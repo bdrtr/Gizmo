@@ -22,6 +22,7 @@ pub struct Material {
     pub albedo: yelbegen_math::vec4::Vec4,
     pub roughness: f32,
     pub metallic: f32,
+    pub unlit: f32,
 }
 
 impl Material {
@@ -31,6 +32,7 @@ impl Material {
             albedo: yelbegen_math::vec4::Vec4::new(1.0, 1.0, 1.0, 1.0),
             roughness: 0.5,
             metallic: 0.0,
+            unlit: 0.0,
         }
     }
 
@@ -38,6 +40,13 @@ impl Material {
         self.albedo = albedo;
         self.roughness = roughness;
         self.metallic = metallic;
+        self.unlit = 0.0;
+        self
+    }
+
+    pub fn with_unlit(mut self, albedo: yelbegen_math::vec4::Vec4) -> Self {
+        self.albedo = albedo;
+        self.unlit = 1.0;
         self
     }
 }

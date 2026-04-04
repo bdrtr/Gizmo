@@ -121,6 +121,7 @@ struct GameState {
     keys: HashSet<KeyCode>,
     bouncing_box_id: u32,
     player_id: u32,
+    skybox_id: u32,
     inspector_selected_entity: Option<u32>,
 }
 
@@ -225,11 +226,23 @@ fn main() {
         ));
         world.add_component(player, EntityName("Kamera (Göz)".into()));
 
+        // --- Skybox (Sonsuz Gökyüzü) ---
+        let skybox = world.spawn();
+        let mut sky_transform = Transform::new(Vec3::ZERO);
+        // Devasa boyut
+        sky_transform.scale = Vec3::new(500.0, 500.0, 500.0); 
+        world.add_component(skybox, sky_transform);
+        world.add_component(skybox, asset_manager.load_obj(&renderer.device, "demo/assets/suzanne.obj")); 
+        world.add_component(skybox, Material::new(tbind.clone()).with_unlit(Vec4::new(0.15, 0.35, 0.60, 1.0))); // Hafif koyu bir gökyüzü mavisi
+        world.add_component(skybox, create_renderer());
+        world.add_component(skybox, EntityName("Skybox (Gök Kubbe)".into()));
+
         GameState {
             mouse_pressed: false,
             keys: HashSet::new(),
             bouncing_box_id: bouncing_box.id(),
             player_id: player.id(),
+            skybox_id: skybox.id(),
             inspector_selected_entity: None,
         }
     });
@@ -477,11 +490,15 @@ fn main() {
         let mut view_mat = Mat4::translation(Vec3::ZERO);
         let mut cam_pos = Vec3::ZERO;
 
-        if let (Some(cameras), Some(transforms)) = (world.borrow::<Camera>(), world.borrow::<Transform>()) {
+        if let (Some(cameras), Some(mut transforms)) = (world.borrow::<Camera>(), world.borrow_mut::<Transform>()) {
             if let (Some(cam), Some(trans)) = (cameras.get(state.player_id), transforms.get(state.player_id)) {
                 proj = cam.get_projection(aspect);
                 view_mat = cam.get_view(trans.position);
                 cam_pos = trans.position;
+            }
+            // Skybox her zaman Kamerayla aynı yerde durarak sonsuzluk hissi yaratır.
+            if let Some(sky_t) = transforms.get_mut(state.skybox_id) {
+                sky_t.position = cam_pos;
             }
         }
         
@@ -537,7 +554,8 @@ fn main() {
                         albedo_color: [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
                         roughness: mat.roughness,
                         metallic: mat.metallic,
-                        _padding: [0.0, 0.0],
+                        unlit: mat.unlit,
+                        _padding: 0.0,
                     };
                     renderer.queue.write_buffer(&mesh_ren.ubuf, 0, bytemuck::cast_slice(&[uniform_data]));
                 }

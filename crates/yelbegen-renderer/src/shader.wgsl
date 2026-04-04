@@ -7,7 +7,8 @@ struct EngineUniforms {
     albedo_color: vec4<f32>,
     roughness: f32,
     metallic: f32,
-    _padding: vec2<f32>,
+    unlit: f32,
+    _padding: f32,
 };
 
 @group(0) @binding(0)
@@ -62,6 +63,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Temel Yüzey Rengi
     let base_color = uniforms.albedo_color.rgb * tex_color.rgb;
     let metallic = clamp(uniforms.metallic, 0.0, 1.0);
+
+    // Eger bu obje 'unlit' (isik yemeyen gokyuzu vs.) ise isiklari es gec ve duz renk bas!
+    if (uniforms.unlit > 0.5) {
+        return vec4<f32>(base_color, uniforms.albedo_color.a * tex_color.a);
+    }
     
     // Nokta Işık Vektörü (Bize gelen ışık)
     let L = normalize(uniforms.light_pos.xyz - in.world_position);

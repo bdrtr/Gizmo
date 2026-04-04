@@ -55,7 +55,8 @@ pub struct EngineUniforms {
     pub albedo_color: [f32; 4],
     pub roughness: f32,
     pub metallic: f32,
-    pub _padding: [f32; 2],
+    pub unlit: f32,
+    pub _padding: f32,
 }
 
 pub struct Renderer<'a> {
@@ -140,10 +141,11 @@ impl<'a> Renderer<'a> {
             camera_pos: [0.0; 4],
             light_pos: [0.0; 4],
             light_color: [0.0; 4],
-            albedo_color: [1.0; 4],
+            albedo_color: [1.0, 1.0, 1.0, 1.0],
             roughness: 0.5,
             metallic: 0.0,
-            _padding: [0.0; 2],
+            unlit: 0.0, // Varsayilan olarak isik alir
+            _padding: 0.0,
         };
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
