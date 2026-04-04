@@ -12,3 +12,4 @@ yelbegen-math = { path = "../yelbegen-math" }
 yelbegen-core = { path = "../yelbegen-core" }
 tobj = "4.0.3"
 image = "0.25"
+serde = { version = "1.0.228", features = ["derive"] }

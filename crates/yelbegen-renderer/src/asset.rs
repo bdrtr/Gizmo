@@ -82,7 +82,7 @@ impl AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        let mesh = Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO);
+        let mesh = Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, format!("obj:{}", file_path));
         self.mesh_cache.insert(file_path.to_string(), mesh.clone());
         mesh
     }
@@ -131,7 +131,81 @@ impl AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO)
+        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "inverted_cube".to_string())
+    }
+
+    /// Basit, yatay bir düzlem (Plane) üretir.
+    pub fn create_plane(device: &wgpu::Device, size: f32) -> Mesh {
+        let half = size / 2.0;
+        let y = 0.0;
+        
+        // Üstten bakışla Saat yönünün tersi (CCW) 2 üçgen (Quad)
+        let vertices = [
+            Vertex { position: [-half, y,  half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.0, size] },
+            Vertex { position: [ half, y,  half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [size, size] },
+            Vertex { position: [ half, y, -half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [size, 0.0] },
+            
+            Vertex { position: [ half, y, -half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [size, 0.0] },
+            Vertex { position: [-half, y, -half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.0, 0.0] },
+            Vertex { position: [-half, y,  half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.0, size] },
+        ];
+
+        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Plane VBuf"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "plane".to_string())
+    }
+
+    /// Programatik UV Küre (Sphere) üretir.
+    pub fn create_sphere(device: &wgpu::Device, radius: f32, stacks: u32, slices: u32) -> Mesh {
+        let mut vertices = Vec::new();
+        let pi = std::f32::consts::PI;
+
+        for i in 0..stacks {
+            let theta1 = (i as f32 / stacks as f32) * pi;
+            let theta2 = ((i + 1) as f32 / stacks as f32) * pi;
+
+            for j in 0..slices {
+                let phi1 = (j as f32 / slices as f32) * 2.0 * pi;
+                let phi2 = ((j + 1) as f32 / slices as f32) * 2.0 * pi;
+
+                // 4 köşe noktası
+                let p1 = [radius * theta1.sin() * phi1.cos(), radius * theta1.cos(), radius * theta1.sin() * phi1.sin()];
+                let p2 = [radius * theta2.sin() * phi1.cos(), radius * theta2.cos(), radius * theta2.sin() * phi1.sin()];
+                let p3 = [radius * theta2.sin() * phi2.cos(), radius * theta2.cos(), radius * theta2.sin() * phi2.sin()];
+                let p4 = [radius * theta1.sin() * phi2.cos(), radius * theta1.cos(), radius * theta1.sin() * phi2.sin()];
+
+                let n1 = [theta1.sin() * phi1.cos(), theta1.cos(), theta1.sin() * phi1.sin()];
+                let n2 = [theta2.sin() * phi1.cos(), theta2.cos(), theta2.sin() * phi1.sin()];
+                let n3 = [theta2.sin() * phi2.cos(), theta2.cos(), theta2.sin() * phi2.sin()];
+                let n4 = [theta1.sin() * phi2.cos(), theta1.cos(), theta1.sin() * phi2.sin()];
+
+                let uv1 = [j as f32 / slices as f32, i as f32 / stacks as f32];
+                let uv2 = [j as f32 / slices as f32, (i + 1) as f32 / stacks as f32];
+                let uv3 = [(j + 1) as f32 / slices as f32, (i + 1) as f32 / stacks as f32];
+                let uv4 = [(j + 1) as f32 / slices as f32, i as f32 / stacks as f32];
+
+                // Üçgen 1
+                vertices.push(Vertex { position: p1, color: [1.0; 3], normal: n1, tex_coords: uv1 });
+                vertices.push(Vertex { position: p2, color: [1.0; 3], normal: n2, tex_coords: uv2 });
+                vertices.push(Vertex { position: p3, color: [1.0; 3], normal: n3, tex_coords: uv3 });
+                // Üçgen 2
+                vertices.push(Vertex { position: p1, color: [1.0; 3], normal: n1, tex_coords: uv1 });
+                vertices.push(Vertex { position: p3, color: [1.0; 3], normal: n3, tex_coords: uv3 });
+                vertices.push(Vertex { position: p4, color: [1.0; 3], normal: n4, tex_coords: uv4 });
+            }
+        }
+
+        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Sphere VBuf"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "sphere".to_string())
     }
 
     /// Bir resim dosyasını diskten okur ve wgpu::Texture olarak döndürür. (Statik yardımcı)
@@ -171,5 +245,29 @@ impl AssetManager {
             texture_size,
         );
         texture
+    }
+
+    /// Bir resmi okuyup Bind Group (Material Texture + Sampler) haline getirir
+    pub fn load_material_texture(device: &wgpu::Device, queue: &wgpu::Queue, layout: &wgpu::BindGroupLayout, path: &str) -> Arc<wgpu::BindGroup> {
+        let texture = Self::load_texture(device, queue, path);
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(path),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+            ],
+        }))
     }
 }

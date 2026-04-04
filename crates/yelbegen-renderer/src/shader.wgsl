@@ -1,22 +1,39 @@
-struct EngineUniforms {
+struct LightData {
+    position: vec4<f32>,
+    color: vec4<f32>,
+};
+
+struct SceneUniforms {
     view_proj: mat4x4<f32>,
-    model: mat4x4<f32>,
     camera_pos: vec4<f32>,
-    light_pos: vec4<f32>,
-    light_color: vec4<f32>,
+    lights: array<LightData, 10>,
+    num_lights: u32,
+    light_view_proj: mat4x4<f32>,
+};
+
+struct ObjectUniforms {
+    model: mat4x4<f32>,
     albedo_color: vec4<f32>,
     roughness: f32,
     metallic: f32,
     unlit: f32,
-    _padding: f32,
 };
 
 @group(0) @binding(0)
-var<uniform> uniforms: EngineUniforms;
+var<uniform> scene: SceneUniforms;
+
+@group(3) @binding(0)
+var t_shadow: texture_depth_2d;
+
+@group(3) @binding(1)
+var s_shadow: sampler_comparison;
 
 @group(1) @binding(0)
+var<uniform> object: ObjectUniforms;
+
+@group(2) @binding(0)
 var t_diffuse: texture_2d<f32>;
-@group(1) @binding(1)
+@group(2) @binding(1)
 var s_diffuse: sampler;
 
 struct VertexInput {
@@ -32,6 +49,7 @@ struct VertexOutput {
     @location(1) normal: vec3<f32>,
     @location(2) tex_coords: vec2<f32>,
     @location(3) world_position: vec3<f32>,
+    @location(4) light_space_pos: vec4<f32>,
 };
 
 @vertex
@@ -41,16 +59,19 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     out.tex_coords = input.tex_coords;
     
     // Objenin Vertex'ini dünya evrenine taşı
-    let world_pos = uniforms.model * vec4<f32>(input.position, 1.0);
+    let world_pos = object.model * vec4<f32>(input.position, 1.0);
     out.world_position = world_pos.xyz;
     
     // Objeyi döndürdüğümüzde ışık da onunla dönebilsin diye normal'i de dünyaya göre döndür
     // (Skalalama çok deforme edici değilse düz matris çarpımı yeterlidir, aksi taktirde invert(transpose) gerekir)
-    let world_normal = (uniforms.model * vec4<f32>(input.normal, 0.0)).xyz;
+    let world_normal = (object.model * vec4<f32>(input.normal, 0.0)).xyz;
     out.normal = world_normal;
     
     // Kameraya yansıt
-    out.clip_position = uniforms.view_proj * world_pos;
+    out.clip_position = scene.view_proj * world_pos;
+    
+    // Işık kamerasına yansıt (Gölge Haritası İçin)
+    out.light_space_pos = scene.light_view_proj * world_pos;
     
     return out;
 }
@@ -60,50 +81,96 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
     let N = normalize(in.normal);
     
-    // Temel Yüzey Rengi
-    // (Henüz tam texture desteğimiz olmadığı için ve köşe pikselleri siyah olabildiği için geçici olarak sadece Albedo kullanıyoruz)
-    let base_color = uniforms.albedo_color.rgb; // * tex_color.rgb kaldirildi
-    let metallic = clamp(uniforms.metallic, 0.0, 1.0);
+    // Temel Yüzey Rengi (Albedo Rengi * Texture Rengi)
+    let base_color = object.albedo_color.rgb * tex_color.rgb;
+    let metallic = clamp(object.metallic, 0.0, 1.0);
 
     // Eger bu obje 'unlit' (isik yemeyen gokyuzu vs.) ise isiklari es gec ve duz renk bas!
-    if (uniforms.unlit > 0.5) {
-        return vec4<f32>(base_color, uniforms.albedo_color.a * tex_color.a);
+    if (object.unlit > 1.5) {
+        let view_dir = normalize(in.world_position - scene.camera_pos.xyz);
+        let sky_y = view_dir.y;
+        
+        let sky_color = vec3<f32>(0.08, 0.28, 0.58); // Koyu Mavi
+        let horizon_color = vec3<f32>(0.65, 0.75, 0.85); // Ufuk rengi (Puslu Acik Mavi)
+        let ground_color = vec3<f32>(0.15, 0.15, 0.18); // Kara toprak
+
+        var final_bg: vec3<f32>;
+        if (sky_y > 0.0) {
+            final_bg = mix(horizon_color, sky_color, sky_y);
+        } else {
+            final_bg = mix(horizon_color, ground_color, -sky_y);
+        }
+        return vec4<f32>(final_bg, 1.0);
+    } else if (object.unlit > 0.5) {
+        return vec4<f32>(base_color, object.albedo_color.a * tex_color.a);
     }
     
-    // Nokta Işık Vektörü (Bize gelen ışık)
-    let L = normalize(uniforms.light_pos.xyz - in.world_position);
-    
-    // Yüzey normali ile açıya göre Diffuse
-    let diff = max(dot(N, L), 0.1);
-    
-    // Roughness'tan (0.0 ile 1.0 arası) Shininess çıkarma (Düşük roughness = keskin parlama)
-    let min_roughness = max(uniforms.roughness, 0.05);
+    let min_roughness = max(object.roughness, 0.05);
     let shininess = 2.0 / (min_roughness * min_roughness) - 2.0;
-
-    // Specular (Blinn-Phong)
-    let view_dir = normalize(uniforms.camera_pos.xyz - in.world_position);
-    let reflect_dir = reflect(-L, N);
-    let spec = pow(max(dot(view_dir, reflect_dir), 0.0), shininess);
-    
-    // Mesafe Kaybı (Distance Attenuation)
-    let distance = length(uniforms.light_pos.xyz - in.world_position);
-    let attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * (distance * distance));
-    
-    // Metal yüzeyler kendi renginde parlar (f0 tespiti) ve mat kısımları emer (diffuse azalır)
+    let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
     let f0 = mix(vec3<f32>(0.04), base_color, metallic);
     
-    // Ambient
-    let ambient = base_color * 0.15; // Gölgeler kör zifiri karanlık olmasın diye 0.1'den 0.15'e çıkarıldı
+    let ambient = base_color * 0.15;
     
-    // Işık Şiddeti (Intensity), light_color.w üzerinden geliyor
-    let intensity = uniforms.light_color.w;
+    // --- Gölge Hesaplama (Shadow Mapping with PCF) ---
+    var shadow_visibility = 1.0;
+    
+    // Homojen koordinatlara (NDCs) çevir [-1, 1]
+    let light_ndc = in.light_space_pos.xyz / in.light_space_pos.w;
+    
+    // NDC -> Doku Koordinatları (Orijin sol üst)
+    let shadow_uv = vec2<f32>(
+        light_ndc.x * 0.5 + 0.5,
+        (light_ndc.y * -0.5) + 0.5
+    );
+    
+    // Eğer noktamız ışık kamerasının görüş alanı içerisindeyse
+    if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 && light_ndc.z <= 1.0) {
+        let bias = 0.005; // Yüzey kusurlarını önlemek için bias
+        
+        var pcf_visibility = 0.0;
+        let texel_size = 1.0 / 2048.0; // Texture ebadına göre 1 piksel boyutu
+        for (var x = -1; x <= 1; x++) {
+            for (var y = -1; y <= 1; y++) {
+                let offset = vec2<f32>(f32(x), f32(y)) * texel_size;
+                pcf_visibility += textureSampleCompare(
+                    t_shadow, s_shadow,
+                    shadow_uv + offset,
+                    light_ndc.z - bias
+                );
+            }
+        }
+        shadow_visibility = pcf_visibility / 9.0;
+    }
+    
+    var total_diffuse = vec3<f32>(0.0);
+    var total_specular = vec3<f32>(0.0);
 
-    // Aydınlatma renklerini parçalama
-    let diffuse_color = base_color * (1.0 - metallic) * diff * uniforms.light_color.rgb * attenuation * intensity;
-    let specular_color = f0 * spec * (1.0 - min_roughness) * uniforms.light_color.rgb * attenuation * intensity;
+    for (var i = 0u; i < scene.num_lights; i++) {
+        let light = scene.lights[i];
+        
+        let L = normalize(light.position.xyz - in.world_position);
+        let diff = max(dot(N, L), 0.1);
+        
+        let reflect_dir = reflect(-L, N);
+        let spec = pow(max(dot(view_dir, reflect_dir), 0.0), shininess);
+        
+        let distance = length(light.position.xyz - in.world_position);
+        let attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * (distance * distance));
+        let intensity = light.position.w;
+
+        // Gölgeyi sadece 1. ışığa (Ana Işık) uygula
+        var current_shadow_factor = 1.0;
+        if (i == 0u) {
+            current_shadow_factor = shadow_visibility;
+        }
+
+        total_diffuse += base_color * (1.0 - metallic) * diff * light.color.rgb * attenuation * intensity * current_shadow_factor;
+        total_specular += f0 * spec * (1.0 - min_roughness) * light.color.rgb * attenuation * intensity * current_shadow_factor;
+    }
     
     // Parçaları topla
-    let final_color = in.color * (ambient + diffuse_color + specular_color);
+    let final_color = in.color * (ambient + total_diffuse + total_specular);
     
-    return vec4<f32>(final_color, uniforms.albedo_color.a * tex_color.a);
+    return vec4<f32>(final_color, object.albedo_color.a * tex_color.a);
 }

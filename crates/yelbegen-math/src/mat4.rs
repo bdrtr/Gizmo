@@ -1,7 +1,7 @@
 use std::ops::Mul;
 use crate::{vec3::Vec3, vec4::Vec4};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Mat4 {
     pub cols: [Vec4; 4],
 }
@@ -34,9 +34,10 @@ impl Mat4 {
         let mut mat = Self::IDENTITY;
         mat.cols[0].x = f / aspect_ratio;
         mat.cols[1].y = f;
-        mat.cols[2].z = (far + near) / (near - far);
+        // wgpu/Vulkan konvansiyonu: z aralığı [0, 1] (OpenGL'deki [-1, 1] değil!)
+        mat.cols[2].z = far / (near - far);
         mat.cols[2].w = -1.0;
-        mat.cols[3].z = (2.0 * far * near) / (near - far);
+        mat.cols[3].z = (far * near) / (near - far);
         mat.cols[3].w = 0.0;
         mat
     }
@@ -105,6 +106,87 @@ impl Mat4 {
             [self.cols[3].x, self.cols[3].y, self.cols[3].z, self.cols[3].w],
         ]
     }
+
+    pub fn inverse(&self) -> Option<Self> {
+        let m = self.cols;
+
+        let coef00 = m[2].z * m[3].w - m[3].z * m[2].w;
+        let coef02 = m[1].z * m[3].w - m[3].z * m[1].w;
+        let coef03 = m[1].z * m[2].w - m[2].z * m[1].w;
+        let coef04 = m[2].y * m[3].w - m[3].y * m[2].w;
+        let coef06 = m[1].y * m[3].w - m[3].y * m[1].w;
+        let coef07 = m[1].y * m[2].w - m[2].y * m[1].w;
+        let coef08 = m[2].y * m[3].z - m[3].y * m[2].z;
+        let coef10 = m[1].y * m[3].z - m[3].y * m[1].z;
+        let coef11 = m[1].y * m[2].z - m[2].y * m[1].z;
+        let coef12 = m[2].x * m[3].w - m[3].x * m[2].w;
+        let coef14 = m[1].x * m[3].w - m[3].x * m[1].w;
+        let coef15 = m[1].x * m[2].w - m[2].x * m[1].w;
+        let coef16 = m[2].x * m[3].z - m[3].x * m[2].z;
+        let coef18 = m[1].x * m[3].z - m[3].x * m[1].z;
+        let coef19 = m[1].x * m[2].z - m[2].x * m[1].z;
+        let coef20 = m[2].x * m[3].y - m[3].x * m[2].y;
+        let coef22 = m[1].x * m[3].y - m[3].x * m[1].y;
+        let coef23 = m[1].x * m[2].y - m[2].x * m[1].y;
+
+        let fac0 = Vec4::new(coef00, coef00, coef02, coef03);
+        let fac1 = Vec4::new(coef04, coef04, coef06, coef07);
+        let fac2 = Vec4::new(coef08, coef08, coef10, coef11);
+        let fac3 = Vec4::new(coef12, coef12, coef14, coef15);
+        let fac4 = Vec4::new(coef16, coef16, coef18, coef19);
+        let fac5 = Vec4::new(coef20, coef20, coef22, coef23);
+
+        let vec0 = Vec4::new(m[1].x, m[0].x, m[0].x, m[0].x);
+        let vec1 = Vec4::new(m[1].y, m[0].y, m[0].y, m[0].y);
+        let vec2 = Vec4::new(m[1].z, m[0].z, m[0].z, m[0].z);
+        let vec3 = Vec4::new(m[1].w, m[0].w, m[0].w, m[0].w);
+
+        let inv0 = Vec4::new(
+             vec1.x * fac0.x - vec2.x * fac1.x + vec3.x * fac2.x,
+            -vec1.y * fac0.y + vec2.y * fac1.y - vec3.y * fac2.y,
+             vec1.z * fac0.z - vec2.z * fac1.z + vec3.z * fac2.z,
+            -vec1.w * fac0.w + vec2.w * fac1.w - vec3.w * fac2.w,
+        );
+
+        let inv1 = Vec4::new(
+            -vec0.x * fac0.x + vec2.x * fac3.x - vec3.x * fac4.x,
+             vec0.y * fac0.y - vec2.y * fac3.y + vec3.y * fac4.y,
+            -vec0.z * fac0.z + vec2.z * fac3.z - vec3.z * fac4.z,
+             vec0.w * fac0.w - vec2.w * fac3.w + vec3.w * fac4.w,
+        );
+
+        let inv2 = Vec4::new(
+             vec0.x * fac1.x - vec1.x * fac3.x + vec3.x * fac5.x,
+            -vec0.y * fac1.y + vec1.y * fac3.y - vec3.y * fac5.y,
+             vec0.z * fac1.z - vec1.z * fac3.z + vec3.z * fac5.z,
+            -vec0.w * fac1.w + vec1.w * fac3.w - vec3.w * fac5.w,
+        );
+
+        let inv3 = Vec4::new(
+            -vec0.x * fac2.x + vec1.x * fac4.x - vec2.x * fac5.x,
+             vec0.y * fac2.y - vec1.y * fac4.y + vec2.y * fac5.y,
+            -vec0.z * fac2.z + vec1.z * fac4.z - vec2.z * fac5.z,
+             vec0.w * fac2.w - vec1.w * fac4.w + vec2.w * fac5.w,
+        );
+
+        let row0 = Vec4::new(inv0.x, inv1.x, inv2.x, inv3.x);
+        let dot0 = m[0].x * row0.x + m[0].y * row0.y + m[0].z * row0.z + m[0].w * row0.w;
+
+        if dot0.abs() < 1e-10 {
+            return None;
+        }
+
+        let rcp_det = 1.0 / dot0;
+
+        Some(Self {
+            cols: [
+                Vec4::new(inv0.x * rcp_det, inv0.y * rcp_det, inv0.z * rcp_det, inv0.w * rcp_det),
+                Vec4::new(inv1.x * rcp_det, inv1.y * rcp_det, inv1.z * rcp_det, inv1.w * rcp_det),
+                Vec4::new(inv2.x * rcp_det, inv2.y * rcp_det, inv2.z * rcp_det, inv2.w * rcp_det),
+                Vec4::new(inv3.x * rcp_det, inv3.y * rcp_det, inv3.z * rcp_det, inv3.w * rcp_det),
+            ],
+        })
+    }
 }
 
 // Mat4 * Mat4 çarpımı (Projection * View * Model için kalbi)
@@ -144,5 +226,20 @@ impl Mul for Mat4 {
             }
         }
         result
+    }
+}
+
+// Mat4 * Vec4 çarpımı (Vertex Transformation & Raycasting için)
+impl Mul<Vec4> for Mat4 {
+    type Output = Vec4;
+
+    #[inline]
+    fn mul(self, rhs: Vec4) -> Self::Output {
+        Vec4::new(
+            self.cols[0].x * rhs.x + self.cols[1].x * rhs.y + self.cols[2].x * rhs.z + self.cols[3].x * rhs.w,
+            self.cols[0].y * rhs.x + self.cols[1].y * rhs.y + self.cols[2].y * rhs.z + self.cols[3].y * rhs.w,
+            self.cols[0].z * rhs.x + self.cols[1].z * rhs.y + self.cols[2].z * rhs.z + self.cols[3].z * rhs.w,
+            self.cols[0].w * rhs.x + self.cols[1].w * rhs.y + self.cols[2].w * rhs.z + self.cols[3].w * rhs.w,
+        )
     }
 }
