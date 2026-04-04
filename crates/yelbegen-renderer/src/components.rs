@@ -17,13 +17,26 @@ impl Mesh {
 
 pub struct Material {
     pub bind_group: Arc<wgpu::BindGroup>,
+    pub albedo: yelbegen_math::vec4::Vec4,
+    pub roughness: f32,
+    pub metallic: f32,
 }
-
-
 
 impl Material {
     pub fn new(bind_group: Arc<wgpu::BindGroup>) -> Self {
-        Self { bind_group }
+        Self {
+            bind_group,
+            albedo: yelbegen_math::vec4::Vec4::new(1.0, 1.0, 1.0, 1.0),
+            roughness: 0.5,
+            metallic: 0.0,
+        }
+    }
+
+    pub fn with_pbr(mut self, albedo: yelbegen_math::vec4::Vec4, roughness: f32, metallic: f32) -> Self {
+        self.albedo = albedo;
+        self.roughness = roughness;
+        self.metallic = metallic;
+        self
     }
 }
 

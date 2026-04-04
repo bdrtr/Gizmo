@@ -4,6 +4,10 @@ struct EngineUniforms {
     camera_pos: vec4<f32>,
     light_pos: vec4<f32>,
     light_color: vec4<f32>,
+    albedo_color: vec4<f32>,
+    roughness: f32,
+    metallic: f32,
+    _padding: vec2<f32>,
 };
 
 @group(0) @binding(0)
@@ -55,27 +59,41 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
     let N = normalize(in.normal);
     
+    // Temel Yüzey Rengi
+    let base_color = uniforms.albedo_color.rgb * tex_color.rgb;
+    let metallic = clamp(uniforms.metallic, 0.0, 1.0);
+    
     // Nokta Işık Vektörü (Bize gelen ışık)
     let L = normalize(uniforms.light_pos.xyz - in.world_position);
     
-    // Diffuse (Yüzeye çarpan genel aydınlık) - Minimum 0.1 Ambient koyuyoruz karanlık olmasın diye
+    // Yüzey normali ile açıya göre Diffuse
     let diff = max(dot(N, L), 0.1);
     
-    // Specular (Parlaklık - Blinn-Phong/Phong)
+    // Roughness'tan (0.0 ile 1.0 arası) Shininess çıkarma (Düşük roughness = keskin parlama)
+    let min_roughness = max(uniforms.roughness, 0.05);
+    let shininess = 2.0 / (min_roughness * min_roughness) - 2.0;
+
+    // Specular (Blinn-Phong)
     let view_dir = normalize(uniforms.camera_pos.xyz - in.world_position);
     let reflect_dir = reflect(-L, N);
-    let spec = pow(max(dot(view_dir, reflect_dir), 0.0), 32.0) * 0.5; // 32 parlaklık çapı, 0.5 şiddet
+    let spec = pow(max(dot(view_dir, reflect_dir), 0.0), shininess);
     
     // Mesafe Kaybı (Distance Attenuation)
     let distance = length(uniforms.light_pos.xyz - in.world_position);
     let attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * (distance * distance));
     
-    // Parçaları topla
-    let ambient = vec3<f32>(0.1) * tex_color.rgb; // Baz karanlık renk
-    let diffuse_color = diff * uniforms.light_color.rgb * tex_color.rgb * attenuation;
-    let specular_color = spec * uniforms.light_color.rgb * attenuation;
+    // Metal yüzeyler kendi renginde parlar (f0 tespiti) ve mat kısımları emer (diffuse azalır)
+    let f0 = mix(vec3<f32>(0.04), base_color, metallic);
     
+    // Ambient
+    let ambient = base_color * 0.1;
+    
+    // Aydınlatma renklerini parçalama
+    let diffuse_color = base_color * (1.0 - metallic) * diff * uniforms.light_color.rgb * attenuation;
+    let specular_color = f0 * spec * (1.0 - min_roughness) * uniforms.light_color.rgb * attenuation;
+    
+    // Parçaları topla
     let final_color = in.color * (ambient + diffuse_color + specular_color);
     
-    return vec4<f32>(final_color, tex_color.a);
+    return vec4<f32>(final_color, uniforms.albedo_color.a * tex_color.a);
 }

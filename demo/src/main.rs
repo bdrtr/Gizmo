@@ -172,7 +172,7 @@ fn main() {
         world.add_component(bouncing_box, Collider::new_aabb(0.5, 0.5, 0.5));
         world.add_component(bouncing_box, RigidBody::new(1.0, 0.8, 0.2, true));
         world.add_component(bouncing_box, AssetManager::load_obj(&renderer.device, "demo/assets/suzanne.obj"));
-        world.add_component(bouncing_box, Material::new(tbind.clone()));
+        world.add_component(bouncing_box, Material::new(tbind.clone()).with_pbr(Vec4::new(0.8, 0.2, 0.2, 1.0), 0.2, 0.1)); // Parlak kırmızımsı materyal
         world.add_component(bouncing_box, create_renderer());
 
         // --- Zemin (Suzanne geçici) ---
@@ -181,8 +181,8 @@ fn main() {
         world.add_component(ground, Velocity::new(Vec3::ZERO));
         world.add_component(ground, Collider::new_aabb(10.0, 1.0, 10.0));
         world.add_component(ground, RigidBody::new_static());
-        world.add_component(ground, AssetManager::load_obj(&renderer.device, "demo/assets/suzanne.obj"));
-        world.add_component(ground, Material::new(tbind.clone()));
+        world.add_component(ground, AssetManager::load_obj(&renderer.device, "demo/assets/suzanne.obj")); // Şimdilik yer objesi niyetine
+        world.add_component(ground, Material::new(tbind.clone()).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.8, 0.0)); // Mat malzeme
         world.add_component(ground, create_renderer());
 
         // --- Işık (Point Light) ---
@@ -191,7 +191,7 @@ fn main() {
         world.add_component(light, PointLight::new(Vec3::new(1.0, 0.9, 0.8), 2.0)); // Sıcak sarımsı ışık
         // Işığı da minik bir mesh olarak görelim
         world.add_component(light, AssetManager::load_obj(&renderer.device, "demo/assets/suzanne.obj"));
-        world.add_component(light, Material::new(tbind.clone()));
+        world.add_component(light, Material::new(tbind.clone()).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 1.0, 0.0));
         world.add_component(light, create_renderer());
 
         // --- Player (Kamera) ---
@@ -320,6 +320,31 @@ fn main() {
                 }
             }
 
+            if let Some(mut materials) = world.borrow_mut::<Material>() {
+                if let Some(mat) = materials.get_mut(state.bouncing_box_id) {
+                    ui.separator();
+                    ui.heading("Materyal ve Yüzey (PBR)");
+                    
+                    let mut edit_albedo = [mat.albedo.x, mat.albedo.y, mat.albedo.z];
+                    ui.horizontal(|ui| {
+                        ui.label("Renk (Albedo): ");
+                        ui.color_edit_button_rgb(&mut edit_albedo);
+                    });
+                    mat.albedo.x = edit_albedo[0];
+                    mat.albedo.y = edit_albedo[1];
+                    mat.albedo.z = edit_albedo[2];
+
+                    ui.horizontal(|ui| {
+                        ui.label("Pürüzlülük (Roughness): ");
+                        ui.add(egui::Slider::new(&mut mat.roughness, 0.0..=1.0));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Metalik (Metallic): ");
+                        ui.add(egui::Slider::new(&mut mat.metallic, 0.0..=1.0));
+                    });
+                }
+            }
+
             if ui.button("🔄 Başa Sar").clicked() {
                 if let Some(mut trans) = world.borrow_mut::<Transform>() {
                     if let Some(t) = trans.get_mut(state.bouncing_box_id) {
@@ -379,12 +404,12 @@ fn main() {
         }
 
         // Uniform buffer güncelleme
-        if let (Some(meshes), Some(renderers), Some(positions), Some(colliders)) =
-            (world.borrow::<Mesh>(), world.borrow::<MeshRenderer>(), world.borrow::<Transform>(), world.borrow::<Collider>())
+        if let (Some(meshes), Some(renderers), Some(positions), Some(colliders), Some(materials)) =
+            (world.borrow::<Mesh>(), world.borrow::<MeshRenderer>(), world.borrow::<Transform>(), world.borrow::<Collider>(), world.borrow::<Material>())
         {
             for entity_id in &renderers.entity_dense {
                 let e = *entity_id;
-                if let (Some(mesh), Some(mesh_ren), Some(trans)) = (meshes.get(e), renderers.get(e), positions.get(e)) {
+                if let (Some(mesh), Some(mesh_ren), Some(trans), Some(mat)) = (meshes.get(e), renderers.get(e), positions.get(e), materials.get(e)) {
                     let mut col_scale = Vec3::new(1.0, 1.0, 1.0);
                     if let Some(col) = colliders.get(e) {
                         if let yelbegen::physics::ColliderShape::Aabb(aabb) = &col.shape {
@@ -412,6 +437,10 @@ fn main() {
                         camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
                         light_pos: [light_pos.x, light_pos.y, light_pos.z, 1.0],
                         light_color: [light_color.x, light_color.y, light_color.z, 1.0],
+                        albedo_color: [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
+                        roughness: mat.roughness,
+                        metallic: mat.metallic,
+                        _padding: [0.0, 0.0],
                     };
                     renderer.queue.write_buffer(&mesh_ren.ubuf, 0, bytemuck::cast_slice(&[uniform_data]));
                 }
