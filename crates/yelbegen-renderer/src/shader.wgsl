@@ -61,7 +61,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let N = normalize(in.normal);
     
     // Temel Yüzey Rengi
-    let base_color = uniforms.albedo_color.rgb * tex_color.rgb;
+    // (Henüz tam texture desteğimiz olmadığı için ve köşe pikselleri siyah olabildiği için geçici olarak sadece Albedo kullanıyoruz)
+    let base_color = uniforms.albedo_color.rgb; // * tex_color.rgb kaldirildi
     let metallic = clamp(uniforms.metallic, 0.0, 1.0);
 
     // Eger bu obje 'unlit' (isik yemeyen gokyuzu vs.) ise isiklari es gec ve duz renk bas!
@@ -92,11 +93,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let f0 = mix(vec3<f32>(0.04), base_color, metallic);
     
     // Ambient
-    let ambient = base_color * 0.1;
+    let ambient = base_color * 0.15; // Gölgeler kör zifiri karanlık olmasın diye 0.1'den 0.15'e çıkarıldı
     
+    // Işık Şiddeti (Intensity), light_color.w üzerinden geliyor
+    let intensity = uniforms.light_color.w;
+
     // Aydınlatma renklerini parçalama
-    let diffuse_color = base_color * (1.0 - metallic) * diff * uniforms.light_color.rgb * attenuation;
-    let specular_color = f0 * spec * (1.0 - min_roughness) * uniforms.light_color.rgb * attenuation;
+    let diffuse_color = base_color * (1.0 - metallic) * diff * uniforms.light_color.rgb * attenuation * intensity;
+    let specular_color = f0 * spec * (1.0 - min_roughness) * uniforms.light_color.rgb * attenuation * intensity;
     
     // Parçaları topla
     let final_color = in.color * (ambient + diffuse_color + specular_color);

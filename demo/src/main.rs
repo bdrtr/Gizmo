@@ -508,13 +508,16 @@ fn main() {
         // Işık kaynağını bul
         let mut light_pos = Vec3::new(0.0, 10.0, 0.0);
         let mut light_color = Vec3::new(1.0, 1.0, 1.0);
+        let mut light_intensity = 1.0;
         if let (Some(lights), Some(transforms)) = (world.borrow::<PointLight>(), world.borrow::<Transform>()) {
             if !lights.dense.is_empty() {
                 let e = lights.entity_dense[0];
                 if let Some(t) = transforms.get(e) {
                     light_pos = t.position;
                 }
-                light_color = lights.dense[0].color;
+                let l = lights.dense[0];
+                light_color = l.color;
+                light_intensity = l.intensity;
             }
         }
 
@@ -551,7 +554,7 @@ fn main() {
                         model: model.to_cols_array_2d(),
                         camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
                         light_pos: [light_pos.x, light_pos.y, light_pos.z, 1.0],
-                        light_color: [light_color.x, light_color.y, light_color.z, 1.0],
+                        light_color: [light_color.x, light_color.y, light_color.z, light_intensity],
                         albedo_color: [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
                         roughness: mat.roughness,
                         metallic: mat.metallic,
