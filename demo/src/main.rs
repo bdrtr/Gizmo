@@ -62,7 +62,10 @@ fn load_model(path: &str) -> Vec<Vertex> {
             let tex = if !mesh.texcoords.is_empty() {
                 [mesh.texcoords[2 * idx], mesh.texcoords[2 * idx + 1]]
             } else {
-                [0.0, 0.0]
+                // Özel doku formülü: Maymunu düz siyahlıktan kurtarmak için tuğlaya sarıyoruz!
+                let u = (pos[0] * 0.2 + 0.5).fract();
+                let v = (pos[1] * 0.2 + 0.5).fract();
+                [u, v]
             };
             
             vertices.push(Vertex { position: pos, normal: norm, tex_coords: tex, color: [1.0, 1.0, 1.0] });
@@ -239,10 +242,27 @@ fn main() {
                                                     }
                                                 }
 
-                                                let mut model = Mat4::translation(trans.position);
-                                                model.cols[0].x = scale.x; 
-                                                model.cols[1].y = scale.y; 
-                                                model.cols[2].z = scale.z;
+                                                // Maymunun orjinal OBJ dosyasındaki kayık vektörünü düzeltmek için bir offset veriyoruz
+                                                let offset_center = Vec3::new(2.5, -1.3, -4.4); // Merkeze çekiş
+
+                                                let mut trans_mat = Mat4::translation(trans.position);
+                                                let rot_mat = Mat4::rotation_y(light_time * 0.5); // Yavaşça etrafında dönsün
+                                                let center_mat = Mat4::translation(offset_center);
+
+                                                // Dönüş x Merkezleme x Çeviri 
+                                                let mut model = trans_mat * rot_mat * center_mat;
+                                                // Ölçekleri dahil et
+                                                model.cols[0].x *= scale.x; 
+                                                model.cols[0].y *= scale.x;
+                                                model.cols[0].z *= scale.x;
+                                                
+                                                model.cols[1].x *= scale.y;
+                                                model.cols[1].y *= scale.y;
+                                                model.cols[1].z *= scale.y;
+
+                                                model.cols[2].x *= scale.z;
+                                                model.cols[2].y *= scale.z;
+                                                model.cols[2].z *= scale.z;
 
                                                 let mvp = proj * view * model;
 

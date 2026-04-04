@@ -44,9 +44,20 @@ impl Mat4 {
     #[inline]
     pub fn translation(offset: Vec3) -> Self {
         let mut mat = Self::IDENTITY;
-        mat.cols[3].x = offset.x;
-        mat.cols[3].y = offset.y;
-        mat.cols[3].z = offset.z;
+        mat.cols[3].x = offset.x; // tx
+        mat.cols[3].y = offset.y; // ty
+        mat.cols[3].z = offset.z; // tz
+        mat
+    }
+
+    #[inline]
+    pub fn rotation_y(angle_radians: f32) -> Self {
+        let (s, c) = (angle_radians.sin(), angle_radians.cos());
+        let mut mat = Self::IDENTITY;
+        mat.cols[0].x = c;
+        mat.cols[0].z = -s;
+        mat.cols[2].x = s;
+        mat.cols[2].z = c;
         mat
     }
 
