@@ -40,8 +40,30 @@ impl World {
             let id = entity.id();
             self.generations[id as usize] += 1;
             self.free_ids.push(id);
-            // Şimdilik sadece ID boşa çıkıyor, tam silme için storagelara da haber gitmeli.
+            
+            for storage in self.storages.values_mut() {
+                storage.get_mut().remove_entity(id);
+            }
         }
+    }
+
+    pub fn despawn_by_id(&mut self, id: u32) {
+        if (id as usize) < self.generations.len() {
+            let gen = self.generations[id as usize];
+            self.despawn(Entity::new(id, gen));
+        }
+    }
+
+    /// Yaşayan (despawn olmamış) tüm Entity'leri liste olarak döndürür
+    pub fn iter_alive_entities(&self) -> Vec<Entity> {
+        let mut alive = Vec::new();
+        for id in 0..self.next_entity_id {
+            if !self.free_ids.contains(&id) {
+                let gen = self.generations[id as usize];
+                alive.push(Entity::new(id, gen));
+            }
+        }
+        alive
     }
 
     pub fn is_alive(&self, entity: Entity) -> bool {

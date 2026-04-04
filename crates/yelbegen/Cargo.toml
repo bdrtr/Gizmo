@@ -3,11 +3,21 @@ name = "yelbegen"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = ["audio"]
+audio = ["dep:yelbegen-audio"]
+editor = ["dep:yelbegen-editor"]
+
 [dependencies]
 yelbegen-core = { path = "../yelbegen-core" }
 yelbegen-math = { path = "../yelbegen-math" }
 yelbegen-renderer = { path = "../yelbegen-renderer" }
 yelbegen-window = { path = "../yelbegen-window" }
 yelbegen-physics = { path = "../yelbegen-physics" }
-yelbegen-editor = { path = "../yelbegen-editor" }
 yelbegen-app = { path = "../yelbegen-app" }
+yelbegen-audio = { path = "../yelbegen-audio", optional = true }
+yelbegen-editor = { path = "../yelbegen-editor", optional = true }
+winit = { workspace = true }
+wgpu = "0.19"
+egui = "0.26"
+bytemuck = "1"

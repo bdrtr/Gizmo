@@ -1,6 +1,6 @@
 use yelbegen_math::{Vec3, Quat, Mat4};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Transform {
     pub position: Vec3,
     pub rotation: Quat,
@@ -32,7 +32,7 @@ impl Transform {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Velocity {
     pub linear: Vec3,
 }
@@ -44,7 +44,7 @@ impl Velocity {
 }
 
 // Fiziksel ağırlık ve dış güçlerin nasıl etki edeceğini belirten kütle özellikleri
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RigidBody {
     pub mass: f32, // Eğer mass == 0.0 ise bu obje sabittir (Duvar/Zemin) ve itilemez!
     pub restitution: f32, // Sekme katsayısı (0.0 = sekmez, 1.0 = sonsuz teper)

@@ -43,15 +43,28 @@ impl Vertex {
     }
 }
 
-// Shader'a gönderilecek paket. (WGSL 16-byte align yapısına birebir uymalı)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub struct EngineUniforms {
+pub struct LightData {
+    pub position: [f32; 4], // xyz: pozisyon, w: şiddet (intensity)
+    pub color: [f32; 4],    // xyz: renk, w: boş
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub struct SceneUniforms {
     pub view_proj: [[f32; 4]; 4],
-    pub model: [[f32; 4]; 4],
     pub camera_pos: [f32; 4],
-    pub light_pos: [f32; 4],
-    pub light_color: [f32; 4],
+    pub lights: [LightData; 10], // Maksimum 10 ışık
+    pub num_lights: u32,
+    pub _padding: [u32; 3], // 16 byte hezalanmak için
+    pub light_view_proj: [[f32; 4]; 4],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub struct ObjectUniforms {
+    pub model: [[f32; 4]; 4],
     pub albedo_color: [f32; 4],
     pub roughness: f32,
     pub metallic: f32,
@@ -66,9 +79,16 @@ pub struct Renderer<'a> {
     pub config: SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
     pub render_pipeline: wgpu::RenderPipeline,
-    pub uniform_buffer: wgpu::Buffer,
-    pub uniform_bind_group_layout: wgpu::BindGroupLayout,
-    pub uniform_bind_group: wgpu::BindGroup,
+    pub shadow_pipeline: wgpu::RenderPipeline,
+    pub shadow_texture_view: wgpu::TextureView,
+    pub global_uniform_buffer: wgpu::Buffer,
+    pub global_bind_group_layout: wgpu::BindGroupLayout,
+    pub global_bind_group: wgpu::BindGroup,
+    
+    pub shadow_bind_group_layout: wgpu::BindGroupLayout,
+    pub shadow_bind_group: wgpu::BindGroup,
+    
+    pub object_bind_group_layout: wgpu::BindGroupLayout,
     
     // Shaderda Texture için hazırladığımız Blueprint
     pub texture_bind_group_layout: wgpu::BindGroupLayout,
@@ -135,27 +155,112 @@ impl<'a> Renderer<'a> {
         let depth_texture_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         // -- GPU Hafızasında UNIFORMS (Kamera ve Işık) --
-        let initial_uniforms = EngineUniforms {
+        let initial_scene_uniforms = SceneUniforms {
             view_proj: [[0.0; 4]; 4],
-            model: [[0.0; 4]; 4],
             camera_pos: [0.0; 4],
-            light_pos: [0.0; 4],
-            light_color: [0.0; 4],
-            albedo_color: [1.0, 1.0, 1.0, 1.0],
-            roughness: 0.5,
-            metallic: 0.0,
-            unlit: 0.0, // Varsayilan olarak isik alir
-            _padding: 0.0,
+            lights: [LightData { position: [0.0; 4], color: [0.0; 4] }; 10],
+            num_lights: 0,
+            _padding: [0; 3],
+            light_view_proj: [[0.0; 4]; 4],
         };
 
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Engine Uniform Buffer"),
-            contents: bytemuck::cast_slice(&[initial_uniforms]),
+        let global_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Global Uniform Buffer"),
+            contents: bytemuck::cast_slice(&[initial_scene_uniforms]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        // WGSL Group 0: Kamera ve Işık Uniformu
-        let uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        // -- Shadow Depth Texture --
+        let shadow_texture = device.create_texture(&wgpu::TextureDescriptor {
+            size: wgpu::Extent3d { width: 2048, height: 2048, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            label: Some("shadow_texture"),
+            view_formats: &[],
+        });
+        let shadow_texture_view = shadow_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
+
+        // WGSL Group 0: Kamera ve Işık Uniformu (Global)
+        let global_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry { // Uniform
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+            label: Some("global_bind_group_layout"),
+        });
+
+        let global_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &global_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: global_uniform_buffer.as_entire_binding(),
+                },
+            ],
+            label: Some("global_bind_group"),
+        });
+
+        // WGSL Group 3: Shadow Map ve Sampler
+        let shadow_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry { // Shadow Texture
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Depth,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry { // Shadow Sampler
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+            ],
+            label: Some("shadow_bind_group_layout"),
+        });
+
+        let shadow_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &shadow_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&shadow_texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&shadow_sampler),
+                },
+            ],
+            label: Some("shadow_bind_group"),
+        });
+
+        // WGSL Group 1: Obje Uniform Layout (Her çizimde yeniden bind edilecek)
+        let object_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
@@ -166,19 +271,10 @@ impl<'a> Renderer<'a> {
                 },
                 count: None,
             }],
-            label: Some("uniform_bind_group_layout"),
+            label: Some("object_bind_group_layout"),
         });
 
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &uniform_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-            label: Some("uniform_bind_group"),
-        });
-
-        // WGSL Group 1: Texture (Resim) Şablonu
+        // WGSL Group 2: Texture (Resim) Şablonu
         let texture_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
@@ -209,7 +305,7 @@ impl<'a> Renderer<'a> {
 
         let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[&uniform_bind_group_layout, &texture_bind_group_layout],
+            bind_group_layouts: &[&global_bind_group_layout, &object_bind_group_layout, &texture_bind_group_layout, &shadow_bind_group_layout],
             push_constant_ranges: &[],
         });
 
@@ -250,6 +346,51 @@ impl<'a> Renderer<'a> {
             multiview: None,
         });
 
+        // -- Shadow Pipeline Kurulumu --
+        let shadow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Shadow Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shadow.wgsl").into()),
+        });
+
+        let shadow_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Shadow Pipeline Layout"),
+            bind_group_layouts: &[&global_bind_group_layout, &object_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Shadow Pipeline"),
+            layout: Some(&shadow_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shadow_shader,
+                entry_point: "vs_main",
+                buffers: &[Vertex::desc()], 
+            },
+            fragment: None, // Shadow pass sadece Depth'e yazar, Color target yoktur
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back), // Front-face/back-face duruma göre peter panning azaltır
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState {
+                    constant: 2, // Slope-scaled depth bias (Z-fighting'i engeller)
+                    slope_scale: 2.0,
+                    clamp: 0.0,
+                },
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+
         Self {
             surface,
             device,
@@ -257,9 +398,14 @@ impl<'a> Renderer<'a> {
             config,
             size,
             render_pipeline,
-            uniform_buffer,
-            uniform_bind_group_layout,
-            uniform_bind_group,
+            shadow_pipeline,
+            shadow_texture_view,
+            global_uniform_buffer,
+            global_bind_group_layout,
+            global_bind_group,
+            shadow_bind_group_layout,
+            shadow_bind_group,
+            object_bind_group_layout,
             texture_bind_group_layout,
             depth_texture_view,
         }

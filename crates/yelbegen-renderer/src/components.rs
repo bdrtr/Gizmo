@@ -6,13 +6,14 @@ pub struct Mesh {
     pub vbuf: Arc<wgpu::Buffer>,
     pub vertex_count: u32,
     pub center_offset: Vec3,
+    pub source: String,
 }
 
 
 
 impl Mesh {
-    pub fn new(vbuf: Arc<wgpu::Buffer>, vertex_count: u32, center_offset: Vec3) -> Self {
-        Self { vbuf, vertex_count, center_offset }
+    pub fn new(vbuf: Arc<wgpu::Buffer>, vertex_count: u32, center_offset: Vec3, source: String) -> Self {
+        Self { vbuf, vertex_count, center_offset, source }
     }
 }
 
@@ -23,6 +24,7 @@ pub struct Material {
     pub roughness: f32,
     pub metallic: f32,
     pub unlit: f32,
+    pub texture_source: Option<String>,
 }
 
 impl Material {
@@ -33,6 +35,7 @@ impl Material {
             roughness: 0.5,
             metallic: 0.0,
             unlit: 0.0,
+            texture_source: None,
         }
     }
 
@@ -47,6 +50,16 @@ impl Material {
     pub fn with_unlit(mut self, albedo: yelbegen_math::vec4::Vec4) -> Self {
         self.albedo = albedo;
         self.unlit = 1.0;
+        self
+    }
+
+    pub fn with_skybox(mut self) -> Self {
+        self.unlit = 2.0;
+        self
+    }
+
+    pub fn with_texture_source(mut self, path: String) -> Self {
+        self.texture_source = Some(path);
         self
     }
 }
@@ -64,6 +77,7 @@ impl MeshRenderer {
     }
 }
 
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Camera {
     pub fov: f32,
     pub near: f32,
@@ -99,7 +113,7 @@ impl Camera {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct PointLight {
     pub color: Vec3,
     pub intensity: f32,

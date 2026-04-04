@@ -1,17 +1,11 @@
-use winit::{
-    event::{Event, WindowEvent, DeviceEvent, ElementState},
-    keyboard::{PhysicalKey, KeyCode},
-};
-
 use yelbegen::prelude::*;
-use yelbegen::renderer::EngineUniforms;
+
 use std::collections::HashSet;
-
-use yelbegen::app::App;
 use std::sync::Arc;
-use yelbegen::renderer::components::{Mesh, Material, MeshRenderer, Camera, PointLight};
-use yelbegen::renderer::asset::AssetManager;
 
+pub mod scene;
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct EntityName(pub String);
 
 
@@ -46,7 +40,7 @@ pub fn physics_movement_system(world: &mut World, dt: f32) {
 
 /// AABB çarpışma tespiti ve çözümleme.
 /// Entity ID tabanlı güvenli erişim kullanır.
-pub fn physics_collision_system(world: &mut World, _dt: f32) {
+pub fn physics_collision_system(world: &mut World, _dt: f32, audio: Option<&yelbegen::audio::AudioManager>) {
     let mut collision_resolutions: Vec<(u32, Vec3, f32)> = Vec::new();
 
     if let (Some(trans), Some(colliders), Some(rbs)) =
@@ -109,12 +103,20 @@ pub fn physics_collision_system(world: &mut World, _dt: f32) {
         if let Some(mut v) = world.borrow_mut::<Velocity>() {
             if let Some(vel) = v.get_mut(*entity_id) {
                 vel.linear.y = -vel.linear.y * restitution;
+                
+                // Zıplama Sesi!
+                if let Some(a) = audio {
+                    a.play("bounce");
+                }
             }
         }
     }
 }
 
 // ======================== OYUN DURUMU ========================
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum DragAxis { X, Y, Z }
 
 struct GameState {
     mouse_pressed: bool,
@@ -123,6 +125,20 @@ struct GameState {
     player_id: u32,
     skybox_id: u32,
     inspector_selected_entity: Option<u32>,
+    audio: Option<yelbegen::audio::AudioManager>,
+    mouse_pos: (f32, f32),
+    window_dims: (f32, f32),
+    do_raycast: bool,
+    gizmo_x: u32,
+    gizmo_y: u32,
+    gizmo_z: u32,
+    dragging_axis: Option<DragAxis>,
+    drag_start_t: f32,
+    drag_original_pos: Vec3,
+    current_fps: f32,
+    spawn_monkey_requests: std::cell::Cell<u32>,
+    spawn_light_requests: std::cell::Cell<u32>,
+    egui_wants_pointer: bool,
 }
 
 // ======================== ANA FONKSİYON ========================
@@ -133,6 +149,11 @@ fn main() {
     // 1. SETUP
     app = app.set_setup(|world, renderer| {
         println!("Yelbegen Engine: Sahne başlatılıyor...");
+
+        let mut audio = yelbegen::audio::AudioManager::new();
+        if let Some(ref mut a) = audio {
+            a.load_sound("bounce", "demo/assets/bounce.wav");
+        }
 
         let mut asset_manager = AssetManager::new();
 
@@ -156,94 +177,187 @@ fn main() {
             ],
         }));
 
-        // Uniform buffer üretici
+        let stone_tbind = AssetManager::load_material_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.texture_bind_group_layout,
+            "demo/assets/stone_tiles.jpg"
+        );
+
+        // Uniform buffer üretici (Her obje için ayrı boyut ve bind group tutacak)
         let create_renderer = || -> MeshRenderer {
             let ubuf = renderer.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Mesh UBUF"),
-                size: std::mem::size_of::<EngineUniforms>() as wgpu::BufferAddress,
+                label: Some("Mesh Object UBUF"),
+                size: std::mem::size_of::<yelbegen::renderer::renderer::ObjectUniforms>() as wgpu::BufferAddress,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
             let ubind = renderer.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Mesh UBIND"),
-                layout: &renderer.uniform_bind_group_layout,
+                label: Some("Mesh Object UBIND"),
+                layout: &renderer.object_bind_group_layout,
                 entries: &[wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() }],
             });
             MeshRenderer::new(ubuf, ubind)
         };
 
-        // --- Zıplayan Kutu (Suzanne) ---
-        let bouncing_box = world.spawn();
-        world.add_component(bouncing_box, Transform::new(Vec3::new(0.0, 5.0, -8.0)));
-        world.add_component(bouncing_box, Velocity::new(Vec3::new(3.0, 0.0, 0.0)));
-        world.add_component(bouncing_box, Collider::new_aabb(0.5, 0.5, 0.5));
-        world.add_component(bouncing_box, RigidBody::new(1.0, 0.8, 0.2, true));
-        world.add_component(bouncing_box, asset_manager.load_obj(&renderer.device, "demo/assets/suzanne.obj"));
-        world.add_component(bouncing_box, Material::new(tbind.clone()).with_pbr(Vec4::new(0.8, 0.2, 0.2, 1.0), 0.2, 0.1)); // Parlak kırmızımsı materyal
-        world.add_component(bouncing_box, create_renderer());
-        world.add_component(bouncing_box, EntityName("Zıplayan Maymun".into()));
+        let mut bouncing_box_id = 0;
+        let loaded = scene::SceneData::load_into(
+            "scene.json",
+            world,
+            &renderer.device,
+            &renderer.queue,
+            &renderer.texture_bind_group_layout,
+            &mut asset_manager,
+            tbind.clone(),
+            &create_renderer,
+            &mut bouncing_box_id,
+        );
 
-        // --- Zemin (Suzanne geçici) ---
-        let ground = world.spawn();
-        world.add_component(ground, Transform::new(Vec3::new(0.0, -1.0, 0.0)));
-        world.add_component(ground, Velocity::new(Vec3::ZERO));
-        world.add_component(ground, Collider::new_aabb(10.0, 1.0, 10.0));
-        world.add_component(ground, RigidBody::new_static());
-        world.add_component(ground, asset_manager.load_obj(&renderer.device, "demo/assets/suzanne.obj")); // Şimdilik yer objesi niyetine
-        world.add_component(ground, Material::new(tbind.clone()).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.8, 0.0)); // Mat malzeme
-        world.add_component(ground, create_renderer());
-        world.add_component(ground, EntityName("Zemin Objesi".into()));
+        let (player_id, skybox_id, g_x, g_y, g_z) = if !loaded {
+            // --- Zıplayan Küre ---
+            let bouncing_box = world.spawn();
+            bouncing_box_id = bouncing_box.id();
+            world.add_component(bouncing_box, Transform::new(Vec3::new(0.0, 5.0, -8.0)));
+            world.add_component(bouncing_box, Velocity::new(Vec3::new(3.0, 0.0, 0.0)));
+            world.add_component(bouncing_box, Collider::new_aabb(1.0, 1.0, 1.0));
+            world.add_component(bouncing_box, RigidBody::new(1.0, 0.8, 0.2, true));
+            world.add_component(bouncing_box, AssetManager::create_sphere(&renderer.device, 1.0, 16, 16));
+            world.add_component(bouncing_box, Material::new(tbind.clone()).with_pbr(Vec4::new(0.8, 0.2, 0.2, 1.0), 0.2, 0.1));
+            world.add_component(bouncing_box, create_renderer());
+            world.add_component(bouncing_box, EntityName("Zıplayan Küre".into()));
 
-        // --- Işık (Point Light) ---
-        let light = world.spawn();
-        world.add_component(light, Transform::new(Vec3::new(2.0, 5.0, -2.0)));
-        world.add_component(light, PointLight::new(Vec3::new(1.0, 0.9, 0.8), 2.0)); // Sıcak sarımsı ışık
-        // Işığı da minik bir mesh olarak görelim
-        world.add_component(light, asset_manager.load_obj(&renderer.device, "demo/assets/suzanne.obj"));
-        world.add_component(light, Material::new(tbind.clone()).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 1.0, 0.0));
-        world.add_component(light, create_renderer());
-        world.add_component(light, EntityName("Nokta Güneş Işığı".into()));
+            // --- Zemin (Gerçek Uçsuz Bucaksız Taş Plane) ---
+            let ground = world.spawn();
+            world.add_component(ground, Transform::new(Vec3::new(0.0, -1.0, 0.0)));
+            world.add_component(ground, Velocity::new(Vec3::ZERO));
+            world.add_component(ground, Collider::new_aabb(25.0, 1.0, 25.0));
+            world.add_component(ground, RigidBody::new_static());
+            world.add_component(ground, AssetManager::create_plane(&renderer.device, 50.0));
+            world.add_component(ground, Material::new(stone_tbind.clone()).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.9, 0.0).with_texture_source("demo/assets/stone_tiles.jpg".into()));
+            world.add_component(ground, create_renderer());
+            world.add_component(ground, EntityName("Taş Zemin".into()));
 
-        // --- Ekstra 10 Maymun (Mesh Önbellekleme Testi) ---
-        for i in 0..10 {
-            let clone_monkey = world.spawn();
-            let random_x = (i as f32 * 2.0) - 10.0;
-            let random_z = (i as f32 % 3.0) * -2.0 - 5.0;
-            world.add_component(clone_monkey, Transform::new(Vec3::new(random_x, 0.5, random_z)));
-            // asset_manager önbellekten direkt veriyor: Sıfır disk okuması
-            world.add_component(clone_monkey, asset_manager.load_obj(&renderer.device, "demo/assets/suzanne.obj"));
-            world.add_component(clone_monkey, Material::new(tbind.clone()).with_pbr(Vec4::new(0.1, 0.8, 0.2, 1.0), 0.5, 0.0)); 
-            world.add_component(clone_monkey, create_renderer());
-            world.add_component(clone_monkey, EntityName(format!("Klon Maymun {}", i)));
-        }
+            // --- Işık 1 (Point Light) ---
+            let light1 = world.spawn();
+            world.add_component(light1, Transform::new(Vec3::new(2.0, 5.0, -2.0)));
+            world.add_component(light1, PointLight::new(Vec3::new(1.0, 0.9, 0.8), 2.0));
+            world.add_component(light1, AssetManager::create_sphere(&renderer.device, 0.3, 8, 8));
+            world.add_component(light1, Material::new(tbind.clone()).with_unlit(Vec4::new(1.0, 0.9, 0.8, 1.0)));
+            world.add_component(light1, create_renderer());
+            world.add_component(light1, EntityName("Sarı Işık".into()));
 
-        // --- Player (Kamera) ---
-        let player = world.spawn();
-        world.add_component(player, Transform::new(Vec3::new(0.0, 5.0, 15.0)));
-        world.add_component(player, Camera::new(
-            std::f32::consts::FRAC_PI_4, 0.1, 2000.0,
-            -std::f32::consts::FRAC_PI_2, -0.3, true,
-        ));
-        world.add_component(player, EntityName("Kamera (Göz)".into()));
+            // --- Işık 2 (Point Light - Çoklu Gösterim) ---
+            let light2 = world.spawn();
+            world.add_component(light2, Transform::new(Vec3::new(-4.0, 2.0, -4.0)));
+            world.add_component(light2, PointLight::new(Vec3::new(0.2, 0.4, 1.0), 1.5));
+            world.add_component(light2, AssetManager::create_sphere(&renderer.device, 0.3, 8, 8));
+            world.add_component(light2, Material::new(tbind.clone()).with_unlit(Vec4::new(0.2, 0.4, 1.0, 1.0)));
+            world.add_component(light2, create_renderer());
+            world.add_component(light2, EntityName("Mavi Işık".into()));
 
-        // --- Skybox (Sonsuz Gökyüzü) ---
-        let skybox = world.spawn();
-        let mut sky_transform = Transform::new(Vec3::ZERO);
-        // Devasa boyut
-        sky_transform.scale = Vec3::new(500.0, 500.0, 500.0); 
-        world.add_component(skybox, sky_transform);
-        world.add_component(skybox, AssetManager::create_inverted_cube(&renderer.device));
-        world.add_component(skybox, Material::new(tbind.clone()).with_unlit(Vec4::new(0.15, 0.35, 0.60, 1.0))); // Hafif koyu bir gökyüzü mavisi
-        world.add_component(skybox, create_renderer());
-        world.add_component(skybox, EntityName("Skybox (Gök Kubbe)".into()));
+            // --- Ekstra 10 Maymun (Mesh Önbellekleme Testi) ---
+            for i in 0..10 {
+                let clone_monkey = world.spawn();
+                let random_x = (i as f32 * 2.5) - 12.0;
+                let random_z = (i as f32 % 3.0) * -3.0 - 5.0;
+                world.add_component(clone_monkey, Transform::new(Vec3::new(random_x, 0.5, random_z)));
+                world.add_component(clone_monkey, Collider::new_aabb(1.0, 1.0, 1.0));
+                world.add_component(clone_monkey, AssetManager::create_sphere(&renderer.device, 1.0, 16, 16));
+                world.add_component(clone_monkey, Material::new(tbind.clone()).with_pbr(Vec4::new(0.1, 0.8, 0.2, 1.0), 0.5, 0.0)); 
+                world.add_component(clone_monkey, create_renderer());
+                world.add_component(clone_monkey, EntityName(format!("Küre {}", i)));
+            }
+
+            // --- Player (Kamera) ---
+            let player = world.spawn();
+            world.add_component(player, Transform::new(Vec3::new(0.0, 5.0, 15.0)));
+            world.add_component(player, Camera::new(
+                std::f32::consts::FRAC_PI_4, 0.1, 2000.0,
+                -std::f32::consts::FRAC_PI_2, -0.3, true,
+            ));
+            world.add_component(player, EntityName("Kamera (Göz)".into()));
+
+            // --- Skybox (Sonsuz Gökyüzü) ---
+            let skybox = world.spawn();
+            let mut sky_transform = Transform::new(Vec3::ZERO);
+            // Devasa boyut
+            sky_transform.scale = Vec3::new(500.0, 500.0, 500.0); 
+            world.add_component(skybox, sky_transform);
+            world.add_component(skybox, AssetManager::create_inverted_cube(&renderer.device));
+            world.add_component(skybox, Material::new(tbind.clone()).with_skybox());
+            world.add_component(skybox, create_renderer());
+            world.add_component(skybox, EntityName("Skybox (Gök Kubbe)".into()));
+
+            // --- GIZMO EKSENLERI (X, Y, Z) ---
+            // Görünmez yapmak için y = -1000'de başlat.
+            let x_gizmo = world.spawn();
+            world.add_component(x_gizmo, Transform { position: Vec3::new(0.0, -1000.0, 0.0), rotation: Quat::IDENTITY, scale: Vec3::new(1.5, 0.08, 0.08) });
+            world.add_component(x_gizmo, AssetManager::create_sphere(&renderer.device, 1.0, 6, 6));
+            world.add_component(x_gizmo, Material::new(tbind.clone()).with_unlit(Vec4::new(1.0, 0.0, 0.0, 1.0)));
+            world.add_component(x_gizmo, Collider::new_aabb(1.5, 0.3, 0.3));
+            world.add_component(x_gizmo, create_renderer());
+            world.add_component(x_gizmo, EntityName("Gizmo_X".into()));
+
+            let y_gizmo = world.spawn();
+            world.add_component(y_gizmo, Transform { position: Vec3::new(0.0, -1000.0, 0.0), rotation: Quat::IDENTITY, scale: Vec3::new(0.08, 1.5, 0.08) });
+            world.add_component(y_gizmo, AssetManager::create_sphere(&renderer.device, 1.0, 6, 6));
+            world.add_component(y_gizmo, Material::new(tbind.clone()).with_unlit(Vec4::new(0.0, 1.0, 0.0, 1.0)));
+            world.add_component(y_gizmo, Collider::new_aabb(0.3, 1.5, 0.3));
+            world.add_component(y_gizmo, create_renderer());
+            world.add_component(y_gizmo, EntityName("Gizmo_Y".into()));
+
+            let z_gizmo = world.spawn();
+            world.add_component(z_gizmo, Transform { position: Vec3::new(0.0, -1000.0, 0.0), rotation: Quat::IDENTITY, scale: Vec3::new(0.08, 0.08, 1.5) });
+            world.add_component(z_gizmo, AssetManager::create_sphere(&renderer.device, 1.0, 6, 6));
+            world.add_component(z_gizmo, Material::new(tbind.clone()).with_unlit(Vec4::new(0.0, 0.0, 1.0, 1.0)));
+            world.add_component(z_gizmo, Collider::new_aabb(0.3, 0.3, 1.5));
+            world.add_component(z_gizmo, create_renderer());
+            world.add_component(z_gizmo, EntityName("Gizmo_Z".into()));
+
+            (player.id(), skybox.id(), x_gizmo.id(), y_gizmo.id(), z_gizmo.id())
+        } else {
+            // ECS'den Player ve Skybox ID'sini çek (Kameralara bakarak vb)
+            let mut p_id = 0;
+            let mut s_id = 0;
+            let mut g_x = 0;
+            let mut g_y = 0;
+            let mut g_z = 0;
+            
+            if let Some(names) = world.borrow::<EntityName>() {
+                for entity in world.iter_alive_entities() {
+                    if let Some(n) = names.get(entity.id()) {
+                        if n.0 == "Kamera (Göz)" { p_id = entity.id(); }
+                        if n.0 == "Skybox (Gök Kubbe)" { s_id = entity.id(); }
+                        if n.0 == "Gizmo_X" { g_x = entity.id(); }
+                        if n.0 == "Gizmo_Y" { g_y = entity.id(); }
+                        if n.0 == "Gizmo_Z" { g_z = entity.id(); }
+                    }
+                }
+            }
+            (p_id, s_id, g_x, g_y, g_z)
+        };
 
         GameState {
             mouse_pressed: false,
             keys: HashSet::new(),
-            bouncing_box_id: bouncing_box.id(),
-            player_id: player.id(),
-            skybox_id: skybox.id(),
+            bouncing_box_id,
+            player_id,
+            skybox_id,
             inspector_selected_entity: None,
+            audio,
+            mouse_pos: (0.0, 0.0),
+            window_dims: (1280.0, 720.0),
+            do_raycast: false,
+            gizmo_x: g_x,
+            gizmo_y: g_y,
+            gizmo_z: g_z,
+            dragging_axis: None,
+            drag_start_t: 0.0,
+            drag_original_pos: Vec3::ZERO,
+            current_fps: 0.0,
+            spawn_monkey_requests: std::cell::Cell::new(0),
+            spawn_light_requests: std::cell::Cell::new(0),
+            egui_wants_pointer: false,
         }
     });
 
@@ -261,9 +375,22 @@ fn main() {
                 }
                 handled = true;
             }
-            Event::WindowEvent { event: WindowEvent::MouseInput { state: m_state, button: winit::event::MouseButton::Right, .. }, .. } => {
+            Event::WindowEvent { event: WindowEvent::MouseInput { state: m_state, button: MouseButton::Right, .. }, .. } => {
                 state.mouse_pressed = *m_state == ElementState::Pressed;
                 handled = true;
+            }
+            Event::WindowEvent { event: WindowEvent::MouseInput { state: m_state, button: MouseButton::Left, .. }, .. } => {
+                if *m_state == ElementState::Pressed && !state.mouse_pressed {
+                    state.do_raycast = true;
+                } else if *m_state == ElementState::Released {
+                    state.dragging_axis = None;
+                }
+            }
+            Event::WindowEvent { event: WindowEvent::CursorMoved { position, .. }, .. } => {
+                state.mouse_pos = (position.x as f32, position.y as f32);
+            }
+            Event::WindowEvent { event: WindowEvent::Resized(physical_size), .. } => {
+                state.window_dims = (physical_size.width as f32, physical_size.height as f32);
             }
             Event::DeviceEvent { event: DeviceEvent::MouseMotion { delta }, .. } => {
                 if state.mouse_pressed {
@@ -286,6 +413,138 @@ fn main() {
     // 3. UPDATE HOOK
     app = app.set_update(|world, state, dt| {
         let speed = 10.0 * dt;
+        state.current_fps = 1.0 / dt;
+
+        let mut current_ray = None;
+        let (mx, my) = state.mouse_pos;
+        let (ww, wh) = state.window_dims;
+        let ndc_x = (2.0 * mx) / ww - 1.0;
+        let ndc_y = 1.0 - (2.0 * my) / wh;
+
+        if let (Some(cameras), Some(transforms)) = (world.borrow::<Camera>(), world.borrow::<Transform>()) {
+            if let (Some(cam), Some(cam_t)) = (cameras.get(state.player_id), transforms.get(state.player_id)) {
+                let proj = Mat4::perspective(cam.fov, ww / wh, cam.near, cam.far);
+                let view = cam.get_view(cam_t.position);
+                let view_proj = proj * view;
+
+                if let Some(inv_vp) = view_proj.inverse() {
+                    // wgpu NDC: z aralığı [0, 1] (near=0, far=1)
+                    let far_pt = inv_vp * Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
+                    let near_pt = inv_vp * Vec4::new(ndc_x, ndc_y, 0.0, 1.0);
+
+                    let world_near = Vec3::new(near_pt.x / near_pt.w, near_pt.y / near_pt.w, near_pt.z / near_pt.w);
+                    let world_far = Vec3::new(far_pt.x / far_pt.w, far_pt.y / far_pt.w, far_pt.z / far_pt.w);
+
+                    let ray_dir = (world_far - world_near).normalize();
+                    current_ray = Some(yelbegen::math::Ray::new(world_near, ray_dir));
+                }
+            }
+        }
+
+        if let Some(ray) = current_ray {
+            // EGUI paneli üzerindeyken raycast'i yutuyoruz
+            if state.egui_wants_pointer {
+                state.do_raycast = false;
+            }
+
+            if state.do_raycast {
+                state.do_raycast = false;
+                
+                let mut closest_t = std::f32::MAX;
+                let mut hit_entity = None;
+
+                if let (Some(colliders), Some(transforms)) = (world.borrow::<Collider>(), world.borrow::<Transform>()) {
+                    for i in 0..colliders.dense.len() {
+                        let id = colliders.entity_dense[i];
+                        // Dahili objeleri (Kamera, Skybox) raycast'ten hariç tut
+                        if id == state.player_id || id == state.skybox_id {
+                            continue;
+                        }
+                        if let Some(t) = transforms.get(id) {
+                            if let yelbegen::physics::ColliderShape::Aabb(aabb) = &colliders.dense[i].shape {
+                                // Scale'i collider boyutuna uygula
+                                let scaled_half = Vec3::new(
+                                    aabb.half_extents.x * t.scale.x,
+                                    aabb.half_extents.y * t.scale.y,
+                                    aabb.half_extents.z * t.scale.z,
+                                );
+                                let min = t.position - scaled_half;
+                                let max = t.position + scaled_half;
+                                if let Some(hitt) = ray.intersect_aabb(min, max) {
+                                    // Sadece bize kameranın önündeki objeleri ver! (Z clip)
+                                    if hitt > 0.0 && hitt < closest_t {
+                                        closest_t = hitt;
+                                        hit_entity = Some(id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(hit) = hit_entity {
+                        if hit == state.gizmo_x || hit == state.gizmo_y || hit == state.gizmo_z {
+                            if let Some(sel) = state.inspector_selected_entity {
+                                if let Some(t) = transforms.get(sel) {
+                                    state.drag_original_pos = t.position;
+                                    let axis_dir = if hit == state.gizmo_x { Vec3::new(1.0, 0.0, 0.0) }
+                                                else if hit == state.gizmo_y { Vec3::new(0.0, 1.0, 0.0) }
+                                                else { Vec3::new(0.0, 0.0, 1.0) };
+                                    
+                                    let w0 = ray.origin - t.position;
+                                    let b = ray.direction.dot(axis_dir);
+                                    let d = ray.direction.dot(w0);
+                                    let e = axis_dir.dot(w0);
+                                    let denom = 1.0 - b * b;
+                                    
+                                    if denom.abs() > 0.0001 {
+                                        state.drag_start_t = (e - b * d) / denom;
+                                        if hit == state.gizmo_x { state.dragging_axis = Some(DragAxis::X); }
+                                        else if hit == state.gizmo_y { state.dragging_axis = Some(DragAxis::Y); }
+                                        else { state.dragging_axis = Some(DragAxis::Z); }
+                                    }
+                                }
+                            }
+                        } else {
+                            state.inspector_selected_entity = Some(hit);
+                            let mut name_str = format!("Model {}", hit);
+                            if let Some(names) = world.borrow::<EntityName>() {
+                                if let Some(n) = names.get(hit) {
+                                    name_str = n.0.clone();
+                                }
+                            }
+                            println!("Raycast: {} seçildi!", name_str);
+                        }
+                    } else {
+                        state.inspector_selected_entity = None;
+                    }
+                } // End immutable borrow
+            } else if let Some(axis) = state.dragging_axis {
+                if let Some(sel) = state.inspector_selected_entity {
+                    let axis_dir = match axis {
+                        DragAxis::X => Vec3::new(1.0, 0.0, 0.0),
+                        DragAxis::Y => Vec3::new(0.0, 1.0, 0.0),
+                        DragAxis::Z => Vec3::new(0.0, 0.0, 1.0),
+                    };
+
+                    let w0 = ray.origin - state.drag_original_pos;
+                    let b = ray.direction.dot(axis_dir);
+                    let d = ray.direction.dot(w0);
+                    let e = axis_dir.dot(w0);
+                    let denom = 1.0 - b * b;
+                    
+                    if denom.abs() > 0.0001 {
+                        let current_t = (e - b * d) / denom;
+                        let delta_t = current_t - state.drag_start_t;
+                        
+                        if let Some(mut trans) = world.borrow_mut::<Transform>() {
+                            if let Some(t) = trans.get_mut(sel) {
+                                t.position = state.drag_original_pos + axis_dir * delta_t;
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         let mut f = Vec3::ZERO;
         let mut r = Vec3::ZERO;
@@ -297,7 +556,32 @@ fn main() {
             }
         }
 
+        // Fizik Güncellemesi & Çarpışmalar & Ses Tetikleyicileri
+        physics_movement_system(world, dt);
+        physics_collision_system(world, dt, state.audio.as_ref());
+
         if let Some(mut trans) = world.borrow_mut::<Transform>() {
+            // Gizmo Senkronizasyonu
+            let target_pos = if let Some(selected) = state.inspector_selected_entity {
+                if let Some(t) = trans.get(selected) {
+                    Some(t.position)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if let Some(pos) = target_pos {
+                if let Some(tx) = trans.get_mut(state.gizmo_x) { tx.position = pos; }
+                if let Some(ty) = trans.get_mut(state.gizmo_y) { ty.position = pos; }
+                if let Some(tz) = trans.get_mut(state.gizmo_z) { tz.position = pos; }
+            } else {
+                if let Some(tx) = trans.get_mut(state.gizmo_x) { tx.position = Vec3::new(0.0, -1000.0, 0.0); }
+                if let Some(ty) = trans.get_mut(state.gizmo_y) { ty.position = Vec3::new(0.0, -1000.0, 0.0); }
+                if let Some(tz) = trans.get_mut(state.gizmo_z) { tz.position = Vec3::new(0.0, -1000.0, 0.0); }
+            }
+
             // Kamera Hareketi
             if let Some(t) = trans.get_mut(state.player_id) {
                 if state.keys.contains(&KeyCode::KeyW) { t.position += f * speed; }
@@ -336,19 +620,38 @@ fn main() {
     });
 
     // 4. ECS SİSTEMLERİ
-    app = app.add_system(physics_movement_system);
-    app = app.add_system(physics_collision_system);
+    // Fizik sistemlerini App::schedule yerine doğrudan Update Hook içerisinde 
+    // çağırdık çünkü AudioManager gibi oyun State'ine ihtiyacımız var.
 
-    // 5. EGUI ARAYÜZ
+    // 4. UI SEÇİM VE GÖRÜNTÜLEME
     app = app.set_ui(|world, state, ctx| {
-        egui::Window::new("⚙️ Yelbegen Engine Inspector")
-            .default_width(400.0)
+        state.egui_wants_pointer = ctx.is_pointer_over_area();
+        egui::Window::new("Yelbegen Inspector")
+            .default_pos([10.0, 10.0])
             .show(ctx, |ui| {
+                ui.heading(format!("FPS: {:.0}", state.current_fps));
+                ui.separator();
+                
                 ui.horizontal(|ui| {
                     // SOL PANEL: Hiyerarşi
                     ui.vertical(|ui| {
                         ui.set_width(150.0);
                         ui.heading("Sahne (Hiyerarşi)");
+                        ui.add_space(5.0);
+                        if ui.button("💾 Sahneyi Kaydet").clicked() {
+                            scene::SceneData::save(world, "scene.json");
+                        }
+                        if ui.button("📂 Yeniden Yükle").on_hover_text("Uygulamayı yeniden başlatın").clicked() {
+                            println!("Lütfen yüklemek için uygulamayı kapatıp yeniden başlatın.");
+                        }
+                        ui.separator();
+                        
+                        if ui.button("➕ Yeni Maymun Ekle").clicked() {
+                            state.spawn_monkey_requests.set(state.spawn_monkey_requests.get() + 1);
+                        }
+                        if ui.button("💡 Yeni Işık Ekle").clicked() {
+                            state.spawn_light_requests.set(state.spawn_light_requests.get() + 1);
+                        }
                         ui.separator();
                         
                         egui::ScrollArea::vertical().id_source("hierarchy").max_height(200.0).show(ui, |ui| {
@@ -356,6 +659,11 @@ fn main() {
                                 for i in 0..names.dense.len() {
                                     let e_id = names.entity_dense[i];
                                     let e_name = &names.dense[i].0;
+                                    // Dahili objeleri (Gizmo, Kamera, Skybox) hiyerarşiden gizle
+                                    if e_id == state.gizmo_x || e_id == state.gizmo_y || e_id == state.gizmo_z
+                                        || e_id == state.player_id || e_id == state.skybox_id {
+                                        continue;
+                                    }
                                     let is_selected = state.inspector_selected_entity == Some(e_id);
                                     if ui.selectable_label(is_selected, e_name).clicked() {
                                         state.inspector_selected_entity = Some(e_id);
@@ -371,16 +679,25 @@ fn main() {
                     ui.vertical(|ui| {
                         ui.set_min_width(200.0);
                         ui.heading("Bileşenler (Components)");
+
+                        if let Some(e) = state.inspector_selected_entity {
+                            if ui.button(egui::RichText::new("🗑️ Seçili Objeyi Sil").color(egui::Color32::RED)).clicked() {
+                                world.despawn_by_id(e);
+                                state.inspector_selected_entity = None;
+                                state.dragging_axis = None;
+                            }
+                        }
+
                         ui.separator();
 
                         if let Some(e) = state.inspector_selected_entity {
-                            // İsim
-                            if let Some(names) = world.borrow::<EntityName>() {
-                                if let Some(n) = names.get(e) {
-                                    ui.label(egui::RichText::new(&n.0).strong().size(16.0));
-                                    ui.add_space(5.0);
+                                // İsim
+                                if let Some(names) = world.borrow::<EntityName>() {
+                                    if let Some(n) = names.get(e) {
+                                        ui.label(egui::RichText::new(&n.0).strong().size(16.0));
+                                        ui.add_space(5.0);
+                                    }
                                 }
-                            }
 
                             // Transform
                             if let Some(mut transforms) = world.borrow_mut::<Transform>() {
@@ -505,55 +822,158 @@ fn main() {
         
         let view_proj = proj * view_mat;
 
-        // Işık kaynağını bul
-        let mut light_pos = Vec3::new(0.0, 10.0, 0.0);
-        let mut light_color = Vec3::new(1.0, 1.0, 1.0);
-        let mut light_intensity = 1.0;
-        if let (Some(lights), Some(transforms)) = (world.borrow::<PointLight>(), world.borrow::<Transform>()) {
-            if !lights.dense.is_empty() {
-                let e = lights.entity_dense[0];
-                if let Some(t) = transforms.get(e) {
-                    light_pos = t.position;
+        // --- EVENT: YENİ OBJE EKLEME ---
+        while state.spawn_monkey_requests.get() > 0 {
+            let entity = world.spawn();
+            let mut spawn_pos = cam_pos + Vec3::new(0.0, 0.0, -5.0);
+            
+            if let Some(cameras) = world.borrow::<Camera>() {
+                if let Some(cam) = cameras.get(state.player_id) {
+                    spawn_pos = cam_pos + cam.get_front() * 5.0; // 5 birim ileriye koy
                 }
-                let l = lights.dense[0];
-                light_color = l.color;
-                light_intensity = l.intensity;
+            }
+
+            world.add_component(entity, Transform::new(spawn_pos));
+            world.add_component(entity, Velocity::new(Vec3::ZERO)); 
+            world.add_component(entity, Collider::new_aabb(1.0, 1.0, 1.0));
+            world.add_component(entity, RigidBody::new(1.0, 0.5, 0.2, true));
+            world.add_component(entity, EntityName("Yeni Küre".into()));
+            
+            // Küre mesh'ini ve materyalini oluştur
+            world.add_component(entity, AssetManager::create_sphere(&renderer.device, 1.0, 16, 16));
+            // Rastgele renkli materyal
+            let r = ((entity.id() * 73 + 17) % 255) as f32 / 255.0;
+            let g = ((entity.id() * 137 + 43) % 255) as f32 / 255.0;
+            let b = ((entity.id() * 199 + 7) % 255) as f32 / 255.0;
+            {
+                let mut bind_group_clone = None;
+                if let Some(mats) = world.borrow::<yelbegen::renderer::components::Material>() {
+                    if let Some(mat) = mats.get(state.bouncing_box_id) {
+                        bind_group_clone = Some(mat.bind_group.clone());
+                    }
+                }
+                if let Some(bg) = bind_group_clone {
+                    let new_mat = yelbegen::renderer::components::Material::new(bg)
+                        .with_pbr(Vec4::new(r, g, b, 1.0), 0.4, 0.1);
+                    world.add_component(entity, new_mat);
+                }
+            }
+            
+            let ubuf = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Mesh Object UBUF"),
+                size: std::mem::size_of::<yelbegen::renderer::renderer::ObjectUniforms>() as wgpu::BufferAddress,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let ubind = renderer.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Mesh Object UBIND"),
+                layout: &renderer.object_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() }],
+            });
+            world.add_component(entity, yelbegen::renderer::components::MeshRenderer::new(ubuf, ubind));
+            
+            state.spawn_monkey_requests.set(state.spawn_monkey_requests.get() - 1);
+        }
+
+        while state.spawn_light_requests.get() > 0 {
+            let entity = world.spawn();
+            let mut spawn_pos = cam_pos + Vec3::new(0.0, 2.0, -3.0);
+            
+            if let Some(cameras) = world.borrow::<Camera>() {
+                if let Some(cam) = cameras.get(state.player_id) {
+                    spawn_pos = cam_pos + cam.get_front() * 3.0; // 3 birim ileriye koy
+                }
+            }
+
+            world.add_component(entity, Transform::new(spawn_pos));
+            world.add_component(entity, PointLight::new(Vec3::new(1.0, 1.0, 1.0), 3.0));
+            world.add_component(entity, EntityName("Yeni Işık".into()));
+            
+            // Küre mesh ve unlit beyaz materyal
+            world.add_component(entity, AssetManager::create_sphere(&renderer.device, 0.3, 8, 8));
+            {
+                let mut mat_bg = None;
+                if let Some(mats) = world.borrow::<yelbegen::renderer::components::Material>() {
+                    if let Some(mat) = mats.get(state.bouncing_box_id) {
+                        mat_bg = Some(mat.bind_group.clone());
+                    }
+                }
+                if let Some(bg) = mat_bg {
+                    world.add_component(entity, yelbegen::renderer::components::Material::new(bg)
+                        .with_unlit(Vec4::new(1.0, 1.0, 1.0, 1.0)));
+                }
+            }
+            
+            let ubuf = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Mesh Object UBUF"),
+                size: std::mem::size_of::<yelbegen::renderer::renderer::ObjectUniforms>() as wgpu::BufferAddress,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let ubind = renderer.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Mesh Object UBIND"),
+                layout: &renderer.object_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() }],
+            });
+            world.add_component(entity, yelbegen::renderer::components::MeshRenderer::new(ubuf, ubind));
+
+            state.spawn_light_requests.set(state.spawn_light_requests.get() - 1);
+        }
+
+        // Işık kaynaklarını topla (Maksimum 10)
+        let mut lights_data = [yelbegen::renderer::renderer::LightData { position: [0.0; 4], color: [0.0; 4] }; 10];
+        let mut num_lights = 0;
+        
+        if let (Some(lights), Some(transforms)) = (world.borrow::<PointLight>(), world.borrow::<Transform>()) {
+            for i in 0..lights.dense.len() {
+                if num_lights >= 10 { break; }
+                let e = lights.entity_dense[i];
+                if let Some(t) = transforms.get(e) {
+                    let l = &lights.dense[i];
+                    lights_data[num_lights as usize] = yelbegen::renderer::renderer::LightData {
+                        position: [t.position.x, t.position.y, t.position.z, l.intensity],
+                        color: [l.color.x, l.color.y, l.color.z, 0.0],
+                    };
+                    num_lights += 1;
+                }
             }
         }
+
+        // Shadow Mapping İçin Ana Işık Kamerasını Hazırla (İlk nokta ışığı referans)
+        let mut light_view_proj = Mat4::IDENTITY;
+        if num_lights > 0 {
+            let l_pos = Vec3::new(lights_data[0].position[0], lights_data[0].position[1], lights_data[0].position[2]);
+            let light_view = Mat4::look_at_rh(l_pos, Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0));
+            // Texture 2048x2048 olduğu için aspect ratio 1.0
+            let light_proj = Mat4::perspective(std::f32::consts::FRAC_PI_2, 1.0, 1.0, 100.0);
+            light_view_proj = light_proj * light_view;
+        }
+
+        // Global Uniforms (Her frame sadece 1 kere gönderilir)
+        let scene_uniform_data = yelbegen::renderer::renderer::SceneUniforms {
+            view_proj: view_proj.to_cols_array_2d(),
+            camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
+            lights: lights_data,
+            num_lights,
+            _padding: [0; 3],
+            light_view_proj: light_view_proj.to_cols_array_2d(),
+        };
+        renderer.queue.write_buffer(&renderer.global_uniform_buffer, 0, bytemuck::cast_slice(&[scene_uniform_data]));
 
         // Uniform buffer güncelleme — Collider artık zorunlu değil, tüm Mesh+Material objeleri renderlanır
         if let (Some(meshes), Some(renderers), Some(positions), Some(materials)) =
             (world.borrow::<Mesh>(), world.borrow::<MeshRenderer>(), world.borrow::<Transform>(), world.borrow::<Material>())
         {
-            // Collider'a opsiyonel erişim (sadece bouncing_box scale için)
-            let colliders = world.borrow::<Collider>();
 
             for entity_id in &renderers.entity_dense {
                 let e = *entity_id;
                 if let (Some(mesh), Some(mesh_ren), Some(trans), Some(mat)) = (meshes.get(e), renderers.get(e), positions.get(e), materials.get(e)) {
-                    // Sadece zıplayan kutu collider boyutu kadar ekstra scale alsın
-                    let mut col_scale = Vec3::new(1.0, 1.0, 1.0);
-                    if let Some(ref cols) = colliders {
-                        if let Some(col) = cols.get(e) {
-                            if let yelbegen::physics::ColliderShape::Aabb(aabb) = &col.shape {
-                                if e == state.bouncing_box_id {
-                                    col_scale = aabb.half_extents;
-                                }
-                            }
-                        }
-                    }
-
                     let trans_mat = trans.model_matrix();
-                    let extra_scale = Mat4::scale(col_scale);
                     let center_mat = Mat4::translation(mesh.center_offset);
-                    let model = trans_mat * extra_scale * center_mat;
+                    let model = trans_mat * center_mat;
 
-                    let uniform_data = EngineUniforms {
-                        view_proj: view_proj.to_cols_array_2d(),
+                    let uniform_data = yelbegen::renderer::renderer::ObjectUniforms {
                         model: model.to_cols_array_2d(),
-                        camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
-                        light_pos: [light_pos.x, light_pos.y, light_pos.z, 1.0],
-                        light_color: [light_color.x, light_color.y, light_color.z, light_intensity],
                         albedo_color: [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
                         roughness: mat.roughness,
                         metallic: mat.metallic,
@@ -569,6 +989,40 @@ fn main() {
         let meshes_ref = world.borrow::<Mesh>();
         let materials_ref = world.borrow::<Material>();
         let renderers_ref = world.borrow::<MeshRenderer>();
+
+        // --- 1. GÖLGE PASS (Shadow Pass) ---
+        {
+            let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Shadow Pass"),
+                color_attachments: &[], // Shadow pass sadece Depth'e çizer
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &renderer.shadow_texture_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            shadow_pass.set_pipeline(&renderer.shadow_pipeline);
+
+            if let (Some(meshes), Some(renderers)) = (&meshes_ref, &renderers_ref) {
+                for entity_id in &renderers.entity_dense {
+                    let e = *entity_id;
+                    if let (Some(mesh), Some(mesh_ren)) = (meshes.get(e), renderers.get(e)) {
+                        shadow_pass.set_bind_group(0, &renderer.global_bind_group, &[]);
+                        shadow_pass.set_bind_group(1, &mesh_ren.ubind, &[]);
+                        shadow_pass.set_vertex_buffer(0, mesh.vbuf.slice(..));
+                        shadow_pass.draw(0..mesh.vertex_count, 0..1);
+                    }
+                }
+            }
+        }
+
+        // --- 2. ANA RENDER PASS ---
 
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Main Render Pass"),
@@ -598,8 +1052,10 @@ fn main() {
             for entity_id in &renderers.entity_dense {
                 let e = *entity_id;
                 if let (Some(mesh), Some(mat), Some(mesh_ren)) = (meshes.get(e), materials.get(e), renderers.get(e)) {
-                    render_pass.set_bind_group(0, &mesh_ren.ubind, &[]);
-                    render_pass.set_bind_group(1, &mat.bind_group, &[]);
+                    render_pass.set_bind_group(0, &renderer.global_bind_group, &[]);
+                    render_pass.set_bind_group(1, &mesh_ren.ubind, &[]);
+                    render_pass.set_bind_group(2, &mat.bind_group, &[]);
+                    render_pass.set_bind_group(3, &renderer.shadow_bind_group, &[]);
                     render_pass.set_vertex_buffer(0, mesh.vbuf.slice(..));
                     render_pass.draw(0..mesh.vertex_count, 0..1);
                 }

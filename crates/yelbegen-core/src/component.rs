@@ -9,6 +9,7 @@ impl<T: 'static + Any> Component for T {}
 pub trait ComponentStorage {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn remove_entity(&mut self, entity: u32);
 }
 
 pub struct SparseSet<T: Component> {
@@ -60,6 +61,24 @@ impl<T: Component> SparseSet<T> {
             None
         }
     }
+
+    pub fn remove(&mut self, entity: u32) -> Option<T> {
+        if entity as usize >= self.sparse.len() { return None; }
+        if let Some(dense_idx) = self.sparse[entity as usize] {
+            let last_idx = self.dense.len() - 1;
+            let last_entity = self.entity_dense[last_idx];
+            
+            self.dense.swap(dense_idx, last_idx);
+            self.entity_dense.swap(dense_idx, last_idx);
+            
+            self.sparse[last_entity as usize] = Some(dense_idx);
+            self.sparse[entity as usize] = None;
+            
+            self.entity_dense.pop();
+            return self.dense.pop();
+        }
+        None
+    }
 }
 
 impl<T: Component> ComponentStorage for SparseSet<T> {
@@ -68,5 +87,8 @@ impl<T: Component> ComponentStorage for SparseSet<T> {
     }
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+    fn remove_entity(&mut self, entity: u32) {
+        self.remove(entity);
     }
 }

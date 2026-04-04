@@ -4,5 +4,6 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
 yelbegen-core = { path = "../yelbegen-core" }
 yelbegen-math = { path = "../yelbegen-math" }
