@@ -52,6 +52,26 @@ impl Quat {
         let uuv = q_vec.cross(uv);
         v + (uv * self.w + uuv) * 2.0
     }
+
+    /// Quaternion'u 4x4 rotasyon matrisine dönüştürür.
+    #[inline]
+    pub fn to_mat4(self) -> crate::mat4::Mat4 {
+        let (x, y, z, w) = (self.x, self.y, self.z, self.w);
+        let (x2, y2, z2) = (x + x, y + y, z + z);
+        let (xx, xy, xz) = (x * x2, x * y2, x * z2);
+        let (yy, yz, zz) = (y * y2, y * z2, z * z2);
+        let (wx, wy, wz) = (w * x2, w * y2, w * z2);
+
+        use crate::vec4::Vec4;
+        crate::mat4::Mat4 {
+            cols: [
+                Vec4::new(1.0 - (yy + zz), xy + wz, xz - wy, 0.0),
+                Vec4::new(xy - wz, 1.0 - (xx + zz), yz + wx, 0.0),
+                Vec4::new(xz + wy, yz - wx, 1.0 - (xx + yy), 0.0),
+                Vec4::new(0.0, 0.0, 0.0, 1.0),
+            ],
+        }
+    }
 }
 
 // Quaternion çarpımı, rotasyonları birleştirir (Quat2 * Quat1 önce quat1 rotasyonu)

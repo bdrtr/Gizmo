@@ -62,6 +62,15 @@ impl Mat4 {
     }
 
     #[inline]
+    pub fn scale(s: Vec3) -> Self {
+        let mut mat = Self::IDENTITY;
+        mat.cols[0].x = s.x;
+        mat.cols[1].y = s.y;
+        mat.cols[2].z = s.z;
+        mat
+    }
+
+    #[inline]
     pub fn look_at_rh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
         let f = (center - eye).normalize();
         let s = f.cross(up).normalize();

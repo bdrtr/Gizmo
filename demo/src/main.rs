@@ -251,6 +251,7 @@ fn main() {
         }
 
         if let Some(mut trans) = world.borrow_mut::<Transform>() {
+            // Kamera Hareketi
             if let Some(t) = trans.get_mut(state.player_id) {
                 if state.keys.contains(&KeyCode::KeyW) { t.position += f * speed; }
                 if state.keys.contains(&KeyCode::KeyS) { t.position -= f * speed; }
@@ -258,6 +259,14 @@ fn main() {
                 if state.keys.contains(&KeyCode::KeyD) { t.position += r * speed; }
                 if state.keys.contains(&KeyCode::KeyQ) { t.position.y -= speed; }
                 if state.keys.contains(&KeyCode::KeyE) { t.position.y += speed; }
+            }
+
+            // Suzanne'ı Y ekseni etrafında döndür
+            if let Some(t) = trans.get_mut(state.bouncing_box_id) {
+                // Zamanı (veya benzeri bir delta_time bazlı değeri) kullanarak Quaternion üretiyoruz
+                // Şimdilik sürekli dönüş sağlamak için yeni bir quaternionla mevcut olanı çarpıyoruz
+                let rot_delta = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), dt * 2.0); // Saniyede 2 radyan
+                t.rotation = (t.rotation * rot_delta).normalize();
             }
         }
     });
@@ -335,22 +344,26 @@ fn main() {
             for entity_id in &renderers.entity_dense {
                 let e = *entity_id;
                 if let (Some(mesh), Some(mesh_ren), Some(trans)) = (meshes.get(e), renderers.get(e), positions.get(e)) {
-                    let mut scale = Vec3::new(1.0, 1.0, 1.0);
+                    let mut col_scale = Vec3::new(1.0, 1.0, 1.0);
                     if let Some(col) = colliders.get(e) {
                         if let yelbegen::physics::ColliderShape::Aabb(aabb) = &col.shape {
                             if e == state.bouncing_box_id {
-                                scale = aabb.half_extents;
+                                col_scale = aabb.half_extents;
                             }
                         }
                     }
 
-                    let trans_mat = Mat4::translation(trans.position);
-                    let center_mat = Mat4::translation(mesh.center_offset);
-                    let mut model = trans_mat * center_mat;
+                    // T * R * S
+                    let trans_mat = trans.model_matrix();
+                    
+                    // Box collision box boyutları kadar büyütmek istiyorsak özel bir scale matrisi ile çarpabiliriz
+                    // Ama motor prensibi olarak scale Transform'da olmalı
+                    let extra_scale = Mat4::scale(col_scale);
 
-                    model.cols[0].x *= scale.x; model.cols[0].y *= scale.x; model.cols[0].z *= scale.x;
-                    model.cols[1].x *= scale.y; model.cols[1].y *= scale.y; model.cols[1].z *= scale.y;
-                    model.cols[2].x *= scale.z; model.cols[2].y *= scale.z; model.cols[2].z *= scale.z;
+                    let center_mat = Mat4::translation(mesh.center_offset);
+                    
+                    // Önce kendi merkezine git, ekstra boyut ekle, sonra asıl Transform matrisini uygula
+                    let model = trans_mat * extra_scale * center_mat;
 
                     let mvp = proj * view_mat * model;
 

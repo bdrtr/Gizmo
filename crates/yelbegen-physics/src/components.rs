@@ -1,13 +1,34 @@
-use yelbegen_math::Vec3;
+use yelbegen_math::{Vec3, Quat, Mat4};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Transform {
     pub position: Vec3,
+    pub rotation: Quat,
+    pub scale: Vec3,
 }
 
 impl Transform {
     pub fn new(position: Vec3) -> Self {
-        Self { position }
+        Self {
+            position,
+            rotation: Quat::IDENTITY,
+            scale: Vec3::new(1.0, 1.0, 1.0),
+        }
+    }
+
+    pub fn with_scale(mut self, scale: Vec3) -> Self {
+        self.scale = scale;
+        self
+    }
+
+    pub fn with_rotation(mut self, rotation: Quat) -> Self {
+        self.rotation = rotation;
+        self
+    }
+
+    /// Model matrisi: Translation * Rotation * Scale
+    pub fn model_matrix(&self) -> Mat4 {
+        Mat4::translation(self.position) * self.rotation.to_mat4() * Mat4::scale(self.scale)
     }
 }
 
