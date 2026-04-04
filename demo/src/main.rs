@@ -12,44 +12,28 @@ use std::sync::Arc;
 use yelbegen::renderer::components::{Mesh, Material, MeshRenderer, Camera};
 use yelbegen::renderer::asset::AssetManager;
 
+// ======================== FİZİK SİSTEMLERİ ========================
 
-fn load_image_texture(device: &wgpu::Device, queue: &wgpu::Queue, path: &str) -> wgpu::Texture {
-    let img = image::open(path).expect("Doku (texture) resmi bulunamadi!").to_rgba8();
-    let dimensions = img.dimensions();
-    let texture_size = wgpu::Extent3d { width: dimensions.0, height: dimensions.1, depth_or_array_layers: 1 };
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        size: texture_size,
-        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        label: Some("Doku"), view_formats: &[],
-    });
-    queue.write_texture(
-        wgpu::ImageCopyTexture { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-        &img,
-        wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(4 * dimensions.0), rows_per_image: Some(dimensions.1) },
-        texture_size,
-    );
-    texture
-}
-
+/// Yerçekimi uygular ve pozisyonları günceller.
+/// Velocity bileşeni olan entity'ler üzerinde iterasyon yapar.
 pub fn physics_movement_system(world: &mut World, dt: f32) {
-    if let (Some(mut trans), Some(mut vel), Some(rbs)) = (world.borrow_mut::<Transform>(), world.borrow_mut::<Velocity>(), world.borrow::<RigidBody>()) {
+    if let (Some(mut trans), Some(mut vel), Some(rbs)) =
+        (world.borrow_mut::<Transform>(), world.borrow_mut::<Velocity>(), world.borrow::<RigidBody>())
+    {
         const GRAVITY: f32 = -9.81;
         for i in 0..vel.dense.len() {
             let entity_id = vel.entity_dense[i];
-            
-            // Eğer objemizin RigidBody'si varsa ve yerçekimsizse etkilenme!
+
             if let Some(rb) = rbs.get(entity_id) {
                 if !rb.use_gravity {
-                    continue; // Zemin objesi düşmesin
+                    continue;
                 }
             }
 
             let mut linear = vel.dense[i].linear;
             linear.y += GRAVITY * dt;
             vel.dense[i].linear = linear;
-            
+
             if let Some(t) = trans.get_mut(entity_id) {
                 t.position += linear * dt;
             }
@@ -57,58 +41,77 @@ pub fn physics_movement_system(world: &mut World, dt: f32) {
     }
 }
 
+/// AABB çarpışma tespiti ve çözümleme.
+/// Entity ID tabanlı güvenli erişim kullanır.
 pub fn physics_collision_system(world: &mut World, _dt: f32) {
-    let mut collision_resolutions = Vec::new();
-    if let (Some(trans), Some(colliders), Some(rbs)) = (world.borrow::<Transform>(), world.borrow::<Collider>(), world.borrow::<RigidBody>()) {
-        let intersect = |a: &yelbegen::physics::Aabb, pos_a: Vec3, b: &yelbegen::physics::Aabb, pos_b: Vec3| -> bool {
-            let a_min = pos_a - a.half_extents; let a_max = pos_a + a.half_extents;
-            let b_min = pos_b - b.half_extents; let b_max = pos_b + b.half_extents;
-            a_min.x <= b_max.x && a_max.x >= b_min.x &&
-            a_min.y <= b_max.y && a_max.y >= b_min.y &&
-            a_min.z <= b_max.z && a_max.z >= b_min.z
-        };
+    let mut collision_resolutions: Vec<(u32, Vec3, f32)> = Vec::new();
 
-        for i in 0..trans.dense.len() {
-            let entity1_id = trans.entity_dense[i];
-            for j in (i + 1)..trans.dense.len() {
-                let entity2_id = trans.entity_dense[j];
-                let col1 = colliders.get(entity1_id);
-                let col2 = colliders.get(entity2_id);
-                let rb1 = rbs.get(entity1_id);
-                let rb2 = rbs.get(entity2_id);
+    if let (Some(trans), Some(colliders), Some(rbs)) =
+        (world.borrow::<Transform>(), world.borrow::<Collider>(), world.borrow::<RigidBody>())
+    {
+        // Collider bileşeni olan entity'ler üzerinde çift döngü
+        let entities: Vec<u32> = colliders.entity_dense.clone();
 
-                if let (Some(c1), Some(c2), Some(_r1), Some(_r2)) = (col1, col2, rb1, rb2) {
-                    if let (yelbegen::physics::ColliderShape::Aabb(aabb1), yelbegen::physics::ColliderShape::Aabb(aabb2)) = (&c1.shape, &c2.shape) {
-                        if intersect(&aabb1, trans.dense[i].position, &aabb2, trans.dense[j].position) {
-                            let mut p1 = trans.dense[i].position;
-                            p1.y = (trans.dense[j].position.y + aabb2.half_extents.y) + aabb1.half_extents.y;
-                            collision_resolutions.push((entity1_id, p1));
-                        }
+        for i in 0..entities.len() {
+            let e1 = entities[i];
+            for j in (i + 1)..entities.len() {
+                let e2 = entities[j];
+
+                let (pos1, pos2) = match (trans.get(e1), trans.get(e2)) {
+                    (Some(t1), Some(t2)) => (t1.position, t2.position),
+                    _ => continue,
+                };
+                let (col1, col2) = match (colliders.get(e1), colliders.get(e2)) {
+                    (Some(c1), Some(c2)) => (c1, c2),
+                    _ => continue,
+                };
+                let (_rb1, rb2) = match (rbs.get(e1), rbs.get(e2)) {
+                    (Some(r1), Some(r2)) => (r1, r2),
+                    _ => continue,
+                };
+
+                if let (
+                    yelbegen::physics::ColliderShape::Aabb(aabb1),
+                    yelbegen::physics::ColliderShape::Aabb(aabb2),
+                ) = (&col1.shape, &col2.shape)
+                {
+                    // AABB kesişim testi
+                    let a_min = pos1 - aabb1.half_extents;
+                    let a_max = pos1 + aabb1.half_extents;
+                    let b_min = pos2 - aabb2.half_extents;
+                    let b_max = pos2 + aabb2.half_extents;
+
+                    let intersects = a_min.x <= b_max.x && a_max.x >= b_min.x
+                        && a_min.y <= b_max.y && a_max.y >= b_min.y
+                        && a_min.z <= b_max.z && a_max.z >= b_min.z;
+
+                    if intersects {
+                        // Dinamik objeyi (e1) statik (e2) üzerine it
+                        let resolved_y = (pos2.y + aabb2.half_extents.y) + aabb1.half_extents.y;
+                        let resolved_pos = Vec3::new(pos1.x, resolved_y, pos1.z);
+                        collision_resolutions.push((e1, resolved_pos, rb2.restitution));
                     }
                 }
             }
         }
     }
 
-    if let Some(mut t) = world.borrow_mut::<Transform>() {
-        for (e, p) in &collision_resolutions {
-            if let Some(trans) = t.get_mut(*e) {
-                trans.position = *p;
+    // Çözümleme: pozisyon düzelt + hız yansıt
+    for (entity_id, new_pos, restitution) in &collision_resolutions {
+        if let Some(mut t) = world.borrow_mut::<Transform>() {
+            if let Some(trans) = t.get_mut(*entity_id) {
+                trans.position = *new_pos;
             }
         }
-    }
-    if let Some(mut v) = world.borrow_mut::<Velocity>() {
-        for (e, _p) in collision_resolutions {
-            if let Some(vel) = v.get_mut(e) {
-                if let Some(r) = world.borrow::<RigidBody>().unwrap().get(e) {
-                    vel.linear.y = -vel.linear.y * r.restitution;
-                }
+        if let Some(mut v) = world.borrow_mut::<Velocity>() {
+            if let Some(vel) = v.get_mut(*entity_id) {
+                vel.linear.y = -vel.linear.y * restitution;
             }
         }
     }
 }
 
-// --------------------------------------------------------------------------------------------------------------------------
+// ======================== OYUN DURUMU ========================
 
 struct GameState {
     mouse_pressed: bool,
@@ -117,52 +120,36 @@ struct GameState {
     player_id: u32,
 }
 
+// ======================== ANA FONKSİYON ========================
+
 fn main() {
-    let mut app = App::new("Yelbegen Faz 7 (App Builder & Olay Döngüsü)", 1280, 720);
+    let mut app = App::new("Yelbegen Engine (Faz 12)", 1280, 720);
 
-    // 1. SETUP (Renderer WGPU Device Hazirklen Cagirilir)
+    // 1. SETUP
     app = app.set_setup(|world, renderer| {
-        println!("Yelbegen Engine: Faz 7 App Builder...");
-        let bouncing_box = world.spawn();
-        world.add_component(bouncing_box, Transform::new(Vec3::new(0.0, 0.0, 0.0)));
-        world.add_component(bouncing_box, Velocity::new(Vec3::ZERO)); 
-        world.add_component(bouncing_box, Collider::new_aabb(2.74, 1.96, 1.70));
-        world.add_component(bouncing_box, RigidBody::new(1.0, 0.6, 0.2, false)); 
-
-        let ground = world.spawn();
-        world.add_component(ground, Transform::new(Vec3::new(0.0, -3.0, 0.0)));
-        world.add_component(ground, Velocity::new(Vec3::ZERO));
-        world.add_component(ground, Collider::new_aabb(20.0, 1.0, 20.0)); 
-        world.add_component(ground, RigidBody::new_static());
+        println!("Yelbegen Engine: Faz 12 — Temiz Mimari");
 
         // Kaplamalar
-        let tex = load_image_texture(&renderer.device, &renderer.queue, "assets/brick.jpg");
+        let tex = AssetManager::load_texture(&renderer.device, &renderer.queue, "assets/brick.jpg");
         let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = renderer.device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::Repeat, address_mode_v: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
 
         let tbind = Arc::new(renderer.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Mesh TBIND"), layout: &renderer.texture_bind_group_layout,
+            label: Some("Mesh TBIND"),
+            layout: &renderer.texture_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
             ],
         }));
 
-        let bouncing_box = world.spawn();
-        world.add_component(bouncing_box, Transform::new(Vec3::new(0.0, 5.0, -8.0)));
-        world.add_component(bouncing_box, Velocity { linear: Vec3::new(3.0, 0.0, 0.0) });
-        world.add_component(bouncing_box, Collider { shape: yelbegen::physics::ColliderShape::Aabb(yelbegen::physics::Aabb { half_extents: Vec3::new(0.5, 0.5, 0.5) }) });
-        world.add_component(bouncing_box, RigidBody { mass: 1.0, restitution: 0.8, friction: 0.2, use_gravity: true });
-
-        // Maymun OBJ'sini ECS'e yukle
-        let suzanne_mesh = AssetManager::load_obj(&renderer.device, "demo/assets/suzanne.obj");
-        world.add_component(bouncing_box, suzanne_mesh);
-        world.add_component(bouncing_box, Material::new(tbind.clone()));
-
+        // Uniform buffer üretici
         let create_renderer = || -> MeshRenderer {
             let ubuf = renderer.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Mesh UBUF"),
@@ -171,28 +158,40 @@ fn main() {
                 mapped_at_creation: false,
             });
             let ubind = renderer.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Mesh UBIND"), layout: &renderer.uniform_bind_group_layout,
+                label: Some("Mesh UBIND"),
+                layout: &renderer.uniform_bind_group_layout,
                 entries: &[wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() }],
             });
             MeshRenderer::new(ubuf, ubind)
         };
+
+        // --- Zıplayan Kutu (Suzanne) ---
+        let bouncing_box = world.spawn();
+        world.add_component(bouncing_box, Transform::new(Vec3::new(0.0, 5.0, -8.0)));
+        world.add_component(bouncing_box, Velocity::new(Vec3::new(3.0, 0.0, 0.0)));
+        world.add_component(bouncing_box, Collider::new_aabb(0.5, 0.5, 0.5));
+        world.add_component(bouncing_box, RigidBody::new(1.0, 0.8, 0.2, true));
+        world.add_component(bouncing_box, AssetManager::load_obj(&renderer.device, "demo/assets/suzanne.obj"));
+        world.add_component(bouncing_box, Material::new(tbind.clone()));
         world.add_component(bouncing_box, create_renderer());
 
+        // --- Zemin (Suzanne geçici) ---
         let ground = world.spawn();
         world.add_component(ground, Transform::new(Vec3::new(0.0, -1.0, 0.0)));
-        world.add_component(ground, Velocity { linear: Vec3::ZERO });
-        world.add_component(ground, Collider { shape: yelbegen::physics::ColliderShape::Aabb(yelbegen::physics::Aabb { half_extents: Vec3::new(10.0, 1.0, 10.0) }) });
-        world.add_component(ground, RigidBody { mass: 0.0, restitution: 0.5, friction: 0.5, use_gravity: false });
-
-        let ground_mesh = AssetManager::load_obj(&renderer.device, "demo/assets/suzanne.obj"); // TODO: ground obj
-        world.add_component(ground, ground_mesh);
+        world.add_component(ground, Velocity::new(Vec3::ZERO));
+        world.add_component(ground, Collider::new_aabb(10.0, 1.0, 10.0));
+        world.add_component(ground, RigidBody::new_static());
+        world.add_component(ground, AssetManager::load_obj(&renderer.device, "demo/assets/suzanne.obj"));
         world.add_component(ground, Material::new(tbind.clone()));
         world.add_component(ground, create_renderer());
 
-        // Player (Kamera)
+        // --- Player (Kamera) ---
         let player = world.spawn();
         world.add_component(player, Transform::new(Vec3::new(0.0, 5.0, 15.0)));
-        world.add_component(player, Camera::new(std::f32::consts::FRAC_PI_4, 0.1, 100.0, -std::f32::consts::FRAC_PI_2, -0.3, true));
+        world.add_component(player, Camera::new(
+            std::f32::consts::FRAC_PI_4, 0.1, 100.0,
+            -std::f32::consts::FRAC_PI_2, -0.3, true,
+        ));
 
         GameState {
             mouse_pressed: false,
@@ -240,7 +239,7 @@ fn main() {
     // 3. UPDATE HOOK
     app = app.set_update(|world, state, dt| {
         let speed = 10.0 * dt;
-        
+
         let mut f = Vec3::ZERO;
         let mut r = Vec3::ZERO;
 
@@ -263,53 +262,63 @@ fn main() {
         }
     });
 
-    // 4. ECS SISTEMLERI
+    // 4. ECS SİSTEMLERİ
     app = app.add_system(physics_movement_system);
     app = app.add_system(physics_collision_system);
 
-    // 4.5. EGUI ARAYÜZ (INSPECTOR) HOOK
+    // 5. EGUI ARAYÜZ
     app = app.set_ui(|world, state, ctx| {
         egui::Window::new("⚙️ Yelbegen Engine Inspector").show(ctx, |ui| {
             ui.heading("Aydınlatma ve Simülasyon");
             ui.separator();
-            ui.label("Güneş gökyüzünde dinamik olarak dönmektedir, objelerin yüzeyindeki gölge etkisini gözlemleyin.");
-            
-            ui.separator();
+
             if let Some(mut rbs) = world.borrow_mut::<RigidBody>() {
                 if let Some(rb) = rbs.get_mut(state.bouncing_box_id) {
                     ui.horizontal(|ui| {
-                        ui.label("Zıplayan Kutu Kütlesi: ");
+                        ui.label("Kütle: ");
                         ui.add(egui::Slider::new(&mut rb.mass, 0.0..=10.0));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Sekme: ");
+                        ui.add(egui::Slider::new(&mut rb.restitution, 0.0..=1.0));
                     });
                 }
             }
 
-            if ui.button("🔄 Başa Sar (Reset)").clicked() {
+            if ui.button("🔄 Başa Sar").clicked() {
                 if let Some(mut trans) = world.borrow_mut::<Transform>() {
-                    if let Some(t) = trans.get_mut(state.bouncing_box_id) { t.position = Vec3::new(0.0, 5.0, -8.0); }
+                    if let Some(t) = trans.get_mut(state.bouncing_box_id) {
+                        t.position = Vec3::new(0.0, 5.0, -8.0);
+                    }
                 }
                 if let Some(mut vels) = world.borrow_mut::<Velocity>() {
-                    if let Some(v) = vels.get_mut(state.bouncing_box_id) { v.linear = Vec3::new(3.0, 0.0, 0.0); }
+                    if let Some(v) = vels.get_mut(state.bouncing_box_id) {
+                        v.linear = Vec3::new(3.0, 0.0, 0.0);
+                    }
                 }
             }
 
             ui.add_space(10.0);
             if let Some(trans) = world.borrow::<Transform>() {
                 if let Some(t) = trans.get(state.player_id) {
-                    ui.label(format!("Kamera Pozisyonu: {:.1}, {:.1}, {:.1}", t.position.x, t.position.y, t.position.z));
+                    ui.label(format!("Kamera: {:.1}, {:.1}, {:.1}", t.position.x, t.position.y, t.position.z));
                 }
             }
-            ui.label("Kamera Kontrolleri: WASD ile hareket, Q/E ile yüksel/alçal, Sağ Tık ile bak.");
+            ui.label("WASD: hareket | Q/E: dikey | Sağ Tık: bakış");
         });
     });
 
-    // 5. RENDER HOOK
+    // 6. RENDER HOOK
     app = app.set_render(|world, state, encoder, view, renderer, light_time| {
-        let aspect = if renderer.size.height > 0 { renderer.size.width as f32 / renderer.size.height as f32 } else { 1.0 };
-        
+        let aspect = if renderer.size.height > 0 {
+            renderer.size.width as f32 / renderer.size.height as f32
+        } else {
+            1.0
+        };
+
         let mut proj = Mat4::perspective(std::f32::consts::FRAC_PI_4, aspect, 0.1, 100.0);
         let mut view_mat = Mat4::translation(Vec3::ZERO);
-        
+
         if let (Some(cameras), Some(transforms)) = (world.borrow::<Camera>(), world.borrow::<Transform>()) {
             if let (Some(cam), Some(trans)) = (cameras.get(state.player_id), transforms.get(state.player_id)) {
                 proj = cam.get_projection(aspect);
@@ -319,8 +328,9 @@ fn main() {
 
         let g_light_x = (light_time * 2.0).sin() * 2.0;
 
-        if let (Some(meshes), Some(renderers), Some(positions), Some(colliders)) = 
-            (world.borrow::<Mesh>(), world.borrow::<MeshRenderer>(), world.borrow::<Transform>(), world.borrow::<Collider>()) 
+        // Uniform buffer güncelleme
+        if let (Some(meshes), Some(renderers), Some(positions), Some(colliders)) =
+            (world.borrow::<Mesh>(), world.borrow::<MeshRenderer>(), world.borrow::<Transform>(), world.borrow::<Collider>())
         {
             for entity_id in &renderers.entity_dense {
                 let e = *entity_id;
@@ -328,7 +338,7 @@ fn main() {
                     let mut scale = Vec3::new(1.0, 1.0, 1.0);
                     if let Some(col) = colliders.get(e) {
                         if let yelbegen::physics::ColliderShape::Aabb(aabb) = &col.shape {
-                            if e == state.bouncing_box_id { 
+                            if e == state.bouncing_box_id {
                                 scale = aabb.half_extents;
                             }
                         }
@@ -353,11 +363,11 @@ fn main() {
             }
         }
 
+        // Render pass: ECS üzerindeki tüm Mesh+Material bileşenlerini çiz
         let meshes_ref = world.borrow::<Mesh>();
         let materials_ref = world.borrow::<Material>();
         let renderers_ref = world.borrow::<MeshRenderer>();
 
-        // Simdi Render Pass baslatin ve ECS uzerindeki tum Render Bilesenlerini (Material + Mesh) cizin!
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Main Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
