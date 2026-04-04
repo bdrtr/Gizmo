@@ -1,0 +1,11 @@
+[package]
+name = "yelbegen-renderer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+wgpu = "0.19"
+pollster = "0.3"
+winit = { workspace = true }
+bytemuck = { version = "1.14", features = ["derive"] }
+yelbegen-math = { path = "../yelbegen-math" }

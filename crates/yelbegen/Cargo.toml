@@ -1,0 +1,12 @@
+[package]
+name = "yelbegen"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+yelbegen-core = { path = "../yelbegen-core" }
+yelbegen-math = { path = "../yelbegen-math" }
+yelbegen-renderer = { path = "../yelbegen-renderer" }
+yelbegen-window = { path = "../yelbegen-window" }
+yelbegen-physics = { path = "../yelbegen-physics" }
+yelbegen-editor = { path = "../yelbegen-editor" }

@@ -1,0 +1,11 @@
+/target
+Cargo.lock
+
+# İşletim sistemi kalıntıları
+.DS_Store
+Thumbs.db
+
+# Geçici dosyalar
+*.log
+*.tmp
+assets/*.crdownload

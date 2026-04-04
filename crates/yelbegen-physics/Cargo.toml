@@ -1,0 +1,8 @@
+[package]
+name = "yelbegen-physics"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+yelbegen-core = { path = "../yelbegen-core" }
+yelbegen-math = { path = "../yelbegen-math" }
