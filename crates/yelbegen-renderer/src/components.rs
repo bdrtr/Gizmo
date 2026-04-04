@@ -99,6 +99,7 @@ impl Camera {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct PointLight {
     pub color: Vec3,
     pub intensity: f32,

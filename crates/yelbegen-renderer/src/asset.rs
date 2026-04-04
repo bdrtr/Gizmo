@@ -87,6 +87,53 @@ impl AssetManager {
         mesh
     }
 
+    /// İçi boş ters yüzlü küp (Skybox) mesh üretir.
+    /// Normaller içe bakar, böylece kamera küpün merkezinden dışarıya baktığında yüzeyler görünür.
+    pub fn create_inverted_cube(device: &wgpu::Device) -> Mesh {
+        // 6 yüz × 2 üçgen × 3 köşe = 36 vertex
+        // Her yüzün normali İÇE bakar (ters küp)
+        let positions: [[f32; 3]; 8] = [
+            [-1.0, -1.0, -1.0], // 0
+            [ 1.0, -1.0, -1.0], // 1
+            [ 1.0,  1.0, -1.0], // 2
+            [-1.0,  1.0, -1.0], // 3
+            [-1.0, -1.0,  1.0], // 4
+            [ 1.0, -1.0,  1.0], // 5
+            [ 1.0,  1.0,  1.0], // 6
+            [-1.0,  1.0,  1.0], // 7
+        ];
+
+        // Her yüz için ters vertex sırası (CW yerine CCW veya tam tersi) + içe bakan normal
+        let faces: [([usize; 6], [f32; 3]); 6] = [
+            ([0, 2, 1, 0, 3, 2], [0.0, 0.0,  1.0]),  // Arka yüz (+Z içe)
+            ([4, 5, 6, 4, 6, 7], [0.0, 0.0, -1.0]),  // Ön yüz (-Z içe)
+            ([0, 1, 5, 0, 5, 4], [0.0,  1.0, 0.0]),  // Alt yüz (+Y içe)
+            ([3, 6, 2, 3, 7, 6], [0.0, -1.0, 0.0]),  // Üst yüz (-Y içe)
+            ([0, 4, 7, 0, 7, 3], [ 1.0, 0.0, 0.0]),  // Sol yüz (+X içe)
+            ([1, 2, 6, 1, 6, 5], [-1.0, 0.0, 0.0]),  // Sağ yüz (-X içe)
+        ];
+
+        let mut vertices = Vec::with_capacity(36);
+        for (indices, normal) in &faces {
+            for &idx in indices {
+                vertices.push(Vertex {
+                    position: positions[idx],
+                    color: [1.0, 1.0, 1.0],
+                    normal: *normal,
+                    tex_coords: [0.0, 0.0],
+                });
+            }
+        }
+
+        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Skybox Inverted Cube VBuf"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO)
+    }
+
     /// Bir resim dosyasını diskten okur ve wgpu::Texture olarak döndürür. (Statik yardımcı)
     pub fn load_texture(device: &wgpu::Device, queue: &wgpu::Queue, path: &str) -> wgpu::Texture {
         let img = image::open(path)

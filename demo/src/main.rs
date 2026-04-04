@@ -128,11 +128,11 @@ struct GameState {
 // ======================== ANA FONKSİYON ========================
 
 fn main() {
-    let mut app = App::new("Yelbegen Engine (Faz 14 — Aydınlatma)", 1280, 720);
+    let mut app = App::new("Yelbegen Engine — Rust 3D Motor", 1280, 720);
 
     // 1. SETUP
     app = app.set_setup(|world, renderer| {
-        println!("Yelbegen Engine: Faz 16 — Sahne Yöneticisi ve Önbellek");
+        println!("Yelbegen Engine: Sahne başlatılıyor...");
 
         let mut asset_manager = AssetManager::new();
 
@@ -221,7 +221,7 @@ fn main() {
         let player = world.spawn();
         world.add_component(player, Transform::new(Vec3::new(0.0, 5.0, 15.0)));
         world.add_component(player, Camera::new(
-            std::f32::consts::FRAC_PI_4, 0.1, 100.0,
+            std::f32::consts::FRAC_PI_4, 0.1, 2000.0,
             -std::f32::consts::FRAC_PI_2, -0.3, true,
         ));
         world.add_component(player, EntityName("Kamera (Göz)".into()));
@@ -232,7 +232,7 @@ fn main() {
         // Devasa boyut
         sky_transform.scale = Vec3::new(500.0, 500.0, 500.0); 
         world.add_component(skybox, sky_transform);
-        world.add_component(skybox, asset_manager.load_obj(&renderer.device, "demo/assets/suzanne.obj")); 
+        world.add_component(skybox, AssetManager::create_inverted_cube(&renderer.device));
         world.add_component(skybox, Material::new(tbind.clone()).with_unlit(Vec4::new(0.15, 0.35, 0.60, 1.0))); // Hafif koyu bir gökyüzü mavisi
         world.add_component(skybox, create_renderer());
         world.add_component(skybox, EntityName("Skybox (Gök Kubbe)".into()));
@@ -487,7 +487,7 @@ fn main() {
             1.0
         };
 
-        let mut proj = Mat4::perspective(std::f32::consts::FRAC_PI_4, aspect, 0.1, 100.0);
+        let mut proj = Mat4::perspective(std::f32::consts::FRAC_PI_4, aspect, 0.1, 2000.0);
         let mut view_mat = Mat4::translation(Vec3::ZERO);
         let mut cam_pos = Vec3::ZERO;
 
@@ -521,32 +521,31 @@ fn main() {
             }
         }
 
-        // Uniform buffer güncelleme
-        if let (Some(meshes), Some(renderers), Some(positions), Some(colliders), Some(materials)) =
-            (world.borrow::<Mesh>(), world.borrow::<MeshRenderer>(), world.borrow::<Transform>(), world.borrow::<Collider>(), world.borrow::<Material>())
+        // Uniform buffer güncelleme — Collider artık zorunlu değil, tüm Mesh+Material objeleri renderlanır
+        if let (Some(meshes), Some(renderers), Some(positions), Some(materials)) =
+            (world.borrow::<Mesh>(), world.borrow::<MeshRenderer>(), world.borrow::<Transform>(), world.borrow::<Material>())
         {
+            // Collider'a opsiyonel erişim (sadece bouncing_box scale için)
+            let colliders = world.borrow::<Collider>();
+
             for entity_id in &renderers.entity_dense {
                 let e = *entity_id;
                 if let (Some(mesh), Some(mesh_ren), Some(trans), Some(mat)) = (meshes.get(e), renderers.get(e), positions.get(e), materials.get(e)) {
+                    // Sadece zıplayan kutu collider boyutu kadar ekstra scale alsın
                     let mut col_scale = Vec3::new(1.0, 1.0, 1.0);
-                    if let Some(col) = colliders.get(e) {
-                        if let yelbegen::physics::ColliderShape::Aabb(aabb) = &col.shape {
-                            if e == state.bouncing_box_id {
-                                col_scale = aabb.half_extents;
+                    if let Some(ref cols) = colliders {
+                        if let Some(col) = cols.get(e) {
+                            if let yelbegen::physics::ColliderShape::Aabb(aabb) = &col.shape {
+                                if e == state.bouncing_box_id {
+                                    col_scale = aabb.half_extents;
+                                }
                             }
                         }
                     }
 
-                    // T * R * S
                     let trans_mat = trans.model_matrix();
-                    
-                    // Box collision box boyutları kadar büyütmek istiyorsak özel bir scale matrisi ile çarpabiliriz
-                    // Ama motor prensibi olarak scale Transform'da olmalı
                     let extra_scale = Mat4::scale(col_scale);
-
                     let center_mat = Mat4::translation(mesh.center_offset);
-                    
-                    // Önce kendi merkezine git, ekstra boyut ekle, sonra asıl Transform matrisini uygula
                     let model = trans_mat * extra_scale * center_mat;
 
                     let uniform_data = EngineUniforms {
