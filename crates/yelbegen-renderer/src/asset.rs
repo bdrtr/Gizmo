@@ -5,11 +5,24 @@ use yelbegen_math::vec3::Vec3;
 use crate::renderer::Vertex;
 use crate::components::Mesh;
 
-pub struct AssetManager;
+pub struct AssetManager {
+    mesh_cache: std::collections::HashMap<String, Mesh>,
+}
 
 impl AssetManager {
+    pub fn new() -> Self {
+        Self {
+            mesh_cache: std::collections::HashMap::new(),
+        }
+    }
+
     /// Bir .obj dosyasını diskten okur ve Mesh ECS bileşenine dönüştürür.
-    pub fn load_obj(device: &wgpu::Device, file_path: &str) -> Mesh {
+    /// Daha önce okunmuşsa, RAM ve VRAM tüketimini önlemek için önbellekten direkt kopya döndürür.
+    pub fn load_obj(&mut self, device: &wgpu::Device, file_path: &str) -> Mesh {
+        if let Some(cached) = self.mesh_cache.get(file_path) {
+            return cached.clone(); // Orijinal veri Arc<Buffer> olduğu için direkt kopya döner (sıfır maliyet)
+        }
+
         let (models, _materials) = tobj::load_obj(
             file_path,
             &tobj::LoadOptions {
@@ -69,10 +82,12 @@ impl AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO)
+        let mesh = Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO);
+        self.mesh_cache.insert(file_path.to_string(), mesh.clone());
+        mesh
     }
 
-    /// Bir resim dosyasını diskten okur ve wgpu::Texture olarak döndürür.
+    /// Bir resim dosyasını diskten okur ve wgpu::Texture olarak döndürür. (Statik yardımcı)
     pub fn load_texture(device: &wgpu::Device, queue: &wgpu::Queue, path: &str) -> wgpu::Texture {
         let img = image::open(path)
             .unwrap_or_else(|e| panic!("AssetManager: Doku yuklenirken hata! {} ({})", path, e))

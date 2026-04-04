@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use yelbegen_math::vec3::Vec3;
 
+#[derive(Clone)]
 pub struct Mesh {
     pub vbuf: Arc<wgpu::Buffer>,
     pub vertex_count: u32,
@@ -15,6 +16,7 @@ impl Mesh {
     }
 }
 
+#[derive(Clone)]
 pub struct Material {
     pub bind_group: Arc<wgpu::BindGroup>,
     pub albedo: yelbegen_math::vec4::Vec4,

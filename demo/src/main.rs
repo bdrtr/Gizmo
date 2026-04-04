@@ -127,7 +127,9 @@ fn main() {
 
     // 1. SETUP
     app = app.set_setup(|world, renderer| {
-        println!("Yelbegen Engine: Faz 12 — Temiz Mimari");
+        println!("Yelbegen Engine: Faz 16 — Sahne Yöneticisi ve Önbellek");
+
+        let mut asset_manager = AssetManager::new();
 
         // Kaplamalar
         let tex = AssetManager::load_texture(&renderer.device, &renderer.queue, "assets/brick.jpg");
@@ -171,7 +173,7 @@ fn main() {
         world.add_component(bouncing_box, Velocity::new(Vec3::new(3.0, 0.0, 0.0)));
         world.add_component(bouncing_box, Collider::new_aabb(0.5, 0.5, 0.5));
         world.add_component(bouncing_box, RigidBody::new(1.0, 0.8, 0.2, true));
-        world.add_component(bouncing_box, AssetManager::load_obj(&renderer.device, "demo/assets/suzanne.obj"));
+        world.add_component(bouncing_box, asset_manager.load_obj(&renderer.device, "demo/assets/suzanne.obj"));
         world.add_component(bouncing_box, Material::new(tbind.clone()).with_pbr(Vec4::new(0.8, 0.2, 0.2, 1.0), 0.2, 0.1)); // Parlak kırmızımsı materyal
         world.add_component(bouncing_box, create_renderer());
 
@@ -181,7 +183,7 @@ fn main() {
         world.add_component(ground, Velocity::new(Vec3::ZERO));
         world.add_component(ground, Collider::new_aabb(10.0, 1.0, 10.0));
         world.add_component(ground, RigidBody::new_static());
-        world.add_component(ground, AssetManager::load_obj(&renderer.device, "demo/assets/suzanne.obj")); // Şimdilik yer objesi niyetine
+        world.add_component(ground, asset_manager.load_obj(&renderer.device, "demo/assets/suzanne.obj")); // Şimdilik yer objesi niyetine
         world.add_component(ground, Material::new(tbind.clone()).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.8, 0.0)); // Mat malzeme
         world.add_component(ground, create_renderer());
 
@@ -190,9 +192,21 @@ fn main() {
         world.add_component(light, Transform::new(Vec3::new(2.0, 5.0, -2.0)));
         world.add_component(light, PointLight::new(Vec3::new(1.0, 0.9, 0.8), 2.0)); // Sıcak sarımsı ışık
         // Işığı da minik bir mesh olarak görelim
-        world.add_component(light, AssetManager::load_obj(&renderer.device, "demo/assets/suzanne.obj"));
+        world.add_component(light, asset_manager.load_obj(&renderer.device, "demo/assets/suzanne.obj"));
         world.add_component(light, Material::new(tbind.clone()).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 1.0, 0.0));
         world.add_component(light, create_renderer());
+
+        // --- Ekstra 10 Maymun (Mesh Önbellekleme Testi) ---
+        for i in 0..10 {
+            let clone_monkey = world.spawn();
+            let random_x = (i as f32 * 2.0) - 10.0;
+            let random_z = (i as f32 % 3.0) * -2.0 - 5.0;
+            world.add_component(clone_monkey, Transform::new(Vec3::new(random_x, 0.5, random_z)));
+            // asset_manager önbellekten direkt veriyor: Sıfır disk okuması
+            world.add_component(clone_monkey, asset_manager.load_obj(&renderer.device, "demo/assets/suzanne.obj"));
+            world.add_component(clone_monkey, Material::new(tbind.clone()).with_pbr(Vec4::new(0.1, 0.8, 0.2, 1.0), 0.5, 0.0)); 
+            world.add_component(clone_monkey, create_renderer());
+        }
 
         // --- Player (Kamera) ---
         let player = world.spawn();
