@@ -144,7 +144,10 @@ fn main() {
     event_loop.set_control_flow(ControlFlow::Poll);
 
     let mut last_update = std::time::Instant::now();
-    let mut camera_pos = Vec3::new(0.0, 5.0, 15.0); // Kamerayı uzağa çektik
+    let mut camera_pos = Vec3::new(0.0, 5.0, 15.0); 
+    let mut camera_yaw = -std::f32::consts::FRAC_PI_2;
+    let mut camera_pitch = -0.3f32;
+    let mut mouse_pressed = false;
     let mut light_time = 0.0f32; // Güneş simülasyonu için
 
     let _ = event_loop.run(move |event, elwt| {
@@ -156,17 +159,27 @@ fn main() {
                 match event {
                     WindowEvent::CloseRequested => elwt.exit(),
                     WindowEvent::Resized(physical_size) => renderer.resize(*physical_size),
+                    WindowEvent::MouseInput { state, button: winit::event::MouseButton::Right, .. } => {
+                        mouse_pressed = *state == ElementState::Pressed;
+                    }
                     WindowEvent::KeyboardInput {
                         event: KeyEvent { physical_key: PhysicalKey::Code(key_code), state: ElementState::Pressed, .. }, ..
                     } => {
                         if !consumes_input {
+                            let fx = camera_yaw.cos() * camera_pitch.cos();
+                            let fy = camera_pitch.sin();
+                            let fz = camera_yaw.sin() * camera_pitch.cos();
+                            let camera_front = Vec3::new(fx, fy, fz).normalize();
+                            let right = camera_front.cross(Vec3::new(0.0, 1.0, 0.0)).normalize();
+                            let speed = 0.5;
+
                             match key_code {
-                                KeyCode::KeyW => camera_pos.z -= 0.5,
-                                KeyCode::KeyS => camera_pos.z += 0.5,
-                                KeyCode::KeyA => camera_pos.x -= 0.5,
-                                KeyCode::KeyD => camera_pos.x += 0.5,
-                                KeyCode::KeyQ => camera_pos.y -= 0.5,
-                                KeyCode::KeyE => camera_pos.y += 0.5,
+                                KeyCode::KeyW => camera_pos = camera_pos + camera_front * speed,
+                                KeyCode::KeyS => camera_pos = camera_pos - camera_front * speed,
+                                KeyCode::KeyA => camera_pos = camera_pos - right * speed,
+                                KeyCode::KeyD => camera_pos = camera_pos + right * speed,
+                                KeyCode::KeyQ => camera_pos.y -= speed,
+                                KeyCode::KeyE => camera_pos.y += speed,
                                 _ => {}
                             }
                         }
@@ -202,9 +215,14 @@ fn main() {
                             render_pass.set_pipeline(&renderer.render_pipeline);
                             
                             // -- ECS'TEKİ HER OBJEYİ ÇİZ (Sadece Transform'u olanları)
+                            let fx = camera_yaw.cos() * camera_pitch.cos();
+                            let fy = camera_pitch.sin();
+                            let fz = camera_yaw.sin() * camera_pitch.cos();
+                            let camera_front = Vec3::new(fx, fy, fz).normalize();
+
                             let aspect = if renderer.size.height > 0 { renderer.size.width as f32 / renderer.size.height as f32 } else { 1.0 };
                             let proj = Mat4::perspective(std::f32::consts::FRAC_PI_4, aspect, 0.1, 100.0);
-                            let view = Mat4::look_at_rh(camera_pos, Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+                            let view = Mat4::look_at_rh(camera_pos, camera_pos + camera_front, Vec3::new(0.0, 1.0, 0.0));
 
                                 // Ekrandaki spesifik objeleri çizeceğiz
                                 let render_entities = [bouncing_box, ground];
@@ -285,6 +303,16 @@ fn main() {
                         output.present();
                     }
                     _ => {}
+                }
+            }
+            Event::DeviceEvent { event: winit::event::DeviceEvent::MouseMotion { delta }, .. } => {
+                if mouse_pressed {
+                    let sensitivity = 0.005;
+                    camera_yaw += delta.0 as f32 * sensitivity;
+                    camera_pitch -= delta.1 as f32 * sensitivity;
+                    
+                    if camera_pitch > 1.5 { camera_pitch = 1.5; }
+                    if camera_pitch < -1.5 { camera_pitch = -1.5; }
                 }
             }
             Event::AboutToWait => {
