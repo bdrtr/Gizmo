@@ -9,7 +9,7 @@ use std::collections::HashSet;
 
 use yelbegen::app::App;
 use std::sync::Arc;
-use yelbegen::renderer::components::{Mesh, Material, MeshRenderer, Camera};
+use yelbegen::renderer::components::{Mesh, Material, MeshRenderer, Camera, PointLight};
 use yelbegen::renderer::asset::AssetManager;
 
 // ======================== FİZİK SİSTEMLERİ ========================
@@ -123,7 +123,7 @@ struct GameState {
 // ======================== ANA FONKSİYON ========================
 
 fn main() {
-    let mut app = App::new("Yelbegen Engine (Faz 12)", 1280, 720);
+    let mut app = App::new("Yelbegen Engine (Faz 14 — Aydınlatma)", 1280, 720);
 
     // 1. SETUP
     app = app.set_setup(|world, renderer| {
@@ -184,6 +184,15 @@ fn main() {
         world.add_component(ground, AssetManager::load_obj(&renderer.device, "demo/assets/suzanne.obj"));
         world.add_component(ground, Material::new(tbind.clone()));
         world.add_component(ground, create_renderer());
+
+        // --- Işık (Point Light) ---
+        let light = world.spawn();
+        world.add_component(light, Transform::new(Vec3::new(2.0, 5.0, -2.0)));
+        world.add_component(light, PointLight::new(Vec3::new(1.0, 0.9, 0.8), 2.0)); // Sıcak sarımsı ışık
+        // Işığı da minik bir mesh olarak görelim
+        world.add_component(light, AssetManager::load_obj(&renderer.device, "demo/assets/suzanne.obj"));
+        world.add_component(light, Material::new(tbind.clone()));
+        world.add_component(light, create_renderer());
 
         // --- Player (Kamera) ---
         let player = world.spawn();
@@ -269,6 +278,23 @@ fn main() {
                 t.rotation = (t.rotation * rot_delta).normalize();
             }
         }
+
+        // Işıkları gökyüzünde gezdir
+        // Bunu update hook'unda dt kullanarak yapabiliriz.
+        if let (Some(lights), Some(mut transforms)) = (world.borrow::<PointLight>(), world.borrow_mut::<Transform>()) {
+            for i in 0..lights.dense.len() {
+                let entity_id = lights.entity_dense[i];
+                if let Some(t) = transforms.get_mut(entity_id) {
+                    // Işığın yerini dairesel sallantılı gezdiriyoruz
+                    // Sürekli dönebilmesi için position.x ve z'yi bir miktar rotate edelim:
+                    let speed = std::f32::consts::PI * 0.5 * dt; // Saniyede çeyrek tur
+                    let x = t.position.x;
+                    let z = t.position.z;
+                    t.position.x = x * speed.cos() - z * speed.sin();
+                    t.position.z = x * speed.sin() + z * speed.cos();
+                }
+            }
+        }
     });
 
     // 4. ECS SİSTEMLERİ
@@ -318,7 +344,7 @@ fn main() {
     });
 
     // 6. RENDER HOOK
-    app = app.set_render(|world, state, encoder, view, renderer, light_time| {
+    app = app.set_render(|world, state, encoder, view, renderer, _light_time| {
         let aspect = if renderer.size.height > 0 {
             renderer.size.width as f32 / renderer.size.height as f32
         } else {
@@ -327,15 +353,30 @@ fn main() {
 
         let mut proj = Mat4::perspective(std::f32::consts::FRAC_PI_4, aspect, 0.1, 100.0);
         let mut view_mat = Mat4::translation(Vec3::ZERO);
+        let mut cam_pos = Vec3::ZERO;
 
         if let (Some(cameras), Some(transforms)) = (world.borrow::<Camera>(), world.borrow::<Transform>()) {
             if let (Some(cam), Some(trans)) = (cameras.get(state.player_id), transforms.get(state.player_id)) {
                 proj = cam.get_projection(aspect);
                 view_mat = cam.get_view(trans.position);
+                cam_pos = trans.position;
             }
         }
+        
+        let view_proj = proj * view_mat;
 
-        let g_light_x = (light_time * 2.0).sin() * 2.0;
+        // Işık kaynağını bul
+        let mut light_pos = Vec3::new(0.0, 10.0, 0.0);
+        let mut light_color = Vec3::new(1.0, 1.0, 1.0);
+        if let (Some(lights), Some(transforms)) = (world.borrow::<PointLight>(), world.borrow::<Transform>()) {
+            if !lights.dense.is_empty() {
+                let e = lights.entity_dense[0];
+                if let Some(t) = transforms.get(e) {
+                    light_pos = t.position;
+                }
+                light_color = lights.dense[0].color;
+            }
+        }
 
         // Uniform buffer güncelleme
         if let (Some(meshes), Some(renderers), Some(positions), Some(colliders)) =
@@ -365,11 +406,12 @@ fn main() {
                     // Önce kendi merkezine git, ekstra boyut ekle, sonra asıl Transform matrisini uygula
                     let model = trans_mat * extra_scale * center_mat;
 
-                    let mvp = proj * view_mat * model;
-
                     let uniform_data = EngineUniforms {
-                        mvp: mvp.to_cols_array_2d(),
-                        light_dir: [-g_light_x, 1.0, 1.0, 0.0],
+                        view_proj: view_proj.to_cols_array_2d(),
+                        model: model.to_cols_array_2d(),
+                        camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
+                        light_pos: [light_pos.x, light_pos.y, light_pos.z, 1.0],
+                        light_color: [light_color.x, light_color.y, light_color.z, 1.0],
                     };
                     renderer.queue.write_buffer(&mesh_ren.ubuf, 0, bytemuck::cast_slice(&[uniform_data]));
                 }

@@ -74,3 +74,14 @@ impl Camera {
         self.get_front().cross(Vec3::new(0.0, 1.0, 0.0)).normalize()
     }
 }
+
+pub struct PointLight {
+    pub color: Vec3,
+    pub intensity: f32,
+}
+
+impl PointLight {
+    pub fn new(color: Vec3, intensity: f32) -> Self {
+        Self { color, intensity }
+    }
+}

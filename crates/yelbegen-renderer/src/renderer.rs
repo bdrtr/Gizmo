@@ -43,12 +43,15 @@ impl Vertex {
     }
 }
 
-// Shader'a gönderilecek devasa paket. MVP Kamerası ve Işık!
+// Shader'a gönderilecek paket. (WGSL 16-byte align yapısına birebir uymalı)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct EngineUniforms {
-    pub mvp: [[f32; 4]; 4],
-    pub light_dir: [f32; 4],
+    pub view_proj: [[f32; 4]; 4],
+    pub model: [[f32; 4]; 4],
+    pub camera_pos: [f32; 4],
+    pub light_pos: [f32; 4],
+    pub light_color: [f32; 4],
 }
 
 pub struct Renderer<'a> {
@@ -128,8 +131,11 @@ impl<'a> Renderer<'a> {
 
         // -- GPU Hafızasında UNIFORMS (Kamera ve Işık) --
         let initial_uniforms = EngineUniforms {
-            mvp: [[0.0; 4]; 4],
-            light_dir: [-1.0, 1.0, 1.0, 0.0],
+            view_proj: [[0.0; 4]; 4],
+            model: [[0.0; 4]; 4],
+            camera_pos: [0.0; 4],
+            light_pos: [0.0; 4],
+            light_color: [0.0; 4],
         };
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
