@@ -7,3 +7,4 @@ pub use yelbegen_renderer as renderer;
 pub use yelbegen_window as window;
 pub use yelbegen_physics as physics;
 pub use yelbegen_editor as editor;
+pub use yelbegen_app as app;

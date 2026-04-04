@@ -1,5 +1,3 @@
-use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vec4 {
     pub x: f32,

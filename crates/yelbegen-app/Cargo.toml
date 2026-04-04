@@ -1,13 +1,17 @@
 [package]
-name = "yelbegen"
+name = "yelbegen-app"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
+description.workspace = true
 
 [dependencies]
 yelbegen-core = { path = "../yelbegen-core" }
-yelbegen-math = { path = "../yelbegen-math" }
 yelbegen-renderer = { path = "../yelbegen-renderer" }
-yelbegen-window = { path = "../yelbegen-window" }
-yelbegen-physics = { path = "../yelbegen-physics" }
+yelbegen-math = { path = "../yelbegen-math" }
+winit = "0.29"
+wgpu = "0.19"
+pollster = "0.3"
+egui = "0.26"
 yelbegen-editor = { path = "../yelbegen-editor" }
-yelbegen-app = { path = "../yelbegen-app" }
+

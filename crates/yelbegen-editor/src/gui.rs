@@ -1,4 +1,4 @@
-use egui::{Context, FullOutput};
+use egui::Context;
 use egui_wgpu::{Renderer, ScreenDescriptor};
 use egui_winit::State;
 use winit::window::Window;

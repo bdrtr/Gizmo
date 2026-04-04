@@ -1,16 +1,16 @@
 use crate::world::World;
 
 pub trait System {
-    fn run(&mut self, world: &World);
+    fn run(&mut self, world: &mut World, dt: f32);
 }
 
 // Bir &World referansı alan her fonksiyonu otomatikman System yapıyoruz.
 impl<F> System for F
 where
-    F: FnMut(&World),
+    F: FnMut(&mut World, f32),
 {
-    fn run(&mut self, world: &World) {
-        (self)(world);
+    fn run(&mut self, world: &mut World, dt: f32) {
+        (self)(world, dt);
     }
 }
 
@@ -29,9 +29,9 @@ impl Schedule {
         self.systems.push(Box::new(system));
     }
 
-    pub fn run(&mut self, world: &World) {
+    pub fn run(&mut self, world: &mut World, dt: f32) {
         for system in &mut self.systems {
-            system.run(world);
+            system.run(world, dt);
         }
     }
 }

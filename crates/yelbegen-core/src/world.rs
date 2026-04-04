@@ -68,7 +68,7 @@ impl World {
 
     /// Bir component dizisine okuma amaçlı (Read-Only) erişim verir.
     /// Başka sistemler de aynı anda okuyabilir (Ref).
-    pub fn borrow<T: Component>(&self) -> Option<Ref<SparseSet<T>>> {
+    pub fn borrow<T: Component>(&self) -> Option<Ref<'_, SparseSet<T>>> {
         let type_id = TypeId::of::<T>();
         let storage = self.storages.get(&type_id)?;
         
@@ -80,7 +80,7 @@ impl World {
 
     /// Bir component dizisine yazma amaçlı (Mutable) erişim verir.
     /// Çalışırken kimse bu veriyi okuyamaz veya yazamaz. Tip güvenliği!
-    pub fn borrow_mut<T: Component>(&self) -> Option<RefMut<SparseSet<T>>> {
+    pub fn borrow_mut<T: Component>(&self) -> Option<RefMut<'_, SparseSet<T>>> {
         let type_id = TypeId::of::<T>();
         let storage = self.storages.get(&type_id)?;
         

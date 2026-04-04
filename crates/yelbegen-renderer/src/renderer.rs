@@ -59,6 +59,7 @@ pub struct Renderer<'a> {
     pub size: winit::dpi::PhysicalSize<u32>,
     pub render_pipeline: wgpu::RenderPipeline,
     pub uniform_buffer: wgpu::Buffer,
+    pub uniform_bind_group_layout: wgpu::BindGroupLayout,
     pub uniform_bind_group: wgpu::BindGroup,
     
     // Shaderda Texture için hazırladığımız Blueprint
@@ -241,6 +242,7 @@ impl<'a> Renderer<'a> {
             size,
             render_pipeline,
             uniform_buffer,
+            uniform_bind_group_layout,
             uniform_bind_group,
             texture_bind_group_layout,
             depth_texture_view,

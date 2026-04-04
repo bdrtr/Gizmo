@@ -6,6 +6,7 @@ members = [
     "crates/yelbegen-window",
     "crates/yelbegen-physics",
     "crates/yelbegen-editor",
+    "crates/yelbegen-app",
     "demo",
 ]
 
