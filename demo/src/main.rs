@@ -269,8 +269,9 @@ fn main() {
                 if state.mouse_pressed {
                     if let Some(mut cameras) = world.borrow_mut::<Camera>() {
                         if let Some(cam) = cameras.get_mut(state.player_id) {
-                            cam.yaw += delta.0 as f32 * 0.005;
-                            cam.pitch -= delta.1 as f32 * 0.005;
+                            // Hassasiyet azaltıldı (pürüzsüz mouse deneyimi için)
+                            cam.yaw += delta.0 as f32 * 0.002;
+                            cam.pitch -= delta.1 as f32 * 0.002;
                             cam.pitch = cam.pitch.clamp(-1.5, 1.5);
                         }
                     }
