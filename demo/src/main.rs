@@ -12,6 +12,9 @@ use std::sync::Arc;
 use yelbegen::renderer::components::{Mesh, Material, MeshRenderer, Camera, PointLight};
 use yelbegen::renderer::asset::AssetManager;
 
+pub struct EntityName(pub String);
+
+
 // ======================== FİZİK SİSTEMLERİ ========================
 
 /// Yerçekimi uygular ve pozisyonları günceller.
@@ -118,6 +121,7 @@ struct GameState {
     keys: HashSet<KeyCode>,
     bouncing_box_id: u32,
     player_id: u32,
+    inspector_selected_entity: Option<u32>,
 }
 
 // ======================== ANA FONKSİYON ========================
@@ -176,6 +180,7 @@ fn main() {
         world.add_component(bouncing_box, asset_manager.load_obj(&renderer.device, "demo/assets/suzanne.obj"));
         world.add_component(bouncing_box, Material::new(tbind.clone()).with_pbr(Vec4::new(0.8, 0.2, 0.2, 1.0), 0.2, 0.1)); // Parlak kırmızımsı materyal
         world.add_component(bouncing_box, create_renderer());
+        world.add_component(bouncing_box, EntityName("Zıplayan Maymun".into()));
 
         // --- Zemin (Suzanne geçici) ---
         let ground = world.spawn();
@@ -186,6 +191,7 @@ fn main() {
         world.add_component(ground, asset_manager.load_obj(&renderer.device, "demo/assets/suzanne.obj")); // Şimdilik yer objesi niyetine
         world.add_component(ground, Material::new(tbind.clone()).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.8, 0.0)); // Mat malzeme
         world.add_component(ground, create_renderer());
+        world.add_component(ground, EntityName("Zemin Objesi".into()));
 
         // --- Işık (Point Light) ---
         let light = world.spawn();
@@ -195,6 +201,7 @@ fn main() {
         world.add_component(light, asset_manager.load_obj(&renderer.device, "demo/assets/suzanne.obj"));
         world.add_component(light, Material::new(tbind.clone()).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 1.0, 0.0));
         world.add_component(light, create_renderer());
+        world.add_component(light, EntityName("Nokta Güneş Işığı".into()));
 
         // --- Ekstra 10 Maymun (Mesh Önbellekleme Testi) ---
         for i in 0..10 {
@@ -206,6 +213,7 @@ fn main() {
             world.add_component(clone_monkey, asset_manager.load_obj(&renderer.device, "demo/assets/suzanne.obj"));
             world.add_component(clone_monkey, Material::new(tbind.clone()).with_pbr(Vec4::new(0.1, 0.8, 0.2, 1.0), 0.5, 0.0)); 
             world.add_component(clone_monkey, create_renderer());
+            world.add_component(clone_monkey, EntityName(format!("Klon Maymun {}", i)));
         }
 
         // --- Player (Kamera) ---
@@ -215,12 +223,14 @@ fn main() {
             std::f32::consts::FRAC_PI_4, 0.1, 100.0,
             -std::f32::consts::FRAC_PI_2, -0.3, true,
         ));
+        world.add_component(player, EntityName("Kamera (Göz)".into()));
 
         GameState {
             mouse_pressed: false,
             keys: HashSet::new(),
             bouncing_box_id: bouncing_box.id(),
             player_id: player.id(),
+            inspector_selected_entity: None,
         }
     });
 
@@ -317,69 +327,142 @@ fn main() {
 
     // 5. EGUI ARAYÜZ
     app = app.set_ui(|world, state, ctx| {
-        egui::Window::new("⚙️ Yelbegen Engine Inspector").show(ctx, |ui| {
-            ui.heading("Aydınlatma ve Simülasyon");
-            ui.separator();
-
-            if let Some(mut rbs) = world.borrow_mut::<RigidBody>() {
-                if let Some(rb) = rbs.get_mut(state.bouncing_box_id) {
-                    ui.horizontal(|ui| {
-                        ui.label("Kütle: ");
-                        ui.add(egui::Slider::new(&mut rb.mass, 0.0..=10.0));
+        egui::Window::new("⚙️ Yelbegen Engine Inspector")
+            .default_width(400.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    // SOL PANEL: Hiyerarşi
+                    ui.vertical(|ui| {
+                        ui.set_width(150.0);
+                        ui.heading("Sahne (Hiyerarşi)");
+                        ui.separator();
+                        
+                        egui::ScrollArea::vertical().id_source("hierarchy").max_height(200.0).show(ui, |ui| {
+                            if let Some(names) = world.borrow::<EntityName>() {
+                                for i in 0..names.dense.len() {
+                                    let e_id = names.entity_dense[i];
+                                    let e_name = &names.dense[i].0;
+                                    let is_selected = state.inspector_selected_entity == Some(e_id);
+                                    if ui.selectable_label(is_selected, e_name).clicked() {
+                                        state.inspector_selected_entity = Some(e_id);
+                                    }
+                                }
+                            }
+                        });
                     });
-                    ui.horizontal(|ui| {
-                        ui.label("Sekme: ");
-                        ui.add(egui::Slider::new(&mut rb.restitution, 0.0..=1.0));
-                    });
-                }
-            }
 
-            if let Some(mut materials) = world.borrow_mut::<Material>() {
-                if let Some(mat) = materials.get_mut(state.bouncing_box_id) {
                     ui.separator();
-                    ui.heading("Materyal ve Yüzey (PBR)");
-                    
-                    let mut edit_albedo = [mat.albedo.x, mat.albedo.y, mat.albedo.z];
-                    ui.horizontal(|ui| {
-                        ui.label("Renk (Albedo): ");
-                        ui.color_edit_button_rgb(&mut edit_albedo);
-                    });
-                    mat.albedo.x = edit_albedo[0];
-                    mat.albedo.y = edit_albedo[1];
-                    mat.albedo.z = edit_albedo[2];
 
-                    ui.horizontal(|ui| {
-                        ui.label("Pürüzlülük (Roughness): ");
-                        ui.add(egui::Slider::new(&mut mat.roughness, 0.0..=1.0));
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Metalik (Metallic): ");
-                        ui.add(egui::Slider::new(&mut mat.metallic, 0.0..=1.0));
-                    });
-                }
-            }
+                    // SAĞ PANEL: Inspector
+                    ui.vertical(|ui| {
+                        ui.set_min_width(200.0);
+                        ui.heading("Bileşenler (Components)");
+                        ui.separator();
 
-            if ui.button("🔄 Başa Sar").clicked() {
-                if let Some(mut trans) = world.borrow_mut::<Transform>() {
-                    if let Some(t) = trans.get_mut(state.bouncing_box_id) {
-                        t.position = Vec3::new(0.0, 5.0, -8.0);
+                        if let Some(e) = state.inspector_selected_entity {
+                            // İsim
+                            if let Some(names) = world.borrow::<EntityName>() {
+                                if let Some(n) = names.get(e) {
+                                    ui.label(egui::RichText::new(&n.0).strong().size(16.0));
+                                    ui.add_space(5.0);
+                                }
+                            }
+
+                            // Transform
+                            if let Some(mut transforms) = world.borrow_mut::<Transform>() {
+                                if let Some(t) = transforms.get_mut(e) {
+                                    ui.label(egui::RichText::new("Transform").underline());
+                                    ui.horizontal(|ui| {
+                                        ui.label("P(X): "); ui.add(egui::DragValue::new(&mut t.position.x).speed(0.1));
+                                        ui.label("P(Y): "); ui.add(egui::DragValue::new(&mut t.position.y).speed(0.1));
+                                        ui.label("P(Z): "); ui.add(egui::DragValue::new(&mut t.position.z).speed(0.1));
+                                    });
+                                    ui.add_space(5.0);
+                                }
+                            }
+
+                            // RigidBody
+                            if let Some(mut rbs) = world.borrow_mut::<RigidBody>() {
+                                if let Some(rb) = rbs.get_mut(e) {
+                                    ui.label(egui::RichText::new("Fizik (RigidBody)").underline());
+                                    ui.horizontal(|ui| {
+                                        ui.label("Kütle: ");
+                                        ui.add(egui::Slider::new(&mut rb.mass, 0.0..=10.0));
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Sekme: ");
+                                        ui.add(egui::Slider::new(&mut rb.restitution, 0.0..=1.0));
+                                    });
+                                    ui.add_space(5.0);
+                                }
+                            }
+
+                            // Material
+                            if let Some(mut materials) = world.borrow_mut::<Material>() {
+                                if let Some(mat) = materials.get_mut(e) {
+                                    ui.label(egui::RichText::new("Materyal (PBR)").underline());
+                                    let mut edit_albedo = [mat.albedo.x, mat.albedo.y, mat.albedo.z];
+                                    ui.horizontal(|ui| {
+                                        ui.label("Renk (Albedo): ");
+                                        ui.color_edit_button_rgb(&mut edit_albedo);
+                                    });
+                                    mat.albedo.x = edit_albedo[0];
+                                    mat.albedo.y = edit_albedo[1];
+                                    mat.albedo.z = edit_albedo[2];
+
+                                    ui.horizontal(|ui| {
+                                        ui.label("Pürüzlülük: ");
+                                        ui.add(egui::Slider::new(&mut mat.roughness, 0.0..=1.0));
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Metalik: ");
+                                        ui.add(egui::Slider::new(&mut mat.metallic, 0.0..=1.0));
+                                    });
+                                    ui.add_space(5.0);
+                                }
+                            }
+
+                            // PointLight
+                            if let Some(mut lights) = world.borrow_mut::<PointLight>() {
+                                if let Some(l) = lights.get_mut(e) {
+                                    ui.label(egui::RichText::new("Işık (PointLight)").underline());
+                                    let mut edit_color = [l.color.x, l.color.y, l.color.z];
+                                    ui.horizontal(|ui| {
+                                        ui.label("Renk: ");
+                                        ui.color_edit_button_rgb(&mut edit_color);
+                                    });
+                                    l.color.x = edit_color[0];
+                                    l.color.y = edit_color[1];
+                                    l.color.z = edit_color[2];
+
+                                    ui.horizontal(|ui| {
+                                        ui.label("Yoğunluk: ");
+                                        ui.add(egui::Slider::new(&mut l.intensity, 0.0..=10.0));
+                                    });
+                                    ui.add_space(5.0);
+                                }
+                            }
+
+                        } else {
+                            ui.label("Lütfen soldaki listeden bir obje seçin.");
+                        }
+                    });
+                });
+
+                ui.separator();
+                if ui.button("🔄 Zıplayan Maymunu Başa Sar").clicked() {
+                    if let Some(mut trans) = world.borrow_mut::<Transform>() {
+                        if let Some(t) = trans.get_mut(state.bouncing_box_id) {
+                            t.position = Vec3::new(0.0, 5.0, -8.0);
+                        }
+                    }
+                    if let Some(mut vels) = world.borrow_mut::<Velocity>() {
+                        if let Some(v) = vels.get_mut(state.bouncing_box_id) {
+                            v.linear = Vec3::new(3.0, 0.0, 0.0);
+                        }
                     }
                 }
-                if let Some(mut vels) = world.borrow_mut::<Velocity>() {
-                    if let Some(v) = vels.get_mut(state.bouncing_box_id) {
-                        v.linear = Vec3::new(3.0, 0.0, 0.0);
-                    }
-                }
-            }
-
-            ui.add_space(10.0);
-            if let Some(trans) = world.borrow::<Transform>() {
-                if let Some(t) = trans.get(state.player_id) {
-                    ui.label(format!("Kamera: {:.1}, {:.1}, {:.1}", t.position.x, t.position.y, t.position.z));
-                }
-            }
-            ui.label("WASD: hareket | Q/E: dikey | Sağ Tık: bakış");
-        });
+            });
     });
 
     // 6. RENDER HOOK
