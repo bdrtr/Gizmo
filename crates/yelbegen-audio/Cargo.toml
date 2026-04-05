@@ -1,9 +1,0 @@
-[package]
-name = "yelbegen-audio"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-description.workspace = true
-
-[dependencies]
-rodio = "0.17"

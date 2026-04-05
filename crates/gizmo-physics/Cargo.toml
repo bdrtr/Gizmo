@@ -1,0 +1,10 @@
+[package]
+name = "gizmo-physics"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rayon = "1.11.0"
+serde = { version = "1.0.228", features = ["derive"] }
+gizmo-core = { path = "../gizmo-core" }
+gizmo-math = { path = "../gizmo-math" }

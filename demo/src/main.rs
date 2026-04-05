@@ -1,4 +1,4 @@
-use yelbegen::prelude::*;
+use gizmo::prelude::*;
 
 pub mod scene;
 
@@ -22,7 +22,7 @@ pub fn transform_hierarchy_system(world: &mut World) {
     // 2. ROOT (Kök) Objelerini bul (Üstünde Parent olmayanlar)
     let mut to_update = Vec::new();
     if let Some(transforms) = world.borrow::<Transform>() {
-        let parents = world.borrow::<yelbegen::core::component::Parent>();
+        let parents = world.borrow::<gizmo::core::component::Parent>();
         for &entity_id in &transforms.entity_dense {
             let has_parent = if let Some(p) = &parents { p.contains(entity_id) } else { false };
             if !has_parent {
@@ -48,7 +48,7 @@ pub fn transform_hierarchy_system(world: &mut World) {
         }
 
         // Child node'ları kuyruğa ekle
-        if let Some(children_comp) = world.borrow::<yelbegen::core::component::Children>() {
+        if let Some(children_comp) = world.borrow::<gizmo::core::component::Children>() {
             if let Some(children) = children_comp.get(entity_id) {
                 for &child_id in &children.0 {
                     to_update.push((child_id, current_global));
@@ -76,7 +76,7 @@ struct GameState {
     skybox_id: u32,
     inspector_selected_entity: Option<u32>,
     #[allow(dead_code)] // AudioManager'ın OutputStream'i canlı tutulmalı (drop edilirse ses durur)
-    audio: Option<yelbegen::audio::AudioManager>,
+    audio: Option<gizmo::audio::AudioManager>,
     do_raycast: bool,
     gizmo_x: u32,
     gizmo_y: u32,
@@ -91,12 +91,13 @@ struct GameState {
     spawn_monkey_requests: std::cell::Cell<u32>,
     spawn_light_requests: std::cell::Cell<u32>,
     texture_load_requests: std::cell::RefCell<Vec<(u32, String)>>,
-    asset_manager: std::cell::RefCell<yelbegen::renderer::asset::AssetManager>,
+    asset_manager: std::cell::RefCell<gizmo::renderer::asset::AssetManager>,
     gizmo_mode: GizmoMode,
     egui_wants_pointer: bool,
-    asset_watcher: Option<yelbegen::renderer::hot_reload::AssetWatcher>,
-    script_engine: std::cell::RefCell<Option<yelbegen::scripting::ScriptEngine>>,
+    asset_watcher: Option<gizmo::renderer::hot_reload::AssetWatcher>,
+    script_engine: std::cell::RefCell<Option<gizmo::scripting::ScriptEngine>>,
     physics_accumulator: f32,
+    target_physics_fps: f32,
 }
 
 // ======================== ARABA SİMÜLASYONU ========================
@@ -114,57 +115,61 @@ pub struct Wheel {
 }
 
 pub fn car_update_system(world: &mut World, input: &Input) {
-    let dt = world.get_resource::<Time>().map_or(0.016, |t| t.dt);
-    let mut car_transform: Option<(u32, Transform, CarController)> = None;
+    // IJKL tuşlarını fizik tabanlı VehicleController'a bağla
+    // I = İleri (Gaz), K = Geri, J = Sola dön, L = Sağa dön
+    // Space = Fren (El Freni)
+    let throttle = if input.is_key_pressed(KeyCode::KeyI as u32) { 1.0 } 
+                   else if input.is_key_pressed(KeyCode::KeyK as u32) { -1.0 } 
+                   else { 0.0 };
+    let steer = if input.is_key_pressed(KeyCode::KeyJ as u32) { 1.0 } 
+                else if input.is_key_pressed(KeyCode::KeyL as u32) { -1.0 } 
+                else { 0.0 };
+    let brake = if input.is_key_pressed(KeyCode::KeyB as u32) { 1.0 } else { 0.0 };
 
-    // 1. Arabayı (CarController) bul ve klavyeye göre güncelle
-    // winit KeyCode değerleri: Up = 81 (ya da winit::keyboard::KeyCode::ArrowUp as u32)
-    // Şimdilik winit KeyCode karşılıklarına bakalım veya klavye oklarını hardcode edelim
-    // W/S harici i/k veya oklara denk gelir. Biz yelbegen-app üzerinden ArrowUp vs test edebiliriz
-    // Standart WASD harflerini direksiyon ve gaza bağlayacağız. Kamera ile çakışacak ama dert değil.
-    // Aslında I,J,K,L tuşlarını arabaya verelim!
-    // I (73), J (74), K (75), L (76) ASCII winit enum fallback veya standard W=87, A=65...
-    // Input modülüne ufak bir ek eklemedikçe winit VirtualKeyCode (KeyI, vs.) bilmek zor ama deneyelim.
-    let car_accel = if input.is_key_pressed(KeyCode::KeyI as u32) { 1.0 } else if input.is_key_pressed(KeyCode::KeyK as u32) { -1.0 } else { 0.0 };
-    let car_steer = if input.is_key_pressed(KeyCode::KeyJ as u32) { 1.0 } else if input.is_key_pressed(KeyCode::KeyL as u32) { -1.0 } else { 0.0 };
-
-    if let Some(mut q) = world.query_mut_mut::<Transform, CarController>() {
-        for (e, t, car) in q.iter_mut() {
-            // İvmelenme ve sürtünme
-            car.speed += car_accel * 15.0 * dt;
-            car.speed *= 0.95; // sürtünme
-            
-            // Direksiyon
-            car.steering += car_steer * 2.0 * dt;
-            car.steering *= 0.8; // direksiyon kendini toplasın (yaylanma)
-            car.steering = car.steering.clamp(-0.5, 0.5); // max direksiyon açısı limiti
-            
-            // Arabanın rotasyonunu direksiyona göre güncelle (sadece ilerlerken)
-            if car.speed.abs() > 0.1 {
-                let turn_factor = car.speed.signum() * car.steering * dt * 2.0;
-                t.rotation = t.rotation * Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), turn_factor);
+    if let Some(mut vehicles) = world.borrow_mut::<gizmo::physics::vehicle::VehicleController>() {
+        for &e in &vehicles.entity_dense.clone() {
+            if let Some(v) = vehicles.get_mut(e) {
+                // Motor gücü: 15000 Newton (Kamyon kütlesi 1500kg, bu ~1g ivme verir)
+                v.engine_force = throttle * 15000.0;
+                
+                // Direksiyon: Yumuşak geçiş (lerp) ile max 0.4 radyan (~23 derece)
+                let target_steer = steer * 0.4;
+                v.steering_angle += (target_steer - v.steering_angle) * 0.15; // Yumuşak geçiş
+                
+                // Fren
             }
-            
-            // Arabanın hız vektörünü ileri taşı
-            let forward = t.rotation.mul_vec3(Vec3::new(0.0, 0.0, 1.0));
-            t.position += forward * car.speed * dt;
-            
-            car_transform = Some((e, *t, *car));
         }
     }
+}
 
-    // 2. Wheel bileşenli tekerleklerin yerel rotasyonlarını direksiyona ve hıza bağla
-    if let Some(mut q) = world.query_mut_mut::<Transform, Wheel>() {
-        if let Some((_cid, _ct, car)) = car_transform {
-            for (_e, t, wheel) in q.iter_mut() {
-                wheel.base_rotation += car.speed * dt * 2.0; // tekerleğin yuvarlanma dönüşü
+pub fn character_update_system(world: &World, input: &Input, dt: f32) {
+    let mut move_dir = Vec3::ZERO;
+    // Arrow keys for character motion
+    if input.is_key_pressed(KeyCode::ArrowUp as u32) { move_dir.z -= 1.0; }
+    if input.is_key_pressed(KeyCode::ArrowDown as u32) { move_dir.z += 1.0; }
+    if input.is_key_pressed(KeyCode::ArrowLeft as u32) { move_dir.x -= 1.0; }
+    if input.is_key_pressed(KeyCode::ArrowRight as u32) { move_dir.x += 1.0; }
+    
+    // Normalize directions so diagonal speed isn't faster
+    if move_dir.length_squared() > 0.001 {
+        move_dir = move_dir.normalize();
+    }
+    
+    if let Some(mut chars) = world.borrow_mut::<gizmo::physics::character::CharacterController>() {
+        for &e in &chars.entity_dense.clone() {
+            if let Some(cc) = chars.get_mut(e) {
+                // Apply input velocity
+                cc.desired_velocity = move_dir * 10.0;
                 
-                // Direksiyon açısı (Sadece Y ekseninde ön tekerlekler, yerel eksende)
-                let y_rot = if wheel.is_front { car.steering } else { 0.0 };
+                // Print a small debug if moving
+                if move_dir.length_squared() > 0.1 {
+                    println!("Player Moving: ground={}, vel={:.1}", cc.is_grounded, cc.vertical_velocity);
+                }
                 
-                // Rotasyonu birleştir: Önce direksiyon yönüne dön (Y), sonra teker gibi yuvarlan (X ekseni etrafında)
-                t.rotation = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), y_rot)
-                           * Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), wheel.base_rotation);
+                // Allow jump if grounded
+                if input.is_key_pressed(KeyCode::Space as u32) && cc.is_grounded {
+                    cc.jump(5.0); 
+                }
             }
         }
     }
@@ -173,10 +178,10 @@ pub fn car_update_system(world: &mut World, input: &Input) {
 // ======================== GLTF HİYERARŞİ OLUŞTURUCU ========================
 pub fn spawn_gltf_hierarchy(
     world: &mut World,
-    nodes: &[yelbegen::renderer::GltfNodeData],
+    nodes: &[gizmo::renderer::GltfNodeData],
     parent_id: Option<u32>,
     default_material: Material,
-) -> Vec<yelbegen::core::Entity> {
+) -> Vec<gizmo::core::Entity> {
     let mut spawned_entities = Vec::new();
 
     for node in nodes {
@@ -211,7 +216,7 @@ pub fn spawn_gltf_hierarchy(
             } else {
                 world.add_component(prim_entity, default_material.clone()); // Eğer GLTF material okumadıysa default
             }
-            world.add_component(prim_entity, yelbegen::renderer::components::MeshRenderer::new());
+            world.add_component(prim_entity, gizmo::renderer::components::MeshRenderer::new());
             immediate_children.push(prim_entity.id());
         }
 
@@ -232,13 +237,13 @@ pub fn spawn_gltf_hierarchy(
 // ======================== ANA FONKSİYON ========================
 
 fn main() {
-    let mut app = App::new("Yelbegen Engine — Rust 3D Motor", 1280, 720);
+    let mut app = App::new("Gizmo Engine — Rust 3D Motor", 1280, 720);
 
     // 1. SETUP
     app = app.set_setup(|world, renderer| {
-        println!("Yelbegen Engine: Sahne başlatılıyor...");
+        println!("Gizmo Engine: Sahne başlatılıyor...");
 
-        let mut audio = yelbegen::audio::AudioManager::new();
+        let mut audio = gizmo::audio::AudioManager::new();
         if let Some(ref mut a) = audio {
             a.load_sound("bounce", "demo/assets/bounce.wav");
         }
@@ -282,59 +287,65 @@ fn main() {
             world.add_component(ground_entity, ground_mesh);
             world.add_component(ground_entity, Transform::new(Vec3::new(0.0, -1.0, 0.0)).with_scale(Vec3::new(50.0, 1.0, 50.0)));
             world.add_component(ground_entity, Material::new(stone_tbind.clone()).with_pbr(Vec4::new(0.3, 0.3, 0.3, 1.0), 0.9, 0.1));
-            world.add_component(ground_entity, yelbegen::renderer::components::MeshRenderer::new());
-            world.add_component(ground_entity, yelbegen::physics::components::RigidBody::new_static());
+            world.add_component(ground_entity, gizmo::renderer::components::MeshRenderer::new());
+            let mut ground_rb = gizmo::physics::components::RigidBody::new_static();
+            ground_rb.restitution = 1.0; // Zemin de zıplamaya katkı yapsın
+            world.add_component(ground_entity, ground_rb);
             // Y ekseni 'half_extent'ini (kalınlık) 0.05 yapıyoruz ki dümdüz olan visual Plane ile eşleşsin! (1.0 olunca havada çarpışıyordu)
-            world.add_component(ground_entity, yelbegen::physics::shape::Collider::new_aabb(25.0, 0.05, 25.0));
+            world.add_component(ground_entity, gizmo::physics::shape::Collider::new_aabb(25.0, 0.05, 25.0));
 
-            // --- Fiziksel Araç (Raycast Milk Truck) ---
-            let gltf_scene = asset_manager.load_gltf_scene(&renderer.device, &renderer.queue, &renderer.texture_bind_group_layout, tbind.clone(), "demo/assets/truck.glb").unwrap();
-            
-            // Gerçek fizik arabamızın asıl gövdesi (Matematiksel Dünya Koordinatlarına sahip Master Kök)
-            let car_root = world.spawn();
-            world.add_component(car_root, Transform::new(Vec3::new(0.0, 5.0, 0.0)));
-            world.add_component(car_root, yelbegen::physics::components::Velocity::new(Vec3::ZERO));
-            
-            // GLTF Hiyerarşisini Çıkar (İlk Node genelde yöneltici Yup2Zup düğümüdür)
-            let parent_entities = spawn_gltf_hierarchy(world, &gltf_scene.roots, Some(car_root.id()), Material::new(tbind.clone()));
-            world.add_component(car_root, yelbegen::core::component::Children(vec![parent_entities[0].id()]));
-            
-            let mut rb = yelbegen::physics::components::RigidBody::new(1500.0, 0.1, 0.5, true);
-            rb.calculate_box_inertia(2.0, 1.5, 3.0); // Kutu eylemsizliği
-            world.add_component(car_root, rb);
-            
-            // Gövde için kaba çarpışma kutusu
-            world.add_component(car_root, yelbegen::physics::shape::Collider::new_aabb(1.2, 0.8, 2.0)); 
-            
-            // Süspansiyon (Vehicle Controller)
-            let mut vehicle = yelbegen::physics::vehicle::VehicleController::new();
-            
-            let w = 1.0;
-            let l_f = 1.43; // GLTF'teki (Node) ön dingil Z konumu
-            let l_r = -1.35; // GLTF'teki (Node.001) arka dingil Z konumu
-            let h = -0.4; // Kasanın altına
+            // Dümdüz Zemin
 
-            let rest = 0.5;
-            let stiff = 25000.0;
-            let damp = 1500.0;
-            let rad = 0.42;
-
-            use yelbegen::physics::vehicle::Wheel;
-            vehicle.add_wheel(Wheel::new(Vec3::new(w, h, l_f), rest, stiff, damp, rad)); // İleri Sol
-            vehicle.add_wheel(Wheel::new(Vec3::new(-w, h, l_f), rest, stiff, damp, rad)); // İleri Sağ
-            vehicle.add_wheel(Wheel::new(Vec3::new(w, h, l_r), rest, stiff, damp, rad)); // Geri Sol
-            vehicle.add_wheel(Wheel::new(Vec3::new(-w, h, l_r), rest, stiff, damp, rad)); // Geri Sağ
-            
-            world.add_component(car_root, vehicle);
-            world.add_component(car_root, EntityName("Süt Kamyonu (GLTF)".into()));
             
             // --- GÜNEŞ (Directional Light / Gerçek Zamanlı Ana Gölgelendirici) ---
             let sun = world.spawn();
             let sun_transform = Transform::new(Vec3::new(0.0, 50.0, 50.0))
                 .with_rotation(Quat::from_axis_angle(Vec3::new(1.0, 0.5, 0.0).normalize(), -std::f32::consts::FRAC_PI_4));
             world.add_component(sun, sun_transform);
-            world.add_component(sun, yelbegen::renderer::components::DirectionalLight::new(Vec3::new(1.0, 0.98, 0.9), 1.5, true));
+            world.add_component(sun, gizmo::renderer::components::DirectionalLight::new(Vec3::new(1.0, 0.98, 0.9), 1.5, true));
             world.add_component(sun, EntityName("Güneş (Directional)".into()));
+
+            // Karakter (mavi top) kaldırıldı!
+
+            // === ASTEROİD STRES TESTİ (Broad-Phase) ===
+            let mut joint_world = gizmo::physics::JointWorld::new(); // Asteroitlerde joint yok, boş dünya
+            
+            // Düşük poligonlu küreler kullanıyoruz ki VRAM değil, CPU (Broad-phase) limitlerini ölçelim
+            let ast_mesh = AssetManager::create_sphere(&renderer.device, 1.0, 8, 8); 
+            
+            let mut seed: u32 = 123456789;
+            let mut rand = || -> f32 {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                (seed as f32) / (std::u32::MAX as f32)
+            };
+
+            for _ in 0..10_000 {
+                let entity = world.spawn();
+                
+                // Uzay boşluğunda -200 ile 200 birimlik devasa bir küp içine yay (O(n^2) engelleme testi)
+                let px = (rand() * 400.0) - 200.0;
+                let py = (rand() * 400.0) - 200.0;
+                let pz = (rand() * 400.0) - 200.0;
+                
+                // Her objeye süzülmesi için hafif rastgele bir vektör veriyoruz (-2 ile +2 arası)
+                let vx = (rand() * 4.0) - 2.0;
+                let vy = (rand() * 4.0) - 2.0;
+                let vz = (rand() * 4.0) - 2.0;
+
+                world.add_component(entity, Transform::new(Vec3::new(px, py, pz)));
+                world.add_component(entity, ast_mesh.clone());
+                world.add_component(entity, Material::new(tbind.clone()).with_pbr(Vec4::new(0.7, 0.7, 0.7, 1.0), 0.9, 0.0));
+                world.add_component(entity, gizmo::renderer::components::MeshRenderer::new());
+                world.add_component(entity, gizmo::physics::shape::Collider::new_sphere(1.0));
+                
+                // Kütle = 1.0, sekme(restitution) = 0.8, hava sürtünmesi = 0.0, yerçekimi = YOK (Uzay ortamı)
+                world.add_component(entity, gizmo::physics::components::RigidBody::new(1.0, 0.8, 0.0, false));
+                world.add_component(entity, gizmo::physics::components::Velocity::new(Vec3::new(vx, vy, vz)));
+            }
+            
+            // Kısıtlayıcıların çalışması için ECS kaynağı (Resource) olarak motora iletiyoruz
+            world.insert_resource(joint_world);
+
 
             // --- Player (Kamera) ---
             let player = world.spawn();
@@ -353,7 +364,7 @@ fn main() {
             world.add_component(skybox, sky_transform);
             world.add_component(skybox, AssetManager::create_inverted_cube(&renderer.device));
             world.add_component(skybox, Material::new(tbind.clone()).with_skybox());
-            world.add_component(skybox, yelbegen::renderer::components::MeshRenderer::new());
+            world.add_component(skybox, gizmo::renderer::components::MeshRenderer::new());
             world.add_component(skybox, EntityName("Skybox (Gök Kubbe)".into()));
 
             // --- GIZMO EKSENLERI (X, Y, Z) ---
@@ -363,7 +374,7 @@ fn main() {
             world.add_component(x_gizmo, AssetManager::create_sphere(&renderer.device, 1.0, 6, 6));
             world.add_component(x_gizmo, Material::new(tbind.clone()).with_unlit(Vec4::new(1.0, 0.0, 0.0, 1.0)));
             world.add_component(x_gizmo, Collider::new_aabb(1.5, 0.3, 0.3));
-            world.add_component(x_gizmo, yelbegen::renderer::components::MeshRenderer::new());
+            world.add_component(x_gizmo, gizmo::renderer::components::MeshRenderer::new());
             world.add_component(x_gizmo, EntityName("Gizmo_X".into()));
 
             let y_gizmo = world.spawn();
@@ -371,7 +382,7 @@ fn main() {
             world.add_component(y_gizmo, AssetManager::create_sphere(&renderer.device, 1.0, 6, 6));
             world.add_component(y_gizmo, Material::new(tbind.clone()).with_unlit(Vec4::new(0.0, 1.0, 0.0, 1.0)));
             world.add_component(y_gizmo, Collider::new_aabb(0.3, 1.5, 0.3));
-            world.add_component(y_gizmo, yelbegen::renderer::components::MeshRenderer::new());
+            world.add_component(y_gizmo, gizmo::renderer::components::MeshRenderer::new());
             world.add_component(y_gizmo, EntityName("Gizmo_Y".into()));
 
             let z_gizmo = world.spawn();
@@ -379,7 +390,7 @@ fn main() {
             world.add_component(z_gizmo, AssetManager::create_sphere(&renderer.device, 1.0, 6, 6));
             world.add_component(z_gizmo, Material::new(tbind.clone()).with_unlit(Vec4::new(0.0, 0.0, 1.0, 1.0)));
             world.add_component(z_gizmo, Collider::new_aabb(0.3, 0.3, 1.5));
-            world.add_component(z_gizmo, yelbegen::renderer::components::MeshRenderer::new());
+            world.add_component(z_gizmo, gizmo::renderer::components::MeshRenderer::new());
             world.add_component(z_gizmo, EntityName("Gizmo_Z".into()));
 
             (player.id(), skybox.id(), x_gizmo.id(), y_gizmo.id(), z_gizmo.id())
@@ -428,9 +439,10 @@ fn main() {
             asset_manager: std::cell::RefCell::new(asset_manager),
             gizmo_mode: GizmoMode::Translate,
             egui_wants_pointer: false,
-            asset_watcher: yelbegen::renderer::hot_reload::AssetWatcher::new(&["demo/assets"]),
-            script_engine: std::cell::RefCell::new(yelbegen::scripting::ScriptEngine::new().ok()),
+            asset_watcher: gizmo::renderer::hot_reload::AssetWatcher::new(&["demo/assets"]),
+            script_engine: std::cell::RefCell::new(gizmo::scripting::ScriptEngine::new().ok()),
             physics_accumulator: 0.0,
+            target_physics_fps: 240.0, // Sub-stepping: saniyede 240 simülasyon adımı (60 FPS'te kare başı 4 adım)
         }
     });
 
@@ -523,7 +535,7 @@ fn main() {
                     let world_far = Vec3::new(far_pt.x / far_pt.w, far_pt.y / far_pt.w, far_pt.z / far_pt.w);
 
                     let ray_dir = (world_far - world_near).normalize();
-                    current_ray = Some(yelbegen::math::Ray::new(world_near, ray_dir));
+                    current_ray = Some(gizmo::math::Ray::new(world_near, ray_dir));
                 }
             }
         }
@@ -548,7 +560,7 @@ fn main() {
                             continue;
                         }
                         if let Some(t) = transforms.get(id) {
-                            if let yelbegen::physics::ColliderShape::Aabb(aabb) = &colliders.dense[i].shape {
+                            if let gizmo::physics::ColliderShape::Aabb(aabb) = &colliders.dense[i].shape {
                                 // Scale'i collider boyutuna uygula
                                 let scaled_half = Vec3::new(
                                     aabb.half_extents.x * t.scale.x,
@@ -656,7 +668,7 @@ fn main() {
                                 let current_angle = local_hit.dot(v).atan2(local_hit.dot(u));
                                 let delta_angle = current_angle - state.drag_start_t;
                                 
-                                let rot_delta = yelbegen::math::Quat::from_axis_angle(axis_dir, delta_angle);
+                                let rot_delta = gizmo::math::Quat::from_axis_angle(axis_dir, delta_angle);
                                 if let Some(mut trans) = world.borrow_mut::<Transform>() {
                                     if let Some(t) = trans.get_mut(sel) {
                                         t.rotation = rot_delta * state.drag_original_rot;
@@ -709,28 +721,32 @@ fn main() {
 
         // Araba Kontrolcüsü Güncellemesi (Render dt ile frame bağımlı çalışsın diye bırakıldı veya bu da fiziğe alınabilir)
         car_update_system(world, input);
+        character_update_system(world, input, dt);
 
         // --- FIXED TIME STEP (SABİT FİZİK ADIMI) ---
         state.physics_accumulator += dt;
-        let fixed_dt: f32 = 1.0 / 60.0; // 60 FPS Fizik adımı (0.016666...)
+        let fixed_dt: f32 = 1.0 / state.target_physics_fps;
 
-        // Max 5 step sınırı koyalım (Oyuna çok fazla drop girerse Spiral of Death engellemesi)
+        // Max adım sınırı artırıldı (Sub-stepping ile daha fazla adım yapılması gerekecek)
         let mut steps = 0;
-        while state.physics_accumulator >= fixed_dt && steps < 5 {
+        while state.physics_accumulator >= fixed_dt && steps < 16 {
             // Fiziğe sabit zamanı simüle ettiğimizi söyleyelim
             // Aslında movement_system içindeki dt'yi world.get_resource::<Time> yerine argüman vs almalıyız
             // Fakat sistem zaten "Time" resource'ını okumuyor! İçinde sabit let dt = 0.016; kullanıyordu. Oraya da `fixed_dt` yollamamız lazım.
             
             // Araç Süspansiyonları (Fizik eylemleri hesaplanmadan hemen önce yay torkunu ekle)
-            yelbegen::physics::system::physics_vehicle_system(world, fixed_dt);
+            gizmo::physics::system::physics_vehicle_system(world, fixed_dt);
             
             // HACK: Simdilik physics_movement_system içindeki sabit dt, fixed_dt ile örtüşmeli
-            yelbegen::physics::system::physics_movement_system(world, fixed_dt);
-            yelbegen::physics::system::physics_collision_system(world);
+            gizmo::physics::system::physics_movement_system(world, fixed_dt);
+            gizmo::physics::system::physics_collision_system(world);
+            
+            // Karakter Sistemi Çözümlemesi
+            gizmo::physics::character::physics_character_system(world, fixed_dt);
             
             // Fizik kısıtlamalarını Çöz
-            if let Some(joint_world) = world.get_resource::<yelbegen::physics::JointWorld>() {
-                yelbegen::physics::solve_constraints(&*joint_world, world, fixed_dt);
+            if let Some(joint_world) = world.get_resource::<gizmo::physics::JointWorld>() {
+                gizmo::physics::solve_constraints(&*joint_world, world, fixed_dt);
             }
             
             state.physics_accumulator -= fixed_dt;
@@ -842,44 +858,19 @@ fn main() {
             }
         }
 
-        // Görsel Tekerlekleri Süspansiyon ile Senkronize Et (Visual Wheel Animation)
-        if let (Some(vehicles), Some(names)) = (world.borrow::<yelbegen::physics::vehicle::VehicleController>(), world.borrow::<EntityName>()) {
-            if let Some(&car_id) = vehicles.entity_dense.first() {
-                if let Some(car_v) = vehicles.get(car_id) {
-                    let front_comp = (car_v.wheels[0].compression + car_v.wheels[1].compression) / 2.0;
-                    let rear_comp = (car_v.wheels[2].compression + car_v.wheels[3].compression) / 2.0;
-                    
-                    if let Some(mut trans) = world.borrow_mut::<Transform>() {
-                        for &e in &names.entity_dense {
-                            if let Some(n) = names.get(e) {
-                                if n.0 == "Node" { // Ön Dingil (Front Axle GLTF Orijinal Z ekseni hizalaması)
-                                    if let Some(t) = trans.get_mut(e) {
-                                        t.position.z = -0.9 + front_comp;
-                                    }
-                                } else if n.0 == "Node.001" { // Arka Dingil
-                                    if let Some(t) = trans.get_mut(e) {
-                                        t.position.z = -0.9 + rear_comp;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
 
         // ECS Güncellemeleri Tamamlandı: Hiyerarşiyi Traverse Et
         transform_hierarchy_system(world);
 
         // Script (Lua) Motorunu Çalıştır
         if let Some(engine) = state.script_engine.borrow_mut().as_mut() {
-            if let (Some(mut transforms), Some(mut vels), Some(scripts)) = (world.borrow_mut::<Transform>(), world.borrow_mut::<Velocity>(), world.borrow::<yelbegen::scripting::Script>()) {
+            if let (Some(mut transforms), Some(mut vels), Some(scripts)) = (world.borrow_mut::<Transform>(), world.borrow_mut::<Velocity>(), world.borrow::<gizmo::scripting::Script>()) {
                 // Sadece scripti olan varlıklarda iterasyon yap (dense array var)
                 for &e in &scripts.entity_dense {
                     let script = match scripts.get(e) { Some(s) => s, None => continue };
                     let t = match transforms.get_mut(e) { Some(t) => t, None => continue };
                     let v = match vels.get_mut(e) { Some(v) => v, None => continue };
-                    let ctx = yelbegen::scripting::engine::ScriptContext {
+                    let ctx = gizmo::scripting::engine::ScriptContext {
                         entity_id: e,
                         dt,
                         position: [t.position.x, t.position.y, t.position.z],
@@ -941,7 +932,7 @@ fn main() {
                 });
                 
                 let entity_count = world.entity_count();
-                let draw_calls = world.query_ref::<yelbegen::renderer::components::MeshRenderer>()
+                let draw_calls = world.query_ref::<gizmo::renderer::components::MeshRenderer>()
                                       .map(|q| q.s1.dense.len())
                                       .unwrap_or(0);
                                       
@@ -954,10 +945,16 @@ fn main() {
                     ui.label(egui::RichText::new("Çizim Çağrısı (Draw Calls):").color(egui::Color32::LIGHT_GRAY));
                     ui.label(egui::RichText::new(format!("{}", draw_calls + 1)).color(egui::Color32::WHITE).strong()); // +1 Shadow Pass
                 });
+                
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Fizik Hızı (FPS):").color(egui::Color32::LIGHT_GRAY));
+                    ui.add(egui::Slider::new(&mut state.target_physics_fps, 5.0..=240.0));
+                });
             });
 
         // --- ANA INSPECTOR ---
-        egui::Window::new("Yelbegen Inspector")
+        egui::Window::new("Gizmo Inspector")
             .default_pos([10.0, 120.0])
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -1132,15 +1129,31 @@ fn main() {
                 });
 
                 ui.separator();
-                if ui.button("🔄 Zıplayan Maymunu Başa Sar").clicked() {
+                if ui.button("🔄 Sahneleri Başa Sar (Testi Tekrarlat)").clicked() {
+                    let mut targets = Vec::new();
+                    if let Some(names) = world.borrow::<EntityName>() {
+                        for entity in world.iter_alive_entities() {
+                            if let Some(n) = names.get(entity.id()) {
+                                if n.0.contains("Mermi -") {
+                                    targets.push(entity.id());
+                                }
+                            }
+                        }
+                    }
                     if let Some(mut trans) = world.borrow_mut::<Transform>() {
-                        if let Some(t) = trans.get_mut(state.bouncing_box_id) {
-                            t.position = Vec3::new(0.0, 5.0, -8.0);
+                        for &id in &targets {
+                            if let Some(t) = trans.get_mut(id) {
+                                t.position.x = -15.0;
+                                t.position.y = 3.0;
+                            }
                         }
                     }
                     if let Some(mut vels) = world.borrow_mut::<Velocity>() {
-                        if let Some(v) = vels.get_mut(state.bouncing_box_id) {
-                            v.linear = Vec3::new(3.0, 0.0, 0.0);
+                        for &id in &targets {
+                            if let Some(v) = vels.get_mut(id) {
+                                v.linear = Vec3::new(50.0, 0.0, 0.0); // Hızı sıfırlayıp 50 ver
+                                v.angular = Vec3::ZERO; // Açısal hızı sıfırla ki düz gitsin
+                            }
                         }
                     }
                 }
@@ -1208,19 +1221,19 @@ fn main() {
             let b = ((entity.id() * 199 + 7) % 255) as f32 / 255.0;
             {
                 let mut bind_group_clone = None;
-                if let Some(mats) = world.borrow::<yelbegen::renderer::components::Material>() {
+                if let Some(mats) = world.borrow::<gizmo::renderer::components::Material>() {
                     if let Some(mat) = mats.get(state.bouncing_box_id) {
                         bind_group_clone = Some(mat.bind_group.clone());
                     }
                 }
                 if let Some(bg) = bind_group_clone {
-                    let new_mat = yelbegen::renderer::components::Material::new(bg)
+                    let new_mat = gizmo::renderer::components::Material::new(bg)
                         .with_pbr(Vec4::new(r, g, b, 1.0), 0.4, 0.1);
                     world.add_component(entity, new_mat);
                 }
             }
             
-            world.add_component(entity, yelbegen::renderer::components::MeshRenderer::new());
+            world.add_component(entity, gizmo::renderer::components::MeshRenderer::new());
             
             // Yeni eklenen maymunu seç
             state.new_selection_request.set(Some(entity.id()));
@@ -1256,18 +1269,18 @@ fn main() {
             }
             {
                 let mut mat_bg = None;
-                if let Some(mats) = world.borrow::<yelbegen::renderer::components::Material>() {
+                if let Some(mats) = world.borrow::<gizmo::renderer::components::Material>() {
                     if let Some(mat) = mats.get(state.bouncing_box_id) {
                         mat_bg = Some(mat.bind_group.clone());
                     }
                 }
                 if let Some(bg) = mat_bg {
-                    world.add_component(entity, yelbegen::renderer::components::Material::new(bg)
+                    world.add_component(entity, gizmo::renderer::components::Material::new(bg)
                         .with_unlit(Vec4::new(1.0, 1.0, 1.0, 1.0)));
                 }
             }
             
-            world.add_component(entity, yelbegen::renderer::components::MeshRenderer::new());
+            world.add_component(entity, gizmo::renderer::components::MeshRenderer::new());
             
             // Yeni eklenen ışığı seç
             state.new_selection_request.set(Some(entity.id()));
@@ -1281,7 +1294,7 @@ fn main() {
             match am.load_material_texture(&renderer.device, &renderer.queue, &renderer.texture_bind_group_layout, &path) {
                 Ok(bg) => {
                     // Query API ile Material component'e güvenli &mut erişim
-                    if let Some(mut q) = world.query_mut::<yelbegen::renderer::components::Material>() {
+                    if let Some(mut q) = world.query_mut::<gizmo::renderer::components::Material>() {
                         for (e, mat) in q.iter_mut() {
                             if e == e_id {
                                 mat.bind_group = bg.clone();
@@ -1299,7 +1312,7 @@ fn main() {
         // --- SKELETAL ANIMATION UPDATE ---
         let delta_time = 1.0 / (state.current_fps.max(1.0));
         
-        if let Some(mut q) = world.query_mut_mut::<yelbegen::renderer::components::AnimationPlayer, yelbegen::renderer::components::Skeleton>() {
+        if let Some(mut q) = world.query_mut_mut::<gizmo::renderer::components::AnimationPlayer, gizmo::renderer::components::Skeleton>() {
             for (_e, anim_player, skeleton) in q.iter_mut() {
                 if anim_player.animations.is_empty() { continue; }
                 
@@ -1320,7 +1333,7 @@ fn main() {
                 
                 // 1) Local Poses hesapla (Sadece animasyondan gelenleri ez, geri kalanı orijinal local_bind kalsın)
                 let hierarchy = &skeleton.hierarchy;
-                let mut local_poses = vec![yelbegen::math::mat4::Mat4::IDENTITY; hierarchy.joints.len()];
+                let mut local_poses = vec![gizmo::math::mat4::Mat4::IDENTITY; hierarchy.joints.len()];
                 
                 for (i, joint) in hierarchy.joints.iter().enumerate() {
                     local_poses[i] = joint.local_bind_transform; // Varsayılan olarak T-Pose bekleme pozu
@@ -1343,10 +1356,10 @@ fn main() {
                     if let Some(val) = track.get_interpolated(time, |a, b, t| a.slerp(b, t)) {
                         if let Some(b_idx) = hierarchy.joints.iter().position(|j| j.node_index == track.target_node) {
                             // Rotation ezmek için mevcut translation ve scale'i koruyup yeniden çarpabiliriz:
-                            let tr = yelbegen::math::vec3::Vec3::new(local_poses[b_idx].cols[3].x, local_poses[b_idx].cols[3].y, local_poses[b_idx].cols[3].z);
+                            let tr = gizmo::math::vec3::Vec3::new(local_poses[b_idx].cols[3].x, local_poses[b_idx].cols[3].y, local_poses[b_idx].cols[3].z);
                             // Scale'i local_bind_transform'dan cikarmak zor, simdilik (1,1,1) varsayip sade donduruyoruz (cok basit yaklasim)
                             // Ileride Mat4::decomposed() metodunu math modulumuze ekleyerek daha iyi cekeriz.
-                            local_poses[b_idx] = yelbegen::math::mat4::Mat4::translation(tr) * val.to_mat4();
+                            local_poses[b_idx] = gizmo::math::mat4::Mat4::translation(tr) * val.to_mat4();
                         }
                     }
                 }
@@ -1354,7 +1367,7 @@ fn main() {
                 for track in &anim.scales {
                     if let Some(val) = track.get_interpolated(time, |a, b, t| a.lerp(b, t)) {
                         if let Some(b_idx) = hierarchy.joints.iter().position(|j| j.node_index == track.target_node) {
-                            local_poses[b_idx] = local_poses[b_idx] * yelbegen::math::mat4::Mat4::scale(val);
+                            local_poses[b_idx] = local_poses[b_idx] * gizmo::math::mat4::Mat4::scale(val);
                         }
                     }
                 }
@@ -1379,13 +1392,13 @@ fn main() {
         }
 
         // Işık kaynaklarını topla (Maksimum 10)
-        let mut lights_data = [yelbegen::renderer::renderer::LightData { position: [0.0; 4], color: [0.0; 4] }; 10];
+        let mut lights_data = [gizmo::renderer::renderer::LightData { position: [0.0; 4], color: [0.0; 4] }; 10];
         let mut num_lights = 0;
         
         if let Some(q) = world.query_ref_ref::<PointLight, Transform>() {
             for (_e, l, t) in q.iter() {
                 if num_lights >= 10 { break; }
-                lights_data[num_lights as usize] = yelbegen::renderer::renderer::LightData {
+                lights_data[num_lights as usize] = gizmo::renderer::renderer::LightData {
                     position: [t.position.x, t.position.y, t.position.z, l.intensity],
                     color: [l.color.x, l.color.y, l.color.z, 0.0],
                 };
@@ -1397,7 +1410,7 @@ fn main() {
         let mut sun_dir = [0.0, -1.0, 0.0, 0.0];
         let mut sun_col = [0.0, 0.0, 0.0, 0.0];
         
-        if let Some(q) = world.query_ref_ref::<yelbegen::renderer::components::DirectionalLight, Transform>() {
+        if let Some(q) = world.query_ref_ref::<gizmo::renderer::components::DirectionalLight, Transform>() {
             for (_e, dl, t) in q.iter() {
                 if dl.is_sun {
                     // Transform'un rotasyonundan ileri vektörü hesapla (Güneşin baktığı yön)
@@ -1431,7 +1444,7 @@ fn main() {
         }
 
         // Global Uniforms (Her frame sadece 1 kere gönderilir)
-        let scene_uniform_data = yelbegen::renderer::renderer::SceneUniforms {
+        let scene_uniform_data = gizmo::renderer::renderer::SceneUniforms {
             view_proj: view_proj.to_cols_array_2d(),
             camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
             sun_direction: sun_dir,
@@ -1444,9 +1457,9 @@ fn main() {
         renderer.queue.write_buffer(&renderer.global_uniform_buffer, 0, bytemuck::cast_slice(&[scene_uniform_data]));
 
         // --- BATCHING (INSTANCING) HAZIRLIĞI VE FRUSTUM CULLING ---
-        use yelbegen::renderer::renderer::InstanceRaw;
+        use gizmo::renderer::renderer::InstanceRaw;
 
-        let frustum = yelbegen::math::frustum::Frustum::from_matrix(&view_proj);
+        let frustum = gizmo::math::frustum::Frustum::from_matrix(&view_proj);
 
         struct BatchData {
             vbuf: std::sync::Arc<wgpu::Buffer>,
@@ -1458,9 +1471,9 @@ fn main() {
 
         let mut batches: std::collections::HashMap<(*const wgpu::Buffer, *const wgpu::BindGroup, *const wgpu::BindGroup), BatchData> = std::collections::HashMap::new();
 
-        let renderers = world.borrow::<yelbegen::renderer::components::MeshRenderer>();
-        let skeletons = world.borrow::<yelbegen::renderer::components::Skeleton>();
-        let lod_groups = world.borrow::<yelbegen::renderer::components::LodGroup>();
+        let renderers = world.borrow::<gizmo::renderer::components::MeshRenderer>();
+        let skeletons = world.borrow::<gizmo::renderer::components::Skeleton>();
+        let lod_groups = world.borrow::<gizmo::renderer::components::LodGroup>();
         
         if let Some(q) = world.query_ref_ref_ref::<Mesh, Transform, Material>() {
             for (e, mesh, trans, mat) in q.iter() {
@@ -1473,7 +1486,7 @@ fn main() {
                 // doğrudan global_matrix'i kullanmamız yeterlidir. Çift çarpım yapmıyoruz!
                 let global_model = trans.global_matrix;
                 
-                let center_mat = yelbegen::math::mat4::Mat4::translation(mesh.center_offset);
+                let center_mat = gizmo::math::mat4::Mat4::translation(mesh.center_offset);
                 let model = global_model * center_mat;
 
                 // Frustum Culling (Görüş açısı dışındakileri atla)

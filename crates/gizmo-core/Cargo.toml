@@ -1,0 +1,10 @@
+[package]
+name = "gizmo-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+
+[dependencies]
+rayon = "1.11.0"
+serde = { version = "1.0.228", features = ["derive"] }
