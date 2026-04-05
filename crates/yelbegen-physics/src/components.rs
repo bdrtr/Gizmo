@@ -76,6 +76,11 @@ pub struct RigidBody {
     // Eylemsizlik Temsili (Inertia Tensor) - objenin kendi ekseni etrafında dönmeye direncini temsil eder
     pub local_inertia: Vec3, 
     pub inverse_inertia: Vec3,
+
+    // Island Sleeping (Uyku Süreci)
+    pub is_sleeping: bool,
+    #[serde(skip)]
+    pub sleep_timer: f32,
 }
 
 impl RigidBody {
@@ -98,6 +103,8 @@ impl RigidBody {
             use_gravity,
             local_inertia,
             inverse_inertia,
+            is_sleeping: false,
+            sleep_timer: 0.0,
         }
     }
 
@@ -109,7 +116,15 @@ impl RigidBody {
             use_gravity: false,
             local_inertia: Vec3::ZERO,
             inverse_inertia: Vec3::ZERO,
+            is_sleeping: true, // Statik objeler hep uyur
+            sleep_timer: 0.0,
         }
+    }
+    
+    /// Objeyi uyandırır
+    pub fn wake_up(&mut self) {
+        self.is_sleeping = false;
+        self.sleep_timer = 0.0;
     }
     
     /// Dinamik objenin Inverse Inertia Tensor'unu boyutlarına (AABB) göre baştan hesaplar
