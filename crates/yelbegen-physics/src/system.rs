@@ -65,6 +65,10 @@ pub fn physics_movement_system(world: &World, dt: f32) {
 
 // O(N^2) Çarpışma Tespit ve Fizik (Impulse/Sekme/Tork) Çözümleyici Sistem
 pub fn physics_collision_system(world: &World) {
+    // Wake-up listesi — collision scope dışında tanımlanıyor
+    let mut entities_to_wake: Vec<u32> = Vec::new();
+
+    { // --- Borrow Scope Başlangıcı (immutable rigidbodies + mutable transforms/velocities) ---
     let mut transforms = world.borrow_mut::<Transform>().expect("Transform yok");
     let mut velocities = world.borrow_mut::<Velocity>().expect("Velocity yok");
     let colliders = world.borrow::<Collider>().expect("Collider yok");
@@ -112,8 +116,6 @@ pub fn physics_collision_system(world: &World) {
             collision_pairs.push((a.entity, b.entity));
         }
     }
-
-    let mut entities_to_wake = Vec::new();
 
     // 2. NARROW-PHASE: GJK/EPA ile gerçek kesişim testi (Sadece filtreden geçen çiftler)
     for (ent_a, ent_b) in collision_pairs {
@@ -252,8 +254,10 @@ pub fn physics_collision_system(world: &World) {
             } // closes colliders
     } // closes for collision_pairs
 
+    } // --- Borrow Scope Sonu (transforms, velocities, colliders, rigidbodies drop ediliyor) ---
+
     // Uyuyan ve dokunulan objeleri UYANDIR!
-    // Kilitli borrown_mut()'lar çakışmaması için en sonda işlenir
+    // Tüm immutable borrow'lar scope dışına çıktı, güvenle borrow_mut yapabiliriz
     if !entities_to_wake.is_empty() {
         if let Some(mut rbs) = world.borrow_mut::<RigidBody>() {
             for e in entities_to_wake {
