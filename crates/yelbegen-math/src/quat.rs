@@ -44,6 +44,42 @@ impl Quat {
         }
     }
 
+    #[inline]
+    pub fn slerp(self, other: Self, t: f32) -> Self {
+        let mut cos_theta = self.x * other.x + self.y * other.y + self.z * other.z + self.w * other.w;
+        let mut rhs = other;
+
+        // Kisa rotasyon yolunu sec (Shortest Path)
+        if cos_theta < 0.0 {
+            rhs = Self::new(-other.x, -other.y, -other.z, -other.w);
+            cos_theta = -cos_theta;
+        }
+
+        // Teta cok kucukse Lerp daha stabil ve hizlidir
+        if cos_theta > 0.9995 {
+            return Self::new(
+                self.x + t * (rhs.x - self.x),
+                self.y + t * (rhs.y - self.y),
+                self.z + t * (rhs.z - self.z),
+                self.w + t * (rhs.w - self.w),
+            ).normalize();
+        }
+
+        let theta_0 = cos_theta.acos();
+        let theta = theta_0 * t;
+        let sin_theta_0 = theta_0.sin();
+
+        let s0 = (theta_0 - theta).sin() / sin_theta_0;
+        let s1 = theta.sin() / sin_theta_0;
+
+        Self::new(
+            self.x * s0 + rhs.x * s1,
+            self.y * s0 + rhs.y * s1,
+            self.z * s0 + rhs.z * s1,
+            self.w * s0 + rhs.w * s1,
+        )
+    }
+
     // Gerçekçi simülatör fizikleri için Quat * Vec3 işlemleri çok kritik olacak
     #[inline]
     pub fn mul_vec3(self, v: Vec3) -> Vec3 {

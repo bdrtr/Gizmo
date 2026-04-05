@@ -87,8 +87,7 @@ impl SceneData {
         texture_bind_group_layout: &wgpu::BindGroupLayout,
         asset_manager: &mut AssetManager,
         default_texture_bind_group: Arc<wgpu::BindGroup>,
-        create_renderer: &impl Fn() -> MeshRenderer,
-        bouncing_box_id: &mut u32
+        car_id: &mut u32
     ) -> bool {
         let json = match fs::read_to_string(file_path) {
             Ok(content) => content,
@@ -109,8 +108,8 @@ impl SceneData {
             
             if let Some(n) = data.name {
                 world.add_component(entity, EntityName(n.clone()));
-                if n == "Zıplayan Kutu" {
-                    *bouncing_box_id = entity.id();
+                if n == "Araba Kasası" || n == "Zıplayan Kutu" {
+                    *car_id = entity.id();
                 }
             }
             if let Some(t) = data.transform { world.add_component(entity, t); }
@@ -136,7 +135,11 @@ impl SceneData {
 
             if let Some(mat_data) = data.material_source {
                 let bind_group = if let Some(tex_path) = &mat_data.texture_source {
-                    AssetManager::load_material_texture(device, queue, texture_bind_group_layout, tex_path)
+                    asset_manager.load_material_texture(device, queue, texture_bind_group_layout, tex_path)
+                        .unwrap_or_else(|e| {
+                            println!("Scene Texture error: {}", e);
+                            default_texture_bind_group.clone()
+                        })
                 } else {
                     default_texture_bind_group.clone()
                 };
@@ -148,7 +151,7 @@ impl SceneData {
                 mat.unlit = mat_data.unlit;
                 mat.texture_source = mat_data.texture_source;
                 world.add_component(entity, mat);
-                world.add_component(entity, create_renderer());
+                world.add_component(entity, MeshRenderer::new());
             }
         }
         

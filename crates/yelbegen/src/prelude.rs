@@ -4,7 +4,7 @@
 // ============================================================
 
 // === ECS Temelleri ===
-pub use crate::core::{World, Entity, Schedule, Component, SparseSet};
+pub use crate::core::{World, Entity, Schedule, Component, SparseSet, Events, Time, component::{Parent, Children}};
 
 // === Matematik ===
 pub use crate::math::{Vec2, Vec3, Vec4, Mat4, Quat, Ray};
@@ -16,7 +16,7 @@ pub use crate::physics::{
 };
 
 // === Renderer Bileşenleri ===
-pub use crate::renderer::components::{Mesh, Material, MeshRenderer, Camera, PointLight};
+pub use crate::renderer::components::{Mesh, Material, MeshRenderer, Camera, PointLight, DirectionalLight};
 pub use crate::renderer::asset::AssetManager;
 pub use crate::renderer::Renderer;
 
@@ -26,6 +26,7 @@ pub use crate::app::App;
 // === Windowing & Input ===
 pub use winit::event::{Event, WindowEvent, DeviceEvent, ElementState, MouseButton};
 pub use winit::keyboard::{PhysicalKey, KeyCode};
+pub use crate::core::input::{Input, mouse};
 
 // === GPU (sık kullanılan tipler) ===
 pub use wgpu;
