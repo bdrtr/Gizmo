@@ -2,6 +2,78 @@ use yelbegen_core::World;
 use crate::components::{Transform, Velocity, RigidBody};
 use crate::shape::Collider;
 use yelbegen_math::{Vec3, Quat};
+use crate::vehicle::VehicleController;
+
+pub fn physics_vehicle_system(world: &World, dt: f32) {
+    if let (Some(mut trans_storage), Some(mut vel_storage), Some(mut rbs), Some(mut vehicles)) = 
+        (world.borrow_mut::<Transform>(), world.borrow_mut::<Velocity>(), world.borrow_mut::<RigidBody>(), world.borrow_mut::<VehicleController>()) 
+    {
+        let entities = vehicles.entity_dense.clone();
+        for entity in entities {
+            let t = match trans_storage.get(entity) { Some(t) => t.clone(), None => continue };
+            let v = match vel_storage.get_mut(entity) { Some(v) => v, None => continue };
+            let rb = match rbs.get_mut(entity) { Some(r) => r, None => continue };
+            let vehicle = vehicles.get_mut(entity).unwrap();
+
+            rb.wake_up();
+
+            let inv_mass = if rb.mass > 0.0 { 1.0 / rb.mass } else { 0.0 };
+            let inv_inertia = rb.inverse_inertia;
+
+            let mut total_linear_impulse = Vec3::ZERO;
+            let mut total_angular_impulse = Vec3::ZERO;
+
+            for wheel in &mut vehicle.wheels {
+                // Tekerleğin gövdeye bağlanma ofseti (Rotasyona göre global offset)
+                let r_ws = t.rotation.mul_vec3(wheel.connection_point);
+                // Tekerleğin süspansiyon başlangıç noktası (Gövde üzerinde lokal tavanı)
+                let origin = t.position + r_ws;
+                // Aşağı doğru yön
+                let dir = t.rotation.mul_vec3(wheel.direction).normalize();
+
+                // Basit Y=0.0 düzlem ışın kesişimi (Sadece devasa düz zemin için optimize edilmiştir)
+                // P.y = origin.y + t * dir.y = 0.0 (veya tekerlek yarıçapı kadar üstü)
+                // Zemini y=0 sayalım. Zeminle temas tekerleğin alt noktasından olmalı.
+                let target_y = 0.0;
+                
+                // Eğer dir.y dümdüz değilse bile bir hesaplama yapılır.
+                if dir.y.abs() > 0.001 {
+                    // Tekerlek yarıçapı çıkarılmış zemin teması (Tekerlek çapı kadar havada kalmalı)
+                    let hit_t = (target_y + wheel.wheel_radius - origin.y) / dir.y;
+                    
+                    if hit_t > 0.0 && hit_t < wheel.suspension_rest_length {
+                        wheel.is_grounded = true;
+                        wheel.compression = wheel.suspension_rest_length - hit_t;
+                        
+                        // Hooke Yasası: F = k * x (Yay Sıkışma Kuvveti)
+                        let force = wheel.suspension_stiffness * wheel.compression;
+                        
+                        // Sönümleme (Damping)
+                        let wheel_vel = v.linear + v.angular.cross(r_ws);
+                        let vel_along_dir = wheel_vel.dot(dir);
+                        let damping_force = -wheel.suspension_damping * vel_along_dir;
+                        
+                        let total_suspension_force = (force + damping_force).max(0.0); // Çekme yapamaz, sadece itebilir
+                        
+                        let impulse_vec = dir * -total_suspension_force * dt;
+                        
+                        total_linear_impulse += impulse_vec;
+                        // Tork (Angular Impulse)
+                        let torque = r_ws.cross(impulse_vec);
+                        total_angular_impulse += Vec3::new(torque.x * inv_inertia.x, torque.y * inv_inertia.y, torque.z * inv_inertia.z);
+                    } else {
+                        wheel.is_grounded = false;
+                        wheel.compression = 0.0;
+                    }
+                }
+            }
+
+            v.linear += total_linear_impulse * inv_mass;
+            v.angular += total_angular_impulse;
+        }
+    }
+}
+
 // Varlıkların fiziksel hareketlerini, yerçekimi ve sürtünme etkileriyle uygulayan sistem
 pub fn physics_movement_system(world: &World, dt: f32) {
     if let (Some(mut trans_storage), Some(mut vel_storage), Some(mut rbs)) = (world.borrow_mut::<Transform>(), world.borrow_mut::<Velocity>(), world.borrow_mut::<RigidBody>()) {
@@ -69,12 +141,10 @@ pub fn physics_collision_system(world: &World) {
     let mut entities_to_wake: Vec<u32> = Vec::new();
 
     { // --- Borrow Scope Başlangıcı (immutable rigidbodies + mutable transforms/velocities) ---
-    let mut transforms = world.borrow_mut::<Transform>().expect("Transform yok");
-    let mut velocities = world.borrow_mut::<Velocity>().expect("Velocity yok");
-    let colliders = world.borrow::<Collider>().expect("Collider yok");
-    let rigidbodies = world.borrow::<RigidBody>().expect("RigidBody yok");
-
-    let entities = transforms.entity_dense.clone();
+    let mut transforms = match world.borrow_mut::<Transform>() { Some(t) => t, None => { println!("ERROR: Transforms yok!"); return; } };
+    let mut velocities = match world.borrow_mut::<Velocity>() { Some(v) => v, None => { println!("ERROR: Velocities yok!"); return; } };
+    let colliders = match world.borrow::<Collider>() { Some(c) => c, None => { println!("ERROR: Colliders yok!"); return; } };
+    let rigidbodies = match world.borrow::<RigidBody>() { Some(r) => r, None => { println!("ERROR: Rigidbodies yok!"); return; } };
 
     // 1. BROAD-PHASE: Sweep and Prune (1D X-Ekseni)
     struct Interval {
@@ -82,6 +152,7 @@ pub fn physics_collision_system(world: &World) {
         min_x: f32,
         max_x: f32,
     }
+    let entities = transforms.entity_dense.clone();
 
     let mut intervals = Vec::with_capacity(entities.len());
     for &e in &entities {
@@ -100,10 +171,10 @@ pub fn physics_collision_system(world: &World) {
             }
         };
         intervals.push(Interval { entity: e, min_x, max_x });
+        println!("INTERVAL: Ent={} Min={} Max={}", e, min_x, max_x);
     }
-
     use rayon::prelude::*;
-    intervals.par_sort_unstable_by(|a, b| a.min_x.partial_cmp(&b.min_x).unwrap_or(std::cmp::Ordering::Equal));
+    intervals.sort_by(|a, b| a.min_x.partial_cmp(&b.min_x).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut collision_pairs = Vec::new();
     for i in 0..intervals.len() {
@@ -119,7 +190,7 @@ pub fn physics_collision_system(world: &World) {
 
     // 2. NARROW-PHASE: GJK/EPA ile gerçek kesişim testi (Sadece filtreden geçen çiftler)
     for (ent_a, ent_b) in collision_pairs {
-
+        println!("Kesisme Testi => Ent {} ve {}", ent_a, ent_b);
             let (rb_a, rb_b) = match (rigidbodies.get(ent_a), rigidbodies.get(ent_b)) {
                 (Some(a), Some(b)) => (a, b),
                 _ => continue, // Rigidbody'si olmayan çarpışıp güç aktaramaz
@@ -141,24 +212,90 @@ pub fn physics_collision_system(world: &World) {
                     None => continue,
                 };
 
-                // Evrensel GJK-EPA Çarpışma Testi
-                let (is_colliding, simplex) = crate::gjk::gjk_intersect(&col_a.shape, pos_a, rot_a, &col_b.shape, pos_b, rot_b);
+                // Evrensel GJK-EPA Çarpışma Testi (Öncesi Özel Optimizasyonlar)
+                let mut is_fast_path = false;
+                let mut manifold = crate::collision::CollisionManifold { 
+                    is_colliding: false, normal: Vec3::ZERO, penetration: 0.0, contact_points: vec![] 
+                };
+
+                // ---- HIZLI VE KESİN ANALİTİK ÇÖZÜCÜ (SPHERE vs AABB) ----
+                // O(1) matematik, GJK'nın devasa ölçekli düzlemsel objelerde girdiği sonsuz döngüyü önler.
+                use crate::shape::ColliderShape;
+                if let (ColliderShape::Sphere(s), ColliderShape::Aabb(a)) = (&col_a.shape, &col_b.shape) {
+                    is_fast_path = true;
+                    // AABB rotasyon desteklemiyor varsayımıyla lokal koordinatlar
+                    let min_box = pos_b - a.half_extents;
+                    let max_box = pos_b + a.half_extents;
+                    
+                    // Sphere'nin AABB üzerindeki en yakın noktası
+                    let closest_x = pos_a.x.clamp(min_box.x, max_box.x);
+                    let closest_y = pos_a.y.clamp(min_box.y, max_box.y);
+                    let closest_z = pos_a.z.clamp(min_box.z, max_box.z);
+                    let closest_point = Vec3::new(closest_x, closest_y, closest_z);
+                    
+                    let diff = closest_point - pos_a; // A'dan B'ye doğru vektör (B'nin noktasından A'nın merkezini çıkar)
+                    let dist_sq = diff.length_squared();
+                    
+                    if dist_sq < s.radius * s.radius {
+                        let dist = dist_sq.sqrt();
+                        manifold.is_colliding = true;
+                        if dist > 0.0001 {
+                            // A (Sphere), B (AABB). Normal A'dan B'ye bakmalı.
+                            manifold.normal = diff / dist; 
+                            manifold.penetration = s.radius - dist;
+                        } else {
+                            // İç içelerse B'yi (AABB) nereye doğru iteceğiz? Kürenin altındaysa aşağı vs. Varsayılan (0, -1, 0)
+                            manifold.normal = Vec3::new(0.0, -1.0, 0.0); 
+                            manifold.penetration = s.radius;
+                        }
+                        manifold.contact_points.push(closest_point);
+                    }
+                } else if let (ColliderShape::Aabb(a), ColliderShape::Sphere(s)) = (&col_a.shape, &col_b.shape) {
+                    is_fast_path = true;
+                    let min_box = pos_a - a.half_extents;
+                    let max_box = pos_a + a.half_extents;
+                    
+                    let closest_x = pos_b.x.clamp(min_box.x, max_box.x);
+                    let closest_y = pos_b.y.clamp(min_box.y, max_box.y);
+                    let closest_z = pos_b.z.clamp(min_box.z, max_box.z);
+                    let closest_point = Vec3::new(closest_x, closest_y, closest_z);
+                    
+                    let diff = pos_b - closest_point; // A'nın noktasından B'nin (Kürenin) merkezine (A'dan B'ye vektör)
+                    let dist_sq = diff.length_squared();
+                    
+                    if dist_sq < s.radius * s.radius {
+                        let dist = dist_sq.sqrt();
+                        manifold.is_colliding = true;
+                        if dist > 0.0001 {
+                            // A (AABB), B (Sphere). Normal A'dan B'ye bakmalı. (Örn: A zeminse, B yukarıdaysa normal UP olmalı)
+                            manifold.normal = diff / dist; 
+                            manifold.penetration = s.radius - dist;
+                        } else {
+                            manifold.normal = Vec3::new(0.0, 1.0, 0.0); // Zemin içindeyse havaya it
+                            manifold.penetration = s.radius;
+                        }
+                        manifold.contact_points.push(closest_point);
+                    }
+                } else if let (ColliderShape::Aabb(a1), ColliderShape::Aabb(a2)) = (&col_a.shape, &col_b.shape) {
+                    is_fast_path = true;
+                    manifold = crate::collision::check_aabb_aabb_manifold(pos_a, a1, pos_b, a2);
+                }
+
+                if !is_fast_path {
+                    let (is_colliding, simplex) = crate::gjk::gjk_intersect(&col_a.shape, pos_a, rot_a, &col_b.shape, pos_b, rot_b);
+                    if is_colliding {
+                        manifold = crate::epa::epa_solve(simplex, &col_a.shape, pos_a, rot_a, &col_b.shape, pos_b, rot_b);
+                    }
+                }
                 
-                let manifold = if is_colliding {
+                if manifold.is_colliding {
                     entities_to_wake.push(ent_a);
                     entities_to_wake.push(ent_b);
-                    crate::epa::epa_solve(simplex, &col_a.shape, pos_a, rot_a, &col_b.shape, pos_b, rot_b)
-                } else {
-                    crate::collision::CollisionManifold { 
-                        is_colliding: false, 
-                        normal: Vec3::ZERO, 
-                        penetration: 0.0, 
-                        contact_points: vec![] 
-                    }
-                };
+                }
 
                 // Eğer objeler birbirine geçiyorsa:
                 if manifold.is_colliding && !manifold.contact_points.is_empty() {
+                    println!("CARPISMA OLDU! GUC: {}", manifold.penetration);
                     let point_count = manifold.contact_points.len() as f32;
                     
                     // -- 1. POZİSYON DÜZELTMESİ (Positional Correction) Sadece 1 kere uygulanır --
@@ -167,11 +304,16 @@ pub fn physics_collision_system(world: &World) {
                     let sum_inv_mass_pos = inv_mass_a + inv_mass_b;
 
                     if sum_inv_mass_pos > 0.0 {
+                        let percent = 0.4; // Yüzde kaç kadar düzelt (-yılanlama önleyici)
+                        let slop = 0.01;   // İzin verilen sapma payı (ufak titreşimleri yutar)
+                        let correction = (manifold.penetration - slop).max(0.0) / sum_inv_mass_pos * percent;
+                        let correction_vec = manifold.normal * correction;
+
                         if let Some(t_a) = transforms.get_mut(ent_a) {
-                            t_a.position -= manifold.normal * (manifold.penetration * (inv_mass_a / sum_inv_mass_pos));
+                            t_a.position -= correction_vec * inv_mass_a;
                         }
                         if let Some(t_b) = transforms.get_mut(ent_b) {
-                            t_b.position += manifold.normal * (manifold.penetration * (inv_mass_b / sum_inv_mass_pos));
+                            t_b.position += correction_vec * inv_mass_b;
                         }
                     }
 
@@ -191,7 +333,11 @@ pub fn physics_collision_system(world: &World) {
 
                         if vel_along_normal > 0.0 { continue; }
 
-                        let e = rb_a.restitution.min(rb_b.restitution);
+                        let mut e = rb_a.restitution.min(rb_b.restitution);
+                        // Jitterı Önle: Hız yer çekimi ivmesinden kaynaklı ufak bir düşüş hızından ibaretse sekmeyi yoksay
+                        if vel_along_normal.abs() < 1.0 { 
+                            e = 0.0;
+                        }
 
                         // Eylemsizlik Temsiline (Inertia) Göre Açısal Etki Hesabı
                         let ra_cross_n = r_a.cross(manifold.normal);
