@@ -159,6 +159,12 @@ impl Input {
     }
 }
 
+impl Default for Input {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Fare buton sabitleri
 pub mod mouse {
     pub const LEFT: u32 = 0;

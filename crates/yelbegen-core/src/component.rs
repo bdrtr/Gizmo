@@ -103,6 +103,12 @@ impl<T: Component> SparseSet<T> {
     }
 }
 
+impl<T: Component> Default for SparseSet<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: Component> ComponentStorage for SparseSet<T> {
     fn as_any(&self) -> &dyn Any {
         self

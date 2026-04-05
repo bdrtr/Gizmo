@@ -27,6 +27,15 @@ impl World {
             resources: HashMap::new(),
         }
     }
+}
+
+impl Default for World {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl World {
 
     pub fn spawn(&mut self) -> Entity {
         if let Some(id) = self.free_ids.pop() {

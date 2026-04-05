@@ -13,7 +13,6 @@
 ///    println!("Çarpışma oldu!");
 /// }
 /// ```
-
 pub struct Events<T: 'static> {
     pub list: Vec<T>,
 }

@@ -7,7 +7,6 @@ use std::sync::mpsc;
 pub struct AssetWatcher {
     _watcher: notify::RecommendedWatcher,
     rx: mpsc::Receiver<Result<Event, notify::Error>>,
-    watched_paths: HashSet<PathBuf>,
 }
 
 impl AssetWatcher {
@@ -23,7 +22,6 @@ impl AssetWatcher {
             }
         };
 
-        let mut watched_paths = HashSet::new();
         for dir in watch_dirs {
             let path = dir.as_ref().to_path_buf();
             if path.exists() {
@@ -31,7 +29,6 @@ impl AssetWatcher {
                     eprintln!("AssetWatcher: Dizin izlenemedi {:?}: {:?}", path, e);
                 } else {
                     println!("AssetWatcher: İzleniyor → {:?}", path);
-                    watched_paths.insert(path);
                 }
             }
         }
@@ -39,13 +36,12 @@ impl AssetWatcher {
         Some(Self {
             _watcher: watcher,
             rx,
-            watched_paths,
         })
     }
 
     /// Bu frame'de değişen dosyaların yollarını döndürür (her frame çağrılmalı)
     pub fn poll_changes(&self) -> Vec<PathBuf> {
-        let mut changed = Vec::new();
+        let mut seen = HashSet::new(); // O(1) dedup (eskiden Vec::contains ile O(N²))
         
         // Kuyrukta biriken tüm olayları al (non-blocking)
         while let Ok(event_result) = self.rx.try_recv() {
@@ -53,9 +49,7 @@ impl AssetWatcher {
                 match event.kind {
                     EventKind::Modify(_) | EventKind::Create(_) => {
                         for path in event.paths {
-                            if !changed.contains(&path) {
-                                changed.push(path);
-                            }
+                            seen.insert(path);
                         }
                     }
                     _ => {}
@@ -63,6 +57,7 @@ impl AssetWatcher {
             }
         }
         
-        changed
+        seen.into_iter().collect()
     }
 }
+

@@ -85,8 +85,8 @@ pub fn physics_collision_system(world: &World) {
 
     let mut intervals = Vec::with_capacity(entities.len());
     for &e in &entities {
-        let t = transforms.get(e).unwrap();
-        let col = if let Some(c) = colliders.get(e) { c } else { continue };
+        let t = match transforms.get(e) { Some(t) => t, None => continue };
+        let col = match colliders.get(e) { Some(c) => c, None => continue };
 
         use crate::shape::ColliderShape;
         let (min_x, max_x) = match &col.shape {
@@ -131,11 +131,15 @@ pub fn physics_collision_system(world: &World) {
             }
 
             if let (Some(col_a), Some(col_b)) = (colliders.get(ent_a), colliders.get(ent_b)) {
-                let pos_a = transforms.get(ent_a).unwrap().position;
-                let pos_b = transforms.get(ent_b).unwrap().position;
-
-                let rot_a = transforms.get(ent_a).unwrap().rotation;
-                let rot_b = transforms.get(ent_b).unwrap().rotation;
+                // Tek seferde Transform lookup (4 ayrı HashMap hit yerine 2)
+                let (pos_a, rot_a) = match transforms.get(ent_a) {
+                    Some(t) => (t.position, t.rotation),
+                    None => continue,
+                };
+                let (pos_b, rot_b) = match transforms.get(ent_b) {
+                    Some(t) => (t.position, t.rotation),
+                    None => continue,
+                };
 
                 // Evrensel GJK-EPA Çarpışma Testi
                 let (is_colliding, simplex) = crate::gjk::gjk_intersect(&col_a.shape, pos_a, rot_a, &col_b.shape, pos_b, rot_b);

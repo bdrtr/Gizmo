@@ -77,6 +77,7 @@ struct GameState {
     player_id: u32,
     skybox_id: u32,
     inspector_selected_entity: Option<u32>,
+    #[allow(dead_code)] // AudioManager'ın OutputStream'i canlı tutulmalı (drop edilirse ses durur)
     audio: Option<yelbegen::audio::AudioManager>,
     do_raycast: bool,
     gizmo_x: u32,
