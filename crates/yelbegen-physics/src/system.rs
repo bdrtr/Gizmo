@@ -4,36 +4,53 @@ use crate::shape::Collider;
 use yelbegen_math::{Vec3, Quat};
 // Varlıkların fiziksel hareketlerini, yerçekimi ve sürtünme etkileriyle uygulayan sistem
 pub fn physics_movement_system(world: &World, dt: f32) {
-    let rigidbodies = world.borrow::<RigidBody>();
+    if let (Some(mut trans_storage), Some(mut vel_storage), Some(mut rbs)) = (world.borrow_mut::<Transform>(), world.borrow_mut::<Velocity>(), world.borrow_mut::<RigidBody>()) {
+        let entities = trans_storage.entity_dense.clone();
+        for entity in entities {
+            let rb = match rbs.get_mut(entity) { Some(r) => r, None => continue };
+            let v = match vel_storage.get_mut(entity) { Some(v) => v, None => continue };
+            let t = match trans_storage.get_mut(entity) { Some(t) => t, None => continue };
 
-    if let Some(mut q) = world.query_mut_mut::<Transform, Velocity>() {
-        for (entity, trans, vel) in q.iter_mut() {
-            // Kuvvetleri Uygula (Eğer Katı Cisim ise)
-            if let Some(rb_list) = &rigidbodies {
-                if let Some(rb) = rb_list.get(entity) {
-                    if rb.use_gravity && rb.mass > 0.0 {
-                        vel.linear.y -= 9.81 * dt; // Yerçekimi ivmesi
+            if rb.mass > 0.0 {
+                let speed_sq = v.linear.length_squared() + v.angular.length_squared();
+                if speed_sq < 0.005 { // Hız uykuda sayılabilecek kadar düşük mü?
+                    rb.sleep_timer += dt;
+                    if rb.sleep_timer > 1.0 { // 1 sn boyunca durağansa uyut
+                        rb.is_sleeping = true;
+                        v.linear = Vec3::ZERO;
+                        v.angular = Vec3::ZERO;
                     }
-                    
-                    if rb.friction > 0.0 && rb.mass > 0.0 {
-                        vel.linear.x *= 1.0 - (rb.friction * dt);
-                        vel.linear.z *= 1.0 - (rb.friction * dt);
-                        vel.angular.x *= 1.0 - (rb.friction * dt * 0.5); // Açısal sürtünme
-                        vel.angular.y *= 1.0 - (rb.friction * dt * 0.5);
-                        vel.angular.z *= 1.0 - (rb.friction * dt * 0.5);
-                    }
+                } else {
+                    rb.wake_up(); // Hareket etti, uyandır
                 }
+            }
+
+            if rb.is_sleeping {
+                continue; // Uyuyan objeler hareket etmez, yerçekimine yenilmez, kaynak tüketmez!
+            }
+
+            // Kuvvetleri Uygula (Eğer Katı Cisim ise)
+            if rb.use_gravity && rb.mass > 0.0 {
+                v.linear.y -= 9.81 * dt; // Yerçekimi ivmesi
+            }
+            
+            if rb.friction > 0.0 && rb.mass > 0.0 {
+                v.linear.x *= 1.0 - (rb.friction * dt);
+                v.linear.z *= 1.0 - (rb.friction * dt);
+                v.angular.x *= 1.0 - (rb.friction * dt * 0.5); // Açısal sürtünme
+                v.angular.y *= 1.0 - (rb.friction * dt * 0.5);
+                v.angular.z *= 1.0 - (rb.friction * dt * 0.5);
             }
             
             // Hızı pozisyona uygula
-            trans.position += vel.linear * dt;
+            t.position += v.linear * dt;
             
             // Açısal Hızı (Angular Velocity) Quat dönüşümüne entegre et: q = q + 0.5 * w * q * dt
-            if vel.angular.length_squared() > 0.0001 {
-                let w_quat = Quat::new(vel.angular.x, vel.angular.y, vel.angular.z, 0.0);
-                let q = trans.rotation;
+            if v.angular.length_squared() > 0.0001 {
+                let w_quat = Quat::new(v.angular.x, v.angular.y, v.angular.z, 0.0);
+                let q = t.rotation;
                 let dq = w_quat * q; 
-                trans.rotation = Quat::new(
+                t.rotation = Quat::new(
                     q.x + 0.5 * dt * dq.x,
                     q.y + 0.5 * dt * dq.y,
                     q.z + 0.5 * dt * dq.z,
@@ -41,7 +58,7 @@ pub fn physics_movement_system(world: &World, dt: f32) {
                 ).normalize();
             }
             
-            trans.update_local_matrix();
+            t.update_local_matrix();
         }
     }
 }
@@ -81,7 +98,8 @@ pub fn physics_collision_system(world: &World) {
         intervals.push(Interval { entity: e, min_x, max_x });
     }
 
-    intervals.sort_unstable_by(|a, b| a.min_x.partial_cmp(&b.min_x).unwrap_or(std::cmp::Ordering::Equal));
+    use rayon::prelude::*;
+    intervals.par_sort_unstable_by(|a, b| a.min_x.partial_cmp(&b.min_x).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut collision_pairs = Vec::new();
     for i in 0..intervals.len() {
@@ -95,6 +113,8 @@ pub fn physics_collision_system(world: &World) {
         }
     }
 
+    let mut entities_to_wake = Vec::new();
+
     // 2. NARROW-PHASE: GJK/EPA ile gerçek kesişim testi (Sadece filtreden geçen çiftler)
     for (ent_a, ent_b) in collision_pairs {
 
@@ -103,8 +123,10 @@ pub fn physics_collision_system(world: &World) {
                 _ => continue, // Rigidbody'si olmayan çarpışıp güç aktaramaz
             };
 
-            // İkisinin de kütlesi yoksa çarpışma çözümüne gerek yok (İki duvar çarpışmaz)
-            if rb_a.mass == 0.0 && rb_b.mass == 0.0 { continue; }
+            // İkisinin de kütlesi yoksa veya İKİSİ DE UYUYORSA çarpışma çözümüne gerek yok
+            if (rb_a.mass == 0.0 && rb_b.mass == 0.0) || (rb_a.is_sleeping && rb_b.is_sleeping) { 
+                continue; 
+            }
 
             if let (Some(col_a), Some(col_b)) = (colliders.get(ent_a), colliders.get(ent_b)) {
                 let pos_a = transforms.get(ent_a).unwrap().position;
@@ -117,6 +139,8 @@ pub fn physics_collision_system(world: &World) {
                 let (is_colliding, simplex) = crate::gjk::gjk_intersect(&col_a.shape, pos_a, rot_a, &col_b.shape, pos_b, rot_b);
                 
                 let manifold = if is_colliding {
+                    entities_to_wake.push(ent_a);
+                    entities_to_wake.push(ent_b);
                     crate::epa::epa_solve(simplex, &col_a.shape, pos_a, rot_a, &col_b.shape, pos_b, rot_b)
                 } else {
                     crate::collision::CollisionManifold { 
@@ -227,4 +251,16 @@ pub fn physics_collision_system(world: &World) {
                 } // closes manifold.is_colliding
             } // closes colliders
     } // closes for collision_pairs
+
+    // Uyuyan ve dokunulan objeleri UYANDIR!
+    // Kilitli borrown_mut()'lar çakışmaması için en sonda işlenir
+    if !entities_to_wake.is_empty() {
+        if let Some(mut rbs) = world.borrow_mut::<RigidBody>() {
+            for e in entities_to_wake {
+                if let Some(rb) = rbs.get_mut(e) {
+                    rb.wake_up();
+                }
+            }
+        }
+    }
 } // closes physics_collision_system

@@ -57,12 +57,4 @@
 
 ---
 
-## 🚀 Maksimum Performans & Profesyonel Fizik (Physics 3.0)
-- [ ] Broad-Phase Collision (Geniş Faz): Octree, Dynamic AABB Tree (BVH) veya Sweep & Prune algoritması. Her karede tüm objelerin birbiriyle (O(N^2)) kontrol edilmesini engeller!
-- [ ] Island Sleeping (Uyku Sistemi): Hareket etmeyen (hızı ve açısı değişmeyen) objeleri "uyku" (sleep) moduna çekerek gereksiz kuvvet/çarpışma algoritmalarından (GJK-EPA) muaf tutma. Temas halinde uyanma.
-- [ ] Fixed Time Stamp (Sabit Fizik Adımı): Fiziğin `dt` (Render Frame Time) yerine bağımsız ve sabit (ör: saniyede 60-120 kare) alt-adımlarla (sub-stepping) hesaplanması. Patlamaları ve jitter'i engeller.
-- [ ] CCD (Continuous Collision Detection): Mermi gibi çok hızlı giden objelerin, ince duvarların içerisinden "tünelleme" yaparak (tunneling) geçip gitmesini engellemek için zamansal tarama (Sweep) yapılması.
-- [ ] Paralelleştirme (Multi-threading): `Rayon` gibi kütüphanelerle farklı adalardaki fizik hesaplamalarını çoklu CPU çekirdeğine yayma.
-- [ ] Karmaşık Şekiller (Convex Hull & Mesh Collider): GJK-EPA'yı geliştirip motora OBB (Oriented Bounding Box), Kapsül ve rastgele Convex (dışbükey) modeller girmek.
-
 > Son güncelleme: 2026-04-05

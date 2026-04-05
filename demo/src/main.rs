@@ -13,11 +13,12 @@ pub struct EntityName(pub String);
 // ======================== HİYERARŞİ (SCENE GRAPH) SİSTEMİ ========================
 
 pub fn transform_hierarchy_system(world: &mut World) {
-    // 1. Önce herkesin local matrix'ini güncelle
+    // 1. Önce herkesin local matrix'ini güncelle (PARALEL!)
     if let Some(mut transforms) = world.borrow_mut::<Transform>() {
-        for i in 0..transforms.dense.len() {
-            transforms.dense[i].update_local_matrix();
-        }
+        use rayon::prelude::*;
+        transforms.dense.par_iter_mut().for_each(|t| {
+            t.update_local_matrix();
+        });
     }
 
     // 2. ROOT (Kök) Objelerini bul (Üstünde Parent olmayanlar)
