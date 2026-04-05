@@ -2,12 +2,12 @@
 resolver = "2"
 members = [
     "crates/*",
-    "crates/yelbegen-renderer",
-    "crates/yelbegen-window",
-    "crates/yelbegen-physics",
-    "crates/yelbegen-editor",
-    "crates/yelbegen-app",
-    "crates/yelbegen-scripting",
+    "crates/gizmo-renderer",
+    "crates/gizmo-window",
+    "crates/gizmo-physics",
+    "crates/gizmo-editor",
+    "crates/gizmo-app",
+    "crates/gizmo-scripting",
     "demo",
 ]
 

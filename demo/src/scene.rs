@@ -1,5 +1,5 @@
 use serde::{Serialize, Deserialize};
-use yelbegen::prelude::*;
+use gizmo::prelude::*;
 use std::fs;
 use std::sync::Arc;
 use crate::EntityName;
@@ -52,7 +52,7 @@ impl SceneData {
             let transform = transforms.as_ref().and_then(|s| s.get(id)).copied();
             let velocity = velocities.as_ref().and_then(|s| s.get(id)).copied();
             let rigid_body = rigidbodies.as_ref().and_then(|s| s.get(id)).copied();
-            let collider = colliders.as_ref().and_then(|s| s.get(id)).copied();
+            let collider = colliders.as_ref().and_then(|s| s.get(id)).cloned();
             let camera = cameras.as_ref().and_then(|s| s.get(id)).copied();
             let point_light = point_lights.as_ref().and_then(|s| s.get(id)).copied();
             let mesh_source = meshes.as_ref().and_then(|s| s.get(id)).map(|m| m.source.clone());

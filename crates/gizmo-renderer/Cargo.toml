@@ -1,0 +1,17 @@
+[package]
+name = "gizmo-renderer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+wgpu = "0.19"
+pollster = "0.3"
+winit = { workspace = true }
+bytemuck = { version = "1.14", features = ["derive"] }
+gizmo-math = { path = "../gizmo-math" }
+gizmo-core = { path = "../gizmo-core" }
+tobj = "4.0.3"
+image = "0.25"
+serde = { version = "1.0.228", features = ["derive"] }
+gltf = "1.4.1"
+notify = "6"

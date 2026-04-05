@@ -1,8 +1,0 @@
-[package]
-name = "yelbegen-window"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-
-[dependencies]
-winit = { workspace = true }

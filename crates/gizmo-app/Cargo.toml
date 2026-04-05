@@ -1,0 +1,18 @@
+[package]
+name = "gizmo-app"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+
+[dependencies]
+gizmo-core = { path = "../gizmo-core" }
+gizmo-renderer = { path = "../gizmo-renderer" }
+gizmo-math = { path = "../gizmo-math" }
+winit = "0.29"
+wgpu = "0.19"
+pollster = "0.3"
+egui = "0.26"
+gizmo-editor = { path = "../gizmo-editor" }
+gizmo-audio = { path = "../gizmo-audio" }
+

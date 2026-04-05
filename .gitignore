@@ -1,11 +1,20 @@
+# Rust / Cargo
 /target
 Cargo.lock
 
 # İşletim sistemi kalıntıları
 .DS_Store
 Thumbs.db
+*.exe
+*.dll
+*.so
+*.dylib
 
-# Geçici dosyalar
+# Geçici dosyalar ve editör
 *.log
 *.tmp
+.vscode/
+.idea/
 assets/*.crdownload
+*.swp
+*~

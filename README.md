@@ -1,29 +1,23 @@
-# 🐉 Yelbegen Engine
+# Gizmo Engine
 
-Yelbegen, tamamen Rust ile ve **sıfırdan (from-scratch)** inşa edilmiş modüler bir 3D oyun motorudur. Üçüncü parti ağır donanımlara veya monolitik kütüphanelere bel bağlamadan; kendi fiziği, kendi matematiği ve kendi ECS (Varlık-Bileşen-Sistem) mimarisi ile donatılmıştır. 
+Gizmo Engine, Rust ile tamamen sıfırdan geliştirilen bağımsız, esnek ve modüler bir Oyun Motoru ve Fizik simülasyon iskeletidir. Çok oyunculu, performans kritik ve karmaşık simülasyon sistemleri geliştirmek için inşa edilmiştir.
 
-AAA kalitesinde bir rendering altyapısına ulaşmak için grafik backend'i olarak `wgpu` API'sini (WebGPU standardı) kullanmaktadır.
+## Core Features (Özellikler)
 
-## 🌟 Modüler Ekosistem (Crates)
+*   **Pürüzsüz ECS (Entity Component System):** Her şey veri odaklı (Data-Driven) ve modüler bir mimari olan Entity-Component-System etrafında şekillenmiştir. Modüller arası bağımlılık en aza indirilmiştir.
+*   **Gizmo Physics:** 
+    *   **Angular Jacobian Solver:** Kısıtlayıcılarda (örneğin Ball-Socket gibi eklemlerde) Tork ve Açısal Hız tabanlı Sequential Impulse iterasyon hesaplamaları yer alır. Ragdoll yapılarını ve sarkaçları mükemmel çözümler.
+    *   **Sweep and Prune (3D Broad-Phase):** Motor, 10.000'den fazla hareketli objeyi N^2 darboğazından kurtarmak için yüksek performanslı 3D AABB kaba eleme sistemine sahiptir.
+    *   **Narrow-phase GJK/EPA:** İmkansız geometrik formlar için anlık çarpışma ve penetrasyon tespiti.
+*   **Gizmo Renderer (GPU Instancing):** Donanım tabanlı instancing desteği ile binlerce nesneyi tek draw-call altında çok yüksek FPS ile bastırma özelliği. Vulkan mimarisi ile güçlü entegrasyon.
+*   **Component Tabanlı Araç (Vehicle) Fiziği:** Raycast tabanlı süspansiyon ve anti-roll sistemleriyle karmaşık araç yapıları simüle edilebilir.
 
-- 🧮 **`yelbegen-math`**: Dışarıdan (`glam`, `cgmath` vb.) kullanmak yerine tamamen kendi hesapladığımız Matris dönüşümleri (`Mat4`) ve Vektör hesaplamaları.
-- ⚙️ **`yelbegen-core`**: Bellek yönetimine (Cache-Locality) son derece duyarlı **Sparse Set** veri mimarisi üzerine kurulu bağımsız ECS.
-- 🌌 **`yelbegen-physics`**: Optimizasyonu sağlanmış AABB çarpışma denetleyicisi. Sürtünme, Yerçekimi ve İtme (Restitution/Impulse) algoritmalarıyla tamamen native fizik hesaplayıcısı.
-- 🎨 **`yelbegen-renderer`**: Z-Buffer derinlik haritalandırmaları, Gerçekçi Gölge & Aydınlatma hesaplamaları (Phong/Lambert) ve Gerçek (PNG/JPG) model dokusu haritalandırması.
-- 🛠️ **`yelbegen-editor`**: Egui üzerinden entegre edilen, oyun motoru içi canlı (runtime) Inspector paneli. (Ağırlık, İvme manipülasyonu)
+## Çalıştırma
 
-## 🧩 Kurulum ve Demo
-
-Projeyi derlemek ve test simülasyonunu başlatmak için:
+Motoru denemek adına kapsamlı bir asteroid/fizik testini çalıştırmak için:
 
 ```bash
-# Sadece Demo uygulamasını çalıştırmak için
-cargo run -p demo
+cargo run --release --bin demo
 ```
 
-## 🔥 Gelecek Planları
-* Modüler Oyun Döngüsü **(App Builder)** yapısı.
-* Gelişmiş donanım hızlandırmalı Ray-Casting algoritmaları.
-* `Obj` model import yeteneğinin geliştirilmesi.
-
-Daha fazla detay için projenin her aşaması özenle dokümante edilmiştir.
+> **Not:** 10,000 objedeki fizikleri en az işlemde tamamlaması için `--release` profili kullanılması kritik öneme sahiptir.
