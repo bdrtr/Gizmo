@@ -1,12 +1,11 @@
 -- player.lua
--- Basit bir hareket scripti
+-- Basit bir hareket scripti — Yelbegen Engine Lua Scripting
+
+frame_count = 0
 
 function on_update(ctx)
-    -- dt = delta time
-    -- pos = {x, y, z}
-    -- vel = {x, y, z}
-    -- input = {w, a, s, d, space}
-    
+    frame_count = frame_count + 1
+
     local pos = ctx.position
     local vel = ctx.velocity
     local dt = ctx.dt
@@ -26,8 +25,10 @@ function on_update(ctx)
     vel.x = dir_x * speed
     vel.z = dir_z * speed
 
-    -- İsterseniz konsola bilgi yazdırabilirsiniz
-    -- print_engine("Lua: Obje " .. tostring(ctx.entity_id) .. " Guncellendi. X: " .. tostring(vel.x))
+    -- Her 120 frame'de durumu konsola yaz
+    if frame_count % 120 == 0 then
+        print_engine("Frame #" .. tostring(frame_count) .. " | Entity: " .. tostring(ctx.entity_id) .. " | Pos: (" .. string.format("%.1f", pos.x) .. ", " .. string.format("%.1f", pos.y) .. ", " .. string.format("%.1f", pos.z) .. ")")
+    end
     
     return {
         velocity = vel,
