@@ -19,19 +19,15 @@ impl<T: Clone + Copy> Track<T> {
         let last_idx = self.keyframes.len() - 1;
         if time >= self.keyframes[last_idx].time { return Some(self.keyframes[last_idx].value); }
 
-        // Doğrusal arama (Performans için binary search eklenebilir)
-        for i in 0..last_idx {
-            let k1 = &self.keyframes[i];
-            let k2 = &self.keyframes[i + 1];
-            
-            if time >= k1.time && time <= k2.time {
-                let dt = k2.time - k1.time;
-                let t = if dt > 0.0 { (time - k1.time) / dt } else { 0.0 };
-                return Some(interpolator(k1.value, k2.value, t));
-            }
-        }
-        
-        Some(self.keyframes[last_idx].value)
+        // Binary search ile doğru aralığı bul (O(log N) — eskiden O(N) doğrusal arama)
+        let idx = self.keyframes.partition_point(|k| k.time < time);
+        if idx == 0 { return Some(self.keyframes[0].value); }
+        let i = idx - 1;
+        let k1 = &self.keyframes[i];
+        let k2 = &self.keyframes[i + 1.min(last_idx)];
+        let dt = k2.time - k1.time;
+        let t = if dt > 0.0 { (time - k1.time) / dt } else { 0.0 };
+        Some(interpolator(k1.value, k2.value, t))
     }
 }
 

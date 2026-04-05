@@ -108,6 +108,12 @@ impl JointWorld {
     }
 }
 
+impl Default for JointWorld {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Kısıtlayıcıları fizik adımında çözen sistem
 /// Position-based constraint solving (Baumgarte stabilization)
 /// World referansı alır — storage yapısından bağımsız çalışır
@@ -119,17 +125,18 @@ pub fn solve_constraints(
     let beta = 0.2; // Baumgarte stabilizasyon faktörü
 
     for joint in &joint_world.joints {
-        let pos_a = match world.borrow::<crate::components::Transform>() {
-            Some(t) => match t.get(joint.entity_a) {
-                Some(ta) => ta.position + joint.anchor_a,
-                None => continue,
-            },
-            None => continue,
-        };
-        let pos_b = match world.borrow::<crate::components::Transform>() {
-            Some(t) => match t.get(joint.entity_b) {
-                Some(tb) => tb.position + joint.anchor_b,
-                None => continue,
+        // Tek bir borrow ile iki entity'nin konumunu al (eskiden 2 ayrı borrow yapılıyordu)
+        let (pos_a, pos_b) = match world.borrow::<crate::components::Transform>() {
+            Some(t) => {
+                let pa = match t.get(joint.entity_a) {
+                    Some(ta) => ta.position + joint.anchor_a,
+                    None => continue,
+                };
+                let pb = match t.get(joint.entity_b) {
+                    Some(tb) => tb.position + joint.anchor_b,
+                    None => continue,
+                };
+                (pa, pb)
             },
             None => continue,
         };

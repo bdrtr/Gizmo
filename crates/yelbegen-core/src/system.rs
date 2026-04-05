@@ -35,3 +35,9 @@ impl Schedule {
         }
     }
 }
+
+impl Default for Schedule {
+    fn default() -> Self {
+        Self::new()
+    }
+}

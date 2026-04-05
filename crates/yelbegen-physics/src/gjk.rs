@@ -47,6 +47,12 @@ impl Simplex {
     }
 }
 
+impl Default for Simplex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// GJK için Yardımcı Support Fonsiyonu
 /// A - B fark vektörünün verilen dir yönündeki en uç noktasını hesaplar.
 pub fn calculate_support(
@@ -165,9 +171,7 @@ fn handle_simplex(simplex: &mut Simplex, dir: &mut Vec3) -> bool {
                     *dir = abc_normal;
                 } else {
                     // Yönleri ters çevir ki winding order (sarma) doğru olsun
-                    let temp = simplex.points[1];
-                    simplex.points[1] = simplex.points[2];
-                    simplex.points[2] = temp;
+                    simplex.points.swap(1, 2);
                     *dir = abc_normal * -1.0;
                 }
             }

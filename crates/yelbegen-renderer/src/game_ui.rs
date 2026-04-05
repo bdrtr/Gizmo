@@ -70,6 +70,15 @@ impl UiCanvas {
     pub fn new() -> Self {
         Self { elements: Vec::new() }
     }
+}
+
+impl Default for UiCanvas {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl UiCanvas {
 
     /// Yeni bir text elemanı ekler
     pub fn add_text(&mut self, id: &str, content: &str, anchor: Anchor, offset: [f32; 2], font_size: f32, color: [f32; 4]) -> &mut Self {

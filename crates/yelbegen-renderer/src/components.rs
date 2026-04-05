@@ -88,6 +88,12 @@ impl MeshRenderer {
     }
 }
 
+impl Default for MeshRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Camera {
     pub fov: f32,
