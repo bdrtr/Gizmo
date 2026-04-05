@@ -16,10 +16,11 @@ pub struct App<State: 'static> {
     window_size: (u32, u32),
 
     setup_fn: Option<Box<dyn FnOnce(&mut World, &Renderer) -> State>>,
-    update_fn: Option<Box<dyn FnMut(&mut World, &mut State, f32)>>, // dt
+    update_fn: Option<Box<dyn FnMut(&mut World, &mut State, f32, &yelbegen_core::input::Input)>>, // dt, input
     render_fn: Option<Box<dyn FnMut(&mut World, &State, &mut wgpu::CommandEncoder, &wgpu::TextureView, &Renderer, f32)>>, // light_time
     input_fn: Option<Box<dyn FnMut(&mut World, &mut State, &winit::event::Event<()>) -> bool>>, // Input handler
     ui_fn: Option<Box<dyn FnMut(&mut World, &mut State, &egui::Context)>>, // Editor UI handler
+    pub input: yelbegen_core::input::Input,
 }
 
 impl<State: 'static> App<State> {
@@ -34,6 +35,7 @@ impl<State: 'static> App<State> {
             render_fn: None,
             input_fn: None,
             ui_fn: None,
+            input: yelbegen_core::input::Input::new(),
         }
     }
 
@@ -47,7 +49,7 @@ impl<State: 'static> App<State> {
 
     pub fn set_update<F>(mut self, f: F) -> Self
     where
-        F: FnMut(&mut World, &mut State, f32) + 'static,
+        F: FnMut(&mut World, &mut State, f32, &yelbegen_core::input::Input) + 'static,
     {
         self.update_fn = Some(Box::new(f));
         self
@@ -92,7 +94,7 @@ impl<State: 'static> App<State> {
                 .expect("Pencere oluşturulamadı!"),
         );
 
-        let renderer = pollster::block_on(Renderer::new(window.clone()));
+        let mut renderer = pollster::block_on(Renderer::new(window.clone()));
         
         let mut state = if let Some(setup) = self.setup_fn.take() {
             setup(&mut self.world, &renderer)
@@ -127,8 +129,38 @@ impl<State: 'static> App<State> {
             match event {
                 Event::WindowEvent { ref event, window_id } if window_id == window.id() => {
                     if !consumes_input {
-                        if let WindowEvent::CloseRequested = event {
-                            current_window.exit();
+                        match event {
+                            WindowEvent::CloseRequested => current_window.exit(),
+                            WindowEvent::Resized(physical_size) => {
+                                renderer.resize(*physical_size);
+                                self.input.on_window_resized(physical_size.width as f32, physical_size.height as f32);
+                            }
+                            WindowEvent::KeyboardInput { event: kb_event, .. } => {
+                                if let winit::keyboard::PhysicalKey::Code(keycode) = kb_event.physical_key {
+                                    if kb_event.state == winit::event::ElementState::Pressed {
+                                        self.input.on_key_pressed(keycode as u32);
+                                    } else {
+                                        self.input.on_key_released(keycode as u32);
+                                    }
+                                }
+                            }
+                            WindowEvent::MouseInput { state: m_state, button, .. } => {
+                                let btn_code = match button {
+                                    winit::event::MouseButton::Left => yelbegen_core::input::mouse::LEFT,
+                                    winit::event::MouseButton::Right => yelbegen_core::input::mouse::RIGHT,
+                                    winit::event::MouseButton::Middle => yelbegen_core::input::mouse::MIDDLE,
+                                    _ => 99,
+                                };
+                                if *m_state == winit::event::ElementState::Pressed {
+                                    self.input.on_mouse_button_pressed(btn_code);
+                                } else {
+                                    self.input.on_mouse_button_released(btn_code);
+                                }
+                            }
+                            WindowEvent::CursorMoved { position, .. } => {
+                                self.input.on_mouse_moved(position.x as f32, position.y as f32);
+                            }
+                            _ => {}
                         }
                     }
                     if let WindowEvent::RedrawRequested = event {
@@ -145,8 +177,10 @@ impl<State: 'static> App<State> {
                         }
 
                         if let Some(update_hk) = self.update_fn.as_mut() {
-                            update_hk(&mut self.world, &mut state, dt);
+                            update_hk(&mut self.world, &mut state, dt, &self.input);
                         }
+                        
+                        self.input.begin_frame();
                         
                         // ECS Sistemlerini Çalıştır
                         self.schedule.run(&mut self.world, dt);
@@ -180,6 +214,9 @@ impl<State: 'static> App<State> {
                 }
                 Event::AboutToWait => {
                     window.request_redraw();
+                }
+                Event::DeviceEvent { event: winit::event::DeviceEvent::MouseMotion { delta }, .. } => {
+                    self.input.on_mouse_delta(delta.0 as f32, delta.1 as f32);
                 }
                 _ => {}
             }

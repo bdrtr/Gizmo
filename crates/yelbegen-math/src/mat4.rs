@@ -17,14 +17,57 @@ impl Mat4 {
     };
 
     #[inline]
+    pub fn from_cols_array_2d(m: &[[f32; 4]; 4]) -> Self {
+        Self {
+            cols: [
+                Vec4::new(m[0][0], m[0][1], m[0][2], m[0][3]),
+                Vec4::new(m[1][0], m[1][1], m[1][2], m[1][3]),
+                Vec4::new(m[2][0], m[2][1], m[2][2], m[2][3]),
+                Vec4::new(m[3][0], m[3][1], m[3][2], m[3][3]),
+            ]
+        }
+    }
+
+    #[inline]
+    pub fn from_quat(q: crate::quat::Quat) -> Self {
+        let x2 = q.x + q.x;
+        let y2 = q.y + q.y;
+        let z2 = q.z + q.z;
+        let xx = q.x * x2;
+        let xy = q.x * y2;
+        let xz = q.x * z2;
+        let yy = q.y * y2;
+        let yz = q.y * z2;
+        let zz = q.z * z2;
+        let wx = q.w * x2;
+        let wy = q.w * y2;
+        let wz = q.w * z2;
+
+        let mut mat = Self::IDENTITY;
+        mat.cols[0].x = 1.0 - (yy + zz);
+        mat.cols[0].y = xy + wz;
+        mat.cols[0].z = xz - wy;
+
+        mat.cols[1].x = xy - wz;
+        mat.cols[1].y = 1.0 - (xx + zz);
+        mat.cols[1].z = yz + wx;
+
+        mat.cols[2].x = xz + wy;
+        mat.cols[2].y = yz - wx;
+        mat.cols[2].z = 1.0 - (xx + yy);
+
+        mat
+    }
+
+    #[inline]
     pub fn orthographic(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
         let mut mat = Self::IDENTITY;
         mat.cols[0].x = 2.0 / (right - left);
         mat.cols[1].y = 2.0 / (top - bottom);
-        mat.cols[2].z = -2.0 / (far - near);
+        mat.cols[2].z = -1.0 / (far - near); // WGPU Z: [0, 1]
         mat.cols[3].x = -(right + left) / (right - left);
         mat.cols[3].y = -(top + bottom) / (top - bottom);
-        mat.cols[3].z = -(far + near) / (far - near);
+        mat.cols[3].z = -near / (far - near); // WGPU Z: [0, 1]
         mat
     }
 

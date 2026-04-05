@@ -23,11 +23,12 @@ pub fn test_sphere_sphere(pos_a: Vec3, s_a: &Sphere, pos_b: Vec3, s_b: &Sphere) 
     dist_sq <= (radius_sum * radius_sum)
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct CollisionManifold {
     pub is_colliding: bool,
-    pub normal: Vec3,       // A'yı B'den iten kuvvet yönü
-    pub penetration: f32,   // Iki nesne ne kadar birbirine geçti? (Pos düzeltmesi için)
+    pub normal: Vec3,
+    pub penetration: f32,
+    pub contact_points: Vec<Vec3>, // Çoklu temas noktaları (Multi-point contact)
 }
 
 pub fn check_aabb_aabb_manifold(pos_a: Vec3, aabb_a: &Aabb, pos_b: Vec3, aabb_b: &Aabb) -> CollisionManifold {
@@ -56,8 +57,76 @@ pub fn check_aabb_aabb_manifold(pos_a: Vec3, aabb_a: &Aabb, pos_b: Vec3, aabb_b:
             p = z_overlap;
         }
 
-        CollisionManifold { is_colliding: true, normal, penetration: p }
+        // Çarpışma noktasını tahmini olarak iki objenin birbirine değdiği ara yüzeyden alıyoruz
+        // AABB-AABB çarpışması bir "volume" olduğu için en basit centroid (merkez) alımını yaparız:
+        let mut contact_point = pos_a + (diff * 0.5);
+        // Tam değdiği yüzeye kilitleyelim:
+        if normal.x != 0.0 { contact_point.x = pos_a.x + normal.x * a_ex.x; }
+        if normal.y != 0.0 { contact_point.y = pos_a.y + normal.y * a_ex.y; }
+        if normal.z != 0.0 { contact_point.z = pos_a.z + normal.z * a_ex.z; }
+
+        CollisionManifold { is_colliding: true, normal, penetration: p, contact_points: vec![contact_point] }
     } else {
-        CollisionManifold { is_colliding: false, normal: Vec3::ZERO, penetration: 0.0 }
+        CollisionManifold { is_colliding: false, normal: Vec3::ZERO, penetration: 0.0, contact_points: vec![] }
+    }
+}
+
+pub fn check_sphere_sphere_manifold(pos_a: Vec3, s_a: &Sphere, pos_b: Vec3, s_b: &Sphere) -> CollisionManifold {
+    let diff = pos_b - pos_a;
+    let dist_sq = diff.length_squared();
+    let sum_r = s_a.radius + s_b.radius;
+
+    if dist_sq < sum_r * sum_r {
+        let dist = dist_sq.sqrt();
+        let penetration = sum_r - dist;
+        let normal = if dist > 0.0001 {
+            diff / dist
+        } else {
+            Vec3::new(0.0, 1.0, 0.0) // Eger merkezleri tamamen ic ice gecmisse rastgele yukari it
+        };
+
+        // Kürenin çarpışma noktası her zaman kendi yüzeyindedir
+        let contact_point = pos_a + (normal * (s_a.radius - penetration * 0.5));
+
+        CollisionManifold { is_colliding: true, normal, penetration, contact_points: vec![contact_point] }
+    } else {
+        CollisionManifold { is_colliding: false, normal: Vec3::ZERO, penetration: 0.0, contact_points: vec![] }
+    }
+}
+
+pub fn check_sphere_aabb_manifold(pos_s: Vec3, sphere: &Sphere, pos_aabb: Vec3, aabb: &Aabb) -> CollisionManifold {
+    // 1. Sphere merkezinin AABB kutusuna olan en yakin noktasini bul
+    let mut closest_point = pos_s;
+
+    let min_b = pos_aabb - aabb.half_extents;
+    let max_b = pos_aabb + aabb.half_extents;
+
+    closest_point.x = closest_point.x.max(min_b.x).min(max_b.x);
+    closest_point.y = closest_point.y.max(min_b.y).min(max_b.y);
+    closest_point.z = closest_point.z.max(min_b.z).min(max_b.z);
+
+    // 2. Kure bu en yakin noktaya ne kadar yakin?
+    let diff = closest_point - pos_s;
+    let dist_sq = diff.length_squared();
+
+    if dist_sq < sphere.radius * sphere.radius {
+        // Çarpışma var!
+        let dist = dist_sq.sqrt();
+        
+        let (normal, penetration) = if dist > 0.0001 {
+            // Normal disari dogru
+            let n = diff / dist;
+            (n, sphere.radius - dist)
+        } else {
+            // Sphere tam AABB icine girmisse en cok hangi eksenden cikabilir?
+            // Kaba bir tahmin: AABB'den disari it.
+            let diff_center = pos_aabb - pos_s;
+            let n = diff_center.normalize();
+            (n * -1.0, sphere.radius) // Rastgele disari
+        };
+
+        CollisionManifold { is_colliding: true, normal, penetration, contact_points: vec![closest_point] }
+    } else {
+        CollisionManifold { is_colliding: false, normal: Vec3::ZERO, penetration: 0.0, contact_points: vec![] }
     }
 }

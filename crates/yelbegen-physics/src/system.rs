@@ -1,19 +1,13 @@
 use yelbegen_core::World;
 use crate::components::{Transform, Velocity, RigidBody};
-use crate::shape::{Collider, ColliderShape};
-use crate::collision::check_aabb_aabb_manifold;
-use yelbegen_math::Vec3;
-
+use crate::shape::Collider;
+use yelbegen_math::{Vec3, Quat};
 // Varlıkların fiziksel hareketlerini, yerçekimi ve sürtünme etkileriyle uygulayan sistem
-pub fn physics_movement_system(world: &World) {
-    let mut transforms = world.borrow_mut::<Transform>().expect("Transform yok");
-    let mut velocities = world.borrow_mut::<Velocity>().expect("Velocity yok");
+pub fn physics_movement_system(world: &World, dt: f32) {
     let rigidbodies = world.borrow::<RigidBody>();
 
-    let dt = 0.016; // FPS sabitleyicimize (16ms) tam uyumlu Delta Time
-
-    for entity in transforms.entity_dense.clone() {
-        if let (Some(trans), Some(vel)) = (transforms.get_mut(entity), velocities.get_mut(entity)) {
+    if let Some(mut q) = world.query_mut_mut::<Transform, Velocity>() {
+        for (entity, trans, vel) in q.iter_mut() {
             // Kuvvetleri Uygula (Eğer Katı Cisim ise)
             if let Some(rb_list) = &rigidbodies {
                 if let Some(rb) = rb_list.get(entity) {
@@ -24,17 +18,35 @@ pub fn physics_movement_system(world: &World) {
                     if rb.friction > 0.0 && rb.mass > 0.0 {
                         vel.linear.x *= 1.0 - (rb.friction * dt);
                         vel.linear.z *= 1.0 - (rb.friction * dt);
+                        vel.angular.x *= 1.0 - (rb.friction * dt * 0.5); // Açısal sürtünme
+                        vel.angular.y *= 1.0 - (rb.friction * dt * 0.5);
+                        vel.angular.z *= 1.0 - (rb.friction * dt * 0.5);
                     }
                 }
             }
             
             // Hızı pozisyona uygula
             trans.position += vel.linear * dt;
+            
+            // Açısal Hızı (Angular Velocity) Quat dönüşümüne entegre et: q = q + 0.5 * w * q * dt
+            if vel.angular.length_squared() > 0.0001 {
+                let w_quat = Quat::new(vel.angular.x, vel.angular.y, vel.angular.z, 0.0);
+                let q = trans.rotation;
+                let dq = w_quat * q; 
+                trans.rotation = Quat::new(
+                    q.x + 0.5 * dt * dq.x,
+                    q.y + 0.5 * dt * dq.y,
+                    q.z + 0.5 * dt * dq.z,
+                    q.w + 0.5 * dt * dq.w,
+                ).normalize();
+            }
+            
+            trans.update_local_matrix();
         }
     }
 }
 
-// O(N^2) Çarpışma Tespit ve Fizik (Impulse/Sekme) Çözümleyici Sistem
+// O(N^2) Çarpışma Tespit ve Fizik (Impulse/Sekme/Tork) Çözümleyici Sistem
 pub fn physics_collision_system(world: &World) {
     let mut transforms = world.borrow_mut::<Transform>().expect("Transform yok");
     let mut velocities = world.borrow_mut::<Velocity>().expect("Velocity yok");
@@ -43,10 +55,48 @@ pub fn physics_collision_system(world: &World) {
 
     let entities = transforms.entity_dense.clone();
 
-    for i in 0..entities.len() {
-        for j in (i + 1)..entities.len() {
-            let ent_a = entities[i];
-            let ent_b = entities[j];
+    // 1. BROAD-PHASE: Sweep and Prune (1D X-Ekseni)
+    struct Interval {
+        entity: u32,
+        min_x: f32,
+        max_x: f32,
+    }
+
+    let mut intervals = Vec::with_capacity(entities.len());
+    for &e in &entities {
+        let t = transforms.get(e).unwrap();
+        let col = if let Some(c) = colliders.get(e) { c } else { continue };
+
+        use crate::shape::ColliderShape;
+        let (min_x, max_x) = match &col.shape {
+            ColliderShape::Aabb(a) => {
+                let half_x = a.half_extents.x * t.scale.x;
+                (t.position.x - half_x, t.position.x + half_x)
+            },
+            ColliderShape::Sphere(s) => {
+                let r = s.radius * t.scale.x.max(t.scale.y).max(t.scale.z);
+                (t.position.x - r, t.position.x + r)
+            }
+        };
+        intervals.push(Interval { entity: e, min_x, max_x });
+    }
+
+    intervals.sort_unstable_by(|a, b| a.min_x.partial_cmp(&b.min_x).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut collision_pairs = Vec::new();
+    for i in 0..intervals.len() {
+        let a = &intervals[i];
+        for j in (i + 1)..intervals.len() {
+            let b = &intervals[j];
+            if b.min_x > a.max_x {
+                break; // PRUNE! Geri kalan hiçbirinin a objesiyle çarpışma ihtimali yok. (O(n^2) engellendi)
+            }
+            collision_pairs.push((a.entity, b.entity));
+        }
+    }
+
+    // 2. NARROW-PHASE: GJK/EPA ile gerçek kesişim testi (Sadece filtreden geçen çiftler)
+    for (ent_a, ent_b) in collision_pairs {
 
             let (rb_a, rb_b) = match (rigidbodies.get(ent_a), rigidbodies.get(ent_b)) {
                 (Some(a), Some(b)) => (a, b),
@@ -60,56 +110,121 @@ pub fn physics_collision_system(world: &World) {
                 let pos_a = transforms.get(ent_a).unwrap().position;
                 let pos_b = transforms.get(ent_b).unwrap().position;
 
-                let manifold = match (&col_a.shape, &col_b.shape) {
-                    (ColliderShape::Aabb(a), ColliderShape::Aabb(b)) => {
-                        check_aabb_aabb_manifold(pos_a, a, pos_b, b)
+                let rot_a = transforms.get(ent_a).unwrap().rotation;
+                let rot_b = transforms.get(ent_b).unwrap().rotation;
+
+                // Evrensel GJK-EPA Çarpışma Testi
+                let (is_colliding, simplex) = crate::gjk::gjk_intersect(&col_a.shape, pos_a, rot_a, &col_b.shape, pos_b, rot_b);
+                
+                let manifold = if is_colliding {
+                    crate::epa::epa_solve(simplex, &col_a.shape, pos_a, rot_a, &col_b.shape, pos_b, rot_b)
+                } else {
+                    crate::collision::CollisionManifold { 
+                        is_colliding: false, 
+                        normal: Vec3::ZERO, 
+                        penetration: 0.0, 
+                        contact_points: vec![] 
                     }
-                    _ => continue,
                 };
 
-                // Eğer kutular birbirine geçiyorsa:
-                if manifold.is_colliding {
-                    // -- 1. POZİSYON DÜZELTMESİ (Positional Correction) --
-                    // Objelerin birbirinin içinden sızmasını (Sinking) engellemek için hafifçe ayırıyoruz
+                // Eğer objeler birbirine geçiyorsa:
+                if manifold.is_colliding && !manifold.contact_points.is_empty() {
+                    let point_count = manifold.contact_points.len() as f32;
+                    
+                    // -- 1. POZİSYON DÜZELTMESİ (Positional Correction) Sadece 1 kere uygulanır --
                     let inv_mass_a = if rb_a.mass == 0.0 { 0.0 } else { 1.0 / rb_a.mass };
                     let inv_mass_b = if rb_b.mass == 0.0 { 0.0 } else { 1.0 / rb_b.mass };
-                    let sum_inv_mass = inv_mass_a + inv_mass_b;
+                    let sum_inv_mass_pos = inv_mass_a + inv_mass_b;
 
-                    if let Some(t_a) = transforms.get_mut(ent_a) {
-                        t_a.position -= manifold.normal * (manifold.penetration * (inv_mass_a / sum_inv_mass));
+                    if sum_inv_mass_pos > 0.0 {
+                        if let Some(t_a) = transforms.get_mut(ent_a) {
+                            t_a.position -= manifold.normal * (manifold.penetration * (inv_mass_a / sum_inv_mass_pos));
+                        }
+                        if let Some(t_b) = transforms.get_mut(ent_b) {
+                            t_b.position += manifold.normal * (manifold.penetration * (inv_mass_b / sum_inv_mass_pos));
+                        }
                     }
-                    if let Some(t_b) = transforms.get_mut(ent_b) {
-                        t_b.position += manifold.normal * (manifold.penetration * (inv_mass_b / sum_inv_mass));
-                    }
 
-                    // -- 2. MOMENTUM & İTME (Impulse & Restitution) --
-                    let vel_a = velocities.get(ent_a).map(|v| v.linear).unwrap_or(Vec3::ZERO);
-                    let vel_b = velocities.get(ent_b).map(|v| v.linear).unwrap_or(Vec3::ZERO);
+                    // -- 2. KATI CİSİM MOMENTUM, TORK VE İTME (Her Temas Noktası İçin) --
+                    for contact_point in &manifold.contact_points {
+                        let r_a = *contact_point - pos_a;
+                        let r_b = *contact_point - pos_b;
 
-                    let relative_vel = vel_b - vel_a;
-                    let vel_along_normal = relative_vel.dot(manifold.normal);
+                        let vel_a = velocities.get(ent_a).cloned().unwrap_or(Velocity::new(Vec3::ZERO));
+                        let vel_b = velocities.get(ent_b).cloned().unwrap_or(Velocity::new(Vec3::ZERO));
 
-                    // Objeler zaten ayrılıyorsa tekrar itme
-                    if vel_along_normal > 0.0 { continue; }
+                        let v_point_a = vel_a.linear + vel_a.angular.cross(r_a);
+                        let v_point_b = vel_b.linear + vel_b.angular.cross(r_b);
 
-                    // Objelerin zıplama oranının en esnek olmayanını alıyoruz
-                    let e = rb_a.restitution.min(rb_b.restitution);
+                        let relative_vel = v_point_b - v_point_a;
+                        let vel_along_normal = relative_vel.dot(manifold.normal);
 
-                    // Güç katsayısı J = -(1 + e) * V / Toplam_Ters_Kütle
-                    let mut j = -(1.0 + e) * vel_along_normal;
-                    j /= sum_inv_mass;
+                        if vel_along_normal > 0.0 { continue; }
 
-                    let impulse = manifold.normal * j;
+                        let e = rb_a.restitution.min(rb_b.restitution);
 
-                    // Hızlara (Velocity) yansıtma
-                    if let Some(v_a) = velocities.get_mut(ent_a) {
-                        v_a.linear -= impulse * inv_mass_a;
-                    }
-                    if let Some(v_b) = velocities.get_mut(ent_b) {
-                        v_b.linear += impulse * inv_mass_b;
-                    }
-                }
-            }
-        }
-    }
-}
+                        // Eylemsizlik Temsiline (Inertia) Göre Açısal Etki Hesabı
+                        let ra_cross_n = r_a.cross(manifold.normal);
+                        let rb_cross_n = r_b.cross(manifold.normal);
+
+                        let inv_inertia_a_vec = rb_a.inverse_inertia;
+                        let inv_t_a = Vec3::new(ra_cross_n.x * inv_inertia_a_vec.x, ra_cross_n.y * inv_inertia_a_vec.y, ra_cross_n.z * inv_inertia_a_vec.z);
+                        let angular_effect_a = inv_t_a.cross(r_a).dot(manifold.normal);
+
+                        let inv_inertia_b_vec = rb_b.inverse_inertia;
+                        let inv_t_b = Vec3::new(rb_cross_n.x * inv_inertia_b_vec.x, rb_cross_n.y * inv_inertia_b_vec.y, rb_cross_n.z * inv_inertia_b_vec.z);
+                        let angular_effect_b = inv_t_b.cross(r_b).dot(manifold.normal);
+
+                        let sum_inv_mass_impulse = inv_mass_a + inv_mass_b + angular_effect_a + angular_effect_b;
+                        if sum_inv_mass_impulse == 0.0 { continue; }
+
+                        let j = (-(1.0 + e) * vel_along_normal / sum_inv_mass_impulse) / point_count;
+                        let impulse = manifold.normal * j;
+
+                        // Hızlara ve Açısal Hızlara (Angular Velocity) Yansıtma
+                        if let Some(v_a) = velocities.get_mut(ent_a) {
+                            v_a.linear -= impulse * inv_mass_a;
+                            let t_a = r_a.cross(impulse * -1.0); 
+                            v_a.angular += Vec3::new(t_a.x * inv_inertia_a_vec.x, t_a.y * inv_inertia_a_vec.y, t_a.z * inv_inertia_a_vec.z);
+                        }
+
+                        if let Some(v_b) = velocities.get_mut(ent_b) {
+                            v_b.linear += impulse * inv_mass_b;
+                            let t_b = r_b.cross(impulse);
+                            v_b.angular += Vec3::new(t_b.x * inv_inertia_b_vec.x, t_b.y * inv_inertia_b_vec.y, t_b.z * inv_inertia_b_vec.z);
+                        }
+
+                        // -- 3. COULOMB SÜRTÜNME MODELİ (Tangential Friction Impulse) --
+                        let tangent_vel = relative_vel - manifold.normal * vel_along_normal;
+                        let tangent_speed = tangent_vel.length();
+
+                        if tangent_speed > 0.001 {
+                            let tangent_dir = tangent_vel / tangent_speed; // Normalize
+
+                            let mu_static = (rb_a.friction + rb_b.friction) * 0.5;
+                            let mu_kinetic = mu_static * 0.7; 
+
+                            let jt = (-tangent_speed / sum_inv_mass_impulse) / point_count;
+
+                            let friction_impulse = if jt.abs() < j.abs() * mu_static {
+                                tangent_dir * jt
+                            } else {
+                                tangent_dir * (-j.abs() * mu_kinetic)
+                            };
+
+                            if let Some(v_a) = velocities.get_mut(ent_a) {
+                                v_a.linear -= friction_impulse * inv_mass_a;
+                                let ft_a = r_a.cross(friction_impulse * -1.0);
+                                v_a.angular += Vec3::new(ft_a.x * inv_inertia_a_vec.x, ft_a.y * inv_inertia_a_vec.y, ft_a.z * inv_inertia_a_vec.z);
+                            }
+                            if let Some(v_b) = velocities.get_mut(ent_b) {
+                                v_b.linear += friction_impulse * inv_mass_b;
+                                let ft_b = r_b.cross(friction_impulse);
+                                v_b.angular += Vec3::new(ft_b.x * inv_inertia_b_vec.x, ft_b.y * inv_inertia_b_vec.y, ft_b.z * inv_inertia_b_vec.z);
+                            } // closes if let v_b
+                        } // closes tangent_speed
+                    } // closes contact_points
+                } // closes manifold.is_colliding
+            } // closes colliders
+    } // closes for collision_pairs
+} // closes physics_collision_system

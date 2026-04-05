@@ -4,15 +4,19 @@ use tobj;
 use yelbegen_math::vec3::Vec3;
 use crate::renderer::Vertex;
 use crate::components::Mesh;
+use crate::animation::{AnimationClip, Track, Keyframe, SkeletonHierarchy, SkeletonJoint};
+use yelbegen_math::quat::Quat;
 
 pub struct AssetManager {
     mesh_cache: std::collections::HashMap<String, Mesh>,
+    pub texture_cache: std::collections::HashMap<String, Arc<wgpu::BindGroup>>,
 }
 
 impl AssetManager {
     pub fn new() -> Self {
         Self {
             mesh_cache: std::collections::HashMap::new(),
+            texture_cache: std::collections::HashMap::new(),
         }
     }
 
@@ -37,6 +41,7 @@ impl AssetManager {
             panic!("AssetManager: OBJ dosyasinda model bulunamadi: {}", file_path);
         }
 
+        let mut aabb = yelbegen_math::Aabb::empty();
         let mut vertices = Vec::new();
         let m = &models[0].mesh;
 
@@ -48,6 +53,7 @@ impl AssetManager {
                 m.positions[idx * 3 + 1],
                 m.positions[idx * 3 + 2],
             ];
+            aabb.extend(Vec3::new(position[0], position[1], position[2]));
 
             let normal = if !m.normals.is_empty() {
                 [
@@ -73,6 +79,8 @@ impl AssetManager {
                 normal,
                 tex_coords,
                 color: [1.0, 1.0, 1.0],
+                joint_indices: [0; 4],
+                joint_weights: [0.0; 4],
             });
         }
 
@@ -82,7 +90,7 @@ impl AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        let mesh = Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, format!("obj:{}", file_path));
+        let mesh = Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, format!("obj:{}", file_path), aabb);
         self.mesh_cache.insert(file_path.to_string(), mesh.clone());
         mesh
     }
@@ -121,6 +129,8 @@ impl AssetManager {
                     color: [1.0, 1.0, 1.0],
                     normal: *normal,
                     tex_coords: [0.0, 0.0],
+                    joint_indices: [0; 4],
+                    joint_weights: [0.0; 4],
                 });
             }
         }
@@ -131,7 +141,8 @@ impl AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "inverted_cube".to_string())
+        let aabb = yelbegen_math::Aabb::new(Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
+        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "inverted_cube".to_string(), aabb)
     }
 
     /// Basit, yatay bir düzlem (Plane) üretir.
@@ -140,14 +151,16 @@ impl AssetManager {
         let y = 0.0;
         
         // Üstten bakışla Saat yönünün tersi (CCW) 2 üçgen (Quad)
+        let def_j = [0; 4];
+        let def_w = [0.0; 4];
         let vertices = [
-            Vertex { position: [-half, y,  half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.0, size] },
-            Vertex { position: [ half, y,  half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [size, size] },
-            Vertex { position: [ half, y, -half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [size, 0.0] },
+            Vertex { position: [-half, y,  half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.0, size], joint_indices: def_j, joint_weights: def_w },
+            Vertex { position: [ half, y,  half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [size, size], joint_indices: def_j, joint_weights: def_w },
+            Vertex { position: [ half, y, -half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [size, 0.0], joint_indices: def_j, joint_weights: def_w },
             
-            Vertex { position: [ half, y, -half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [size, 0.0] },
-            Vertex { position: [-half, y, -half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.0, 0.0] },
-            Vertex { position: [-half, y,  half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.0, size] },
+            Vertex { position: [ half, y, -half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [size, 0.0], joint_indices: def_j, joint_weights: def_w },
+            Vertex { position: [-half, y, -half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.0, 0.0], joint_indices: def_j, joint_weights: def_w },
+            Vertex { position: [-half, y,  half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.0, size], joint_indices: def_j, joint_weights: def_w },
         ];
 
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -156,7 +169,37 @@ impl AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "plane".to_string())
+        let aabb = yelbegen_math::Aabb::new(Vec3::new(-size, -0.01, -size), Vec3::new(size, 0.01, size));
+        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "plane".to_string(), aabb)
+    }
+
+    /// 2D Sprite dörtgeni oluşturur (XY düzleminde, kameraya paralel).
+    /// Ortografik projeksiyon ile kullanıldığında 2D oyun desteği sağlar.
+    pub fn create_sprite_quad(device: &wgpu::Device, width: f32, height: f32) -> Mesh {
+        let hw = width / 2.0;
+        let hh = height / 2.0;
+        let def_j = [0; 4];
+        let def_w = [0.0; 4];
+
+        // XY düzleminde dörtgen (Z=0), kameraya bakan yön +Z
+        let vertices = [
+            Vertex { position: [-hw, -hh, 0.0], color: [1.0, 1.0, 1.0], normal: [0.0, 0.0, 1.0], tex_coords: [0.0, 1.0], joint_indices: def_j, joint_weights: def_w },
+            Vertex { position: [ hw, -hh, 0.0], color: [1.0, 1.0, 1.0], normal: [0.0, 0.0, 1.0], tex_coords: [1.0, 1.0], joint_indices: def_j, joint_weights: def_w },
+            Vertex { position: [ hw,  hh, 0.0], color: [1.0, 1.0, 1.0], normal: [0.0, 0.0, 1.0], tex_coords: [1.0, 0.0], joint_indices: def_j, joint_weights: def_w },
+            
+            Vertex { position: [ hw,  hh, 0.0], color: [1.0, 1.0, 1.0], normal: [0.0, 0.0, 1.0], tex_coords: [1.0, 0.0], joint_indices: def_j, joint_weights: def_w },
+            Vertex { position: [-hw,  hh, 0.0], color: [1.0, 1.0, 1.0], normal: [0.0, 0.0, 1.0], tex_coords: [0.0, 0.0], joint_indices: def_j, joint_weights: def_w },
+            Vertex { position: [-hw, -hh, 0.0], color: [1.0, 1.0, 1.0], normal: [0.0, 0.0, 1.0], tex_coords: [0.0, 1.0], joint_indices: def_j, joint_weights: def_w },
+        ];
+
+        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Sprite Quad VBuf"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let aabb = yelbegen_math::Aabb::new(Vec3::new(-hw, -hh, -0.01), Vec3::new(hw, hh, 0.01));
+        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "sprite_quad".to_string(), aabb)
     }
 
     /// Programatik UV Küre (Sphere) üretir.
@@ -188,14 +231,17 @@ impl AssetManager {
                 let uv3 = [(j + 1) as f32 / slices as f32, (i + 1) as f32 / stacks as f32];
                 let uv4 = [(j + 1) as f32 / slices as f32, i as f32 / stacks as f32];
 
+                let def_j = [0; 4];
+                let def_w = [0.0; 4];
+                
                 // Üçgen 1
-                vertices.push(Vertex { position: p1, color: [1.0; 3], normal: n1, tex_coords: uv1 });
-                vertices.push(Vertex { position: p2, color: [1.0; 3], normal: n2, tex_coords: uv2 });
-                vertices.push(Vertex { position: p3, color: [1.0; 3], normal: n3, tex_coords: uv3 });
+                vertices.push(Vertex { position: p1, color: [1.0; 3], normal: n1, tex_coords: uv1, joint_indices: def_j, joint_weights: def_w });
+                vertices.push(Vertex { position: p2, color: [1.0; 3], normal: n2, tex_coords: uv2, joint_indices: def_j, joint_weights: def_w });
+                vertices.push(Vertex { position: p3, color: [1.0; 3], normal: n3, tex_coords: uv3, joint_indices: def_j, joint_weights: def_w });
                 // Üçgen 2
-                vertices.push(Vertex { position: p1, color: [1.0; 3], normal: n1, tex_coords: uv1 });
-                vertices.push(Vertex { position: p3, color: [1.0; 3], normal: n3, tex_coords: uv3 });
-                vertices.push(Vertex { position: p4, color: [1.0; 3], normal: n4, tex_coords: uv4 });
+                vertices.push(Vertex { position: p1, color: [1.0; 3], normal: n1, tex_coords: uv1, joint_indices: def_j, joint_weights: def_w });
+                vertices.push(Vertex { position: p3, color: [1.0; 3], normal: n3, tex_coords: uv3, joint_indices: def_j, joint_weights: def_w });
+                vertices.push(Vertex { position: p4, color: [1.0; 3], normal: n4, tex_coords: uv4, joint_indices: def_j, joint_weights: def_w });
             }
         }
 
@@ -205,13 +251,24 @@ impl AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "sphere".to_string())
+        let aabb = yelbegen_math::Aabb::new(Vec3::new(-radius, -radius, -radius), Vec3::new(radius, radius, radius));
+        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "sphere".to_string(), aabb)
     }
 
-    /// Bir resim dosyasını diskten okur ve wgpu::Texture olarak döndürür. (Statik yardımcı)
-    pub fn load_texture(device: &wgpu::Device, queue: &wgpu::Queue, path: &str) -> wgpu::Texture {
+    /// Bir resmi okuyup Bind Group (Material Texture + Sampler) haline getirir
+    pub fn load_material_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layout: &wgpu::BindGroupLayout,
+        path: &str,
+    ) -> Result<Arc<wgpu::BindGroup>, String> {
+        if let Some(cached) = self.texture_cache.get(path) {
+            return Ok(cached.clone());
+        }
+
         let img = image::open(path)
-            .unwrap_or_else(|e| panic!("AssetManager: Doku yuklenirken hata! {} ({})", path, e))
+            .map_err(|e| format!("Doku yuklenirken hata! {} ({})", path, e))?
             .to_rgba8();
         let dimensions = img.dimensions();
         let texture_size = wgpu::Extent3d {
@@ -244,12 +301,7 @@ impl AssetManager {
             },
             texture_size,
         );
-        texture
-    }
 
-    /// Bir resmi okuyup Bind Group (Material Texture + Sampler) haline getirir
-    pub fn load_material_texture(device: &wgpu::Device, queue: &wgpu::Queue, layout: &wgpu::BindGroupLayout, path: &str) -> Arc<wgpu::BindGroup> {
-        let texture = Self::load_texture(device, queue, path);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -261,13 +313,249 @@ impl AssetManager {
             ..Default::default()
         });
 
-        Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bg = Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(path),
             layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
             ],
-        }))
+        }));
+
+        self.texture_cache.insert(path.to_string(), bg.clone());
+        Ok(bg)
     }
+
+    /// GLTF / GLB Sahnesini yükleyerek Mesh ve Hiyerarşi ağacını parçalar.
+    /// (Bu veri yapısı daha sonra motorun diğer parçaları (örn: scene builder) tarafından ECS Entity'lerine basılır)
+    pub fn load_gltf_scene(&mut self, device: &wgpu::Device, file_path: &str) -> Result<GltfSceneAsset, String> {
+        let (document, buffers, _images) = gltf::import(file_path)
+            .map_err(|e| format!("GLTF dosyasi yuklenemedi ({}). Hata: {}", file_path, e))?;
+
+        let mut roots = Vec::new();
+
+        for scene in document.scenes() {
+            for node in scene.nodes() {
+                roots.push(self.parse_gltf_node(device, &node, &buffers, file_path));
+            }
+        }
+
+        let mut animations = Vec::new();
+        for anim in document.animations() {
+            let mut transl = Vec::new();
+            let mut rot = Vec::new();
+            let mut scl = Vec::new();
+
+            for channel in anim.channels() {
+                let target_node = channel.target().node().index();
+                let reader = channel.reader(|b| Some(&buffers[b.index()]));
+                
+                if let Some(inputs) = reader.read_inputs() {
+                    let times: Vec<f32> = inputs.collect();
+
+                    if let Some(outputs) = reader.read_outputs() {
+                        match outputs {
+                            gltf::animation::util::ReadOutputs::Translations(tr) => {
+                                let mut kfs = Vec::new();
+                                for (time, val) in times.iter().zip(tr) {
+                                    kfs.push(Keyframe { time: *time, value: Vec3::new(val[0], val[1], val[2]) });
+                                }
+                                transl.push(Track { target_node, keyframes: kfs });
+                            },
+                            gltf::animation::util::ReadOutputs::Rotations(rt) => {
+                                let mut kfs = Vec::new();
+                                for (time, val) in times.iter().zip(rt.into_f32()) {
+                                    kfs.push(Keyframe { time: *time, value: Quat::new(val[0], val[1], val[2], val[3]) });
+                                }
+                                rot.push(Track { target_node, keyframes: kfs });
+                            },
+                            gltf::animation::util::ReadOutputs::Scales(sc) => {
+                                let mut kfs = Vec::new();
+                                for (time, val) in times.iter().zip(sc) {
+                                    kfs.push(Keyframe { time: *time, value: Vec3::new(val[0], val[1], val[2]) });
+                                }
+                                scl.push(Track { target_node, keyframes: kfs });
+                            },
+                            _ => {} // Morph targets vb. goz ardi edildi
+                        }
+                    }
+                }
+            }
+
+            animations.push(AnimationClip {
+                name: anim.name().unwrap_or("unnamed_anim").to_string(),
+                duration: 0.0, // Hesaplamamiz lazim (track'lerin son keyframe time'larinin max'i)
+                translations: transl,
+                rotations: rot,
+                scales: scl,
+            });
+        }
+
+        // Sure hesaplama sonradan yapilabilir
+        for anim in &mut animations {
+            let mut max_t = 0.0f32;
+            for t in &anim.translations { if let Some(k) = t.keyframes.last() { max_t = max_t.max(k.time); } }
+            for t in &anim.rotations { if let Some(k) = t.keyframes.last() { max_t = max_t.max(k.time); } }
+            for t in &anim.scales { if let Some(k) = t.keyframes.last() { max_t = max_t.max(k.time); } }
+            anim.duration = max_t;
+        }
+
+        let mut node_parents = std::collections::HashMap::new();
+        for node in document.nodes() {
+            for child in node.children() {
+                node_parents.insert(child.index(), node.index());
+            }
+        }
+
+        let mut skeletons = Vec::new();
+        for skin in document.skins() {
+            let reader = skin.reader(|b| Some(&buffers[b.index()]));
+            let ibm: Vec<[[f32; 4]; 4]> = reader.read_inverse_bind_matrices()
+                .map(|v| v.collect())
+                .unwrap_or_else(|| {
+                    vec![[[1.0,0.,0.,0.],[0.,1.,0.,0.],[0.,0.,1.,0.],[0.,0.,0.,1.]]; skin.joints().count()]
+                });
+            
+            let mut node_to_bone = std::collections::HashMap::new();
+            for (bone_idx, node) in skin.joints().enumerate() {
+                node_to_bone.insert(node.index(), bone_idx);
+            }
+
+            let mut joints = Vec::new();
+            for (bone_idx, joint_node) in skin.joints().enumerate() {
+                let inverse_bind_matrix = yelbegen_math::mat4::Mat4::from_cols_array_2d(&ibm[bone_idx]);
+                
+                let parent_index = node_parents.get(&joint_node.index()).and_then(|p| node_to_bone.get(p).copied());
+
+                let (t, r, s) = joint_node.transform().decomposed();
+                let loc_t = yelbegen_math::mat4::Mat4::translation(Vec3::new(t[0], t[1], t[2]));
+                let loc_r = yelbegen_math::mat4::Mat4::from_quat(Quat::new(r[0], r[1], r[2], r[3]));
+                let loc_s = yelbegen_math::mat4::Mat4::scale(Vec3::new(s[0], s[1], s[2]));
+                let local_bind_transform = loc_t * loc_r * loc_s;
+
+                joints.push(SkeletonJoint {
+                    name: joint_node.name().unwrap_or("bone").to_string(),
+                    node_index: joint_node.index(),
+                    inverse_bind_matrix,
+                    parent_index,
+                    local_bind_transform,
+                });
+            }
+
+            skeletons.push(SkeletonHierarchy { joints });
+        }
+
+        Ok(GltfSceneAsset {
+            roots,
+            animations,
+            skeletons,
+        })
+    }
+
+    fn parse_gltf_node(&mut self, device: &wgpu::Device, node: &gltf::Node, buffers: &[gltf::buffer::Data], file_name: &str) -> GltfNodeData {
+        let (translation, rotation, scale) = node.transform().decomposed();
+        
+        let mut node_mesh = None;
+        if let Some(mesh) = node.mesh() {
+            let mut all_vertices = Vec::new();
+            let mut aabb = yelbegen_math::Aabb::empty();
+            // GLTF mesh'leri primitive'lerden oluşur
+            for primitive in mesh.primitives() {
+                let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
+                
+                let positions = reader.read_positions().map(|v| v.collect::<Vec<_>>()).unwrap_or_default();
+                let normals = reader.read_normals().map(|v| v.collect::<Vec<_>>()).unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
+                let tex_coords = reader.read_tex_coords(0).map(|v| v.into_f32().collect::<Vec<_>>()).unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
+                
+                // --- Skeletal Animation Verileri ---
+                let joints = reader.read_joints(0).map(|v| v.into_u16().collect::<Vec<_>>());
+                let weights = reader.read_weights(0).map(|v| v.into_f32().collect::<Vec<_>>());
+
+                let get_vertex = |i: usize, pos: [f32; 3]| -> Vertex {
+                    let j = if let Some(ref js) = joints {
+                        if i < js.len() {
+                            [js[i][0] as u32, js[i][1] as u32, js[i][2] as u32, js[i][3] as u32]
+                        } else { [0; 4] }
+                    } else { [0; 4] };
+
+                    let w = if let Some(ref ws) = weights {
+                        if i < ws.len() { ws[i] } else { [0.0; 4] }
+                    } else { [0.0; 4] };
+
+                    Vertex {
+                        position: pos,
+                        normal: normals[i],
+                        tex_coords: tex_coords[i],
+                        color: [1.0, 1.0, 1.0],
+                        joint_indices: j,
+                        joint_weights: w,
+                    }
+                };
+
+                if let Some(indices) = reader.read_indices() {
+                    let indices_u32: Vec<u32> = indices.into_u32().collect();
+                    for idx in indices_u32 {
+                        let i = idx as usize;
+                        if i < positions.len() {
+                            let pos = positions[i];
+                            aabb.extend(Vec3::new(pos[0], pos[1], pos[2]));
+                            all_vertices.push(get_vertex(i, pos));
+                        }
+                    }
+                } else {
+                    for i in 0..positions.len() {
+                        let pos = positions[i];
+                        aabb.extend(Vec3::new(pos[0], pos[1], pos[2]));
+                        all_vertices.push(get_vertex(i, pos));
+                    }
+                }
+            }
+
+            let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(&format!("GLTF VBuf: {} (Node: {:?})", file_name, node.name())),
+                contents: bytemuck::cast_slice(&all_vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+
+            let mesh_comp = Mesh::new(
+                Arc::new(vbuf), 
+                all_vertices.len() as u32, 
+                Vec3::ZERO, 
+                format!("gltf_mesh_{}_{:?}", file_name, node.name()), 
+                aabb
+            );
+            node_mesh = Some(mesh_comp);
+        }
+
+        let mut children = Vec::new();
+        for child in node.children() {
+            children.push(self.parse_gltf_node(device, &child, buffers, file_name));
+        }
+
+        GltfNodeData {
+            index: node.index(),
+            name: node.name().map(|n| n.to_string()),
+            translation,
+            rotation,
+            scale,
+            mesh: node_mesh,
+            children,
+        }
+    }
+}
+
+pub struct GltfNodeData {
+    pub index: usize,
+    pub name: Option<String>,
+    pub translation: [f32; 3],
+    pub rotation: [f32; 4],
+    pub scale: [f32; 3],
+    pub mesh: Option<Mesh>, 
+    pub children: Vec<GltfNodeData>,
+}
+
+pub struct GltfSceneAsset {
+    pub roots: Vec<GltfNodeData>,
+    pub animations: Vec<AnimationClip>,
+    pub skeletons: Vec<SkeletonHierarchy>,
 }

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-yelbegen = { path = "../crates/yelbegen", features = ["audio", "editor"] }
+yelbegen = { path = "../crates/yelbegen", features = ["audio", "editor", "scripting"] }
 pollster = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

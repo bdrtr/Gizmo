@@ -15,6 +15,9 @@ pub use yelbegen_audio as audio;
 #[cfg(feature = "editor")]
 pub use yelbegen_editor as editor;
 
+#[cfg(feature = "scripting")]
+pub use yelbegen_scripting as scripting;
+
 // === 3. Parti Re-Export (Kullanıcının ayrıca eklemesine gerek kalmasın) ===
 pub use winit;
 pub use wgpu;

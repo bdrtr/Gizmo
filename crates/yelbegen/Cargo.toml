@@ -7,6 +7,7 @@ edition.workspace = true
 default = ["audio"]
 audio = ["dep:yelbegen-audio"]
 editor = ["dep:yelbegen-editor"]
+scripting = ["dep:yelbegen-scripting"]
 
 [dependencies]
 yelbegen-core = { path = "../yelbegen-core" }
@@ -17,6 +18,7 @@ yelbegen-physics = { path = "../yelbegen-physics" }
 yelbegen-app = { path = "../yelbegen-app" }
 yelbegen-audio = { path = "../yelbegen-audio", optional = true }
 yelbegen-editor = { path = "../yelbegen-editor", optional = true }
+yelbegen-scripting = { path = "../yelbegen-scripting", optional = true }
 winit = { workspace = true }
 wgpu = "0.19"
 egui = "0.26"

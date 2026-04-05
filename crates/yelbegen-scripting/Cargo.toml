@@ -1,0 +1,10 @@
+[package]
+name = "yelbegen-scripting"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mlua = { version = "0.9", features = ["lua54", "vendored"] }
+yelbegen-core = { path = "../yelbegen-core" }
+yelbegen-math = { path = "../yelbegen-math" }
+yelbegen-physics = { path = "../yelbegen-physics" }
