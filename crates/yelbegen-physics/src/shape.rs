@@ -39,9 +39,10 @@ impl ColliderShape {
                 // AABB şu an Axis-Aligned (Rotasyonsuz), eğer rotasyon eklenirse OBB (Oriented Bounding Box) olur.
                 // Şimdilik sadece pozisyonu dikkate alıyoruz (Rotasyonu AABB üzerinde uygulamayız).
                 let mut p = pos;
-                p.x += if dir.x > 0.0 { aabb.half_extents.x } else { -aabb.half_extents.x };
-                p.y += if dir.y > 0.0 { aabb.half_extents.y } else { -aabb.half_extents.y };
-                p.z += if dir.z > 0.0 { aabb.half_extents.z } else { -aabb.half_extents.z };
+                let eps = 1e-4;
+                p.x += if dir.x > eps { aabb.half_extents.x } else if dir.x < -eps { -aabb.half_extents.x } else { 0.0 };
+                p.y += if dir.y > eps { aabb.half_extents.y } else if dir.y < -eps { -aabb.half_extents.y } else { 0.0 };
+                p.z += if dir.z > eps { aabb.half_extents.z } else if dir.z < -eps { -aabb.half_extents.z } else { 0.0 };
                 p
             }
         }

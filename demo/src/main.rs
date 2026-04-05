@@ -1,7 +1,5 @@
 use yelbegen::prelude::*;
 
-
-
 pub mod scene;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -178,16 +176,16 @@ pub fn spawn_gltf_hierarchy(
     nodes: &[yelbegen::renderer::GltfNodeData],
     parent_id: Option<u32>,
     default_material: Material,
-) -> Vec<u32> {
-    let mut spawned_ids = Vec::new();
+) -> Vec<yelbegen::core::Entity> {
+    let mut spawned_entities = Vec::new();
 
     for node in nodes {
         let entity = world.spawn();
         let id = entity.id();
-        spawned_ids.push(id);
+        spawned_entities.push(entity);
 
         let entity_name = node.name.clone().unwrap_or_else(|| "GLTF_Node".to_string());
-        world.add_component(entity, EntityName(entity_name));
+        world.add_component(entity, EntityName(entity_name.clone()));
 
         // Transform hesapla
         let t = Transform::new(Vec3::new(node.translation[0], node.translation[1], node.translation[2]))
@@ -199,20 +197,36 @@ pub fn spawn_gltf_hierarchy(
             world.add_component(entity, Parent(pid));
         }
 
-        if let Some(mesh) = &node.mesh {
-            world.add_component(entity, mesh.clone());
-            world.add_component(entity, default_material.clone()); // Eğer GLTF material okumadıysa default
-            world.add_component(entity, yelbegen::renderer::components::MeshRenderer::new());
+        let mut immediate_children = Vec::new();
+
+        for (prim_i, (mesh, mat_opt)) in node.primitives.iter().enumerate() {
+            let prim_entity = world.spawn();
+            world.add_component(prim_entity, Parent(id));
+            world.add_component(prim_entity, Transform::new(Vec3::ZERO));
+            world.add_component(prim_entity, EntityName(format!("{}_Primitive_{}", entity_name, prim_i)));
+            world.add_component(prim_entity, mesh.clone());
+            
+            if let Some(mat) = mat_opt {
+                world.add_component(prim_entity, mat.clone());
+            } else {
+                world.add_component(prim_entity, default_material.clone()); // Eğer GLTF material okumadıysa default
+            }
+            world.add_component(prim_entity, yelbegen::renderer::components::MeshRenderer::new());
+            immediate_children.push(prim_entity.id());
         }
 
         // Recursive olarak çocukları in
         if !node.children.is_empty() {
-            let child_ids = spawn_gltf_hierarchy(world, &node.children, Some(id), default_material.clone());
-            world.add_component(entity, Children(child_ids));
+            let child_entities = spawn_gltf_hierarchy(world, &node.children, Some(id), default_material.clone());
+            immediate_children.extend(child_entities.iter().map(|e| e.id()));
+        }
+
+        if !immediate_children.is_empty() {
+            world.add_component(entity, Children(immediate_children));
         }
     }
 
-    spawned_ids
+    spawned_entities
 }
 
 // ======================== ANA FONKSİYON ========================
@@ -262,208 +276,65 @@ fn main() {
             // Sphere Mesh'ini bir kez oluşturup paylaşalım (Instancing için şart!)
             let sphere_mesh = AssetManager::create_sphere(&renderer.device, 1.0, 16, 16);
 
-            // --- Geniş GLTF Testi (Araba veya Test Modeli) ---
-            let (car_chassis, _chassis_mesh) = match asset_manager.load_gltf_scene(&renderer.device, "demo/assets/car.glb") {
-                Ok(nodes) => {
-                    println!("GLTF Araba basariyla okundu! Hiyerarsi kuruluyor...");
-                    let car_root = world.spawn();
-                    bouncing_box_id = car_root.id();
+            // --- FİZİKLİ ZEMİN OLUŞTURMA ---
+            let ground_mesh = AssetManager::create_plane(&renderer.device, 50.0);
+            let ground_entity = world.spawn();
+            world.add_component(ground_entity, ground_mesh);
+            world.add_component(ground_entity, Transform::new(Vec3::new(0.0, -1.0, 0.0)).with_scale(Vec3::new(50.0, 1.0, 50.0)));
+            world.add_component(ground_entity, Material::new(stone_tbind.clone()).with_pbr(Vec4::new(0.3, 0.3, 0.3, 1.0), 0.9, 0.1));
+            world.add_component(ground_entity, yelbegen::renderer::components::MeshRenderer::new());
+            world.add_component(ground_entity, yelbegen::physics::components::RigidBody::new_static());
+            // Y ekseni 'half_extent'ini (kalınlık) 0.05 yapıyoruz ki dümdüz olan visual Plane ile eşleşsin! (1.0 olunca havada çarpışıyordu)
+            world.add_component(ground_entity, yelbegen::physics::shape::Collider::new_aabb(25.0, 0.05, 25.0));
 
-                    let default_mat = Material::new(tbind.clone()).with_pbr(Vec4::new(0.8, 0.1, 0.1, 1.0), 0.3, 0.8);
-                    
-                    // Root objemize araba parçalarını entegre ediyoruz
-                    let child_ids = spawn_gltf_hierarchy(world, &nodes.roots, Some(bouncing_box_id), default_mat);
-                    world.add_component(car_root, Children(child_ids));
-
-                    if !nodes.animations.is_empty() && !nodes.skeletons.is_empty() {
-                        let hierarchy = std::sync::Arc::new(nodes.skeletons[0].clone());
-                        let animations = std::sync::Arc::new(nodes.animations.clone());
-
-                        let buffer = renderer.device.create_buffer(&wgpu::BufferDescriptor {
-                            label: Some("Skeleton Buffer"),
-                            size: 64 * 64, // 64 mat4 of 64 bytes
-                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                            mapped_at_creation: false,
-                        });
-                        let bind_group = renderer.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            layout: &renderer.skeleton_bind_group_layout,
-                            entries: &[wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: buffer.as_entire_binding(),
-                            }],
-                            label: Some("Skeleton Bind Group"),
-                        });
-
-                        world.add_component(car_root, yelbegen::renderer::components::Skeleton {
-                            bind_group: std::sync::Arc::new(bind_group),
-                            buffer: std::sync::Arc::new(buffer),
-                            hierarchy,
-                            local_poses: Vec::new(),
-                        });
-
-                        world.add_component(car_root, yelbegen::renderer::components::AnimationPlayer {
-                            current_time: 0.0,
-                            active_animation: 0,
-                            loop_anim: true,
-                            animations,
-                        });
-                        println!("==> Animasyon Oynatıcısı ve İskelet takıldı!");
-                    }
-
-                    // car_root'a mesh eklemiyoruz, çünkü GLTF kendi mesh'lerine sahip. Sadece çarpışma kutusu yeterli olabilir.
-                    // Fakat test amaçlı yine de Suzanne falan ekleyip arkasına hiyerarşiyi takabiliriz. Bu sadece root:
-                    (car_root, sphere_mesh.clone())
-                },
-                Err(_) => {
-                    println!("Yelbegen Info: 'car.glb' ozel modeli bulunamadi, standart test modeli (Suzanne) yukleniyor.");
-                    let car_chassis = world.spawn();
-                    bouncing_box_id = car_chassis.id();
-                    let cube_mesh = asset_manager.load_obj(&renderer.device, "demo/assets/suzanne.obj");
-                    world.add_component(car_chassis, cube_mesh.clone());
-                    world.add_component(car_chassis, Material::new(tbind.clone()).with_pbr(Vec4::new(0.8, 0.1, 0.1, 1.0), 0.3, 0.8));
-                    world.add_component(car_chassis, yelbegen::renderer::components::MeshRenderer::new());
-                    (car_chassis, cube_mesh)
-                }
-            };
+            // --- Fiziksel Araç (Raycast Milk Truck) ---
+            let gltf_scene = asset_manager.load_gltf_scene(&renderer.device, &renderer.queue, &renderer.texture_bind_group_layout, tbind.clone(), "demo/assets/truck.glb").unwrap();
             
-            // Controller, Fizik ve İsim ekle
-            world.add_component(car_chassis, Transform::new(Vec3::new(0.0, 1.0, -8.0)).with_scale(Vec3::new(1.0, 1.0, 2.0)));
-            world.add_component(car_chassis, CarController { speed: 0.0, steering: 0.0 });
-            world.add_component(car_chassis, Collider::new_aabb(2.0, 1.0, 3.0));
-            world.add_component(car_chassis, RigidBody::new(5.0, 0.5, 0.5, true));
-            world.add_component(car_chassis, EntityName("Araba Kasası (GLTF/Fallback)".into()));
-
-            // --- 4 Adet Tekerlek ---
-            let offsets = [
-                (true, true, Vec3::new(-1.2, -0.3, 1.5)),   // Ön-Sol
-                (true, false, Vec3::new(1.2, -0.3, 1.5)),   // Ön-Sağ
-                (false, true, Vec3::new(-1.2, -0.3, -1.5)), // Arka-Sol
-                (false, false, Vec3::new(1.2, -0.3, -1.5)), // Arka-Sağ
-            ];
+            // Gerçek fizik arabamızın asıl gövdesi (Matematiksel Dünya Koordinatlarına sahip Master Kök)
+            let car_root = world.spawn();
+            world.add_component(car_root, Transform::new(Vec3::new(0.0, 5.0, 0.0)));
+            world.add_component(car_root, yelbegen::physics::components::Velocity::new(Vec3::ZERO));
             
-            let mut wheel_ids = Vec::new();
+            // GLTF Hiyerarşisini Çıkar (İlk Node genelde yöneltici Yup2Zup düğümüdür)
+            let parent_entities = spawn_gltf_hierarchy(world, &gltf_scene.roots, Some(car_root.id()), Material::new(tbind.clone()));
+            world.add_component(car_root, yelbegen::core::component::Children(vec![parent_entities[0].id()]));
             
-            for (is_front, is_left, offset) in offsets {
-                let w = world.spawn();
-                world.add_component(w, Transform::new(offset).with_scale(Vec3::new(0.4, 0.6, 0.6))); // Disk şekli için x'ten bastık
-                world.add_component(w, Parent(bouncing_box_id));
-                world.add_component(w, Wheel { is_front, is_left, base_rotation: 0.0 });
-                world.add_component(w, Collider::new_sphere(0.6));
-                world.add_component(w, sphere_mesh.clone());
-                world.add_component(w, Material::new(tbind.clone()).with_pbr(Vec4::new(0.1, 0.1, 0.1, 1.0), 0.9, 0.1));
-                world.add_component(w, yelbegen::renderer::components::MeshRenderer::new());
-                world.add_component(w, EntityName(if is_front { "Tekerlek (Ön)" } else { "Tekerlek (Arka)" }.into()));
-                wheel_ids.push(w.id());
-            }
+            let mut rb = yelbegen::physics::components::RigidBody::new(1500.0, 0.1, 0.5, true);
+            rb.calculate_box_inertia(2.0, 1.5, 3.0); // Kutu eylemsizliği
+            world.add_component(car_root, rb);
+            
+            // Gövde için kaba çarpışma kutusu
+            world.add_component(car_root, yelbegen::physics::shape::Collider::new_aabb(1.2, 0.8, 2.0)); 
+            
+            // Süspansiyon (Vehicle Controller)
+            let mut vehicle = yelbegen::physics::vehicle::VehicleController::new();
+            
+            let w = 1.0;
+            let l_f = 1.43; // GLTF'teki (Node) ön dingil Z konumu
+            let l_r = -1.35; // GLTF'teki (Node.001) arka dingil Z konumu
+            let h = -0.4; // Kasanın altına
 
-            world.add_component(car_chassis, Children(wheel_ids));
+            let rest = 0.5;
+            let stiff = 25000.0;
+            let damp = 1500.0;
+            let rad = 0.42;
 
-            // --- Zemin (Gerçek Uçsuz Bucaksız Taş Plane) ---
-            let ground = world.spawn();
-            world.add_component(ground, Transform::new(Vec3::new(0.0, -1.0, 0.0)));
-            world.add_component(ground, Velocity::new(Vec3::ZERO));
-            world.add_component(ground, Collider::new_aabb(25.0, 1.0, 25.0));
-            world.add_component(ground, RigidBody::new_static());
-            world.add_component(ground, AssetManager::create_plane(&renderer.device, 50.0));
-            world.add_component(ground, Material::new(stone_tbind.clone()).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.9, 0.0).with_texture_source("demo/assets/stone_tiles.jpg".into()));
-            world.add_component(ground, yelbegen::renderer::components::MeshRenderer::new());
-            world.add_component(ground, EntityName("Taş Zemin".into()));
-
+            use yelbegen::physics::vehicle::Wheel;
+            vehicle.add_wheel(Wheel::new(Vec3::new(w, h, l_f), rest, stiff, damp, rad)); // İleri Sol
+            vehicle.add_wheel(Wheel::new(Vec3::new(-w, h, l_f), rest, stiff, damp, rad)); // İleri Sağ
+            vehicle.add_wheel(Wheel::new(Vec3::new(w, h, l_r), rest, stiff, damp, rad)); // Geri Sol
+            vehicle.add_wheel(Wheel::new(Vec3::new(-w, h, l_r), rest, stiff, damp, rad)); // Geri Sağ
+            
+            world.add_component(car_root, vehicle);
+            world.add_component(car_root, EntityName("Süt Kamyonu (GLTF)".into()));
+            
             // --- GÜNEŞ (Directional Light / Gerçek Zamanlı Ana Gölgelendirici) ---
             let sun = world.spawn();
-            // Güneşi x etrafında eğiyoruz ki ufuktan vursun (-z yönüne bakar, x etrafında -45 derece eğilirse aşağı / ileri bakar)
             let sun_transform = Transform::new(Vec3::new(0.0, 50.0, 50.0))
                 .with_rotation(Quat::from_axis_angle(Vec3::new(1.0, 0.5, 0.0).normalize(), -std::f32::consts::FRAC_PI_4));
             world.add_component(sun, sun_transform);
             world.add_component(sun, yelbegen::renderer::components::DirectionalLight::new(Vec3::new(1.0, 0.98, 0.9), 1.5, true));
             world.add_component(sun, EntityName("Güneş (Directional)".into()));
-
-            // --- Işık 1 (Point Light) ---
-            let light1 = world.spawn();
-            world.add_component(light1, Transform::new(Vec3::new(2.0, 5.0, -2.0)));
-            world.add_component(light1, PointLight::new(Vec3::new(1.0, 0.9, 0.8), 2.0));
-            world.add_component(light1, sphere_mesh.clone());
-            world.add_component(light1, Material::new(tbind.clone()).with_unlit(Vec4::new(1.0, 0.9, 0.8, 1.0)));
-            world.add_component(light1, yelbegen::renderer::components::MeshRenderer::new());
-            world.add_component(light1, EntityName("Sarı Işık".into()));
-
-            // --- Işık 2 (Point Light - Çoklu Gösterim) ---
-            let light2 = world.spawn();
-            world.add_component(light2, Transform::new(Vec3::new(-4.0, 2.0, -4.0)));
-            world.add_component(light2, PointLight::new(Vec3::new(0.2, 0.4, 1.0), 1.5));
-            world.add_component(light2, sphere_mesh.clone());
-            world.add_component(light2, Material::new(tbind.clone()).with_unlit(Vec4::new(0.2, 0.4, 1.0, 1.0)));
-            world.add_component(light2, yelbegen::renderer::components::MeshRenderer::new());
-            world.add_component(light2, EntityName("Mavi Işık".into()));
-
-            // --- FİZİK TEST KUTUSU (Açısal Momentum Testi İçin Fırlatılan Obje) ---
-            let test_cube = world.spawn();
-            let mut t = Transform::new(Vec3::new(-5.0, 10.0, -5.0));
-            // Yamuk bir rotasyonla (havada asimetrik düşmesi için) başlatıyoruz
-            t.rotation = Quat::from_axis_angle(Vec3::new(1.0, 1.0, 0.0).normalize(), std::f32::consts::FRAC_PI_4 * 0.5); 
-            world.add_component(test_cube, t);
-            
-            let mut rb = RigidBody::new(2.0, 0.6, 0.5, true);
-            rb.calculate_box_inertia(1.0, 1.0, 1.0); // 1x1x1 Kutu eylemsizliği
-            world.add_component(test_cube, rb);
-            
-            world.add_component(test_cube, Velocity::new(Vec3::new(2.0, 0.0, 0.0))); // Hafifçe yana doğru fırlatılmış
-            world.add_component(test_cube, Collider::new_aabb(0.5, 0.5, 0.5)); // 1 birimlik kutu (half 0.5)
-            
-            // Render olarak Suzanne maymununu kullanıyoruz ancak Fizik Motoru onu 1x1'lik bir görünmez Zar (Box) olarak çözecek
-            let cube_mesh = asset_manager.load_obj(&renderer.device, "demo/assets/suzanne.obj"); 
-            world.add_component(test_cube, cube_mesh.clone());
-            world.add_component(test_cube, Material::new(tbind.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.1, 1.0), 0.5, 0.0));
-            world.add_component(test_cube, yelbegen::renderer::components::MeshRenderer::new());
-            world.add_component(test_cube, EntityName("Fizik Takla Testi".into()));
-            // LUA BETİK TESTİ!
-            world.add_component(test_cube, yelbegen::scripting::Script::new("demo/assets/player.lua"));
-
-            // --- LOD TEST KÜRESI ---
-            // 3 farklı detay seviyesinde küre: yakın=yüksek, orta, uzak=düşük poligon
-            {
-                use yelbegen::renderer::components::{LodGroup, LodLevel};
-                let lod_entity = world.spawn();
-                world.add_component(lod_entity, Transform::new(Vec3::new(8.0, 2.0, -8.0)));
-                
-                let mesh_high = AssetManager::create_sphere(&renderer.device, 1.0, 32, 32); // 2048 segment
-                let mesh_mid  = AssetManager::create_sphere(&renderer.device, 1.0, 8, 8);   // 128 segment
-                let mesh_low  = AssetManager::create_sphere(&renderer.device, 1.0, 4, 4);   // 32 segment
-                
-                // Varsayılan mesh (uzakta görünecek en düşük)
-                world.add_component(lod_entity, mesh_high.clone());
-                
-                world.add_component(lod_entity, LodGroup::new(vec![
-                    LodLevel { mesh: mesh_high, max_distance: 15.0 },  // 0-15m: Yüksek detay
-                    LodLevel { mesh: mesh_mid, max_distance: 40.0 },   // 15-40m: Orta detay
-                    LodLevel { mesh: mesh_low, max_distance: 200.0 },  // 40m+: Düşük detay
-                ]));
-                
-                world.add_component(lod_entity, Material::new(tbind.clone()).with_pbr(Vec4::new(0.2, 0.7, 0.9, 1.0), 0.3, 0.5));
-                world.add_component(lod_entity, yelbegen::renderer::components::MeshRenderer::new());
-                world.add_component(lod_entity, EntityName("LOD Test Küresi".into()));
-            }
-
-            // --- JENGA / STACKING TESTI (Çoklu temas noktası doğrulama) ---
-            let cube_mesh = asset_manager.load_obj(&renderer.device, "demo/assets/suzanne.obj"); // Geçiçi küp görünümü için suzanne kullanılmış, sorun değil
-            for i in 0..5 {
-                let stack_box = world.spawn();
-                let y_pos = 1.0 + (i as f32) * 1.5; // Üst üste binen kutular
-                world.add_component(stack_box, Transform::new(Vec3::new(4.0, y_pos, -4.0)));
-                
-                let mut rb = RigidBody::new(1.0, 0.4, 0.5, true); 
-                rb.calculate_box_inertia(1.0, 1.0, 1.0);
-                world.add_component(stack_box, rb);
-                world.add_component(stack_box, Velocity::new(Vec3::ZERO));
-                world.add_component(stack_box, Collider::new_aabb(0.5, 0.5, 0.5));
-                
-                world.add_component(stack_box, cube_mesh.clone());
-                let color = Vec4::new(0.2 + i as f32 * 0.15, 0.5, 0.8 - i as f32 * 0.1, 1.0);
-                world.add_component(stack_box, Material::new(tbind.clone()).with_pbr(color, 0.8, 0.1));
-                world.add_component(stack_box, yelbegen::renderer::components::MeshRenderer::new());
-                world.add_component(stack_box, EntityName(format!("Stack Box {}", i)));
-            }
-
 
             // --- Player (Kamera) ---
             let player = world.spawn();
@@ -850,6 +721,9 @@ fn main() {
             // Aslında movement_system içindeki dt'yi world.get_resource::<Time> yerine argüman vs almalıyız
             // Fakat sistem zaten "Time" resource'ını okumuyor! İçinde sabit let dt = 0.016; kullanıyordu. Oraya da `fixed_dt` yollamamız lazım.
             
+            // Araç Süspansiyonları (Fizik eylemleri hesaplanmadan hemen önce yay torkunu ekle)
+            yelbegen::physics::system::physics_vehicle_system(world, fixed_dt);
+            
             // HACK: Simdilik physics_movement_system içindeki sabit dt, fixed_dt ile örtüşmeli
             yelbegen::physics::system::physics_movement_system(world, fixed_dt);
             yelbegen::physics::system::physics_collision_system(world);
@@ -964,6 +838,32 @@ fn main() {
                     // Yatay eksende çok hafif dön, asıl dikeyde (Y) in/çık
                     t.position.x = x * speed.cos() - y * speed.sin();
                     t.position.y = x * speed.sin() + y * speed.cos();
+                }
+            }
+        }
+
+        // Görsel Tekerlekleri Süspansiyon ile Senkronize Et (Visual Wheel Animation)
+        if let (Some(vehicles), Some(names)) = (world.borrow::<yelbegen::physics::vehicle::VehicleController>(), world.borrow::<EntityName>()) {
+            if let Some(&car_id) = vehicles.entity_dense.first() {
+                if let Some(car_v) = vehicles.get(car_id) {
+                    let front_comp = (car_v.wheels[0].compression + car_v.wheels[1].compression) / 2.0;
+                    let rear_comp = (car_v.wheels[2].compression + car_v.wheels[3].compression) / 2.0;
+                    
+                    if let Some(mut trans) = world.borrow_mut::<Transform>() {
+                        for &e in &names.entity_dense {
+                            if let Some(n) = names.get(e) {
+                                if n.0 == "Node" { // Ön Dingil (Front Axle GLTF Orijinal Z ekseni hizalaması)
+                                    if let Some(t) = trans.get_mut(e) {
+                                        t.position.z = -0.9 + front_comp;
+                                    }
+                                } else if n.0 == "Node.001" { // Arka Dingil
+                                    if let Some(t) = trans.get_mut(e) {
+                                        t.position.z = -0.9 + rear_comp;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1569,19 +1469,9 @@ fn main() {
                     if r.get(e).is_none() { continue; }
                 } else { continue; }
                 // --- GLOBAL TRANSFORM HESAPLAMA ---
-                let mut global_model = trans.model_matrix();
-                let mut current_e = e;
-                if let Some(parents) = world.borrow::<Parent>() {
-                    if let Some(transforms) = world.borrow::<Transform>() {
-                        while let Some(p) = parents.get(current_e) {
-                            if let Some(p_t) = transforms.get(p.0) {
-                                // Ağaçta yukarı çıktıkça (Parent), Matrisi SOL'dan çarparız.
-                                global_model = p_t.model_matrix() * global_model;
-                            }
-                            current_e = p.0;
-                        }
-                    }
-                }
+                // transform_hierarchy_system() daha önce tüm hiyerarşiyi t.global_matrix'te çözdüğü için 
+                // doğrudan global_matrix'i kullanmamız yeterlidir. Çift çarpım yapmıyoruz!
+                let global_model = trans.global_matrix;
                 
                 let center_mat = yelbegen::math::mat4::Mat4::translation(mesh.center_offset);
                 let model = global_model * center_mat;

@@ -89,11 +89,13 @@ pub fn gjk_intersect(
     dir = support.v * -1.0;
 
     // Uzayda sonsuz döngüyü önlemek için iterasyon limiti
-    for _ in 0..64 {
+    for iter in 0..64 {
         let a = calculate_support(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b, dir);
+        println!("  [GJK Iter {}] dir: {:?}, a.v: {:?}", iter, dir, a.v);
         
         // Eğer bulduğumuz nokta aradığımız yönde orijini (0,0,0) geçemiyorsa, kesişim imkansızdır.
         if a.v.dot(dir) < 0.0 {
+            println!("  [GJK] DOT NEGATIVE: a.v.dot(dir) = {} < 0.0, EXITING FALSE", a.v.dot(dir));
             return (false, simplex);
         }
 
