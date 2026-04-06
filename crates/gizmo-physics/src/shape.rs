@@ -52,43 +52,43 @@ impl ColliderShape {
             }
             ColliderShape::Aabb(aabb) => {
                 let mut p = pos;
-                let eps = 1e-4;
-                p.x += if dir.x > eps { aabb.half_extents.x } else if dir.x < -eps { -aabb.half_extents.x } else { 0.0 };
-                p.y += if dir.y > eps { aabb.half_extents.y } else if dir.y < -eps { -aabb.half_extents.y } else { 0.0 };
-                p.z += if dir.z > eps { aabb.half_extents.z } else if dir.z < -eps { -aabb.half_extents.z } else { 0.0 };
+                p.x += if dir.x >= 0.0 { aabb.half_extents.x } else { -aabb.half_extents.x };
+                p.y += if dir.y >= 0.0 { aabb.half_extents.y } else { -aabb.half_extents.y };
+                p.z += if dir.z >= 0.0 { aabb.half_extents.z } else { -aabb.half_extents.z };
                 p
             }
             ColliderShape::Capsule(cap) => {
-                // Kapsül = iki yarıküre merkezi arasındaki segment + yarıçap
-                // Lokal koordinatta: üst = (0, half_height, 0), alt = (0, -half_height, 0)
-                // Rotasyonlu dünya koordinatına çevir
+                // Arama vektörünü lokal uzaya çek (Böylece vertexlere döngüde rotasyon uygulamaktan kurtuluyoruz)
+                let local_dir = rot.inverse().mul_vec3(dir);
                 let local_top = Vec3::new(0.0, cap.half_height, 0.0);
                 let local_bot = Vec3::new(0.0, -cap.half_height, 0.0);
-                let world_top = pos + rot.mul_vec3(local_top);
-                let world_bot = pos + rot.mul_vec3(local_bot);
                 
-                // Hangi uç, dir yönünde daha ilerideyse onu seç
-                if dir.dot(world_top) >= dir.dot(world_bot) {
-                    world_top + dir * cap.radius
+                // Lokal yönü baz alıp seçimi yap
+                let best_local = if local_dir.dot(local_top) >= local_dir.dot(local_bot) {
+                    local_top
                 } else {
-                    world_bot + dir * cap.radius
-                }
+                    local_bot
+                };
+                
+                // Sadece seçili (1 adet) noktayı tekrar dünyaya çevirip küre yarıçapını ekle
+                pos + rot.mul_vec3(best_local) + dir * cap.radius
             }
             ColliderShape::ConvexHull(hull) => {
-                // Tüm vertexler üzerinde max dot product — O(n) brute force
-                // Küçük vertex sayıları (<100) için yeterince hızlı
+                // Arama yönünü konveks gövdenin kendi eksenine göre (Lokal uzaya) çeviriyoruz.
+                // Bu optimizasyon sayeseinde döngü içindeki N adet rotasyon işlemi, 1 inverse rotasyon işlemine düşer.
+                let local_dir = rot.inverse().mul_vec3(dir);
                 let mut best_dot = f32::NEG_INFINITY;
-                let mut best_point = pos;
+                let mut best_local = Vec3::ZERO;
                 
                 for v in &hull.vertices {
-                    let world_v = pos + rot.mul_vec3(*v);
-                    let d = dir.dot(world_v);
+                    let d = local_dir.dot(*v);
                     if d > best_dot {
                         best_dot = d;
-                        best_point = world_v;
+                        best_local = *v;
                     }
                 }
-                best_point
+                // Sadece son kazanan vertex noktasına Dünya Uzayı rotasyonunu ve pozisyonunu ver.
+                pos + rot.mul_vec3(best_local)
             }
         }
     }

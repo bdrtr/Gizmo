@@ -1,6 +1,5 @@
 use std::f32;
-use crate::vec3::Vec3;
-use crate::mat4::Mat4;
+use glam::{Vec3, Mat4, Vec4};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Aabb {
@@ -44,7 +43,7 @@ impl Aabb {
 
         let mut transformed_aabb = Self::empty();
         for corner in corners.iter() {
-            let transformed_pt = *mat * crate::vec4::Vec4::new(corner.x, corner.y, corner.z, 1.0);
+            let transformed_pt = *mat * Vec4::new(corner.x, corner.y, corner.z, 1.0);
             transformed_aabb.extend(Vec3::new(
                 transformed_pt.x / transformed_pt.w,
                 transformed_pt.y / transformed_pt.w,

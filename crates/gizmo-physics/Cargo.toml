@@ -8,3 +8,4 @@ rayon = "1.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
 gizmo-core = { path = "../gizmo-core" }
 gizmo-math = { path = "../gizmo-math" }
+wide = "1.2.0"

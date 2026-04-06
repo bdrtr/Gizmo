@@ -40,12 +40,12 @@ impl Transform {
 
     /// Update metodu, sistemden önce başlangıç değerleri için kullanılabilir
     pub fn update_local_matrix(&mut self) {
-        self.global_matrix = Mat4::translation(self.position) * self.rotation.to_mat4() * Mat4::scale(self.scale);
+        self.global_matrix = Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position);
     }
 
     /// Geriye dönük uyumluluk veya anlık model matrisi hesaplaması
     pub fn local_matrix(&self) -> Mat4 {
-        Mat4::translation(self.position) * self.rotation.to_mat4() * Mat4::scale(self.scale)
+        Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position)
     }
 
     pub fn model_matrix(&self) -> Mat4 {

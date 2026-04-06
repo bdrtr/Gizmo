@@ -89,13 +89,12 @@ pub fn gjk_intersect(
     dir = support.v * -1.0;
 
     // Uzayda sonsuz döngüyü önlemek için iterasyon limiti
-    for iter in 0..64 {
+    for _iter in 0..64 {
         let a = calculate_support(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b, dir);
-        println!("  [GJK Iter {}] dir: {:?}, a.v: {:?}", iter, dir, a.v);
         
         // Eğer bulduğumuz nokta aradığımız yönde orijini (0,0,0) geçemiyorsa, kesişim imkansızdır.
-        if a.v.dot(dir) < 0.0 {
-            println!("  [GJK] DOT NEGATIVE: a.v.dot(dir) = {} < 0.0, EXITING FALSE", a.v.dot(dir));
+        // Hassasiyet (epsilon) eklendi, böylece yüzey temaslarında erken pes etmez
+        if a.v.dot(dir) < -0.0001 {
             return (false, simplex);
         }
 
@@ -145,8 +144,8 @@ fn handle_simplex(simplex: &mut Simplex, dir: &mut Vec3) -> bool {
 
             let abc_normal = ab.cross(ac);
             
-            // AB kenarının dışı
-            if abc_normal.cross(ab).dot(ao) > 0.0 {
+            // AB kenarının dışı (Dışa bakan yön: ab x abc_normal)
+            if ab.cross(abc_normal).dot(ao) > 0.0 {
                 if ab.dot(ao) > 0.0 {
                     simplex.points[2] = simplex.points[1];
                     simplex.size = 2;
@@ -156,8 +155,8 @@ fn handle_simplex(simplex: &mut Simplex, dir: &mut Vec3) -> bool {
                     *dir = ao;
                 }
             } 
-            // AC kenarının dışı
-            else if ac.cross(abc_normal).dot(ao) > 0.0 {
+            // AC kenarının dışı (Dışa bakan yön: abc_normal x ac)
+            else if abc_normal.cross(ac).dot(ao) > 0.0 {
                 if ac.dot(ao) > 0.0 {
                     simplex.points[1] = simplex.points[2];
                     simplex.size = 2;
@@ -190,9 +189,7 @@ fn handle_simplex(simplex: &mut Simplex, dir: &mut Vec3) -> bool {
             let adb_normal = ad.cross(ab);
 
             if abc_normal.dot(ao) > 0.0 {
-                // ABC dışındayız, simplex'i 3 yapıp yeniden kontrol (D yi düşürdüm diyemeyiz, handle_simplex kendi 3'lü akışına dönecek)
-                simplex.points[3] = simplex.points[2];
-                simplex.points[2] = simplex.points[1];
+                // ABC dışındayız (A, B, C zaten 0, 1, 2 indekslerinde), sadece boyutu 3'e düşür
                 simplex.size = 3;
                 return handle_simplex(simplex, dir);
             }

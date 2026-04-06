@@ -1,18 +1,17 @@
-pub mod vec2;
-pub mod vec3;
-pub mod vec4;
-pub mod quat;
-pub mod mat4;
 pub mod ray;
-
 pub mod aabb;
 pub mod frustum;
 
-pub use vec2::Vec2;
-pub use vec3::Vec3;
-pub use vec4::Vec4;
-pub use quat::Quat;
-pub use mat4::Mat4;
+// Geriye dönük uyumluluk veya ekstra yardımcı metodlar için pub modüller kalsın
+// ama custom tipleri glam ile değiştiriyoruz.
+pub use glam::{
+    Vec2,
+    Vec3,
+    Vec4,
+    Mat4,
+    Quat
+};
+
 pub use ray::Ray;
 pub use aabb::Aabb;
 pub use frustum::Frustum;

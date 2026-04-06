@@ -6,4 +6,5 @@ authors.workspace = true
 description.workspace = true
 
 [dependencies]
+glam = { version = "0.32.1", features = ["serde", "bytemuck", "rand"] }
 serde = { version = "1.0.228", features = ["derive"] }
