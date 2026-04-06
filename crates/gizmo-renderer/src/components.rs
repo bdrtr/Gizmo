@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use gizmo_math::vec3::Vec3;
+use gizmo_math::Vec3;
 
 #[derive(Clone)]
 pub struct Mesh {
@@ -19,7 +19,7 @@ impl Mesh {
 #[derive(Clone)]
 pub struct Material {
     pub bind_group: Arc<wgpu::BindGroup>,
-    pub albedo: gizmo_math::vec4::Vec4,
+    pub albedo: gizmo_math::Vec4,
     pub roughness: f32,
     pub metallic: f32,
     pub unlit: f32,
@@ -30,7 +30,7 @@ impl Material {
     pub fn new(bind_group: Arc<wgpu::BindGroup>) -> Self {
         Self {
             bind_group,
-            albedo: gizmo_math::vec4::Vec4::new(1.0, 1.0, 1.0, 1.0),
+            albedo: gizmo_math::Vec4::new(1.0, 1.0, 1.0, 1.0),
             roughness: 0.5,
             metallic: 0.0,
             unlit: 0.0,
@@ -38,7 +38,7 @@ impl Material {
         }
     }
 
-    pub fn with_pbr(mut self, albedo: gizmo_math::vec4::Vec4, roughness: f32, metallic: f32) -> Self {
+    pub fn with_pbr(mut self, albedo: gizmo_math::Vec4, roughness: f32, metallic: f32) -> Self {
         self.albedo = albedo;
         self.roughness = roughness;
         self.metallic = metallic;
@@ -46,7 +46,7 @@ impl Material {
         self
     }
 
-    pub fn with_unlit(mut self, albedo: gizmo_math::vec4::Vec4) -> Self {
+    pub fn with_unlit(mut self, albedo: gizmo_math::Vec4) -> Self {
         self.albedo = albedo;
         self.unlit = 1.0;
         self
@@ -70,7 +70,7 @@ pub struct Skeleton {
     pub bind_group: Arc<wgpu::BindGroup>,
     pub buffer: Arc<wgpu::Buffer>,
     pub hierarchy: Arc<crate::animation::SkeletonHierarchy>,
-    pub local_poses: Vec<gizmo_math::mat4::Mat4>,
+    pub local_poses: Vec<gizmo_math::Mat4>,
 }
 
 #[derive(Clone)]
@@ -109,13 +109,13 @@ impl Camera {
         Self { fov, near, far, yaw, pitch, primary }
     }
 
-    pub fn get_projection(&self, aspect: f32) -> gizmo_math::mat4::Mat4 {
-        gizmo_math::mat4::Mat4::perspective(self.fov, aspect, self.near, self.far)
+    pub fn get_projection(&self, aspect: f32) -> gizmo_math::Mat4 {
+        gizmo_math::Mat4::perspective_rh(self.fov, aspect, self.near, self.far)
     }
 
-    pub fn get_view(&self, position: Vec3) -> gizmo_math::mat4::Mat4 {
+    pub fn get_view(&self, position: Vec3) -> gizmo_math::Mat4 {
         let front = self.get_front();
-        gizmo_math::mat4::Mat4::look_at_rh(position, position + front, Vec3::new(0.0, 1.0, 0.0))
+        gizmo_math::Mat4::look_at_rh(position, position + front, Vec3::new(0.0, 1.0, 0.0))
     }
     
     pub fn get_front(&self) -> Vec3 {
@@ -179,10 +179,10 @@ impl Camera2D {
     }
 
     /// Ortografik projeksiyon matrisini döndürür (piksel birimi)
-    pub fn get_projection(&self, width: f32, height: f32) -> gizmo_math::mat4::Mat4 {
+    pub fn get_projection(&self, width: f32, height: f32) -> gizmo_math::Mat4 {
         let hw = (width / 2.0) / self.zoom;
         let hh = (height / 2.0) / self.zoom;
-        gizmo_math::mat4::Mat4::orthographic(-hw, hw, -hh, hh, -1000.0, 1000.0)
+        gizmo_math::Mat4::orthographic_rh(-hw, hw, -hh, hh, -1000.0, 1000.0)
     }
 }
 

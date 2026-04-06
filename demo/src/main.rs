@@ -90,6 +90,7 @@ struct GameState {
     new_selection_request: std::cell::Cell<Option<u32>>,
     spawn_monkey_requests: std::cell::Cell<u32>,
     spawn_light_requests: std::cell::Cell<u32>,
+    spawn_asteroid_requests: std::cell::Cell<u32>,
     texture_load_requests: std::cell::RefCell<Vec<(u32, String)>>,
     asset_manager: std::cell::RefCell<gizmo::renderer::asset::AssetManager>,
     gizmo_mode: GizmoMode,
@@ -98,6 +99,10 @@ struct GameState {
     script_engine: std::cell::RefCell<Option<gizmo::scripting::ScriptEngine>>,
     physics_accumulator: f32,
     target_physics_fps: f32,
+    pub car_id: u32,
+    pub visual_wheels: [u32; 4],
+    #[allow(dead_code)]
+    pub sphere_prefab_id: u32,
 }
 
 // ======================== ARABA SİMÜLASYONU ========================
@@ -137,12 +142,13 @@ pub fn car_update_system(world: &mut World, input: &Input) {
                 v.steering_angle += (target_steer - v.steering_angle) * 0.15; // Yumuşak geçiş
                 
                 // Fren
+                v.brake_force = brake * 20000.0;
             }
         }
     }
 }
 
-pub fn character_update_system(world: &World, input: &Input, dt: f32) {
+pub fn character_update_system(world: &World, input: &Input, _dt: f32) {
     let mut move_dir = Vec3::ZERO;
     // Arrow keys for character motion
     if input.is_key_pressed(KeyCode::ArrowUp as u32) { move_dir.z -= 1.0; }
@@ -194,7 +200,7 @@ pub fn spawn_gltf_hierarchy(
 
         // Transform hesapla
         let t = Transform::new(Vec3::new(node.translation[0], node.translation[1], node.translation[2]))
-            .with_rotation(Quat::new(node.rotation[0], node.rotation[1], node.rotation[2], node.rotation[3]))
+            .with_rotation(Quat::from_xyzw(node.rotation[0], node.rotation[1], node.rotation[2], node.rotation[3]))
             .with_scale(Vec3::new(node.scale[0], node.scale[1], node.scale[2]));
         world.add_component(entity, t);
 
@@ -277,9 +283,9 @@ fn main() {
             &mut bouncing_box_id,
         );
 
-        let (player_id, skybox_id, g_x, g_y, g_z) = if !loaded {
+        let (player_id, skybox_id, g_x, g_y, g_z, mut car_id, mut visual_wheels) = if !loaded {
             // Sphere Mesh'ini bir kez oluşturup paylaşalım (Instancing için şart!)
-            let sphere_mesh = AssetManager::create_sphere(&renderer.device, 1.0, 16, 16);
+            let _sphere_mesh = AssetManager::create_sphere(&renderer.device, 1.0, 16, 16);
 
             // --- FİZİKLİ ZEMİN OLUŞTURMA ---
             let ground_mesh = AssetManager::create_plane(&renderer.device, 50.0);
@@ -307,45 +313,83 @@ fn main() {
 
             // Karakter (mavi top) kaldırıldı!
 
-            // === ASTEROİD STRES TESTİ (Broad-Phase) ===
-            let mut joint_world = gizmo::physics::JointWorld::new(); // Asteroitlerde joint yok, boş dünya
+            let joint_world = gizmo::physics::JointWorld::new(); // Bağlantı yok ama ECS'ye verilecek
             
-            // Düşük poligonlu küreler kullanıyoruz ki VRAM değil, CPU (Broad-phase) limitlerini ölçelim
-            let ast_mesh = AssetManager::create_sphere(&renderer.device, 1.0, 8, 8); 
+            // --- TEST ARACI OLUŞTUR (RAYCAST VEHICLE) ---
+            let car_chassis = world.spawn();
+            let mut car_trans = Transform::new(Vec3::new(0.0, 5.0, 0.0));
+            car_trans.scale = Vec3::new(2.0, 0.5, 4.0); // Şasi büyüklüğü
+            world.add_component(car_chassis, car_trans);
+            world.add_component(car_chassis, EntityName("Test Aracı Şasisi".into()));
             
-            let mut seed: u32 = 123456789;
-            let mut rand = || -> f32 {
-                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                (seed as f32) / (std::u32::MAX as f32)
-            };
+            // Görseli bir GLTF modelinden çek:
+            if let Ok(car_scene) = asset_manager.load_gltf_scene(
+                &renderer.device, 
+                &renderer.queue, 
+                &renderer.texture_bind_group_layout, 
+                tbind.clone(), 
+                "demo/assets/truck.glb"
+            ) {
+                // Şasinin direkt child'ı olarak görsel modelin açısını düzeltebileceğimiz bir "Çapa (Anchor)" oluşturuyoruz
+                let visual_anchor = world.spawn();
+                
+                let mut anchor_trans = Transform::new(Vec3::new(0.0, -0.5, 0.0)); // Yarıçapı kadar aşağı taşı (Zemine otursun)
+                // GLTF genelde Z-Up gelir veya farklı yönlerde döner. 90 derece X veya Z ekseninde düzelterek 'Yan Yatmasını' engelleriz!
+                anchor_trans.rotation = Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), -std::f32::consts::FRAC_PI_2); // -90 derece X
+                
+                // Eğer hala sağa sola yatıksa, Z ekseninde de döndürebilmek için:
+                let additional_rot = Quat::from_axis_angle(Vec3::new(0.0, 0.0, 1.0), -std::f32::consts::FRAC_PI_2);
+                anchor_trans.rotation = anchor_trans.rotation * additional_rot;
+                
+                world.add_component(visual_anchor, anchor_trans);
+                world.add_component(visual_anchor, gizmo::core::component::Parent(car_chassis.id()));
+                world.add_component(visual_anchor, EntityName("Car Visual Anchor".into()));
 
-            for _ in 0..10_000 {
-                let entity = world.spawn();
-                
-                // Uzay boşluğunda -200 ile 200 birimlik devasa bir küp içine yay (O(n^2) engelleme testi)
-                let px = (rand() * 400.0) - 200.0;
-                let py = (rand() * 400.0) - 200.0;
-                let pz = (rand() * 400.0) - 200.0;
-                
-                // Her objeye süzülmesi için hafif rastgele bir vektör veriyoruz (-2 ile +2 arası)
-                let vx = (rand() * 4.0) - 2.0;
-                let vy = (rand() * 4.0) - 2.0;
-                let vz = (rand() * 4.0) - 2.0;
-
-                world.add_component(entity, Transform::new(Vec3::new(px, py, pz)));
-                world.add_component(entity, ast_mesh.clone());
-                world.add_component(entity, Material::new(tbind.clone()).with_pbr(Vec4::new(0.7, 0.7, 0.7, 1.0), 0.9, 0.0));
-                world.add_component(entity, gizmo::renderer::components::MeshRenderer::new());
-                world.add_component(entity, gizmo::physics::shape::Collider::new_sphere(1.0));
-                
-                // Kütle = 1.0, sekme(restitution) = 0.8, hava sürtünmesi = 0.0, yerçekimi = YOK (Uzay ortamı)
-                world.add_component(entity, gizmo::physics::components::RigidBody::new(1.0, 0.8, 0.0, false));
-                world.add_component(entity, gizmo::physics::components::Velocity::new(Vec3::new(vx, vy, vz)));
+                // Şasinin çocukları olarak GLTF nodelarını ekle
+                spawn_gltf_hierarchy(world, &car_scene.roots, Some(visual_anchor.id()), Material::new(tbind.clone()));
+            } else {
+                world.add_component(car_chassis, AssetManager::create_cube(&renderer.device));
+                world.add_component(car_chassis, Material::new(tbind.clone()).with_pbr(Vec4::new(0.9, 0.1, 0.1, 1.0), 0.3, 0.0));
+                world.add_component(car_chassis, gizmo::renderer::components::MeshRenderer::new());
             }
-            
-            // Kısıtlayıcıların çalışması için ECS kaynağı (Resource) olarak motora iletiyoruz
-            world.insert_resource(joint_world);
 
+            let mut car_rb = gizmo::physics::components::RigidBody::new(1500.0, 0.0, 0.8, true);
+            car_rb.calculate_box_inertia(4.0, 1.0, 8.0); // Scale is half-extents typically? 2,0.5,4 means 4x1x8 box
+            world.add_component(car_chassis, car_rb);
+            world.add_component(car_chassis, gizmo::physics::components::Velocity::new(Vec3::ZERO));
+            world.add_component(car_chassis, gizmo::physics::shape::Collider::new_aabb(2.0, 0.5, 4.0)); // AABB eklendi ki zemine takılmasın (Raycast için şart değil ama havada kalsın)
+            
+            let mut vehicle = gizmo::physics::vehicle::VehicleController::new();
+            let rest_len = 1.0;
+            let stiffness = 55000.0;
+            let damping = 4500.0;
+            let radius = 0.4;
+            
+            // Lokal bağlantı noktaları (Şasinin alt corners)
+            vehicle.add_wheel(gizmo::physics::vehicle::Wheel::new(Vec3::new(-1.8, -0.5, 3.5), rest_len, stiffness, damping, radius)); // Ön-Sol
+            vehicle.add_wheel(gizmo::physics::vehicle::Wheel::new(Vec3::new(1.8, -0.5, 3.5), rest_len, stiffness, damping, radius));  // Ön-Sağ
+            vehicle.add_wheel(gizmo::physics::vehicle::Wheel::new(Vec3::new(-1.8, -0.5, -3.5), rest_len, stiffness, damping, radius)); // Arka-Sol
+            vehicle.add_wheel(gizmo::physics::vehicle::Wheel::new(Vec3::new(1.8, -0.5, -3.5), rest_len, stiffness, damping, radius));  // Arka-Sağ
+            
+            world.add_component(car_chassis, vehicle);
+            
+            // TEKERLEK GÖRSELLERİNİ OLUŞTUR (DEBUG)
+            let mut wheel_ids = [0; 4];
+            let cylinder_mesh = AssetManager::create_cube(&renderer.device); // Silindir olmadığı için şimdilik ufak küpler
+            for i in 0..4 {
+                let w = world.spawn();
+                world.add_component(w, Transform::new(Vec3::ZERO).with_scale(Vec3::new(0.4, 0.4, 0.4)));
+                world.add_component(w, cylinder_mesh.clone());
+                world.add_component(w, Material::new(tbind.clone()).with_pbr(Vec4::new(0.1, 0.1, 0.1, 1.0), 0.8, 0.0));
+                world.add_component(w, gizmo::renderer::components::MeshRenderer::new());
+                world.add_component(w, EntityName(format!("Tekerlek {}", i)));
+                wheel_ids[i] = w.id();
+            }
+
+            
+            // Kısıtlayıcıların çalışması için ECS kaynağı
+            world.insert_resource(joint_world);
+            world.insert_resource(gizmo::physics::system::PhysicsSolverState::new());
 
             // --- Player (Kamera) ---
             let player = world.spawn();
@@ -393,7 +437,7 @@ fn main() {
             world.add_component(z_gizmo, gizmo::renderer::components::MeshRenderer::new());
             world.add_component(z_gizmo, EntityName("Gizmo_Z".into()));
 
-            (player.id(), skybox.id(), x_gizmo.id(), y_gizmo.id(), z_gizmo.id())
+            (player.id(), skybox.id(), x_gizmo.id(), y_gizmo.id(), z_gizmo.id(), car_chassis.id(), wheel_ids)
         } else {
             // ECS'den Player ve Skybox ID'sini çek (Kameralara bakarak vb)
             let mut p_id = 0;
@@ -401,6 +445,8 @@ fn main() {
             let mut g_x = 0;
             let mut g_y = 0;
             let mut g_z = 0;
+            let mut c_id = 0;
+            let mut w_ids = [0; 4];
             
             if let Some(names) = world.borrow::<EntityName>() {
                 for entity in world.iter_alive_entities() {
@@ -410,11 +456,20 @@ fn main() {
                         if n.0 == "Gizmo_X" { g_x = entity.id(); }
                         if n.0 == "Gizmo_Y" { g_y = entity.id(); }
                         if n.0 == "Gizmo_Z" { g_z = entity.id(); }
+                        if n.0 == "Test Aracı Şasisi" { c_id = entity.id(); }
+                        if n.0 == "Tekerlek 0" { w_ids[0] = entity.id(); }
+                        if n.0 == "Tekerlek 1" { w_ids[1] = entity.id(); }
+                        if n.0 == "Tekerlek 2" { w_ids[2] = entity.id(); }
+                        if n.0 == "Tekerlek 3" { w_ids[3] = entity.id(); }
                     }
                 }
             }
-            (p_id, s_id, g_x, g_y, g_z)
+            (p_id, s_id, g_x, g_y, g_z, c_id, w_ids)
         };
+
+        // Yüksek kaliteli top (Sphere) Mesh'i yarat ve sakla
+        let sphere_prefab = world.spawn();
+        world.add_component(sphere_prefab, AssetManager::create_sphere(&renderer.device, 1.0, 8, 8)); // 8x8 yüksek çözünürlüklü
 
         GameState {
             bouncing_box_id,
@@ -435,6 +490,7 @@ fn main() {
             new_selection_request: std::cell::Cell::new(None),
             spawn_monkey_requests: std::cell::Cell::new(0),
             spawn_light_requests: std::cell::Cell::new(0),
+            spawn_asteroid_requests: std::cell::Cell::new(0),
             texture_load_requests: std::cell::RefCell::new(Vec::new()),
             asset_manager: std::cell::RefCell::new(asset_manager),
             gizmo_mode: GizmoMode::Translate,
@@ -443,6 +499,9 @@ fn main() {
             script_engine: std::cell::RefCell::new(gizmo::scripting::ScriptEngine::new().ok()),
             physics_accumulator: 0.0,
             target_physics_fps: 240.0, // Sub-stepping: saniyede 240 simülasyon adımı (60 FPS'te kare başı 4 adım)
+            sphere_prefab_id: sphere_prefab.id(),
+            car_id,
+            visual_wheels,
         }
     });
 
@@ -522,11 +581,12 @@ fn main() {
 
         if let (Some(cameras), Some(transforms)) = (world.borrow::<Camera>(), world.borrow::<Transform>()) {
             if let (Some(cam), Some(cam_t)) = (cameras.get(state.player_id), transforms.get(state.player_id)) {
-                let proj = Mat4::perspective(cam.fov, ww / wh, cam.near, cam.far);
+                let proj = Mat4::perspective_rh(cam.fov, ww / wh, cam.near, cam.far);
                 let view = cam.get_view(cam_t.position);
                 let view_proj = proj * view;
 
-                if let Some(inv_vp) = view_proj.inverse() {
+                let inv_vp = view_proj.inverse();
+                if true {
                     // wgpu NDC: z aralığı [0, 1] (near=0, far=1)
                     let far_pt = inv_vp * Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
                     let near_pt = inv_vp * Vec4::new(ndc_x, ndc_y, 0.0, 1.0);
@@ -820,26 +880,88 @@ fn main() {
                 }
             }
 
-            // 3.4. Kamera Hareketi Güncellemesi (WASD)
-            let mut move_dir = Vec3::ZERO;
-            
-            if input.is_key_pressed(KeyCode::KeyW as u32) { move_dir.z += 1.0; }
-            if input.is_key_pressed(KeyCode::KeyS as u32) { move_dir.z -= 1.0; }
-            if input.is_key_pressed(KeyCode::KeyA as u32) { move_dir.x -= 1.0; }
-            if input.is_key_pressed(KeyCode::KeyD as u32) { move_dir.x += 1.0; }
-            if input.is_key_pressed(KeyCode::Space as u32) { move_dir.y += 1.0; }
-            if input.is_key_pressed(KeyCode::ShiftLeft as u32) { move_dir.y -= 1.0; }
-            
-            if let Some(t) = trans.get_mut(state.player_id) {
-                t.position += (f * move_dir.z + r * move_dir.x + Vec3::new(0.0, move_dir.y, 0.0)) * speed * 2.0;
+            // 3.4. THIRD-PERSON CHASE CAMERA
+            // Arabanın arkasından takip et (Y eksenini kopyala, X/Z eksenini ihmal et)
+            if state.car_id != 0 {
+                let mut target_pos = Vec3::ZERO;
+                let mut target_yaw = 0.0;
+                
+                if let Some(car_t) = trans.get(state.car_id) {
+                    target_pos = car_t.position;
+                    // Euler açılarından Y ekseni dönüşünü al (Yaw)
+                    let q = car_t.rotation;
+                    let siny_cosp = 2.0 * (q.w * q.y + q.z * q.x);
+                    let cosy_cosp = 1.0 - 2.0 * (q.x * q.x + q.y * q.y);
+                    target_yaw = siny_cosp.atan2(cosy_cosp);
+                }
+                
+                if let Some(cam_t) = trans.get_mut(state.player_id) {
+                    // Kamerayı 10 metre geri, 4 metre yukarı yerleştir (YAW açısına göre)
+                    let offset_x = target_yaw.sin() * -12.0;
+                    let offset_z = target_yaw.cos() * -12.0;
+
+                    let desired_pos = target_pos + Vec3::new(offset_x, 4.0, offset_z);
+                    // Kamerayı arabaya yumuşak geçiş ile (Lerp) kopyala
+                    cam_t.position += (desired_pos - cam_t.position) * 0.1;
+                }
+                
+                // Kamerayı direkt arabaya baktır (Pitch/Yaw güncelle)
+                if let Some(mut cameras) = world.borrow_mut::<Camera>() {
+                    if let Some(cam) = cameras.get_mut(state.player_id) {
+                        let cam_pos = trans.get(state.player_id).unwrap().position;
+                        let direction = (target_pos - cam_pos).normalize();
+                        
+                        let pitch = direction.y.asin();
+                        let yaw = direction.x.atan2(direction.z);
+                        
+                        // mouse ile look özelliği iptal edilmedi ama üstüne yazılıyor
+                        cam.pitch += (pitch - cam.pitch) * 0.2;
+                        cam.yaw += (yaw - cam.yaw) * 0.2;
+                    }
+                }
+                
+                // === TEKERLEKLERI UPDATE ET (Visual Synchronizer) ===
+                if let Some(vehicles) = world.borrow::<gizmo::physics::vehicle::VehicleController>() {
+                    let mut cached_configs = [Vec3::ZERO; 4];
+                    let mut cached_rots = [Quat::IDENTITY; 4];
+                    let mut valid = false;
+                    
+                    if let Some(car_t) = trans.get(state.car_id) {
+                        let car_rot = car_t.rotation.clone();
+                        let car_pos = car_t.position.clone();
+                        
+                        if let Some(vrc) = vehicles.get(state.car_id) {
+                            valid = true;
+                            for (i, wheel) in vrc.wheels.iter().enumerate() {
+                                let local_down = car_rot.mul_vec3(wheel.direction); 
+                                let local_origin = car_pos + car_rot.mul_vec3(wheel.connection_point);
+                                
+                                let wheel_dist = wheel.suspension_rest_length - wheel.compression;
+                                let wheel_global_pos = local_origin + local_down * wheel_dist;
+                                
+                                let rot = if i < 2 {
+                                    car_rot * Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), vrc.steering_angle)
+                                } else {
+                                    car_rot
+                                };
+                                
+                                cached_configs[i] = wheel_global_pos;
+                                cached_rots[i] = rot;
+                            }
+                        }
+                    }
+                    
+                    if valid {
+                        for i in 0..4 {
+                            if let Some(tw) = trans.get_mut(state.visual_wheels[i]) {
+                                tw.position = cached_configs[i];
+                                tw.rotation = cached_rots[i];
+                            }
+                        }
+                    }
+                }
             }
 
-            // Suzanne / Car_Root'ı Y ekseni etrafında YALNIZCA input ile döndürmek lazım.
-            // Sürekli dönmesini engellemek için bu satırı kapattık.
-            /*if let Some(t) = trans.get_mut(state.bouncing_box_id) {
-                let rot_delta = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), dt * 2.0); 
-                t.rotation = (t.rotation * rot_delta).normalize();
-            }*/
         }
 
         // Işıkları gökyüzünde gezdir
@@ -976,6 +1098,9 @@ fn main() {
                         }
                         if ui.button("💡 Yeni Işık Ekle").clicked() {
                             state.spawn_light_requests.set(state.spawn_light_requests.get() + 1);
+                        }
+                        if ui.button("🔴 10.000 Küçük Zıplayan Top Testi").clicked() {
+                            state.spawn_asteroid_requests.set(10000); // 10K istek yolla
                         }
                         ui.separator();
                         
@@ -1168,8 +1293,8 @@ fn main() {
             1.0
         };
 
-        let mut proj = Mat4::perspective(std::f32::consts::FRAC_PI_4, aspect, 0.1, 2000.0);
-        let mut view_mat = Mat4::translation(Vec3::ZERO);
+        let mut proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 2000.0);
+        let mut view_mat = Mat4::from_translation(Vec3::ZERO);
         let mut cam_pos = Vec3::ZERO;
 
         if let (Some(cameras), Some(mut transforms)) = (world.borrow::<Camera>(), world.borrow_mut::<Transform>()) {
@@ -1199,7 +1324,8 @@ fn main() {
 
             world.add_component(entity, Transform::new(spawn_pos));
             world.add_component(entity, Velocity::new(Vec3::ZERO)); 
-            world.add_component(entity, Collider::new_aabb(1.0, 1.0, 1.0));
+            // "Küre" görselinin fiziği de PÜRÜZSÜZ BİR KÜRE olsun!
+            world.add_component(entity, gizmo::physics::shape::Collider::new_sphere(1.0));
             world.add_component(entity, RigidBody::new(1.0, 0.5, 0.2, true));
             world.add_component(entity, EntityName("Yeni Küre".into()));
             
@@ -1288,6 +1414,7 @@ fn main() {
             state.spawn_light_requests.set(state.spawn_light_requests.get() - 1);
         }
 
+
         // --- EVENT: DOKU (TEXTURE) YÜKLEME ---
         while let Some((e_id, path)) = state.texture_load_requests.borrow_mut().pop() {
             let mut am = state.asset_manager.borrow_mut();
@@ -1333,45 +1460,32 @@ fn main() {
                 
                 // 1) Local Poses hesapla (Sadece animasyondan gelenleri ez, geri kalanı orijinal local_bind kalsın)
                 let hierarchy = &skeleton.hierarchy;
-                let mut local_poses = vec![gizmo::math::mat4::Mat4::IDENTITY; hierarchy.joints.len()];
+                let mut local_poses = vec![Mat4::IDENTITY; hierarchy.joints.len()];
                 
-                for (i, joint) in hierarchy.joints.iter().enumerate() {
-                    local_poses[i] = joint.local_bind_transform; // Varsayılan olarak T-Pose bekleme pozu
-                }
-                
-                for track in &anim.translations {
-                    if let Some(val) = track.get_interpolated(time, |a, b, t| a.lerp(b, t)) {
-                        if let Some(b_idx) = hierarchy.joints.iter().position(|j| j.node_index == track.target_node) {
-                            // translation'i degistir
-                            // Aslında matrisi TRS şeklinde sıfırdan oluşturmamız daha doğru olur.
-                            // Çok kaba bir simülasyon: mevcut local_bind_transform'un translation kısmını ezelim:
-                            local_poses[b_idx].cols[3].x = val.x;
-                            local_poses[b_idx].cols[3].y = val.y;
-                            local_poses[b_idx].cols[3].z = val.z;
+                for (b_idx, joint) in hierarchy.joints.iter().enumerate() {
+                    let (mut s, mut r, mut t) = joint.local_bind_transform.to_scale_rotation_translation();
+                    
+                    if let Some(track) = anim.translations.iter().find(|tr| tr.target_node == joint.node_index) {
+                        if let Some(val) = track.get_interpolated(time, |a, b, lerp_t| a.lerp(b, lerp_t)) {
+                            t = val;
                         }
                     }
-                }
-                
-                for track in &anim.rotations {
-                    if let Some(val) = track.get_interpolated(time, |a, b, t| a.slerp(b, t)) {
-                        if let Some(b_idx) = hierarchy.joints.iter().position(|j| j.node_index == track.target_node) {
-                            // Rotation ezmek için mevcut translation ve scale'i koruyup yeniden çarpabiliriz:
-                            let tr = gizmo::math::vec3::Vec3::new(local_poses[b_idx].cols[3].x, local_poses[b_idx].cols[3].y, local_poses[b_idx].cols[3].z);
-                            // Scale'i local_bind_transform'dan cikarmak zor, simdilik (1,1,1) varsayip sade donduruyoruz (cok basit yaklasim)
-                            // Ileride Mat4::decomposed() metodunu math modulumuze ekleyerek daha iyi cekeriz.
-                            local_poses[b_idx] = gizmo::math::mat4::Mat4::translation(tr) * val.to_mat4();
+                    
+                    if let Some(track) = anim.rotations.iter().find(|tr| tr.target_node == joint.node_index) {
+                        if let Some(val) = track.get_interpolated(time, |a, b, lerp_t| a.slerp(b, lerp_t)) {
+                            r = Quat::from_xyzw(val.x, val.y, val.z, val.w);
                         }
                     }
-                }
-                
-                for track in &anim.scales {
-                    if let Some(val) = track.get_interpolated(time, |a, b, t| a.lerp(b, t)) {
-                        if let Some(b_idx) = hierarchy.joints.iter().position(|j| j.node_index == track.target_node) {
-                            local_poses[b_idx] = local_poses[b_idx] * gizmo::math::mat4::Mat4::scale(val);
+                    
+                    if let Some(track) = anim.scales.iter().find(|tr| tr.target_node == joint.node_index) {
+                        if let Some(val) = track.get_interpolated(time, |a, b, lerp_t| a.lerp(b, lerp_t)) {
+                            s = val;
                         }
                     }
+                    
+                    local_poses[b_idx] = Mat4::from_scale_rotation_translation(s, r, t);
                 }
-                
+
                 // 2) Global matrisleri hesapla (Hierarchy)
                 let globals = hierarchy.calculate_global_matrices(&local_poses);
                 
@@ -1433,13 +1547,13 @@ fn main() {
             
             let light_view = Mat4::look_at_rh(light_pos, cam_pos, Vec3::new(0.0, 1.0, 0.0));
             // 40 metre genişliğinde dik açılı yüksek kaliteli gölge kutusu (Orthographic)
-            let light_proj = Mat4::orthographic(-40.0, 40.0, -40.0, 40.0, 0.1, 100.0);
+            let light_proj = Mat4::orthographic_rh(-40.0, 40.0, -40.0, 40.0, 0.1, 100.0);
             light_view_proj = light_proj * light_view;
         } else if num_lights > 0 {
             // Fallback: PointLight taklidi
             let l_pos = Vec3::new(lights_data[0].position[0], lights_data[0].position[1], lights_data[0].position[2]);
             let light_view = Mat4::look_at_rh(l_pos, Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0));
-            let light_proj = Mat4::orthographic(-10.0, 10.0, -10.0, 10.0, 0.1, 100.0);
+            let light_proj = Mat4::orthographic_rh(-10.0, 10.0, -10.0, 10.0, 0.1, 100.0);
             light_view_proj = light_proj * light_view;
         }
 
@@ -1486,7 +1600,7 @@ fn main() {
                 // doğrudan global_matrix'i kullanmamız yeterlidir. Çift çarpım yapmıyoruz!
                 let global_model = trans.global_matrix;
                 
-                let center_mat = gizmo::math::mat4::Mat4::translation(mesh.center_offset);
+                let center_mat = Mat4::from_translation(mesh.center_offset);
                 let model = global_model * center_mat;
 
                 // Frustum Culling (Görüş açısı dışındakileri atla)
@@ -1501,7 +1615,7 @@ fn main() {
                 // Eğer entity'de LodGroup varsa, kameraya mesafeye göre düşük/yüksek detay mesh seç
                 let active_mesh = if let Some(lods) = &lod_groups {
                     if let Some(lod) = lods.get(e) {
-                        let world_pos = Vec3::new(model.cols[3].x, model.cols[3].y, model.cols[3].z);
+                        let world_pos = Vec3::new(model.w_axis.x, model.w_axis.y, model.w_axis.z);
                         let dist = cam_pos.distance(world_pos);
                         lod.select_mesh(dist).unwrap_or(mesh)
                     } else {

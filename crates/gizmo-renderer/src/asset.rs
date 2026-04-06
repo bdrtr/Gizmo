@@ -1,11 +1,11 @@
 use wgpu::util::DeviceExt;
 use std::sync::Arc;
 use tobj;
-use gizmo_math::vec3::Vec3;
+use gizmo_math::Vec3;
 use crate::renderer::Vertex;
 use crate::components::{Mesh, Material};
 use crate::animation::{AnimationClip, Track, Keyframe, SkeletonHierarchy, SkeletonJoint};
-use gizmo_math::quat::Quat;
+use gizmo_math::Quat;
 
 pub struct AssetManager {
     mesh_cache: std::collections::HashMap<String, Mesh>,
@@ -471,7 +471,7 @@ impl AssetManager {
         let mut gltf_materials = Vec::new();
         for material in document.materials() {
             let pbr = material.pbr_metallic_roughness();
-            let base_color = pbr.base_color_factor();
+            let _base_color = pbr.base_color_factor();
             
             let mut mat = if let Some(tex_info) = pbr.base_color_texture() {
                 let tex_idx = tex_info.texture().source().index();
@@ -483,7 +483,7 @@ impl AssetManager {
             } else {
                 Material::new(default_tbind.clone())
             };
-            mat.albedo = gizmo_math::vec4::Vec4::new(1.0, 1.0, 1.0, 1.0);
+            mat.albedo = gizmo_math::Vec4::new(1.0, 1.0, 1.0, 1.0);
             mat.metallic = pbr.metallic_factor();
             mat.roughness = pbr.roughness_factor();
             mat.unlit = 1.0; // PBR'ı kapatıp Texture'u çıplak olarak (ambient shadowsuz) çiz!
@@ -523,7 +523,7 @@ impl AssetManager {
                             gltf::animation::util::ReadOutputs::Rotations(rt) => {
                                 let mut kfs = Vec::new();
                                 for (time, val) in times.iter().zip(rt.into_f32()) {
-                                    kfs.push(Keyframe { time: *time, value: Quat::new(val[0], val[1], val[2], val[3]) });
+                                    kfs.push(Keyframe { time: *time, value: Quat::from_xyzw(val[0], val[1], val[2], val[3]) });
                                 }
                                 rot.push(Track { target_node, keyframes: kfs });
                             },
@@ -581,14 +581,14 @@ impl AssetManager {
 
             let mut joints = Vec::new();
             for (bone_idx, joint_node) in skin.joints().enumerate() {
-                let inverse_bind_matrix = gizmo_math::mat4::Mat4::from_cols_array_2d(&ibm[bone_idx]);
+                let inverse_bind_matrix = gizmo_math::Mat4::from_cols_array_2d(&ibm[bone_idx]);
                 
                 let parent_index = node_parents.get(&joint_node.index()).and_then(|p| node_to_bone.get(p).copied());
 
                 let (t, r, s) = joint_node.transform().decomposed();
-                let loc_t = gizmo_math::mat4::Mat4::translation(Vec3::new(t[0], t[1], t[2]));
-                let loc_r = gizmo_math::mat4::Mat4::from_quat(Quat::new(r[0], r[1], r[2], r[3]));
-                let loc_s = gizmo_math::mat4::Mat4::scale(Vec3::new(s[0], s[1], s[2]));
+                let loc_t = gizmo_math::Mat4::from_translation(Vec3::new(t[0], t[1], t[2]));
+                let loc_r = gizmo_math::Mat4::from_quat(Quat::from_array(r));
+                let loc_s = gizmo_math::Mat4::from_scale(Vec3::new(s[0], s[1], s[2]));
                 let local_bind_transform = loc_t * loc_r * loc_s;
 
                 joints.push(SkeletonJoint {

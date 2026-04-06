@@ -1,4 +1,4 @@
-use gizmo_math::{vec3::Vec3, quat::Quat, mat4::Mat4};
+use gizmo_math::{Vec3, Quat, Mat4};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Keyframe<T> {
