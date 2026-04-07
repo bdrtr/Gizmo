@@ -220,31 +220,36 @@ pub fn check_capsule_aabb_manifold(
     let cap_top = pos_cap + rot_cap.mul_vec3(Vec3::new(0.0, cap.half_height, 0.0));
     let cap_bot = pos_cap + rot_cap.mul_vec3(Vec3::new(0.0, -cap.half_height, 0.0));
     
-    // AABB'ye en yakın kapsül segmenti noktasını bul
-    // Basit yaklaşım: segmentteki birkaç noktayı test et, en yakın olanı seç
+    // Analitik segment-AABB en yakın nokta hesabı:
+    // 1. Segment üzerindeki her noktanın AABB'ye yakınlığını parametrik t ile bul
+    // 2. En yakın (t, clamped_point) çiftini seç
     let min_b = pos_aabb - aabb.half_extents;
     let max_b = pos_aabb + aabb.half_extents;
+    let seg_dir = cap_top - cap_bot;
+    let seg_len_sq = seg_dir.length_squared();
     
-    let mut best_dist_sq = f32::MAX;
-    let mut best_cap_point = pos_cap;
-    
-    // Segmentten 5 nokta sample'la
-    for i in 0..=4 {
-        let t = i as f32 / 4.0;
-        let p = cap_bot + (cap_top - cap_bot) * t;
+    let best_cap_point = if seg_len_sq < 0.0001 {
+        // Degenerate kapsül (nokta) — merkez kullan
+        pos_cap
+    } else {
+        // AABB merkezine en yakın segment noktasını başlangıç tahmini olarak kullan
+        // sonra iteratif olarak iyileştir (2 adım yeterli — Voronoi bölge yakınsaması)
+        let mut best_t = ((pos_aabb - cap_bot).dot(seg_dir) / seg_len_sq).clamp(0.0, 1.0);
         
-        // Bu noktanın AABB'ye en yakın noktası
-        let clamped = Vec3::new(
-            p.x.max(min_b.x).min(max_b.x),
-            p.y.max(min_b.y).min(max_b.y),
-            p.z.max(min_b.z).min(max_b.z),
-        );
-        let dist_sq = (clamped - p).length_squared();
-        if dist_sq < best_dist_sq {
-            best_dist_sq = dist_sq;
-            best_cap_point = p;
+        for _ in 0..3 {
+            let seg_pt = cap_bot + seg_dir * best_t;
+            // Bu segment noktasının AABB'ye en yakın noktası
+            let clamped = Vec3::new(
+                seg_pt.x.max(min_b.x).min(max_b.x),
+                seg_pt.y.max(min_b.y).min(max_b.y),
+                seg_pt.z.max(min_b.z).min(max_b.z),
+            );
+            // Bu AABB noktasına en yakın segment noktasını bul (ters yönlü projeksiyon)
+            best_t = ((clamped - cap_bot).dot(seg_dir) / seg_len_sq).clamp(0.0, 1.0);
         }
-    }
+        
+        cap_bot + seg_dir * best_t
+    };
 
     // En yakın noktadan Sphere-AABB çarpışmasına indirge
     check_sphere_aabb_manifold(best_cap_point, &Sphere { radius: cap.radius }, pos_aabb, aabb)

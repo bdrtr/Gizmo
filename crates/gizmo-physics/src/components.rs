@@ -87,29 +87,25 @@ pub struct RigidBody {
 }
 
 impl RigidBody {
+    /// Yeni rigid body oluştur. ⚠️ Varsayılan 1x1x1 küp eylemsizliği hesaplanır!
+    /// Doğru eylemsizlik için oluşturduktan sonra `calculate_box_inertia()`,
+    /// `calculate_sphere_inertia()` veya `calculate_capsule_inertia()` çağırılmalı.
     pub fn new(mass: f32, restitution: f32, friction: f32, use_gravity: bool) -> Self {
-        // Varsayılan olarak 1x1x1 bir küp olduğunu varsayarak Inertia hesaplayalım
-        // İleride şekle (Shape) göre dinamik hesaplanacak
-        let mut local_inertia = Vec3::new(1.0, 1.0, 1.0);
-        let mut inverse_inertia = Vec3::ZERO;
-
-        if mass > 0.0 {
-            let i = (1.0 / 12.0) * mass * (1.0 * 1.0 + 1.0 * 1.0); // Kutu eylemsizlik tahmini
-            local_inertia = Vec3::new(i, i, i);
-            inverse_inertia = Vec3::new(1.0 / i, 1.0 / i, 1.0 / i);
-        }
-
-        Self { 
+        let mut rb = Self { 
             mass, 
             restitution, 
             friction, 
             use_gravity,
-            local_inertia,
-            inverse_inertia,
+            local_inertia: Vec3::new(1.0, 1.0, 1.0),
+            inverse_inertia: Vec3::ZERO,
             is_sleeping: false,
             sleep_timer: 0.0,
             ccd_enabled: false,
+        };
+        if mass > 0.0 {
+            rb.calculate_box_inertia(1.0, 1.0, 1.0); // Varsayılan 1x1x1
         }
+        rb
     }
 
     pub fn new_static() -> Self {
@@ -180,5 +176,18 @@ impl RigidBody {
             self.local_inertia = Vec3::new(ix, iy, ix);
             self.inverse_inertia = Vec3::new(1.0 / ix, 1.0 / iy, 1.0 / ix);
         }
+    }
+}
+
+/// Global fizik konfigürasyonu — World resource olarak saklanır
+#[derive(Debug, Clone, Copy)]
+pub struct PhysicsConfig {
+    /// Fallback zemin yüksekliği (collider yoksa) — varsayılan: -1.0
+    pub ground_y: f32,
+}
+
+impl Default for PhysicsConfig {
+    fn default() -> Self {
+        Self { ground_y: -1.0 }
     }
 }

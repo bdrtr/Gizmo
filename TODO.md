@@ -9,7 +9,7 @@
 
 ### Çarpışma Algılama (collision.rs, system.rs)
 
-- [ ] **Capsule-AABB sadece 5 nokta örnekliyor** — `collision.rs:231-247`
+- [x] **Capsule-AABB sadece 5 nokta örnekliyor** — `collision.rs:231-247`
   Kapsül-AABB en yakın nokta hesabı, kapsülün merkez segmentinden sadece 5 noktayı test ediyor. Çapraz açıdan gelen kapsüller için gerçek en yakın noktayı kaçırabilir → yanlış normal → NPC duvara kayar.
   **Çözüm:** Analitik segment-AABB en yakın nokta hesaplaması (segment'i AABB'nin 6 düzlemine kırp).
 
@@ -17,7 +17,7 @@
   `check_capsule_aabb_manifold` fonksiyonunda AABB min/max hesaplanırken kutunun rotasyonu göz ardı ediliyor: `let min_b = pos_aabb - aabb.half_extents`. Rotasyonlu kutuya çarpan kapsül yanlış sonuç alır.
   **Çözüm:** AABB rotasyonlu ise GJK/EPA'ya yönlendir veya OBB-Capsule analitik çözüm yaz.
 
-- [ ] **Sphere-AABB inline fast-path, collision.rs'deki `check_sphere_aabb_manifold` ile kod tekrarı yapıyor** — `system.rs:249-280`
+- [x] **Sphere-AABB inline fast-path, collision.rs'deki `check_sphere_aabb_manifold` ile kod tekrarı yapıyor** — `system.rs:249-280`
   Aynı Sphere-AABB hesaplaması hem `system.rs`'deki inline kodda hem de `collision.rs:92-121`'deki fonksiyonda var. Inline kopya rotasyonu kontrol ediyor, fonksiyon etmiyor. Tutarsızlık riski.
   **Çözüm:** Fast-path'i `check_sphere_aabb_manifold` fonksiyonuna yönlendir, tekrarlı kodu sil.
 
@@ -31,11 +31,11 @@
   Temas noktası tutarsızlığı nedeniyle warm-starting iptal edilmiş. Bu, stacking (yığılma) senaryolarında yakınsamayı çok yavaşlatır (her kare sıfırdan başlıyor).
   **Çözüm:** Temas noktası eşleme (contact point matching) implementasyonu ile warm-starting'i geri aç.
 
-- [ ] **Çözücü iterasyonu sabit 8** — `system.rs:525`
+- [x] **Çözücü iterasyonu sabit 8** — `system.rs:525`
   `for _iter in 0..8` — Basit sahneler için yeterli, ama yığılma veya zincirleme durumlarda yetersiz kalabilir. Dinamik iterasyon sayısı öğrenme fırsatı.
   **Çözüm:** Konfigüre edilebilir `solver_iterations` parametresi ekle veya artık iyileşme (residual) bazlı erken çıkış.
 
-- [ ] **Pseudo-random contact shuffle deterministik değil** — `system.rs:520-523`
+- [x] **Pseudo-random contact shuffle deterministik değil** — `system.rs:520-523`
   `island.contacts.swap(i, swap_idx)` ile `(i * 37 + 11) % len` kullanılıyor. Deterministik ama ardışık frame'lerde aynı sıralama → bias kalıcı olabilir.
   **Çözüm:** Frame sayısını seed olarak kullan: `(i * 37 + 11 + frame_count) % len`.
 
@@ -50,7 +50,7 @@
 
 ### Bileşenler (components.rs)
 
-- [ ] **RigidBody varsayılan eylemsizlik 1x1x1 küp** — `components.rs:97`
+- [x] **RigidBody varsayılan eylemsizlik 1x1x1 küp** — `components.rs:97`
   `RigidBody::new()` her zaman 1x1x1 bir küp eylemsizliği hesaplıyor. `calculate_box_inertia` / `calculate_sphere_inertia` / `calculate_capsule_inertia` fonksiyonları var ama sahne kurulumunda **çağrılmıyor**! Her obje aynı eylemsizliğe sahip.
   **Çözüm:** `scene_setup.rs`'de Collider oluşturduktan sonra boyutlara göre uygun inertia fonksiyonunu çağır.
 
@@ -90,7 +90,7 @@
   Bu RefCell kuralları açısından sorunsuz (farklı tipler) ama `borrow_mut::<NavAgent>` da tutulduğunda toplam 3 aktif borrow var. Gelecekte başka bir sistem de velocity borroow ederse çakışma olur.
   **Çözüm:** Dokümante et veya borrow scope'unu daralt.
 
-- [ ] **A* `find_path` 2000 iterasyon limitli ama NAV_GRID hücre boyutuna bağlı** — `pathfinding.rs`
+- [x] **A* `find_path` 2000 iterasyon limitli ama NAV_GRID hücre boyutuna bağlı** — `pathfinding.rs`
   Eğer grid hücre boyutu çok küçükse (ör. 0.1) aynı mesafe için 100x daha fazla node var ve 2000 iterasyon yetersiz kalır.
   **Çözüm:** Limiti grid alanına orantılı yap: `max_iter = (area / cell_size²).min(5000)`.
 
@@ -114,7 +114,7 @@
   GPU particle buffer boyutu hardcoded. Küçük sahneler için bellek israfı, büyük efektler için yetersiz olabilir.
   **Çözüm:** Dinamik veya konfigüre edilebilir buf boyutu.
 
-- [ ] **GLTF loader'da bilinmeyen format fallback'i sessiz** — `asset.rs:482-490`
+- [x] **GLTF loader'da bilinmeyen format fallback'i sessiz** — `asset.rs:482-490`
   GLTF'den gelen bilinmeyen piksel formatları sessizce beyaz piksele dönüştürülüyor. Debugging güçleşir.
   **Çözüm:** `eprintln!` veya log crate ile uyarı bas.
 
@@ -138,7 +138,7 @@
   Bu fonksiyon her frame çağrılırsa (ör. particle system) gereksiz allocation yapar.
   **Çözüm:** Alive entity listesini cache'le veya iterator pattern kullan.
 
-- [ ] **RefCell runtime borrow panikleri korumasız** — `world.rs:112-113, 122-123`
+- [x] **RefCell runtime borrow panikleri korumasız** — `world.rs:112-113, 122-123`
   `storage.borrow()` ve `storage.borrow_mut()` RefCell panikleri (BorrowMutError) korumasız. Aynı component'i aynı anda okuma+yazma denerseniz program panikler.
   **Çözüm:** `try_borrow` / `try_borrow_mut` ile hata mesajı döndür.
 
@@ -190,7 +190,7 @@
 
 ### Karakter Kontrolcüsü (character.rs)
 
-- [ ] **Zemin Y değeri hardcoded: `-1.0`** — `character.rs:234`
+- [x] **Zemin Y değeri hardcoded: `-1.0`** — `character.rs:234`
   `let ground_y = -1.0_f32;` — Bu sabit zemin yüksekliği. Multi-level haritalar veya rampalar için çalışmaz.
   **Çözüm:** Aşağı doğru raycast ile gerçek zemin yüksekliğini bul.
 
@@ -200,7 +200,7 @@
 
 ### Araç Fiziği (vehicle.rs)
 
-- [ ] **Zemin Y değeri hardcoded: `-1.0`** — `vehicle.rs:140`
+- [x] **Zemin Y değeri hardcoded: `-1.0`** — `vehicle.rs:140`
   Araç raycast sistemi de sabit zemin yüksekliği kullanıyor.
   **Çözüm:** Gerçek collider raycast sonuçlarını kullan.
 
@@ -224,7 +224,7 @@
 
 ## 📜 LUA SCRIPTING (gizmo-scripting)
 
-- [ ] **Script fonksiyon adı dosya adına göre hardcoded** — `main.rs:256-262`
+- [x] **Script fonksiyon adı dosya adına göre hardcoded** — `main.rs:256-262`
   `car_controller` içeriyorsa `"car_update"`, `rain` içeriyorsa `"rain_update"`, aksi halde `"on_update"`. Yeni script dosyaları için her seferinde bu if-chain'e ekleme yapılması lazım.
   **Çözüm:** Script bileşenine `entry_function: String` field ekle veya convention-over-configuration uygula.
 

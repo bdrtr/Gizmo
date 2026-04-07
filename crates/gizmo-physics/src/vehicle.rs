@@ -155,8 +155,10 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                 // === RAYCASTING (AABB & Ground Plane) ===
                 let mut hit_t = f32::MAX;
                 
-                // 1. Zemin Yüzeyi (Y = -1.0) fallback olarak
-                let ground_y = -1.0_f32;
+                // 1. Zemin Yüzeyi fallback olarak (PhysicsConfig'den oku)
+                let ground_y = world.get_resource::<crate::components::PhysicsConfig>()
+                    .map(|c| c.ground_y)
+                    .unwrap_or(-1.0);
                 if dir.y < -0.001 && origin.y > ground_y {
                     let t_y = (ground_y - origin.y) / dir.y;
                     if t_y > 0.0 && t_y < hit_t { hit_t = t_y; }

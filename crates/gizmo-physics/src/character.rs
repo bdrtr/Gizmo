@@ -233,7 +233,9 @@ pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
             }
             
             // === 4. Zemin düzlemi kontrolü (fallback — collider yoksa) ===
-            let ground_y = -1.0_f32;
+            let ground_y = world.get_resource::<crate::components::PhysicsConfig>()
+                .map(|c| c.ground_y)
+                .unwrap_or(-1.0);
             let foot_y = new_pos.y - cc.half_height - cc.radius;
             
             if foot_y <= ground_y + cc.skin_width + 0.05 {
