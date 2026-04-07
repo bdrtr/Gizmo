@@ -103,6 +103,13 @@ pub fn register_scene_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result
             Ok(())
         })?)?;
     }
+    {
+        let cq = command_queue.clone();
+        race_table.set("start", lua.create_function(move |_, ()| {
+            cq.push(ScriptCommand::StartRace);
+            Ok(())
+        })?)?;
+    }
     lua.globals().set("race", race_table)?;
 
     // --- KAMERA ---

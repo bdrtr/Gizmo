@@ -29,6 +29,33 @@ pub fn register_physics_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
         })?)?;
     }
 
+    // === RIGIDBODY EKLE ===
+    {
+        let cq = command_queue.clone();
+        physics_table.set("add_rigidbody", lua.create_function(move |_, (id, mass, restitution, friction, use_gravity): (u32, f32, f32, f32, bool)| {
+            cq.push(ScriptCommand::AddRigidBody { id, mass, restitution, friction, use_gravity });
+            Ok(())
+        })?)?;
+    }
+
+    // === COLLIDER EKLE ===
+    {
+        let cq = command_queue.clone();
+        physics_table.set("add_box_collider", lua.create_function(move |_, (id, hx, hy, hz): (u32, f32, f32, f32)| {
+            cq.push(ScriptCommand::AddBoxCollider { id, hx, hy, hz });
+            Ok(())
+        })?)?;
+    }
+
+    {
+        let cq = command_queue.clone();
+        physics_table.set("add_sphere_collider", lua.create_function(move |_, (id, radius): (u32, f32)| {
+            cq.push(ScriptCommand::AddSphereCollider { id, radius });
+            Ok(())
+        })?)?;
+    }
+
     lua.globals().set("physics", physics_table)?;
+
     Ok(())
 }

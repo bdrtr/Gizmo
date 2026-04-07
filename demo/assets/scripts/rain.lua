@@ -9,7 +9,7 @@ local ground_y = -5.0
 local wind_x = -12.0
 local wind_z = 8.0
 
-function on_update(ctx)
+function rain_update(ctx)
     local pos = ctx.position
     local vel = ctx.velocity
     local dt = ctx.dt

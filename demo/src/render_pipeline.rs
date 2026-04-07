@@ -82,6 +82,66 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
             state.spawn_domino_requests.set(state.spawn_domino_requests.get() - 1);
         }
 
+        // --- PACHINKO / GALTON KUTUSU SPAWNER (Gerçekçi Deney) ---
+        // Toplam 1000 top hedefleniyor
+        if state.pachinko_spawn_count.get() < 1000 {
+            let dt = if state.current_fps > 0.0 { 1.0 / state.current_fps } else { 0.016 };
+            let mut timer = state.pachinko_spawn_timer.get();
+            timer += dt;
+            
+            // Saniyede ~20 top (0.05s)
+            if timer >= 0.05 {
+                timer = 0.0;
+                let count = state.pachinko_spawn_count.get();
+                state.pachinko_spawn_count.set(count + 1);
+                
+                let entity = world.spawn();
+                let pachinko_center = Vec3::new(0.0, 5.0, -10.0);
+                
+                // Tepeden düşen bilyelerde hafif bir merkez kayması yarat (randomness)
+                // Gerçekçi olması için sine() fonksiyonu ile pseudo-random saçılım yapıldı.
+                let rand_x = (count as f32 * 123.456).sin() * 1.5; 
+                let spawn_pos = pachinko_center + Vec3::new(rand_x, 30.0, 0.0);
+                
+                world.add_component(entity, Transform::new(spawn_pos).with_scale(Vec3::new(0.24, 0.24, 0.24)));
+                world.add_component(entity, Velocity::new(Vec3::ZERO));
+                
+                // Basıncı azaltmak için düşük kütle (0.2) ve zıplama (0.05).
+                let mut rb = RigidBody::new(0.2, 0.05, 0.5, true);
+                rb.ccd_enabled = true; 
+                world.add_component(entity, rb);
+                world.add_component(entity, gizmo::physics::shape::Collider::new_sphere(0.12));
+                
+                // Prefab'den mesh ve materyalleri klonla (Instancing)
+                let mut mesh_clone = None;
+                if let Some(meshes) = world.borrow::<Mesh>() {
+                    if let Some(m) = meshes.get(state.sphere_prefab_id) {
+                        mesh_clone = Some(m.clone());
+                    }
+                }
+                if let Some(mesh) = mesh_clone {
+                    world.add_component(entity, mesh);
+                }
+                
+                // Gerçekçi Metalik Bilye Materyali PBR
+                let mut bind_group_clone = None;
+                if let Some(mats) = world.borrow::<gizmo::renderer::components::Material>() {
+                    if let Some(mat) = mats.get(state.sphere_prefab_id) {
+                        bind_group_clone = Some(mat.bind_group.clone());
+                    }
+                }
+                if let Some(bg) = bind_group_clone {
+                    // PBR: Çelik/Krom Hisli Bilyeler (Parlak, Açık Gri, Pürüzsüz)
+                    let new_mat = gizmo::renderer::components::Material::new(bg)
+                        .with_pbr(Vec4::new(0.85, 0.85, 0.9, 1.0), 0.95, 0.15); 
+                    world.add_component(entity, new_mat);
+                }
+                
+                world.add_component(entity, gizmo::renderer::components::MeshRenderer::new());
+            }
+            state.pachinko_spawn_timer.set(timer);
+        }
+
 
         // --- EVENT: DOKU (TEXTURE) YÜKLEME ---
         while let Some((e_id, path)) = state.texture_load_requests.borrow_mut().pop() {

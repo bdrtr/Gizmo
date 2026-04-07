@@ -7,6 +7,7 @@ pub struct EntityName(pub String);
 
 pub mod state;       pub use state::*;
 pub mod scene_setup; pub use scene_setup::*;
+pub mod demo_car;    pub use demo_car::*;
 pub mod ui;          pub use ui::*;
 pub mod render_pipeline; pub use render_pipeline::*;
 pub mod systems;     pub use systems::*;
@@ -20,7 +21,7 @@ fn main() {
 
     // ── SETUP ──────────────────────────────────────────────────────────────
     app = app.set_setup(|world, renderer| {
-        setup_default_scene(world, renderer)
+        scene_setup::setup_default_scene(world, renderer) // Galton Kutusu (Pachinko) Deneysel Sahnesi
     });
 
     // ── UPDATE ─────────────────────────────────────────────────────────────
@@ -107,13 +108,45 @@ fn main() {
             if let Some(jw) = world.get_resource::<gizmo::physics::JointWorld>() {
                 gizmo::physics::solve_constraints(&*jw, world, fixed_dt);
             }
+            gizmo::physics::vehicle::physics_vehicle_system(world, fixed_dt);
+            gizmo::physics::integration::physics_movement_system(world, fixed_dt);
             state.physics_accumulator -= fixed_dt;
             steps += 1;
         }
 
+        // Vehicle Controller (Input to Engine/Steering)
+        if let Some(mut vehicles) = world.borrow_mut::<gizmo::physics::vehicle::VehicleController>() {
+            let engine_power = 2000.0;
+            let mut current_engine = 0.0;
+            let mut current_steer = 0.0;
+            let mut current_brake = 0.0;
+            
+            if input.is_key_pressed(KeyCode::ArrowUp as u32) { current_engine = engine_power; }
+            if input.is_key_pressed(KeyCode::ArrowDown as u32) { current_engine = -engine_power * 0.5; }
+            if input.is_key_pressed(KeyCode::ArrowLeft as u32) { current_steer = 0.5; } // Rad
+            if input.is_key_pressed(KeyCode::ArrowRight as u32) { current_steer = -0.5; }
+            if input.is_key_pressed(KeyCode::Space as u32) { current_brake = 5000.0; }
+
+            for entity in vehicles.entity_dense.clone() {
+                if let Some(v) = vehicles.get_mut(entity) {
+                    v.engine_force = current_engine;
+                    v.steering_angle = current_steer;
+                    v.brake_force = current_brake;
+                }
+            }
+        }
+
         transform_hierarchy_system(world);
 
-        // Lua Script motoru
+        // Lua Script motoru güncellemeleri (Input, Time, Scene durumlarını aktarır + global on_update çağırır)
+        if let Some(engine) = state.script_engine.borrow_mut().as_mut() {
+            let _ = engine.update(world, input, dt);
+        }
+
+        // Script bileşeni olan entity'ler için per-entity script çalıştır (eski run_scripts)
+        // NOT: run_scripts her entity için "on_update" çağırdığından, global "on_update" fonksiyonu
+        // race_map1.lua ve car_controller.lua arasında ezilebilir. Bunun çözümü her component'in scriptini bağlamalı yapmak.
+        // Şimdilik sadece input entegrasyonu için engine.update() eklendi.
         let cmds = run_scripts(world, state, dt, input);
 
         // Lua'dan gelen oyun komutlarını işle
@@ -186,12 +219,29 @@ fn run_scripts(world: &mut World, state: &mut GameState, dt: f32, input: &Input)
                 key_s:     input.is_key_pressed(KeyCode::KeyS as u32),
                 key_d:     input.is_key_pressed(KeyCode::KeyD as u32),
                 key_space: input.is_key_pressed(KeyCode::Space as u32),
+                key_up:    input.is_key_pressed(KeyCode::ArrowUp as u32),
+                key_down:  input.is_key_pressed(KeyCode::ArrowDown as u32),
+                key_left:  input.is_key_pressed(KeyCode::ArrowLeft as u32),
+                key_right: input.is_key_pressed(KeyCode::ArrowRight as u32),
             };
             if let Some(engine) = state.script_engine.borrow_mut().as_mut() {
                 let _ = engine.reload_if_changed(&script.file_path);
-                if let Ok(res) = engine.run_update(&ctx) {
-                    if let Some(pos) = res.new_position { t.position = Vec3::new(pos[0], pos[1], pos[2]); }
-                    if let Some(vel) = res.new_velocity  { v.linear   = Vec3::new(vel[0], vel[1], vel[2]); }
+                let func_name = if script.file_path.contains("car_controller") {
+                    "car_update"
+                } else if script.file_path.contains("rain") {
+                    "rain_update"
+                } else {
+                    "on_update"
+                };
+                
+                match engine.run_entity_update(func_name, &ctx) {
+                    Ok(res) => {
+                        if let Some(pos) = res.new_position { t.position = Vec3::new(pos[0], pos[1], pos[2]); }
+                        if let Some(vel) = res.new_velocity  { v.linear   = Vec3::new(vel[0], vel[1], vel[2]); }
+                    }
+                    Err(err) => {
+                        println!("[Lua Runtime Error] {}: {}", func_name, err);
+                    }
                 }
             }
         }
@@ -292,6 +342,9 @@ fn process_game_commands(world: &mut World, state: &mut GameState, dt: f32, comm
                 if let Some(cp) = state.checkpoints.iter_mut().find(|c| c.id == id) {
                     cp.activated = true;
                 }
+            }
+            ScriptCommand::StartRace => {
+                state.race_status = crate::state::RaceStatus::Running;
             }
             ScriptCommand::FinishRace { winner_name } => {
                 state.race_status = crate::state::RaceStatus::Finished;
