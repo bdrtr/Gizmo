@@ -486,6 +486,8 @@ impl AssetManager {
                     (rgba, wgpu::TextureFormat::Rgba8UnormSrgb, 4 * width)
                 },
                 _ => {
+                    eprintln!("[GLTF WARN] Bilinmeyen piksel formatı (image idx={}), RGBA8 fallback kullanılıyor. Boyut: {}x{}, Pixel len: {}",
+                        i, width, height, image.pixels.len());
                     // Fallback to RGBA8 padding if length doesn't match standard
                     let mut rgba = vec![255; (width * height * 4) as usize];
                     // At least prevent WGPU out-of-bounds panic

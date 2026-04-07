@@ -140,11 +140,14 @@ pub fn find_path(grid: &NavGrid, start_world: Vec3, end_world: Vec3) -> Option<V
     open_set.push(AStarNode { pos: start, cost: 0 });
     g_score.insert(start, 0);
 
-    let mut iterations = 0;
+    let manhattan_dist = ((start.x - end.x).abs() + (start.z - end.z).abs()) as u32;
+    let max_iterations = (manhattan_dist as usize * 10).clamp(500, 5000);
+
+    let mut iterations = 0usize;
     while let Some(current_node) = open_set.pop() {
         iterations += 1;
-        if iterations > 2000 {
-            println!("Gizmo AI: Pathfinding limit aşıldı! Çok karmaşık veya ulaşılamaz rota.");
+        if iterations > max_iterations {
+            eprintln!("[AI] Pathfinding limit aşıldı ({}/{}). Ulaşılamaz rota?", iterations, max_iterations);
             break;
         }
 

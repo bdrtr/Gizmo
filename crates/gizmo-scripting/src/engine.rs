@@ -382,6 +382,11 @@ impl ScriptEngine {
         Ok(true)
     }
 
+    /// Belirli bir isimdeki Lua fonksiyonunun var olup olmadığını kontrol eder
+    pub fn has_function(&self, name: &str) -> bool {
+        self.lua.globals().get::<_, LuaFunction>(name).is_ok()
+    }
+
     /// Belirli bir isimdeki Lua fonksiyonunu çağırır (per-entity scriptler için)
     pub fn run_entity_update(&self, func_name: &str, ctx: &ScriptContext) -> Result<ScriptResult, String> {
         let globals = self.lua.globals();

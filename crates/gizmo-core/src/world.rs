@@ -109,9 +109,15 @@ impl World {
         let type_id = TypeId::of::<T>();
         let storage = self.storages.get(&type_id)?;
         
-        Some(Ref::map(storage.borrow(), |s| {
-            s.as_any().downcast_ref::<SparseSet<T>>().unwrap()
-        }))
+        match storage.try_borrow() {
+            Ok(borrowed) => Some(Ref::map(borrowed, |s| {
+                s.as_any().downcast_ref::<SparseSet<T>>().unwrap()
+            })),
+            Err(_) => {
+                eprintln!("[ECS WARN] borrow<{}> başarısız — mutable borrow aktif!", std::any::type_name::<T>());
+                None
+            }
+        }
     }
 
     /// Component dizisine yazma erişimi (Mutable, tekil sahiplik).
@@ -119,9 +125,15 @@ impl World {
         let type_id = TypeId::of::<T>();
         let storage = self.storages.get(&type_id)?;
         
-        Some(RefMut::map(storage.borrow_mut(), |s| {
-            s.as_any_mut().downcast_mut::<SparseSet<T>>().unwrap()
-        }))
+        match storage.try_borrow_mut() {
+            Ok(borrowed) => Some(RefMut::map(borrowed, |s| {
+                s.as_any_mut().downcast_mut::<SparseSet<T>>().unwrap()
+            })),
+            Err(_) => {
+                eprintln!("[ECS WARN] borrow_mut<{}> başarısız — başka bir borrow aktif!", std::any::type_name::<T>());
+                None
+            }
+        }
     }
 
     // ==========================================================

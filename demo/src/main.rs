@@ -260,15 +260,23 @@ fn run_scripts(world: &mut World, _state: &mut GameState, dt: f32, input: &Input
             };
             if let Some(engine) = engine_opt.as_mut() {
                 let _ = engine.reload_if_changed(&script.file_path);
-                let func_name = if script.file_path.contains("car_controller") {
-                    "car_update"
-                } else if script.file_path.contains("rain") {
-                    "rain_update"
-                } else {
-                    "on_update"
+                let func_name = {
+                    // Convention-over-configuration: dosya adından entry fonksiyon ismi türet
+                    // örn. "scripts/car_controller.lua" → "car_controller_update"
+                    let stem = std::path::Path::new(&script.file_path)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("on");
+                    let auto_name = format!("{}_update", stem);
+                    // Fonksiyon script'te varsa onu kullan, yoksa fallback "on_update"
+                    if engine.has_function(&auto_name) {
+                        auto_name
+                    } else {
+                        "on_update".to_string()
+                    }
                 };
                 
-                match engine.run_entity_update(func_name, &ctx) {
+                match engine.run_entity_update(&func_name, &ctx) {
                     Ok(res) => {
                         if let Some(pos) = res.new_position { t.position = Vec3::new(pos[0], pos[1], pos[2]); }
                         if let Some(vel) = res.new_velocity  { v.linear   = Vec3::new(vel[0], vel[1], vel[2]); }

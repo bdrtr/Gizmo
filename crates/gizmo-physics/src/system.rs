@@ -8,7 +8,11 @@ use std::collections::HashMap;
 
 /// Kalıcı Çözücü Durumu (Warm-Starting Cache için)
 pub struct PhysicsSolverState {
-    pub cached_impulses: HashMap<(u32, u32), (f32, Vec3)>, // Accumulated Normal Impulse, Accumulated Friction Impulse
+    pub cached_impulses: HashMap<(u32, u32), (f32, Vec3)>,
+    /// Konfigüre edilebilir çözücü iterasyon sayısı (varsayılan: 8)
+    pub solver_iterations: u32,
+    /// Frame sayacı — contact shuffle için seed olarak kullanılır
+    pub frame_counter: u64,
 }
 
 impl Default for PhysicsSolverState {
@@ -19,7 +23,7 @@ impl Default for PhysicsSolverState {
 
 impl PhysicsSolverState {
     pub fn new() -> Self {
-        Self { cached_impulses: HashMap::new() }
+        Self { cached_impulses: HashMap::new(), solver_iterations: 8, frame_counter: 0 }
     }
 }
 
@@ -257,35 +261,15 @@ pub fn physics_collision_system(world: &World, dt: f32) {
         if let (ColliderShape::Sphere(s), ColliderShape::Aabb(a)) = (&col_a.shape, &col_b.shape) {
             if is_rot_b_identity {
                 is_fast_path = true;
-                let min_box = pos_b - a.half_extents;
-                let max_box = pos_b + a.half_extents;
-                let cp = Vec3::new(pos_a.x.clamp(min_box.x, max_box.x), pos_a.y.clamp(min_box.y, max_box.y), pos_a.z.clamp(min_box.z, max_box.z));
-                let diff = cp - pos_a;
-                let dist_sq = diff.length_squared();
-                if dist_sq < s.radius * s.radius {
-                    let dist = dist_sq.sqrt();
-                    manifold.is_colliding = true;
-                    if dist > 0.0001 { manifold.normal = diff / dist; manifold.penetration = s.radius - dist; }
-                    else { manifold.normal = Vec3::new(0.0, -1.0, 0.0); manifold.penetration = s.radius; }
-                    manifold.contact_points.push((cp, manifold.penetration));
-                }
+                manifold = crate::collision::check_sphere_aabb_manifold(pos_a, s, pos_b, a);
             }
             // Rotasyonlu AABB → GJK/EPA'ya düşer
         } else if let (ColliderShape::Aabb(a), ColliderShape::Sphere(s)) = (&col_a.shape, &col_b.shape) {
             if is_rot_a_identity {
                 is_fast_path = true;
-                let min_box = pos_a - a.half_extents;
-                let max_box = pos_a + a.half_extents;
-                let cp = Vec3::new(pos_b.x.clamp(min_box.x, max_box.x), pos_b.y.clamp(min_box.y, max_box.y), pos_b.z.clamp(min_box.z, max_box.z));
-                let diff = pos_b - cp;
-                let dist_sq = diff.length_squared();
-                if dist_sq < s.radius * s.radius {
-                    let dist = dist_sq.sqrt();
-                    manifold.is_colliding = true;
-                    if dist > 0.0001 { manifold.normal = diff / dist; manifold.penetration = s.radius - dist; }
-                    else { manifold.normal = Vec3::new(0.0, 1.0, 0.0); manifold.penetration = s.radius; }
-                    manifold.contact_points.push((cp, manifold.penetration));
-                }
+                // Sphere=B, AABB=A → fonksiyonu ters çağır, normali çevir
+                manifold = crate::collision::check_sphere_aabb_manifold(pos_b, s, pos_a, a);
+                manifold.normal = -manifold.normal; // A→B yönü
             }
         } else if let (ColliderShape::Capsule(c1), ColliderShape::Capsule(c2)) = (&col_a.shape, &col_b.shape) {
             is_fast_path = true;
@@ -513,25 +497,30 @@ pub fn physics_collision_system(world: &World, dt: f32) {
     // bir önceki karenin (salisenin) şiddetli itme kuvvetini yeni ve farklı bir köşeye
     // uygulamak objelerin uzayda patlamasına ve takla atıp hızlanmasına yol açıyor.
     // Bu yüzden önbellek itmesi tamamen devre dışı bırakılmıştır.
-    if let Some(mut state) = world.get_resource_mut::<PhysicsSolverState>() {
+    let (solver_iters, frame_count) = if let Some(mut state) = world.get_resource_mut::<PhysicsSolverState>() {
         state.cached_impulses.clear();
-    }
+        state.frame_counter += 1;
+        (state.solver_iterations, state.frame_counter)
+    } else {
+        (8, 0)
+    };
 
     const MAX_ANG: f32 = 100.0;
     const MAX_LIN: f32 = 200.0;
 
     // ---- FAZ 2: PARALEL ADA ÇÖZÜMÜ ----
     islands.par_iter_mut().for_each(|island| {
-        // Çözüm bias'ını engellemek (her kare hep aynı yönden yığılmaları engellemek) için rehizalama:
+        // Çözüm bias'ını engellemek için frame-seeded pseudo-random contact shuffle:
         let contacts_len = island.contacts.len();
         if contacts_len > 1 {
+            let seed = frame_count as usize;
             for i in 0..(contacts_len - 1) {
-                let swap_idx = (i * 37 + 11) % contacts_len; // Çok basit pseudo-random karma
+                let swap_idx = (i * 37 + 11 + seed) % contacts_len;
                 island.contacts.swap(i, swap_idx);
             }
         }
 
-        for _iter in 0..8 {
+        for _iter in 0..solver_iters {
             for c in island.contacts.iter_mut() {
                 let va = island.velocities.get(&c.ent_a).cloned().unwrap_or(Velocity::new(Vec3::ZERO));
                 let vb = island.velocities.get(&c.ent_b).cloned().unwrap_or(Velocity::new(Vec3::ZERO));
