@@ -45,7 +45,7 @@
   Semi-Implicit Euler'de doğru sıralama: (1) hız güncelle, (2) pozisyonu yeni hızla güncelle. Ama koddaki akış: BATCH 2'de hız güncellenir, BATCH 3'te `let v = *vel_storage.get(e)` ile hız okunup pozisyon güncellenir. Bu doğru görünüyor AMA hız clamp ve damping BATCH 2'de uygulanıyor, solver impulse'ları ayrıca `physics_collision_system`'de uygulanıyor ve bu iki sistem AYRI çağrılıyor. Solver → Integration sırası main.rs'de doğru mu kontrol edilmeli.
   **Not:** `main.rs:107-117`'de sıra: `collision_system → character_system → constraints → vehicle → ai → movement`. Bu doğru sıralama.
 
-- [ ] **SIMD Batch artık döngüsünde `index += 8` sabit** — `integration.rs:102`
+- [x] **SIMD Batch artık döngüsünde `index += 8` sabit** — `integration.rs:102`
   Son batch'te geçersiz lane'ler (valid_count < 8) sıfır ile dolduruluyor. Bu doğru çalışıyor ama `grav[i]` sıfır olduğunda bile yerçekimi uygulanıyor (0.0 çarpılıyor, sorun yok). Kod doğru ama yorum eklenebilir.
 
 ### Bileşenler (components.rs)
@@ -94,7 +94,7 @@
   Eğer grid hücre boyutu çok küçükse (ör. 0.1) aynı mesafe için 100x daha fazla node var ve 2000 iterasyon yetersiz kalır.
   **Çözüm:** Limiti grid alanına orantılı yap: `max_iter = (area / cell_size²).min(5000)`.
 
-- [ ] **NavAgent `max_speed: 8.0` fizik çözücüyle uyumsuz olabilir** — `scene_setup.rs:306`
+- [x] **NavAgent `max_speed: 8.0` fizik çözücüyle uyumsuz olabilir** — `scene_setup.rs:306`
   AI hız 8 m/s ama fizik çöz gücüsü `max_force: 50.0`. Eğer AI hızla duvara koşarsa penetrasyon derinliği `8.0 * dt ≈ 0.13 m/frame` olabilir ki bu pozisyon düzeltmesinin slop'undan çok büyük. Pozisyon düzeltmesi eklendi ama hâlâ yüksek hızlarda sorun olabilir.
   **Çözüm:** AI max_speed'i fizik solver kapasitesiyle test et / limitini düşür.
 
@@ -106,11 +106,11 @@
   Struct çok şişmiş. Post-processing, shadow, skeleton, particle alanları hep aynı struct'ta. Bakım, okuma ve refactor zorlaşıyor.
   **Çözüm:** Sub-struct'lara ayır: `PostProcessState`, `ShadowState`, `SkeletonState`.
 
-- [ ] **`PresentMode::Fifo` sabit kodlanmış — VSync her zaman açık** — `renderer.rs:92`
+- [x] **`PresentMode::Fifo` sabit kodlanmış — VSync her zaman açık** — `renderer.rs:92`
   FPS sınırı VSync ile kilitli. Performans testi veya "uncapped FPS" seçeneği yok.
   **Çözüm:** Konfigüre edilebilir PresentMode (Mailbox / Immediate).
 
-- [ ] **`gpu_particles` 100,000 parçacık sabit** — `renderer.rs:104`
+- [x] **`gpu_particles` 100,000 parçacık sabit** — `renderer.rs:104`
   GPU particle buffer boyutu hardcoded. Küçük sahneler için bellek israfı, büyük efektler için yetersiz olabilir.
   **Çözüm:** Dinamik veya konfigüre edilebilir buf boyutu.
 
@@ -174,7 +174,7 @@
   Duvarlar `RigidBody::new_static()` ile oluşturuluyor (mass=0, inverse_inertia=ZERO). Statik objeler için sorun değil AMA NPC (`mass=1.0`) için `calculate_capsule_inertia` çağrılmamış.
   **Çözüm:** NPC RigidBody oluşturduktan sonra `rb.calculate_capsule_inertia(0.5, 0.5)` çağır.
 
-- [ ] **NavGrid engel padding 3x3 ama collider 1.0x2.0x1.0** — `scene_setup.rs:287-291`
+- [x] **NavGrid engel padding 3x3 ama collider 1.0x2.0x1.0** — `scene_setup.rs:287-291`
   Padding 1 hücre her yöne ama collider yarı genişliği 1.0 metre. Hücre boyutu 1.0m olduğunda padding tam oturuyor, ama collider boyutu veya hücre boyutu değişirse mismatch olur.
   **Çözüm:** Padding'i collider boyutuna göre otomatik hesapla.
 
@@ -239,7 +239,7 @@
   Sadece `gjk.rs`, `epa.rs` ve `collision.rs`'te temel birim testler var. Integration, solver, vehicle, constraint testleri yok.
   **Çözüm:** Her modüle "penetrasyon kalıcı mı?", "yığılma stabil mi?" gibi regresyon testleri ekle.
 
-- [ ] **TODO/FIXME/HACK yorum taraması** — Tüm kod tabanı
+- [x] **TODO/FIXME/HACK yorum taraması** — Tüm kod tabanı
   Kodda birçok yerde Türkçe yorum ile "geçici çözüm" veya "ileride yapılacak" notları var. Bunları merkezi bir izleme listesine taşımak gerekir.
   **Çözüm:** `grep -rn "TODO\|FIXME\|HACK\|İPTAL\|geçici\|hatrlat"` ile tarayıp bu dosyaya ekle.
 

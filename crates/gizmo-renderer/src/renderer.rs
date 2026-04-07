@@ -89,7 +89,12 @@ impl<'a> Renderer<'a> {
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::Fifo,
+            // VSync tercihi: Mailbox (uncapped FPS) varsa kullan, yoksa Fifo (VSync)
+            present_mode: if surface_caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+                wgpu::PresentMode::Mailbox
+            } else {
+                wgpu::PresentMode::Fifo
+            },
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -101,8 +106,10 @@ impl<'a> Renderer<'a> {
         let scene = crate::pipeline::build_scene_pipelines(&device);
         let post  = crate::post_process::build_post_process_resources(&device, surface_format, config.width, config.height);
 
+        // GPU particle buffer boyutu — ihtiyaca göre ayarlanabilir
+        let max_particles: u32 = 100_000;
         let gpu_particles = Some(crate::particle_renderer::GpuParticleSystem::new(
-            &device, 100000, &scene.global_bind_group_layout, wgpu::TextureFormat::Rgba16Float,
+            &device, max_particles, &scene.global_bind_group_layout, wgpu::TextureFormat::Rgba16Float,
         ));
 
         Self {
