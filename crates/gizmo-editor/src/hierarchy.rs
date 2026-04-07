@@ -111,9 +111,22 @@ fn draw_entity_node(
                     egui::RichText::new(format!("📦 {}", entity_name))
                 };
                 
-                if ui.selectable_label(is_selected, label).clicked() {
+                let response = ui.selectable_label(is_selected, label);
+                if response.clicked() {
                     state.selected_entity = Some(entity_id);
                 }
+                
+                response.context_menu(|ui| {
+                    if ui.button("💾 Prefab Olarak Kaydet").clicked() {
+                        let path = format!("demo/assets/prefabs/{}.json", entity_name.replace(" ", "_"));
+                        state.prefab_save_request = Some((entity_id, path));
+                        ui.close_menu();
+                    }
+                    if ui.button("🗑 Sil").clicked() {
+                        state.despawn_request = Some(entity_id);
+                        ui.close_menu();
+                    }
+                });
             })
             .body(|ui| {
                 if let Some(children) = children_comp.as_ref().and_then(|c| c.get(entity_id)) {
@@ -130,11 +143,22 @@ fn draw_entity_node(
             egui::RichText::new(format!("  ● {}", entity_name))
         };
         
-        if ui.selectable_label(is_selected, label).clicked() {
+        let response = ui.selectable_label(is_selected, label);
+        if response.clicked() {
             state.selected_entity = Some(entity_id);
         }
+        
+        response.context_menu(|ui| {
+            if ui.button("💾 Prefab Olarak Kaydet").clicked() {
+                let path = format!("demo/assets/prefabs/{}.json", entity_name.replace(" ", "_"));
+                state.prefab_save_request = Some((entity_id, path));
+                ui.close_menu();
+            }
+            if ui.button("🗑 Sil").clicked() {
+                state.despawn_request = Some(entity_id);
+                ui.close_menu();
+            }
+        });
     }
-
-    // Sağ tık menüsü
-    // (egui context_menu entity bazlı olası düğümlerde çalışır)
 }
+

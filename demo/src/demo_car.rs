@@ -7,7 +7,7 @@ use crate::state::{GameState, GizmoMode};
 pub fn setup_car_scene(world: &mut World, renderer: &gizmo::renderer::renderer::Renderer) -> GameState {
     println!("Gizmo Engine: Süspansiyon ve Arazi Sahnesi başlatılıyor...");
 
-    let mut audio = gizmo::audio::AudioManager::new();
+    let audio = gizmo::audio::AudioManager::new();
     let asset_manager = gizmo::renderer::asset::AssetManager::new();
 
     let tbind_asphalt = gizmo::renderer::asset::AssetManager::new().load_material_texture(
@@ -116,9 +116,9 @@ pub fn setup_car_scene(world: &mut World, renderer: &gizmo::renderer::renderer::
     // Sol Ön (2)
     vehicle.add_wheel(Wheel::new(Vec3::new(-0.95, -0.3, 1.6), rest_len, stiffness, damping, wheel_radius));
     // Sağ Arka (3)
-    vehicle.add_wheel(Wheel::new(Vec3::new(0.95, -0.3, -1.6), rest_len, stiffness, damping, wheel_radius));
+    vehicle.add_wheel(Wheel::new(Vec3::new(0.95, -0.3, -1.6), rest_len, stiffness, damping, wheel_radius).with_drive());
     // Sol Arka (4)
-    vehicle.add_wheel(Wheel::new(Vec3::new(-0.95, -0.3, -1.6), rest_len, stiffness, damping, wheel_radius));
+    vehicle.add_wheel(Wheel::new(Vec3::new(-0.95, -0.3, -1.6), rest_len, stiffness, damping, wheel_radius).with_drive());
     
     world.add_component(car, vehicle);
 
@@ -127,22 +127,36 @@ pub fn setup_car_scene(world: &mut World, renderer: &gizmo::renderer::renderer::
     let gizmo_y = world.spawn().id();
     let gizmo_z = world.spawn().id();
 
+    world.insert_resource(gizmo::core::event::Events::<crate::state::SpawnDominoEvent>::new());
+    world.insert_resource(gizmo::core::event::Events::<crate::state::ReleaseDominoEvent>::new());
+    world.insert_resource(gizmo::core::event::Events::<crate::state::TextureLoadEvent>::new());
+    world.insert_resource(gizmo::core::event::Events::<crate::state::AssetSpawnEvent>::new());
+    world.insert_resource(gizmo::core::event::Events::<crate::state::ShaderReloadEvent>::new());
+    world.insert_resource(gizmo::core::event::Events::<crate::state::SelectionEvent>::new());
+    world.insert_resource(crate::state::DominoAppState { active_ball_id: None });
+    world.insert_resource(crate::state::PachinkoSpawnerState { timer: 0.0, count: 0 });
+    world.insert_resource(asset_manager);
+    
+    if let Ok(engine) = gizmo::scripting::ScriptEngine::new() {
+        world.insert_resource(engine);
+    }
+    
+    world.insert_resource(gizmo::renderer::renderer::PostProcessUniforms {
+        bloom_intensity: 0.8, bloom_threshold: 0.8,
+        chromatic_aberration: 1.0, exposure: 1.2, vignette_intensity: 0.5,
+        _padding: [0.0; 3],
+    });
+    
+    world.insert_resource(gizmo::editor::EditorState::new());
+
     GameState {
         bouncing_box_id, player_id, skybox_id: skybox.id(), inspector_selected_entity: None,
         audio, do_raycast: false, gizmo_x, gizmo_y, gizmo_z, dragging_axis: None,
         drag_start_t: 0.0, drag_original_pos: Vec3::ZERO, drag_original_scale: Vec3::ONE,
         drag_original_rot: Quat::IDENTITY, current_fps: 60.0,
-        new_selection_request: std::cell::Cell::new(None),
-        spawn_domino_requests: std::cell::Cell::new(0),
-        release_domino_requests: std::cell::Cell::new(0),
-        domino_ball_id: std::cell::Cell::new(None),
-        texture_load_requests: std::cell::RefCell::new(Vec::new()),
-        asset_spawn_requests: std::cell::RefCell::new(Vec::new()),
-        asset_manager: std::cell::RefCell::new(asset_manager),
         gizmo_mode: GizmoMode::Translate,
         egui_wants_pointer: false,
         asset_watcher: gizmo::renderer::hot_reload::AssetWatcher::new(&["demo/assets"]),
-        script_engine: std::cell::RefCell::new(gizmo::scripting::ScriptEngine::new().ok()),
         physics_accumulator: 0.0,
         target_physics_fps: 240.0,
         sphere_prefab_id: bouncing_box_id,
@@ -154,14 +168,6 @@ pub fn setup_car_scene(world: &mut World, renderer: &gizmo::renderer::renderer::
         active_cutscene: None,
         camera_follow_target: Some(car.id()),
         free_cam: false,
-        post_process_settings: std::cell::RefCell::new(gizmo::renderer::renderer::PostProcessUniforms {
-            bloom_intensity: 0.8, bloom_threshold: 0.8,
-            chromatic_aberration: 1.0, exposure: 1.2, vignette_intensity: 0.5,
-            _padding: [0.0; 3],
-        }),
-        shader_reload_request: std::cell::Cell::new(false),
-        editor_state: std::cell::RefCell::new(gizmo::editor::EditorState::new()),
-        pachinko_spawn_timer: std::cell::Cell::new(0.0),
-        pachinko_spawn_count: std::cell::Cell::new(0),
+        total_elapsed: 0.0,
     }
 }

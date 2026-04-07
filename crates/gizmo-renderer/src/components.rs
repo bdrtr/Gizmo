@@ -216,7 +216,7 @@ impl PointLight {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct DirectionalLight {
     pub color: Vec3,
     pub intensity: f32,

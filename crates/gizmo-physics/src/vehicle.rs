@@ -11,6 +11,7 @@ pub struct Wheel {
     pub suspension_damping: f32,     // Sönümleme (Geri fırlamayı önler)
     pub wheel_radius: f32,           // Tekerleğin yarıçapı
     
+    pub is_drive_wheel: bool,        // Bu tekerlek motor gücü alıyor mu (FWD/RWD/4WD)
     // Geçici durumsal veriler (Sistem tarafından her frame güncellenir)
     pub is_grounded: bool,
     pub compression: f32,            // Yerdeyse yayın ne kadar sıkıştığı
@@ -27,10 +28,17 @@ impl Wheel {
             suspension_stiffness: stiffness,
             suspension_damping: damping,
             wheel_radius: radius,
+            is_drive_wheel: false,
             is_grounded: false,
             compression: 0.0,
             contact_point: Vec3::ZERO,
         }
+    }
+
+    /// Motorlu tekerlek olarak ayarla
+    pub fn with_drive(mut self) -> Self {
+        self.is_drive_wheel = true;
+        self
     }
 }
 
@@ -41,6 +49,10 @@ pub struct VehicleController {
     pub engine_force: f32,    // Motor gücü (Newton). Pozitif = ileri, Negatif = geri
     pub steering_angle: f32,  // Direksiyon açısı (Radyan). Pozitif = sola, Negatif = sağa
     pub brake_force: f32,     // Fren kuvveti (Newton)
+    // Konfigüre edilebilir fizik sabitleri (artık hardcoded değil)
+    pub steering_force_mult: f32,  // Direksiyon kuvvet çarpanı (eski: 8000.0)
+    pub lateral_grip: f32,         // Yanal tutuş kuvveti (eski: 5000.0)
+    pub anti_slide_force: f32,     // Kayma önleme kuvveti (eski: 3000.0)
 }
 
 impl Default for VehicleController {
@@ -56,6 +68,9 @@ impl VehicleController {
             engine_force: 0.0,
             steering_angle: 0.0,
             brake_force: 0.0,
+            steering_force_mult: 8000.0,
+            lateral_grip: 5000.0,
+            anti_slide_force: 3000.0,
         }
     }
 
@@ -126,8 +141,12 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
             let engine_force = vehicle.engine_force;
             let steering_angle = vehicle.steering_angle;
             let brake_force = vehicle.brake_force;
+            let steer_mult = vehicle.steering_force_mult;
+            let lat_grip = vehicle.lateral_grip;
+            let anti_slide_k = vehicle.anti_slide_force;
+            let drive_wheel_count = vehicle.wheels.iter().filter(|w| w.is_drive_wheel).count().max(1) as f32;
 
-            for (i, wheel) in vehicle.wheels.iter_mut().enumerate() {
+            for (_i, wheel) in vehicle.wheels.iter_mut().enumerate() {
                 // Lokal bağlantı noktasını dünya haritasına çevir
                 let r_ws = t.rotation.mul_vec3(wheel.connection_point);
                 let origin = t.position + r_ws;
@@ -195,9 +214,9 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                         total_angular_impulse += apply_inv_inertia(torque, inv_inertia, t.rotation);
                     }
                     
-                    // === MOTOR GÜCÜ (Arka tekerlekler) ===
-                    if i >= 2 && engine_force.abs() > 0.01 {
-                        let drive_impulse = forward * (engine_force / 2.0) * dt;
+                    // === MOTOR GÜCÜ (is_drive_wheel ile belirlenen tekerlekler) ===
+                    if wheel.is_drive_wheel && engine_force.abs() > 0.01 {
+                        let drive_impulse = forward * (engine_force / drive_wheel_count) * dt;
                         total_linear_impulse += drive_impulse;
                         let drive_torque = r_ws.cross(drive_impulse);
                         total_angular_impulse += apply_inv_inertia(drive_torque, inv_inertia, t.rotation);
@@ -210,12 +229,12 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                         total_linear_impulse += brake_impulse;
                     }
                     
-                    // === DİREKSİYON (Ön tekerlekler) ===
-                    if i < 2 && steering_angle.abs() > 0.001 {
+                    // === DİREKSİYON (Ön tekerlekler — drive olmayan) ===
+                    if !wheel.is_drive_wheel && steering_angle.abs() > 0.001 {
                         let wheel_vel = v.linear + v.angular.cross(r_ws);
                         let lateral_vel = wheel_vel.dot(right);
-                        let steer_force = steering_angle * 8000.0; 
-                        let grip_force = -lateral_vel * 5000.0;
+                        let steer_force = steering_angle * steer_mult;
+                        let grip_force = -lateral_vel * lat_grip;
                         let lateral_impulse = right * (steer_force + grip_force) * dt / num_wheels;
                         total_linear_impulse += lateral_impulse;
                         
@@ -226,7 +245,7 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                     // Yanal Sürtünme / Tutuş (Araca viraj dönerken drift engelleme)
                     let wheel_vel = v.linear + v.angular.cross(r_ws);
                     let lateral_vel = wheel_vel.dot(right);
-                    let anti_slide = right * (-lateral_vel * 3000.0 / num_wheels) * dt;
+                    let anti_slide = right * (-lateral_vel * anti_slide_k / num_wheels) * dt;
                     total_linear_impulse += anti_slide;
                     let slide_torque = r_ws.cross(anti_slide);
                     total_angular_impulse += apply_inv_inertia(slide_torque, inv_inertia, t.rotation);

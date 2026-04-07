@@ -62,19 +62,32 @@ impl NavGrid {
     // Yalnızca X,Z düzleminde Dört yön hareket algılayan komşuluk.
     // Eğer 3 boyutlu uçan ajan istersek y de eklenebilir.
     pub fn get_neighbors(&self, pos: GridPos) -> Vec<GridPos> {
-        let mut neighbors = Vec::with_capacity(4);
+        let mut neighbors = Vec::with_capacity(8);
         let dirs = [
             (1, 0, 0), (-1, 0, 0),
             (0, 0, 1), (0, 0, -1),
-            // Çaprazlar
+        ];
+        
+        let diagonals = [
              (1, 0, 1), (-1, 0, -1),
              (-1, 0, 1), (1, 0, -1),
         ];
 
+        // 1. Düz yönler
         for (dx, dy, dz) in dirs.iter() {
             let n = GridPos::new(pos.x + dx, pos.y + dy, pos.z + dz);
-            // Çapraz hareketlerde çaprazın köşe engellerini de kontrol etmek Pathfindingi iyileştirir ama basit tutalım.
             if self.is_walkable(n) {
+                neighbors.push(n);
+            }
+        }
+        
+        // 2. Çapraz yönler (Köşeden geçerken her iki kenarın da açık olması şart! Yoksa çarpar)
+        for (dx, dy, dz) in diagonals.iter() {
+            let n = GridPos::new(pos.x + dx, pos.y + dy, pos.z + dz);
+            let side1 = GridPos::new(pos.x + dx, pos.y, pos.z);
+            let side2 = GridPos::new(pos.x, pos.y, pos.z + dz);
+            
+            if self.is_walkable(n) && self.is_walkable(side1) && self.is_walkable(side2) {
                 neighbors.push(n);
             }
         }
@@ -127,7 +140,14 @@ pub fn find_path(grid: &NavGrid, start_world: Vec3, end_world: Vec3) -> Option<V
     open_set.push(AStarNode { pos: start, cost: 0 });
     g_score.insert(start, 0);
 
+    let mut iterations = 0;
     while let Some(current_node) = open_set.pop() {
+        iterations += 1;
+        if iterations > 2000 {
+            println!("Gizmo AI: Pathfinding limit aşıldı! Çok karmaşık veya ulaşılamaz rota.");
+            break;
+        }
+
         let current = current_node.pos;
 
         if current == end {

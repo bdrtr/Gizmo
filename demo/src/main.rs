@@ -32,17 +32,20 @@ fn main() {
         poll_hot_reload(world, state);
 
         // Seçim isteği uygula
-        if let Some(new_sel) = state.new_selection_request.get() {
-            state.inspector_selected_entity = Some(new_sel);
-            state.new_selection_request.set(None);
+        if let Some(mut events) = world.get_resource_mut::<gizmo::core::event::Events<crate::state::SelectionEvent>>() {
+            for ev in events.drain() {
+                state.inspector_selected_entity = Some(ev.entity_id);
+            }
         }
 
         // Mouse tıklaması → raycast bayrağı
         if input.is_mouse_button_just_pressed(mouse::LEFT) { state.do_raycast = true; }
         if input.is_mouse_button_just_released(mouse::LEFT) { state.dragging_axis = None; }
 
+        let is_in_game = world.get_resource::<crate::state::AppMode>().map(|m| *m) == Some(crate::state::AppMode::InGame);
+
         // Kamera fare ile döndür (Serbest kamera modunda)
-        if state.free_cam && input.is_mouse_button_pressed(mouse::RIGHT) {
+        if is_in_game && state.free_cam && input.is_mouse_button_pressed(mouse::RIGHT) {
             if let Some(mut cameras) = world.borrow_mut::<Camera>() {
                 if let Some(cam) = cameras.get_mut(state.player_id) {
                     let delta = input.mouse_delta();
@@ -54,7 +57,7 @@ fn main() {
         }
 
         // Serbest kamera WASD hareketi
-        if state.free_cam {
+        if is_in_game && state.free_cam {
             let speed = 10.0 * dt;
             let mut f = Vec3::ZERO;
             let mut r = Vec3::ZERO;
@@ -96,51 +99,78 @@ fn main() {
         sync_gizmos(world, state);
 
         // Zaman kaynağı
-        world.insert_resource(Time { dt, elapsed_seconds: 0.0 });
+        state.total_elapsed += dt as f64;
+        world.insert_resource(Time { dt, elapsed_seconds: state.total_elapsed });
 
         // Fizik (sabit adım)
         state.physics_accumulator += dt;
         let fixed_dt = 1.0 / state.target_physics_fps;
+        // Death spiral önleme: accumulator'ı max 16 adımla sınırla
+        state.physics_accumulator = state.physics_accumulator.min(fixed_dt * 16.0);
         let mut steps = 0;
         while state.physics_accumulator >= fixed_dt && steps < 16 {
-            gizmo::physics::system::physics_collision_system(world, 1.0 / 60.0);
+            gizmo::physics::system::physics_collision_system(world, fixed_dt);
             gizmo::physics::character::physics_character_system(world, fixed_dt);
             if let Some(jw) = world.get_resource::<gizmo::physics::JointWorld>() {
                 gizmo::physics::solve_constraints(&*jw, world, fixed_dt);
             }
             gizmo::physics::vehicle::physics_vehicle_system(world, fixed_dt);
+            
+            // AI Navigasyon sistemi
+            gizmo_ai::ai_navigation_system(world, fixed_dt);
+            
             gizmo::physics::integration::physics_movement_system(world, fixed_dt);
             state.physics_accumulator -= fixed_dt;
             steps += 1;
         }
 
         // Vehicle Controller (Input to Engine/Steering)
-        if let Some(mut vehicles) = world.borrow_mut::<gizmo::physics::vehicle::VehicleController>() {
-            let engine_power = 2000.0;
-            let mut current_engine = 0.0;
-            let mut current_steer = 0.0;
-            let mut current_brake = 0.0;
-            
-            if input.is_key_pressed(KeyCode::ArrowUp as u32) { current_engine = engine_power; }
-            if input.is_key_pressed(KeyCode::ArrowDown as u32) { current_engine = -engine_power * 0.5; }
-            if input.is_key_pressed(KeyCode::ArrowLeft as u32) { current_steer = 0.5; } // Rad
-            if input.is_key_pressed(KeyCode::ArrowRight as u32) { current_steer = -0.5; }
-            if input.is_key_pressed(KeyCode::Space as u32) { current_brake = 5000.0; }
+        if is_in_game {
+            if let Some(mut vehicles) = world.borrow_mut::<gizmo::physics::vehicle::VehicleController>() {
+                let engine_power = 2000.0;
+                let mut current_engine = 0.0;
+                let mut current_steer = 0.0;
+                let mut current_brake = 0.0;
+                
+                if input.is_key_pressed(KeyCode::ArrowUp as u32) { current_engine = engine_power; }
+                if input.is_key_pressed(KeyCode::ArrowDown as u32) { current_engine = -engine_power * 0.5; }
+                if input.is_key_pressed(KeyCode::ArrowLeft as u32) { current_steer = 0.5; } // Rad
+                if input.is_key_pressed(KeyCode::ArrowRight as u32) { current_steer = -0.5; }
+                if input.is_key_pressed(KeyCode::Space as u32) { current_brake = 5000.0; }
 
-            for entity in vehicles.entity_dense.clone() {
-                if let Some(v) = vehicles.get_mut(entity) {
-                    v.engine_force = current_engine;
-                    v.steering_angle = current_steer;
-                    v.brake_force = current_brake;
+                for entity in vehicles.entity_dense.clone() {
+                    if let Some(v) = vehicles.get_mut(entity) {
+                        v.engine_force = current_engine;
+                        v.steering_angle = current_steer;
+                        v.brake_force = current_brake;
+                    }
                 }
             }
         }
 
         transform_hierarchy_system(world);
+        
+        // AI Hedef Güncelleme (Oyuncuyu Takip Et)
+        if let Some(mut agents) = world.borrow_mut::<gizmo_ai::NavAgent>() {
+            let player_pos = if let Some(transforms) = world.borrow::<Transform>() {
+                transforms.get(state.player_id).map(|t| t.position)
+            } else { None };
+            
+            if let Some(ppos) = player_pos {
+                let keys = agents.entity_dense.clone();
+                for e in keys {
+                    if let Some(a) = agents.get_mut(e) {
+                         a.target = Some(ppos);
+                    }
+                }
+            }
+        }
 
         // Lua Script motoru güncellemeleri (Input, Time, Scene durumlarını aktarır + global on_update çağırır)
-        if let Some(engine) = state.script_engine.borrow_mut().as_mut() {
+        let mut engine_opt = world.remove_resource::<gizmo::scripting::ScriptEngine>();
+        if let Some(mut engine) = engine_opt.take() {
             let _ = engine.update(world, input, dt);
+            world.insert_resource(engine);
         }
 
         // Script bileşeni olan entity'ler için per-entity script çalıştır (eski run_scripts)
@@ -162,14 +192,17 @@ fn main() {
     app = app.set_render(|world, state, encoder, view, renderer: &mut gizmo::renderer::Renderer, light_time| {
         // Post-process ayarlarını uygula
         {
-            let pp = *state.post_process_settings.borrow();
-            renderer.update_post_process(&renderer.queue, pp);
+            if let Some(pp) = world.get_resource::<gizmo::renderer::renderer::PostProcessUniforms>() {
+                renderer.update_post_process(&renderer.queue, *pp);
+            }
         }
         
         // Shader reload isteği
-        if state.shader_reload_request.get() {
-            renderer.rebuild_shaders();
-            state.shader_reload_request.set(false);
+        if let Some(mut events) = world.get_resource_mut::<gizmo::core::event::Events<crate::state::ShaderReloadEvent>>() {
+            if !events.is_empty() {
+                renderer.rebuild_shaders();
+                events.clear();
+            }
         }
 
         render_pipeline::execute_render_pipeline(world, state, encoder, view, renderer, light_time);
@@ -196,9 +229,10 @@ fn build_ray(world: &World, player_id: u32, ndc_x: f32, ndc_y: f32, ww: f32, wh:
     None
 }
 
-fn run_scripts(world: &mut World, state: &mut GameState, dt: f32, input: &Input) -> Vec<gizmo::scripting::commands::ScriptCommand> {
+fn run_scripts(world: &mut World, _state: &mut GameState, dt: f32, input: &Input) -> Vec<gizmo::scripting::commands::ScriptCommand> {
     let mut unhandled = Vec::new();
-    if state.script_engine.borrow().is_none() { return unhandled; }
+    let mut engine_opt = world.remove_resource::<gizmo::scripting::ScriptEngine>();
+    if engine_opt.is_none() { return unhandled; }
 
     if let (Some(mut transforms), Some(mut vels), Some(scripts)) = (
         world.borrow_mut::<Transform>(),
@@ -224,7 +258,7 @@ fn run_scripts(world: &mut World, state: &mut GameState, dt: f32, input: &Input)
                 key_left:  input.is_key_pressed(KeyCode::ArrowLeft as u32),
                 key_right: input.is_key_pressed(KeyCode::ArrowRight as u32),
             };
-            if let Some(engine) = state.script_engine.borrow_mut().as_mut() {
+            if let Some(engine) = engine_opt.as_mut() {
                 let _ = engine.reload_if_changed(&script.file_path);
                 let func_name = if script.file_path.contains("car_controller") {
                     "car_update"
@@ -246,8 +280,9 @@ fn run_scripts(world: &mut World, state: &mut GameState, dt: f32, input: &Input)
             }
         }
     }
-    if let Some(engine) = state.script_engine.borrow_mut().as_mut() {
+    if let Some(engine) = engine_opt {
         unhandled = engine.flush_commands(world);
+        world.insert_resource(engine);
     }
     unhandled
 }

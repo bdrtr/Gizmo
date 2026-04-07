@@ -315,6 +315,12 @@ impl AssetManager {
         layout: &wgpu::BindGroupLayout,
         path: &str,
     ) -> Result<Arc<wgpu::BindGroup>, String> {
+        // Yolu normalize et — aynı dosyanın farklı path'lerle cache'te çoğalmasını önle
+        let canonical = std::path::Path::new(path).canonicalize()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| path.to_string());
+        let path = canonical.as_str();
+        
         if let Some(cached) = self.texture_cache.get(path) {
             return Ok(cached.clone());
         }
@@ -376,6 +382,62 @@ impl AssetManager {
 
         self.texture_cache.insert(path.to_string(), bg.clone());
         Ok(bg)
+    }
+
+    /// Dümdüz 1x1 beyaz (katı) bir kaplama üretir. Doku içermeyen materyallerin varsayılan kaplamasıdır.
+    pub fn create_white_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layout: &wgpu::BindGroupLayout,
+    ) -> Arc<wgpu::BindGroup> {
+        let path = "__white_fallback_texture__";
+        if let Some(cached) = self.texture_cache.get(path) {
+            return cached.clone();
+        }
+
+        let texture_size = wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            size: texture_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            label: Some("White Fallback Texture"),
+            view_formats: &[],
+        });
+
+        // Sadece 1 piksel tam beyaz [255, 255, 255, 255]
+        queue.write_texture(
+            wgpu::ImageCopyTexture { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            &[255, 255, 255, 255],
+            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+            texture_size,
+        );
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        let bg = Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("White Fallback BindGroup"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+            ],
+        }));
+
+        self.texture_cache.insert(path.to_string(), bg.clone());
+        bg
     }
 
     /// GLTF / GLB Sahnesini yükleyerek Mesh ve Hiyerarşi ağacını parçalar.
@@ -492,7 +554,8 @@ impl AssetManager {
             mat.albedo = gizmo_math::Vec4::new(1.0, 1.0, 1.0, 1.0);
             mat.metallic = pbr.metallic_factor();
             mat.roughness = pbr.roughness_factor();
-            mat.unlit = 1.0; // PBR'ı kapatıp Texture'u çıplak olarak (ambient shadowsuz) çiz!
+            // Varsayılan: PBR açık (unlit=0.0). GLTF modelleri artık ışıklandırma alacak.
+            mat.unlit = 0.0;
             gltf_materials.push(mat);
         }
 

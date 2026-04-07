@@ -51,6 +51,12 @@ pub struct EditorState {
     pub scene_path: String,
     /// Silme talebi gönderilen entity ID
     pub despawn_request: Option<u32>,
+    /// Sahne kaydetme isteği (Dosya yolu)
+    pub scene_save_request: Option<String>,
+    /// Sahne yükleme isteği (Dosya yolu)
+    pub scene_load_request: Option<String>,
+    /// Prefab kaydetme isteği (Entity ID, Dosya yolu)
+    pub prefab_save_request: Option<(u32, String)>,
 }
 
 impl EditorState {
@@ -71,6 +77,9 @@ impl EditorState {
             status_message: "Hazır".to_string(),
             scene_path: "scene.json".to_string(),
             despawn_request: None,
+            scene_save_request: None,
+            scene_load_request: None,
+            prefab_save_request: None,
         }
     }
 
@@ -112,3 +121,4 @@ impl Default for EditorState {
         Self::new()
     }
 }
+

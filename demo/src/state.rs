@@ -1,5 +1,4 @@
 use gizmo::prelude::*;
-use std::cell::{Cell, RefCell};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum DragAxis { X, Y, Z }
@@ -36,6 +35,57 @@ pub enum RaceStatus {
     Finished,
 }
 
+// --- ECS KULLANIMI İÇİN EVENT VE RESOURCE YAPILARI ---
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum AppMode {
+    MainMenu,
+    InGame,
+    Settings,
+}
+
+#[derive(Clone, Debug)]
+pub struct PlayerStats {
+    pub health: f32,
+    pub max_health: f32,
+    pub ammo: u32,
+    pub max_ammo: u32,
+}
+
+
+pub struct PachinkoSpawnerState {
+    pub timer: f32,
+    pub count: u32,
+}
+
+pub struct SpawnDominoEvent {
+    pub count: u32,
+}
+
+pub struct ReleaseDominoEvent {
+    pub count: u32,
+}
+
+pub struct TextureLoadEvent {
+    pub entity_id: u32,
+    pub path: String,
+}
+
+pub struct AssetSpawnEvent {
+    pub path: String,
+}
+
+pub struct ShaderReloadEvent;
+
+pub struct SelectionEvent {
+    pub entity_id: u32,
+}
+
+pub struct DominoAppState {
+    pub active_ball_id: Option<u32>,
+}
+
+
 pub struct GameState {
     pub bouncing_box_id: u32,
     pub player_id: u32,
@@ -53,24 +103,13 @@ pub struct GameState {
     pub drag_original_scale: Vec3,
     pub drag_original_rot: Quat,
     pub current_fps: f32,
-    pub new_selection_request: Cell<Option<u32>>,
-    pub spawn_domino_requests: Cell<u32>,
-    pub release_domino_requests: Cell<u32>,
-    pub domino_ball_id: Cell<Option<u32>>,
-    pub texture_load_requests: RefCell<Vec<(u32, String)>>,
-    pub asset_manager: RefCell<gizmo::renderer::asset::AssetManager>,
     pub gizmo_mode: GizmoMode,
     pub egui_wants_pointer: bool,
     pub asset_watcher: Option<gizmo::renderer::hot_reload::AssetWatcher>,
-    pub script_engine: RefCell<Option<gizmo::scripting::ScriptEngine>>,
     pub physics_accumulator: f32,
     pub target_physics_fps: f32,
     pub sphere_prefab_id: u32,
     pub cube_prefab_id: u32,
-    pub asset_spawn_requests: RefCell<Vec<String>>,
-    pub shader_reload_request: Cell<bool>,
-    pub post_process_settings: RefCell<gizmo::renderer::renderer::PostProcessUniforms>,
-    pub editor_state: RefCell<gizmo::editor::EditorState>,
     pub free_cam: bool,
 
     // ── Oyun Sistemi ──────────────────────────────────────────────────
@@ -84,10 +123,7 @@ pub struct GameState {
     pub race_status: RaceStatus,
     /// Yarış süresi (saniye)
     pub race_timer: f32,
-    /// Kamera takip target (None = serbest kamera)
     pub camera_follow_target: Option<u32>,
-
-    // --- Galton Box Özel ---
-    pub pachinko_spawn_timer: Cell<f32>,
-    pub pachinko_spawn_count: Cell<u32>,
+    /// Toplam geçen süre (saniye) — Time resource'u için
+    pub total_elapsed: f64,
 }

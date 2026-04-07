@@ -2,8 +2,8 @@ use gizmo_core::World;
 use gizmo_math::Vec3;
 use gizmo_physics::components::{Transform, RigidBody, Velocity};
 use gizmo_physics::shape::Collider;
-use gizmo_physics::system::{physics_movement_system, physics_collision_system};
-
+use gizmo_physics::system::physics_collision_system;
+use gizmo_physics::integration::physics_movement_system;
 fn setup_world() -> World {
     World::new()
 }
@@ -63,6 +63,7 @@ fn test_tunneling_prevention_with_ccd() {
     world.add_component(wall, Collider::new_aabb(0.5, 5.0, 5.0)); 
     
     // 0.1 saniye işlet
+    physics_collision_system(&world, 0.1);
     physics_movement_system(&world, 0.1);
     
     let t = world.borrow::<Transform>().unwrap().get(bullet.id()).unwrap().clone();

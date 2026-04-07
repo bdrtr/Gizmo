@@ -1,0 +1,433 @@
+{
+  "entities": [
+    {
+      "original_id": 0,
+      "name": null,
+      "transform": null,
+      "velocity": null,
+      "rigid_body": null,
+      "collider": null,
+      "camera": null,
+      "point_light": null,
+      "directional_light": null,
+      "mesh_source": null,
+      "material_source": {
+        "albedo": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughness": 0.5,
+        "metallic": 0.0,
+        "unlit": 0.0,
+        "texture_source": null
+      },
+      "parent_id": null,
+      "script_path": null
+    },
+    {
+      "original_id": 1,
+      "name": null,
+      "transform": {
+        "position": [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          200.0,
+          1.0,
+          200.0
+        ]
+      },
+      "velocity": null,
+      "rigid_body": {
+        "mass": 0.0,
+        "restitution": 1.0,
+        "friction": 1.0,
+        "use_gravity": false,
+        "local_inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inverse_inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "is_sleeping": true,
+        "ccd_enabled": false
+      },
+      "collider": {
+        "shape": {
+          "Aabb": {
+            "half_extents": [
+              100.0,
+              0.05,
+              100.0
+            ]
+          }
+        }
+      },
+      "camera": null,
+      "point_light": null,
+      "directional_light": null,
+      "mesh_source": "plane",
+      "material_source": {
+        "albedo": [
+          0.8,
+          0.7,
+          0.4,
+          1.0
+        ],
+        "roughness": 0.9,
+        "metallic": 0.1,
+        "unlit": 0.0,
+        "texture_source": "demo/assets/stone_tiles.jpg"
+      },
+      "parent_id": null,
+      "script_path": null
+    },
+    {
+      "original_id": 2,
+      "name": "Ay (Directional)",
+      "transform": {
+        "position": [
+          0.0,
+          50.0,
+          50.0
+        ],
+        "rotation": [
+          -0.34228247,
+          -0.17114124,
+          -0.0,
+          0.9238795
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "velocity": null,
+      "rigid_body": null,
+      "collider": null,
+      "camera": null,
+      "point_light": null,
+      "directional_light": {
+        "color": [
+          1.0,
+          0.95,
+          0.85
+        ],
+        "intensity": 2.0,
+        "is_sun": true
+      },
+      "mesh_source": null,
+      "material_source": null,
+      "parent_id": null,
+      "script_path": null
+    },
+    {
+      "original_id": 3,
+      "name": "Kamera (Göz)",
+      "transform": {
+        "position": [
+          -10.2585745,
+          9.099199,
+          26.128796
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "velocity": null,
+      "rigid_body": null,
+      "collider": null,
+      "camera": {
+        "fov": 0.7853982,
+        "near": 0.1,
+        "far": 2000.0,
+        "yaw": -1.3967962,
+        "pitch": -0.35400006,
+        "primary": true
+      },
+      "point_light": null,
+      "directional_light": null,
+      "mesh_source": null,
+      "material_source": null,
+      "parent_id": null,
+      "script_path": null
+    },
+    {
+      "original_id": 4,
+      "name": "Skybox (Gök Kubbe)",
+      "transform": {
+        "position": [
+          -10.2585745,
+          9.099199,
+          26.128796
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          500.0,
+          500.0,
+          500.0
+        ]
+      },
+      "velocity": null,
+      "rigid_body": null,
+      "collider": null,
+      "camera": null,
+      "point_light": null,
+      "directional_light": null,
+      "mesh_source": "inverted_cube",
+      "material_source": {
+        "albedo": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughness": 0.5,
+        "metallic": 0.0,
+        "unlit": 2.0,
+        "texture_source": null
+      },
+      "parent_id": null,
+      "script_path": null
+    },
+    {
+      "original_id": 5,
+      "name": "Gizmo_X",
+      "transform": {
+        "position": [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.5,
+          0.08,
+          0.08
+        ]
+      },
+      "velocity": null,
+      "rigid_body": null,
+      "collider": {
+        "shape": {
+          "Aabb": {
+            "half_extents": [
+              1.5,
+              0.3,
+              0.3
+            ]
+          }
+        }
+      },
+      "camera": null,
+      "point_light": null,
+      "directional_light": null,
+      "mesh_source": "sphere",
+      "material_source": {
+        "albedo": [
+          1.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "roughness": 0.5,
+        "metallic": 0.0,
+        "unlit": 1.0,
+        "texture_source": null
+      },
+      "parent_id": null,
+      "script_path": null
+    },
+    {
+      "original_id": 6,
+      "name": "Gizmo_Y",
+      "transform": {
+        "position": [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.08,
+          1.5,
+          0.08
+        ]
+      },
+      "velocity": null,
+      "rigid_body": null,
+      "collider": {
+        "shape": {
+          "Aabb": {
+            "half_extents": [
+              0.3,
+              1.5,
+              0.3
+            ]
+          }
+        }
+      },
+      "camera": null,
+      "point_light": null,
+      "directional_light": null,
+      "mesh_source": "sphere",
+      "material_source": {
+        "albedo": [
+          0.0,
+          1.0,
+          0.0,
+          1.0
+        ],
+        "roughness": 0.5,
+        "metallic": 0.0,
+        "unlit": 1.0,
+        "texture_source": null
+      },
+      "parent_id": null,
+      "script_path": null
+    },
+    {
+      "original_id": 7,
+      "name": "Gizmo_Z",
+      "transform": {
+        "position": [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.08,
+          0.08,
+          1.5
+        ]
+      },
+      "velocity": null,
+      "rigid_body": null,
+      "collider": {
+        "shape": {
+          "Aabb": {
+            "half_extents": [
+              0.3,
+              0.3,
+              1.5
+            ]
+          }
+        }
+      },
+      "camera": null,
+      "point_light": null,
+      "directional_light": null,
+      "mesh_source": "sphere",
+      "material_source": {
+        "albedo": [
+          0.0,
+          0.0,
+          1.0,
+          1.0
+        ],
+        "roughness": 0.5,
+        "metallic": 0.0,
+        "unlit": 1.0,
+        "texture_source": null
+      },
+      "parent_id": null,
+      "script_path": null
+    },
+    {
+      "original_id": 8,
+      "name": null,
+      "transform": null,
+      "velocity": null,
+      "rigid_body": null,
+      "collider": null,
+      "camera": null,
+      "point_light": null,
+      "directional_light": null,
+      "mesh_source": "sphere",
+      "material_source": {
+        "albedo": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughness": 0.5,
+        "metallic": 0.0,
+        "unlit": 0.0,
+        "texture_source": null
+      },
+      "parent_id": null,
+      "script_path": null
+    },
+    {
+      "original_id": 9,
+      "name": null,
+      "transform": null,
+      "velocity": null,
+      "rigid_body": null,
+      "collider": null,
+      "camera": null,
+      "point_light": null,
+      "directional_light": null,
+      "mesh_source": "standard_cube",
+      "material_source": {
+        "albedo": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughness": 0.5,
+        "metallic": 0.0,
+        "unlit": 0.0,
+        "texture_source": null
+      },
+      "parent_id": null,
+      "script_path": null
+    }
+  ]
+}
