@@ -164,6 +164,42 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
     let cube_prefab = world.spawn();
     world.add_component(cube_prefab, gizmo::renderer::asset::AssetManager::create_cube(&renderer.device));
 
+    // --- YAĞMUR PARTİKÜLLERİ ---
+    println!("Gizmo Engine: Yağmur partikülleri oluşturuluyor...");
+    let rain_mat = world.spawn();
+    world.add_component(rain_mat, Material::new(tbind.clone()).with_pbr(Vec4::new(0.6, 0.7, 0.9, 0.6), 0.1, 0.0).with_unlit(Vec4::new(0.6, 0.7, 0.9, 0.6)));
+    let rain_mesh = gizmo::renderer::asset::AssetManager::create_cube(&renderer.device);
+
+    // assuming rand is available, or use a simple LCG
+    let mut rng_seed: u32 = 12345;
+    let mut rand_f32 = || -> f32 {
+        rng_seed = rng_seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        (rng_seed as f32 / std::u32::MAX as f32)
+    };
+
+    for i in 0..500 {
+        let drop = world.spawn();
+        let rx = (rand_f32() - 0.5) * 60.0;
+        let rz = (rand_f32() - 0.5) * 60.0;
+        let ry = 10.0 + (rand_f32() * 30.0);
+        
+        // Yağmur damlası şekli (ince uzun küp)
+        world.add_component(drop, Transform::new(Vec3::new(rx, ry, rz))
+            .with_scale(Vec3::new(0.04, 0.8, 0.04)));
+        
+        world.add_component(drop, EntityName(format!("Raindrop_{}", i)));
+        world.add_component(drop, gizmo::physics::components::Velocity::new(Vec3::new(0.0, -15.0 - (rand_f32() * 10.0), 0.0)));
+        world.add_component(drop, rain_mesh.clone());
+        world.add_component(drop, Material::new(tbind.clone()).with_unlit(Vec4::new(0.4, 0.6, 0.9, 0.8))); // Biraz mavi şeffafımsı görünüm
+        world.add_component(drop, gizmo::renderer::components::MeshRenderer::new());
+        // LUA SCRIPT EKLENTİSİ
+        world.add_component(drop, gizmo::scripting::Script {
+            file_path: "demo/assets/scripts/rain.lua".to_string(),
+            initialized: false,
+        });
+        // RigidBody ve Collider EKLENMİYOR! Böylece sadece script hareket ettirir.
+    }
+
     GameState {
         bouncing_box_id,
         player_id,
