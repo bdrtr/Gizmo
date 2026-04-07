@@ -86,4 +86,8 @@ pub struct GameState {
     pub race_timer: f32,
     /// Kamera takip target (None = serbest kamera)
     pub camera_follow_target: Option<u32>,
+
+    // --- Galton Box Özel ---
+    pub pachinko_spawn_timer: Cell<f32>,
+    pub pachinko_spawn_count: Cell<u32>,
 }

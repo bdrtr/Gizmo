@@ -48,6 +48,10 @@ pub struct ScriptContext {
     pub key_s: bool,
     pub key_d: bool,
     pub key_space: bool,
+    pub key_up: bool,
+    pub key_down: bool,
+    pub key_left: bool,
+    pub key_right: bool,
 }
 
 /// Lua'dan dönen değişiklikler (geriye dönük uyumluluk)
@@ -290,6 +294,32 @@ impl ScriptEngine {
                         }
                     }
                 }
+                ScriptCommand::AddRigidBody { id, mass, restitution, friction, use_gravity } => {
+                    let entity = world.iter_alive_entities().into_iter().find(|e| e.id() == id);
+                    if let Some(e) = entity {
+                        let rb = gizmo_physics::components::RigidBody::new(mass, restitution, friction, use_gravity);
+                        world.add_component(e, rb);
+                        // Make sure velocity exists so it can move
+                        if world.borrow::<gizmo_physics::components::Velocity>().map(|v| v.get(id).is_none()).unwrap_or(true) {
+                            world.add_component(e, gizmo_physics::components::Velocity::new(gizmo_math::Vec3::ZERO));
+                        }
+                    }
+                }
+                ScriptCommand::AddBoxCollider { id, hx, hy, hz } => {
+                    let entity = world.iter_alive_entities().into_iter().find(|e| e.id() == id);
+                    if let Some(e) = entity {
+                        let col = gizmo_physics::shape::Collider::new_aabb(hx, hy, hz);
+                        world.add_component(e, col);
+                    }
+                }
+                ScriptCommand::AddSphereCollider { id, radius } => {
+                    let entity = world.iter_alive_entities().into_iter().find(|e| e.id() == id);
+                    if let Some(e) = entity {
+                        let col = gizmo_physics::shape::Collider::new_sphere(radius);
+                        world.add_component(e, col);
+                    }
+                }
+
                 ScriptCommand::SpawnEntity { name, position } => {
                     let entity = world.spawn();
                     world.add_component(entity, gizmo_core::EntityName::new(&name));
@@ -312,6 +342,14 @@ impl ScriptEngine {
                             n.0 = name;
                         }
                     }
+                }
+                ScriptCommand::SaveScene(_) |
+                ScriptCommand::ShowDialogue { .. } | ScriptCommand::HideDialogue |
+                ScriptCommand::TriggerCutscene(_) | ScriptCommand::EndCutscene |
+                ScriptCommand::AddCheckpoint { .. } | ScriptCommand::ActivateCheckpoint(_) |
+                ScriptCommand::StartRace | ScriptCommand::FinishRace { .. } | ScriptCommand::ResetRace |
+                ScriptCommand::SetCameraTarget(_) | ScriptCommand::SetCameraFov(_) => {
+                    // Ignored
                 }
                 other => {
                     unhandled.push(other);
@@ -344,11 +382,11 @@ impl ScriptEngine {
         Ok(true)
     }
 
-    /// Eski API uyumluluğu: run_update (mevcut demo kodu için)
-    pub fn run_update(&self, ctx: &ScriptContext) -> Result<ScriptResult, String> {
+    /// Belirli bir isimdeki Lua fonksiyonunu çağırır (per-entity scriptler için)
+    pub fn run_entity_update(&self, func_name: &str, ctx: &ScriptContext) -> Result<ScriptResult, String> {
         let globals = self.lua.globals();
         
-        let func: LuaFunction = match globals.get("on_update") {
+        let func: LuaFunction = match globals.get(func_name) {
             Ok(f) => f,
             Err(_) => return Ok(ScriptResult::default()),
         };
@@ -356,6 +394,7 @@ impl ScriptEngine {
         let ctx_table = self.lua.create_table().map_err(|e| e.to_string())?;
         ctx_table.set("entity_id", ctx.entity_id).map_err(|e| e.to_string())?;
         ctx_table.set("dt", ctx.dt).map_err(|e| e.to_string())?;
+        ctx_table.set("elapsed", self.elapsed_time).map_err(|e| e.to_string())?;
         
         let pos = self.lua.create_table().map_err(|e| e.to_string())?;
         pos.set("x", ctx.position[0]).map_err(|e| e.to_string())?;
@@ -375,6 +414,10 @@ impl ScriptEngine {
         input.set("s", ctx.key_s).map_err(|e| e.to_string())?;
         input.set("d", ctx.key_d).map_err(|e| e.to_string())?;
         input.set("space", ctx.key_space).map_err(|e| e.to_string())?;
+        input.set("up", ctx.key_up).map_err(|e| e.to_string())?;
+        input.set("down", ctx.key_down).map_err(|e| e.to_string())?;
+        input.set("left", ctx.key_left).map_err(|e| e.to_string())?;
+        input.set("right", ctx.key_right).map_err(|e| e.to_string())?;
         ctx_table.set("input", input).map_err(|e| e.to_string())?;
 
         let result_table: LuaTable = func.call(ctx_table).map_err(|e| format!("Lua runtime: {}", e))?;

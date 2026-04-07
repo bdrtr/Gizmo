@@ -21,6 +21,24 @@ pub enum ScriptCommand {
     // Physics
     ApplyForce(u32, Vec3),
     ApplyImpulse(u32, Vec3),
+    AddRigidBody {
+        id: u32,
+        mass: f32,
+        restitution: f32,
+        friction: f32,
+        use_gravity: bool,
+    },
+    AddBoxCollider {
+        id: u32,
+        hx: f32,
+        hy: f32,
+        hz: f32,
+    },
+    AddSphereCollider {
+        id: u32,
+        radius: f32,
+    },
+
     
     // Entity Lifecycle
     SpawnEntity { name: String, position: Vec3 },
@@ -49,6 +67,7 @@ pub enum ScriptCommand {
     EndCutscene,
 
     // Yarış Sistemi
+    StartRace,
     AddCheckpoint { id: u32, position: Vec3, radius: f32 },
     ActivateCheckpoint(u32),
     FinishRace { winner_name: String },
