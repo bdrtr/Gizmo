@@ -127,3 +127,28 @@ pub struct Parent(pub u32);
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Children(pub Vec<u32>);
+
+/// Entity isim bileşeni — Editor, Lua ve Scene Serialization tarafından kullanılır.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct EntityName(pub String);
+
+impl EntityName {
+    pub fn new(name: &str) -> Self {
+        Self(name.to_string())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PrefabRequest(pub String);
+
+impl PrefabRequest {
+    pub fn new(name: &str) -> Self {
+        Self(name.to_string())
+    }
+}
+
+impl std::fmt::Display for EntityName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}

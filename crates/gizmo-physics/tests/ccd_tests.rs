@@ -33,7 +33,7 @@ fn test_tunneling_without_ccd() {
     // -5.0 + 20.0 = 15.0'e ışınlanmalı ve duvara HİÇ ÇARPMADAN geçmeli
     // (Çünkü CCD kapalı ve discrete test 1 kareden diğerine duvarı atlar)
     physics_movement_system(&world, 0.1);
-    physics_collision_system(&world); // Çarpışmayı kontrol et ama nafile, çünkü duvardan çoktan geçti
+    physics_collision_system(&world, 0.1); // Çarpışmayı kontrol et ama nafile, çünkü duvardan çoktan geçti
     
     let t = world.borrow::<Transform>().unwrap().get(bullet.id()).unwrap().clone();
     

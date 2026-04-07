@@ -67,3 +67,50 @@ impl Ray {
         Some(t)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ray_intersect_aabb_hit() {
+        let ray = Ray::new(Vec3::new(0.0, 0.0, -5.0), Vec3::new(0.0, 0.0, 1.0));
+        let min = Vec3::new(-1.0, -1.0, -1.0);
+        let max = Vec3::new(1.0, 1.0, 1.0);
+
+        let t = ray.intersect_aabb(min, max);
+        assert!(t.is_some());
+        assert_eq!(t.unwrap(), 4.0); // Hits the front face at z = -1, origin is -5, distance is 4 
+    }
+
+    #[test]
+    fn test_ray_intersect_aabb_miss() {
+        let ray = Ray::new(Vec3::new(0.0, 5.0, -5.0), Vec3::new(0.0, 0.0, 1.0));
+        let min = Vec3::new(-1.0, -1.0, -1.0);
+        let max = Vec3::new(1.0, 1.0, 1.0);
+
+        let t = ray.intersect_aabb(min, max);
+        assert!(t.is_none());
+    }
+
+    #[test]
+    fn test_ray_intersect_aabb_inside() {
+        let ray = Ray::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0));
+        let min = Vec3::new(-1.0, -1.0, -1.0);
+        let max = Vec3::new(1.0, 1.0, 1.0);
+
+        let t = ray.intersect_aabb(min, max);
+        assert!(t.is_some());
+        assert_eq!(t.unwrap(), 1.0); // Inside the box, hits the back face at z = 1, distance is 1
+    }
+
+    #[test]
+    fn test_ray_intersect_aabb_behind() {
+        let ray = Ray::new(Vec3::new(0.0, 0.0, 5.0), Vec3::new(0.0, 0.0, 1.0));
+        let min = Vec3::new(-1.0, -1.0, -1.0);
+        let max = Vec3::new(1.0, 1.0, 1.0);
+
+        let t = ray.intersect_aabb(min, max);
+        assert!(t.is_none()); // The box is strictly behind the ray origin
+    }
+}

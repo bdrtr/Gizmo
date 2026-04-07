@@ -7,6 +7,7 @@ pub use gizmo_renderer as renderer;
 pub use gizmo_window as window;
 pub use gizmo_physics as physics;
 pub use gizmo_app as app;
+pub use gizmo_ai as ai;
 
 // === Opsiyonel Modüller ===
 #[cfg(feature = "audio")]
@@ -17,6 +18,9 @@ pub use gizmo_editor as editor;
 
 #[cfg(feature = "scripting")]
 pub use gizmo_scripting as scripting;
+
+#[cfg(feature = "scene")]
+pub use gizmo_scene as scene;
 
 // === 3. Parti Re-Export (Kullanıcının ayrıca eklemesine gerek kalmasın) ===
 pub use winit;

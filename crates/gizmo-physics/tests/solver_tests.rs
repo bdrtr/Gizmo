@@ -1,7 +1,6 @@
 use gizmo_core::World;
 use gizmo_math::{Vec3, Quat};
 use gizmo_physics::components::{Transform, RigidBody, Velocity};
-use gizmo_physics::shape::Collider;
 use gizmo_physics::constraints::{JointWorld, Joint, solve_constraints, JointKind};
 
 fn setup_world() -> World {
@@ -24,7 +23,7 @@ fn test_fixed_joint_pull() {
     world.add_component(entity_b, Transform::new(Vec3::new(2.0, 0.0, 0.0)));
     let rb_b = RigidBody::new(10.0, 0.0, 0.5, false);
     world.add_component(entity_b, rb_b);
-    let mut vel_b = Velocity::new(Vec3::new(100.0, 0.0, 0.0));
+    let vel_b = Velocity::new(Vec3::new(100.0, 0.0, 0.0));
     world.add_component(entity_b, vel_b);
     
     // A ve B'yi Fixed Joint ile bağla

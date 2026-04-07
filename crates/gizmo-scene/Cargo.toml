@@ -1,0 +1,13 @@
+[package]
+name = "gizmo-scene"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+gizmo-core = { path = "../gizmo-core" }
+gizmo-math = { path = "../gizmo-math" }
+gizmo-physics = { path = "../gizmo-physics" }
+gizmo-renderer = { path = "../gizmo-renderer" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+wgpu = "0.19"

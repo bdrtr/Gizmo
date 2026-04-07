@@ -1,5 +1,5 @@
 use gizmo_math::{Vec3, Quat};
-use gizmo_physics::shape::{ColliderShape, Capsule, Aabb, Sphere, ConvexHull};
+use gizmo_physics::shape::{ColliderShape, Capsule, Aabb, Sphere};
 use gizmo_physics::collision::{
     check_aabb_aabb_manifold, 
     check_capsule_aabb_manifold,

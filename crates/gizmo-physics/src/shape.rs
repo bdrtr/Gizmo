@@ -51,11 +51,12 @@ impl ColliderShape {
                 pos + dir * s.radius
             }
             ColliderShape::Aabb(aabb) => {
-                let mut p = pos;
-                p.x += if dir.x >= 0.0 { aabb.half_extents.x } else { -aabb.half_extents.x };
-                p.y += if dir.y >= 0.0 { aabb.half_extents.y } else { -aabb.half_extents.y };
-                p.z += if dir.z >= 0.0 { aabb.half_extents.z } else { -aabb.half_extents.z };
-                p
+                // AABB'yi gerçek rotasyona tepki veren bir OBB gibi ele alıyoruz:
+                let local_dir = rot.inverse().mul_vec3(dir);
+                let lx = if local_dir.x >= 0.0 { aabb.half_extents.x } else { -aabb.half_extents.x };
+                let ly = if local_dir.y >= 0.0 { aabb.half_extents.y } else { -aabb.half_extents.y };
+                let lz = if local_dir.z >= 0.0 { aabb.half_extents.z } else { -aabb.half_extents.z };
+                pos + rot.mul_vec3(Vec3::new(lx, ly, lz))
             }
             ColliderShape::Capsule(cap) => {
                 // Arama vektörünü lokal uzaya çek (Böylece vertexlere döngüde rotasyon uygulamaktan kurtuluyoruz)

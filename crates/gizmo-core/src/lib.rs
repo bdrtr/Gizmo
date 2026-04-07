@@ -6,12 +6,14 @@ pub mod input;
 pub mod query;
 pub mod event;
 pub mod time;
+pub mod registry;
 
 pub use entity::Entity;
-pub use component::{Component, ComponentStorage, SparseSet};
+pub use component::{Component, ComponentStorage, SparseSet, EntityName, PrefabRequest};
 pub use world::World;
 pub use system::{Schedule, System};
 pub use input::Input;
 pub use query::*;
 pub use event::Events;
 pub use time::Time;
+pub use registry::ComponentRegistry;

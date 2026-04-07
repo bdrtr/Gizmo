@@ -8,6 +8,7 @@ members = [
     "crates/gizmo-editor",
     "crates/gizmo-app",
     "crates/gizmo-scripting",
+    "crates/gizmo-scene",
     "demo",
 ]
 

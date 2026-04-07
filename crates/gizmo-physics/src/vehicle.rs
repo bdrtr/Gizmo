@@ -43,6 +43,12 @@ pub struct VehicleController {
     pub brake_force: f32,     // Fren kuvveti (Newton)
 }
 
+impl Default for VehicleController {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VehicleController {
     pub fn new() -> Self {
         Self {
@@ -57,3 +63,191 @@ impl VehicleController {
         self.wheels.push(wheel);
     }
 }
+
+use gizmo_core::World;
+use crate::components::{Transform, Velocity, RigidBody};
+use crate::shape::{Collider, ColliderShape};
+use crate::integration::apply_inv_inertia;
+pub fn physics_vehicle_system(world: &World, dt: f32) {
+    // Statik objeleri topla (Raycast testleri için)
+    struct StaticAabb {
+        position: Vec3,
+        half_extents: Vec3,
+    }
+    let colliders_storage = world.borrow::<Collider>();
+    let static_aabbs: Vec<StaticAabb> = {
+        if let (Some(rbs), Some(ref cols), Some(ts)) = (world.borrow::<RigidBody>(), &colliders_storage, world.borrow::<Transform>()) {
+            cols.entity_dense.iter()
+                .filter_map(|&e| {
+                    if rbs.get(e).is_some_and(|rb| rb.mass == 0.0) {
+                        let t = ts.get(e)?;
+                        let col = cols.get(e)?;
+                        if let ColliderShape::Aabb(aabb) = &col.shape {
+                            return Some(StaticAabb {
+                                position: t.position,
+                                half_extents: Vec3::new(
+                                    aabb.half_extents.x * t.scale.x,
+                                    aabb.half_extents.y * t.scale.y,
+                                    aabb.half_extents.z * t.scale.z,
+                                ),
+                            });
+                        }
+                    }
+                    None
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    };
+
+    if let (Some(trans_storage), Some(mut vel_storage), Some(mut rbs), Some(mut vehicles)) = 
+        (world.borrow_mut::<Transform>(), world.borrow_mut::<Velocity>(), world.borrow_mut::<RigidBody>(), world.borrow_mut::<VehicleController>()) 
+    {
+        let entities = vehicles.entity_dense.clone();
+        for entity in entities {
+            let t = match trans_storage.get(entity) { Some(t) => *t, None => continue };
+            let v = match vel_storage.get_mut(entity) { Some(v) => v, None => continue };
+            let rb = match rbs.get_mut(entity) { Some(r) => r, None => continue };
+            let vehicle = vehicles.get_mut(entity).unwrap();
+
+            rb.wake_up();
+
+            let inv_mass = if rb.mass > 0.0 { 1.0 / rb.mass } else { 0.0 };
+            let inv_inertia = rb.inverse_inertia;
+
+            let mut total_linear_impulse = Vec3::ZERO;
+            let mut total_angular_impulse = Vec3::ZERO;
+            
+            let forward = t.rotation.mul_vec3(Vec3::new(0.0, 0.0, 1.0)).normalize();
+            let right = t.rotation.mul_vec3(Vec3::new(1.0, 0.0, 0.0)).normalize();
+            
+            let num_wheels = vehicle.wheels.len() as f32;
+            let engine_force = vehicle.engine_force;
+            let steering_angle = vehicle.steering_angle;
+            let brake_force = vehicle.brake_force;
+
+            for (i, wheel) in vehicle.wheels.iter_mut().enumerate() {
+                // Lokal bağlantı noktasını dünya haritasına çevir
+                let r_ws = t.rotation.mul_vec3(wheel.connection_point);
+                let origin = t.position + r_ws;
+                let dir = t.rotation.mul_vec3(wheel.direction).normalize();
+
+                // === RAYCASTING (AABB & Ground Plane) ===
+                let mut hit_t = f32::MAX;
+                
+                // 1. Zemin Yüzeyi (Y = -1.0) fallback olarak
+                let ground_y = -1.0_f32;
+                if dir.y < -0.001 && origin.y > ground_y {
+                    let t_y = (ground_y - origin.y) / dir.y;
+                    if t_y > 0.0 && t_y < hit_t { hit_t = t_y; }
+                }
+
+                // 2. Statik AABB'lere Raycast Testi
+                for static_col in &static_aabbs {
+                    let min_b = static_col.position - static_col.half_extents;
+                    let max_b = static_col.position + static_col.half_extents;
+                    
+                    let inv_dir = Vec3::new(
+                        if dir.x.abs() > 1e-8 { 1.0 / dir.x } else { f32::MAX },
+                        if dir.y.abs() > 1e-8 { 1.0 / dir.y } else { f32::MAX },
+                        if dir.z.abs() > 1e-8 { 1.0 / dir.z } else { f32::MAX },
+                    );
+                    
+                    let t1x = (min_b.x - origin.x) * inv_dir.x;
+                    let t2x = (max_b.x - origin.x) * inv_dir.x;
+                    let t1y = (min_b.y - origin.y) * inv_dir.y;
+                    let t2y = (max_b.y - origin.y) * inv_dir.y;
+                    let t1z = (min_b.z - origin.z) * inv_dir.z;
+                    let t2z = (max_b.z - origin.z) * inv_dir.z;
+                    
+                    let t_near = t1x.min(t2x).max(t1y.min(t2y)).max(t1z.min(t2z));
+                    let t_far = t1x.max(t2x).min(t1y.max(t2y)).min(t1z.max(t2z));
+                    
+                    if t_near <= t_far && t_far > 0.0 && t_near < hit_t {
+                        hit_t = if t_near > 0.0 { t_near } else { 0.0 };
+                    }
+                }
+                
+                // === SÜSPANSİYON YAYLANMASI (Hooke Yasası + Damper) ===
+                if hit_t <= wheel.suspension_rest_length {
+                    wheel.is_grounded = true;
+                    // X = Dinlenme uzunluğu (rest) eksi, ulaşılan ray uzaklığı. 
+                    // Tekerlek lastiği de pay içerdiği için çıkarılır.
+                    let tire_margin = wheel.wheel_radius;
+                    // Tam Hooke Sıkıştırması: 
+                    wheel.compression = (wheel.suspension_rest_length + tire_margin) - hit_t;
+                    
+                    if wheel.compression > 0.0 {
+                        let spring_force = wheel.suspension_stiffness * wheel.compression;
+                        
+                        let wheel_vel = v.linear + v.angular.cross(r_ws);
+                        let vel_along_dir = wheel_vel.dot(dir);
+                        
+                        let damping_force = wheel.suspension_damping * vel_along_dir;
+                        let total_suspension_force = (spring_force + damping_force).max(0.0);
+                        
+                        let suspension_impulse = dir * -total_suspension_force * dt;
+                        total_linear_impulse += suspension_impulse;
+                        
+                        // Direk Tork oluştur (Merkezi olmayan kuvvet)
+                        let torque = r_ws.cross(suspension_impulse);
+                        total_angular_impulse += apply_inv_inertia(torque, inv_inertia, t.rotation);
+                    }
+                    
+                    // === MOTOR GÜCÜ (Arka tekerlekler) ===
+                    if i >= 2 && engine_force.abs() > 0.01 {
+                        let drive_impulse = forward * (engine_force / 2.0) * dt;
+                        total_linear_impulse += drive_impulse;
+                        let drive_torque = r_ws.cross(drive_impulse);
+                        total_angular_impulse += apply_inv_inertia(drive_torque, inv_inertia, t.rotation);
+                    }
+                    
+                    // === FREN ===
+                    if brake_force > 0.01 {
+                        let forward_speed = v.linear.dot(forward);
+                        let brake_impulse = forward * (-forward_speed.signum() * brake_force / num_wheels) * dt;
+                        total_linear_impulse += brake_impulse;
+                    }
+                    
+                    // === DİREKSİYON (Ön tekerlekler) ===
+                    if i < 2 && steering_angle.abs() > 0.001 {
+                        let wheel_vel = v.linear + v.angular.cross(r_ws);
+                        let lateral_vel = wheel_vel.dot(right);
+                        let steer_force = steering_angle * 8000.0; 
+                        let grip_force = -lateral_vel * 5000.0;
+                        let lateral_impulse = right * (steer_force + grip_force) * dt / num_wheels;
+                        total_linear_impulse += lateral_impulse;
+                        
+                        let steer_torque = r_ws.cross(lateral_impulse);
+                        total_angular_impulse += apply_inv_inertia(steer_torque, inv_inertia, t.rotation);
+                    }
+                    
+                    // Yanal Sürtünme / Tutuş (Araca viraj dönerken drift engelleme)
+                    let wheel_vel = v.linear + v.angular.cross(r_ws);
+                    let lateral_vel = wheel_vel.dot(right);
+                    let anti_slide = right * (-lateral_vel * 3000.0 / num_wheels) * dt;
+                    total_linear_impulse += anti_slide;
+                    let slide_torque = r_ws.cross(anti_slide);
+                    total_angular_impulse += apply_inv_inertia(slide_torque, inv_inertia, t.rotation);
+                    
+                } else {
+                    wheel.is_grounded = false;
+                    wheel.compression = 0.0;
+                }
+            }
+            
+            // Hava Direnci
+            let speed_sq = v.linear.length_squared();
+            if speed_sq > 0.1 {
+                let drag = v.linear * (-0.5 * speed_sq.sqrt() * 0.3 * dt);
+                total_linear_impulse += drag;
+            }
+
+            v.linear += total_linear_impulse * inv_mass;
+            v.angular += total_angular_impulse;
+        }
+    }
+}
+
+// Varlıkların fiziksel hareketlerini, yerçekimi ve sürtünme etkileriyle uygulayan sistem

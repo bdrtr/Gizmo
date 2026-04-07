@@ -2,7 +2,7 @@
 /// 
 /// `World` içerisinde Resource olarak tutulan evrensel olay (event) kuyruklarıdır.
 /// Örnek Kullanım:
-/// ```
+/// ```rust,ignore
 /// world.insert_resource(Events::<CollisionEvent>::new());
 /// 
 /// // Olay Fırlatma:

@@ -5,6 +5,7 @@ pub mod system;
 pub mod constraints;
 pub mod gjk;
 pub mod epa;
+pub mod integration;
 pub mod vehicle;
 pub mod character;
 pub use shape::{Aabb, Sphere, Capsule, ConvexHull, ColliderShape, Collider};
@@ -14,7 +15,8 @@ pub use collision::{
     check_capsule_capsule_manifold, check_capsule_sphere_manifold, check_capsule_aabb_manifold,
 };
 pub use components::{Transform, Velocity, RigidBody};
-pub use system::{physics_movement_system, physics_collision_system};
+pub use system::{PhysicsSolverState, physics_collision_system};
+pub use integration::physics_movement_system;
 pub use constraints::{Joint, JointKind, JointWorld, solve_constraints};
-pub use vehicle::{Wheel, VehicleController};
+pub use vehicle::{Wheel, VehicleController, physics_vehicle_system};
 pub use character::{CharacterController, physics_character_system};

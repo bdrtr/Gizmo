@@ -1,7 +1,7 @@
 use gizmo_core::World;
-use gizmo_math::{Vec3, Quat};
+use gizmo_math::Vec3;
 use gizmo_physics::components::{Transform, RigidBody, Velocity};
-use gizmo_physics::shape::{Collider, Aabb};
+use gizmo_physics::shape::Collider;
 use gizmo_physics::constraints::{JointWorld, Joint, solve_constraints, JointKind};
 use gizmo_physics::system::{physics_collision_system, physics_movement_system};
 
@@ -34,7 +34,7 @@ fn test_extreme_quantum_stack_explosion() {
     // Sistemler çözüme çalışsın (1 saniye boyunca)
     for _ in 0..60 {
         physics_movement_system(&world, 0.016);
-        physics_collision_system(&world);
+        physics_collision_system(&world, 0.016);
     }
     
     // Objelere test: NaN olmamalılar ve şiddetli şekilde dışarı saçılmış olmalılar
@@ -78,7 +78,7 @@ fn test_extreme_mass_disparity() {
     // Birkaç frame simüle et (çarpışma olsun)
     for _ in 0..20 {
         physics_movement_system(&world, 0.016);
-        physics_collision_system(&world);
+        physics_collision_system(&world, 0.016);
     }
     
     let vel_feather = world.borrow::<Velocity>().unwrap().get(feather.id()).unwrap().clone();

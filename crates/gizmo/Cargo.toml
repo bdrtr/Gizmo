@@ -4,10 +4,11 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-default = ["audio"]
+default = ["audio", "scene"]
 audio = ["dep:gizmo-audio"]
 editor = ["dep:gizmo-editor"]
 scripting = ["dep:gizmo-scripting"]
+scene = ["dep:gizmo-scene"]
 
 [dependencies]
 gizmo-core = { path = "../gizmo-core" }
@@ -16,9 +17,11 @@ gizmo-renderer = { path = "../gizmo-renderer" }
 gizmo-window = { path = "../gizmo-window" }
 gizmo-physics = { path = "../gizmo-physics" }
 gizmo-app = { path = "../gizmo-app" }
+gizmo-ai = { path = "../gizmo-ai" }
 gizmo-audio = { path = "../gizmo-audio", optional = true }
 gizmo-editor = { path = "../gizmo-editor", optional = true }
 gizmo-scripting = { path = "../gizmo-scripting", optional = true }
+gizmo-scene = { path = "../gizmo-scene", optional = true }
 winit = { workspace = true }
 wgpu = "0.19"
 egui = "0.26"

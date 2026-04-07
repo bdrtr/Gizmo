@@ -216,3 +216,51 @@ fn handle_simplex(simplex: &mut Simplex, dir: &mut Vec3) -> bool {
     
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shape::{ColliderShape, Sphere, Aabb};
+
+    #[test]
+    fn test_gjk_sphere_sphere_intersect() {
+        let shape_a = ColliderShape::Sphere(Sphere { radius: 1.0 });
+        let pos_a = Vec3::new(0.0, 0.0, 0.0);
+        let rot_a = Quat::IDENTITY;
+
+        let shape_b = ColliderShape::Sphere(Sphere { radius: 1.0 });
+        let pos_b = Vec3::new(1.5, 0.0, 0.0);
+        let rot_b = Quat::IDENTITY;
+
+        let (intersect, _) = gjk_intersect(&shape_a, pos_a, rot_a, &shape_b, pos_b, rot_b);
+        assert!(intersect, "Spheres should intersect");
+    }
+
+    #[test]
+    fn test_gjk_sphere_sphere_disjoint() {
+        let shape_a = ColliderShape::Sphere(Sphere { radius: 1.0 });
+        let pos_a = Vec3::new(0.0, 0.0, 0.0);
+        let rot_a = Quat::IDENTITY;
+
+        let shape_b = ColliderShape::Sphere(Sphere { radius: 1.0 });
+        let pos_b = Vec3::new(3.0, 0.0, 0.0);
+        let rot_b = Quat::IDENTITY;
+
+        let (intersect, _) = gjk_intersect(&shape_a, pos_a, rot_a, &shape_b, pos_b, rot_b);
+        assert!(!intersect, "Spheres should NOT intersect");
+    }
+
+    #[test]
+    fn test_gjk_aabb_aabb_intersect() {
+        let shape_a = ColliderShape::Aabb(Aabb { half_extents: Vec3::new(1.0, 1.0, 1.0) });
+        let pos_a = Vec3::new(0.0, 0.0, 0.0);
+        let rot_a = Quat::IDENTITY;
+
+        let shape_b = ColliderShape::Aabb(Aabb { half_extents: Vec3::new(1.0, 1.0, 1.0) });
+        let pos_b = Vec3::new(1.9, 1.9, 1.9); // Almost touching corner
+        let rot_b = Quat::IDENTITY;
+
+        let (intersect, _) = gjk_intersect(&shape_a, pos_a, rot_a, &shape_b, pos_b, rot_b);
+        assert!(intersect, "AABBs should intersect");
+    }
+}

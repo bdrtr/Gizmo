@@ -1,6 +1,6 @@
 use gizmo_math::{Vec3, Quat};
-use gizmo_physics::shape::{ColliderShape, Collider};
-use gizmo_physics::components::{Transform, RigidBody};
+use gizmo_physics::shape::Collider;
+use gizmo_physics::components::Transform;
 
 #[test]
 fn test_cube_ramp_collision() {
