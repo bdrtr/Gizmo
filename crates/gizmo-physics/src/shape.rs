@@ -33,6 +33,11 @@ pub enum ColliderShape {
     Aabb(Aabb),
     Capsule(Capsule),
     ConvexHull(ConvexHull),
+    #[serde(skip)]
+    Swept {
+        base: Box<ColliderShape>,
+        sweep_vector: Vec3,
+    },
 }
 
 impl ColliderShape {
@@ -75,8 +80,6 @@ impl ColliderShape {
                 pos + rot.mul_vec3(best_local) + dir * cap.radius
             }
             ColliderShape::ConvexHull(hull) => {
-                // Arama yönünü konveks gövdenin kendi eksenine göre (Lokal uzaya) çeviriyoruz.
-                // Bu optimizasyon sayeseinde döngü içindeki N adet rotasyon işlemi, 1 inverse rotasyon işlemine düşer.
                 let local_dir = rot.inverse().mul_vec3(dir);
                 let mut best_dot = f32::NEG_INFINITY;
                 let mut best_local = Vec3::ZERO;
@@ -88,8 +91,13 @@ impl ColliderShape {
                         best_local = *v;
                     }
                 }
-                // Sadece son kazanan vertex noktasına Dünya Uzayı rotasyonunu ve pozisyonunu ver.
                 pos + rot.mul_vec3(best_local)
+            }
+            ColliderShape::Swept { base, sweep_vector } => {
+                // Sweep mantığı: Orijinal şeklin uç noktasına, eğer tarama yönü 'dir' ile aynı yöndeyse
+                // sweep_vector (süpürme hareketi) eklenir. Bu sayede şekil hareket ettiği hacmi kapsar.
+                let offset = if dir.dot(*sweep_vector) > 0.0 { *sweep_vector } else { Vec3::ZERO };
+                base.support_point(pos, rot, dir) + offset
             }
         }
     }

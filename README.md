@@ -9,8 +9,9 @@ Gizmo Engine, Rust ile tamamen sıfırdan geliştirilen bağımsız, esnek ve mo
     *   **Angular Jacobian Solver:** Kısıtlayıcılarda (örneğin Ball-Socket gibi eklemlerde) Tork ve Açısal Hız tabanlı Sequential Impulse iterasyon hesaplamaları yer alır. Ragdoll yapılarını ve sarkaçları mükemmel çözümler.
     *   **Sweep and Prune (3D Broad-Phase):** Motor, 10.000'den fazla hareketli objeyi N^2 darboğazından kurtarmak için yüksek performanslı 3D AABB kaba eleme sistemine sahiptir.
     *   **Narrow-phase GJK/EPA:** İmkansız geometrik formlar için anlık çarpışma ve penetrasyon tespiti.
-*   **Gizmo Renderer (GPU Instancing):** Donanım tabanlı instancing desteği ile binlerce nesneyi tek draw-call altında çok yüksek FPS ile bastırma özelliği. Vulkan mimarisi ile güçlü entegrasyon.
-*   **Component Tabanlı Araç (Vehicle) Fiziği:** Raycast tabanlı süspansiyon ve anti-roll sistemleriyle karmaşık araç yapıları simüle edilebilir.
+*   **Gizmo Renderer (GPU Instancing):** Donanım tabanlı instancing desteği ile binlerce nesneyi tek draw-call altında çok yüksek FPS ile bastırma özelliği. Vulkan mimarisi ile güçlü entegrasyon. GLTF PBR materyalleri otomatik desteklenir.
+*   **Component Tabanlı Araç (Vehicle) Fiziği:** Raycast tabanlı süspansiyon ve anti-roll sistemleriyle karmaşık araç yapıları simüle edilebilir. FWD, RWD ve 4WD destekli çekiş sistemine sahiptir.
+*   **Optimize Edilmiş Mimari:** Yüksek performans için `RefCell` overhead'leri azaltılmış, O(1) çalışan pathfinding ve dar boğaz onarımları ile donatılmıştır.
 
 ## Çalıştırma
 

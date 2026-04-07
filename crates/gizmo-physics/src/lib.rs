@@ -20,3 +20,12 @@ pub use integration::physics_movement_system;
 pub use constraints::{Joint, JointKind, JointWorld, solve_constraints};
 pub use vehicle::{Wheel, VehicleController, physics_vehicle_system};
 pub use character::{CharacterController, physics_character_system};
+
+#[derive(Clone, Debug)]
+pub struct CollisionEvent {
+    pub entity_a: u32,
+    pub entity_b: u32,
+    pub position: gizmo_math::Vec3,
+    pub normal: gizmo_math::Vec3,
+    pub impulse: f32,
+}

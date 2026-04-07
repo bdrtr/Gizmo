@@ -3,6 +3,13 @@ use gizmo::egui;
 use crate::state::{GameState, RaceStatus};
 
 pub fn render_ui(ctx: &egui::Context, state: &mut GameState, world: &World) {
+    if let Some(mut editor_state) = world.get_resource_mut::<gizmo::editor::EditorState>() {
+        gizmo::editor::draw_editor(ctx, world, &mut editor_state);
+    }
+    
+    // YENİ HUD SİSTEMİ ÇAĞRISI
+    render_game_ui(ctx, world);
+
     // --- DİYALOG KUTUSU (Lua'dan tetiklenir) ---
     if let Some(ref dlg) = state.active_dialogue {
         egui::Window::new("##dialogue")
@@ -122,11 +129,15 @@ pub fn render_ui(ctx: &egui::Context, state: &mut GameState, world: &World) {
             ui.heading("Stres Testleri (Fizik)");
 
             if ui.button("🎯 Domino Etkisi (Sıfırla ve Kur)").clicked() {
-                state.spawn_domino_requests.set(1);
+                if let Some(mut events) = world.get_resource_mut::<gizmo::core::event::Events<crate::state::SpawnDominoEvent>>() {
+                    events.push(crate::state::SpawnDominoEvent { count: 1 });
+                }
                 state.free_cam = true; // Domino effect için otomatik serbest kameraya geçsin
             }
             if ui.button("▶️ Domino Başlat").clicked() {
-                state.release_domino_requests.set(1);
+                if let Some(mut events) = world.get_resource_mut::<gizmo::core::event::Events<crate::state::ReleaseDominoEvent>>() {
+                    events.push(crate::state::ReleaseDominoEvent { count: 1 });
+                }
             }
             ui.checkbox(&mut state.free_cam, "Serbest Kamera Modu (Sol Mouse ile çevreye bak ve WASD)");
             
@@ -141,7 +152,9 @@ pub fn render_ui(ctx: &egui::Context, state: &mut GameState, world: &World) {
                             if ext == "glb" || ext == "gltf" || ext == "obj" {
                                 let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
                                 if ui.button(format!("📦 {}", name)).clicked() {
-                                    state.asset_spawn_requests.borrow_mut().push(path.to_string_lossy().to_string());
+                                    if let Some(mut events) = world.get_resource_mut::<gizmo::core::event::Events<crate::state::AssetSpawnEvent>>() {
+                                        events.push(crate::state::AssetSpawnEvent { path: path.to_string_lossy().to_string() });
+                                    }
                                 }
                             }
                         }
@@ -153,27 +166,28 @@ pub fn render_ui(ctx: &egui::Context, state: &mut GameState, world: &World) {
 
             ui.separator();
             ui.heading("Sinematik Efektler (Post-Process)");
-            let mut pp = state.post_process_settings.borrow_mut();
-            ui.horizontal(|ui| {
-                ui.label("Bloom Şiddeti:");
-                ui.add(egui::Slider::new(&mut pp.bloom_intensity, 0.0..=2.0));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Bloom Eşiği:");
-                ui.add(egui::Slider::new(&mut pp.bloom_threshold, 0.1..=5.0));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Pozlama (Exposure):");
-                ui.add(egui::Slider::new(&mut pp.exposure, 0.1..=5.0));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Renk Sapması (Chromatic):");
-                ui.add(egui::Slider::new(&mut pp.chromatic_aberration, 0.0..=5.0));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Köşe Karartması (Vignette):");
-                ui.add(egui::Slider::new(&mut pp.vignette_intensity, 0.0..=2.0));
-            });
+            if let Some(mut pp) = world.get_resource_mut::<gizmo::renderer::renderer::PostProcessUniforms>() {
+                ui.horizontal(|ui| {
+                    ui.label("Bloom Şiddeti:");
+                    ui.add(egui::Slider::new(&mut pp.bloom_intensity, 0.0..=2.0));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Bloom Eşiği:");
+                    ui.add(egui::Slider::new(&mut pp.bloom_threshold, 0.1..=5.0));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Pozlama (Exposure):");
+                    ui.add(egui::Slider::new(&mut pp.exposure, 0.1..=5.0));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Renk Sapması (Chromatic):");
+                    ui.add(egui::Slider::new(&mut pp.chromatic_aberration, 0.0..=5.0));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Köşe Karartması (Vignette):");
+                    ui.add(egui::Slider::new(&mut pp.vignette_intensity, 0.0..=2.0));
+                });
+            }
 
             ui.separator();
             if ui.button("🔄 Sahneleri Başa Sar (Testi Tekrarlat)").clicked() {
@@ -205,4 +219,125 @@ pub fn render_ui(ctx: &egui::Context, state: &mut GameState, world: &World) {
                 }
             }
         });
+}
+
+pub fn render_game_ui(ctx: &egui::Context, world: &World) {
+    let mode = world.get_resource::<crate::state::AppMode>().map(|m| *m).unwrap_or(crate::state::AppMode::InGame);
+    
+    // --- HUD (InGame) ---
+    if mode == crate::state::AppMode::InGame {
+        if let Some(stats) = world.get_resource::<crate::state::PlayerStats>() {
+            let health_pct = (stats.health / stats.max_health).clamp(0.0, 1.0);
+            
+            // Health Bar (Sol Alt, Yuvarlatılmış Modern Tasarım)
+            egui::Area::new("health_hud")
+                .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(30.0, -30.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    let desired_size = egui::vec2(250.0, 24.0);
+                    let (rect, _resp) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+                    
+                    // Arkaplan
+                    ui.painter().rect_filled(rect, 12.0, egui::Color32::from_rgba_premultiplied(20, 20, 20, 150));
+                    
+                    // Dolum
+                    let mut fill_rect = rect;
+                    fill_rect.max.x = rect.min.x + (rect.width() * health_pct);
+                    let color = if health_pct > 0.5 { egui::Color32::from_rgb(40, 200, 80) } 
+                                else if health_pct > 0.2 { egui::Color32::from_rgb(220, 150, 20) } 
+                                else { egui::Color32::from_rgb(220, 40, 40) };
+                    
+                    ui.painter().rect_filled(fill_rect, 12.0, color);
+                    
+                    // Yazı
+                    let text = format!("+ {:.0}", stats.health);
+                    ui.painter().text(
+                        rect.left_center() + egui::vec2(15.0, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        text,
+                        egui::FontId::proportional(16.0),
+                        egui::Color32::WHITE,
+                    );
+                });
+
+            // Ammo Counter (Sağ Alt)
+            egui::Area::new("ammo_hud")
+                .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-40.0, -30.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("{}", stats.ammo))
+                                .size(48.0)
+                                .strong()
+                                .color(egui::Color32::WHITE)
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("/{}", stats.max_ammo))
+                                .size(24.0)
+                                .color(egui::Color32::GRAY)
+                        );
+                    });
+                });
+        }
+
+        // Crosshair (Nişangah Merkezi)
+        egui::Area::new("crosshair")
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .order(egui::Order::Foreground)
+            .interactable(false)
+            .show(ctx, |ui| {
+                let rect = ui.allocate_space(egui::vec2(20.0, 20.0)).1;
+                let c = rect.center();
+                let stroke = egui::Stroke::new(2.0, egui::Color32::from_white_alpha(150));
+                ui.painter().line_segment([c - egui::vec2(10.0, 0.0), c - egui::vec2(4.0, 0.0)], stroke);
+                ui.painter().line_segment([c + egui::vec2(4.0, 0.0), c + egui::vec2(10.0, 0.0)], stroke);
+                ui.painter().line_segment([c - egui::vec2(0.0, 10.0), c - egui::vec2(0.0, 4.0)], stroke);
+                ui.painter().line_segment([c + egui::vec2(0.0, 4.0), c + egui::vec2(0.0, 10.0)], stroke);
+            });
+    }
+
+    // --- MAIN MENU ---
+    if mode == crate::state::AppMode::MainMenu {
+        // Ekranı karartarak tıklamaları engelle
+        egui::Area::new("main_menu_bg")
+            .anchor(egui::Align2::LEFT_TOP, egui::vec2(0.0, 0.0))
+            .order(egui::Order::Background)
+            .interactable(true) 
+            .show(ctx, |ui| {
+                let screen_rect = ctx.screen_rect();
+                ui.painter().rect_filled(screen_rect, 0.0, egui::Color32::from_rgba_premultiplied(10, 10, 12, 230));
+            });
+
+        // Ortalı Menü Öğeleri
+        egui::Area::new("main_menu_content")
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.label(egui::RichText::new("GIZMO ENGINE").size(72.0).strong().color(egui::Color32::WHITE));
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("NoroNest Pre-Alpha").size(24.0).color(egui::Color32::from_rgb(255, 200, 80)));
+                    ui.add_space(60.0);
+
+                    let btn_size = egui::vec2(250.0, 50.0);
+                    
+                    if ui.add_sized(btn_size, egui::Button::new(egui::RichText::new("Oyuna Başla").size(22.0))).clicked() {
+                        if let Some(mut m) = world.get_resource_mut::<crate::state::AppMode>() {
+                            *m = crate::state::AppMode::InGame;
+                        }
+                    }
+                    ui.add_space(20.0);
+                    
+                    if ui.add_sized(btn_size, egui::Button::new(egui::RichText::new("Ayarlar").size(22.0))).clicked() {
+                        // TODO: Settings
+                    }
+                    ui.add_space(20.0);
+                    
+                    if ui.add_sized(btn_size, egui::Button::new(egui::RichText::new("Çıkış").size(22.0))).clicked() {
+                        std::process::exit(0);
+                    }
+                });
+            });
+    }
 }

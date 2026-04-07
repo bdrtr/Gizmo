@@ -37,7 +37,9 @@ pub fn poll_hot_reload(world: &mut World, state: &mut GameState) {
             }
             drop(materials);
             for entity_id in targets {
-                state.texture_load_requests.borrow_mut().push((entity_id, path_str.clone()));
+                if let Some(mut events) = world.get_resource_mut::<gizmo::core::event::Events<crate::state::TextureLoadEvent>>() {
+                    events.push(crate::state::TextureLoadEvent { entity_id, path: path_str.clone() });
+                }
             }
         }
     }

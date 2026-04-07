@@ -1,6 +1,5 @@
 use gizmo_core::World;
 use crate::components::{Transform, Velocity, RigidBody};
-use crate::shape::{Collider, ColliderShape};
 use gizmo_math::{Vec3, Quat};
 
 pub fn apply_inv_inertia(torque: Vec3, inv_inertia: Vec3, rot: Quat) -> Vec3 {
@@ -10,42 +9,7 @@ pub fn apply_inv_inertia(torque: Vec3, inv_inertia: Vec3, rot: Quat) -> Vec3 {
 }
 
 pub fn physics_movement_system(world: &World, dt: f32) {
-    // CCD için collider'ları ayrıca borrow'la (sadece immutable okuma)
-    let colliders_storage = world.borrow::<Collider>();
-    
-    // CCD: Hangi entity'ler statik? Kesişim testi için AABB'leri önceden topla (borrow conflict önleme)
-    struct StaticAabb {
-        entity: u32,
-        position: Vec3,
-        half_extents: Vec3,
-    }
-    let static_aabbs: Vec<StaticAabb> = {
-        if let (Some(rbs), Some(ref cols), Some(ts)) = (world.borrow::<RigidBody>(), &colliders_storage, world.borrow::<Transform>()) {
-            cols.entity_dense.iter()
-                .filter_map(|&e| {
-                    if rbs.get(e).is_some_and(|rb| rb.mass == 0.0) {
-                        let t = ts.get(e)?;
-                        let col = cols.get(e)?;
-                        if let ColliderShape::Aabb(aabb) = &col.shape {
-                            return Some(StaticAabb {
-                                entity: e,
-                                position: t.position,
-                                half_extents: Vec3::new(
-                                    aabb.half_extents.x * t.scale.x,
-                                    aabb.half_extents.y * t.scale.y,
-                                    aabb.half_extents.z * t.scale.z,
-                                ),
-                            });
-                        }
-                    }
-                    None
-                })
-                .collect()
-        } else {
-            Vec::new()
-        }
-    };
-    
+
     if let (Some(mut trans_storage), Some(mut vel_storage), Some(mut rbs)) = (world.borrow_mut::<Transform>(), world.borrow_mut::<Velocity>(), world.borrow_mut::<RigidBody>()) {
         use wide::f32x8;
 
@@ -57,9 +21,9 @@ pub fn physics_movement_system(world: &World, dt: f32) {
                 if let Some(v) = vel_storage.get_mut(entity) {
                     if rb.mass > 0.0 {
                         let speed_sq = v.linear.length_squared() + v.angular.length_squared();
-                        if speed_sq < 0.05 {
+                        if speed_sq < 0.01 {
                             rb.sleep_timer += dt;
-                            if rb.sleep_timer > 1.0 {
+                            if rb.sleep_timer > 2.0 {
                                 rb.is_sleeping = true;
                                 v.linear = Vec3::ZERO;
                                 v.angular = Vec3::ZERO;
@@ -119,8 +83,9 @@ pub fn physics_movement_system(world: &World, dt: f32) {
             z_a = z_a.max(min_ang).min(max_ang);
 
             // 3. HAVA VE YER SÜRTÜNMESİ DAMPING (Dengesiz Jitter'ı durdurur)
-            let linear_drag = f32x8::splat((1.0 - dt * 2.0).max(0.0));
-            let angular_drag = f32x8::splat((1.0 - dt * 15.0).max(0.0));
+            // Eski değerler (2.0 ve 15.0) aşırıydı — çözücünün itme düzeltmelerini yutuyordu!
+            let linear_drag = f32x8::splat((1.0 - dt * 0.5).max(0.0));   // ~%26/sn kayıp (gerçekçi hava direnci)
+            let angular_drag = f32x8::splat((1.0 - dt * 3.0).max(0.0));  // ~%95/sn kayıp (makul dönüş sönümleme)
             x_v *= linear_drag; y_v *= linear_drag; z_v *= linear_drag;
             x_a *= angular_drag; y_a *= angular_drag; z_a *= angular_drag;
 
@@ -140,124 +105,9 @@ pub fn physics_movement_system(world: &World, dt: f32) {
 
         // BATCH 3: Pozisyon Entegrasyonu & CCD (Continuous Collision Detection) - Skalar Loop
         for &e in &active_ents {
-            let rb = rbs.get(e).unwrap();
+            let _rb = rbs.get(e).unwrap();
             let v = *vel_storage.get(e).unwrap();
             let t = match trans_storage.get_mut(e) { Some(t) => t, None => continue };
-
-            // === CCD (Continuous Collision Detection) ===
-            // Hızlı objeler için: genişletilmiş AABB üzerinden sphere-sweep
-            if rb.ccd_enabled && rb.mass > 0.0 {
-                let displacement = v.linear * dt;
-                let speed = displacement.length();
-                
-                if speed > 0.3 { // 0.3m/frame eşik
-                    let ray_dir = displacement / speed;
-                    let ray_origin = t.position;
-                    
-                    // Objenin collider yarıçapı
-                    let col = colliders_storage.as_ref().and_then(|c| c.get(e));
-                    let sweep_radius = match col.map(|c| &c.shape) {
-                        Some(crate::shape::ColliderShape::Sphere(s)) => s.radius,
-                        Some(crate::shape::ColliderShape::Aabb(a)) => a.half_extents.x.max(a.half_extents.y).max(a.half_extents.z),
-                        Some(crate::shape::ColliderShape::Capsule(c)) => c.radius,
-                        _ => 0.5,
-                    };
-                    
-                    let mut closest_t = speed;
-                    let mut hit_normal = Vec3::ZERO;
-                    let mut had_hit = false;
-                    
-                    let ground_y = -1.0_f32;
-                    if ray_dir.y < -0.001 && ray_origin.y > ground_y + sweep_radius {
-                        let t_hit = (ground_y + sweep_radius - ray_origin.y) / ray_dir.y;
-                        if t_hit > 0.0 && t_hit < closest_t {
-                            closest_t = t_hit;
-                            hit_normal = Vec3::new(0.0, 1.0, 0.0);
-                            had_hit = true;
-                        }
-                    }
-                    
-                    let up = Vec3::new(0.0, 1.0, 0.0);
-                    let rot_axis = up.cross(ray_dir);
-                    let rot_angle = up.dot(ray_dir).acos();
-                    let swept_rot = if rot_axis.length_squared() > 1e-6 { Quat::from_axis_angle(rot_axis.normalize(), rot_angle) } else { Quat::IDENTITY };
-                    
-                    for other in &static_aabbs {
-                        if other.entity == e { continue; }
-                        
-                        let expanded_half = other.half_extents + Vec3::new(sweep_radius, sweep_radius, sweep_radius);
-                        let min_b = other.position - expanded_half;
-                        let max_b = other.position + expanded_half;
-                        
-                        let inv_dir = Vec3::new(
-                            if ray_dir.x.abs() > 1e-8 { 1.0 / ray_dir.x } else { f32::MAX },
-                            if ray_dir.y.abs() > 1e-8 { 1.0 / ray_dir.y } else { f32::MAX },
-                            if ray_dir.z.abs() > 1e-8 { 1.0 / ray_dir.z } else { f32::MAX },
-                        );
-                        let t1x = (min_b.x - ray_origin.x) * inv_dir.x;
-                        let t2x = (max_b.x - ray_origin.x) * inv_dir.x;
-                        let t1y = (min_b.y - ray_origin.y) * inv_dir.y;
-                        let t2y = (max_b.y - ray_origin.y) * inv_dir.y;
-                        let t1z = (min_b.z - ray_origin.z) * inv_dir.z;
-                        let t2z = (max_b.z - ray_origin.z) * inv_dir.z;
-                        
-                        let t_near = t1x.min(t2x).max(t1y.min(t2y)).max(t1z.min(t2z));
-                        let t_far = t1x.max(t2x).min(t1y.max(t2y)).min(t1z.max(t2z));
-                        
-                        if t_near <= t_far && t_far > 0.0 && t_near < closest_t {
-                            let aabb_col = crate::shape::ColliderShape::Aabb(crate::shape::Aabb { half_extents: other.half_extents });
-                            let full_capsule = crate::shape::Capsule { radius: sweep_radius, half_height: speed / 2.0 };
-                            let swept_pos = ray_origin + ray_dir * (speed / 2.0);
-                            
-                            let (collides, _) = crate::gjk::gjk_intersect(&crate::shape::ColliderShape::Capsule(full_capsule), swept_pos, swept_rot, &aabb_col, other.position, Quat::IDENTITY);
-                            
-                            if collides {
-                                let mut t_low = if t_near > 0.0 { t_near } else { 0.0 };
-                                let mut t_high = t_far.min(speed);
-                                
-                                for _ in 0..6 {
-                                    let t_mid = (t_low + t_high) * 0.5;
-                                    let mid_capsule = crate::shape::Capsule { radius: sweep_radius, half_height: t_mid / 2.0 };
-                                    let mid_pos = ray_origin + ray_dir * (t_mid / 2.0);
-                                    let (hit, _) = crate::gjk::gjk_intersect(&crate::shape::ColliderShape::Capsule(mid_capsule), mid_pos, swept_rot, &aabb_col, other.position, Quat::IDENTITY);
-                                    
-                                    if hit { t_high = t_mid; } else { t_low = t_mid; }
-                                }
-                                
-                                let t_hit = t_high;
-                                if t_hit < closest_t {
-                                    closest_t = t_hit;
-                                    let hit_point = ray_origin + ray_dir * t_hit;
-                                    let diff = hit_point - other.position;
-                                    let abs_diff = Vec3::new(diff.x.abs() / other.half_extents.x, diff.y.abs() / other.half_extents.y, diff.z.abs() / other.half_extents.z);
-                                    
-                                    if abs_diff.x > abs_diff.y && abs_diff.x > abs_diff.z {
-                                        hit_normal = Vec3::new(if diff.x > 0.0 { 1.0 } else { -1.0 }, 0.0, 0.0);
-                                    } else if abs_diff.y > abs_diff.z {
-                                        hit_normal = Vec3::new(0.0, if diff.y > 0.0 { 1.0 } else { -1.0 }, 0.0);
-                                    } else {
-                                        hit_normal = Vec3::new(0.0, 0.0, if diff.z > 0.0 { 1.0 } else { -1.0 });
-                                    }
-                                    had_hit = true;
-                                }
-                            }
-                        }
-                    }
-                    
-                    if had_hit {
-                        let safe_t = (closest_t - 0.01).max(0.0);
-                        t.position += ray_dir * safe_t;
-                        
-                        let vel_along_normal = hit_normal * v.linear.dot(hit_normal);
-                        if let Some(mut_v) = vel_storage.get_mut(e) {
-                            mut_v.linear -= vel_along_normal;
-                        }
-                        t.update_local_matrix();
-                        continue; // CCD triggered, skip normal integration
-                    }
-                }
-            }
-
             t.position += v.linear * dt;
             
             if v.angular.length_squared() > 0.0001 {

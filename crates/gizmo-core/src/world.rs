@@ -191,4 +191,15 @@ impl World {
             s.downcast_mut::<T>().unwrap()
         }))
     }
+
+    /// Global bir Resource'u ECS'ten tamamen çıkartır ve sahipliğini döndürür
+    pub fn remove_resource<T: 'static>(&mut self) -> Option<T> {
+        let type_id = TypeId::of::<T>();
+        let cell = self.resources.remove(&type_id)?;
+        let boxed_any = cell.into_inner();
+        match boxed_any.downcast::<T>() {
+            Ok(boxed_t) => Some(*boxed_t),
+            Err(_) => None,
+        }
+    }
 }

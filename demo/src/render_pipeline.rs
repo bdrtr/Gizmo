@@ -26,143 +26,8 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
         
         let view_proj = proj * view_mat;
 
-        // --- EVENT: YENİ OBJE EKLEME ---
-        while state.spawn_domino_requests.get() > 0 {
-            let entity = world.spawn();
-            let mut spawn_pos = cam_pos + Vec3::new(0.0, 0.0, -5.0);
-            
-            if let Some(cameras) = world.borrow::<Camera>() {
-                if let Some(cam) = cameras.get(state.player_id) {
-                    spawn_pos = cam_pos + cam.get_front() * 5.0; // 5 birim ileriye koy
-                }
-            }
-
-            world.add_component(entity, Transform::new(spawn_pos));
-            world.add_component(entity, Velocity::new(Vec3::ZERO)); 
-            // "Küre" görselinin fiziği de PÜRÜZSÜZ BİR KÜRE olsun!
-            world.add_component(entity, gizmo::physics::shape::Collider::new_sphere(1.0));
-            world.add_component(entity, RigidBody::new(1.0, 0.5, 0.2, true));
-            world.add_component(entity, EntityName("Yeni Küre".into()));
-            
-            // Olan mesh'i kopyala ki Instancing (Batching) devreye girsin!
-            let mut mesh_clone = None;
-            if let Some(meshes) = world.borrow::<Mesh>() {
-                if let Some(m) = meshes.get(state.bouncing_box_id) {
-                    mesh_clone = Some(m.clone());
-                }
-            }
-            if let Some(mesh) = mesh_clone {
-                world.add_component(entity, mesh);
-            } else {
-                world.add_component(entity, AssetManager::create_sphere(&renderer.device, 1.0, 16, 16));
-            }
-            // Rastgele renkli materyal
-            let r = ((entity.id() * 73 + 17) % 255) as f32 / 255.0;
-            let g = ((entity.id() * 137 + 43) % 255) as f32 / 255.0;
-            let b = ((entity.id() * 199 + 7) % 255) as f32 / 255.0;
-            {
-                let mut bind_group_clone = None;
-                if let Some(mats) = world.borrow::<gizmo::renderer::components::Material>() {
-                    if let Some(mat) = mats.get(state.bouncing_box_id) {
-                        bind_group_clone = Some(mat.bind_group.clone());
-                    }
-                }
-                if let Some(bg) = bind_group_clone {
-                    let new_mat = gizmo::renderer::components::Material::new(bg)
-                        .with_pbr(Vec4::new(r, g, b, 1.0), 0.4, 0.1);
-                    world.add_component(entity, new_mat);
-                }
-            }
-            
-            world.add_component(entity, gizmo::renderer::components::MeshRenderer::new());
-            
-            // Yeni eklenen maymunu seç
-            state.new_selection_request.set(Some(entity.id()));
-            
-            state.spawn_domino_requests.set(state.spawn_domino_requests.get() - 1);
-        }
-
-        // --- PACHINKO / GALTON KUTUSU SPAWNER (Gerçekçi Deney) ---
-        // Toplam 1000 top hedefleniyor
-        if state.pachinko_spawn_count.get() < 1000 {
-            let dt = if state.current_fps > 0.0 { 1.0 / state.current_fps } else { 0.016 };
-            let mut timer = state.pachinko_spawn_timer.get();
-            timer += dt;
-            
-            // Saniyede ~20 top (0.05s)
-            if timer >= 0.05 {
-                timer = 0.0;
-                let count = state.pachinko_spawn_count.get();
-                state.pachinko_spawn_count.set(count + 1);
-                
-                let entity = world.spawn();
-                let pachinko_center = Vec3::new(0.0, 5.0, -10.0);
-                
-                // Tepeden düşen bilyelerde hafif bir merkez kayması yarat (randomness)
-                // Gerçekçi olması için sine() fonksiyonu ile pseudo-random saçılım yapıldı.
-                let rand_x = (count as f32 * 123.456).sin() * 1.5; 
-                let spawn_pos = pachinko_center + Vec3::new(rand_x, 30.0, 0.0);
-                
-                world.add_component(entity, Transform::new(spawn_pos).with_scale(Vec3::new(0.24, 0.24, 0.24)));
-                world.add_component(entity, Velocity::new(Vec3::ZERO));
-                
-                // Basıncı azaltmak için düşük kütle (0.2) ve zıplama (0.05).
-                let mut rb = RigidBody::new(0.2, 0.05, 0.5, true);
-                rb.ccd_enabled = true; 
-                world.add_component(entity, rb);
-                world.add_component(entity, gizmo::physics::shape::Collider::new_sphere(0.12));
-                
-                // Prefab'den mesh ve materyalleri klonla (Instancing)
-                let mut mesh_clone = None;
-                if let Some(meshes) = world.borrow::<Mesh>() {
-                    if let Some(m) = meshes.get(state.sphere_prefab_id) {
-                        mesh_clone = Some(m.clone());
-                    }
-                }
-                if let Some(mesh) = mesh_clone {
-                    world.add_component(entity, mesh);
-                }
-                
-                // Gerçekçi Metalik Bilye Materyali PBR
-                let mut bind_group_clone = None;
-                if let Some(mats) = world.borrow::<gizmo::renderer::components::Material>() {
-                    if let Some(mat) = mats.get(state.sphere_prefab_id) {
-                        bind_group_clone = Some(mat.bind_group.clone());
-                    }
-                }
-                if let Some(bg) = bind_group_clone {
-                    // PBR: Çelik/Krom Hisli Bilyeler (Parlak, Açık Gri, Pürüzsüz)
-                    let new_mat = gizmo::renderer::components::Material::new(bg)
-                        .with_pbr(Vec4::new(0.85, 0.85, 0.9, 1.0), 0.95, 0.15); 
-                    world.add_component(entity, new_mat);
-                }
-                
-                world.add_component(entity, gizmo::renderer::components::MeshRenderer::new());
-            }
-            state.pachinko_spawn_timer.set(timer);
-        }
-
-
-        // --- EVENT: DOKU (TEXTURE) YÜKLEME ---
-        while let Some((e_id, path)) = state.texture_load_requests.borrow_mut().pop() {
-            let mut am = state.asset_manager.borrow_mut();
-            match am.load_material_texture(&renderer.device, &renderer.queue, &renderer.texture_bind_group_layout, &path) {
-                Ok(bg) => {
-                    // Query API ile Material component'e güvenli &mut erişim
-                    if let Some(mut q) = world.query_mut::<gizmo::renderer::components::Material>() {
-                        for (e, mat) in q.iter_mut() {
-                            if e == e_id {
-                                mat.bind_group = bg.clone();
-                                println!("Texture başarıyla yüklendi: {}", path);
-                            }
-                        }
-                    }
-                },
-                Err(err) => {
-                    println!("Texture yukleme hatasi: {}", err);
-                }
-            }
-        }
+        // Event: Spawning moved to spawner_update_system.
+        // Event: Texture Loading moved to main render loop pass before execute_render_pipeline.
 
         // --- SKELETAL ANIMATION UPDATE ---
         let delta_time = 1.0 / (state.current_fps.max(1.0));
@@ -274,8 +139,8 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
             let light_pos = cam_pos - light_direction * 40.0; 
             
             let light_view = Mat4::look_at_rh(light_pos, cam_pos, Vec3::new(0.0, 1.0, 0.0));
-            // 40 metre genişliğinde dik açılı yüksek kaliteli gölge kutusu (Orthographic)
-            let light_proj = Mat4::orthographic_rh(-40.0, 40.0, -40.0, 40.0, 0.1, 100.0);
+            // Daha sıkı (tight) frustum kullanarak gölge kalitesini artırıyoruz (25 metre)
+            let light_proj = Mat4::orthographic_rh(-25.0, 25.0, -25.0, 25.0, 0.1, 150.0);
             light_view_proj = light_proj * light_view;
         } else if num_lights > 0 {
             // Fallback: PointLight taklidi

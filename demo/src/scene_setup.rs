@@ -59,8 +59,70 @@ pub fn spawn_gltf_hierarchy(
     spawned_entities
 }
 
+pub fn spawn_gltf_asset(
+    world: &mut World,
+    asset: &gizmo::renderer::asset::GltfSceneAsset,
+    renderer: &gizmo::renderer::renderer::Renderer,
+    default_material: Material,
+    root_transform: Transform,
+) -> gizmo::core::Entity {
+    // Tüm sahneyi sarmalayan Ana (Root) Entity
+    let root_ent = world.spawn();
+    world.add_component(root_ent, root_transform);
+    world.add_component(root_ent, EntityName("GLTF_Asset_Root".into()));
+
+    // Hiyerarşiyi Root altında oluştur
+    let children = spawn_gltf_hierarchy(world, &asset.roots, Some(root_ent.id()), default_material);
+    let child_ids: Vec<u32> = children.iter().map(|e| e.id()).collect();
+    if !child_ids.is_empty() {
+        world.add_component(root_ent, Children(child_ids));
+    }
+
+    // İskelet Animasyon (Skeletal Animation) Bileşeni
+    if !asset.skeletons.is_empty() {
+        // İlk SkeletonHierarchy'i alıyoruz (genelde tek kök iskelet vardır)
+        let hierarchy = std::sync::Arc::new(asset.skeletons[0].clone());
+        
+        let buf = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Skeletal Animation Buffer"),
+            size: 64 * 64, // 64 mat4x4 (64 * 16 * 4 bayt = 4096)
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        
+        let bg = renderer.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Skeletal Animation BindGroup"),
+            layout: &renderer.skeleton_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buf.as_entire_binding(),
+            }],
+        });
+        
+        world.add_component(root_ent, gizmo::renderer::components::Skeleton {
+            bind_group: std::sync::Arc::new(bg),
+            buffer: std::sync::Arc::new(buf),
+            hierarchy,
+            local_poses: Vec::new(),
+        });
+    }
+
+    // Animasyon (Keyframe) Bileşeni
+    if !asset.animations.is_empty() {
+        world.add_component(root_ent, gizmo::renderer::components::AnimationPlayer {
+            current_time: 0.0,
+            active_animation: 0, // İlk animasyonu varsayılan başlat
+            loop_anim: true,
+            animations: std::sync::Arc::new(asset.animations.clone()),
+        });
+    }
+
+    root_ent
+}
+
 pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::renderer::Renderer) -> GameState {
     println!("Gizmo Engine: Sahne başlatılıyor...");
+    world.insert_resource(gizmo::core::event::Events::<gizmo::physics::CollisionEvent>::new());
 
     let mut audio = gizmo::audio::AudioManager::new();
     if let Some(ref mut a) = audio {
@@ -89,7 +151,10 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
     let ground_entity = world.spawn();
     world.add_component(ground_entity, ground_mesh);
     world.add_component(ground_entity, Transform::new(Vec3::new(0.0, -1.0, 0.0)).with_scale(Vec3::new(200.0, 1.0, 200.0)));
-    world.add_component(ground_entity, Material::new(tbind.clone()).with_pbr(Vec4::new(0.8, 0.7, 0.4, 1.0), 0.9, 0.1));
+    
+    let mut ground_mat = Material::new(tbind.clone()).with_pbr(Vec4::new(0.8, 0.7, 0.4, 1.0), 0.9, 0.1);
+    ground_mat.texture_source = Some("demo/assets/stone_tiles.jpg".to_string());
+    world.add_component(ground_entity, ground_mat);
     world.add_component(ground_entity, gizmo::renderer::components::MeshRenderer::new());
     let mut ground_rb = gizmo::physics::components::RigidBody::new_static();
     ground_rb.restitution = 1.0; 
@@ -101,7 +166,7 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
     let sun_transform = Transform::new(Vec3::new(0.0, 50.0, 50.0))
         .with_rotation(Quat::from_axis_angle(Vec3::new(1.0, 0.5, 0.0).normalize(), -std::f32::consts::FRAC_PI_4));
     world.add_component(sun, sun_transform);
-    world.add_component(sun, gizmo::renderer::components::DirectionalLight::new(Vec3::new(0.4, 0.4, 0.6), 0.1, true)); // Karanlık mavi ay ışığı
+    world.add_component(sun, gizmo::renderer::components::DirectionalLight::new(Vec3::new(1.0, 0.95, 0.85), 2.0, true)); // Güçlü Güneş Işığı
     world.add_component(sun, EntityName("Ay (Directional)".into()));
 
     let joint_world = gizmo::physics::JointWorld::new(); // Bağlantı yok ama ECS'ye verilecek
@@ -123,7 +188,7 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
     sky_transform.scale = Vec3::new(500.0, 500.0, 500.0); 
     world.add_component(skybox, sky_transform);
     world.add_component(skybox, gizmo::renderer::asset::AssetManager::create_inverted_cube(&renderer.device));
-    world.add_component(skybox, Material::new(tbind.clone()).with_unlit(Vec4::new(0.05, 0.05, 0.1, 1.0))); // Tamamen Gece!
+    world.add_component(skybox, Material::new(tbind.clone()).with_skybox());
     world.add_component(skybox, gizmo::renderer::components::MeshRenderer::new());
     world.add_component(skybox, EntityName("Skybox (Gök Kubbe)".into()));
 
@@ -167,104 +232,117 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
     world.add_component(cube_prefab, gizmo::renderer::asset::AssetManager::create_cube(&renderer.device));
     world.add_component(cube_prefab, Material::new(tbind.clone()));
 
-    // --- PACHINKO / GALTON KUTUSU (GÖRSEL ŞOV) ---
-    println!("Gizmo Engine: Galton Kutusu (Pachinko) inşaa ediliyor...");
-    let pachinko_center = Vec3::new(0.0, 5.0, -10.0); // Kameranın tam karşısı
+    // --- SKELETAL ANIMATION TEST (CesiumMan) ---
+    println!("Gizmo Engine: CesiumMan.glb test karakteri yükleniyor...");
+    if let Ok(cesium_man_asset) = asset_manager.load_gltf_scene(
+        &renderer.device,
+        &renderer.queue,
+        &renderer.texture_bind_group_layout,
+        tbind.clone(),
+        "demo/assets/cesium_man.glb",
+    ) {
+        let man_root_transform = Transform::new(Vec3::new(0.0, 1.0, -10.0))
+            .with_rotation(Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), std::f32::consts::PI));
+        
+        let mut def_mat = Material::new(tbind.clone());
+        def_mat.albedo = Vec4::new(1.0, 1.0, 1.0, 1.0);
 
-    // Çiviler (Pins) - Topların sadece zorla geçebileceği dar aralıklar!
-    let pins_x = 35;
-    let pins_y = 20;
-    for y in 0..pins_y {
-        for x in 0..pins_x {
-            let offset = if y % 2 == 0 { 0.0 } else { 0.425 };
-            let pos_x = (x as f32) * 0.85 - (pins_x as f32 * 0.425) + offset;
-            let pos_y = (y as f32) * 0.85;
-            
-            let pin = world.spawn();
-            // Çiviler çok daha ince yapıldı (scale 0.14)
-            // Çiviler KAPSÜL (Silindir) yapılacağı için Z eksenine 90 derece yatırmak için rotasyon veriliyor!
-            world.add_component(pin, Transform::new(pachinko_center + Vec3::new(pos_x, pos_y, 0.0))
-                .with_scale(Vec3::new(0.14, 2.0, 0.14)) // Y ekseninde uzadı, X ve Z de ince
-                .with_rotation(Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), std::f32::consts::FRAC_PI_2))
-            );
-            world.add_component(pin, base_sphere_mesh.clone());
-            // Çiviler KROM (Parlak Metal) - PBR
-            world.add_component(pin, Material::new(tbind.clone()).with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 0.95, 0.1));
-            world.add_component(pin, gizmo::renderer::components::MeshRenderer::new());
-            
-            let mut pin_rb = gizmo::physics::components::RigidBody::new_static();
-            pin_rb.friction = 0.5;
-            pin_rb.restitution = 0.5; 
-            world.add_component(pin, pin_rb);
-            // KÜRE (Sphere) YERİNE KAPSÜL! Toplar silindirin kenarından kaydığı için Z ekseninde itmeden sekip rahatça düşer.
-            world.add_component(pin, gizmo::physics::shape::Collider::new_capsule(0.07, 1.0));
+        let entity = spawn_gltf_asset(world, &cesium_man_asset, renderer, def_mat, man_root_transform);
+        if let Some(mut ent_name) = world.borrow_mut::<EntityName>() {
+            if let Some(n) = ent_name.get_mut(entity.id()) {
+                n.0 = "CesiumMan (Animated)".to_string();
+            }
+        }
+    } else {
+        println!("Gizmo Engine: demo/assets/cesium_man.glb bulunamadı! İskelet animasyon testi atlanıyor.");
+    }
+
+    // --- PACHINKO / GALTON KUTUSU (GÖRSEL ŞOV) - TEST İÇİN DEVRE DIŞI BIRAKILDI ---
+    /*
+    println!("Gizmo Engine: Galton Kutusu (Pachinko) inşaa ediliyor...");
+    ...
+    */
+
+    // --- NAVGRID & AI TESTİ ---
+    let mut nav_grid = gizmo_ai::NavGrid::new(1.0); // Hücre boyutunu 1.0 yaptık
+
+    println!("Gizmo Engine: AI Engelleri ve NavGrid yükleniyor...");
+    for _ in 0..20 {
+        let x = (rand::random::<f32>() - 0.5) * 40.0;
+        let z = (rand::random::<f32>() - 0.5) * 40.0;
+        if x.abs() < 5.0 && z.abs() < 5.0 { continue; } // Player başlangıcından uzağa koy
+        
+        let pos = Vec3::new(x, 1.0, z);
+        let wall = world.spawn();
+        
+        world.add_component(wall, Transform::new(pos).with_scale(Vec3::new(1.0, 2.0, 1.0)));
+        world.add_component(wall, gizmo::renderer::asset::AssetManager::create_cube(&renderer.device));
+        world.add_component(wall, Material::new(tbind.clone()));
+        world.add_component(wall, Collider::new_aabb(1.0, 2.0, 1.0));
+        world.add_component(wall, gizmo::physics::components::RigidBody::new_static());
+        world.add_component(wall, gizmo::renderer::components::MeshRenderer::new());
+        world.add_component(wall, EntityName("Duvar Engel".to_string()));
+
+        // Güvendiğimiz bir kalınlıkta NavGrid'i duvarın etrafında bloke edelim (3x3 grid padding!)
+        for ix in -1..=1 {
+            for iz in -1..=1 {
+                nav_grid.add_obstacle_world(pos + Vec3::new(ix as f32 * 1.0, 0.0, iz as f32 * 1.0));
+            }
         }
     }
-
-    // Yukarıdan Düşen Dinamik Toplar tamamen "Spawner" sistemine aktarıldı (render_pipeline içerisinden saniyede 20 adet düşüyor).
-
-    // Duvarlar (Cam kavanoz gibi - Yere tam sıfırlansın diye yükseklik arttırıldı)
-    // Şeffaf, hafif mavi tint'li Akrilik Cam (PBR, düşük pürüzlülük)
-    let glass_mat = Material::new(tbind.clone()).with_pbr(Vec4::new(0.6, 0.8, 1.0, 0.2), 0.1, 0.0);
-
-    let left_wall = world.spawn();
-    world.add_component(left_wall, Transform::new(pachinko_center + Vec3::new(-16.0, 10.0, 0.0)).with_scale(Vec3::new(1.0, 40.0, 3.0)));
-    world.add_component(left_wall, gizmo::renderer::asset::AssetManager::create_cube(&renderer.device));
-    world.add_component(left_wall, glass_mat.clone());
-    world.add_component(left_wall, gizmo::renderer::components::MeshRenderer::new());
-    world.add_component(left_wall, gizmo::physics::components::RigidBody::new_static());
-    world.add_component(left_wall, gizmo::physics::shape::Collider::new_aabb(0.5, 20.0, 1.5));
     
-    let right_wall = world.spawn();
-    world.add_component(right_wall, Transform::new(pachinko_center + Vec3::new(16.0, 10.0, 0.0)).with_scale(Vec3::new(1.0, 40.0, 3.0)));
-    world.add_component(right_wall, gizmo::renderer::asset::AssetManager::create_cube(&renderer.device));
-    world.add_component(right_wall, glass_mat.clone());
-    world.add_component(right_wall, gizmo::renderer::components::MeshRenderer::new());
-    world.add_component(right_wall, gizmo::physics::components::RigidBody::new_static());
-    world.add_component(right_wall, gizmo::physics::shape::Collider::new_aabb(0.5, 20.0, 1.5));
+    // NPCs
+    println!("Gizmo Engine: Kırmızı AI NPC test için oluşturuluyor!");
+    let npc = world.spawn();
+    world.add_component(npc, Transform::new(Vec3::new(20.0, 1.5, 20.0)).with_scale(Vec3::new(1.0, 2.0, 1.0)));
+    world.add_component(npc, gizmo::renderer::asset::AssetManager::create_cube(&renderer.device));
+    world.add_component(npc, Material::new(tbind.clone()).with_pbr(Vec4::new(1.0, 0.0, 0.0, 1.0), 0.5, 0.5)); // Kırmızı
+    world.add_component(npc, gizmo::renderer::components::MeshRenderer::new());
+    world.add_component(npc, Collider::new_aabb(1.0, 2.0, 1.0)); // Küp visual ile eşleşiyor
+    let mut rb = gizmo::physics::components::RigidBody::new(1.0, 0.0, 0.0, false);
+    rb.ccd_enabled = false; // NPC Yavaş olduğu için CCD ye gerek yok
+    rb.calculate_box_inertia(2.0, 4.0, 2.0); // Collider boyutları: 2*half_extents
+    world.add_component(npc, rb);
+    world.add_component(npc, gizmo::physics::components::Velocity::new(Vec3::ZERO));
+    world.add_component(npc, gizmo_ai::NavAgent::new(8.0, 50.0, 2.0)); // Hız 8.0, Güç 50.0
+    world.add_component(npc, EntityName("NPC Takipçi".to_string()));
 
-    let front_wall = world.spawn();
-    world.add_component(front_wall, Transform::new(pachinko_center + Vec3::new(0.0, 10.0, 0.66)).with_scale(Vec3::new(32.0, 40.0, 1.0)));
-    world.add_component(front_wall, gizmo::renderer::asset::AssetManager::create_cube(&renderer.device));
-    world.add_component(front_wall, glass_mat.clone());
-    world.add_component(front_wall, gizmo::renderer::components::MeshRenderer::new());
-    world.add_component(front_wall, gizmo::physics::components::RigidBody::new_static());
-    world.add_component(front_wall, gizmo::physics::shape::Collider::new_aabb(16.0, 20.0, 0.5));
+    world.insert_resource(nav_grid);
+
+
+    world.insert_resource(gizmo::core::event::Events::<crate::state::SpawnDominoEvent>::new());
+    world.insert_resource(gizmo::core::event::Events::<crate::state::ReleaseDominoEvent>::new());
+    world.insert_resource(gizmo::core::event::Events::<crate::state::TextureLoadEvent>::new());
+    world.insert_resource(gizmo::core::event::Events::<crate::state::AssetSpawnEvent>::new());
+    world.insert_resource(gizmo::core::event::Events::<crate::state::ShaderReloadEvent>::new());
+    world.insert_resource(gizmo::core::event::Events::<crate::state::SelectionEvent>::new());
+    world.insert_resource(crate::state::DominoAppState { active_ball_id: None });
+    world.insert_resource(crate::state::PachinkoSpawnerState { timer: 0.0, count: 0 });
+    world.insert_resource(asset_manager);
     
-    let back_wall = world.spawn();
-    world.add_component(back_wall, Transform::new(pachinko_center + Vec3::new(0.0, 10.0, -0.66)).with_scale(Vec3::new(32.0, 40.0, 1.0)));
-    world.add_component(back_wall, gizmo::renderer::asset::AssetManager::create_cube(&renderer.device));
-    world.add_component(back_wall, glass_mat.clone());
-    world.add_component(back_wall, gizmo::renderer::components::MeshRenderer::new());
-    world.add_component(back_wall, gizmo::physics::shape::Collider::new_aabb(16.0, 20.0, 0.5));
-
-    // Ekstra Kutunun Kendi Tabanı (Ana harita zemini hariç kendi tepsisi)
-    let bottom_floor = world.spawn();
-    world.add_component(bottom_floor, Transform::new(pachinko_center + Vec3::new(0.0, -6.5, 0.0)).with_scale(Vec3::new(32.0, 1.0, 3.0)));
-    world.add_component(bottom_floor, gizmo::physics::components::RigidBody::new_static());
-    world.add_component(bottom_floor, gizmo::physics::shape::Collider::new_aabb(16.0, 0.5, 1.5));
-
-    // --- GALTON KUTUSU BİDONLARI (BUCKETS - Normal Dağılım Çan Eğrisi İçin) ---
-    let bucket_count = 35; // Daha ince bölmeler (35 adet)
-    for b in 0..bucket_count {
-        let bucket_x = (b as f32) * 0.85 - (bucket_count as f32 * 0.425) + 0.425;
-        let divider = world.spawn();
-        
-        // Zemin Y = -1.0, Bölmelerin üst çizgisi Y = 4.0 olacak şekilde (Boy 5.0)
-        // Sarı plakalar KALINLAŞTIRILDI ki toplar buglanıp içinden geçmesin!
-        world.add_component(divider, Transform::new(pachinko_center + Vec3::new(bucket_x, -3.5, 0.0)).with_scale(Vec3::new(0.3, 5.0, 2.0)));
-        world.add_component(divider, gizmo::renderer::asset::AssetManager::create_cube(&renderer.device));
-        world.add_component(divider, Material::new(tbind.clone()).with_unlit(Vec4::new(0.8, 0.8, 0.2, 1.0))); // Sarı bölmeler
-        world.add_component(divider, gizmo::renderer::components::MeshRenderer::new());
-        
-        let mut div_rb = gizmo::physics::components::RigidBody::new_static();
-        div_rb.friction = 0.5; // Toplar fazla zıplamasın
-        world.add_component(divider, div_rb);
-        // KALINLAŞTIRILDI (Extents = 0.15)
-        world.add_component(divider, gizmo::physics::shape::Collider::new_aabb(0.15, 2.5, 1.0));
+    if let Ok(engine) = gizmo::scripting::ScriptEngine::new() {
+        world.insert_resource(engine);
     }
-
-    // Araç, Yağmur ve Checkpoint'ler ortamdan arındırıldı. Sadece Galton Kutusu kaldı.
+    
+    world.insert_resource(gizmo::renderer::renderer::PostProcessUniforms {
+        bloom_intensity: 0.3,
+        bloom_threshold: 1.0,
+        exposure: 1.0,
+        chromatic_aberration: 0.0,
+        vignette_intensity: 0.0,
+        _padding: [0.0; 3],
+    });
+    
+    world.insert_resource(gizmo::editor::EditorState::new());
+    
+    // UI Durumları
+    world.insert_resource(crate::state::AppMode::MainMenu);
+    world.insert_resource(crate::state::PlayerStats {
+        health: 100.0,
+        max_health: 100.0,
+        ammo: 30,
+        max_ammo: 120,
+    });
 
     GameState {
         bouncing_box_id,
@@ -282,34 +360,13 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
         drag_original_scale: Vec3::ONE,
         drag_original_rot: Quat::IDENTITY,
         current_fps: 60.0,
-        new_selection_request: std::cell::Cell::new(None),
-        spawn_domino_requests: std::cell::Cell::new(1),
-        release_domino_requests: std::cell::Cell::new(0),
-        domino_ball_id: std::cell::Cell::new(None),
-        texture_load_requests: std::cell::RefCell::new(Vec::new()),
-        asset_spawn_requests: std::cell::RefCell::new(Vec::new()),
-        asset_manager: std::cell::RefCell::new(asset_manager),
         gizmo_mode: GizmoMode::Translate,
         egui_wants_pointer: false,
         asset_watcher: gizmo::renderer::hot_reload::AssetWatcher::new(&["demo/assets"]),
-        script_engine: std::cell::RefCell::new({
-            let mut eng = gizmo::scripting::ScriptEngine::new().ok();
-            eng
-        }),
         physics_accumulator: 0.0,
         target_physics_fps: 240.0, // Sub-stepping: saniyede 240 simülasyon adımı (60 FPS'te kare başı 4 adım)
         sphere_prefab_id: sphere_prefab.id(),
         cube_prefab_id: cube_prefab.id(),
-        post_process_settings: std::cell::RefCell::new(gizmo::renderer::renderer::PostProcessUniforms {
-            bloom_intensity: 0.3,
-            bloom_threshold: 1.0,
-            exposure: 1.0,
-            chromatic_aberration: 0.0,
-            vignette_intensity: 0.0,
-            _padding: [0.0; 3],
-        }),
-        shader_reload_request: std::cell::Cell::new(false),
-        editor_state: std::cell::RefCell::new(gizmo::editor::EditorState::new()),
         free_cam: true,
 
         // Oyun sistemi
@@ -319,8 +376,6 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
         race_status: crate::state::RaceStatus::Idle,
         race_timer: 0.0,
         camera_follow_target: None,
-        
-        pachinko_spawn_timer: std::cell::Cell::new(0.0),
-        pachinko_spawn_count: std::cell::Cell::new(0),
+        total_elapsed: 0.0,
     }
 }

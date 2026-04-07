@@ -74,9 +74,14 @@ pub fn physics_collision_system(world: &World, dt: f32) {
                 (t.position - radius_vec, t.position + radius_vec)
             },
             ColliderShape::Capsule(c) => {
-                let ext = c.radius + c.half_height;
-                let ext_vec = Vec3::new(ext, ext, ext);
-                (t.position - ext_vec, t.position + ext_vec)
+                // Kapsülün rotasyonuna göre sıkı AABB hesapla
+                let up = t.rotation.mul_vec3(Vec3::new(0.0, c.half_height, 0.0));
+                let top = t.position + up;
+                let bot = t.position - up;
+                let r = Vec3::new(c.radius, c.radius, c.radius);
+                let mn = Vec3::new(top.x.min(bot.x), top.y.min(bot.y), top.z.min(bot.z)) - r;
+                let mx = Vec3::new(top.x.max(bot.x), top.y.max(bot.y), top.z.max(bot.z)) + r;
+                (mn, mx)
             },
             ColliderShape::ConvexHull(hull) => {
                 let mut mn = Vec3::new(f32::MAX, f32::MAX, f32::MAX);
@@ -87,6 +92,10 @@ pub fn physics_collision_system(world: &World, dt: f32) {
                     mx.x = mx.x.max(wv.x); mx.y = mx.y.max(wv.y); mx.z = mx.z.max(wv.z);
                 }
                 (mn, mx)
+            },
+            ColliderShape::Swept { .. } => {
+                eprintln!("[Physics WARN] Swept shape found in ECS for entity {}! Skipping.", e);
+                continue;
             }
         };
 
@@ -172,6 +181,8 @@ pub fn physics_collision_system(world: &World, dt: f32) {
         rot_b: gizmo_math::Quat,
         accumulated_j: f32,
         accumulated_friction: Vec3,
+        ccd_offset_a: Vec3,
+        ccd_offset_b: Vec3,
     }
 
     // Paralel algılama sonucu — her iş parçacığı kendi sonuçlarını üretir
@@ -187,6 +198,8 @@ pub fn physics_collision_system(world: &World, dt: f32) {
     let c_sparse = &colliders.sparse;
     let rb_dense = &rigidbodies.dense;
     let rb_sparse = &rigidbodies.sparse;
+    let v_dense = &velocities.dense;
+    let v_sparse = &velocities.sparse;
     
     // Vehicle entity ID'lerini thread-safe HashSet'e çıkar
     // Ref<SparseSet> = !Sync (Cell içerir), ama entity_dense (&[u32]) = Sync
@@ -220,37 +233,59 @@ pub fn physics_collision_system(world: &World, dt: f32) {
 
         // Çarpışma algılama (analitik veya GJK/EPA) — saf hesaplama, yan etkisiz
         let mut is_fast_path = false;
+        let mut ccd_pos_a = None;
+        let mut ccd_pos_b = None;
         let mut manifold = crate::collision::CollisionManifold {
             is_colliding: false, normal: Vec3::ZERO, penetration: 0.0, contact_points: vec![]
         };
 
-        if let (ColliderShape::Sphere(s), ColliderShape::Aabb(a)) = (&col_a.shape, &col_b.shape) {
-            is_fast_path = true;
-            let min_box = pos_b - a.half_extents;
-            let max_box = pos_b + a.half_extents;
-            let cp = Vec3::new(pos_a.x.clamp(min_box.x, max_box.x), pos_a.y.clamp(min_box.y, max_box.y), pos_a.z.clamp(min_box.z, max_box.z));
-            let diff = cp - pos_a;
-            let dist_sq = diff.length_squared();
-            if dist_sq < s.radius * s.radius {
-                let dist = dist_sq.sqrt();
-                manifold.is_colliding = true;
-                if dist > 0.0001 { manifold.normal = diff / dist; manifold.penetration = s.radius - dist; }
-                else { manifold.normal = Vec3::new(0.0, -1.0, 0.0); manifold.penetration = s.radius; }
-                manifold.contact_points.push((cp, manifold.penetration));
+        // Rotasyon kontrolü: AABB fast-path'leri sadece rotasyonsuz kutular için güvenli
+        let is_rot_a_identity = rot_a.x.abs() < 0.001 && rot_a.y.abs() < 0.001 && rot_a.z.abs() < 0.001;
+        let is_rot_b_identity = rot_b.x.abs() < 0.001 && rot_b.y.abs() < 0.001 && rot_b.z.abs() < 0.001;
+
+        // === BUG #3 FIX: AABB-AABB analitik fast-path ===
+        if let (ColliderShape::Aabb(a1), ColliderShape::Aabb(a2)) = (&col_a.shape, &col_b.shape) {
+            if is_rot_a_identity && is_rot_b_identity {
+                is_fast_path = true;
+                manifold = crate::collision::check_aabb_aabb_manifold(pos_a, a1, pos_b, a2);
             }
+            // Rotasyonlu AABB'ler GJK/EPA'ya düşecek (is_fast_path = false kalır)
+        }
+
+        // === BUG #4 FIX: Sphere-AABB rotasyon kontrolü ===
+        if !is_fast_path {
+        if let (ColliderShape::Sphere(s), ColliderShape::Aabb(a)) = (&col_a.shape, &col_b.shape) {
+            if is_rot_b_identity {
+                is_fast_path = true;
+                let min_box = pos_b - a.half_extents;
+                let max_box = pos_b + a.half_extents;
+                let cp = Vec3::new(pos_a.x.clamp(min_box.x, max_box.x), pos_a.y.clamp(min_box.y, max_box.y), pos_a.z.clamp(min_box.z, max_box.z));
+                let diff = cp - pos_a;
+                let dist_sq = diff.length_squared();
+                if dist_sq < s.radius * s.radius {
+                    let dist = dist_sq.sqrt();
+                    manifold.is_colliding = true;
+                    if dist > 0.0001 { manifold.normal = diff / dist; manifold.penetration = s.radius - dist; }
+                    else { manifold.normal = Vec3::new(0.0, -1.0, 0.0); manifold.penetration = s.radius; }
+                    manifold.contact_points.push((cp, manifold.penetration));
+                }
+            }
+            // Rotasyonlu AABB → GJK/EPA'ya düşer
         } else if let (ColliderShape::Aabb(a), ColliderShape::Sphere(s)) = (&col_a.shape, &col_b.shape) {
-            is_fast_path = true;
-            let min_box = pos_a - a.half_extents;
-            let max_box = pos_a + a.half_extents;
-            let cp = Vec3::new(pos_b.x.clamp(min_box.x, max_box.x), pos_b.y.clamp(min_box.y, max_box.y), pos_b.z.clamp(min_box.z, max_box.z));
-            let diff = pos_b - cp;
-            let dist_sq = diff.length_squared();
-            if dist_sq < s.radius * s.radius {
-                let dist = dist_sq.sqrt();
-                manifold.is_colliding = true;
-                if dist > 0.0001 { manifold.normal = diff / dist; manifold.penetration = s.radius - dist; }
-                else { manifold.normal = Vec3::new(0.0, 1.0, 0.0); manifold.penetration = s.radius; }
-                manifold.contact_points.push((cp, manifold.penetration));
+            if is_rot_a_identity {
+                is_fast_path = true;
+                let min_box = pos_a - a.half_extents;
+                let max_box = pos_a + a.half_extents;
+                let cp = Vec3::new(pos_b.x.clamp(min_box.x, max_box.x), pos_b.y.clamp(min_box.y, max_box.y), pos_b.z.clamp(min_box.z, max_box.z));
+                let diff = pos_b - cp;
+                let dist_sq = diff.length_squared();
+                if dist_sq < s.radius * s.radius {
+                    let dist = dist_sq.sqrt();
+                    manifold.is_colliding = true;
+                    if dist > 0.0001 { manifold.normal = diff / dist; manifold.penetration = s.radius - dist; }
+                    else { manifold.normal = Vec3::new(0.0, 1.0, 0.0); manifold.penetration = s.radius; }
+                    manifold.contact_points.push((cp, manifold.penetration));
+                }
             }
         } else if let (ColliderShape::Capsule(c1), ColliderShape::Capsule(c2)) = (&col_a.shape, &col_b.shape) {
             is_fast_path = true;
@@ -273,11 +308,86 @@ pub fn physics_collision_system(world: &World, dt: f32) {
             is_fast_path = true;
             manifold = crate::collision::check_sphere_sphere_manifold(pos_a, s1, pos_b, s2);
         }
+        } // if !is_fast_path (Bug #4 rotasyon guard kapanışı)
 
         if !is_fast_path {
             let (is_colliding, simplex) = crate::gjk::gjk_intersect(&col_a.shape, pos_a, rot_a, &col_b.shape, pos_b, rot_b);
             if is_colliding {
                 manifold = crate::epa::epa_solve(simplex, &col_a.shape, pos_a, rot_a, &col_b.shape, pos_b, rot_b);
+            }
+        }
+
+        // --- YENİ: CCD Bisection (Sürekli Çözüm Aracı) ---
+        // Eğer t=0 anında kesişmedilerse, fakat CCD aktifse ve hızlılarsa:
+        if !manifold.is_colliding && (rb_a.ccd_enabled || rb_b.ccd_enabled) {
+            let v_a_lin = v_sparse.get(&ent_a).map(|&i| v_dense[i].linear).unwrap_or(Vec3::ZERO);
+            let v_b_lin = v_sparse.get(&ent_b).map(|&i| v_dense[i].linear).unwrap_or(Vec3::ZERO);
+            let rel_v = v_b_lin - v_a_lin;
+            
+            // Eğer bağıl hızları bir framede belirli bir mesafeden fazlaysa Sweep Testi yap
+            if rel_v.length() * dt > 0.1 {
+                // A sabit, B bağıl hızla hareket ediyormuş gibi Swept Shape oluşturuyoruz
+                let swept_b = crate::shape::ColliderShape::Swept {
+                    base: Box::new(col_b.shape.clone()),
+                    sweep_vector: rel_v * dt,
+                };
+                
+                // Tam zaman aralığında [0, dt] hiç çarpışma ihtimali var mı?
+                let (hit_any, _) = crate::gjk::gjk_intersect(&col_a.shape, pos_a, rot_a, &swept_b, pos_b, rot_b);
+                
+                if hit_any {
+                    // Çarpışma var! Gerçek TOI'yi bulmak için İkili Arama (Bisection) kullan.
+                    let mut t_low = 0.0;
+                    let mut t_high = dt;
+                    
+                    for _ in 0..8 {
+                        let t_mid = (t_low + t_high) * 0.5;
+                        
+                        let sweep_mid = crate::shape::ColliderShape::Swept {
+                            base: Box::new(col_b.shape.clone()),
+                            sweep_vector: rel_v * (t_mid - t_low),
+                        };
+                        
+                        let pa_low = pos_a + v_a_lin * t_low;
+                        let pb_low = pos_b + v_b_lin * t_low;
+                        
+                        // [t_low, t_mid] arasında çarpışma var mı?
+                        let (hit_first_half, _) = crate::gjk::gjk_intersect(&col_a.shape, pa_low, rot_a, &sweep_mid, pb_low, rot_b);
+                        
+                        if hit_first_half {
+                            t_high = t_mid; // İlk yarıda çarpıştılar, zamanı daralt
+                        } else {
+                            t_low = t_mid; // İlk yarıda çarpmadılar, demek ki [t_mid, t_high] arasında çarpışacaklar
+                        }
+                    }
+
+                    // Bisection bitti. t_high (veya t_low) TOI'dir.
+                    // EPA için nesneleri TOI anındaki tam fiziksel pozisyonlarına taşı:
+                    let t_hit = t_high;
+                    let pa_hit = pos_a + v_a_lin * t_hit;
+                    let pb_hit = pos_b + v_b_lin * t_hit;
+                    
+                    let (hit, sim) = crate::gjk::gjk_intersect(&col_a.shape, pa_hit, rot_a, &col_b.shape, pb_hit, rot_b);
+                    if hit {
+                        manifold = crate::epa::epa_solve(sim, &col_a.shape, pa_hit, rot_a, &col_b.shape, pb_hit, rot_b);
+                        
+                        if manifold.is_colliding {
+                            ccd_pos_a = Some(pa_hit - pos_a);
+                            ccd_pos_b = Some(pb_hit - pos_b);
+                            
+                            // Tünellemeyi önlemek için yapay Penetrasyon ekliyoruz!
+                            let remaining_t = dt - t_hit;
+                            let vn = rel_v.dot(manifold.normal);
+                            if vn < 0.0 {
+                                manifold.penetration += -vn * remaining_t;
+                            }
+                            
+                            for cp in &mut manifold.contact_points {
+                                cp.0 -= (v_a_lin + v_b_lin) * 0.5 * t_hit; 
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -322,6 +432,8 @@ pub fn physics_collision_system(world: &World, dt: f32) {
                 rot_b: t_b.rotation,
                 accumulated_j: 0.0,
                 accumulated_friction: Vec3::ZERO,
+                ccd_offset_a: ccd_pos_a.unwrap_or(Vec3::ZERO),
+                ccd_offset_b: ccd_pos_b.unwrap_or(Vec3::ZERO),
             });
         }
 
@@ -381,11 +493,15 @@ pub fn physics_collision_system(world: &World, dt: f32) {
         for c in &island.contacts {
             if c.inv_mass_a > 0.0 && !island.velocities.contains_key(&c.ent_a) {
                 island.velocities.insert(c.ent_a, velocities.get(c.ent_a).cloned().unwrap_or(Velocity::new(Vec3::ZERO)));
-                island.poses.insert(c.ent_a, *transforms.get(c.ent_a).unwrap());
+                let mut p = *transforms.get(c.ent_a).unwrap();
+                p.position += c.ccd_offset_a;
+                island.poses.insert(c.ent_a, p);
             }
             if c.inv_mass_b > 0.0 && !island.velocities.contains_key(&c.ent_b) {
                 island.velocities.insert(c.ent_b, velocities.get(c.ent_b).cloned().unwrap_or(Velocity::new(Vec3::ZERO)));
-                island.poses.insert(c.ent_b, *transforms.get(c.ent_b).unwrap());
+                let mut p = *transforms.get(c.ent_b).unwrap();
+                p.position += c.ccd_offset_b;
+                island.poses.insert(c.ent_b, p);
             }
         }
     }
@@ -537,23 +653,67 @@ pub fn physics_collision_system(world: &World, dt: f32) {
             }
         }
 
+        // === BUG #2 FIX: DOĞRUDAN POZİSYON DÜZELTMESİ (Position Projection) ===
+        // SI çözücü hız tabanlı düzeltme yapar, ama damping onu zayıflatabilir.
+        // Bu adım nesneleri doğrudan penetrasyon derinliği kadar ayırır.
+        for c in &island.contacts {
+            let slop = 0.005;
+            let correction_factor = 0.4; // %40 anında düzelt (çok agresif olursa titreşim yapar)
+            let correction = (c.penetration - slop).max(0.0) * correction_factor;
+            
+            if correction > 0.0 {
+                let total_inv = c.inv_mass_a + c.inv_mass_b;
+                if total_inv > 0.0 {
+                    let push = c.normal * (correction / total_inv);
+                    if let Some(p) = island.poses.get_mut(&c.ent_a) {
+                        p.position -= push * c.inv_mass_a;
+                    }
+                    if let Some(p) = island.poses.get_mut(&c.ent_b) {
+                        p.position += push * c.inv_mass_b;
+                    }
+                }
+            }
+        }
+
     });
+
+    let mut collision_events = Vec::new();
 
     // Yazımları ana array'e geri aktar (Sync phase)
     let mut sync_cache = Vec::new();
     for island in islands {
-        for (ent, vel) in island.velocities {
-            if let Some(v) = velocities.get_mut(ent) {
-                *v = vel;
+        for (ent, vel) in &island.velocities {
+            if let Some(v) = velocities.get_mut(*ent) {
+                *v = *vel;
             }
         }
-        for (ent, tbox) in island.poses {
-            if let Some(t) = transforms.get_mut(ent) {
-                *t = tbox;
+        for (ent, tbox) in &island.poses {
+            if let Some(t) = transforms.get_mut(*ent) {
+                *t = *tbox;
             }
         }
         for c in island.contacts {
             sync_cache.push((c.ent_a, c.ent_b, c.accumulated_j, c.accumulated_friction));
+
+            // DARBE/MOMENTUM EVENT'İ FIRLAT: Eğer şiddetli bir etki varsa (0.05'ten büyük) ses çıksın
+            if c.accumulated_j > 0.05 {
+                let pos_a = island.poses.get(&c.ent_a).map(|t| t.position).unwrap_or(Vec3::ZERO);
+                collision_events.push(crate::CollisionEvent {
+                    entity_a: c.ent_a,
+                    entity_b: c.ent_b,
+                    position: pos_a + c.r_a,
+                    normal: c.normal,
+                    impulse: c.accumulated_j,
+                });
+            }
+        }
+    }
+
+    if !collision_events.is_empty() {
+        if let Some(mut evs) = world.get_resource_mut::<gizmo_core::event::Events<crate::CollisionEvent>>() {
+            for ev in collision_events {
+                evs.push(ev);
+            }
         }
     }
 

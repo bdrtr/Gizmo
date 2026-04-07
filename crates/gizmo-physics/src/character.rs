@@ -138,6 +138,9 @@ fn resolve_capsule_collisions(
             ColliderShape::ConvexHull(_) => {
                 // ConvexHull karakter çarpışması GJK/EPA ile çözülür (ileri adım)
                 None
+            },
+            ColliderShape::Swept { .. } => {
+                None  // Swept shape should never be in ECS
             }
         };
 

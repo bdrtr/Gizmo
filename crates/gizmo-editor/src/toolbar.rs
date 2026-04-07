@@ -14,10 +14,12 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                 // === DOSYA İŞLEMLERİ ===
                 if ui.button("💾 Kaydet").clicked() {
                     state.status_message = format!("Sahne kaydediliyor → {}", state.scene_path);
+                    state.scene_save_request = Some(state.scene_path.clone());
                 }
                 
                 if ui.button("📂 Yükle").clicked() {
                     state.status_message = format!("Sahne yükleniyor ← {}", state.scene_path);
+                    state.scene_load_request = Some(state.scene_path.clone());
                 }
                 
                 ui.separator();
