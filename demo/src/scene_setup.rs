@@ -283,10 +283,13 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
         world.add_component(wall, gizmo::renderer::components::MeshRenderer::new());
         world.add_component(wall, EntityName("Duvar Engel".to_string()));
 
-        // Güvendiğimiz bir kalınlıkta NavGrid'i duvarın etrafında bloke edelim (3x3 grid padding!)
-        for ix in -1..=1 {
-            for iz in -1..=1 {
-                nav_grid.add_obstacle_world(pos + Vec3::new(ix as f32 * 1.0, 0.0, iz as f32 * 1.0));
+        // NavGrid engel padding: collider boyutuna göre hesapla (half_extent / cell_size + 1)
+        let cell_size = 1.0_f32; // NavGrid cell_size ile eşleşmeli
+        let pad_x = (1.0_f32 / cell_size).ceil() as i32; // half_extent.x = 1.0
+        let pad_z = (1.0_f32 / cell_size).ceil() as i32; // half_extent.z = 1.0
+        for ix in -pad_x..=pad_x {
+            for iz in -pad_z..=pad_z {
+                nav_grid.add_obstacle_world(pos + Vec3::new(ix as f32 * cell_size, 0.0, iz as f32 * cell_size));
             }
         }
     }
@@ -304,7 +307,7 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
     rb.calculate_box_inertia(2.0, 4.0, 2.0); // Collider boyutları: 2*half_extents
     world.add_component(npc, rb);
     world.add_component(npc, gizmo::physics::components::Velocity::new(Vec3::ZERO));
-    world.add_component(npc, gizmo_ai::NavAgent::new(8.0, 50.0, 2.0)); // Hız 8.0, Güç 50.0
+    world.add_component(npc, gizmo_ai::NavAgent::new(5.0, 50.0, 2.0)); // Hız 5.0 (solver uyumlu), Güç 50.0
     world.add_component(npc, EntityName("NPC Takipçi".to_string()));
 
     world.insert_resource(nav_grid);

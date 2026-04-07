@@ -100,7 +100,7 @@ pub fn physics_movement_system(world: &World, dt: f32) {
                     v.angular = Vec3::new(xa_arr[i], ya_arr[i], za_arr[i]);
                 }
             }
-            index += 8;
+            index += 8; // Son batch'te valid_count < 8 olabilir — geçersiz lane'ler sıfır ile doldurulur, sonuç yok sayılır
         }
 
         // BATCH 3: Pozisyon Entegrasyonu & CCD (Continuous Collision Detection) - Skalar Loop
