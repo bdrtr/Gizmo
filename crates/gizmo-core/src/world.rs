@@ -14,6 +14,8 @@ pub struct World {
     storages: HashMap<TypeId, RefCell<Box<dyn ComponentStorage>>>,
     // Entity'den bağımsız global veriler (Time, WindowSize, Input vs.)
     resources: HashMap<TypeId, RefCell<Box<dyn std::any::Any>>>,
+    // Entity başına hangi TypeId'lerde component var — despawn'da O(S) yerine O(C) tarama
+    entity_components: HashMap<u32, Vec<TypeId>>,
 }
 
 impl World {
@@ -25,6 +27,7 @@ impl World {
             free_set: HashSet::new(),
             storages: HashMap::new(),
             resources: HashMap::new(),
+            entity_components: HashMap::new(),
         }
     }
 }
@@ -57,8 +60,13 @@ impl World {
             self.free_ids.push(id);
             self.free_set.insert(id);
             
-            for storage in self.storages.values_mut() {
-                storage.get_mut().remove_entity(id);
+            // Sadece bu entity'nin component'ı olan storage'lara dokunur — O(C) (C = entity'nin component sayısı)
+            if let Some(type_ids) = self.entity_components.remove(&id) {
+                for type_id in type_ids {
+                    if let Some(storage) = self.storages.get_mut(&type_id) {
+                        storage.get_mut().remove_entity(id);
+                    }
+                }
             }
         }
     }
@@ -70,16 +78,19 @@ impl World {
         }
     }
 
-    /// Yaşayan (despawn olmamış) tüm Entity'leri döndürür — O(n) artık, eskisi O(n²) idi
-    pub fn iter_alive_entities(&self) -> Vec<Entity> {
-        let mut alive = Vec::with_capacity((self.next_entity_id as usize).saturating_sub(self.free_set.len()));
-        for id in 0..self.next_entity_id {
-            if !self.free_set.contains(&id) {
-                let gen = self.generations[id as usize];
-                alive.push(Entity::new(id, gen));
-            }
+    /// Yaşayan (despawn olmamış) tüm Entity'leri döndüren iterator — sıfır allocation
+    pub fn iter_alive_entities(&self) -> AliveEntityIter<'_> {
+        AliveEntityIter {
+            current_id: 0,
+            max_id: self.next_entity_id,
+            free_set: &self.free_set,
+            generations: &self.generations,
         }
-        alive
+    }
+
+    /// Tüm yaşayan entity'leri Vec olarak döndürür (kolaylık metodu)
+    pub fn alive_entities(&self) -> Vec<Entity> {
+        self.iter_alive_entities().collect()
     }
 
     #[inline]
@@ -102,6 +113,12 @@ impl World {
         if let Some(sparse_set) = borrowed.as_any_mut().downcast_mut::<SparseSet<T>>() {
             sparse_set.insert(entity.id(), component);
         }
+
+        // Entity → TypeId takibini güncelle (despawn optimizasyonu için)
+        self.entity_components
+            .entry(entity.id())
+            .or_insert_with(Vec::new)
+            .push(type_id);
     }
 
     /// Component dizisine okuma erişimi (Read-Only, Ref ile paylaşılabilir).
@@ -213,5 +230,36 @@ impl World {
             Ok(boxed_t) => Some(*boxed_t),
             Err(_) => None,
         }
+    }
+}
+
+/// Sıfır allocation ile yaşayan entity'ler üzerinde iterasyon yapan iterator.
+pub struct AliveEntityIter<'a> {
+    current_id: u32,
+    max_id: u32,
+    free_set: &'a HashSet<u32>,
+    generations: &'a Vec<u32>,
+}
+
+impl<'a> Iterator for AliveEntityIter<'a> {
+    type Item = Entity;
+
+    #[inline]
+    fn next(&mut self) -> Option<Entity> {
+        while self.current_id < self.max_id {
+            let id = self.current_id;
+            self.current_id += 1;
+            if !self.free_set.contains(&id) {
+                let gen = self.generations[id as usize];
+                return Some(Entity::new(id, gen));
+            }
+        }
+        None
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = (self.max_id - self.current_id) as usize;
+        (0, Some(remaining))
     }
 }

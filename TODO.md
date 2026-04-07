@@ -130,13 +130,13 @@
 
 ## 🏗️ ECS CORE (gizmo-core)
 
-- [ ] **`World::despawn` tüm storage'ları iterasyonla tarar** — `world.rs:60-62`
-  Her despawn'da tüm component storage'ları (HashMap values) üzerinde tek tek `remove_entity` çağrılıyor. N component tipi varsa O(N) maliyet.
-  **Çözüm:** Entity'nin hangi storage'larda olduğunu bir bitfield/set ile takip et.
+- [x] **`World::despawn` tüm storage'ları iterasyonla tarıyordu** — `world.rs:60-62`
+  Entity başına TypeId takibi (`entity_components`) eklendi. Artık sadece ilgili storage'lara dokunulur — O(S) → O(C).
+  **Çözüm:** `entity_components: HashMap<u32, Vec<TypeId>>` ile hedefe yönelik silme ✅
 
-- [ ] **`iter_alive_entities` her çağrıda Vec allocate ediyor** — `world.rs:74-83`
-  Bu fonksiyon her frame çağrılırsa (ör. particle system) gereksiz allocation yapar.
-  **Çözüm:** Alive entity listesini cache'le veya iterator pattern kullan.
+- [x] **`iter_alive_entities` her çağrıda Vec allocate ediyordu** — `world.rs:74-83`
+  Sıfır allocation `AliveEntityIter` iterator struct'ı eklendi. Vec döndüren `alive_entities()` kolaylık metodu korundu.
+  **Çözüm:** Iterator pattern — `AliveEntityIter` struct ✅
 
 - [x] **RefCell runtime borrow panikleri korumasız** — `world.rs:112-113, 122-123`
   `storage.borrow()` ve `storage.borrow_mut()` RefCell panikleri (BorrowMutError) korumasız. Aynı component'i aynı anda okuma+yazma denerseniz program panikler.

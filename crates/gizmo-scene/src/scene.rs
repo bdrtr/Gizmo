@@ -57,7 +57,7 @@ pub struct MaterialData {
 impl SceneData {
     /// Mevcut World durumunu JSON dosyası olarak diske kaydeder
     pub fn save(world: &World, file_path: &str) {
-        let entities_data = Self::serialize_entities(world, world.iter_alive_entities().into_iter().map(|e| e.id()).collect());
+        let entities_data = Self::serialize_entities(world, world.iter_alive_entities().map(|e| e.id()).collect());
 
         let scene = SceneData { entities: entities_data };
         let json = serde_json::to_string_pretty(&scene).expect("Scene Serialize Hatası!");
