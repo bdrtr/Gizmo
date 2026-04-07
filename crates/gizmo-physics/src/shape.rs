@@ -103,7 +103,22 @@ impl ColliderShape {
     }
 }
 
-// Fiziksel varlıkları tespit edecek `Collider` bileşeni
+/// Fiziksel çarpışma bileşeni.
+///
+/// **ÖNEMLİ TASARIM KARARI — `Transform.scale` ETKİSİ:**
+/// Collider boyutları (half_extents, radius, half_height) `Transform.scale` ile
+/// otomatik olarak **çarpılmaz**. Şekil boyutlarını doğrudan oluştururken belirleyin.
+///
+/// Bu bilinçli bir karardır:
+/// - Fizik deterministik kalır (scale animasyonu collision'ı bozmaz)
+/// - Runtime'da her frame scale × collider çarpımı yapılmaz
+/// - Non-uniform scale (2, 1, 3) küreyi elipse çevirirdi ki bu GJK/EPA'yı bozar
+///
+/// Doğru kullanım örneği:
+/// ```
+/// // Görsel: Transform scale (2, 2, 2) ile 2x büyütülmüş küp
+/// // Collider: half_extents de 2x olmalı → new_aabb(2.0, 2.0, 2.0)
+/// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Collider {
     pub shape: ColliderShape,
