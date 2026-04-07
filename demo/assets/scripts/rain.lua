@@ -5,6 +5,10 @@ local reset_height = 40.0
 local fall_speed = 35.0
 local ground_y = -5.0
 
+-- Sert bir rüzgar (X ve Z yönünde kayma)
+local wind_x = -12.0
+local wind_z = 8.0
+
 function on_update(ctx)
     local pos = ctx.position
     local vel = ctx.velocity
@@ -16,6 +20,10 @@ function on_update(ctx)
     if vel.y < -fall_speed then
         vel.y = -fall_speed
     end
+    
+    -- Rüzgar damlaları iter
+    vel.x = wind_x
+    vel.z = wind_z
     
     -- Fizik motoru (RigidBody) olmadığı için biz hareket ettiriyoruz
     pos.x = pos.x + vel.x * dt
@@ -31,8 +39,7 @@ function on_update(ctx)
         pos.z = ((math.random() - 0.5) * spread)
         
         vel.y = -15.0 - (math.random() * 10.0)
-        vel.x = 0.0
-        vel.z = 0.0
+        -- vel.x ve vel.z zaten rüzgardan geliyor
     end
     
     return {

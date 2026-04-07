@@ -114,7 +114,10 @@ fn main() {
         transform_hierarchy_system(world);
 
         // Lua Script motoru
-        run_scripts(world, state, dt, input);
+        let cmds = run_scripts(world, state, dt, input);
+
+        // Lua'dan gelen oyun komutlarını işle
+        process_game_commands(world, state, dt, cmds);
     });
 
     // ── UI ─────────────────────────────────────────────────────────────────
@@ -160,8 +163,9 @@ fn build_ray(world: &World, player_id: u32, ndc_x: f32, ndc_y: f32, ww: f32, wh:
     None
 }
 
-fn run_scripts(world: &mut World, state: &mut GameState, dt: f32, input: &Input) {
-    if state.script_engine.borrow().is_none() { return; }
+fn run_scripts(world: &mut World, state: &mut GameState, dt: f32, input: &Input) -> Vec<gizmo::scripting::commands::ScriptCommand> {
+    let mut unhandled = Vec::new();
+    if state.script_engine.borrow().is_none() { return unhandled; }
 
     if let (Some(mut transforms), Some(mut vels), Some(scripts)) = (
         world.borrow_mut::<Transform>(),
@@ -193,6 +197,123 @@ fn run_scripts(world: &mut World, state: &mut GameState, dt: f32, input: &Input)
         }
     }
     if let Some(engine) = state.script_engine.borrow_mut().as_mut() {
-        engine.flush_commands(world);
+        unhandled = engine.flush_commands(world);
+    }
+    unhandled
+}
+
+/// Lua command queue'daki oyun komutlarını GameState'e uygular
+fn process_game_commands(world: &mut World, state: &mut GameState, dt: f32, commands: Vec<gizmo::scripting::commands::ScriptCommand>) {
+    use gizmo::scripting::commands::ScriptCommand;
+
+    // Diyalog timer'ını güncelle
+    if let Some(ref mut dlg) = state.active_dialogue {
+        if dlg.timer > 0.0 {
+            dlg.timer -= dt;
+            if dlg.timer <= 0.0 {
+                state.active_dialogue = None;
+            }
+        }
+    }
+
+    // Yarış timer'ı
+    if state.race_status == crate::state::RaceStatus::Running {
+        state.race_timer += dt;
+    }
+
+    // Kamera takip sistemi
+    if let Some(target_id) = state.camera_follow_target {
+        let mut target_pos = None;
+        if let Some(transforms) = world.borrow::<Transform>() {
+            if let Some(t) = transforms.get(target_id) {
+                target_pos = Some(t.position);
+            }
+        }
+        if let Some(tpos) = target_pos {
+            if let Some(mut transforms) = world.borrow_mut::<Transform>() {
+                if let Some(cam_t) = transforms.get_mut(state.player_id) {
+                    // Chase kamera: hedefin arkasına + yukarıya yerleş
+                    let offset = Vec3::new(0.0, 4.0, 10.0);
+                    cam_t.position = cam_t.position.lerp(tpos + offset, dt * 5.0);
+                }
+            }
+        }
+    }
+
+    // Checkpoint temas kontrolü
+    {
+        let mut player_pos = None;
+        if let Some(transforms) = world.borrow::<Transform>() {
+            if let Some(t) = transforms.get(state.player_id) {
+                player_pos = Some(t.position);
+            }
+        }
+        if let Some(ppos) = player_pos {
+            for cp in &mut state.checkpoints {
+                if !cp.activated && ppos.distance(cp.position) < cp.radius {
+                    cp.activated = true;
+                    println!("[Race] Checkpoint {} geçildi!", cp.id);
+                }
+            }
+            // Tüm checkpoint'ler geçildiyse yarış bitti
+            if !state.checkpoints.is_empty()
+                && state.checkpoints.iter().all(|c| c.activated)
+                && state.race_status == crate::state::RaceStatus::Running
+            {
+                state.race_status = crate::state::RaceStatus::Finished;
+                println!("[Race] Yarış tamamlandı! Süre: {:.2}s", state.race_timer);
+            }
+        }
+    }
+
+    for cmd in commands {
+        match cmd {
+            ScriptCommand::ShowDialogue { speaker, text, duration } => {
+                state.active_dialogue = Some(crate::state::DialogueEntry { speaker, text, timer: duration });
+            }
+            ScriptCommand::HideDialogue => {
+                state.active_dialogue = None;
+            }
+            ScriptCommand::TriggerCutscene(name) => {
+                state.active_cutscene = Some(name.clone());
+                state.free_cam = false; // cutscene sırasında kamera kilitle
+                println!("[Cutscene] Başladı: {}", name);
+            }
+            ScriptCommand::EndCutscene => {
+                state.active_cutscene = None;
+                state.free_cam = true;
+                println!("[Cutscene] Bitti.");
+            }
+            ScriptCommand::AddCheckpoint { id, position, radius } => {
+                state.checkpoints.push(crate::state::Checkpoint { id, position, radius, activated: false });
+                println!("[Race] Checkpoint {} eklendi ({:.1}, {:.1}, {:.1})", id, position.x, position.y, position.z);
+            }
+            ScriptCommand::ActivateCheckpoint(id) => {
+                if let Some(cp) = state.checkpoints.iter_mut().find(|c| c.id == id) {
+                    cp.activated = true;
+                }
+            }
+            ScriptCommand::FinishRace { winner_name } => {
+                state.race_status = crate::state::RaceStatus::Finished;
+                println!("[Race] Kazanan: {} | Süre: {:.2}s", winner_name, state.race_timer);
+            }
+            ScriptCommand::ResetRace => {
+                for cp in &mut state.checkpoints { cp.activated = false; }
+                state.race_timer = 0.0;
+                state.race_status = crate::state::RaceStatus::Idle;
+            }
+            ScriptCommand::SetCameraTarget(entity_id) => {
+                state.camera_follow_target = Some(entity_id);
+                state.free_cam = false;
+            }
+            ScriptCommand::SetCameraFov(fov) => {
+                if let Some(mut cameras) = world.borrow_mut::<Camera>() {
+                    if let Some(cam) = cameras.get_mut(state.player_id) {
+                        cam.fov = fov.to_radians();
+                    }
+                }
+            }
+            _ => {} // diğer komutlar flush_commands'ta zaten işlendi
+        }
     }
 }

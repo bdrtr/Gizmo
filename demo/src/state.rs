@@ -11,6 +11,31 @@ pub enum GizmoMode {
     Scale,
 }
 
+/// Aktif bir diyalog metni
+#[derive(Clone, Debug)]
+pub struct DialogueEntry {
+    pub speaker: String,
+    pub text: String,
+    pub timer: f32,    // kalan süre (saniye), 0 = süresiz
+}
+
+/// Yarış checkpoint'i
+#[derive(Clone, Debug)]
+pub struct Checkpoint {
+    pub id: u32,
+    pub position: Vec3,
+    pub radius: f32,
+    pub activated: bool,
+}
+
+/// Yarış durumu
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum RaceStatus {
+    Idle,
+    Running,
+    Finished,
+}
+
 pub struct GameState {
     pub bouncing_box_id: u32,
     pub player_id: u32,
@@ -47,4 +72,18 @@ pub struct GameState {
     pub post_process_settings: RefCell<gizmo::renderer::renderer::PostProcessUniforms>,
     pub editor_state: RefCell<gizmo::editor::EditorState>,
     pub free_cam: bool,
+
+    // ── Oyun Sistemi ──────────────────────────────────────────────────
+    /// Ekranda gösterilen diyalog (None ise gizli)
+    pub active_dialogue: Option<DialogueEntry>,
+    /// Aktif ara sahne adı (None ise cutscene yok)
+    pub active_cutscene: Option<String>,
+    /// Yarış checkpoint'leri
+    pub checkpoints: Vec<Checkpoint>,
+    /// Yarış durumu
+    pub race_status: RaceStatus,
+    /// Yarış süresi (saniye)
+    pub race_timer: f32,
+    /// Kamera takip target (None = serbest kamera)
+    pub camera_follow_target: Option<u32>,
 }
