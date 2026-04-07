@@ -268,11 +268,13 @@ fn run_scripts(world: &mut World, _state: &mut GameState, dt: f32, input: &Input
                         .and_then(|s| s.to_str())
                         .unwrap_or("on");
                     let auto_name = format!("{}_update", stem);
-                    // Fonksiyon script'te varsa onu kullan, yoksa fallback "on_update"
+                    // Fonksiyon script'te varsa onu kullan, yoksa bu entity'yi atla
+                    // NOT: Global "on_update" zaten engine.update() tarafından çağrılıyor,
+                    // burada tekrar çağırmak çift çalıştırma (double-call) sorununa yol açar.
                     if engine.has_function(&auto_name) {
                         auto_name
                     } else {
-                        "on_update".to_string()
+                        continue; // entity-specific fonksiyon yok → atla
                     }
                 };
                 

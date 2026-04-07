@@ -226,10 +226,17 @@ pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
                 cc.ground_normal = normal;
                 
                 // Slide: Kalan hızdan çarpışma normal bileşenini çıkar
+                // normal, collider'dan dışarı (karaktere doğru) yönlü.
+                // remaining'in normal üzerine projeksiyonu negatifse (collider'a doğru gidiyor),
+                // o bileşeni çıkarıyoruz. Pozitifse (zaten uzaklaşıyor) dokunmuyoruz.
                 let remaining = new_pos - t.position;
-                let normal_component = normal * remaining.dot(normal);
-                let slide = remaining - normal_component;
-                new_pos = t.position + slide;
+                let dot = remaining.dot(normal);
+                if dot < 0.0 {
+                    // Sadece collider'a doğru olan bileşeni çıkar
+                    let normal_component = normal * dot;
+                    let slide = remaining - normal_component;
+                    new_pos = t.position + slide;
+                }
             }
             
             // === 4. Zemin düzlemi kontrolü (fallback — collider yoksa) ===

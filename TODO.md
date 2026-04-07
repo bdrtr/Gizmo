@@ -54,9 +54,9 @@
   `RigidBody::new()` her zaman 1x1x1 bir küp eylemsizliği hesaplıyor. `calculate_box_inertia` / `calculate_sphere_inertia` / `calculate_capsule_inertia` fonksiyonları var ama sahne kurulumunda **çağrılmıyor**! Her obje aynı eylemsizliğe sahip.
   **Çözüm:** `scene_setup.rs`'de Collider oluşturduktan sonra boyutlara göre uygun inertia fonksiyonunu çağır.
 
-- [ ] **Transform.scale fizik tarafından yok sayılıyor** — Genel tasarım
-  Collider boyutları asla `Transform.scale` ile çarpılmıyor. Bu bilinçli bir tasarım kararı olabilir ama belgelenmemiş. Kullanıcı bir küpü `scale(2,2,2)` yaparsa collider aynı boyutta kalır.
-  **Çözüm:** Ya otomatik Scale-aware collider yap, ya da bu kararı docs/README'ye belirgin şekilde yaz.
+- [x] **Transform.scale fizik tarafından yok sayılıyor** — Genel tasarım
+  Bilinçli tasarım kararı olarak belgelendi: Collider'a kapsamlı doc-comment eklendi (determinizm, performans, non-uniform scale sebepleri).
+  **Çözüm:** `shape.rs::Collider` üzerine belgeleme eklendi ✅
 
 ### Kapsül (shape.rs)
 
@@ -86,9 +86,9 @@
   Vec'in başından silmek tüm elemanları kaydırır. Uzun yollarda her frame O(n) maliyet.
   **Çözüm:** `VecDeque` kullan veya indeks takibi yap (`current_path_index` field).
 
-- [ ] **AI navigasyon sistemi `borrow::<Transform>` ve `borrow_mut::<Velocity>` aynı anda tutuyor** — `system.rs:18-26`
-  Bu RefCell kuralları açısından sorunsuz (farklı tipler) ama `borrow_mut::<NavAgent>` da tutulduğunda toplam 3 aktif borrow var. Gelecekte başka bir sistem de velocity borroow ederse çakışma olur.
-  **Çözüm:** Dokümante et veya borrow scope'unu daralt.
+- [x] **AI navigasyon sistemi `borrow::<Transform>` ve `borrow_mut::<Velocity>` aynı anda tutuyor** — `system.rs:18-26`
+  Kapsamlı borrow güvenliği dökümantasyonu eklendi: 4 RefCell borrow'un neden güvenli olduğu ve hangi koşullarda risk taşıdığı.
+  **Çözüm:** `ai_navigation_system` üzerine doc-comment eklendi ✅
 
 - [x] **A* `find_path` 2000 iterasyon limitli ama NAV_GRID hücre boyutuna bağlı** — `pathfinding.rs`
   Eğer grid hücre boyutu çok küçükse (ör. 0.1) aynı mesafe için 100x daha fazla node var ve 2000 iterasyon yetersiz kalır.
@@ -160,9 +160,9 @@
   `Time { dt, elapsed_seconds: 0.0 }` — toplam geçen süre asla güncellenmemiş.
   **Çözüm:** Bir `app_start` timestamp tutup `elapsed_seconds = now - app_start` hesapla.
 
-- [ ] **Lua `run_scripts` ve `engine.update` çift çağrı** — `main.rs:163-176`
-  Hem `engine.update(world, input, dt)` hem de `run_scripts(world, state, dt, input)` çağrılıyor. Bazı script fonksiyonları iki kez çalışabilir.
-  **Çözüm:** Sorumlulukları netleştir veya birleştir.
+- [x] **Lua `run_scripts` ve `engine.update` çift çağrı** — `main.rs:163-176`
+  `run_scripts`'teki fallback `"on_update"` global fonksiyonu zaten `engine.update`'de çağrılıyordu. Fallback `continue` ile değiştirildi.
+  **Çözüm:** Entity-specific fonksiyon yoksa entity atlanır, global on_update ikinci kez çağrılmaz ✅
 
 ### Sahne Kurulumu (scene_setup.rs)
 
@@ -194,9 +194,9 @@
   `let ground_y = -1.0_f32;` — Bu sabit zemin yüksekliği. Multi-level haritalar veya rampalar için çalışmaz.
   **Çözüm:** Aşağı doğru raycast ile gerçek zemin yüksekliğini bul.
 
-- [ ] **Slide vektörü hesaplaması `correction * -1` olmalı** — `character.rs:228`
-  `let normal_component = normal * remaining.dot(normal)` — Burada `normal`, correction'dan gelen (collider'dan dışarı yönlü) bir vektör. Remaining vektörünün bu normalle projection'ı slide yönünü belirliyor. İşaret karışıklığı olabilir.
-  **Çözüm:** Bir birim test ile slide mantığını doğrula.
+- [x] **Slide vektörü hesaplaması işaret sorunu** — `character.rs:228`
+  `remaining.dot(normal)` işareti kontrol edilmeden her zaman normal bileşen çıkarılıyordu. Artık sadece collider'a doğru giden bileşen çıkarılır.
+  **Çözüm:** `dot < 0.0` ise normal bileşeni çıkar, değilse dokunma ✅
 
 ### Araç Fiziği (vehicle.rs)
 

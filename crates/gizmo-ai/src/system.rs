@@ -4,6 +4,20 @@ use crate::components::NavAgent;
 use crate::pathfinding::{NavGrid, find_path};
 use crate::steering;
 
+/// AI Navigasyon Sistemi — Per-frame ajan güncelleme döngüsü.
+///
+/// **Borrow Güvenliği Notu:**
+/// Bu fonksiyon eşzamanlı 4 RefCell borrow tutar:
+/// - `NavGrid` (Resource, immutable)
+/// - `NavAgent` (Component, **mutable**)
+/// - `Transform` (Component, immutable)
+/// - `Velocity` (Component, **mutable**)
+///
+/// Bu güvenlidir çünkü her biri **farklı TypeId** ile ayrı `RefCell`'de saklanır.
+/// Ancak bu fonksiyon çalışırken başka bir sistem aynı anda `NavAgent` veya
+/// `Velocity` için `borrow_mut` yaparsa `try_borrow_mut` başarısız olur.
+/// Bu nedenle AI sistemi fizik adım döngüsü **içinde** çağrılmalıdır (main.rs),
+/// dışardan paralel çağrılmamalıdır.
 pub fn ai_navigation_system(world: &World, dt: f32) {
     let grid = match world.get_resource::<NavGrid>() {
         Some(g) => g,
