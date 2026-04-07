@@ -295,7 +295,7 @@ impl ScriptEngine {
                     }
                 }
                 ScriptCommand::AddRigidBody { id, mass, restitution, friction, use_gravity } => {
-                    let entity = world.iter_alive_entities().into_iter().find(|e| e.id() == id);
+                    let entity = world.iter_alive_entities().find(|e| e.id() == id);
                     if let Some(e) = entity {
                         let rb = gizmo_physics::components::RigidBody::new(mass, restitution, friction, use_gravity);
                         world.add_component(e, rb);
@@ -306,14 +306,14 @@ impl ScriptEngine {
                     }
                 }
                 ScriptCommand::AddBoxCollider { id, hx, hy, hz } => {
-                    let entity = world.iter_alive_entities().into_iter().find(|e| e.id() == id);
+                    let entity = world.iter_alive_entities().find(|e| e.id() == id);
                     if let Some(e) = entity {
                         let col = gizmo_physics::shape::Collider::new_aabb(hx, hy, hz);
                         world.add_component(e, col);
                     }
                 }
                 ScriptCommand::AddSphereCollider { id, radius } => {
-                    let entity = world.iter_alive_entities().into_iter().find(|e| e.id() == id);
+                    let entity = world.iter_alive_entities().find(|e| e.id() == id);
                     if let Some(e) = entity {
                         let col = gizmo_physics::shape::Collider::new_sphere(radius);
                         world.add_component(e, col);
