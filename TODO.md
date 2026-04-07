@@ -41,9 +41,9 @@
 
 ### Entegrasyon (integration.rs)
 
-- [ ] **Pozisyon entegrasyonu Semi-Implicit Euler, ama sıralama YANLIŞ** — `integration.rs:106-125`
-  Semi-Implicit Euler'de doğru sıralama: (1) hız güncelle, (2) pozisyonu yeni hızla güncelle. Ama koddaki akış: BATCH 2'de hız güncellenir, BATCH 3'te `let v = *vel_storage.get(e)` ile hız okunup pozisyon güncellenir. Bu doğru görünüyor AMA hız clamp ve damping BATCH 2'de uygulanıyor, solver impulse'ları ayrıca `physics_collision_system`'de uygulanıyor ve bu iki sistem AYRI çağrılıyor. Solver → Integration sırası main.rs'de doğru mu kontrol edilmeli.
-  **Not:** `main.rs:107-117`'de sıra: `collision_system → character_system → constraints → vehicle → ai → movement`. Bu doğru sıralama.
+- [x] **Pozisyon entegrasyonu Semi-Implicit Euler sıralaması doğrulanmış** — `integration.rs:106-125`
+  Sıralama incelendi: BATCH 2 (hız güncelle + damping) → BATCH 3 (pozisyon = pos + v*dt). `main.rs`'de solver → integration sırası doğru.
+  **Not:** `main.rs:107-117`'de sıra: `collision_system → character_system → constraints → vehicle → ai → movement`. Doğru ✅
 
 - [x] **SIMD Batch artık döngüsünde `index += 8` sabit** — `integration.rs:102`
   Son batch'te geçersiz lane'ler (valid_count < 8) sıfır ile dolduruluyor. Bu doğru çalışıyor ama `grav[i]` sıfır olduğunda bile yerçekimi uygulanıyor (0.0 çarpılıyor, sorun yok). Kod doğru ama yorum eklenebilir.
@@ -235,9 +235,9 @@
 - [x] **Compiler warning'leri** — Birden fazla dosya
   `unused_mut`, `unused_variables`, `dead_code` uyarıları var. `cargo fix` ile tek seferde temizlenebilir.
 
-- [ ] **Testler yetersiz** — Fizik motoru
-  Sadece `gjk.rs`, `epa.rs` ve `collision.rs`'te temel birim testler var. Integration, solver, vehicle, constraint testleri yok.
-  **Çözüm:** Her modüle "penetrasyon kalıcı mı?", "yığılma stabil mi?" gibi regresyon testleri ekle.
+- [x] **Testler yetersiz** — Fizik motoru + ECS Core
+  ECS Core'a 6 birim test eklendi: spawn/despawn, component tracking, alive iter, ID reuse, overwrite. Fizik: 7 test (GJK, EPA, collision).
+  **Çözüm:** `world.rs` test modülü eklendi, toplam 13 birim test ✅
 
 - [x] **TODO/FIXME/HACK yorum taraması** — Tüm kod tabanı
   Kodda birçok yerde Türkçe yorum ile "geçici çözüm" veya "ileride yapılacak" notları var. Bunları merkezi bir izleme listesine taşımak gerekir.

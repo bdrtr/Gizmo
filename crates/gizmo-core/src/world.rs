@@ -263,3 +263,108 @@ impl<'a> Iterator for AliveEntityIter<'a> {
         (0, Some(remaining))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Test component types
+    #[derive(Debug, Clone, PartialEq)]
+    struct Position { x: f32, y: f32 }
+    
+    #[derive(Debug, Clone, PartialEq)]
+    struct Health(u32);
+
+    #[test]
+    fn test_spawn_and_alive_count() {
+        let mut world = World::new();
+        let e1 = world.spawn();
+        let e2 = world.spawn();
+        let e3 = world.spawn();
+        assert_eq!(world.entity_count(), 3);
+        assert!(world.is_alive(e1));
+        assert!(world.is_alive(e2));
+        assert!(world.is_alive(e3));
+    }
+
+    #[test]
+    fn test_despawn_removes_components() {
+        let mut world = World::new();
+        let e1 = world.spawn();
+        world.add_component(e1, Position { x: 1.0, y: 2.0 });
+        world.add_component(e1, Health(100));
+        
+        assert!(world.borrow::<Position>().unwrap().get(e1.id()).is_some());
+        assert!(world.borrow::<Health>().unwrap().get(e1.id()).is_some());
+        
+        world.despawn(e1);
+        
+        assert!(!world.is_alive(e1));
+        assert!(world.borrow::<Position>().unwrap().get(e1.id()).is_none());
+        assert!(world.borrow::<Health>().unwrap().get(e1.id()).is_none());
+    }
+
+    #[test]
+    fn test_despawn_only_touches_relevant_storages() {
+        let mut world = World::new();
+        let e1 = world.spawn();
+        let e2 = world.spawn();
+        
+        // e1 has Position only, e2 has both
+        world.add_component(e1, Position { x: 0.0, y: 0.0 });
+        world.add_component(e2, Position { x: 1.0, y: 1.0 });
+        world.add_component(e2, Health(50));
+        
+        // Despawn e1 — should not affect e2
+        world.despawn(e1);
+        
+        assert!(world.borrow::<Position>().unwrap().get(e2.id()).is_some());
+        assert!(world.borrow::<Health>().unwrap().get(e2.id()).is_some());
+        assert_eq!(world.entity_count(), 1);
+    }
+
+    #[test]
+    fn test_iter_alive_entities_zero_allocation() {
+        let mut world = World::new();
+        let _e1 = world.spawn();
+        let e2 = world.spawn();
+        let _e3 = world.spawn();
+        
+        world.despawn(e2);
+        
+        // Iterator should return 2 entities (e1 and e3), skipping e2
+        let alive: Vec<Entity> = world.iter_alive_entities().collect();
+        assert_eq!(alive.len(), 2);
+        assert!(alive.iter().all(|e| e.id() != e2.id()));
+    }
+
+    #[test]
+    fn test_entity_id_reuse_after_despawn() {
+        let mut world = World::new();
+        let e1 = world.spawn();
+        let old_id = e1.id();
+        let old_gen = e1.generation();
+        
+        world.despawn(e1);
+        
+        let e_new = world.spawn();
+        // Should reuse the same ID with bumped generation
+        assert_eq!(e_new.id(), old_id);
+        assert_eq!(e_new.generation(), old_gen + 1);
+        
+        // Old entity should not be alive
+        assert!(!world.is_alive(e1));
+        assert!(world.is_alive(e_new));
+    }
+
+    #[test]
+    fn test_add_component_overwrites() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, Health(100));
+        world.add_component(e, Health(50)); // Overwrite
+        
+        let hp = world.borrow::<Health>().unwrap();
+        assert_eq!(hp.get(e.id()).unwrap().0, 50);
+    }
+}
