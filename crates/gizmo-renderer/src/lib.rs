@@ -12,6 +12,8 @@ pub mod particle_renderer;
 pub use gpu_types::{Vertex, InstanceRaw, LightData, PostProcessUniforms, SceneUniforms};
 pub use components::{Mesh, Material, MeshRenderer, Camera, Camera2D, Sprite, PointLight, DirectionalLight, LodGroup, LodLevel};
 pub use renderer::Renderer;
+pub use pipeline::SceneState;
+pub use post_process::PostProcessState;
 pub use asset::{AssetManager, GltfNodeData};
 pub use animation::{AnimationClip, Track, Keyframe, SkeletonHierarchy, SkeletonJoint};
 pub use hot_reload::AssetWatcher;

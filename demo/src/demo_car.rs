@@ -11,7 +11,7 @@ pub fn setup_car_scene(world: &mut World, renderer: &gizmo::renderer::renderer::
     let asset_manager = gizmo::renderer::asset::AssetManager::new();
 
     let tbind_asphalt = gizmo::renderer::asset::AssetManager::new().load_material_texture(
-         &renderer.device, &renderer.queue, &renderer.texture_bind_group_layout,
+         &renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout,
          "demo/assets/stone_tiles.jpg"
     ).expect("texture bulunamadi!");
 

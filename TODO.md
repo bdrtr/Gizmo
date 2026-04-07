@@ -102,9 +102,9 @@
 
 ## 🎨 RENDERER (gizmo-renderer)
 
-- [ ] **Renderer struct'ında 40+ public field var** — `renderer.rs:7-50`
-  Struct çok şişmiş. Post-processing, shadow, skeleton, particle alanları hep aynı struct'ta. Bakım, okuma ve refactor zorlaşıyor.
-  **Çözüm:** Sub-struct'lara ayır: `PostProcessState`, `ShadowState`, `SkeletonState`.
+- [x] **Renderer struct'ında 40+ public field var** — `renderer.rs:7-50`
+  Struct çok şişmişti. Sub-struct'lara ayrıldı: `SceneState` (pipeline, shadow, skeleton), `PostProcessState` (HDR, bloom, blur, composite).
+  **Çözüm:** `renderer.scene.*` ve `renderer.post.*` olarak yeniden yapılandırıldı ✅
 
 - [x] **`PresentMode::Fifo` sabit kodlanmış — VSync her zaman açık** — `renderer.rs:92`
   FPS sınırı VSync ile kilitli. Performans testi veya "uncapped FPS" seçeneği yok.

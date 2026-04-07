@@ -1,7 +1,8 @@
 use wgpu::util::DeviceExt;
 use crate::gpu_types::PostProcessUniforms;
 
-pub struct PostProcessResources {
+/// Post-Processing durumu — HDR, Bloom, Blur, Composite pipeline'ları ve kaynakları
+pub struct PostProcessState {
     pub post_bind_group_layout: wgpu::BindGroupLayout,
     pub blur_params_bind_group_layout: wgpu::BindGroupLayout,
     pub composite_bloom_bind_group_layout: wgpu::BindGroupLayout,
@@ -28,7 +29,7 @@ pub fn build_post_process_resources(
     surface_format: wgpu::TextureFormat,
     width: u32,
     height: u32,
-) -> PostProcessResources {
+) -> PostProcessState {
     let post_shader = {
         let source = std::fs::read_to_string("demo/assets/shaders/post_process.wgsl")
             .unwrap_or_else(|_| include_str!("post_process.wgsl").to_string());
@@ -120,7 +121,7 @@ pub fn build_post_process_resources(
     let (blur_params_buffer, blur_h_bind_group, blur_v_bind_group) =
         create_blur_buffers(device, &blur_params_bind_group_layout, width, height);
 
-    PostProcessResources {
+    PostProcessState {
         post_bind_group_layout, blur_params_bind_group_layout, composite_bloom_bind_group_layout,
         post_params_buffer, post_params_bind_group_layout, post_params_bind_group,
         bloom_extract_pipeline, bloom_blur_pipeline, composite_pipeline,
@@ -195,13 +196,13 @@ fn build_post_pipelines(
 pub fn rebuild_post_pipelines(renderer: &mut crate::Renderer, post_shader: &wgpu::ShaderModule) {
     let (e, b, c) = build_post_pipelines(
         &renderer.device, post_shader,
-        &renderer.post_bind_group_layout, &renderer.blur_params_bind_group_layout,
-        &renderer.composite_bloom_bind_group_layout, &renderer.post_params_bind_group_layout,
+        &renderer.post.post_bind_group_layout, &renderer.post.blur_params_bind_group_layout,
+        &renderer.post.composite_bloom_bind_group_layout, &renderer.post.post_params_bind_group_layout,
         renderer.config.format,
     );
-    renderer.bloom_extract_pipeline = e;
-    renderer.bloom_blur_pipeline = b;
-    renderer.composite_pipeline = c;
+    renderer.post.bloom_extract_pipeline = e;
+    renderer.post.bloom_blur_pipeline = b;
+    renderer.post.composite_pipeline = c;
 }
 
 fn create_post_sampler(device: &wgpu::Device) -> wgpu::Sampler {
@@ -292,15 +293,15 @@ pub fn run_post_processing(renderer: &crate::Renderer, encoder: &mut wgpu::Comma
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Bloom Extract Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &renderer.bloom_extract_texture_view, resolve_target: None,
+                view: &renderer.post.bloom_extract_texture_view, resolve_target: None,
                 ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
             })],
             depth_stencil_attachment: None, ..Default::default()
         });
-        pass.set_pipeline(&renderer.bloom_extract_pipeline);
-        pass.set_bind_group(0, &renderer.hdr_bind_group, &[]);
-        pass.set_bind_group(1, &renderer.blur_h_bind_group, &[]);
-        pass.set_bind_group(2, &renderer.post_params_bind_group, &[]);
+        pass.set_pipeline(&renderer.post.bloom_extract_pipeline);
+        pass.set_bind_group(0, &renderer.post.hdr_bind_group, &[]);
+        pass.set_bind_group(1, &renderer.post.blur_h_bind_group, &[]);
+        pass.set_bind_group(2, &renderer.post.post_params_bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
     // Pass 2a: Yatay Blur
@@ -308,14 +309,14 @@ pub fn run_post_processing(renderer: &crate::Renderer, encoder: &mut wgpu::Comma
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Bloom Blur Horizontal"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &renderer.bloom_blur_texture_view, resolve_target: None,
+                view: &renderer.post.bloom_blur_texture_view, resolve_target: None,
                 ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
             })],
             depth_stencil_attachment: None, ..Default::default()
         });
-        pass.set_pipeline(&renderer.bloom_blur_pipeline);
-        pass.set_bind_group(0, &renderer.bloom_extract_bind_group, &[]);
-        pass.set_bind_group(1, &renderer.blur_h_bind_group, &[]);
+        pass.set_pipeline(&renderer.post.bloom_blur_pipeline);
+        pass.set_bind_group(0, &renderer.post.bloom_extract_bind_group, &[]);
+        pass.set_bind_group(1, &renderer.post.blur_h_bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
     // Pass 2b: Dikey Blur (ping-pong)
@@ -323,14 +324,14 @@ pub fn run_post_processing(renderer: &crate::Renderer, encoder: &mut wgpu::Comma
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Bloom Blur Vertical"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &renderer.bloom_extract_texture_view, resolve_target: None,
+                view: &renderer.post.bloom_extract_texture_view, resolve_target: None,
                 ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
             })],
             depth_stencil_attachment: None, ..Default::default()
         });
-        pass.set_pipeline(&renderer.bloom_blur_pipeline);
-        pass.set_bind_group(0, &renderer.bloom_blur_bind_group, &[]);
-        pass.set_bind_group(1, &renderer.blur_v_bind_group, &[]);
+        pass.set_pipeline(&renderer.post.bloom_blur_pipeline);
+        pass.set_bind_group(0, &renderer.post.bloom_blur_bind_group, &[]);
+        pass.set_bind_group(1, &renderer.post.blur_v_bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
     // Pass 3: Composite + Tone Mapping
@@ -343,10 +344,10 @@ pub fn run_post_processing(renderer: &crate::Renderer, encoder: &mut wgpu::Comma
             })],
             depth_stencil_attachment: None, ..Default::default()
         });
-        pass.set_pipeline(&renderer.composite_pipeline);
-        pass.set_bind_group(0, &renderer.hdr_bind_group, &[]);
-        pass.set_bind_group(1, &renderer.bloom_extract_bind_group, &[]);
-        pass.set_bind_group(2, &renderer.post_params_bind_group, &[]);
+        pass.set_pipeline(&renderer.post.composite_pipeline);
+        pass.set_bind_group(0, &renderer.post.hdr_bind_group, &[]);
+        pass.set_bind_group(1, &renderer.post.bloom_extract_bind_group, &[]);
+        pass.set_bind_group(2, &renderer.post.post_params_bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
 }
