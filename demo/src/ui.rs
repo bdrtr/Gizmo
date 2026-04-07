@@ -1,8 +1,73 @@
 use gizmo::prelude::*;
 use gizmo::egui;
-use crate::state::GameState;
+use crate::state::{GameState, RaceStatus};
 
 pub fn render_ui(ctx: &egui::Context, state: &mut GameState, world: &World) {
+    // --- DİYALOG KUTUSU (Lua'dan tetiklenir) ---
+    if let Some(ref dlg) = state.active_dialogue {
+        egui::Window::new("##dialogue")
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -60.0))
+            .title_bar(false)
+            .resizable(false)
+            .collapsible(false)
+            .min_width(500.0)
+            .frame(egui::Frame::window(&ctx.style())
+                .fill(egui::Color32::from_rgba_premultiplied(10, 10, 20, 230))
+                .rounding(egui::Rounding::same(12.0)))
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.label(egui::RichText::new(&dlg.speaker)
+                        .color(egui::Color32::from_rgb(255, 200, 80))
+                        .strong().size(14.0));
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(&dlg.text)
+                        .color(egui::Color32::WHITE).size(16.0));
+                    if dlg.timer > 0.0 {
+                        ui.add_space(6.0);
+                        ui.add(egui::ProgressBar::new(
+                            (dlg.timer / 3.0_f32.max(dlg.timer)).clamp(0.0, 1.0)
+                        ).desired_width(200.0).fill(egui::Color32::from_rgb(255, 200, 80)));
+                    }
+                });
+            });
+    }
+
+    // --- YARIŞ HUD ---
+    if state.race_status != RaceStatus::Idle || !state.checkpoints.is_empty() {
+        let cp_done = state.checkpoints.iter().filter(|c| c.activated).count();
+        let cp_total = state.checkpoints.len();
+
+        egui::Window::new("##race_hud")
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-20.0, 20.0))
+            .title_bar(false)
+            .resizable(false)
+            .collapsible(false)
+            .frame(egui::Frame::window(&ctx.style())
+                .fill(egui::Color32::from_rgba_premultiplied(0, 0, 0, 180))
+                .rounding(egui::Rounding::same(10.0)))
+            .show(ctx, |ui| {
+                let status_txt = match state.race_status {
+                    RaceStatus::Idle     => "⏸ Hazır",
+                    RaceStatus::Running  => "🏁 Yarış!",
+                    RaceStatus::Finished => "🏆 Bitti!",
+                };
+                ui.label(egui::RichText::new(status_txt).color(egui::Color32::WHITE).strong().size(18.0));
+                ui.separator();
+                let mins = (state.race_timer / 60.0) as u32;
+                let secs = state.race_timer % 60.0;
+                ui.label(egui::RichText::new(format!("⏱ {:02}:{:05.2}", mins, secs))
+                    .color(egui::Color32::from_rgb(100, 255, 150)).size(22.0).strong());
+                if cp_total > 0 {
+                    ui.separator();
+                    ui.label(egui::RichText::new(format!("📍 {}/{}", cp_done, cp_total))
+                        .color(egui::Color32::LIGHT_BLUE).size(14.0));
+                    ui.add(egui::ProgressBar::new(cp_done as f32 / cp_total as f32)
+                        .desired_width(130.0)
+                        .fill(egui::Color32::from_rgb(50, 200, 100)));
+                }
+            });
+    }
+
     // --- PROFILER OVERLAY ---
     egui::Window::new("Profiler")
         .fixed_pos([240.0, 50.0])

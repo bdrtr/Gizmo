@@ -217,9 +217,10 @@ impl ScriptEngine {
         Ok(())
     }
 
-    /// Komut kuyruğundaki tüm komutları World'e uygular
-    pub fn flush_commands(&self, world: &mut World) {
+    /// Komut kuyruğundaki tüm komutları World'e uygular ve oyun mantığı için kalan komutları döndürür
+    pub fn flush_commands(&self, world: &mut World) -> Vec<ScriptCommand> {
         let commands = self.command_queue.drain();
+        let mut unhandled = Vec::new();
         
         for cmd in commands {
             match cmd {
@@ -259,8 +260,6 @@ impl ScriptEngine {
                     }
                 }
                 ScriptCommand::ApplyForce(id, force) => {
-                    // Kuvveti hız değişikliği olarak uygula (F = m*a, v += F/m * dt)
-                    // Basit yaklaşım: dt varsayılan 1/60
                     let dt = 1.0 / 60.0;
                     if let Some(rbs) = world.borrow::<gizmo_physics::components::RigidBody>() {
                         if let Some(rb) = rbs.get(id) {
@@ -302,7 +301,6 @@ impl ScriptEngine {
                     world.add_component(entity, gizmo_core::EntityName::new(&name));
                     world.add_component(entity, gizmo_physics::components::Transform::new(position));
                     world.add_component(entity, gizmo_core::PrefabRequest(prefab_type.clone()));
-                    // Yalnızca hafif bir bilgi logu, FPS'i düşürmesin
                 }
                 ScriptCommand::DestroyEntity(id) => {
                     world.despawn_by_id(id);
@@ -315,14 +313,13 @@ impl ScriptEngine {
                         }
                     }
                 }
-                // Audio ve Scene komutları dışarıdan (demo) ele alınır
-                ScriptCommand::PlaySound(_) | ScriptCommand::PlaySound3D(_, _) | 
-                ScriptCommand::StopSound(_) | ScriptCommand::LoadScene(_) | 
-                ScriptCommand::SaveScene(_) => {
-                    // Bu komutlar get_pending_commands() ile dışarıya verilir
+                other => {
+                    unhandled.push(other);
                 }
             }
         }
+        
+        unhandled
     }
 
     /// Runtime'da bekleyen ses/sahne komutlarını döndürür (demo tarafında ele alınır)

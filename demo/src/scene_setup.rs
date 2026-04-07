@@ -101,7 +101,7 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
     let sun_transform = Transform::new(Vec3::new(0.0, 50.0, 50.0))
         .with_rotation(Quat::from_axis_angle(Vec3::new(1.0, 0.5, 0.0).normalize(), -std::f32::consts::FRAC_PI_4));
     world.add_component(sun, sun_transform);
-    world.add_component(sun, gizmo::renderer::components::DirectionalLight::new(Vec3::new(1.0, 0.98, 0.9), 1.5, true));
+    world.add_component(sun, gizmo::renderer::components::DirectionalLight::new(Vec3::new(0.6, 0.65, 0.7), 0.6, true));
     world.add_component(sun, EntityName("Güneş (Directional)".into()));
 
     let joint_world = gizmo::physics::JointWorld::new(); // Bağlantı yok ama ECS'ye verilecek
@@ -123,7 +123,7 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
     sky_transform.scale = Vec3::new(500.0, 500.0, 500.0); 
     world.add_component(skybox, sky_transform);
     world.add_component(skybox, gizmo::renderer::asset::AssetManager::create_inverted_cube(&renderer.device));
-    world.add_component(skybox, Material::new(tbind.clone()).with_skybox());
+    world.add_component(skybox, Material::new(tbind.clone()).with_unlit(Vec4::new(0.4, 0.45, 0.5, 1.0)));
     world.add_component(skybox, gizmo::renderer::components::MeshRenderer::new());
     world.add_component(skybox, EntityName("Skybox (Gök Kubbe)".into()));
 
@@ -174,10 +174,10 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
     let mut rng_seed: u32 = 12345;
     let mut rand_f32 = || -> f32 {
         rng_seed = rng_seed.wrapping_mul(1664525).wrapping_add(1013904223);
-        (rng_seed as f32 / std::u32::MAX as f32)
+        rng_seed as f32 / std::u32::MAX as f32
     };
 
-    for i in 0..500 {
+    for i in 0..3000 {
         let drop = world.spawn();
         let rx = (rand_f32() - 0.5) * 60.0;
         let rz = (rand_f32() - 0.5) * 60.0;
@@ -242,5 +242,13 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
         shader_reload_request: std::cell::Cell::new(false),
         editor_state: std::cell::RefCell::new(gizmo::editor::EditorState::new()),
         free_cam: true,
+
+        // Oyun sistemi
+        active_dialogue: None,
+        active_cutscene: None,
+        checkpoints: Vec::new(),
+        race_status: crate::state::RaceStatus::Idle,
+        race_timer: 0.0,
+        camera_follow_target: None,
     }
 }

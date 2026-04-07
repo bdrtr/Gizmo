@@ -39,7 +39,25 @@ pub enum ScriptCommand {
     // Scene
     LoadScene(String),
     SaveScene(String),
-    
+
+    // Diyalog Sistemi
+    ShowDialogue { speaker: String, text: String, duration: f32 },
+    HideDialogue,
+
+    // Ara Sahne (Cutscene)
+    TriggerCutscene(String), // cutscene adı/id
+    EndCutscene,
+
+    // Yarış Sistemi
+    AddCheckpoint { id: u32, position: Vec3, radius: f32 },
+    ActivateCheckpoint(u32),
+    FinishRace { winner_name: String },
+    ResetRace,
+
+    // Kamera
+    SetCameraTarget(u32),    // hangi entity'yi takip etsin
+    SetCameraFov(f32),
+
     // Component
     SetEntityName(u32, String),
 }
