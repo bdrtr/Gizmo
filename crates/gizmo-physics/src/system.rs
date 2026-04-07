@@ -6,9 +6,27 @@ use crate::vehicle::VehicleController;
 use crate::integration::apply_inv_inertia;
 use std::collections::HashMap;
 
+/// Kalıcı temas noktası — frame'ler arası eşleme için konum bilgisi taşır
+#[derive(Clone, Debug)]
+pub struct CachedContact {
+    /// Dünya koordinatlarında temas noktası (eşleme anahtarı)
+    pub world_point: Vec3,
+    /// Birikmiş normal impuls
+    pub accumulated_normal: f32,
+    /// Birikmiş sürtünme impulsu
+    pub accumulated_friction: Vec3,
+}
+
+/// Contact Point Matching eşik değeri (2cm yarıçap)
+const MATCH_THRESHOLD_SQ: f32 = 0.02 * 0.02;
+
+/// Warm-start sönümleme faktörü (%80 — patlama riskini azaltır)
+const WARM_START_FACTOR: f32 = 0.8;
+
 /// Kalıcı Çözücü Durumu (Warm-Starting Cache için)
 pub struct PhysicsSolverState {
-    pub cached_impulses: HashMap<(u32, u32), (f32, Vec3)>,
+    /// Önceki karedeki temas noktalarının entity-çifti bazlı cache'i
+    pub contact_cache: HashMap<(u32, u32), Vec<CachedContact>>,
     /// Konfigüre edilebilir çözücü iterasyon sayısı (varsayılan: 8)
     pub solver_iterations: u32,
     /// Frame sayacı — contact shuffle için seed olarak kullanılır
@@ -23,8 +41,26 @@ impl Default for PhysicsSolverState {
 
 impl PhysicsSolverState {
     pub fn new() -> Self {
-        Self { cached_impulses: HashMap::new(), solver_iterations: 8, frame_counter: 0 }
+        Self { contact_cache: HashMap::new(), solver_iterations: 8, frame_counter: 0 }
     }
+}
+
+/// Yeni frame'deki bir temas noktası için önceki frame'in cache'inde en yakın eşleşmeyi bul.
+/// Eşleşme 2cm içindeyse (accumulated_j, accumulated_friction) döndürür, yoksa None.
+fn match_cached_contact(
+    new_point: Vec3,
+    cached: &[CachedContact],
+) -> Option<(f32, Vec3)> {
+    let mut best_dist_sq = f32::MAX;
+    let mut best = None;
+    for cc in cached {
+        let d = (new_point - cc.world_point).length_squared();
+        if d < best_dist_sq && d < MATCH_THRESHOLD_SQ {
+            best_dist_sq = d;
+            best = Some((cc.accumulated_normal, cc.accumulated_friction));
+        }
+    }
+    best
 }
 
 pub fn physics_collision_system(world: &World, dt: f32) {
@@ -128,7 +164,7 @@ pub fn physics_collision_system(world: &World, dt: f32) {
     // =========================================================================
     
     // 1. Min X eksenine göre çok hızlı bir şekilde (unstable_sort) sırala
-    intervals.sort_unstable_by(|a, b| a.min.x.partial_cmp(&b.min.x).unwrap_or(std::cmp::Ordering::Equal));
+    intervals.sort_unstable_by(|a, b| a.min.x.total_cmp(&b.min.x));
 
     let mut collision_pairs: Vec<(u32, u32)> = Vec::new();
 
@@ -187,6 +223,8 @@ pub fn physics_collision_system(world: &World, dt: f32) {
         accumulated_friction: Vec3,
         ccd_offset_a: Vec3,
         ccd_offset_b: Vec3,
+        /// Dünya koordinatlarındaki temas noktası (warm-start eşleme için)
+        world_point: Vec3,
     }
 
     // Paralel algılama sonucu — her iş parçacığı kendi sonuçlarını üretir
@@ -418,6 +456,7 @@ pub fn physics_collision_system(world: &World, dt: f32) {
                 accumulated_friction: Vec3::ZERO,
                 ccd_offset_a: ccd_pos_a.unwrap_or(Vec3::ZERO),
                 ccd_offset_b: ccd_pos_b.unwrap_or(Vec3::ZERO),
+                world_point: *contact_point,
             });
         }
 
@@ -492,13 +531,57 @@ pub fn physics_collision_system(world: &World, dt: f32) {
 
     let mut islands: Vec<Island> = islands_map.into_values().collect();
 
-    // === FAZ 1: WARM STARTING UYGULAMASI (İPTAL) ===
-    // 1-Noktalı EPA/GJK çözücüde temas edilen köşeler sürekli değiştiği için,
-    // bir önceki karenin (salisenin) şiddetli itme kuvvetini yeni ve farklı bir köşeye
-    // uygulamak objelerin uzayda patlamasına ve takla atıp hızlanmasına yol açıyor.
-    // Bu yüzden önbellek itmesi tamamen devre dışı bırakılmıştır.
+    // === FAZ 1: WARM STARTING — Contact Point Matching ile Güvenli Önbellek İtmesi ===
+    // Önceki karenin impuls sonuçlarını, temas noktası konumsal eşlemesi (2cm threshold)
+    // ile yeni karenin başlangıç değerleri olarak kullan. %80 sönümleme uygulanır.
     let (solver_iters, frame_count) = if let Some(mut state) = world.get_resource_mut::<PhysicsSolverState>() {
-        state.cached_impulses.clear();
+        // Önceki frame'in cache'inden eşleşen temas noktalarının impulslarını aktar
+        for island in islands.iter_mut() {
+            for c in island.contacts.iter_mut() {
+                let key = if c.ent_a < c.ent_b { (c.ent_a, c.ent_b) } else { (c.ent_b, c.ent_a) };
+                if let Some(cached_contacts) = state.contact_cache.get(&key) {
+                    if let Some((cached_j, cached_friction)) = match_cached_contact(c.world_point, cached_contacts) {
+                        // Güvenli warm-start: %80 sönümleme, max 20.0 impuls limiti
+                        c.accumulated_j = (cached_j * WARM_START_FACTOR).min(20.0);
+                        c.accumulated_friction = cached_friction * WARM_START_FACTOR;
+                    }
+                }
+            }
+        }
+
+        // Warm-start impulslarını hızlara uygula (solver öncesi başlangıç noktası)
+        for island in islands.iter_mut() {
+            for c in island.contacts.iter() {
+                if c.accumulated_j > 1e-6 {
+                    let impulse = c.normal * c.accumulated_j;
+                    if let Some(v_a) = island.velocities.get_mut(&c.ent_a) {
+                        v_a.linear -= impulse * c.inv_mass_a;
+                        let t = c.r_a.cross(impulse * -1.0);
+                        v_a.angular += apply_inv_inertia(t, c.inv_inertia_a, c.rot_a);
+                    }
+                    if let Some(v_b) = island.velocities.get_mut(&c.ent_b) {
+                        v_b.linear += impulse * c.inv_mass_b;
+                        let t = c.r_b.cross(impulse);
+                        v_b.angular += apply_inv_inertia(t, c.inv_inertia_b, c.rot_b);
+                    }
+                }
+                // Sürtünme warm-start
+                let fi = c.accumulated_friction;
+                if fi.length_squared() > 1e-12 {
+                    if let Some(v) = island.velocities.get_mut(&c.ent_a) {
+                        v.linear -= fi * c.inv_mass_a;
+                        let ft = c.r_a.cross(fi * -1.0);
+                        v.angular += apply_inv_inertia(ft, c.inv_inertia_a, c.rot_a);
+                    }
+                    if let Some(v) = island.velocities.get_mut(&c.ent_b) {
+                        v.linear += fi * c.inv_mass_b;
+                        let ft = c.r_b.cross(fi);
+                        v.angular += apply_inv_inertia(ft, c.inv_inertia_b, c.rot_b);
+                    }
+                }
+            }
+        }
+
         state.frame_counter += 1;
         (state.solver_iterations, state.frame_counter)
     } else {
@@ -682,7 +765,11 @@ pub fn physics_collision_system(world: &World, dt: f32) {
             }
         }
         for c in island.contacts {
-            sync_cache.push((c.ent_a, c.ent_b, c.accumulated_j, c.accumulated_friction));
+            // Temas noktası dünya koordinatını hesapla (warm-start cache için)
+            let wp = island.poses.get(&c.ent_a)
+                .map(|p| p.position + c.r_a)
+                .unwrap_or(c.world_point);
+            sync_cache.push((c.ent_a, c.ent_b, c.accumulated_j, c.accumulated_friction, wp));
 
             // DARBE/MOMENTUM EVENT'İ FIRLAT: Eğer şiddetli bir etki varsa (0.05'ten büyük) ses çıksın
             if c.accumulated_j > 0.05 {
@@ -706,10 +793,25 @@ pub fn physics_collision_system(world: &World, dt: f32) {
         }
     }
 
-    // === FAZ 3: WARM STARTING CACHE KAYDI (İPTAL) ===
-    // Çözülen kısıtlayıcıları (constraints) bir sonraki karede hatalı köşelere uygulamaması
-    // için kayıt mekanizması askıya alınmıştır. 
-    // if let Some(mut state) = world.get_resource_mut::<PhysicsSolverState>() { ... }
+    // === FAZ 3: WARM STARTING CACHE KAYDI ===
+    // Contact point matching sayesinde güvenle etkinleştirildi.
+    // Her temas noktasının dünya koordinatı ve birikmiş impulsu bir sonraki frame için saklanır.
+    if let Some(mut state) = world.get_resource_mut::<PhysicsSolverState>() {
+        state.contact_cache.clear();
+        for (ent_a, ent_b, acc_j, acc_friction, world_point) in &sync_cache {
+            // Cache key'i her zaman küçük entity ID önce olacak şekilde normalize et
+            let key = if ent_a < ent_b { (*ent_a, *ent_b) } else { (*ent_b, *ent_a) };
+            let entry = state.contact_cache.entry(key).or_insert_with(Vec::new);
+            // Entity çifti başına max 4 temas noktası (bellek koruması)
+            if entry.len() < 4 {
+                entry.push(CachedContact {
+                    world_point: *world_point,
+                    accumulated_normal: *acc_j,
+                    accumulated_friction: *acc_friction,
+                });
+            }
+        }
+    }
 
     } // --- Borrow Scope Sonu (transforms, velocities, colliders, rigidbodies drop ediliyor) ---
 
