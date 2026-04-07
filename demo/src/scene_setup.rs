@@ -92,7 +92,7 @@ pub fn spawn_gltf_asset(
         
         let bg = renderer.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Skeletal Animation BindGroup"),
-            layout: &renderer.skeleton_bind_group_layout,
+            layout: &renderer.scene.skeleton_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: buf.as_entire_binding(),
@@ -135,7 +135,7 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
     let tbind = asset_manager.load_material_texture(
          &renderer.device,
          &renderer.queue,
-         &renderer.texture_bind_group_layout,
+         &renderer.scene.texture_bind_group_layout,
          "demo/assets/stone_tiles.jpg"
     ).expect("Varsayilan texture bulunamadi!");
 
@@ -237,7 +237,7 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
     if let Ok(cesium_man_asset) = asset_manager.load_gltf_scene(
         &renderer.device,
         &renderer.queue,
-        &renderer.texture_bind_group_layout,
+        &renderer.scene.texture_bind_group_layout,
         tbind.clone(),
         "demo/assets/cesium_man.glb",
     ) {

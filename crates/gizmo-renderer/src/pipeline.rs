@@ -2,7 +2,8 @@ use wgpu::util::DeviceExt;
 use std::sync::Arc;
 use crate::gpu_types::{Vertex, InstanceRaw, LightData, SceneUniforms};
 
-pub struct BuiltPipelines {
+/// Sahne render durumu — pipeline'lar, shadow, skeleton ve global bind group'lar
+pub struct SceneState {
     pub render_pipeline: wgpu::RenderPipeline,
     pub unlit_pipeline: wgpu::RenderPipeline,
     pub water_pipeline: wgpu::RenderPipeline,
@@ -26,7 +27,7 @@ fn load_shader(device: &wgpu::Device, file_path: &str, fallback_src: &str, label
     })
 }
 
-pub fn build_scene_pipelines(device: &wgpu::Device) -> BuiltPipelines {
+pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     // Global Uniform Buffer
     let initial_uniforms = SceneUniforms {
         view_proj: [[0.0; 4]; 4],
@@ -211,7 +212,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> BuiltPipelines {
         multisample: wgpu::MultisampleState::default(), multiview: None,
     });
 
-    BuiltPipelines {
+    SceneState {
         render_pipeline, unlit_pipeline, water_pipeline, shadow_pipeline,
         global_uniform_buffer, global_bind_group_layout, global_bind_group,
         shadow_bind_group_layout, shadow_bind_group, shadow_texture_view,
@@ -239,8 +240,8 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Render Pipeline Layout"),
         bind_group_layouts: &[
-            &renderer.global_bind_group_layout, &renderer.texture_bind_group_layout,
-            &renderer.shadow_bind_group_layout, &renderer.skeleton_bind_group_layout,
+            &renderer.scene.global_bind_group_layout, &renderer.scene.texture_bind_group_layout,
+            &renderer.scene.shadow_bind_group_layout, &renderer.scene.skeleton_bind_group_layout,
         ],
         push_constant_ranges: &[],
     });
@@ -262,16 +263,16 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
         })
     };
 
-    renderer.render_pipeline = create_main(&shader, "Render Pipeline");
-    renderer.unlit_pipeline  = create_main(&unlit_shader, "Unlit Pipeline");
-    renderer.water_pipeline  = create_main(&water_shader, "Water Pipeline");
+    renderer.scene.render_pipeline = create_main(&shader, "Render Pipeline");
+    renderer.scene.unlit_pipeline  = create_main(&unlit_shader, "Unlit Pipeline");
+    renderer.scene.water_pipeline  = create_main(&water_shader, "Water Pipeline");
 
     let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Shadow Pipeline Layout"),
-        bind_group_layouts: &[&renderer.global_bind_group_layout, &renderer.skeleton_bind_group_layout],
+        bind_group_layouts: &[&renderer.scene.global_bind_group_layout, &renderer.scene.skeleton_bind_group_layout],
         push_constant_ranges: &[],
     });
-    renderer.shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+    renderer.scene.shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Shadow Pipeline"), layout: Some(&shadow_layout),
         vertex: wgpu::VertexState { module: &shadow_shader, entry_point: "vs_main", buffers: &[Vertex::desc(), InstanceRaw::desc()] },
         fragment: None,

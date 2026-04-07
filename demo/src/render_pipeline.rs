@@ -161,7 +161,7 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
             num_lights,
             _padding: [0; 3],
         };
-        renderer.queue.write_buffer(&renderer.global_uniform_buffer, 0, bytemuck::cast_slice(&[scene_uniform_data]));
+        renderer.queue.write_buffer(&renderer.scene.global_uniform_buffer, 0, bytemuck::cast_slice(&[scene_uniform_data]));
 
         // --- BATCHING (INSTANCING) HAZIRLIĞI VE FRUSTUM CULLING ---
         use gizmo::renderer::renderer::InstanceRaw;
@@ -229,7 +229,7 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
 
                 // --- SKELETON (KEMİK) ARAMASI ---
                 // Yalnızca child meshin değil, atalarından (Root) herhangi birisinde Skeleton var mı diye tırman:
-                let mut skel_bg = renderer.dummy_skeleton_bind_group.clone();
+                let mut skel_bg = renderer.scene.dummy_skeleton_bind_group.clone();
                 if let Some(skels) = &skeletons {
                     if let Some(s) = skels.get(e) {
                          skel_bg = s.bind_group.clone();
@@ -279,7 +279,7 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
                 label: Some("Shadow Pass"),
                 color_attachments: &[], // Shadow pass sadece Depth'e çizer
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &renderer.shadow_texture_view,
+                    view: &renderer.scene.shadow_texture_view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -290,11 +290,11 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
                 occlusion_query_set: None,
             });
 
-            shadow_pass.set_pipeline(&renderer.shadow_pipeline);
+            shadow_pass.set_pipeline(&renderer.scene.shadow_pipeline);
 
             // Tıpkı main render gibi gruplanmış nesneleri tek draw çağrısıyla bas
             for (batch, instance_buf) in &gpu_batches {
-                shadow_pass.set_bind_group(0, &renderer.global_bind_group, &[]);
+                shadow_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
                 shadow_pass.set_bind_group(1, &batch.skeleton_bg, &[]);
                 shadow_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
                 shadow_pass.set_vertex_buffer(1, instance_buf.slice(..));
@@ -307,7 +307,7 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Main Render Pass (HDR)"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &renderer.hdr_texture_view, // Artık ekran yerine HDR texture'a çiziyoruz!
+                    view: &renderer.post.hdr_texture_view, // Artık ekran yerine HDR texture'a çiziyoruz!
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.15, b: 0.20, a: 1.0 }),
@@ -326,12 +326,12 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
                 occlusion_query_set: None,
             });
 
-            render_pass.set_pipeline(&renderer.render_pipeline);
+            render_pass.set_pipeline(&renderer.scene.render_pipeline);
 
             for (batch, instance_buf) in &gpu_batches {
-                render_pass.set_bind_group(0, &renderer.global_bind_group, &[]);
+                render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
                 render_pass.set_bind_group(1, &batch.bind_group, &[]);
-                render_pass.set_bind_group(2, &renderer.shadow_bind_group, &[]);
+                render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
                 render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
                 render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
                 render_pass.set_vertex_buffer(1, instance_buf.slice(..));
