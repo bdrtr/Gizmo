@@ -290,4 +290,75 @@ pub fn solve_constraints(
             }
         }
     }
+
+    // === POSITION PROJECTION PASS ===
+    // Velocity solver sonrası, kalan konumsal hatayı (drift) doğrudan Transform'a uygula.
+    // Bu, Baumgarte stabilization'ın yakınsayamadığı büyük hataları düzeltir.
+    drop(vels);      // velocity borrow'unu bırak
+    drop(rbs);       // rbs borrow'unu bırak  
+    drop(transforms); // transforms borrow'unu bırak
+
+    let mut transforms = match world.borrow_mut::<crate::components::Transform>() {
+        Some(t) => t,
+        None => return,
+    };
+    let rbs = match world.borrow::<crate::components::RigidBody>() {
+        Some(r) => r,
+        None => return,
+    };
+
+    const POSITION_CORRECTION_FACTOR: f32 = 0.8; // %80 düzeltme (overshooting koruması)
+    const POSITION_SLOP: f32 = 0.001; // 1mm'den küçük hataları yoksay
+
+    for joint in &joint_world.joints {
+        let ta = match transforms.get(joint.entity_a) { Some(ta) => *ta, None => continue };
+        let tb = match transforms.get(joint.entity_b) { Some(tb) => *tb, None => continue };
+
+        let pos_a = ta.position + ta.rotation.mul_vec3(joint.anchor_a);
+        let pos_b = tb.position + tb.rotation.mul_vec3(joint.anchor_b);
+
+        let (inv_mass_a, _) = rbs.get(joint.entity_a).map_or((0.0, Vec3::ZERO), |rb| {
+            if rb.mass > 0.0 { (1.0 / rb.mass, rb.inverse_inertia) } else { (0.0, Vec3::ZERO) }
+        });
+        let (inv_mass_b, _) = rbs.get(joint.entity_b).map_or((0.0, Vec3::ZERO), |rb| {
+            if rb.mass > 0.0 { (1.0 / rb.mass, rb.inverse_inertia) } else { (0.0, Vec3::ZERO) }
+        });
+        let total_inv_mass = inv_mass_a + inv_mass_b;
+        if total_inv_mass == 0.0 { continue; }
+
+        match &joint.kind {
+            JointKind::BallSocket | JointKind::Fixed { .. } | JointKind::Hinge { .. } => {
+                let error = pos_b - pos_a;
+                let error_len = error.length();
+                if error_len > POSITION_SLOP {
+                    let correction = error * (POSITION_CORRECTION_FACTOR / total_inv_mass);
+                    if let Some(t_a) = transforms.get_mut(joint.entity_a) {
+                        t_a.position += correction * inv_mass_a;
+                    }
+                    if let Some(t_b) = transforms.get_mut(joint.entity_b) {
+                        t_b.position -= correction * inv_mass_b;
+                    }
+                }
+            }
+            JointKind::Distance { length } => {
+                let diff = pos_b - pos_a;
+                let current_len = diff.length();
+                if current_len < 0.0001 { continue; }
+                let dir = diff / current_len;
+                let error = current_len - length;
+                if error.abs() > POSITION_SLOP {
+                    let correction = dir * (error * POSITION_CORRECTION_FACTOR / total_inv_mass);
+                    if let Some(t_a) = transforms.get_mut(joint.entity_a) {
+                        t_a.position += correction * inv_mass_a;
+                    }
+                    if let Some(t_b) = transforms.get_mut(joint.entity_b) {
+                        t_b.position -= correction * inv_mass_b;
+                    }
+                }
+            }
+            JointKind::Spring { .. } => {
+                // Spring'ler esnek bağlantı — pozisyon düzeltmesi yapılmaz
+            }
+        }
+    }
 }

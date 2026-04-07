@@ -70,9 +70,9 @@
   Her joint tipi ve her iterasyonda (`15 × joints.len()` kez) velocity storage yeniden borrow ediliyor. Bu RefCell overhead'i çok yüksek.
   **Çözüm:** Velocity'yi iterasyon döngüsünün DIŞINDA bir kez borrow et, local HashMap'e kopyala, sonunda geri yaz (collision solver'ın yaptığı gibi).
 
-- [ ] **Joint solver Transform'u her iterasyonda sadece READ ediyor ama pozisyon düzeltmesi yapmıyor** — `constraints.rs:150-162`
-  Pozisyon kısıtı sadece velocity bias ile çözülüyor. Fixed ve BallSocket joint'ler, nesneler belirli bir mesafede kalması gerektiğinde drifting yaşayabilir.
-  **Çözüm:** Solver sonrası doğrudan Transform pozisyon düzeltmesi (collision solver'a benzer).
+- [x] **Joint solver Transform'u her iterasyonda sadece READ ediyordu, pozisyon düzeltmesi yoktu** — `constraints.rs:150-162`
+  Velocity solver sonrasına Position Projection pass eklendi. BallSocket, Distance, Fixed, Hinge joint'ler için %80 düzeltme faktörü, 1mm slop.
+  **Çözüm:** Solver sonrası doğrudan Transform pozisyon düzeltmesi ✅
 
 - [x] **Spring joint'te `borrow::<Velocity>` ve `borrow_mut::<Velocity>` aynı scope'da** — `constraints.rs:311-325`
   Satır 311'de `world.borrow::<Velocity>()` immutable olarak okunuyor, satır 319'da `world.borrow_mut::<Velocity>()` mutable olarak alınıyor. RefCell'de aynı scope'da ikisi birden olmamalı, ama scope farklı (`{}` bloğu ile ayrılmış). Çalışıyor ama fragile.
