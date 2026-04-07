@@ -64,7 +64,7 @@ fn test_broadphase_performance_10000_objects() {
     for i in 0..steps {
         let step_start = Instant::now();
         gizmo_physics::system::physics_movement_system(&world, dt);
-        gizmo_physics::system::physics_collision_system(&world);
+        gizmo_physics::system::physics_collision_system(&world, dt);
         
         if i % 10 == 0 || i == steps - 1 {
             println!("   Kare {:02} hesaplandı: {:?}", i, step_start.elapsed());
@@ -118,7 +118,7 @@ fn test_broadphase_performance_100000_objects() {
     for i in 0..steps {
         let step_start = Instant::now();
         gizmo_physics::system::physics_movement_system(&world, dt);
-        gizmo_physics::system::physics_collision_system(&world);
+        gizmo_physics::system::physics_collision_system(&world, dt);
         println!("   Kare {:02} hesaplandı: {:?}", i, step_start.elapsed());
     }
     

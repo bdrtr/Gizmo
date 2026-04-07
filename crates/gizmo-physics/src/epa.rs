@@ -117,35 +117,61 @@ fn generate_face_contacts(
     _shape_b: &ColliderShape, _pos_b: Vec3, _rot_b: Quat,
     normal: Vec3, _penetration: f32,
     polytope: &[SupportPoint], faces: &[usize], closest_face_idx: usize,
-) -> Vec<Vec3> {
+) -> Vec<(Vec3, f32)> {
     // Her iki şeklin temas yüzeyini bul, KÜÇÜK olanı kullan!
     // Normal A→B yönünde: A'nın face'i = normal yönünde, B'nin face'i = -normal yönünde
-    let face_a = find_support_face(shape_a, pos_a, rot_a, normal);
-    let face_b = find_support_face(_shape_b, _pos_b, _rot_b, normal * -1.0);
+    let (face_a, normal_a) = find_support_face(shape_a, pos_a, rot_a, normal);
+    let (face_b, normal_b) = find_support_face(_shape_b, _pos_b, _rot_b, normal * -1.0);
     
-    // Küçük olan yüzeyi seç
-    let face_verts = if face_a.len() >= 2 && face_b.len() >= 2 {
-        let extent_a = face_extent(&face_a);
-        let extent_b = face_extent(&face_b);
-        if extent_a <= extent_b { face_a } else { face_b }
-    } else if face_a.len() >= 2 {
-        face_a
-    } else if face_b.len() >= 2 {
-        face_b
+    // Sutherland-Hodgman Kırpması için Reference (Ref) ve Incident (Inc) Yüzey Seçimi
+    // Reference yüzü, normali bizim arama yönümüzle en uyumlu (ve kapladığı alanı daha uygun) yüzdür.
+    let extent_a = face_extent(&face_a);
+    let extent_b = face_extent(&face_b);
+
+    // B her zaman Incident Face, A Reference Face gibi ele alacağız
+    // Ama B'den daha dik ve güçlü bir Support Face gelirse değiştiririz.
+    // İhtiyacımız olan Contact noktalarını "reference yüzeyine" düşen noktalar oluşturur.
+    let (ref_face, mut inc_face, ref_normal) = if extent_a <= extent_b {
+        // A'yı Reference Face yap (Normal A'dan B'ye)
+        (face_a.clone(), face_b.clone(), normal_a)
     } else {
-        vec![]
+        // B'yi Reference Face yap (Normal B'dan A'ya, dikkat et yönü ters!)
+        (face_b.clone(), face_a.clone(), normal_b)
     };
     
-    if face_verts.len() >= 2 {
-        // Yüz teması! Face vertex'lerinin AĞIRLIK MERKEZİNİ (centroid) tek temas noktası olarak kullan.
-        // Bu, EPA'nın hatalı barycentric noktası yerine yüzeyin TAM ORTASInı verir.
-        // Centroid = simetrik şekillerde NET TORK = 0 (takla yok!)
-        let mut centroid = Vec3::ZERO;
-        for v in &face_verts {
-            centroid += *v;
+    if ref_face.len() >= 3 && inc_face.len() >= 3 {
+        // TAM YÜZEY-YÜZEY TEMASI -> SUTHERLAND HODGMAN KESİŞİMİ (Poligon Kırpma)
+        for i in 0..ref_face.len() {
+            let a = ref_face[i];
+            let b = ref_face[(i + 1) % ref_face.len()];
+            let edge_dir = (b - a).normalize();
+            
+            // Eğer Yüzey köşeleri Saat Yönünün Tersine (CCW) dönüyorsa, Inward normal şu şekilde hesaplanır:
+            let inward_normal = ref_normal.cross(edge_dir).normalize();
+            
+            inc_face = clip_polygon_against_plane(&inc_face, a, inward_normal);
         }
-        centroid /= face_verts.len() as f32;
-        return vec![centroid];
+
+        // Clip sonrası dışarı taşan (Reference yüzeyinin önünde kalan) noktaları filtrele
+        // Sadece içeri giren (penetration) noktaları Manifold olarak kabul et
+        let mut final_contacts = Vec::new();
+        // inc_face şuan kırpma (clipping) sınırlarını geçen noktaları barındırır.
+        for pt in &inc_face {
+            let dist = (*pt - ref_face[0]).dot(ref_normal);
+            // distance <= 0.05 anlamına gelir ki noktanın yüksekliği A'nın referans düzleminin altına girmiş
+            if extent_a <= extent_b { // If A is ref
+                if dist <= 0.05 { final_contacts.push((*pt, -dist.min(0.0))); }
+            } else {
+                if dist <= 0.05 { final_contacts.push((*pt, -dist.min(0.0))); }
+            }
+        }
+        
+        if final_contacts.len() > 0 {
+            return final_contacts;
+        }
+    } else if ref_face.len() >= 2 {
+        // Kenar - Yüzey veya benzer azınlık temasında direkt orijinalini dön, hepsine uniform pen ver.
+        return ref_face.into_iter().map(|v| (v, _penetration)).collect();
     }
     
     // Köşe teması veya küre gibi yuvarlak şekil → tek noktaya fallback (eski yöntem)
@@ -175,7 +201,7 @@ fn generate_face_contacts(
     if sum > 0.0001 { u_b /= sum; v_b /= sum; w_b /= sum; }
     else { u_b = 0.333; v_b = 0.333; w_b = 0.333; }
     let contact_point = a_sup.a * u_b + b_sup.a * v_b + c_sup.a * w_b;
-    vec![contact_point]
+    vec![(contact_point, _penetration)]
 }
 
 /// Bir yüzeyin köşelerinin toplam yayılım alanını (bounding extent) hesapla.
@@ -195,12 +221,11 @@ fn face_extent(verts: &[Vec3]) -> f32 {
 /// Verilen yönde (dir) bir ConvexHull veya AABB'nin "temas yüzeyini" (support face) bul.
 /// Yüzeyin tüm köşelerini dünya koordinatlarında döndürür.
 /// Kutu için: yüz-yüze = 4 nokta, kenar = 2 nokta, köşe = 1 nokta
-fn find_support_face(shape: &ColliderShape, pos: Vec3, rot: Quat, dir: Vec3) -> Vec<Vec3> {
-    let dir_norm = if dir.length_squared() > 0.0001 { dir.normalize() } else { return vec![]; };
+fn find_support_face(shape: &ColliderShape, pos: Vec3, rot: Quat, dir: Vec3) -> (Vec<Vec3>, Vec3) {
+    let dir_norm = if dir.length_squared() > 0.0001 { dir.normalize() } else { return (vec![], Vec3::ZERO); };
     
     match shape {
         ColliderShape::ConvexHull(hull) => {
-            // Tüm köşeleri dünya koordinatına çevir ve normal yönünde projeksiyon hesapla
             let mut max_proj = f32::MIN;
             let mut world_verts: Vec<(Vec3, f32)> = Vec::with_capacity(hull.vertices.len());
             
@@ -211,43 +236,107 @@ fn find_support_face(shape: &ColliderShape, pos: Vec3, rot: Quat, dir: Vec3) -> 
                 world_verts.push((wv, proj));
             }
             
-            // Max projeksiyona yakın tüm köşeler aynı "yüz" üzerinde
-            // Tolerans: vertex boyutunun ~%5'i (küçük şekiller için 0.01, büyükler için daha geniş)
             let tolerance = 0.05;
-            world_verts.iter()
+            let verts: Vec<Vec3> = world_verts.iter()
                 .filter(|(_, p)| max_proj - p < tolerance)
                 .map(|(v, _)| *v)
-                .collect()
+                .collect();
+            // Yüzeysel Normal varsayımı: dir_norm
+            (verts, dir_norm)
         },
         ColliderShape::Aabb(aabb) => {
             let he = aabb.half_extents;
-            // AABB'nin 8 köşesini oluştur (AABB rotasyon desteklemez)
-            let corners = [
-                pos + Vec3::new(-he.x, -he.y, -he.z),
-                pos + Vec3::new( he.x, -he.y, -he.z),
-                pos + Vec3::new( he.x,  he.y, -he.z),
-                pos + Vec3::new(-he.x,  he.y, -he.z),
-                pos + Vec3::new(-he.x, -he.y,  he.z),
-                pos + Vec3::new( he.x, -he.y,  he.z),
-                pos + Vec3::new( he.x,  he.y,  he.z),
-                pos + Vec3::new(-he.x,  he.y,  he.z),
-            ];
-            
-            let mut max_proj = f32::MIN;
-            for c in &corners {
-                let proj = c.dot(dir_norm);
-                if proj > max_proj { max_proj = proj; }
+            // OBY'ye (OBB) göre Lokal Arama Yönünü bul
+            let local_dir = rot.inverse().mul_vec3(dir_norm);
+            let abs_x = local_dir.x.abs();
+            let abs_y = local_dir.y.abs();
+            let abs_z = local_dir.z.abs();
+
+            let mut local_corners = Vec::with_capacity(4);
+            let local_normal;
+
+            // Köşeleri Saat Yönünün Tersine (CCW) eklemek hayati önem taşır (Sutherland-Hodgman için)
+            if abs_x >= abs_y && abs_x >= abs_z {
+                let sign = local_dir.x.signum();
+                local_normal = Vec3::new(sign, 0.0, 0.0);
+                if sign > 0.0 {
+                    local_corners.push(Vec3::new(he.x,  he.y, -he.z));
+                    local_corners.push(Vec3::new(he.x,  he.y,  he.z));
+                    local_corners.push(Vec3::new(he.x, -he.y,  he.z));
+                    local_corners.push(Vec3::new(he.x, -he.y, -he.z));
+                } else {
+                    local_corners.push(Vec3::new(-he.x,  he.y,  he.z));
+                    local_corners.push(Vec3::new(-he.x,  he.y, -he.z));
+                    local_corners.push(Vec3::new(-he.x, -he.y, -he.z));
+                    local_corners.push(Vec3::new(-he.x, -he.y,  he.z));
+                }
+            } else if abs_y >= abs_x && abs_y >= abs_z {
+                let sign = local_dir.y.signum();
+                local_normal = Vec3::new(0.0, sign, 0.0);
+                if sign > 0.0 {
+                    local_corners.push(Vec3::new(-he.x, he.y, -he.z));
+                    local_corners.push(Vec3::new(-he.x, he.y,  he.z));
+                    local_corners.push(Vec3::new( he.x, he.y,  he.z));
+                    local_corners.push(Vec3::new( he.x, he.y, -he.z));
+                } else {
+                    local_corners.push(Vec3::new(-he.x, -he.y,  he.z));
+                    local_corners.push(Vec3::new(-he.x, -he.y, -he.z));
+                    local_corners.push(Vec3::new( he.x, -he.y, -he.z));
+                    local_corners.push(Vec3::new( he.x, -he.y,  he.z));
+                }
+            } else {
+                let sign = local_dir.z.signum();
+                local_normal = Vec3::new(0.0, 0.0, sign);
+                if sign > 0.0 {
+                    local_corners.push(Vec3::new(-he.x,  he.y, he.z));
+                    local_corners.push(Vec3::new(-he.x, -he.y, he.z));
+                    local_corners.push(Vec3::new( he.x, -he.y, he.z));
+                    local_corners.push(Vec3::new( he.x,  he.y, he.z));
+                } else {
+                    local_corners.push(Vec3::new(-he.x, -he.y, -he.z));
+                    local_corners.push(Vec3::new(-he.x,  he.y, -he.z));
+                    local_corners.push(Vec3::new( he.x,  he.y, -he.z));
+                    local_corners.push(Vec3::new( he.x, -he.y, -he.z));
+                }
             }
             
-            let tolerance = 0.05;
-            corners.iter()
-                .filter(|c| max_proj - c.dot(dir_norm) < tolerance)
-                .cloned()
-                .collect()
+            // Tüm CCW köşelerini GERÇEK dünya uzayına çevir (Rotasyonu hesaba katarak)
+            let world_corners: Vec<Vec3> = local_corners.iter().map(|v| pos + rot.mul_vec3(*v)).collect();
+            let world_normal = rot.mul_vec3(local_normal);
+            
+            (world_corners, world_normal)
         },
-        // Küre/Kapsül analitik çözücüden geçer, buraya düşmemeli
-        _ => vec![],
+        _ => (vec![], Vec3::ZERO),
     }
+}
+
+fn clip_polygon_against_plane(polygon: &[Vec3], plane_point: Vec3, inward_normal: Vec3) -> Vec<Vec3> {
+    if polygon.is_empty() { return vec![]; }
+    let mut clipped = Vec::new();
+    let mut prev_v = polygon.last().unwrap();
+    let mut prev_d = (*prev_v - plane_point).dot(inward_normal);
+    
+    for v in polygon {
+        let curr_d = (*v - plane_point).dot(inward_normal);
+        
+        if prev_d >= 0.0 {
+            if curr_d >= 0.0 {
+                clipped.push(*v);
+            } else {
+                let t = prev_d / (prev_d - curr_d);
+                clipped.push(*prev_v + (*v - *prev_v) * t);
+            }
+        } else {
+            if curr_d >= 0.0 {
+                let t = prev_d / (prev_d - curr_d);
+                clipped.push(*prev_v + (*v - *prev_v) * t);
+                clipped.push(*v);
+            }
+        }
+        prev_v = v;
+        prev_d = curr_d;
+    }
+    clipped
 }
 
 
@@ -296,5 +385,42 @@ fn add_edge_if_unique(edges: &mut Vec<(usize, usize)>, a: usize, b: usize) {
         edges.remove(pos);
     } else {
         edges.push((a, b));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shape::{ColliderShape, Sphere};
+    use crate::gjk::gjk_intersect;
+
+    #[test]
+    fn test_epa_sphere_penetration() {
+        let shape_a = ColliderShape::Sphere(Sphere { radius: 1.0 });
+        let pos_a = Vec3::new(0.0, 0.0, 0.0);
+        let rot_a = Quat::IDENTITY;
+
+        let shape_b = ColliderShape::Sphere(Sphere { radius: 1.0 });
+        let pos_b = Vec3::new(1.5, 0.0, 0.0);
+        let rot_b = Quat::IDENTITY;
+
+        let (intersect, simplex) = gjk_intersect(&shape_a, pos_a, rot_a, &shape_b, pos_b, rot_b);
+        assert!(intersect, "Spheres should intersect for EPA to run");
+
+        let manifold = epa_solve(simplex, &shape_a, pos_a, rot_a, &shape_b, pos_b, rot_b);
+        
+        assert!(manifold.is_colliding);
+        // They are 1.5 units apart in X, radius sum is 2.0. Penetration should be 0.5.
+        // Normal should point from B to A or A to B depending on who is first, typically away from origin in Minkowski difference context.
+        // In this implementation, normal is 'face_normal' from Minkowski difference (A-B).
+        // A is at 0, B is at 1.5. A - B is at -1.5. So origin is "inside" Minkowski diff.
+        // The closest boundary of Minkowski diff to origin is at X = 0.5 (penetration depth).
+        // Let's verify the distance is close to 0.5.
+        assert!((manifold.penetration - 0.5).abs() < 0.05, "Penetration depth should be approx 0.5, got {}", manifold.penetration);
+        
+        // Normal should be along X axis
+        assert!(manifold.normal.x.abs() > 0.95);
+        assert!(manifold.normal.y.abs() < 0.05);
+        assert!(manifold.normal.z.abs() < 0.05);
     }
 }

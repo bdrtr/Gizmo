@@ -1,8 +1,8 @@
 use gizmo_core::World;
-use gizmo_math::{Vec3, Quat};
-use gizmo_physics::components::{Transform, RigidBody, Velocity};
+use gizmo_math::Vec3;
+use gizmo_physics::components::{Transform, RigidBody};
 use gizmo_physics::character::{CharacterController, physics_character_system};
-use gizmo_physics::shape::{Collider, ColliderShape, Aabb, Capsule, Sphere};
+use gizmo_physics::shape::Collider;
 
 fn setup_world() -> World {
     World::new()
@@ -29,7 +29,7 @@ fn test_character_gravity_and_grounding() {
     let dt = 0.1; // 0.1 saniye
     physics_character_system(&world, dt);
     
-    let t = world.borrow::<Transform>().unwrap().get(char_entity.id()).unwrap().clone();
+    let _t = world.borrow::<Transform>().unwrap().get(char_entity.id()).unwrap().clone();
     let cc = world.borrow::<CharacterController>().unwrap().get(char_entity.id()).unwrap().clone();
     assert!(!cc.is_grounded, "Havada olmalı");
     assert!(cc.vertical_velocity < -0.9, "Yerçekimi ile düşmeli: {}", cc.vertical_velocity);

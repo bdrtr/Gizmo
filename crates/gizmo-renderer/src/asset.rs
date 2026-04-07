@@ -12,6 +12,12 @@ pub struct AssetManager {
     pub texture_cache: std::collections::HashMap<String, Arc<wgpu::BindGroup>>,
 }
 
+impl Default for AssetManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AssetManager {
     pub fn new() -> Self {
         Self {
@@ -113,12 +119,12 @@ impl AssetManager {
 
         // Her yüz için ters vertex sırası (CW yerine CCW veya tam tersi) + içe bakan normal
         let faces: [([usize; 6], [f32; 3]); 6] = [
-            ([0, 2, 1, 0, 3, 2], [0.0, 0.0,  1.0]),  // Arka yüz (+Z içe)
-            ([4, 5, 6, 4, 6, 7], [0.0, 0.0, -1.0]),  // Ön yüz (-Z içe)
-            ([0, 1, 5, 0, 5, 4], [0.0,  1.0, 0.0]),  // Alt yüz (+Y içe)
-            ([3, 6, 2, 3, 7, 6], [0.0, -1.0, 0.0]),  // Üst yüz (-Y içe)
-            ([0, 4, 7, 0, 7, 3], [ 1.0, 0.0, 0.0]),  // Sol yüz (+X içe)
-            ([1, 2, 6, 1, 6, 5], [-1.0, 0.0, 0.0]),  // Sağ yüz (-X içe)
+            ([0, 1, 2, 0, 2, 3], [0.0, 0.0,  1.0]),  // Arka yüz (+Z içe)
+            ([4, 6, 5, 4, 7, 6], [0.0, 0.0, -1.0]),  // Ön yüz (-Z içe)
+            ([0, 5, 1, 0, 4, 5], [0.0,  1.0, 0.0]),  // Alt yüz (+Y içe)
+            ([3, 2, 6, 3, 6, 7], [0.0, -1.0, 0.0]),  // Üst yüz (-Y içe)
+            ([0, 3, 7, 0, 7, 4], [ 1.0, 0.0, 0.0]),  // Sol yüz (+X içe)
+            ([1, 6, 2, 1, 5, 6], [-1.0, 0.0, 0.0]),  // Sağ yüz (-X içe)
         ];
 
         let mut vertices = Vec::with_capacity(36);
@@ -159,12 +165,12 @@ impl AssetManager {
         ];
 
         let faces: [([usize; 6], [f32; 3]); 6] = [
-            ([0, 1, 2, 0, 2, 3], [0.0, 0.0, -1.0]),  // Arka (-Z Dışa)
-            ([4, 6, 5, 4, 7, 6], [0.0, 0.0,  1.0]),  // Ön (+Z Dışa)
-            ([0, 5, 1, 0, 4, 5], [0.0, -1.0, 0.0]),  // Alt (-Y Dışa)
-            ([3, 2, 6, 3, 6, 7], [0.0,  1.0, 0.0]),  // Üst (+Y Dışa)
-            ([0, 3, 7, 0, 7, 4], [-1.0, 0.0, 0.0]),  // Sol (-X Dışa)
-            ([1, 6, 2, 1, 5, 6], [ 1.0, 0.0, 0.0]),  // Sağ (+X Dışa)
+            ([0, 2, 1, 0, 3, 2], [0.0, 0.0, -1.0]),  // Arka (-Z Dışa)
+            ([4, 5, 6, 4, 6, 7], [0.0, 0.0,  1.0]),  // Ön (+Z Dışa)
+            ([0, 1, 5, 0, 5, 4], [0.0, -1.0, 0.0]),  // Alt (-Y Dışa)
+            ([3, 6, 2, 3, 7, 6], [0.0,  1.0, 0.0]),  // Üst (+Y Dışa)
+            ([0, 4, 7, 0, 7, 3], [-1.0, 0.0, 0.0]),  // Sol (-X Dışa)
+            ([1, 2, 6, 1, 6, 5], [ 1.0, 0.0, 0.0]),  // Sağ (+X Dışa)
         ];
 
         let mut vertices = Vec::with_capacity(36);

@@ -4,7 +4,7 @@
 // ============================================================
 
 // === ECS Temelleri ===
-pub use crate::core::{World, Entity, Schedule, Component, SparseSet, Events, Time, component::{Parent, Children}};
+pub use crate::core::{World, Entity, Schedule, Component, SparseSet, Events, Time, EntityName, component::{Parent, Children}};
 
 // === Matematik ===
 pub use crate::math::{Vec2, Vec3, Vec4, Mat4, Quat, Ray};

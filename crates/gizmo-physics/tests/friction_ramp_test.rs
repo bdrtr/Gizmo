@@ -20,7 +20,7 @@ use gizmo_physics::components::{Transform, Velocity, RigidBody};
 fn run_simulation(world: &gizmo_core::World, dt: f32, steps: usize) {
     for _ in 0..steps {
         gizmo_physics::system::physics_movement_system(world, dt);
-        gizmo_physics::system::physics_collision_system(world);
+        gizmo_physics::system::physics_collision_system(world, dt);
     }
 }
 
@@ -107,7 +107,7 @@ fn test_cube_does_not_tunnel_through_ramp() {
         
         for step in 0..600 { // 10 saniye simülasyon
             gizmo_physics::system::physics_movement_system(&world, dt);
-            gizmo_physics::system::physics_collision_system(&world);
+            gizmo_physics::system::physics_collision_system(&world, dt);
             
             let pos = get_position(&world, cube_id);
             assert!(
@@ -141,7 +141,7 @@ fn test_cube_does_not_fly_away() {
         
         for step in 0..600 {
             gizmo_physics::system::physics_movement_system(&world, dt);
-            gizmo_physics::system::physics_collision_system(&world);
+            gizmo_physics::system::physics_collision_system(&world, dt);
             
             let pos = get_position(&world, cube_id);
             assert!(
@@ -211,7 +211,7 @@ fn test_angular_velocity_stays_bounded() {
         
         for step in 0..600 {
             gizmo_physics::system::physics_movement_system(&world, dt);
-            gizmo_physics::system::physics_collision_system(&world);
+            gizmo_physics::system::physics_collision_system(&world, dt);
             
             let vel = get_velocity(&world, cube_id);
             let angular_speed = vel.angular.length();

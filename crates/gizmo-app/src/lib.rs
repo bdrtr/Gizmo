@@ -17,7 +17,7 @@ pub struct App<State: 'static> {
 
     setup_fn: Option<Box<dyn FnOnce(&mut World, &Renderer) -> State>>,
     update_fn: Option<Box<dyn FnMut(&mut World, &mut State, f32, &gizmo_core::input::Input)>>, // dt, input
-    render_fn: Option<Box<dyn FnMut(&mut World, &State, &mut wgpu::CommandEncoder, &wgpu::TextureView, &Renderer, f32)>>, // light_time
+    render_fn: Option<Box<dyn FnMut(&mut World, &State, &mut wgpu::CommandEncoder, &wgpu::TextureView, &mut Renderer, f32)>>, // light_time
     input_fn: Option<Box<dyn FnMut(&mut World, &mut State, &winit::event::Event<()>) -> bool>>, // Input handler
     ui_fn: Option<Box<dyn FnMut(&mut World, &mut State, &egui::Context)>>, // Editor UI handler
     pub input: gizmo_core::input::Input,
@@ -57,7 +57,7 @@ impl<State: 'static> App<State> {
 
     pub fn set_render<F>(mut self, f: F) -> Self
     where
-        F: FnMut(&mut World, &State, &mut wgpu::CommandEncoder, &wgpu::TextureView, &Renderer, f32) + 'static,
+        F: FnMut(&mut World, &State, &mut wgpu::CommandEncoder, &wgpu::TextureView, &mut Renderer, f32) + 'static,
     {
         self.render_fn = Some(Box::new(f));
         self
@@ -136,11 +136,36 @@ impl<State: 'static> App<State> {
                                 self.input.on_window_resized(physical_size.width as f32, physical_size.height as f32);
                             }
                             WindowEvent::KeyboardInput { event: kb_event, .. } => {
+                                let mut codes_to_press = Vec::new();
+                                // Fiziksel Tuş (PhysicalKey)
                                 if let winit::keyboard::PhysicalKey::Code(keycode) = kb_event.physical_key {
+                                    codes_to_press.push(keycode as u32);
+                                }
+                                // Mantıksal Tuş (LogicalKey Fallback)
+                                if let winit::keyboard::Key::Character(c) = kb_event.logical_key.as_ref() {
+                                    match c.to_lowercase().as_str() {
+                                        "w" => codes_to_press.push(winit::keyboard::KeyCode::KeyW as u32),
+                                        "a" => codes_to_press.push(winit::keyboard::KeyCode::KeyA as u32),
+                                        "s" => codes_to_press.push(winit::keyboard::KeyCode::KeyS as u32),
+                                        "d" => codes_to_press.push(winit::keyboard::KeyCode::KeyD as u32),
+                                        _ => {}
+                                    }
+                                } else if let winit::keyboard::Key::Named(named) = kb_event.logical_key {
+                                    match named {
+                                        winit::keyboard::NamedKey::ArrowUp => codes_to_press.push(winit::keyboard::KeyCode::ArrowUp as u32),
+                                        winit::keyboard::NamedKey::ArrowDown => codes_to_press.push(winit::keyboard::KeyCode::ArrowDown as u32),
+                                        winit::keyboard::NamedKey::ArrowLeft => codes_to_press.push(winit::keyboard::KeyCode::ArrowLeft as u32),
+                                        winit::keyboard::NamedKey::ArrowRight => codes_to_press.push(winit::keyboard::KeyCode::ArrowRight as u32),
+                                        winit::keyboard::NamedKey::Space => codes_to_press.push(winit::keyboard::KeyCode::Space as u32),
+                                        _ => {}
+                                    }
+                                }
+
+                                for code in codes_to_press {
                                     if kb_event.state == winit::event::ElementState::Pressed {
-                                        self.input.on_key_pressed(keycode as u32);
+                                        self.input.on_key_pressed(code);
                                     } else {
-                                        self.input.on_key_released(keycode as u32);
+                                        self.input.on_key_released(code);
                                     }
                                 }
                             }
@@ -203,7 +228,7 @@ impl<State: 'static> App<State> {
 
                         // Kullaniciya CommandEncoder verip cizdiriyoruz!
                         if let Some(render_hk) = self.render_fn.as_mut() {
-                            render_hk(&mut self.world, &state, &mut encoder, &view, &renderer, light_time);
+                            render_hk(&mut self.world, &state, &mut encoder, &view, &mut renderer, light_time);
                         }
 
                         editor.render(&window, &renderer.device, &renderer.queue, &mut encoder, &view);

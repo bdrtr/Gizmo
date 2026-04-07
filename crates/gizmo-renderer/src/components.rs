@@ -16,6 +16,13 @@ impl Mesh {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum MaterialType {
+    Pbr,
+    Unlit,
+    Water,
+}
+
 #[derive(Clone)]
 pub struct Material {
     pub bind_group: Arc<wgpu::BindGroup>,
@@ -24,6 +31,7 @@ pub struct Material {
     pub metallic: f32,
     pub unlit: f32,
     pub texture_source: Option<String>,
+    pub material_type: MaterialType,
 }
 
 impl Material {
@@ -35,6 +43,7 @@ impl Material {
             metallic: 0.0,
             unlit: 0.0,
             texture_source: None,
+            material_type: MaterialType::Pbr,
         }
     }
 
@@ -43,17 +52,26 @@ impl Material {
         self.roughness = roughness;
         self.metallic = metallic;
         self.unlit = 0.0;
+        self.material_type = MaterialType::Pbr;
         self
     }
 
     pub fn with_unlit(mut self, albedo: gizmo_math::Vec4) -> Self {
         self.albedo = albedo;
         self.unlit = 1.0;
+        self.material_type = MaterialType::Unlit;
         self
     }
 
     pub fn with_skybox(mut self) -> Self {
         self.unlit = 2.0;
+        self.material_type = MaterialType::Unlit;
+        self
+    }
+    
+    pub fn with_water(mut self, base_albedo: gizmo_math::Vec4) -> Self {
+        self.albedo = base_albedo;
+        self.material_type = MaterialType::Water;
         self
     }
 
@@ -244,5 +262,71 @@ impl LodGroup {
         }
         // Tüm LOD eşiklerini aştıysa en son (en düşük detay) mesh'i kullan
         self.levels.last().map(|l| &l.mesh)
+    }
+}
+
+// --- PARTICLE SYSTEM ---
+
+#[derive(Clone)]
+pub struct Particle {
+    pub position: Vec3,
+    pub velocity: Vec3,
+    pub life: f32,       // Current age
+    pub max_life: f32,   // Age capacity
+    pub size_start: f32, // Size mapping
+    pub size_end: f32,
+    pub color: gizmo_math::Vec4, // Optional coloring
+}
+
+#[derive(Clone)]
+pub struct ParticleEmitter {
+    pub particles: Vec<Particle>,
+    pub spawn_rate: f32, // How many particles to spawn per second
+    pub accumulator: f32, // Used over frame deltas
+    
+    // Extents
+    pub local_offset: Vec3, // Local to the entity transform
+    
+    // Physics
+    pub global_gravity: f32,
+    pub global_drag: f32,
+    
+    // Defaults for new spawns
+    pub initial_velocity: Vec3,
+    pub velocity_randomness: f32,
+    pub lifespan: f32,
+    pub lifespan_randomness: f32,
+    pub size_start: f32,
+    pub size_end: f32,
+    
+    // Appearance bindings
+    pub texture_source: Option<String>,
+    pub is_active: bool,
+}
+
+impl Default for ParticleEmitter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ParticleEmitter {
+    pub fn new() -> Self {
+        Self {
+            particles: Vec::with_capacity(100),
+            spawn_rate: 10.0,
+            accumulator: 0.0,
+            local_offset: Vec3::ZERO,
+            global_gravity: 0.0,
+            global_drag: 0.01,
+            initial_velocity: Vec3::new(0.0, 1.0, 0.0),
+            velocity_randomness: 0.5,
+            lifespan: 2.0,
+            lifespan_randomness: 0.5,
+            size_start: 0.5,
+            size_end: 0.1,
+            texture_source: None,
+            is_active: true,
+        }
     }
 }

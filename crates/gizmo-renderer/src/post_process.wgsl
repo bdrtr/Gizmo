@@ -1,9 +1,8 @@
 // ============================================================
 // Yelbegen Engine — Post-Processing Shader
-// Bloom (Bright Extract + Gaussian Blur) ve ACES Tone Mapping
+// Bloom (Bright Extract + Gaussian Blur) ve ACES Tone Mapping + Sinematikler
 // ============================================================
 
-// Fullscreen Quad Vertex Shader (Tüm post-processing geçişleri için ortak)
 struct FullscreenVertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -11,40 +10,41 @@ struct FullscreenVertexOutput {
 
 @vertex
 fn vs_fullscreen(@builtin(vertex_index) vertex_index: u32) -> FullscreenVertexOutput {
-    // 3 vertex ile tam ekran üçgen çizmek (Quad'dan daha verimli)
-    // vertex 0: (-1, -1), vertex 1: (3, -1), vertex 2: (-1, 3)
     var out: FullscreenVertexOutput;
     let x = f32(i32(vertex_index) / 2) * 4.0 - 1.0;
     let y = f32(i32(vertex_index) % 2) * 4.0 - 1.0;
     out.position = vec4<f32>(x, y, 0.0, 1.0);
-    // UV koordinatları (0,0) sol-üst, (1,1) sağ-alt
     out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
     return out;
 }
 
-// ============================
-// Bind Group: Kaynak Texture
-// ============================
-@group(0) @binding(0)
-var t_source: texture_2d<f32>;
-@group(0) @binding(1)
-var s_source: sampler;
+@group(0) @binding(0) var t_source: texture_2d<f32>;
+@group(0) @binding(1) var s_source: sampler;
+
+struct PostProcessParams {
+    bloom_intensity: f32,
+    bloom_threshold: f32,
+    exposure: f32,
+    chromatic_aberration: f32,
+    vignette_intensity: f32,
+    _padding0: f32,
+    _padding1: f32,
+    _padding2: f32,
+};
+
+@group(2) @binding(0)
+var<uniform> params: PostProcessParams;
 
 // ============================
 // Pass 1: Bright Extract
 // ============================
-// Parlaklık eşiğini aşan pikselleri ayıklayıp geri kalanları siyaha çeker
 @fragment
 fn fs_bright_extract(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let color = textureSample(t_source, s_source, in.uv);
-    
-    // İnsan gözünün parlaklık algısına göre ağırlıklı luminance
     let luminance = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
     
-    // Eşik: 1.0 üzerindeki pikseller bloom'a dahil olacak
-    // Yumuşak geçiş (soft knee) için clamp kullanıyoruz
-    let threshold = 1.0;
-    let soft_threshold = 0.7;
+    let threshold = params.bloom_threshold;
+    let soft_threshold = threshold * 0.7; // Yumuşatılmış alt sınır
     let knee = max(luminance - soft_threshold, 0.0) / (threshold - soft_threshold + 0.0001);
     let contribution = clamp(knee * knee, 0.0, 1.0);
     
@@ -54,22 +54,17 @@ fn fs_bright_extract(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 // ============================
 // Pass 2: Gaussian Blur
 // ============================
-// Bloom eşiğinden geçen texture'ı 9-tap Gaussian ile yumuşatıyoruz
-// Yatay ve dikey iki ayrı geçiş yapılarak separable blur uygulanır
-
 struct BlurParams {
-    direction: vec2<f32>, // (1/w, 0) yatay veya (0, 1/h) dikey
+    direction: vec2<f32>,
     _padding: vec2<f32>,
 };
 
-@group(1) @binding(0)
-var<uniform> blur_params: BlurParams;
+@group(1) @binding(0) var<uniform> blur_params: BlurParams;
 
 @fragment
 fn fs_blur(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     var result = textureSample(t_source, s_source, in.uv) * 0.227027;
     
-    // Unrolled 9-tap Gaussian (naga constant-index kısıtlaması nedeniyle)
     let o1 = blur_params.direction * 1.0;
     result += textureSample(t_source, s_source, in.uv + o1) * 0.1945946;
     result += textureSample(t_source, s_source, in.uv - o1) * 0.1945946;
@@ -92,15 +87,9 @@ fn fs_blur(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 // ============================
 // Pass 3: Composite + Tone Mapping
 // ============================
-// HDR sahne rengini ve bloom'u birleştirip ACES Filmic Tone Mapping uygular
+@group(1) @binding(0) var t_bloom: texture_2d<f32>;
+@group(1) @binding(1) var s_bloom: sampler;
 
-@group(1) @binding(0)
-var t_bloom: texture_2d<f32>;
-@group(1) @binding(1)
-var s_bloom: sampler;
-
-// ACES Filmic Tone Mapping (Hollywood Sinema Standardı)
-// x girdisi HDR renk değeri, çıktı [0, 1] aralığında LDR renk
 fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
     let a = 2.51;
     let b = 0.03;
@@ -112,19 +101,29 @@ fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
-    let hdr_color = textureSample(t_source, s_source, in.uv).rgb;
+    // 1. Chromatic Aberration
+    let center_dist = distance(in.uv, vec2<f32>(0.5, 0.5));
+    let ca_offset = params.chromatic_aberration * center_dist * 0.05;
+    
+    let r = textureSample(t_source, s_source, in.uv + vec2<f32>(ca_offset, 0.0)).r;
+    let g = textureSample(t_source, s_source, in.uv).g;
+    let b = textureSample(t_source, s_source, in.uv - vec2<f32>(ca_offset, 0.0)).b;
+    let hdr_color = vec3<f32>(r, g, b);
+
+    // 2. Bloom Addition
     let bloom_color = textureSample(t_bloom, s_bloom, in.uv).rgb;
+    let combined = (hdr_color + bloom_color * params.bloom_intensity) * params.exposure;
     
-    // Bloom yoğunluğu (intensity)
-    let bloom_intensity = 0.3;
-    let combined = hdr_color + bloom_color * bloom_intensity;
-    
-    // ACES Tone Mapping
+    // 3. ACES Tone Mapping
     let mapped = aces_tonemap(combined);
     
-    // Gamma düzeltmesi (Linear → sRGB)
+    // 4. Gamma Correction
     let gamma = vec3<f32>(1.0 / 2.2);
-    let final_color = pow(mapped, gamma);
+    var final_color = pow(mapped, gamma);
+    
+    // 5. Vignette
+    let vignette = smoothstep(1.5, 0.3, center_dist * (1.0 + params.vignette_intensity));
+    final_color *= vignette;
     
     return vec4<f32>(final_color, 1.0);
 }

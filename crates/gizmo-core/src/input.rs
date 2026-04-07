@@ -3,7 +3,7 @@ use std::collections::HashSet;
 /// Ergonomik input soyutlama katmanı.
 /// 
 /// Kullanım:
-/// ```rust
+/// ```rust,ignore
 /// if input.is_key_pressed(KeyCode::KeyW) { /* ileri git */ }
 /// if input.is_key_just_pressed(KeyCode::Space) { /* zıpla (tek sefer) */ }
 /// if input.is_mouse_button_pressed(MouseButton::Left) { /* ateş et */ }

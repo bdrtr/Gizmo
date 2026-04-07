@@ -1,12 +1,17 @@
+pub mod gpu_types;
+pub mod pipeline;
+pub mod post_process;
 pub mod renderer;
 pub mod components;
 pub mod asset;
 pub mod animation;
 pub mod hot_reload;
 pub mod game_ui;
+pub mod particle_renderer;
 
+pub use gpu_types::{Vertex, InstanceRaw, LightData, PostProcessUniforms, SceneUniforms};
 pub use components::{Mesh, Material, MeshRenderer, Camera, Camera2D, Sprite, PointLight, DirectionalLight, LodGroup, LodLevel};
-pub use renderer::{Renderer, Vertex, SceneUniforms, InstanceRaw, LightData};
+pub use renderer::Renderer;
 pub use asset::{AssetManager, GltfNodeData};
 pub use animation::{AnimationClip, Track, Keyframe, SkeletonHierarchy, SkeletonJoint};
 pub use hot_reload::AssetWatcher;

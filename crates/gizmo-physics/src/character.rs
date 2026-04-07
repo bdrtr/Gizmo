@@ -186,7 +186,7 @@ pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
     {
         let entities = controllers.entity_dense.clone();
         for entity in entities {
-            let t = match trans_storage.get(entity) { Some(t) => t.clone(), None => continue };
+            let t = match trans_storage.get(entity) { Some(t) => *t, None => continue };
             let cc = match controllers.get_mut(entity) { Some(c) => c, None => continue };
             
             let cap = Capsule { radius: cc.radius, half_height: cc.half_height };

@@ -148,6 +148,20 @@ impl RigidBody {
         }
     }
 
+    pub fn calculate_sphere_inertia(&mut self, radius: f32) {
+        if self.mass <= 0.0 {
+            return;
+        }
+        // I = 2/5 * m * r^2
+        let inertia = (2.0 / 5.0) * self.mass * (radius * radius);
+        self.local_inertia = Vec3::new(inertia, inertia, inertia);
+        self.inverse_inertia = Vec3::new(
+            1.0 / inertia,
+            1.0 / inertia,
+            1.0 / inertia,
+        );
+    }
+
     /// Kapsül için eylemsizlik tensörü hesaplar (silindir + iki yarıküre)
     pub fn calculate_capsule_inertia(&mut self, radius: f32, half_height: f32) {
         if self.mass > 0.0 {

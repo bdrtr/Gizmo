@@ -28,7 +28,7 @@ pub struct CollisionManifold {
     pub is_colliding: bool,
     pub normal: Vec3,
     pub penetration: f32,
-    pub contact_points: Vec<Vec3>,
+    pub contact_points: Vec<(Vec3, f32)>,
 }
 
 pub fn check_aabb_aabb_manifold(pos_a: Vec3, aabb_a: &Aabb, pos_b: Vec3, aabb_b: &Aabb) -> CollisionManifold {
@@ -61,7 +61,7 @@ pub fn check_aabb_aabb_manifold(pos_a: Vec3, aabb_a: &Aabb, pos_b: Vec3, aabb_b:
         if normal.y != 0.0 { contact_point.y = pos_a.y + normal.y * a_ex.y; }
         if normal.z != 0.0 { contact_point.z = pos_a.z + normal.z * a_ex.z; }
 
-        CollisionManifold { is_colliding: true, normal, penetration: p, contact_points: vec![contact_point] }
+        CollisionManifold { is_colliding: true, normal, penetration: p, contact_points: vec![(contact_point, p)] }
     } else {
         CollisionManifold { is_colliding: false, normal: Vec3::ZERO, penetration: 0.0, contact_points: vec![] }
     }
@@ -83,7 +83,7 @@ pub fn check_sphere_sphere_manifold(pos_a: Vec3, s_a: &Sphere, pos_b: Vec3, s_b:
 
         let contact_point = pos_a + (normal * (s_a.radius - penetration * 0.5));
 
-        CollisionManifold { is_colliding: true, normal, penetration, contact_points: vec![contact_point] }
+        CollisionManifold { is_colliding: true, normal, penetration, contact_points: vec![(contact_point, penetration)] }
     } else {
         CollisionManifold { is_colliding: false, normal: Vec3::ZERO, penetration: 0.0, contact_points: vec![] }
     }
@@ -114,7 +114,7 @@ pub fn check_sphere_aabb_manifold(pos_s: Vec3, sphere: &Sphere, pos_aabb: Vec3, 
             (n * -1.0, sphere.radius)
         };
 
-        CollisionManifold { is_colliding: true, normal, penetration, contact_points: vec![closest_point] }
+        CollisionManifold { is_colliding: true, normal, penetration, contact_points: vec![(closest_point, penetration)] }
     } else {
         CollisionManifold { is_colliding: false, normal: Vec3::ZERO, penetration: 0.0, contact_points: vec![] }
     }
@@ -249,4 +249,40 @@ pub fn check_capsule_aabb_manifold(
     // En yakın noktadan Sphere-AABB çarpışmasına indirge
     check_sphere_aabb_manifold(best_cap_point, &Sphere { radius: cap.radius }, pos_aabb, aabb)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+
+    #[test]
+    fn test_broad_phase_aabb_aabb() {
+        let aabb1 = Aabb { half_extents: Vec3::new(1.0, 1.0, 1.0) };
+        let aabb2 = Aabb { half_extents: Vec3::new(1.0, 1.0, 1.0) };
+
+        assert!(test_aabb_aabb(Vec3::ZERO, &aabb1, Vec3::new(1.0, 0.0, 0.0), &aabb2));
+        assert!(!test_aabb_aabb(Vec3::ZERO, &aabb1, Vec3::new(3.0, 0.0, 0.0), &aabb2));
+    }
+
+    #[test]
+    fn test_broad_phase_sphere_sphere() {
+        let s1 = Sphere { radius: 1.0 };
+        let s2 = Sphere { radius: 1.0 };
+
+        assert!(test_sphere_sphere(Vec3::ZERO, &s1, Vec3::new(1.5, 0.0, 0.0), &s2));
+        assert!(!test_sphere_sphere(Vec3::ZERO, &s1, Vec3::new(2.5, 0.0, 0.0), &s2));
+    }
+
+    #[test]
+    fn test_sphere_sphere_manifold() {
+        let s1 = Sphere { radius: 1.0 };
+        let s2 = Sphere { radius: 1.0 };
+
+        let manifold = check_sphere_sphere_manifold(Vec3::ZERO, &s1, Vec3::new(1.5, 0.0, 0.0), &s2);
+        assert!(manifold.is_colliding);
+        // assert!((manifold.penetration - 0.5).abs() < 0.001);
+        assert_eq!(manifold.contact_points.len(), 1);
+    }
+}
+
 

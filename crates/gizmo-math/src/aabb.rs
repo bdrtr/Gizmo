@@ -53,4 +53,46 @@ impl Aabb {
 
         transformed_aabb
     }
+
+    pub fn intersects(&self, other: &Self) -> bool {
+        self.min.x <= other.max.x && self.max.x >= other.min.x &&
+        self.min.y <= other.max.y && self.max.y >= other.min.y &&
+        self.min.z <= other.max.z && self.max.z >= other.min.z
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_aabb_intersects_overlapping() {
+        let a = Aabb::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(2.0, 2.0, 2.0));
+        let b = Aabb::new(Vec3::new(1.0, 1.0, 1.0), Vec3::new(3.0, 3.0, 3.0));
+        assert!(a.intersects(&b));
+        assert!(b.intersects(&a));
+    }
+
+    #[test]
+    fn test_aabb_intersects_disjoint() {
+        let a = Aabb::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(2.0, 2.0, 2.0));
+        let b = Aabb::new(Vec3::new(3.0, 3.0, 3.0), Vec3::new(5.0, 5.0, 5.0));
+        assert!(!a.intersects(&b));
+        assert!(!b.intersects(&a));
+    }
+
+    #[test]
+    fn test_aabb_intersects_edge_touching() {
+        let a = Aabb::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(2.0, 2.0, 2.0));
+        let b = Aabb::new(Vec3::new(2.0, 0.0, 0.0), Vec3::new(4.0, 2.0, 2.0));
+        assert!(a.intersects(&b)); // Edge-touching is considered intersection here
+    }
+
+    #[test]
+    fn test_aabb_extend() {
+        let mut a = Aabb::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(2.0, 2.0, 2.0));
+        a.extend(Vec3::new(3.0, -1.0, 1.0));
+        assert_eq!(a.min, Vec3::new(0.0, -1.0, 0.0));
+        assert_eq!(a.max, Vec3::new(3.0, 2.0, 2.0));
+    }
 }

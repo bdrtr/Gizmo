@@ -9,3 +9,7 @@ wgpu = "0.19"
 egui = "0.26"
 egui-winit = "0.26"
 egui-wgpu = "0.26"
+gizmo-core = { path = "../gizmo-core" }
+gizmo-math = { path = "../gizmo-math" }
+gizmo-physics = { path = "../gizmo-physics" }
+gizmo-renderer = { path = "../gizmo-renderer" }
