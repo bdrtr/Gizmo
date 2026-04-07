@@ -27,9 +27,9 @@
 
 ### SI Çözücü (system.rs)
 
-- [ ] **Warm-starting devre dışı bırakılmış** — `system.rs:503-510`
-  Temas noktası tutarsızlığı nedeniyle warm-starting iptal edilmiş. Bu, stacking (yığılma) senaryolarında yakınsamayı çok yavaşlatır (her kare sıfırdan başlıyor).
-  **Çözüm:** Temas noktası eşleme (contact point matching) implementasyonu ile warm-starting'i geri aç.
+- [x] **Warm-starting devre dışı bırakılmış** — `system.rs:503-510`
+  Temas noktası tutarsızlığı nedeniyle warm-starting iptal edilmişti. Contact Point Matching (2cm threshold, %80 sönümleme) ile güvenle geri açıldı.
+  **Çözüm:** Temas noktası eşleme (contact point matching) implementasyonu ile warm-starting geri açıldı ✅
 
 - [x] **Çözücü iterasyonu sabit 8** — `system.rs:525`
   `for _iter in 0..8` — Basit sahneler için yeterli, ama yığılma veya zincirleme durumlarda yetersiz kalabilir. Dinamik iterasyon sayısı öğrenme fırsatı.
