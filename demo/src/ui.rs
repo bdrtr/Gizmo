@@ -41,215 +41,390 @@ pub fn render_ui(ctx: &egui::Context, state: &mut GameState, world: &World) {
 
     // --- YARIŞ HUD ---
     if let Some(ref race) = state.ps1_race {
-        // Geri sayım
+        // Yardımcı fonksiyon: Gölgede metin çizmek için
+        let draw_shadow_text = |ui: &mut egui::Ui, text: String, pos: egui::Pos2, size: f32, color: egui::Color32| {
+            let font = egui::FontId::proportional(size);
+            // Gölge
+            ui.painter().text(pos + egui::vec2(2.0, 3.0), egui::Align2::CENTER_CENTER, &text, font.clone(), egui::Color32::from_black_alpha(150));
+            // Ana Metin
+            ui.painter().text(pos, egui::Align2::CENTER_CENTER, &text, font, color);
+        };
+
+        let screen_rect = ctx.screen_rect();
+
+        // Geri sayım (Countdown) - Merkezi, Büyük ve Gölgeli
         if race.phase == crate::race::RacePhase::Countdown {
             let txt = crate::race::countdown_text(race);
             if !txt.is_empty() {
                 egui::Area::new("countdown_hud")
-                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, -100.0))
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, -80.0))
                     .order(egui::Order::Foreground)
+                    .interactable(false)
                     .show(ctx, |ui| {
-                        ui.label(egui::RichText::new(txt).color(egui::Color32::from_rgb(255, 200, 50)).size(120.0).strong());
+                        // Dinamik boyut (zaman küçüldükçe hafif büyüme efekti / yaylanma)
+                        let time_fract = race.countdown_timer.fract();
+                        let pulse = 1.0 + (time_fract * std::f32::consts::PI).sin() * 0.2;
+                        let size = 120.0 * (if txt == "GO!" { 1.5 } else { pulse });
+                        
+                        let color = if txt == "GO!" { 
+                            egui::Color32::from_rgb(50, 255, 100) 
+                        } else { 
+                            egui::Color32::from_rgb(255, 200, 50) 
+                        };
+
+                        let pos = ui.max_rect().center(); // Alanın merkezi
+                        draw_shadow_text(ui, txt.to_string(), pos, size, color);
                     });
             }
         }
 
-        egui::Window::new("##race_hud")
-            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-20.0, 20.0))
-            .title_bar(false)
-            .resizable(false)
-            .collapsible(false)
-            .frame(egui::Frame::window(&ctx.style())
-                .fill(egui::Color32::from_rgba_premultiplied(0, 0, 0, 180))
-                .rounding(egui::Rounding::same(10.0)))
-            .show(ctx, |ui| {
-                let status_txt = match race.phase {
-                    crate::race::RacePhase::Countdown => "⏳ Bekleniyor",
-                    crate::race::RacePhase::Racing    => "🏁 YARIŞ",
-                    crate::race::RacePhase::Finished  => "🏆 BİTTİ",
-                };
-                ui.label(egui::RichText::new(status_txt).color(egui::Color32::WHITE).strong().size(22.0));
-                
-                ui.separator();
-                let mins = (race.race_timer / 60.0) as u32;
-                let secs = race.race_timer % 60.0;
-                ui.label(egui::RichText::new(format!("⏱ {:02}:{:05.2}", mins, secs))
-                    .color(egui::Color32::from_rgb(100, 255, 150)).size(24.0).strong());
-
-                ui.separator();
-                let pos = crate::race::get_player_position(race, world);
-                let total_cars = 1 + race.ai_entities.len();
-                ui.label(egui::RichText::new(format!("Sıra: {}/{}", pos, total_cars)).color(egui::Color32::from_rgb(255, 200, 80)).size(20.0));
-                
-                ui.label(egui::RichText::new(format!("Tur: {}/{}", race.player_laps.min(race.total_laps), race.total_laps)).color(egui::Color32::LIGHT_BLUE).size(20.0));
-
-                let speed = crate::race::get_speed_kmh(world, race.player_entity);
-                ui.label(egui::RichText::new(format!("{:.0} km/h", speed)).color(egui::Color32::WHITE).size(18.0));
-            });
-
-        // Bitiş Ekranı
-        if race.phase == crate::race::RacePhase::Finished {
-            egui::Window::new("Yarış Bitti")
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .collapsible(false)
-                .resizable(false)
+        if race.phase == crate::race::RacePhase::Racing {
+            // --- Hız Göstergesi (Sağ Alt) ---
+            egui::Area::new("race_speedometer")
+                .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-40.0, -40.0))
+                .order(egui::Order::Foreground)
+                .interactable(false)
                 .show(ctx, |ui| {
-                    ui.heading("🏁 SIRALAMA 🏁");
+                    let desired_size = egui::vec2(200.0, 80.0);
+                    let (rect, _) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+                    
+                    // Şık yarı saydam arka plan (Cam efekti)
+                    ui.painter().rect_filled(rect, 16.0, egui::Color32::from_rgba_premultiplied(10, 15, 25, 200));
+                    ui.painter().rect_stroke(rect, 16.0, egui::Stroke::new(2.0, egui::Color32::from_white_alpha(30)));
+                    
+                    let speed = crate::race::get_speed_kmh(world, race.player_entity);
+                    
+                    // "KM/H" etiket
+                    ui.painter().text(
+                        rect.right_center() + egui::vec2(-20.0, 15.0),
+                        egui::Align2::RIGHT_BOTTOM,
+                        "KM/H",
+                        egui::FontId::proportional(20.0),
+                        egui::Color32::from_gray(150),
+                    );
+
+                    // Hız Rakamları (Dinamik ve büyük)
+                    let speed_color = if speed > 150.0 { egui::Color32::from_rgb(255, 80, 50) } // Yüksek hızda kırmızıya dönük
+                                      else { egui::Color32::from_rgb(200, 240, 255) }; 
+                    ui.painter().text(
+                        rect.right_center() + egui::vec2(-20.0, -10.0),
+                        egui::Align2::RIGHT_BOTTOM,
+                        format!("{:.0}", speed),
+                        egui::FontId::proportional(64.0),
+                        speed_color,
+                    );
+                });
+
+            // --- Sıralama ve Tur (Sol Üst / Sağ Üst) ---
+            egui::Area::new("race_status_top")
+                .anchor(egui::Align2::LEFT_TOP, egui::vec2(40.0, 40.0))
+                .order(egui::Order::Foreground)
+                .interactable(false)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        // POSITION BOX
+                        let (pos_rect, _) = ui.allocate_exact_size(egui::vec2(160.0, 70.0), egui::Sense::hover());
+                        ui.painter().rect_filled(pos_rect, 12.0, egui::Color32::from_rgba_premultiplied(10, 15, 25, 220));
+                        ui.painter().rect_stroke(pos_rect, 12.0, egui::Stroke::new(2.0, egui::Color32::from_white_alpha(30)));
+                        
+                        ui.painter().text(
+                            pos_rect.left_center() + egui::vec2(15.0, 0.0),
+                            egui::Align2::LEFT_CENTER,
+                            "POS",
+                            egui::FontId::proportional(22.0),
+                            egui::Color32::from_rgb(255, 200, 80),
+                        );
+
+                        let pos = crate::race::get_player_position(race, world);
+                        let total_cars = 1 + race.ai_entities.len();
+                        let postfix = match pos { 1 => "st", 2 => "nd", 3 => "rd", _ => "th" };
+
+                        ui.painter().text(
+                            pos_rect.right_center() + egui::vec2(-15.0, -8.0),
+                            egui::Align2::RIGHT_CENTER,
+                            format!("{}", pos),
+                            egui::FontId::proportional(42.0),
+                            egui::Color32::WHITE,
+                        );
+                        ui.painter().text(
+                            pos_rect.right_center() + egui::vec2(-15.0, 18.0),
+                            egui::Align2::RIGHT_CENTER,
+                            format!("{}/{}", postfix, total_cars),
+                            egui::FontId::proportional(16.0),
+                            egui::Color32::GRAY,
+                        );
+
+                        ui.add_space(20.0);
+
+                        // LAPS BOX
+                        let (lap_rect, _) = ui.allocate_exact_size(egui::vec2(160.0, 70.0), egui::Sense::hover());
+                        ui.painter().rect_filled(lap_rect, 12.0, egui::Color32::from_rgba_premultiplied(10, 15, 25, 220));
+                        ui.painter().rect_stroke(lap_rect, 12.0, egui::Stroke::new(2.0, egui::Color32::from_white_alpha(30)));
+                        
+                        ui.painter().text(
+                            lap_rect.left_center() + egui::vec2(15.0, 0.0),
+                            egui::Align2::LEFT_CENTER,
+                            "LAP",
+                            egui::FontId::proportional(22.0),
+                            egui::Color32::LIGHT_BLUE,
+                        );
+
+                        ui.painter().text(
+                            lap_rect.right_center() + egui::vec2(-15.0, 0.0),
+                            egui::Align2::RIGHT_CENTER,
+                            format!("{}/{}", race.player_laps.min(race.total_laps) + 1, race.total_laps),
+                            egui::FontId::proportional(36.0),
+                            egui::Color32::WHITE,
+                        );
+                    });
+                });
+
+            // --- Yarış Süresi (Merkez Üst) ---
+            egui::Area::new("race_timer_top")
+                .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 30.0))
+                .order(egui::Order::Foreground)
+                .interactable(false)
+                .show(ctx, |ui| {
+                    let mins = (race.race_timer / 60.0) as u32;
+                    let secs = race.race_timer % 60.0;
+                    let text = format!("{:02}:{:05.2}", mins, secs);
+
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(200.0, 50.0), egui::Sense::hover());
+                    ui.painter().rect_filled(rect, 8.0, egui::Color32::from_rgba_premultiplied(0, 0, 0, 150));
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        text,
+                        egui::FontId::proportional(32.0),
+                        egui::Color32::from_rgb(100, 255, 150),
+                    );
+                });
+        }
+
+        // --- Bitiş Ekranı (Finish Screen) ---
+        if race.phase == crate::race::RacePhase::Finished {
+            // Arkaplanı karart
+            egui::Area::new("finish_bg")
+                .anchor(egui::Align2::LEFT_TOP, egui::vec2(0.0, 0.0))
+                .order(egui::Order::Foreground)
+                .interactable(true)
+                .show(ctx, |ui| {
+                    ui.painter().rect_filled(screen_rect, 0.0, egui::Color32::from_black_alpha(200));
+                });
+
+            egui::Area::new("finish_panel")
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    let panel_size = egui::vec2(500.0, 400.0);
+                    let (rect, _) = ui.allocate_exact_size(panel_size, egui::Sense::hover());
+                    
+                    ui.painter().rect_filled(rect, 16.0, egui::Color32::from_rgba_premultiplied(20, 25, 40, 240));
+                    ui.painter().rect_stroke(rect, 16.0, egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 150, 255)));
+
+                    // Başlık
+                    ui.painter().text(
+                        rect.center_top() + egui::vec2(0.0, 40.0),
+                        egui::Align2::CENTER_CENTER,
+                        "RACE FINISHED",
+                        egui::FontId::proportional(48.0),
+                        egui::Color32::from_rgb(255, 200, 80),
+                    );
+                    
+                    ui.painter().line_segment(
+                        [rect.left_top() + egui::vec2(50.0, 80.0), rect.right_top() + egui::vec2(-50.0, 80.0)], 
+                        egui::Stroke::new(2.0, egui::Color32::from_white_alpha(50))
+                    );
+
+                    // Sıralama Listesi
+                    let mut start_y = 130.0;
                     for (i, &(id, time)) in race.finish_order.iter().enumerate() {
-                        let name = if id == race.player_entity { "🏎️ OYUNCU" } else { "🚙 RAKİP" };
-                        let color = if id == race.player_entity { egui::Color32::GREEN } else { egui::Color32::WHITE };
+                        let is_player = id == race.player_entity;
+                        let name = if is_player { "PLAYER (YOU)" } else { "AI RIVAL" };
+                        let color = if is_player { egui::Color32::from_rgb(50, 255, 120) } else { egui::Color32::from_gray(200) };
                         let mins = (time / 60.0) as u32;
                         let secs = time % 60.0;
-                        ui.label(egui::RichText::new(format!("{}. {} - {:02}:{:05.2}", i+1, name, mins, secs)).color(color).size(18.0));
+                        
+                        let rank_txt = format!("{}  -  {}", i + 1, name);
+                        let time_txt = format!("{:02}:{:05.2}", mins, secs);
+
+                        ui.painter().text(
+                            rect.left_top() + egui::vec2(60.0, start_y),
+                            egui::Align2::LEFT_CENTER,
+                            rank_txt,
+                            egui::FontId::proportional(24.0),
+                            color,
+                        );
+
+                        ui.painter().text(
+                            rect.right_top() + egui::vec2(-60.0, start_y),
+                            egui::Align2::RIGHT_CENTER,
+                            time_txt,
+                            egui::FontId::proportional(24.0),
+                            color,
+                        );
+
+                        start_y += 50.0;
                     }
+                    
+                    // Alt Kısımda Talimat
+                    ui.painter().text(
+                        rect.center_bottom() + egui::vec2(0.0, -30.0),
+                        egui::Align2::CENTER_CENTER,
+                        "Press 'R' to Restart or 'ESC' to Menu",
+                        egui::FontId::proportional(16.0),
+                        egui::Color32::from_gray(120),
+                    );
                 });
         }
     }
 
-    // --- PROFILER OVERLAY ---
-    egui::Window::new("Profiler")
-        .fixed_pos([240.0, 50.0])
-        .title_bar(false)
-        .collapsible(false)
-        .resizable(false)
-        .frame(egui::Frame::window(&ctx.style()).fill(egui::Color32::from_black_alpha(200)))
-        .show(ctx, |ui| {
-            ui.label(egui::RichText::new("📊 BİLGİ EKRANI").color(egui::Color32::WHITE).strong());
-            ui.separator();
-            
-            let fps = state.current_fps;
-            let ms = if fps > 0.0 { 1000.0 / fps } else { 0.0 };
-            
-            // Renklendirme mantığı (FPS)
-            let fps_color = if fps >= 55.0 { egui::Color32::GREEN }
-                            else if fps >= 30.0 { egui::Color32::YELLOW }
-                            else { egui::Color32::RED };
+    if state.show_devtools {
+        // --- PROFILER OVERLAY ---
+        egui::Window::new("Profiler")
+            .fixed_pos([240.0, 50.0])
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
+            .frame(egui::Frame::window(&ctx.style()).fill(egui::Color32::from_black_alpha(200)))
+            .show(ctx, |ui| {
+                ui.label(egui::RichText::new("📊 BİLGİ EKRANI").color(egui::Color32::WHITE).strong());
+                ui.separator();
+                
+                let fps = state.current_fps;
+                let ms = if fps > 0.0 { 1000.0 / fps } else { 0.0 };
+                
+                // Renklendirme mantığı (FPS)
+                let fps_color = if fps >= 55.0 { egui::Color32::GREEN }
+                                else if fps >= 30.0 { egui::Color32::YELLOW }
+                                else { egui::Color32::RED };
 
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("FPS:").color(egui::Color32::LIGHT_GRAY));
-                ui.label(egui::RichText::new(format!("{:.1}", fps)).color(fps_color).strong());
-                ui.label(egui::RichText::new(format!("({:.2} ms)", ms)).color(egui::Color32::GRAY));
-            });
-            
-            let entity_count = world.entity_count();
-            let draw_calls = world.query_ref::<gizmo::renderer::components::MeshRenderer>()
-                                  .map(|q| q.s1.dense.len())
-                                  .unwrap_or(0);
-                                  
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Varlık (Entity):").color(egui::Color32::LIGHT_GRAY));
-                ui.label(egui::RichText::new(format!("{}", entity_count)).color(egui::Color32::WHITE).strong());
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("FPS:").color(egui::Color32::LIGHT_GRAY));
+                    ui.label(egui::RichText::new(format!("{:.1}", fps)).color(fps_color).strong());
+                    ui.label(egui::RichText::new(format!("({:.2} ms)", ms)).color(egui::Color32::GRAY));
+                });
+                
+                let entity_count = world.entity_count();
+                let draw_calls = world.query_ref::<gizmo::renderer::components::MeshRenderer>()
+                                      .map(|q| q.s1.dense.len())
+                                      .unwrap_or(0);
+                                      
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Varlık (Entity):").color(egui::Color32::LIGHT_GRAY));
+                    ui.label(egui::RichText::new(format!("{}", entity_count)).color(egui::Color32::WHITE).strong());
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Çizim Çağrısı (Draw Calls):").color(egui::Color32::LIGHT_GRAY));
+                    ui.label(egui::RichText::new(format!("{}", draw_calls + 1)).color(egui::Color32::WHITE).strong()); // +1 Shadow Pass
+                });
+                
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Fizik Hızı (FPS):").color(egui::Color32::LIGHT_GRAY));
+                    ui.add(egui::Slider::new(&mut state.target_physics_fps, 5.0..=240.0));
+                });
             });
 
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Çizim Çağrısı (Draw Calls):").color(egui::Color32::LIGHT_GRAY));
-                ui.label(egui::RichText::new(format!("{}", draw_calls + 1)).color(egui::Color32::WHITE).strong()); // +1 Shadow Pass
-            });
-            
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Fizik Hızı (FPS):").color(egui::Color32::LIGHT_GRAY));
-                ui.add(egui::Slider::new(&mut state.target_physics_fps, 5.0..=240.0));
-            });
-        });
+        // --- DEMO DEVTOOLS ---
+        egui::Window::new("Demo DevTools (Stres & Görsel test)")
+            .default_pos([240.0, 150.0])
+            .show(ctx, |ui| {
+                ui.heading("Stres Testleri (Fizik)");
 
-    // --- DEMO DEVTOOLS ---
-    egui::Window::new("Demo DevTools (Stres & Görsel test)")
-        .default_pos([240.0, 150.0])
-        .show(ctx, |ui| {
-            ui.heading("Stres Testleri (Fizik)");
-
-            if ui.button("🎯 Domino Etkisi (Sıfırla ve Kur)").clicked() {
-                if let Some(mut events) = world.get_resource_mut::<gizmo::core::event::Events<crate::state::SpawnDominoEvent>>() {
-                    events.push(crate::state::SpawnDominoEvent { count: 1 });
+                if ui.button("🎯 Domino Etkisi (Sıfırla ve Kur)").clicked() {
+                    if let Some(mut events) = world.get_resource_mut::<gizmo::core::event::Events<crate::state::SpawnDominoEvent>>() {
+                        events.push(crate::state::SpawnDominoEvent { count: 1 });
+                    }
+                    state.free_cam = true; // Domino effect için otomatik serbest kameraya geçsin
                 }
-                state.free_cam = true; // Domino effect için otomatik serbest kameraya geçsin
-            }
-            if ui.button("▶️ Domino Başlat").clicked() {
-                if let Some(mut events) = world.get_resource_mut::<gizmo::core::event::Events<crate::state::ReleaseDominoEvent>>() {
-                    events.push(crate::state::ReleaseDominoEvent { count: 1 });
+                if ui.button("▶️ Domino Başlat").clicked() {
+                    if let Some(mut events) = world.get_resource_mut::<gizmo::core::event::Events<crate::state::ReleaseDominoEvent>>() {
+                        events.push(crate::state::ReleaseDominoEvent { count: 1 });
+                    }
                 }
-            }
-            ui.checkbox(&mut state.free_cam, "Serbest Kamera Modu (Sol Mouse ile çevreye bak ve WASD)");
-            
-            ui.separator();
-            ui.heading("Varlıklar (Assets)");
-            egui::ScrollArea::vertical().id_source("assets_demo").max_height(100.0).show(ui, |ui| {
-                if let Ok(entries) = std::fs::read_dir("demo/assets") {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.is_file() {
-                            let ext = path.extension().unwrap_or_default().to_string_lossy().to_string();
-                            if ext == "glb" || ext == "gltf" || ext == "obj" {
-                                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                                if ui.button(format!("📦 {}", name)).clicked() {
-                                    if let Some(mut events) = world.get_resource_mut::<gizmo::core::event::Events<crate::state::AssetSpawnEvent>>() {
-                                        events.push(crate::state::AssetSpawnEvent { path: path.to_string_lossy().to_string() });
+                ui.checkbox(&mut state.free_cam, "Serbest Kamera Modu (Sol Mouse ile çevreye bak ve WASD)");
+                
+                ui.separator();
+                ui.heading("Varlıklar (Assets)");
+                egui::ScrollArea::vertical().id_source("assets_demo").max_height(100.0).show(ui, |ui| {
+                    if let Ok(entries) = std::fs::read_dir("demo/assets") {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if path.is_file() {
+                                let ext = path.extension().unwrap_or_default().to_string_lossy().to_string();
+                                if ext == "glb" || ext == "gltf" || ext == "obj" {
+                                    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                                    if ui.button(format!("📦 {}", name)).clicked() {
+                                        if let Some(mut events) = world.get_resource_mut::<gizmo::core::event::Events<crate::state::AssetSpawnEvent>>() {
+                                            events.push(crate::state::AssetSpawnEvent { path: path.to_string_lossy().to_string() });
+                                        }
                                     }
                                 }
                             }
                         }
+                    } else {
+                        ui.label("No assets folder found.");
                     }
-                } else {
-                    ui.label("No assets folder found.");
+                });
+
+                ui.separator();
+                ui.heading("Sinematik Efektler (Post-Process)");
+                if let Some(mut pp) = world.get_resource_mut::<gizmo::renderer::renderer::PostProcessUniforms>() {
+                    ui.horizontal(|ui| {
+                        ui.label("Bloom Şiddeti:");
+                        ui.add(egui::Slider::new(&mut pp.bloom_intensity, 0.0..=2.0));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Bloom Eşiği:");
+                        ui.add(egui::Slider::new(&mut pp.bloom_threshold, 0.1..=5.0));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Pozlama (Exposure):");
+                        ui.add(egui::Slider::new(&mut pp.exposure, 0.1..=5.0));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Renk Sapması (Chromatic):");
+                        ui.add(egui::Slider::new(&mut pp.chromatic_aberration, 0.0..=5.0));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Köşe Karartması (Vignette):");
+                        ui.add(egui::Slider::new(&mut pp.vignette_intensity, 0.0..=2.0));
+                    });
                 }
-            });
 
-            ui.separator();
-            ui.heading("Sinematik Efektler (Post-Process)");
-            if let Some(mut pp) = world.get_resource_mut::<gizmo::renderer::renderer::PostProcessUniforms>() {
-                ui.horizontal(|ui| {
-                    ui.label("Bloom Şiddeti:");
-                    ui.add(egui::Slider::new(&mut pp.bloom_intensity, 0.0..=2.0));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Bloom Eşiği:");
-                    ui.add(egui::Slider::new(&mut pp.bloom_threshold, 0.1..=5.0));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Pozlama (Exposure):");
-                    ui.add(egui::Slider::new(&mut pp.exposure, 0.1..=5.0));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Renk Sapması (Chromatic):");
-                    ui.add(egui::Slider::new(&mut pp.chromatic_aberration, 0.0..=5.0));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Köşe Karartması (Vignette):");
-                    ui.add(egui::Slider::new(&mut pp.vignette_intensity, 0.0..=2.0));
-                });
-            }
-
-            ui.separator();
-            if ui.button("🔄 Sahneleri Başa Sar (Testi Tekrarlat)").clicked() {
-                let mut targets = Vec::new();
-                if let Some(names) = world.borrow::<EntityName>() {
-                    for entity in world.iter_alive_entities() {
-                        if let Some(n) = names.get(entity.id()) {
-                            if n.0.contains("Mermi -") {
-                                targets.push(entity.id());
+                ui.separator();
+                if ui.button("🔄 Sahneleri Başa Sar (Testi Tekrarlat)").clicked() {
+                    let mut targets = Vec::new();
+                    if let Some(names) = world.borrow::<EntityName>() {
+                        for entity in world.iter_alive_entities() {
+                            if let Some(n) = names.get(entity.id()) {
+                                if n.0.contains("Mermi -") {
+                                    targets.push(entity.id());
+                                }
+                            }
+                        }
+                    }
+                    if let Some(mut trans) = world.borrow_mut::<Transform>() {
+                        for &id in &targets {
+                            if let Some(t) = trans.get_mut(id) {
+                                t.position.x = -15.0;
+                                t.position.y = 3.0;
+                            }
+                        }
+                    }
+                    if let Some(mut vels) = world.borrow_mut::<Velocity>() {
+                        for &id in &targets {
+                            if let Some(v) = vels.get_mut(id) {
+                                v.linear = Vec3::new(50.0, 0.0, 0.0);
+                                v.angular = Vec3::ZERO;
                             }
                         }
                     }
                 }
-                if let Some(mut trans) = world.borrow_mut::<Transform>() {
-                    for &id in &targets {
-                        if let Some(t) = trans.get_mut(id) {
-                            t.position.x = -15.0;
-                            t.position.y = 3.0;
-                        }
-                    }
-                }
-                if let Some(mut vels) = world.borrow_mut::<Velocity>() {
-                    for &id in &targets {
-                        if let Some(v) = vels.get_mut(id) {
-                            v.linear = Vec3::new(50.0, 0.0, 0.0);
-                            v.angular = Vec3::ZERO;
-                        }
-                    }
-                }
-            }
-        });
+            });
+    }
 }
 
 pub fn render_game_ui(ctx: &egui::Context, world: &World) {

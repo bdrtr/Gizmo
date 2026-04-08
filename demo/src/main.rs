@@ -47,6 +47,10 @@ fn main() {
         if input.is_mouse_button_just_pressed(mouse::LEFT) { state.do_raycast = true; }
         if input.is_mouse_button_just_released(mouse::LEFT) { state.dragging_axis = None; }
 
+        if input.is_key_just_pressed(KeyCode::F3 as u32) {
+            state.show_devtools = !state.show_devtools;
+        }
+
         let is_in_game = world.get_resource::<crate::state::AppMode>().map(|m| *m) == Some(crate::state::AppMode::InGame);
 
         // Kamera fare ile döndür (Serbest kamera modunda)

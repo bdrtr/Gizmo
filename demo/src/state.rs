@@ -127,4 +127,5 @@ pub struct GameState {
     /// Toplam geçen süre (saniye) — Time resource'u için
     pub total_elapsed: f64,
     pub ps1_race: Option<crate::race::RaceState>,
+    pub show_devtools: bool,
 }
