@@ -71,8 +71,8 @@ pub fn setup_basic_scene(
     vc.steering_force_mult = 15000.0;
     vc.anti_slide_force = 12000.0;
     
-    let stiff = 25000.0;
-    let damp = 3000.0;
+    let stiff = 8500.0;
+    let damp = 1000.0;
     vc.add_wheel(Wheel::new(Vec3::new(-1.0, -0.3, 1.5), 0.8, stiff, damp, 0.4));
     vc.add_wheel(Wheel::new(Vec3::new(1.0, -0.3, 1.5), 0.8, stiff, damp, 0.4));
     vc.add_wheel(Wheel::new(Vec3::new(-1.0, -0.3, -1.2), 0.8, stiff, damp, 0.4).with_drive());

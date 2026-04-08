@@ -103,9 +103,11 @@ impl<'a> Renderer<'a> {
 
         let scene_state = SceneState {
             render_pipeline: scene.render_pipeline,
+            render_double_sided_pipeline: scene.render_double_sided_pipeline,
             unlit_pipeline:  scene.unlit_pipeline,
             water_pipeline:  scene.water_pipeline,
             shadow_pipeline: scene.shadow_pipeline,
+            transparent_pipeline: scene.transparent_pipeline,
             shadow_texture_view:       scene.shadow_texture_view,
             global_uniform_buffer:     scene.global_uniform_buffer,
             global_bind_group_layout:  scene.global_bind_group_layout,
