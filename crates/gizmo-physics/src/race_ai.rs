@@ -83,10 +83,10 @@ pub fn race_ai_system(world: &gizmo_core::World, _dt: f32) {
         let dot = forward_xz.dot(target_dir);
 
         // Steering açısı: cross.y pozitifse sola, negatifse sağa
-        let steer = cross.y.clamp(-1.0, 1.0) * 0.6; // Max 0.6 rad ≈ 35°
+        let steer = cross.y.clamp(-1.0, 1.0) * 0.8; // Max 0.8 rad (~45 deg)
 
         // Throttle: Hedefe bakıyorsak tam gaz, yana bakıyorsak yavaşla
-        let base_engine = 6000.0 * ai.speed_mult;
+        let base_engine = 12000.0 * ai.speed_mult;
         let engine = if dot > 0.5 {
             base_engine
         } else if dot > 0.0 {
@@ -96,7 +96,7 @@ pub fn race_ai_system(world: &gizmo_core::World, _dt: f32) {
         };
 
         // Brake: Hedefin tam tersine bakıyorsak frenle
-        let brake = if dot < -0.3 { 10000.0 } else { 0.0 };
+        let brake = if dot < -0.3 { 15000.0 } else { 0.0 };
 
         // VehicleController'a yaz
         if let Some(vc) = vehicles.get_mut(e) {
