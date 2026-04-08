@@ -141,7 +141,8 @@ fn spawn_vehicle(
     world.add_component(entity, Transform::new(position)
         .with_rotation(rotation));
 
-    let mut rb = RigidBody::new(800.0, 0.1, 0.8, true);
+    // Daha hafif araç, daha düşük sürtünme (Yüksek top speed için)
+    let mut rb = RigidBody::new(600.0, 0.02, 0.8, true); 
     rb.calculate_box_inertia(2.0, 1.0, 4.0);
     world.add_component(entity, rb);
     world.add_component(entity, Collider::new_aabb(1.0, 0.5, 2.0));
@@ -149,10 +150,15 @@ fn spawn_vehicle(
 
     // VehicleController — 4 tekerlek (RWD)
     let mut vc = VehicleController::new();
-    vc.add_wheel(Wheel::new(Vec3::new(-0.8, -0.3, 1.5), 0.6, 25000.0, 3000.0, 0.3));
-    vc.add_wheel(Wheel::new(Vec3::new(0.8, -0.3, 1.5), 0.6, 25000.0, 3000.0, 0.3));
-    vc.add_wheel(Wheel::new(Vec3::new(-0.8, -0.3, -1.2), 0.6, 25000.0, 3000.0, 0.3).with_drive());
-    vc.add_wheel(Wheel::new(Vec3::new(0.8, -0.3, -1.2), 0.6, 25000.0, 3000.0, 0.3).with_drive());
+    // Arcade tuning overrides: Çok güçlü yanal tutuş ve yüksek direksiyon torku
+    vc.lateral_grip = 18000.0;
+    vc.steering_force_mult = 15000.0;
+    vc.anti_slide_force = 12000.0;
+
+    vc.add_wheel(Wheel::new(Vec3::new(-1.0, -0.3, 1.5), 0.6, 35000.0, 4000.0, 0.3));
+    vc.add_wheel(Wheel::new(Vec3::new(1.0, -0.3, 1.5), 0.6, 35000.0, 4000.0, 0.3));
+    vc.add_wheel(Wheel::new(Vec3::new(-1.0, -0.3, -1.2), 0.6, 35000.0, 4000.0, 0.3).with_drive());
+    vc.add_wheel(Wheel::new(Vec3::new(1.0, -0.3, -1.2), 0.6, 35000.0, 4000.0, 0.3).with_drive());
     world.add_component(entity, vc);
 
     // Görsel: GLTF model varsa yükle, yoksa küp placeholder

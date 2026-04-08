@@ -137,9 +137,9 @@ fn main() {
         // Vehicle Controller (Input to Engine/Steering)
         if is_in_game {
             if let Some(mut vehicles) = world.borrow_mut::<gizmo::physics::vehicle::VehicleController>() {
-                // Arcade Tuning
-                let engine_power = 6000.0; // Daha yüksek ivme
-                let max_steer = 0.6; // Daha keskin dönüş açısı (~34 derece)
+                // Arcade Tuning - HIZLI VE KESKİN
+                let engine_power = 12000.0; // İki kat ivme / maksimum hız
+                let max_steer = 0.8; // Çok daha keskin dönüş açısı (~45 derece)
                 let mut current_engine = 0.0;
                 let mut current_steer = 0.0;
                 let mut current_brake = 0.0;
@@ -153,8 +153,8 @@ fn main() {
                 let target_entity = state.ps1_race.as_ref().map(|r| r.player_entity);
                 if let Some(player_ent) = target_entity {
                     if let Some(v) = vehicles.get_mut(player_ent) {
-                        // Yumuşak dönüş (Steering Lerp - Input yumuşatma)
-                        v.steering_angle += (current_steer - v.steering_angle) * 10.0 * dt;
+                        // Snappy, hızlı direksiyon tepkisi
+                        v.steering_angle += (current_steer - v.steering_angle) * 15.0 * dt;
                         v.engine_force = current_engine;
                         v.brake_force = current_brake;
                     }
