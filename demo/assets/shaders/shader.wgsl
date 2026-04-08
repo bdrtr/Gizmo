@@ -106,7 +106,15 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     
     // Obje veya animasyon döndürüldüğünde ışık da tepki versin
     let skinned_normal = skin_mat * vec4<f32>(input.normal, 0.0);
-    let world_normal = (model * vec4<f32>(skinned_normal.xyz, 0.0)).xyz;
+    // Şimdilik inverse-transpose yerine basit tutuyoruz ama normalize eklendi (Scale bozulmalarını minimuma indirir)
+    let world_normal_raw = (model * vec4<f32>(skinned_normal.xyz, 0.0)).xyz;
+    
+    // ÇOK ÖNEMLİ: Sıfıra bölme (Division by Zero) WGSL'de mix fonksiyonu etrafında bile NaN üretebilir. 
+    // safe_len ile bunu matematiğe girmeden kesiyoruz!
+    let wn_len = length(world_normal_raw);
+    let safe_wn_len = max(wn_len, 0.0001);
+    let world_normal = mix(vec3<f32>(0.0, 1.0, 0.0), world_normal_raw / safe_wn_len, step(0.0001, wn_len));
+    
     out.normal = world_normal;
     
     out.inst_albedo = inst.albedo_color;
@@ -125,7 +133,11 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
 @fragment
 fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
     let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
-    var N = normalize(in.normal);
+    // Fragment içinde in.normal'in sıfır olup NaN patlamasını engelleyen matematik (Division By Zero engelli!):
+    var n_len = length(in.normal);
+    var safe_n_len = max(n_len, 0.0001);
+    var N = mix(vec3<f32>(0.0, 1.0, 0.0), in.normal / safe_n_len, step(0.0001, n_len));
+    
     if (!is_front) {
         N = -N;
     }
@@ -192,9 +204,6 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
             }
         }
         shadow_visibility = pcf_visibility / 9.0;
-        
-        // GÖLGE TESTİ: Gölge Acne'yi (siyahlıkları) kesin olarak teşhis etmek için geçici olarak 1.0 yapıyoruz!
-        shadow_visibility = 1.0;
     }
     
     var total_diffuse = vec3<f32>(0.0);
@@ -210,7 +219,8 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
         // Eğer yüzey ışığa dönük değilse, specular highlight oluşmamalı! (Işık sızmasını engeller)
         if (diff > 0.0) {
             let reflect_dir = reflect(-L, N);
-            spec = pow(max(dot(view_dir, reflect_dir), 0.0), shininess);
+            // KORUMA: Linux Mesa sürücülerinde pow(0.0, shininess) NaN çıkarıp bütün ekranı siyah yapabilir! Bu yüzden 0.0001 limiti kondu.
+            spec = pow(max(dot(view_dir, reflect_dir), 0.0001), shininess);
         }
         
         let intensity = scene.sun_color.w;
@@ -231,7 +241,8 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
         var spec = 0.0;
         if (diff > 0.0) {
             let reflect_dir = reflect(-L, N);
-            spec = pow(max(dot(view_dir, reflect_dir), 0.0), shininess);
+            // KORUMA: Linux Mesa pow() NaN bug'ı koruması
+            spec = pow(max(dot(view_dir, reflect_dir), 0.0001), shininess);
         }
         
         let distance = length(light.position.xyz - in.world_position);
@@ -243,8 +254,13 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
         total_specular += f0 * spec * (1.0 - min_roughness) * light.color.rgb * attenuation * intensity;
     }
     
-    // Parçaları topla
-    let final_color = in.color * (ambient + total_diffuse + total_specular);
+    // Eksik veya simsiyah (0,0,0) kaydedilmiş Vertex Color'ları tespit et ve kurtar:
+    // Eğer in.color tamamen siyahsa veya siyaha çok yakınsa, onu 1.0 (Beyaz) kabul et ki objeyi zifiri karanlık yapmasın!
+    let use_vertex_color = step(0.01, length(in.color));
+    let vc = mix(vec3<f32>(1.0), in.color, use_vertex_color);
+    
+    // Parçaları topla (Tavsiye edildiği gibi vc değişkeni eklendi)
+    let final_color = vc * (ambient + total_diffuse + total_specular);
     
     return vec4<f32>(final_color, in.inst_albedo.a * tex_color.a);
 }
