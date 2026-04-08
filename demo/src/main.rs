@@ -16,6 +16,7 @@ pub mod camera;      pub use camera::*;
 pub mod hot_reload_sys; pub use hot_reload_sys::*;
 pub mod components;
 pub mod race;
+pub mod sandbox;
 
 fn main() {
     let mut app = App::new("Gizmo Engine — Rust 3D Motor", 1280, 720);
@@ -23,9 +24,12 @@ fn main() {
     // ── SETUP ──────────────────────────────────────────────────────────────
     app = app.set_setup(|world, renderer| {
         let mut state = scene_setup::setup_default_scene(world, renderer);
-        let (_, race_state) = crate::race::setup_race_scene(world, renderer, crate::race::TrackConfig::default());
-        state.player_id = race_state.camera_entity;
-        state.ps1_race = Some(race_state);
+        
+        // Yarış yerine Sandbox modunu başlat
+        let sandbox_state = crate::sandbox::setup_sandbox_scene(world, renderer);
+        state.player_id = sandbox_state.camera_entity;
+        state.sandbox = Some(sandbox_state);
+        
         state
     });
 
@@ -150,7 +154,10 @@ fn main() {
                 if input.is_key_pressed(KeyCode::ArrowRight as u32) || input.is_key_pressed(KeyCode::KeyD as u32) { current_steer = -max_steer; }
                 if input.is_key_pressed(KeyCode::Space as u32) { current_brake = 15000.0; } // Çok güçlü fren
 
-                let target_entity = state.ps1_race.as_ref().map(|r| r.player_entity);
+                // Race veya Sandbox player ID'sini bul
+                let target_entity = state.sandbox.as_ref().map(|s| s.player_entity)
+                    .or_else(|| state.ps1_race.as_ref().map(|r| r.player_entity));
+                
                 if let Some(player_ent) = target_entity {
                     if let Some(v) = vehicles.get_mut(player_ent) {
                         // Snappy, hızlı direksiyon tepkisi
@@ -227,6 +234,42 @@ fn main() {
                 }
                 if let Some(mut cameras) = world.borrow_mut::<Camera>() {
                     if let Some(cam) = cameras.get_mut(race.camera_entity) {
+                        cam.yaw = new_yaw;
+                        cam.pitch = new_pitch;
+                    }
+                }
+            }
+        }
+
+        // CHASE CAM UPDATE FOR SANDBOX
+        if let Some(ref sandbox) = state.sandbox {
+            let (mut p_pos, mut p_forward) = (Vec3::ZERO, Vec3::ZERO);
+            let mut cam_pos = Vec3::ZERO;
+            
+            if let Some(trans) = world.borrow::<Transform>() {
+                if let Some(player_t) = trans.get(sandbox.player_entity) {
+                    p_pos = player_t.position;
+                    p_forward = player_t.rotation * Vec3::new(0.0, 0.0, 1.0);
+                }
+                if let Some(cam_t) = trans.get(sandbox.camera_entity) {
+                    cam_pos = cam_t.position;
+                }
+            }
+            
+            if p_pos != Vec3::ZERO && cam_pos != Vec3::ZERO {
+                let target_cam_pos = p_pos - p_forward * 8.0 + Vec3::new(0.0, 4.0, 0.0);
+                let new_cam_pos = cam_pos.lerp(target_cam_pos, 10.0 * dt);
+                let dir = (p_pos - new_cam_pos).normalize();
+                let new_yaw = dir.z.atan2(dir.x);
+                let new_pitch = dir.y.asin();
+                
+                if let Some(mut trans) = world.borrow_mut::<Transform>() {
+                    if let Some(cam_t) = trans.get_mut(sandbox.camera_entity) {
+                        cam_t.position = new_cam_pos;
+                    }
+                }
+                if let Some(mut cameras) = world.borrow_mut::<Camera>() {
+                    if let Some(cam) = cameras.get_mut(sandbox.camera_entity) {
                         cam.yaw = new_yaw;
                         cam.pitch = new_pitch;
                     }
