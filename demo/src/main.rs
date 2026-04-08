@@ -15,13 +15,18 @@ pub mod gizmo_input; pub use gizmo_input::*;
 pub mod camera;      pub use camera::*;
 pub mod hot_reload_sys; pub use hot_reload_sys::*;
 pub mod components;
+pub mod race;
 
 fn main() {
     let mut app = App::new("Gizmo Engine — Rust 3D Motor", 1280, 720);
 
     // ── SETUP ──────────────────────────────────────────────────────────────
     app = app.set_setup(|world, renderer| {
-        scene_setup::setup_default_scene(world, renderer) // Galton Kutusu (Pachinko) Deneysel Sahnesi
+        let mut state = scene_setup::setup_default_scene(world, renderer);
+        let (race_player_id, race_state) = crate::race::setup_race_scene(world, renderer, crate::race::TrackConfig::default());
+        state.player_id = race_player_id;
+        state.ps1_race = Some(race_state);
+        state
     });
 
     // ── UPDATE ─────────────────────────────────────────────────────────────
@@ -114,6 +119,7 @@ fn main() {
             if let Some(jw) = world.get_resource::<gizmo::physics::JointWorld>() {
                 gizmo::physics::solve_constraints(&*jw, world, fixed_dt);
             }
+            gizmo::physics::race_ai_system(world, fixed_dt);
             gizmo::physics::vehicle::physics_vehicle_system(world, fixed_dt);
             
             // AI Navigasyon sistemi
@@ -181,6 +187,10 @@ fn main() {
 
         // Lua'dan gelen oyun komutlarını işle
         process_game_commands(world, state, dt, cmds);
+
+        if let Some(ref mut race) = state.ps1_race {
+            crate::race::update_race(world, race, dt);
+        }
     });
 
     // ── UI ─────────────────────────────────────────────────────────────────

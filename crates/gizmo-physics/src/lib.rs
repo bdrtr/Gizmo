@@ -20,6 +20,8 @@ pub use integration::physics_movement_system;
 pub use constraints::{Joint, JointKind, JointWorld, solve_constraints};
 pub use vehicle::{Wheel, VehicleController, physics_vehicle_system};
 pub use character::{CharacterController, physics_character_system};
+pub mod race_ai;
+pub use race_ai::{RaceAI, race_ai_system};
 
 #[derive(Clone, Debug)]
 pub struct CollisionEvent {

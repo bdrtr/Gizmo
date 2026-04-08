@@ -126,4 +126,5 @@ pub struct GameState {
     pub camera_follow_target: Option<u32>,
     /// Toplam geçen süre (saniye) — Time resource'u için
     pub total_elapsed: f64,
+    pub ps1_race: Option<crate::race::RaceState>,
 }

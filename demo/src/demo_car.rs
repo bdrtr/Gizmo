@@ -169,5 +169,6 @@ pub fn setup_car_scene(world: &mut World, renderer: &gizmo::renderer::renderer::
         camera_follow_target: Some(car.id()),
         free_cam: false,
         total_elapsed: 0.0,
+        ps1_race: None,
     }
 }

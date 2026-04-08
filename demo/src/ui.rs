@@ -1,6 +1,6 @@
 use gizmo::prelude::*;
 use gizmo::egui;
-use crate::state::{GameState, RaceStatus};
+use crate::state::GameState;
 
 pub fn render_ui(ctx: &egui::Context, state: &mut GameState, world: &World) {
     if let Some(mut editor_state) = world.get_resource_mut::<gizmo::editor::EditorState>() {
@@ -40,9 +40,19 @@ pub fn render_ui(ctx: &egui::Context, state: &mut GameState, world: &World) {
     }
 
     // --- YARIŞ HUD ---
-    if state.race_status != RaceStatus::Idle || !state.checkpoints.is_empty() {
-        let cp_done = state.checkpoints.iter().filter(|c| c.activated).count();
-        let cp_total = state.checkpoints.len();
+    if let Some(ref race) = state.ps1_race {
+        // Geri sayım
+        if race.phase == crate::race::RacePhase::Countdown {
+            let txt = crate::race::countdown_text(race);
+            if !txt.is_empty() {
+                egui::Area::new("countdown_hud")
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, -100.0))
+                    .order(egui::Order::Foreground)
+                    .show(ctx, |ui| {
+                        ui.label(egui::RichText::new(txt).color(egui::Color32::from_rgb(255, 200, 50)).size(120.0).strong());
+                    });
+            }
+        }
 
         egui::Window::new("##race_hud")
             .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-20.0, 20.0))
@@ -53,26 +63,47 @@ pub fn render_ui(ctx: &egui::Context, state: &mut GameState, world: &World) {
                 .fill(egui::Color32::from_rgba_premultiplied(0, 0, 0, 180))
                 .rounding(egui::Rounding::same(10.0)))
             .show(ctx, |ui| {
-                let status_txt = match state.race_status {
-                    RaceStatus::Idle     => "⏸ Hazır",
-                    RaceStatus::Running  => "🏁 Yarış!",
-                    RaceStatus::Finished => "🏆 Bitti!",
+                let status_txt = match race.phase {
+                    crate::race::RacePhase::Countdown => "⏳ Bekleniyor",
+                    crate::race::RacePhase::Racing    => "🏁 YARIŞ",
+                    crate::race::RacePhase::Finished  => "🏆 BİTTİ",
                 };
-                ui.label(egui::RichText::new(status_txt).color(egui::Color32::WHITE).strong().size(18.0));
+                ui.label(egui::RichText::new(status_txt).color(egui::Color32::WHITE).strong().size(22.0));
+                
                 ui.separator();
-                let mins = (state.race_timer / 60.0) as u32;
-                let secs = state.race_timer % 60.0;
+                let mins = (race.race_timer / 60.0) as u32;
+                let secs = race.race_timer % 60.0;
                 ui.label(egui::RichText::new(format!("⏱ {:02}:{:05.2}", mins, secs))
-                    .color(egui::Color32::from_rgb(100, 255, 150)).size(22.0).strong());
-                if cp_total > 0 {
-                    ui.separator();
-                    ui.label(egui::RichText::new(format!("📍 {}/{}", cp_done, cp_total))
-                        .color(egui::Color32::LIGHT_BLUE).size(14.0));
-                    ui.add(egui::ProgressBar::new(cp_done as f32 / cp_total as f32)
-                        .desired_width(130.0)
-                        .fill(egui::Color32::from_rgb(50, 200, 100)));
-                }
+                    .color(egui::Color32::from_rgb(100, 255, 150)).size(24.0).strong());
+
+                ui.separator();
+                let pos = crate::race::get_player_position(race, world);
+                let total_cars = 1 + race.ai_entities.len();
+                ui.label(egui::RichText::new(format!("Sıra: {}/{}", pos, total_cars)).color(egui::Color32::from_rgb(255, 200, 80)).size(20.0));
+                
+                ui.label(egui::RichText::new(format!("Tur: {}/{}", race.player_laps.min(race.total_laps), race.total_laps)).color(egui::Color32::LIGHT_BLUE).size(20.0));
+
+                let speed = crate::race::get_speed_kmh(world, race.player_entity);
+                ui.label(egui::RichText::new(format!("{:.0} km/h", speed)).color(egui::Color32::WHITE).size(18.0));
             });
+
+        // Bitiş Ekranı
+        if race.phase == crate::race::RacePhase::Finished {
+            egui::Window::new("Yarış Bitti")
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.heading("🏁 SIRALAMA 🏁");
+                    for (i, &(id, time)) in race.finish_order.iter().enumerate() {
+                        let name = if id == race.player_entity { "🏎️ OYUNCU" } else { "🚙 RAKİP" };
+                        let color = if id == race.player_entity { egui::Color32::GREEN } else { egui::Color32::WHITE };
+                        let mins = (time / 60.0) as u32;
+                        let secs = time % 60.0;
+                        ui.label(egui::RichText::new(format!("{}. {} - {:02}:{:05.2}", i+1, name, mins, secs)).color(color).size(18.0));
+                    }
+                });
+        }
     }
 
     // --- PROFILER OVERLAY ---

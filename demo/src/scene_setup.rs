@@ -380,5 +380,6 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
         race_timer: 0.0,
         camera_follow_target: None,
         total_elapsed: 0.0,
+        ps1_race: None,
     }
 }
