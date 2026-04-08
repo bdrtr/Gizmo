@@ -13,6 +13,11 @@ Gizmo Engine, Rust ile tamamen sıfırdan geliştirilen bağımsız, esnek ve mo
 *   **Component Tabanlı Araç (Vehicle) Fiziği:** Raycast tabanlı süspansiyon ve anti-roll sistemleriyle karmaşık araç yapıları simüle edilebilir. FWD, RWD ve 4WD destekli çekiş sistemine sahiptir.
 *   **Optimize Edilmiş Mimari:** Yüksek performans için `RefCell` overhead'leri azaltılmış, O(1) çalışan pathfinding ve dar boğaz onarımları ile donatılmıştır.
 
+## Motordan Görüntüler
+Gizmo Engine'in PBR rendering ve Fizik motoru senkronizasyonuna dair örnek bir test sahnesi:
+
+![Volkswagen Test Scene](media/gizmo_engine_showcase.png)
+
 ## Dokümantasyon & Araştırma Logları
 Gizmo Engine geliştirilirken kernel ve driver düzeyinde keşfedilen anomaliler ve bu sistemik sorunların nasıl motor seviyesinde çözüldüğünü listelediğimiz teknik dokümanlarımız bulunmaktadır:
 *   [📖 Olay İncelemesi: WGSL Mesa `pow(0.0)` Linux Sürücü Hatası ve PBR Render Çökmesi](WGSL_MESA_BUG.md)
