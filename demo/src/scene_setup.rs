@@ -120,6 +120,47 @@ pub fn spawn_gltf_asset(
     root_ent
 }
 
+pub fn setup_empty_scene(world: &mut World, renderer: &gizmo::renderer::renderer::Renderer) -> GameState {
+    let mut audio = gizmo::audio::AudioManager::new();
+    let asset_watcher = gizmo::renderer::hot_reload::AssetWatcher::new(&["demo/assets"]);
+
+    GameState {
+        bouncing_box_id: 0,
+        player_id: 0,
+        skybox_id: 0,
+        inspector_selected_entity: None,
+        audio,
+        do_raycast: false,
+        gizmo_x: 0,
+        gizmo_y: 0,
+        gizmo_z: 0,
+        dragging_axis: None,
+        drag_start_t: 0.0,
+        drag_original_pos: Vec3::ZERO,
+        drag_original_scale: Vec3::ONE,
+        drag_original_rot: Quat::IDENTITY,
+        current_fps: 60.0,
+        gizmo_mode: GizmoMode::Translate,
+        egui_wants_pointer: false,
+        asset_watcher,
+        physics_accumulator: 0.0,
+        target_physics_fps: 240.0,
+        sphere_prefab_id: 0,
+        cube_prefab_id: 0,
+        free_cam: true,
+        active_dialogue: None,
+        active_cutscene: None,
+        checkpoints: Vec::new(),
+        race_status: crate::state::RaceStatus::Idle,
+        race_timer: 0.0,
+        camera_follow_target: None,
+        total_elapsed: 0.0,
+        ps1_race: None,
+        basic_scene: None,
+        show_devtools: false,
+    }
+}
+
 pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::renderer::Renderer) -> GameState {
     println!("Gizmo Engine: Sahne başlatılıyor...");
     world.insert_resource(gizmo::core::event::Events::<gizmo::physics::CollisionEvent>::new());
@@ -381,7 +422,7 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
         camera_follow_target: None,
         total_elapsed: 0.0,
         ps1_race: None,
-        sandbox: None,
+        basic_scene: None,
         show_devtools: false,
     }
 }

@@ -129,7 +129,7 @@ pub struct GameState {
 
     // Oyun Modları
     pub ps1_race: Option<crate::race::RaceState>,
-    pub sandbox: Option<crate::sandbox::SandboxState>,
+    pub basic_scene: Option<crate::basic_scene::BasicSceneState>,
     
     // Geliştirici Araçları,
     pub show_devtools: bool,
