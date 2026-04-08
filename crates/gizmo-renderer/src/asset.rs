@@ -541,7 +541,7 @@ impl AssetManager {
         let mut gltf_materials = Vec::new();
         for material in document.materials() {
             let pbr = material.pbr_metallic_roughness();
-            let _base_color = pbr.base_color_factor();
+            let base_color = pbr.base_color_factor();
             
             let mut mat = if let Some(tex_info) = pbr.base_color_texture() {
                 let tex_idx = tex_info.texture().source().index();
@@ -553,9 +553,9 @@ impl AssetManager {
             } else {
                 Material::new(default_tbind.clone())
             };
-            mat.albedo = gizmo_math::Vec4::new(1.0, 1.0, 1.0, 1.0);
-            mat.metallic = pbr.metallic_factor();
-            mat.roughness = pbr.roughness_factor();
+            mat.albedo = gizmo_math::Vec4::new(base_color[0], base_color[1], base_color[2], base_color[3]);
+            mat.metallic = pbr.metallic_factor().min(0.2); // Sınırlı! IBL olmadığı için saf metaller simsiyah kalıyor.
+            mat.roughness = pbr.roughness_factor().max(0.6); // Paralamaması için pürüzlü kalsın.
             // Varsayılan: PBR açık (unlit=0.0). GLTF modelleri artık ışıklandırma alacak.
             mat.unlit = 0.0;
             gltf_materials.push(mat);
@@ -686,7 +686,12 @@ impl AssetManager {
         
         let mut primitives = Vec::new();
         if let Some(mesh) = node.mesh() {
-            for (prim_i, primitive) in mesh.primitives().enumerate() {
+            for (prim_i, primitive) in node.mesh().unwrap().primitives().enumerate() {
+            // Eğer primitive saydamlık gerektiriyorsa (örn. Drop Shadow) ve motorumuzda
+            // transparent pass yoksa, bu primitive'i yoksayıyoruz (siyah titreme ve z-fighting yapar).
+            if primitive.material().alpha_mode() == gltf::material::AlphaMode::Blend {
+                continue;
+            }
                 let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
                 
                 let positions = reader.read_positions().map(|v| v.collect::<Vec<_>>()).unwrap_or_default();

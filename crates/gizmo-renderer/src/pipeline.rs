@@ -17,6 +17,9 @@ pub struct SceneState {
     pub texture_bind_group_layout: wgpu::BindGroupLayout,
     pub skeleton_bind_group_layout: wgpu::BindGroupLayout,
     pub dummy_skeleton_bind_group: Arc<wgpu::BindGroup>,
+    pub instance_bind_group_layout: wgpu::BindGroupLayout,
+    pub instance_buffer: wgpu::Buffer,
+    pub instance_bind_group: wgpu::BindGroup,
 }
 
 fn load_shader(device: &wgpu::Device, file_path: &str, fallback_src: &str, label: &str) -> wgpu::ShaderModule {
@@ -143,10 +146,30 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         label: Some("dummy_skeleton_bind_group"),
     }));
 
+    let instance_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("instance_bind_group_layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0, visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+            count: None,
+        }],
+    });
+    let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Instance Buffer"),
+        size: (100_000 * std::mem::size_of::<crate::InstanceRaw>()) as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let instance_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        layout: &instance_bind_group_layout,
+        entries: &[wgpu::BindGroupEntry { binding: 0, resource: instance_buffer.as_entire_binding() }],
+        label: Some("instance_bind_group"),
+    });
+
     // ---- Render Pipelines ----
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Render Pipeline Layout"),
-        bind_group_layouts: &[&global_bind_group_layout, &texture_bind_group_layout, &shadow_bind_group_layout, &skeleton_bind_group_layout],
+        bind_group_layouts: &[&global_bind_group_layout, &texture_bind_group_layout, &shadow_bind_group_layout, &skeleton_bind_group_layout, &instance_bind_group_layout],
         push_constant_ranges: &[],
     });
 
@@ -159,19 +182,23 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(&render_pipeline_layout),
-            vertex: wgpu::VertexState { module: sm, entry_point: "vs_main", buffers: &[Vertex::desc(), InstanceRaw::desc()] },
+            vertex: wgpu::VertexState { module: sm, entry_point: "vs_main", buffers: &[Vertex::desc()] },
             fragment: Some(wgpu::FragmentState {
                 module: sm, entry_point: "fs_main",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba16Float,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList, front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None, polygon_mode: wgpu::PolygonMode::Fill,
-                ..Default::default()
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back), // Arka yüzeyleri tekrar kapatıyoruz, Z-fighting'e neden oldu!
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: true,
@@ -190,17 +217,17 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     // Shadow pipeline
     let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Shadow Pipeline Layout"),
-        bind_group_layouts: &[&global_bind_group_layout, &skeleton_bind_group_layout],
+        bind_group_layouts: &[&global_bind_group_layout, &skeleton_bind_group_layout, &instance_bind_group_layout],
         push_constant_ranges: &[],
     });
     let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Shadow Pipeline"),
         layout: Some(&shadow_layout),
-        vertex: wgpu::VertexState { module: &shadow_shader, entry_point: "vs_main", buffers: &[Vertex::desc(), InstanceRaw::desc()] },
+        vertex: wgpu::VertexState { module: &shadow_shader, entry_point: "vs_main", buffers: &[Vertex::desc()] },
         fragment: None,
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList, front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Back), polygon_mode: wgpu::PolygonMode::Fill,
+            cull_mode: Some(wgpu::Face::Front), polygon_mode: wgpu::PolygonMode::Fill,
             ..Default::default()
         },
         depth_stencil: Some(wgpu::DepthStencilState {
@@ -217,6 +244,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         global_uniform_buffer, global_bind_group_layout, global_bind_group,
         shadow_bind_group_layout, shadow_bind_group, shadow_texture_view,
         texture_bind_group_layout, skeleton_bind_group_layout, dummy_skeleton_bind_group,
+        instance_bind_group_layout, instance_buffer, instance_bind_group,
     }
 }
 
@@ -242,6 +270,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
         bind_group_layouts: &[
             &renderer.scene.global_bind_group_layout, &renderer.scene.texture_bind_group_layout,
             &renderer.scene.shadow_bind_group_layout, &renderer.scene.skeleton_bind_group_layout,
+            &renderer.scene.instance_bind_group_layout,
         ],
         push_constant_ranges: &[],
     });
@@ -249,7 +278,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     let create_main = |sm: &wgpu::ShaderModule, label: &str| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label), layout: Some(&layout),
-            vertex: wgpu::VertexState { module: sm, entry_point: "vs_main", buffers: &[Vertex::desc(), InstanceRaw::desc()] },
+            vertex: wgpu::VertexState { module: sm, entry_point: "vs_main", buffers: &[Vertex::desc()] },
             fragment: Some(wgpu::FragmentState {
                 module: sm, entry_point: "fs_main",
                 targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })],
@@ -269,14 +298,14 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
 
     let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Shadow Pipeline Layout"),
-        bind_group_layouts: &[&renderer.scene.global_bind_group_layout, &renderer.scene.skeleton_bind_group_layout],
+        bind_group_layouts: &[&renderer.scene.global_bind_group_layout, &renderer.scene.skeleton_bind_group_layout, &renderer.scene.instance_bind_group_layout],
         push_constant_ranges: &[],
     });
     renderer.scene.shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Shadow Pipeline"), layout: Some(&shadow_layout),
-        vertex: wgpu::VertexState { module: &shadow_shader, entry_point: "vs_main", buffers: &[Vertex::desc(), InstanceRaw::desc()] },
+        vertex: wgpu::VertexState { module: &shadow_shader, entry_point: "vs_main", buffers: &[Vertex::desc()] },
         fragment: None,
-        primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, front_face: wgpu::FrontFace::Ccw, cull_mode: Some(wgpu::Face::Back), ..Default::default() },
+        primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, front_face: wgpu::FrontFace::Ccw, cull_mode: Some(wgpu::Face::Front), ..Default::default() },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: true, depth_compare: wgpu::CompareFunction::LessEqual,
             stencil: wgpu::StencilState::default(), bias: wgpu::DepthBiasState { constant: 2, slope_scale: 2.0, clamp: 0.0 },

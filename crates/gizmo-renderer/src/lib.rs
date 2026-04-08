@@ -8,6 +8,7 @@ pub mod animation;
 pub mod hot_reload;
 pub mod game_ui;
 pub mod particle_renderer;
+pub mod physics_renderer;
 
 pub use gpu_types::{Vertex, InstanceRaw, LightData, PostProcessUniforms, SceneUniforms};
 pub use components::{Mesh, Material, MeshRenderer, Camera, Camera2D, Sprite, PointLight, DirectionalLight, LodGroup, LodLevel};

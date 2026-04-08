@@ -23,6 +23,9 @@ pub struct Renderer<'a> {
 
     // === PARTİKÜL SİSTEMİ ===
     pub gpu_particles: Option<crate::particle_renderer::GpuParticleSystem>,
+    
+    // === GPU FİZİK SİSTEMİ ===
+    pub gpu_physics: Option<crate::physics_renderer::GpuPhysicsSystem>,
 }
 
 impl<'a> Renderer<'a> {
@@ -51,7 +54,11 @@ impl<'a> Renderer<'a> {
         let (device, queue) = adapter.request_device(
             &wgpu::DeviceDescriptor {
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
+                required_limits: wgpu::Limits {
+                    max_bind_groups: 6,
+                    max_storage_buffers_per_shader_stage: 8,
+                    ..wgpu::Limits::default()
+                },
                 label: None,
             },
             None,
@@ -88,6 +95,12 @@ impl<'a> Renderer<'a> {
             &device, max_particles, &scene.global_bind_group_layout, wgpu::TextureFormat::Rgba16Float,
         ));
 
+        // GPU Physics buffer boyutu -- Pachinko simülasyonu
+        let max_physics_spheres: u32 = 50_000;
+        let gpu_physics = Some(crate::physics_renderer::GpuPhysicsSystem::new(
+            &device, max_physics_spheres, &scene.global_bind_group_layout, wgpu::TextureFormat::Rgba16Float, wgpu::TextureFormat::Depth32Float
+        ));
+
         let scene_state = SceneState {
             render_pipeline: scene.render_pipeline,
             unlit_pipeline:  scene.unlit_pipeline,
@@ -102,6 +115,9 @@ impl<'a> Renderer<'a> {
             texture_bind_group_layout: scene.texture_bind_group_layout,
             skeleton_bind_group_layout: scene.skeleton_bind_group_layout,
             dummy_skeleton_bind_group:  scene.dummy_skeleton_bind_group,
+            instance_bind_group_layout: scene.instance_bind_group_layout,
+            instance_buffer: scene.instance_buffer,
+            instance_bind_group: scene.instance_bind_group,
         };
 
         let post_state = PostProcessState {
@@ -131,6 +147,7 @@ impl<'a> Renderer<'a> {
             scene: scene_state,
             post: post_state,
             gpu_particles,
+            gpu_physics,
         }
     }
 

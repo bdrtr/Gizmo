@@ -35,6 +35,18 @@ struct SkeletonData {
 @group(3) @binding(0)
 var<uniform> skeleton: SkeletonData;
 
+struct InstanceData {
+    model_matrix_0: vec4<f32>,
+    model_matrix_1: vec4<f32>,
+    model_matrix_2: vec4<f32>,
+    model_matrix_3: vec4<f32>,
+    albedo_color: vec4<f32>,
+    pbr: vec4<f32>,
+};
+
+@group(4) @binding(0)
+var<storage, read> instances: array<InstanceData>;
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) color: vec3<f32>,
@@ -42,12 +54,6 @@ struct VertexInput {
     @location(3) tex_coords: vec2<f32>,
     @location(4) joint_indices: vec4<u32>,
     @location(5) joint_weights: vec4<f32>,
-    @location(6) model_matrix_0: vec4<f32>,
-    @location(7) model_matrix_1: vec4<f32>,
-    @location(8) model_matrix_2: vec4<f32>,
-    @location(9) model_matrix_3: vec4<f32>,
-    @location(10) albedo_color: vec4<f32>,
-    @location(11) pbr: vec4<f32>, // x: roughness, y: metallic, z: unlit
 };
 
 struct VertexOutput {
@@ -59,19 +65,21 @@ struct VertexOutput {
     @location(4) light_space_pos: vec4<f32>,
     @location(5) inst_albedo: vec4<f32>,
     @location(6) inst_pbr: vec4<f32>,
+    @location(7) local_normal: vec3<f32>,
 };
 
 @vertex
-fn vs_main(input: VertexInput) -> VertexOutput {
+fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.color = input.color;
     out.tex_coords = input.tex_coords;
     
+    let inst = instances[instance_idx];
     let model = mat4x4<f32>(
-        input.model_matrix_0,
-        input.model_matrix_1,
-        input.model_matrix_2,
-        input.model_matrix_3,
+        inst.model_matrix_0,
+        inst.model_matrix_1,
+        inst.model_matrix_2,
+        inst.model_matrix_3,
     );
 
     // Skinning Matrix (Skeletal Animation)
@@ -101,11 +109,12 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     let world_normal = (model * vec4<f32>(skinned_normal.xyz, 0.0)).xyz;
     out.normal = world_normal;
     
-    out.inst_albedo = input.albedo_color;
-    out.inst_pbr = input.pbr;
+    out.inst_albedo = inst.albedo_color;
+    out.inst_pbr = inst.pbr;
 
     // Kameraya yansıt
     out.clip_position = scene.view_proj * world_pos;
+    out.local_normal = input.normal;
     
     // Işık kamerasına yansıt (Gölge Haritası İçin)
     out.light_space_pos = scene.light_view_proj * world_pos;
@@ -147,7 +156,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
     let f0 = mix(vec3<f32>(0.04), base_color, metallic);
     
-    let ambient = base_color * 0.15;
+    let ambient = base_color * 0.4; // 0.15'ten 0.4'e çıkartarak gölgelerin kapkaranlık olmasını engelledik
     
     // --- Gölge Hesaplama (Shadow Mapping with PCF) ---
     var shadow_visibility = 1.0;
@@ -163,7 +172,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     
     // Eğer noktamız ışık kamerasının görüş alanı içerisindeyse
     if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 && light_ndc.z <= 1.0) {
-        let bias = 0.005; // Yüzey kusurlarını önlemek için bias
+        // Yüzey normaline ve ışık açısına bağlı adaptif Bias (Shadow Acne'yi düzeltir)
+        let L_dir = normalize(-scene.sun_direction.xyz);
+        let current_bias = max(0.001, 0.008 * (1.0 - max(dot(N, L_dir), 0.0)));
         
         var pcf_visibility = 0.0;
         let texel_size = 1.0 / 2048.0; // Texture ebadına göre 1 piksel boyutu
@@ -173,11 +184,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 pcf_visibility += textureSampleCompare(
                     t_shadow, s_shadow,
                     shadow_uv + offset,
-                    light_ndc.z - bias
+                    light_ndc.z - current_bias
                 );
             }
         }
         shadow_visibility = pcf_visibility / 9.0;
+        
+        // GÖLGE TESTİ: Gölge Acne'yi (siyahlıkları) kesin olarak teşhis etmek için geçici olarak 1.0 yapıyoruz!
+        shadow_visibility = 1.0;
     }
     
     var total_diffuse = vec3<f32>(0.0);
@@ -189,8 +203,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let L = normalize(-scene.sun_direction.xyz);
         let diff = max(dot(N, L), 0.0);
         
-        let reflect_dir = reflect(-L, N);
-        let spec = pow(max(dot(view_dir, reflect_dir), 0.0), shininess);
+        var spec = 0.0;
+        // Eğer yüzey ışığa dönük değilse, specular highlight oluşmamalı! (Işık sızmasını engeller)
+        if (diff > 0.0) {
+            let reflect_dir = reflect(-L, N);
+            spec = pow(max(dot(view_dir, reflect_dir), 0.0), shininess);
+        }
         
         let intensity = scene.sun_color.w;
         let sun_color = scene.sun_color.rgb;
@@ -207,8 +225,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let L = normalize(light.position.xyz - in.world_position);
         let diff = max(dot(N, L), 0.0);
         
-        let reflect_dir = reflect(-L, N);
-        let spec = pow(max(dot(view_dir, reflect_dir), 0.0), shininess);
+        var spec = 0.0;
+        if (diff > 0.0) {
+            let reflect_dir = reflect(-L, N);
+            spec = pow(max(dot(view_dir, reflect_dir), 0.0), shininess);
+        }
         
         let distance = length(light.position.xyz - in.world_position);
         let attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * (distance * distance));

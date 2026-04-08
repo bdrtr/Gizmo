@@ -35,6 +35,18 @@ struct SkeletonData {
 @group(3) @binding(0)
 var<uniform> skeleton: SkeletonData;
 
+struct InstanceData {
+    model_matrix_0: vec4<f32>,
+    model_matrix_1: vec4<f32>,
+    model_matrix_2: vec4<f32>,
+    model_matrix_3: vec4<f32>,
+    albedo_color: vec4<f32>,
+    pbr: vec4<f32>,
+};
+
+@group(4) @binding(0)
+var<storage, read> instances: array<InstanceData>;
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) color: vec3<f32>,
@@ -42,12 +54,6 @@ struct VertexInput {
     @location(3) tex_coords: vec2<f32>,
     @location(4) joint_indices: vec4<u32>,
     @location(5) joint_weights: vec4<f32>,
-    @location(6) model_matrix_0: vec4<f32>,
-    @location(7) model_matrix_1: vec4<f32>,
-    @location(8) model_matrix_2: vec4<f32>,
-    @location(9) model_matrix_3: vec4<f32>,
-    @location(10) albedo_color: vec4<f32>,
-    @location(11) pbr: vec4<f32>, // x: roughness, y: metallic, z: unlit
 };
 
 struct VertexOutput {
@@ -62,16 +68,17 @@ struct VertexOutput {
 };
 
 @vertex
-fn vs_main(input: VertexInput) -> VertexOutput {
+fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.color = input.color;
     out.tex_coords = input.tex_coords;
     
+    let inst = instances[instance_idx];
     let model = mat4x4<f32>(
-        input.model_matrix_0,
-        input.model_matrix_1,
-        input.model_matrix_2,
-        input.model_matrix_3,
+        inst.model_matrix_0,
+        inst.model_matrix_1,
+        inst.model_matrix_2,
+        inst.model_matrix_3,
     );
 
     // Skinning Matrix (Skeletal Animation)
@@ -101,8 +108,8 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     let world_normal = (model * vec4<f32>(skinned_normal.xyz, 0.0)).xyz;
     out.normal = world_normal;
     
-    out.inst_albedo = input.albedo_color;
-    out.inst_pbr = input.pbr;
+    out.inst_albedo = inst.albedo_color;
+    out.inst_pbr = inst.pbr;
 
     // Kameraya yansıt
     out.clip_position = scene.view_proj * world_pos;
@@ -116,7 +123,12 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
-    let N = normalize(in.normal);
+    var raw_normal = in.normal;
+    if (length(raw_normal) < 0.001) {
+        // Hatalı (sıfır) normalleri olan modeller için NaN hatasını engelle!
+        raw_normal = vec3<f32>(0.0, 1.0, 0.0);
+    }
+    let N = normalize(raw_normal);
     
     // Temel Yüzey Rengi (Albedo Rengi * Texture Rengi)
     let base_color = in.inst_albedo.rgb * tex_color.rgb;
@@ -147,7 +159,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
     let f0 = mix(vec3<f32>(0.04), base_color, metallic);
     
-    let ambient = base_color * 0.15;
+    // Yüksek ortam ışığı, karanlık köşeleri daha görünür yapar
+    let ambient = base_color * 0.4;
     
     // --- Gölge Hesaplama (Shadow Mapping with PCF) ---
     var shadow_visibility = 1.0;
@@ -163,7 +176,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     
     // Eğer noktamız ışık kamerasının görüş alanı içerisindeyse
     if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 && light_ndc.z <= 1.0) {
-        let bias = 0.005; // Yüzey kusurlarını önlemek için bias
+        let L_dir = normalize(-scene.sun_direction.xyz);
+        let slope = 1.0 - max(dot(N, L_dir), 0.0);
+        let bias = max(0.005 * slope, 0.001); // Eğim bazlı shadow acne onleyici
         
         var pcf_visibility = 0.0;
         let texel_size = 1.0 / 2048.0; // Texture ebadına göre 1 piksel boyutu

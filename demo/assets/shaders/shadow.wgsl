@@ -22,6 +22,18 @@ struct SkeletonData {
 @group(1) @binding(0)
 var<uniform> skeleton: SkeletonData;
 
+struct InstanceData {
+    model_matrix_0: vec4<f32>,
+    model_matrix_1: vec4<f32>,
+    model_matrix_2: vec4<f32>,
+    model_matrix_3: vec4<f32>,
+    albedo_color: vec4<f32>,
+    pbr: vec4<f32>,
+};
+
+@group(2) @binding(0)
+var<storage, read> instances: array<InstanceData>;
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) color: vec3<f32>,
@@ -29,21 +41,16 @@ struct VertexInput {
     @location(3) tex_coords: vec2<f32>,
     @location(4) joint_indices: vec4<u32>,
     @location(5) joint_weights: vec4<f32>,
-    @location(6) model_matrix_0: vec4<f32>,
-    @location(7) model_matrix_1: vec4<f32>,
-    @location(8) model_matrix_2: vec4<f32>,
-    @location(9) model_matrix_3: vec4<f32>,
-    @location(10) albedo_color: vec4<f32>,
-    @location(11) pbr: vec4<f32>,
 };
 
 @vertex
-fn vs_main(input: VertexInput) -> @builtin(position) vec4<f32> {
+fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> @builtin(position) vec4<f32> {
+    let inst = instances[instance_idx];
     let model = mat4x4<f32>(
-        input.model_matrix_0,
-        input.model_matrix_1,
-        input.model_matrix_2,
-        input.model_matrix_3,
+        inst.model_matrix_0,
+        inst.model_matrix_1,
+        inst.model_matrix_2,
+        inst.model_matrix_3,
     );
 
     var skin_mat = mat4x4<f32>(

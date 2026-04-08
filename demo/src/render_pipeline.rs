@@ -261,16 +261,46 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
             }
         }
 
-        // Batch'ler için GPU tarafında geçici instancing buffer'ı oluştur
-        let mut gpu_batches = Vec::new();
-        use wgpu::util::DeviceExt;
-        for (_, batch) in batches {
-            let instance_buf = renderer.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Instance Buffer"),
-                contents: bytemuck::cast_slice(&batch.instances),
-                usage: wgpu::BufferUsages::VERTEX,
+        struct FlatBatchData {
+            vbuf: std::sync::Arc<wgpu::Buffer>,
+            vertex_count: u32,
+            bind_group: std::sync::Arc<wgpu::BindGroup>,
+            skeleton_bg: std::sync::Arc<wgpu::BindGroup>,
+            start_instance: u32,
+            end_instance: u32,
+        }
+
+        let mut all_instances = Vec::new();
+        let mut flat_batches = Vec::new();
+
+        for (_, mut batch) in batches {
+            let start = all_instances.len() as u32;
+            let count = batch.instances.len() as u32;
+            all_instances.append(&mut batch.instances);
+
+            flat_batches.push(FlatBatchData {
+                vbuf: batch.vbuf,
+                vertex_count: batch.vertex_count,
+                bind_group: batch.bind_group,
+                skeleton_bg: batch.skeleton_bg,
+                start_instance: start,
+                end_instance: start + count,
             });
-            gpu_batches.push((batch, instance_buf));
+        }
+
+        if !all_instances.is_empty() {
+            let limit = 100_000;
+            let safe_len = std::cmp::min(all_instances.len(), limit);
+            renderer.queue.write_buffer(
+                &renderer.scene.instance_buffer, 
+                0, 
+                bytemuck::cast_slice(&all_instances[0..safe_len])
+            );
+        }
+
+        // --- 0. COMPUTE PASSES ---
+        if let Some(physics) = &renderer.gpu_physics {
+            physics.compute_pass(encoder);
         }
 
         // --- 1. GÖLGE PASS (Shadow Pass) ---
@@ -293,12 +323,15 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
             shadow_pass.set_pipeline(&renderer.scene.shadow_pipeline);
 
             // Tıpkı main render gibi gruplanmış nesneleri tek draw çağrısıyla bas
-            for (batch, instance_buf) in &gpu_batches {
+            for batch in &flat_batches {
+                if batch.start_instance >= 100_000 { continue; }
+                let safe_end = std::cmp::min(batch.end_instance, 100_000);
+                
                 shadow_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
                 shadow_pass.set_bind_group(1, &batch.skeleton_bg, &[]);
+                shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
                 shadow_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
-                shadow_pass.set_vertex_buffer(1, instance_buf.slice(..));
-                shadow_pass.draw(0..batch.vertex_count, 0..batch.instances.len() as u32);
+                shadow_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
             }
         }
 
@@ -328,14 +361,22 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
 
             render_pass.set_pipeline(&renderer.scene.render_pipeline);
 
-            for (batch, instance_buf) in &gpu_batches {
+            for batch in &flat_batches {
+                if batch.start_instance >= 100_000 { continue; }
+                let safe_end = std::cmp::min(batch.end_instance, 100_000);
+                
                 render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
                 render_pass.set_bind_group(1, &batch.bind_group, &[]);
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
                 render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
+                render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
-                render_pass.set_vertex_buffer(1, instance_buf.slice(..));
-                render_pass.draw(0..batch.vertex_count, 0..batch.instances.len() as u32);
+                render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
+            }
+            
+            // --- DRAW GPU PHYSICS SPHERES ---
+            if let Some(physics) = &renderer.gpu_physics {
+                physics.render_pass(&mut render_pass, &renderer.scene.global_bind_group);
             }
         }
 
