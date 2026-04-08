@@ -5,9 +5,11 @@ use crate::gpu_types::{Vertex, InstanceRaw, LightData, SceneUniforms};
 /// Sahne render durumu — pipeline'lar, shadow, skeleton ve global bind group'lar
 pub struct SceneState {
     pub render_pipeline: wgpu::RenderPipeline,
+    pub render_double_sided_pipeline: wgpu::RenderPipeline,
     pub unlit_pipeline: wgpu::RenderPipeline,
     pub water_pipeline: wgpu::RenderPipeline,
     pub shadow_pipeline: wgpu::RenderPipeline,
+    pub transparent_pipeline: wgpu::RenderPipeline,
     pub global_uniform_buffer: wgpu::Buffer,
     pub global_bind_group_layout: wgpu::BindGroupLayout,
     pub global_bind_group: wgpu::BindGroup,
@@ -178,7 +180,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     let water_shader = load_shader(device, "demo/assets/shaders/water.wgsl",   include_str!("water.wgsl"),   "Water Shader");
     let shadow_shader= load_shader(device, "demo/assets/shaders/shadow.wgsl",  include_str!("shadow.wgsl"),  "Shadow Shader");
 
-    let create_main = |sm: &wgpu::ShaderModule, label: &str| {
+    let create_main = |sm: &wgpu::ShaderModule, label: &str, depth_write: bool, cull: Option<wgpu::Face>| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(&render_pipeline_layout),
@@ -195,13 +197,13 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back), // Arka yüzeyleri tekrar kapatıyoruz, Z-fighting'e neden oldu!
+                cull_mode: cull, // Arka yüzeyleri isteğe göre açıp kapat
                 unclipped_depth: false,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
             },
             depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: true,
+                format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: depth_write,
                 depth_compare: wgpu::CompareFunction::Less,
                 stencil: wgpu::StencilState::default(), bias: wgpu::DepthBiasState::default(),
             }),
@@ -210,9 +212,12 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         })
     };
 
-    let render_pipeline = create_main(&shader, "Render Pipeline");
-    let unlit_pipeline  = create_main(&unlit_shader, "Unlit Pipeline");
-    let water_pipeline  = create_main(&water_shader, "Water Pipeline");
+    let render_pipeline = create_main(&shader, "Render Pipeline", true, Some(wgpu::Face::Back));
+    let render_double_sided_pipeline = create_main(&shader, "Render TwoSided Pipeline", true, None);
+    // Şeffaf objelerde cull_mode: None hayat kurtarır (camın arka yüzü, yapraklar vb.)
+    let transparent_pipeline = create_main(&shader, "Transparent Pipeline", false, None);
+    let unlit_pipeline  = create_main(&unlit_shader, "Unlit Pipeline", true, Some(wgpu::Face::Back));
+    let water_pipeline  = create_main(&water_shader, "Water Pipeline", true, Some(wgpu::Face::Back));
 
     // Shadow pipeline
     let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -240,7 +245,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     });
 
     SceneState {
-        render_pipeline, unlit_pipeline, water_pipeline, shadow_pipeline,
+        render_pipeline, render_double_sided_pipeline, unlit_pipeline, water_pipeline, shadow_pipeline, transparent_pipeline,
         global_uniform_buffer, global_bind_group_layout, global_bind_group,
         shadow_bind_group_layout, shadow_bind_group, shadow_texture_view,
         texture_bind_group_layout, skeleton_bind_group_layout, dummy_skeleton_bind_group,

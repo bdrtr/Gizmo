@@ -123,9 +123,12 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
     let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
-    let N = normalize(in.normal);
+    var N = normalize(in.normal);
+    if (!is_front) {
+        N = -N;
+    }
     
     // Temel Yüzey Rengi (Albedo Rengi * Texture Rengi)
     let base_color = in.inst_albedo.rgb * tex_color.rgb;

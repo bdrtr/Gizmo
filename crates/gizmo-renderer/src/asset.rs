@@ -558,6 +558,14 @@ impl AssetManager {
             mat.roughness = pbr.roughness_factor().max(0.6); // Paralamaması için pürüzlü kalsın.
             // Varsayılan: PBR açık (unlit=0.0). GLTF modelleri artık ışıklandırma alacak.
             mat.unlit = 0.0;
+            
+            if material.alpha_mode() == gltf::material::AlphaMode::Blend {
+                mat.is_transparent = true;
+            }
+            if material.double_sided() {
+                mat.is_double_sided = true;
+            }
+            
             gltf_materials.push(mat);
         }
 
@@ -687,11 +695,6 @@ impl AssetManager {
         let mut primitives = Vec::new();
         if let Some(mesh) = node.mesh() {
             for (prim_i, primitive) in node.mesh().unwrap().primitives().enumerate() {
-            // Eğer primitive saydamlık gerektiriyorsa (örn. Drop Shadow) ve motorumuzda
-            // transparent pass yoksa, bu primitive'i yoksayıyoruz (siyah titreme ve z-fighting yapar).
-            if primitive.material().alpha_mode() == gltf::material::AlphaMode::Blend {
-                continue;
-            }
                 let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
                 
                 let positions = reader.read_positions().map(|v| v.collect::<Vec<_>>()).unwrap_or_default();

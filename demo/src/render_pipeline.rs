@@ -176,7 +176,10 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
             instances: Vec<InstanceRaw>,
         }
 
-        let mut batches: std::collections::HashMap<(*const wgpu::Buffer, *const wgpu::BindGroup, *const wgpu::BindGroup), BatchData> = std::collections::HashMap::new();
+        // Anahtarlar aynı, fakat şeffaflığa ve çift taraflılığa göre ayrı tablolar tutuyoruz
+        let mut opaque_batches: std::collections::HashMap<(*const wgpu::Buffer, *const wgpu::BindGroup, *const wgpu::BindGroup), BatchData> = std::collections::HashMap::new();
+        let mut opaque_double_sided_batches: std::collections::HashMap<(*const wgpu::Buffer, *const wgpu::BindGroup, *const wgpu::BindGroup), BatchData> = std::collections::HashMap::new();
+        let mut transparent_batches: std::collections::HashMap<(*const wgpu::Buffer, *const wgpu::BindGroup, *const wgpu::BindGroup), BatchData> = std::collections::HashMap::new();
 
         let renderers = world.borrow::<gizmo::renderer::components::MeshRenderer>();
         let skeletons = world.borrow::<gizmo::renderer::components::Skeleton>();
@@ -249,6 +252,14 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
                 let bg_ptr = std::sync::Arc::as_ptr(&mat.bind_group);
                 let skel_ptr = std::sync::Arc::as_ptr(&skel_bg);
 
+                let batches = if mat.is_transparent { 
+                    &mut transparent_batches 
+                } else if mat.is_double_sided {
+                    &mut opaque_double_sided_batches
+                } else { 
+                    &mut opaque_batches 
+                };
+
                 let batch = batches.entry((vbuf_ptr, bg_ptr, skel_ptr)).or_insert_with(|| BatchData {
                     vbuf: active_mesh.vbuf.clone(),
                     vertex_count: active_mesh.vertex_count,
@@ -268,25 +279,48 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
             skeleton_bg: std::sync::Arc<wgpu::BindGroup>,
             start_instance: u32,
             end_instance: u32,
+            is_transparent: bool,
+            is_double_sided: bool,
         }
 
         let mut all_instances = Vec::new();
         let mut flat_batches = Vec::new();
 
-        for (_, mut batch) in batches {
-            let start = all_instances.len() as u32;
-            let count = batch.instances.len() as u32;
-            all_instances.append(&mut batch.instances);
+        let mut process_batches = |batches: std::collections::HashMap<_, BatchData>, is_transparent: bool, is_double_sided: bool| {
+            for (_, mut batch) in batches {
+                // Şeffaf objelerin arka plandan öne doğru sıralanması (Z-Sorting)
+                // Instance'ın model matrisinden world pozisyonunu çekip kameraya uzaklığına göre sıralıyoruz
+                if is_transparent {
+                    batch.instances.sort_by(|a, b| {
+                        let pos_a = Vec3::new(a.model[3][0], a.model[3][1], a.model[3][2]);
+                        let pos_b = Vec3::new(b.model[3][0], b.model[3][1], b.model[3][2]);
+                        let dist_a = cam_pos.distance_squared(pos_a);
+                        let dist_b = cam_pos.distance_squared(pos_b);
+                        // Uzak olanlar ÖNCE çizilmeli (Azalan sıralama)
+                        dist_b.partial_cmp(&dist_a).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                }
+                
+                let start = all_instances.len() as u32;
+                let count = batch.instances.len() as u32;
+                all_instances.append(&mut batch.instances);
 
-            flat_batches.push(FlatBatchData {
-                vbuf: batch.vbuf,
-                vertex_count: batch.vertex_count,
-                bind_group: batch.bind_group,
-                skeleton_bg: batch.skeleton_bg,
-                start_instance: start,
-                end_instance: start + count,
-            });
-        }
+                flat_batches.push(FlatBatchData {
+                    vbuf: batch.vbuf,
+                    vertex_count: batch.vertex_count,
+                    bind_group: batch.bind_group,
+                    skeleton_bg: batch.skeleton_bg,
+                    start_instance: start,
+                    end_instance: start + count,
+                    is_transparent,
+                    is_double_sided,
+                });
+            }
+        };
+
+        process_batches(opaque_batches, false, false);
+        process_batches(opaque_double_sided_batches, false, true);
+        process_batches(transparent_batches, true, false);
 
         if !all_instances.is_empty() {
             let limit = 100_000;
@@ -359,9 +393,10 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
                 occlusion_query_set: None,
             });
 
+            // 1. OPAQUE OBJELERİ ÇİZ (Sırtı Cull edilen normal objeler)
             render_pass.set_pipeline(&renderer.scene.render_pipeline);
-
             for batch in &flat_batches {
+                if batch.is_transparent || batch.is_double_sided { continue; } // Şeffafları ve çift yönlüleri atla
                 if batch.start_instance >= 100_000 { continue; }
                 let safe_end = std::cmp::min(batch.end_instance, 100_000);
                 
@@ -374,9 +409,41 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
                 render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
             }
             
-            // --- DRAW GPU PHYSICS SPHERES ---
+            // 2. ÇİFT YÖNLÜ OPAQUE OBJELER (Kumaşlar, cull_mode = None)
+            render_pass.set_pipeline(&renderer.scene.render_double_sided_pipeline);
+            for batch in &flat_batches {
+                if batch.is_transparent || !batch.is_double_sided { continue; }
+                if batch.start_instance >= 100_000 { continue; }
+                let safe_end = std::cmp::min(batch.end_instance, 100_000);
+                
+                render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+                render_pass.set_bind_group(1, &batch.bind_group, &[]);
+                render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+                render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
+                render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
+                render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
+            }
+            
+            // --- DRAW GPU PHYSICS SPHERES (Katı Obje olarak farz ediliyor) ---
             if let Some(physics) = &renderer.gpu_physics {
                 physics.render_pass(&mut render_pass, &renderer.scene.global_bind_group);
+            }
+            
+            // 3. TRANSPARENT OBJELERİ ÇİZ (Depth yazması kapalı, Opaque'nin üstüne blend olur)
+            render_pass.set_pipeline(&renderer.scene.transparent_pipeline);
+            for batch in &flat_batches {
+                if !batch.is_transparent { continue; } // Sadece şeffafları çiz
+                if batch.start_instance >= 100_000 { continue; }
+                let safe_end = std::cmp::min(batch.end_instance, 100_000);
+                
+                render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+                render_pass.set_bind_group(1, &batch.bind_group, &[]);
+                render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+                render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
+                render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
+                render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
             }
         }
 

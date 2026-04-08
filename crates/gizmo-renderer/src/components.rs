@@ -32,6 +32,8 @@ pub struct Material {
     pub unlit: f32,
     pub texture_source: Option<String>,
     pub material_type: MaterialType,
+    pub is_transparent: bool,
+    pub is_double_sided: bool,
 }
 
 impl Material {
@@ -44,6 +46,8 @@ impl Material {
             unlit: 0.0,
             texture_source: None,
             material_type: MaterialType::Pbr,
+            is_transparent: false,
+            is_double_sided: false,
         }
     }
 
@@ -53,6 +57,16 @@ impl Material {
         self.metallic = metallic;
         self.unlit = 0.0;
         self.material_type = MaterialType::Pbr;
+        self
+    }
+
+    pub fn with_transparent(mut self, transparent: bool) -> Self {
+        self.is_transparent = transparent;
+        self
+    }
+
+    pub fn with_double_sided(mut self, double_sided: bool) -> Self {
+        self.is_double_sided = double_sided;
         self
     }
 
