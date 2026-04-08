@@ -19,6 +19,7 @@ pub struct RaceState {
     pub countdown_timer: f32,
     pub total_laps: u32,
     pub player_entity: u32,
+    pub camera_entity: u32,
     pub ai_entities: Vec<u32>,
     pub race_timer: f32,
     /// Bitiş sıralaması (entity_id, süre)
@@ -66,33 +67,60 @@ pub struct TrackConfig {
 
 impl Default for TrackConfig {
     fn default() -> Self {
+        // Oval / Racetrack şeklinde sıralı waypointler üret
+        let mut waypoints = Vec::new();
+        let num_points = 36;
+        let radius_x = 80.0;
+        let radius_z = 120.0;
+        
+        for i in 0..num_points {
+            let angle = (i as f32 / num_points as f32) * std::f32::consts::PI * 2.0;
+            // Hafif dalgalı oval
+            let x = angle.cos() * radius_x;
+            let z = angle.sin() * radius_z + (angle * 2.0).sin() * 20.0; 
+            waypoints.push(Vec3::new(x, 0.5, z));
+        }
+
+        // Başlangıç noktaları (ilk wp = sin=0 -> z=0, cos=1 -> x=80, yani x ekseninde pozitif yan)
+        // Araçların grid pozisyonları pist üzerinde başlangıcın hemen öncesinde olsun
+        let mut grid_positions = Vec::new();
+        let mut grid_rotations = Vec::new();
+        
+        let start_angle = -0.1_f32; // Başlangıçtan biraz geride
+        for i in 0..4 {
+            let offset_angle = start_angle - (i / 2) as f32 * 0.05;
+            let side_offset = if i % 2 == 0 { -4.0 } else { 4.0 };
+            
+            let x = offset_angle.cos() * radius_x;
+            let z = offset_angle.sin() * radius_z + (offset_angle * 2.0).sin() * 20.0;
+            
+            // Teğet yönünü (ileriyi) bulmak için türev/ufak delta alalım
+            let delta_angle = offset_angle + 0.05;
+            let dx = delta_angle.cos() * radius_x;
+            let dz = delta_angle.sin() * radius_z + (delta_angle * 2.0).sin() * 20.0;
+            
+            let forward = Vec3::new(dx - x, 0.0, dz - z).normalize();
+            let right = Vec3::new(-forward.z, 0.0, forward.x);
+            
+            grid_positions.push(Vec3::new(x, 1.0, z) + right * side_offset);
+            
+            let yaw = forward.x.atan2(forward.z);
+            grid_rotations.push(Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), yaw));
+        }
+
         Self {
-            waypoints: vec![
-                Vec3::new(0.0, 0.5, -30.0),
-                Vec3::new(0.0, 0.5, 0.0),
-                Vec3::new(0.0, 0.5, 30.0),
-                Vec3::new(15.0, 0.5, 40.0),
-                Vec3::new(30.0, 0.5, 30.0),
-                Vec3::new(30.0, 0.5, 0.0),
-                Vec3::new(30.0, 0.5, -30.0),
-                Vec3::new(15.0, 0.5, -40.0),
-            ],
-            grid_positions: vec![
-                Vec3::new(-2.0, 1.0, -35.0),
-                Vec3::new(2.0, 1.0, -35.0),
-                Vec3::new(-2.0, 1.0, -40.0),
-                Vec3::new(2.0, 1.0, -40.0),
-            ],
-            grid_rotations: vec![Quat::IDENTITY; 4],
-            track_model: None,    // Şimdilik yok — kullanıcı kendi modelini ekleyecek
-            car_models: vec![None; 4], // Küp placeholder
+            waypoints,
+            grid_positions,
+            grid_rotations,
+            track_model: None,
+            car_models: vec![None; 4],
             car_colors: vec![
-                [0.8, 0.1, 0.1, 1.0], // Kırmızı — Oyuncu
+                [0.8, 0.1, 0.1, 1.0], // Kırmızı (Player)
                 [0.1, 0.4, 0.8, 1.0], // Mavi
                 [0.1, 0.7, 0.2, 1.0], // Yeşil
                 [0.9, 0.7, 0.1, 1.0], // Sarı
             ],
-            ai_speeds: vec![0.7, 0.85, 1.0],
+            ai_speeds: vec![0.8, 0.9, 1.0], // Daha agrasif AI
             total_laps: 3,
             ground_y: -0.5,
         }
@@ -218,10 +246,13 @@ pub fn setup_race_scene(
         &config.car_models.get(0).cloned().flatten(),
         base_tbind.clone(),
     );
-    world.add_component(player, Camera {
+    // Bağımsız Chase Kamera (Sürekli oyuncuyu takip edecek)
+    let camera_entity = world.spawn();
+    world.add_component(camera_entity, Transform::new(config.grid_positions[0] + Vec3::new(0.0, 5.0, -10.0)));
+    world.add_component(camera_entity, Camera {
         fov: 75.0_f32.to_radians(),
         near: 0.1,
-        far: 500.0,
+        far: 1000.0,
         yaw: 0.0,
         pitch: -0.15,
         primary: true,
@@ -250,6 +281,7 @@ pub fn setup_race_scene(
         countdown_timer: 4.0,
         total_laps: config.total_laps,
         player_entity: player.id(),
+        camera_entity: camera_entity.id(),
         ai_entities,
         race_timer: 0.0,
         finish_order: Vec::new(),

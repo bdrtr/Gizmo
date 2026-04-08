@@ -23,8 +23,8 @@ fn main() {
     // ── SETUP ──────────────────────────────────────────────────────────────
     app = app.set_setup(|world, renderer| {
         let mut state = scene_setup::setup_default_scene(world, renderer);
-        let (race_player_id, race_state) = crate::race::setup_race_scene(world, renderer, crate::race::TrackConfig::default());
-        state.player_id = race_player_id;
+        let (_, race_state) = crate::race::setup_race_scene(world, renderer, crate::race::TrackConfig::default());
+        state.player_id = race_state.camera_entity;
         state.ps1_race = Some(race_state);
         state
     });
@@ -137,21 +137,25 @@ fn main() {
         // Vehicle Controller (Input to Engine/Steering)
         if is_in_game {
             if let Some(mut vehicles) = world.borrow_mut::<gizmo::physics::vehicle::VehicleController>() {
-                let engine_power = 2000.0;
+                // Arcade Tuning
+                let engine_power = 6000.0; // Daha yüksek ivme
+                let max_steer = 0.6; // Daha keskin dönüş açısı (~34 derece)
                 let mut current_engine = 0.0;
                 let mut current_steer = 0.0;
                 let mut current_brake = 0.0;
                 
-                if input.is_key_pressed(KeyCode::ArrowUp as u32) { current_engine = engine_power; }
-                if input.is_key_pressed(KeyCode::ArrowDown as u32) { current_engine = -engine_power * 0.5; }
-                if input.is_key_pressed(KeyCode::ArrowLeft as u32) { current_steer = 0.5; } // Rad
-                if input.is_key_pressed(KeyCode::ArrowRight as u32) { current_steer = -0.5; }
-                if input.is_key_pressed(KeyCode::Space as u32) { current_brake = 5000.0; }
+                if input.is_key_pressed(KeyCode::ArrowUp as u32) || input.is_key_pressed(KeyCode::KeyW as u32) { current_engine = engine_power; }
+                if input.is_key_pressed(KeyCode::ArrowDown as u32) || input.is_key_pressed(KeyCode::KeyS as u32) { current_engine = -engine_power * 0.4; } // Geri Vites
+                if input.is_key_pressed(KeyCode::ArrowLeft as u32) || input.is_key_pressed(KeyCode::KeyA as u32) { current_steer = max_steer; }
+                if input.is_key_pressed(KeyCode::ArrowRight as u32) || input.is_key_pressed(KeyCode::KeyD as u32) { current_steer = -max_steer; }
+                if input.is_key_pressed(KeyCode::Space as u32) { current_brake = 15000.0; } // Çok güçlü fren
 
-                for entity in vehicles.entity_dense.clone() {
-                    if let Some(v) = vehicles.get_mut(entity) {
+                let target_entity = state.ps1_race.as_ref().map(|r| r.player_entity);
+                if let Some(player_ent) = target_entity {
+                    if let Some(v) = vehicles.get_mut(player_ent) {
+                        // Yumuşak dönüş (Steering Lerp - Input yumuşatma)
+                        v.steering_angle += (current_steer - v.steering_angle) * 10.0 * dt;
                         v.engine_force = current_engine;
-                        v.steering_angle = current_steer;
                         v.brake_force = current_brake;
                     }
                 }
@@ -194,6 +198,40 @@ fn main() {
 
         if let Some(ref mut race) = state.ps1_race {
             crate::race::update_race(world, race, dt);
+            
+            // CHASE CAM UPDATE
+            let (mut p_pos, mut p_forward) = (Vec3::ZERO, Vec3::ZERO);
+            let mut cam_pos = Vec3::ZERO;
+            
+            if let Some(trans) = world.borrow::<Transform>() {
+                if let Some(player_t) = trans.get(race.player_entity) {
+                    p_pos = player_t.position;
+                    p_forward = player_t.rotation * Vec3::new(0.0, 0.0, 1.0);
+                }
+                if let Some(cam_t) = trans.get(race.camera_entity) {
+                    cam_pos = cam_t.position;
+                }
+            }
+            
+            if p_pos != Vec3::ZERO && cam_pos != Vec3::ZERO {
+                let target_cam_pos = p_pos - p_forward * 6.0 + Vec3::new(0.0, 3.0, 0.0);
+                let new_cam_pos = cam_pos.lerp(target_cam_pos, 8.0 * dt);
+                let dir = (p_pos - new_cam_pos).normalize();
+                let new_yaw = dir.z.atan2(dir.x);
+                let new_pitch = dir.y.asin();
+                
+                if let Some(mut trans) = world.borrow_mut::<Transform>() {
+                    if let Some(cam_t) = trans.get_mut(race.camera_entity) {
+                        cam_t.position = new_cam_pos;
+                    }
+                }
+                if let Some(mut cameras) = world.borrow_mut::<Camera>() {
+                    if let Some(cam) = cameras.get_mut(race.camera_entity) {
+                        cam.yaw = new_yaw;
+                        cam.pitch = new_pitch;
+                    }
+                }
+            }
         }
     });
 
