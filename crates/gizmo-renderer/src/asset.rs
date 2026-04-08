@@ -228,12 +228,14 @@ impl AssetManager {
         let def_j = [0; 4];
         let def_w = [0.0; 4];
         let vertices = [
-            Vertex { position: [-half, y,  half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.0, size], joint_indices: def_j, joint_weights: def_w },
-            Vertex { position: [ half, y,  half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [size, size], joint_indices: def_j, joint_weights: def_w },
-            Vertex { position: [ half, y, -half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [size, 0.0], joint_indices: def_j, joint_weights: def_w },
-            
-            Vertex { position: [ half, y, -half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [size, 0.0], joint_indices: def_j, joint_weights: def_w },
+            // İlk Üçgen (CCW)
             Vertex { position: [-half, y, -half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.0, 0.0], joint_indices: def_j, joint_weights: def_w },
+            Vertex { position: [ half, y, -half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [size, 0.0], joint_indices: def_j, joint_weights: def_w },
+            Vertex { position: [ half, y,  half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [size, size], joint_indices: def_j, joint_weights: def_w },
+            
+            // İkinci Üçgen (CCW)
+            Vertex { position: [-half, y, -half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.0, 0.0], joint_indices: def_j, joint_weights: def_w },
+            Vertex { position: [ half, y,  half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [size, size], joint_indices: def_j, joint_weights: def_w },
             Vertex { position: [-half, y,  half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.0, size], joint_indices: def_j, joint_weights: def_w },
         ];
 
