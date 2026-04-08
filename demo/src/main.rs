@@ -153,8 +153,8 @@ fn main() {
                 let mut current_steer = 0.0;
                 let mut current_brake = 0.0;
                 
-                // Araç kontrollerini sadece geliştirici menüsü kapalıyken çalıştır
-                if !state.show_devtools {
+                // Araç kontrollerini sadece Serbest Kamera Modu (free_cam) YOKSA çalıştır.
+                if !state.free_cam {
                     if input.is_key_pressed(KeyCode::ArrowUp as u32) || input.is_key_pressed(KeyCode::KeyW as u32) { current_engine = engine_power; }
                     if input.is_key_pressed(KeyCode::ArrowDown as u32) || input.is_key_pressed(KeyCode::KeyS as u32) { current_engine = -engine_power * 0.4; } // Geri Vites
                     if input.is_key_pressed(KeyCode::ArrowLeft as u32) || input.is_key_pressed(KeyCode::KeyA as u32) { current_steer = max_steer; }
@@ -249,8 +249,8 @@ fn main() {
         }
 
         // CHASE CAM UPDATE FOR BASIC SCENE
-        // Geliştirici menüsü açık değilse (free cam kapalıysa) arabayı takip et
-        if !state.show_devtools {
+        // Serbest kamera (free cam) kapalıysa arabayı takip et
+        if !state.free_cam {
             if let Some(ref basic) = state.basic_scene {
                 let (mut p_pos, mut p_forward) = (Vec3::ZERO, Vec3::ZERO);
                 let mut cam_pos = Vec3::ZERO;

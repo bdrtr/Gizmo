@@ -58,7 +58,9 @@ pub fn setup_basic_scene(
 
     // ==================== OYUNCU (CAR GLB) ====================
     let player = world.spawn();
-    world.add_component(player, Transform::new(Vec3::new(0.0, 2.0, 0.0)));
+    // Fizik motoru Play tuşuna basana kadar havada (2.0) duruyordu. 
+    // Daha gerçekçi görünmesi için direk zemine (0.5) yakın spawn edelim:
+    world.add_component(player, Transform::new(Vec3::new(0.0, 0.5, 0.0)));
     
     let mut rb = RigidBody::new(600.0, 0.02, 0.8, true); 
     rb.calculate_box_inertia(2.0, 1.0, 4.0);
@@ -88,11 +90,12 @@ pub fn setup_basic_scene(
     ) {
         Ok(asset) => {
             let def_mat = gizmo::prelude::Material::new(base_tbind.clone()).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.6, 0.1);
-            
             let car_root = world.spawn();
-            // VW modeli zaten muhtemelen metre cinsinden (orijinal boyutlu), o yüzden 1.0 scale kullanıyoruz.
-            // Modelin origin noktasına bağlı olarak havada durmasını engellemek için görseli -0.7m (veya gerekiyorsa -0.85m) aşağı çekiyoruz:
-            world.add_component(car_root, Transform::new(Vec3::new(0.0, -0.65, 0.0)).with_scale(Vec3::new(1.0, 1.0, 1.0)));
+            // GLTF modeli genellikle `-Z`'ye (ekrandan içe doğru) bakar ancak Fizik motorumuz `+Z`'ye ivmelenir.
+            // Bu yüzden modeli Y ekseninde 180 derece çeviriyoruz ki ileri basınca doğru yöne gitsin ve kamera arkadan (egzoz) baksın!
+            world.add_component(car_root, Transform::new(Vec3::ZERO)
+                .with_scale(Vec3::new(1.0, 1.0, 1.0))
+                .with_rotation(Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), std::f32::consts::PI)));
             world.add_component(car_root, Parent(player.id()));
             
             let children = crate::scene_setup::spawn_gltf_hierarchy(world, &asset.roots, Some(car_root.id()), def_mat);
