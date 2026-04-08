@@ -90,6 +90,28 @@ impl AssetManager {
             });
         }
 
+        // Eğer dosya normal içermiyorsa, [0,1,0] ile saçmalamak yerine 
+        // üçgen yüzeylerinden flat (düz) normaller hesaplayalım:
+        if m.normals.is_empty() {
+            for chunk in vertices.chunks_exact_mut(3) {
+                let p0 = chunk[0].position;
+                let p1 = chunk[1].position;
+                let p2 = chunk[2].position;
+                let v0 = Vec3::new(p0[0], p0[1], p0[2]);
+                let v1 = Vec3::new(p1[0], p1[1], p1[2]);
+                let v2 = Vec3::new(p2[0], p2[1], p2[2]);
+                
+                let norm = (v1 - v0).cross(v2 - v0);
+                // Sıfır uzunluklu cross product'tan kaçın
+                let final_norm = if norm.length_squared() > 1e-6 { norm.normalize() } else { Vec3::new(0.0, 1.0, 0.0) };
+                let n_arr = [final_norm.x, final_norm.y, final_norm.z];
+                
+                chunk[0].normal = n_arr;
+                chunk[1].normal = n_arr;
+                chunk[2].normal = n_arr;
+            }
+        }
+
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(&format!("Obj VBuf: {}", file_path)),
             contents: bytemuck::cast_slice(&vertices),
@@ -741,6 +763,28 @@ impl AssetManager {
                         let pos = positions[i];
                         aabb.extend(Vec3::new(pos[0], pos[1], pos[2]));
                         all_vertices.push(get_vertex(i, pos));
+                    }
+                }
+
+                // EĞER GLTF DOSYASINDA NORMALLER YOKSA VEYA BOZUKSA (HEPSİ [0,1,0] İSE)
+                // Kötü gözükmemesi için Flat Normalleri kendimiz hesaplayalım.
+                let has_real_normals = reader.read_normals().is_some();
+                if !has_real_normals {
+                    for chunk in all_vertices.chunks_exact_mut(3) {
+                        let p0 = chunk[0].position;
+                        let p1 = chunk[1].position;
+                        let p2 = chunk[2].position;
+                        let v0 = Vec3::new(p0[0], p0[1], p0[2]);
+                        let v1 = Vec3::new(p1[0], p1[1], p1[2]);
+                        let v2 = Vec3::new(p2[0], p2[1], p2[2]);
+                        
+                        let norm = (v1 - v0).cross(v2 - v0);
+                        let final_norm = if norm.length_squared() > 1e-6 { norm.normalize() } else { Vec3::new(0.0, 1.0, 0.0) };
+                        let n_arr = [final_norm.x, final_norm.y, final_norm.z];
+                        
+                        chunk[0].normal = n_arr;
+                        chunk[1].normal = n_arr;
+                        chunk[2].normal = n_arr;
                     }
                 }
 

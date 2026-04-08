@@ -84,14 +84,15 @@ pub fn setup_basic_scene(
         &renderer.queue,
         &renderer.scene.texture_bind_group_layout,
         base_tbind.clone(),
-        "demo/assets/models/ToyCar.glb",
+        "demo/assets/vw.glb",
     ) {
         Ok(asset) => {
             let def_mat = gizmo::prelude::Material::new(base_tbind.clone()).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.6, 0.1);
             
             let car_root = world.spawn();
-            // Araba çok küçük (ToyCar modeli santimetre bazlı), bu yüzden 100 kat büyütüyoruz
-            world.add_component(car_root, Transform::new(Vec3::ZERO).with_scale(Vec3::new(100.0, 100.0, 100.0)));
+            // VW modeli zaten muhtemelen metre cinsinden (orijinal boyutlu), o yüzden 1.0 scale kullanıyoruz.
+            // Modelin origin noktasına bağlı olarak havada durmasını engellemek için görseli -0.7m (veya gerekiyorsa -0.85m) aşağı çekiyoruz:
+            world.add_component(car_root, Transform::new(Vec3::new(0.0, -0.65, 0.0)).with_scale(Vec3::new(1.0, 1.0, 1.0)));
             world.add_component(car_root, Parent(player.id()));
             
             let children = crate::scene_setup::spawn_gltf_hierarchy(world, &asset.roots, Some(car_root.id()), def_mat);
