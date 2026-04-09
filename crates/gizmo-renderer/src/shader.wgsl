@@ -123,6 +123,13 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
+    
+    // Alpha Cutoff (Alpha Test)
+    let final_alpha = in.inst_albedo.a * tex_color.a;
+    if (final_alpha < 0.5) {
+        discard;
+    }
+
     var raw_normal = in.normal;
     if (length(raw_normal) < 0.001) {
         // Hatalı (sıfır) normalleri olan modeller için NaN hatasını engelle!
@@ -159,29 +166,35 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
     let f0 = mix(vec3<f32>(0.04), base_color, metallic);
     
-    // Yüksek ortam ışığı, karanlık köşeleri daha görünür yapar
-    let ambient = base_color * 0.4;
+    // --- Golden Hour (Gün Batımı) Hemispheric (Yarı-küresel) Ortam Işığı ---
+    let sky_ambient = vec3<f32>(0.8, 0.5, 0.4) * 0.7; // Gün batımı gökyüzünden yansıyan kızıl ışık
+    let ground_ambient = vec3<f32>(0.15, 0.1, 0.15); // Yerden seken morumsu gölge 
+    let hemi_mix = N.y * 0.5 + 0.5;
+    let ambient = base_color * mix(ground_ambient, sky_ambient, hemi_mix);
     
+    // --- Fake IBL (Image Based Lighting) Yansıması ---
+    let R = reflect(-view_dir, N);
+    let reflect_mix = clamp(R.y * 0.5 + 0.5, 0.0, 1.0);
+    // Yansımaları gökyüzü rengine (gün batımına) uydur
+    let fake_env_color = mix(ground_ambient, vec3<f32>(1.0, 0.6, 0.4), reflect_mix);
+    
+    let fake_ibl_specular = f0 * fake_env_color * ((1.0 - min_roughness) * (1.0 - min_roughness) * 2.0);
+
     // --- Gölge Hesaplama (Shadow Mapping with PCF) ---
     var shadow_visibility = 1.0;
-    
-    // Homojen koordinatlara (NDCs) çevir [-1, 1]
     let light_ndc = in.light_space_pos.xyz / in.light_space_pos.w;
-    
-    // NDC -> Doku Koordinatları (Orijin sol üst)
     let shadow_uv = vec2<f32>(
         light_ndc.x * 0.5 + 0.5,
         (light_ndc.y * -0.5) + 0.5
     );
     
-    // Eğer noktamız ışık kamerasının görüş alanı içerisindeyse
     if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 && light_ndc.z <= 1.0) {
         let L_dir = normalize(-scene.sun_direction.xyz);
         let slope = 1.0 - max(dot(N, L_dir), 0.0);
-        let bias = max(0.005 * slope, 0.001); // Eğim bazlı shadow acne onleyici
+        let bias = max(0.005 * slope, 0.001); 
         
         var pcf_visibility = 0.0;
-        let texel_size = 1.0 / 2048.0; // Texture ebadına göre 1 piksel boyutu
+        let texel_size = 1.0 / 4096.0; // 4K Gölge Ebatı
         for (var x = -1; x <= 1; x++) {
             for (var y = -1; y <= 1; y++) {
                 let offset = vec2<f32>(f32(x), f32(y)) * texel_size;
@@ -198,9 +211,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var total_diffuse = vec3<f32>(0.0);
     var total_specular = vec3<f32>(0.0);
 
-    // --- 1. Directional Light (Güneş / Ana Işık) Hesaplaması ---
-    if (scene.sun_direction.w > 0.5) { // Eğer güneş açıksa
-        // Işık vektörü, güneş ışığına doğru bakan vektördür (yönün tersi)
+    // --- 1. Directional Light (Güneş) ---
+    if (scene.sun_direction.w > 0.5) { 
         let L = normalize(-scene.sun_direction.xyz);
         let diff = max(dot(N, L), 0.0);
         
@@ -210,18 +222,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let intensity = scene.sun_color.w;
         let sun_color = scene.sun_color.rgb;
 
-        // Gölge (shadow_visibility) sadece Güneş ışığını doğrudan maskeler
         total_diffuse += base_color * (1.0 - metallic) * diff * sun_color * intensity * shadow_visibility;
         total_specular += f0 * spec * (1.0 - min_roughness) * sun_color * intensity * shadow_visibility;
     }
 
-    // --- 2. Point Lights Hesaplaması ---
+    // --- 2. Point Lights ---
     for (var i = 0u; i < scene.num_lights; i++) {
         let light = scene.lights[i];
-        
         let L = normalize(light.position.xyz - in.world_position);
         let diff = max(dot(N, L), 0.0);
-        
         let reflect_dir = reflect(-L, N);
         let spec = pow(max(dot(view_dir, reflect_dir), 0.0), shininess);
         
@@ -229,13 +238,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * (distance * distance));
         let intensity = light.position.w;
 
-        // Noktasal ışıklar şu an için gölge üretmiyor
         total_diffuse += base_color * (1.0 - metallic) * diff * light.color.rgb * attenuation * intensity;
         total_specular += f0 * spec * (1.0 - min_roughness) * light.color.rgb * attenuation * intensity;
     }
     
     // Parçaları topla
-    let final_color = in.color * (ambient + total_diffuse + total_specular);
+    var final_color = in.color * (ambient + total_diffuse + total_specular + fake_ibl_specular);
+    
+    // --- ACES Tone Mapping (Filmik Renk Düzenlemesi) ---
+    // Patlayan aşırı beyaz/parlak renkleri yumuşatarak sinematik ve gerçekçi bir filtre atar
+    let a = 2.51;
+    let b = 0.03;
+    let c = 2.43;
+    let d = 0.59;
+    let e = 0.14;
+    final_color = clamp((final_color * (a * final_color + b)) / (final_color * (c * final_color + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
+    // Srgb gamma düzeltmesi
+    final_color = pow(final_color, vec3<f32>(1.0 / 2.2));
     
     return vec4<f32>(final_color, in.inst_albedo.a * tex_color.a);
 }

@@ -21,6 +21,7 @@ pub struct App<State: 'static> {
     input_fn: Option<Box<dyn FnMut(&mut World, &mut State, &winit::event::Event<()>) -> bool>>, // Input handler
     ui_fn: Option<Box<dyn FnMut(&mut World, &mut State, &egui::Context)>>, // Editor UI handler
     pub input: gizmo_core::input::Input,
+    initial_scene: Option<String>,
 }
 
 impl<State: 'static> App<State> {
@@ -36,6 +37,7 @@ impl<State: 'static> App<State> {
             input_fn: None,
             ui_fn: None,
             input: gizmo_core::input::Input::new(),
+            initial_scene: None,
         }
     }
 
@@ -46,6 +48,7 @@ impl<State: 'static> App<State> {
         self.setup_fn = Some(Box::new(f));
         self
     }
+
 
     pub fn set_update<F>(mut self, f: F) -> Self
     where
@@ -84,7 +87,13 @@ impl<State: 'static> App<State> {
         self
     }
 
+    pub fn load_scene(mut self, path: &str) -> Self {
+        self.initial_scene = Some(path.to_string());
+        self
+    }
+
     pub fn run(mut self) {
+
         let event_loop = EventLoop::new().expect("Event Loop başlatılamadı");
         let window = Arc::new(
             WindowBuilder::new()
@@ -101,6 +110,27 @@ impl<State: 'static> App<State> {
         } else {
             panic!("setup() fonksiyonu atanmadi! (App State yaratilamadi)");
         };
+
+        if let Some(scene_path) = self.initial_scene.take() {
+            if let Some(mut asset_manager) = self.world.remove_resource::<gizmo_renderer::asset::AssetManager>() {
+                let dummy_rgba = [255, 255, 255, 255];
+                let dummy_bg = renderer.create_texture(&dummy_rgba, 1, 1);
+                
+                gizmo_scene::scene::SceneData::load_into(
+                    &scene_path,
+                    &mut self.world,
+                    &renderer.device,
+                    &renderer.queue,
+                    &renderer.scene.texture_bind_group_layout,
+                    &mut asset_manager,
+                    Arc::new(dummy_bg)
+                );
+                
+                self.world.insert_resource(asset_manager);
+            } else {
+                eprintln!("[App::run] AssetManager bulunamadı, sahne yüklenemiyor!");
+            }
+        }
 
         let mut editor = EditorContext::new(&renderer.device, renderer.config.format, &window);
 
@@ -205,10 +235,15 @@ impl<State: 'static> App<State> {
                             update_hk(&mut self.world, &mut state, dt, &self.input);
                         }
                         
-                        self.input.begin_frame();
-                        
+                        // ECS Sistemlerini Çalıştırmadan önce DI için Core Resource'ları Güncelle
+                        self.world.insert_resource(self.input.clone());
+                        self.world.insert_resource(gizmo_core::time::Time { dt, elapsed_seconds: light_time as f64 });
+
                         // ECS Sistemlerini Çalıştır
                         self.schedule.run(&mut self.world, dt);
+
+                        // İşlemlerin bitiminde frame-özel input girdilerini temizle
+                        self.input.begin_frame();
 
                         // --- DRAW KISMI ---
                         let output = match renderer.surface.get_current_texture() {
@@ -247,4 +282,5 @@ impl<State: 'static> App<State> {
             }
         }).unwrap();
     }
+
 }

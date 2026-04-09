@@ -12,10 +12,10 @@ pub struct Wheel {
     pub wheel_radius: f32,           // Tekerleğin yarıçapı
     
     pub is_drive_wheel: bool,        // Bu tekerlek motor gücü alıyor mu (FWD/RWD/4WD)
-    // Geçici durumsal veriler (Sistem tarafından her frame güncellenir)
     pub is_grounded: bool,
     pub compression: f32,            // Yerdeyse yayın ne kadar sıkıştığı
     pub contact_point: Vec3,         // Çarpışma noktası
+    pub rotation_angle: f32,         // Animasyon için görsel dönüş açısı
 }
 
 impl Wheel {
@@ -32,6 +32,7 @@ impl Wheel {
             is_grounded: false,
             compression: 0.0,
             contact_point: Vec3::ZERO,
+            rotation_angle: 0.0,
         }
     }
 
@@ -232,7 +233,7 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                     }
                     
                     // === DİREKSİYON (Ön tekerlekler — drive olmayan) ===
-                    if !wheel.is_drive_wheel && steering_angle.abs() > 0.001 {
+                    if !wheel.is_drive_wheel {
                         let wheel_vel = v.linear + v.angular.cross(r_ws);
                         let lateral_vel = wheel_vel.dot(right);
                         let steer_force = steering_angle * steer_mult;
@@ -244,13 +245,20 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                         total_angular_impulse += apply_inv_inertia(steer_torque, inv_inertia, t.rotation);
                     }
                     
-                    // Yanal Sürtünme / Tutuş (Araca viraj dönerken drift engelleme)
-                    let wheel_vel = v.linear + v.angular.cross(r_ws);
-                    let lateral_vel = wheel_vel.dot(right);
-                    let anti_slide = right * (-lateral_vel * anti_slide_k / num_wheels) * dt;
-                    total_linear_impulse += anti_slide;
-                    let slide_torque = r_ws.cross(anti_slide);
-                    total_angular_impulse += apply_inv_inertia(slide_torque, inv_inertia, t.rotation);
+                    // Yanal Sürtünme / Tutuş (Arka tekerlek drift algısı)
+                    if wheel.is_drive_wheel {
+                        let wheel_vel = v.linear + v.angular.cross(r_ws);
+                        let lateral_vel = wheel_vel.dot(right);
+                        let anti_slide = right * (-lateral_vel * anti_slide_k / num_wheels) * dt;
+                        total_linear_impulse += anti_slide;
+                        
+                        let torque = r_ws.cross(anti_slide);
+                        total_angular_impulse += apply_inv_inertia(torque, inv_inertia, t.rotation);
+                    }
+                    
+                    // Görsel tekerlek dönmesi (hıza göre tekerlek çevresini hesaplayarak döndür)
+                    let speed = v.linear.dot(forward);
+                    wheel.rotation_angle += (speed / wheel.wheel_radius) * dt;
                     
                 } else {
                     wheel.is_grounded = false;

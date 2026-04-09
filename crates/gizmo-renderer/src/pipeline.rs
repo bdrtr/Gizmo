@@ -1,6 +1,6 @@
 use wgpu::util::DeviceExt;
 use std::sync::Arc;
-use crate::gpu_types::{Vertex, InstanceRaw, LightData, SceneUniforms};
+use crate::gpu_types::{Vertex, LightData, SceneUniforms};
 
 /// Sahne render durumu — pipeline'lar, shadow, skeleton ve global bind group'lar
 pub struct SceneState {
@@ -52,7 +52,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
 
     // Shadow Texture
     let shadow_texture = device.create_texture(&wgpu::TextureDescriptor {
-        size: wgpu::Extent3d { width: 2048, height: 2048, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d { width: 4096, height: 4096, depth_or_array_layers: 1 },
         mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Depth32Float,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,

@@ -53,6 +53,13 @@ impl World {
         }
     }
 
+    pub fn get_entity(&self, id: u32) -> Option<Entity> {
+        if (id as usize) < self.generations.len() && !self.free_set.contains(&id) {
+            return Some(Entity::new(id, self.generations[id as usize]));
+        }
+        None
+    }
+
     pub fn despawn(&mut self, entity: Entity) {
         if self.is_alive(entity) {
             let id = entity.id();

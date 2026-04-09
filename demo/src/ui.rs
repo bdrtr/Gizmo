@@ -2,7 +2,50 @@ use gizmo::prelude::*;
 use gizmo::egui;
 use crate::state::GameState;
 
+pub fn setup_modern_theme(ctx: &egui::Context) {
+    let mut style = (*ctx.style()).clone();
+    
+    // Unity / Unreal tarzı renk paleti
+    style.visuals.window_fill = egui::Color32::from_rgb(32, 32, 34);
+    style.visuals.panel_fill = egui::Color32::from_rgb(42, 42, 44);
+    style.visuals.faint_bg_color = egui::Color32::from_rgb(25, 25, 27);
+    style.visuals.extreme_bg_color = egui::Color32::from_rgb(18, 18, 20);
+
+    style.visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgb(42, 42, 44);
+    style.visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(55, 55, 58);
+    style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(67, 67, 70);
+    style.visuals.widgets.active.bg_fill = egui::Color32::from_rgb(80, 120, 200); // Vurgu Rengi: Açık Mavi
+
+    style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 62));
+    style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 70, 72));
+    style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 100, 102));
+
+    style.visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_rgb(180, 180, 180);
+    style.visuals.widgets.inactive.fg_stroke.color = egui::Color32::from_rgb(210, 210, 210);
+    style.visuals.widgets.hovered.fg_stroke.color = egui::Color32::WHITE;
+    style.visuals.widgets.active.fg_stroke.color = egui::Color32::WHITE;
+
+    style.visuals.selection.bg_fill = egui::Color32::from_rgb(60, 100, 200);
+    style.visuals.selection.stroke.color = egui::Color32::WHITE;
+
+    // Keskin, profesyonel kenarlar (Rounding=4.0)
+    style.visuals.window_rounding = egui::Rounding::same(4.0);
+    style.visuals.widgets.noninteractive.rounding = egui::Rounding::same(3.0);
+    style.visuals.widgets.inactive.rounding = egui::Rounding::same(3.0);
+    style.visuals.widgets.hovered.rounding = egui::Rounding::same(3.0);
+    style.visuals.widgets.active.rounding = egui::Rounding::same(3.0);
+
+    // Boşluklar
+    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+    style.spacing.window_margin = egui::style::Margin::same(12.0);
+
+    ctx.set_style(style);
+}
+
 pub fn render_ui(ctx: &egui::Context, state: &mut GameState, world: &World) {
+    // 1. Temayı her frame (basitçe) uygula
+    setup_modern_theme(ctx);
+
     if let Some(mut editor_state) = world.get_resource_mut::<gizmo::editor::EditorState>() {
         gizmo::editor::draw_editor(ctx, world, &mut editor_state);
     }
@@ -19,8 +62,9 @@ pub fn render_ui(ctx: &egui::Context, state: &mut GameState, world: &World) {
             .collapsible(false)
             .min_width(500.0)
             .frame(egui::Frame::window(&ctx.style())
-                .fill(egui::Color32::from_rgba_premultiplied(10, 10, 20, 230))
-                .rounding(egui::Rounding::same(12.0)))
+                .fill(egui::Color32::from_rgba_premultiplied(25, 25, 27, 240))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 62)))
+                .rounding(egui::Rounding::same(6.0)))
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.label(egui::RichText::new(&dlg.speaker)
@@ -523,7 +567,7 @@ pub fn render_game_ui(ctx: &egui::Context, world: &World) {
                 ui.vertical_centered(|ui| {
                     ui.label(egui::RichText::new("GIZMO ENGINE").size(72.0).strong().color(egui::Color32::WHITE));
                     ui.add_space(8.0);
-                    ui.label(egui::RichText::new("NoroNest Pre-Alpha").size(24.0).color(egui::Color32::from_rgb(255, 200, 80)));
+                    ui.label(egui::RichText::new("NoroNest Pre-Alpha").size(24.0).color(egui::Color32::from_rgb(100, 150, 255)));
                     ui.add_space(60.0);
 
                     let btn_size = egui::vec2(250.0, 50.0);

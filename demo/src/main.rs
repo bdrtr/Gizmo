@@ -1,6 +1,11 @@
 use gizmo::prelude::*;
+use gizmo::math::{Vec3, Vec4, Quat};
 
-pub mod scene;
+#[derive(Clone, Copy)]
+pub struct OriginalRotation(pub Quat);
+
+#[derive(Clone, Copy)]
+pub struct Player;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct EntityName(pub String);
@@ -17,23 +22,58 @@ pub mod hot_reload_sys; pub use hot_reload_sys::*;
 pub mod components;
 pub mod race;
 pub mod basic_scene;
+pub mod network;
 
 fn main() {
-    let mut app = App::new("Gizmo Engine — Rust 3D Motor", 1280, 720);
+    // Demo -> Sadece Voxygen (Client) Renderer olarak görev yapar!
+    let mut app = App::<crate::state::GameState>::new("Gizmo Engine — Rust 3D Motor", 1280, 720)
+        .add_system(crate::systems::vehicle_controller_system)
+        .add_system(crate::systems::character_update_system)
+        .add_system(crate::systems::free_camera_system)
+        .add_system(crate::systems::chase_camera_system)
+        .add_system(crate::systems::ccd_test_system)
+        .add_system(crate::network::client_network_system)
+        // .load_scene("scene1.json") // Sahneleri otomatik yüklemek için bu satırı açabilirsiniz
+        ;
 
     app = app.set_setup(|world, renderer| {
+        use gizmo::core::input::ActionMap;
+        use gizmo::winit::keyboard::KeyCode;
+
+        let mut action_map = ActionMap::new();
+        action_map.bind_action("Accelerate", KeyCode::ArrowUp as u32);
+        action_map.bind_action("Reverse", KeyCode::ArrowDown as u32);
+        action_map.bind_action("SteerLeft", KeyCode::ArrowLeft as u32);
+        action_map.bind_action("SteerRight", KeyCode::ArrowRight as u32);
+        action_map.bind_action("Brake", KeyCode::Space as u32);
+        world.insert_resource(action_map);
+
         let mut state = scene_setup::setup_empty_scene(world, renderer);
         
         // Yarış yerine Basic Scene modunu başlat
         let basic_state = crate::basic_scene::setup_basic_scene(world, renderer);
         state.player_id = basic_state.camera_entity;
         state.basic_scene = Some(basic_state);
+        state.free_cam = true; // Oyuncunun kamerayı WASD ile gezdirebilmesi için aktif edildi.
         
+        // Gizmo-Net Client Initialize (Şimdilik devre dışı - sunucu yoksa çökmeyi önlemek için)
+        // world.insert_resource(gizmo_net::client::NetworkClient::new("127.0.0.1:4000"));
+
         state
     });
 
     // ── UPDATE ─────────────────────────────────────────────────────────────
     app = app.set_update(|world, state, dt, input| {
+        let active_camera = state.basic_scene.as_ref().map(|s| s.camera_entity)
+            .or_else(|| state.ps1_race.as_ref().map(|r| r.camera_entity))
+            .unwrap_or(state.player_id);
+
+        world.insert_resource(crate::state::EngineConfig {
+            free_cam: state.free_cam,
+            active_camera_entity: active_camera,
+            show_devtools: state.show_devtools,
+        });
+
         state.current_fps = 1.0 / dt;
 
         // Hot-reload texture dosya takibi
@@ -54,48 +94,7 @@ fn main() {
             state.show_devtools = !state.show_devtools;
         }
 
-        let is_in_game = world.get_resource::<crate::state::AppMode>().map(|m| *m) == Some(crate::state::AppMode::InGame);
-
-        let active_camera_entity = state.basic_scene.as_ref().map(|s| s.camera_entity)
-            .or_else(|| state.ps1_race.as_ref().map(|r| r.camera_entity))
-            .unwrap_or(state.player_id);
-
-        // Kamera fare ile döndür (Geliştirici menüsü açıksa Serbest kamera)
-        if state.show_devtools && input.is_mouse_button_pressed(mouse::RIGHT) {
-            if let Some(mut cameras) = world.borrow_mut::<Camera>() {
-                if let Some(cam) = cameras.get_mut(active_camera_entity) {
-                    let delta = input.mouse_delta();
-                    cam.yaw   += delta.0 * 0.002;
-                    cam.pitch -= delta.1 * 0.002;
-                    cam.pitch  = cam.pitch.clamp(-1.5, 1.5);
-                }
-            }
-        }
-
-        // Serbest kamera WASD hareketi
-        if state.show_devtools {
-            let speed = 25.0 * dt;
-            let mut f = Vec3::ZERO;
-            let mut r = Vec3::ZERO;
-            if let Some(cameras) = world.borrow::<Camera>() {
-                if let Some(cam) = cameras.get(active_camera_entity) {
-                    f = cam.get_front();
-                    r = cam.get_right();
-                }
-            }
-            let mut move_delta = Vec3::ZERO;
-            if input.is_key_pressed(KeyCode::KeyW as u32) { move_delta += f * speed; }
-            if input.is_key_pressed(KeyCode::KeyS as u32) { move_delta -= f * speed; }
-            if input.is_key_pressed(KeyCode::KeyA as u32) { move_delta -= r * speed; }
-            if input.is_key_pressed(KeyCode::KeyD as u32) { move_delta += r * speed; }
-            if move_delta.length_squared() > 0.0 {
-                if let Some(mut trans) = world.borrow_mut::<Transform>() {
-                    if let Some(t) = trans.get_mut(active_camera_entity) {
-                        t.position += move_delta;
-                    }
-                }
-            }
-        }
+        let _is_in_game = world.get_resource::<crate::state::AppMode>().map(|m| *m) == Some(crate::state::AppMode::InGame);
 
         // Ray hesapla
         let (mx, my) = input.mouse_position();
@@ -143,38 +142,7 @@ fn main() {
             steps += 1;
         }
 
-        // Vehicle Controller (Input to Engine/Steering)
-        if is_in_game {
-            if let Some(mut vehicles) = world.borrow_mut::<gizmo::physics::vehicle::VehicleController>() {
-                // Arcade Tuning - HIZLI VE KESKİN
-                let engine_power = 12000.0; // İki kat ivme / maksimum hız
-                let max_steer = 0.8; // Çok daha keskin dönüş açısı (~45 derece)
-                let mut current_engine = 0.0;
-                let mut current_steer = 0.0;
-                let mut current_brake = 0.0;
-                
-                // Araç kontrollerini sadece Serbest Kamera Modu (free_cam) YOKSA çalıştır.
-                if !state.free_cam {
-                    if input.is_key_pressed(KeyCode::ArrowUp as u32) || input.is_key_pressed(KeyCode::KeyW as u32) { current_engine = engine_power; }
-                    if input.is_key_pressed(KeyCode::ArrowDown as u32) || input.is_key_pressed(KeyCode::KeyS as u32) { current_engine = -engine_power * 0.4; } // Geri Vites
-                    if input.is_key_pressed(KeyCode::ArrowLeft as u32) || input.is_key_pressed(KeyCode::KeyA as u32) { current_steer = max_steer; }
-                    if input.is_key_pressed(KeyCode::ArrowRight as u32) || input.is_key_pressed(KeyCode::KeyD as u32) { current_steer = -max_steer; }
-                    if input.is_key_pressed(KeyCode::Space as u32) { current_brake = 15000.0; } // Çok güçlü fren
-                }
-                // Race veya Basic Scene player ID'sini bul
-                let target_entity = state.basic_scene.as_ref().map(|s| s.player_entity)
-                    .or_else(|| state.ps1_race.as_ref().map(|r| r.player_entity));
-                
-                if let Some(player_ent) = target_entity {
-                    if let Some(v) = vehicles.get_mut(player_ent) {
-                        // Snappy, hızlı direksiyon tepkisi
-                        v.steering_angle += (current_steer - v.steering_angle) * 15.0 * dt;
-                        v.engine_force = current_engine;
-                        v.brake_force = current_brake;
-                    }
-                }
-            }
-        }
+
 
         transform_hierarchy_system(world);
         
@@ -248,6 +216,11 @@ fn main() {
             }
         }
 
+        // SCENE VS GAME VIEW TAB ODAK KONTROLÜ
+        if let Some(editor) = world.get_resource::<gizmo::editor::EditorState>() {
+            state.free_cam = true; // Hep serbest kamera
+        }
+
         // CHASE CAM UPDATE FOR BASIC SCENE
         // Serbest kamera (free cam) kapalıysa arabayı takip et
         if !state.free_cam {
@@ -266,13 +239,10 @@ fn main() {
             }
             
             if p_pos != Vec3::ZERO && cam_pos != Vec3::ZERO {
-                // Kamerayı aracın arkasından ve biraz üstünden bakacak şekilde ayarlıyoruz.
-                // Titremeyi tamamen yok etmek için sert (lerpsiz) takip kullanacağız veya lerp'i çok hızlandıracağız.
-                // 10 birim geriye, 3 birim yukarıya.
-                let target_cam_pos = p_pos - p_forward * 10.0 + Vec3::new(0.0, 3.0, 0.0);
+                // Kamerayı araca yaklaştıralım (Mesafe 5.5, Yükseklik 2.0)
+                let target_cam_pos = p_pos - p_forward * 5.5 + Vec3::new(0.0, 2.0, 0.0);
                 
-                // Titremeyi onlemek icin direk pozisyona snap yapıyoruz (yumuşak geçiş istemiyoruz test için)
-                let new_cam_pos = target_cam_pos;
+                let new_cam_pos = cam_pos.lerp(target_cam_pos, 15.0 * dt);
                 
                 let dir = (p_pos - new_cam_pos).normalize();
                 let new_yaw = dir.z.atan2(dir.x);
@@ -300,7 +270,281 @@ fn main() {
         render_ui(ctx, state, world);
     });
 
-    app = app.set_render(|world, state, encoder, view, renderer: &mut gizmo::renderer::Renderer, light_time| {
+    app = app.set_render(|world: &mut World, state: &crate::state::GameState, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, renderer: &mut gizmo::renderer::Renderer, light_time: f32| {
+        // EDITOR SCENE SAVE/LOAD İşlemleri
+        let mut save_req: Option<String> = None;
+        let mut load_req: Option<String> = None;
+        let mut spawn_req: Option<String> = None;
+        let mut spawn_asset_req: Option<String> = None;
+        let mut spawn_asset_pos: Option<gizmo::math::Vec3> = None;
+        let mut despawn_req: Option<u32> = None;
+        let mut reparent_req: Option<(u32, u32)> = None;
+        let mut unparent_req: Option<u32> = None;
+        let mut toggle_vis_req: Option<u32> = None;
+        let mut add_comp_req: Option<(u32, String)> = None;
+        
+        if let Some(mut editor) = world.get_resource_mut::<gizmo::editor::EditorState>() {
+            save_req = editor.scene_save_request.take();
+            load_req = editor.scene_load_request.take();
+            spawn_req = editor.spawn_request.take();
+            spawn_asset_req = editor.spawn_asset_request.take();
+            spawn_asset_pos = editor.spawn_asset_position.take();
+            despawn_req = editor.despawn_request.take();
+            reparent_req = editor.reparent_request.take();
+            unparent_req = editor.unparent_request.take();
+            toggle_vis_req = editor.toggle_visibility_request.take();
+            add_comp_req = editor.add_component_request.take();
+        }
+
+        // TOGGLE VISIBILITY
+        if let Some(id) = toggle_vis_req {
+            if let Some(entity) = world.get_entity(id) {
+                let mut is_hidden = false;
+                if let Some(mut hidden_comp) = world.borrow_mut::<gizmo::core::component::IsHidden>() {
+                    if hidden_comp.contains(id) {
+                        hidden_comp.remove(id);
+                    } else {
+                        is_hidden = true;
+                    }
+                }
+                if is_hidden {
+                    world.add_component(entity, gizmo::core::component::IsHidden);
+                }
+            }
+        }
+
+        // DESPAWN
+        if let Some(id) = despawn_req {
+            world.despawn_by_id(id);
+            if let Some(mut editor) = world.get_resource_mut::<gizmo::editor::EditorState>() {
+                let msg = format!("Silindi: {}", id);
+                editor.status_message = msg.clone();
+                editor.log_warning(&msg);
+                editor.selected_entity = None;
+            }
+        }
+
+        // ADD COMPONENT
+        if let Some((ent_id, comp_name)) = add_comp_req {
+            if let Some(entity) = world.get_entity(ent_id) {
+                match comp_name.as_str() {
+                    "Transform" => world.add_component(entity, gizmo::physics::components::Transform::new(gizmo::math::Vec3::ZERO)),
+                    "Velocity" => world.add_component(entity, gizmo::physics::components::Velocity::new(gizmo::math::Vec3::ZERO)),
+                    "RigidBody" => world.add_component(entity, gizmo::physics::components::RigidBody::new(1.0, 0.5, 0.5, true)),
+                    "Collider" => world.add_component(entity, gizmo::physics::shape::Collider::new_sphere(1.0)),
+                    "Camera" => world.add_component(entity, gizmo::renderer::components::Camera::new(
+                        std::f32::consts::FRAC_PI_4,
+                        0.1,
+                        1000.0,
+                        0.0,
+                        0.0,
+                        true,
+                    )),
+                    "PointLight" => {
+                        let light = gizmo::renderer::components::PointLight::new(gizmo::math::Vec3::new(1.0, 1.0, 1.0), 10.0);
+                        world.add_component(entity, light);
+                    },
+                    "Material" => {
+                        // Basit white material
+                        if let Some(mut asset_manager) = world.remove_resource::<gizmo::renderer::asset::AssetManager>() {
+                            let base_tbind = asset_manager.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+                            let mat = gizmo::renderer::components::Material::new(base_tbind).with_pbr(gizmo::math::Vec4::new(1.0, 1.0, 1.0, 1.0), 0.5, 0.5);
+                            world.add_component(entity, mat);
+                            world.insert_resource(asset_manager);
+                        }
+                    },
+                    _ => {}
+                }
+
+                if let Some(mut editor) = world.get_resource_mut::<gizmo::editor::EditorState>() {
+                    editor.log_info(&format!("Bileşen eklendi: {} (Entity {})", comp_name, ent_id));
+                }
+            }
+        }
+
+        // SPAWN
+        if let Some(spawn_type) = spawn_req {
+            let ent = world.spawn();
+            world.add_component(ent, gizmo::prelude::Transform::new(gizmo::prelude::Vec3::new(0.0, 0.0, 0.0)));
+            
+            let name = match spawn_type.as_str() {
+                "Cube" => {
+                    let mesh = gizmo::renderer::asset::AssetManager::create_cube(&renderer.device);
+                    world.add_component(ent, mesh);
+                    world.add_component(ent, gizmo::renderer::components::MeshRenderer::new());
+                    "Küp"
+                },
+                "Sphere" => {
+                    let mesh = gizmo::renderer::asset::AssetManager::create_sphere(&renderer.device, 1.0, 16, 16);
+                    world.add_component(ent, mesh);
+                    world.add_component(ent, gizmo::renderer::components::MeshRenderer::new());
+                    "Küre"
+                },
+                _ => "Boş Entity"
+            };
+            
+            world.add_component(ent, gizmo::prelude::EntityName(name.to_string()));
+            
+            if let Some(mut editor) = world.get_resource_mut::<gizmo::editor::EditorState>() {
+                let msg = format!("Oluşturuldu: {} ({})", name, ent.id());
+                editor.status_message = msg.clone();
+                editor.log_info(&msg);
+                editor.selected_entity = Some(ent.id());
+            }
+        }
+
+        // ASSET SPAWN (GLB/GLTF)
+        if let Some(path) = spawn_asset_req {
+            let mut status = "Desteklenmeyen dosya türü!".to_string();
+            let mut new_ent_id = None;
+            
+            if let Some(mut asset_manager) = world.remove_resource::<gizmo::renderer::asset::AssetManager>() {
+                let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
+                
+                if ext == "glb" || ext == "gltf" {
+                    let base_tbind = asset_manager.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+                    let def_mat = gizmo::renderer::components::Material::new(base_tbind.clone()).with_pbr(gizmo::math::Vec4::new(1.0, 1.0, 1.0, 1.0), 0.5, 0.5);
+                    
+                    match asset_manager.load_gltf_scene(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout, base_tbind, &path) {
+                        Ok(asset) => {
+                            // Kameradan 10 birim ilerisini bul (Eğer Scene View Sürükle ve Bırak ise)
+                            let mut drop_pos = gizmo::math::Vec3::ZERO;
+                            if spawn_asset_pos.is_some() {
+                                // Kameranın baktığı yönü bulalım
+                                if let (Some(cameras), Some(transforms)) = (world.borrow::<gizmo::renderer::components::Camera>(), world.borrow::<gizmo::physics::components::Transform>()) {
+                                    if let (Some(cam), Some(t)) = (cameras.get(state.player_id), transforms.get(state.player_id)) {
+                                        drop_pos = t.position + cam.get_front() * 10.0;
+                                    }
+                                }
+                            }
+                        
+                            let root_transform = gizmo::physics::components::Transform::new(drop_pos);
+                            let root_entity = crate::scene_setup::spawn_gltf_asset(world, &asset, renderer, def_mat, root_transform);
+                            
+                            // Adını dosya adı yap
+                            let file_name = std::path::Path::new(&path).file_name().unwrap_or_else(|| std::ffi::OsStr::new("Asset")).to_string_lossy().to_string();
+                            world.add_component(root_entity, gizmo::prelude::EntityName(file_name));
+                            
+                            status = format!("Model Yüklendi: {}", path);
+                            new_ent_id = Some(root_entity.id());
+                        }
+                        Err(e) => {
+                            status = format!("Model yüklenemedi: {:?}", e);
+                        }
+                    }
+                }
+                
+                world.insert_resource(asset_manager);
+            } else {
+                status = "Hata: AssetManager bulunamadı!".to_string();
+            }
+            
+            if let Some(mut editor) = world.get_resource_mut::<gizmo::editor::EditorState>() {
+                editor.status_message = status.clone();
+                if new_ent_id.is_some() {
+                    editor.log_info(&status);
+                    editor.selected_entity = new_ent_id;
+                } else {
+                    editor.log_error(&status);
+                }
+            }
+        }
+
+        // REPARENT
+        if let Some((child_id, new_parent_id)) = reparent_req {
+            let mut old_parent_id = None;
+            
+            // Çocuğun eski Parent'ı kim?
+            if let Some(parents) = world.borrow::<gizmo::core::component::Parent>() {
+                if let Some(p) = parents.get(child_id) {
+                    old_parent_id = Some(p.0);
+                }
+            }
+
+            // Çocuğa yeni ebeveyni kaydet
+            world.add_component(gizmo::core::entity::Entity::new(child_id, 0), gizmo::core::component::Parent(new_parent_id));
+
+            // Yeni ebeveynin Children dizisine çocuğu ekle
+            let mut target_had_children = false;
+            if let Some(mut children_comp) = world.borrow_mut::<gizmo::core::component::Children>() {
+                if let Some(c) = children_comp.get_mut(new_parent_id) {
+                    if !c.0.contains(&child_id) {
+                        c.0.push(child_id);
+                    }
+                    target_had_children = true;
+                }
+            }
+            if !target_had_children {
+                world.add_component(gizmo::core::entity::Entity::new(new_parent_id, 0), gizmo::core::component::Children(vec![child_id]));
+            }
+
+            // Eski ebeveynin Children dizisinden çocuğu sil
+            if let Some(old_pid) = old_parent_id {
+                if let Some(mut children_comp) = world.borrow_mut::<gizmo::core::component::Children>() {
+                    if let Some(c) = children_comp.get_mut(old_pid) {
+                        c.0.retain(|&id| id != child_id);
+                    }
+                }
+            }
+
+            if let Some(mut editor) = world.get_resource_mut::<gizmo::editor::EditorState>() {
+                editor.status_message = format!("Bağlandı: {} -> Parent {}", child_id, new_parent_id);
+            }
+        }
+
+        // UNPARENT (Kök yap)
+        if let Some(child_id) = unparent_req {
+            let mut old_parent_id = None;
+            if let Some(parents) = world.borrow::<gizmo::core::component::Parent>() {
+                if let Some(p) = parents.get(child_id) {
+                    old_parent_id = Some(p.0);
+                }
+            }
+            if let Some(old_pid) = old_parent_id {
+                if let Some(mut children_comp) = world.borrow_mut::<gizmo::core::component::Children>() {
+                    if let Some(c) = children_comp.get_mut(old_pid) {
+                        c.0.retain(|&id| id != child_id);
+                    }
+                }
+                // Component'i silmek zor, yerine id'sini parent=0 veya root için bir yapı koymak gerekiyorsa koyarız.
+                // Motorumuzda kök entitylerde Parent componenti olması opsiyonel.
+            }
+            if let Some(mut editor) = world.get_resource_mut::<gizmo::editor::EditorState>() {
+                editor.status_message = format!("Kök yapıldı: {}", child_id);
+            }
+        }
+
+        if let Some(save_path) = save_req {
+            gizmo::scene::SceneData::save(world, &save_path);
+            if let Some(mut editor) = world.get_resource_mut::<gizmo::editor::EditorState>() {
+                editor.status_message = format!("✅ Kaydedildi: {}", save_path);
+            }
+        }
+
+        if let Some(load_path) = load_req {
+            let mut status = String::new();
+            if let Some(mut asset_manager) = world.remove_resource::<gizmo::renderer::asset::AssetManager>() {
+                let dummy_rgba = [255, 255, 255, 255];
+                let dummy_bg = renderer.create_texture(&dummy_rgba, 1, 1);
+                gizmo::scene::SceneData::load_into(
+                    &load_path,
+                    world,
+                    &renderer.device,
+                    &renderer.queue,
+                    &renderer.scene.texture_bind_group_layout,
+                    &mut asset_manager,
+                    std::sync::Arc::new(dummy_bg)
+                );
+                world.insert_resource(asset_manager);
+                status = format!("✅ Yüklendi: {}", load_path);
+            } else {
+                status = "❌ Hata: AssetManager bulunamadı!".to_string();
+            }
+            if let Some(mut editor) = world.get_resource_mut::<gizmo::editor::EditorState>() {
+                editor.status_message = status;
+            }
+        }
+
         // Post-process ayarlarını uygula
         {
             if let Some(pp) = world.get_resource::<gizmo::renderer::renderer::PostProcessUniforms>() {

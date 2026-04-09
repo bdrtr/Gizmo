@@ -59,6 +59,128 @@ pub fn spawn_gltf_hierarchy(
     spawned_entities
 }
 
+pub fn spawn_gltf_map_hierarchy(
+    world: &mut World,
+    nodes: &[gizmo::renderer::GltfNodeData],
+    parent_pos: Vec3,
+    parent_rot: Quat,
+    parent_scale: Vec3,
+    default_material: Material,
+) -> Vec<gizmo::core::Entity> {
+    let mut spawned_entities = Vec::new();
+
+    for node in nodes {
+        let local_pos = Vec3::new(node.translation[0], node.translation[1], node.translation[2]);
+        let local_rot = Quat::from_xyzw(node.rotation[0], node.rotation[1], node.rotation[2], node.rotation[3]);
+        let local_scale = Vec3::new(node.scale[0], node.scale[1], node.scale[2]);
+
+        let global_scale = parent_scale * local_scale;
+        let global_rot = parent_rot * local_rot;
+        let scaled_pos = Vec3::new(local_pos.x * parent_scale.x, local_pos.y * parent_scale.y, local_pos.z * parent_scale.z);
+        let global_pos = parent_pos + parent_rot * scaled_pos;
+
+        let entity_name = node.name.clone().unwrap_or_else(|| "GLTF_MapNode".to_string());
+
+        for (prim_i, (mesh, mat_opt)) in node.primitives.iter().enumerate() {
+            let prim_entity = world.spawn();
+            spawned_entities.push(prim_entity);
+            
+            world.add_component(prim_entity, Transform::new(global_pos).with_rotation(global_rot).with_scale(global_scale));
+            world.add_component(prim_entity, EntityName(format!("{}_Primitive_{}", entity_name, prim_i)));
+            world.add_component(prim_entity, mesh.clone());
+            
+            if let Some(mat) = mat_opt {
+                world.add_component(prim_entity, mat.clone());
+            } else {
+                world.add_component(prim_entity, default_material.clone()); 
+            }
+            world.add_component(prim_entity, gizmo::renderer::components::MeshRenderer::new());
+            
+            world.add_component(prim_entity, RigidBody::new_static());
+            let bounds_extents = (mesh.bounds.max - mesh.bounds.min) * 0.5;
+            let safe_hx = (bounds_extents.x * global_scale.x).max(0.05);
+            let safe_hy = (bounds_extents.y * global_scale.y).max(0.05);
+            let safe_hz = (bounds_extents.z * global_scale.z).max(0.05);
+            world.add_component(prim_entity, Collider::new_aabb(safe_hx, safe_hy, safe_hz));
+        }
+
+        if !node.children.is_empty() {
+            let child_entities = spawn_gltf_map_hierarchy(world, &node.children, global_pos, global_rot, global_scale, default_material.clone());
+            spawned_entities.extend(child_entities);
+        }
+    }
+
+    spawned_entities
+}
+
+pub fn spawn_gltf_map(
+    world: &mut World,
+    asset: &gizmo::renderer::asset::GltfSceneAsset,
+    default_material: Material,
+    root_transform: Transform,
+) -> Vec<gizmo::core::Entity> {
+    spawn_gltf_map_hierarchy(
+        world, 
+        &asset.roots, 
+        root_transform.position, 
+        root_transform.rotation, 
+        root_transform.scale, 
+        default_material
+    )
+}
+
+
+pub fn setup_headless_scene(world: &mut World) -> crate::state::GameState {
+    world.insert_resource(gizmo::core::input::ActionMap::new());
+    world.insert_resource(gizmo::physics::components::PhysicsConfig {
+        ground_y: -0.5,
+    });
+    world.insert_resource(gizmo::physics::JointWorld::new());
+    world.insert_resource(gizmo::physics::system::PhysicsSolverState::new());
+    
+    // Physics and default entities setup without rendering components
+    let player = world.spawn();
+    world.add_component(player, Transform::new(Vec3::new(0.0, 5.0, 0.0)));
+    world.add_component(player, gizmo::physics::character::CharacterController::new(0.4, 0.8));
+    world.add_component(player, crate::Player);
+
+    crate::state::GameState {
+        player_id: player.id(),
+        bouncing_box_id: 0,
+        skybox_id: 0,
+        inspector_selected_entity: None,
+        audio: None,
+        do_raycast: false,
+        gizmo_x: 0,
+        gizmo_y: 0,
+        gizmo_z: 0,
+        dragging_axis: None,
+        drag_start_t: 0.0,
+        drag_original_pos: Vec3::ZERO,
+        drag_original_scale: Vec3::ONE,
+        drag_original_rot: Quat::IDENTITY,
+        current_fps: 60.0,
+        gizmo_mode: crate::state::GizmoMode::Translate,
+        egui_wants_pointer: false,
+        asset_watcher: gizmo::renderer::hot_reload::AssetWatcher::new(&["demo/assets"]),
+        physics_accumulator: 0.0,
+        target_physics_fps: 240.0, 
+        sphere_prefab_id: 0,
+        cube_prefab_id: 0,
+        free_cam: false,
+        active_dialogue: None,
+        active_cutscene: None,
+        checkpoints: Vec::new(),
+        race_status: crate::state::RaceStatus::Idle,
+        race_timer: 0.0,
+        camera_follow_target: None,
+        total_elapsed: 0.0,
+        ps1_race: None,
+        basic_scene: None,
+        show_devtools: false,
+    }
+}
+
 pub fn spawn_gltf_asset(
     world: &mut World,
     asset: &gizmo::renderer::asset::GltfSceneAsset,
@@ -120,8 +242,8 @@ pub fn spawn_gltf_asset(
     root_ent
 }
 
-pub fn setup_empty_scene(world: &mut World, renderer: &gizmo::renderer::renderer::Renderer) -> GameState {
-    let mut audio = gizmo::audio::AudioManager::new();
+pub fn setup_empty_scene(_world: &mut World, _renderer: &gizmo::renderer::renderer::Renderer) -> GameState {
+    let audio = gizmo::audio::AudioManager::new();
     let asset_watcher = gizmo::renderer::hot_reload::AssetWatcher::new(&["demo/assets"]);
 
     GameState {
@@ -380,7 +502,7 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
     world.insert_resource(gizmo::editor::EditorState::new());
     
     // UI Durumları
-    world.insert_resource(crate::state::AppMode::MainMenu);
+    world.insert_resource(crate::state::AppMode::InGame);
     world.insert_resource(crate::state::PlayerStats {
         health: 100.0,
         max_health: 100.0,
@@ -411,7 +533,7 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
         target_physics_fps: 240.0, // Sub-stepping: saniyede 240 simülasyon adımı (60 FPS'te kare başı 4 adım)
         sphere_prefab_id: sphere_prefab.id(),
         cube_prefab_id: cube_prefab.id(),
-        free_cam: true,
+        free_cam: false,
 
         // Oyun sistemi
         active_dialogue: None,

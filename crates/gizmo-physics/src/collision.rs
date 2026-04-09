@@ -120,6 +120,132 @@ pub fn check_sphere_aabb_manifold(pos_s: Vec3, sphere: &Sphere, pos_aabb: Vec3, 
     }
 }
 
+pub fn check_sphere_obb_manifold(pos_s: Vec3, sphere: &Sphere, pos_obb: Vec3, rot_obb: gizmo_math::Quat, obb: &Aabb) -> CollisionManifold {
+    // Küre merkezini OBB'nin yerel uzayına (Local Space) dönüştür
+    let diff = pos_s - pos_obb;
+    let local_s = rot_obb.inverse().mul_vec3(diff);
+
+    // Yerel uzaydaki AABB'ye kenetle (Clamp)
+    let closest_local = Vec3::new(
+        local_s.x.clamp(-obb.half_extents.x, obb.half_extents.x),
+        local_s.y.clamp(-obb.half_extents.y, obb.half_extents.y),
+        local_s.z.clamp(-obb.half_extents.z, obb.half_extents.z),
+    );
+
+    let local_diff = local_s - closest_local;
+    let dist_sq = local_diff.length_squared();
+
+    if dist_sq < sphere.radius * sphere.radius {
+        // En yakın noktayı dünya uzayına çevir
+        let closest_world = pos_obb + rot_obb.mul_vec3(closest_local);
+        
+        let dist = dist_sq.sqrt();
+        let (normal, penetration) = if dist > 0.0001 {
+            let n = rot_obb.mul_vec3(local_diff / dist);
+            (n, sphere.radius - dist)
+        } else {
+            // Tam merkezdeyse rastgele yön fırlat
+            let n = rot_obb.mul_vec3(Vec3::new(0.0, 1.0, 0.0));
+            (n, sphere.radius)
+        };
+
+        CollisionManifold { is_colliding: true, normal, penetration, contact_points: vec![(closest_world, penetration)] }
+    } else {
+        CollisionManifold { is_colliding: false, normal: Vec3::ZERO, penetration: 0.0, contact_points: vec![] }
+    }
+}
+
+pub fn check_obb_obb_manifold(
+    pos_a: Vec3, rot_a: gizmo_math::Quat, aabb_a: &Aabb,
+    pos_b: Vec3, rot_b: gizmo_math::Quat, aabb_b: &Aabb,
+) -> CollisionManifold {
+    // 1. Eksenleri hesapla
+    let axes_a = [
+        rot_a.mul_vec3(Vec3::new(1.0, 0.0, 0.0)),
+        rot_a.mul_vec3(Vec3::new(0.0, 1.0, 0.0)),
+        rot_a.mul_vec3(Vec3::new(0.0, 0.0, 1.0)),
+    ];
+    let axes_b = [
+        rot_b.mul_vec3(Vec3::new(1.0, 0.0, 0.0)),
+        rot_b.mul_vec3(Vec3::new(0.0, 1.0, 0.0)),
+        rot_b.mul_vec3(Vec3::new(0.0, 0.0, 1.0)),
+    ];
+
+    let t = pos_b - pos_a;
+
+    let mut min_penetration = f32::MAX;
+    let mut best_axis = Vec3::ZERO;
+    // Normal A'dan B'ye doğrudur her zaman
+
+    // Toplam 15 ayırıcı eksen: 3(a) + 3(b) + 9(a_x_cross_b_y)
+    let mut test_axes = Vec::with_capacity(15);
+    test_axes.extend_from_slice(&axes_a);
+    test_axes.extend_from_slice(&axes_b);
+    for i in 0..3 {
+        for j in 0..3 {
+            let cross = axes_a[i].cross(axes_b[j]);
+            // Çok küçük boyutlu (paralel) vektörleri atla
+            if cross.length_squared() > 1e-6 {
+                test_axes.push(cross.normalize());
+            }
+        }
+    }
+
+    let ea = aabb_a.half_extents;
+    let eb = aabb_b.half_extents;
+
+    for mut axis in test_axes {
+        // İzdüşüm yarıçapları
+        let ra = ea.x * axis.dot(axes_a[0]).abs() + ea.y * axis.dot(axes_a[1]).abs() + ea.z * axis.dot(axes_a[2]).abs();
+        let rb = eb.x * axis.dot(axes_b[0]).abs() + eb.y * axis.dot(axes_b[1]).abs() + eb.z * axis.dot(axes_b[2]).abs();
+        
+        let dist = t.dot(axis).abs();
+        let p = (ra + rb) - dist;
+
+        if p < 0.0 {
+            // Çakışma yok (Ayrıştırıcı Eksen bulundu)
+            return CollisionManifold { is_colliding: false, normal: Vec3::ZERO, penetration: 0.0, contact_points: vec![] };
+        }
+
+        if p < min_penetration {
+            min_penetration = p;
+            // Eksen her zaman A'dan B'ye işaret etmeli
+            if t.dot(axis) < 0.0 {
+                axis *= -1.0;
+            }
+            best_axis = axis;
+        }
+    }
+
+    // Basitleştirilmiş EPA tarzı iletişim noktası tahmini: (SAT ile normali çok net bulduk)
+    // İki tarafın da bulunan eksen bağlamında destek noktalarını buluyoruz.
+    // OBB A'nın -normal yönündeki en uzak köşesi (Ama b'ye en yakın) vs.
+    
+    // Support from A towards B
+    let local_dir_a = rot_a.inverse().mul_vec3(best_axis);
+    let lx_a = if local_dir_a.x > 0.0 { ea.x } else { -ea.x };
+    let ly_a = if local_dir_a.y > 0.0 { ea.y } else { -ea.y };
+    let lz_a = if local_dir_a.z > 0.0 { ea.z } else { -ea.z };
+    let support_a = pos_a + rot_a.mul_vec3(Vec3::new(lx_a, ly_a, lz_a));
+
+    // Support from B towards A
+    let local_dir_b = rot_b.inverse().mul_vec3(-best_axis);
+    let lx_b = if local_dir_b.x > 0.0 { eb.x } else { -eb.x };
+    let ly_b = if local_dir_b.y > 0.0 { eb.y } else { -eb.y };
+    let lz_b = if local_dir_b.z > 0.0 { eb.z } else { -eb.z };
+    let support_b = pos_b + rot_b.mul_vec3(Vec3::new(lx_b, ly_b, lz_b));
+
+    // Orta noktayı merkez noktası olarak kullan
+    let contact_point = (support_a + support_b) * 0.5;
+
+    CollisionManifold {
+        is_colliding: true,
+        normal: best_axis,
+        penetration: min_penetration,
+        contact_points: vec![(contact_point, min_penetration)],
+    }
+}
+
 // ======================== KAPSÜL ÇARPIŞMA FONKSİYONLARI ========================
 
 /// İki çizgi segmenti arasındaki en yakın noktaları bulur.

@@ -1,5 +1,5 @@
 use gizmo::prelude::*;
-use gizmo::physics::{VehicleController, Wheel, RigidBody, Collider};
+
 
 pub struct BasicSceneState {
     pub player_entity: u32,
@@ -10,6 +10,19 @@ pub fn setup_basic_scene(
     world: &mut World,
     renderer: &gizmo::renderer::Renderer,
 ) -> BasicSceneState {
+    use gizmo::core::input::ActionMap;
+    use gizmo::winit::keyboard::KeyCode;
+
+    let mut action_map = ActionMap::new();
+    action_map.bind_action("Accelerate", KeyCode::ArrowUp as u32);
+    action_map.bind_action("Reverse", KeyCode::ArrowDown as u32);
+    action_map.bind_action("SteerLeft", KeyCode::ArrowLeft as u32);
+    action_map.bind_action("SteerRight", KeyCode::ArrowRight as u32);
+    action_map.bind_action("Brake", KeyCode::Space as u32);
+    action_map.bind_action("ShootNoCCD", KeyCode::KeyE as u32);
+    action_map.bind_action("ShootCCD", KeyCode::KeyR as u32);
+    world.insert_resource(action_map);
+
     world.insert_resource(gizmo::physics::components::PhysicsConfig {
         ground_y: -0.5,
     });
@@ -18,119 +31,106 @@ pub fn setup_basic_scene(
 
     let mut asset_manager = gizmo::renderer::asset::AssetManager::new();
     let base_tbind = asset_manager.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+    
+    // ==================== ZEMİN MESHİ (Asfalt/Beton) ====================
+    let floor_entity = world.spawn();
+    // Şehir artık devasa boyutta olacağı için zemini de şehrin hemen alt tabanına (Y = -2.0) alıyoruz
+    world.add_component(floor_entity, Transform::new(Vec3::new(0.0, -2.0, 0.0)));
+    world.add_component(floor_entity, gizmo::renderer::asset::AssetManager::create_plane(&renderer.device, 20000.0));
+    
+    let mut floor_mat = Material::new(base_tbind.clone()).with_pbr(Vec4::new(0.1, 0.1, 0.1, 1.0), 0.95, 0.0);
+    floor_mat.is_double_sided = true; // Zemin yüzeyi kameraya ters baksa bile renderlanması için
+    world.add_component(floor_entity, floor_mat);
+    
+    world.add_component(floor_entity, gizmo::renderer::components::MeshRenderer::new());
+    world.add_component(floor_entity, EntityName("Asfalt Zemin (City Ground)".to_string()));
 	   
-    // ==================== DÜMDÜZ ZEMİN ====================
-    // Duvarda Texture dümdüz dursun diye UV Repeat ile yaratılan create_plane kullanıyoruz.
-    // scale edilirse texture aşırı sünüp tek renk gibi görünür.
-    let ground_mesh = gizmo::renderer::asset::AssetManager::create_plane(&renderer.device, 400.0);
-    
-    // YUKARI BAKAN YÜZ
-    let ground_top = world.spawn();
-    world.add_component(ground_top, Transform::new(Vec3::new(0.0, -0.5, 0.0)));
-    world.add_component(ground_top, RigidBody::new_static());
-    world.add_component(ground_top, Collider::new_aabb(400.0, 0.5, 400.0));
-    
-    // AŞAĞI BAKAN YÜZ (Culling hatasına karşı)
-    let ground_bottom = world.spawn();
-    // 180 derece (PI) döndürüyoruz
-    world.add_component(ground_bottom, Transform::new(Vec3::new(0.0, -0.51, 0.0))
-        .with_rotation(Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), std::f32::consts::PI)));
-    
-    let mut ground_mat = Material::new(base_tbind.clone()).with_pbr(Vec4::new(0.4, 0.4, 0.4, 1.0), 0.9, 0.1);
-    // Kaplama ekleyelim ki zemin algılansın
-    match asset_manager.load_material_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout, "demo/assets/stone_tiles.jpg") {
-        Ok(tex) => {
-            ground_mat = Material::new(tex).with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.9, 0.1);
-            ground_mat.texture_source = Some("demo/assets/stone_tiles.jpg".to_string());
-        }
-        Err(e) => println!("Zemin kaplamasi yuklenemedi: {:?}", e),
-    }
-    world.add_component(ground_top, ground_mat.clone());
-    world.add_component(ground_top, ground_mesh.clone());
-    world.add_component(ground_top, gizmo::renderer::components::MeshRenderer::new());
-
-    world.add_component(ground_bottom, ground_mat);
-    world.add_component(ground_bottom, ground_mesh);
-    world.add_component(ground_bottom, gizmo::renderer::components::MeshRenderer::new());
-
-    // Gökyüzü bembeyaz olduğu için (White Texture kullandık) göz alıyor. 
-    // Skybox'ı siliyoruz, motorun varsayılan karanlık arka plan rengi devreye girecek.
-
-    // ==================== OYUNCU (CAR GLB) ====================
-    let player = world.spawn();
-    // Fizik motoru Play tuşuna basana kadar havada (2.0) duruyordu. 
-    // Daha gerçekçi görünmesi için direk zemine (0.5) yakın spawn edelim:
-    world.add_component(player, Transform::new(Vec3::new(0.0, 0.5, 0.0)));
-    
-    let mut rb = RigidBody::new(600.0, 0.02, 0.8, true); 
-    rb.calculate_box_inertia(2.0, 1.0, 4.0);
-    world.add_component(player, rb);
-    world.add_component(player, Collider::new_aabb(1.0, 0.5, 2.0));
-    world.add_component(player, gizmo::physics::Velocity::new(Vec3::ZERO));
-
-    let mut vc = VehicleController::new();
-    vc.lateral_grip = 18000.0;
-    vc.steering_force_mult = 15000.0;
-    vc.anti_slide_force = 12000.0;
-    
-    let stiff = 8500.0;
-    let damp = 1000.0;
-    vc.add_wheel(Wheel::new(Vec3::new(-1.0, -0.3, 1.5), 0.8, stiff, damp, 0.4));
-    vc.add_wheel(Wheel::new(Vec3::new(1.0, -0.3, 1.5), 0.8, stiff, damp, 0.4));
-    vc.add_wheel(Wheel::new(Vec3::new(-1.0, -0.3, -1.2), 0.8, stiff, damp, 0.4).with_drive());
-    vc.add_wheel(Wheel::new(Vec3::new(1.0, -0.3, -1.2), 0.8, stiff, damp, 0.4).with_drive());
-    world.add_component(player, vc);
-
+    // ==================== DIŞARIDAN YÜKLENEN HARİTA (Map GLTF) ====================
+    let map_mat = Material::new(base_tbind.clone()).with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.9, 0.1);
     match asset_manager.load_gltf_scene(
         &renderer.device,
         &renderer.queue,
         &renderer.scene.texture_bind_group_layout,
         base_tbind.clone(),
-        "demo/assets/vw.glb",
+        "demo/assets/city.glb",
     ) {
         Ok(asset) => {
-            let def_mat = gizmo::prelude::Material::new(base_tbind.clone()).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.6, 0.1);
-            let car_root = world.spawn();
-            // GLTF modeli genellikle `-Z`'ye (ekrandan içe doğru) bakar ancak Fizik motorumuz `+Z`'ye ivmelenir.
-            // Bu yüzden modeli Y ekseninde 180 derece çeviriyoruz ki ileri basınca doğru yöne gitsin ve kamera arkadan (egzoz) baksın!
-            world.add_component(car_root, Transform::new(Vec3::ZERO)
-                .with_scale(Vec3::new(1.0, 1.0, 1.0))
-                .with_rotation(Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), std::f32::consts::PI)));
-            world.add_component(car_root, Parent(player.id()));
-            
-            let children = crate::scene_setup::spawn_gltf_hierarchy(world, &asset.roots, Some(car_root.id()), def_mat);
-            world.add_component(car_root, Children(children.iter().map(|e| e.id()).collect()));
-            world.add_component(player, Children(vec![car_root.id()]));
+            // Şehir modeli aslında "minyatür" olarak export edilmiş! 
+            // Onu gerçek hayattaki gökdelen boyutlarına getirmek için 100 ile çarpıyoruz.
+            let root_transform = Transform::new(Vec3::new(0.0, -1.0, 0.0))
+                .with_scale(Vec3::new(100.0, 100.0, 100.0));
+
+            crate::scene_setup::spawn_gltf_map(world, &asset, map_mat, root_transform);
+            println!("City haritası başarıyla yüklendi ve fiziksel zemin oluşturuldu!");
         }
         Err(e) => {
-            println!("ARABA GLFT YUKLENEMEDI! HATA: {:?}", e);
-            world.add_component(player, gizmo::renderer::asset::AssetManager::create_cube(&renderer.device));
-            world.add_component(player, gizmo::prelude::Material::new(base_tbind.clone()).with_pbr(Vec4::new(0.8, 0.2, 0.2, 1.0), 0.5, 0.1));
-            world.add_component(player, gizmo::renderer::components::MeshRenderer::new());
+            println!("HARİTA GLTF YUKLENEMEDI! HATA: {:?}", e);
         }
     }
+
+    // ==================== ANİMASYONLU KARAKTER TESTİ (Cesium Man) ====================
+    let char_mat = Material::new(base_tbind.clone()).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.8, 0.2);
+    match asset_manager.load_gltf_scene(
+        &renderer.device,
+        &renderer.queue,
+        &renderer.scene.texture_bind_group_layout,
+        base_tbind.clone(),
+        "demo/assets/cesium_man.glb",
+    ) {
+        Ok(asset) => {
+            let root_transform = Transform::new(Vec3::new(0.0, -0.5, -5.0))
+                .with_scale(Vec3::new(2.5, 2.5, 2.5));
+
+            crate::scene_setup::spawn_gltf_asset(world, &asset, renderer, char_mat, root_transform);
+            println!("CesiumMan animasyonlu haritası başarıyla yüklendi!");
+        }
+        Err(e) => {
+            println!("CESIUM MAN YUKLENEMEDI! HATA: {:?}", e);
+        }
+    }
+
+    // ==================== GPU PARTICLE GÖSTERİSİ (Magma Gayzeri) ====================
+    let fire_entity = world.spawn();
+    world.add_component(fire_entity, Transform::new(Vec3::new(20.0, -10.0, -20.0)));
+    
+    let mut fire_emitter = gizmo::renderer::components::ParticleEmitter::new();
+    fire_emitter.spawn_rate = 2000.0; // Saniyede 2000 partikül
+    fire_emitter.initial_velocity = Vec3::new(0.0, 80.0, 0.0); // Fışkırma
+    fire_emitter.velocity_randomness = 10.0;
+    fire_emitter.lifespan = 4.0;
+    fire_emitter.lifespan_randomness = 2.0;
+    fire_emitter.size_start = 3.0; // Dev alev küreleri
+    fire_emitter.size_end = 0.0;
+    fire_emitter.color_start = Vec4::new(1.0, 0.2, 0.0, 1.0); // Dev ateş
+
+    world.add_component(fire_entity, fire_emitter);
+    world.add_component(fire_entity, EntityName("Magma Geyser Emitter".to_string()));
 
     // ==================== TAKİP KAMERASI ====================
     let camera_entity = world.spawn();
     world.add_component(camera_entity, Transform::new(Vec3::new(0.0, 5.0, -15.0)));
     world.add_component(camera_entity, Camera {
         fov: 75.0_f32.to_radians(),
-        near: 0.1,
+        near: 0.5,
         far: 1500.0,
-        yaw: 0.0,
+        yaw: std::f32::consts::FRAC_PI_2,
         pitch: -0.15,
         primary: true,
     });
 
     // ==================== IŞIK (GÜNEŞ) ====================
     let sun = world.spawn();
+    // Daha yatay uzanan, altın saat (Golden Hour) gölgeleri için güneşi eğiyoruz
     world.add_component(sun, Transform::new(Vec3::new(0.0, 100.0, 100.0))
-        .with_rotation(Quat::from_axis_angle(Vec3::new(1.0, 0.5, 0.0).normalize(), -std::f32::consts::FRAC_PI_4)));
-    // is_sun'ı true yapıp gölgeleri geri açıyoruz (Artık shader düzeldi)
-    world.add_component(sun, gizmo::renderer::components::DirectionalLight::new(Vec3::new(1.0, 0.95, 0.9), 1.0, true));
+        .with_rotation(Quat::from_axis_angle(Vec3::new(1.0, 0.3, 0.0).normalize(), -std::f32::consts::FRAC_PI_6)));
+    world.add_component(sun, gizmo::renderer::components::DirectionalLight {
+        color: Vec3::new(1.0, 0.7, 0.4), // Altın / Turuncu (Sunset) güneş rengi
+        intensity: 2.5,
+        is_sun: true,
+    });
 
     BasicSceneState {
-        player_entity: player.id(),
+        player_entity: camera_entity.id(), // Shadow focus point
         camera_entity: camera_entity.id(),
     }
 }

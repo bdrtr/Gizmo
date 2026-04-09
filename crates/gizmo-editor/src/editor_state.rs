@@ -57,6 +57,27 @@ pub struct EditorState {
     pub scene_load_request: Option<String>,
     /// Prefab kaydetme isteği (Entity ID, Dosya yolu)
     pub prefab_save_request: Option<(u32, String)>,
+    /// Yeni entity yaratma talebi (Type adı örn: "Empty", "Cube", "Sphere")
+    pub spawn_request: Option<String>,
+    /// Asset üzerinden yeni model spawn etme isteği (Dosya yolu)
+    pub spawn_asset_request: Option<String>,
+    /// İsteğe bağlı, ekrandan (drag&drop) atılan pozisyon
+    pub spawn_asset_position: Option<gizmo_math::Vec3>,
+    /// Entity ebeveyn değiştirme (Dragged ID, Target Parent ID)
+    pub reparent_request: Option<(u32, u32)>,
+    /// Entity ebeveyni silme (Root yapma) - Drag ID
+    pub unparent_request: Option<u32>,
+    /// Obje görünürlüğünü aç/kapat tetiği
+    pub toggle_visibility_request: Option<u32>,
+    /// Seçili Obje ID'sine yeni obje tipi ekleme
+    pub add_component_request: Option<(u32, String)>,
+    /// Hangi kameraların çizileceğini anlamak için bayraklar
+    pub scene_view_visible: bool,
+    pub game_view_visible: bool,
+    /// Console logları
+    pub console_logs: Vec<(String, egui::Color32)>,
+    /// Docking State (Pencere yerleşim verisi)
+    pub dock_state: egui_dock::DockState<String>,
 }
 
 impl EditorState {
@@ -80,6 +101,17 @@ impl EditorState {
             scene_save_request: None,
             scene_load_request: None,
             prefab_save_request: None,
+            spawn_request: None,
+            spawn_asset_request: None,
+            spawn_asset_position: None,
+            reparent_request: None,
+            unparent_request: None,
+            toggle_visibility_request: None,
+            add_component_request: None,
+            scene_view_visible: true,
+            game_view_visible: false,
+            console_logs: Vec::new(),
+            dock_state: create_default_dock_state(),
         }
     }
 
@@ -114,11 +146,41 @@ impl EditorState {
     pub fn is_editing(&self) -> bool {
         self.mode == EditorMode::Edit
     }
+
+    pub fn log_info(&mut self, msg: &str) {
+        self.console_logs.push((format!("ℹ️ {}", msg), egui::Color32::WHITE));
+    }
+    
+    pub fn log_warning(&mut self, msg: &str) {
+        self.console_logs.push((format!("⚠️ {}", msg), egui::Color32::YELLOW));
+    }
+
+    pub fn log_error(&mut self, msg: &str) {
+        self.console_logs.push((format!("❌ {}", msg), egui::Color32::RED));
+    }
 }
 
 impl Default for EditorState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn create_default_dock_state() -> egui_dock::DockState<String> {
+    use egui_dock::{DockState, NodeIndex};
+    // Root tab "Scene View" and "Game View" in the same area
+    let mut state = DockState::new(vec!["Scene View".to_string(), "Game View".to_string()]);
+    let surface = state.main_surface_mut();
+
+    // Right Split for Inspector
+    let [main, _right] = surface.split_right(NodeIndex::root(), 0.75, vec!["Inspector".to_string()]);
+    
+    // Left Split for Hierarchy
+    let [main, _left] = surface.split_left(main, 0.25, vec!["Hierarchy".to_string()]);
+    
+    // Bottom Split for Asset Browser
+    let [_main, _bottom] = surface.split_below(main, 0.7, vec!["Asset Browser".to_string(), "Console".to_string()]);
+    
+    state
 }
 

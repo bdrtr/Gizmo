@@ -138,6 +138,10 @@ impl EntityName {
     }
 }
 
+/// Görünmezlik etiketi: Eğer bu component bir objede varsa render edilmez (veya aktifliği kapatılır).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct IsHidden;
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PrefabRequest(pub String);
 

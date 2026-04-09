@@ -25,6 +25,13 @@ impl<'a, T1: Component> QueryMut<'a, T1> {
     }
 }
 
+impl<T1: Component> crate::system::SystemParam for QueryMut<'static, T1> {
+    type Item<'a> = QueryMut<'a, T1>;
+    fn fetch<'a>(world: &'a World) -> Self::Item<'a> {
+        QueryMut::new(world).expect("Failed to borrow component")
+    }
+}
+
 pub struct QueryRef<'a, T1: Component> {
     pub s1: Ref<'a, SparseSet<T1>>,
 }
@@ -40,6 +47,13 @@ impl<'a, T1: Component> QueryRef<'a, T1> {
         self.s1.entity_dense.iter()
             .zip(self.s1.dense.iter())
             .map(|(&e, t1)| (e, t1))
+    }
+}
+
+impl<T1: Component> crate::system::SystemParam for QueryRef<'static, T1> {
+    type Item<'a> = QueryRef<'a, T1>;
+    fn fetch<'a>(world: &'a World) -> Self::Item<'a> {
+        QueryRef::new(world).expect("Failed to borrow component")
     }
 }
 
@@ -68,6 +82,13 @@ impl<'a, T1: Component, T2: Component> QueryMutRef<'a, T1, T2> {
             .filter_map(move |(&e, t1)| {
                 s2.get(e).map(|t2| (e, t1, t2))
             })
+    }
+}
+
+impl<T1: Component, T2: Component> crate::system::SystemParam for QueryMutRef<'static, T1, T2> {
+    type Item<'a> = QueryMutRef<'a, T1, T2>;
+    fn fetch<'a>(world: &'a World) -> Self::Item<'a> {
+        QueryMutRef::new(world).expect("Failed to borrow components")
     }
 }
 
@@ -105,6 +126,13 @@ impl<'a, T1: Component, T2: Component> QueryMutMut<'a, T1, T2> {
                     None
                 }
             })
+    }
+}
+
+impl<T1: Component, T2: Component> crate::system::SystemParam for QueryMutMut<'static, T1, T2> {
+    type Item<'a> = QueryMutMut<'a, T1, T2>;
+    fn fetch<'a>(world: &'a World) -> Self::Item<'a> {
+        QueryMutMut::new(world).expect("Failed to borrow components")
     }
 }
 
@@ -195,3 +223,5 @@ impl<'a, T1: Component, T2: Component, T3: Component> QueryRefRefRef<'a, T1, T2,
             })
     }
 }
+
+

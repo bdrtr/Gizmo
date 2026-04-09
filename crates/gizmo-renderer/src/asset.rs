@@ -583,7 +583,7 @@ impl AssetManager {
             // Varsayılan: PBR açık (unlit=0.0). GLTF modelleri artık ışıklandırma alacak.
             mat.unlit = 0.0;
             
-            if material.alpha_mode() == gltf::material::AlphaMode::Blend {
+            if material.alpha_mode() == gltf::material::AlphaMode::Blend || material.alpha_mode() == gltf::material::AlphaMode::Mask {
                 mat.is_transparent = true;
             }
             if material.double_sided() {
@@ -717,7 +717,7 @@ impl AssetManager {
         let (translation, rotation, scale) = node.transform().decomposed();
         
         let mut primitives = Vec::new();
-        if let Some(mesh) = node.mesh() {
+        if let Some(_mesh) = node.mesh() {
             for (prim_i, primitive) in node.mesh().unwrap().primitives().enumerate() {
                 let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
                 

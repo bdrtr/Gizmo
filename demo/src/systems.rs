@@ -1,5 +1,70 @@
 use gizmo::prelude::*;
+use gizmo::math::{Vec3, Vec4, Quat};
 use crate::GameState;
+use gizmo::core::input::Input;
+
+pub fn free_camera_system(world: &mut World, dt: f32) {
+    let state_opt = world.get_resource::<crate::state::EngineConfig>();
+    let input_opt = world.get_resource::<gizmo::core::input::Input>();
+    
+    if state_opt.is_none() || input_opt.is_none() { 
+        // EngineConfig henüz eklenmediyse çık (Crash'i önler)
+        return; 
+    }
+    let state = state_opt.unwrap();
+    let input = input_opt.unwrap();
+    
+    if !state.free_cam { return; }
+    
+    let active_camera_entity = state.active_camera_entity;
+
+    let wants_pointer = world.get_resource::<egui::Context>().map(|c| c.wants_pointer_input()).unwrap_or(false);
+    let wants_keyboard = world.get_resource::<egui::Context>().map(|c| c.wants_keyboard_input()).unwrap_or(false);
+
+    let speed = 25.0 * dt;
+    let mut move_delta = Vec3::ZERO;
+    let mut do_rotation = false;
+
+    if input.is_mouse_button_pressed(gizmo::core::input::mouse::RIGHT) && !wants_pointer {
+        do_rotation = true;
+    }
+
+    // WASD kontrol
+    if !wants_keyboard {
+        use gizmo::winit::keyboard::KeyCode;
+        
+        // Shift ile hızlandır
+        let mut current_speed = speed;
+        if input.is_key_pressed(KeyCode::ShiftLeft as u32) {
+            current_speed *= 10.0;
+        }
+
+        if input.is_key_pressed(KeyCode::KeyW as u32) { move_delta += Vec3::new(0.0, 0.0, 1.0) * current_speed; } // W
+        if input.is_key_pressed(KeyCode::KeyS as u32) { move_delta -= Vec3::new(0.0, 0.0, 1.0) * current_speed; } // S
+        if input.is_key_pressed(KeyCode::KeyA as u32) { move_delta -= Vec3::new(1.0, 0.0, 0.0) * current_speed; } // A
+        if input.is_key_pressed(KeyCode::KeyD as u32) { move_delta += Vec3::new(1.0, 0.0, 0.0) * current_speed; } // D
+    }
+
+    if let Some(mut query) = world.query_mut_mut::<Camera, Transform>() {
+        for (id, cam, trans) in query.iter_mut() {
+            if id == active_camera_entity {
+                if do_rotation {
+                    let delta = input.mouse_delta();
+                    cam.yaw   += delta.0 * 0.002;
+                    cam.pitch -= delta.1 * 0.002;
+                    cam.pitch  = cam.pitch.clamp(-1.5, 1.5);
+                }
+
+                if move_delta.length_squared() > 0.0 {
+                    let f = cam.get_front();
+                    let r = cam.get_right();
+                    let actual_move = f * move_delta.z + r * move_delta.x;
+                    trans.position += actual_move;
+                }
+            }
+        }
+    }
+}
 
 pub fn transform_hierarchy_system(world: &mut World) {
     // 1. Önce herkesin local matrix'ini güncelle (PARALEL!)
@@ -46,87 +111,6 @@ pub fn transform_hierarchy_system(world: &mut World) {
         }
     }
 }
-
-
-pub fn particle_update_system(world: &mut World, dt: f32) {
-    if dt <= 0.0 { return; }
-    
-    let mut emitters = match world.borrow_mut::<gizmo::renderer::components::ParticleEmitter>() {
-        Some(e) => e,
-        None => return,
-    };
-    
-    let transforms = match world.borrow::<gizmo::physics::components::Transform>() {
-        Some(t) => t,
-        None => return,
-    };
-
-    use rand::Rng;
-    let mut rng = rand::rng();
-
-    let emitter_entities = emitters.entity_dense.clone();
-    for e_id in emitter_entities {
-        
-        if let Some(emitter) = emitters.get_mut(e_id) {
-            let base_pos = if let Some(t) = transforms.get(e_id) {
-                t.position + t.rotation.mul_vec3(emitter.local_offset)
-            } else {
-                emitter.local_offset
-            };
-            
-            // 1. Spawning
-            if emitter.is_active && emitter.spawn_rate > 0.0 {
-                emitter.accumulator += dt;
-                let spawn_interval = 1.0 / emitter.spawn_rate;
-                
-                while emitter.accumulator >= spawn_interval {
-                    emitter.accumulator -= spawn_interval;
-                    
-                    let rand_v_x = rng.random_range(-1.0..=1.0) * emitter.velocity_randomness;
-                    let rand_v_y = rng.random_range(-1.0..=1.0) * emitter.velocity_randomness;
-                    let rand_v_z = rng.random_range(-1.0..=1.0) * emitter.velocity_randomness;
-                    
-                    let out_dir = Vec3::new(rand_v_x, rand_v_y, rand_v_z);
-                    let vel = emitter.initial_velocity + out_dir;
-                    
-                    let rand_life = rng.random_range(-1.0..=1.0) * emitter.lifespan_randomness;
-                    let max_life = (emitter.lifespan + rand_life).max(0.1);
-                    
-                    emitter.particles.push(gizmo::renderer::components::Particle {
-                        position: base_pos,
-                        velocity: vel,
-                        life: 0.0,
-                        max_life,
-                        size_start: emitter.size_start,
-                        size_end: emitter.size_end,
-                        color: Vec4::new(0.8, 0.8, 0.8, 0.5), // Smoke Default
-                    });
-                }
-            } else {
-                emitter.accumulator = 0.0;
-            }
-            
-            // 2. Integration / Physics
-            let mut i = 0;
-            while i < emitter.particles.len() {
-                emitter.particles[i].life += dt;
-                if emitter.particles[i].life >= emitter.particles[i].max_life {
-                    emitter.particles.swap_remove(i);
-                } else {
-                    let mut p_vel = emitter.particles[i].velocity;
-                    p_vel.y -= emitter.global_gravity * dt;
-                    let drag = p_vel * emitter.global_drag * dt;
-                    p_vel -= drag;
-                    
-                    emitter.particles[i].velocity = p_vel;
-                    emitter.particles[i].position += p_vel * dt;
-                    i += 1;
-                }
-            }
-        }
-    }
-}
-
 
 #[allow(dead_code)]
 pub(crate) fn audio_update_system(world: &mut World, state: &mut GameState) {
@@ -225,22 +209,79 @@ pub(crate) fn audio_update_system(world: &mut World, state: &mut GameState) {
 }
 
 
-
-
-
-pub fn character_update_system(world: &World, input: &Input, _dt: f32) {
-    let mut move_dir = Vec3::ZERO;
-    // Arrow keys for character motion
-    if input.is_key_pressed(KeyCode::ArrowUp as u32) { move_dir.z -= 1.0; }
-    if input.is_key_pressed(KeyCode::ArrowDown as u32) { move_dir.z += 1.0; }
-    if input.is_key_pressed(KeyCode::ArrowLeft as u32) { move_dir.x -= 1.0; }
-    if input.is_key_pressed(KeyCode::ArrowRight as u32) { move_dir.x += 1.0; }
+pub fn vehicle_controller_system(world: &mut World, dt: f32) {
+    let state_opt = world.get_resource::<crate::state::EngineConfig>();
+    let input_opt = world.get_resource::<Input>();
+    let actions_opt = world.get_resource::<gizmo::core::input::ActionMap>();
     
-    // Normalize directions so diagonal speed isn't faster
-    if move_dir.length_squared() > 0.001 {
+    if state_opt.is_none() || input_opt.is_none() || actions_opt.is_none() { 
+        println!("MISSING RESOURCE! state: {}, input: {}, actions: {}", state_opt.is_none(), input_opt.is_none(), actions_opt.is_none());
+        return; 
+    }
+    
+    let _state = state_opt.unwrap();
+    let input = input_opt.unwrap();
+    let actions = actions_opt.unwrap();
+    if let Some(_am_ref) = gizmo::core::world::World::default().get_resource::<crate::state::AppMode>() {
+        // AppMode kontrolünü global yapabiliriz ancak şimdilik manuel State içerisinden bakıyoruz.
+    }
+    
+    let engine_power = 12000.0;
+    let max_steer = 1.3; // 0.8'den 1.3'e çıkarıldı: Artık tekerlekler daha fazla dönecek!
+    let mut current_engine = 0.0;
+    let mut current_steer = 0.0;
+    let mut current_brake = 0.0;
+    
+    if actions.is_action_pressed(&input, "Accelerate") { current_engine = engine_power; }
+    if actions.is_action_pressed(&input, "Reverse")    { current_engine = -engine_power * 0.4; }
+    if actions.is_action_pressed(&input, "SteerLeft")  { current_steer = max_steer; }
+    if actions.is_action_pressed(&input, "SteerRight") { current_steer = -max_steer; }
+    if actions.is_action_pressed(&input, "Brake")      { current_brake = 15000.0; }
+    
+    if let Some(mut query) = world.query_mut_ref::<gizmo::physics::vehicle::VehicleController, crate::Player>() {
+        for (_id, v, _player) in query.iter_mut() {
+            v.steering_angle += (current_steer - v.steering_angle) * 20.0 * dt; // Direksiyonun hızı da 15'ten 20'ye artırıldı
+            v.engine_force = current_engine;
+            v.brake_force = current_brake;
+            break; // Yalnızca tek oyuncu olduğu varsayılıyor
+        }
+    }
+}
+
+pub fn character_update_system(world: &mut World, dt: f32) {
+    let input_opt = world.get_resource::<gizmo::core::input::Input>();
+    let state_opt = world.get_resource::<crate::state::EngineConfig>();
+
+    if input_opt.is_none() || state_opt.is_none() {
+        return;
+    }
+    
+    let input = input_opt.unwrap();
+    let state = state_opt.unwrap();
+    
+    // Serbest kamera çalışıyorsa karakter hareket etmesin
+    if state.free_cam {
+        return;
+    }
+
+    let mut move_dir = Vec3::ZERO;
+    // Arrow keys & WASD for character motion (winit keycodes typically arrow up=73, we check ASCII as well if we want)
+    // 17=W, 31=S, 30=A, 32=D (from winit physical keys approximately or we use action bindings)
+    let actions_opt = world.get_resource::<gizmo::core::input::ActionMap>();
+    if let Some(ref actions) = actions_opt {
+        if actions.is_action_pressed(&input, "Accelerate") { move_dir.z -= 1.0; }
+        if actions.is_action_pressed(&input, "Reverse")    { move_dir.z += 1.0; }
+        if actions.is_action_pressed(&input, "SteerLeft")  { move_dir.x -= 1.0; }
+        if actions.is_action_pressed(&input, "SteerRight") { move_dir.x += 1.0; }
+    }
+    
+    let is_moving = move_dir.length_squared() > 0.001;
+    if is_moving {
         move_dir = move_dir.normalize();
     }
     
+    // Fetch multiple components avoiding overlapping mut borrows manually where needed
+    // The easiest is to use isolated queries or multiple get_mut.
     if let Some(mut chars) = world.borrow_mut::<gizmo::physics::character::CharacterController>() {
         for &e in &chars.entity_dense.clone() {
             if let Some(cc) = chars.get_mut(e) {
@@ -248,8 +289,53 @@ pub fn character_update_system(world: &World, input: &Input, _dt: f32) {
                 cc.desired_velocity = move_dir * 10.0;
                 
                 // Allow jump if grounded
-                if input.is_key_pressed(KeyCode::Space as u32) && cc.is_grounded {
-                    cc.jump(5.0); 
+                if let Some(ref actions) = actions_opt {
+                    if actions.is_action_pressed(&input, "Brake") && cc.is_grounded {
+                        cc.jump(8.0); 
+                    }
+                }
+            }
+        }
+    }
+
+    // Now update transforms for rotation and animation players for playing
+    if let (Some(mut transforms), Some(mut aniopts), Some(chars)) = (
+        world.borrow_mut::<Transform>(),
+        world.borrow_mut::<gizmo::renderer::components::AnimationPlayer>(),
+        world.borrow::<gizmo::physics::character::CharacterController>()
+    ) {
+        for &e in &chars.entity_dense {
+            if let Some(cc) = chars.get(e) {
+                let actual_speed = cc.desired_velocity.length();
+                if let Some(t) = transforms.get_mut(e) {
+                    if is_moving {
+                        // Kapsül hareketinin karakter için yönü hesapla ve yönünü o yöne döndür.
+                        // Model default `-Z` bakar. Biz karakteri hareket yönüne döndürelim.
+                        let _look_target = t.position + move_dir;
+                        let angle = move_dir.x.atan2(move_dir.z);
+                        // CesiumMan by default faces +Z, and atan2(x, z) gives 0 when (0, 1), pi/2 when (1, 0)
+                        let target_rot = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), angle);
+                        t.rotation = t.rotation.slerp(target_rot, 15.0 * dt);
+                    }
+                }
+                
+                if let Some(anim) = aniopts.get_mut(e) {
+                    anim.active_animation = 0;
+                    if actual_speed > 0.1 || !cc.is_grounded {
+                        anim.loop_anim = true;
+                        // Time should progress. We let render_pipeline progress it, but wait!
+                        // render_pipeline only progresses what it iterates. 
+                        // We could speed it up by modifying current_time here, but render_pipeline multiplies by dt.
+                        // Let's just create a playback_speed inside AnimationPlayer or simply block time advancing in render_pipeline if not walking.
+                        // Since we don't have playback_speed, we can just reset or pause the anim.
+                        // Actually, render_pipeline always increases current_time!
+                        // To pause, we can just subtract the dt here so render_pipeline adds it back to zero change.
+                        // Better: We add `is_playing: bool` to the component? We can't change it here without refactoring.
+                        // For now, if not moving, we reset `current_time` to force IDLE pose (start of walk animation).
+                    } else {
+                        // Keep IDLE stand by resetting or locking time to 0.0
+                        anim.current_time = 0.0;
+                    }
                 }
             }
         }
@@ -330,3 +416,120 @@ pub fn spawner_update_system(world: &mut World, state: &crate::state::GameState,
 
 
 
+pub fn chase_camera_system(world: &mut World, dt: f32) {
+    let state_opt = world.get_resource::<crate::state::EngineConfig>();
+    if state_opt.is_none() { return; }
+    
+    let state = state_opt.unwrap();
+    // Eğer serbest kamera modundaysak takip kamerasını iptal et
+    if state.free_cam { return; }
+    
+    let active_camera_entity = state.active_camera_entity;
+    
+    // 1. Arabanın (Player) Transform'unu bul
+    let mut target_transform = None;
+    if let Some(mut q1) = world.query_mut_ref::<gizmo::physics::vehicle::VehicleController, crate::Player>() {
+        for (id, _vc, _player) in q1.iter_mut() {
+            if let Some(transforms) = world.borrow::<Transform>() {
+                if let Some(transform) = transforms.get(id) {
+                    target_transform = Some(*transform);
+                }
+            }
+            break;
+        }
+    }
+    
+    // 2. Kamerayı Arabaya göre hizala ve bakış açısını kilitle
+    if let Some(tt) = target_transform {
+        if let Some(mut q2) = world.query_mut_mut::<Camera, Transform>() {
+            for (id, cam, trans) in q2.iter_mut() {
+                if id == active_camera_entity {
+                    // Arabanın yönüne göre arka konumu (Araçta +Z ön tarafa bakar, bu yüzden fwd +Z)
+                    let fwd = tt.rotation * Vec3::new(0.0, 0.0, 1.0);
+                    // Arabanın arkasında ve biraz yukarısında olması gereken ideal pozisyon
+                    let desired_pos = tt.position - fwd * 9.0 + Vec3::new(0.0, 3.5, 0.0);
+                    
+                    // Pozisyonu oldukça sıkı takip et (Lerp) - Titremeyi azaltmak için hız artırıldı
+                    trans.position += (desired_pos - trans.position) * 15.0 * dt;
+                    
+                    // Kameranın tam olarak arabanın biraz üstüne bakmasını sağla
+                    let look_target = tt.position + Vec3::new(0.0, 1.0, 0.0);
+                    let dir = (look_target - trans.position).normalize();
+                    
+                    // dir vektörüne göre Yaw ve Pitch açılarını hesapla
+                    cam.pitch = dir.y.asin();
+                    cam.yaw = dir.z.atan2(dir.x);
+                }
+            }
+        }
+    }
+}
+
+pub fn ccd_test_system(world: &mut World, _dt: f32) {
+    let mut shoot_req = None; // None, Some(false) for NoCCD, Some(true) for CCD
+    let mut cam_pos = Vec3::ZERO;
+    let mut cam_front = Vec3::new(0.0, 0.0, 1.0); // +Z 
+
+    {
+        let input_opt = world.get_resource::<Input>();
+        let actions_opt = world.get_resource::<gizmo::core::input::ActionMap>();
+        let state_opt = world.get_resource::<crate::state::EngineConfig>();
+
+        if input_opt.is_none() || actions_opt.is_none() || state_opt.is_none() {
+            return;
+        }
+
+        let input = input_opt.unwrap();
+        let actions = actions_opt.unwrap();
+        let state = state_opt.unwrap();
+
+        if actions.is_action_pressed(&input, "ShootNoCCD") {
+            shoot_req = Some(false);
+        } else if actions.is_action_pressed(&input, "ShootCCD") {
+            shoot_req = Some(true);
+        }
+
+        if shoot_req.is_some() {
+            if let (Some(cameras), Some(transforms)) = (world.borrow::<Camera>(), world.borrow::<Transform>()) {
+                if let (Some(cam), Some(cam_t)) = (cameras.get(state.active_camera_entity), transforms.get(state.active_camera_entity)) {
+                    cam_pos = cam_t.position;
+                    cam_front = cam.get_front();
+                } else if let Some(first) = cameras.entity_dense.first() {
+                    if let (Some(cam), Some(cam_t)) = (cameras.get(*first), transforms.get(*first)) {
+                        cam_pos = cam_t.position;
+                        cam_front = cam.get_front();
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(use_ccd) = shoot_req {
+        let entity = world.spawn();
+        // Karakterin biraz önünden fırlat
+        let spawn_pos = cam_pos + cam_front * 2.0;
+        
+        world.add_component(entity, Transform::new(spawn_pos).with_scale(Vec3::new(0.2, 0.2, 0.2)));
+        // SES HIZINDAN BİLE HIZLI: 500 m/s
+        world.add_component(entity, Velocity::new(cam_front * 500.0));
+        world.add_component(entity, gizmo::physics::shape::Collider::new_sphere(0.2));
+        
+        let mut rb = RigidBody::new(0.5, 0.9, 0.1, false); // Yerçekimi kapalı (Bullet physics)
+        rb.ccd_enabled = use_ccd;
+        world.add_component(entity, rb);
+        world.add_component(entity, gizmo::prelude::EntityName(if use_ccd { "CCD Bullet".into() } else { "Ghost Bullet".into() }));
+        
+        // Extract mesh and material first to drop the World immutable borrow
+        let prefab_data = if let Some(prefab) = world.get_resource::<crate::state::BulletPrefab>() {
+            Some((prefab.mesh.clone(), prefab.material.clone()))
+        } else {
+            None
+        };
+        
+        if let Some((mesh, material)) = prefab_data {
+            world.add_component(entity, mesh);
+            world.add_component(entity, material);
+            world.add_component(entity, gizmo::renderer::components::MeshRenderer::new());
+        }
+    }
+}
