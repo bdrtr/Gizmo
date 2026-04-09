@@ -37,11 +37,18 @@ pub enum RaceStatus {
 
 // --- ECS KULLANIMI İÇİN EVENT VE RESOURCE YAPILARI ---
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppMode {
     MainMenu,
     InGame,
     Settings,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct EngineConfig {
+    pub free_cam: bool,
+    pub active_camera_entity: u32,
+    pub show_devtools: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -79,6 +86,11 @@ pub struct ShaderReloadEvent;
 
 pub struct SelectionEvent {
     pub entity_id: u32,
+}
+
+pub struct BulletPrefab {
+    pub mesh: gizmo::renderer::components::Mesh,
+    pub material: gizmo::renderer::components::Material,
 }
 
 pub struct DominoAppState {

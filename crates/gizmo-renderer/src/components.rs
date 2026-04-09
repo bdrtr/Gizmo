@@ -282,28 +282,12 @@ impl LodGroup {
 // --- PARTICLE SYSTEM ---
 
 #[derive(Clone)]
-pub struct Particle {
-    pub position: Vec3,
-    pub velocity: Vec3,
-    pub life: f32,       // Current age
-    pub max_life: f32,   // Age capacity
-    pub size_start: f32, // Size mapping
-    pub size_end: f32,
-    pub color: gizmo_math::Vec4, // Optional coloring
-}
-
-#[derive(Clone)]
 pub struct ParticleEmitter {
-    pub particles: Vec<Particle>,
     pub spawn_rate: f32, // How many particles to spawn per second
     pub accumulator: f32, // Used over frame deltas
     
     // Extents
     pub local_offset: Vec3, // Local to the entity transform
-    
-    // Physics
-    pub global_gravity: f32,
-    pub global_drag: f32,
     
     // Defaults for new spawns
     pub initial_velocity: Vec3,
@@ -312,6 +296,7 @@ pub struct ParticleEmitter {
     pub lifespan_randomness: f32,
     pub size_start: f32,
     pub size_end: f32,
+    pub color_start: gizmo_math::Vec4,
     
     // Appearance bindings
     pub texture_source: Option<String>,
@@ -327,18 +312,16 @@ impl Default for ParticleEmitter {
 impl ParticleEmitter {
     pub fn new() -> Self {
         Self {
-            particles: Vec::with_capacity(100),
             spawn_rate: 10.0,
             accumulator: 0.0,
             local_offset: Vec3::ZERO,
-            global_gravity: 0.0,
-            global_drag: 0.01,
             initial_velocity: Vec3::new(0.0, 1.0, 0.0),
             velocity_randomness: 0.5,
             lifespan: 2.0,
             lifespan_randomness: 0.5,
             size_start: 0.5,
             size_end: 0.1,
+            color_start: gizmo_math::Vec4::new(1.0, 0.5, 0.1, 1.0), // Fire/spark default
             texture_source: None,
             is_active: true,
         }

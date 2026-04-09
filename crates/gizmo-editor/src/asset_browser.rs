@@ -4,14 +4,9 @@ use egui;
 use crate::editor_state::EditorState;
 use std::path::Path;
 
-/// Asset Browser panelini çizer
-pub fn draw_asset_browser(ctx: &egui::Context, state: &mut EditorState) {
-    egui::TopBottomPanel::bottom("asset_browser_panel")
-        .default_height(150.0)
-        .min_height(80.0)
-        .max_height(300.0)
-        .show(ctx, |ui| {
-            ui.horizontal(|ui| {
+/// Asset Browser sekmesini çizer
+pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
+    ui.horizontal(|ui| {
                 ui.heading("🗂️ Asset Browser");
                 ui.separator();
                 ui.label("🔍");
@@ -60,6 +55,27 @@ pub fn draw_asset_browser(ctx: &egui::Context, state: &mut EditorState) {
                                             .min_size(egui::vec2(70.0, 50.0))
                                     );
                                     
+                                    let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
+                                    let is_model = ext == "glb" || ext == "gltf";
+
+                                    // Context menu
+                                    response.context_menu(|ui| {
+                                        if is_model {
+                                            if ui.button("⚙️ Sahneye Ekle").clicked() {
+                                                state.spawn_asset_request = Some(path.to_string_lossy().to_string());
+                                                ui.close_menu();
+                                            }
+                                        }
+                                    });
+
+                                    // Drag & Drop
+                                    let drag_id = egui::Id::new("drag_asset").with(&path);
+                                    let response = ui.interact(response.rect, drag_id, egui::Sense::drag());
+                                    
+                                    if response.drag_started() {
+                                        ui.memory_mut(|m| m.data.insert_temp(egui::Id::new("dragged_asset_path"), path.to_string_lossy().to_string()));
+                                    }
+
                                     if response.clicked() {
                                         if is_dir {
                                             state.asset_root = path.to_string_lossy().to_string();
@@ -91,7 +107,6 @@ pub fn draw_asset_browser(ctx: &egui::Context, state: &mut EditorState) {
                         }
                 });
             });
-        });
 }
 
 /// Dosya uzantısına göre ikon döndürür

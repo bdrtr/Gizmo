@@ -12,7 +12,7 @@ pub use entity::Entity;
 pub use component::{Component, ComponentStorage, SparseSet, EntityName, PrefabRequest};
 pub use world::{World, AliveEntityIter};
 pub use system::{Schedule, System};
-pub use input::Input;
+pub use input::{Input, ActionMap};
 pub use query::*;
 pub use event::Events;
 pub use time::Time;

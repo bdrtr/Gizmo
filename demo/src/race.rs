@@ -252,6 +252,7 @@ pub fn setup_race_scene(
         &config.car_models.get(0).cloned().flatten(),
         base_tbind.clone(),
     );
+    world.add_component(player, crate::Player);
     // Bağımsız Chase Kamera (Sürekli oyuncuyu takip edecek)
     let camera_entity = world.spawn();
     world.add_component(camera_entity, Transform::new(config.grid_positions[0] + Vec3::new(0.0, 5.0, -10.0)));

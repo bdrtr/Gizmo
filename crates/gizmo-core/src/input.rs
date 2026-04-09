@@ -9,6 +9,7 @@ use std::collections::HashSet;
 /// if input.is_mouse_button_pressed(MouseButton::Left) { /* ateş et */ }
 /// let (dx, dy) = input.mouse_delta(); /* fare hareketi */
 /// ```
+#[derive(Clone)]
 pub struct Input {
     // Tuş durumları
     keys_pressed: HashSet<u32>,       // Şu an basılı tuşlar
@@ -55,6 +56,11 @@ impl Input {
     }
 
     // ==================== TUŞ GİRDİSİ ====================
+
+    /// Basılı tüm tuşları döndürür (Debug için)
+    pub fn get_pressed_keys(&self) -> Vec<u32> {
+        self.keys_pressed.iter().copied().collect()
+    }
 
     /// Tuş basıldığında çağır (winit KeyCode'un scan code'u)
     pub fn on_key_pressed(&mut self, key: u32) {
@@ -170,4 +176,58 @@ pub mod mouse {
     pub const LEFT: u32 = 0;
     pub const RIGHT: u32 = 1;
     pub const MIDDLE: u32 = 2;
+}
+
+// ==================== ACTION MAP (Tuş Soyutlama) ====================
+
+use std::collections::HashMap;
+
+/// Evrensel Girdi Çevirici. 
+/// "W" veya "Yukarı Ok" tuşlarını doğrudan kontrol etmek yerine, 
+/// "Accelerate" veya "Jump" gibi mantıksal isimlendirmelerle dinlememizi sağlar.
+#[derive(Clone)]
+pub struct ActionMap {
+    bindings: HashMap<String, Vec<u32>>,
+}
+
+impl ActionMap {
+    pub fn new() -> Self {
+        Self {
+            bindings: HashMap::new(),
+        }
+    }
+
+    /// Bir isme (Action) yeni bir tuş kodu bağlar
+    pub fn bind_action(&mut self, action_name: &str, keycode: u32) {
+        self.bindings
+            .entry(action_name.to_string())
+            .or_insert_with(Vec::new)
+            .push(keycode);
+    }
+
+    /// Action (eylem) şu an uygulanıyor mu? (Basılı tutuluyor mu)
+    pub fn is_action_pressed(&self, input: &Input, action_name: &str) -> bool {
+        if let Some(keys) = self.bindings.get(action_name) {
+            for &k in keys {
+                if input.is_key_pressed(k) { return true; }
+            }
+        }
+        false
+    }
+
+    /// Action bu frame'de yeni mi tetiklendi?
+    pub fn is_action_just_pressed(&self, input: &Input, action_name: &str) -> bool {
+        if let Some(keys) = self.bindings.get(action_name) {
+            for &k in keys {
+                if input.is_key_just_pressed(k) { return true; }
+            }
+        }
+        false
+    }
+}
+
+impl Default for ActionMap {
+    fn default() -> Self {
+        Self::new()
+    }
 }

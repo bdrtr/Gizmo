@@ -313,7 +313,7 @@ impl GpuPhysicsSystem {
     }
 }
 
-fn create_ico_sphere(subdivisions: u32) -> (Vec<crate::gpu_types::Vertex>, Vec<u32>) {
+fn create_ico_sphere(_subdivisions: u32) -> (Vec<crate::gpu_types::Vertex>, Vec<u32>) {
     let s = 1.0f32;
     let positions = [
         [-s, -s,  s], [ s, -s,  s], [ s,  s,  s], [-s,  s,  s],

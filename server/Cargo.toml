@@ -1,0 +1,15 @@
+[package]
+name = "server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+
+[dependencies]
+gizmo-core = { path = "../crates/gizmo-core" }
+gizmo-math = { path = "../crates/gizmo-math" }
+gizmo-physics = { path = "../crates/gizmo-physics" }
+gizmo-net = { path = "../crates/gizmo-net" }
+renet = "2.0.0"
+serde = { version = "1.0", features = ["derive"] }
+bincode = "1.3.3"

@@ -57,24 +57,27 @@ pub struct SkeletonHierarchy {
 
 impl SkeletonHierarchy {
     pub fn calculate_global_matrices(&self, local_poses: &[Mat4]) -> Vec<Mat4> {
-        let mut globals = vec![Mat4::IDENTITY; self.joints.len()];
+        let mut globals: Vec<Option<Mat4>> = vec![None; self.joints.len()];
         
-        // Root'dan children'a dogru dogru bir sirada gecmemiz lazim. 
-        // Eger joint'ler parent-first formatinda (babalar array'de daha once) dizili degilse bu dongu hatali isler.
-        // Genelde GLTF'te kokler vs sirasina guvenemeyiz, dogru olan derinlik (Depth) ilk iterasyonudur veya O(N^2) parent lookup!
-        // Gizmo_math'e bir recursive traverse uyduralim veya yavasca parent oncelikli gidelim:
-        
-        // Basit yaklasim: Joints dizisi zaten top-down topological sort formatinda kabul edelim (GLTF genelde boyledir!)
-        for (i, joint) in self.joints.iter().enumerate() {
-            let local_mat = local_poses[i];
-            
-            if let Some(parent) = joint.parent_index {
-                globals[i] = globals[parent] * local_mat;
-            } else {
-                globals[i] = local_mat; // Kok joint
+        // Recursive & Memoized fonksiyon ile derinlik öncelikli ağaç taraması
+        fn compute_global(i: usize, joints: &[SkeletonJoint], local_poses: &[Mat4], globals: &mut [Option<Mat4>]) -> Mat4 {
+            if let Some(mat) = globals[i] {
+                return mat;
             }
+            let local_mat = local_poses[i];
+            let global_mat = if let Some(parent) = joints[i].parent_index {
+                compute_global(parent, joints, local_poses, globals) * local_mat
+            } else {
+                local_mat
+            };
+            globals[i] = Some(global_mat);
+            global_mat
+        }
+
+        for i in 0..self.joints.len() {
+            compute_global(i, &self.joints, local_poses, &mut globals);
         }
         
-        globals
+        globals.into_iter().map(|m| m.unwrap()).collect()
     }
 }

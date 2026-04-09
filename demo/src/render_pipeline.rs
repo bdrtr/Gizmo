@@ -11,6 +11,7 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
         let mut proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 2000.0);
         let mut view_mat = Mat4::from_translation(Vec3::ZERO);
         let mut cam_pos = Vec3::ZERO;
+        let is_hidden_guard = world.borrow::<gizmo::core::component::IsHidden>();
 
         if let (Some(cameras), Some(mut transforms)) = (world.borrow::<Camera>(), world.borrow_mut::<Transform>()) {
             if let (Some(cam), Some(trans)) = (cameras.get(state.player_id), transforms.get(state.player_id)) {
@@ -135,12 +136,12 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
         if sun_dir[3] > 0.5 {
             // Dinamik Frustum: Gölge kamerasını oyuncunun (cam_pos) tam üstüne/arkasına kilitleriz.
             let light_direction = Vec3::new(sun_dir[0], sun_dir[1], sun_dir[2]).normalize();
-            // Güneşi kameranın uzağına yerleştirip, kameranın baktığı yeri aydınlatmasını sağla
-            let light_pos = cam_pos - light_direction * 40.0; 
+            // Güneşi kameranın çok uzağına yerleştirip, devasa şehri tamamen kapsamasını sağla
+            let light_pos = cam_pos - light_direction * 150.0; 
             
             let light_view = Mat4::look_at_rh(light_pos, cam_pos, Vec3::new(0.0, 1.0, 0.0));
-            // Daha sıkı (tight) frustum kullanarak gölge kalitesini artırıyoruz (25 metre)
-            let light_proj = Mat4::orthographic_rh(-25.0, 25.0, -25.0, 25.0, 0.1, 150.0);
+            // Devasa şehir haritaları için gölge projeksiyon kutusunu 100 metre yarıçapına çıkarıyoruz
+            let light_proj = Mat4::orthographic_rh(-100.0, 100.0, -100.0, 100.0, 0.1, 300.0);
             light_view_proj = light_proj * light_view;
         } else if num_lights > 0 {
             // Fallback: PointLight taklidi
@@ -191,6 +192,12 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
                 if let Some(r) = &renderers {
                     if r.get(e).is_none() { continue; }
                 } else { continue; }
+                
+                // Gizli olarak işaretlenmiş objeleri atla!
+                if let Some(hidden) = world.borrow::<gizmo::core::component::IsHidden>() {
+                    if hidden.contains(e) { continue; }
+                }
+
                 // --- GLOBAL TRANSFORM HESAPLAMA ---
                 // transform_hierarchy_system() daha önce tüm hiyerarşiyi t.global_matrix'te çözdüğü için 
                 // doğrudan global_matrix'i kullanmamız yeterlidir. Çift çarpım yapmıyoruz!
@@ -333,6 +340,68 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
         }
 
         // --- 0. COMPUTE PASSES ---
+        if let Some(gpu_particles) = &renderer.gpu_particles {
+            gpu_particles.update_params(&renderer.queue, delta_time);
+            
+            // --- YENİ PARTİCÜL SPAWNLAMA (CPU -> GPU) ---
+            if let Some(mut emitters) = world.borrow_mut::<gizmo::renderer::components::ParticleEmitter>() {
+                if let Some(transforms) = world.borrow::<Transform>() {
+                    use rand::Rng;
+                    let mut rng = rand::rng();
+                    let mut all_new_particles = Vec::new();
+                    
+                    let emitter_entities = emitters.entity_dense.clone();
+                    for e_id in emitter_entities {
+                        if let Some(emitter) = emitters.get_mut(e_id) {
+                            if !emitter.is_active || emitter.spawn_rate <= 0.0 { continue; }
+                            
+                            let base_pos = if let Some(t) = transforms.get(e_id) {
+                                t.position + t.rotation.mul_vec3(emitter.local_offset)
+                            } else {
+                                emitter.local_offset
+                            };
+                            
+                            emitter.accumulator += delta_time;
+                            // Güvenlik limiti: Frame drop olursa bir frame'de 100'den fazla spawnlamasın
+                            // Aksi takdirde 1 saniye donup binlerce üreterek FPS'i çökertir
+                            let spawn_interval = 1.0 / emitter.spawn_rate;
+                            let mut spawned_this_frame = 0;
+                            
+                            while emitter.accumulator >= spawn_interval && spawned_this_frame < 100 {
+                                emitter.accumulator -= spawn_interval;
+                                spawned_this_frame += 1;
+                                
+                                let rand_v_x = rng.random_range(-1.0..=1.0) * emitter.velocity_randomness;
+                                let rand_v_y = rng.random_range(-1.0..=1.0) * emitter.velocity_randomness;
+                                let rand_v_z = rng.random_range(-1.0..=1.0) * emitter.velocity_randomness;
+                                
+                                let out_dir = Vec3::new(rand_v_x, rand_v_y, rand_v_z);
+                                let vel = emitter.initial_velocity + out_dir;
+                                
+                                let rand_life = rng.random_range(-1.0..=1.0) * emitter.lifespan_randomness;
+                                let max_life = (emitter.lifespan + rand_life).max(0.1);
+                                
+                                all_new_particles.push(gizmo::renderer::particle_renderer::GpuParticle {
+                                    position: [base_pos.x, base_pos.y, base_pos.z],
+                                    life: 0.0,
+                                    velocity: [vel.x, vel.y, vel.z],
+                                    max_life,
+                                    color: emitter.color_start.into(),
+                                    size_start: emitter.size_start,
+                                    size_end: emitter.size_end,
+                                    _padding: [0.0; 2],
+                                });
+                            }
+                        }
+                    }
+                    
+                    gpu_particles.spawn_particles(&renderer.queue, &all_new_particles);
+                }
+            }
+            
+            gpu_particles.compute_pass(encoder);
+        }
+
         if let Some(physics) = &renderer.gpu_physics {
             physics.compute_pass(encoder);
         }
@@ -444,6 +513,15 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
                 render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
                 render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
+            }
+            
+            // --- 4. DRAW GPU PARTICLES (Billboard & Şeffaf) ---
+            if let Some(gpu_particles) = &renderer.gpu_particles {
+                render_pass.set_pipeline(&gpu_particles.render_pipeline);
+                render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, gpu_particles.quad_vertex_buffer.slice(..));
+                render_pass.set_vertex_buffer(1, gpu_particles.particles_buffer.slice(..));
+                render_pass.draw(0..4, 0..gpu_particles.active_particles);
             }
         }
 

@@ -285,30 +285,34 @@ pub fn physics_collision_system(world: &World, dt: f32) {
         let is_rot_a_identity = rot_a.x.abs() < 0.001 && rot_a.y.abs() < 0.001 && rot_a.z.abs() < 0.001;
         let is_rot_b_identity = rot_b.x.abs() < 0.001 && rot_b.y.abs() < 0.001 && rot_b.z.abs() < 0.001;
 
-        // === BUG #3 FIX: AABB-AABB analitik fast-path ===
+        // === BUG #3 FIX: AABB-AABB analitik fast-path + SAT OBB Geçişi ===
         if let (ColliderShape::Aabb(a1), ColliderShape::Aabb(a2)) = (&col_a.shape, &col_b.shape) {
+            is_fast_path = true;
             if is_rot_a_identity && is_rot_b_identity {
-                is_fast_path = true;
                 manifold = crate::collision::check_aabb_aabb_manifold(pos_a, a1, pos_b, a2);
+            } else {
+                // Herhangi biri rotasyonluysa Analitik OBB GJK'in yerini alıyor
+                manifold = crate::collision::check_obb_obb_manifold(pos_a, rot_a, a1, pos_b, rot_b, a2);
             }
-            // Rotasyonlu AABB'ler GJK/EPA'ya düşecek (is_fast_path = false kalır)
         }
 
         // === BUG #4 FIX: Sphere-AABB rotasyon kontrolü ===
         if !is_fast_path {
         if let (ColliderShape::Sphere(s), ColliderShape::Aabb(a)) = (&col_a.shape, &col_b.shape) {
+            is_fast_path = true;
             if is_rot_b_identity {
-                is_fast_path = true;
                 manifold = crate::collision::check_sphere_aabb_manifold(pos_a, s, pos_b, a);
+            } else {
+                manifold = crate::collision::check_sphere_obb_manifold(pos_a, s, pos_b, rot_b, a);
             }
-            // Rotasyonlu AABB → GJK/EPA'ya düşer
         } else if let (ColliderShape::Aabb(a), ColliderShape::Sphere(s)) = (&col_a.shape, &col_b.shape) {
+            is_fast_path = true;
             if is_rot_a_identity {
-                is_fast_path = true;
-                // Sphere=B, AABB=A → fonksiyonu ters çağır, normali çevir
                 manifold = crate::collision::check_sphere_aabb_manifold(pos_b, s, pos_a, a);
-                manifold.normal = -manifold.normal; // A→B yönü
+            } else {
+                manifold = crate::collision::check_sphere_obb_manifold(pos_b, s, pos_a, rot_a, a);
             }
+            manifold.normal = -manifold.normal; // A→B yönü
         } else if let (ColliderShape::Capsule(c1), ColliderShape::Capsule(c2)) = (&col_a.shape, &col_b.shape) {
             is_fast_path = true;
             manifold = crate::collision::check_capsule_capsule_manifold(pos_a, rot_a, c1, pos_b, rot_b, c2);

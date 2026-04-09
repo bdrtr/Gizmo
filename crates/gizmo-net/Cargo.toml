@@ -1,0 +1,13 @@
+[package]
+name = "gizmo-net"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+
+[dependencies]
+bincode = "1.3.3"
+gizmo-core = { version = "0.1.0", path = "../gizmo-core" }
+renet = "2.0.0"
+renet_netcode = "2.0.0"
+serde = { version = "1.0.228", features = ["derive"] }
