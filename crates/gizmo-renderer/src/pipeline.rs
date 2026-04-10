@@ -7,6 +7,7 @@ pub struct SceneState {
     pub render_pipeline: wgpu::RenderPipeline,
     pub render_double_sided_pipeline: wgpu::RenderPipeline,
     pub unlit_pipeline: wgpu::RenderPipeline,
+    pub sky_pipeline: wgpu::RenderPipeline,
     pub water_pipeline: wgpu::RenderPipeline,
     pub shadow_pipeline: wgpu::RenderPipeline,
     pub transparent_pipeline: wgpu::RenderPipeline,
@@ -178,6 +179,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     let shader       = load_shader(device, "demo/assets/shaders/shader.wgsl",  include_str!("shader.wgsl"),  "Shader");
     let unlit_shader = load_shader(device, "demo/assets/shaders/unlit.wgsl",   include_str!("unlit.wgsl"),   "Unlit Shader");
     let water_shader = load_shader(device, "demo/assets/shaders/water.wgsl",   include_str!("water.wgsl"),   "Water Shader");
+    let sky_shader   = load_shader(device, "demo/assets/shaders/sky.wgsl",     include_str!("sky.wgsl"),     "Sky Shader");
     let shadow_shader= load_shader(device, "demo/assets/shaders/shadow.wgsl",  include_str!("shadow.wgsl"),  "Shadow Shader");
 
     let create_main = |sm: &wgpu::ShaderModule, label: &str, depth_write: bool, cull: Option<wgpu::Face>| {
@@ -217,6 +219,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     // Şeffaf objelerde cull_mode: None hayat kurtarır (camın arka yüzü, yapraklar vb.)
     let transparent_pipeline = create_main(&shader, "Transparent Pipeline", false, None);
     let unlit_pipeline  = create_main(&unlit_shader, "Unlit Pipeline", true, Some(wgpu::Face::Back));
+    let sky_pipeline  = create_main(&sky_shader, "Sky Pipeline", false, Some(wgpu::Face::Back));
     let water_pipeline  = create_main(&water_shader, "Water Pipeline", true, Some(wgpu::Face::Back));
 
     // Shadow pipeline
@@ -245,7 +248,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     });
 
     SceneState {
-        render_pipeline, render_double_sided_pipeline, unlit_pipeline, water_pipeline, shadow_pipeline, transparent_pipeline,
+        render_pipeline, render_double_sided_pipeline, unlit_pipeline, sky_pipeline, water_pipeline, shadow_pipeline, transparent_pipeline,
         global_uniform_buffer, global_bind_group_layout, global_bind_group,
         shadow_bind_group_layout, shadow_bind_group, shadow_texture_view,
         texture_bind_group_layout, skeleton_bind_group_layout, dummy_skeleton_bind_group,

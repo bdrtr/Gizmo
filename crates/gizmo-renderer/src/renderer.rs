@@ -96,13 +96,14 @@ impl<'a> Renderer<'a> {
         ));
 
         // GPU Physics buffer boyutu -- Pachinko simülasyonu
-        let max_physics_spheres: u32 = 50_000;
+        let _max_physics_spheres: u32 = 50_000;
         let gpu_physics: Option<crate::physics_renderer::GpuPhysicsSystem> = None;
 
         let scene_state = SceneState {
             render_pipeline: scene.render_pipeline,
             render_double_sided_pipeline: scene.render_double_sided_pipeline,
             unlit_pipeline:  scene.unlit_pipeline,
+            sky_pipeline:    scene.sky_pipeline,
             water_pipeline:  scene.water_pipeline,
             shadow_pipeline: scene.shadow_pipeline,
             transparent_pipeline: scene.transparent_pipeline,

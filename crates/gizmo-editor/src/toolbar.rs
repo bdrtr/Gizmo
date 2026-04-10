@@ -12,6 +12,9 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 
                 // === DOSYA İŞLEMLERİ ===
+                ui.label("Sahne:");
+                ui.add(egui::TextEdit::singleline(&mut state.scene_path).desired_width(120.0));
+                
                 if ui.button("💾 Kaydet").clicked() {
                     state.status_message = format!("Sahne kaydediliyor → {}", state.scene_path);
                     state.scene_save_request = Some(state.scene_path.clone());
@@ -67,10 +70,13 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                 
                 ui.separator();
                 
-                // === PANEL TOGGLE ===
-                ui.checkbox(&mut state.show_hierarchy, "Hiyerarşi");
-                ui.checkbox(&mut state.show_inspector, "Inspector");
-                ui.checkbox(&mut state.show_asset_browser, "Assets");
+                // === PENCERELER (WINDOW MANAGEMENT) ===
+                ui.menu_button("🪟 Pencereler", |ui| {
+                    if ui.button("♻ Varsayılan Düzene Dön (Tümünü Aç)").clicked() {
+                        state.reset_layout();
+                        ui.close_menu();
+                    }
+                });
                 
                 // === SAHNE YOLU ===
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

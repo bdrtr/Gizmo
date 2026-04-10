@@ -42,6 +42,7 @@ pub enum AppMode {
     MainMenu,
     InGame,
     Settings,
+    PauseMenu,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -97,6 +98,9 @@ pub struct DominoAppState {
     pub active_ball_id: Option<u32>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Coin;
+
 
 pub struct GameState {
     pub bouncing_box_id: u32,
@@ -142,6 +146,10 @@ pub struct GameState {
     // Oyun Modları
     pub ps1_race: Option<crate::race::RaceState>,
     pub basic_scene: Option<crate::basic_scene::BasicSceneState>,
+    
+    // Gizmo City Dash Game State
+    pub game_score: u32,
+    pub game_max_score: u32,
     
     // Geliştirici Araçları,
     pub show_devtools: bool,

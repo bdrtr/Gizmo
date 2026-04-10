@@ -3,7 +3,8 @@ use gizmo_math::Vec3;
 use gizmo_physics::components::{Transform, RigidBody, Velocity};
 use gizmo_physics::shape::Collider;
 use gizmo_physics::constraints::{JointWorld, Joint, solve_constraints, JointKind};
-use gizmo_physics::system::{physics_collision_system, physics_movement_system};
+use gizmo_physics::system::physics_collision_system;
+use gizmo_physics::physics_movement_system;
 
 fn setup_world() -> World {
     World::new()
@@ -31,10 +32,9 @@ fn test_extreme_quantum_stack_explosion() {
         entities.push(e);
     }
 
-    // Sistemler çözüme çalışsın (1 saniye boyunca)
     for _ in 0..60 {
-        physics_movement_system(&world, 0.016);
         physics_collision_system(&world, 0.016);
+        physics_movement_system(&world, 0.016);
     }
     
     // Objelere test: NaN olmamalılar ve şiddetli şekilde dışarı saçılmış olmalılar
@@ -77,8 +77,8 @@ fn test_extreme_mass_disparity() {
     
     // Birkaç frame simüle et (çarpışma olsun)
     for _ in 0..20 {
-        physics_movement_system(&world, 0.016);
         physics_collision_system(&world, 0.016);
+        physics_movement_system(&world, 0.016);
     }
     
     let vel_feather = world.borrow::<Velocity>().unwrap().get(feather.id()).unwrap().clone();
@@ -118,6 +118,7 @@ fn test_extreme_needle_wall_ccd() {
     world.add_component(needle, Collider::new_aabb(0.0001, 1000.0, 1000.0));
     
     // 0.1 sn geçir => 50 m yol alacak
+    physics_collision_system(&world, 0.1);
     physics_movement_system(&world, 0.1);
     
     let t = world.borrow::<Transform>().unwrap().get(bullet.id()).unwrap().clone();
@@ -125,6 +126,7 @@ fn test_extreme_needle_wall_ccd() {
     
     // Merminin hızı ne kadar fazla olursa olsun ve duvar ne kadar atomik incelikte olursa olsun
     // CCD duvarın önünde nesneyi tutmayı başarmalı!
+    println!("Bullet Pos: {:?}, Vel: {:?}", t.position, v.linear);
     assert!(t.position.x < 0.0, "Mikro duvarı deldi geçti!");
     assert!(v.linear.x < 1.0, "Hız kesilmedi!");
 }
@@ -165,7 +167,7 @@ fn test_extreme_spring_snap() {
     
     // Kısıtlayıcıların aşırı mesafeden çekerken fizik kurallarını ihlal (NaN üretmesi) etmemesi gerekir
     // 1 kare (0.016s) serbest bırakalım.
-    gizmo_physics::system::physics_movement_system(&world, 0.016);
+    gizmo_physics::physics_movement_system(&world, 0.016);
     solve_constraints(&joint_world, &world, 0.016);
     
     let v_sat = world.borrow::<Velocity>().unwrap().get(satellite.id()).unwrap().clone();

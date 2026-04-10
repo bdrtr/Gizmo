@@ -13,4 +13,5 @@ gizmo-core = { path = "../gizmo-core" }
 gizmo-math = { path = "../gizmo-math" }
 gizmo-physics = { path = "../gizmo-physics" }
 gizmo-renderer = { path = "../gizmo-renderer" }
+gizmo-audio = { path = "../gizmo-audio" }
 egui_dock = "0.11"

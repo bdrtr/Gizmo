@@ -57,11 +57,14 @@ pub struct MaterialData {
 impl SceneData {
     /// Mevcut World durumunu JSON dosyası olarak diske kaydeder
     pub fn save(world: &World, file_path: &str) {
+        if let Some(parent) = std::path::Path::new(file_path).parent() {
+            let _ = fs::create_dir_all(parent);
+        }
         let entities_data = Self::serialize_entities(world, world.iter_alive_entities().map(|e| e.id()).collect());
 
         let scene = SceneData { entities: entities_data };
-        let json = serde_json::to_string_pretty(&scene).expect("Scene Serialize Hatası!");
-        fs::write(file_path, json).expect("Sahne disk üzerine yazılamadı!");
+        let bytes = bincode::serialize(&scene).expect("Scene Serialize Hatası!");
+        fs::write(file_path, bytes).expect("Sahne disk üzerine yazılamadı!");
         println!("✅ Sahne kaydedildi → {}", file_path);
     }
 
@@ -122,12 +125,12 @@ impl SceneData {
         asset_manager: &mut AssetManager,
         default_texture_bind_group: Arc<wgpu::BindGroup>,
     ) -> bool {
-        let json = match fs::read_to_string(file_path) {
+        let bytes = match fs::read(file_path) {
             Ok(content) => content,
             Err(_) => return false,
         };
 
-        let scene: SceneData = match serde_json::from_str(&json) {
+        let scene: SceneData = match bincode::deserialize(&bytes) {
             Ok(s) => s,
             Err(e) => {
                 println!("❌ Sahne dosyası geçersiz ({}): {}", file_path, e);
@@ -285,8 +288,11 @@ impl SceneData {
             entities: entities_data,
         };
 
-        let json = serde_json::to_string_pretty(&prefab).expect("Prefab Serialize Hatası!");
-        fs::write(file_path, json).expect("Prefab diske yazılamadı!");
+        let bytes = bincode::serialize(&prefab).expect("Prefab Serialize Hatası!");
+        if let Some(parent) = std::path::Path::new(file_path).parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        fs::write(file_path, bytes).expect("Prefab diske yazılamadı!");
         println!("✅ Prefab kaydedildi → {}", file_path);
     }
 
@@ -301,12 +307,12 @@ impl SceneData {
         asset_manager: &mut AssetManager,
         default_texture_bind_group: Arc<wgpu::BindGroup>,
     ) -> Option<u32> {
-        let json = match fs::read_to_string(file_path) {
+        let bytes = match fs::read(file_path) {
             Ok(content) => content,
             Err(_) => return None,
         };
 
-        let prefab: PrefabData = match serde_json::from_str(&json) {
+        let prefab: PrefabData = match bincode::deserialize(&bytes) {
             Ok(p) => p,
             Err(e) => {
                 println!("❌ Prefab dosyası geçersiz ({}): {}", file_path, e);

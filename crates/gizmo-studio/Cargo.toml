@@ -1,0 +1,10 @@
+[package]
+name = "gizmo-studio"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+gizmo = { path = "../gizmo", features = ["editor", "scene", "audio", "scripting"] }
+rand = "0.9.0"
+serde = { version = "1.0", features = ["derive"] }
+bincode = "1.3"

@@ -219,6 +219,64 @@ impl AssetManager {
         Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "standard_cube".to_string(), aabb)
     }
 
+    pub fn create_gizmo_arrow(device: &wgpu::Device) -> Mesh {
+        let w = 0.03; // Shaft thickness
+        let hw = 0.12; // Head width
+        let sl = 0.8; // Shaft length
+        
+        let positions: [[f32; 3]; 13] = [
+            // Shaft (0..8)
+            [-w, 0.0, -w], [ w, 0.0, -w], [ w, sl, -w], [-w, sl, -w],
+            [-w, 0.0,  w], [ w, 0.0,  w], [ w, sl,  w], [-w, sl,  w],
+            // Head Base (8..12)
+            [-hw, sl, -hw], [ hw, sl, -hw], [ hw, sl,  hw], [-hw, sl,  hw],
+            // Apex (12)
+            [0.0, 1.0, 0.0]
+        ];
+
+        let n_sz = 0.7071;
+
+        // Tuple of (Indices, Normal)
+        let mut faces: Vec<(Vec<usize>, [f32; 3])> = vec![
+            // Shaft
+            (vec![0, 2, 1, 0, 3, 2], [0.0, 0.0, -1.0]),  // Back
+            (vec![4, 5, 6, 4, 6, 7], [0.0, 0.0,  1.0]),  // Front
+            (vec![0, 1, 5, 0, 5, 4], [0.0, -1.0, 0.0]),  // Bottom
+            (vec![0, 4, 7, 0, 7, 3], [-1.0, 0.0, 0.0]),  // Left
+            (vec![1, 2, 6, 1, 6, 5], [ 1.0, 0.0, 0.0]),  // Right
+            // Arrowhead Base
+            (vec![8, 9, 10, 8, 10, 11], [0.0, -1.0, 0.0]),
+            // Arrowhead Sides
+            (vec![11, 10, 12], [0.0, n_sz, n_sz]),   // Front (+Z)
+            (vec![9, 8, 12], [0.0, n_sz, -n_sz]),    // Back (-Z)
+            (vec![10, 9, 12], [n_sz, n_sz, 0.0]),    // Right (+X)
+            (vec![8, 11, 12], [-n_sz, n_sz, 0.0]),   // Left (-X)
+        ];
+
+        let mut vertices = Vec::new();
+        for (indices, normal) in faces {
+            for idx in indices {
+                vertices.push(Vertex {
+                    position: positions[idx],
+                    color: [1.0, 1.0, 1.0],
+                    normal,
+                    tex_coords: [0.0, 0.0],
+                    joint_indices: [0; 4],
+                    joint_weights: [0.0; 4],
+                });
+            }
+        }
+
+        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Gizmo Arrow VBuf"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let aabb = gizmo_math::Aabb::new(Vec3::new(-hw, 0.0, -hw), Vec3::new(hw, 1.0, hw));
+        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "gizmo_arrow".to_string(), aabb)
+    }
+
     /// Basit, yatay bir düzlem (Plane) üretir.
     pub fn create_plane(device: &wgpu::Device, size: f32) -> Mesh {
         let half = size / 2.0;

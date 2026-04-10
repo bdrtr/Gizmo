@@ -174,7 +174,21 @@ pub(crate) fn audio_update_system(world: &mut World, state: &mut GameState) {
                                         [right_ear.x, right_ear.y, right_ear.z], 
                                         [left_ear.x, left_ear.y, left_ear.z]);
                             }
-                            am.set_sink_volume(sid, audio_src.volume, audio_src.is_3d);
+                            
+                            // --- MESAFE ZAYIFLAMASI (Distance Attenuation) HESAPLAMASI ---
+                            let mut final_volume = audio_src.volume;
+                            if audio_src.is_3d {
+                                let dist = cam_pos.distance(curr_pos);
+                                if dist > audio_src.max_distance {
+                                    final_volume = 0.0;
+                                } else {
+                                    // Linear uzaklık yerine karesel (Inverse-Square tarzı) bir yumuşatma
+                                    let dist_ratio = 1.0 - (dist / audio_src.max_distance);
+                                    final_volume = audio_src.volume * dist_ratio * dist_ratio;
+                                }
+                            }
+                            
+                            am.set_sink_volume(sid, final_volume, audio_src.is_3d);
                             am.set_sink_pitch(sid, audio_src.pitch, audio_src.is_3d);
                         }
                     }
@@ -485,11 +499,34 @@ pub fn ccd_test_system(world: &mut World, _dt: f32) {
 
         if actions.is_action_pressed(&input, "ShootNoCCD") {
             shoot_req = Some(false);
-        } else if actions.is_action_pressed(&input, "ShootCCD") {
-            shoot_req = Some(true);
+        }
+
+        // RELOAD MANTIĞI
+        if actions.is_action_pressed(&input, "Reload") {
+            if let Some(mut stats) = world.get_resource_mut::<crate::state::PlayerStats>() {
+                stats.ammo = stats.max_ammo;
+                println!("Silah Sarjörü Dolduruldu (Reload)! Ammo: {}", stats.ammo);
+            }
         }
 
         if shoot_req.is_some() {
+            // MERMİ KONTROLÜ
+            let can_shoot = if let Some(mut stats) = world.get_resource_mut::<crate::state::PlayerStats>() {
+                if stats.ammo > 0 {
+                    stats.ammo -= 1;
+                    true
+                } else {
+                    println!("Mermi Bitti! R tuşuna basarak doldur.");
+                    false
+                }
+            } else {
+                true // Stats yoksa sınırsız sık
+            };
+
+            if !can_shoot {
+                return;
+            }
+
             if let (Some(cameras), Some(transforms)) = (world.borrow::<Camera>(), world.borrow::<Transform>()) {
                 if let (Some(cam), Some(cam_t)) = (cameras.get(state.active_camera_entity), transforms.get(state.active_camera_entity)) {
                     cam_pos = cam_t.position;
@@ -530,6 +567,56 @@ pub fn ccd_test_system(world: &mut World, _dt: f32) {
             world.add_component(entity, mesh);
             world.add_component(entity, material);
             world.add_component(entity, gizmo::renderer::components::MeshRenderer::new());
+        }
+    }
+}
+
+pub fn gizmo_city_dash_system(world: &mut World, state: &mut GameState, dt: f32) {
+    let mut player_pos = None;
+    
+    if let Some(transforms) = world.borrow::<Transform>() {
+        // The car is the only VehicleController normally, or we just use player_id! 
+        // Wait, `basic_scene.rs` set `state.player_entity`? We don't have `state.player_entity`, but we have `GameState::player_id` because basic scene returns it but it maps to `state.player_id`.
+        if let Some(t) = transforms.get(state.player_id) {
+            player_pos = Some(t.position);
+        }
+    }
+    
+    let mut coins_to_despawn = Vec::new();
+    let ppos = player_pos.unwrap_or(Vec3::ZERO);
+
+    if let (Some(mut transforms), Some(coins)) = (world.borrow_mut::<Transform>(), world.borrow::<crate::state::Coin>()) {
+        for entity in &coins.entity_dense {
+            if let Some(t) = transforms.get_mut(*entity) {
+                t.rotation = t.rotation * Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), dt * 3.0);
+                
+                if player_pos.is_some() {
+                    let dist = (t.position - ppos).length();
+                    if dist < 4.0 {
+                        coins_to_despawn.push(*entity);
+                    }
+                }
+            }
+        }
+    }
+    
+    for id in coins_to_despawn {
+        if let Some(ent) = world.get_entity(id) {
+            world.despawn(ent);
+        }
+        
+        state.game_score += 1;
+        if state.game_score > state.game_max_score {
+            state.game_score = state.game_max_score;
+        }
+
+        if let Some(audio) = state.audio.as_mut() {
+            let sound = if state.game_score == state.game_max_score {
+                "checkpoint" // Ya da music
+            } else {
+                "bounce"
+            };
+            audio.play(sound);
         }
     }
 }

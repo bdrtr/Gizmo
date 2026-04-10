@@ -66,6 +66,12 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
                                                 ui.close_menu();
                                             }
                                         }
+                                        if ext == "prefab" {
+                                            if ui.button("⚙️ Sahneye Prefab Olarak Ekle").clicked() {
+                                                state.prefab_load_request = Some((path.to_string_lossy().to_string(), None));
+                                                ui.close_menu();
+                                            }
+                                        }
                                     });
 
                                     // Drag & Drop
@@ -76,7 +82,14 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
                                         ui.memory_mut(|m| m.data.insert_temp(egui::Id::new("dragged_asset_path"), path.to_string_lossy().to_string()));
                                     }
 
-                                    if response.clicked() {
+                                    if response.double_clicked() {
+                                        if !is_dir && ext == "prefab" {
+                                            state.prefab_load_request = Some((path.to_string_lossy().to_string(), None));
+                                        }
+                                        if !is_dir && ext == "gizmo" {
+                                            state.scene_load_request = Some(path.to_string_lossy().to_string());
+                                        }
+                                    } else if response.clicked() {
                                         if is_dir {
                                             state.asset_root = path.to_string_lossy().to_string();
                                         } else {
@@ -117,7 +130,7 @@ fn get_file_icon(filename: &str) -> &'static str {
         "jpg" | "jpeg" | "png" | "bmp" | "tga" => "🖼️",
         "wav" | "ogg" | "mp3" | "flac" => "🔊",
         "lua" => "📜",
-        "json" | "ron" | "toml" => "📋",
+        "json" | "prefab" | "gizmo" | "giz" | "ron" | "toml" => "📋",
         "wgsl" | "glsl" | "hlsl" => "🎨",
         _ => "📄",
     }

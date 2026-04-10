@@ -147,7 +147,6 @@ pub fn setup_car_scene(world: &mut World, renderer: &gizmo::renderer::renderer::
         _padding: [0.0; 3],
     });
     
-    world.insert_resource(gizmo::editor::EditorState::new());
 
     GameState {
         bouncing_box_id, player_id, skybox_id: skybox.id(), inspector_selected_entity: None,
@@ -171,6 +170,8 @@ pub fn setup_car_scene(world: &mut World, renderer: &gizmo::renderer::renderer::
         total_elapsed: 0.0,
         ps1_race: None,
         basic_scene: None,
+        game_score: 0,
+        game_max_score: 15,
         show_devtools: false,
     }
 }

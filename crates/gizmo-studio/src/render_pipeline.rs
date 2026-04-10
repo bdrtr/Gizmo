@@ -1,27 +1,31 @@
+use crate::StudioState;
 use gizmo::prelude::*;
-use crate::state::GameState;
 
-pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, renderer: &mut gizmo::renderer::Renderer, _light_time: f32) {
-        let aspect = if renderer.size.height > 0 {
+pub fn execute_render_pipeline(world: &mut World, state: &StudioState, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, renderer: &mut gizmo::renderer::Renderer, _light_time: f32) {
+        let mut aspect = if renderer.size.height > 0 {
             renderer.size.width as f32 / renderer.size.height as f32
         } else {
             1.0
         };
+
+        if let Some(ed_state) = world.get_resource::<gizmo::editor::EditorState>() {
+            if let Some(rect) = ed_state.scene_view_rect {
+                if rect.height() > 0.0 {
+                    aspect = rect.width() / rect.height();
+                }
+            }
+        }
 
         let mut proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 2000.0);
         let mut view_mat = Mat4::from_translation(Vec3::ZERO);
         let mut cam_pos = Vec3::ZERO;
         let _is_hidden_guard = world.borrow::<gizmo::core::component::IsHidden>();
 
-        if let (Some(cameras), Some(mut transforms)) = (world.borrow::<Camera>(), world.borrow_mut::<Transform>()) {
-            if let (Some(cam), Some(trans)) = (cameras.get(state.player_id), transforms.get(state.player_id)) {
+        if let (Some(cameras), Some(transforms)) = (world.borrow::<Camera>(), world.borrow::<Transform>()) {
+            if let (Some(cam), Some(trans)) = (cameras.get(state.editor_camera), transforms.get(state.editor_camera)) {
                 proj = cam.get_projection(aspect);
                 view_mat = cam.get_view(trans.position);
                 cam_pos = trans.position;
-            }
-            // Skybox her zaman Kamerayla aynı yerde durarak sonsuzluk hissi yaratır.
-            if let Some(sky_t) = transforms.get_mut(state.skybox_id) {
-                sky_t.position = cam_pos;
             }
         }
         
@@ -207,12 +211,11 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
                 let center_mat = Mat4::from_translation(mesh.center_offset);
                 let model = global_model * center_mat;
 
-                // Frustum Culling (Görüş açısı dışındakileri atla)
-                if e != state.skybox_id && e != state.gizmo_x && e != state.gizmo_y && e != state.gizmo_z {
-                    let world_aabb = mesh.bounds.transform(&model);
-                    if !frustum.contains_aabb(&world_aabb) {
-                        continue;
-                    }
+                // Frustum Culling
+                let world_aabb = mesh.bounds.transform(&model);
+                // Gelişmiş Editör Gizmo veya skybox istisnaları şimdilik stüdyoda devre dışı bırakıldı
+                if !frustum.contains_aabb(&world_aabb) {
+                    continue;
                 }
 
                 // --- LOD (Level of Detail) SEÇİMİ ---
@@ -450,7 +453,8 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
                     view: &renderer.post.hdr_texture_view, // Artık ekran yerine HDR texture'a çiziyoruz!
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.15, b: 0.20, a: 1.0 }),
+                        // Linear space 0.035 ~= sRGB 0.22 (Blender dark grey) after Gamma Correction / HDR
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.035, g: 0.035, b: 0.035, a: 1.0 }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -546,6 +550,28 @@ pub fn execute_render_pipeline(world: &mut World, state: &GameState, encoder: &m
         }
 
         // --- 3. POST-PROCESSING (Bloom + Tone Mapping → Ekrana Yaz) ---
-        renderer.run_post_processing(encoder, view);
+        let render_target = world.get_resource::<gizmo::renderer::components::EditorRenderTarget>();
+        let output_view = if let Some(target) = &render_target {
+            // Ana ekranı siyah ile mecburi temizleyelim (Swapchain error önleme)
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Clear Swapchain Background Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            &target.view
+        } else {
+            view
+        };
+
+        renderer.run_post_processing(encoder, output_view);
 
 }

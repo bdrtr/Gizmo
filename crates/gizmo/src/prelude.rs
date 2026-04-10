@@ -9,6 +9,9 @@ pub use crate::core::{World, Entity, Schedule, Component, SparseSet, Events, Tim
 // === Matematik ===
 pub use crate::math::{Vec2, Vec3, Vec4, Mat4, Quat, Ray};
 
+// Temel Makrolar
+pub use crate::gizmo_log;
+
 // === Fizik ===
 pub use crate::physics::{
     Collider, ColliderShape, Aabb, Sphere,

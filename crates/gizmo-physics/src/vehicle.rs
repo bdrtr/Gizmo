@@ -192,7 +192,7 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                 }
                 
                 // === SÜSPANSİYON YAYLANMASI (Hooke Yasası + Damper) ===
-                if hit_t <= wheel.suspension_rest_length {
+                if hit_t <= wheel.suspension_rest_length + wheel.wheel_radius {
                     wheel.is_grounded = true;
                     // X = Dinlenme uzunluğu (rest) eksi, ulaşılan ray uzaklığı. 
                     // Tekerlek lastiği de pay içerdiği için çıkarılır.

@@ -101,6 +101,35 @@ impl ColliderShape {
             }
         }
     }
+
+    /// Tüm boyut şekillerini çevreleyen temel bir Bounding Box (AABB) üretir.
+    /// Kesişim (Raycast/Broadphase) algoritmalarında ön ve hızlı test için gereklidir.
+    pub fn bounding_box_half_extents(&self) -> Vec3 {
+        match self {
+            ColliderShape::Sphere(s) => Vec3::new(s.radius, s.radius, s.radius),
+            ColliderShape::Aabb(a) => a.half_extents,
+            ColliderShape::Capsule(c) => Vec3::new(c.radius, c.half_height + c.radius, c.radius),
+            ColliderShape::ConvexHull(c) => {
+                let mut max_x = 0.0_f32;
+                let mut max_y = 0.0_f32;
+                let mut max_z = 0.0_f32;
+                for v in &c.vertices {
+                    max_x = max_x.max(v.x.abs());
+                    max_y = max_y.max(v.y.abs());
+                    max_z = max_z.max(v.z.abs());
+                }
+                Vec3::new(max_x, max_y, max_z)
+            }
+            ColliderShape::Swept { base, sweep_vector } => {
+                let base_ext = base.bounding_box_half_extents();
+                Vec3::new(
+                    base_ext.x + sweep_vector.x.abs() * 0.5,
+                    base_ext.y + sweep_vector.y.abs() * 0.5,
+                    base_ext.z + sweep_vector.z.abs() * 0.5,
+                )
+            }
+        }
+    }
 }
 
 /// Fiziksel çarpışma bileşeni.

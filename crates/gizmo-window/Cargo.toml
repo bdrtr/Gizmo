@@ -6,3 +6,4 @@ authors.workspace = true
 
 [dependencies]
 winit = { workspace = true }
+image = "0.25"

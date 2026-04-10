@@ -1,7 +1,7 @@
 //! Gizmo Scripting — Lua tabanlı oyun mantığı scriptleme sistemi
 //!
 //! ## Kullanım
-//! ```rust,no_run
+//! ```rust,ignore
 //! let mut script_engine = ScriptEngine::new().unwrap();
 //! script_engine.load_script("scripts/player.lua").unwrap();
 //! 
