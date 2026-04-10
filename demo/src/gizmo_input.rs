@@ -241,3 +241,19 @@ pub fn sync_gizmos(world: &mut World, state: &GameState) {
         }
     }
 }
+
+pub fn build_ray(world: &World, player_id: u32, ndc_x: f32, ndc_y: f32, ww: f32, wh: f32) -> Option<gizmo::math::Ray> {
+    if let (Some(cameras), Some(transforms)) = (world.borrow::<gizmo::renderer::components::Camera>(), world.borrow::<gizmo::physics::components::Transform>()) {
+        if let (Some(cam), Some(cam_t)) = (cameras.get(player_id), transforms.get(player_id)) {
+            let proj    = gizmo::math::Mat4::perspective_rh(cam.fov, ww / wh, cam.near, cam.far);
+            let view    = cam.get_view(cam_t.position);
+            let inv_vp  = (proj * view).inverse();
+            let far_pt  = inv_vp * gizmo::math::Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
+            let near_pt = inv_vp * gizmo::math::Vec4::new(ndc_x, ndc_y, 0.0, 1.0);
+            let world_near = gizmo::math::Vec3::new(near_pt.x / near_pt.w, near_pt.y / near_pt.w, near_pt.z / near_pt.w);
+            let world_far  = gizmo::math::Vec3::new(far_pt.x / far_pt.w, far_pt.y / far_pt.w, far_pt.z / far_pt.w);
+            return Some(gizmo::math::Ray::new(world_near, (world_far - world_near).normalize()));
+        }
+    }
+    None
+}

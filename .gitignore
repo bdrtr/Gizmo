@@ -18,3 +18,8 @@ Thumbs.db
 assets/*.crdownload
 *.swp
 *~
+test.py
+ray_test
+scratch.rs
+demo/scratch.rs
+scratch/

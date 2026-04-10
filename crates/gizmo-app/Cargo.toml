@@ -16,4 +16,5 @@ egui = "0.26"
 gizmo-editor = { path = "../gizmo-editor" }
 gizmo-audio = { path = "../gizmo-audio" }
 gizmo-scene = { path = "../gizmo-scene" }
+image = "0.25"
 

@@ -327,3 +327,9 @@ impl ParticleEmitter {
         }
     }
 }
+
+pub struct EditorRenderTarget {
+    pub view: std::sync::Arc<wgpu::TextureView>,
+    pub width: u32,
+    pub height: u32,
+}

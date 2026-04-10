@@ -22,6 +22,7 @@ pub struct App<State: 'static> {
     ui_fn: Option<Box<dyn FnMut(&mut World, &mut State, &egui::Context)>>, // Editor UI handler
     pub input: gizmo_core::input::Input,
     initial_scene: Option<String>,
+    window_icon: Option<&'static [u8]>,
 }
 
 impl<State: 'static> App<State> {
@@ -38,7 +39,13 @@ impl<State: 'static> App<State> {
             ui_fn: None,
             input: gizmo_core::input::Input::new(),
             initial_scene: None,
+            window_icon: None,
         }
+    }
+
+    pub fn with_icon(mut self, icon_bytes: &'static [u8]) -> Self {
+        self.window_icon = Some(icon_bytes);
+        self
     }
 
     pub fn set_setup<F>(mut self, f: F) -> Self
@@ -95,11 +102,22 @@ impl<State: 'static> App<State> {
     pub fn run(mut self) {
 
         let event_loop = EventLoop::new().expect("Event Loop başlatılamadı");
+        let mut builder = WindowBuilder::new()
+            .with_title(&self.window_title)
+            .with_inner_size(winit::dpi::LogicalSize::new(self.window_size.0, self.window_size.1));
+
+        if let Some(icon_bytes) = self.window_icon {
+            if let Ok(image) = image::load_from_memory(icon_bytes) {
+                let rgba = image.into_rgba8();
+                let (width, height) = rgba.dimensions();
+                if let Ok(icon) = winit::window::Icon::from_rgba(rgba.into_raw(), width, height) {
+                    builder = builder.with_window_icon(Some(icon));
+                }
+            }
+        }
+
         let window = Arc::new(
-            WindowBuilder::new()
-                .with_title(&self.window_title)
-                .with_inner_size(winit::dpi::LogicalSize::new(self.window_size.0, self.window_size.1))
-                .build(&event_loop)
+            builder.build(&event_loop)
                 .expect("Pencere oluşturulamadı!"),
         );
 
@@ -229,6 +247,57 @@ impl<State: 'static> App<State> {
                         editor.begin_frame(&window);
                         if let Some(ui_hk) = self.ui_fn.as_mut() {
                             ui_hk(&mut self.world, &mut state, &editor.context);
+                        }
+
+                        // --- Scene View RTT (Render To Texture) YÖNETİMİ ---
+                        if self.world.get_resource::<gizmo_editor::EditorState>().is_some() {
+                            let mut ed_state = self.world.remove_resource::<gizmo_editor::EditorState>().unwrap();
+                            
+                            let w = renderer.size.width;
+                            let h = renderer.size.height;
+
+                            let mut needs_recreate = false;
+                            if let Some(target) = self.world.get_resource::<gizmo_renderer::components::EditorRenderTarget>() {
+                                if target.width != w || target.height != h {
+                                    needs_recreate = true;
+                                }
+                            } else {
+                                needs_recreate = true;
+                            }
+
+                            if needs_recreate && w > 0 && h > 0 {
+                                if let Some(old_id) = ed_state.scene_texture_id {
+                                    editor.renderer.free_texture(&old_id);
+                                }
+
+                                let texture = renderer.device.create_texture(&wgpu::TextureDescriptor {
+                                    label: Some("Editor RTT"),
+                                    size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                                    mip_level_count: 1,
+                                    sample_count: 1,
+                                    dimension: wgpu::TextureDimension::D2,
+                                    format: renderer.config.format,
+                                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                                    view_formats: &[],
+                                });
+
+                                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+                                let id = editor.renderer.register_native_texture(
+                                    &renderer.device,
+                                    &view,
+                                    wgpu::FilterMode::Linear,
+                                );
+
+                                ed_state.scene_texture_id = Some(id);
+                                self.world.insert_resource(gizmo_renderer::components::EditorRenderTarget {
+                                    view: std::sync::Arc::new(view),
+                                    width: w,
+                                    height: h,
+                                });
+                            }
+                            
+                            self.world.insert_resource(ed_state);
                         }
 
                         if let Some(update_hk) = self.update_fn.as_mut() {

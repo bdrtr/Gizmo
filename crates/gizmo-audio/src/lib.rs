@@ -15,6 +15,7 @@ pub struct AudioSource {
     pub volume: f32,
     pub pitch: f32,
     pub loop_sound: bool,
+    pub max_distance: f32, // Sesin zayıflayarak tamamen kısılacağı mesafe limiti
     pub _internal_sink_id: Option<u64>,
 }
 
@@ -26,12 +27,18 @@ impl AudioSource {
             volume: 1.0,
             pitch: 1.0,
             loop_sound: false,
+            max_distance: 100.0, // Varsayılan değer
             _internal_sink_id: None,
         }
     }
     
     pub fn with_loop(mut self, l: bool) -> Self {
         self.loop_sound = l;
+        self
+    }
+    
+    pub fn with_max_distance(mut self, dist: f32) -> Self {
+        self.max_distance = dist;
         self
     }
 }

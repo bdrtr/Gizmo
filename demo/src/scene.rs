@@ -74,8 +74,8 @@ impl SceneData {
         }
 
         let scene = SceneData { entities: entities_data };
-        let json = serde_json::to_string_pretty(&scene).expect("Scene Serialize Hatası!");
-        fs::write(file_path, json).expect("Sahne disk üzerine yazılamadı!");
+        let bytes = bincode::serialize(&scene).expect("Scene Serialize Hatası!");
+        fs::write(file_path, bytes).expect("Sahne disk üzerine yazılamadı!");
         println!("Sahne {} yoluna başarıyla kaydedildi.", file_path);
     }
 
@@ -89,12 +89,12 @@ impl SceneData {
         default_texture_bind_group: Arc<wgpu::BindGroup>,
         car_id: &mut u32
     ) -> bool {
-        let json = match fs::read_to_string(file_path) {
+        let bytes = match fs::read(file_path) {
             Ok(content) => content,
             Err(_) => return false,
         };
 
-        let scene: SceneData = match serde_json::from_str(&json) {
+        let scene: SceneData = match bincode::deserialize(&bytes) {
             Ok(s) => s,
             Err(e) => {
                 println!("Sahne dosyası bozuk veya geçersiz ({}).", e);

@@ -177,6 +177,8 @@ pub fn setup_headless_scene(world: &mut World) -> crate::state::GameState {
         total_elapsed: 0.0,
         ps1_race: None,
         basic_scene: None,
+        game_score: 0,
+        game_max_score: 15,
         show_devtools: false,
     }
 }
@@ -279,6 +281,8 @@ pub fn setup_empty_scene(_world: &mut World, _renderer: &gizmo::renderer::render
         total_elapsed: 0.0,
         ps1_race: None,
         basic_scene: None,
+        game_score: 0,
+        game_max_score: 15,
         show_devtools: false,
     }
 }
@@ -499,7 +503,6 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
         _padding: [0.0; 3],
     });
     
-    world.insert_resource(gizmo::editor::EditorState::new());
     
     // UI Durumları
     world.insert_resource(crate::state::AppMode::InGame);
@@ -545,6 +548,8 @@ pub fn setup_default_scene(world: &mut World, renderer: &gizmo::renderer::render
         total_elapsed: 0.0,
         ps1_race: None,
         basic_scene: None,
+        game_score: 0,
+        game_max_score: 15,
         show_devtools: false,
     }
 }

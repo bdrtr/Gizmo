@@ -14,7 +14,7 @@ fn create_physics_world() -> World {
 /// Simulate steps helper
 fn simulate(world: &World, steps: u32, dt: f32) {
     for _ in 0..steps {
-        physics_movement_system(world, dt);
+        gizmo_physics::physics_movement_system(world, dt);
         physics_collision_system(world, dt);
     }
 }

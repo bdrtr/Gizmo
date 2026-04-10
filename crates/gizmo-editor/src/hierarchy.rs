@@ -75,6 +75,14 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 
                 // Root entity'leri çiz
                 for &eid in &root_entities {
+                    // Editor-only (Hayali) objeleri hiyerarşide listeleme
+                    let is_editor_only = names.as_ref()
+                        .and_then(|n| n.get(eid))
+                        .map(|e| e.0 == "Editor Guidelines" || e.0 == "Highlight Box")
+                        .unwrap_or(false);
+                        
+                    if is_editor_only { continue; }
+
                     draw_entity_node(
                         ui,
                         world,
@@ -138,15 +146,19 @@ fn draw_entity_node(
                 
                 let response = ui.selectable_label(is_selected, label);
                 
+                if response.clicked() {
+                    state.selected_entity = Some(entity_id);
+                }
+                
                 // --- Sürükle Bırak (Drag & Drop) ---
                 let drag_id = egui::Id::new("drag_ent").with(entity_id);
-                let response = ui.interact(response.rect, drag_id, egui::Sense::drag());
+                let drag_response = ui.interact(response.rect, drag_id, egui::Sense::drag());
                 
-                if response.drag_started() {
+                if drag_response.drag_started() {
                     ui.memory_mut(|m| m.data.insert_temp(egui::Id::new("dragged_ent"), entity_id));
                 }
                 
-                if response.hovered() {
+                if drag_response.hovered() {
                     if let Some(dragged) = ui.memory(|m| m.data.get_temp::<u32>(egui::Id::new("dragged_ent"))) {
                         // Vurgu rengi ile bırakılabilecek yeri göster
                         ui.painter().rect_stroke(response.rect, 2.0, egui::Stroke::new(1.0, egui::Color32::YELLOW));
@@ -157,10 +169,6 @@ fn draw_entity_node(
                     }
                 }
                 // ------------------------------------
-
-                if response.clicked() {
-                    state.selected_entity = Some(entity_id);
-                }
                 
                 response.context_menu(|ui| {
                     let is_hidden = world.borrow::<gizmo_core::component::IsHidden>().map(|c| c.contains(entity_id)).unwrap_or(false);
@@ -170,8 +178,12 @@ fn draw_entity_node(
                         ui.close_menu();
                     }
                     if ui.button("💾 Prefab Olarak Kaydet").clicked() {
-                        let path = format!("demo/assets/prefabs/{}.json", entity_name.replace(" ", "_"));
+                        let path = format!("demo/assets/prefabs/{}.prefab", entity_name.replace(" ", "_"));
                         state.prefab_save_request = Some((entity_id, path));
+                        ui.close_menu();
+                    }
+                    if ui.button("📑 Çoğalt (Duplicate)").clicked() {
+                        state.duplicate_request = Some(entity_id);
                         ui.close_menu();
                     }
                     if ui.button("🗑 Sil").clicked() {
@@ -230,8 +242,12 @@ fn draw_entity_node(
                 ui.close_menu();
             }
             if ui.button("💾 Prefab Olarak Kaydet").clicked() {
-                let path = format!("demo/assets/prefabs/{}.json", entity_name.replace(" ", "_"));
+                let path = format!("demo/assets/prefabs/{}.prefab", entity_name.replace(" ", "_"));
                 state.prefab_save_request = Some((entity_id, path));
+                ui.close_menu();
+            }
+            if ui.button("📑 Çoğalt (Duplicate)").clicked() {
+                state.duplicate_request = Some(entity_id);
                 ui.close_menu();
             }
             if ui.button("🗑 Sil").clicked() {

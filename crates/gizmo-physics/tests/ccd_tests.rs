@@ -3,7 +3,7 @@ use gizmo_math::Vec3;
 use gizmo_physics::components::{Transform, RigidBody, Velocity};
 use gizmo_physics::shape::Collider;
 use gizmo_physics::system::physics_collision_system;
-use gizmo_physics::integration::physics_movement_system;
+
 fn setup_world() -> World {
     World::new()
 }
@@ -32,7 +32,7 @@ fn test_tunneling_without_ccd() {
     // 0.1 saniye işlet => Mermi 20 metre gidecek
     // -5.0 + 20.0 = 15.0'e ışınlanmalı ve duvara HİÇ ÇARPMADAN geçmeli
     // (Çünkü CCD kapalı ve discrete test 1 kareden diğerine duvarı atlar)
-    physics_movement_system(&world, 0.1);
+    gizmo_physics::physics_movement_system(&world, 0.1);
     physics_collision_system(&world, 0.1); // Çarpışmayı kontrol et ama nafile, çünkü duvardan çoktan geçti
     
     let t = world.borrow::<Transform>().unwrap().get(bullet.id()).unwrap().clone();
@@ -64,7 +64,7 @@ fn test_tunneling_prevention_with_ccd() {
     
     // 0.1 saniye işlet
     physics_collision_system(&world, 0.1);
-    physics_movement_system(&world, 0.1);
+    gizmo_physics::physics_movement_system(&world, 0.1);
     
     let t = world.borrow::<Transform>().unwrap().get(bullet.id()).unwrap().clone();
     let v = world.borrow::<Velocity>().unwrap().get(bullet.id()).unwrap().clone();

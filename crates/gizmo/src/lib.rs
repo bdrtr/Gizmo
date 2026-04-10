@@ -23,6 +23,8 @@ pub use gizmo_scripting as scripting;
 pub use gizmo_scene as scene;
 
 // === 3. Parti Re-Export (Kullanıcının ayrıca eklemesine gerek kalmasın) ===
+pub use gizmo_core::gizmo_log;
+
 pub use winit;
 pub use wgpu;
 pub use egui;

@@ -3,7 +3,6 @@ use gizmo_physics::components::{RigidBody, Transform, Velocity};
 use gizmo_physics::shape::Collider;
 use gizmo_math::Vec3;
 use gizmo_physics::system::{physics_collision_system, PhysicsSolverState};
-use gizmo_physics::integration::physics_movement_system;
 use gizmo_physics::JointWorld;
 use std::time::Instant;
 
@@ -78,7 +77,7 @@ fn test_pachinko_broadphase_benchmark() {
         let step_start = Instant::now();
         
         physics_collision_system(&world, dt);
-        physics_movement_system(&world, dt);
+        gizmo_physics::physics_movement_system(&world, dt);
         if let Some(jw) = world.get_resource::<JointWorld>() {
             gizmo_physics::solve_constraints(&*jw, &world, dt);
         }
@@ -99,8 +98,13 @@ fn test_pachinko_broadphase_benchmark() {
     println!("En Yavaş Frame Çözüm Süresi (Max Spike): {:.3} ms", max_time);
     
     // Testin patlamaması ve akıcı olması için FPS hedeflerini (ms) test içinde sorgula
-    assert!(avg_time < 5.0, "PERFORMANS UYARISI: Ortalama süre 5ms'nin üstünde! Broadphase verimi düşük olabilir.");
-    assert!(max_time < 50.0, "PERFORMANS DROP UYARISI: Çok büyük ani takılma (spike) yaşandı ({:.3} ms)", max_time);
+    let (max_avg, max_spike) = if cfg!(debug_assertions) {
+        (100.0, 600.0) // Debug kiti optimizasyonsuz olduğundan süre toleransı yüksektir
+    } else {
+        (5.0, 50.0) // Release'te Broadphase ve SIMD çok daha hızlı çalışır
+    };
+    assert!(avg_time < max_avg, "PERFORMANS UYARISI: Ortalama süre limiti aştı! ({:.3} > {})", avg_time, max_avg);
+    assert!(max_time < max_spike, "PERFORMANS DROP UYARISI: Çok büyük ani takılma (spike) yaşandı ({:.3} > {})", max_time, max_spike);
 
     println!("Test başarıyla tamamlandı. Broad-phase optimizasyonu 10/10 akıcı çalışıyor!\n");
 }

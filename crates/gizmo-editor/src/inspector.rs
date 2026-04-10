@@ -6,6 +6,7 @@ use gizmo_physics::components::{Transform, Velocity, RigidBody};
 use gizmo_physics::shape::Collider;
 use gizmo_renderer::components::{Camera, PointLight, Material, ParticleEmitter};
 use gizmo_physics::vehicle::VehicleController;
+use gizmo_audio::AudioSource;
 use gizmo_math::{Vec3, Vec4};
 use crate::editor_state::EditorState;
 
@@ -51,6 +52,9 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
                     // === VEHICLE CONTROLLER ===
                     draw_vehicle_controller_section(ui, world, entity_id);
                     
+                    // === AUDIO SOURCE ===
+                    draw_audio_source_section(ui, world, entity_id);
+
                     ui.separator();
                     
                     // === ADD COMPONENT BUTONU ===
@@ -348,19 +352,60 @@ fn draw_vehicle_controller_section(ui: &mut egui::Ui, world: &World, entity_id: 
 
 fn draw_add_component_menu(ui: &mut egui::Ui, _world: &World, _entity_id: u32, state: &mut EditorState) {
     ui.group(|ui| {
-        ui.label("Bileşen Seçin:");
-        let components = [
-            "Transform", "Velocity", "RigidBody", "Collider",
-            "Camera", "PointLight", "Material", "Script",
-        ];
-        for comp_name in &components {
-            if ui.button(*comp_name).clicked() {
-                state.add_component_open = false;
-                state.status_message = format!("{} eklendi (entity {})", comp_name, _entity_id);
-                state.add_component_request = Some((_entity_id, comp_name.to_string()));
-            }
-        }
+        ui.horizontal(|ui| {
+            ui.label("Eklenecek Bileşen:");
+            
+            let components = [
+                "Transform", "Velocity", "RigidBody", "Collider",
+                "Camera", "PointLight", "Material", "Script", "AudioSource",
+            ];
+            
+            egui::ComboBox::from_id_source("add_comp_combo")
+                .selected_text("Seçiniz...")
+                .show_ui(ui, |ui| {
+                    for comp_name in &components {
+                        if ui.selectable_label(false, *comp_name).clicked() {
+                            state.add_component_open = false;
+                            state.add_component_request = Some((_entity_id, comp_name.to_string()));
+                        }
+                    }
+                });
+        });
     });
+}
+
+fn draw_audio_source_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
+    if let Some(mut audios) = world.borrow_mut::<AudioSource>() {
+        if let Some(audio) = audios.get_mut(entity_id) {
+            egui::CollapsingHeader::new("🔊 AudioSource")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Ses Dosyası:");
+                        ui.label(egui::RichText::new(&audio.sound_name).color(egui::Color32::from_rgb(100, 200, 255)));
+                    });
+                    ui.checkbox(&mut audio.is_3d, "3D Uzamsal Ses");
+                    ui.checkbox(&mut audio.loop_sound, "Döngü (Loop)");
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("Ses Şiddeti (Volume):");
+                        ui.add(egui::Slider::new(&mut audio.volume, 0.0..=5.0));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Ses İnceliği (Pitch):");
+                        ui.add(egui::Slider::new(&mut audio.pitch, 0.1..=3.0));
+                    });
+                    
+                    if audio.is_3d {
+                        ui.horizontal(|ui| {
+                            ui.label("Maksimum Mesafe:");
+                            ui.add(egui::Slider::new(&mut audio.max_distance, 1.0..=1000.0).suffix("m"));
+                        });
+                    }
+                });
+            ui.separator();
+        }
+    }
 }
 
 // === YARDIMCI FONKSİYONLAR ===

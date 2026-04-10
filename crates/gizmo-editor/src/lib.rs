@@ -14,7 +14,7 @@ pub mod toolbar;
 pub mod asset_browser;
 
 pub use gui::EditorContext;
-pub use editor_state::{EditorState, GizmoMode, EditorMode};
+pub use editor_state::{EditorState, GizmoMode, EditorMode, DragAxis};
 
 use gizmo_core::World;
 
@@ -46,14 +46,57 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             "Scene View" => {
                 self.state.scene_view_visible = true;
                 
-                let response = ui.allocate_response(ui.available_size(), egui::Sense::hover());
+                let response = ui.allocate_response(ui.available_size(), egui::Sense::click_and_drag());
                 let rect = response.rect;
 
-                ui.allocate_ui_at_rect(rect, |ui| {
-                    ui.centered_and_justified(|ui| {
-                        ui.label(egui::RichText::new("Gizmo Scene View").color(egui::Color32::from_white_alpha(50)));
+                self.state.scene_view_rect = Some(rect);
+
+                if let Some(texture_id) = self.state.scene_texture_id {
+                    let mut mesh = egui::Mesh::with_texture(texture_id);
+                    mesh.add_rect_with_uv(
+                        rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
+                    ui.painter().add(mesh);
+                } else {
+                    ui.allocate_ui_at_rect(rect, |ui| {
+                        ui.centered_and_justified(|ui| {
+                            ui.label(egui::RichText::new("Gizmo Scene View").color(egui::Color32::from_white_alpha(50)));
+                        });
                     });
-                });
+                }
+
+                // --- GIZMO FARE (MOUSE) ETKİLEŞİMLERİ ---
+                if let Some(hover_pos) = ui.input(|i| i.pointer.hover_pos()) {
+                    if response.contains_pointer() || response.dragged() {
+                        // Fare sahne içinde veya sürükleniyor ise NDC (-1.0 ile 1.0) hesapla
+                        let nx = ((hover_pos.x - rect.left()) / rect.width()) * 2.0 - 1.0;
+                        let ny = 1.0 - ((hover_pos.y - rect.top()) / rect.height()) * 2.0;
+
+                        self.state.mouse_ndc = Some(gizmo_math::Vec2::new(nx, ny));
+
+                        if response.clicked_by(egui::PointerButton::Primary) || response.drag_started_by(egui::PointerButton::Primary) {
+                            self.state.do_raycast = true;
+                        }
+                        
+                        // Sağ tık kamerayı çevirmek için (Egui ham input'u yuttuğu için burdan geçirmeliyiz)
+                        if response.dragged_by(egui::PointerButton::Secondary) {
+                            let delta = response.drag_delta();
+                            self.state.camera_look_delta = Some(gizmo_math::Vec2::new(delta.x, delta.y));
+                        } else {
+                            self.state.camera_look_delta = None;
+                        }
+                    } else {
+                        self.state.mouse_ndc = None;
+                        self.state.camera_look_delta = None;
+                    }
+                }
+
+                // Fareyi bırakırsa sürükleme (axis_drag) iptal olur
+                if ui.input(|i| i.pointer.any_released()) && self.state.dragging_axis.is_some() {
+                    self.state.dragging_axis = None;
+                }
 
                 // Dışarıdan veya UI'dan sürüklenen objeyi Scene View'a bırakma yakakalayıcısı
                 if let Some(dragged_path) = ui.memory(|m| m.data.get_temp::<String>(egui::Id::new("dragged_asset_path"))) {
@@ -78,9 +121,17 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                 ui.separator();
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
+                    .stick_to_bottom(true)
                     .show(ui, |ui| {
-                        for (log, color) in &self.state.console_logs {
-                            ui.label(egui::RichText::new(log).color(*color));
+                        if let Ok(logs) = gizmo_core::logger::GLOBAL_LOGS.lock() {
+                            for log in logs.iter() {
+                                let color = match log.level {
+                                    gizmo_core::logger::LogLevel::Info => egui::Color32::WHITE,
+                                    gizmo_core::logger::LogLevel::Warning => egui::Color32::from_rgb(255, 200, 0),
+                                    gizmo_core::logger::LogLevel::Error => egui::Color32::RED,
+                                };
+                                ui.label(egui::RichText::new(&log.message).color(color));
+                            }
                         }
                     });
             }

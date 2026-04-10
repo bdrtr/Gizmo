@@ -41,7 +41,7 @@ fn test_fixed_joint_pull() {
     // Constraints çözücüyü çalıştır
     // 1 adım simülasyon (dt = 0.016)
     // Hızın pozisyona dönüşmesi ve constraint'in onu geri çekmesi için movement system çalışmalı
-    gizmo_physics::system::physics_movement_system(&world, 0.016);
+    gizmo_physics::physics_movement_system(&world, 0.016);
     solve_constraints(&joint_world, &world, 0.016);
     
     let v_a = world.borrow::<Velocity>().unwrap().get(entity_a.id()).unwrap().clone();

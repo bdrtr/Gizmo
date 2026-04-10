@@ -366,7 +366,7 @@ pub fn physics_collision_system(world: &World, dt: f32) {
                     let mut t_low = 0.0;
                     let mut t_high = dt;
                     
-                    for _ in 0..8 {
+                    for _ in 0..16 {
                         let t_mid = (t_low + t_high) * 0.5;
                         
                         let sweep_mid = crate::shape::ColliderShape::Swept {
@@ -389,7 +389,8 @@ pub fn physics_collision_system(world: &World, dt: f32) {
 
                     // Bisection bitti. t_high (veya t_low) TOI'dir.
                     // EPA için nesneleri TOI anındaki tam fiziksel pozisyonlarına taşı:
-                    let t_hit = t_high;
+                    // Çarpışmanın GJK/EPA tarafından net algılanıp normal üretmesi için t_hit'i mikroskobik düzeyde (0.001) ileri sarıyoruz.
+                    let t_hit = (t_high + dt * 0.001).min(dt);
                     let pa_hit = pos_a + v_a_lin * t_hit;
                     let pb_hit = pos_b + v_b_lin * t_hit;
                     

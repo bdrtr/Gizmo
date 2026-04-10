@@ -7,6 +7,7 @@ pub mod query;
 pub mod event;
 pub mod time;
 pub mod registry;
+pub mod logger;
 
 pub use entity::Entity;
 pub use component::{Component, ComponentStorage, SparseSet, EntityName, PrefabRequest};

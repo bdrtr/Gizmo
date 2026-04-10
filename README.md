@@ -1,5 +1,9 @@
 # Gizmo Engine
 
+<div align="center">
+  <img src="media/logo.png" alt="Gizmo Engine Logo" width="200" />
+</div>
+
 Gizmo Engine, Rust programlama dili kullanılarak sıfırdan geliştirilen; yüksek performanslı, veri odaklı (Data-Driven) ve tamamıyla modüler bir **3D Oyun Motoru ve Fizik Simülasyonu** çatısıdır. Gizmo Engine, performansın kritik olduğu geniş ölçekli fizik simülasyonları, modern araç içi dinamikleri ve gelişmiş 3D Rendering işlemleri için özel olarak inşa edilmiştir.
 
 ## 🚀 Motorun Yetenekleri (Neler Yapabilir?)

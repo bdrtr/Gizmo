@@ -12,59 +12,26 @@ impl Ray {
     /// Bir AABB (Axis-Aligned Bounding Box) kutusuyla kesişim testi yapar (Slab Algorithm).
     /// Kesişiyorsa t_near mesafesini döner, kesişmiyorsa None döner.
     pub fn intersect_aabb(&self, min: Vec3, max: Vec3) -> Option<f32> {
-        let mut tmin = (min.x - self.origin.x) / self.direction.x;
-        let mut tmax = (max.x - self.origin.x) / self.direction.x;
+        let inv_dir = Vec3::new(
+            if self.direction.x.abs() > 1e-8 { 1.0 / self.direction.x } else { f32::MAX.copysign(self.direction.x) },
+            if self.direction.y.abs() > 1e-8 { 1.0 / self.direction.y } else { f32::MAX.copysign(self.direction.y) },
+            if self.direction.z.abs() > 1e-8 { 1.0 / self.direction.z } else { f32::MAX.copysign(self.direction.z) }
+        );
 
-        if tmin > tmax {
-            std::mem::swap(&mut tmin, &mut tmax);
+        let t0 = (min - self.origin) * inv_dir;
+        let t1 = (max - self.origin) * inv_dir;
+
+        let tmin_vec = t0.min(t1);
+        let tmax_vec = t0.max(t1);
+
+        let tmin = tmin_vec.x.max(tmin_vec.y).max(tmin_vec.z);
+        let tmax = tmax_vec.x.min(tmax_vec.y).min(tmax_vec.z);
+
+        if tmin <= tmax && tmax > 0.0 {
+            Some(if tmin > 0.0 { tmin } else { tmax })
+        } else {
+            None
         }
-
-        let mut tymin = (min.y - self.origin.y) / self.direction.y;
-        let mut tymax = (max.y - self.origin.y) / self.direction.y;
-
-        if tymin > tymax {
-            std::mem::swap(&mut tymin, &mut tymax);
-        }
-
-        if (tmin > tymax) || (tymin > tmax) {
-            return None;
-        }
-
-        if tymin > tmin {
-            tmin = tymin;
-        }
-
-        if tymax < tmax {
-            tmax = tymax;
-        }
-
-        let mut tzmin = (min.z - self.origin.z) / self.direction.z;
-        let mut tzmax = (max.z - self.origin.z) / self.direction.z;
-
-        if tzmin > tzmax {
-            std::mem::swap(&mut tzmin, &mut tzmax);
-        }
-
-        if (tmin > tzmax) || (tzmin > tmax) {
-            return None;
-        }
-
-        if tzmin > tmin {
-            tmin = tzmin;
-        }
-
-        if tzmax < tmax {
-            tmax = tzmax;
-        }
-
-        // tmin < 0 ise kutunun içindeyiz, bu yüzden pozitif bir mesafe olan tmax'ı dönebiliriz.
-        // Ancak bizim işimiz için dışarıdan vurmayı (tmin > 0) ölçmek yeterli.
-        if tmax < 0.0 {
-            return None; // Kutu kameranın arkasında kaldı
-        }
-
-        let t = if tmin < 0.0 { tmax } else { tmin };
-        Some(t)
     }
 }
 
