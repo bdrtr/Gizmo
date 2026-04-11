@@ -169,7 +169,7 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
     };
 
     if let (Some(trans_storage), Some(mut vel_storage), Some(mut rbs), Some(mut vehicles)) = (
-        world.borrow_mut::<Transform>(),
+        world.borrow::<Transform>(),     // Sadece okuma — borrow_mut gerekmiyor (runtime panic önlenir)
         world.borrow_mut::<Velocity>(),
         world.borrow_mut::<RigidBody>(),
         world.borrow_mut::<VehicleController>(),
