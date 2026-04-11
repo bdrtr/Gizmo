@@ -22,6 +22,8 @@ pub enum JointKind {
     BallSocket,
     /// Menteşe (Hinge) — Tek bir eksen etrafında döner, açı limitli
     Hinge {
+        /// Menteşe ekseni — entity_a'nın **yerel (local)** uzayında saklanır.
+        /// Fizik solverında her frame `rot_a.mul_vec3(axis)` ile world-space'e dönüştürülmelidir.
         axis: Vec3,
         min_angle: f32, // Minimum açı (radyan). f32::NEG_INFINITY = limitsiz
         max_angle: f32, // Maximum açı (radyan). f32::INFINITY = limitsiz
@@ -493,14 +495,24 @@ pub fn solve_constraints(joint_world: &JointWorld, world: &gizmo_core::World, dt
 
                     // c — Açı limiti
                     if *min_angle > f32::NEG_INFINITY || *max_angle < f32::INFINITY {
+                        // `axis` entity_a'nın local-space'inde saklanır.
+                        // Anlık world-space ekseni her frame yeniden hesaplanmalıdır.
+                        let hinge_world = rot_a.mul_vec3(*axis);
+
+                        // rel_rot: B'nin A'ya göre göreli dönüşü (A-local uzayında)
                         let rel_rot = rot_a.conjugate() * rot_b;
-                        let (hinge_axis_local, angle) = rel_rot.to_axis_angle();
-                        let signed_angle = if hinge_axis_local.dot(*axis) >= 0.0 {
+                        let (rel_axis_local, angle) = rel_rot.to_axis_angle();
+
+                        // rel_axis_local, A'nın yerel uzayında — world-space'e çevir
+                        let rel_axis_world = rot_a.mul_vec3(rel_axis_local);
+
+                        // Dönüş yönü, world-space hinge_world eksenine göre işaretlenir
+                        let signed_angle = if rel_axis_world.dot(hinge_world) >= 0.0 {
                             angle
                         } else {
                             -angle
                         };
-                        let hinge_world = rot_a.mul_vec3(*axis);
+
                         if signed_angle < *min_angle {
                             let correction = hinge_world * (*min_angle - signed_angle) * (beta / dt);
                             if let Some(v_b) = vels.get_mut(joint.entity_b) {
