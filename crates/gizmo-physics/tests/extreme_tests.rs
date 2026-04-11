@@ -33,7 +33,7 @@ fn test_extreme_quantum_stack_explosion() {
     }
 
     for _ in 0..60 {
-        physics_collision_system(&world, 0.016);
+        physics_collision_system(&mut world, 0.016);
         physics_apply_forces_system(&world, 0.016);
         physics_movement_system(&world, 0.016);
     }
@@ -87,7 +87,7 @@ fn test_extreme_mass_disparity() {
 
     // Birkaç frame simüle et (çarpışma olsun)
     for _ in 0..20 {
-        physics_collision_system(&world, 0.016);
+        physics_collision_system(&mut world, 0.016);
         physics_apply_forces_system(&world, 0.016);
         physics_movement_system(&world, 0.016);
     }
@@ -145,7 +145,7 @@ fn test_extreme_needle_wall_ccd() {
     world.add_component(needle, Collider::new_aabb(0.0001, 1000.0, 1000.0));
 
     // 0.1 sn geçir => 50 m yol alacak
-    physics_collision_system(&world, 0.1);
+    physics_collision_system(&mut world, 0.1);
     physics_apply_forces_system(&world, 0.1);
     physics_movement_system(&world, 0.1);
 

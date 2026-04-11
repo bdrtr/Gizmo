@@ -601,6 +601,7 @@ pub fn check_capsule_aabb_manifold(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gizmo_math::Quat;
 
     #[test]
     fn test_broad_phase_aabb_aabb() {
@@ -651,7 +652,128 @@ mod tests {
 
         let manifold = check_sphere_sphere_manifold(Vec3::ZERO, &s1, Vec3::new(1.5, 0.0, 0.0), &s2);
         assert!(manifold.is_colliding);
-        // assert!((manifold.penetration - 0.5).abs() < 0.001);
+        // Penetration: sum_r(2.0) - dist(1.5) = 0.5
+        assert!(
+            (manifold.penetration - 0.5).abs() < 0.001,
+            "Penetration should be ~0.5, got {}",
+            manifold.penetration
+        );
         assert_eq!(manifold.contact_points.len(), 1);
     }
+
+    #[test]
+    fn test_sphere_sphere_no_collision() {
+        let s1 = Sphere { radius: 1.0 };
+        let s2 = Sphere { radius: 1.0 };
+        let manifold = check_sphere_sphere_manifold(Vec3::ZERO, &s1, Vec3::new(3.0, 0.0, 0.0), &s2);
+        assert!(!manifold.is_colliding);
+        assert!(manifold.contact_points.is_empty());
+    }
+
+    #[test]
+    fn test_sphere_sphere_degenerate_same_pos() {
+        // İki küre aynı yerde — NaN kontrolü
+        let s1 = Sphere { radius: 1.0 };
+        let s2 = Sphere { radius: 1.0 };
+        let manifold = check_sphere_sphere_manifold(Vec3::ZERO, &s1, Vec3::ZERO, &s2);
+        assert!(manifold.is_colliding);
+        // Normal NaN olmamalı
+        assert!(manifold.normal.x.is_finite());
+        assert!(manifold.normal.y.is_finite());
+        assert!(manifold.normal.z.is_finite());
+    }
+
+    #[test]
+    fn test_obb_obb_flat_surface_multi_contact() {
+        // Düz zeminde yatan iki kutu — Sutherland-Hodgman 4 temas noktası üretmeli
+        let a = Aabb { half_extents: Vec3::new(1.0, 0.5, 1.0) };
+        let b = Aabb { half_extents: Vec3::new(1.0, 0.5, 1.0) };
+
+        // B kutusu, A'nın tam üstünde hafif geçiş yapıyor (10cm)
+        let manifold = check_obb_obb_manifold(
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            &a,
+            Vec3::new(0.0, 0.9, 0.0), // 0.5 + 0.5 - 0.1 = 0.9
+            Quat::IDENTITY,
+            &b,
+        );
+        assert!(manifold.is_colliding, "Overlapping boxes should collide");
+        // Düz yüzey teması — birden fazla temas noktası bekleniyor
+        assert!(
+            manifold.contact_points.len() >= 1,
+            "Expected at least 1 contact point, got {}",
+            manifold.contact_points.len()
+        );
+        // Normal Y ekseni yönünde olmalı
+        assert!(manifold.normal.y.abs() > 0.9, "Normal should be mostly Y");
+    }
+
+    #[test]
+    fn test_obb_obb_no_collision() {
+        let a = Aabb { half_extents: Vec3::new(1.0, 1.0, 1.0) };
+        let b = Aabb { half_extents: Vec3::new(1.0, 1.0, 1.0) };
+        let manifold = check_obb_obb_manifold(
+            Vec3::ZERO, Quat::IDENTITY, &a,
+            Vec3::new(5.0, 0.0, 0.0), Quat::IDENTITY, &b,
+        );
+        assert!(!manifold.is_colliding);
+    }
+
+    #[test]
+    fn test_obb_obb_rotated() {
+        // 45 derece döndürülmüş A ile rotasyonsuz B arası çarpışma
+        let a = Aabb { half_extents: Vec3::new(1.0, 1.0, 1.0) };
+        let b = Aabb { half_extents: Vec3::new(1.0, 1.0, 1.0) };
+        let rot_45 = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), std::f32::consts::FRAC_PI_4);
+        // Köşeden köşeye yakın mesafe — çarpışmalı
+        let manifold = check_obb_obb_manifold(
+            Vec3::ZERO, rot_45, &a,
+            Vec3::new(2.0, 0.0, 0.0), Quat::IDENTITY, &b,
+        );
+        // sqrt(2)*1.0 + 1.0 ≈ 2.41 > 2.0 → çarpışmalı
+        assert!(manifold.is_colliding, "Rotated OBB should still detect collision at dist=2.0");
+    }
+
+    #[test]
+    fn test_capsule_capsule_manifold() {
+        let c1 = Capsule { radius: 0.5, half_height: 1.0 };
+        let c2 = Capsule { radius: 0.5, half_height: 1.0 };
+
+        // Paralel kapsüller, 0.8 birim ayrık (0.5+0.5-0.2=0.8 → çarpışmalı)
+        let manifold = check_capsule_capsule_manifold(
+            Vec3::ZERO, Quat::IDENTITY, &c1,
+            Vec3::new(0.8, 0.0, 0.0), Quat::IDENTITY, &c2,
+        );
+        assert!(manifold.is_colliding);
+        assert!(manifold.penetration > 0.0);
+    }
+
+    #[test]
+    fn test_capsule_sphere_manifold() {
+        let cap = Capsule { radius: 0.5, half_height: 1.0 };
+        let sphere = Sphere { radius: 0.5 };
+
+        // Kapsül merkezine küre çakışıyor
+        let manifold = check_capsule_sphere_manifold(
+            Vec3::ZERO, Quat::IDENTITY, &cap,
+            Vec3::new(0.8, 0.0, 0.0),
+            &sphere,
+        );
+        assert!(manifold.is_colliding);
+    }
+
+    #[test]
+    fn test_sphere_aabb_center_overlap_no_nan() {
+        // Küre tam AABB merkezinde — NaN oluşmamalı (Bug #9)
+        let sphere = Sphere { radius: 2.0 };
+        let aabb = Aabb { half_extents: Vec3::new(1.0, 1.0, 1.0) };
+        let manifold = check_sphere_aabb_manifold(Vec3::ZERO, &sphere, Vec3::ZERO, &aabb);
+        assert!(manifold.is_colliding);
+        // Normal her axiste finite olmalı
+        assert!(manifold.normal.x.is_finite());
+        assert!(manifold.normal.y.is_finite());
+        assert!(manifold.normal.z.is_finite());
+    }
 }
+

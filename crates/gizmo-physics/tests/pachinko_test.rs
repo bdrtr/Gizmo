@@ -76,7 +76,7 @@ fn test_pachinko_broadphase_benchmark() {
     for _ in 0..steps {
         let step_start = Instant::now();
 
-        physics_collision_system(&world, dt);
+        physics_collision_system(&mut world, dt);
         gizmo_physics::physics_apply_forces_system(&world, dt);
         gizmo_physics::physics_movement_system(&world, dt);
         if let Some(jw) = world.get_resource::<JointWorld>() {

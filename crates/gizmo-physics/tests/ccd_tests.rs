@@ -34,7 +34,7 @@ fn test_tunneling_without_ccd() {
     // (Çünkü CCD kapalı ve discrete test 1 kareden diğerine duvarı atlar)
     gizmo_physics::physics_apply_forces_system(&world, 0.1);
     gizmo_physics::physics_movement_system(&world, 0.1);
-    physics_collision_system(&world, 0.1); // Çarpışmayı kontrol et ama nafile, çünkü duvardan çoktan geçti
+    physics_collision_system(&mut world, 0.1); // Çarpışmayı kontrol et ama nafile, çünkü duvardan çoktan geçti
 
     let t = world
         .borrow::<Transform>()
@@ -73,7 +73,7 @@ fn test_tunneling_prevention_with_ccd() {
     world.add_component(wall, Collider::new_aabb(0.5, 5.0, 5.0));
 
     // 0.1 saniye işlet
-    physics_collision_system(&world, 0.1);
+    physics_collision_system(&mut world, 0.1);
     gizmo_physics::physics_apply_forces_system(&world, 0.1);
     gizmo_physics::physics_movement_system(&world, 0.1);
 

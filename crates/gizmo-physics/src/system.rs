@@ -922,6 +922,16 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
                 state.frame_counter += 1;
                 (state.solver_iterations, state.frame_counter)
             } else {
+                // PhysicsSolverState World'e kayıtlı değil — warm-start devre dışı,
+                // varsayılan 8 iterasyon kullanılıyor.
+                // Düzeltmek için: world.insert_resource(PhysicsSolverState::new())
+                // çağrısını uygulama başlangıcında ekleyin.
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[Physics WARN] PhysicsSolverState resource bulunamadı. \
+                     Warm-start devre dışı; her frame 8 iterasyonla başlıyor. \
+                     world.insert_resource(PhysicsSolverState::new()) çağrısı eklenmeli."
+                );
                 (8, 0)
             };
 
