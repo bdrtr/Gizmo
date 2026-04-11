@@ -713,55 +713,70 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
             })
             .collect();
 
-        // ---- FAZ 1b: ISLAND GENERATION (Union-Find — Path-Halving + Union-by-Rank) ----
+        // ---- FAZ 1b: ISLAND GENERATION (Union-Find — Full Path Compression + Union-by-Rank) ----
         //
         // parent_map[i] = i'nin parent node'u (başta her node kendi root'u)
         // rank_map[i]   = alt ağaç derinliği tahmini (union-by-rank için)
         //
-        // find_root : iterative path-halving → O(α(N)) amortize, sonsuz döngü riski yok
-        // union_nodes: rank küçük olan rank büyüğe bağlanır → dengeli ağaç, O(log N) derinlik
+        // find_root: İki geçişli tam path compression → O(α(N)) amortize
+        //   1. Geçiş: root bulunana kadar yolu izle, gidilen node'ları topla
+        //   2. Geçiş: zincirdeki tüm node'ları doğrudan root'a bağla
+        // Bu sayede bir sonraki find_root aynı node için O(1) seviyesine düşer.
+        //
+        // BTreeMap → HashMap: Her lookup O(log N) → O(1) amortize.
+        // Büyük sahnelerde (50+ entity zinciri) frame-time spike'ını ortadan kaldırır.
 
-        let mut parent_map: std::collections::BTreeMap<u32, u32> =
-            std::collections::BTreeMap::new();
-        let mut rank_map: std::collections::BTreeMap<u32, u8> = std::collections::BTreeMap::new();
+        let mut parent_map: std::collections::HashMap<u32, u32> =
+            std::collections::HashMap::new();
+        let mut rank_map: std::collections::HashMap<u32, u8> =
+            std::collections::HashMap::new();
 
         // Node'u haritaya ekler (idempotent — zaten varsa değişmez).
         fn ensure_node(
-            parent: &mut std::collections::BTreeMap<u32, u32>,
-            rank: &mut std::collections::BTreeMap<u32, u8>,
+            parent: &mut std::collections::HashMap<u32, u32>,
+            rank: &mut std::collections::HashMap<u32, u8>,
             i: u32,
         ) {
             parent.entry(i).or_insert(i);
             rank.entry(i).or_insert(0);
         }
 
-        // Kökü döndürür — her adımda i'yi büyük-ebeveynine (grandparent) bağlar (path-halving).
-        // Tek pass'te hem arama hem sıkıştırma yapılır; entry+get çift erişim sorununu ortadan kaldırır.
-        fn find_root(parent: &mut std::collections::BTreeMap<u32, u32>, mut i: u32) -> u32 {
+        // Kökü döndürür — iki geçişli tam path compression uygular.
+        //
+        // 1. Geçiş: root'a kadar olan zinciri `path` vektörüne topla.
+        // 2. Geçiş: zincirdeki her node'u doğrudan root'a bağla.
+        //
+        // Bir sonraki find_root çağrısında bu node'lar O(1) ile root'a ulaşır.
+        // path-halving'den farkı: tek node bile atlamadan doğrudan root'a bağlanır.
+        fn find_root(parent: &mut std::collections::HashMap<u32, u32>, i: u32) -> u32 {
+            // --- Geçiş 1: root'u bul ---
+            let mut path = Vec::new(); // Geçilen node'lar (stack allocation için max ~20 eleman)
+            let mut cur = i;
             loop {
-                // parent yoksa node kendi kendinin root'u demektir
-                let p = match parent.get(&i) {
+                let p = match parent.get(&cur) {
                     Some(&p) => p,
-                    None => return i,
+                    None => cur, // Bilinmeyen node → kendi root'u
                 };
-                if p == i {
-                    return i;
+                if p == cur {
+                    break; // Root bulundu
                 }
-                // grandparent'ı al (yoksa p'nin kendisi)
-                let gp = match parent.get(&p) {
-                    Some(&gp) => gp,
-                    None => p,
-                };
-                // path-halving: i'yi grandparent'a bağla
-                parent.insert(i, gp);
-                i = gp;
+                path.push(cur);
+                cur = p;
             }
+            let root = cur;
+
+            // --- Geçiş 2: tüm zinciri doğrudan root'a bağla ---
+            for node in path {
+                parent.insert(node, root);
+            }
+
+            root
         }
 
         // İki island'ı birleştirir; rank'ı düşük olan, yüksek olanın altına girer.
         fn union_nodes(
-            parent: &mut std::collections::BTreeMap<u32, u32>,
-            rank: &mut std::collections::BTreeMap<u32, u8>,
+            parent: &mut std::collections::HashMap<u32, u32>,
+            rank: &mut std::collections::HashMap<u32, u8>,
             i: u32,
             j: u32,
         ) {
