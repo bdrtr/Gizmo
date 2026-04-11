@@ -237,8 +237,25 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
         }
 
         // =========================================================================
-        // 1D Sweep & Prune Broadphase - O(N log N)
-        // En yüksek varyansa sahip ekseni bularak dinamik sıralama/pruning yapar.
+        // 1D Sweep & Prune Broadphase — Active-List yöntemi
+        //
+        // Algoritma:
+        //   1. Merkez varyansından en geniş dağılım eksenini seç (X/Y/Z).
+        //   2. Interval'leri bu eksenin min değerine göre sırala — O(N log N).
+        //   3. Tek geçişte aktif liste (active list) tut:
+        //      - Yeni interval tarandığında, max'ı current_min'in gerisinde kalan
+        //        tüm eski interval'leri listeden çıkar (sweep-out).
+        //      - Aktif listedeki her entry ile tam 3-eksen AABB testi yap.
+        //
+        // Neden nested double-loop SAP'tan doğru?
+        //   Nested loop: seçili eksende prune tetiklenmediğinde O(N²) çalışır.
+        //   Dikey sahnede nesneler aynı X bantında yığılıysa X'de prune olmaz.
+        //   Active-list ise seçili ekseni **kesin** kullanır: max < current_min
+        //   olan entry'ler güvenle silinir → yalnızca gerçek örtüşen çiftler
+        //   3-eksen testinden geçer.
+        //
+        // Karmaşıklık: O(N log N + N·k) — k = ortalama aktif liste boyutu.
+        // Dikey/yatay yığın sahnelerinde k << N → O(N log N)'ye yaklaşır.
         // =========================================================================
 
         let mut collision_pairs: Vec<(u32, u32)> = Vec::new();
@@ -246,67 +263,89 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
             return;
         }
 
-        // 1. Merkezlerin eksenlere göre varyansını (dağılımını) hesapla
+        // 1. Merkezlerin varyansını hesapla → en geniş dağılım eksenini seç
         let mut sum = Vec3::ZERO;
         let mut sum_sq = Vec3::ZERO;
-        for i in &intervals {
-            let center = (i.min + i.max) * 0.5;
+        for iv in &intervals {
+            let center = (iv.min + iv.max) * 0.5;
             sum += center;
-            sum_sq += center * center;
+            sum_sq.x += center.x * center.x;
+            sum_sq.y += center.y * center.y;
+            sum_sq.z += center.z * center.z;
         }
         let count = intervals.len() as f32;
         let mean = sum / count;
-        let variance = sum_sq / count - mean * mean;
+        // Var(X) = E[X²] - E[X]² — her bileşen ayrı ayrı
+        let variance = Vec3::new(
+            sum_sq.x / count - mean.x * mean.x,
+            sum_sq.y / count - mean.y * mean.y,
+            sum_sq.z / count - mean.z * mean.z,
+        );
 
-        // En geniş dağılım (variance) hangi eksendeyse o ekseni seç
-        let mut axis = 0; // 0: X, 1: Y, 2: Z
-        if variance.y > variance.x && variance.y > variance.z {
-            axis = 1;
-        } else if variance.z > variance.x && variance.z > variance.y {
-            axis = 2;
-        }
+        // En yüksek varyansa sahip eksen seçilir
+        let axis: u8 = if variance.y >= variance.x && variance.y >= variance.z {
+            1
+        } else if variance.z >= variance.x && variance.z >= variance.y {
+            2
+        } else {
+            0
+        };
 
-        // 2. Seçilen eksenin min değerine göre hızlıca (unstable_sort) sırala
+        // Seçili eksene göre min küçükten büyüğe sırala — O(N log N)
         intervals.sort_unstable_by(|a, b| {
-            if axis == 0 {
-                a.min.x.total_cmp(&b.min.x)
-            } else if axis == 1 {
-                a.min.y.total_cmp(&b.min.y)
-            } else {
-                a.min.z.total_cmp(&b.min.z)
-            }
+            let va = if axis == 0 { a.min.x } else if axis == 1 { a.min.y } else { a.min.z };
+            let vb = if axis == 0 { b.min.x } else if axis == 1 { b.min.y } else { b.min.z };
+            va.total_cmp(&vb)
         });
 
-        // 3. Sıralanmış listeyi Linear olarak tara (Sweep)
+        // 2. Active-list tek geçiş sweep — O(N·k), k = aktif liste boyutu
+        //
+        // active_list: hâlâ açık olan interval'lerin `intervals` dizisindeki **indeksi**.
+        // Yeni interval i işlenirken:
+        //   a) active_list'ten max_axis(j) < min_axis(i) olanları temizle (expired).
+        //   b) Kalan her j ile 3-eksen AABB overlap testi yap.
+        //   c) i'yi active_list'e ekle.
         let len = intervals.len();
+        let mut active_list: Vec<usize> = Vec::with_capacity(32);
+
         for i in 0..len {
+            let cur_min_axis = if axis == 0 {
+                intervals[i].min.x
+            } else if axis == 1 {
+                intervals[i].min.y
+            } else {
+                intervals[i].min.z
+            };
+
+            // a) Süresi dolen entry'leri active_list'ten temizle (sweep-out).
+            // partition_point ile binary search yerine retain kullanıyoruz:
+            // liste genellikle küçük (< 20 eleman) olduğu için lineer scan hızlıdır.
+            active_list.retain(|&j| {
+                let max_j = if axis == 0 {
+                    intervals[j].max.x
+                } else if axis == 1 {
+                    intervals[j].max.y
+                } else {
+                    intervals[j].max.z
+                };
+                max_j >= cur_min_axis // Hâlâ örtüşüyor → listede kal
+            });
+
+            // b) Aktif listedeki her interval ile tam 3-eksen overlap testi
             let a = &intervals[i];
-            for j in (i + 1)..len {
+            for &j in &active_list {
                 let b = &intervals[j];
 
-                // (Prune) Eğer b'nin sol kenarı (min), seçili eksende a'nın sağ kenarını geçiyorsa,
-                // Liste sıralı olduğu için geri kalan HİÇBİR obje a ile kesişemez. Döngüyü kır.
-                let prune = if axis == 0 {
-                    b.min.x > a.max.x
-                } else if axis == 1 {
-                    b.min.y > a.max.y
-                } else {
-                    b.min.z > a.max.z
-                };
-
-                if prune {
-                    break;
-                }
-
-                // Kalan tüm eksenlerde kesin örtüşme (overlap) kontrolü yap
-                if a.min.x <= b.max.x
+                // Seçili eksende guaranteed overlap (active_list invariantı)
+                // Diğer iki eksende AABB overlap testi
+                let overlap = a.min.x <= b.max.x
                     && a.max.x >= b.min.x
                     && a.min.y <= b.max.y
                     && a.max.y >= b.min.y
                     && a.min.z <= b.max.z
-                    && a.max.z >= b.min.z
-                {
-                    // Benzersiz Çifti ekle (Sürülen j daima i'den ileride olduğu için kopya çakışması asla olmaz)
+                    && a.max.z >= b.min.z;
+
+                if overlap {
                     let pair = if a.entity < b.entity {
                         (a.entity, b.entity)
                     } else {
@@ -315,6 +354,9 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
                     collision_pairs.push(pair);
                 }
             }
+
+            // c) Kendini active_list'e ekle (sonraki interval'ler bu entry'yi test eder)
+            active_list.push(i);
         }
 
         // Determinizm için pairleri Entity ID lerine göre mutlak düzene oturtalım
