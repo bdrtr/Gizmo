@@ -36,7 +36,9 @@ impl ComponentRegistry {
 
     /// TypeId'den isime dönüşüm
     pub fn get_name<T: 'static>(&self) -> Option<&str> {
-        self.type_to_name.get(&TypeId::of::<T>()).map(|s| s.as_str())
+        self.type_to_name
+            .get(&TypeId::of::<T>())
+            .map(|s| s.as_str())
     }
 
     /// TypeId'den isime dönüşüm (doğrudan TypeId ile)

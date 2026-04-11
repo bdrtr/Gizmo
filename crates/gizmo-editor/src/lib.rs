@@ -6,16 +6,16 @@
 //! - **Inspector** — Sağ panel: Component düzenleyici
 //! - **Asset Browser** — Alt panel: Dosya gezgini
 
-pub mod gui;
+pub mod asset_browser;
 pub mod editor_state;
+pub mod gui;
 pub mod hierarchy;
+pub mod history;
 pub mod inspector;
 pub mod toolbar;
-pub mod asset_browser;
-pub mod history;
 
+pub use editor_state::{BuildTarget, DragAxis, EditorMode, EditorState, GizmoMode};
 pub use gui::EditorContext;
-pub use editor_state::{EditorState, GizmoMode, EditorMode, DragAxis, BuildTarget};
 
 use gizmo_core::World;
 
@@ -46,8 +46,9 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             }
             "Scene View" => {
                 self.state.scene_view_visible = true;
-                
-                let response = ui.allocate_response(ui.available_size(), egui::Sense::click_and_drag());
+
+                let response =
+                    ui.allocate_response(ui.available_size(), egui::Sense::click_and_drag());
                 let rect = response.rect;
 
                 self.state.scene_view_rect = Some(rect);
@@ -63,7 +64,10 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                 } else {
                     ui.allocate_ui_at_rect(rect, |ui| {
                         ui.centered_and_justified(|ui| {
-                            ui.label(egui::RichText::new("Gizmo Scene View").color(egui::Color32::from_white_alpha(50)));
+                            ui.label(
+                                egui::RichText::new("Gizmo Scene View")
+                                    .color(egui::Color32::from_white_alpha(50)),
+                            );
                         });
                     });
                 }
@@ -77,22 +81,26 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
 
                         self.state.mouse_ndc = Some(gizmo_math::Vec2::new(nx, ny));
 
-                        if response.clicked_by(egui::PointerButton::Primary) || response.drag_started_by(egui::PointerButton::Primary) {
+                        if response.clicked_by(egui::PointerButton::Primary)
+                            || response.drag_started_by(egui::PointerButton::Primary)
+                        {
                             self.state.do_raycast = true;
                         }
-                        
+
                         // Sağ tık kamerayı çevirmek için (Egui ham input'u yuttuğu için burdan geçirmeliyiz)
                         if response.dragged_by(egui::PointerButton::Secondary) {
                             let delta = response.drag_delta();
-                            self.state.camera_look_delta = Some(gizmo_math::Vec2::new(delta.x, delta.y));
+                            self.state.camera_look_delta =
+                                Some(gizmo_math::Vec2::new(delta.x, delta.y));
                         } else {
                             self.state.camera_look_delta = None;
                         }
-                        
+
                         // Orta tık kamerayı kaydırmak (Pan) için
                         if response.dragged_by(egui::PointerButton::Middle) {
                             let delta = response.drag_delta();
-                            self.state.camera_pan_delta = Some(gizmo_math::Vec2::new(delta.x, delta.y));
+                            self.state.camera_pan_delta =
+                                Some(gizmo_math::Vec2::new(delta.x, delta.y));
                         } else {
                             self.state.camera_pan_delta = None;
                         }
@@ -101,11 +109,12 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                         let alt_pressed = ui.input(|i| i.modifiers.alt);
                         if alt_pressed && response.dragged_by(egui::PointerButton::Primary) {
                             let delta = response.drag_delta();
-                            self.state.camera_orbit_delta = Some(gizmo_math::Vec2::new(delta.x, delta.y));
+                            self.state.camera_orbit_delta =
+                                Some(gizmo_math::Vec2::new(delta.x, delta.y));
                         } else {
                             self.state.camera_orbit_delta = None;
                         }
-                        
+
                         // Scroll Zoom için
                         let scroll_y = ui.input(|i| i.raw_scroll_delta.y); // raw_scroll kullanırsak daha yumuşak gelir
                         if scroll_y.abs() > 0.0 {
@@ -113,7 +122,6 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                         } else {
                             self.state.camera_scroll_delta = None;
                         }
-                        
                     } else {
                         self.state.mouse_ndc = None;
                         self.state.camera_look_delta = None;
@@ -129,37 +137,54 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                 }
 
                 // Dışarıdan veya UI'dan sürüklenen objeyi Scene View'a bırakma yakakalayıcısı
-                if let Some(dragged_path) = ui.memory(|m| m.data.get_temp::<String>(egui::Id::new("dragged_asset_path"))) {
+                if let Some(dragged_path) = ui.memory(|m| {
+                    m.data
+                        .get_temp::<String>(egui::Id::new("dragged_asset_path"))
+                }) {
                     if response.hovered() && ui.input(|i| i.pointer.any_released()) {
                         self.state.spawn_asset_request = Some(dragged_path);
-                        
+
                         // Farenin bırakıldığı yerin NDC koordinatı ile objeyi spawner'a gönderelim (sıfır değil)
-                        // Asset Drop Raycasting (Aşama 2): 
+                        // Asset Drop Raycasting (Aşama 2):
                         if let Some(ndc) = self.state.mouse_ndc {
                             // Biz şimdilik NDC'yi direkt pozisyon olarak veriyoruz (bunu main.rs raycast'e dönüştürecek)
-                            self.state.spawn_asset_position = Some(gizmo_math::Vec3::new(ndc.x, ndc.y, 1.0)); 
+                            self.state.spawn_asset_position =
+                                Some(gizmo_math::Vec3::new(ndc.x, ndc.y, 1.0));
                         } else {
-                            self.state.spawn_asset_position = Some(gizmo_math::Vec3::ZERO); 
+                            self.state.spawn_asset_position = Some(gizmo_math::Vec3::ZERO);
                         }
-                        
-                        ui.memory_mut(|m| m.data.remove::<String>(egui::Id::new("dragged_asset_path")));
+
+                        ui.memory_mut(|m| {
+                            m.data.remove::<String>(egui::Id::new("dragged_asset_path"))
+                        });
                     }
                 }
 
                 // --- EGUI-GIZMO Entegrasyonu (Aşama 1) ---
-                if let (Some(view_mat), Some(proj_mat)) = (self.state.camera_view, self.state.camera_proj) {
+                if let (Some(view_mat), Some(proj_mat)) =
+                    (self.state.camera_view, self.state.camera_proj)
+                {
                     if !self.state.selected_entities.is_empty() {
-                        if let Some(mut transforms) = self.world.borrow_mut::<gizmo_physics::components::Transform>() {
+                        if let Some(mut transforms) = self
+                            .world
+                            .borrow_mut::<gizmo_physics::components::Transform>()
+                        {
                             let primary_id = *self.state.selected_entities.iter().next().unwrap();
                             let mut primary_model_mat = gizmo_math::Mat4::IDENTITY;
                             if let Some(primary_t) = transforms.get(primary_id) {
                                 primary_model_mat = primary_t.model_matrix();
                             }
-                                
+
                             let gizmo_mode = match self.state.gizmo_mode {
-                                crate::editor_state::GizmoMode::Translate => egui_gizmo::GizmoMode::Translate,
-                                crate::editor_state::GizmoMode::Rotate => egui_gizmo::GizmoMode::Rotate,
-                                crate::editor_state::GizmoMode::Scale => egui_gizmo::GizmoMode::Scale,
+                                crate::editor_state::GizmoMode::Translate => {
+                                    egui_gizmo::GizmoMode::Translate
+                                }
+                                crate::editor_state::GizmoMode::Rotate => {
+                                    egui_gizmo::GizmoMode::Rotate
+                                }
+                                crate::editor_state::GizmoMode::Scale => {
+                                    egui_gizmo::GizmoMode::Scale
+                                }
                             };
 
                             let gizmo_orientation = if self.state.gizmo_local_space {
@@ -192,15 +217,22 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                                     }
                                 }
 
-                                if let Some(orig_pivot) = self.state.gizmo_original_transforms.get(&primary_id) {
-                                    let new_mat = gizmo_math::Mat4::from_cols_array_2d(&result.transform().into());
+                                if let Some(orig_pivot) =
+                                    self.state.gizmo_original_transforms.get(&primary_id)
+                                {
+                                    let new_mat = gizmo_math::Mat4::from_cols_array_2d(
+                                        &result.transform().into(),
+                                    );
                                     let delta_mat = new_mat * orig_pivot.model_matrix().inverse();
-                                    
+
                                     for &id in self.state.selected_entities.iter() {
-                                        if let Some(orig_t) = self.state.gizmo_original_transforms.get(&id) {
+                                        if let Some(orig_t) =
+                                            self.state.gizmo_original_transforms.get(&id)
+                                        {
                                             if let Some(t) = transforms.get_mut(id) {
                                                 let final_mat = delta_mat * orig_t.model_matrix();
-                                                let (scale, rot, pos) = final_mat.to_scale_rotation_translation();
+                                                let (scale, rot, pos) =
+                                                    final_mat.to_scale_rotation_translation();
                                                 t.position = pos;
                                                 t.rotation = rot;
                                                 t.scale = scale;
@@ -213,19 +245,24 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                                 // Sürükleme bittiğinde değişimi History'e aktar
                                 let mut changes = Vec::new();
                                 for &id in self.state.selected_entities.iter() {
-                                    if let Some(old_t) = self.state.gizmo_original_transforms.get(&id) {
+                                    if let Some(old_t) =
+                                        self.state.gizmo_original_transforms.get(&id)
+                                    {
                                         if let Some(t) = transforms.get(id) {
-                                            if old_t.position != t.position || old_t.rotation != t.rotation || old_t.scale != t.scale {
+                                            if old_t.position != t.position
+                                                || old_t.rotation != t.rotation
+                                                || old_t.scale != t.scale
+                                            {
                                                 changes.push((id, *old_t, *t));
                                             }
                                         }
                                     }
                                 }
-                                
+
                                 if !changes.is_empty() {
-                                    self.state.history.push(crate::history::EditorAction::TransformsChanged {
-                                        changes,
-                                    });
+                                    self.state.history.push(
+                                        crate::history::EditorAction::TransformsChanged { changes },
+                                    );
                                 }
                                 self.state.gizmo_original_transforms.clear();
                             }
@@ -248,7 +285,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                             egui::Color32::WHITE,
                         );
                         ui.painter().add(mesh);
-                        
+
                         if is_paused {
                             ui.allocate_ui_at_rect(rect, |ui| {
                                 ui.centered_and_justified(|ui| {
@@ -272,9 +309,11 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                         );
                         ui.add_space(8.0);
                         ui.label(
-                            egui::RichText::new("Toolbar'daki ▶ Başlat butonuna\nbasarak simülasyonu çalıştırın.")
-                                .size(14.0)
-                                .color(egui::Color32::from_white_alpha(40)),
+                            egui::RichText::new(
+                                "Toolbar'daki ▶ Başlat butonuna\nbasarak simülasyonu çalıştırın.",
+                            )
+                            .size(14.0)
+                            .color(egui::Color32::from_white_alpha(40)),
                         );
                     });
 
@@ -302,7 +341,11 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                         .spacing([16.0, 4.0])
                         .show(ui, |ui| {
                             for (key, desc) in &shortcuts {
-                                ui.label(egui::RichText::new(*key).monospace().color(egui::Color32::from_rgb(200, 200, 100)));
+                                ui.label(
+                                    egui::RichText::new(*key)
+                                        .monospace()
+                                        .color(egui::Color32::from_rgb(200, 200, 100)),
+                                );
                                 ui.label(egui::RichText::new(*desc).color(egui::Color32::GRAY));
                                 ui.end_row();
                             }
@@ -321,7 +364,9 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                             for log in logs.iter() {
                                 let color = match log.level {
                                     gizmo_core::logger::LogLevel::Info => egui::Color32::WHITE,
-                                    gizmo_core::logger::LogLevel::Warning => egui::Color32::from_rgb(255, 200, 0),
+                                    gizmo_core::logger::LogLevel::Warning => {
+                                        egui::Color32::from_rgb(255, 200, 0)
+                                    }
                                     gizmo_core::logger::LogLevel::Error => egui::Color32::RED,
                                 };
                                 ui.label(egui::RichText::new(&log.message).color(color));
@@ -370,16 +415,26 @@ pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) 
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
                         for log in logs_lock.iter() {
-                            let color = if log.contains("HATA") || log.contains("error:") || log.contains("❌") {
+                            let color = if log.contains("HATA")
+                                || log.contains("error:")
+                                || log.contains("❌")
+                            {
                                 egui::Color32::RED
-                            } else if log.contains("Başarılı") || log.contains("TAMAMLANDI") || log.contains("🎉") {
+                            } else if log.contains("Başarılı")
+                                || log.contains("TAMAMLANDI")
+                                || log.contains("🎉")
+                            {
                                 egui::Color32::GREEN
                             } else if log.contains("⚠") {
                                 egui::Color32::YELLOW
                             } else {
                                 egui::Color32::LIGHT_GRAY
                             };
-                            ui.label(egui::RichText::new(log).family(egui::FontFamily::Monospace).color(color));
+                            ui.label(
+                                egui::RichText::new(log)
+                                    .family(egui::FontFamily::Monospace)
+                                    .color(color),
+                            );
                         }
                     });
 
@@ -391,7 +446,11 @@ pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) 
                 } else if is_building {
                     ui.horizontal(|ui| {
                         ui.add(egui::Spinner::new());
-                        ui.label(egui::RichText::new("Derleniyor, lütfen bekleyin...").strong().color(egui::Color32::YELLOW));
+                        ui.label(
+                            egui::RichText::new("Derleniyor, lütfen bekleyin...")
+                                .strong()
+                                .color(egui::Color32::YELLOW),
+                        );
                     });
                 }
             });
@@ -413,7 +472,10 @@ pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) 
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label("Hareket Hızı:");
-                                ui.add(egui::Slider::new(&mut state.camera_speed, 1.0..=100.0).suffix(" m/s"));
+                                ui.add(
+                                    egui::Slider::new(&mut state.camera_speed, 1.0..=100.0)
+                                        .suffix(" m/s"),
+                                );
                             });
                         });
 
@@ -423,18 +485,36 @@ pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) 
                     egui::CollapsingHeader::new("🔧 Snap (Izgara Kilitleme)")
                         .default_open(true)
                         .show(ui, |ui| {
-                            ui.label(egui::RichText::new("Ctrl basılıyken aktif olur.").weak().small());
+                            ui.label(
+                                egui::RichText::new("Ctrl basılıyken aktif olur.")
+                                    .weak()
+                                    .small(),
+                            );
                             ui.horizontal(|ui| {
                                 ui.label("Taşıma:");
-                                ui.add(egui::DragValue::new(&mut state.snap_translate).speed(0.05).clamp_range(0.01..=10.0).suffix(" m"));
+                                ui.add(
+                                    egui::DragValue::new(&mut state.snap_translate)
+                                        .speed(0.05)
+                                        .clamp_range(0.01..=10.0)
+                                        .suffix(" m"),
+                                );
                             });
                             ui.horizontal(|ui| {
                                 ui.label("Döndürme:");
-                                ui.add(egui::DragValue::new(&mut state.snap_rotate_deg).speed(1.0).clamp_range(1.0..=90.0).suffix("°"));
+                                ui.add(
+                                    egui::DragValue::new(&mut state.snap_rotate_deg)
+                                        .speed(1.0)
+                                        .clamp_range(1.0..=90.0)
+                                        .suffix("°"),
+                                );
                             });
                             ui.horizontal(|ui| {
                                 ui.label("Ölçekleme:");
-                                ui.add(egui::DragValue::new(&mut state.snap_scale).speed(0.01).clamp_range(0.01..=5.0));
+                                ui.add(
+                                    egui::DragValue::new(&mut state.snap_scale)
+                                        .speed(0.01)
+                                        .clamp_range(0.01..=5.0),
+                                );
                             });
                         });
 
@@ -477,4 +557,3 @@ pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) 
         state.settings_open = open;
     }
 }
-

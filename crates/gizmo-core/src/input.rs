@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 /// Ergonomik input soyutlama katmanı.
-/// 
+///
 /// Kullanım:
 /// ```rust,ignore
 /// if input.is_key_pressed(KeyCode::KeyW) { /* ileri git */ }
@@ -48,6 +48,19 @@ impl Input {
 
     /// Her frame başında çağrılmalı — "just pressed/released" setlerini temizler.
     pub fn begin_frame(&mut self) {
+        // Aynı frame içinde hemen bırakılan ("fast tap") tuşların is_key_pressed'de o frame için
+        // true kalmasını sağlayan mekanizmanın temizliği:
+        for k in &self.keys_just_released {
+            if self.keys_just_pressed.contains(k) {
+                self.keys_pressed.remove(k);
+            }
+        }
+        for b in &self.mouse_buttons_just_released {
+            if self.mouse_buttons_just_pressed.contains(b) {
+                self.mouse_buttons_pressed.remove(b);
+            }
+        }
+
         self.keys_just_pressed.clear();
         self.keys_just_released.clear();
         self.mouse_buttons_just_pressed.clear();
@@ -71,8 +84,12 @@ impl Input {
 
     /// Tuş bırakıldığında çağır
     pub fn on_key_released(&mut self, key: u32) {
-        self.keys_pressed.remove(&key);
         self.keys_just_released.insert(key);
+        // Eğer bu frame çok hızlı basıp bırakıldıysa, oyunun bu tuşu kaçırmaması için
+        // keys_pressed listesinden anında SİLMİYORUZ. begin_frame'e defer (erteleme) yapıyoruz.
+        if !self.keys_just_pressed.contains(&key) {
+            self.keys_pressed.remove(&key);
+        }
     }
 
     /// Tuş şu an basılı mı? (sürekli kontrol)
@@ -104,8 +121,10 @@ impl Input {
 
     /// Fare butonu bırakıldığında çağır
     pub fn on_mouse_button_released(&mut self, button: u32) {
-        self.mouse_buttons_pressed.remove(&button);
         self.mouse_buttons_just_released.insert(button);
+        if !self.mouse_buttons_just_pressed.contains(&button) {
+            self.mouse_buttons_pressed.remove(&button);
+        }
     }
 
     /// Fare butonu basılı mı?
@@ -163,6 +182,44 @@ impl Input {
     pub fn window_size(&self) -> (f32, f32) {
         self.window_size
     }
+
+    // ==================== KISALTMA API (Bevy tarzı) ====================
+
+    /// Tuş kontrolü kısaltması — `KeyCode as u32` otomatik dönüşümü sağlar.
+    ///
+    /// # Örnek
+    /// ```rust,ignore
+    /// // Prelude'da `Key = KeyCode` alias'ı ile:
+    /// if input.key(Key::KeyW as u32) { /* ileri */ }
+    /// ```
+    #[inline]
+    pub fn key(&self, keycode: u32) -> bool {
+        self.keys_pressed.contains(&keycode)
+    }
+
+    /// Tuş bu frame'de ilk kez basıldı mı? (tek seferlik tetikleme)
+    #[inline]
+    pub fn key_just(&self, keycode: u32) -> bool {
+        self.keys_just_pressed.contains(&keycode)
+    }
+
+    /// Tuş bu frame'de bırakıldı mı?
+    #[inline]
+    pub fn key_released(&self, keycode: u32) -> bool {
+        self.keys_just_released.contains(&keycode)
+    }
+
+    /// Fare tuşu basılı mı? `mouse::LEFT`, `mouse::RIGHT`, `mouse::MIDDLE` kullan.
+    #[inline]
+    pub fn mouse_btn(&self, button: u32) -> bool {
+        self.mouse_buttons_pressed.contains(&button)
+    }
+
+    /// Fare tuşu bu frame'de mi basıldı?
+    #[inline]
+    pub fn mouse_just(&self, button: u32) -> bool {
+        self.mouse_buttons_just_pressed.contains(&button)
+    }
 }
 
 impl Default for Input {
@@ -182,8 +239,8 @@ pub mod mouse {
 
 use std::collections::HashMap;
 
-/// Evrensel Girdi Çevirici. 
-/// "W" veya "Yukarı Ok" tuşlarını doğrudan kontrol etmek yerine, 
+/// Evrensel Girdi Çevirici.
+/// "W" veya "Yukarı Ok" tuşlarını doğrudan kontrol etmek yerine,
 /// "Accelerate" veya "Jump" gibi mantıksal isimlendirmelerle dinlememizi sağlar.
 #[derive(Clone)]
 pub struct ActionMap {
@@ -209,7 +266,9 @@ impl ActionMap {
     pub fn is_action_pressed(&self, input: &Input, action_name: &str) -> bool {
         if let Some(keys) = self.bindings.get(action_name) {
             for &k in keys {
-                if input.is_key_pressed(k) { return true; }
+                if input.is_key_pressed(k) {
+                    return true;
+                }
             }
         }
         false
@@ -219,7 +278,9 @@ impl ActionMap {
     pub fn is_action_just_pressed(&self, input: &Input, action_name: &str) -> bool {
         if let Some(keys) = self.bindings.get(action_name) {
             for &k in keys {
-                if input.is_key_just_pressed(k) { return true; }
+                if input.is_key_just_pressed(k) {
+                    return true;
+                }
             }
         }
         false

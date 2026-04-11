@@ -1,8 +1,8 @@
+use crate::protocol::{connection_config, PROTOCOL_ID};
 use renet::RenetServer;
 use renet_netcode::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
 use std::net::UdpSocket;
 use std::time::{Duration, SystemTime};
-use crate::protocol::{connection_config, PROTOCOL_ID};
 
 pub struct NetworkServer {
     pub server: RenetServer,
@@ -15,8 +15,10 @@ impl NetworkServer {
 
         let public_addr: std::net::SocketAddr = public_addr.parse().unwrap();
         let socket = UdpSocket::bind(public_addr).unwrap();
-        let current_time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap();
-        
+        let current_time = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap();
+
         let server_config = ServerConfig {
             current_time,
             max_clients: 64,

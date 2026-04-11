@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use gizmo_math::Vec3;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Mesh {
@@ -11,8 +11,20 @@ pub struct Mesh {
 }
 
 impl Mesh {
-    pub fn new(vbuf: Arc<wgpu::Buffer>, vertex_count: u32, center_offset: Vec3, source: String, bounds: gizmo_math::Aabb) -> Self {
-        Self { vbuf, vertex_count, center_offset, source, bounds }
+    pub fn new(
+        vbuf: Arc<wgpu::Buffer>,
+        vertex_count: u32,
+        center_offset: Vec3,
+        source: String,
+        bounds: gizmo_math::Aabb,
+    ) -> Self {
+        Self {
+            vbuf,
+            vertex_count,
+            center_offset,
+            source,
+            bounds,
+        }
     }
 }
 
@@ -82,7 +94,7 @@ impl Material {
         self.material_type = MaterialType::Unlit;
         self
     }
-    
+
     pub fn with_water(mut self, base_albedo: gizmo_math::Vec4) -> Self {
         self.albedo = base_albedo;
         self.material_type = MaterialType::Water;
@@ -138,7 +150,14 @@ pub struct Camera {
 
 impl Camera {
     pub fn new(fov: f32, near: f32, far: f32, yaw: f32, pitch: f32, primary: bool) -> Self {
-        Self { fov, near, far, yaw, pitch, primary }
+        Self {
+            fov,
+            near,
+            far,
+            yaw,
+            pitch,
+            primary,
+        }
     }
 
     pub fn get_projection(&self, aspect: f32) -> gizmo_math::Mat4 {
@@ -149,14 +168,14 @@ impl Camera {
         let front = self.get_front();
         gizmo_math::Mat4::look_at_rh(position, position + front, Vec3::new(0.0, 1.0, 0.0))
     }
-    
+
     pub fn get_front(&self) -> Vec3 {
         let fx = self.yaw.cos() * self.pitch.cos();
         let fy = self.pitch.sin();
         let fz = self.yaw.sin() * self.pitch.cos();
         Vec3::new(fx, fy, fz).normalize()
     }
-    
+
     pub fn get_right(&self) -> Vec3 {
         self.get_front().cross(Vec3::new(0.0, 1.0, 0.0)).normalize()
     }
@@ -169,7 +188,7 @@ pub struct Sprite {
     pub height: f32,
     pub uv_min: [f32; 2], // Sprite sheet sol-üst UV (atlas desteği)
     pub uv_max: [f32; 2], // Sprite sheet sağ-alt UV
-    pub layer: i32,        // Çizim sırası (Z-order, büyük = daha önde)
+    pub layer: i32,       // Çizim sırası (Z-order, büyük = daha önde)
     pub flip_x: bool,
     pub flip_y: bool,
 }
@@ -177,7 +196,8 @@ pub struct Sprite {
 impl Sprite {
     pub fn new(width: f32, height: f32) -> Self {
         Self {
-            width, height,
+            width,
+            height,
             uv_min: [0.0, 0.0],
             uv_max: [1.0, 1.0],
             layer: 0,
@@ -201,13 +221,16 @@ impl Sprite {
 /// 2D Ortografik kamera — sprite/2D oyun rendering için
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Camera2D {
-    pub zoom: f32,     // Yakınlaştırma (1.0 = normal)
+    pub zoom: f32, // Yakınlaştırma (1.0 = normal)
     pub primary: bool,
 }
 
 impl Camera2D {
     pub fn new(zoom: f32) -> Self {
-        Self { zoom, primary: true }
+        Self {
+            zoom,
+            primary: true,
+        }
     }
 
     /// Ortografik projeksiyon matrisini döndürür (piksel birimi)
@@ -235,7 +258,11 @@ pub struct Terrain {
 
 impl PointLight {
     pub fn new(color: gizmo_math::Vec3, intensity: f32) -> Self {
-        Self { color, intensity, radius: 10.0 }
+        Self {
+            color,
+            intensity,
+            radius: 10.0,
+        }
     }
 }
 
@@ -292,12 +319,12 @@ impl LodGroup {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ParticleEmitter {
-    pub spawn_rate: f32, // How many particles to spawn per second
+    pub spawn_rate: f32,  // How many particles to spawn per second
     pub accumulator: f32, // Used over frame deltas
-    
+
     // Extents
     pub local_offset: Vec3, // Local to the entity transform
-    
+
     // Defaults for new spawns
     pub initial_velocity: Vec3,
     pub velocity_randomness: f32,
@@ -306,7 +333,7 @@ pub struct ParticleEmitter {
     pub size_start: f32,
     pub size_end: f32,
     pub color_start: gizmo_math::Vec4,
-    
+
     // Appearance bindings
     pub texture_source: Option<String>,
     pub is_active: bool,

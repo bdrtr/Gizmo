@@ -1,81 +1,89 @@
+use gizmo::physics::components::{RigidBody, Velocity};
+use gizmo::physics::integration::{physics_apply_forces_system, physics_movement_system};
+use gizmo::physics::shape::{Aabb, Collider, ColliderShape};
+use gizmo::physics::system::{physics_collision_system, PhysicsSolverState};
 use gizmo::prelude::*;
-use gizmo_app::App;
 
 fn main() {
-    let app = App::<()>::new("Gizmo Tutorial - Özel Proje", 800, 600)
+    App::<()>::new("Gizmo Tutorial", 800, 600)
         .set_setup(|world, renderer| {
-            // ECS'ye Nesneleri Ekleyebiliriz
-            let entity_id = world.spawn();
-            world.add_component(entity_id, EntityName("Ilk Objem".to_string()));
-            
-            let pos = Transform::new(Vec3::new(0.0, 0.0, -10.0));
-            world.add_component(entity_id, pos);
+            // Fizik Solver Durumunu ekle (Baumgarte ve Contact algoritmaları için şart)
+            world.insert_resource(PhysicsSolverState::new());
 
-            let mesh = gizmo::renderer::asset::AssetManager::create_cube(&renderer.device);
-            world.add_component(entity_id, mesh);
+            let mut cmd = Commands::new(world, renderer);
 
-            let mut asset_manager = gizmo::renderer::asset::AssetManager::new();
-            let bg = asset_manager.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
-            let material = Material::new(bg).with_unlit(Vec4::new(1.0, 0.0, 0.0, 1.0)); // Kirmizi kup
-            world.add_component(entity_id, material);
-            world.add_component(entity_id, gizmo::renderer::components::MeshRenderer::new());
+            // Zemin (Statik Fiziksel)
+            let floor_id = cmd
+                .spawn_plane(Vec3::new(0.0, 0.0, 0.0), 20.0, Color::DARK_GRAY)
+                .with_name("Zemin");
+            cmd.world.add_component(floor_id, RigidBody::new_static());
+            cmd.world.add_component(
+                floor_id,
+                Collider {
+                    shape: ColliderShape::Aabb(Aabb {
+                        half_extents: Vec3::new(10.0, 0.5, 10.0),
+                    }),
+                },
+            );
+            cmd.world.add_component(floor_id, Velocity::new(Vec3::ZERO));
 
-            println!("Motor baslatildi ve Obje ECS'ye eklendi!");
+            // Domino Taşlarını Dizelim
+            for i in 0..15 {
+                let dx = 0.2;
+                let dy = 1.0;
+                let dz = 0.1;
+                let pos = Vec3::new(0.0, dy, -8.0 + (i as f32 * 0.8));
 
-            // Kamera ECS uzerinde tanimlaniyor
-            let cam_id = world.spawn();
-            world.add_component(cam_id, Transform::new(Vec3::new(0.0, 2.0, 5.0)));
-            world.add_component(cam_id, Camera {
-                fov: 60.0_f32.to_radians(), near: 0.1, far: 1000.0,
-                yaw: -std::f32::consts::FRAC_PI_2, pitch: -0.2, primary: true
+                let domino_id = cmd
+                    .spawn_cube(pos, Color::RED)
+                    .with_name(&format!("Domino_{}", i));
+
+                let mut rb = RigidBody::new(0.5, 0.1, 0.3, true);
+                rb.calculate_box_inertia(dx * 2.0, dy * 2.0, dz * 2.0);
+
+                cmd.world.add_component(domino_id, rb);
+                cmd.world.add_component(
+                    domino_id,
+                    Collider {
+                        shape: ColliderShape::Aabb(Aabb {
+                            half_extents: Vec3::new(dx, dy, dz),
+                        }),
+                    },
+                );
+                cmd.world
+                    .add_component(domino_id, Velocity::new(Vec3::ZERO));
+
+                // İlk taşı devirecek başlangıç ivmesi (zinciri tetikle)
+                if i == 0 {
+                    cmd.world
+                        .add_component(domino_id, Velocity::new(Vec3::new(0.0, 0.0, 5.0)));
+                }
+
+                // Oyuncu modelimizi gösterelim (Sadece görsel basitlik için oyuncu kutusunu en son dominonun arkasına koyabiliriz, ama gerek yok)
+            }
+
+            // Kamera — varsayılan ayarlarla hazır (Yandan bakalım dominolara)
+            cmd.spawn_camera(Vec3::new(-10.0, 5.0, -2.0));
+        })
+        .set_update(|world, _state, dt, input| {
+            // Fizik sabit adımlarla (Fixed Timestep) ilerletilir, burada görsel tut için basitçe tick atıyoruz
+            physics_apply_forces_system(world, dt);
+            physics_collision_system(world, dt);
+            physics_movement_system(world, dt);
+
+            // Kamera dönüşü
+            let hiz = 8.0 * dt;
+            world.move_entity_named("Camera", |trans| {
+                if input.pressed(Key::KeyW) {
+                    trans.position.y += hiz;
+                }
+                if input.pressed(Key::KeyS) {
+                    trans.position.y -= hiz;
+                }
             });
-            
-            // Dummy State donduruyoruz
-            ()
         })
-        .set_update(|world, _state, delta_time, input| {
-            // Hangi tuslara basildigini gormek icin (Eger calisiyorsa ekrana yazar)
-            let keys = input.get_pressed_keys();
-            if !keys.is_empty() {
-                // println!("Basili tuslarin u32 kodlari: {:?}", keys);
-            }
-
-            // 1. "Ilk Objem" etiketli kirmizi kupun ID'sini arayalim
-            let mut player_id = None;
-            if let Some(names) = world.query_ref::<EntityName>() {
-                for (id, name) in names.iter() {
-                    if name.0 == "Ilk Objem" {
-                        player_id = Some(id);
-                    }
-                }
-            }
-
-            // 2. O kupun Uzaydaki pozisyon guncellemesi (Hareket)
-            if let Some(id) = player_id {
-                if let Some(mut transforms) = world.query_mut::<Transform>() {
-                    for (trans_id, trans) in transforms.iter_mut() {
-                        if trans_id == id {
-                            let hiz = 20.0 * delta_time; // Daha hizli! Saniyede 20 metre
-                            
-                            // WASD tuslariyla nesneyi kontrol et!
-                            if input.is_key_pressed(KeyCode::KeyW as u32) { trans.position.y += hiz; } // Yukari
-                            if input.is_key_pressed(KeyCode::KeyS as u32) { trans.position.y -= hiz; } // Asagi
-                            if input.is_key_pressed(KeyCode::KeyA as u32) { trans.position.x -= hiz; } // Sola
-                            if input.is_key_pressed(KeyCode::KeyD as u32) { trans.position.x += hiz; } // Saga
-
-                            // COK ONEMLI: Pozisyon degistigi icin GPU'nun anlayacagi Transform Matrisini guncellememiz sart!
-                            trans.update_local_matrix();
-                            trans.global_matrix = trans.local_matrix();
-                        }
-                    }
-                }
-            }
-        })
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            // Bevy'deki DefaultPlugins gibi saniyeler icinde ayarlamalari es gecip
-            // sahnedeki objeleri ekrana otomatik basmak icin kullanilan paketimiz:
+        .set_render(|world, _state, encoder, view, renderer, _t| {
             default_render_pass(world, encoder, view, renderer);
-        });
-
-    app.run();
+        })
+        .run();
 }

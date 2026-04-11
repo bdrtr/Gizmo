@@ -1,7 +1,7 @@
-use rodio::{OutputStream, OutputStreamHandle, Sink, SpatialSink, Decoder, Source};
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source, SpatialSink};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Read, Cursor};
+use std::io::{Cursor, Read};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -32,12 +32,12 @@ impl AudioSource {
             _internal_sink_id: None,
         }
     }
-    
+
     pub fn with_loop(mut self, l: bool) -> Self {
         self.loop_sound = l;
         self
     }
-    
+
     pub fn with_max_distance(mut self, dist: f32) -> Self {
         self.max_distance = dist;
         self
@@ -50,10 +50,10 @@ pub struct AudioManager {
     // OutputStream is kept alive so audio actually plays
     _stream: OutputStream,
     stream_handle: OutputStreamHandle,
-    
+
     // RAM'e (Memory) yüklenmiş ses dosyaları (Disk I/O darboğazını önler)
-    sound_buffers: HashMap<String, Arc<[u8]>>, 
-    
+    sound_buffers: HashMap<String, Arc<[u8]>>,
+
     // Aktif SpatialSink'leri veya normal Sink'leri takip edip parametrelerini güncellemek için
     active_spatial_sinks: HashMap<u64, SpatialSink>,
     active_sinks: HashMap<u64, Sink>,
@@ -118,7 +118,7 @@ impl AudioManager {
                     }
                     let id = self.next_sink_id;
                     self.next_sink_id += 1;
-                    
+
                     self.active_sinks.insert(id, sink);
                     return Some(id);
                 }
@@ -130,29 +130,50 @@ impl AudioManager {
     }
 
     /// 3D Uzamsal (Spatial) bir ses oynatır (tek seferlik)
-    pub fn play_3d(&mut self, name: &str, emitter_pos: [f32; 3], right_ear: [f32; 3], left_ear: [f32; 3]) -> Option<u64> {
+    pub fn play_3d(
+        &mut self,
+        name: &str,
+        emitter_pos: [f32; 3],
+        right_ear: [f32; 3],
+        left_ear: [f32; 3],
+    ) -> Option<u64> {
         self.play_3d_internal(name, emitter_pos, right_ear, left_ear, false)
     }
 
     /// 3D Uzamsal bir sesi döngüsel oynatır
-    pub fn play_3d_looped(&mut self, name: &str, emitter_pos: [f32; 3], right_ear: [f32; 3], left_ear: [f32; 3]) -> Option<u64> {
+    pub fn play_3d_looped(
+        &mut self,
+        name: &str,
+        emitter_pos: [f32; 3],
+        right_ear: [f32; 3],
+        left_ear: [f32; 3],
+    ) -> Option<u64> {
         self.play_3d_internal(name, emitter_pos, right_ear, left_ear, true)
     }
 
-    fn play_3d_internal(&mut self, name: &str, emitter_pos: [f32; 3], right_ear: [f32; 3], left_ear: [f32; 3], looped: bool) -> Option<u64> {
+    fn play_3d_internal(
+        &mut self,
+        name: &str,
+        emitter_pos: [f32; 3],
+        right_ear: [f32; 3],
+        left_ear: [f32; 3],
+        looped: bool,
+    ) -> Option<u64> {
         if let Some(bytes) = self.sound_buffers.get(name) {
             let cursor = Cursor::new(bytes.clone());
             if let Ok(decoder) = Decoder::new(cursor) {
-                if let Ok(sink) = SpatialSink::try_new(&self.stream_handle, emitter_pos, left_ear, right_ear) {
+                if let Ok(sink) =
+                    SpatialSink::try_new(&self.stream_handle, emitter_pos, left_ear, right_ear)
+                {
                     if looped {
                         sink.append(decoder.repeat_infinite());
                     } else {
                         sink.append(decoder);
                     }
-                    
+
                     let id = self.next_sink_id;
                     self.next_sink_id += 1;
-                    
+
                     self.active_spatial_sinks.insert(id, sink);
                     return Some(id);
                 }
@@ -160,17 +181,23 @@ impl AudioManager {
         }
         None
     }
-    
+
     // ========== ECS SINK GÜNCELLEMELERİ ==========
 
-    pub fn update_spatial_sink(&mut self, id: u64, emitter_pos: [f32; 3], right_ear: [f32; 3], left_ear: [f32; 3]) {
+    pub fn update_spatial_sink(
+        &mut self,
+        id: u64,
+        emitter_pos: [f32; 3],
+        right_ear: [f32; 3],
+        left_ear: [f32; 3],
+    ) {
         if let Some(sink) = self.active_spatial_sinks.get(&id) {
             sink.set_emitter_position(emitter_pos);
             sink.set_left_ear_position(left_ear);
             sink.set_right_ear_position(right_ear);
         }
     }
-    
+
     pub fn set_sink_volume(&mut self, id: u64, volume: f32, is_3d: bool) {
         if is_3d {
             if let Some(sink) = self.active_spatial_sinks.get(&id) {
@@ -182,7 +209,7 @@ impl AudioManager {
             }
         }
     }
-    
+
     pub fn set_sink_pitch(&mut self, id: u64, pitch: f32, is_3d: bool) {
         if is_3d {
             if let Some(sink) = self.active_spatial_sinks.get(&id) {
@@ -190,7 +217,7 @@ impl AudioManager {
             }
         } else {
             if let Some(sink) = self.active_sinks.get(&id) {
-                sink.set_speed(pitch); 
+                sink.set_speed(pitch);
             }
         }
     }
@@ -200,12 +227,18 @@ impl AudioManager {
         self.active_spatial_sinks.retain(|_, sink| !sink.empty());
         self.active_sinks.retain(|_, sink| !sink.empty());
     }
-    
+
     pub fn is_playing(&self, id: u64, is_3d: bool) -> bool {
         if is_3d {
-            self.active_spatial_sinks.get(&id).map(|s| !s.empty()).unwrap_or(false)
+            self.active_spatial_sinks
+                .get(&id)
+                .map(|s| !s.empty())
+                .unwrap_or(false)
         } else {
-            self.active_sinks.get(&id).map(|s| !s.empty()).unwrap_or(false)
+            self.active_sinks
+                .get(&id)
+                .map(|s| !s.empty())
+                .unwrap_or(false)
         }
     }
 }

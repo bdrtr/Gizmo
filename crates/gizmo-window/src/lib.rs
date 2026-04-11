@@ -15,7 +15,7 @@ impl AppWindow {
             .with_inner_size(winit::dpi::LogicalSize::new(width, height))
             .build(event_loop)
             .expect("HATA: Pencere oluşturulamadı!");
-            
+
         Self { window }
     }
 
@@ -31,7 +31,10 @@ pub fn run_window(title: &str, width: u32, height: u32) {
 
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    println!("{} {}x{} çözünürlüğünde başlatıldı. Ekranda bir pencere görmelisin!", title, width, height);
+    println!(
+        "{} {}x{} çözünürlüğünde başlatıldı. Ekranda bir pencere görmelisin!",
+        title, width, height
+    );
 
     let _ = event_loop.run(move |event, elwt| {
         match event {
@@ -42,7 +45,7 @@ pub fn run_window(title: &str, width: u32, height: u32) {
             Event::AboutToWait => {
                 // Her frame'de yapılacak işler...
             }
-            _ => ()
+            _ => (),
         }
     });
 }

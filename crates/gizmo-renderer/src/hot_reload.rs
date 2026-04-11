@@ -1,4 +1,4 @@
-use notify::{Watcher, RecursiveMode, Event, EventKind};
+use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -13,7 +13,7 @@ impl AssetWatcher {
     /// Yeni bir AssetWatcher oluşturur ve belirtilen dizinleri izlemeye başlar
     pub fn new<P: AsRef<Path>>(watch_dirs: &[P]) -> Option<Self> {
         let (tx, rx) = mpsc::channel();
-        
+
         let mut watcher = match notify::recommended_watcher(tx) {
             Ok(w) => w,
             Err(e) => {
@@ -42,7 +42,7 @@ impl AssetWatcher {
     /// Bu frame'de değişen dosyaların yollarını döndürür (her frame çağrılmalı)
     pub fn poll_changes(&self) -> Vec<PathBuf> {
         let mut seen = HashSet::new(); // O(1) dedup (eskiden Vec::contains ile O(N²))
-        
+
         // Kuyrukta biriken tüm olayları al (non-blocking)
         while let Ok(event_result) = self.rx.try_recv() {
             if let Ok(event) = event_result {
@@ -56,8 +56,7 @@ impl AssetWatcher {
                 }
             }
         }
-        
+
         seen.into_iter().collect()
     }
 }
-

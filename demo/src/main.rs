@@ -1,5 +1,5 @@
+use gizmo::math::Quat;
 use gizmo::prelude::*;
-use gizmo::math::{Quat};
 
 #[derive(Clone, Copy)]
 pub struct OriginalRotation(pub Quat);
@@ -10,20 +10,30 @@ pub struct Player;
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct EntityName(pub String);
 
-pub mod state;       pub use state::*;
-pub mod scene_setup; pub use scene_setup::*;
-pub mod demo_car;    pub use demo_car::*;
-pub mod ui;          pub use ui::*;
-pub mod script_sys;  pub use script_sys::*;
-pub mod render_pipeline; pub use render_pipeline::*;
-pub mod systems;     pub use systems::*;
-pub mod gizmo_input; pub use gizmo_input::*;
-pub mod camera;      pub use camera::*;
-pub mod hot_reload_sys; pub use hot_reload_sys::*;
-pub mod components;
-pub mod race;
+pub mod state;
+pub use state::*;
+pub mod scene_setup;
+pub use scene_setup::*;
+pub mod demo_car;
+pub use demo_car::*;
+pub mod ui;
+pub use ui::*;
+pub mod script_sys;
+pub use script_sys::*;
+pub mod render_pipeline;
+pub use render_pipeline::*;
+pub mod systems;
+pub use systems::*;
+pub mod gizmo_input;
+pub use gizmo_input::*;
+pub mod camera;
+pub use camera::*;
+pub mod hot_reload_sys;
+pub use hot_reload_sys::*;
 pub mod basic_scene;
+pub mod components;
 pub mod network;
+pub mod race;
 pub mod update;
 
 fn main() {
@@ -34,7 +44,14 @@ fn main() {
         .add_system(crate::systems::free_camera_system)
         .add_system(crate::systems::chase_camera_system)
         .add_system(crate::systems::ccd_test_system)
-        .add_system(crate::network::client_network_system);
+        .add_system(crate::network::client_network_system)
+        .add_event::<gizmo::physics::CollisionEvent>()
+        .add_event::<crate::state::ShaderReloadEvent>()
+        .add_event::<crate::state::SelectionEvent>()
+        .add_event::<crate::state::TextureLoadEvent>()
+        .add_event::<crate::state::SpawnDominoEvent>()
+        .add_event::<crate::state::ReleaseDominoEvent>()
+        .add_event::<crate::state::AssetSpawnEvent>();
 
     app = app.set_setup(|world, renderer| {
         use gizmo::core::input::ActionMap;
@@ -49,14 +66,14 @@ fn main() {
         world.insert_resource(action_map);
 
         let mut state = scene_setup::setup_empty_scene(world, renderer);
-        
+
         // Yarış yerine Basic Scene modunu başlat
         let basic_state = crate::basic_scene::setup_basic_scene(world, renderer);
-        state.player_id = basic_state.player_entity; 
+        state.player_id = basic_state.player_entity;
         state.camera_follow_target = Some(basic_state.player_entity);
         state.basic_scene = Some(basic_state);
         state.free_cam = false;
-        
+
         state
     });
 
@@ -72,24 +89,62 @@ fn main() {
     });
 
     // ── RENDER ─────────────────────────────────────────────────────────────
-    app = app.set_render(|world: &mut World, state: &crate::state::GameState, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, renderer: &mut gizmo::renderer::Renderer, light_time: f32| {
-        // Post-process ayarlarını uygula
-        {
-            if let Some(pp) = world.get_resource::<gizmo::renderer::renderer::PostProcessUniforms>() {
-                renderer.update_post_process(&renderer.queue, *pp);
-            }
-        }
-        
-        // Shader reload isteği
-        if let Some(mut events) = world.get_resource_mut::<gizmo::core::event::Events<crate::state::ShaderReloadEvent>>() {
-            if !events.is_empty() {
-                renderer.rebuild_shaders();
-                events.clear();
-            }
-        }
+    app = app.set_render(
+        |world: &mut World,
+         state: &crate::state::GameState,
+         encoder: &mut wgpu::CommandEncoder,
+         view: &wgpu::TextureView,
+         renderer: &mut gizmo::renderer::Renderer,
+         light_time: f32| {
+            // Yeni Sahne Yükleme İsteği
+            if let Some(req) = world.remove_resource::<crate::state::SceneLoadRequest>() {
+                println!("[Demo Engine] Sahne değiştiriliyor: {}", req.0);
+                if let Some(mut asset_manager) =
+                    world.remove_resource::<gizmo::renderer::asset::AssetManager>()
+                {
+                    // Sahne yüklemesi sırasında mevcut nesneler, fizik rigid body'leri vs bozulabilir!
+                    // Gerçek bir sahnede önce entity'leri temizlemek gerekebilir (demo world.clear yok)
+                    // Şimdilik üst üste asset yükleyecektir.
+                    let dummy_rgba = [255, 255, 255, 255];
+                    let dummy_bg = renderer.create_texture(&dummy_rgba, 1, 1);
 
-        render_pipeline::execute_render_pipeline(world, state, encoder, view, renderer, light_time);
-    });
+                    gizmo::scene::SceneData::load_into(
+                        &req.0,
+                        world,
+                        &renderer.device,
+                        &renderer.queue,
+                        &renderer.scene.texture_bind_group_layout,
+                        &mut asset_manager,
+                        std::sync::Arc::new(dummy_bg),
+                    );
+                    world.insert_resource(asset_manager);
+                }
+            }
+
+            // Post-process ayarlarını uygula
+            {
+                if let Some(pp) =
+                    world.get_resource::<gizmo::renderer::renderer::PostProcessUniforms>()
+                {
+                    renderer.update_post_process(&renderer.queue, *pp);
+                }
+            }
+
+            // Shader reload isteği
+            if let Some(mut events) = world
+                .get_resource_mut::<gizmo::core::event::Events<crate::state::ShaderReloadEvent>>()
+            {
+                if !events.is_empty() {
+                    renderer.rebuild_shaders();
+                    events.clear();
+                }
+            }
+
+            render_pipeline::execute_render_pipeline(
+                world, state, encoder, view, renderer, light_time,
+            );
+        },
+    );
 
     app.run();
 }

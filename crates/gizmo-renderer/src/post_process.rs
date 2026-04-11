@@ -1,5 +1,5 @@
-use wgpu::util::DeviceExt;
 use crate::gpu_types::PostProcessUniforms;
+use wgpu::util::DeviceExt;
 
 /// Post-Processing durumu — HDR, Bloom, Blur, Composite pipeline'ları ve kaynakları
 pub struct PostProcessState {
@@ -39,97 +39,155 @@ pub fn build_post_process_resources(
         })
     };
 
-    let post_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("post_bind_group_layout"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ],
-    });
+    let post_bind_group_layout =
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("post_bind_group_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
 
-    let blur_params_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("blur_params_bind_group_layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
-            count: None,
-        }],
-    });
+    let blur_params_bind_group_layout =
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("blur_params_bind_group_layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
 
-    let composite_bloom_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("composite_bloom_bind_group_layout"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ],
-    });
+    let composite_bloom_bind_group_layout =
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("composite_bloom_bind_group_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
 
     let post_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Post Process Params Buffer"),
         contents: bytemuck::cast_slice(&[PostProcessUniforms {
-            bloom_intensity: 0.3, bloom_threshold: 1.0, exposure: 1.0,
-            chromatic_aberration: 0.0, vignette_intensity: 0.0, _padding: [0.0; 3],
+            bloom_intensity: 0.3,
+            bloom_threshold: 1.0,
+            exposure: 1.0,
+            chromatic_aberration: 0.0,
+            vignette_intensity: 0.0,
+            _padding: [0.0; 3],
         }]),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
 
-    let post_params_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("post_params_bind_group_layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
-            count: None,
-        }],
-    });
+    let post_params_bind_group_layout =
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("post_params_bind_group_layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
 
     let post_params_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: &post_params_bind_group_layout,
-        entries: &[wgpu::BindGroupEntry { binding: 0, resource: post_params_buffer.as_entire_binding() }],
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: post_params_buffer.as_entire_binding(),
+        }],
         label: Some("post_params_bind_group"),
     });
 
     let (bloom_extract_pipeline, bloom_blur_pipeline, composite_pipeline) = build_post_pipelines(
-        device, &post_shader,
-        &post_bind_group_layout, &blur_params_bind_group_layout,
-        &composite_bloom_bind_group_layout, &post_params_bind_group_layout,
+        device,
+        &post_shader,
+        &post_bind_group_layout,
+        &blur_params_bind_group_layout,
+        &composite_bloom_bind_group_layout,
+        &post_params_bind_group_layout,
         surface_format,
     );
 
     let post_sampler = create_post_sampler(device);
-    let (hdr_texture_view, hdr_bind_group,
-         bloom_extract_texture_view, bloom_extract_bind_group,
-         bloom_blur_texture_view, bloom_blur_bind_group,
-         composite_bloom_bind_group) =
-        create_post_textures(device, &post_bind_group_layout, &composite_bloom_bind_group_layout, &post_sampler, width, height);
+    let (
+        hdr_texture_view,
+        hdr_bind_group,
+        bloom_extract_texture_view,
+        bloom_extract_bind_group,
+        bloom_blur_texture_view,
+        bloom_blur_bind_group,
+        composite_bloom_bind_group,
+    ) = create_post_textures(
+        device,
+        &post_bind_group_layout,
+        &composite_bloom_bind_group_layout,
+        &post_sampler,
+        width,
+        height,
+    );
 
     let (blur_params_buffer, blur_h_bind_group, blur_v_bind_group) =
         create_blur_buffers(device, &blur_params_bind_group_layout, width, height);
 
     PostProcessState {
-        post_bind_group_layout, blur_params_bind_group_layout, composite_bloom_bind_group_layout,
-        post_params_buffer, post_params_bind_group_layout, post_params_bind_group,
-        bloom_extract_pipeline, bloom_blur_pipeline, composite_pipeline,
-        hdr_texture_view, hdr_bind_group,
-        bloom_extract_texture_view, bloom_extract_bind_group,
-        bloom_blur_texture_view, bloom_blur_bind_group,
+        post_bind_group_layout,
+        blur_params_bind_group_layout,
+        composite_bloom_bind_group_layout,
+        post_params_buffer,
+        post_params_bind_group_layout,
+        post_params_bind_group,
+        bloom_extract_pipeline,
+        bloom_blur_pipeline,
+        composite_pipeline,
+        hdr_texture_view,
+        hdr_bind_group,
+        bloom_extract_texture_view,
+        bloom_extract_bind_group,
+        bloom_blur_texture_view,
+        bloom_blur_bind_group,
         composite_bloom_bind_group,
-        blur_params_buffer, blur_h_bind_group, blur_v_bind_group,
+        blur_params_buffer,
+        blur_h_bind_group,
+        blur_v_bind_group,
     }
 }
 
@@ -141,21 +199,40 @@ fn build_post_pipelines(
     composite_bloom_bgl: &wgpu::BindGroupLayout,
     post_params_bgl: &wgpu::BindGroupLayout,
     surface_format: wgpu::TextureFormat,
-) -> (wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline) {
+) -> (
+    wgpu::RenderPipeline,
+    wgpu::RenderPipeline,
+    wgpu::RenderPipeline,
+) {
     let extract_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Bloom Extract Pipeline Layout"),
         bind_group_layouts: &[post_bgl, blur_bgl, post_params_bgl],
         push_constant_ranges: &[],
     });
     let bloom_extract_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Bloom Extract Pipeline"), layout: Some(&extract_layout),
-        vertex: wgpu::VertexState { module: post_shader, entry_point: "vs_fullscreen", buffers: &[] },
+        label: Some("Bloom Extract Pipeline"),
+        layout: Some(&extract_layout),
+        vertex: wgpu::VertexState {
+            module: post_shader,
+            entry_point: "vs_fullscreen",
+            buffers: &[],
+        },
         fragment: Some(wgpu::FragmentState {
-            module: post_shader, entry_point: "fs_bright_extract",
-            targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })],
+            module: post_shader,
+            entry_point: "fs_bright_extract",
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba16Float,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
         }),
-        primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
-        depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None,
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
     });
 
     let blur_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -164,14 +241,29 @@ fn build_post_pipelines(
         push_constant_ranges: &[],
     });
     let bloom_blur_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Bloom Blur Pipeline"), layout: Some(&blur_layout),
-        vertex: wgpu::VertexState { module: post_shader, entry_point: "vs_fullscreen", buffers: &[] },
+        label: Some("Bloom Blur Pipeline"),
+        layout: Some(&blur_layout),
+        vertex: wgpu::VertexState {
+            module: post_shader,
+            entry_point: "vs_fullscreen",
+            buffers: &[],
+        },
         fragment: Some(wgpu::FragmentState {
-            module: post_shader, entry_point: "fs_blur",
-            targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })],
+            module: post_shader,
+            entry_point: "fs_blur",
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba16Float,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
         }),
-        primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
-        depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None,
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
     });
 
     let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -180,24 +272,46 @@ fn build_post_pipelines(
         push_constant_ranges: &[],
     });
     let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Composite Pipeline"), layout: Some(&composite_layout),
-        vertex: wgpu::VertexState { module: post_shader, entry_point: "vs_fullscreen", buffers: &[] },
+        label: Some("Composite Pipeline"),
+        layout: Some(&composite_layout),
+        vertex: wgpu::VertexState {
+            module: post_shader,
+            entry_point: "vs_fullscreen",
+            buffers: &[],
+        },
         fragment: Some(wgpu::FragmentState {
-            module: post_shader, entry_point: "fs_composite",
-            targets: &[Some(wgpu::ColorTargetState { format: surface_format, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })],
+            module: post_shader,
+            entry_point: "fs_composite",
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surface_format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
         }),
-        primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
-        depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None,
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
     });
 
-    (bloom_extract_pipeline, bloom_blur_pipeline, composite_pipeline)
+    (
+        bloom_extract_pipeline,
+        bloom_blur_pipeline,
+        composite_pipeline,
+    )
 }
 
 pub fn rebuild_post_pipelines(renderer: &mut crate::Renderer, post_shader: &wgpu::ShaderModule) {
     let (e, b, c) = build_post_pipelines(
-        &renderer.device, post_shader,
-        &renderer.post.post_bind_group_layout, &renderer.post.blur_params_bind_group_layout,
-        &renderer.post.composite_bloom_bind_group_layout, &renderer.post.post_params_bind_group_layout,
+        &renderer.device,
+        post_shader,
+        &renderer.post.post_bind_group_layout,
+        &renderer.post.blur_params_bind_group_layout,
+        &renderer.post.composite_bloom_bind_group_layout,
+        &renderer.post.post_params_bind_group_layout,
         renderer.config.format,
     );
     renderer.post.bloom_extract_pipeline = e;
@@ -220,13 +334,28 @@ pub fn create_post_textures(
     post_bgl: &wgpu::BindGroupLayout,
     composite_bloom_bgl: &wgpu::BindGroupLayout,
     sampler: &wgpu::Sampler,
-    width: u32, height: u32,
-) -> (wgpu::TextureView, wgpu::BindGroup, wgpu::TextureView, wgpu::BindGroup, wgpu::TextureView, wgpu::BindGroup, wgpu::BindGroup) {
+    width: u32,
+    height: u32,
+) -> (
+    wgpu::TextureView,
+    wgpu::BindGroup,
+    wgpu::TextureView,
+    wgpu::BindGroup,
+    wgpu::TextureView,
+    wgpu::BindGroup,
+    wgpu::BindGroup,
+) {
     let make = |label: &str| -> (wgpu::TextureView, wgpu::BindGroup) {
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba16Float,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
@@ -235,8 +364,14 @@ pub fn create_post_textures(
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: post_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
             ],
             label: Some(&format!("{}_bind_group", label)),
         });
@@ -244,14 +379,20 @@ pub fn create_post_textures(
     };
 
     let (hdr_v, hdr_bg) = make("HDR Texture");
-    let (be_v, be_bg)   = make("Bloom Extract Texture");
-    let (bb_v, bb_bg)   = make("Bloom Blur Texture");
+    let (be_v, be_bg) = make("Bloom Extract Texture");
+    let (bb_v, bb_bg) = make("Bloom Blur Texture");
 
     let cb_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: composite_bloom_bgl,
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&bb_v) },
-            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&bb_v),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
         ],
         label: Some("composite_bloom_bind_group"),
     });
@@ -262,41 +403,61 @@ pub fn create_post_textures(
 pub fn create_blur_buffers(
     device: &wgpu::Device,
     bgl: &wgpu::BindGroupLayout,
-    width: u32, height: u32,
+    width: u32,
+    height: u32,
 ) -> (wgpu::Buffer, wgpu::BindGroup, wgpu::BindGroup) {
-    let h_data: [f32; 4] = [1.0 / width as f32,  0.0, 0.0, 0.0];
+    let h_data: [f32; 4] = [1.0 / width as f32, 0.0, 0.0, 0.0];
     let v_data: [f32; 4] = [0.0, 1.0 / height as f32, 0.0, 0.0];
 
     let h_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Blur H Params"), contents: bytemuck::cast_slice(&h_data),
+        label: Some("Blur H Params"),
+        contents: bytemuck::cast_slice(&h_data),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
     let v_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Blur V Params"), contents: bytemuck::cast_slice(&v_data),
+        label: Some("Blur V Params"),
+        contents: bytemuck::cast_slice(&v_data),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
     let h_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        layout: bgl, entries: &[wgpu::BindGroupEntry { binding: 0, resource: h_buf.as_entire_binding() }],
+        layout: bgl,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: h_buf.as_entire_binding(),
+        }],
         label: Some("blur_h_bind_group"),
     });
     let v_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        layout: bgl, entries: &[wgpu::BindGroupEntry { binding: 0, resource: v_buf.as_entire_binding() }],
+        layout: bgl,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: v_buf.as_entire_binding(),
+        }],
         label: Some("blur_v_bind_group"),
     });
     (h_buf, h_bg, v_bg)
 }
 
 /// Post-processing render geçişlerini sırayla çalıştırır.
-pub fn run_post_processing(renderer: &crate::Renderer, encoder: &mut wgpu::CommandEncoder, output_view: &wgpu::TextureView) {
+pub fn run_post_processing(
+    renderer: &crate::Renderer,
+    encoder: &mut wgpu::CommandEncoder,
+    output_view: &wgpu::TextureView,
+) {
     // Pass 1: Bright Extract
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Bloom Extract Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &renderer.post.bloom_extract_texture_view, resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                view: &renderer.post.bloom_extract_texture_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
             })],
-            depth_stencil_attachment: None, ..Default::default()
+            depth_stencil_attachment: None,
+            ..Default::default()
         });
         pass.set_pipeline(&renderer.post.bloom_extract_pipeline);
         pass.set_bind_group(0, &renderer.post.hdr_bind_group, &[]);
@@ -309,10 +470,15 @@ pub fn run_post_processing(renderer: &crate::Renderer, encoder: &mut wgpu::Comma
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Bloom Blur Horizontal"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &renderer.post.bloom_blur_texture_view, resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                view: &renderer.post.bloom_blur_texture_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
             })],
-            depth_stencil_attachment: None, ..Default::default()
+            depth_stencil_attachment: None,
+            ..Default::default()
         });
         pass.set_pipeline(&renderer.post.bloom_blur_pipeline);
         pass.set_bind_group(0, &renderer.post.bloom_extract_bind_group, &[]);
@@ -324,10 +490,15 @@ pub fn run_post_processing(renderer: &crate::Renderer, encoder: &mut wgpu::Comma
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Bloom Blur Vertical"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &renderer.post.bloom_extract_texture_view, resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                view: &renderer.post.bloom_extract_texture_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
             })],
-            depth_stencil_attachment: None, ..Default::default()
+            depth_stencil_attachment: None,
+            ..Default::default()
         });
         pass.set_pipeline(&renderer.post.bloom_blur_pipeline);
         pass.set_bind_group(0, &renderer.post.bloom_blur_bind_group, &[]);
@@ -339,10 +510,15 @@ pub fn run_post_processing(renderer: &crate::Renderer, encoder: &mut wgpu::Comma
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Composite + Tone Mapping Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: output_view, resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                view: output_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
             })],
-            depth_stencil_attachment: None, ..Default::default()
+            depth_stencil_attachment: None,
+            ..Default::default()
         });
         pass.set_pipeline(&renderer.post.composite_pipeline);
         pass.set_bind_group(0, &renderer.post.hdr_bind_group, &[]);

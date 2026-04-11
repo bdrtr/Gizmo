@@ -19,10 +19,26 @@ impl GpuParticle {
             array_stride: std::mem::size_of::<GpuParticle>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &[
-                wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x4 }, // pos + life
-                wgpu::VertexAttribute { offset: 16, shader_location: 1, format: wgpu::VertexFormat::Float32x4 }, // vel + max_life
-                wgpu::VertexAttribute { offset: 32, shader_location: 2, format: wgpu::VertexFormat::Float32x4 }, // color
-                wgpu::VertexAttribute { offset: 48, shader_location: 3, format: wgpu::VertexFormat::Float32x4 }, // sizes + padding
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x4,
+                }, // pos + life
+                wgpu::VertexAttribute {
+                    offset: 16,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x4,
+                }, // vel + max_life
+                wgpu::VertexAttribute {
+                    offset: 32,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x4,
+                }, // color
+                wgpu::VertexAttribute {
+                    offset: 48,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x4,
+                }, // sizes + padding
             ],
         }
     }
@@ -51,7 +67,7 @@ pub struct GpuParticleSystem {
 
 impl GpuParticleSystem {
     pub fn new(
-        device: &wgpu::Device, 
+        device: &wgpu::Device,
         max_particles: u32,
         global_bind_group_layout: &wgpu::BindGroupLayout,
         output_format: wgpu::TextureFormat,
@@ -64,17 +80,26 @@ impl GpuParticleSystem {
                 velocity: [0.0, 0.0, 0.0],
                 max_life: 0.1,
                 color: [0.0, 0.0, 0.0, 0.0],
-                size_start: 0.0, size_end: 0.0, _padding: [0.0; 2]
+                size_start: 0.0,
+                size_end: 0.0,
+                _padding: [0.0; 2],
             });
         }
 
         let particles_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("GPU Particles Buffer"),
             contents: bytemuck::cast_slice(&initial_particles),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::COPY_DST,
         });
 
-        let params = ParticleSimParams { dt: 0.0, global_gravity: 0.0, global_drag: 0.0, _padding: 0.0 };
+        let params = ParticleSimParams {
+            dt: 0.0,
+            global_gravity: 0.0,
+            global_drag: 0.0,
+            _padding: 0.0,
+        };
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("GPU Particle Params Buffer"),
             contents: bytemuck::cast_slice(&[params]),
@@ -82,37 +107,44 @@ impl GpuParticleSystem {
         });
 
         // Compute Layout & Pipeline
-        let compute_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+        let compute_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-            label: Some("particle_compute_layout"),
-        });
+                ],
+                label: Some("particle_compute_layout"),
+            });
 
         let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &compute_bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: params_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: particles_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: particles_buffer.as_entire_binding(),
+                },
             ],
             label: Some("particle_compute_bind_group"),
         });
@@ -122,11 +154,12 @@ impl GpuParticleSystem {
             source: wgpu::ShaderSource::Wgsl(include_str!("particle_compute.wgsl").into()),
         });
 
-        let compute_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Particle Compute Pipeline Layout"),
-            bind_group_layouts: &[&compute_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        let compute_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Particle Compute Pipeline Layout"),
+                bind_group_layouts: &[&compute_bind_group_layout],
+                push_constant_ranges: &[],
+            });
 
         let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Particle Compute Pipeline"),
@@ -141,20 +174,16 @@ impl GpuParticleSystem {
             source: wgpu::ShaderSource::Wgsl(include_str!("particle_render.wgsl").into()),
         });
 
-        let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Particle Render Pipeline Layout"),
-            bind_group_layouts: &[global_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Particle Render Pipeline Layout"),
+                bind_group_layouts: &[global_bind_group_layout],
+                push_constant_ranges: &[],
+            });
 
         // Simple Quad (2 triangles for billboard)
-        let quad_vertices: [[f32; 2]; 4] = [
-            [-0.5, -0.5],
-            [ 0.5, -0.5],
-            [-0.5,  0.5],
-            [ 0.5,  0.5],
-        ];
-        
+        let quad_vertices: [[f32; 2]; 4] = [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]];
+
         let quad_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Particle Quad Vertex Buffer"),
             contents: bytemuck::cast_slice(&quad_vertices),
@@ -173,7 +202,7 @@ impl GpuParticleSystem {
                         step_mode: wgpu::VertexStepMode::Vertex,
                         attributes: &wgpu::vertex_attr_array![4 => Float32x2], // Location 4 avoids conflict
                     },
-                    GpuParticle::desc()
+                    GpuParticle::desc(),
                 ],
             },
             fragment: Some(wgpu::FragmentState {
@@ -216,32 +245,37 @@ impl GpuParticleSystem {
     }
 
     pub fn update_params(&self, queue: &wgpu::Queue, dt: f32) {
-        let params = ParticleSimParams { 
-            dt, 
-            global_gravity: 9.81, 
-            global_drag: 0.8, 
-            _padding: 0.0 
+        let params = ParticleSimParams {
+            dt,
+            global_gravity: 9.81,
+            global_drag: 0.8,
+            _padding: 0.0,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
     }
 
     pub fn spawn_particles(&self, queue: &wgpu::Queue, new_particles: &[GpuParticle]) {
-        if new_particles.is_empty() { return; }
+        if new_particles.is_empty() {
+            return;
+        }
 
         let count = new_particles.len() as u32;
-        let mut head = self.ring_head.fetch_add(count, std::sync::atomic::Ordering::Relaxed) % self.max_particles;
-        
+        let mut head = self
+            .ring_head
+            .fetch_add(count, std::sync::atomic::Ordering::Relaxed)
+            % self.max_particles;
+
         let mut remaining = count;
         let mut offset = 0;
 
         while remaining > 0 {
             let to_write = remaining.min(self.max_particles - head);
             let slice = &new_particles[offset as usize..(offset + to_write) as usize];
-            
+
             queue.write_buffer(
-                &self.particles_buffer, 
-                (head as usize * std::mem::size_of::<GpuParticle>()) as wgpu::BufferAddress, 
-                bytemuck::cast_slice(slice)
+                &self.particles_buffer,
+                (head as usize * std::mem::size_of::<GpuParticle>()) as wgpu::BufferAddress,
+                bytemuck::cast_slice(slice),
             );
 
             head = (head + to_write) % self.max_particles;

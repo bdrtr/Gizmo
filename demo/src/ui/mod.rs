@@ -1,19 +1,21 @@
-pub mod theme;
-pub mod menus;
 pub mod hud;
+pub mod menus;
+pub mod theme;
 
-use gizmo::prelude::*;
-use gizmo::egui;
 use crate::state::GameState;
+use gizmo::egui;
+use gizmo::prelude::*;
 
 pub fn render_ui(ctx: &egui::Context, state: &mut GameState, world: &World) {
     // 1. Temayı her frame (basitçe) uygula
     theme::setup_modern_theme(ctx);
 
-    
     // HUD ve Menüler
-    let mode = world.get_resource::<crate::state::AppMode>().map(|m| *m).unwrap_or(crate::state::AppMode::InGame);
-    
+    let mode = world
+        .get_resource::<crate::state::AppMode>()
+        .map(|m| *m)
+        .unwrap_or(crate::state::AppMode::InGame);
+
     if mode == crate::state::AppMode::InGame {
         hud::render_game_hud(ctx, world, state);
     } else if mode == crate::state::AppMode::MainMenu {
@@ -36,41 +38,68 @@ fn render_devtools(ctx: &egui::Context, state: &mut GameState, world: &World) {
         .resizable(false)
         .frame(egui::Frame::window(&ctx.style()).fill(egui::Color32::from_black_alpha(200)))
         .show(ctx, |ui| {
-            ui.label(egui::RichText::new("📊 BİLGİ EKRANI").color(egui::Color32::WHITE).strong());
+            ui.label(
+                egui::RichText::new("📊 BİLGİ EKRANI")
+                    .color(egui::Color32::WHITE)
+                    .strong(),
+            );
             ui.separator();
-            
+
             let fps = state.current_fps;
             let ms = if fps > 0.0 { 1000.0 / fps } else { 0.0 };
-            
-            let fps_color = if fps >= 55.0 { egui::Color32::GREEN }
-                            else if fps >= 30.0 { egui::Color32::YELLOW }
-                            else { egui::Color32::RED };
+
+            let fps_color = if fps >= 55.0 {
+                egui::Color32::GREEN
+            } else if fps >= 30.0 {
+                egui::Color32::YELLOW
+            } else {
+                egui::Color32::RED
+            };
 
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("FPS:").color(egui::Color32::LIGHT_GRAY));
-                ui.label(egui::RichText::new(format!("{:.1}", fps)).color(fps_color).strong());
+                ui.label(
+                    egui::RichText::new(format!("{:.1}", fps))
+                        .color(fps_color)
+                        .strong(),
+                );
                 ui.label(egui::RichText::new(format!("({:.2} ms)", ms)).color(egui::Color32::GRAY));
             });
-            
+
             let entity_count = world.entity_count();
-            let draw_calls = world.query_ref::<gizmo::renderer::components::MeshRenderer>()
-                                  .map(|q| q.s1.dense.len())
-                                  .unwrap_or(0);
-                                  
+            let draw_calls = world
+                .query_ref::<gizmo::renderer::components::MeshRenderer>()
+                .map(|q| q.s1.dense.len())
+                .unwrap_or(0);
+
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Varlık (Entity):").color(egui::Color32::LIGHT_GRAY));
-                ui.label(egui::RichText::new(format!("{}", entity_count)).color(egui::Color32::WHITE).strong());
+                ui.label(
+                    egui::RichText::new(format!("{}", entity_count))
+                        .color(egui::Color32::WHITE)
+                        .strong(),
+                );
             });
 
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Çizim Çağrısı (Draw Calls):").color(egui::Color32::LIGHT_GRAY));
-                ui.label(egui::RichText::new(format!("{}", draw_calls + 1)).color(egui::Color32::WHITE).strong());
+                ui.label(
+                    egui::RichText::new("Çizim Çağrısı (Draw Calls):")
+                        .color(egui::Color32::LIGHT_GRAY),
+                );
+                ui.label(
+                    egui::RichText::new(format!("{}", draw_calls + 1))
+                        .color(egui::Color32::WHITE)
+                        .strong(),
+                );
             });
-            
+
             ui.separator();
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Fizik Hızı (FPS):").color(egui::Color32::LIGHT_GRAY));
-                ui.add(egui::Slider::new(&mut state.target_physics_fps, 5.0..=240.0));
+                ui.add(egui::Slider::new(
+                    &mut state.target_physics_fps,
+                    5.0..=240.0,
+                ));
             });
         });
 

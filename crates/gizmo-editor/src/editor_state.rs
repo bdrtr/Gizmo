@@ -48,14 +48,14 @@ pub struct EditorState {
     pub selected_entities: std::collections::HashSet<u32>,
     /// Gizmo aracı modu (Translate/Rotate/Scale)
     pub gizmo_mode: GizmoMode,
-    
+
     pub play_start_request: bool,
     pub play_stop_request: bool,
 
     // --- Görünüm (View) Verileri ---
     /// Etrafını saran seçim çizgisi (Highlight Box)
     pub highlight_box: u32,
-    
+
     // --- Etkileşim & Sürükleme Durumları ---
     pub do_raycast: bool,
     pub dragging_axis: Option<DragAxis>,
@@ -66,7 +66,7 @@ pub struct EditorState {
     pub mouse_ndc: Option<gizmo_math::Vec2>,
     pub gizmo_local_space: bool,
     pub gizmo_handles: [u32; 3],
-    
+
     // --- Build Sistemi ---
     pub build_request: bool,
     pub build_target: BuildTarget,
@@ -75,7 +75,8 @@ pub struct EditorState {
 
     // --- Undo/Redo Sistemi ---
     pub history: crate::history::History,
-    pub gizmo_original_transforms: std::collections::HashMap<u32, gizmo_physics::components::Transform>,
+    pub gizmo_original_transforms:
+        std::collections::HashMap<u32, gizmo_physics::components::Transform>,
     pub camera_look_delta: Option<gizmo_math::Vec2>,
     pub camera_pan_delta: Option<gizmo_math::Vec2>,
     pub camera_orbit_delta: Option<gizmo_math::Vec2>,
@@ -120,7 +121,7 @@ pub struct EditorState {
     /// Snap ölçeği (Scale)
     pub snap_scale: f32,
     /// Silme talebi gönderilen entity ID
-    pub despawn_request: Option<u32>,
+    pub despawn_requests: Vec<u32>,
     /// Arazi yeniden oluşturulması gereken Entity ID'leri
     pub generate_terrain_requests: Vec<u32>,
     /// Sahne kaydetme isteği (Dosya yolu)
@@ -132,7 +133,7 @@ pub struct EditorState {
     /// Prefab yükleme isteği (Dosya yolu, Opsiyonel Parent ID, Opsiyonel Pozisyon)
     pub prefab_load_request: Option<(String, Option<u32>, Option<gizmo_math::Vec3>)>,
     /// Entity kopyalama / çoğaltma isteği (Entity ID)
-    pub duplicate_request: Option<u32>,
+    pub duplicate_requests: Vec<u32>,
     /// Yeni entity yaratma talebi (Type adı örn: "Empty", "Cube", "Sphere")
     pub spawn_request: Option<String>,
     /// Asset üzerinden yeni model spawn etme isteği (Dosya yolu)
@@ -161,7 +162,12 @@ pub struct EditorState {
 
     // --- Gizmo Debug Renderer ---
     /// (Pos, Rot, Scale, Color) olarak çizim talepleri
-    pub debug_draw_requests: Vec<(gizmo_math::Vec3, gizmo_math::Quat, gizmo_math::Vec3, gizmo_math::Vec4)>,
+    pub debug_draw_requests: Vec<(
+        gizmo_math::Vec3,
+        gizmo_math::Quat,
+        gizmo_math::Vec3,
+        gizmo_math::Vec4,
+    )>,
     /// Ekranda belirip silinmesi gereken Debug çizim objeleri (Timer, EntityID)
     pub debug_spawned_entities: Vec<(f32, u32)>,
 }
@@ -172,12 +178,12 @@ impl EditorState {
             open: false,
             mode: EditorMode::Edit,
             gizmo_mode: GizmoMode::Translate,
-            
+
             play_start_request: false,
             play_stop_request: false,
             selected_entities: std::collections::HashSet::new(),
             highlight_box: 0,
-            
+
             do_raycast: false,
             dragging_axis: None,
             drag_original_pos: gizmo_math::Vec3::new(0.0, 0.0, 0.0),
@@ -187,22 +193,21 @@ impl EditorState {
             mouse_ndc: None,
             gizmo_local_space: false,
             gizmo_handles: [0, 0, 0],
-            
+
             build_request: false,
             build_target: BuildTarget::Native,
             is_building: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             build_logs: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            
+
             history: crate::history::History::default(),
             gizmo_original_transforms: std::collections::HashMap::new(),
-            
+
             camera_look_delta: None,
             camera_pan_delta: None,
             camera_orbit_delta: None,
             camera_scroll_delta: None,
             camera_view: None,
             camera_proj: None,
-
 
             show_hierarchy: true,
             show_inspector: true,
@@ -221,13 +226,13 @@ impl EditorState {
             snap_translate: 0.5,
             snap_rotate_deg: 15.0,
             snap_scale: 0.1,
-            despawn_request: None,
+            despawn_requests: Vec::new(),
             generate_terrain_requests: Vec::new(),
             scene_save_request: None,
             scene_load_request: None,
             prefab_save_request: None,
             prefab_load_request: None,
-            duplicate_request: None,
+            duplicate_requests: Vec::new(),
             spawn_request: None,
             spawn_asset_request: None,
             spawn_asset_position: None,
@@ -255,7 +260,7 @@ impl EditorState {
         self.selected_entities.clear();
         self.selected_entities.insert(id);
     }
-    
+
     pub fn toggle_selection(&mut self, id: u32) {
         if self.selected_entities.contains(&id) {
             self.selected_entities.remove(&id);
@@ -273,11 +278,11 @@ impl EditorState {
             EditorMode::Edit => {
                 self.play_start_request = true;
                 EditorMode::Play
-            },
+            }
             EditorMode::Play => {
                 self.play_stop_request = true;
                 EditorMode::Edit
-            },
+            }
             EditorMode::Paused => EditorMode::Play,
         };
     }
@@ -303,15 +308,18 @@ impl EditorState {
     }
 
     pub fn log_info(&mut self, msg: &str) {
-        self.console_logs.push((format!("ℹ️ {}", msg), egui::Color32::WHITE));
+        self.console_logs
+            .push((format!("ℹ️ {}", msg), egui::Color32::WHITE));
     }
-    
+
     pub fn log_warning(&mut self, msg: &str) {
-        self.console_logs.push((format!("⚠️ {}", msg), egui::Color32::YELLOW));
+        self.console_logs
+            .push((format!("⚠️ {}", msg), egui::Color32::YELLOW));
     }
 
     pub fn log_error(&mut self, msg: &str) {
-        self.console_logs.push((format!("❌ {}", msg), egui::Color32::RED));
+        self.console_logs
+            .push((format!("❌ {}", msg), egui::Color32::RED));
     }
 
     pub fn save_layout(&mut self) {
@@ -349,12 +357,17 @@ fn create_default_dock_state() -> egui_dock::DockState<String> {
     let surface = state.main_surface_mut();
 
     // Right Split for Inspector & Hierarchy
-    let [main, right_panel] = surface.split_right(NodeIndex::root(), 0.8, vec!["Inspector".to_string()]);
-    let [_hierarchy, _inspector] = surface.split_above(right_panel, 0.4, vec!["Hierarchy".to_string()]);
-    
+    let [main, right_panel] =
+        surface.split_right(NodeIndex::root(), 0.8, vec!["Inspector".to_string()]);
+    let [_hierarchy, _inspector] =
+        surface.split_above(right_panel, 0.4, vec!["Hierarchy".to_string()]);
+
     // Bottom Split for Asset Browser
-    let [_main, _bottom] = surface.split_below(main, 0.7, vec!["Asset Browser".to_string(), "Console".to_string()]);
-    
+    let [_main, _bottom] = surface.split_below(
+        main,
+        0.7,
+        vec!["Asset Browser".to_string(), "Console".to_string()],
+    );
+
     state
 }
-

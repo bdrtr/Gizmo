@@ -1,11 +1,11 @@
-use wgpu::util::DeviceExt;
+use crate::animation::{AnimationClip, Keyframe, SkeletonHierarchy, SkeletonJoint, Track};
+use crate::components::{Material, Mesh};
+use crate::renderer::Vertex;
+use gizmo_math::Quat;
+use gizmo_math::Vec3;
 use std::sync::Arc;
 use tobj;
-use gizmo_math::Vec3;
-use crate::renderer::Vertex;
-use crate::components::{Mesh, Material};
-use crate::animation::{AnimationClip, Track, Keyframe, SkeletonHierarchy, SkeletonJoint};
-use gizmo_math::Quat;
+use wgpu::util::DeviceExt;
 
 pub struct AssetManager {
     mesh_cache: std::collections::HashMap<String, Mesh>,
@@ -41,10 +41,14 @@ impl AssetManager {
                 ignore_points: true,
                 ignore_lines: true,
             },
-        ).unwrap_or_else(|e| panic!("AssetManager: OBJ yuklenirken hata! {} ({})", file_path, e));
+        )
+        .unwrap_or_else(|e| panic!("AssetManager: OBJ yuklenirken hata! {} ({})", file_path, e));
 
         if models.is_empty() {
-            panic!("AssetManager: OBJ dosyasinda model bulunamadi: {}", file_path);
+            panic!(
+                "AssetManager: OBJ dosyasinda model bulunamadi: {}",
+                file_path
+            );
         }
 
         let mut aabb = gizmo_math::Aabb::empty();
@@ -72,10 +76,7 @@ impl AssetManager {
             };
 
             let tex_coords = if !m.texcoords.is_empty() {
-                [
-                    m.texcoords[idx * 2],
-                    1.0 - m.texcoords[idx * 2 + 1],
-                ]
+                [m.texcoords[idx * 2], 1.0 - m.texcoords[idx * 2 + 1]]
             } else {
                 [0.0, 0.0]
             };
@@ -90,7 +91,7 @@ impl AssetManager {
             });
         }
 
-        // Eğer dosya normal içermiyorsa, [0,1,0] ile saçmalamak yerine 
+        // Eğer dosya normal içermiyorsa, [0,1,0] ile saçmalamak yerine
         // üçgen yüzeylerinden flat (düz) normaller hesaplayalım:
         if m.normals.is_empty() {
             for chunk in vertices.chunks_exact_mut(3) {
@@ -100,12 +101,16 @@ impl AssetManager {
                 let v0 = Vec3::new(p0[0], p0[1], p0[2]);
                 let v1 = Vec3::new(p1[0], p1[1], p1[2]);
                 let v2 = Vec3::new(p2[0], p2[1], p2[2]);
-                
+
                 let norm = (v1 - v0).cross(v2 - v0);
                 // Sıfır uzunluklu cross product'tan kaçın
-                let final_norm = if norm.length_squared() > 1e-6 { norm.normalize() } else { Vec3::new(0.0, 1.0, 0.0) };
+                let final_norm = if norm.length_squared() > 1e-6 {
+                    norm.normalize()
+                } else {
+                    Vec3::new(0.0, 1.0, 0.0)
+                };
                 let n_arr = [final_norm.x, final_norm.y, final_norm.z];
-                
+
                 chunk[0].normal = n_arr;
                 chunk[1].normal = n_arr;
                 chunk[2].normal = n_arr;
@@ -118,7 +123,13 @@ impl AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        let mesh = Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, format!("obj:{}", file_path), aabb);
+        let mesh = Mesh::new(
+            Arc::new(vbuf),
+            vertices.len() as u32,
+            Vec3::ZERO,
+            format!("obj:{}", file_path),
+            aabb,
+        );
         self.mesh_cache.insert(file_path.to_string(), mesh.clone());
         mesh
     }
@@ -130,23 +141,23 @@ impl AssetManager {
         // Her yüzün normali İÇE bakar (ters küp)
         let positions: [[f32; 3]; 8] = [
             [-1.0, -1.0, -1.0], // 0
-            [ 1.0, -1.0, -1.0], // 1
-            [ 1.0,  1.0, -1.0], // 2
-            [-1.0,  1.0, -1.0], // 3
-            [-1.0, -1.0,  1.0], // 4
-            [ 1.0, -1.0,  1.0], // 5
-            [ 1.0,  1.0,  1.0], // 6
-            [-1.0,  1.0,  1.0], // 7
+            [1.0, -1.0, -1.0],  // 1
+            [1.0, 1.0, -1.0],   // 2
+            [-1.0, 1.0, -1.0],  // 3
+            [-1.0, -1.0, 1.0],  // 4
+            [1.0, -1.0, 1.0],   // 5
+            [1.0, 1.0, 1.0],    // 6
+            [-1.0, 1.0, 1.0],   // 7
         ];
 
         // Her yüz için ters vertex sırası (CW yerine CCW veya tam tersi) + içe bakan normal
         let faces: [([usize; 6], [f32; 3]); 6] = [
-            ([0, 1, 2, 0, 2, 3], [0.0, 0.0,  1.0]),  // Arka yüz (+Z içe)
-            ([4, 6, 5, 4, 7, 6], [0.0, 0.0, -1.0]),  // Ön yüz (-Z içe)
-            ([0, 5, 1, 0, 4, 5], [0.0,  1.0, 0.0]),  // Alt yüz (+Y içe)
-            ([3, 2, 6, 3, 6, 7], [0.0, -1.0, 0.0]),  // Üst yüz (-Y içe)
-            ([0, 3, 7, 0, 7, 4], [ 1.0, 0.0, 0.0]),  // Sol yüz (+X içe)
-            ([1, 6, 2, 1, 5, 6], [-1.0, 0.0, 0.0]),  // Sağ yüz (-X içe)
+            ([0, 1, 2, 0, 2, 3], [0.0, 0.0, 1.0]),  // Arka yüz (+Z içe)
+            ([4, 6, 5, 4, 7, 6], [0.0, 0.0, -1.0]), // Ön yüz (-Z içe)
+            ([0, 5, 1, 0, 4, 5], [0.0, 1.0, 0.0]),  // Alt yüz (+Y içe)
+            ([3, 2, 6, 3, 6, 7], [0.0, -1.0, 0.0]), // Üst yüz (-Y içe)
+            ([0, 3, 7, 0, 7, 4], [1.0, 0.0, 0.0]),  // Sol yüz (+X içe)
+            ([1, 6, 2, 1, 5, 6], [-1.0, 0.0, 0.0]), // Sağ yüz (-X içe)
         ];
 
         let mut vertices = Vec::with_capacity(36);
@@ -170,29 +181,35 @@ impl AssetManager {
         });
 
         let aabb = gizmo_math::Aabb::new(Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
-        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "inverted_cube".to_string(), aabb)
+        Mesh::new(
+            Arc::new(vbuf),
+            vertices.len() as u32,
+            Vec3::ZERO,
+            "inverted_cube".to_string(),
+            aabb,
+        )
     }
 
     /// Düzenli Küp mesh üretir (Dışa bakan normaller, PBR ışıklandırma ve gölgelendirme için doğru)
     pub fn create_cube(device: &wgpu::Device) -> Mesh {
         let positions: [[f32; 3]; 8] = [
             [-1.0, -1.0, -1.0], // 0
-            [ 1.0, -1.0, -1.0], // 1
-            [ 1.0,  1.0, -1.0], // 2
-            [-1.0,  1.0, -1.0], // 3
-            [-1.0, -1.0,  1.0], // 4
-            [ 1.0, -1.0,  1.0], // 5
-            [ 1.0,  1.0,  1.0], // 6
-            [-1.0,  1.0,  1.0], // 7
+            [1.0, -1.0, -1.0],  // 1
+            [1.0, 1.0, -1.0],   // 2
+            [-1.0, 1.0, -1.0],  // 3
+            [-1.0, -1.0, 1.0],  // 4
+            [1.0, -1.0, 1.0],   // 5
+            [1.0, 1.0, 1.0],    // 6
+            [-1.0, 1.0, 1.0],   // 7
         ];
 
         let faces: [([usize; 6], [f32; 3]); 6] = [
-            ([0, 2, 1, 0, 3, 2], [0.0, 0.0, -1.0]),  // Arka (-Z Dışa)
-            ([4, 5, 6, 4, 6, 7], [0.0, 0.0,  1.0]),  // Ön (+Z Dışa)
-            ([0, 1, 5, 0, 5, 4], [0.0, -1.0, 0.0]),  // Alt (-Y Dışa)
-            ([3, 6, 2, 3, 7, 6], [0.0,  1.0, 0.0]),  // Üst (+Y Dışa)
-            ([0, 4, 7, 0, 7, 3], [-1.0, 0.0, 0.0]),  // Sol (-X Dışa)
-            ([1, 2, 6, 1, 6, 5], [ 1.0, 0.0, 0.0]),  // Sağ (+X Dışa)
+            ([0, 2, 1, 0, 3, 2], [0.0, 0.0, -1.0]), // Arka (-Z Dışa)
+            ([4, 5, 6, 4, 6, 7], [0.0, 0.0, 1.0]),  // Ön (+Z Dışa)
+            ([0, 1, 5, 0, 5, 4], [0.0, -1.0, 0.0]), // Alt (-Y Dışa)
+            ([3, 6, 2, 3, 7, 6], [0.0, 1.0, 0.0]),  // Üst (+Y Dışa)
+            ([0, 4, 7, 0, 7, 3], [-1.0, 0.0, 0.0]), // Sol (-X Dışa)
+            ([1, 2, 6, 1, 6, 5], [1.0, 0.0, 0.0]),  // Sağ (+X Dışa)
         ];
 
         let mut vertices = Vec::with_capacity(36);
@@ -216,22 +233,37 @@ impl AssetManager {
         });
 
         let aabb = gizmo_math::Aabb::new(Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
-        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "standard_cube".to_string(), aabb)
+        Mesh::new(
+            Arc::new(vbuf),
+            vertices.len() as u32,
+            Vec3::ZERO,
+            "standard_cube".to_string(),
+            aabb,
+        )
     }
 
     pub fn create_gizmo_arrow(device: &wgpu::Device) -> Mesh {
         let w = 0.03; // Shaft thickness
         let hw = 0.12; // Head width
         let sl = 0.8; // Shaft length
-        
+
         let positions: [[f32; 3]; 13] = [
             // Shaft (0..8)
-            [-w, 0.0, -w], [ w, 0.0, -w], [ w, sl, -w], [-w, sl, -w],
-            [-w, 0.0,  w], [ w, 0.0,  w], [ w, sl,  w], [-w, sl,  w],
+            [-w, 0.0, -w],
+            [w, 0.0, -w],
+            [w, sl, -w],
+            [-w, sl, -w],
+            [-w, 0.0, w],
+            [w, 0.0, w],
+            [w, sl, w],
+            [-w, sl, w],
             // Head Base (8..12)
-            [-hw, sl, -hw], [ hw, sl, -hw], [ hw, sl,  hw], [-hw, sl,  hw],
+            [-hw, sl, -hw],
+            [hw, sl, -hw],
+            [hw, sl, hw],
+            [-hw, sl, hw],
             // Apex (12)
-            [0.0, 1.0, 0.0]
+            [0.0, 1.0, 0.0],
         ];
 
         let n_sz = 0.7071;
@@ -239,18 +271,18 @@ impl AssetManager {
         // Tuple of (Indices, Normal)
         let faces: Vec<(Vec<usize>, [f32; 3])> = vec![
             // Shaft
-            (vec![0, 2, 1, 0, 3, 2], [0.0, 0.0, -1.0]),  // Back
-            (vec![4, 5, 6, 4, 6, 7], [0.0, 0.0,  1.0]),  // Front
-            (vec![0, 1, 5, 0, 5, 4], [0.0, -1.0, 0.0]),  // Bottom
-            (vec![0, 4, 7, 0, 7, 3], [-1.0, 0.0, 0.0]),  // Left
-            (vec![1, 2, 6, 1, 6, 5], [ 1.0, 0.0, 0.0]),  // Right
+            (vec![0, 2, 1, 0, 3, 2], [0.0, 0.0, -1.0]), // Back
+            (vec![4, 5, 6, 4, 6, 7], [0.0, 0.0, 1.0]),  // Front
+            (vec![0, 1, 5, 0, 5, 4], [0.0, -1.0, 0.0]), // Bottom
+            (vec![0, 4, 7, 0, 7, 3], [-1.0, 0.0, 0.0]), // Left
+            (vec![1, 2, 6, 1, 6, 5], [1.0, 0.0, 0.0]),  // Right
             // Arrowhead Base
             (vec![8, 9, 10, 8, 10, 11], [0.0, -1.0, 0.0]),
             // Arrowhead Sides
-            (vec![11, 10, 12], [0.0, n_sz, n_sz]),   // Front (+Z)
-            (vec![9, 8, 12], [0.0, n_sz, -n_sz]),    // Back (-Z)
-            (vec![10, 9, 12], [n_sz, n_sz, 0.0]),    // Right (+X)
-            (vec![8, 11, 12], [-n_sz, n_sz, 0.0]),   // Left (-X)
+            (vec![11, 10, 12], [0.0, n_sz, n_sz]), // Front (+Z)
+            (vec![9, 8, 12], [0.0, n_sz, -n_sz]),  // Back (-Z)
+            (vec![10, 9, 12], [n_sz, n_sz, 0.0]),  // Right (+X)
+            (vec![8, 11, 12], [-n_sz, n_sz, 0.0]), // Left (-X)
         ];
 
         let mut vertices = Vec::new();
@@ -274,27 +306,74 @@ impl AssetManager {
         });
 
         let aabb = gizmo_math::Aabb::new(Vec3::new(-hw, 0.0, -hw), Vec3::new(hw, 1.0, hw));
-        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "gizmo_arrow".to_string(), aabb)
+        Mesh::new(
+            Arc::new(vbuf),
+            vertices.len() as u32,
+            Vec3::ZERO,
+            "gizmo_arrow".to_string(),
+            aabb,
+        )
     }
 
     /// Basit, yatay bir düzlem (Plane) üretir.
     pub fn create_plane(device: &wgpu::Device, size: f32) -> Mesh {
         let half = size / 2.0;
         let y = 0.0;
-        
+
         // Üstten bakışla Saat yönünün tersi (CCW) 2 üçgen (Quad)
         let def_j = [0; 4];
         let def_w = [0.0; 4];
         let vertices = [
             // İlk Üçgen (CCW)
-            Vertex { position: [-half, y, -half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.0, 0.0], joint_indices: def_j, joint_weights: def_w },
-            Vertex { position: [ half, y, -half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [size, 0.0], joint_indices: def_j, joint_weights: def_w },
-            Vertex { position: [ half, y,  half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [size, size], joint_indices: def_j, joint_weights: def_w },
-            
+            Vertex {
+                position: [-half, y, -half],
+                color: [1.0, 1.0, 1.0],
+                normal: [0.0, 1.0, 0.0],
+                tex_coords: [0.0, 0.0],
+                joint_indices: def_j,
+                joint_weights: def_w,
+            },
+            Vertex {
+                position: [half, y, -half],
+                color: [1.0, 1.0, 1.0],
+                normal: [0.0, 1.0, 0.0],
+                tex_coords: [size, 0.0],
+                joint_indices: def_j,
+                joint_weights: def_w,
+            },
+            Vertex {
+                position: [half, y, half],
+                color: [1.0, 1.0, 1.0],
+                normal: [0.0, 1.0, 0.0],
+                tex_coords: [size, size],
+                joint_indices: def_j,
+                joint_weights: def_w,
+            },
             // İkinci Üçgen (CCW)
-            Vertex { position: [-half, y, -half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.0, 0.0], joint_indices: def_j, joint_weights: def_w },
-            Vertex { position: [ half, y,  half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [size, size], joint_indices: def_j, joint_weights: def_w },
-            Vertex { position: [-half, y,  half], color: [1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.0, size], joint_indices: def_j, joint_weights: def_w },
+            Vertex {
+                position: [-half, y, -half],
+                color: [1.0, 1.0, 1.0],
+                normal: [0.0, 1.0, 0.0],
+                tex_coords: [0.0, 0.0],
+                joint_indices: def_j,
+                joint_weights: def_w,
+            },
+            Vertex {
+                position: [half, y, half],
+                color: [1.0, 1.0, 1.0],
+                normal: [0.0, 1.0, 0.0],
+                tex_coords: [size, size],
+                joint_indices: def_j,
+                joint_weights: def_w,
+            },
+            Vertex {
+                position: [-half, y, half],
+                color: [1.0, 1.0, 1.0],
+                normal: [0.0, 1.0, 0.0],
+                tex_coords: [0.0, size],
+                joint_indices: def_j,
+                joint_weights: def_w,
+            },
         ];
 
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -303,8 +382,15 @@ impl AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        let aabb = gizmo_math::Aabb::new(Vec3::new(-size, -0.01, -size), Vec3::new(size, 0.01, size));
-        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "plane".to_string(), aabb)
+        let aabb =
+            gizmo_math::Aabb::new(Vec3::new(-size, -0.01, -size), Vec3::new(size, 0.01, size));
+        Mesh::new(
+            Arc::new(vbuf),
+            vertices.len() as u32,
+            Vec3::ZERO,
+            "plane".to_string(),
+            aabb,
+        )
     }
 
     /// 2D Sprite dörtgeni oluşturur (XY düzleminde, kameraya paralel).
@@ -317,13 +403,54 @@ impl AssetManager {
 
         // XY düzleminde dörtgen (Z=0), kameraya bakan yön +Z
         let vertices = [
-            Vertex { position: [-hw, -hh, 0.0], color: [1.0, 1.0, 1.0], normal: [0.0, 0.0, 1.0], tex_coords: [0.0, 1.0], joint_indices: def_j, joint_weights: def_w },
-            Vertex { position: [ hw, -hh, 0.0], color: [1.0, 1.0, 1.0], normal: [0.0, 0.0, 1.0], tex_coords: [1.0, 1.0], joint_indices: def_j, joint_weights: def_w },
-            Vertex { position: [ hw,  hh, 0.0], color: [1.0, 1.0, 1.0], normal: [0.0, 0.0, 1.0], tex_coords: [1.0, 0.0], joint_indices: def_j, joint_weights: def_w },
-            
-            Vertex { position: [ hw,  hh, 0.0], color: [1.0, 1.0, 1.0], normal: [0.0, 0.0, 1.0], tex_coords: [1.0, 0.0], joint_indices: def_j, joint_weights: def_w },
-            Vertex { position: [-hw,  hh, 0.0], color: [1.0, 1.0, 1.0], normal: [0.0, 0.0, 1.0], tex_coords: [0.0, 0.0], joint_indices: def_j, joint_weights: def_w },
-            Vertex { position: [-hw, -hh, 0.0], color: [1.0, 1.0, 1.0], normal: [0.0, 0.0, 1.0], tex_coords: [0.0, 1.0], joint_indices: def_j, joint_weights: def_w },
+            Vertex {
+                position: [-hw, -hh, 0.0],
+                color: [1.0, 1.0, 1.0],
+                normal: [0.0, 0.0, 1.0],
+                tex_coords: [0.0, 1.0],
+                joint_indices: def_j,
+                joint_weights: def_w,
+            },
+            Vertex {
+                position: [hw, -hh, 0.0],
+                color: [1.0, 1.0, 1.0],
+                normal: [0.0, 0.0, 1.0],
+                tex_coords: [1.0, 1.0],
+                joint_indices: def_j,
+                joint_weights: def_w,
+            },
+            Vertex {
+                position: [hw, hh, 0.0],
+                color: [1.0, 1.0, 1.0],
+                normal: [0.0, 0.0, 1.0],
+                tex_coords: [1.0, 0.0],
+                joint_indices: def_j,
+                joint_weights: def_w,
+            },
+            Vertex {
+                position: [hw, hh, 0.0],
+                color: [1.0, 1.0, 1.0],
+                normal: [0.0, 0.0, 1.0],
+                tex_coords: [1.0, 0.0],
+                joint_indices: def_j,
+                joint_weights: def_w,
+            },
+            Vertex {
+                position: [-hw, hh, 0.0],
+                color: [1.0, 1.0, 1.0],
+                normal: [0.0, 0.0, 1.0],
+                tex_coords: [0.0, 0.0],
+                joint_indices: def_j,
+                joint_weights: def_w,
+            },
+            Vertex {
+                position: [-hw, -hh, 0.0],
+                color: [1.0, 1.0, 1.0],
+                normal: [0.0, 0.0, 1.0],
+                tex_coords: [0.0, 1.0],
+                joint_indices: def_j,
+                joint_weights: def_w,
+            },
         ];
 
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -333,7 +460,13 @@ impl AssetManager {
         });
 
         let aabb = gizmo_math::Aabb::new(Vec3::new(-hw, -hh, -0.01), Vec3::new(hw, hh, 0.01));
-        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "sprite_quad".to_string(), aabb)
+        Mesh::new(
+            Arc::new(vbuf),
+            vertices.len() as u32,
+            Vec3::ZERO,
+            "sprite_quad".to_string(),
+            aabb,
+        )
     }
 
     /// Programatik UV Küre (Sphere) üretir.
@@ -350,32 +483,109 @@ impl AssetManager {
                 let phi2 = ((j + 1) as f32 / slices as f32) * 2.0 * pi;
 
                 // 4 köşe noktası
-                let p1 = [radius * theta1.sin() * phi1.cos(), radius * theta1.cos(), radius * theta1.sin() * phi1.sin()];
-                let p2 = [radius * theta2.sin() * phi1.cos(), radius * theta2.cos(), radius * theta2.sin() * phi1.sin()];
-                let p3 = [radius * theta2.sin() * phi2.cos(), radius * theta2.cos(), radius * theta2.sin() * phi2.sin()];
-                let p4 = [radius * theta1.sin() * phi2.cos(), radius * theta1.cos(), radius * theta1.sin() * phi2.sin()];
+                let p1 = [
+                    radius * theta1.sin() * phi1.cos(),
+                    radius * theta1.cos(),
+                    radius * theta1.sin() * phi1.sin(),
+                ];
+                let p2 = [
+                    radius * theta2.sin() * phi1.cos(),
+                    radius * theta2.cos(),
+                    radius * theta2.sin() * phi1.sin(),
+                ];
+                let p3 = [
+                    radius * theta2.sin() * phi2.cos(),
+                    radius * theta2.cos(),
+                    radius * theta2.sin() * phi2.sin(),
+                ];
+                let p4 = [
+                    radius * theta1.sin() * phi2.cos(),
+                    radius * theta1.cos(),
+                    radius * theta1.sin() * phi2.sin(),
+                ];
 
-                let n1 = [theta1.sin() * phi1.cos(), theta1.cos(), theta1.sin() * phi1.sin()];
-                let n2 = [theta2.sin() * phi1.cos(), theta2.cos(), theta2.sin() * phi1.sin()];
-                let n3 = [theta2.sin() * phi2.cos(), theta2.cos(), theta2.sin() * phi2.sin()];
-                let n4 = [theta1.sin() * phi2.cos(), theta1.cos(), theta1.sin() * phi2.sin()];
+                let n1 = [
+                    theta1.sin() * phi1.cos(),
+                    theta1.cos(),
+                    theta1.sin() * phi1.sin(),
+                ];
+                let n2 = [
+                    theta2.sin() * phi1.cos(),
+                    theta2.cos(),
+                    theta2.sin() * phi1.sin(),
+                ];
+                let n3 = [
+                    theta2.sin() * phi2.cos(),
+                    theta2.cos(),
+                    theta2.sin() * phi2.sin(),
+                ];
+                let n4 = [
+                    theta1.sin() * phi2.cos(),
+                    theta1.cos(),
+                    theta1.sin() * phi2.sin(),
+                ];
 
                 let uv1 = [j as f32 / slices as f32, i as f32 / stacks as f32];
                 let uv2 = [j as f32 / slices as f32, (i + 1) as f32 / stacks as f32];
-                let uv3 = [(j + 1) as f32 / slices as f32, (i + 1) as f32 / stacks as f32];
+                let uv3 = [
+                    (j + 1) as f32 / slices as f32,
+                    (i + 1) as f32 / stacks as f32,
+                ];
                 let uv4 = [(j + 1) as f32 / slices as f32, i as f32 / stacks as f32];
 
                 let def_j = [0; 4];
                 let def_w = [0.0; 4];
-                
+
                 // Üçgen 1
-                vertices.push(Vertex { position: p1, color: [1.0; 3], normal: n1, tex_coords: uv1, joint_indices: def_j, joint_weights: def_w });
-                vertices.push(Vertex { position: p2, color: [1.0; 3], normal: n2, tex_coords: uv2, joint_indices: def_j, joint_weights: def_w });
-                vertices.push(Vertex { position: p3, color: [1.0; 3], normal: n3, tex_coords: uv3, joint_indices: def_j, joint_weights: def_w });
+                vertices.push(Vertex {
+                    position: p1,
+                    color: [1.0; 3],
+                    normal: n1,
+                    tex_coords: uv1,
+                    joint_indices: def_j,
+                    joint_weights: def_w,
+                });
+                vertices.push(Vertex {
+                    position: p2,
+                    color: [1.0; 3],
+                    normal: n2,
+                    tex_coords: uv2,
+                    joint_indices: def_j,
+                    joint_weights: def_w,
+                });
+                vertices.push(Vertex {
+                    position: p3,
+                    color: [1.0; 3],
+                    normal: n3,
+                    tex_coords: uv3,
+                    joint_indices: def_j,
+                    joint_weights: def_w,
+                });
                 // Üçgen 2
-                vertices.push(Vertex { position: p1, color: [1.0; 3], normal: n1, tex_coords: uv1, joint_indices: def_j, joint_weights: def_w });
-                vertices.push(Vertex { position: p3, color: [1.0; 3], normal: n3, tex_coords: uv3, joint_indices: def_j, joint_weights: def_w });
-                vertices.push(Vertex { position: p4, color: [1.0; 3], normal: n4, tex_coords: uv4, joint_indices: def_j, joint_weights: def_w });
+                vertices.push(Vertex {
+                    position: p1,
+                    color: [1.0; 3],
+                    normal: n1,
+                    tex_coords: uv1,
+                    joint_indices: def_j,
+                    joint_weights: def_w,
+                });
+                vertices.push(Vertex {
+                    position: p3,
+                    color: [1.0; 3],
+                    normal: n3,
+                    tex_coords: uv3,
+                    joint_indices: def_j,
+                    joint_weights: def_w,
+                });
+                vertices.push(Vertex {
+                    position: p4,
+                    color: [1.0; 3],
+                    normal: n4,
+                    tex_coords: uv4,
+                    joint_indices: def_j,
+                    joint_weights: def_w,
+                });
             }
         }
 
@@ -385,8 +595,17 @@ impl AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        let aabb = gizmo_math::Aabb::new(Vec3::new(-radius, -radius, -radius), Vec3::new(radius, radius, radius));
-        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "sphere".to_string(), aabb)
+        let aabb = gizmo_math::Aabb::new(
+            Vec3::new(-radius, -radius, -radius),
+            Vec3::new(radius, radius, radius),
+        );
+        Mesh::new(
+            Arc::new(vbuf),
+            vertices.len() as u32,
+            Vec3::ZERO,
+            "sphere".to_string(),
+            aabb,
+        )
     }
 
     pub fn create_terrain(
@@ -396,20 +615,21 @@ impl AssetManager {
         depth: f32,
         max_height: f32,
     ) -> Result<(Mesh, Vec<f32>, u32, u32), String> {
-        let canonical = std::path::Path::new(heightmap_path).canonicalize()
+        let canonical = std::path::Path::new(heightmap_path)
+            .canonicalize()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| heightmap_path.to_string());
-            
+
         let img = image::open(&canonical)
             .map_err(|e| format!("Heightmap yuklenemedi! {} ({})", canonical, e))?
             .into_luma8(); // Grayscale format
-            
+
         let (img_width, img_height) = img.dimensions();
         // Sınırlama: 512x512'den büyükse performans için uyar ya da downscale et
-        
+
         let mut vertices: Vec<Vertex> = Vec::with_capacity((img_width * img_height) as usize);
         let mut heights: Vec<f32> = Vec::with_capacity((img_width * img_height) as usize);
-        
+
         let half_w = width / 2.0;
         let half_d = depth / 2.0;
 
@@ -419,14 +639,14 @@ impl AssetManager {
                 let pixel = img.get_pixel(x, y)[0] as f32 / 255.0; // 0.0 - 1.0
                 heights.push(pixel);
                 let world_y = pixel * max_height;
-                
+
                 let world_x = -half_w + (x as f32 / (img_width as f32 - 1.0)) * width;
                 let world_z = -half_d + (y as f32 / (img_height as f32 - 1.0)) * depth;
-                
+
                 // UV Mapping: Repeat 10 times across terrain so grass doesn't look stretched
                 let uv_x = (x as f32 / (img_width as f32 - 1.0)) * 10.0;
                 let uv_y = (y as f32 / (img_height as f32 - 1.0)) * 10.0;
-                
+
                 vertices.push(Vertex {
                     position: [world_x, world_y, world_z],
                     color: [1.0, 1.0, 1.0],
@@ -437,7 +657,7 @@ impl AssetManager {
                 });
             }
         }
-        
+
         // 2. INDEX'LERİ OLUŞTUR VE NORMALLERİ HESAPLA
         let mut indices = Vec::with_capacity(((img_width - 1) * (img_height - 1) * 6) as usize);
         for y in 0..(img_height - 1) {
@@ -446,37 +666,40 @@ impl AssetManager {
                 let i1 = y * img_width + (x + 1);
                 let i2 = (y + 1) * img_width + x;
                 let i3 = (y + 1) * img_width + (x + 1);
-                
+
                 // Triangle 1
                 indices.push(i0 as u32);
                 indices.push(i2 as u32);
                 indices.push(i1 as u32);
-                
+
                 // Triangle 2
                 indices.push(i1 as u32);
                 indices.push(i2 as u32);
                 indices.push(i3 as u32);
             }
         }
-        
+
         // Face ve Smooth Normalleri hesapla
         let mut final_vertices = Vec::with_capacity(indices.len());
         for chunk in indices.chunks(3) {
             let i0 = chunk[0] as usize;
             let i1 = chunk[1] as usize;
             let i2 = chunk[2] as usize;
-            
+
             let p0 = Vec3::from_array(vertices[i0].position);
             let p1 = Vec3::from_array(vertices[i1].position);
             let p2 = Vec3::from_array(vertices[i2].position);
-            
+
             let normal = (p1 - p0).cross(p2 - p0).normalize();
-            
+
             // Triangle count for WGPU. Note: using flat normal per face first, optionally can be smoothed
-            let mut v0 = vertices[i0].clone(); v0.normal = [normal.x, normal.y, normal.z];
-            let mut v1 = vertices[i1].clone(); v1.normal = [normal.x, normal.y, normal.z];
-            let mut v2 = vertices[i2].clone(); v2.normal = [normal.x, normal.y, normal.z];
-            
+            let mut v0 = vertices[i0].clone();
+            v0.normal = [normal.x, normal.y, normal.z];
+            let mut v1 = vertices[i1].clone();
+            v1.normal = [normal.x, normal.y, normal.z];
+            let mut v2 = vertices[i2].clone();
+            v2.normal = [normal.x, normal.y, normal.z];
+
             final_vertices.push(v0);
             final_vertices.push(v1);
             final_vertices.push(v2);
@@ -488,8 +711,17 @@ impl AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        let aabb = gizmo_math::Aabb::new(Vec3::new(-half_w, 0.0, -half_d), Vec3::new(half_w, max_height, half_d));
-        let mesh = Mesh::new(Arc::new(vbuf), final_vertices.len() as u32, Vec3::ZERO, format!("terrain:{}", heightmap_path), aabb);
+        let aabb = gizmo_math::Aabb::new(
+            Vec3::new(-half_w, 0.0, -half_d),
+            Vec3::new(half_w, max_height, half_d),
+        );
+        let mesh = Mesh::new(
+            Arc::new(vbuf),
+            final_vertices.len() as u32,
+            Vec3::ZERO,
+            format!("terrain:{}", heightmap_path),
+            aabb,
+        );
         Ok((mesh, heights, img_width, img_height))
     }
 
@@ -502,11 +734,12 @@ impl AssetManager {
         path: &str,
     ) -> Result<Arc<wgpu::BindGroup>, String> {
         // Yolu normalize et — aynı dosyanın farklı path'lerle cache'te çoğalmasını önle
-        let canonical = std::path::Path::new(path).canonicalize()
+        let canonical = std::path::Path::new(path)
+            .canonicalize()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| path.to_string());
         let path = canonical.as_str();
-        
+
         if let Some(cached) = self.texture_cache.get(path) {
             return Ok(cached.clone());
         }
@@ -561,8 +794,14 @@ impl AssetManager {
             label: Some(path),
             layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
             ],
         }));
 
@@ -582,7 +821,11 @@ impl AssetManager {
             return cached.clone();
         }
 
-        let texture_size = wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 };
+        let texture_size = wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             size: texture_size,
             mip_level_count: 1,
@@ -596,9 +839,18 @@ impl AssetManager {
 
         // Sadece 1 piksel tam beyaz [255, 255, 255, 255]
         queue.write_texture(
-            wgpu::ImageCopyTexture { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::ImageCopyTexture {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             &[255, 255, 255, 255],
-            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
             texture_size,
         );
 
@@ -617,8 +869,14 @@ impl AssetManager {
             label: Some("White Fallback BindGroup"),
             layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
             ],
         }));
 
@@ -644,17 +902,25 @@ impl AssetManager {
 
         for (i, image) in images.iter().enumerate() {
             let (width, height) = (image.width, image.height);
-            let texture_size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
-            
+            let texture_size = wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            };
+
             let (img_data, format, bytes_per_row) = match image.format {
-                gltf::image::Format::R8G8B8A8 => (image.pixels.clone(), wgpu::TextureFormat::Rgba8UnormSrgb, 4 * width),
+                gltf::image::Format::R8G8B8A8 => (
+                    image.pixels.clone(),
+                    wgpu::TextureFormat::Rgba8UnormSrgb,
+                    4 * width,
+                ),
                 gltf::image::Format::R8G8B8 => {
                     let mut rgba = Vec::with_capacity((width * height * 4) as usize);
                     for chunk in image.pixels.chunks_exact(3) {
                         rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
                     }
                     (rgba, wgpu::TextureFormat::Rgba8UnormSrgb, 4 * width)
-                },
+                }
                 gltf::image::Format::R8G8 => {
                     // Luminance + Alpha converts to R=Lum, G=Lum, B=Lum, A=Alpha
                     let mut rgba = Vec::with_capacity((width * height * 4) as usize);
@@ -662,7 +928,7 @@ impl AssetManager {
                         rgba.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]);
                     }
                     (rgba, wgpu::TextureFormat::Rgba8UnormSrgb, 4 * width)
-                },
+                }
                 gltf::image::Format::R8 => {
                     // Luminance converts to R=Lum, G=Lum, B=Lum, A=255
                     let mut rgba = Vec::with_capacity((width * height * 4) as usize);
@@ -670,7 +936,7 @@ impl AssetManager {
                         rgba.extend_from_slice(&[lum, lum, lum, 255]);
                     }
                     (rgba, wgpu::TextureFormat::Rgba8UnormSrgb, 4 * width)
-                },
+                }
                 _ => {
                     eprintln!("[GLTF WARN] Bilinmeyen piksel formatı (image idx={}), RGBA8 fallback kullanılıyor. Boyut: {}x{}, Pixel len: {}",
                         i, width, height, image.pixels.len());
@@ -695,9 +961,18 @@ impl AssetManager {
             });
 
             queue.write_texture(
-                wgpu::ImageCopyTexture { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::ImageCopyTexture {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
                 &img_data,
-                wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(bytes_per_row), rows_per_image: Some(height) },
+                wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
                 texture_size,
             );
 
@@ -716,8 +991,14 @@ impl AssetManager {
                 label: Some(&format!("{}_bg_{}", file_path, i)),
                 layout: texture_bind_group_layout,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
                 ],
             }));
             gltf_textures.push(bg);
@@ -728,7 +1009,7 @@ impl AssetManager {
         for material in document.materials() {
             let pbr = material.pbr_metallic_roughness();
             let base_color = pbr.base_color_factor();
-            
+
             let mut mat = if let Some(tex_info) = pbr.base_color_texture() {
                 let tex_idx = tex_info.texture().source().index();
                 if let Some(bg) = gltf_textures.get(tex_idx) {
@@ -739,19 +1020,22 @@ impl AssetManager {
             } else {
                 Material::new(default_tbind.clone())
             };
-            mat.albedo = gizmo_math::Vec4::new(base_color[0], base_color[1], base_color[2], base_color[3]);
+            mat.albedo =
+                gizmo_math::Vec4::new(base_color[0], base_color[1], base_color[2], base_color[3]);
             mat.metallic = pbr.metallic_factor().min(0.2); // Sınırlı! IBL olmadığı için saf metaller simsiyah kalıyor.
             mat.roughness = pbr.roughness_factor().max(0.6); // Paralamaması için pürüzlü kalsın.
-            // Varsayılan: PBR açık (unlit=0.0). GLTF modelleri artık ışıklandırma alacak.
+                                                             // Varsayılan: PBR açık (unlit=0.0). GLTF modelleri artık ışıklandırma alacak.
             mat.unlit = 0.0;
-            
-            if material.alpha_mode() == gltf::material::AlphaMode::Blend || material.alpha_mode() == gltf::material::AlphaMode::Mask {
+
+            if material.alpha_mode() == gltf::material::AlphaMode::Blend
+                || material.alpha_mode() == gltf::material::AlphaMode::Mask
+            {
                 mat.is_transparent = true;
             }
             if material.double_sided() {
                 mat.is_double_sided = true;
             }
-            
+
             gltf_materials.push(mat);
         }
 
@@ -759,7 +1043,13 @@ impl AssetManager {
 
         for scene in document.scenes() {
             for node in scene.nodes() {
-                roots.push(self.parse_gltf_node(device, &node, &buffers, &gltf_materials, file_path));
+                roots.push(self.parse_gltf_node(
+                    device,
+                    &node,
+                    &buffers,
+                    &gltf_materials,
+                    file_path,
+                ));
             }
         }
 
@@ -772,7 +1062,7 @@ impl AssetManager {
             for channel in anim.channels() {
                 let target_node = channel.target().node().index();
                 let reader = channel.reader(|b| Some(&buffers[b.index()]));
-                
+
                 if let Some(inputs) = reader.read_inputs() {
                     let times: Vec<f32> = inputs.collect();
 
@@ -781,24 +1071,42 @@ impl AssetManager {
                             gltf::animation::util::ReadOutputs::Translations(tr) => {
                                 let mut kfs = Vec::new();
                                 for (time, val) in times.iter().zip(tr) {
-                                    kfs.push(Keyframe { time: *time, value: Vec3::new(val[0], val[1], val[2]) });
+                                    kfs.push(Keyframe {
+                                        time: *time,
+                                        value: Vec3::new(val[0], val[1], val[2]),
+                                    });
                                 }
-                                transl.push(Track { target_node, keyframes: kfs });
-                            },
+                                transl.push(Track {
+                                    target_node,
+                                    keyframes: kfs,
+                                });
+                            }
                             gltf::animation::util::ReadOutputs::Rotations(rt) => {
                                 let mut kfs = Vec::new();
                                 for (time, val) in times.iter().zip(rt.into_f32()) {
-                                    kfs.push(Keyframe { time: *time, value: Quat::from_xyzw(val[0], val[1], val[2], val[3]) });
+                                    kfs.push(Keyframe {
+                                        time: *time,
+                                        value: Quat::from_xyzw(val[0], val[1], val[2], val[3]),
+                                    });
                                 }
-                                rot.push(Track { target_node, keyframes: kfs });
-                            },
+                                rot.push(Track {
+                                    target_node,
+                                    keyframes: kfs,
+                                });
+                            }
                             gltf::animation::util::ReadOutputs::Scales(sc) => {
                                 let mut kfs = Vec::new();
                                 for (time, val) in times.iter().zip(sc) {
-                                    kfs.push(Keyframe { time: *time, value: Vec3::new(val[0], val[1], val[2]) });
+                                    kfs.push(Keyframe {
+                                        time: *time,
+                                        value: Vec3::new(val[0], val[1], val[2]),
+                                    });
                                 }
-                                scl.push(Track { target_node, keyframes: kfs });
-                            },
+                                scl.push(Track {
+                                    target_node,
+                                    keyframes: kfs,
+                                });
+                            }
                             _ => {} // Morph targets vb. goz ardi edildi
                         }
                     }
@@ -817,9 +1125,21 @@ impl AssetManager {
         // Sure hesaplama sonradan yapilabilir
         for anim in &mut animations {
             let mut max_t = 0.0f32;
-            for t in &anim.translations { if let Some(k) = t.keyframes.last() { max_t = max_t.max(k.time); } }
-            for t in &anim.rotations { if let Some(k) = t.keyframes.last() { max_t = max_t.max(k.time); } }
-            for t in &anim.scales { if let Some(k) = t.keyframes.last() { max_t = max_t.max(k.time); } }
+            for t in &anim.translations {
+                if let Some(k) = t.keyframes.last() {
+                    max_t = max_t.max(k.time);
+                }
+            }
+            for t in &anim.rotations {
+                if let Some(k) = t.keyframes.last() {
+                    max_t = max_t.max(k.time);
+                }
+            }
+            for t in &anim.scales {
+                if let Some(k) = t.keyframes.last() {
+                    max_t = max_t.max(k.time);
+                }
+            }
             anim.duration = max_t;
         }
 
@@ -833,12 +1153,21 @@ impl AssetManager {
         let mut skeletons = Vec::new();
         for skin in document.skins() {
             let reader = skin.reader(|b| Some(&buffers[b.index()]));
-            let ibm: Vec<[[f32; 4]; 4]> = reader.read_inverse_bind_matrices()
+            let ibm: Vec<[[f32; 4]; 4]> = reader
+                .read_inverse_bind_matrices()
                 .map(|v| v.collect())
                 .unwrap_or_else(|| {
-                    vec![[[1.0,0.,0.,0.],[0.,1.,0.,0.],[0.,0.,1.,0.],[0.,0.,0.,1.]]; skin.joints().count()]
+                    vec![
+                        [
+                            [1.0, 0., 0., 0.],
+                            [0., 1., 0., 0.],
+                            [0., 0., 1., 0.],
+                            [0., 0., 0., 1.]
+                        ];
+                        skin.joints().count()
+                    ]
                 });
-            
+
             let mut node_to_bone = std::collections::HashMap::new();
             for (bone_idx, node) in skin.joints().enumerate() {
                 node_to_bone.insert(node.index(), bone_idx);
@@ -847,8 +1176,10 @@ impl AssetManager {
             let mut joints = Vec::new();
             for (bone_idx, joint_node) in skin.joints().enumerate() {
                 let inverse_bind_matrix = gizmo_math::Mat4::from_cols_array_2d(&ibm[bone_idx]);
-                
-                let parent_index = node_parents.get(&joint_node.index()).and_then(|p| node_to_bone.get(p).copied());
+
+                let parent_index = node_parents
+                    .get(&joint_node.index())
+                    .and_then(|p| node_to_bone.get(p).copied());
 
                 let (t, r, s) = joint_node.transform().decomposed();
                 let loc_t = gizmo_math::Mat4::from_translation(Vec3::new(t[0], t[1], t[2]));
@@ -875,29 +1206,66 @@ impl AssetManager {
         })
     }
 
-    fn parse_gltf_node(&mut self, device: &wgpu::Device, node: &gltf::Node, buffers: &[gltf::buffer::Data], materials: &[Material], file_name: &str) -> GltfNodeData {
+    fn parse_gltf_node(
+        &mut self,
+        device: &wgpu::Device,
+        node: &gltf::Node,
+        buffers: &[gltf::buffer::Data],
+        materials: &[Material],
+        file_name: &str,
+    ) -> GltfNodeData {
         let (translation, rotation, scale) = node.transform().decomposed();
-        
+
         let mut primitives = Vec::new();
         if let Some(_mesh) = node.mesh() {
             for (prim_i, primitive) in node.mesh().unwrap().primitives().enumerate() {
                 let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
-                
-                let positions = reader.read_positions().map(|v| v.collect::<Vec<_>>()).unwrap_or_default();
-                let normals = reader.read_normals().map(|v| v.collect::<Vec<_>>()).unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
-                let tex_coords = reader.read_tex_coords(0).map(|v| v.into_f32().collect::<Vec<_>>()).unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
-                
-                let joints = reader.read_joints(0).map(|v| v.into_u16().collect::<Vec<_>>());
-                let weights = reader.read_weights(0).map(|v| v.into_f32().collect::<Vec<_>>());
+
+                let positions = reader
+                    .read_positions()
+                    .map(|v| v.collect::<Vec<_>>())
+                    .unwrap_or_default();
+                let normals = reader
+                    .read_normals()
+                    .map(|v| v.collect::<Vec<_>>())
+                    .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
+                let tex_coords = reader
+                    .read_tex_coords(0)
+                    .map(|v| v.into_f32().collect::<Vec<_>>())
+                    .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
+
+                let joints = reader
+                    .read_joints(0)
+                    .map(|v| v.into_u16().collect::<Vec<_>>());
+                let weights = reader
+                    .read_weights(0)
+                    .map(|v| v.into_f32().collect::<Vec<_>>());
 
                 let get_vertex = |i: usize, pos: [f32; 3]| -> Vertex {
                     let j = if let Some(ref js) = joints {
-                        if i < js.len() { [js[i][0] as u32, js[i][1] as u32, js[i][2] as u32, js[i][3] as u32] } else { [0; 4] }
-                    } else { [0; 4] };
+                        if i < js.len() {
+                            [
+                                js[i][0] as u32,
+                                js[i][1] as u32,
+                                js[i][2] as u32,
+                                js[i][3] as u32,
+                            ]
+                        } else {
+                            [0; 4]
+                        }
+                    } else {
+                        [0; 4]
+                    };
 
                     let w = if let Some(ref ws) = weights {
-                        if i < ws.len() { ws[i] } else { [0.0; 4] }
-                    } else { [0.0; 4] };
+                        if i < ws.len() {
+                            ws[i]
+                        } else {
+                            [0.0; 4]
+                        }
+                    } else {
+                        [0.0; 4]
+                    };
 
                     Vertex {
                         position: pos,
@@ -941,11 +1309,15 @@ impl AssetManager {
                         let v0 = Vec3::new(p0[0], p0[1], p0[2]);
                         let v1 = Vec3::new(p1[0], p1[1], p1[2]);
                         let v2 = Vec3::new(p2[0], p2[1], p2[2]);
-                        
+
                         let norm = (v1 - v0).cross(v2 - v0);
-                        let final_norm = if norm.length_squared() > 1e-6 { norm.normalize() } else { Vec3::new(0.0, 1.0, 0.0) };
+                        let final_norm = if norm.length_squared() > 1e-6 {
+                            norm.normalize()
+                        } else {
+                            Vec3::new(0.0, 1.0, 0.0)
+                        };
                         let n_arr = [final_norm.x, final_norm.y, final_norm.z];
-                        
+
                         chunk[0].normal = n_arr;
                         chunk[1].normal = n_arr;
                         chunk[2].normal = n_arr;
@@ -959,14 +1331,17 @@ impl AssetManager {
                 });
 
                 let mesh_comp = Mesh::new(
-                    Arc::new(vbuf), 
-                    all_vertices.len() as u32, 
-                    Vec3::ZERO, 
-                    format!("gltf_mesh_{}_{:?}_p{}", file_name, node.name(), prim_i), 
-                    aabb
+                    Arc::new(vbuf),
+                    all_vertices.len() as u32,
+                    Vec3::ZERO,
+                    format!("gltf_mesh_{}_{:?}_p{}", file_name, node.name(), prim_i),
+                    aabb,
                 );
-                
-                let mat_opt = primitive.material().index().and_then(|idx| materials.get(idx).cloned());
+
+                let mat_opt = primitive
+                    .material()
+                    .index()
+                    .and_then(|idx| materials.get(idx).cloned());
                 primitives.push((mesh_comp, mat_opt));
             }
         }

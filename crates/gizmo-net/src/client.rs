@@ -1,8 +1,8 @@
+use crate::protocol::{connection_config, PROTOCOL_ID};
 use renet::RenetClient;
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
 use std::net::UdpSocket;
 use std::time::{Duration, SystemTime};
-use crate::protocol::{connection_config, PROTOCOL_ID};
 
 pub struct NetworkClient {
     pub client: RenetClient,
@@ -15,8 +15,10 @@ impl NetworkClient {
 
         let server_addr: std::net::SocketAddr = server_addr.parse().unwrap();
         let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
-        let current_time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap();
-        
+        let current_time = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap();
+
         let client_id = current_time.as_millis() as u64; // Simple random ID for now
         let authentication = ClientAuthentication::Unsecure {
             client_id,

@@ -18,7 +18,17 @@ pub static GLOBAL_LOGS: Mutex<Vec<LogEntry>> = Mutex::new(Vec::new());
 /// Arkada Mutex'i güvenlice açan ve log yazan yardımcı bir fonksiyon
 pub fn log_message(level: LogLevel, msg: String) {
     if let Ok(mut logs) = GLOBAL_LOGS.lock() {
-        logs.push(LogEntry { message: msg.clone(), level });
+        // Spam önleyici: Aynı mesaj art arda geliyorsa vektörü ve konsolu şişirme (Frame bazlı spam koruması)
+        if let Some(last) = logs.last() {
+            if last.message == msg && last.level == level {
+                return;
+            }
+        }
+
+        logs.push(LogEntry {
+            message: msg.clone(),
+            level,
+        });
         // Aynı zamanda konsola da yaz (Opsiyonel ama hata takibi için terminalde durması iyidir)
         match level {
             LogLevel::Info => println!("[INFO] {}", msg),

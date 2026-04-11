@@ -3,11 +3,11 @@
 //! Lua scriptlerinden entity pozisyon, rotasyon, hız ve ölçek bilgilerine
 //! erişim sağlar. Tüm değişiklikler komut kuyruğuna yazılır.
 
+use crate::commands::{CommandQueue, ScriptCommand};
+use gizmo_core::World;
+use gizmo_math::{Quat, Vec3};
 use mlua::prelude::*;
 use std::sync::Arc;
-use crate::commands::{CommandQueue, ScriptCommand};
-use gizmo_math::{Vec3, Quat};
-use gizmo_core::World;
 
 /// Entity API fonksiyonlarını Lua'ya kaydeder
 pub fn register_entity_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result<(), LuaError> {
@@ -16,81 +16,117 @@ pub fn register_entity_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resul
     // === POSITION ===
     {
         let cq = command_queue.clone();
-        entity_table.set("set_position", lua.create_function(move |_, (id, x, y, z): (u32, f32, f32, f32)| {
-            cq.push(ScriptCommand::SetPosition(id, Vec3::new(x, y, z)));
-            Ok(())
-        })?)?;
+        entity_table.set(
+            "set_position",
+            lua.create_function(move |_, (id, x, y, z): (u32, f32, f32, f32)| {
+                cq.push(ScriptCommand::SetPosition(id, Vec3::new(x, y, z)));
+                Ok(())
+            })?,
+        )?;
     }
 
     // === ROTATION ===
     {
         let cq = command_queue.clone();
-        entity_table.set("set_rotation", lua.create_function(move |_, (id, x, y, z, w): (u32, f32, f32, f32, f32)| {
-            cq.push(ScriptCommand::SetRotation(id, Quat::from_xyzw(x, y, z, w)));
-            Ok(())
-        })?)?;
+        entity_table.set(
+            "set_rotation",
+            lua.create_function(move |_, (id, x, y, z, w): (u32, f32, f32, f32, f32)| {
+                cq.push(ScriptCommand::SetRotation(id, Quat::from_xyzw(x, y, z, w)));
+                Ok(())
+            })?,
+        )?;
     }
 
     // === SCALE ===
     {
         let cq = command_queue.clone();
-        entity_table.set("set_scale", lua.create_function(move |_, (id, x, y, z): (u32, f32, f32, f32)| {
-            cq.push(ScriptCommand::SetScale(id, Vec3::new(x, y, z)));
-            Ok(())
-        })?)?;
+        entity_table.set(
+            "set_scale",
+            lua.create_function(move |_, (id, x, y, z): (u32, f32, f32, f32)| {
+                cq.push(ScriptCommand::SetScale(id, Vec3::new(x, y, z)));
+                Ok(())
+            })?,
+        )?;
     }
 
     // === VELOCITY ===
     {
         let cq = command_queue.clone();
-        entity_table.set("set_velocity", lua.create_function(move |_, (id, x, y, z): (u32, f32, f32, f32)| {
-            cq.push(ScriptCommand::SetVelocity(id, Vec3::new(x, y, z)));
-            Ok(())
-        })?)?;
+        entity_table.set(
+            "set_velocity",
+            lua.create_function(move |_, (id, x, y, z): (u32, f32, f32, f32)| {
+                cq.push(ScriptCommand::SetVelocity(id, Vec3::new(x, y, z)));
+                Ok(())
+            })?,
+        )?;
     }
 
     {
         let cq = command_queue.clone();
-        entity_table.set("set_angular_velocity", lua.create_function(move |_, (id, x, y, z): (u32, f32, f32, f32)| {
-            cq.push(ScriptCommand::SetAngularVelocity(id, Vec3::new(x, y, z)));
-            Ok(())
-        })?)?;
+        entity_table.set(
+            "set_angular_velocity",
+            lua.create_function(move |_, (id, x, y, z): (u32, f32, f32, f32)| {
+                cq.push(ScriptCommand::SetAngularVelocity(id, Vec3::new(x, y, z)));
+                Ok(())
+            })?,
+        )?;
     }
 
     // === SPAWN ===
     {
         let cq = command_queue.clone();
-        entity_table.set("spawn", lua.create_function(move |_, (name, x, y, z): (String, f32, f32, f32)| {
-            cq.push(ScriptCommand::SpawnEntity { name, position: Vec3::new(x, y, z) });
-            Ok(())
-        })?)?;
+        entity_table.set(
+            "spawn",
+            lua.create_function(move |_, (name, x, y, z): (String, f32, f32, f32)| {
+                cq.push(ScriptCommand::SpawnEntity {
+                    name,
+                    position: Vec3::new(x, y, z),
+                });
+                Ok(())
+            })?,
+        )?;
     }
 
     // === SPAWN PREFAB ===
     {
         let cq = command_queue.clone();
-        entity_table.set("spawn_prefab", lua.create_function(move |_, (name, prefab_type, x, y, z): (String, String, f32, f32, f32)| {
-            cq.push(ScriptCommand::SpawnPrefab { name, prefab_type, position: Vec3::new(x, y, z) });
-            Ok(())
-        })?)?;
+        entity_table.set(
+            "spawn_prefab",
+            lua.create_function(
+                move |_, (name, prefab_type, x, y, z): (String, String, f32, f32, f32)| {
+                    cq.push(ScriptCommand::SpawnPrefab {
+                        name,
+                        prefab_type,
+                        position: Vec3::new(x, y, z),
+                    });
+                    Ok(())
+                },
+            )?,
+        )?;
     }
 
     // === DESTROY ===
     {
         let cq = command_queue.clone();
-        entity_table.set("destroy", lua.create_function(move |_, id: u32| {
-            cq.push(ScriptCommand::DestroyEntity(id));
-            Ok(())
-        })?)?;
+        entity_table.set(
+            "destroy",
+            lua.create_function(move |_, id: u32| {
+                cq.push(ScriptCommand::DestroyEntity(id));
+                Ok(())
+            })?,
+        )?;
     }
 
     // === SET NAME ===
     {
         let cq = command_queue.clone();
-        entity_table.set("set_name", lua.create_function(move |_, (id, name): (u32, String)| {
-            cq.push(ScriptCommand::SetEntityName(id, name));
-            Ok(())
-        })?)?;
+        entity_table.set(
+            "set_name",
+            lua.create_function(move |_, (id, name): (u32, String)| {
+                cq.push(ScriptCommand::SetEntityName(id, name));
+                Ok(())
+            })?,
+        )?;
     }
 
     lua.globals().set("entity", entity_table)?;
@@ -110,7 +146,7 @@ pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> 
     let names = lua.create_table()?;
 
     if let Some(transforms) = world.borrow::<gizmo_physics::components::Transform>() {
-        for &eid in &transforms.entity_dense {
+        for eid in transforms.dense.iter().map(|e| e.entity) {
             if let Some(t) = transforms.get(eid) {
                 let pos = lua.create_table()?;
                 pos.set("x", t.position.x)?;
@@ -135,7 +171,7 @@ pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> 
     }
 
     if let Some(vels) = world.borrow::<gizmo_physics::components::Velocity>() {
-        for &eid in &vels.entity_dense {
+        for eid in vels.dense.iter().map(|e| e.entity) {
             if let Some(v) = vels.get(eid) {
                 let vel = lua.create_table()?;
                 vel.set("x", v.linear.x)?;
@@ -147,7 +183,7 @@ pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> 
     }
 
     if let Some(entity_names) = world.borrow::<gizmo_core::EntityName>() {
-        for &eid in &entity_names.entity_dense {
+        for eid in entity_names.dense.iter().map(|e| e.entity) {
             if let Some(n) = entity_names.get(eid) {
                 names.set(eid, n.0.clone())?;
             }
@@ -162,7 +198,8 @@ pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> 
     entity_table.set("_names", names)?;
 
     // Lua tarafı get_position(id) gibi helper fonksiyonları kullanır
-    lua.load(r#"
+    lua.load(
+        r#"
         function entity.get_position(id)
             return entity._positions[id] or {x=0, y=0, z=0}
         end
@@ -178,7 +215,9 @@ pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> 
         function entity.get_name(id)
             return entity._names[id] or ""
         end
-    "#).exec()?;
+    "#,
+    )
+    .exec()?;
 
     Ok(())
 }

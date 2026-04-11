@@ -61,15 +61,25 @@ impl ColliderShape {
         }
 
         match self {
-            ColliderShape::Sphere(s) => {
-                pos + dir * s.radius
-            }
+            ColliderShape::Sphere(s) => pos + dir * s.radius,
             ColliderShape::Aabb(aabb) => {
                 // AABB'yi gerçek rotasyona tepki veren bir OBB gibi ele alıyoruz:
                 let local_dir = rot.inverse().mul_vec3(dir);
-                let lx = if local_dir.x >= 0.0 { aabb.half_extents.x } else { -aabb.half_extents.x };
-                let ly = if local_dir.y >= 0.0 { aabb.half_extents.y } else { -aabb.half_extents.y };
-                let lz = if local_dir.z >= 0.0 { aabb.half_extents.z } else { -aabb.half_extents.z };
+                let lx = if local_dir.x >= 0.0 {
+                    aabb.half_extents.x
+                } else {
+                    -aabb.half_extents.x
+                };
+                let ly = if local_dir.y >= 0.0 {
+                    aabb.half_extents.y
+                } else {
+                    -aabb.half_extents.y
+                };
+                let lz = if local_dir.z >= 0.0 {
+                    aabb.half_extents.z
+                } else {
+                    -aabb.half_extents.z
+                };
                 pos + rot.mul_vec3(Vec3::new(lx, ly, lz))
             }
             ColliderShape::Capsule(cap) => {
@@ -77,14 +87,14 @@ impl ColliderShape {
                 let local_dir = rot.inverse().mul_vec3(dir);
                 let local_top = Vec3::new(0.0, cap.half_height, 0.0);
                 let local_bot = Vec3::new(0.0, -cap.half_height, 0.0);
-                
+
                 // Lokal yönü baz alıp seçimi yap
                 let best_local = if local_dir.dot(local_top) >= local_dir.dot(local_bot) {
                     local_top
                 } else {
                     local_bot
                 };
-                
+
                 // Sadece seçili (1 adet) noktayı tekrar dünyaya çevirip küre yarıçapını ekle
                 pos + rot.mul_vec3(best_local) + dir * cap.radius
             }
@@ -92,7 +102,7 @@ impl ColliderShape {
                 let local_dir = rot.inverse().mul_vec3(dir);
                 let mut best_dot = f32::NEG_INFINITY;
                 let mut best_local = Vec3::ZERO;
-                
+
                 for v in &hull.vertices {
                     let d = local_dir.dot(*v);
                     if d > best_dot {
@@ -105,47 +115,116 @@ impl ColliderShape {
             ColliderShape::Swept { base, sweep_vector } => {
                 // Sweep mantığı: Orijinal şeklin uç noktasına, eğer tarama yönü 'dir' ile aynı yöndeyse
                 // sweep_vector (süpürme hareketi) eklenir. Bu sayede şekil hareket ettiği hacmi kapsar.
-                let offset = if dir.dot(*sweep_vector) > 0.0 { *sweep_vector } else { Vec3::ZERO };
+                let offset = if dir.dot(*sweep_vector) > 0.0 {
+                    *sweep_vector
+                } else {
+                    Vec3::ZERO
+                };
                 base.support_point(pos, rot, dir) + offset
             }
-            ColliderShape::HeightField { width, max_height, depth, .. } => {
-                // GJK Convex Hull tabanlı çalıştığı için HeightField tam uyumlu değildir.
-                // Bu yüzden kabaca AABB tabanlı davranmasını sağlarız. Raycastler özel olarak ele alınacaktır.
-                let lx = if dir.x >= 0.0 { *width * 0.5 } else { -(*width) * 0.5 };
-                let ly = if dir.y >= 0.0 { *max_height } else { 0.0 };
-                let lz = if dir.z >= 0.0 { *depth * 0.5 } else { -(*depth) * 0.5 };
-                pos + rot.mul_vec3(Vec3::new(lx, ly, lz))
+            ColliderShape::HeightField {
+                heights,
+                segments_x,
+                segments_z,
+                width,
+                depth,
+                max_height,
+            } => {
+                let local_dir = rot.inverse().mul_vec3(dir);
+                let mut best_dot = f32::NEG_INFINITY;
+                let mut best_local = Vec3::ZERO;
+
+                let sx_f = (*segments_x).saturating_sub(1).max(1) as f32;
+                let sz_f = (*segments_z).saturating_sub(1).max(1) as f32;
+                let half_w = *width * 0.5;
+                let half_d = *depth * 0.5;
+
+                for gz in 0..*segments_z {
+                    let fz = gz as f32 / sz_f;
+                    let lz = -half_d + *depth * fz;
+                    for gx in 0..*segments_x {
+                        let fx = gx as f32 / sx_f;
+                        let lx = -half_w + *width * fx;
+
+                        let idx = (gz * *segments_x + gx) as usize;
+                        let h = if idx < heights.len() {
+                            heights[idx] * *max_height
+                        } else {
+                            0.0
+                        };
+
+                        // Yüzey (tepe) noktası
+                        let pt = Vec3::new(lx, h, lz);
+                        let d = local_dir.dot(pt);
+                        if d > best_dot {
+                            best_dot = d;
+                            best_local = pt;
+                        }
+
+                        // Alt zemin hacmi sağlamak için taban noktası
+                        let pt_bot = Vec3::new(lx, 0.0, lz);
+                        let d_bot = local_dir.dot(pt_bot);
+                        if d_bot > best_dot {
+                            best_dot = d_bot;
+                            best_local = pt_bot;
+                        }
+                    }
+                }
+                pos + rot.mul_vec3(best_local)
             }
         }
     }
 
     /// Tüm boyut şekillerini çevreleyen temel bir Bounding Box (AABB) üretir.
     /// Kesişim (Raycast/Broadphase) algoritmalarında ön ve hızlı test için gereklidir.
-    pub fn bounding_box_half_extents(&self) -> Vec3 {
+    pub fn bounding_box_half_extents(&self, rot: gizmo_math::Quat) -> Vec3 {
         match self {
             ColliderShape::Sphere(s) => Vec3::new(s.radius, s.radius, s.radius),
-            ColliderShape::Aabb(a) => a.half_extents,
-            ColliderShape::Capsule(c) => Vec3::new(c.radius, c.half_height + c.radius, c.radius),
+            ColliderShape::Aabb(a) => {
+                let rx = rot.mul_vec3(Vec3::new(a.half_extents.x, 0.0, 0.0));
+                let ry = rot.mul_vec3(Vec3::new(0.0, a.half_extents.y, 0.0));
+                let rz = rot.mul_vec3(Vec3::new(0.0, 0.0, a.half_extents.z));
+                Vec3::new(
+                    rx.x.abs() + ry.x.abs() + rz.x.abs(),
+                    rx.y.abs() + ry.y.abs() + rz.y.abs(),
+                    rx.z.abs() + ry.z.abs() + rz.z.abs(),
+                )
+            }
+            ColliderShape::Capsule(c) => {
+                let r_top = rot.mul_vec3(Vec3::new(0.0, c.half_height, 0.0));
+                Vec3::new(
+                    r_top.x.abs() + c.radius,
+                    r_top.y.abs() + c.radius,
+                    r_top.z.abs() + c.radius,
+                )
+            }
             ColliderShape::ConvexHull(c) => {
                 let mut max_x = 0.0_f32;
                 let mut max_y = 0.0_f32;
                 let mut max_z = 0.0_f32;
                 for v in &c.vertices {
-                    max_x = max_x.max(v.x.abs());
-                    max_y = max_y.max(v.y.abs());
-                    max_z = max_z.max(v.z.abs());
+                    let v_rot = rot.mul_vec3(*v);
+                    max_x = max_x.max(v_rot.x.abs());
+                    max_y = max_y.max(v_rot.y.abs());
+                    max_z = max_z.max(v_rot.z.abs());
                 }
                 Vec3::new(max_x, max_y, max_z)
             }
             ColliderShape::Swept { base, sweep_vector } => {
-                let base_ext = base.bounding_box_half_extents();
+                let base_ext = base.bounding_box_half_extents(rot);
                 Vec3::new(
                     base_ext.x + sweep_vector.x.abs() * 0.5,
                     base_ext.y + sweep_vector.y.abs() * 0.5,
                     base_ext.z + sweep_vector.z.abs() * 0.5,
                 )
             }
-            ColliderShape::HeightField { width, depth, max_height, .. } => {
+            ColliderShape::HeightField {
+                width,
+                depth,
+                max_height,
+                ..
+            } => {
+                // Heightfield generally unrotated handling
                 Vec3::new(*width * 0.5, *max_height * 0.5, *depth * 0.5)
             }
         }
@@ -175,21 +254,33 @@ pub struct Collider {
 
 impl Collider {
     pub fn new_sphere(radius: f32) -> Self {
-        Self { shape: ColliderShape::Sphere(Sphere { radius }) }
+        Self {
+            shape: ColliderShape::Sphere(Sphere { radius }),
+        }
     }
 
     pub fn new_aabb(hx: f32, hy: f32, hz: f32) -> Self {
-        Self { shape: ColliderShape::Aabb(Aabb { half_extents: Vec3::new(hx, hy, hz) }) }
+        Self {
+            shape: ColliderShape::Aabb(Aabb {
+                half_extents: Vec3::new(hx, hy, hz),
+            }),
+        }
     }
 
     /// Kapsül collider oluşturur. Toplam yükseklik = 2*(half_height + radius)
     pub fn new_capsule(radius: f32, half_height: f32) -> Self {
-        Self { shape: ColliderShape::Capsule(Capsule { radius, half_height }) }
+        Self {
+            shape: ColliderShape::Capsule(Capsule {
+                radius,
+                half_height,
+            }),
+        }
     }
 
     /// Konveks gövde collider oluşturur. Vertex'ler lokal koordinatlarda verilir.
     pub fn new_convex(vertices: Vec<Vec3>) -> Self {
-        Self { shape: ColliderShape::ConvexHull(ConvexHull { vertices }) }
+        Self {
+            shape: ColliderShape::ConvexHull(ConvexHull { vertices }),
+        }
     }
 }
-

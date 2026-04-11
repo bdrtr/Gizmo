@@ -1,7 +1,7 @@
+use crate::GameState;
 /// Chase camera güncellemesi.
 /// Bu proje versiyonunda araç sistemi yoktur; modül ileride kullanılmak üzere boş bırakılmıştır.
 use gizmo::prelude::*;
-use crate::GameState;
 
 /// Serbest kamera hareketi WASD ile main.rs'de halihazırda yönetiliyor.
 /// Bu fonksiyon gelecekte araç takip kamerası için kullanılabilir.

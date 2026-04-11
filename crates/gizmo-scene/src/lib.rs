@@ -5,4 +5,4 @@
 
 pub mod scene;
 
-pub use scene::{SceneData, EntityData, MaterialData};
+pub use scene::{EntityData, MaterialData, SceneData};

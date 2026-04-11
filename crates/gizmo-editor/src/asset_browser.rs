@@ -1,7 +1,7 @@
 //! Asset Browser — Alt panel'de proje dosyalarını gösterir
 
-use egui;
 use crate::editor_state::EditorState;
+use egui;
 use std::path::Path;
 
 /// Asset Browser sekmesini çizer
@@ -28,17 +28,17 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
         ui.horizontal(|ui| {
             let path_parts: Vec<&str> = current_root.split('/').collect();
             let mut current_path = String::new();
-            
+
             for (i, part) in path_parts.iter().enumerate() {
                 if i > 0 {
                     current_path.push('/');
                 }
                 current_path.push_str(part);
-                
+
                 if ui.add(egui::Button::new(*part).frame(false)).clicked() {
                     state.asset_root = current_path.clone();
                 }
-                
+
                 if i < path_parts.len() - 1 {
                     ui.label("›"); // Breadcrumb separator
                 }
@@ -65,13 +65,14 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
             let root = Path::new(&state.asset_root);
             if !root.exists() || !root.is_dir() {
                 ui.label(
-                    egui::RichText::new("⚠ Asset dizini bulunamadı")
-                        .color(egui::Color32::YELLOW),
+                    egui::RichText::new("⚠ Asset dizini bulunamadı").color(egui::Color32::YELLOW),
                 );
                 return;
             }
 
-            let Ok(entries) = std::fs::read_dir(root) else { return };
+            let Ok(entries) = std::fs::read_dir(root) else {
+                return;
+            };
             let mut files: Vec<_> = entries.filter_map(|e| e.ok()).collect();
             files.sort_by(|a, b| {
                 // Klasörler önce
@@ -86,7 +87,9 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
 
                 // Filtre
                 if !state.asset_filter.is_empty()
-                    && !name.to_lowercase().contains(&state.asset_filter.to_lowercase())
+                    && !name
+                        .to_lowercase()
+                        .contains(&state.asset_filter.to_lowercase())
                 {
                     continue;
                 }
@@ -128,10 +131,15 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
                     response.clone().on_hover_text(format!(
                         "{}\n{}",
                         name,
-                        if is_prefab { "Tek tık: Sahneye ekle" }
-                        else if is_scene { "Tek tık: Sahneyi yükle" }
-                        else if is_dir { "Çift tık: Klasöre gir" }
-                        else { "Sağ tık: Seçenekler" }
+                        if is_prefab {
+                            "Tek tık: Sahneye ekle"
+                        } else if is_scene {
+                            "Tek tık: Sahneyi yükle"
+                        } else if is_dir {
+                            "Çift tık: Klasöre gir"
+                        } else {
+                            "Sağ tık: Seçenekler"
+                        }
                     ));
 
                     // Sağ tık menüsü
@@ -164,7 +172,10 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
                     let drag_id = egui::Id::new("drag_asset").with(&path);
                     let drag_response = ui.interact(response.rect, drag_id, egui::Sense::drag());
                     if drag_response.drag_started() {
-                        ui.memory_mut(|m| m.data.insert_temp(egui::Id::new("dragged_asset_path"), path_str.clone()));
+                        ui.memory_mut(|m| {
+                            m.data
+                                .insert_temp(egui::Id::new("dragged_asset_path"), path_str.clone())
+                        });
                     }
 
                     if response.double_clicked() {

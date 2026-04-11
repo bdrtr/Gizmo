@@ -12,25 +12,21 @@ pub trait ComponentStorage {
     fn remove_entity(&mut self, entity: u32);
 }
 
-/// Yüksek performanslı ECS deposu.
-/// 
-/// `dense` vektörü bitişik bellekte tutulur → cache-friendly iterasyon.
-/// `sparse` olarak HashMap kullanılır → O(1) lookup, sadece var olan entity'ler kadar bellek.
-/// 
-/// Bellek karşılaştırması (1000 entity, 10 component tipi):
-///   Eski (Vec<Option<usize>>):  10 × 8KB sparse = 80KB sadece indeks!
-///   Yeni (HashMap<u32, usize>): 10 × ~1KB hash  = ~10KB indeks (8× tasarruf)
+#[derive(Debug, Clone)]
+pub struct DenseEntry<T> {
+    pub entity: u32,
+    pub data: T,
+}
+
 pub struct SparseSet<T: Component> {
-    pub dense: Vec<T>,
-    pub entity_dense: Vec<u32>,           // dense index → entity id
-    pub sparse: HashMap<u32, usize>,      // entity id → dense index (O(1) lookup)
+    pub dense: Vec<DenseEntry<T>>,
+    pub sparse: HashMap<u32, usize>, // entity id → dense index (O(1) lookup)
 }
 
 impl<T: Component> SparseSet<T> {
     pub fn new() -> Self {
         Self {
             dense: Vec::new(),
-            entity_dense: Vec::new(),
             sparse: HashMap::new(),
         }
     }
@@ -39,25 +35,27 @@ impl<T: Component> SparseSet<T> {
     pub fn insert(&mut self, entity: u32, component: T) {
         if let Some(&dense_idx) = self.sparse.get(&entity) {
             // Zaten varsa yenisiyle değiştir (overwrite)
-            self.dense[dense_idx] = component;
+            self.dense[dense_idx].data = component;
         } else {
             // Yeni ekle — dense sona eklenir
             let dense_idx = self.dense.len();
-            self.dense.push(component);
-            self.entity_dense.push(entity);
+            self.dense.push(DenseEntry {
+                entity,
+                data: component,
+            });
             self.sparse.insert(entity, dense_idx);
         }
     }
 
     #[inline]
     pub fn get(&self, entity: u32) -> Option<&T> {
-        self.sparse.get(&entity).map(|&id| &self.dense[id])
+        self.sparse.get(&entity).map(|&id| &self.dense[id].data)
     }
 
     #[inline]
     pub fn get_mut(&mut self, entity: u32) -> Option<&mut T> {
         if let Some(&id) = self.sparse.get(&entity) {
-            Some(&mut self.dense[id])
+            Some(&mut self.dense[id].data)
         } else {
             None
         }
@@ -67,19 +65,29 @@ impl<T: Component> SparseSet<T> {
     /// Son elemanı silinen elemanın yerine koyar, dense dizisini bitişik tutar.
     pub fn remove(&mut self, entity: u32) -> Option<T> {
         if let Some(dense_idx) = self.sparse.remove(&entity) {
+            if dense_idx >= self.dense.len() {
+                // Koleksiyonlar arasında senkronizasyon kayması yaşanmış, güvenli bir şekilde dön
+                crate::gizmo_log!(
+                    Warning,
+                    "SparseSet desync: entity {} idx {} len {}",
+                    entity,
+                    dense_idx,
+                    self.dense.len()
+                );
+                return None;
+            }
+
             let last_idx = self.dense.len() - 1;
 
             if dense_idx != last_idx {
-                let last_entity = self.entity_dense[last_idx];
+                let last_entity = self.dense[last_idx].entity;
                 // Son elemanı silinen yere taşı
                 self.dense.swap(dense_idx, last_idx);
-                self.entity_dense.swap(dense_idx, last_idx);
                 // Taşınan entity'nin sparse kaydını güncelle
                 self.sparse.insert(last_entity, dense_idx);
             }
 
-            self.entity_dense.pop();
-            self.dense.pop()
+            self.dense.pop().map(|e| e.data)
         } else {
             None
         }

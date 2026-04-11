@@ -1,23 +1,23 @@
-use gizmo::prelude::*;
 use gizmo::editor::EditorState;
+use gizmo::prelude::*;
 
-pub mod state;
-pub mod setup;
-pub mod update;
 pub mod render;
 pub mod render_pipeline;
+pub mod setup;
+pub mod state;
 pub mod studio_input;
+pub mod update;
 
+pub use state::{DebugAssets, StudioState};
 pub use studio_input::*;
-pub use state::{StudioState, DebugAssets};
 
 fn main() {
     let mut app = App::<StudioState>::new("Gizmo Studio", 1600, 900)
-        .with_icon(include_bytes!("../../../media/logo.png"));
+        .with_icon(include_bytes!("../../../media/logo.png"))
+        .add_event::<gizmo::physics::CollisionEvent>()
+        .add_event::<crate::state::ShaderReloadEvent>();
 
-    app = app.set_setup(|world, renderer| {
-        setup::setup_studio_scene(world, renderer)
-    });
+    app = app.set_setup(|world, renderer| setup::setup_studio_scene(world, renderer));
 
     app = app.set_update(|world, state, dt, input| {
         update::update_studio(world, state, dt, input);

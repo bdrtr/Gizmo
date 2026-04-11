@@ -7,15 +7,16 @@ use mlua::prelude::*;
 /// Time API fonksiyonlarını Lua'ya kaydeder
 pub fn register_time_api(lua: &Lua) -> Result<(), LuaError> {
     let time_table = lua.create_table()?;
-    
+
     time_table.set("_dt", 0.0f32)?;
     time_table.set("_elapsed", 0.0f32)?;
     time_table.set("_fps", 60.0f32)?;
-    
+
     lua.globals().set("time", time_table)?;
-    
+
     // Lua helper fonksiyonları
-    lua.load(r#"
+    lua.load(
+        r#"
         function time.dt()
             return time._dt
         end
@@ -27,8 +28,10 @@ pub fn register_time_api(lua: &Lua) -> Result<(), LuaError> {
         function time.fps()
             return time._fps
         end
-    "#).exec()?;
-    
+    "#,
+    )
+    .exec()?;
+
     Ok(())
 }
 

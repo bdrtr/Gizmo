@@ -1,6 +1,6 @@
+use gizmo::editor::EditorState;
+use gizmo::math::{Ray, Vec3};
 use gizmo::prelude::*;
-use gizmo::editor::{EditorState};
-use gizmo::math::{Vec3, Ray};
 
 pub fn handle_studio_input(
     world: &mut World,
@@ -16,7 +16,12 @@ pub fn handle_studio_input(
     }
 }
 
-fn perform_drag(world: &mut World, state: &mut EditorState, ray: Ray, axis: gizmo::editor::DragAxis) {
+fn perform_drag(
+    world: &mut World,
+    state: &mut EditorState,
+    ray: Ray,
+    axis: gizmo::editor::DragAxis,
+) {
     if let Some(&selected) = state.selected_entities.iter().next() {
         let axis_dir = match axis {
             gizmo::editor::DragAxis::X => Vec3::new(1.0, 0.0, 0.0),
@@ -24,16 +29,16 @@ fn perform_drag(world: &mut World, state: &mut EditorState, ray: Ray, axis: gizm
             gizmo::editor::DragAxis::Z => Vec3::new(0.0, 0.0, 1.0),
         };
 
-        let w0    = ray.origin - state.drag_original_pos;
-        let b     = ray.direction.dot(axis_dir);
-        let d     = ray.direction.dot(w0);
-        let e     = axis_dir.dot(w0);
+        let w0 = ray.origin - state.drag_original_pos;
+        let b = ray.direction.dot(axis_dir);
+        let d = ray.direction.dot(w0);
+        let e = axis_dir.dot(w0);
         let denom = 1.0 - b * b;
-        
+
         if denom.abs() > 0.0001 {
             let current_t = (e - b * d) / denom;
-            let delta_t   = current_t - state.drag_start_t;
-            
+            let delta_t = current_t - state.drag_start_t;
+
             if let Some(mut trans) = world.borrow_mut::<Transform>() {
                 if let Some(t) = trans.get_mut(selected) {
                     if state.gizmo_mode == gizmo::editor::GizmoMode::Translate {
@@ -51,42 +56,39 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
     let mut closest_t = std::f32::MAX;
     let mut hit_entity = None;
 
-    if let (Some(colliders), Some(transforms)) = (world.borrow::<Collider>(), world.borrow::<Transform>()) {
+    if let (Some(colliders), Some(transforms)) =
+        (world.borrow::<Collider>(), world.borrow::<Transform>())
+    {
         let is_hidden = world.borrow::<gizmo::core::component::IsHidden>();
-        
+
         for i in 0..colliders.dense.len() {
-            let id = colliders.entity_dense[i];
-            
+            let id = colliders.dense[i].entity;
+
             // Editör objelerini, highlight box'ı es geç
             if id == player_id || id == state.highlight_box {
                 continue;
             }
-            // Gizli component'i olan objeleri tıklanabilir yapma. 
+            // Gizli component'i olan objeleri tıklanabilir yapma.
             // Seçili objemiz bittiğinde Gizmo okları IsHidden alır, o yüzden tıklanmazlar.
             if let Some(hidden) = &is_hidden {
                 if hidden.contains(id) {
                     continue;
                 }
             }
-            
+
             if let Some(t) = (*transforms).get(id) {
-                let extents = colliders.dense[i].shape.bounding_box_half_extents();
-                
-                let inv_rot = t.rotation.inverse();
-                let local_ray_dir = inv_rot * ray.direction;
-                let local_ray_origin = inv_rot * (ray.origin - t.position);
-                let local_ray = Ray::new(local_ray_origin, local_ray_dir);
-                
+                let extents = colliders.dense[i]
+                    .data
+                    .shape
+                    .bounding_box_half_extents(t.rotation);
                 let scaled_half = Vec3::new(
                     extents.x * t.scale.x,
                     extents.y * t.scale.y,
                     extents.z * t.scale.z,
                 );
-                let min = -scaled_half;
-                let max = scaled_half;
-                
-                // Işın testi (Yerel Düzlemde OBB/AABB Testi)
-                if let Some(hitt) = local_ray.intersect_aabb(min, max) {
+
+                // Işın testi (OBB Testi)
+                if let Some(hitt) = ray.intersect_obb(t.position, scaled_half, t.rotation) {
                     if hitt > 0.0 && hitt < closest_t {
                         closest_t = hitt;
                         hit_entity = Some(id);
@@ -97,7 +99,9 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
     }
 
     if let Some(hit) = hit_entity {
-        let _handled = world.get_resource::<gizmo::winit::window::Window>().map_or(false, |_| false);
+        let _handled = world
+            .get_resource::<gizmo::winit::window::Window>()
+            .map_or(false, |_| false);
 
         // --- GIZMO DRAG CHECK ---
         if hit == state.gizmo_handles[0] {
@@ -111,7 +115,10 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
         if let Some(axis) = state.dragging_axis {
             // Hit a gizmo axis. Save the original position of the selected entity.
             if let Some(&selected_id) = state.selected_entities.iter().next() {
-                if let Some(t) = world.borrow::<Transform>().and_then(|ts| ts.get(selected_id).map(|c| *c)) {
+                if let Some(t) = world
+                    .borrow::<Transform>()
+                    .and_then(|ts| ts.get(selected_id).map(|c| *c))
+                {
                     state.drag_original_pos = t.position;
                     // Calculate pure mathematical T for the starting anchor point
                     let axis_dir = match axis {
@@ -119,10 +126,10 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
                         gizmo::editor::DragAxis::Y => Vec3::new(0.0, 1.0, 0.0),
                         gizmo::editor::DragAxis::Z => Vec3::new(0.0, 0.0, 1.0),
                     };
-                    let w0    = ray.origin - t.position;
-                    let b     = ray.direction.dot(axis_dir);
-                    let d     = ray.direction.dot(w0);
-                    let e     = axis_dir.dot(w0);
+                    let w0 = ray.origin - t.position;
+                    let b = ray.direction.dot(axis_dir);
+                    let d = ray.direction.dot(w0);
+                    let e = axis_dir.dot(w0);
                     let denom = 1.0 - b * b;
                     if denom.abs() > 0.0001 {
                         state.drag_start_t = (e - b * d) / denom;
@@ -135,7 +142,7 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
         // Raycast işleminde Ctrl desteği input parametresi gelmeden sağlanamayabilir.
         // O yüzden şimdilik "Eğer hit tıklanmışsa, ve seçili değilse tek onu seç"
         state.select_exclusive(hit);
-        
+
         // Seçim değiştiği için Editör sekmesine Transform verisini logla/yedekle
         if let Some(transforms) = world.borrow::<Transform>() {
             if let Some(t) = transforms.get(hit) {
@@ -155,7 +162,7 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
     let mut selected_rot = gizmo::math::Quat::IDENTITY;
     let mut selected_scale = gizmo::math::Vec3::ONE;
     let mut selected_col = None;
-    
+
     if let Some(&selected) = state.selected_entities.iter().next() {
         if let Some(transforms) = world.borrow::<Transform>() {
             if let Some(t) = transforms.get(selected) {
@@ -163,7 +170,7 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
                 selected_pos = t.position;
                 selected_rot = t.rotation;
                 selected_scale = t.scale;
-                
+
                 if let Some(colls) = world.borrow::<Collider>() {
                     if let Some(c) = colls.get(selected) {
                         selected_col = Some(c.clone());
@@ -184,12 +191,12 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
 
                 let mut base_extents = Vec3::ONE;
                 if let Some(c) = &selected_col {
-                    base_extents = c.shape.bounding_box_half_extents() * selected_scale;
+                    base_extents = c.shape.bounding_box_half_extents(selected_rot) * selected_scale;
                 }
-                
+
                 hb.scale = base_extents * 1.05; // Çerçeveyi tam objenin collision AABB bounds'una sığdır
             }
-            
+
             // --- GIZMO TRANSFORMS SYNC ---
             if let Some(hidden) = &mut is_hidden_mod {
                 hidden.remove(state.gizmo_handles[0]);
@@ -205,11 +212,12 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
             if let Some(t) = (*trans).get_mut(state.gizmo_handles[2]) {
                 t.position = selected_pos + Vec3::new(0.0, 0.0, 1.5);
             }
-
         } else {
             // Hiçbir şey seçili değilse uzağa sakla
-            if let Some(t) = (*trans).get_mut(state.highlight_box) { t.position = Vec3::new(0.0, -10000.0, 0.0); }
-            
+            if let Some(t) = (*trans).get_mut(state.highlight_box) {
+                t.position = Vec3::new(0.0, -10000.0, 0.0);
+            }
+
             if let Some(hidden) = &mut is_hidden_mod {
                 hidden.insert(state.gizmo_handles[0], gizmo::core::component::IsHidden);
                 hidden.insert(state.gizmo_handles[1], gizmo::core::component::IsHidden);
@@ -219,20 +227,30 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
     }
 }
 
-pub fn build_ray(world: &World, player_id: u32, ndc_x: f32, ndc_y: f32, aspect: f32, _wh: f32) -> Option<Ray> {
-    if let (Some(transforms), Some(cameras)) = (world.borrow::<Transform>(), world.borrow::<gizmo::renderer::components::Camera>()) {
+pub fn build_ray(
+    world: &World,
+    player_id: u32,
+    ndc_x: f32,
+    ndc_y: f32,
+    aspect: f32,
+    _wh: f32,
+) -> Option<Ray> {
+    if let (Some(transforms), Some(cameras)) = (
+        world.borrow::<Transform>(),
+        world.borrow::<gizmo::renderer::components::Camera>(),
+    ) {
         if let (Some(cam_t), Some(cam)) = (transforms.get(player_id), cameras.get(player_id)) {
             let view = cam.get_view(cam_t.position);
             let proj = cam.get_projection(aspect);
-            
+
             let inv_vp = (proj * view).inverse();
-            
+
             // WGPU'da Z=0 yakın düzlem, Z=1 uzak düzlemdir. Lazerin ekrandan çıktığı nokta Z=0'dır.
             let near_vec = inv_vp.project_point3(gizmo::math::Vec3::new(ndc_x, ndc_y, 0.0));
             let far_vec = inv_vp.project_point3(gizmo::math::Vec3::new(ndc_x, ndc_y, 1.0));
-            
+
             let world_dir = (far_vec - near_vec).normalize();
-            
+
             return Some(Ray {
                 origin: near_vec,
                 direction: world_dir,
