@@ -290,7 +290,7 @@ impl LodGroup {
 
 // --- PARTICLE SYSTEM ---
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ParticleEmitter {
     pub spawn_rate: f32, // How many particles to spawn per second
     pub accumulator: f32, // Used over frame deltas

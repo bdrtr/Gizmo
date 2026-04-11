@@ -47,6 +47,8 @@ pub fn render_studio(
     
     if play_stop {
         load_req = Some(play_backup_path.to_string());
+        // Eski fizikten kalan bağlantı (Joint) kalıntılarını temizle
+        world.insert_resource(gizmo::physics::JointWorld::new());
     }
 
     if let Some(path) = save_req {
@@ -56,16 +58,39 @@ pub fn render_studio(
 
     if let Some(path) = load_req {
         let ents = world.alive_entities();
+        
+        let mut protected_ids = std::collections::HashSet::new();
+        protected_ids.insert(state.editor_camera);
+        protected_ids.insert(highlight_box_id);
+
+        if let Some(names) = world.borrow::<gizmo::core::component::EntityName>() {
+            for e in &ents {
+                if let Some(name) = names.get(e.id()) {
+                    if name.0 == "Editor Guidelines" || name.0 == "Highlight Box" {
+                        protected_ids.insert(e.id());
+                    }
+                }
+            }
+        }
+        
+        if let Some(children) = world.borrow::<gizmo::core::component::Children>() {
+            let mut i = 0;
+            let mut pro_list: Vec<u32> = protected_ids.iter().copied().collect();
+            while i < pro_list.len() {
+                let id = pro_list[i];
+                if let Some(c) = children.get(id) {
+                    for &child_id in &c.0 {
+                        if protected_ids.insert(child_id) {
+                            pro_list.push(child_id);
+                        }
+                    }
+                }
+                i += 1;
+            }
+        }
+
         for e in ents {
-            // Editor kamerası, highlight box ve grid'i koru
-            let eid = e.id();
-            if eid == state.editor_camera || eid == highlight_box_id { continue ; }
-            // Editor Guidelines (grid) — isimle kontrol et
-            let is_editor_only = world.borrow::<gizmo::core::component::EntityName>()
-                .and_then(|names| names.get(eid).map(|n| n.0.clone()))
-                .map(|name| name == "Editor Guidelines" || name == "Highlight Box")
-                .unwrap_or(false);
-            if is_editor_only { continue; }
+            if protected_ids.contains(&e.id()) { continue; }
             world.despawn(e);
         }
         if let Some(mut asset_manager) = world.remove_resource::<gizmo::renderer::asset::AssetManager>() {

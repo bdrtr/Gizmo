@@ -78,7 +78,7 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
                     // Editor-only (Hayali) objeleri hiyerarşide listeleme
                     let is_editor_only = names.as_ref()
                         .and_then(|n| n.get(eid))
-                        .map(|e| e.0 == "Editor Guidelines" || e.0 == "Highlight Box")
+                        .map(|e| e.0.starts_with("Editor ") || e.0 == "Highlight Box")
                         .unwrap_or(false);
                         
                     if is_editor_only { continue; }
@@ -113,6 +113,11 @@ fn draw_entity_node(
         .and_then(|n| n.get(entity_id))
         .map(|n| n.0.clone())
         .unwrap_or_else(|| format!("Entity_{}", entity_id));
+
+    // Editor objelerini Hiyerarşiden tamamen gizle
+    if entity_name.starts_with("Editor ") || entity_name == "Highlight Box" {
+        return;
+    }
 
     // Filtre uygulaması
     if !filter.is_empty() && !entity_name.to_lowercase().contains(&filter.to_lowercase()) {
