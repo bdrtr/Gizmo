@@ -53,13 +53,17 @@ impl Wheel {
 #[derive(Debug, Clone)]
 pub struct VehicleController {
     pub wheels: Vec<Wheel>,
-    pub engine_force: f32, // Motor gücü (Newton). Pozitif = ileri, Negatif = geri
+    pub engine_force: f32,   // Motor gücü (Newton). Pozitif = ileri, Negatif = geri
     pub steering_angle: f32, // Direksiyon açısı (Radyan). Pozitif = sola, Negatif = sağa
-    pub brake_force: f32,  // Fren kuvveti (Newton)
-    // Konfigüre edilebilir fizik sabitleri (artık hardcoded değil)
-    pub steering_force_mult: f32, // Direksiyon kuvvet çarpanı (eski: 8000.0)
-    pub lateral_grip: f32,        // Yanal tutuş kuvveti (eski: 5000.0)
-    pub anti_slide_force: f32,    // Kayma önleme kuvveti (eski: 3000.0)
+    pub brake_force: f32,    // Fren kuvveti (Newton)
+    // Konfigüre edilebilir fizik sabitleri
+    pub steering_force_mult: f32, // Direksiyon kuvvet çarpanı
+    pub lateral_grip: f32,        // Yanal tutuş kuvveti
+    pub anti_slide_force: f32,    // Kayma önleme kuvveti
+    /// Aerodinamik sürükleme katsayısı — F = ½ · Cd · ρA · v²
+    /// Sadece Cd·ρA çarpımı saklanır (ρ=1.225 kg/m³ hava yoğunluğu dahil).
+    /// Tipik değerler: spor araba ~0.15, SUV/kamyon ~0.40.
+    pub drag_coefficient: f32,
 }
 
 impl Default for VehicleController {
@@ -78,6 +82,8 @@ impl VehicleController {
             steering_force_mult: 8000.0,
             lateral_grip: 5000.0,
             anti_slide_force: 3000.0,
+            // 0.3 ≈ kötü aerodinamiği olan bir sedan/SUV için gerçekçi Cd·ρA
+            drag_coefficient: 0.3,
         }
     }
 
@@ -444,11 +450,21 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                 }
             }
 
-            // Hava Direnci
+            // === HAVA DİRENCI (Kuadratik Sürükleme) ===
+            // Gerçek aerodinamik formül: F_drag = -½ · Cd·ρA · |v|² · v̂
+            // Impulse = F_drag · dt,  Δv = impulse · (1/m)
+            // Önceki hatalar:
+            //   1) speed_sq.sqrt() * v.linear → net v² etkisi tesadüfen doğruydu, ama okunaksız.
+            //   2) inv_mass ile **çarpılmıyordu** → kütle bağımsız direnç (50 kg = 5000 kg aynı etki).
+            //   3) Katsayı hardcoded magic number'dı; artık VehicleController::drag_coefficient'ten okunuyor.
             let speed_sq = v.linear.length_squared();
-            if speed_sq > 0.1 {
-                let drag = v.linear * (-0.5 * speed_sq.sqrt() * 0.3 * dt);
-                total_linear_impulse += drag;
+            if speed_sq > 0.01 {
+                let cd = vehicle.drag_coefficient;
+                // F_drag yönü: hıza zıt → v̂ = v / |v|, |v|² · v̂ = |v| · v
+                // impulse = -½·Cd·|v|²·v̂ · dt = -½·Cd·|v|·v · dt
+                let drag_impulse = v.linear * (-0.5 * cd * speed_sq.sqrt() * dt);
+                // Δv = impulse / m — kütle-bağımlı hava direnci
+                total_linear_impulse += drag_impulse * inv_mass;
             }
 
             v.linear += total_linear_impulse * inv_mass;
