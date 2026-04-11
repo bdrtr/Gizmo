@@ -128,6 +128,26 @@ impl World {
             .push(type_id);
     }
 
+    /// Sistemden component silme
+    pub fn remove_component<T: Component>(&mut self, entity: Entity) {
+        if !self.is_alive(entity) { return; }
+
+        let type_id = TypeId::of::<T>();
+        
+        if let Some(storage) = self.storages.get_mut(&type_id) {
+            let mut borrowed = storage.borrow_mut();
+            if let Some(sparse_set) = borrowed.as_any_mut().downcast_mut::<SparseSet<T>>() {
+                sparse_set.remove(entity.id());
+            }
+        }
+        
+        if let Some(types) = self.entity_components.get_mut(&entity.id()) {
+            if let Some(pos) = types.iter().position(|x| *x == type_id) {
+                types.remove(pos);
+            }
+        }
+    }
+
     /// Component dizisine okuma erişimi (Read-Only, Ref ile paylaşılabilir).
     pub fn borrow<T: Component>(&self) -> Option<Ref<'_, SparseSet<T>>> {
         let type_id = TypeId::of::<T>();

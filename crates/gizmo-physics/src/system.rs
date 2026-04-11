@@ -136,6 +136,24 @@ pub fn physics_collision_system(world: &World, dt: f32) {
             ColliderShape::Swept { .. } => {
                 eprintln!("[Physics WARN] Swept shape found in ECS for entity {}! Skipping.", e);
                 continue;
+            },
+            ColliderShape::HeightField { width, max_height, depth, .. } => {
+                let he = Vec3::new(*width * 0.5, *max_height * 0.5, *depth * 0.5);
+                let center_offset = Vec3::new(0.0, *max_height * 0.5, 0.0);
+                let corners = [
+                    Vec3::new(he.x, he.y, he.z) + center_offset, Vec3::new(he.x, he.y, -he.z) + center_offset,
+                    Vec3::new(he.x, -he.y, he.z) + center_offset, Vec3::new(he.x, -he.y, -he.z) + center_offset,
+                    Vec3::new(-he.x, he.y, he.z) + center_offset, Vec3::new(-he.x, he.y, -he.z) + center_offset,
+                    Vec3::new(-he.x, -he.y, he.z) + center_offset, Vec3::new(-he.x, -he.y, -he.z) + center_offset,
+                ];
+                let mut mn = Vec3::new(f32::MAX, f32::MAX, f32::MAX);
+                let mut mx = Vec3::new(f32::MIN, f32::MIN, f32::MIN);
+                for v in &corners {
+                    let wv = t.position + t.rotation.mul_vec3(*v);
+                    mn.x = mn.x.min(wv.x); mn.y = mn.y.min(wv.y); mn.z = mn.z.min(wv.z);
+                    mx.x = mx.x.max(wv.x); mx.y = mx.y.max(wv.y); mx.z = mx.z.max(wv.z);
+                }
+                (mn, mx)
             }
         };
 

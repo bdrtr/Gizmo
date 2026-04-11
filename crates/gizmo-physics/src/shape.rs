@@ -38,6 +38,15 @@ pub enum ColliderShape {
         base: Box<ColliderShape>,
         sweep_vector: Vec3,
     },
+    // Yükseklik alanı tabanlı çarpışma yüzeyi (Arazi / Terrain)
+    HeightField {
+        heights: Vec<f32>,
+        segments_x: u32,
+        segments_z: u32,
+        width: f32,
+        depth: f32,
+        max_height: f32,
+    },
 }
 
 impl ColliderShape {
@@ -99,6 +108,14 @@ impl ColliderShape {
                 let offset = if dir.dot(*sweep_vector) > 0.0 { *sweep_vector } else { Vec3::ZERO };
                 base.support_point(pos, rot, dir) + offset
             }
+            ColliderShape::HeightField { width, max_height, depth, .. } => {
+                // GJK Convex Hull tabanlı çalıştığı için HeightField tam uyumlu değildir.
+                // Bu yüzden kabaca AABB tabanlı davranmasını sağlarız. Raycastler özel olarak ele alınacaktır.
+                let lx = if dir.x >= 0.0 { *width * 0.5 } else { -(*width) * 0.5 };
+                let ly = if dir.y >= 0.0 { *max_height } else { 0.0 };
+                let lz = if dir.z >= 0.0 { *depth * 0.5 } else { -(*depth) * 0.5 };
+                pos + rot.mul_vec3(Vec3::new(lx, ly, lz))
+            }
         }
     }
 
@@ -127,6 +144,9 @@ impl ColliderShape {
                     base_ext.y + sweep_vector.y.abs() * 0.5,
                     base_ext.z + sweep_vector.z.abs() * 0.5,
                 )
+            }
+            ColliderShape::HeightField { width, depth, max_height, .. } => {
+                Vec3::new(*width * 0.5, *max_height * 0.5, *depth * 0.5)
             }
         }
     }

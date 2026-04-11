@@ -8,6 +8,19 @@ pub enum GizmoMode {
     Scale,
 }
 
+/// Build hedef işletim sistemi
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum BuildTarget {
+    /// Mevcut işletim sistemi (native)
+    Native,
+    /// Linux (x86_64-unknown-linux-gnu)
+    Linux,
+    /// Windows (x86_64-pc-windows-gnu — cross gerektirir)
+    Windows,
+    /// macOS (x86_64-apple-darwin — yalnızca Mac üzerinde)
+    MacOs,
+}
+
 /// Editor çalışma modu
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum EditorMode {
@@ -31,15 +44,15 @@ pub enum DragAxis {
 pub struct EditorState {
     /// Editor is toggled on/off
     pub open: bool,
-    /// Seçili entity ID'si
-    pub selected_entity: Option<u32>,
+    // Seçilen objeler
+    pub selected_entities: std::collections::HashSet<u32>,
     /// Gizmo aracı modu (Translate/Rotate/Scale)
     pub gizmo_mode: GizmoMode,
     
-    // --- Gizmo Kimlikleri ---
-    pub gizmo_x: u32,
-    pub gizmo_y: u32,
-    pub gizmo_z: u32,
+    pub play_start_request: bool,
+    pub play_stop_request: bool,
+
+    // --- Görünüm (View) Verileri ---
     /// Etrafını saran seçim çizgisi (Highlight Box)
     pub highlight_box: u32,
     
@@ -51,7 +64,23 @@ pub struct EditorState {
     pub drag_original_rot: gizmo_math::Quat,
     pub drag_start_t: f32,
     pub mouse_ndc: Option<gizmo_math::Vec2>,
+    pub gizmo_local_space: bool,
+    
+    // --- Build Sistemi ---
+    pub build_request: bool,
+    pub build_target: BuildTarget,
+    pub is_building: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub build_logs: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+
+    // --- Undo/Redo Sistemi ---
+    pub history: crate::history::History,
+    pub gizmo_original_transforms: std::collections::HashMap<u32, gizmo_physics::components::Transform>,
     pub camera_look_delta: Option<gizmo_math::Vec2>,
+    pub camera_pan_delta: Option<gizmo_math::Vec2>,
+    pub camera_orbit_delta: Option<gizmo_math::Vec2>,
+    pub camera_scroll_delta: Option<f32>,
+    pub camera_view: Option<gizmo_math::Mat4>,
+    pub camera_proj: Option<gizmo_math::Mat4>,
 
     /// Çalışma modu
     pub mode: EditorMode,
@@ -63,6 +92,8 @@ pub struct EditorState {
     pub show_asset_browser: bool,
     /// Toolbar açık mı?
     pub show_toolbar: bool,
+    /// Settings penceresi açık mı?
+    pub settings_open: bool,
     /// Filtre metni (hierarchy arama)
     pub hierarchy_filter: String,
     /// Asset browser filtre metni
@@ -77,16 +108,28 @@ pub struct EditorState {
     pub status_message: String,
     /// Sahne dosya yolu
     pub scene_path: String,
+    /// Editör kamera hızı (WASD)
+    pub camera_speed: f32,
+    /// Grid görünür mü?
+    pub show_grid: bool,
+    /// Snap miktarı (Translate)
+    pub snap_translate: f32,
+    /// Snap açısı (Rotate, derece)
+    pub snap_rotate_deg: f32,
+    /// Snap ölçeği (Scale)
+    pub snap_scale: f32,
     /// Silme talebi gönderilen entity ID
     pub despawn_request: Option<u32>,
+    /// Arazi yeniden oluşturulması gereken Entity ID'leri
+    pub generate_terrain_requests: Vec<u32>,
     /// Sahne kaydetme isteği (Dosya yolu)
     pub scene_save_request: Option<String>,
     /// Sahne yükleme isteği (Dosya yolu)
     pub scene_load_request: Option<String>,
     /// Prefab kaydetme isteği (Entity ID, Dosya yolu)
     pub prefab_save_request: Option<(u32, String)>,
-    /// Prefab yükleme isteği (Dosya yolu, Opsiyonel Parent ID)
-    pub prefab_load_request: Option<(String, Option<u32>)>,
+    /// Prefab yükleme isteği (Dosya yolu, Opsiyonel Parent ID, Opsiyonel Pozisyon)
+    pub prefab_load_request: Option<(String, Option<u32>, Option<gizmo_math::Vec3>)>,
     /// Entity kopyalama / çoğaltma isteği (Entity ID)
     pub duplicate_request: Option<u32>,
     /// Yeni entity yaratma talebi (Type adı örn: "Empty", "Cube", "Sphere")
@@ -126,12 +169,12 @@ impl EditorState {
     pub fn new() -> Self {
         Self {
             open: false,
-            selected_entity: None,
+            mode: EditorMode::Edit,
             gizmo_mode: GizmoMode::Translate,
-
-            gizmo_x: 0,
-            gizmo_y: 0,
-            gizmo_z: 0,
+            
+            play_start_request: false,
+            play_stop_request: false,
+            selected_entities: std::collections::HashSet::new(),
             highlight_box: 0,
             
             do_raycast: false,
@@ -141,13 +184,29 @@ impl EditorState {
             drag_original_rot: gizmo_math::Quat::default(),
             drag_start_t: 0.0,
             mouse_ndc: None,
+            gizmo_local_space: false,
+            
+            build_request: false,
+            build_target: BuildTarget::Native,
+            is_building: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            build_logs: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            
+            history: crate::history::History::default(),
+            gizmo_original_transforms: std::collections::HashMap::new(),
+            
             camera_look_delta: None,
+            camera_pan_delta: None,
+            camera_orbit_delta: None,
+            camera_scroll_delta: None,
+            camera_view: None,
+            camera_proj: None,
 
-            mode: EditorMode::Edit,
+
             show_hierarchy: true,
             show_inspector: true,
             show_asset_browser: true,
             show_toolbar: true,
+            settings_open: false,
             hierarchy_filter: String::new(),
             asset_filter: String::new(),
             asset_root: "demo/assets".to_string(),
@@ -155,7 +214,13 @@ impl EditorState {
             last_error: None,
             status_message: "Hazır".to_string(),
             scene_path: "scene.giz".to_string(),
+            camera_speed: 8.0,
+            show_grid: true,
+            snap_translate: 0.5,
+            snap_rotate_deg: 15.0,
+            snap_scale: 0.1,
             despawn_request: None,
+            generate_terrain_requests: Vec::new(),
             scene_save_request: None,
             scene_load_request: None,
             prefab_save_request: None,
@@ -173,24 +238,44 @@ impl EditorState {
             scene_view_rect: None,
             scene_texture_id: None,
             console_logs: Vec::new(),
-            dock_state: create_default_dock_state(),
+            dock_state: Self::load_layout().unwrap_or_else(create_default_dock_state),
             debug_draw_requests: Vec::new(),
             debug_spawned_entities: Vec::new(),
         }
     }
 
-    pub fn select_entity(&mut self, id: u32) {
-        self.selected_entity = Some(id);
+    // --- Selection API ---
+    pub fn is_selected(&self, id: u32) -> bool {
+        self.selected_entities.contains(&id)
     }
 
-    pub fn deselect(&mut self) {
-        self.selected_entity = None;
+    pub fn select_exclusive(&mut self, id: u32) {
+        self.selected_entities.clear();
+        self.selected_entities.insert(id);
+    }
+    
+    pub fn toggle_selection(&mut self, id: u32) {
+        if self.selected_entities.contains(&id) {
+            self.selected_entities.remove(&id);
+        } else {
+            self.selected_entities.insert(id);
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selected_entities.clear();
     }
 
     pub fn toggle_play(&mut self) {
         self.mode = match self.mode {
-            EditorMode::Edit => EditorMode::Play,
-            EditorMode::Play => EditorMode::Edit,
+            EditorMode::Edit => {
+                self.play_start_request = true;
+                EditorMode::Play
+            },
+            EditorMode::Play => {
+                self.play_stop_request = true;
+                EditorMode::Edit
+            },
             EditorMode::Paused => EditorMode::Play,
         };
     }
@@ -225,6 +310,27 @@ impl EditorState {
 
     pub fn log_error(&mut self, msg: &str) {
         self.console_logs.push((format!("❌ {}", msg), egui::Color32::RED));
+    }
+
+    pub fn save_layout(&mut self) {
+        if let Ok(json) = serde_json::to_string(&self.dock_state) {
+            if let Err(e) = std::fs::write("editor_layout.json", json) {
+                self.log_error(&format!("Layout kaydedilemedi: {}", e));
+            } else {
+                self.log_info("Pencere düzeni başarıyla kaydedildi.");
+            }
+        } else {
+            self.log_error("Layout serialize edilemedi.");
+        }
+    }
+
+    pub fn load_layout() -> Option<egui_dock::DockState<String>> {
+        if let Ok(content) = std::fs::read_to_string("editor_layout.json") {
+            if let Ok(dock) = serde_json::from_str(&content) {
+                return Some(dock);
+            }
+        }
+        None
     }
 }
 

@@ -1,4 +1,5 @@
 pub mod prelude;
+pub mod default_systems;
 
 // === Motor Alt Sistemleri ===
 pub use gizmo_core as core;
@@ -8,6 +9,7 @@ pub use gizmo_window as window;
 pub use gizmo_physics as physics;
 pub use gizmo_app as app;
 pub use gizmo_ai as ai;
+pub use default_systems as default_plugins;
 
 // === Opsiyonel Modüller ===
 #[cfg(feature = "audio")]

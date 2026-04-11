@@ -33,7 +33,6 @@ pub fn run_scripts(world: &mut World, _state: &mut GameState, dt: f32, input: &I
                 key_right: input.is_key_pressed(KeyCode::ArrowRight as u32),
             };
             if let Some(engine) = engine_opt.as_mut() {
-                let _ = engine.reload_if_changed(&script.file_path);
                 let func_name = {
                     let stem = std::path::Path::new(&script.file_path)
                         .file_stem()

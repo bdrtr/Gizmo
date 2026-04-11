@@ -220,13 +220,22 @@ impl Camera2D {
 
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct PointLight {
-    pub color: Vec3,
+    pub color: gizmo_math::Vec3,
     pub intensity: f32,
+    pub radius: f32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Terrain {
+    pub heightmap_path: String,
+    pub width: f32,
+    pub depth: f32,
+    pub max_height: f32,
 }
 
 impl PointLight {
-    pub fn new(color: Vec3, intensity: f32) -> Self {
-        Self { color, intensity }
+    pub fn new(color: gizmo_math::Vec3, intensity: f32) -> Self {
+        Self { color, intensity, radius: 10.0 }
     }
 }
 
