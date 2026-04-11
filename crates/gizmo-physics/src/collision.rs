@@ -151,8 +151,12 @@ pub fn check_sphere_aabb_manifold(
             (n, sphere.radius - dist)
         } else {
             let diff_center = pos_aabb - pos_s;
-            let n = diff_center.normalize();
-            (n * -1.0, sphere.radius)
+            let n = if diff_center.length_squared() > 1e-6 {
+                diff_center.normalize() * -1.0
+            } else {
+                Vec3::new(0.0, 1.0, 0.0)
+            };
+            (n, sphere.radius)
         };
 
         CollisionManifold {
@@ -395,19 +399,40 @@ fn obb_obb_contact_points(
         inc_face_center + iu * iu_ext - iv * iv_ext,
     ];
 
-    // Referans yüze clip et ve penetrasyon pozitif olan noktaları al
-    let mut result = Vec::with_capacity(4);
-    for &corner in &corners {
-        let local = corner - ref_face_center;
-        let du = local.dot(u);
-        let dv = local.dot(v);
-        // Köşe referans yüz ız(e)düşümünde mi?
-        if du.abs() <= u_ext + 0.001 && dv.abs() <= v_ext + 0.001 {
-            // Penetrasyon derinliği: normal yönünde ne kadar içeri girmiş
-            let dep = penetration.min((ref_face_center - corner).dot(normal) + penetration);
-            if dep >= 0.0 {
-                result.push((corner, dep.max(0.001)));
+    // Referans yüzün 4 sınır düzlemine göre Sutherland-Hodgman Polygon Kırpması
+    let mut poly = corners.to_vec();
+    for &(dir, ext) in &[(u, u_ext), (u * -1.0, u_ext), (v, v_ext), (v * -1.0, v_ext)] {
+        if poly.is_empty() {
+            break;
+        }
+        let plane_pt = ref_face_center + dir * ext;
+        let inward_norm = dir * -1.0; // Yüzeyin içine (merkezine) doğru
+
+        let mut next_poly = Vec::new();
+        for i in 0..poly.len() {
+            let p1 = poly[i];
+            let p2 = poly[(i + 1) % poly.len()];
+
+            let d1 = (p1 - plane_pt).dot(inward_norm);
+            let d2 = (p2 - plane_pt).dot(inward_norm);
+
+            if d1 >= -0.001 {
+                next_poly.push(p1);
             }
+            // Sınırı kesiyorsa (Biri içerde diğeri dışardaysa)
+            if (d1 >= -0.001 && d2 < -0.001) || (d1 < -0.001 && d2 >= -0.001) {
+                let t = d1 / (d1 - d2);
+                next_poly.push(p1 + (p2 - p1) * t);
+            }
+        }
+        poly = next_poly;
+    }
+
+    let mut result = Vec::with_capacity(poly.len());
+    for p in poly {
+        let dep = penetration.min((ref_face_center - p).dot(normal) + penetration);
+        if dep >= 0.0 {
+            result.push((p, dep.max(0.001)));
         }
     }
 

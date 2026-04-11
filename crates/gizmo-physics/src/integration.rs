@@ -27,7 +27,7 @@ fn physics_apply_forces_system_impl(world: &World, dt: f32) {
                 if let Some(v) = vel_storage.get_mut(entity) {
                     if rb.mass > 0.0 {
                         let speed_sq = v.linear.length_squared() + v.angular.length_squared();
-                        if speed_sq < 0.01 {
+                        if speed_sq < 0.0001 {
                             rb.sleep_timer += dt;
                             if rb.sleep_timer > 2.0 {
                                 rb.is_sleeping = true;
