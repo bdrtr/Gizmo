@@ -151,6 +151,10 @@ impl Joint {
 }
 
 /// Kısıtlayıcı havuzu — Tüm aktif joint'lerin listesi
+///
+/// Joint'ler nesil bazlı `usize` ID'ler ile tanımlanır. `remove` çağrıldıktan
+/// sonra silinen ID geçersiz olur; ancak diğer ID'ler **etkilenmez**
+/// (kararlı sıralama / stable removal kullanılır).
 pub struct JointWorld {
     pub joints: Vec<(usize, Joint)>,
     pub next_id: usize,
@@ -164,6 +168,9 @@ impl JointWorld {
         }
     }
 
+    /// Yeni bir joint ekler ve ona özgü ID döndürür.
+    /// ID'ler belirleyici biçimde artan tam sayılardır; kullanıcı tarafından dizine erişim yerine
+    /// opak tanımlayıcı (opaque handle) olarak saklanmalıdır.
     pub fn add(&mut self, joint: Joint) -> usize {
         let id = self.next_id;
         self.next_id += 1;
@@ -171,10 +178,13 @@ impl JointWorld {
         id
     }
 
+    /// Verilen ID'ye sahip joint'i kararlı sıralamayı koruyarak siler.
+    ///
+    /// `swap_remove` kullanılmaz; çünkü swap_remove silinen index'ten büyük
+    /// tüm indisleri geçersiz kılar ve ID'ye göre erişen çağıran kod
+    /// farklı bir joint'i silmiş gibi davranabilir (silent bug).
     pub fn remove(&mut self, id: usize) {
-        if let Some(pos) = self.joints.iter().position(|(i, _)| *i == id) {
-            self.joints.swap_remove(pos);
-        }
+        self.joints.retain(|(i, _)| *i != id);
     }
 }
 

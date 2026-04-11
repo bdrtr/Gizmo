@@ -12,7 +12,7 @@ fn create_physics_world() -> World {
 }
 
 /// Simulate steps helper
-fn simulate(world: &World, steps: u32, dt: f32) {
+fn simulate(world: &mut World, steps: u32, dt: f32) {
     for _ in 0..steps {
         gizmo_physics::physics_apply_forces_system(world, dt);
         gizmo_physics::physics_movement_system(world, dt);
@@ -106,7 +106,7 @@ fn domino_chain_reaction() {
     // 4. SİMÜLASYON ADIMLARI
     // 100 domino = ~80 mt uzunluk. Gülle çarptıktan sonra zincir reaksiyonun sona ulaşması zaman alacaktır.
     // 60fps * 30 saniye = 1800 kare
-    simulate(&world, 1800, dt);
+    simulate(&mut world, 1800, dt);
 
     // 5. SONUÇLARI DOĞRULA (ASSERTION)
     // Son dominonun pozisyonuna bakalım.

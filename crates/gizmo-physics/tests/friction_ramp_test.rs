@@ -16,7 +16,7 @@ use gizmo_physics::shape::Collider;
 
 /// Tam fizik simülasyonu çalıştır: movement + collision
 /// dt = sabit zaman adımı, steps = kaç kare simüle edilecek
-fn run_simulation(world: &gizmo_core::World, dt: f32, steps: usize) {
+fn run_simulation(world: &mut gizmo_core::World, dt: f32, steps: usize) {
     for _ in 0..steps {
         gizmo_physics::physics_apply_forces_system(world, dt);
         gizmo_physics::physics_movement_system(world, dt);
@@ -109,14 +109,14 @@ fn test_cube_does_not_tunnel_through_ramp() {
     let min_allowed_y = -11.0; // Rampa eğimine ve iç geçmeye biraz tolerans
 
     for &angle in &[10.0_f32, 30.0, 45.0] {
-        let (world, cube_id) = setup_ramp_scene(angle, 8.0, 0.5);
+        let (mut world, cube_id) = setup_ramp_scene(angle, 8.0, 0.5);
         let dt = 1.0 / 60.0;
 
         for step in 0..600 {
             // 10 saniye simülasyon
             gizmo_physics::physics_apply_forces_system(&world, dt);
             gizmo_physics::physics_movement_system(&world, dt);
-            gizmo_physics::system::physics_collision_system(&world, dt);
+            gizmo_physics::system::physics_collision_system(&mut world, dt);
 
             let pos = get_position(&world, cube_id);
             assert!(
@@ -147,13 +147,13 @@ fn test_cube_does_not_fly_away() {
     let max_allowed_y = start_y * 2.0;
 
     for &angle in &[10.0_f32, 30.0, 45.0] {
-        let (world, cube_id) = setup_ramp_scene(angle, start_y, 0.5);
+        let (mut world, cube_id) = setup_ramp_scene(angle, start_y, 0.5);
         let dt = 1.0 / 60.0;
 
         for step in 0..600 {
             gizmo_physics::physics_apply_forces_system(&world, dt);
             gizmo_physics::physics_movement_system(&world, dt);
-            gizmo_physics::system::physics_collision_system(&world, dt);
+            gizmo_physics::system::physics_collision_system(&mut world, dt);
 
             let pos = get_position(&world, cube_id);
             assert!(
@@ -181,8 +181,8 @@ fn test_cube_eventually_settles() {
 
     // 10° rampa: tan(10°)=0.176 < friction(0.5) → küp DURMALI!
     {
-        let (world, cube_id) = setup_ramp_scene(10.0, 8.0, 0.5);
-        run_simulation(&world, dt, 1800);
+        let (mut world, cube_id) = setup_ramp_scene(10.0, 8.0, 0.5);
+        run_simulation(&mut world, dt, 1800);
         let vel = get_velocity(&world, cube_id);
         let speed = vel.linear.length();
         println!("[10° Durma Testi] Lineer Hız: {:.4} m/s", speed);
@@ -191,8 +191,8 @@ fn test_cube_eventually_settles() {
 
     // 30° rampa: tan(30°)=0.577 > friction(0.5) → fiziksel olarak kayar ama hızı SINIRSIZ artmamalı
     {
-        let (world, cube_id) = setup_ramp_scene(30.0, 8.0, 0.5);
-        run_simulation(&world, dt, 1800);
+        let (mut world, cube_id) = setup_ramp_scene(30.0, 8.0, 0.5);
+        run_simulation(&mut world, dt, 1800);
         let vel = get_velocity(&world, cube_id);
         let speed = vel.linear.length();
         println!("[30° Sınırlı Kayma Testi] Lineer Hız: {:.4} m/s", speed);
@@ -202,8 +202,8 @@ fn test_cube_eventually_settles() {
 
     // 45° rampa: çok dik ama yine de terminal hızda kalmalı
     {
-        let (world, cube_id) = setup_ramp_scene(45.0, 8.0, 0.5);
-        run_simulation(&world, dt, 1800);
+        let (mut world, cube_id) = setup_ramp_scene(45.0, 8.0, 0.5);
+        run_simulation(&mut world, dt, 1800);
         let vel = get_velocity(&world, cube_id);
         let speed = vel.linear.length();
         println!("[45° Sınırlı Kayma Testi] Lineer Hız: {:.4} m/s", speed);
@@ -219,13 +219,13 @@ fn test_angular_velocity_stays_bounded() {
     let max_angular_speed = 100.0; // rad/s — gerçekçi güvenlik sınırı
 
     for &angle in &[10.0_f32, 30.0, 45.0] {
-        let (world, cube_id) = setup_ramp_scene(angle, 8.0, 0.5);
+        let (mut world, cube_id) = setup_ramp_scene(angle, 8.0, 0.5);
         let dt = 1.0 / 60.0;
 
         for step in 0..600 {
             gizmo_physics::physics_apply_forces_system(&world, dt);
             gizmo_physics::physics_movement_system(&world, dt);
-            gizmo_physics::system::physics_collision_system(&world, dt);
+            gizmo_physics::system::physics_collision_system(&mut world, dt);
 
             let vel = get_velocity(&world, cube_id);
             let angular_speed = vel.angular.length();
@@ -248,11 +248,11 @@ fn test_angular_velocity_stays_bounded() {
 fn test_full_drop_slide_stop_scenario() {
     // Senaryo: küp havadan 10° rampaya düşer → kayar → sürtünmeyle DURUR
     // 10° seçtik çünkü tan(10°)=0.176 < friction(0.5) → küp kesinlikle durmalı
-    let (world, cube_id) = setup_ramp_scene(10.0, 8.0, 0.5);
+    let (mut world, cube_id) = setup_ramp_scene(10.0, 8.0, 0.5);
     let dt = 1.0 / 60.0;
 
     // 1. İlk 1 saniyede küp düşmeli (Y azalmalı)
-    run_simulation(&world, dt, 60);
+    run_simulation(&mut world, dt, 60);
     let pos_after_1s = get_position(&world, cube_id);
     assert!(
         pos_after_1s.y < 8.0,
@@ -262,7 +262,7 @@ fn test_full_drop_slide_stop_scenario() {
     println!("[Tam Senaryo] 1 sn sonra: {:?}", pos_after_1s);
 
     // 2. 30 saniye sonra küp durmuş olmalı
-    run_simulation(&world, dt, 1740);
+    run_simulation(&mut world, dt, 1740);
     let final_pos = get_position(&world, cube_id);
     let final_vel = get_velocity(&world, cube_id);
     let final_speed = final_vel.linear.length();

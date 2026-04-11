@@ -118,6 +118,15 @@ pub fn gjk_intersect(
         }
     }
 
+    // 64 iterasyon tükendi — GJK yakınsayamadı.
+    // Bu genellikle çok karmaşık / sayısal olarak hassas ConvexHull çiftlerinde oluşur.
+    // EPA'ya geçilmeden önce silent failure yerine uyarı verilir.
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[GJK WARN] 64 iterasyon tükendi, yakınsama başarısız. \
+         Karmaşık ConvexHull çiftleri veya degenerate şekiller kontrol edilmeli."
+    );
+
     (false, simplex)
 }
 
