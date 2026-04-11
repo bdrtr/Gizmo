@@ -578,6 +578,32 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
                 }
 
                 // --- CCD Bisection (Sürekli Çarpışma Tespiti) ---
+                //
+                // ÇAĞRI SIRASI VE KOORDİNAT SEMANTİĞİ:
+                //   physics_apply_forces_system → physics_collision_system → physics_movement_system
+                //
+                // Bu sistem çağrıldığında pos_a/pos_b = ÖNCEK frame'in sonu (movement henüz çalışmadı).
+                // Dolayısıyla kinematik: pos_a(t) = pos_a + v_a_lin * t,  t ∈ [0, dt]
+                //   t=0  → collision öncesi konum (mevcut Transform)
+                //   t=dt → bu frame sonundaki konum (movement'tan sonra olacak olan)
+                // Bu tam olarak istediğimiz aralıktır — DOĞRU.
+                //
+                // GÖRELİ REFERANS ÇERÇEVESİ (sweep_vector semantiği):
+                //   Swept GJK: A sabit, B hareket ediyor.
+                //   A'nın gerçek hareketi rel_v = v_b - v_a içine gömülüdür.
+                //   B'nin A-referans çerçevesindeki göreli konumu:
+                //     r_b(t) = pos_b + v_b*t - (pos_a + v_a*t)
+                //            = (pos_b - pos_a) + (v_b - v_a)*t
+                //            = sabit_offset + rel_v * t
+                //   Yani A'yı sabit tutup B'ye rel_v * Δt süpürme uygulamak matematiksel olarak eşdeğer.
+                //
+                // BİSECTİON ADIMI [t_low, t_mid]:
+                //   pa_low = pos_a + v_a * t_low  ← A'nın t_low anındaki mutlak konumu
+                //   pb_low = pos_b + v_b * t_low  ← B'nin t_low anındaki mutlak konumu
+                //   sweep  = rel_v * (t_mid - t_low)  ← B'nin bu alt aralıktaki göreli hareketi
+                //   GJK sorusu: "A pa_low'da sabit, B pb_low'dan sweep kadar hareket ederse çarpışır mı?"
+                //   Bu sorunun cevabı "[t_low, t_mid] içinde çarpışma var mı?" ile eşdeğerdir.
+                //
                 // t=0'da kesişme yoksa fakat hızlıysak TOI (Time of Impact) ara.
                 if !manifold.is_colliding && (rb_a.data.ccd_enabled || rb_b.data.ccd_enabled) {
                     let v_a_lin = v_sparse
@@ -593,7 +619,7 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
                     // Sadece göreli hız bu frame içinde anlamlı mesafe kat ediyorsa testi yap
                     if rel_v.length() * dt > 0.1 {
                         // Ön test: tüm [0, dt] aralığında hiç çakışma var mı?
-                        // B'yi dt boyunca sweep et, A sabittir.
+                        // A sabit (pos_a), B tüm rel_v * dt'yi süpürüyor.
                         let swept_b_full = crate::shape::ColliderShape::Swept {
                             base: Box::new(col_b.data.shape.clone()),
                             sweep_vector: rel_v * dt,
@@ -609,19 +635,21 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
 
                         if hit_any {
                             // Bisection — her adımda MUTLAK pozisyonları kullan, birikmeli sweep değil.
-                            // Böylece t_low güncellendikçe sweep vektörü sıfırdan yanlış hesaplanmaz.
+                            // t_low arttıkça başlangıç noktası kayar; sweep_vector sıfırdan değil
+                            // Δt kadar hesaplanır → hata birikmez.
                             let mut t_low = 0.0_f32;
                             let mut t_high = dt;
 
                             for _ in 0..16 {
                                 let t_mid = (t_low + t_high) * 0.5;
 
-                                // [t_low, t_mid] aralığında çarpışma: B'yi t_low'dan t_mid'e sweep et
+                                // [t_low, t_mid] alt aralığı: her iki nesnenin t_low anındaki
+                                // mutlak konumundan başla, yalnızca Δt = t_mid - t_low süpür.
                                 let pa_low = pos_a + v_a_lin * t_low;
                                 let pb_low = pos_b + v_b_lin * t_low;
                                 let sweep_half = crate::shape::ColliderShape::Swept {
                                     base: Box::new(col_b.data.shape.clone()),
-                                    // Doğru sweep: [t_low, t_mid] mesafesi, t_mid - t_low (MUTLAK aralık)
+                                    // rel_v * (t_mid - t_low): A-çerçevesinde B'nin bu alt aralıktaki göreli hareketi
                                     sweep_vector: (v_b_lin - v_a_lin) * (t_mid - t_low),
                                 };
                                 let (hit_first, _) = crate::gjk::gjk_intersect(
