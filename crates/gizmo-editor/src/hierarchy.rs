@@ -125,7 +125,7 @@ fn draw_entity_node(
         return;
     }
 
-    let is_selected = state.selected_entity == Some(entity_id);
+    let is_selected = state.is_selected(entity_id);
     let has_children = children_comp.as_ref()
         .and_then(|c| c.get(entity_id))
         .map(|c| !c.0.is_empty())
@@ -145,9 +145,12 @@ fn draw_entity_node(
                 };
                 
                 let response = ui.selectable_label(is_selected, label);
-                
                 if response.clicked() {
-                    state.selected_entity = Some(entity_id);
+                    if ui.input(|i| i.modifiers.command) {
+                        state.toggle_selection(entity_id);
+                    } else {
+                        state.select_exclusive(entity_id);
+                    }
                 }
                 
                 // --- Sürükle Bırak (Drag & Drop) ---
@@ -213,13 +216,13 @@ fn draw_entity_node(
         
         // --- Sürükle Bırak (Drag & Drop) ---
         let drag_id = egui::Id::new("drag_ent").with(entity_id);
-        let response = ui.interact(response.rect, drag_id, egui::Sense::drag());
+        let drag_response = ui.interact(response.rect, drag_id, egui::Sense::drag());
         
-        if response.drag_started() {
+        if drag_response.drag_started() {
             ui.memory_mut(|m| m.data.insert_temp(egui::Id::new("dragged_ent"), entity_id));
         }
         
-        if response.hovered() {
+        if drag_response.hovered() {
             if let Some(dragged) = ui.memory(|m| m.data.get_temp::<u32>(egui::Id::new("dragged_ent"))) {
                 ui.painter().rect_stroke(response.rect, 2.0, egui::Stroke::new(1.0, egui::Color32::YELLOW));
                 if ui.input(|i| i.pointer.any_released()) && dragged != entity_id {
@@ -231,7 +234,11 @@ fn draw_entity_node(
         // ------------------------------------
 
         if response.clicked() {
-            state.selected_entity = Some(entity_id);
+            if ui.input(|i| i.modifiers.command) {
+                state.toggle_selection(entity_id);
+            } else {
+                state.select_exclusive(entity_id);
+            }
         }
         
         response.context_menu(|ui| {

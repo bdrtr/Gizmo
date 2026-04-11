@@ -1,0 +1,10 @@
+[package]
+name = "tut"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gizmo = { path = "../crates/gizmo" }
+gizmo-app = { path = "../crates/gizmo-app" }
+pollster = "0.3"
+wgpu = "0.20.1"

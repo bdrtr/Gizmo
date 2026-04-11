@@ -170,71 +170,70 @@ impl<State: 'static> App<State> {
             // Eğer UI girdiyi yakalamadıysa Kullanıcı Input Hook'a Yolla
             if !consumes_input {
                 if let Some(input_hk) = self.input_fn.as_mut() {
-                    consumes_input = input_hk(&mut self.world, &mut state, &event);
+                    let _ = input_hk(&mut self.world, &mut state, &event);
                 }
             }
 
             match event {
                 Event::WindowEvent { ref event, window_id } if window_id == window.id() => {
-                    if !consumes_input {
-                        match event {
-                            WindowEvent::CloseRequested => current_window.exit(),
-                            WindowEvent::Resized(physical_size) => {
-                                renderer.resize(*physical_size);
-                                self.input.on_window_resized(physical_size.width as f32, physical_size.height as f32);
-                            }
-                            WindowEvent::KeyboardInput { event: kb_event, .. } => {
-                                let mut codes_to_press = Vec::new();
-                                // Fiziksel Tuş (PhysicalKey)
-                                if let winit::keyboard::PhysicalKey::Code(keycode) = kb_event.physical_key {
-                                    codes_to_press.push(keycode as u32);
-                                }
-                                // Mantıksal Tuş (LogicalKey Fallback)
-                                if let winit::keyboard::Key::Character(c) = kb_event.logical_key.as_ref() {
-                                    match c.to_lowercase().as_str() {
-                                        "w" => codes_to_press.push(winit::keyboard::KeyCode::KeyW as u32),
-                                        "a" => codes_to_press.push(winit::keyboard::KeyCode::KeyA as u32),
-                                        "s" => codes_to_press.push(winit::keyboard::KeyCode::KeyS as u32),
-                                        "d" => codes_to_press.push(winit::keyboard::KeyCode::KeyD as u32),
-                                        _ => {}
-                                    }
-                                } else if let winit::keyboard::Key::Named(named) = kb_event.logical_key {
-                                    match named {
-                                        winit::keyboard::NamedKey::ArrowUp => codes_to_press.push(winit::keyboard::KeyCode::ArrowUp as u32),
-                                        winit::keyboard::NamedKey::ArrowDown => codes_to_press.push(winit::keyboard::KeyCode::ArrowDown as u32),
-                                        winit::keyboard::NamedKey::ArrowLeft => codes_to_press.push(winit::keyboard::KeyCode::ArrowLeft as u32),
-                                        winit::keyboard::NamedKey::ArrowRight => codes_to_press.push(winit::keyboard::KeyCode::ArrowRight as u32),
-                                        winit::keyboard::NamedKey::Space => codes_to_press.push(winit::keyboard::KeyCode::Space as u32),
-                                        _ => {}
-                                    }
-                                }
-
-                                for code in codes_to_press {
-                                    if kb_event.state == winit::event::ElementState::Pressed {
-                                        self.input.on_key_pressed(code);
-                                    } else {
-                                        self.input.on_key_released(code);
-                                    }
-                                }
-                            }
-                            WindowEvent::MouseInput { state: m_state, button, .. } => {
-                                let btn_code = match button {
-                                    winit::event::MouseButton::Left => gizmo_core::input::mouse::LEFT,
-                                    winit::event::MouseButton::Right => gizmo_core::input::mouse::RIGHT,
-                                    winit::event::MouseButton::Middle => gizmo_core::input::mouse::MIDDLE,
-                                    _ => 99,
-                                };
-                                if *m_state == winit::event::ElementState::Pressed {
-                                    self.input.on_mouse_button_pressed(btn_code);
-                                } else {
-                                    self.input.on_mouse_button_released(btn_code);
-                                }
-                            }
-                            WindowEvent::CursorMoved { position, .. } => {
-                                self.input.on_mouse_moved(position.x as f32, position.y as f32);
-                            }
-                            _ => {}
+                    match event {
+                        WindowEvent::CloseRequested => current_window.exit(),
+                        WindowEvent::Resized(physical_size) => {
+                            renderer.resize(*physical_size);
+                            self.input.on_window_resized(physical_size.width as f32, physical_size.height as f32);
                         }
+                        WindowEvent::KeyboardInput { event: kb_event, .. } => {
+                            let mut codes_to_press = Vec::new();
+                            // Fiziksel Tuş (PhysicalKey)
+                            if let winit::keyboard::PhysicalKey::Code(keycode) = kb_event.physical_key {
+                                codes_to_press.push(keycode as u32);
+                            }
+                            // Mantıksal Tuş (LogicalKey Fallback)
+                            if let winit::keyboard::Key::Character(c) = kb_event.logical_key.as_ref() {
+                                match c.to_lowercase().as_str() {
+                                    "w" => codes_to_press.push(winit::keyboard::KeyCode::KeyW as u32),
+                                    "a" => codes_to_press.push(winit::keyboard::KeyCode::KeyA as u32),
+                                    "s" => codes_to_press.push(winit::keyboard::KeyCode::KeyS as u32),
+                                    "d" => codes_to_press.push(winit::keyboard::KeyCode::KeyD as u32),
+                                    _ => {}
+                                }
+                            } else if let winit::keyboard::Key::Named(named) = kb_event.logical_key {
+                                match named {
+                                    winit::keyboard::NamedKey::ArrowUp => codes_to_press.push(winit::keyboard::KeyCode::ArrowUp as u32),
+                                    winit::keyboard::NamedKey::ArrowDown => codes_to_press.push(winit::keyboard::KeyCode::ArrowDown as u32),
+                                    winit::keyboard::NamedKey::ArrowLeft => codes_to_press.push(winit::keyboard::KeyCode::ArrowLeft as u32),
+                                    winit::keyboard::NamedKey::ArrowRight => codes_to_press.push(winit::keyboard::KeyCode::ArrowRight as u32),
+                                    winit::keyboard::NamedKey::Space => codes_to_press.push(winit::keyboard::KeyCode::Space as u32),
+                                    winit::keyboard::NamedKey::Escape => codes_to_press.push(winit::keyboard::KeyCode::Escape as u32),
+                                    _ => {}
+                                }
+                            }
+
+                            for code in codes_to_press {
+                                if kb_event.state == winit::event::ElementState::Pressed {
+                                    self.input.on_key_pressed(code);
+                                } else {
+                                    self.input.on_key_released(code);
+                                }
+                            }
+                        }
+                        WindowEvent::MouseInput { state: m_state, button, .. } => {
+                            let btn_code = match button {
+                                winit::event::MouseButton::Left => gizmo_core::input::mouse::LEFT,
+                                winit::event::MouseButton::Right => gizmo_core::input::mouse::RIGHT,
+                                winit::event::MouseButton::Middle => gizmo_core::input::mouse::MIDDLE,
+                                _ => 99,
+                            };
+                            if *m_state == winit::event::ElementState::Pressed {
+                                self.input.on_mouse_button_pressed(btn_code);
+                            } else {
+                                self.input.on_mouse_button_released(btn_code);
+                            }
+                        }
+                        WindowEvent::CursorMoved { position, .. } => {
+                            self.input.on_mouse_moved(position.x as f32, position.y as f32);
+                        }
+                        _ => {}
                     }
                     if let WindowEvent::RedrawRequested = event {
                         let now = std::time::Instant::now();

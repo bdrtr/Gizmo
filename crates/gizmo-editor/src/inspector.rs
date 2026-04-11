@@ -12,7 +12,30 @@ use crate::editor_state::EditorState;
 
 /// Inspector sekmesini çizer
 pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
-    if let Some(entity_id) = state.selected_entity {
+    let sel_len = state.selected_entities.len();
+    if sel_len == 0 {
+        ui.label(egui::RichText::new("Hiçbir obje seçili değil.").color(egui::Color32::GRAY));
+        return;
+    }
+    
+    if sel_len > 1 {
+        ui.heading(format!("🔧 Çoklu Oje Seçili ({} adet)", sel_len));
+        ui.separator();
+        
+        ui.label("Şu anda çoklu seçim modundasınız. Çoklu objelerin özelliklerinin aynı anda değiştirilmesi ilerleyen versiyonlarda desteklenecektir.");
+        
+        if ui.button(egui::RichText::new("🗑️ Seçili Objeleri Sil").color(egui::Color32::RED)).clicked() {
+            // Şimdilik sadece tek siliyoruz, ya da birini:
+            // Multi-delete update.rs içinde klavye ile de var.
+            // Butona basılınca sadece log yazalım veya ilkini silelim (ileride event üzerinden yapılacak)
+            let first = *state.selected_entities.iter().next().unwrap();
+            state.despawn_request = Some(first); 
+        }
+        return;
+    }
+
+    // Tekli seçim durumu
+    if let Some(&entity_id) = state.selected_entities.iter().next() {
         ui.heading(format!("🔧 Inspector [{}]", entity_id));
                 
                 if ui.button(egui::RichText::new("🗑️ Seçili Objeyi Sil").color(egui::Color32::RED)).clicked() {
@@ -51,9 +74,8 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 
                     // === VEHICLE CONTROLLER ===
                     draw_vehicle_controller_section(ui, world, entity_id);
-                    
-                    // === AUDIO SOURCE ===
                     draw_audio_source_section(ui, world, entity_id);
+                    draw_terrain_section(ui, world, entity_id, state);
 
                     ui.separator();
                     
@@ -357,7 +379,7 @@ fn draw_add_component_menu(ui: &mut egui::Ui, _world: &World, _entity_id: u32, s
             
             let components = [
                 "Transform", "Velocity", "RigidBody", "Collider",
-                "Camera", "PointLight", "Material", "Script", "AudioSource",
+                "Camera", "PointLight", "Material", "ParticleEmitter", "Script", "AudioSource", "Terrain"
             ];
             
             egui::ComboBox::from_id_source("add_comp_combo")
@@ -403,6 +425,35 @@ fn draw_audio_source_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
                         });
                     }
                 });
+            ui.separator();
+        }
+    }
+}
+
+fn draw_terrain_section(ui: &mut egui::Ui, world: &World, entity_id: u32, state: &mut EditorState) {
+    if let Some(mut terrains) = world.borrow_mut::<gizmo_renderer::components::Terrain>() {
+        if let Some(terrain) = terrains.get_mut(entity_id) {
+            let mut changed = false;
+            egui::CollapsingHeader::new("🏔 Terrain")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.label(format!("Heightmap: {}", terrain.heightmap_path));
+                    ui.horizontal(|ui| {
+                        ui.label("Genişlik (X):");
+                        if ui.add(egui::Slider::new(&mut terrain.width, 10.0..=1000.0).suffix("m")).changed() { changed = true; }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Derinlik (Z):");
+                        if ui.add(egui::Slider::new(&mut terrain.depth, 10.0..=1000.0).suffix("m")).changed() { changed = true; }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Maks. Yükseklik:");
+                        if ui.add(egui::Slider::new(&mut terrain.max_height, 1.0..=500.0).suffix("m")).changed() { changed = true; }
+                    });
+                });
+            if changed {
+                state.generate_terrain_requests.push(entity_id);
+            }
             ui.separator();
         }
     }

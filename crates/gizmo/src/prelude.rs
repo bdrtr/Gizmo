@@ -25,6 +25,7 @@ pub use crate::renderer::Renderer;
 
 // === Uygulama Çerçevesi ===
 pub use crate::app::App;
+pub use crate::default_systems::default_render_pass;
 
 // === Windowing & Input ===
 pub use winit::event::{Event, WindowEvent, DeviceEvent, ElementState, MouseButton};

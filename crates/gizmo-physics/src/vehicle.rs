@@ -86,27 +86,50 @@ use crate::shape::{Collider, ColliderShape};
 use crate::integration::apply_inv_inertia;
 pub fn physics_vehicle_system(world: &World, dt: f32) {
     // Statik objeleri topla (Raycast testleri için)
-    struct StaticAabb {
-        position: Vec3,
-        half_extents: Vec3,
+    enum StaticCol {
+        Aabb { position: Vec3, half_extents: Vec3 },
+        HeightField { 
+            position: Vec3, 
+            heights: std::sync::Arc<Vec<f32>>, 
+            segments_x: u32, 
+            segments_z: u32,
+            width: f32,
+            depth: f32,
+            max_height: f32 
+        }
     }
+    
     let colliders_storage = world.borrow::<Collider>();
-    let static_aabbs: Vec<StaticAabb> = {
+    let static_cols: Vec<StaticCol> = {
         if let (Some(rbs), Some(ref cols), Some(ts)) = (world.borrow::<RigidBody>(), &colliders_storage, world.borrow::<Transform>()) {
             cols.entity_dense.iter()
                 .filter_map(|&e| {
                     if rbs.get(e).is_some_and(|rb| rb.mass == 0.0) {
                         let t = ts.get(e)?;
                         let col = cols.get(e)?;
-                        if let ColliderShape::Aabb(aabb) = &col.shape {
-                            return Some(StaticAabb {
-                                position: t.position,
-                                half_extents: Vec3::new(
-                                    aabb.half_extents.x * t.scale.x,
-                                    aabb.half_extents.y * t.scale.y,
-                                    aabb.half_extents.z * t.scale.z,
-                                ),
-                            });
+                        match &col.shape {
+                            ColliderShape::Aabb(aabb) => {
+                                return Some(StaticCol::Aabb {
+                                    position: t.position,
+                                    half_extents: Vec3::new(
+                                        aabb.half_extents.x * t.scale.x,
+                                        aabb.half_extents.y * t.scale.y,
+                                        aabb.half_extents.z * t.scale.z,
+                                    ),
+                                });
+                            },
+                            ColliderShape::HeightField { heights, segments_x, segments_z, width, depth, max_height } => {
+                                return Some(StaticCol::HeightField {
+                                    position: t.position,
+                                    heights: std::sync::Arc::new(heights.clone()),
+                                    segments_x: *segments_x,
+                                    segments_z: *segments_z,
+                                    width: *width * t.scale.x,
+                                    depth: *depth * t.scale.z,
+                                    max_height: *max_height * t.scale.y,
+                                });
+                            },
+                            _ => return None,
                         }
                     }
                     None
@@ -165,29 +188,68 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                     if t_y > 0.0 && t_y < hit_t { hit_t = t_y; }
                 }
 
-                // 2. Statik AABB'lere Raycast Testi
-                for static_col in &static_aabbs {
-                    let min_b = static_col.position - static_col.half_extents;
-                    let max_b = static_col.position + static_col.half_extents;
-                    
-                    let inv_dir = Vec3::new(
-                        if dir.x.abs() > 1e-8 { 1.0 / dir.x } else { f32::MAX },
-                        if dir.y.abs() > 1e-8 { 1.0 / dir.y } else { f32::MAX },
-                        if dir.z.abs() > 1e-8 { 1.0 / dir.z } else { f32::MAX },
-                    );
-                    
-                    let t1x = (min_b.x - origin.x) * inv_dir.x;
-                    let t2x = (max_b.x - origin.x) * inv_dir.x;
-                    let t1y = (min_b.y - origin.y) * inv_dir.y;
-                    let t2y = (max_b.y - origin.y) * inv_dir.y;
-                    let t1z = (min_b.z - origin.z) * inv_dir.z;
-                    let t2z = (max_b.z - origin.z) * inv_dir.z;
-                    
-                    let t_near = t1x.min(t2x).max(t1y.min(t2y)).max(t1z.min(t2z));
-                    let t_far = t1x.max(t2x).min(t1y.max(t2y)).min(t1z.max(t2z));
-                    
-                    if t_near <= t_far && t_far > 0.0 && t_near < hit_t {
-                        hit_t = if t_near > 0.0 { t_near } else { 0.0 };
+                // 2. Statik Objelerle Raycast Test (AABB & HeightField)
+                for static_col in &static_cols {
+                    match static_col {
+                        StaticCol::Aabb { position, half_extents } => {
+                            let min_b = *position - *half_extents;
+                            let max_b = *position + *half_extents;
+                            
+                            let inv_dir = Vec3::new(
+                                if dir.x.abs() > 1e-8 { 1.0 / dir.x } else { f32::MAX },
+                                if dir.y.abs() > 1e-8 { 1.0 / dir.y } else { f32::MAX },
+                                if dir.z.abs() > 1e-8 { 1.0 / dir.z } else { f32::MAX },
+                            );
+                            
+                            let t1x = (min_b.x - origin.x) * inv_dir.x;
+                            let t2x = (max_b.x - origin.x) * inv_dir.x;
+                            let t1y = (min_b.y - origin.y) * inv_dir.y;
+                            let t2y = (max_b.y - origin.y) * inv_dir.y;
+                            let t1z = (min_b.z - origin.z) * inv_dir.z;
+                            let t2z = (max_b.z - origin.z) * inv_dir.z;
+                            
+                            let t_near = t1x.min(t2x).max(t1y.min(t2y)).max(t1z.min(t2z));
+                            let t_far = t1x.max(t2x).min(t1y.max(t2y)).min(t1z.max(t2z));
+                            
+                            if t_near <= t_far && t_far > 0.0 && t_near < hit_t {
+                                hit_t = if t_near > 0.0 { t_near } else { 0.0 };
+                            }
+                        },
+                        StaticCol::HeightField { position, heights, segments_x, segments_z, width, depth, max_height } => {
+                            // Araç tekerlekleri genelde tam aşağı bakar. Basitleştirilmiş HeightField Raycast:
+                            // Yönümüz aşağıysa objenin XZ izdüşümünü al, grid'e haritala, o noktadaki (X,Z) yüksekliğine bak.
+                            // Eğer daha hassas açısal raycast isteniyorsa Ray-March yapılmalı.
+                            
+                            if dir.y > -0.001 { continue; } // Yukarı/yatay ray çekiyorsak pas geç
+                            
+                            let local_x = origin.x - position.x;
+                            let local_z = origin.z - position.z;
+                            let half_w = *width * 0.5;
+                            let half_d = *depth * 0.5;
+                            
+                            if local_x >= -half_w && local_x <= half_w && local_z >= -half_d && local_z <= half_d {
+                                let normalized_x = (local_x + half_w) / *width;
+                                let normalized_z = (local_z + half_d) / *depth;
+                                
+                                let grid_x = (normalized_x * (*segments_x as f32 - 1.0)).round() as u32;
+                                let grid_z = (normalized_z * (*segments_z as f32 - 1.0)).round() as u32;
+                                
+                                let grid_x = grid_x.clamp(0, *segments_x - 1);
+                                let grid_z = grid_z.clamp(0, *segments_z - 1);
+                                
+                                let index = (grid_z * *segments_x + grid_x) as usize;
+                                if index < heights.len() {
+                                    let terrain_y = position.y + heights[index] * *max_height;
+                                    
+                                    if origin.y > terrain_y {
+                                        let t_y = (terrain_y - origin.y) / dir.y;
+                                        if t_y > 0.0 && t_y < hit_t {
+                                            hit_t = t_y;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 

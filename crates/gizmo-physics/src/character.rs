@@ -141,6 +141,9 @@ fn resolve_capsule_collisions(
             },
             ColliderShape::Swept { .. } => {
                 None  // Swept shape should never be in ECS
+            },
+            ColliderShape::HeightField { .. } => {
+                None // CharacterController vs Heightmap is not implemented yet
             }
         };
 

@@ -16,6 +16,32 @@ pub fn poll_hot_reload(world: &mut World, state: &mut GameState) {
         let is_image = path_str.ends_with(".jpg")
             || path_str.ends_with(".png")
             || path_str.ends_with(".jpeg");
+        
+        let is_script = path_str.ends_with(".lua");
+        let is_shader = path_str.ends_with(".wgsl");
+
+        if is_script {
+            println!("🔥 Script Hot-Reload: {}", path_str);
+            if let Some(mut engine) = world.get_resource_mut::<gizmo::scripting::ScriptEngine>() {
+                if let Err(e) = engine.load_script(&path_str) {
+                    println!("    ❌ Script yüklenemedi: {}", e);
+                }
+            }
+            continue;
+        }
+
+        if is_shader {
+            println!("🔥 Shader Hot-Reload: {}", path_str);
+            let has_events = world.get_resource::<gizmo::core::event::Events<crate::state::ShaderReloadEvent>>().is_some();
+            if !has_events {
+                world.insert_resource(gizmo::core::event::Events::<crate::state::ShaderReloadEvent>::new());
+            }
+            if let Some(mut events) = world.get_resource_mut::<gizmo::core::event::Events<crate::state::ShaderReloadEvent>>() {
+                events.push(crate::state::ShaderReloadEvent);
+            }
+            continue;
+        }
+
         if !is_image { continue; }
 
         println!("🔥 Hot-Reload: Texture değişti → {}", path_str);
