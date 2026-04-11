@@ -3,6 +3,20 @@ struct LightData {
     color: vec4<f32>,
 };
 
+// Inverse of a 3x3 matrix for correct normal transformation under non-uniform scale
+fn inverse_transpose_3x3(m: mat3x3<f32>) -> mat3x3<f32> {
+    let cross01 = cross(m[0], m[1]);
+    let cross12 = cross(m[1], m[2]);
+    let cross20 = cross(m[2], m[0]);
+    let inv_det = 1.0 / dot(m[2], cross01);
+
+    return mat3x3<f32>(
+        cross12 * inv_det,
+        cross20 * inv_det,
+        cross01 * inv_det
+    );
+}
+
 struct SceneUniforms {
     view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
@@ -103,9 +117,10 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     let world_pos = model * vec4<f32>(skinned_pos.xyz, 1.0);
     out.world_position = world_pos.xyz;
     
-    // Obje veya animasyon döndürüldüğünde ışık da tepki versin
+    // Obje veya animasyon döndürüldüğünde ışık da tepki versin (Non-uniform scale desteği ile)
     let skinned_normal = skin_mat * vec4<f32>(input.normal, 0.0);
-    let world_normal = (model * vec4<f32>(skinned_normal.xyz, 0.0)).xyz;
+    let normal_matrix = inverse_transpose_3x3(mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz));
+    let world_normal = normal_matrix * skinned_normal.xyz;
     out.normal = world_normal;
     
     out.inst_albedo = inst.albedo_color;

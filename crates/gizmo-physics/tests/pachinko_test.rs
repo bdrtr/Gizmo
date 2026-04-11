@@ -1,7 +1,7 @@
 use gizmo_core::world::World;
+use gizmo_math::Vec3;
 use gizmo_physics::components::{RigidBody, Transform, Velocity};
 use gizmo_physics::shape::Collider;
-use gizmo_math::Vec3;
 use gizmo_physics::system::{physics_collision_system, PhysicsSolverState};
 use gizmo_physics::JointWorld;
 use std::time::Instant;
@@ -35,7 +35,7 @@ fn test_pachinko_broadphase_benchmark() {
             let offset = if y % 2 == 0 { 0.0 } else { 1.5 };
             let pos_x = (x as f32) * 3.0 - (pins_x as f32 * 1.5) + offset;
             let pos_y = (y as f32) * 3.0 + 5.0; // Çiviler havada dizilsin
-            
+
             let pin = world.spawn();
             world.add_component(pin, Transform::new(Vec3::new(pos_x, pos_y, 0.0)));
             world.add_component(pin, Collider::new_sphere(0.5)); // Yuvarlak çiviler
@@ -49,16 +49,16 @@ fn test_pachinko_broadphase_benchmark() {
     // 3. Yukarıdan düşen toplar
     for i in 0..num_spheres {
         let sphere = world.spawn();
-        
+
         // Yukarıda dar bir huni (kaynak) gibi bir noktadan hafif rastgelelikle bırak
-        let drop_x = (i as f32 % 10.0) * 0.1 - 0.5; 
+        let drop_x = (i as f32 % 10.0) * 0.1 - 0.5;
         let drop_y = 60.0 + (i as f32 * 0.1); // Peş peşe bırakılmaları için yükseklikleri artır
         let drop_z = (i as f32 % 5.0) * 0.1 - 0.25;
 
         world.add_component(sphere, Transform::new(Vec3::new(drop_x, drop_y, drop_z)));
         world.add_component(sphere, Velocity::new(Vec3::ZERO));
         world.add_component(sphere, Collider::new_sphere(0.4)); // Çivilerin arasından geçebilecek boyutta
-        
+
         // Dinamik top kütlesi
         let mut rb = RigidBody::new(10.0, 0.3, 0.2, true);
         rb.ccd_enabled = true; // Çok hızlı düşerlerse içinden geçmesinler diye CCD aktif
@@ -75,8 +75,9 @@ fn test_pachinko_broadphase_benchmark() {
 
     for _ in 0..steps {
         let step_start = Instant::now();
-        
+
         physics_collision_system(&world, dt);
+        gizmo_physics::physics_apply_forces_system(&world, dt);
         gizmo_physics::physics_movement_system(&world, dt);
         if let Some(jw) = world.get_resource::<JointWorld>() {
             gizmo_physics::solve_constraints(&*jw, &world, dt);
@@ -93,18 +94,37 @@ fn test_pachinko_broadphase_benchmark() {
     let avg_time = total_time / (steps as f64);
 
     println!("=== SONUÇLAR ===");
-    println!("Toplam Simülasyon Süresi: {:.2}s (Gerçek hayatta karşılığı: 10 saniye)", elapsed.as_secs_f64());
-    println!("Ortalama Frame (Kare) Çözüm Süresi: {:.3} ms (İdeal limit: <16.6ms)", avg_time);
-    println!("En Yavaş Frame Çözüm Süresi (Max Spike): {:.3} ms", max_time);
-    
+    println!(
+        "Toplam Simülasyon Süresi: {:.2}s (Gerçek hayatta karşılığı: 10 saniye)",
+        elapsed.as_secs_f64()
+    );
+    println!(
+        "Ortalama Frame (Kare) Çözüm Süresi: {:.3} ms (İdeal limit: <16.6ms)",
+        avg_time
+    );
+    println!(
+        "En Yavaş Frame Çözüm Süresi (Max Spike): {:.3} ms",
+        max_time
+    );
+
     // Testin patlamaması ve akıcı olması için FPS hedeflerini (ms) test içinde sorgula
     let (max_avg, max_spike) = if cfg!(debug_assertions) {
         (100.0, 600.0) // Debug kiti optimizasyonsuz olduğundan süre toleransı yüksektir
     } else {
         (5.0, 50.0) // Release'te Broadphase ve SIMD çok daha hızlı çalışır
     };
-    assert!(avg_time < max_avg, "PERFORMANS UYARISI: Ortalama süre limiti aştı! ({:.3} > {})", avg_time, max_avg);
-    assert!(max_time < max_spike, "PERFORMANS DROP UYARISI: Çok büyük ani takılma (spike) yaşandı ({:.3} > {})", max_time, max_spike);
+    assert!(
+        avg_time < max_avg,
+        "PERFORMANS UYARISI: Ortalama süre limiti aştı! ({:.3} > {})",
+        avg_time,
+        max_avg
+    );
+    assert!(
+        max_time < max_spike,
+        "PERFORMANS DROP UYARISI: Çok büyük ani takılma (spike) yaşandı ({:.3} > {})",
+        max_time,
+        max_spike
+    );
 
     println!("Test başarıyla tamamlandı. Broad-phase optimizasyonu 10/10 akıcı çalışıyor!\n");
 }

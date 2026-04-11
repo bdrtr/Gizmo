@@ -1,4 +1,4 @@
-use gizmo_math::{Vec3, Quat, Mat4};
+use gizmo_math::{Mat4, Quat, Vec3};
 
 fn default_mat4() -> Mat4 {
     Mat4::IDENTITY
@@ -40,7 +40,8 @@ impl Transform {
 
     /// Update metodu, sistemden önce başlangıç değerleri için kullanılabilir
     pub fn update_local_matrix(&mut self) {
-        self.global_matrix = Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position);
+        self.global_matrix =
+            Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position);
     }
 
     /// Geriye dönük uyumluluk veya anlık model matrisi hesaplaması
@@ -61,7 +62,10 @@ pub struct Velocity {
 
 impl Velocity {
     pub fn new(linear: Vec3) -> Self {
-        Self { linear, angular: Vec3::ZERO }
+        Self {
+            linear,
+            angular: Vec3::ZERO,
+        }
     }
 }
 
@@ -72,9 +76,9 @@ pub struct RigidBody {
     pub restitution: f32, // Sekme katsayısı (0.0 = sekmez, 1.0 = sonsuz teper)
     pub friction: f32, // Sürtünme katsayısı
     pub use_gravity: bool, // Yerçekiminden etkileniyor mu?
-    
+
     // Eylemsizlik Temsili (Inertia Tensor) - objenin kendi ekseni etrafında dönmeye direncini temsil eder
-    pub local_inertia: Vec3, 
+    pub local_inertia: Vec3,
     pub inverse_inertia: Vec3,
 
     // Island Sleeping (Uyku Süreci)
@@ -91,10 +95,10 @@ impl RigidBody {
     /// Doğru eylemsizlik için oluşturduktan sonra `calculate_box_inertia()`,
     /// `calculate_sphere_inertia()` veya `calculate_capsule_inertia()` çağırılmalı.
     pub fn new(mass: f32, restitution: f32, friction: f32, use_gravity: bool) -> Self {
-        let mut rb = Self { 
-            mass, 
-            restitution, 
-            friction, 
+        let mut rb = Self {
+            mass,
+            restitution,
+            friction,
             use_gravity,
             local_inertia: Vec3::new(1.0, 1.0, 1.0),
             inverse_inertia: Vec3::ZERO,
@@ -109,10 +113,10 @@ impl RigidBody {
     }
 
     pub fn new_static() -> Self {
-        Self { 
-            mass: 0.0, 
-            restitution: 0.0, 
-            friction: 1.0, 
+        Self {
+            mass: 0.0,
+            restitution: 0.0,
+            friction: 1.0,
             use_gravity: false,
             local_inertia: Vec3::ZERO,
             inverse_inertia: Vec3::ZERO,
@@ -121,13 +125,13 @@ impl RigidBody {
             ccd_enabled: false,
         }
     }
-    
+
     /// Objeyi uyandırır
     pub fn wake_up(&mut self) {
         self.is_sleeping = false;
         self.sleep_timer = 0.0;
     }
-    
+
     /// Dinamik objenin Inverse Inertia Tensor'unu boyutlarına (AABB) göre baştan hesaplar
     pub fn calculate_box_inertia(&mut self, width: f32, height: f32, depth: f32) {
         if self.mass > 0.0 {
@@ -151,11 +155,7 @@ impl RigidBody {
         // I = 2/5 * m * r^2
         let inertia = (2.0 / 5.0) * self.mass * (radius * radius);
         self.local_inertia = Vec3::new(inertia, inertia, inertia);
-        self.inverse_inertia = Vec3::new(
-            1.0 / inertia,
-            1.0 / inertia,
-            1.0 / inertia,
-        );
+        self.inverse_inertia = Vec3::new(1.0 / inertia, 1.0 / inertia, 1.0 / inertia);
     }
 
     /// Kapsül için eylemsizlik tensörü hesaplar (silindir + iki yarıküre)
@@ -163,18 +163,46 @@ impl RigidBody {
         if self.mass > 0.0 {
             let r2 = radius * radius;
             let h = half_height * 2.0; // Toplam silindir yüksekliği
-            // Silindir kısmının eylemsizliği
+                                       // Silindir kısmının eylemsizliği
             let cyl_mass = self.mass * h / (h + (4.0 / 3.0) * radius);
             let sphere_mass = self.mass - cyl_mass;
-            
+
             // Y ekseni etrafında (uzun eksen)
             let iy = 0.5 * cyl_mass * r2 + (2.0 / 5.0) * sphere_mass * r2;
             // X ve Z ekseni etrafında
             let ix = cyl_mass * (3.0 * r2 + h * h) / 12.0
-                   + sphere_mass * (2.0 * r2 / 5.0 + h * h / 4.0 + 3.0 * h * radius / 8.0);
-            
+                + sphere_mass * (2.0 * r2 / 5.0 + h * h / 4.0 + 3.0 * h * radius / 8.0);
+
             self.local_inertia = Vec3::new(ix, iy, ix);
             self.inverse_inertia = Vec3::new(1.0 / ix, 1.0 / iy, 1.0 / ix);
+        }
+    }
+
+    /// ColliderShape verisine bakarak eylemsizlik tensörünü otomatik hesaplar
+    pub fn update_inertia_from_shape(&mut self, shape: &crate::shape::ColliderShape) {
+        if self.mass <= 0.0 {
+            return;
+        }
+        match shape {
+            crate::shape::ColliderShape::Aabb(aabb) => {
+                self.calculate_box_inertia(
+                    aabb.half_extents.x * 2.0,
+                    aabb.half_extents.y * 2.0,
+                    aabb.half_extents.z * 2.0,
+                );
+            }
+            crate::shape::ColliderShape::Sphere(sphere) => {
+                self.calculate_sphere_inertia(sphere.radius);
+            }
+            crate::shape::ColliderShape::Capsule(capsule) => {
+                self.calculate_capsule_inertia(capsule.radius, capsule.half_height);
+            }
+            crate::shape::ColliderShape::ConvexHull(_)
+            | crate::shape::ColliderShape::HeightField { .. }
+            | crate::shape::ColliderShape::Swept { .. } => {
+                // Approximate fallback
+                self.calculate_box_inertia(1.0, 1.0, 1.0);
+            }
         }
     }
 }

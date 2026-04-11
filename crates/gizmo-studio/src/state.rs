@@ -1,5 +1,3 @@
-
-
 pub struct StudioState {
     pub current_fps: f32,
     pub editor_camera: u32,

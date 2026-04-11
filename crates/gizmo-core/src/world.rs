@@ -1,15 +1,18 @@
 use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
-use std::{cell::RefCell, cell::{Ref, RefMut}};
+use std::{
+    cell::RefCell,
+    cell::{Ref, RefMut},
+};
 
-use crate::entity::Entity;
 use crate::component::{Component, ComponentStorage, SparseSet};
+use crate::entity::Entity;
 
 pub struct World {
     next_entity_id: u32,
     generations: Vec<u32>,
     free_ids: Vec<u32>,
-    free_set: HashSet<u32>,  // O(1) contains() kontrolü için
+    free_set: HashSet<u32>, // O(1) contains() kontrolü için
     // RefCell: Aynı anda farklı Component dizilerini eşzamanlı olarak ödünç alabilmek (Borrow) için çok kritiktir.
     storages: HashMap<TypeId, RefCell<Box<dyn ComponentStorage>>>,
     // Entity'den bağımsız global veriler (Time, WindowSize, Input vs.)
@@ -39,7 +42,6 @@ impl Default for World {
 }
 
 impl World {
-
     pub fn spawn(&mut self) -> Entity {
         if let Some(id) = self.free_ids.pop() {
             self.free_set.remove(&id);
@@ -66,7 +68,7 @@ impl World {
             self.generations[id as usize] += 1;
             self.free_ids.push(id);
             self.free_set.insert(id);
-            
+
             // Sadece bu entity'nin component'ı olan storage'lara dokunur — O(C) (C = entity'nin component sayısı)
             if let Some(type_ids) = self.entity_components.remove(&id) {
                 for type_id in type_ids {
@@ -108,13 +110,16 @@ impl World {
 
     /// Sisteme component ekleme — sıfır bellek israfı
     pub fn add_component<T: Component>(&mut self, entity: Entity, component: T) {
-        if !self.is_alive(entity) { return; }
+        if !self.is_alive(entity) {
+            return;
+        }
 
         let type_id = TypeId::of::<T>();
-        
-        let storage = self.storages.entry(type_id).or_insert_with(|| {
-            RefCell::new(Box::new(SparseSet::<T>::new()))
-        });
+
+        let storage = self
+            .storages
+            .entry(type_id)
+            .or_insert_with(|| RefCell::new(Box::new(SparseSet::<T>::new())));
 
         let mut borrowed = storage.borrow_mut();
         if let Some(sparse_set) = borrowed.as_any_mut().downcast_mut::<SparseSet<T>>() {
@@ -122,25 +127,31 @@ impl World {
         }
 
         // Entity → TypeId takibini güncelle (despawn optimizasyonu için)
-        self.entity_components
+        let types = self
+            .entity_components
             .entry(entity.id())
-            .or_insert_with(Vec::new)
-            .push(type_id);
+            .or_insert_with(Vec::new);
+
+        if !types.contains(&type_id) {
+            types.push(type_id);
+        }
     }
 
     /// Sistemden component silme
     pub fn remove_component<T: Component>(&mut self, entity: Entity) {
-        if !self.is_alive(entity) { return; }
+        if !self.is_alive(entity) {
+            return;
+        }
 
         let type_id = TypeId::of::<T>();
-        
+
         if let Some(storage) = self.storages.get_mut(&type_id) {
             let mut borrowed = storage.borrow_mut();
             if let Some(sparse_set) = borrowed.as_any_mut().downcast_mut::<SparseSet<T>>() {
                 sparse_set.remove(entity.id());
             }
         }
-        
+
         if let Some(types) = self.entity_components.get_mut(&entity.id()) {
             if let Some(pos) = types.iter().position(|x| *x == type_id) {
                 types.remove(pos);
@@ -152,13 +163,17 @@ impl World {
     pub fn borrow<T: Component>(&self) -> Option<Ref<'_, SparseSet<T>>> {
         let type_id = TypeId::of::<T>();
         let storage = self.storages.get(&type_id)?;
-        
+
         match storage.try_borrow() {
             Ok(borrowed) => Some(Ref::map(borrowed, |s| {
                 s.as_any().downcast_ref::<SparseSet<T>>().unwrap()
             })),
             Err(_) => {
-                eprintln!("[ECS WARN] borrow<{}> başarısız — mutable borrow aktif!", std::any::type_name::<T>());
+                crate::gizmo_log!(
+                    Warning,
+                    "[ECS] borrow<{}> başarısız — mutable borrow aktif!",
+                    std::any::type_name::<T>()
+                );
                 None
             }
         }
@@ -168,13 +183,17 @@ impl World {
     pub fn borrow_mut<T: Component>(&self) -> Option<RefMut<'_, SparseSet<T>>> {
         let type_id = TypeId::of::<T>();
         let storage = self.storages.get(&type_id)?;
-        
+
         match storage.try_borrow_mut() {
             Ok(borrowed) => Some(RefMut::map(borrowed, |s| {
                 s.as_any_mut().downcast_mut::<SparseSet<T>>().unwrap()
             })),
             Err(_) => {
-                eprintln!("[ECS WARN] borrow_mut<{}> başarısız — başka bir borrow aktif!", std::any::type_name::<T>());
+                crate::gizmo_log!(
+                    Warning,
+                    "[ECS] borrow_mut<{}> başarısız — başka bir borrow aktif!",
+                    std::any::type_name::<T>()
+                );
                 None
             }
         }
@@ -192,24 +211,70 @@ impl World {
         crate::query::QueryRef::new(self)
     }
 
-    pub fn query_mut_ref<T1: Component, T2: Component>(&self) -> Option<crate::query::QueryMutRef<'_, T1, T2>> {
+    pub fn query_mut_ref<T1: Component, T2: Component>(
+        &self,
+    ) -> Option<crate::query::QueryMutRef<'_, T1, T2>> {
         crate::query::QueryMutRef::new(self)
     }
 
-    pub fn query_mut_mut<T1: Component, T2: Component>(&self) -> Option<crate::query::QueryMutMut<'_, T1, T2>> {
+    pub fn query_mut_mut<T1: Component, T2: Component>(
+        &self,
+    ) -> Option<crate::query::QueryMutMut<'_, T1, T2>> {
         crate::query::QueryMutMut::new(self)
     }
 
-    pub fn query_ref_ref<T1: Component, T2: Component>(&self) -> Option<crate::query::QueryRefRef<'_, T1, T2>> {
+    pub fn query_ref_ref<T1: Component, T2: Component>(
+        &self,
+    ) -> Option<crate::query::QueryRefRef<'_, T1, T2>> {
         crate::query::QueryRefRef::new(self)
     }
 
-    pub fn query_mut_ref_ref<T1: Component, T2: Component, T3: Component>(&self) -> Option<crate::query::QueryMutRefRef<'_, T1, T2, T3>> {
+    pub fn query_mut_ref_ref<T1: Component, T2: Component, T3: Component>(
+        &self,
+    ) -> Option<crate::query::QueryMutRefRef<'_, T1, T2, T3>> {
         crate::query::QueryMutRefRef::new(self)
     }
 
-    pub fn query_ref_ref_ref<T1: Component, T2: Component, T3: Component>(&self) -> Option<crate::query::QueryRefRefRef<'_, T1, T2, T3>> {
+    pub fn query_ref_ref_ref<T1: Component, T2: Component, T3: Component>(
+        &self,
+    ) -> Option<crate::query::QueryRefRefRef<'_, T1, T2, T3>> {
         crate::query::QueryRefRefRef::new(self)
+    }
+
+    pub fn query_mut_ref_ref_ref<T1: Component, T2: Component, T3: Component, T4: Component>(
+        &self,
+    ) -> Option<crate::query::QueryMutRefRefRef<'_, T1, T2, T3, T4>> {
+        crate::query::QueryMutRefRefRef::new(self)
+    }
+
+    pub fn query_ref_ref_ref_ref<T1: Component, T2: Component, T3: Component, T4: Component>(
+        &self,
+    ) -> Option<crate::query::QueryRefRefRefRef<'_, T1, T2, T3, T4>> {
+        crate::query::QueryRefRefRefRef::new(self)
+    }
+
+    pub fn query_mut_ref_ref_ref_ref<
+        T1: Component,
+        T2: Component,
+        T3: Component,
+        T4: Component,
+        T5: Component,
+    >(
+        &self,
+    ) -> Option<crate::query::QueryMutRefRefRefRef<'_, T1, T2, T3, T4, T5>> {
+        crate::query::QueryMutRefRefRefRef::new(self)
+    }
+
+    pub fn query_ref_ref_ref_ref_ref<
+        T1: Component,
+        T2: Component,
+        T3: Component,
+        T4: Component,
+        T5: Component,
+    >(
+        &self,
+    ) -> Option<crate::query::QueryRefRefRefRefRef<'_, T1, T2, T3, T4, T5>> {
+        crate::query::QueryRefRefRefRefRef::new(self)
     }
 
     /// Toplam yaşayan entity sayısı
@@ -225,14 +290,15 @@ impl World {
     /// Sisteme global bir Resource ekler veya üzerine yazar.
     pub fn insert_resource<T: 'static>(&mut self, resource: T) {
         let type_id = TypeId::of::<T>();
-        self.resources.insert(type_id, RefCell::new(Box::new(resource)));
+        self.resources
+            .insert(type_id, RefCell::new(Box::new(resource)));
     }
 
     /// Global bir Resource'u okumak için çağrılır (Immutable Borrow)
     pub fn get_resource<T: 'static>(&self) -> Option<Ref<'_, T>> {
         let type_id = TypeId::of::<T>();
         let storage = self.resources.get(&type_id)?;
-        
+
         Some(Ref::map(storage.borrow(), |s| {
             s.downcast_ref::<T>().unwrap()
         }))
@@ -242,10 +308,23 @@ impl World {
     pub fn get_resource_mut<T: 'static>(&self) -> Option<RefMut<'_, T>> {
         let type_id = TypeId::of::<T>();
         let storage = self.resources.get(&type_id)?;
-        
+
         Some(RefMut::map(storage.borrow_mut(), |s| {
             s.downcast_mut::<T>().unwrap()
         }))
+    }
+
+    /// Global bir Resource yoksa Default olarak oluşturur, ardından Mutable Borrow döndürür.
+    /// World mutable borrow gerektirir, böylece hashmap'e güvenle kayıt yapılabilir.
+    pub fn get_resource_mut_or_default<T: Default + 'static>(&mut self) -> RefMut<'_, T> {
+        let type_id = TypeId::of::<T>();
+        if !self.resources.contains_key(&type_id) {
+            self.resources
+                .insert(type_id, RefCell::new(Box::new(T::default())));
+        }
+
+        let storage = self.resources.get(&type_id).unwrap();
+        RefMut::map(storage.borrow_mut(), |s| s.downcast_mut::<T>().unwrap())
     }
 
     /// Global bir Resource'u ECS'ten tamamen çıkartır ve sahipliğini döndürür
@@ -297,8 +376,11 @@ mod tests {
 
     // Test component types
     #[derive(Debug, Clone, PartialEq)]
-    struct Position { x: f32, y: f32 }
-    
+    struct Position {
+        x: f32,
+        y: f32,
+    }
+
     #[derive(Debug, Clone, PartialEq)]
     struct Health(u32);
 
@@ -320,12 +402,12 @@ mod tests {
         let e1 = world.spawn();
         world.add_component(e1, Position { x: 1.0, y: 2.0 });
         world.add_component(e1, Health(100));
-        
+
         assert!(world.borrow::<Position>().unwrap().get(e1.id()).is_some());
         assert!(world.borrow::<Health>().unwrap().get(e1.id()).is_some());
-        
+
         world.despawn(e1);
-        
+
         assert!(!world.is_alive(e1));
         assert!(world.borrow::<Position>().unwrap().get(e1.id()).is_none());
         assert!(world.borrow::<Health>().unwrap().get(e1.id()).is_none());
@@ -336,15 +418,15 @@ mod tests {
         let mut world = World::new();
         let e1 = world.spawn();
         let e2 = world.spawn();
-        
+
         // e1 has Position only, e2 has both
         world.add_component(e1, Position { x: 0.0, y: 0.0 });
         world.add_component(e2, Position { x: 1.0, y: 1.0 });
         world.add_component(e2, Health(50));
-        
+
         // Despawn e1 — should not affect e2
         world.despawn(e1);
-        
+
         assert!(world.borrow::<Position>().unwrap().get(e2.id()).is_some());
         assert!(world.borrow::<Health>().unwrap().get(e2.id()).is_some());
         assert_eq!(world.entity_count(), 1);
@@ -356,9 +438,9 @@ mod tests {
         let _e1 = world.spawn();
         let e2 = world.spawn();
         let _e3 = world.spawn();
-        
+
         world.despawn(e2);
-        
+
         // Iterator should return 2 entities (e1 and e3), skipping e2
         let alive: Vec<Entity> = world.iter_alive_entities().collect();
         assert_eq!(alive.len(), 2);
@@ -371,14 +453,14 @@ mod tests {
         let e1 = world.spawn();
         let old_id = e1.id();
         let old_gen = e1.generation();
-        
+
         world.despawn(e1);
-        
+
         let e_new = world.spawn();
         // Should reuse the same ID with bumped generation
         assert_eq!(e_new.id(), old_id);
         assert_eq!(e_new.generation(), old_gen + 1);
-        
+
         // Old entity should not be alive
         assert!(!world.is_alive(e1));
         assert!(world.is_alive(e_new));
@@ -390,7 +472,7 @@ mod tests {
         let e = world.spawn();
         world.add_component(e, Health(100));
         world.add_component(e, Health(50)); // Overwrite
-        
+
         let hp = world.borrow::<Health>().unwrap();
         assert_eq!(hp.get(e.id()).unwrap().0, 50);
     }

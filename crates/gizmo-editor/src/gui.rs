@@ -1,8 +1,8 @@
 use egui::Context;
 use egui_wgpu::{Renderer, ScreenDescriptor};
 use egui_winit::State;
-use winit::window::Window;
 use winit::event::WindowEvent;
+use winit::window::Window;
 
 pub struct EditorContext {
     pub context: Context,
@@ -14,7 +14,7 @@ impl EditorContext {
     pub fn new(device: &wgpu::Device, output_format: wgpu::TextureFormat, window: &Window) -> Self {
         let context = Context::default();
         let viewport_id = context.viewport_id();
-        
+
         let state = State::new(
             context.clone(),
             viewport_id,
@@ -25,7 +25,11 @@ impl EditorContext {
 
         let renderer = Renderer::new(device, output_format, None, 1);
 
-        Self { context, state, renderer }
+        Self {
+            context,
+            state,
+            renderer,
+        }
     }
 
     pub fn handle_event(&mut self, window: &Window, event: &WindowEvent) -> bool {
@@ -49,13 +53,17 @@ impl EditorContext {
         view: &wgpu::TextureView, // Wgpu'nun sahneyi boyadığı tuvalin referansı
     ) {
         let full_output = self.context.end_frame();
-        self.state.handle_platform_output(window, full_output.platform_output.clone());
+        self.state
+            .handle_platform_output(window, full_output.platform_output.clone());
 
-        let paint_jobs = self.context.tessellate(full_output.shapes, window.scale_factor() as f32);
+        let paint_jobs = self
+            .context
+            .tessellate(full_output.shapes, window.scale_factor() as f32);
 
         // Dokuları Yükle (Fontlar, Pencereler vs)
         for (id, image_delta) in &full_output.textures_delta.set {
-            self.renderer.update_texture(device, queue, *id, image_delta);
+            self.renderer
+                .update_texture(device, queue, *id, image_delta);
         }
 
         let screen_descriptor = ScreenDescriptor {
@@ -63,13 +71,8 @@ impl EditorContext {
             pixels_per_point: window.scale_factor() as f32,
         };
 
-        self.renderer.update_buffers(
-            device,
-            queue,
-            encoder,
-            &paint_jobs,
-            &screen_descriptor,
-        );
+        self.renderer
+            .update_buffers(device, queue, encoder, &paint_jobs, &screen_descriptor);
 
         // -- EGUI ÇİZİCİSİNİ AKTİFLEŞTİR: Motorun Pass'inin Üzerine Ek Çizim Yapar --
         {
@@ -88,7 +91,8 @@ impl EditorContext {
                 occlusion_query_set: None,
             });
 
-            self.renderer.render(&mut render_pass, &paint_jobs, &screen_descriptor);
+            self.renderer
+                .render(&mut render_pass, &paint_jobs, &screen_descriptor);
         }
 
         // Eski dokuları sil

@@ -3,13 +3,13 @@
 //! Lua scriptlerinden tuş ve fare durumunu sorgulamak için kullanılır.
 //! Read-only API'dir, komut kuyruğuna yazmaz.
 
-use mlua::prelude::*;
 use gizmo_core::input::Input;
+use mlua::prelude::*;
 
 /// Input API fonksiyonlarını Lua'ya kaydeder
 pub fn register_input_api(lua: &Lua) -> Result<(), LuaError> {
     let input_table = lua.create_table()?;
-    
+
     // Placeholder fonksiyonlar - her frame update_input_api ile güncellenir
     input_table.set("_keys", lua.create_table()?)?;
     input_table.set("_just_keys", lua.create_table()?)?;
@@ -20,11 +20,12 @@ pub fn register_input_api(lua: &Lua) -> Result<(), LuaError> {
     input_table.set("_mouse_left", false)?;
     input_table.set("_mouse_right", false)?;
     input_table.set("_mouse_middle", false)?;
-    
+
     lua.globals().set("input", input_table)?;
-    
+
     // Lua helper fonksiyonlarını tanımla
-    lua.load(r#"
+    lua.load(
+        r#"
         -- Tuş adından KeyCode'a eşleme tablosu
         local key_map = {
             w = 17, a = 4, s = 22, d = 7,
@@ -72,19 +73,21 @@ pub fn register_input_api(lua: &Lua) -> Result<(), LuaError> {
             end
             return false
         end
-    "#).exec()?;
-    
+    "#,
+    )
+    .exec()?;
+
     Ok(())
 }
 
 /// Her frame Input durumunu Lua'ya aktarır
 pub fn update_input_api(lua: &Lua, input: &Input) -> Result<(), LuaError> {
     let input_table: LuaTable = lua.globals().get("input")?;
-    
+
     // Basılı tuşları Lua table'ına aktar
     let keys = lua.create_table()?;
     let just_keys = lua.create_table()?;
-    
+
     // Yaygın tuş kodlarını kontrol et (winit KeyCode enum değerleri)
     for code in 0..256u32 {
         if input.is_key_pressed(code) {
@@ -94,21 +97,30 @@ pub fn update_input_api(lua: &Lua, input: &Input) -> Result<(), LuaError> {
             just_keys.set(code, true)?;
         }
     }
-    
+
     input_table.set("_keys", keys)?;
     input_table.set("_just_keys", just_keys)?;
-    
+
     let (mx, my) = input.mouse_position();
     input_table.set("_mouse_x", mx)?;
     input_table.set("_mouse_y", my)?;
-    
+
     let (dx, dy) = input.mouse_delta();
     input_table.set("_mouse_dx", dx)?;
     input_table.set("_mouse_dy", dy)?;
-    
-    input_table.set("_mouse_left", input.is_mouse_button_pressed(gizmo_core::input::mouse::LEFT))?;
-    input_table.set("_mouse_right", input.is_mouse_button_pressed(gizmo_core::input::mouse::RIGHT))?;
-    input_table.set("_mouse_middle", input.is_mouse_button_pressed(gizmo_core::input::mouse::MIDDLE))?;
-    
+
+    input_table.set(
+        "_mouse_left",
+        input.is_mouse_button_pressed(gizmo_core::input::mouse::LEFT),
+    )?;
+    input_table.set(
+        "_mouse_right",
+        input.is_mouse_button_pressed(gizmo_core::input::mouse::RIGHT),
+    )?;
+    input_table.set(
+        "_mouse_middle",
+        input.is_mouse_button_pressed(gizmo_core::input::mouse::MIDDLE),
+    )?;
+
     Ok(())
 }

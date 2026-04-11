@@ -1,14 +1,14 @@
 //! Component Inspector Panel — Sağ panel'de seçili entity'nin bileşenlerini gösterir ve düzenlenebilir
 
-use egui;
-use gizmo_core::{World, EntityName};
-use gizmo_physics::components::{Transform, Velocity, RigidBody};
-use gizmo_physics::shape::Collider;
-use gizmo_renderer::components::{Camera, PointLight, Material, ParticleEmitter};
-use gizmo_physics::vehicle::VehicleController;
-use gizmo_audio::AudioSource;
-use gizmo_math::{Vec3, Vec4};
 use crate::editor_state::EditorState;
+use egui;
+use gizmo_audio::AudioSource;
+use gizmo_core::{EntityName, World};
+use gizmo_math::{Vec3, Vec4};
+use gizmo_physics::components::{RigidBody, Transform, Velocity};
+use gizmo_physics::shape::Collider;
+use gizmo_physics::vehicle::VehicleController;
+use gizmo_renderer::components::{Camera, Material, ParticleEmitter, PointLight};
 
 /// Inspector sekmesini çizer
 pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
@@ -17,19 +17,20 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         ui.label(egui::RichText::new("Hiçbir obje seçili değil.").color(egui::Color32::GRAY));
         return;
     }
-    
+
     if sel_len > 1 {
         ui.heading(format!("🔧 Çoklu Oje Seçili ({} adet)", sel_len));
         ui.separator();
-        
+
         ui.label("Şu anda çoklu seçim modundasınız. Çoklu objelerin özelliklerinin aynı anda değiştirilmesi ilerleyen versiyonlarda desteklenecektir.");
-        
-        if ui.button(egui::RichText::new("🗑️ Seçili Objeleri Sil").color(egui::Color32::RED)).clicked() {
-            // Şimdilik sadece tek siliyoruz, ya da birini:
-            // Multi-delete update.rs içinde klavye ile de var.
-            // Butona basılınca sadece log yazalım veya ilkini silelim (ileride event üzerinden yapılacak)
-            let first = *state.selected_entities.iter().next().unwrap();
-            state.despawn_request = Some(first); 
+
+        if ui
+            .button(egui::RichText::new("🗑️ Seçili Objeleri Sil").color(egui::Color32::RED))
+            .clicked()
+        {
+            for &entity in state.selected_entities.iter() {
+                state.despawn_requests.push(entity);
+            }
         }
         return;
     }
@@ -37,59 +38,62 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     // Tekli seçim durumu
     if let Some(&entity_id) = state.selected_entities.iter().next() {
         ui.heading(format!("🔧 Inspector [{}]", entity_id));
-                
-                if ui.button(egui::RichText::new("🗑️ Seçili Objeyi Sil").color(egui::Color32::RED)).clicked() {
-                    state.despawn_request = Some(entity_id);
+
+        if ui
+            .button(egui::RichText::new("🗑️ Seçili Objeyi Sil").color(egui::Color32::RED))
+            .clicked()
+        {
+            state.despawn_requests.push(entity_id);
+        }
+
+        ui.separator();
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            // === ENTITY NAME ===
+            draw_name_section(ui, world, entity_id);
+
+            // === TRANSFORM ===
+            draw_transform_section(ui, world, entity_id);
+
+            // === VELOCITY ===
+            draw_velocity_section(ui, world, entity_id);
+
+            // === RIGIDBODY ===
+            draw_rigidbody_section(ui, world, entity_id);
+
+            // === COLLIDER ===
+            draw_collider_section(ui, world, entity_id);
+
+            // === CAMERA ===
+            draw_camera_section(ui, world, entity_id);
+
+            // === POINT LIGHT ===
+            draw_point_light_section(ui, world, entity_id);
+
+            // === MATERIAL ===
+            draw_material_section(ui, world, entity_id);
+
+            // === PARTICLE EMITTER ===
+            draw_particle_emitter_section(ui, world, entity_id);
+
+            // === VEHICLE CONTROLLER ===
+            draw_vehicle_controller_section(ui, world, entity_id);
+            draw_audio_source_section(ui, world, entity_id);
+            draw_terrain_section(ui, world, entity_id, state);
+
+            ui.separator();
+
+            // === ADD COMPONENT BUTONU ===
+            ui.horizontal(|ui| {
+                if ui.button("➕ Bileşen Ekle").clicked() {
+                    state.add_component_open = !state.add_component_open;
                 }
-                
-                ui.separator();
+            });
 
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    // === ENTITY NAME ===
-                    draw_name_section(ui, world, entity_id);
-                    
-                    // === TRANSFORM ===
-                    draw_transform_section(ui, world, entity_id);
-                    
-                    // === VELOCITY ===
-                    draw_velocity_section(ui, world, entity_id);
-                    
-                    // === RIGIDBODY ===
-                    draw_rigidbody_section(ui, world, entity_id);
-                    
-                    // === COLLIDER ===
-                    draw_collider_section(ui, world, entity_id);
-                    
-                    // === CAMERA ===
-                    draw_camera_section(ui, world, entity_id);
-                    
-                    // === POINT LIGHT ===
-                    draw_point_light_section(ui, world, entity_id);
-                    
-                    // === MATERIAL ===
-                    draw_material_section(ui, world, entity_id);
-
-                    // === PARTICLE EMITTER ===
-                    draw_particle_emitter_section(ui, world, entity_id);
-
-                    // === VEHICLE CONTROLLER ===
-                    draw_vehicle_controller_section(ui, world, entity_id);
-                    draw_audio_source_section(ui, world, entity_id);
-                    draw_terrain_section(ui, world, entity_id, state);
-
-                    ui.separator();
-                    
-                    // === ADD COMPONENT BUTONU ===
-                    ui.horizontal(|ui| {
-                        if ui.button("➕ Bileşen Ekle").clicked() {
-                            state.add_component_open = !state.add_component_open;
-                        }
-                    });
-                    
-                    if state.add_component_open {
-                        draw_add_component_menu(ui, world, entity_id, state);
-                    }
-                });
+            if state.add_component_open {
+                draw_add_component_menu(ui, world, entity_id, state);
+            }
+        });
     } else {
         ui.heading("🔧 Inspector");
         ui.separator();
@@ -146,11 +150,23 @@ fn draw_transform_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
                     ui.label("Ölçek:");
                     ui.horizontal(|ui| {
                         ui.label("X");
-                        ui.add(egui::DragValue::new(&mut t.scale.x).speed(0.05).clamp_range(0.01..=100.0));
+                        ui.add(
+                            egui::DragValue::new(&mut t.scale.x)
+                                .speed(0.05)
+                                .clamp_range(0.01..=100.0),
+                        );
                         ui.label("Y");
-                        ui.add(egui::DragValue::new(&mut t.scale.y).speed(0.05).clamp_range(0.01..=100.0));
+                        ui.add(
+                            egui::DragValue::new(&mut t.scale.y)
+                                .speed(0.05)
+                                .clamp_range(0.01..=100.0),
+                        );
                         ui.label("Z");
-                        ui.add(egui::DragValue::new(&mut t.scale.z).speed(0.05).clamp_range(0.01..=100.0));
+                        ui.add(
+                            egui::DragValue::new(&mut t.scale.z)
+                                .speed(0.05)
+                                .clamp_range(0.01..=100.0),
+                        );
                     });
                 });
             ui.separator();
@@ -166,15 +182,39 @@ fn draw_velocity_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
                 .show(ui, |ui| {
                     ui.label("Doğrusal:");
                     ui.horizontal(|ui| {
-                        ui.add(egui::DragValue::new(&mut v.linear.x).speed(0.1).prefix("X: "));
-                        ui.add(egui::DragValue::new(&mut v.linear.y).speed(0.1).prefix("Y: "));
-                        ui.add(egui::DragValue::new(&mut v.linear.z).speed(0.1).prefix("Z: "));
+                        ui.add(
+                            egui::DragValue::new(&mut v.linear.x)
+                                .speed(0.1)
+                                .prefix("X: "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut v.linear.y)
+                                .speed(0.1)
+                                .prefix("Y: "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut v.linear.z)
+                                .speed(0.1)
+                                .prefix("Z: "),
+                        );
                     });
                     ui.label("Açısal:");
                     ui.horizontal(|ui| {
-                        ui.add(egui::DragValue::new(&mut v.angular.x).speed(0.1).prefix("X: "));
-                        ui.add(egui::DragValue::new(&mut v.angular.y).speed(0.1).prefix("Y: "));
-                        ui.add(egui::DragValue::new(&mut v.angular.z).speed(0.1).prefix("Z: "));
+                        ui.add(
+                            egui::DragValue::new(&mut v.angular.x)
+                                .speed(0.1)
+                                .prefix("X: "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut v.angular.y)
+                                .speed(0.1)
+                                .prefix("Y: "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut v.angular.z)
+                                .speed(0.1)
+                                .prefix("Z: "),
+                        );
                     });
                 });
             ui.separator();
@@ -190,26 +230,41 @@ fn draw_rigidbody_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Kütle:");
-                        ui.add(egui::DragValue::new(&mut rb.mass).speed(0.5).clamp_range(0.0..=100000.0));
+                        ui.add(
+                            egui::DragValue::new(&mut rb.mass)
+                                .speed(0.5)
+                                .clamp_range(0.0..=100000.0),
+                        );
                     });
                     ui.horizontal(|ui| {
                         ui.label("Sekme:");
-                        ui.add(egui::DragValue::new(&mut rb.restitution).speed(0.01).clamp_range(0.0..=1.0));
+                        ui.add(
+                            egui::DragValue::new(&mut rb.restitution)
+                                .speed(0.01)
+                                .clamp_range(0.0..=1.0),
+                        );
                     });
                     ui.horizontal(|ui| {
                         ui.label("Sürtünme:");
-                        ui.add(egui::DragValue::new(&mut rb.friction).speed(0.01).clamp_range(0.0..=2.0));
+                        ui.add(
+                            egui::DragValue::new(&mut rb.friction)
+                                .speed(0.01)
+                                .clamp_range(0.0..=2.0),
+                        );
                     });
                     ui.checkbox(&mut rb.use_gravity, "Yerçekimi");
                     ui.checkbox(&mut rb.ccd_enabled, "CCD (Hızlı Obje)");
-                    
-                    let status = if rb.is_sleeping { "💤 Uyuyor" } else { "⚡ Aktif" };
+
+                    let status = if rb.is_sleeping {
+                        "💤 Uyuyor"
+                    } else {
+                        "⚡ Aktif"
+                    };
                     ui.label(format!("Durum: {}", status));
-                    
-                    if rb.is_sleeping
-                        && ui.button("Uyandır").clicked() {
-                            rb.wake_up();
-                        }
+
+                    if rb.is_sleeping && ui.button("Uyandır").clicked() {
+                        rb.wake_up();
+                    }
                 });
             ui.separator();
         }
@@ -239,17 +294,33 @@ fn draw_camera_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
                     ui.horizontal(|ui| {
                         ui.label("FOV:");
                         let mut fov_deg = cam.fov.to_degrees();
-                        if ui.add(egui::DragValue::new(&mut fov_deg).speed(1.0).clamp_range(10.0..=120.0).suffix("°")).changed() {
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut fov_deg)
+                                    .speed(1.0)
+                                    .clamp_range(10.0..=120.0)
+                                    .suffix("°"),
+                            )
+                            .changed()
+                        {
                             cam.fov = fov_deg.to_radians();
                         }
                     });
                     ui.horizontal(|ui| {
                         ui.label("Near:");
-                        ui.add(egui::DragValue::new(&mut cam.near).speed(0.01).clamp_range(0.001..=10.0));
+                        ui.add(
+                            egui::DragValue::new(&mut cam.near)
+                                .speed(0.01)
+                                .clamp_range(0.001..=10.0),
+                        );
                     });
                     ui.horizontal(|ui| {
                         ui.label("Far:");
-                        ui.add(egui::DragValue::new(&mut cam.far).speed(10.0).clamp_range(10.0..=50000.0));
+                        ui.add(
+                            egui::DragValue::new(&mut cam.far)
+                                .speed(10.0)
+                                .clamp_range(10.0..=50000.0),
+                        );
                     });
                     ui.checkbox(&mut cam.primary, "Ana Kamera");
                 });
@@ -273,7 +344,11 @@ fn draw_point_light_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
                     });
                     ui.horizontal(|ui| {
                         ui.label("Yoğunluk:");
-                        ui.add(egui::DragValue::new(&mut light.intensity).speed(0.1).clamp_range(0.0..=100.0));
+                        ui.add(
+                            egui::DragValue::new(&mut light.intensity)
+                                .speed(0.1)
+                                .clamp_range(0.0..=100.0),
+                        );
                     });
                 });
             ui.separator();
@@ -296,16 +371,30 @@ fn draw_material_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
                     });
                     ui.horizontal(|ui| {
                         ui.label("Metalik:");
-                        ui.add(egui::DragValue::new(&mut mat.metallic).speed(0.01).clamp_range(0.0..=1.0));
+                        ui.add(
+                            egui::DragValue::new(&mut mat.metallic)
+                                .speed(0.01)
+                                .clamp_range(0.0..=1.0),
+                        );
                     });
                     ui.horizontal(|ui| {
                         ui.label("Pürüzlülük (Roughness):");
-                        ui.add(egui::DragValue::new(&mut mat.roughness).speed(0.01).clamp_range(0.0..=1.0));
+                        ui.add(
+                            egui::DragValue::new(&mut mat.roughness)
+                                .speed(0.01)
+                                .clamp_range(0.0..=1.0),
+                        );
                     });
-                    
-                    let mode = if mat.unlit == 0.0 { "PBR" } else if mat.unlit == 1.0 { "Unlit" } else { "Skybox" };
+
+                    let mode = if mat.unlit == 0.0 {
+                        "PBR"
+                    } else if mat.unlit == 1.0 {
+                        "Unlit"
+                    } else {
+                        "Skybox"
+                    };
                     ui.label(format!("Mod: {}", mode));
-                    
+
                     if let Some(src) = &mat.texture_source {
                         ui.label(format!("Texture: {}", src));
                     }
@@ -335,7 +424,10 @@ fn draw_particle_emitter_section(ui: &mut egui::Ui, world: &World, entity_id: u3
                     });
                     ui.horizontal(|ui| {
                         ui.label("Saçılma (Rnd):");
-                        ui.add(egui::Slider::new(&mut emitter.velocity_randomness, 0.0..=20.0));
+                        ui.add(egui::Slider::new(
+                            &mut emitter.velocity_randomness,
+                            0.0..=20.0,
+                        ));
                     });
                 });
             ui.separator();
@@ -359,8 +451,12 @@ fn draw_vehicle_controller_section(ui: &mut egui::Ui, world: &World, entity_id: 
                     });
                     ui.horizontal(|ui| {
                         ui.label("Süsp. Sertliği:");
-                        let mut stiffness = vrc.wheels.first().map_or(20.0, |w| w.suspension_stiffness);
-                        if ui.add(egui::Slider::new(&mut stiffness, 0.0..=100.0)).changed() {
+                        let mut stiffness =
+                            vrc.wheels.first().map_or(20.0, |w| w.suspension_stiffness);
+                        if ui
+                            .add(egui::Slider::new(&mut stiffness, 0.0..=100.0))
+                            .changed()
+                        {
                             for w in &mut vrc.wheels {
                                 w.suspension_stiffness = stiffness;
                             }
@@ -372,16 +468,30 @@ fn draw_vehicle_controller_section(ui: &mut egui::Ui, world: &World, entity_id: 
     }
 }
 
-fn draw_add_component_menu(ui: &mut egui::Ui, _world: &World, _entity_id: u32, state: &mut EditorState) {
+fn draw_add_component_menu(
+    ui: &mut egui::Ui,
+    _world: &World,
+    _entity_id: u32,
+    state: &mut EditorState,
+) {
     ui.group(|ui| {
         ui.horizontal(|ui| {
             ui.label("Eklenecek Bileşen:");
-            
+
             let components = [
-                "Transform", "Velocity", "RigidBody", "Collider",
-                "Camera", "PointLight", "Material", "ParticleEmitter", "Script", "AudioSource", "Terrain"
+                "Transform",
+                "Velocity",
+                "RigidBody",
+                "Collider",
+                "Camera",
+                "PointLight",
+                "Material",
+                "ParticleEmitter",
+                "Script",
+                "AudioSource",
+                "Terrain",
             ];
-            
+
             egui::ComboBox::from_id_source("add_comp_combo")
                 .selected_text("Seçiniz...")
                 .show_ui(ui, |ui| {
@@ -404,11 +514,14 @@ fn draw_audio_source_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Ses Dosyası:");
-                        ui.label(egui::RichText::new(&audio.sound_name).color(egui::Color32::from_rgb(100, 200, 255)));
+                        ui.label(
+                            egui::RichText::new(&audio.sound_name)
+                                .color(egui::Color32::from_rgb(100, 200, 255)),
+                        );
                     });
                     ui.checkbox(&mut audio.is_3d, "3D Uzamsal Ses");
                     ui.checkbox(&mut audio.loop_sound, "Döngü (Loop)");
-                    
+
                     ui.horizontal(|ui| {
                         ui.label("Ses Şiddeti (Volume):");
                         ui.add(egui::Slider::new(&mut audio.volume, 0.0..=5.0));
@@ -417,11 +530,14 @@ fn draw_audio_source_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
                         ui.label("Ses İnceliği (Pitch):");
                         ui.add(egui::Slider::new(&mut audio.pitch, 0.1..=3.0));
                     });
-                    
+
                     if audio.is_3d {
                         ui.horizontal(|ui| {
                             ui.label("Maksimum Mesafe:");
-                            ui.add(egui::Slider::new(&mut audio.max_distance, 1.0..=1000.0).suffix("m"));
+                            ui.add(
+                                egui::Slider::new(&mut audio.max_distance, 1.0..=1000.0)
+                                    .suffix("m"),
+                            );
                         });
                     }
                 });
@@ -440,15 +556,32 @@ fn draw_terrain_section(ui: &mut egui::Ui, world: &World, entity_id: u32, state:
                     ui.label(format!("Heightmap: {}", terrain.heightmap_path));
                     ui.horizontal(|ui| {
                         ui.label("Genişlik (X):");
-                        if ui.add(egui::Slider::new(&mut terrain.width, 10.0..=1000.0).suffix("m")).changed() { changed = true; }
+                        if ui
+                            .add(egui::Slider::new(&mut terrain.width, 10.0..=1000.0).suffix("m"))
+                            .changed()
+                        {
+                            changed = true;
+                        }
                     });
                     ui.horizontal(|ui| {
                         ui.label("Derinlik (Z):");
-                        if ui.add(egui::Slider::new(&mut terrain.depth, 10.0..=1000.0).suffix("m")).changed() { changed = true; }
+                        if ui
+                            .add(egui::Slider::new(&mut terrain.depth, 10.0..=1000.0).suffix("m"))
+                            .changed()
+                        {
+                            changed = true;
+                        }
                     });
                     ui.horizontal(|ui| {
                         ui.label("Maks. Yükseklik:");
-                        if ui.add(egui::Slider::new(&mut terrain.max_height, 1.0..=500.0).suffix("m")).changed() { changed = true; }
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut terrain.max_height, 1.0..=500.0).suffix("m"),
+                            )
+                            .changed()
+                        {
+                            changed = true;
+                        }
                     });
                 });
             if changed {
@@ -483,7 +616,7 @@ fn quat_to_euler_deg(q: gizmo_math::Quat) -> (f32, f32, f32) {
 
 fn euler_deg_to_quat(rx: f32, ry: f32, rz: f32) -> gizmo_math::Quat {
     let (rx, ry, rz) = (rx.to_radians(), ry.to_radians(), rz.to_radians());
-    
+
     let (sx, cx) = (rx * 0.5).sin_cos();
     let (sy, cy) = (ry * 0.5).sin_cos();
     let (sz, cz) = (rz * 0.5).sin_cos();

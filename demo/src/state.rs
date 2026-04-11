@@ -1,7 +1,11 @@
 use gizmo::prelude::*;
 
 #[derive(Clone, Copy, PartialEq)]
-pub enum DragAxis { X, Y, Z }
+pub enum DragAxis {
+    X,
+    Y,
+    Z,
+}
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum GizmoMode {
@@ -15,7 +19,7 @@ pub enum GizmoMode {
 pub struct DialogueEntry {
     pub speaker: String,
     pub text: String,
-    pub timer: f32,    // kalan süre (saniye), 0 = süresiz
+    pub timer: f32, // kalan süre (saniye), 0 = süresiz
 }
 
 /// Yarış checkpoint'i
@@ -36,6 +40,8 @@ pub enum RaceStatus {
 }
 
 // --- ECS KULLANIMI İÇİN EVENT VE RESOURCE YAPILARI ---
+
+pub struct SceneLoadRequest(pub String);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppMode {
@@ -59,7 +65,6 @@ pub struct PlayerStats {
     pub ammo: u32,
     pub max_ammo: u32,
 }
-
 
 pub struct PachinkoSpawnerState {
     pub timer: f32,
@@ -100,7 +105,6 @@ pub struct DominoAppState {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Coin;
-
 
 pub struct GameState {
     pub bouncing_box_id: u32,
@@ -146,11 +150,11 @@ pub struct GameState {
     // Oyun Modları
     pub ps1_race: Option<crate::race::RaceState>,
     pub basic_scene: Option<crate::basic_scene::BasicSceneState>,
-    
+
     // Gizmo City Dash Game State
     pub game_score: u32,
     pub game_max_score: u32,
-    
+
     // Geliştirici Araçları,
     pub show_devtools: bool,
 }

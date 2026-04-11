@@ -1,11 +1,11 @@
-use gizmo_math::{Vec3, Quat};
-use crate::shape::{ColliderShape, Collider, Aabb, Sphere, Capsule};
 use crate::components::Transform;
+use crate::shape::{Aabb, Capsule, Collider, ColliderShape, Sphere};
+use gizmo_math::{Quat, Vec3};
 
 /// Kinematic Character Controller
 /// Fizik simülasyonuna TAM tabi olmadan çarpışma yapan özel bileşen.
 /// Unity'deki CharacterController'a eşdeğer.
-/// 
+///
 /// Çalışma prensibi:
 /// 1. Oyuncu input'u → `desired_velocity` olarak ayarlanır
 /// 2. `physics_character_system` çağrılır
@@ -63,12 +63,14 @@ impl CharacterController {
 /// Capsule vs AABB penetrasyon testi (world space)
 /// true dönerse `normal` ve `depth` ile ne kadar gömüldüğünü verir
 fn capsule_vs_aabb(
-    cap_pos: Vec3, cap_rot: Quat, cap: &Capsule,
-    box_pos: Vec3, aabb: &Aabb,
+    cap_pos: Vec3,
+    cap_rot: Quat,
+    cap: &Capsule,
+    box_pos: Vec3,
+    aabb: &Aabb,
 ) -> Option<(Vec3, f32)> {
-    let manifold = crate::collision::check_capsule_aabb_manifold(
-        cap_pos, cap_rot, cap, box_pos, aabb,
-    );
+    let manifold =
+        crate::collision::check_capsule_aabb_manifold(cap_pos, cap_rot, cap, box_pos, aabb);
     if manifold.is_colliding {
         Some((manifold.normal, manifold.penetration))
     } else {
@@ -78,12 +80,14 @@ fn capsule_vs_aabb(
 
 /// Capsule vs Sphere penetrasyon testi
 fn capsule_vs_sphere(
-    cap_pos: Vec3, cap_rot: Quat, cap: &Capsule,
-    sphere_pos: Vec3, sphere: &Sphere,
+    cap_pos: Vec3,
+    cap_rot: Quat,
+    cap: &Capsule,
+    sphere_pos: Vec3,
+    sphere: &Sphere,
 ) -> Option<(Vec3, f32)> {
-    let manifold = crate::collision::check_capsule_sphere_manifold(
-        cap_pos, cap_rot, cap, sphere_pos, sphere,
-    );
+    let manifold =
+        crate::collision::check_capsule_sphere_manifold(cap_pos, cap_rot, cap, sphere_pos, sphere);
     if manifold.is_colliding {
         Some((manifold.normal, manifold.penetration))
     } else {
@@ -93,8 +97,12 @@ fn capsule_vs_sphere(
 
 /// Capsule vs Capsule penetrasyon testi
 fn capsule_vs_capsule(
-    cap_a_pos: Vec3, cap_a_rot: Quat, cap_a: &Capsule,
-    cap_b_pos: Vec3, cap_b_rot: Quat, cap_b: &Capsule,
+    cap_a_pos: Vec3,
+    cap_a_rot: Quat,
+    cap_a: &Capsule,
+    cap_b_pos: Vec3,
+    cap_b_rot: Quat,
+    cap_b: &Capsule,
 ) -> Option<(Vec3, f32)> {
     let manifold = crate::collision::check_capsule_capsule_manifold(
         cap_a_pos, cap_a_rot, cap_a, cap_b_pos, cap_b_rot, cap_b,
@@ -108,7 +116,9 @@ fn capsule_vs_capsule(
 
 /// Karakter kapsülünü tüm collider'lara karşı test eder ve toplam itme vektörü döndürür
 fn resolve_capsule_collisions(
-    cap_pos: Vec3, cap_rot: Quat, cap: &Capsule,
+    cap_pos: Vec3,
+    cap_rot: Quat,
+    cap: &Capsule,
     entity_id: u32,
     transforms: &gizmo_core::SparseSet<Transform>,
     colliders: &gizmo_core::SparseSet<Collider>,
@@ -118,32 +128,158 @@ fn resolve_capsule_collisions(
     let mut ground_normal = Vec3::new(0.0, 1.0, 0.0);
     let mut is_grounded = false;
 
-    for other_entity in colliders.entity_dense.iter() {
+    for other_entity in colliders.dense.iter().map(|e| &e.entity) {
         let other_id = *other_entity;
-        if other_id == entity_id { continue; }
+        if other_id == entity_id {
+            continue;
+        }
 
-        let other_t = match transforms.get(other_id) { Some(t) => t, None => continue };
-        let other_col = match colliders.get(other_id) { Some(c) => c, None => continue };
+        let other_t = match transforms.get(other_id) {
+            Some(t) => t,
+            None => continue,
+        };
+        let other_col = match colliders.get(other_id) {
+            Some(c) => c,
+            None => continue,
+        };
+
+        // ================= BROAD-PHASE (KÜRESEL ÖN TEST) =================
+        // Dar-faz (Narrow-phase) GJK/EPA veya benzeri detaylı hesaplara girmeden önce,
+        // karakter ile obje arasındaki kaba küresel mesafeyi buluruz.
+        let other_ext = other_col.shape.bounding_box_half_extents(other_t.rotation);
+        let other_radius = other_ext.length();
+        let cap_radius = cap.half_height + cap.radius;
+        let max_dist = other_radius + cap_radius + 0.5; // 0.5m güvenlik payı
+        if (cap_pos - other_t.position).length_squared() > max_dist * max_dist {
+            continue; // Kapsül ve Obje birbirinden güvenle uzakta, atla!
+        }
 
         let hit = match &other_col.shape {
             ColliderShape::Aabb(aabb) => {
-                capsule_vs_aabb(cap_pos + correction, cap_rot, cap, other_t.position, aabb)
-            },
+                capsule_vs_aabb(cap_pos, cap_rot, cap, other_t.position, aabb)
+            }
             ColliderShape::Sphere(sphere) => {
-                capsule_vs_sphere(cap_pos + correction, cap_rot, cap, other_t.position, sphere)
-            },
-            ColliderShape::Capsule(other_cap) => {
-                capsule_vs_capsule(cap_pos + correction, cap_rot, cap, other_t.position, other_t.rotation, other_cap)
-            },
+                capsule_vs_sphere(cap_pos, cap_rot, cap, other_t.position, sphere)
+            }
+            ColliderShape::Capsule(other_cap) => capsule_vs_capsule(
+                cap_pos,
+                cap_rot,
+                cap,
+                other_t.position,
+                other_t.rotation,
+                other_cap,
+            ),
             ColliderShape::ConvexHull(_) => {
-                // ConvexHull karakter çarpışması GJK/EPA ile çözülür (ileri adım)
-                None
-            },
+                let test_pos = cap_pos;
+                let cap_shape = ColliderShape::Capsule(cap.clone());
+                let (hit, sim) = crate::gjk::gjk_intersect(
+                    &cap_shape,
+                    test_pos,
+                    cap_rot,
+                    &other_col.shape,
+                    other_t.position,
+                    other_t.rotation,
+                );
+                if hit {
+                    let manifold = crate::epa::epa_solve(
+                        sim,
+                        &cap_shape,
+                        test_pos,
+                        cap_rot,
+                        &other_col.shape,
+                        other_t.position,
+                        other_t.rotation,
+                    );
+                    if manifold.is_colliding {
+                        Some((manifold.normal, manifold.penetration))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
             ColliderShape::Swept { .. } => {
-                None  // Swept shape should never be in ECS
-            },
-            ColliderShape::HeightField { .. } => {
-                None // CharacterController vs Heightmap is not implemented yet
+                None // Swept shape should never be in ECS
+            }
+            ColliderShape::HeightField {
+                heights,
+                segments_x,
+                segments_z,
+                width,
+                depth,
+                max_height,
+            } => {
+                let test_pos = cap_pos;
+                let position = other_t.position;
+                let local_x = test_pos.x - position.x;
+                let local_z = test_pos.z - position.z;
+                let half_w = *width * 0.5;
+                let half_d = *depth * 0.5;
+
+                // Kapsül boundary kontrolü
+                if local_x >= -half_w
+                    && local_x <= half_w
+                    && local_z >= -half_d
+                    && local_z <= half_d
+                {
+                    let nx = (local_x + half_w) / *width;
+                    let nz = (local_z + half_d) / *depth;
+                    let sx = *segments_x as f32 - 1.0;
+                    let sz_ = *segments_z as f32 - 1.0;
+                    let fx = (nx * sx).max(0.0);
+                    let fz = (nz * sz_).max(0.0);
+
+                    let gx0 = (fx as u32).clamp(0, *segments_x - 2);
+                    let gz0 = (fz as u32).clamp(0, *segments_z - 2);
+                    let gx1 = gx0 + 1;
+                    let gz1 = gz0 + 1;
+
+                    let h = |gx: u32, gz: u32| -> f32 {
+                        let idx = (gz * *segments_x + gx) as usize;
+                        if idx < heights.len() {
+                            heights[idx] * *max_height
+                        } else {
+                            0.0
+                        }
+                    };
+
+                    let h00 = h(gx0, gz0);
+                    let h10 = h(gx1, gz0);
+                    let h01 = h(gx0, gz1);
+                    let h11 = h(gx1, gz1);
+
+                    let tx = fx - gx0 as f32;
+                    let tz = fz - gz0 as f32;
+
+                    let terrain_local_y = h00 * (1.0 - tx) * (1.0 - tz)
+                        + h10 * tx * (1.0 - tz)
+                        + h01 * (1.0 - tx) * tz
+                        + h11 * tx * tz;
+
+                    let terrain_y = position.y + terrain_local_y;
+
+                    // Kapsülün en alt noktası (yön tamamen upright kabul ediliyor)
+                    let bottom_y = test_pos.y - cap.half_height - cap.radius;
+
+                    if bottom_y < terrain_y {
+                        // Basit normal hesabı (türevler üzerinden)
+                        let raw_dx = (h10 - h00) * (1.0 - tz) + (h11 - h01) * tz;
+                        let raw_dz = (h01 - h00) * (1.0 - tx) + (h11 - h10) * tx;
+
+                        let cell_w = *width / (*segments_x as f32);
+                        let cell_d = *depth / (*segments_z as f32);
+
+                        let norm = gizmo_math::Vec3::new(-raw_dx / cell_w, 1.0, -raw_dz / cell_d)
+                            .normalize();
+
+                        Some((norm, terrain_y - bottom_y))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
             }
         };
 
@@ -185,18 +321,31 @@ fn slope_angle(normal: Vec3) -> f32 {
 /// 6. Eğim limiti kontrolü
 pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
     // Collider'ları ayrıca borrow'lamak lazım
-    let colliders = match world.borrow::<Collider>() { Some(c) => c, None => return };
-    
-    if let (Some(mut trans_storage), Some(mut controllers)) = 
-        (world.borrow_mut::<Transform>(), world.borrow_mut::<CharacterController>())
-    {
-        let entities = controllers.entity_dense.clone();
+    let colliders = match world.borrow::<Collider>() {
+        Some(c) => c,
+        None => return,
+    };
+
+    if let (Some(mut trans_storage), Some(mut controllers)) = (
+        world.borrow_mut::<Transform>(),
+        world.borrow_mut::<CharacterController>(),
+    ) {
+        let entities: Vec<u32> = controllers.dense.iter().map(|e| e.entity).collect();
         for entity in entities {
-            let t = match trans_storage.get(entity) { Some(t) => *t, None => continue };
-            let cc = match controllers.get_mut(entity) { Some(c) => c, None => continue };
-            
-            let cap = Capsule { radius: cc.radius, half_height: cc.half_height };
-            
+            let t = match trans_storage.get(entity) {
+                Some(t) => *t,
+                None => continue,
+            };
+            let cc = match controllers.get_mut(entity) {
+                Some(c) => c,
+                None => continue,
+            };
+
+            let cap = Capsule {
+                radius: cc.radius,
+                half_height: cc.half_height,
+            };
+
             // === 1. Yerçekimi ===
             if !cc.is_grounded {
                 cc.vertical_velocity -= 9.81 * dt;
@@ -206,28 +355,33 @@ pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
                 // Hafif aşağı kuvvet (yere yapışmak için, eğimden kayma amaçlı)
                 cc.vertical_velocity = -0.5;
             }
-            
+
             // === 2. Toplam hareketi hesapla ===
             let mut move_delta = cc.desired_velocity * dt;
             move_delta.y += cc.vertical_velocity * dt;
-            
+
             // === 3. Hareketi uygula ve çarpışma çöz (3 iterasyon slide) ===
             let mut new_pos = t.position + move_delta;
-            
+
             for _slide_iter in 0..3 {
                 let (correction, normal, grounded) = resolve_capsule_collisions(
-                    new_pos, t.rotation, &cap, entity, &trans_storage, &colliders,
+                    new_pos,
+                    t.rotation,
+                    &cap,
+                    entity,
+                    &trans_storage,
+                    &colliders,
                 );
-                
+
                 if correction.length_squared() < 0.00001 {
                     // Çarpışma yok, hareketi kabul et
                     break;
                 }
-                
+
                 new_pos += correction;
                 cc.is_grounded = grounded;
                 cc.ground_normal = normal;
-                
+
                 // Slide: Kalan hızdan çarpışma normal bileşenini çıkar
                 // normal, collider'dan dışarı (karaktere doğru) yönlü.
                 // remaining'in normal üzerine projeksiyonu negatifse (collider'a doğru gidiyor),
@@ -241,29 +395,30 @@ pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
                     new_pos = t.position + slide;
                 }
             }
-            
+
             // === 4. Zemin düzlemi kontrolü (fallback — collider yoksa) ===
-            let ground_y = world.get_resource::<crate::components::PhysicsConfig>()
+            let ground_y = world
+                .get_resource::<crate::components::PhysicsConfig>()
                 .map(|c| c.ground_y)
                 .unwrap_or(-1.0);
             let foot_y = new_pos.y - cc.half_height - cc.radius;
-            
+
             if foot_y <= ground_y + cc.skin_width + 0.05 {
                 cc.is_grounded = true;
                 cc.ground_normal = Vec3::new(0.0, 1.0, 0.0);
-                
+
                 let target_y = ground_y + cc.half_height + cc.radius + cc.skin_width;
                 if new_pos.y < target_y {
                     new_pos.y = target_y;
                 }
-                
+
                 if cc.vertical_velocity < 0.0 {
                     cc.vertical_velocity = 0.0;
                 }
             } else if !cc.is_grounded {
                 cc.is_grounded = false;
             }
-            
+
             // === 5. Eğim kontrolü ===
             if cc.is_grounded {
                 let angle = slope_angle(cc.ground_normal);
@@ -271,13 +426,14 @@ pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
                     // Eğim çok dik — kayma uygula
                     let slide_dir = Vec3::new(cc.ground_normal.x, 0.0, cc.ground_normal.z);
                     if slide_dir.length_squared() > 0.001 {
-                        let slide_force = slide_dir.normalize() * 9.81 * angle.to_radians().sin() * dt;
+                        let slide_force =
+                            slide_dir.normalize() * 9.81 * angle.to_radians().sin() * dt;
                         new_pos += slide_force;
                     }
                     cc.is_grounded = false; // Kontrol kaybı
                 }
             }
-            
+
             // === 6. Basamak çıkma (Step Climbing) ===
             // Yatay hareket varsa ve bir engelle karşılaşıldıysa:
             // step_height kadar yukarıdan tekrar dene
@@ -289,11 +445,16 @@ pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
                         t.position.y + cc.step_height,
                         t.position.z + horizontal_move.z,
                     );
-                    
+
                     let (step_correction, _, _) = resolve_capsule_collisions(
-                        step_test_pos, t.rotation, &cap, entity, &trans_storage, &colliders,
+                        step_test_pos,
+                        t.rotation,
+                        &cap,
+                        entity,
+                        &trans_storage,
+                        &colliders,
                     );
-                    
+
                     // Yukarıdan geçebildiyse (çarpışma düzeltmesi küçükse) → basamak çık
                     if step_correction.length_squared() < 0.01 {
                         // step_test_pos'tan aşağı doğru yerçekimi ile dengeye otur
@@ -303,13 +464,13 @@ pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
                     }
                 }
             }
-            
+
             // === 7. Son pozisyonu uygula ===
             if let Some(t_mut) = trans_storage.get_mut(entity) {
                 t_mut.position = new_pos;
                 t_mut.update_local_matrix();
             }
-            
+
             // desired_velocity'yi sıfırla (her frame yeniden ayarlanmalı)
             cc.desired_velocity = Vec3::ZERO;
         }

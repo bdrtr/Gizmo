@@ -1,20 +1,14 @@
-pub mod ray;
 pub mod aabb;
 pub mod frustum;
+pub mod ray;
 
 // Geriye dönük uyumluluk veya ekstra yardımcı metodlar için pub modüller kalsın
 // ama custom tipleri glam ile değiştiriyoruz.
-pub use glam::{
-    Vec2,
-    Vec3,
-    Vec4,
-    Mat4,
-    Quat
-};
+pub use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 
-pub use ray::Ray;
 pub use aabb::Aabb;
 pub use frustum::Frustum;
+pub use ray::Ray;
 
 #[cfg(test)]
 mod tests {
@@ -28,7 +22,7 @@ mod tests {
 
         let v3 = Vec3::new(2.0, 3.0, 4.0);
         let v4 = Vec3::new(1.0, 2.0, 3.0);
-        assert_eq!(v3.dot(v4), 2.0*1.0 + 3.0*2.0 + 4.0*3.0);
+        assert_eq!(v3.dot(v4), 2.0 * 1.0 + 3.0 * 2.0 + 4.0 * 3.0);
     }
 
     #[test]

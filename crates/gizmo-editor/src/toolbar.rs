@@ -1,7 +1,7 @@
 //! Toolbar — Üst toolbar paneli (Save/Load/Play/Pause/Gizmo mode)
 
+use crate::editor_state::{BuildTarget, EditorMode, EditorState, GizmoMode};
 use egui;
-use crate::editor_state::{EditorState, GizmoMode, EditorMode, BuildTarget};
 
 /// Toolbar panelini çizer
 pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
@@ -29,23 +29,24 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
 
                 // === PLAY/PAUSE/STOP ===
                 let play_text = match state.mode {
-                    EditorMode::Edit   => "▶ Başlat",
-                    EditorMode::Play   => "⏹ Durdur",
+                    EditorMode::Edit => "▶ Başlat",
+                    EditorMode::Play => "⏹ Durdur",
                     EditorMode::Paused => "▶ Devam",
                 };
                 let play_color = match state.mode {
-                    EditorMode::Edit   => egui::Color32::from_rgb(80, 200, 80),
-                    EditorMode::Play   => egui::Color32::from_rgb(200, 80, 80),
+                    EditorMode::Edit => egui::Color32::from_rgb(80, 200, 80),
+                    EditorMode::Play => egui::Color32::from_rgb(200, 80, 80),
                     EditorMode::Paused => egui::Color32::from_rgb(200, 200, 80),
                 };
 
-                if ui.button(egui::RichText::new(play_text).color(play_color)).clicked() {
+                if ui
+                    .button(egui::RichText::new(play_text).color(play_color))
+                    .clicked()
+                {
                     state.toggle_play();
                 }
 
-                if state.mode == EditorMode::Play
-                    && ui.button("⏸ Duraklat").clicked()
-                {
+                if state.mode == EditorMode::Play && ui.button("⏸ Duraklat").clicked() {
                     state.toggle_pause();
                 }
 
@@ -70,7 +71,11 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                 ui.separator();
 
                 // === GIZMO UZAYI (LOCAL/GLOBAL) ===
-                let space_text = if state.gizmo_local_space { "📦 Local" } else { "🌐 Global" };
+                let space_text = if state.gizmo_local_space {
+                    "📦 Local"
+                } else {
+                    "🌐 Global"
+                };
                 if ui.button(space_text).clicked() {
                     state.gizmo_local_space = !state.gizmo_local_space;
                 }
@@ -97,7 +102,10 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                 } else {
                     egui::Color32::GRAY
                 };
-                if ui.button(egui::RichText::new("⚙️ Ayarlar").color(settings_color)).clicked() {
+                if ui
+                    .button(egui::RichText::new("⚙️ Ayarlar").color(settings_color))
+                    .clicked()
+                {
                     state.settings_open = !state.settings_open;
                 }
 
@@ -110,26 +118,45 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                 } else {
                     // -- İşletim Sistemi Seçimi --
                     let target_label = match state.build_target {
-                        BuildTarget::Native  => "💻 Native",
-                        BuildTarget::Linux   => "🐧 Linux",
+                        BuildTarget::Native => "💻 Native",
+                        BuildTarget::Linux => "🐧 Linux",
                         BuildTarget::Windows => "🪟 Windows",
-                        BuildTarget::MacOs   => "🍎 macOS",
+                        BuildTarget::MacOs => "🍎 macOS",
                     };
                     egui::ComboBox::from_id_source("build_target_combo")
                         .selected_text(target_label)
                         .width(105.0)
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut state.build_target, BuildTarget::Native,  "💻 Native (Mevcut OS)");
-                            ui.selectable_value(&mut state.build_target, BuildTarget::Linux,   "🐧 Linux (ELF)");
-                            ui.selectable_value(&mut state.build_target, BuildTarget::Windows, "🪟 Windows (.exe)");
-                            ui.selectable_value(&mut state.build_target, BuildTarget::MacOs,   "🍎 macOS");
+                            ui.selectable_value(
+                                &mut state.build_target,
+                                BuildTarget::Native,
+                                "💻 Native (Mevcut OS)",
+                            );
+                            ui.selectable_value(
+                                &mut state.build_target,
+                                BuildTarget::Linux,
+                                "🐧 Linux (ELF)",
+                            );
+                            ui.selectable_value(
+                                &mut state.build_target,
+                                BuildTarget::Windows,
+                                "🪟 Windows (.exe)",
+                            );
+                            ui.selectable_value(
+                                &mut state.build_target,
+                                BuildTarget::MacOs,
+                                "🍎 macOS",
+                            );
                         });
 
-                    if ui.button(
-                        egui::RichText::new("🚀 Build Et")
-                            .strong()
-                            .color(egui::Color32::from_rgb(100, 255, 100)),
-                    ).clicked() {
+                    if ui
+                        .button(
+                            egui::RichText::new("🚀 Build Et")
+                                .strong()
+                                .color(egui::Color32::from_rgb(100, 255, 100)),
+                        )
+                        .clicked()
+                    {
                         state.build_request = true;
                     }
                 }

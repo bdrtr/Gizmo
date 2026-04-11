@@ -1,15 +1,15 @@
-use serde::{Serialize, Deserialize};
-use gizmo_core::{World, EntityName};
-use gizmo_physics::components::{Transform, Velocity, RigidBody};
-use gizmo_physics::shape::Collider;
-use gizmo_renderer::components::{Camera, PointLight, Material, Mesh, MeshRenderer};
-use gizmo_renderer::asset::AssetManager;
+use gizmo_core::{EntityName, World};
 use gizmo_math::Vec4;
+use gizmo_physics::components::{RigidBody, Transform, Velocity};
+use gizmo_physics::shape::Collider;
+use gizmo_renderer::asset::AssetManager;
+use gizmo_renderer::components::{Camera, Material, Mesh, MeshRenderer, PointLight};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::sync::Arc;
 
+use gizmo_core::component::{Children, Parent};
 use std::collections::HashMap;
-use gizmo_core::component::{Parent, Children};
 
 /// Tam sahne verisi — tüm entity'ler ve bileşenleri
 #[derive(Serialize, Deserialize, Clone)]
@@ -66,9 +66,12 @@ impl SceneData {
         if let Some(parent) = std::path::Path::new(file_path).parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let entities_data = Self::serialize_entities(world, world.iter_alive_entities().map(|e| e.id()).collect());
+        let entities_data =
+            Self::serialize_entities(world, world.iter_alive_entities().map(|e| e.id()).collect());
 
-        let scene = SceneData { entities: entities_data };
+        let scene = SceneData {
+            entities: entities_data,
+        };
         let bytes = bincode::serialize(&scene).expect("Scene Serialize Hatası!");
         fs::write(file_path, bytes).expect("Sahne disk üzerine yazılamadı!");
         println!("✅ Sahne kaydedildi → {}", file_path);
@@ -96,7 +99,7 @@ impl SceneData {
 
         for &id in &entity_ids {
             let name = names.as_ref().and_then(|s| s.get(id)).map(|n| n.0.clone());
-            
+
             // Gizmo Studio'nun içsel araçlarını kaydetme (Gizmo kurguları, Highlight box, grid vs.)
             if let Some(ref n) = name {
                 if n.starts_with("Editor ") || n == "Highlight Box" {
@@ -111,27 +114,62 @@ impl SceneData {
             let camera = cameras.as_ref().and_then(|s| s.get(id)).copied();
             let point_light = point_lights.as_ref().and_then(|s| s.get(id)).copied();
             let directional_light = dir_lights.as_ref().and_then(|s| s.get(id)).copied();
-            let mesh_source = meshes.as_ref().and_then(|s| s.get(id)).map(|m| m.source.clone());
-            let material_source = materials.as_ref().and_then(|s| s.get(id)).map(|m| MaterialData {
-                albedo: m.albedo,
-                roughness: m.roughness,
-                metallic: m.metallic,
-                unlit: m.unlit,
-                texture_source: m.texture_source.clone(),
-            });
+            let mesh_source = meshes
+                .as_ref()
+                .and_then(|s| s.get(id))
+                .map(|m| m.source.clone());
+            let material_source =
+                materials
+                    .as_ref()
+                    .and_then(|s| s.get(id))
+                    .map(|m| MaterialData {
+                        albedo: m.albedo,
+                        roughness: m.roughness,
+                        metallic: m.metallic,
+                        unlit: m.unlit,
+                        texture_source: m.texture_source.clone(),
+                    });
             let parent_id = parents.as_ref().and_then(|s| s.get(id)).map(|p| p.0);
-            let script_path = scripts.as_ref().and_then(|s| s.get(id)).map(|sc| sc.file_path.clone());
+            let script_path = scripts
+                .as_ref()
+                .and_then(|s| s.get(id))
+                .map(|sc| sc.file_path.clone());
             let terrain = terrains.as_ref().and_then(|s| s.get(id)).cloned();
             let particle_emitter = particles.as_ref().and_then(|s| s.get(id)).cloned();
             let audio_source = audios.as_ref().and_then(|s| s.get(id)).cloned();
 
-            if name.is_some() || transform.is_some() || velocity.is_some() || rigid_body.is_some() ||
-               collider.is_some() || camera.is_some() || point_light.is_some() || directional_light.is_some() ||
-               mesh_source.is_some() || material_source.is_some() || script_path.is_some() ||
-               terrain.is_some() || particle_emitter.is_some() || audio_source.is_some() {
+            if name.is_some()
+                || transform.is_some()
+                || velocity.is_some()
+                || rigid_body.is_some()
+                || collider.is_some()
+                || camera.is_some()
+                || point_light.is_some()
+                || directional_light.is_some()
+                || mesh_source.is_some()
+                || material_source.is_some()
+                || script_path.is_some()
+                || terrain.is_some()
+                || particle_emitter.is_some()
+                || audio_source.is_some()
+            {
                 entities_data.push(EntityData {
-                    original_id: id, name, transform, velocity, rigid_body, collider, camera, point_light, directional_light,
-                    mesh_source, material_source, parent_id, script_path, terrain, particle_emitter, audio_source,
+                    original_id: id,
+                    name,
+                    transform,
+                    velocity,
+                    rigid_body,
+                    collider,
+                    camera,
+                    point_light,
+                    directional_light,
+                    mesh_source,
+                    material_source,
+                    parent_id,
+                    script_path,
+                    terrain,
+                    particle_emitter,
+                    audio_source,
                 });
             }
         }
@@ -162,9 +200,16 @@ impl SceneData {
         };
 
         Self::instantiate_entities(
-            scene.entities, None, world, device, queue, texture_bind_group_layout, asset_manager, &default_texture_bind_group
+            scene.entities,
+            None,
+            world,
+            device,
+            queue,
+            texture_bind_group_layout,
+            asset_manager,
+            &default_texture_bind_group,
         );
-        
+
         println!("✅ Sahne yüklendi ← {}", file_path);
         true
     }
@@ -196,21 +241,43 @@ impl SceneData {
         for data in entities {
             let new_id = id_map[&data.original_id];
             let entity = entity_structs[&new_id];
-            
+
             if let Some(n) = data.name {
                 world.add_component(entity, EntityName::new(&n));
             }
-            if let Some(t) = data.transform { world.add_component(entity, t); }
-            if let Some(v) = data.velocity { world.add_component(entity, v); }
-            if let Some(r) = data.rigid_body { world.add_component(entity, r); }
-            if let Some(c) = data.collider { world.add_component(entity, c); }
-            if let Some(cam) = data.camera { world.add_component(entity, cam); }
-            if let Some(pl) = data.point_light { world.add_component(entity, pl); }
-            if let Some(dl) = data.directional_light { world.add_component(entity, dl); }
-            if let Some(ter) = data.terrain { world.add_component(entity, ter); }
-            if let Some(pe) = data.particle_emitter { world.add_component(entity, pe); }
-            if let Some(aud) = data.audio_source { world.add_component(entity, aud); }
-            if let Some(spath) = data.script_path { world.add_component(entity, gizmo_scripting::Script::new(&spath)); }
+            if let Some(t) = data.transform {
+                world.add_component(entity, t);
+            }
+            if let Some(v) = data.velocity {
+                world.add_component(entity, v);
+            }
+            if let Some(r) = data.rigid_body {
+                world.add_component(entity, r);
+            }
+            if let Some(c) = data.collider {
+                world.add_component(entity, c);
+            }
+            if let Some(cam) = data.camera {
+                world.add_component(entity, cam);
+            }
+            if let Some(pl) = data.point_light {
+                world.add_component(entity, pl);
+            }
+            if let Some(dl) = data.directional_light {
+                world.add_component(entity, dl);
+            }
+            if let Some(ter) = data.terrain {
+                world.add_component(entity, ter);
+            }
+            if let Some(pe) = data.particle_emitter {
+                world.add_component(entity, pe);
+            }
+            if let Some(aud) = data.audio_source {
+                world.add_component(entity, aud);
+            }
+            if let Some(spath) = data.script_path {
+                world.add_component(entity, gizmo_scripting::Script::new(&spath));
+            }
 
             if let Some(mesh_src) = data.mesh_source {
                 let mesh = if mesh_src == "inverted_cube" {
@@ -235,7 +302,8 @@ impl SceneData {
 
             if let Some(mat_data) = data.material_source {
                 let bind_group = if let Some(tex_path) = &mat_data.texture_source {
-                    asset_manager.load_material_texture(device, queue, texture_bind_group_layout, tex_path)
+                    asset_manager
+                        .load_material_texture(device, queue, texture_bind_group_layout, tex_path)
                         .unwrap_or_else(|e| {
                             println!("Scene Texture error: {}", e);
                             default_texture_bind_group.clone()
@@ -243,7 +311,7 @@ impl SceneData {
                 } else {
                     default_texture_bind_group.clone()
                 };
-                
+
                 let mut mat = Material::new(bind_group);
                 mat.albedo = mat_data.albedo;
                 mat.roughness = mat_data.roughness;
@@ -268,7 +336,10 @@ impl SceneData {
 
             if let Some(p_id) = resolved_parent {
                 world.add_component(entity, Parent(p_id));
-                children_map.entry(p_id).or_insert_with(Vec::new).push(new_id);
+                children_map
+                    .entry(p_id)
+                    .or_insert_with(Vec::new)
+                    .push(new_id);
             }
         }
 
@@ -292,7 +363,7 @@ impl SceneData {
     /// Prefab kaydet (Verilen entity ve tüm alt çocukları)
     pub fn save_prefab(world: &World, root_entity_id: u32, file_path: &str) {
         let mut entity_ids = vec![root_entity_id];
-        
+
         // Tüm alt çocukları (recursive olarak) bul
         let mut i = 0;
         while i < entity_ids.len() {
@@ -304,9 +375,12 @@ impl SceneData {
         }
 
         let mut entities_data = Self::serialize_entities(world, entity_ids);
-        
+
         // Prefab'ın root entity'sinin parent'ını kopar ki bağımsız yüklensin
-        if let Some(root_data) = entities_data.iter_mut().find(|d| d.original_id == root_entity_id) {
+        if let Some(root_data) = entities_data
+            .iter_mut()
+            .find(|d| d.original_id == root_entity_id)
+        {
             root_data.parent_id = None;
         }
 
@@ -348,19 +422,32 @@ impl SceneData {
         };
 
         let id_map = Self::instantiate_entities(
-            prefab.entities, parent_entity, world, device, queue, texture_bind_group_layout, asset_manager, &default_texture_bind_group
+            prefab.entities,
+            parent_entity,
+            world,
+            device,
+            queue,
+            texture_bind_group_layout,
+            asset_manager,
+            &default_texture_bind_group,
         );
 
         let new_root_id = id_map.get(&prefab.root_id).copied();
-        
+
         if let (Some(new_r), Some(p_id)) = (new_root_id, parent_entity) {
             // Root entity'i existing parent'a (daha önce Children var mı yok mu bakarak) ekle!
             let mut children_list = Vec::new();
-            if let Some(existing_children) = world.borrow::<Children>().and_then(|c| c.get(p_id).cloned()) {
+            if let Some(existing_children) = world
+                .borrow::<Children>()
+                .and_then(|c| c.get(p_id).cloned())
+            {
                 children_list = existing_children.0;
             }
             children_list.push(new_r);
-            world.add_component(gizmo_core::entity::Entity::new(p_id, 0), Children(children_list)); // Not strict generation safe but reasonable fallback
+            world.add_component(
+                gizmo_core::entity::Entity::new(p_id, 0),
+                Children(children_list),
+            ); // Not strict generation safe but reasonable fallback
         }
 
         println!("✅ Prefab yüklendi ← {}", file_path);
@@ -371,7 +458,7 @@ impl SceneData {
     pub fn get_entity_names(world: &World) -> Vec<(u32, String)> {
         let mut result = Vec::new();
         if let Some(names) = world.borrow::<EntityName>() {
-            for &entity_id in &names.entity_dense {
+            for entity_id in names.dense.iter().map(|e| e.entity) {
                 if let Some(name) = names.get(entity_id) {
                     result.push((entity_id, name.0.clone()));
                 }
@@ -383,7 +470,7 @@ impl SceneData {
     /// İsme göre entity bul
     pub fn find_entity_by_name(world: &World, target_name: &str) -> Option<u32> {
         if let Some(names) = world.borrow::<EntityName>() {
-            for &entity_id in &names.entity_dense {
+            for entity_id in names.dense.iter().map(|e| e.entity) {
                 if let Some(name) = names.get(entity_id) {
                     if name.0 == target_name {
                         return Some(entity_id);
@@ -398,46 +485,55 @@ impl SceneData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gizmo_core::World;
-    use gizmo_physics::{Transform, Velocity};
-    use gizmo_renderer::components::{Terrain, ParticleEmitter};
     use gizmo_audio::AudioSource;
-    use gizmo_scripting::Script;
+    use gizmo_core::World;
     use gizmo_math::Vec3;
+    use gizmo_physics::{Transform, Velocity};
+    use gizmo_renderer::components::{ParticleEmitter, Terrain};
+    use gizmo_scripting::Script;
 
     #[test]
     fn test_entity_serialization_includes_new_components() {
         let mut world = World::new();
         let entity = world.spawn();
-        
+
         world.add_component(entity, Transform::new(Vec3::new(1.0, 2.0, 3.0)));
         world.add_component(entity, Script::new("my_script.lua"));
         world.add_component(entity, AudioSource::new("explosion.wav"));
         world.add_component(entity, ParticleEmitter::new());
-        world.add_component(entity, Terrain {
-            heightmap_path: "heightmap.png".to_string(),
-            width: 100.0,
-            depth: 100.0,
-            max_height: 20.0,
-        });
+        world.add_component(
+            entity,
+            Terrain {
+                heightmap_path: "heightmap.png".to_string(),
+                width: 100.0,
+                depth: 100.0,
+                max_height: 20.0,
+            },
+        );
 
         let data = SceneData::serialize_entities(&world, vec![entity.id()]);
         assert_eq!(data.len(), 1);
-        
+
         let ent_data = &data[0];
-        
+
         // Assertions
         assert!(ent_data.transform.is_some());
         assert_eq!(ent_data.transform.unwrap().position.y, 2.0);
-        
+
         assert!(ent_data.script_path.is_some());
         assert_eq!(ent_data.script_path.as_ref().unwrap(), "my_script.lua");
-        
+
         assert!(ent_data.audio_source.is_some());
-        assert_eq!(ent_data.audio_source.as_ref().unwrap().sound_name, "explosion.wav");
-        
+        assert_eq!(
+            ent_data.audio_source.as_ref().unwrap().sound_name,
+            "explosion.wav"
+        );
+
         assert!(ent_data.particle_emitter.is_some());
         assert!(ent_data.terrain.is_some());
-        assert_eq!(ent_data.terrain.as_ref().unwrap().heightmap_path, "heightmap.png");
+        assert_eq!(
+            ent_data.terrain.as_ref().unwrap().heightmap_path,
+            "heightmap.png"
+        );
     }
 }

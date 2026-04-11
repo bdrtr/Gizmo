@@ -23,7 +23,7 @@ use std::cell::{Ref, RefMut};
 /// Bir fonksiyonun sistem parametresi olarak alabileceği argümanları tanımlar.
 pub trait SystemParam {
     type Item<'w>;
-    fn fetch<'w>(world: &'w World) -> Self::Item<'w>;
+    fn fetch<'w>(world: &'w World, dt: f32) -> Option<Self::Item<'w>>;
 }
 
 /// Salt okunur (Immutable) Resource enjeksiyonu
@@ -40,10 +40,9 @@ impl<'w, T: 'static> std::ops::Deref for Res<'w, T> {
 
 impl<T: 'static> SystemParam for Res<'static, T> {
     type Item<'w> = Res<'w, T>;
-    fn fetch<'w>(world: &'w World) -> Self::Item<'w> {
-        Res {
-            value: world.get_resource::<T>().expect(&format!("Resource {} not found in World!", std::any::type_name::<T>())),
-        }
+    fn fetch<'w>(world: &'w World, _dt: f32) -> Option<Self::Item<'w>> {
+        let value = world.get_resource::<T>()?;
+        Some(Res { value })
     }
 }
 
@@ -67,10 +66,9 @@ impl<'w, T: 'static> std::ops::DerefMut for ResMut<'w, T> {
 
 impl<T: 'static> SystemParam for ResMut<'static, T> {
     type Item<'w> = ResMut<'w, T>;
-    fn fetch<'w>(world: &'w World) -> Self::Item<'w> {
-        ResMut {
-            value: world.get_resource_mut::<T>().expect(&format!("Resource {} not found or already borrowed mutably!", std::any::type_name::<T>())),
-        }
+    fn fetch<'w>(world: &'w World, _dt: f32) -> Option<Self::Item<'w>> {
+        let value = world.get_resource_mut::<T>()?;
+        Some(ResMut { value })
     }
 }
 
@@ -94,6 +92,14 @@ where
     }
 }
 
+// dt enjeksiyonu için
+impl SystemParam for f32 {
+    type Item<'w> = f32;
+    fn fetch<'w>(_world: &'w World, dt: f32) -> Option<Self::Item<'w>> {
+        Some(dt)
+    }
+}
+
 // 1 Parametre
 impl<F, P1> IntoSystem<(P1,)> for F
 where
@@ -101,9 +107,10 @@ where
     P1: SystemParam + 'static,
 {
     fn into_system(mut self) -> Box<dyn System> {
-        Box::new(move |world: &mut World, _dt: f32| {
-            let p1 = P1::fetch(world);
-            (self)(p1);
+        Box::new(move |world: &mut World, dt: f32| {
+            if let Some(p1) = P1::fetch(world, dt) {
+                (self)(p1);
+            }
         })
     }
 }
@@ -116,10 +123,10 @@ where
     P2: SystemParam + 'static,
 {
     fn into_system(mut self) -> Box<dyn System> {
-        Box::new(move |world: &mut World, _dt: f32| {
-            let p1 = P1::fetch(world);
-            let p2 = P2::fetch(world);
-            (self)(p1, p2);
+        Box::new(move |world: &mut World, dt: f32| {
+            if let (Some(p1), Some(p2)) = (P1::fetch(world, dt), P2::fetch(world, dt)) {
+                (self)(p1, p2);
+            }
         })
     }
 }
@@ -133,11 +140,14 @@ where
     P3: SystemParam + 'static,
 {
     fn into_system(mut self) -> Box<dyn System> {
-        Box::new(move |world: &mut World, _dt: f32| {
-            let p1 = P1::fetch(world);
-            let p2 = P2::fetch(world);
-            let p3 = P3::fetch(world);
-            (self)(p1, p2, p3);
+        Box::new(move |world: &mut World, dt: f32| {
+            if let (Some(p1), Some(p2), Some(p3)) = (
+                P1::fetch(world, dt),
+                P2::fetch(world, dt),
+                P3::fetch(world, dt),
+            ) {
+                (self)(p1, p2, p3);
+            }
         })
     }
 }
@@ -152,12 +162,15 @@ where
     P4: SystemParam + 'static,
 {
     fn into_system(mut self) -> Box<dyn System> {
-        Box::new(move |world: &mut World, _dt: f32| {
-            let p1 = P1::fetch(world);
-            let p2 = P2::fetch(world);
-            let p3 = P3::fetch(world);
-            let p4 = P4::fetch(world);
-            (self)(p1, p2, p3, p4);
+        Box::new(move |world: &mut World, dt: f32| {
+            if let (Some(p1), Some(p2), Some(p3), Some(p4)) = (
+                P1::fetch(world, dt),
+                P2::fetch(world, dt),
+                P3::fetch(world, dt),
+                P4::fetch(world, dt),
+            ) {
+                (self)(p1, p2, p3, p4);
+            }
         })
     }
 }
@@ -173,13 +186,16 @@ where
     P5: SystemParam + 'static,
 {
     fn into_system(mut self) -> Box<dyn System> {
-        Box::new(move |world: &mut World, _dt: f32| {
-            let p1 = P1::fetch(world);
-            let p2 = P2::fetch(world);
-            let p3 = P3::fetch(world);
-            let p4 = P4::fetch(world);
-            let p5 = P5::fetch(world);
-            (self)(p1, p2, p3, p4, p5);
+        Box::new(move |world: &mut World, dt: f32| {
+            if let (Some(p1), Some(p2), Some(p3), Some(p4), Some(p5)) = (
+                P1::fetch(world, dt),
+                P2::fetch(world, dt),
+                P3::fetch(world, dt),
+                P4::fetch(world, dt),
+                P5::fetch(world, dt),
+            ) {
+                (self)(p1, p2, p3, p4, p5);
+            }
         })
     }
 }
@@ -187,7 +203,8 @@ where
 // 6 Parametre
 impl<F, P1, P2, P3, P4, P5, P6> IntoSystem<(P1, P2, P3, P4, P5, P6)> for F
 where
-    F: FnMut(P1::Item<'_>, P2::Item<'_>, P3::Item<'_>, P4::Item<'_>, P5::Item<'_>, P6::Item<'_>) + 'static,
+    F: FnMut(P1::Item<'_>, P2::Item<'_>, P3::Item<'_>, P4::Item<'_>, P5::Item<'_>, P6::Item<'_>)
+        + 'static,
     P1: SystemParam + 'static,
     P2: SystemParam + 'static,
     P3: SystemParam + 'static,
@@ -196,14 +213,17 @@ where
     P6: SystemParam + 'static,
 {
     fn into_system(mut self) -> Box<dyn System> {
-        Box::new(move |world: &mut World, _dt: f32| {
-            let p1 = P1::fetch(world);
-            let p2 = P2::fetch(world);
-            let p3 = P3::fetch(world);
-            let p4 = P4::fetch(world);
-            let p5 = P5::fetch(world);
-            let p6 = P6::fetch(world);
-            (self)(p1, p2, p3, p4, p5, p6);
+        Box::new(move |world: &mut World, dt: f32| {
+            if let (Some(p1), Some(p2), Some(p3), Some(p4), Some(p5), Some(p6)) = (
+                P1::fetch(world, dt),
+                P2::fetch(world, dt),
+                P3::fetch(world, dt),
+                P4::fetch(world, dt),
+                P5::fetch(world, dt),
+                P6::fetch(world, dt),
+            ) {
+                (self)(p1, p2, p3, p4, p5, p6);
+            }
         })
     }
 }
@@ -222,7 +242,7 @@ impl Schedule {
     pub fn add_di_system<Params, S: IntoSystem<Params>>(&mut self, system: S) {
         self.systems.push(system.into_system());
     }
-    
+
     pub fn add_system<S: System + 'static>(&mut self, system: S) {
         self.systems.push(Box::new(system));
     }

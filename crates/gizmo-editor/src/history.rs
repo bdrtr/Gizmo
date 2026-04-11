@@ -8,7 +8,10 @@ pub enum EditorAction {
     TransformsChanged {
         changes: Vec<(u32, Transform, Transform)>, // (entity_id, old_transform, new_transform)
     },
-    // Gelecekte eklenebilecek eylemler: EntitySpawned, EntityDespawned, PropertyChanged
+    /// Objelerin silinmesi
+    EntityDespawned { data: Vec<Vec<u8>> },
+    /// Objelerin oluşturulması
+    EntitySpawned { entity_ids: Vec<u32> },
 }
 
 /// Yapılan eylemlerin kaydını tutan History yöneticisi.
@@ -35,12 +38,9 @@ impl History {
 
     /// Yeni bir eylemi geçmişe kaydeder
     pub fn push(&mut self, action: EditorAction) {
-        // Redo kuyruğu temizlenir, çünkü artık yeni bir gelecek çizgisindeyiz.
         self.redo_stack.clear();
-
         self.undo_stack.push(action);
 
-        // Bellek limiti aşılırsa en eski işlemleri sil
         if self.undo_stack.len() > self.max_history {
             self.undo_stack.remove(0);
         }
@@ -51,22 +51,18 @@ impl History {
         if let Some(action) = self.undo_stack.pop() {
             match action {
                 EditorAction::TransformsChanged { changes } => {
-                    // World üzerinde Transform bileşenine eriş
                     if let Some(mut transforms) = world.borrow_mut::<Transform>() {
                         for (entity_id, old_transform, _new_transform) in changes.iter() {
                             if let Some(t) = transforms.get_mut(*entity_id) {
-                                // Eski haline döndür
                                 *t = *old_transform;
                                 t.update_local_matrix();
                             }
                         }
                     }
-                    
-                    // Şimdiki durumu Redo stack'ine at ki ileri alınabilsin.
-                    self.redo_stack.push(EditorAction::TransformsChanged {
-                        changes,
-                    });
+                    self.redo_stack
+                        .push(EditorAction::TransformsChanged { changes });
                 }
+                _ => {} // Gelecekte diğer actionlar burada geri alınacak
             }
         }
     }
@@ -79,18 +75,15 @@ impl History {
                     if let Some(mut transforms) = world.borrow_mut::<Transform>() {
                         for (entity_id, _old_transform, new_transform) in changes.iter() {
                             if let Some(t) = transforms.get_mut(*entity_id) {
-                                // Yeni hedefe (geleceğe) taşı
                                 *t = *new_transform;
                                 t.update_local_matrix();
                             }
                         }
                     }
-
-                    // Undo stack'ine tekrar eklensin ki tekrar vazgeçebilelim
-                    self.undo_stack.push(EditorAction::TransformsChanged {
-                        changes,
-                    });
+                    self.undo_stack
+                        .push(EditorAction::TransformsChanged { changes });
                 }
+                _ => {} // Gelecekte diğer actionlar burada ileri alınacak
             }
         }
     }

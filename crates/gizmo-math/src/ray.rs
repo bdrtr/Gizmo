@@ -1,4 +1,4 @@
-use glam::Vec3;
+use glam::{Quat, Vec3};
 pub struct Ray {
     pub origin: Vec3,
     pub direction: Vec3, // Normalize edilmiş olmalı
@@ -6,16 +6,31 @@ pub struct Ray {
 
 impl Ray {
     pub fn new(origin: Vec3, direction: Vec3) -> Self {
-        Self { origin, direction: direction.normalize() }
+        Self {
+            origin,
+            direction: direction.normalize(),
+        }
     }
 
     /// Bir AABB (Axis-Aligned Bounding Box) kutusuyla kesişim testi yapar (Slab Algorithm).
     /// Kesişiyorsa t_near mesafesini döner, kesişmiyorsa None döner.
     pub fn intersect_aabb(&self, min: Vec3, max: Vec3) -> Option<f32> {
         let inv_dir = Vec3::new(
-            if self.direction.x.abs() > 1e-8 { 1.0 / self.direction.x } else { f32::MAX.copysign(self.direction.x) },
-            if self.direction.y.abs() > 1e-8 { 1.0 / self.direction.y } else { f32::MAX.copysign(self.direction.y) },
-            if self.direction.z.abs() > 1e-8 { 1.0 / self.direction.z } else { f32::MAX.copysign(self.direction.z) }
+            if self.direction.x.abs() > 1e-8 {
+                1.0 / self.direction.x
+            } else {
+                f32::MAX.copysign(self.direction.x)
+            },
+            if self.direction.y.abs() > 1e-8 {
+                1.0 / self.direction.y
+            } else {
+                f32::MAX.copysign(self.direction.y)
+            },
+            if self.direction.z.abs() > 1e-8 {
+                1.0 / self.direction.z
+            } else {
+                f32::MAX.copysign(self.direction.z)
+            },
         );
 
         let t0 = (min - self.origin) * inv_dir;
@@ -33,6 +48,24 @@ impl Ray {
             None
         }
     }
+
+    /// Bir OBB (Oriented Bounding Box) kutusuyla kesişim testi yapar.
+    /// Kesişiyorsa t_near mesafesini döner, kesişmiyorsa None döner.
+    pub fn intersect_obb(&self, center: Vec3, half_extents: Vec3, rotation: Quat) -> Option<f32> {
+        let inv_rot = rotation.inverse();
+
+        // Işını OBB'nin yerel uzayına çeviriyoruz
+        let local_origin = inv_rot * (self.origin - center);
+        let local_direction = inv_rot * self.direction;
+
+        let local_ray = Ray {
+            origin: local_origin,
+            direction: local_direction, // Rotasyon vektör boyunu değiştirmediği için hala mormalize edilmiş haldedir
+        };
+
+        // Yerel koordinatlarda AABB testi
+        local_ray.intersect_aabb(-half_extents, half_extents)
+    }
 }
 
 #[cfg(test)]
@@ -47,7 +80,7 @@ mod tests {
 
         let t = ray.intersect_aabb(min, max);
         assert!(t.is_some());
-        assert_eq!(t.unwrap(), 4.0); // Hits the front face at z = -1, origin is -5, distance is 4 
+        assert_eq!(t.unwrap(), 4.0); // Hits the front face at z = -1, origin is -5, distance is 4
     }
 
     #[test]

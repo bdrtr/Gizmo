@@ -19,11 +19,11 @@ pub struct RaceAI {
 }
 
 impl RaceAI {
-    pub fn new(waypoints: Vec<Vec3>, speed_mult: f32) -> Self {
+    pub fn new(waypoints: Vec<Vec3>, speed_mult: f32, reach_radius: f32) -> Self {
         Self {
             waypoints,
             current_wp: 0,
-            reach_radius: 5.0,
+            reach_radius,
             speed_mult,
             laps_completed: 0,
             total_wp_passed: 0,
@@ -47,21 +47,29 @@ pub fn race_ai_system(world: &gizmo_core::World, _dt: f32) {
         None => return,
     };
 
-    let entity_ids = ais.entity_dense.clone();
+    let entity_ids: Vec<u32> = ais.dense.iter().map(|e| e.entity).collect();
 
     for &e in &entity_ids {
-        let t = match transforms.get(e) { Some(t) => t, None => continue };
-        let ai = match ais.get_mut(e) { Some(a) => a, None => continue };
+        let t = match transforms.get(e) {
+            Some(t) => t,
+            None => continue,
+        };
+        let ai = match ais.get_mut(e) {
+            Some(a) => a,
+            None => continue,
+        };
 
-        if ai.waypoints.is_empty() { continue; }
+        if ai.waypoints.is_empty() {
+            continue;
+        }
 
         // Hedef waypoint
         let target = ai.waypoints[ai.current_wp];
         let to_target = target - t.position;
-        let dist_xz = Vec3::new(to_target.x, 0.0, to_target.z).length();
+        let dist = to_target.length();
 
         // Waypoint'e ulaştı mı?
-        if dist_xz < ai.reach_radius {
+        if dist < ai.reach_radius {
             ai.current_wp += 1;
             ai.total_wp_passed += 1;
 
@@ -98,11 +106,14 @@ pub fn race_ai_system(world: &gizmo_core::World, _dt: f32) {
         // Brake: Hedefin tam tersine bakıyorsak frenle
         let brake = if dot < -0.3 { 15000.0 } else { 0.0 };
 
-        // VehicleController'a yaz
+        // VehicleController'a yaz (Yumuşak geçiş / Interpolation ile frame-rate bağımsızlığı)
         if let Some(vc) = vehicles.get_mut(e) {
-            vc.engine_force = engine;
-            vc.steering_angle = steer;
-            vc.brake_force = brake;
+            // Saniyede %99 hedefe ulaşacak şekilde exponential decay (pürüzsüz lerp)
+            let lerp_factor = 1.0 - (-10.0 * _dt).exp();
+
+            vc.engine_force += (engine - vc.engine_force) * lerp_factor;
+            vc.steering_angle += (steer - vc.steering_angle) * lerp_factor;
+            vc.brake_force += (brake - vc.brake_force) * lerp_factor;
         }
     }
 }

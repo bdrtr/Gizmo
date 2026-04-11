@@ -1,9 +1,9 @@
+pub mod components;
 pub mod pathfinding;
 pub mod steering;
-pub mod components;
 pub mod system;
 
-pub use pathfinding::{NavGrid, GridPos, find_path};
-pub use steering::{seek, arrive};
 pub use components::NavAgent;
+pub use pathfinding::{find_path, GridPos, NavGrid};
+pub use steering::{arrive, seek};
 pub use system::ai_navigation_system;
