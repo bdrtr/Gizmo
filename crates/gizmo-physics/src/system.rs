@@ -1181,7 +1181,17 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
         // Yazımları ana array'e geri aktar (Sync phase)
         let mut sync_cache = Vec::new();
         for island in islands {
-            for (ent, vel) in &island.velocities {
+            // Island'ı erken destructure et:
+            // `contacts` move edilirken `poses`'a da erişebilmek için partial-move
+            // semantiğine dayanmak yerine tüm alanları açıkça ayırıyoruz.
+            // Bu sayede borrow checker açısından kesin ve okunması kolay kod elde edilir.
+            let Island {
+                contacts,
+                velocities: island_vels, // outer `velocities` (SparseSet) ile çakışmasın
+                poses,
+            } = island;
+
+            for (ent, vel) in &island_vels {
                 // VehicleController entity'lerinin velocity'sini SI solver üzerine yazmasın —
                 // bu entity'lerin fizik kuvvetleri physics_vehicle_system tarafından yönetilir.
                 if vehicle_entities.contains(ent) {
@@ -1191,16 +1201,16 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
                     *v = *vel;
                 }
             }
-            for (ent, tbox) in &island.poses {
+            for (ent, tbox) in &poses {
                 if let Some(t) = transforms.get_mut(*ent) {
                     *t = *tbox;
                     t.update_local_matrix();
                 }
             }
-            for c in island.contacts {
-                // Temas noktası dünya koordinatını hesapla (warm-start cache için)
-                let wp = island
-                    .poses
+            for c in contacts {
+                // Temas noktası dünya koordinatını hesapla (warm-start cache için).
+                // `poses` solver sonrası güncellenmiş transform'ları içerir — doğru kaynak.
+                let wp = poses
                     .get(&c.ent_a)
                     .map(|p| p.position + c.r_a)
                     .unwrap_or(c.world_point);
@@ -1216,8 +1226,7 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
                 let eff_mass = 1.0 / (c.inv_mass_a + c.inv_mass_b).max(0.0001);
                 let threshold = (0.05 * eff_mass) + 0.01;
                 if c.accumulated_j > threshold {
-                    let pos_a = island
-                        .poses
+                    let pos_a = poses
                         .get(&c.ent_a)
                         .map(|t| t.position)
                         .unwrap_or(Vec3::ZERO);
@@ -1231,6 +1240,7 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
                 }
             }
         }
+
 
         // === FAZ 3: WARM STARTING CACHE KAYDI ===
         // Contact point matching sayesinde güvenle etkinleştirildi.
