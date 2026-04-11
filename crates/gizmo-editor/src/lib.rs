@@ -238,26 +238,33 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                 let is_playing = self.state.is_playing();
                 let is_paused = self.state.mode == crate::editor_state::EditorMode::Paused;
 
-                ui.vertical_centered(|ui| {
-                    ui.add_space(30.0);
-
-                    if is_playing {
-                        ui.label(
-                            egui::RichText::new("🎮 OYUN ÇALIŞIYOR")
-                                .size(26.0)
-                                .color(egui::Color32::from_rgb(80, 220, 80))
-                                .strong(),
+                if is_playing || is_paused {
+                    let rect = ui.available_rect_before_wrap();
+                    if let Some(tex_id) = self.state.scene_texture_id {
+                        let mut mesh = egui::Mesh::with_texture(tex_id);
+                        mesh.add_rect_with_uv(
+                            rect,
+                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                            egui::Color32::WHITE,
                         );
-                        ui.add_space(8.0);
-                        ui.label(egui::RichText::new("Fizik ve scriptler aktif.").color(egui::Color32::GRAY));
-                    } else if is_paused {
-                        ui.label(
-                            egui::RichText::new("⏸ DURAKLATILDI")
-                                .size(26.0)
-                                .color(egui::Color32::from_rgb(220, 200, 60))
-                                .strong(),
-                        );
-                    } else {
+                        ui.painter().add(mesh);
+                        
+                        if is_paused {
+                            ui.allocate_ui_at_rect(rect, |ui| {
+                                ui.centered_and_justified(|ui| {
+                                    ui.label(
+                                        egui::RichText::new("⏸ DURAKLATILDI")
+                                            .size(40.0)
+                                            .color(egui::Color32::from_white_alpha(150))
+                                            .strong(),
+                                    );
+                                });
+                            });
+                        }
+                    }
+                } else {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(30.0);
                         ui.label(
                             egui::RichText::new("▶ Oyunu Başlat")
                                 .size(26.0)
@@ -269,7 +276,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                                 .size(14.0)
                                 .color(egui::Color32::from_white_alpha(40)),
                         );
-                    }
+                    });
 
                     ui.add_space(20.0);
                     ui.separator();
@@ -300,7 +307,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                                 ui.end_row();
                             }
                         });
-                });
+                }
             }
 
             "Console" => {

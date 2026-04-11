@@ -65,6 +65,7 @@ pub struct EditorState {
     pub drag_start_t: f32,
     pub mouse_ndc: Option<gizmo_math::Vec2>,
     pub gizmo_local_space: bool,
+    pub gizmo_handles: [u32; 3],
     
     // --- Build Sistemi ---
     pub build_request: bool,
@@ -185,6 +186,7 @@ impl EditorState {
             drag_start_t: 0.0,
             mouse_ndc: None,
             gizmo_local_space: false,
+            gizmo_handles: [0, 0, 0],
             
             build_request: false,
             build_target: BuildTarget::Native,

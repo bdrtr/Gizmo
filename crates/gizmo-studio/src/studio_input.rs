@@ -11,6 +11,37 @@ pub fn handle_studio_input(
 ) {
     if do_raycast {
         perform_raycast(world, state, ray, player_id);
+    } else if let Some(axis) = state.dragging_axis {
+        perform_drag(world, state, ray, axis);
+    }
+}
+
+fn perform_drag(world: &mut World, state: &mut EditorState, ray: Ray, axis: gizmo::editor::DragAxis) {
+    if let Some(&selected) = state.selected_entities.iter().next() {
+        let axis_dir = match axis {
+            gizmo::editor::DragAxis::X => Vec3::new(1.0, 0.0, 0.0),
+            gizmo::editor::DragAxis::Y => Vec3::new(0.0, 1.0, 0.0),
+            gizmo::editor::DragAxis::Z => Vec3::new(0.0, 0.0, 1.0),
+        };
+
+        let w0    = ray.origin - state.drag_original_pos;
+        let b     = ray.direction.dot(axis_dir);
+        let d     = ray.direction.dot(w0);
+        let e     = axis_dir.dot(w0);
+        let denom = 1.0 - b * b;
+        
+        if denom.abs() > 0.0001 {
+            let current_t = (e - b * d) / denom;
+            let delta_t   = current_t - state.drag_start_t;
+            
+            if let Some(mut trans) = world.borrow_mut::<Transform>() {
+                if let Some(t) = trans.get_mut(selected) {
+                    if state.gizmo_mode == gizmo::editor::GizmoMode::Translate {
+                        t.position = state.drag_original_pos + axis_dir * delta_t;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -21,12 +52,21 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
     let mut hit_entity = None;
 
     if let (Some(colliders), Some(transforms)) = (world.borrow::<Collider>(), world.borrow::<Transform>()) {
+        let is_hidden = world.borrow::<gizmo::core::component::IsHidden>();
+        
         for i in 0..colliders.dense.len() {
             let id = colliders.entity_dense[i];
             
             // Editör objelerini, highlight box'ı es geç
             if id == player_id || id == state.highlight_box {
                 continue;
+            }
+            // Gizli component'i olan objeleri tıklanabilir yapma. 
+            // Seçili objemiz bittiğinde Gizmo okları IsHidden alır, o yüzden tıklanmazlar.
+            if let Some(hidden) = &is_hidden {
+                if hidden.contains(id) {
+                    continue;
+                }
             }
             
             if let Some(t) = (*transforms).get(id) {
@@ -58,12 +98,46 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
 
     if let Some(hit) = hit_entity {
         let _handled = world.get_resource::<gizmo::winit::window::Window>().map_or(false, |_| false);
+
+        // --- GIZMO DRAG CHECK ---
+        if hit == state.gizmo_handles[0] {
+            state.dragging_axis = Some(gizmo::editor::DragAxis::X);
+        } else if hit == state.gizmo_handles[1] {
+            state.dragging_axis = Some(gizmo::editor::DragAxis::Y);
+        } else if hit == state.gizmo_handles[2] {
+            state.dragging_axis = Some(gizmo::editor::DragAxis::Z);
+        }
+
+        if let Some(axis) = state.dragging_axis {
+            // Hit a gizmo axis. Save the original position of the selected entity.
+            if let Some(&selected_id) = state.selected_entities.iter().next() {
+                if let Some(t) = world.borrow::<Transform>().and_then(|ts| ts.get(selected_id).map(|c| *c)) {
+                    state.drag_original_pos = t.position;
+                    // Calculate pure mathematical T for the starting anchor point
+                    let axis_dir = match axis {
+                        gizmo::editor::DragAxis::X => Vec3::new(1.0, 0.0, 0.0),
+                        gizmo::editor::DragAxis::Y => Vec3::new(0.0, 1.0, 0.0),
+                        gizmo::editor::DragAxis::Z => Vec3::new(0.0, 0.0, 1.0),
+                    };
+                    let w0    = ray.origin - t.position;
+                    let b     = ray.direction.dot(axis_dir);
+                    let d     = ray.direction.dot(w0);
+                    let e     = axis_dir.dot(w0);
+                    let denom = 1.0 - b * b;
+                    if denom.abs() > 0.0001 {
+                        state.drag_start_t = (e - b * d) / denom;
+                    }
+                }
+            }
+            return; // Intercept selection
+        }
+
         // Raycast işleminde Ctrl desteği input parametresi gelmeden sağlanamayabilir.
         // O yüzden şimdilik "Eğer hit tıklanmışsa, ve seçili değilse tek onu seç"
         state.select_exclusive(hit);
         
         // Seçim değiştiği için Editör sekmesine Transform verisini logla/yedekle
-        if let Some(transforms) = world.borrow::<gizmo::physics::components::Transform>() {
+        if let Some(transforms) = world.borrow::<Transform>() {
             if let Some(t) = transforms.get(hit) {
                 state.drag_original_pos = t.position;
                 state.drag_original_rot = t.rotation;
@@ -99,6 +173,8 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
         }
     }
 
+    let mut is_hidden_mod = world.borrow_mut::<gizmo::core::component::IsHidden>();
+
     // Highlight Box Güncellemesi (Tıklanan objenin etrafındaki transparan çerçeve)
     if let Some(mut trans) = world.borrow_mut::<Transform>() {
         if any_selected {
@@ -113,9 +189,32 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
                 
                 hb.scale = base_extents * 1.05; // Çerçeveyi tam objenin collision AABB bounds'una sığdır
             }
+            
+            // --- GIZMO TRANSFORMS SYNC ---
+            if let Some(hidden) = &mut is_hidden_mod {
+                hidden.remove(state.gizmo_handles[0]);
+                hidden.remove(state.gizmo_handles[1]);
+                hidden.remove(state.gizmo_handles[2]);
+            }
+            if let Some(t) = (*trans).get_mut(state.gizmo_handles[0]) {
+                t.position = selected_pos + Vec3::new(1.5, 0.0, 0.0);
+            }
+            if let Some(t) = (*trans).get_mut(state.gizmo_handles[1]) {
+                t.position = selected_pos + Vec3::new(0.0, 1.5, 0.0);
+            }
+            if let Some(t) = (*trans).get_mut(state.gizmo_handles[2]) {
+                t.position = selected_pos + Vec3::new(0.0, 0.0, 1.5);
+            }
+
         } else {
             // Hiçbir şey seçili değilse uzağa sakla
             if let Some(t) = (*trans).get_mut(state.highlight_box) { t.position = Vec3::new(0.0, -10000.0, 0.0); }
+            
+            if let Some(hidden) = &mut is_hidden_mod {
+                hidden.insert(state.gizmo_handles[0], gizmo::core::component::IsHidden);
+                hidden.insert(state.gizmo_handles[1], gizmo::core::component::IsHidden);
+                hidden.insert(state.gizmo_handles[2], gizmo::core::component::IsHidden);
+            }
         }
     }
 }
