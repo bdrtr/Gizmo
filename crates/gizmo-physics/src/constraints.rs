@@ -417,6 +417,10 @@ pub fn solve_constraints(joint_world: &JointWorld, world: &gizmo_core::World, dt
                     }
                 }
                 JointKind::Distance { length } => {
+                    // Anchor'lardan merkeze lever arm (world-space)
+                    let r_a = rot_a.mul_vec3(joint.anchor_a);
+                    let r_b = rot_b.mul_vec3(joint.anchor_b);
+
                     let diff = pos_b - pos_a;
                     let current_len = diff.length();
                     if current_len < 0.0001 {
@@ -424,17 +428,67 @@ pub fn solve_constraints(joint_world: &JointWorld, world: &gizmo_core::World, dt
                     }
                     let dir = diff / current_len;
                     let error = current_len - length;
-                    let va = vels.get(joint.entity_a).map_or(Vec3::ZERO, |v| v.linear);
-                    let vb = vels.get(joint.entity_b).map_or(Vec3::ZERO, |v| v.linear);
-                    let rel_vel_along_dir = (vb - va).dot(dir);
-                    let lambda = -(rel_vel_along_dir + error * (beta / dt) * joint.stiffness)
-                        / total_inv_mass;
+
+                    // Anchor hızlarını hesapla (linear + angular katkısıyla)
+                    let va_lin = vels.get(joint.entity_a).map_or(Vec3::ZERO, |v| v.linear);
+                    let va_ang = vels.get(joint.entity_a).map_or(Vec3::ZERO, |v| v.angular);
+                    let vb_lin = vels.get(joint.entity_b).map_or(Vec3::ZERO, |v| v.linear);
+                    let vb_ang = vels.get(joint.entity_b).map_or(Vec3::ZERO, |v| v.angular);
+
+                    let vel_a_anchor = va_lin + va_ang.cross(r_a);
+                    let vel_b_anchor = vb_lin + vb_ang.cross(r_b);
+                    let rel_vel_along_dir = (vel_b_anchor - vel_a_anchor).dot(dir);
+
+                    // Etkin kütle: Lineer + Rotasyonel katkı
+                    // Önceki hata: total_inv_mass yalnızca lineer kütleyi kapsıyordu →
+                    // impulse fazla büyük, angular kol hiç güncellenmiyordu
+                    let r_a_cross_dir = r_a.cross(dir);
+                    let r_b_cross_dir = r_b.cross(dir);
+                    let ang_a = Vec3::new(
+                        r_a_cross_dir.x * inv_inertia_a.x,
+                        r_a_cross_dir.y * inv_inertia_a.y,
+                        r_a_cross_dir.z * inv_inertia_a.z,
+                    );
+                    let ang_b = Vec3::new(
+                        r_b_cross_dir.x * inv_inertia_b.x,
+                        r_b_cross_dir.y * inv_inertia_b.y,
+                        r_b_cross_dir.z * inv_inertia_b.z,
+                    );
+                    let eff_mass_inv = inv_mass_a
+                        + inv_mass_b
+                        + ang_a.dot(r_a_cross_dir)
+                        + ang_b.dot(r_b_cross_dir);
+
+                    if eff_mass_inv < 1e-8 {
+                        continue;
+                    }
+
+                    // Baumgarte konum düzeltmesi + hız düzeltmesi
+                    let bias = error * (beta / dt) * joint.stiffness;
+                    let lambda = -(rel_vel_along_dir + bias) / eff_mass_inv;
                     let impulse = dir * lambda;
+
+                    // Linear VE Angular impulse uygula
+                    // Önceki kod sadece linear uyguluyordu → sarkık obje sallanmak yerine dönüyordu
                     if let Some(v_a) = vels.get_mut(joint.entity_a) {
                         v_a.linear -= impulse * inv_mass_a;
+                        // angular -= I⁻¹ · (r_a × impulse)
+                        let torque_a = r_a.cross(impulse);
+                        v_a.angular -= Vec3::new(
+                            torque_a.x * inv_inertia_a.x,
+                            torque_a.y * inv_inertia_a.y,
+                            torque_a.z * inv_inertia_a.z,
+                        );
                     }
                     if let Some(v_b) = vels.get_mut(joint.entity_b) {
                         v_b.linear += impulse * inv_mass_b;
+                        // angular += I⁻¹ · (r_b × impulse)
+                        let torque_b = r_b.cross(impulse);
+                        v_b.angular += Vec3::new(
+                            torque_b.x * inv_inertia_b.x,
+                            torque_b.y * inv_inertia_b.y,
+                            torque_b.z * inv_inertia_b.z,
+                        );
                     }
                 }
                 JointKind::Spring {
