@@ -152,14 +152,22 @@ impl Joint {
     }
 }
 
-/// Kısıtlayıcı havuzu — Tüm aktif joint'lerin listesi
+/// Kısıtlayıcı havuzu — Tüm aktif joint'lerın opaque-ID tabanlı listesi.
 ///
-/// Joint'ler nesil bazlı `usize` ID'ler ile tanımlanır. `remove` çağrıldıktan
-/// sonra silinen ID geçersiz olur; ancak diğer ID'ler **etkilenmez**
-/// (kararlı sıralama / stable removal kullanılır).
+/// # ID Garantileri
+/// - [`add`] her çağrıda benzersiz, monoton artan bir `usize` ID döndürür.
+/// - ID'ler asla yeniden kullanılmaz; silinen ID sonsuza kadar geçersizdir.
+/// - Çağıran kod **daima ID'yi** saklamalıdır, `Vec` indeksini değil.
+///
+/// # Güvenlik Tasarımı
+/// `joints` alanı `pub(crate)` yapılmıştır; dışarıdan ham indeksle erişim
+/// derleme aşamasında engellenir. Tüm dış erişim [`get`] / [`get_mut`] /
+/// [`iter`] / [`contains`] arayüzleri üzerinden yapılır.
 pub struct JointWorld {
-    pub joints: Vec<(usize, Joint)>,
-    pub next_id: usize,
+    /// (id, joint) çiftleri. Dışarıdan indeks erişimini engellemek için
+    /// `pub(crate)` — solver bu alanı doğrudan okur.
+    pub(crate) joints: Vec<(usize, Joint)>,
+    next_id: usize,
 }
 
 impl JointWorld {
@@ -170,9 +178,10 @@ impl JointWorld {
         }
     }
 
-    /// Yeni bir joint ekler ve ona özgü ID döndürür.
-    /// ID'ler belirleyici biçimde artan tam sayılardır; kullanıcı tarafından dizine erişim yerine
-    /// opak tanımlayıcı (opaque handle) olarak saklanmalıdır.
+    /// Yeni bir joint ekler; çağırana özgü opaque ID döndürür.
+    ///
+    /// Dönen ID'yi saklayın — silme ve sorgulama işlemlerinde bu ID kullanılır.
+    /// Ham `Vec` indeksi **geçersiz** bir tanımlayıcıdır; kullanmayın.
     pub fn add(&mut self, joint: Joint) -> usize {
         let id = self.next_id;
         self.next_id += 1;
@@ -180,13 +189,73 @@ impl JointWorld {
         id
     }
 
-    /// Verilen ID'ye sahip joint'i kararlı sıralamayı koruyarak siler.
+    /// Verilen ID'ye sahip joint'i **kararlı sıralamayı koruyarak** siler.
     ///
-    /// `swap_remove` kullanılmaz; çünkü swap_remove silinen index'ten büyük
-    /// tüm indisleri geçersiz kılar ve ID'ye göre erişen çağıran kod
-    /// farklı bir joint'i silmiş gibi davranabilir (silent bug).
-    pub fn remove(&mut self, id: usize) {
+    /// Dönüş değeri:
+    /// - `true`  → ID bulundu ve silindi.
+    /// - `false` → ID zaten geçersizdi (çift silme / stale handle); sessiz hata yok.
+    ///
+    /// # Neden `swap_remove` değil?
+    /// `swap_remove` son elemanı silinen yere taşır; bu, taşınan joint'in
+    /// Vec indeksini değiştirir. Çağıran kod eski indeksi saklıyorsa farklı
+    /// bir joint'i yanlışlıkla hedefler — tespit edilmesi güç sessiz bug.
+    /// `retain` ile sıralama sabit kalır ve tüm ID'ler geçerliliğini korur.
+    pub fn remove(&mut self, id: usize) -> bool {
+        let before = self.joints.len();
         self.joints.retain(|(i, _)| *i != id);
+        self.joints.len() < before
+    }
+
+    /// Verilen ID'nin hâlâ geçerli olup olmadığını kontrol eder.
+    ///
+    /// Çağıran kod silme işleminden önce/sonra ID'yi doğrulamak istiyorsa
+    /// kullanılır. `remove` sonrası aynı ID için `false` döner.
+    #[inline]
+    pub fn contains(&self, id: usize) -> bool {
+        self.joints.iter().any(|(i, _)| *i == id)
+    }
+
+    /// ID'ye göre joint'e salt-okunur erişim.
+    ///
+    /// ID geçersizse `None` döner — asla paniklemez.
+    #[inline]
+    pub fn get(&self, id: usize) -> Option<&Joint> {
+        self.joints.iter().find(|(i, _)| *i == id).map(|(_, j)| j)
+    }
+
+    /// ID'ye göre joint'e değiştirilebilir erişim.
+    ///
+    /// ID geçersizse `None` döner — asla paniklemez.
+    #[inline]
+    pub fn get_mut(&mut self, id: usize) -> Option<&mut Joint> {
+        self.joints
+            .iter_mut()
+            .find(|(i, _)| *i == id)
+            .map(|(_, j)| j)
+    }
+
+    /// Tüm (id, joint) çiftleri üzerinde iterator döndürür.
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = (usize, &Joint)> {
+        self.joints.iter().map(|(id, j)| (*id, j))
+    }
+
+    /// Tüm (id, joint) çiftleri üzerinde değiştirilebilir iterator döndürür.
+    #[inline]
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (usize, &mut Joint)> {
+        self.joints.iter_mut().map(|(id, j)| (*id, j))
+    }
+
+    /// Kayıtlı joint sayısını döndürür.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.joints.len()
+    }
+
+    /// Hiç joint yoksa `true` döner.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.joints.is_empty()
     }
 }
 
