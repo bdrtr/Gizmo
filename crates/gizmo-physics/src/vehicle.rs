@@ -215,10 +215,15 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                 let origin = t.position + r_ws;
                 let dir = t.rotation.mul_vec3(wheel.direction).normalize();
 
-                // === RAYCASTING (AABB & Ground Plane) ===
+                // === RAYCASTING — hit_t (mesafe) + contact_normal (yüzey normali) ===
+                //
+                // contact_normal; süspansiyon kuvvetinin yönünü belirler.
+                // HeightField için bilinear türev ile hesaplanır — düz global-Y değil.
+                // Bu, eğimli zemin üzerinde titreşimi ve yan kaymayı önler.
                 let mut hit_t = f32::MAX;
+                let mut contact_normal = Vec3::new(0.0, 1.0, 0.0); // fallback: düz zemin
 
-                // 1. Zemin Yüzeyi fallback olarak (PhysicsConfig'den oku)
+                // 1. Zemin Yüzeyi fallback (PhysicsConfig'den oku)
                 let ground_y = world
                     .get_resource::<crate::components::PhysicsConfig>()
                     .map(|c| c.ground_y)
@@ -227,6 +232,7 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                     let t_y = (ground_y - origin.y) / dir.y;
                     if t_y > 0.0 && t_y < hit_t {
                         hit_t = t_y;
+                        contact_normal = Vec3::new(0.0, 1.0, 0.0);
                     }
                 }
 
@@ -241,21 +247,9 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                             let max_b = *position + *half_extents;
 
                             let inv_dir = Vec3::new(
-                                if dir.x.abs() > 1e-8 {
-                                    1.0 / dir.x
-                                } else {
-                                    f32::MAX
-                                },
-                                if dir.y.abs() > 1e-8 {
-                                    1.0 / dir.y
-                                } else {
-                                    f32::MAX
-                                },
-                                if dir.z.abs() > 1e-8 {
-                                    1.0 / dir.z
-                                } else {
-                                    f32::MAX
-                                },
+                                if dir.x.abs() > 1e-8 { 1.0 / dir.x } else { f32::MAX },
+                                if dir.y.abs() > 1e-8 { 1.0 / dir.y } else { f32::MAX },
+                                if dir.z.abs() > 1e-8 { 1.0 / dir.z } else { f32::MAX },
                             );
 
                             let t1x = (min_b.x - origin.x) * inv_dir.x;
@@ -266,10 +260,24 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                             let t2z = (max_b.z - origin.z) * inv_dir.z;
 
                             let t_near = t1x.min(t2x).max(t1y.min(t2y)).max(t1z.min(t2z));
-                            let t_far = t1x.max(t2x).min(t1y.max(t2y)).min(t1z.max(t2z));
+                            let t_far  = t1x.max(t2x).min(t1y.max(t2y)).min(t1z.max(t2z));
 
                             if t_near <= t_far && t_far > 0.0 && t_near < hit_t {
-                                hit_t = if t_near > 0.0 { t_near } else { 0.0 };
+                                let ht = if t_near > 0.0 { t_near } else { 0.0 };
+                                hit_t = ht;
+
+                                // Hangi slab'dan girildi? — o slab'ın normali = contact_normal
+                                // t_near'ın katkısını sağlayan eksen en büyük t_near'ı veriyor.
+                                let tx_near = t1x.min(t2x);
+                                let ty_near = t1y.min(t2y);
+                                let tz_near = t1z.min(t2z);
+                                contact_normal = if tx_near >= ty_near && tx_near >= tz_near {
+                                    Vec3::new(if dir.x > 0.0 { -1.0 } else { 1.0 }, 0.0, 0.0)
+                                } else if ty_near >= tz_near {
+                                    Vec3::new(0.0, if dir.y > 0.0 { -1.0 } else { 1.0 }, 0.0)
+                                } else {
+                                    Vec3::new(0.0, 0.0, if dir.z > 0.0 { -1.0 } else { 1.0 })
+                                };
                             }
                         }
                         StaticCol::HeightField {
@@ -309,23 +317,21 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                                 let gx1 = gx0 + 1;
                                 let gz1 = gz0 + 1;
 
-                                // Dört köşe (İkili interpolasyon — Bilinear)
+                                // Dört köşe yükseklikleri
                                 let h = |gx: u32, gz: u32| -> f32 {
                                     let idx = (gz * *segments_x + gx) as usize;
-                                    if idx < heights.len() {
-                                        heights[idx] * *max_height
-                                    } else {
-                                        0.0
-                                    }
+                                    if idx < heights.len() { heights[idx] * *max_height } else { 0.0 }
                                 };
                                 let h00 = h(gx0, gz0);
                                 let h10 = h(gx1, gz0);
                                 let h01 = h(gx0, gz1);
                                 let h11 = h(gx1, gz1);
 
-                                // Hucre içi interpolasyon ağırlıkları
+                                // Hücre içi interpolasyon ağırlıkları
                                 let tx = fx - gx0 as f32;
                                 let tz = fz - gz0 as f32;
+
+                                // Bilinear yükseklik interpolasyonu — snap değil
                                 let terrain_height = h00 * (1.0 - tx) * (1.0 - tz)
                                     + h10 * tx * (1.0 - tz)
                                     + h01 * (1.0 - tx) * tz
@@ -336,6 +342,21 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                                     let t_y = (terrain_y - origin.y) / dir.y;
                                     if t_y > 0.0 && t_y < hit_t {
                                         hit_t = t_y;
+
+                                        // Bilinear türev ile terrein normali
+                                        // ∂h/∂x ≈ bilinear türev x yönünde
+                                        // ∂h/∂z ≈ bilinear türev z yönünde
+                                        let cell_w = *width / sx;
+                                        let cell_d = *depth / sz_;
+                                        let dh_dx = ((h10 - h00) * (1.0 - tz)
+                                            + (h11 - h01) * tz)
+                                            / cell_w;
+                                        let dh_dz = ((h01 - h00) * (1.0 - tx)
+                                            + (h11 - h10) * tx)
+                                            / cell_d;
+                                        // Normal = (-∂h/∂x, 1, -∂h/∂z).normalize()
+                                        contact_normal = Vec3::new(-dh_dx, 1.0, -dh_dz)
+                                            .normalize();
                                     }
                                 }
                             }
@@ -356,12 +377,15 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                         let spring_force = wheel.suspension_stiffness * wheel.compression;
 
                         let wheel_vel = v.linear + v.angular.cross(r_ws);
-                        let vel_along_dir = wheel_vel.dot(dir);
+                        // Sönümleme: hız bileşenini gerçek terrein normaline göre ölç.
+                        // Düz zeminde contact_normal ≈ Vec3::Y olduğundan davranış değişmez.
+                        let vel_along_normal = wheel_vel.dot(contact_normal);
 
-                        let damping_force = wheel.suspension_damping * vel_along_dir;
+                        let damping_force = wheel.suspension_damping * vel_along_normal;
                         let total_suspension_force = (spring_force + damping_force).max(0.0);
 
-                        let suspension_impulse = dir * -total_suspension_force * dt;
+                        // Kuvveti terrein normaline göre uygula — eğimde titreşim önlenir.
+                        let suspension_impulse = contact_normal * total_suspension_force * dt;
                         total_linear_impulse += suspension_impulse;
 
                         // Direk Tork oluştur (Merkezi olmayan kuvvet)
