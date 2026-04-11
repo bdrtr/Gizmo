@@ -90,7 +90,12 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
     let base_color = in.inst_albedo.rgb * tex_color.rgb;
+    
+    var v_color = in.color;
+    if (length(v_color) < 0.0001) {
+        v_color = vec3<f32>(1.0, 1.0, 1.0);
+    }
     // Düz rengini doğrudan döndür (Işıklandırma devre dışı)
-    let final_color = in.color * base_color;
+    let final_color = v_color * base_color;
     return vec4<f32>(final_color, in.inst_albedo.a * tex_color.a);
 }

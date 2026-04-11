@@ -96,6 +96,14 @@ impl SceneData {
 
         for &id in &entity_ids {
             let name = names.as_ref().and_then(|s| s.get(id)).map(|n| n.0.clone());
+            
+            // Gizmo Studio'nun içsel araçlarını kaydetme (Gizmo kurguları, Highlight box, grid vs.)
+            if let Some(ref n) = name {
+                if n.starts_with("Editor ") || n == "Highlight Box" {
+                    continue;
+                }
+            }
+
             let transform = transforms.as_ref().and_then(|s| s.get(id)).copied();
             let velocity = velocities.as_ref().and_then(|s| s.get(id)).copied();
             let rigid_body = rigidbodies.as_ref().and_then(|s| s.get(id)).copied();

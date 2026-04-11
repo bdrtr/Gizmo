@@ -243,7 +243,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     
     // Parçaları topla
-    var final_color = in.color * (ambient + total_diffuse + total_specular + fake_ibl_specular);
+    var v_color = in.color;
+    if (length(v_color) < 0.0001) {
+        v_color = vec3<f32>(1.0, 1.0, 1.0);
+    }
+    var final_color = v_color * (ambient + total_diffuse + total_specular + fake_ibl_specular);
     
     // --- ACES Tone Mapping (Filmik Renk Düzenlemesi) ---
     // Patlayan aşırı beyaz/parlak renkleri yumuşatarak sinematik ve gerçekçi bir filtre atar
