@@ -685,11 +685,14 @@ mod tests {
 
     #[test]
     fn test_obb_obb_flat_surface_multi_contact() {
-        // Düz zeminde yatan iki kutu — Sutherland-Hodgman 4 temas noktası üretmeli
+        // Düz zeminde yüzey-yüzey teması — Sutherland-Hodgman 4 temas noktası üretmeli.
+        // Bu test OBB-OBB'nin flat surface'de tek nokta üretmediğini kanıtlar.
+        // Tek nokta: köşe-yüzey teması. Dört nokta: yüzey-yüzey (zemin/tavan temas gibi).
         let a = Aabb { half_extents: Vec3::new(1.0, 0.5, 1.0) };
         let b = Aabb { half_extents: Vec3::new(1.0, 0.5, 1.0) };
 
-        // B kutusu, A'nın tam üstünde hafif geçiş yapıyor (10cm)
+        // B kutusu, A'nın tam üstünde 10 cm geçiş yapıyor: penetrasyon = 0.1
+        // Beklenti: 4 köşe de referans yüz içinde → 4 temas noktası
         let manifold = check_obb_obb_manifold(
             Vec3::ZERO,
             Quat::IDENTITY,
@@ -699,14 +702,25 @@ mod tests {
             &b,
         );
         assert!(manifold.is_colliding, "Overlapping boxes should collide");
-        // Düz yüzey teması — birden fazla temas noktası bekleniyor
+
+        // Yüzey-yüzey teması → SAT Y eksenini seçmeli
+        assert!(manifold.normal.y.abs() > 0.9, "Normal should be Y-axis (got {:?})", manifold.normal);
+
+        // Penetrasyon: 1.0 - 0.9 = 0.1 (A üst + B alt = 0.5+0.5, merkez arası = 0.9)
         assert!(
-            manifold.contact_points.len() >= 1,
-            "Expected at least 1 contact point, got {}",
+            (manifold.penetration - 0.1).abs() < 0.01,
+            "Penetration should be ~0.1, got {}",
+            manifold.penetration
+        );
+
+        // KRİTİK: Sutherland-Hodgman yüzey-yüzey temasında 4 nokta üretmeli.
+        // Eğer burada 1 çıkıyorsa OBB-OBB polygon clipping düzgün çalışmıyor → titreme.
+        assert!(
+            manifold.contact_points.len() >= 4,
+            "Face-face contact should produce 4 contact points (got {}). \
+             Single-point OBB contact causes flat-surface jitter.",
             manifold.contact_points.len()
         );
-        // Normal Y ekseni yönünde olmalı
-        assert!(manifold.normal.y.abs() > 0.9, "Normal should be mostly Y");
     }
 
     #[test]
