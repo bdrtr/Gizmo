@@ -8,7 +8,7 @@ use std::sync::Arc;
 // ======================== ECS COMPONENT ========================
 
 /// 3D veya 2D oynatılabilecek ses kaynağı bileşeni (ECS için)
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct AudioSource {
     pub sound_name: String,
     pub is_3d: bool,
@@ -16,6 +16,7 @@ pub struct AudioSource {
     pub pitch: f32,
     pub loop_sound: bool,
     pub max_distance: f32, // Sesin zayıflayarak tamamen kısılacağı mesafe limiti
+    #[serde(skip)]
     pub _internal_sink_id: Option<u64>,
 }
 

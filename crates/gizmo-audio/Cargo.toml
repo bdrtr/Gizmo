@@ -7,3 +7,4 @@ description.workspace = true
 
 [dependencies]
 rodio = "0.17"
+serde = { version = "1.0", features = ["derive"] }

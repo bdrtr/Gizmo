@@ -19,6 +19,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
 
     // Light Icon (Kesişen prizmalar ile yıldız/güneş imgesi)
     let icon1 = world.spawn();
+    world.add_component(icon1, gizmo::core::component::EntityName("Editor Light Icon 1".to_string()));
     world.add_component(icon1, Transform::new(Vec3::ZERO).with_scale(Vec3::new(0.04, 0.6, 0.04)));
     world.add_component(icon1, gizmo::renderer::asset::AssetManager::create_cube(&renderer.device));
     world.add_component(icon1, gizmo::prelude::Material::new(white_tex.clone()).with_unlit(Vec4::new(1.0, 0.8, 0.1, 1.0)));
@@ -26,6 +27,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
     world.add_component(icon1, gizmo::core::component::Parent(light.id()));
 
     let icon2 = world.spawn();
+    world.add_component(icon2, gizmo::core::component::EntityName("Editor Light Icon 2".to_string()));
     world.add_component(icon2, Transform::new(Vec3::ZERO).with_scale(Vec3::new(0.6, 0.04, 0.04)));
     world.add_component(icon2, gizmo::renderer::asset::AssetManager::create_cube(&renderer.device));
     world.add_component(icon2, gizmo::prelude::Material::new(white_tex.clone()).with_unlit(Vec4::new(1.0, 0.8, 0.1, 1.0)));
@@ -33,6 +35,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
     world.add_component(icon2, gizmo::core::component::Parent(light.id()));
     
     let icon3 = world.spawn();
+    world.add_component(icon3, gizmo::core::component::EntityName("Editor Light Icon 3".to_string()));
     world.add_component(icon3, Transform::new(Vec3::ZERO).with_scale(Vec3::new(0.04, 0.04, 0.6)));
     world.add_component(icon3, gizmo::renderer::asset::AssetManager::create_cube(&renderer.device));
     world.add_component(icon3, gizmo::prelude::Material::new(white_tex.clone()).with_unlit(Vec4::new(1.0, 0.8, 0.1, 1.0)));
