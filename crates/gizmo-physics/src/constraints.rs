@@ -490,13 +490,14 @@ pub fn solve_constraints(joint_world: &JointWorld, world: &gizmo_core::World, dt
                         } else {
                             -angle
                         };
+                        let hinge_world = rot_a.mul_vec3(*axis);
                         if signed_angle < *min_angle {
-                            let correction = *axis * (*min_angle - signed_angle) * (beta / dt);
+                            let correction = hinge_world * (*min_angle - signed_angle) * (beta / dt);
                             if let Some(v_b) = vels.get_mut(joint.entity_b) {
                                 v_b.angular += correction;
                             }
                         } else if signed_angle > *max_angle {
-                            let correction = *axis * (signed_angle - *max_angle) * (beta / dt);
+                            let correction = hinge_world * (signed_angle - *max_angle) * (beta / dt);
                             if let Some(v_b) = vels.get_mut(joint.entity_b) {
                                 v_b.angular -= correction;
                             }

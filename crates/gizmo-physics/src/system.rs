@@ -238,30 +238,70 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
 
         // =========================================================================
         // 1D Sweep & Prune Broadphase - O(N log N)
-        // RAM Memory-Fetch süresini dramatik ölçüde azaltan Düz Vector taraması.
-        // Dinamik Memory (HashMap) ataması 0'dır, Cache dostudur.
+        // En yüksek varyansa sahip ekseni bularak dinamik sıralama/pruning yapar.
         // =========================================================================
 
-        // 1. Min X eksenine göre çok hızlı bir şekilde (unstable_sort) sırala
-        intervals.sort_unstable_by(|a, b| a.min.x.total_cmp(&b.min.x));
-
         let mut collision_pairs: Vec<(u32, u32)> = Vec::new();
+        if intervals.is_empty() {
+            return;
+        }
 
-        // 2. Sıralanmış listeyi Linear olarak tara (Sweep)
+        // 1. Merkezlerin eksenlere göre varyansını (dağılımını) hesapla
+        let mut sum = Vec3::ZERO;
+        let mut sum_sq = Vec3::ZERO;
+        for i in &intervals {
+            let center = (i.min + i.max) * 0.5;
+            sum += center;
+            sum_sq += center * center;
+        }
+        let count = intervals.len() as f32;
+        let mean = sum / count;
+        let variance = sum_sq / count - mean * mean;
+
+        // En geniş dağılım (variance) hangi eksendeyse o ekseni seç
+        let mut axis = 0; // 0: X, 1: Y, 2: Z
+        if variance.y > variance.x && variance.y > variance.z {
+            axis = 1;
+        } else if variance.z > variance.x && variance.z > variance.y {
+            axis = 2;
+        }
+
+        // 2. Seçilen eksenin min değerine göre hızlıca (unstable_sort) sırala
+        intervals.sort_unstable_by(|a, b| {
+            if axis == 0 {
+                a.min.x.total_cmp(&b.min.x)
+            } else if axis == 1 {
+                a.min.y.total_cmp(&b.min.y)
+            } else {
+                a.min.z.total_cmp(&b.min.z)
+            }
+        });
+
+        // 3. Sıralanmış listeyi Linear olarak tara (Sweep)
         let len = intervals.len();
         for i in 0..len {
             let a = &intervals[i];
             for j in (i + 1)..len {
                 let b = &intervals[j];
 
-                // (Prune) Eğer b'nin sol kenarı (min.x) a'nın sağ kenarını geçiyorsa,
+                // (Prune) Eğer b'nin sol kenarı (min), seçili eksende a'nın sağ kenarını geçiyorsa,
                 // Liste sıralı olduğu için geri kalan HİÇBİR obje a ile kesişemez. Döngüyü kır.
-                if b.min.x > a.max.x {
+                let prune = if axis == 0 {
+                    b.min.x > a.max.x
+                } else if axis == 1 {
+                    b.min.y > a.max.y
+                } else {
+                    b.min.z > a.max.z
+                };
+
+                if prune {
                     break;
                 }
 
-                // Kalan 2 eksende (Y ve Z) kesin örtüşme (overlap) kontrolü yap
-                if a.min.y <= b.max.y
+                // Kalan tüm eksenlerde kesin örtüşme (overlap) kontrolü yap
+                if a.min.x <= b.max.x
+                    && a.max.x >= b.min.x
+                    && a.min.y <= b.max.y
                     && a.max.y >= b.min.y
                     && a.min.z <= b.max.z
                     && a.max.z >= b.min.z
@@ -1105,8 +1145,10 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
                     wp,
                 ));
 
-                // DARBE/MOMENTUM EVENT'İ FIRLAT: Eğer şiddetli bir etki varsa (0.05'ten büyük) ses çıksın
-                if c.accumulated_j > 0.05 {
+                // DARBE/MOMENTUM EVENT'İ FIRLAT: Kütle-normalize edilmiş eşik (adaptif)
+                let eff_mass = 1.0 / (c.inv_mass_a + c.inv_mass_b).max(0.0001);
+                let threshold = (0.05 * eff_mass) + 0.01;
+                if c.accumulated_j > threshold {
                     let pos_a = island
                         .poses
                         .get(&c.ent_a)
