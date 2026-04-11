@@ -430,11 +430,26 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
                 let rb_a = rb_sparse.get(&ent_a).map(|&i| &rb_dense[i])?;
                 let rb_b = rb_sparse.get(&ent_b).map(|&i| &rb_dense[i])?;
 
-                if (rb_a.data.mass == 0.0 && rb_b.data.mass == 0.0)
-                    || (rb_a.data.is_sleeping && rb_b.data.is_sleeping)
-                {
+                // Erken çıkış: iki statik obje asla birbirini etkileyemez.
+                if rb_a.data.mass == 0.0 && rb_b.data.mass == 0.0 {
                     return None;
                 }
+
+                // Erken çıkış: her ikisi de DINAMIK ve her ikisi de uyuyanlar birbirini uyandıramaz.
+                //
+                // ⚠️ NÜANS: new_static() is_sleeping=true ile başlar — statik objenin is_sleeping
+                // bayrağı "gerçek uyku" değil, "hiç uyanmaz" anlamındadır.
+                // Dolayısıyla bu koşul SADECE her iki taraf da dinamik (mass > 0) olduğunda
+                // geçerlidir. Statik + uyuyan dinamik çifti buradan atlanmamalı —
+                // dinamik olanın wake listesine düşmesi gerekebilir.
+                let both_dynamic_sleeping = rb_a.data.mass > 0.0
+                    && rb_b.data.mass > 0.0
+                    && rb_a.data.is_sleeping
+                    && rb_b.data.is_sleeping;
+                if both_dynamic_sleeping {
+                    return None;
+                }
+
 
                 if has_vehicles
                     && ((v_set.contains(&ent_a) && rb_b.data.mass == 0.0)
@@ -732,13 +747,17 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
                 // SADECE ZATEN UYUYAN OBJELERİ UYANDIR!
                 // Eğer iki obje de zaten uyanıksa birbirlerini dürtüp sleep_timer'larını SIFIRLAMAMALILAR.
                 // Yoksa üst üste binen objeler sonsuza dek titreşir ve asla uyumazlar.
+                // Uyku listesi: yalnızca DINAMIK (mass > 0) ve uyuyan objeler uyandırılır.
+                // Statik objelerin is_sleeping=true değeri "hiç uyanmaz" anlamındadır;
+                // onlara wake_up() çağırmak hem gereksiz hem yanıltıcı.
                 let mut wakes = Vec::new();
-                if rb_a.data.is_sleeping {
+                if rb_a.data.is_sleeping && rb_a.data.mass > 0.0 {
                     wakes.push(ent_a);
                 }
-                if rb_b.data.is_sleeping {
+                if rb_b.data.is_sleeping && rb_b.data.mass > 0.0 {
                     wakes.push(ent_b);
                 }
+
 
                 let mut result = DetectionResult {
                     contacts: Vec::new(),
