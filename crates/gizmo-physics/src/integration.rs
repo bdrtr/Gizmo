@@ -7,9 +7,9 @@ use gizmo_math::{Mat3, Quat, Vec3};
 /// Lineer: (m/s)² — obje bu hızın altına düştüğünde uyku sayıcısı artar.
 /// Açısal: (rad/s)² — ayrı eşik; dönerken lineer sıfır olsa da uyanmalı.
 /// İkkisini toplamak boyutsel olarak anlamsız (m/s ≠ rad/s) — ayrı kontrol zorunlu.
-const SLEEP_LINEAR_SQ: f32 = 0.01 * 0.01;  // 1 cm/s
-const SLEEP_ANGULAR_SQ: f32 = 0.05 * 0.05; // 0.05 rad/s
-const SLEEP_TIMER_THRESHOLD: f32 = 2.0;    // saniye
+const SLEEP_LINEAR_SQ: f32 = 0.05 * 0.05;  // 5 cm/s — Bullet Physics standardı
+const SLEEP_ANGULAR_SQ: f32 = 0.15 * 0.15;  // 0.15 rad/s (~8.6°/s)
+const SLEEP_TIMER_THRESHOLD: f32 = 1.0;     // 1 saniye — 2s çok uzun, jitter uzar
 
 /// Dünya uzayında tork `τ` için açısal ivme benzeri vektör `I⁻¹ τ` (burada `I⁻¹` dünya uzayında
 /// `R I_body⁻¹ Rᵀ`). `inverse_inertia_local` gövde çerçevesinde simetrik ters eylemsizlik matrisidir.
