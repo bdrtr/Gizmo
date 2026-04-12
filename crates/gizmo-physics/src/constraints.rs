@@ -36,6 +36,12 @@ impl JointBodies {
         transforms: &gizmo_core::SparseSet<crate::components::Transform>,
         rbs:        &gizmo_core::SparseSet<crate::components::RigidBody>,
     ) -> Option<Self> {
+        // Self-joint guard: aynı entity'ye bağlı joint fiziksel olarak anlamsız
+        // ve velocity çözümünde ikinci yazma ilkini ezer → sessiz bug
+        if joint.entity_a == joint.entity_b {
+            return None;
+        }
+
         let ta = *transforms.get(joint.entity_a)?;
         let tb = *transforms.get(joint.entity_b)?;
 

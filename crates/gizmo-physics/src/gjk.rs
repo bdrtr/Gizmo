@@ -102,6 +102,13 @@ pub fn gjk_intersect(
 
     // Uzayda sonsuz döngüyü önlemek için iterasyon limiti
     for _iter in 0..64 {
+        // NaN / degenerate guard: sıfır uzunluklu dir ile support_point NaN üretir
+        if dir.length_squared() < 1e-10 {
+            // Dir sıfıra yakın — degenerate simplex, orijin tam üzerinde olabilir
+            // Güvenli bir fallback yönü dene
+            dir = Vec3::new(1.0, 0.0, 0.0);
+        }
+
         let a = calculate_support(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b, dir);
 
         // Eğer bulduğumuz nokta aradığımız yönde orijini (0,0,0) geçemiyorsa, kesişim imkansızdır.
@@ -191,7 +198,10 @@ fn handle_simplex(simplex: &mut Simplex, dir: &mut Vec3) -> bool {
                 }
                 // Üçgenin içi, yukarıya (veya aşağıya) doğru
                 else {
-                    if abc_normal.dot(ao) > 0.0 {
+                    if abc_normal.length_squared() < 1e-10 {
+                        // Degenerate üçgen (collinear noktalar) — güvenli fallback
+                        *dir = ao;
+                    } else if abc_normal.dot(ao) > 0.0 {
                         *dir = abc_normal;
                     } else {
                         // Yönleri ters çevir ki winding order (sarma) doğru olsun
@@ -228,6 +238,27 @@ fn handle_simplex(simplex: &mut Simplex, dir: &mut Vec3) -> bool {
                 if adb_normal.dot(ao) > 0.0 {
                     simplex.points[2] = simplex.points[1];
                     simplex.points[1] = simplex.points[3];
+                    simplex.size = 3;
+                    continue;
+                }
+
+                // BCD yüzeyi (A'yı içermeyen yüzey) — nadir ama matematiksel bütünlük için gerekli.
+                // B=points[1], C=points[2], D=points[3]
+                let bc = simplex.points[2].v - simplex.points[1].v;
+                let bd = simplex.points[3].v - simplex.points[1].v;
+                let mut bcd_normal = bc.cross(bd);
+                // Normal tetrahedronun dışına bakmalı (A'nın tersi yönünde)
+                let ba = simplex.points[0].v - simplex.points[1].v;
+                if bcd_normal.dot(ba) > 0.0 {
+                    bcd_normal = bcd_normal * -1.0; // Flip: A'dan uzağa baksın
+                }
+                let bo = simplex.points[1].v * -1.0;
+
+                if bcd_normal.dot(bo) > 0.0 {
+                    // BCD dışındayız — A'yı (points[0]) at, B,C,D'yi üçgen olarak yeniden değerlendir
+                    simplex.points[0] = simplex.points[1];
+                    simplex.points[1] = simplex.points[2];
+                    simplex.points[2] = simplex.points[3];
                     simplex.size = 3;
                     continue;
                 }
@@ -291,5 +322,94 @@ mod tests {
 
         let (intersect, _) = gjk_intersect(&shape_a, pos_a, rot_a, &shape_b, pos_b, rot_b);
         assert!(intersect, "AABBs should intersect");
+    }
+
+    /// Simplex kalite testi: kesişen şekillerde dönen simplex'in
+    /// EPA'ya beslenebilecek geçerli noktalar içerdiğini doğrular.
+    #[test]
+    fn test_gjk_simplex_quality_for_epa() {
+        let shape_a = ColliderShape::Sphere(Sphere { radius: 1.0 });
+        let pos_a = Vec3::new(0.0, 0.0, 0.0);
+        let rot_a = Quat::IDENTITY;
+
+        let shape_b = ColliderShape::Sphere(Sphere { radius: 1.0 });
+        let pos_b = Vec3::new(1.0, 0.0, 0.0); // Derin kesişim
+        let rot_b = Quat::IDENTITY;
+
+        let (intersect, simplex) = gjk_intersect(&shape_a, pos_a, rot_a, &shape_b, pos_b, rot_b);
+        assert!(intersect, "Spheres should intersect");
+
+        // Simplex en az 2 nokta içermeli (genellikle 4 — tetrahedron)
+        assert!(simplex.size >= 2, "Simplex should have at least 2 points, got {}", simplex.size);
+
+        // Tüm simplex noktaları NaN olmamalı
+        for i in 0..simplex.size {
+            let p = simplex.points[i];
+            assert!(!p.v.x.is_nan() && !p.v.y.is_nan() && !p.v.z.is_nan(),
+                "Simplex point {} has NaN in Minkowski difference: {:?}", i, p.v);
+            assert!(!p.a.x.is_nan() && !p.a.y.is_nan() && !p.a.z.is_nan(),
+                "Simplex point {} has NaN in A-support: {:?}", i, p.a);
+            assert!(!p.b.x.is_nan() && !p.b.y.is_nan() && !p.b.z.is_nan(),
+                "Simplex point {} has NaN in B-support: {:?}", i, p.b);
+        }
+
+        // EPA'ya beslenebilmeli — penetration depth > 0 olmalı
+        let manifold = crate::epa::epa_solve(
+            simplex,
+            &shape_a, pos_a, rot_a,
+            &shape_b, pos_b, rot_b,
+        );
+        assert!(manifold.penetration > 0.0, "EPA should report positive penetration, got {}", manifold.penetration);
+        assert!(!manifold.normal.x.is_nan(), "EPA normal should not be NaN");
+    }
+
+    /// Degenerate case: iki şekil tam aynı pozisyonda. GJK crash etmemeli.
+    #[test]
+    fn test_gjk_coincident_positions_no_crash() {
+        let shape = ColliderShape::Aabb(Aabb {
+            half_extents: Vec3::new(1.0, 1.0, 1.0),
+        });
+        let pos = Vec3::new(0.0, 0.0, 0.0);
+        let rot = Quat::IDENTITY;
+
+        let (intersect, simplex) = gjk_intersect(&shape, pos, rot, &shape, pos, rot);
+        assert!(intersect, "Coincident shapes should intersect");
+        // NaN kontrolü
+        for i in 0..simplex.size {
+            assert!(!simplex.points[i].v.x.is_nan(), "Coincident test: NaN detected");
+        }
+    }
+
+    /// Döndürülmüş OBB testi: rotasyonlu kutular doğru kesişmeli.
+    #[test]
+    fn test_gjk_rotated_obb_intersect() {
+        let shape = ColliderShape::Aabb(Aabb {
+            half_extents: Vec3::new(1.0, 0.5, 0.5),
+        });
+        let pos_a = Vec3::ZERO;
+        let rot_a = Quat::IDENTITY;
+
+        // 45° döndürülmüş kutu — köşegen uzanımı artırır, kesişim olmalı
+        let pos_b = Vec3::new(1.8, 0.0, 0.0);
+        let rot_b = Quat::from_axis_angle(Vec3::new(0.0, 0.0, 1.0), std::f32::consts::FRAC_PI_4);
+
+        let (intersect, _) = gjk_intersect(&shape, pos_a, rot_a, &shape, pos_b, rot_b);
+        assert!(intersect, "45° rotated OBBs at distance 1.8 should intersect");
+    }
+
+    /// Ayrık OBB testi: döndürülmüş ama uzak kutular kesişmemeli.
+    #[test]
+    fn test_gjk_rotated_obb_disjoint() {
+        let shape = ColliderShape::Aabb(Aabb {
+            half_extents: Vec3::new(0.5, 0.5, 0.5),
+        });
+        let pos_a = Vec3::ZERO;
+        let rot_a = Quat::IDENTITY;
+
+        let pos_b = Vec3::new(3.0, 0.0, 0.0);
+        let rot_b = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), 0.7);
+
+        let (intersect, _) = gjk_intersect(&shape, pos_a, rot_a, &shape, pos_b, rot_b);
+        assert!(!intersect, "Far apart rotated OBBs should NOT intersect");
     }
 }

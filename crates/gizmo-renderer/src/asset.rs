@@ -285,23 +285,61 @@ impl AssetManager {
             [-1.0, 1.0, 1.0],   // 7
         ];
 
-        let faces: [([usize; 6], [f32; 3]); 6] = [
-            ([0, 2, 1, 0, 3, 2], [0.0, 0.0, -1.0]), // Arka (-Z Dışa)
-            ([4, 5, 6, 4, 6, 7], [0.0, 0.0, 1.0]),  // Ön (+Z Dışa)
-            ([0, 1, 5, 0, 5, 4], [0.0, -1.0, 0.0]), // Alt (-Y Dışa)
-            ([3, 6, 2, 3, 7, 6], [0.0, 1.0, 0.0]),  // Üst (+Y Dışa)
-            ([0, 4, 7, 0, 7, 3], [-1.0, 0.0, 0.0]), // Sol (-X Dışa)
-            ([1, 2, 6, 1, 6, 5], [1.0, 0.0, 0.0]),  // Sağ (+X Dışa)
+        // Her yüz: 6 vertex indeksi, normal, ve 6 UV koordinatı
+        // UV'ler her üçgen için sırasıyla: tri1(v0,v1,v2), tri2(v3,v4,v5)
+        struct FaceDef {
+            indices: [usize; 6],
+            normal: [f32; 3],
+            uvs: [[f32; 2]; 6],
+        }
+
+        let faces: [FaceDef; 6] = [
+            // Arka (-Z)
+            FaceDef {
+                indices: [0, 2, 1, 0, 3, 2],
+                normal: [0.0, 0.0, -1.0],
+                uvs: [[1.0, 1.0], [0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
+            },
+            // Ön (+Z)
+            FaceDef {
+                indices: [4, 5, 6, 4, 6, 7],
+                normal: [0.0, 0.0, 1.0],
+                uvs: [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
+            },
+            // Alt (-Y)
+            FaceDef {
+                indices: [0, 1, 5, 0, 5, 4],
+                normal: [0.0, -1.0, 0.0],
+                uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            },
+            // Üst (+Y)
+            FaceDef {
+                indices: [3, 6, 2, 3, 7, 6],
+                normal: [0.0, 1.0, 0.0],
+                uvs: [[0.0, 0.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+            },
+            // Sol (-X)
+            FaceDef {
+                indices: [0, 4, 7, 0, 7, 3],
+                normal: [-1.0, 0.0, 0.0],
+                uvs: [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
+            },
+            // Sağ (+X)
+            FaceDef {
+                indices: [1, 2, 6, 1, 6, 5],
+                normal: [1.0, 0.0, 0.0],
+                uvs: [[1.0, 1.0], [1.0, 0.0], [0.0, 0.0], [1.0, 1.0], [0.0, 0.0], [0.0, 1.0]],
+            },
         ];
 
         let mut vertices = Vec::with_capacity(36);
-        for (indices, normal) in &faces {
-            for &idx in indices {
+        for face in &faces {
+            for i in 0..6 {
                 vertices.push(Vertex {
-                    position: positions[idx],
+                    position: positions[face.indices[i]],
                     color: [1.0, 1.0, 1.0],
-                    normal: *normal,
-                    tex_coords: [0.0, 0.0],
+                    normal: face.normal,
+                    tex_coords: face.uvs[i],
                     joint_indices: [0; 4],
                     joint_weights: [0.0; 4],
                 });

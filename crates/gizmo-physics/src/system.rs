@@ -955,7 +955,7 @@ fn solve_single_island(island: &mut Island, solver_iters: u32, frame_count: u64,
                 continue;
             }
 
-            let bias = ((0.2 / 1.0) * (c.penetration - 0.005).max(0.0)).min(20.0);
+            let bias = ((0.15 / 1.0) * (c.penetration - 0.005).max(0.0)).min(2.0);
             let j_new = (-(1.0 + e) * vn + bias) / eff_mass;
             let old_acc = c.accumulated_j;
             c.accumulated_j = (c.accumulated_j + j_new).max(0.0);

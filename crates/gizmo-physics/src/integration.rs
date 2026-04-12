@@ -55,8 +55,8 @@ fn physics_apply_forces_scalar(world: &World, dt: f32) {
             }
         }
 
-        let linear_drag = (-0.5 * dt).exp();
-        let angular_drag = (-3.0 * dt).exp();
+        let linear_drag = (-0.1 * dt).exp();   // k=0.1: ~10%/s kayıp (hafif hava direnci)
+        let angular_drag = (-0.5 * dt).exp();   // k=0.5: ~40%/s kayıp (dönme sönümleme)
 
         for &e in &active_ents {
             if let Some(v) = vel_storage.get_mut(e) {
@@ -182,8 +182,8 @@ fn physics_apply_forces_system_impl(world: &World, dt: f32) {
             // 1/(1+k·dt) yaklaşımı ise farklı fps değerlerinde farklı sonuç üretir.
             //   k=0.5 → lineer drag: saniyede e^(-0.5) ≈ %60 hız kalır
             //   k=3.0 → angular drag: saniyede e^(-3) ≈ %5 hız kalır (hızlı sönümleme)
-            let linear_drag = f32x8::splat((-0.5 * dt).exp());
-            let angular_drag = f32x8::splat((-3.0 * dt).exp());
+            let linear_drag = f32x8::splat((-0.1 * dt).exp());
+            let angular_drag = f32x8::splat((-0.5 * dt).exp());
             x_v *= linear_drag;
             y_v *= linear_drag;
             z_v *= linear_drag;

@@ -152,14 +152,14 @@ fn generate_face_contacts(
     let extent_b = face_extent(&face_b);
 
     // B her zaman Incident Face, A Reference Face gibi ele alacağız
-    // Ama B'den daha dik ve güçlü bir Support Face gelirse değiştiririz.
     // İhtiyacımız olan Contact noktalarını "reference yüzeyine" düşen noktalar oluşturur.
-    let (ref_face, mut inc_face, ref_normal) = if extent_a <= extent_b {
+    // a_is_ref: penetrasyon derinliği hesabında collision normal yönünü belirler
+    let (ref_face, mut inc_face, ref_normal, a_is_ref) = if extent_a <= extent_b {
         // A'yı Reference Face yap (Normal A'dan B'ye)
-        (face_a.clone(), face_b.clone(), normal_a)
+        (face_a.clone(), face_b.clone(), normal_a, true)
     } else {
-        // B'yi Reference Face yap (Normal B'dan A'ya, dikkat et yönü ters!)
-        (face_b.clone(), face_a.clone(), normal_b)
+        // B'yi Reference Face yap (Normal B'dan A'ya)
+        (face_b.clone(), face_a.clone(), normal_b, false)
     };
 
     if ref_face.len() >= 3 && inc_face.len() >= 3 {
@@ -180,9 +180,15 @@ fn generate_face_contacts(
         let mut final_contacts = Vec::new();
         // inc_face şuan kırpma (clipping) sınırlarını geçen noktaları barındırır.
         for pt in &inc_face {
-            let dist = (*pt - ref_face[0]).dot(ref_normal);
+            // Incident noktanın reference düzlemine olan signed mesafesi.
+            // ref_normal her zaman reference face'in DIŞA bakan normalidir.
+            // A ref → incident (B) noktaları ref düzleminin altında → dist < 0 = penetrasyon ✓
+            // B ref → incident (A) noktaları ref düzleminin ÜSTÜnde → dist > 0, ama bunlar temas!
+            //   Bu durumda dist'i ters çevirmemiz lazım çünkü collision normal A→B yönünde.
+            let raw_dist = (*pt - ref_face[0]).dot(ref_normal);
+            let dist = if a_is_ref { raw_dist } else { -raw_dist };
 
-            // distance <= 0.05 anlamına gelir ki noktanın yüksekliği referans düzleminin altına girmiş
+            // dist <= 0.05: nokta referans düzleminin altına girmiş (veya çok yakın)
             if dist <= 0.05 {
                 final_contacts.push((*pt, -dist.min(0.0)));
             }
