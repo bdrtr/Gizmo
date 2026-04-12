@@ -70,7 +70,7 @@ struct Island {
 const MATCH_THRESHOLD_SQ: f32 = 0.02 * 0.02;
 
 /// Warm-start sönümleme faktörü (%80 — patlama riskini azaltır)
-const WARM_START_FACTOR: f32 = 0.8;
+const WARM_START_FACTOR: f32 = 0.4;  // 0.8 çok agresif → yapışma, 0.4 = dengeli
 
 /// Kalıcı Çözücü Durumu (Warm-Starting Cache için)
 pub struct PhysicsSolverState {
@@ -1081,21 +1081,9 @@ fn solve_single_island(island: &mut Island, solver_iters: u32, frame_count: u64,
         }
     }
 
-    for c in &island.contacts {
-        let correction = (c.penetration - 0.005).max(0.0) * 0.4;
-        if correction > 0.0 {
-            let total_inv = c.inv_mass_a + c.inv_mass_b;
-            if total_inv > 0.0 {
-                let push = c.normal * (correction / total_inv);
-                if let Some(p) = island.poses.get_mut(&c.ent_a) {
-                    p.position -= push * c.inv_mass_a;
-                }
-                if let Some(p) = island.poses.get_mut(&c.ent_b) {
-                    p.position += push * c.inv_mass_b;
-                }
-            }
-        }
-    }
+    // NOT: Position projection kaldırıldı — Baumgarte bias (satır 958) zaten
+    // hız seviyesinde penetrasyon düzeltmesi yapıyor. İkisinin birden aktif olması
+    // çift düzeltme üretip objeleri havaya fırlatıyordu.
 
     for (_, joint, jb) in island.joints.iter() {
         let mut pos_a = jb.pos_a;
@@ -1141,20 +1129,23 @@ fn solve_islands(
     dt: f32,
     parallel_island_solve: bool,
 ) {
-    // Warm-start: önceki frame'in impulslarını temas eşlemesiyle aktar
+    // Warm-start: önceki frame'in NORMAL impulslarını temas eşlemesiyle aktar.
+    // NOT: Sürtünme warm-start kaldırıldı — cached friction vektörü önceki frame'in
+    // teğet yönüne göre hesaplandı. Obje döndüğünde teğet değişir ama cache'deki
+    // eski yön uygulanmaya devam eder → yanlış yönde kuvvet → jitter.
     for island in islands.iter_mut() {
         for c in island.contacts.iter_mut() {
             let key = if c.ent_a < c.ent_b { (c.ent_a, c.ent_b) } else { (c.ent_b, c.ent_a) };
             if let Some(cached) = contact_cache.get(&key) {
-                if let Some((cached_j, cached_friction)) = match_cached_contact(c.world_point, cached) {
-                    c.accumulated_j        = (cached_j * WARM_START_FACTOR).min(20.0);
-                    c.accumulated_friction = cached_friction * WARM_START_FACTOR;
+                if let Some((cached_j, _cached_friction)) = match_cached_contact(c.world_point, cached) {
+                    c.accumulated_j = (cached_j * WARM_START_FACTOR).min(5.0);
+                    // c.accumulated_friction kasıtlı olarak sıfır bırakılıyor
                 }
             }
         }
     }
 
-    // Warm-start impulslarını hızlara uygula
+    // Warm-start normal impulslarını hızlara uygula
     for island in islands.iter_mut() {
         for c in island.contacts.iter() {
             if c.accumulated_j > 1e-6 {
@@ -1166,17 +1157,6 @@ fn solve_islands(
                 if let Some(v_b) = island.velocities.get_mut(&c.ent_b) {
                     v_b.linear  += impulse * c.inv_mass_b;
                     v_b.angular += apply_inv_inertia(c.r_b.cross(impulse), c.inv_inertia_b, c.rot_b);
-                }
-            }
-            let fi = c.accumulated_friction;
-            if fi.length_squared() > 1e-12 {
-                if let Some(v) = island.velocities.get_mut(&c.ent_a) {
-                    v.linear  -= fi * c.inv_mass_a;
-                    v.angular += apply_inv_inertia(c.r_a.cross(fi * -1.0), c.inv_inertia_a, c.rot_a);
-                }
-                if let Some(v) = island.velocities.get_mut(&c.ent_b) {
-                    v.linear  += fi * c.inv_mass_b;
-                    v.angular += apply_inv_inertia(c.r_b.cross(fi), c.inv_inertia_b, c.rot_b);
                 }
             }
         }

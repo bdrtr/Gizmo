@@ -179,9 +179,8 @@ fn physics_apply_forces_system_impl(world: &World, dt: f32) {
 
             // 2. DOĞRU DAMPING / DRAG HESABI (Gerçek frame-rate bağımsız üstel sönümleme)
             // e^(-k·dt) formülü: fps'ten bağımsız, her zaman aynı saniyesel sönümleme oranını verir.
-            // 1/(1+k·dt) yaklaşımı ise farklı fps değerlerinde farklı sonuç üretir.
-            //   k=0.5 → lineer drag: saniyede e^(-0.5) ≈ %60 hız kalır
-            //   k=3.0 → angular drag: saniyede e^(-3) ≈ %5 hız kalır (hızlı sönümleme)
+            //   k=0.1 → lineer drag: saniyede e^(-0.1) ≈ %90 hız kalır (hafif hava direnci)
+            //   k=0.5 → angular drag: saniyede e^(-0.5) ≈ %60 hız kalır (dönme sönümleme)
             let linear_drag = f32x8::splat((-0.1 * dt).exp());
             let angular_drag = f32x8::splat((-0.5 * dt).exp());
             x_v *= linear_drag;
