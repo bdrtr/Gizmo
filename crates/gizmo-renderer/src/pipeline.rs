@@ -23,6 +23,42 @@ pub struct SceneState {
     pub instance_bind_group_layout: wgpu::BindGroupLayout,
     pub instance_buffer: wgpu::Buffer,
     pub instance_bind_group: wgpu::BindGroup,
+    /// Current capacity (number of InstanceRaw items) of `instance_buffer`.
+    pub instance_capacity: usize,
+}
+
+impl SceneState {
+    /// Grow the instance buffer when the scene has more objects than current capacity.
+    ///
+    /// Allocates a new buffer at `2 * needed` to amortize future reallocations,
+    /// rebuilds the bind group, and updates `instance_capacity`.
+    /// Returns `true` if a reallocation happened.
+    pub fn ensure_instance_capacity(&mut self, device: &wgpu::Device, needed: usize) -> bool {
+        if needed <= self.instance_capacity {
+            return false;
+        }
+
+        let new_capacity = (needed * 2).max(8_192);
+        let new_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Instance Buffer (grown)"),
+            size: (new_capacity * std::mem::size_of::<crate::InstanceRaw>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let new_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &self.instance_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: new_buffer.as_entire_binding(),
+            }],
+            label: Some("instance_bind_group (grown)"),
+        });
+
+        self.instance_buffer = new_buffer;
+        self.instance_bind_group = new_bind_group;
+        self.instance_capacity = new_capacity;
+        true
+    }
 }
 
 fn load_shader(
@@ -48,6 +84,8 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         lights: [LightData {
             position: [0.0; 4],
             color: [0.0; 4],
+            direction: [0.0, -1.0, 0.0, 0.0],
+            params: [0.0; 4],
         }; 10],
         light_view_proj: [[0.0; 4]; 4],
         num_lights: 0,
@@ -216,9 +254,10 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
                 count: None,
             }],
         });
+    let initial_capacity: usize = 8_192;
     let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Instance Buffer"),
-        size: (100_000 * std::mem::size_of::<crate::InstanceRaw>()) as u64,
+        size: (initial_capacity * std::mem::size_of::<crate::InstanceRaw>()) as u64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -398,6 +437,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         instance_bind_group_layout,
         instance_buffer,
         instance_bind_group,
+        instance_capacity: initial_capacity,
     }
 }
 
@@ -535,4 +575,67 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
         });
 
     crate::post_process::rebuild_post_pipelines(renderer, &post_shader);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dynamic_instance_buffer_resize() {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::all(),
+                ..Default::default()
+            });
+
+            let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                ..Default::default()
+            }).await;
+
+            let adapter = match adapter {
+                Some(a) => a,
+                None => {
+                    println!("No suitable GPU adapter found for headless test. Skipping wgpu test.");
+                    return;
+                }
+            };
+
+            let (device, _) = adapter.request_device(
+                &wgpu::DeviceDescriptor {
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits {
+                        max_bind_groups: 6,
+                        ..wgpu::Limits::default()
+                    },
+                    label: None,
+                },
+                None,
+            ).await.unwrap();
+
+            // Sahnemizi kur, default capacity 8_192 olmali!
+            let mut scene_state = build_scene_pipelines(&device);
+            assert_eq!(scene_state.instance_capacity, 8_192);
+
+            // Daha kucuk bir obje listesi istenirse buyumez.
+            let grew = scene_state.ensure_instance_capacity(&device, 100);
+            assert!(!grew, "Buffer should not grow if capacity is enough");
+            assert_eq!(scene_state.instance_capacity, 8_192);
+
+            // Mevcudun disine ciktiginda (Ornegin 10_000) 2 katina grow eder.
+            let grew2 = scene_state.ensure_instance_capacity(&device, 10_000);
+            assert!(grew2, "Buffer should grow since needed > capacity");
+            assert_eq!(scene_state.instance_capacity, 20_000);
+            
+            // Gercek byte miktarinin da artmis oldugundan emin olalim.
+            let expected_bytes = (20_000 * std::mem::size_of::<crate::InstanceRaw>()) as u64;
+            assert_eq!(scene_state.instance_buffer.size(), expected_bytes);
+            
+            // Yeniden mevcut sinirlar icinde kaldiginda grow etmez
+            let grew3 = scene_state.ensure_instance_capacity(&device, 12_000);
+            assert!(!grew3, "Buffer should not grow if capacity is enough");
+            assert_eq!(scene_state.instance_capacity, 20_000);
+        });
+    }
 }

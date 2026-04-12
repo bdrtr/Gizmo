@@ -61,8 +61,8 @@ pub fn free_camera_system(world: &mut World, dt: f32) {
         } // D
     }
 
-    if let Some(mut query) = world.query_mut_mut::<Camera, Transform>() {
-        for (id, cam, trans) in query.iter_mut() {
+    if let Some(mut query) = world.query::<(&mut Camera, &mut Transform)>() {
+        for (id, (cam, trans)) in query.iter_mut() {
             if id == active_camera_entity {
                 if do_rotation {
                     let delta = input.mouse_delta();
@@ -321,9 +321,9 @@ pub fn vehicle_controller_system(world: &mut World, dt: f32) {
     }
 
     if let Some(mut query) =
-        world.query_mut_ref::<gizmo::physics::vehicle::VehicleController, crate::Player>()
+        world.query::<(&mut gizmo::physics::vehicle::VehicleController, &crate::Player)>()
     {
-        for (_id, v, _player) in query.iter_mut() {
+        for (_id, (v, _player)) in query.iter_mut() {
             v.steering_angle += (current_steer - v.steering_angle) * 20.0 * dt; // Direksiyonun hızı da 15'ten 20'ye artırıldı
             v.engine_force = current_engine;
             v.brake_force = current_brake;
@@ -536,9 +536,9 @@ pub fn chase_camera_system(world: &mut World, dt: f32) {
     // 1. Arabanın (Player) Transform'unu bul
     let mut target_transform = None;
     if let Some(mut q1) =
-        world.query_mut_ref::<gizmo::physics::vehicle::VehicleController, crate::Player>()
+        world.query::<(&mut gizmo::physics::vehicle::VehicleController, &crate::Player)>()
     {
-        for (id, _vc, _player) in q1.iter_mut() {
+        for (id, (_vc, _player)) in q1.iter_mut() {
             if let Some(transforms) = world.borrow::<Transform>() {
                 if let Some(transform) = transforms.get(id) {
                     target_transform = Some(*transform);
@@ -550,8 +550,8 @@ pub fn chase_camera_system(world: &mut World, dt: f32) {
 
     // 2. Kamerayı Arabaya göre hizala ve bakış açısını kilitle
     if let Some(tt) = target_transform {
-        if let Some(mut q2) = world.query_mut_mut::<Camera, Transform>() {
-            for (id, cam, trans) in q2.iter_mut() {
+        if let Some(mut q2) = world.query::<(&mut Camera, &mut Transform)>() {
+            for (id, (cam, trans)) in q2.iter_mut() {
                 if id == active_camera_entity {
                     // Arabanın yönüne göre arka konumu (Araçta +Z ön tarafa bakar, bu yüzden fwd +Z)
                     let fwd = tt.rotation * Vec3::new(0.0, 0.0, 1.0);

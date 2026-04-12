@@ -97,13 +97,10 @@ pub fn update_demo(world: &mut World, state: &mut GameState, dt: f32, input: &In
         let mut steps = 0;
         while state.physics_accumulator >= fixed_dt && steps < 16 {
             gizmo::physics::integration::physics_apply_forces_system(world, fixed_dt);
+            gizmo::physics::vehicle::physics_vehicle_system(world, fixed_dt);
             gizmo::physics::system::physics_collision_system(world, fixed_dt);
             gizmo::physics::character::physics_character_system(world, fixed_dt);
-            if let Some(jw) = world.get_resource::<gizmo::physics::JointWorld>() {
-                gizmo::physics::solve_constraints(&*jw, world, fixed_dt);
-            }
             gizmo::physics::race_ai_system(world, fixed_dt);
-            gizmo::physics::vehicle::physics_vehicle_system(world, fixed_dt);
 
             // AI Navigasyon sistemi
             gizmo_ai::ai_navigation_system(world, fixed_dt);

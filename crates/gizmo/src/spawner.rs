@@ -260,7 +260,7 @@ impl<'a> Commands<'a> {
         let mat = Material::new(bg).with_unlit(color.to_vec4());
         let id = spawn_mesh_entity(self.world, pos, mesh, mat);
         // Scale'i half_extents ile eşleştir
-        if let Some(mut transforms) = self.world.query_mut::<Transform>() {
+        if let Some(mut transforms) = self.world.query::<&mut Transform>() {
             for (tid, trans) in transforms.iter_mut() {
                 if tid == id.id() {
                     trans.scale = half_extents * 2.0;
@@ -597,8 +597,8 @@ pub trait WorldExt {
 
 impl WorldExt for World {
     fn entity_named(&self, name: &str) -> Option<u32> {
-        let names = self.query_ref::<EntityName>()?;
-        for (id, n) in names.iter() {
+        let mut names = self.query::<&EntityName>()?;
+        for (id, n) in names.iter_mut() {
             if n.0 == name {
                 return Some(id);
             }
@@ -608,9 +608,9 @@ impl WorldExt for World {
 
     fn move_entity_named<F: FnMut(&mut gizmo_physics::Transform)>(&mut self, name: &str, mut f: F) {
         let target: Option<u32> = {
-            if let Some(names) = self.query_ref::<EntityName>() {
+            if let Some(mut names) = self.query::<&EntityName>() {
                 let mut found = None;
-                for (id, n) in names.iter() {
+                for (id, n) in names.iter_mut() {
                     if n.0 == name {
                         found = Some(id);
                         break;
@@ -622,7 +622,7 @@ impl WorldExt for World {
             }
         };
         if let Some(target_id) = target {
-            if let Some(mut transforms) = self.query_mut::<gizmo_physics::Transform>() {
+            if let Some(mut transforms) = self.query::<&mut gizmo_physics::Transform>() {
                 for (tid, trans) in transforms.iter_mut() {
                     if tid == target_id {
                         f(trans);
@@ -646,9 +646,9 @@ impl WorldExt for World {
         mut f: F,
     ) {
         let target: Option<u32> = {
-            if let Some(names) = self.query_ref::<EntityName>() {
+            if let Some(mut names) = self.query::<&EntityName>() {
                 let mut found = None;
-                for (id, n) in names.iter() {
+                for (id, n) in names.iter_mut() {
                     if n.0 == name {
                         found = Some(id);
                         break;

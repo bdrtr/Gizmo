@@ -1,6 +1,8 @@
 struct LightData {
-    position: vec4<f32>,
-    color: vec4<f32>,
+    position:  vec4<f32>,  // xyz=pos, w=intensity
+    color:     vec4<f32>,  // rgb=color, a=radius
+    direction: vec4<f32>,  // xyz=dir (spot/directional), w=inner_cutoff_cos
+    params:    vec4<f32>,  // x=outer_cutoff_cos, y=light_type (0=point,1=spot,2=dir)
 };
 
 struct SceneUniforms {

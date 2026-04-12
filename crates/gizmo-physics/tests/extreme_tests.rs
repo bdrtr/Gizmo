@@ -1,7 +1,7 @@
 use gizmo_core::World;
 use gizmo_math::Vec3;
 use gizmo_physics::components::{RigidBody, Transform, Velocity};
-use gizmo_physics::constraints::{solve_constraints, Joint, JointKind, JointWorld};
+use gizmo_physics::constraints::{Joint, JointKind, JointWorld};
 use gizmo_physics::shape::Collider;
 use gizmo_physics::system::physics_collision_system;
 use gizmo_physics::{physics_apply_forces_system, physics_movement_system};
@@ -210,7 +210,8 @@ fn test_extreme_spring_snap() {
     // 1 kare (0.016s) serbest bırakalım.
     gizmo_physics::physics_apply_forces_system(&world, 0.016);
     gizmo_physics::physics_movement_system(&world, 0.016);
-    solve_constraints(&joint_world, &world, 0.016);
+    world.insert_resource(joint_world);
+    gizmo_physics::system::physics_collision_system(&mut world, 0.016);
 
     let v_sat = world
         .borrow::<Velocity>()

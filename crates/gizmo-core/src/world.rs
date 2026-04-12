@@ -169,12 +169,12 @@ impl World {
                 s.as_any().downcast_ref::<SparseSet<T>>().unwrap()
             })),
             Err(_) => {
-                crate::gizmo_log!(
-                    Warning,
-                    "[ECS] borrow<{}> başarısız — mutable borrow aktif!",
+                panic!(
+                    "[ECS] PANIC: borrow<{}> failed — a mutable borrow is already active! \
+                    This usually means another query or system is currently holding a mutable \
+                    reference to this component type. Fix the aliasing conflict.",
                     std::any::type_name::<T>()
                 );
-                None
             }
         }
     }
@@ -189,12 +189,12 @@ impl World {
                 s.as_any_mut().downcast_mut::<SparseSet<T>>().unwrap()
             })),
             Err(_) => {
-                crate::gizmo_log!(
-                    Warning,
-                    "[ECS] borrow_mut<{}> başarısız — başka bir borrow aktif!",
+                panic!(
+                    "[ECS] PANIC: borrow_mut<{}> failed — another borrow is already active! \
+                    This happens when multiple queries attempt to access the same component simultaneously \
+                    where at least one is a mutable access. Fix the aliasing conflict.",
                     std::any::type_name::<T>()
                 );
-                None
             }
         }
     }
@@ -203,78 +203,8 @@ impl World {
     // ERGONOMİK SORGULAR (QUERY API)
     // ==========================================================
 
-    pub fn query_mut<T1: Component>(&self) -> Option<crate::query::QueryMut<'_, T1>> {
-        crate::query::QueryMut::new(self)
-    }
-
-    pub fn query_ref<T1: Component>(&self) -> Option<crate::query::QueryRef<'_, T1>> {
-        crate::query::QueryRef::new(self)
-    }
-
-    pub fn query_mut_ref<T1: Component, T2: Component>(
-        &self,
-    ) -> Option<crate::query::QueryMutRef<'_, T1, T2>> {
-        crate::query::QueryMutRef::new(self)
-    }
-
-    pub fn query_mut_mut<T1: Component, T2: Component>(
-        &self,
-    ) -> Option<crate::query::QueryMutMut<'_, T1, T2>> {
-        crate::query::QueryMutMut::new(self)
-    }
-
-    pub fn query_ref_ref<T1: Component, T2: Component>(
-        &self,
-    ) -> Option<crate::query::QueryRefRef<'_, T1, T2>> {
-        crate::query::QueryRefRef::new(self)
-    }
-
-    pub fn query_mut_ref_ref<T1: Component, T2: Component, T3: Component>(
-        &self,
-    ) -> Option<crate::query::QueryMutRefRef<'_, T1, T2, T3>> {
-        crate::query::QueryMutRefRef::new(self)
-    }
-
-    pub fn query_ref_ref_ref<T1: Component, T2: Component, T3: Component>(
-        &self,
-    ) -> Option<crate::query::QueryRefRefRef<'_, T1, T2, T3>> {
-        crate::query::QueryRefRefRef::new(self)
-    }
-
-    pub fn query_mut_ref_ref_ref<T1: Component, T2: Component, T3: Component, T4: Component>(
-        &self,
-    ) -> Option<crate::query::QueryMutRefRefRef<'_, T1, T2, T3, T4>> {
-        crate::query::QueryMutRefRefRef::new(self)
-    }
-
-    pub fn query_ref_ref_ref_ref<T1: Component, T2: Component, T3: Component, T4: Component>(
-        &self,
-    ) -> Option<crate::query::QueryRefRefRefRef<'_, T1, T2, T3, T4>> {
-        crate::query::QueryRefRefRefRef::new(self)
-    }
-
-    pub fn query_mut_ref_ref_ref_ref<
-        T1: Component,
-        T2: Component,
-        T3: Component,
-        T4: Component,
-        T5: Component,
-    >(
-        &self,
-    ) -> Option<crate::query::QueryMutRefRefRefRef<'_, T1, T2, T3, T4, T5>> {
-        crate::query::QueryMutRefRefRefRef::new(self)
-    }
-
-    pub fn query_ref_ref_ref_ref_ref<
-        T1: Component,
-        T2: Component,
-        T3: Component,
-        T4: Component,
-        T5: Component,
-    >(
-        &self,
-    ) -> Option<crate::query::QueryRefRefRefRefRef<'_, T1, T2, T3, T4, T5>> {
-        crate::query::QueryRefRefRefRefRef::new(self)
+    pub fn query<'w, Q: crate::query::WorldQuery<'w>>(&'w self) -> Option<crate::query::Query<'w, Q>> {
+        crate::query::Query::new(self)
     }
 
     /// Toplam yaşayan entity sayısı

@@ -149,6 +149,7 @@ impl<'a> Renderer<'a> {
             instance_bind_group_layout: scene.instance_bind_group_layout,
             instance_buffer: scene.instance_buffer,
             instance_bind_group: scene.instance_bind_group,
+            instance_capacity: scene.instance_capacity,
         };
 
         let post_state = PostProcessState {
@@ -190,6 +191,10 @@ impl<'a> Renderer<'a> {
     pub fn rebuild_shaders(&mut self) {
         println!("🚀 Rebuilding Shaders Pipeline...");
         crate::pipeline::rebuild_pipelines(self);
+    }
+
+    pub fn ensure_instance_capacity(&mut self, needed: usize) -> bool {
+        self.scene.ensure_instance_capacity(&self.device, needed)
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -264,6 +269,7 @@ impl<'a> Renderer<'a> {
     }
 
     pub fn create_texture(&self, rgba_bytes: &[u8], width: u32, height: u32) -> wgpu::BindGroup {
+        let mip_level_count = width.max(height).ilog2() + 1;
         let size = wgpu::Extent3d {
             width,
             height,
@@ -272,11 +278,11 @@ impl<'a> Renderer<'a> {
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Game Texture"),
             size,
-            mip_level_count: 1,
+            mip_level_count,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
         self.queue.write_texture(
@@ -294,14 +300,16 @@ impl<'a> Renderer<'a> {
             },
             size,
         );
+
+        Self::generate_mipmaps(&self.device, &self.queue, &texture, wgpu::TextureFormat::Rgba8UnormSrgb, mip_level_count);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
             address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -336,5 +344,185 @@ impl<'a> Renderer<'a> {
             view_formats: &[],
         });
         tex.create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    fn generate_mipmaps(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+        format: wgpu::TextureFormat,
+        mip_level_count: u32,
+    ) {
+        if mip_level_count <= 1 {
+            return;
+        }
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Mipmap Blit Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("mipmap.wgsl").into()),
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Mipmap Blit Pipeline"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Mipmap Encoder"),
+        });
+
+        let views: Vec<wgpu::TextureView> = (0..mip_level_count)
+            .map(|mip| {
+                texture.create_view(&wgpu::TextureViewDescriptor {
+                    label: Some(&format!("Mip {}", mip)),
+                    format: None,
+                    dimension: None,
+                    aspect: wgpu::TextureAspect::All,
+                    base_mip_level: mip,
+                    mip_level_count: Some(1),
+                    base_array_layer: 0,
+                    array_layer_count: None,
+                })
+            })
+            .collect();
+
+        for target_mip in 1..mip_level_count as usize {
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: &bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&views[target_mip - 1]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+                label: None,
+            });
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &views[target_mip],
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        queue.submit(Some(encoder.finish()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mipmap_level_calculation() {
+        let width = 4096u32;
+        let height = 2048u32;
+        let mip_level_count = width.max(height).ilog2() + 1;
+        assert_eq!(mip_level_count, 13); // 4096 -> 2^12. Level count is 13 (with level 0)
+        
+        let width2 = 512u32;
+        let height2 = 512u32;
+        assert_eq!(width2.max(height2).ilog2() + 1, 10);
+    }
+
+    #[test]
+    fn test_headless_mipmap_generation() {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::all(),
+                ..Default::default()
+            });
+
+            let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            }).await;
+
+            let adapter = match adapter {
+                Some(a) => a,
+                None => {
+                    println!("No suitable GPU adapter found for headless test. Skipping wgpu test.");
+                    return;
+                }
+            };
+
+            let (device, queue) = adapter.request_device(
+                &wgpu::DeviceDescriptor {
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::downlevel_defaults(),
+                    label: None,
+                },
+                None,
+            ).await.unwrap();
+
+            let width = 256u32;
+            let height = 256u32;
+            let mip_level_count = width.max(height).ilog2() + 1;
+
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Test Texture"),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+
+            // This should compile the WGSL and execute without panicking or creating wgpu validation errors
+            Renderer::generate_mipmaps(&device, &queue, &texture, wgpu::TextureFormat::Rgba8UnormSrgb, mip_level_count);
+
+            device.poll(wgpu::Maintain::Wait);
+        });
     }
 }

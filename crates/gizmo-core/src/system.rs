@@ -228,26 +228,174 @@ where
     }
 }
 
+
+
+// ==============================================================
+// DEPENDENCY GRAPH (EXECUTION ORDER)
+// ==============================================================
+
+pub struct SystemConfig {
+    pub system: Box<dyn System>,
+    pub labels: Vec<&'static str>,
+    pub before: Vec<&'static str>,
+    pub after: Vec<&'static str>,
+}
+
+impl SystemConfig {
+    pub fn new(system: Box<dyn System>) -> Self {
+        Self {
+            system,
+            labels: Vec::new(),
+            before: Vec::new(),
+            after: Vec::new(),
+        }
+    }
+
+    pub fn label(mut self, label: &'static str) -> Self {
+        self.labels.push(label);
+        self
+    }
+
+    pub fn before(mut self, target: &'static str) -> Self {
+        self.before.push(target);
+        self
+    }
+
+    pub fn after(mut self, target: &'static str) -> Self {
+        self.after.push(target);
+        self
+    }
+}
+
+pub trait IntoSystemConfig<Params> {
+    fn into_config(self) -> SystemConfig;
+    
+    fn label(self, l: &'static str) -> SystemConfig where Self: Sized {
+        self.into_config().label(l)
+    }
+    
+    fn before(self, target: &'static str) -> SystemConfig where Self: Sized {
+        self.into_config().before(target)
+    }
+    
+    fn after(self, target: &'static str) -> SystemConfig where Self: Sized {
+        self.into_config().after(target)
+    }
+}
+
+impl<Params, T: IntoSystem<Params>> IntoSystemConfig<Params> for T {
+    fn into_config(self) -> SystemConfig {
+        SystemConfig::new(self.into_system())
+    }
+}
+
+impl IntoSystemConfig<()> for SystemConfig {
+    fn into_config(self) -> SystemConfig {
+        self
+    }
+}
+
 pub struct Schedule {
+    unbuilt_configs: Vec<SystemConfig>,
     systems: Vec<Box<dyn System>>,
+    is_built: bool,
 }
 
 impl Schedule {
     pub fn new() -> Self {
         Self {
+            unbuilt_configs: Vec::new(),
             systems: Vec::new(),
+            is_built: false,
         }
     }
 
-    pub fn add_di_system<Params, S: IntoSystem<Params>>(&mut self, system: S) {
-        self.systems.push(system.into_system());
+    pub fn add_di_system<Params, S: IntoSystemConfig<Params>>(&mut self, system: S) {
+        self.unbuilt_configs.push(system.into_config());
+        self.is_built = false;
     }
 
     pub fn add_system<S: System + 'static>(&mut self, system: S) {
-        self.systems.push(Box::new(system));
+        self.unbuilt_configs.push(SystemConfig::new(Box::new(system)));
+        self.is_built = false;
+    }
+
+    pub fn build(&mut self) {
+        if self.is_built {
+            return;
+        }
+        
+        let mut configs = std::mem::take(&mut self.unbuilt_configs);
+        let count = configs.len();
+        
+        // Adjacency list: edges[A] = [B, C] indicates A must run BEFORE B and C.
+        let mut adj = vec![Vec::new(); count];
+        let mut in_degree = vec![0; count];
+        
+        // Resolve relations
+        for i in 0..count {
+            // "before": config[i] runs before config[j]
+            for before_label in &configs[i].before {
+                for j in 0..count {
+                    if i != j && configs[j].labels.contains(before_label) {
+                        adj[i].push(j);
+                        in_degree[j] += 1;
+                    }
+                }
+            }
+            
+            // "after": config[i] runs after config[j]
+            for after_label in &configs[i].after {
+                for j in 0..count {
+                    if i != j && configs[j].labels.contains(after_label) {
+                        adj[j].push(i);
+                        in_degree[i] += 1;
+                    }
+                }
+            }
+        }
+        
+        // Kahn's Topological Sort
+        let mut queue = std::collections::VecDeque::new();
+        for i in 0..count {
+            if in_degree[i] == 0 {
+                queue.push_back(i);
+            }
+        }
+        
+        let mut sorted_indices = Vec::with_capacity(count);
+        while let Some(node) = queue.pop_front() {
+            sorted_indices.push(node);
+            for &neighbor in &adj[node] {
+                in_degree[neighbor] -= 1;
+                if in_degree[neighbor] == 0 {
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+        
+        if sorted_indices.len() != count {
+            panic!("Cyclic dependency detected in System execution graph!");
+        }
+        
+        // We must extract systems by taking ownership.
+        // We temporarily replace configs with a dummy to grab the Box<dyn System>
+        let mut final_systems = Vec::with_capacity(count);
+        let mut dummy_configs: Vec<Option<SystemConfig>> = configs.into_iter().map(Some).collect();
+        
+        for &idx in &sorted_indices {
+            let config = dummy_configs[idx].take().unwrap();
+            final_systems.push(config.system);
+        }
+        
+        self.systems = final_systems;
+        self.is_built = true;
     }
 
     pub fn run(&mut self, world: &mut World, dt: f32) {
+        if !self.is_built {
+            self.build();
+        }
         for system in &mut self.systems {
             system.run(world, dt);
         }
@@ -257,5 +405,37 @@ impl Schedule {
 impl Default for Schedule {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn test_system_execution_order() {
+        let mut world = World::new();
+        let tracker = Arc::new(Mutex::new(Vec::new()));
+        
+        let t1 = tracker.clone();
+        let mut sys_a = move || { t1.lock().unwrap().push("A"); };
+        
+        let t2 = tracker.clone();
+        let mut sys_b = move || { t2.lock().unwrap().push("B"); };
+        
+        let t3 = tracker.clone();
+        let mut sys_c = move || { t3.lock().unwrap().push("C"); };
+
+        let mut schedule = Schedule::new();
+        // Insert out of order: B, C, A. But specify A before B, B before C.
+        schedule.add_di_system(sys_b.label("B").after("A"));
+        schedule.add_di_system(sys_c.label("C").after("B"));
+        schedule.add_di_system(sys_a.label("A"));
+
+        schedule.run(&mut world, 0.1);
+
+        let final_order = tracker.lock().unwrap().clone();
+        assert_eq!(final_order, vec!["A", "B", "C"]);
     }
 }

@@ -480,12 +480,9 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
             let mut steps = 0;
             while state.physics_accumulator >= fixed_dt && steps < 16 {
                 gizmo::physics::integration::physics_apply_forces_system(world, fixed_dt);
+                gizmo::physics::vehicle::physics_vehicle_system(world, fixed_dt);
                 gizmo::physics::system::physics_collision_system(world, fixed_dt);
                 gizmo::physics::character::physics_character_system(world, fixed_dt);
-                if let Some(jw) = world.get_resource::<gizmo::physics::JointWorld>() {
-                    gizmo::physics::solve_constraints(&*jw, world, fixed_dt);
-                }
-                gizmo::physics::vehicle::physics_vehicle_system(world, fixed_dt);
                 gizmo::physics::integration::physics_movement_system(world, fixed_dt);
 
                 state.physics_accumulator -= fixed_dt;

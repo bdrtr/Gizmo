@@ -15,7 +15,7 @@ pub use collision::{
     test_aabb_aabb, test_sphere_sphere, CollisionManifold,
 };
 pub use components::{RigidBody, Transform, Velocity};
-pub use constraints::{solve_constraints, Joint, JointKind, JointWorld};
+pub use constraints::{Joint, JointKind, JointWorld};
 pub use integration::{physics_apply_forces_system, physics_movement_system};
 pub use shape::{Aabb, Capsule, Collider, ColliderShape, ConvexHull, Sphere};
 pub use system::{physics_collision_system, PhysicsSolverState};

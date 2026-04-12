@@ -58,6 +58,7 @@ struct DetectionResult {
 
 /// Birbirine temas eden dinamik entity'lerin grubu
 struct Island {
+    pub joints: Vec<(usize, crate::constraints::Joint, crate::constraints::JointBodies)>,
     contacts: Vec<StoredContact>,
     velocities: HashMap<u32, Velocity>,
     poses: HashMap<u32, Transform>,
@@ -374,7 +375,7 @@ fn detect_collisions(
     vehicle_entities: &std::collections::HashSet<u32>,
     has_vehicles: bool,
     dt: f32,
-) -> Vec<DetectionResult> {
+) -> DetectionResult {
     use crate::shape::ColliderShape;
     use rayon::prelude::*;
 
@@ -508,7 +509,16 @@ fn detect_collisions(
 
             Some(result)
         })
-        .collect()
+        .reduce(
+            || DetectionResult { contacts: Vec::new(), wake_entities: Vec::new() },
+            |mut acc, mut item| {
+                if acc.contacts.is_empty() && acc.wake_entities.is_empty() { return item; }
+                if item.contacts.is_empty() && item.wake_entities.is_empty() { return acc; }
+                acc.contacts.append(&mut item.contacts);
+                acc.wake_entities.append(&mut item.wake_entities);
+                acc
+            }
+        )
 }
 
 /// Tek bir çarpışma çifti için analitik veya GJK/EPA ile manifold üret.
@@ -660,30 +670,42 @@ fn ccd_bisect(
 /// Birbirine temas eden dinamik entity'leri gruplara ayırır.
 /// Her island bağımsız olarak çözülebilir → paralel solver mümkündür.
 fn build_islands(
-    detection_results: Vec<DetectionResult>,
+    detection_result: DetectionResult,
     transforms:  &gizmo_core::SparseSet<Transform>,
     velocities:  &gizmo_core::SparseSet<Velocity>,
     entities_to_wake: &mut Vec<u32>,
+    rbs: &gizmo_core::SparseSet<RigidBody>,
+    joint_world_opt: Option<&crate::constraints::JointWorld>,
 ) -> Vec<Island> {
     let mut parent_map: HashMap<u32, u32> = HashMap::new();
     let mut rank_map:   HashMap<u32, u8>  = HashMap::new();
 
-    let mut all_contacts: Vec<StoredContact> = Vec::new();
-    for result in detection_results {
-        entities_to_wake.extend(result.wake_entities);
-        for c in result.contacts {
-            let a_dyn = c.inv_mass_a > 0.0;
-            let b_dyn = c.inv_mass_b > 0.0;
-            if a_dyn && b_dyn {
-                ensure_node(&mut parent_map, &mut rank_map, c.ent_a);
-                ensure_node(&mut parent_map, &mut rank_map, c.ent_b);
-                union_nodes(&mut parent_map, &mut rank_map, c.ent_a, c.ent_b);
-            } else if a_dyn {
-                ensure_node(&mut parent_map, &mut rank_map, c.ent_a);
-            } else if b_dyn {
-                ensure_node(&mut parent_map, &mut rank_map, c.ent_b);
+    entities_to_wake.extend(detection_result.wake_entities);
+    let all_contacts = detection_result.contacts;
+
+    for c in &all_contacts {
+        let a_dyn = c.inv_mass_a > 0.0;
+        let b_dyn = c.inv_mass_b > 0.0;
+        if a_dyn && b_dyn {
+            ensure_node(&mut parent_map, &mut rank_map, c.ent_a);
+            ensure_node(&mut parent_map, &mut rank_map, c.ent_b);
+            union_nodes(&mut parent_map, &mut rank_map, c.ent_a, c.ent_b);
+        } else if a_dyn {
+            ensure_node(&mut parent_map, &mut rank_map, c.ent_a);
+        } else if b_dyn {
+            ensure_node(&mut parent_map, &mut rank_map, c.ent_b);
+        }
+    }
+
+    let mut resolved_joints = Vec::new();
+    if let Some(jw) = joint_world_opt {
+        for (id, joint) in jw.joints.iter() {
+            if let Some(jb) = crate::constraints::JointBodies::resolve(joint, transforms, rbs) {
+                ensure_node(&mut parent_map, &mut rank_map, joint.entity_a);
+                ensure_node(&mut parent_map, &mut rank_map, joint.entity_b);
+                union_nodes(&mut parent_map, &mut rank_map, joint.entity_a, joint.entity_b);
+                resolved_joints.push((*id, joint.clone(), jb));
             }
-            all_contacts.push(c);
         }
     }
 
@@ -697,11 +719,36 @@ fn build_islands(
             find_root(&mut parent_map, c.ent_b)
         };
         let island = islands_map.entry(root).or_insert_with(|| Island {
+            joints: Vec::new(),
             contacts: Vec::new(),
             velocities: HashMap::new(),
             poses: HashMap::new(),
         });
         island.contacts.push(c);
+    }
+
+    for (id, joint, jb) in resolved_joints {
+        let root = find_root(&mut parent_map, joint.entity_a);
+        let island = islands_map.entry(root).or_insert_with(|| Island {
+            joints: Vec::new(),
+            contacts: Vec::new(),
+            velocities: HashMap::new(),
+            poses: HashMap::new(),
+        });
+        island.joints.push((id, joint.clone(), jb));
+        
+        if !island.velocities.contains_key(&joint.entity_a) {
+            island.velocities.insert(joint.entity_a, velocities.get(joint.entity_a).cloned().unwrap_or(Velocity::new(Vec3::ZERO)));
+        }
+        if !island.velocities.contains_key(&joint.entity_b) {
+            island.velocities.insert(joint.entity_b, velocities.get(joint.entity_b).cloned().unwrap_or(Velocity::new(Vec3::ZERO)));
+        }
+        if !island.poses.contains_key(&joint.entity_a) {
+            island.poses.insert(joint.entity_a, transforms.get(joint.entity_a).cloned().unwrap_or(Transform::new(Vec3::ZERO)));
+        }
+        if !island.poses.contains_key(&joint.entity_b) {
+            island.poses.insert(joint.entity_b, transforms.get(joint.entity_b).cloned().unwrap_or(Transform::new(Vec3::ZERO)));
+        }
     }
 
     // Her island'a başlangıç hız ve pozisyon snapshot'larını aktar
@@ -741,6 +788,7 @@ fn solve_islands(
     contact_cache: &HashMap<(u32, u32), Vec<CachedContact>>,
     solver_iters: u32,
     frame_count: u64,
+    dt: f32,
 ) {
     use rayon::prelude::*;
 
@@ -896,6 +944,25 @@ fn solve_islands(
                     }
                 }
             }
+
+            for (_, joint, jb) in island.joints.iter() {
+                let mut va = island.velocities.get(&joint.entity_a).cloned().unwrap_or(Velocity::new(Vec3::ZERO));
+                let mut vb = island.velocities.get(&joint.entity_b).cloned().unwrap_or(Velocity::new(Vec3::ZERO));
+                
+                let mut va_lin = va.linear; let mut va_ang = va.angular;
+                let mut vb_lin = vb.linear; let mut vb_ang = vb.angular;
+
+                crate::constraints::solve_joint_velocity(
+                    dt, joint, jb, &mut va_lin, &mut va_ang, &mut vb_lin, &mut vb_ang
+                );
+                
+                if let Some(v) = island.velocities.get_mut(&joint.entity_a) {
+                    v.linear = va_lin; v.angular = va_ang;
+                }
+                if let Some(v) = island.velocities.get_mut(&joint.entity_b) {
+                    v.linear = vb_lin; v.angular = vb_ang;
+                }
+            }
         }
 
         // Position Projection — nesneleri doğrudan penetrasyon derinliği kadar ayır
@@ -909,6 +976,25 @@ fn solve_islands(
                     if let Some(p) = island.poses.get_mut(&c.ent_b) { p.position += push * c.inv_mass_b; }
                 }
             }
+        }
+        
+        for (_, joint, jb) in island.joints.iter() {
+            let mut pos_a = jb.pos_a;
+            let mut pos_b = jb.pos_b;
+            if let Some(p) = island.poses.get(&joint.entity_a) { pos_a = p.position + p.rotation.mul_vec3(joint.anchor_a); }
+            if let Some(p) = island.poses.get(&joint.entity_b) { pos_b = p.position + p.rotation.mul_vec3(joint.anchor_b); }
+            
+            let mut pos_a_core = island.poses.get(&joint.entity_a).map(|p| p.position).unwrap_or(Vec3::ZERO);
+            let mut pos_b_core = island.poses.get(&joint.entity_b).map(|p| p.position).unwrap_or(Vec3::ZERO);
+            
+            let mut latest_jb = jb.clone();
+            latest_jb.pos_a = pos_a; 
+            latest_jb.pos_b = pos_b;
+            
+            crate::constraints::solve_joint_position(joint, &latest_jb, &mut pos_a_core, &mut pos_b_core);
+            
+            if let Some(p) = island.poses.get_mut(&joint.entity_a) { p.position = pos_a_core; }
+            if let Some(p) = island.poses.get_mut(&joint.entity_b) { p.position = pos_b_core; }
         }
     });
 }
@@ -936,7 +1022,7 @@ fn write_back(
     let frame = solver_state.frame_counter;
 
     for island in islands {
-        let Island { contacts, velocities: island_vels, poses } = island;
+        let Island { contacts, joints: _, velocities: island_vels, poses } = island;
 
         for (ent, vel) in &island_vels {
             // Araç entity'lerinin hızına dokunma — vehicle_system yönetir
@@ -1005,6 +1091,7 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
         let colliders       = match world.borrow::<Collider>()        { Some(c) => c, None => return };
         let rigidbodies     = match world.borrow::<RigidBody>()       { Some(r) => r, None => return };
         let vehicles        = world.borrow::<VehicleController>();
+        let joint_world     = world.get_resource::<crate::constraints::JointWorld>();
 
         let vehicle_entities: std::collections::HashSet<u32> = match &vehicles {
             Some(v) => v.dense.iter().map(|e| e.entity).collect(),
@@ -1014,7 +1101,8 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
 
         // 1. Broad-phase — olası çarpışma çiftleri
         let collision_pairs = broad_phase(&transforms, &colliders, &rigidbodies, &velocities, dt);
-        if collision_pairs.is_empty() {
+        let has_joints = joint_world.is_some() && !joint_world.as_ref().unwrap().joints.is_empty();
+        if collision_pairs.is_empty() && !has_joints {
             return;
         }
 
@@ -1026,7 +1114,7 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
         );
 
         // 3. Island generation — Union-Find ile gruplama
-        let mut islands = build_islands(detection_results, &transforms, &velocities, &mut entities_to_wake);
+        let mut islands = build_islands(detection_results, &transforms, &velocities, &mut entities_to_wake, &rigidbodies, joint_world.as_deref());
 
         // 4. Çözücü — warm-start + SI + position projection (paralel island başına)
         let (solver_iters, frame_count) =
@@ -1047,7 +1135,7 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
             HashMap::new()
         };
 
-        solve_islands(&mut islands, &contact_cache, solver_iters, frame_count);
+        solve_islands(&mut islands, &contact_cache, solver_iters, frame_count, dt);
 
         // PhysicsConfig'den limitleri oku — Fix #5, #6, #31
         let (max_contacts_per_pair, event_throttle_frames) =

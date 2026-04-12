@@ -1,6 +1,8 @@
 struct LightData {
-    position: vec4<f32>,
-    color: vec4<f32>,
+    position:  vec4<f32>,  // xyz=pos, w=intensity
+    color:     vec4<f32>,  // rgb=color, a=radius
+    direction: vec4<f32>,  // xyz=dir (spot/directional), w=inner_cutoff_cos
+    params:    vec4<f32>,  // x=outer_cutoff_cos, y=light_type (0=point,1=spot,2=dir)
 };
 
 struct SceneUniforms {
@@ -27,6 +29,18 @@ struct SkeletonData {
 @group(3) @binding(0)
 var<uniform> skeleton: SkeletonData;
 
+struct InstanceRaw {
+    model_matrix_0: vec4<f32>,
+    model_matrix_1: vec4<f32>,
+    model_matrix_2: vec4<f32>,
+    model_matrix_3: vec4<f32>,
+    albedo_color: vec4<f32>,
+    pbr: vec4<f32>,
+};
+
+@group(4) @binding(0)
+var<storage, read> instances: array<InstanceRaw>;
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) color: vec3<f32>,
@@ -34,12 +48,6 @@ struct VertexInput {
     @location(3) tex_coords: vec2<f32>,
     @location(4) joint_indices: vec4<u32>,
     @location(5) joint_weights: vec4<f32>,
-    @location(6) model_matrix_0: vec4<f32>,
-    @location(7) model_matrix_1: vec4<f32>,
-    @location(8) model_matrix_2: vec4<f32>,
-    @location(9) model_matrix_3: vec4<f32>,
-    @location(10) albedo_color: vec4<f32>,
-    @location(11) pbr: vec4<f32>, // x: roughness, y: metallic, z: unlit
 };
 
 struct VertexOutput {
@@ -52,16 +60,17 @@ struct VertexOutput {
 };
 
 @vertex
-fn vs_main(input: VertexInput) -> VertexOutput {
+fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.color = input.color;
     out.tex_coords = input.tex_coords;
     
+    let inst = instances[instance_idx];
     let model = mat4x4<f32>(
-        input.model_matrix_0,
-        input.model_matrix_1,
-        input.model_matrix_2,
-        input.model_matrix_3,
+        inst.model_matrix_0,
+        inst.model_matrix_1,
+        inst.model_matrix_2,
+        inst.model_matrix_3,
     );
 
     // Kendi pos'umuzu degistirelim: (Sine Wave Vertex Displacement)
@@ -99,7 +108,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     
     out.world_position = world_pos.xyz;
     out.normal = world_normal;
-    out.inst_albedo = input.albedo_color;
+    out.inst_albedo = inst.albedo_color;
     
     out.clip_position = scene.view_proj * world_pos;
     

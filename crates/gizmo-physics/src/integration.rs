@@ -193,7 +193,13 @@ pub fn physics_movement_system(world: &World, dt: f32) {
                 Some(t) => t,
                 None => continue,
             };
-            t.position += v.linear * dt;
+            let mut is_dirty = false;
+            
+            // Eğer objenin lineer hızı kayda değer değilse pozisyonu rölantide tut (mikro-jitter engeller)
+            if v.linear.length_squared() > 0.000001 {
+                t.position += v.linear * dt;
+                is_dirty = true;
+            }
 
             if v.angular.length_squared() > 0.0001 {
                 let w_quat = Quat::from_xyzw(v.angular.x, v.angular.y, v.angular.z, 0.0);
@@ -206,11 +212,71 @@ pub fn physics_movement_system(world: &World, dt: f32) {
                     q.w + 0.5 * dt * dq.w,
                 )
                 .normalize();
+                is_dirty = true;
             }
 
-            t.update_local_matrix();
+            // Performans Optimizasyonu: Sadece matrisini değiştirmesi "gereken" objelerde
+            // Mat4 hesaplaması yaparız, gereksiz sin/cos/mul matris inşasını önleriz.
+            if is_dirty {
+                t.update_local_matrix();
+            }
         }
     }
 }
 
 // O(N^2) Çarpışma Tespit ve Fizik (Impulse/Sekme/Tork) Çözümleyici Sistem
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gizmo_math::Mat4;
+
+    #[test]
+    fn test_physics_dirty_flag_matrix_update() {
+        let mut world = World::new();
+
+        // 1. Static/Stationary Entity (Awake, but zero velocity)
+        let e_static = world.spawn();
+        let mut t_static = Transform::new(Vec3::ZERO);
+        let broken_matrix = Mat4::from_scale_rotation_translation(
+            Vec3::new(9.0, 9.0, 9.0),
+            Quat::IDENTITY,
+            Vec3::new(9.0, 9.0, 9.0),
+        );
+        t_static.global_matrix = broken_matrix; // Bilerek bozuyoruz
+        world.add_component(e_static, t_static);
+        world.add_component(e_static, Velocity::new(Vec3::ZERO));
+        
+        let mut rb1 = RigidBody::new(1.0, 0.5, 0.5, true);
+        rb1.is_sleeping = false;
+        world.add_component(e_static, rb1);
+
+        // 2. Moving Entity
+        let e_moving = world.spawn();
+        let mut t_moving = Transform::new(Vec3::ZERO);
+        t_moving.global_matrix = broken_matrix; // Bilerek bozuyoruz
+        world.add_component(e_moving, t_moving);
+        world.add_component(e_moving, Velocity::new(Vec3::new(10.0, 0.0, 0.0)));
+        
+        let mut rb2 = RigidBody::new(1.0, 0.5, 0.5, true);
+        rb2.is_sleeping = false;
+        world.add_component(e_moving, rb2);
+
+        // Run movement
+        physics_movement_system(&world, 0.1);
+
+        let transforms = world.borrow::<Transform>().unwrap();
+
+        // Stationary -> Hız < 1e-6, update_local_matrix çağrılmamalı! Bozuk matris korunmalı.
+        let t1 = transforms.get(e_static.id()).unwrap();
+        assert_eq!(t1.global_matrix, broken_matrix, "Stationary Matrix recalculated without movement!");
+
+        // Moving -> Hız kayda değer, dirty flag true oldu, Matris yeniden hesaplanmalı ve düzelmeli!
+        let t2 = transforms.get(e_moving.id()).unwrap();
+        assert_ne!(t2.global_matrix, broken_matrix, "Moving Matrix did NOT recalculate!");
+        assert_eq!(
+            t2.global_matrix,
+            Mat4::from_scale_rotation_translation(Vec3::new(1.0, 1.0, 1.0), Quat::IDENTITY, Vec3::new(1.0, 0.0, 0.0))
+        );
+    }
+}
