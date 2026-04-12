@@ -132,9 +132,9 @@ fn generate_face_contacts(
     shape_a: &ColliderShape,
     pos_a: Vec3,
     rot_a: Quat,
-    _shape_b: &ColliderShape,
-    _pos_b: Vec3,
-    _rot_b: Quat,
+    shape_b: &ColliderShape,
+    pos_b: Vec3,
+    rot_b: Quat,
     normal: Vec3,
     _penetration: f32,
     polytope: &[SupportPoint],
@@ -144,7 +144,7 @@ fn generate_face_contacts(
     // Her iki şeklin temas yüzeyini bul, KÜÇÜK olanı kullan!
     // Normal A→B yönünde: A'nın face'i = normal yönünde, B'nin face'i = -normal yönünde
     let (face_a, normal_a) = find_support_face(shape_a, pos_a, rot_a, normal);
-    let (face_b, normal_b) = find_support_face(_shape_b, _pos_b, _rot_b, normal * -1.0);
+    let (face_b, normal_b) = find_support_face(shape_b, pos_b, rot_b, normal * -1.0);
 
     // Sutherland-Hodgman Kırpması için Reference (Ref) ve Incident (Inc) Yüzey Seçimi
     // Reference yüzü, normali bizim arama yönümüzle en uyumlu (ve kapladığı alanı daha uygun) yüzdür.
@@ -180,7 +180,7 @@ fn generate_face_contacts(
         let mut final_contacts = Vec::new();
         // inc_face şuan kırpma (clipping) sınırlarını geçen noktaları barındırır.
         for pt in &inc_face {
-            let mut dist = (*pt - ref_face[0]).dot(ref_normal);
+            let dist = (*pt - ref_face[0]).dot(ref_normal);
 
             // distance <= 0.05 anlamına gelir ki noktanın yüksekliği referans düzleminin altına girmiş
             if dist <= 0.05 {
@@ -290,7 +290,8 @@ fn find_support_face(shape: &ColliderShape, pos: Vec3, rot: Quat, dir: Vec3) -> 
                 world_verts.push((wv, proj));
             }
 
-            let tolerance = 0.05;
+            let extent = hull.vertices.iter().fold(0.0f32, |acc, v| acc.max(v.length_squared())).sqrt();
+            let tolerance = (extent * 0.05).max(0.01);
             let verts: Vec<Vec3> = world_verts
                 .iter()
                 .filter(|(_, p)| max_proj - p < tolerance)

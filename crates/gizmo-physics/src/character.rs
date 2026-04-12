@@ -122,6 +122,7 @@ fn resolve_capsule_collisions(
     entity_id: u32,
     transforms: &gizmo_core::SparseSet<Transform>,
     colliders: &gizmo_core::SparseSet<Collider>,
+    limit_cos: f32,
 ) -> (Vec3, Vec3, bool) {
     // Döndürür: (toplam_pozisyon_düzeltme, zemin_normali, yerde_mi)
     let mut correction = Vec3::ZERO;
@@ -146,6 +147,11 @@ fn resolve_capsule_collisions(
         // ================= BROAD-PHASE (KÜRESEL ÖN TEST) =================
         // Dar-faz (Narrow-phase) GJK/EPA veya benzeri detaylı hesaplara girmeden önce,
         // karakter ile obje arasındaki kaba küresel mesafeyi buluruz.
+        let dist_sq = (cap_pos - other_t.position).length_squared();
+        if dist_sq > 10000.0 { 
+            continue; // Hızlı eleme: 100 metreden uzak objeler O(V) döndürme maliyetinden kurtulur
+        }
+
         let other_ext = other_col.shape.bounding_box_half_extents(other_t.rotation);
         let other_radius = other_ext.length();
         let cap_radius = cap.half_height + cap.radius;
@@ -288,7 +294,6 @@ fn resolve_capsule_collisions(
             correction -= normal * depth;
 
             // Zemin tespiti: yüzey normal açısı slope limitten küçük mü (zemin mi?)
-            let limit_cos = cc.slope_limit.to_radians().cos();
             let n_y = normal.y;
             if n_y < -limit_cos {
                 is_grounded = true;
@@ -371,6 +376,8 @@ pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
             // === 3. Hareketi uygula ve çarpışma çöz (3 iterasyon slide) ===
             let mut new_pos = t.position + move_delta;
 
+            let limit_cos = cc.slope_limit.to_radians().cos();
+
             for _slide_iter in 0..3 {
                 let (correction, normal, grounded) = resolve_capsule_collisions(
                     new_pos,
@@ -379,6 +386,7 @@ pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
                     entity,
                     &trans_storage,
                     &colliders,
+                    limit_cos,
                 );
 
                 if correction.length_squared() < 0.00001 {
@@ -461,6 +469,7 @@ pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
                         entity,
                         &trans_storage,
                         &colliders,
+                        limit_cos,
                     );
 
                     // Yukarıdan geçebildiyse (çarpışma düzeltmesi küçükse) → basamak çık
