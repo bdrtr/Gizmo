@@ -1,5 +1,68 @@
 use gizmo_math::Vec3;
 
+// ─── Yardımcı: JointBodies ───────────────────────────────────────────────────
+//
+// Her joint kolunda tekrarlanan 6 satırlık hazırlık kodu:
+//
+//   let pos_a       = ta.position + ta.rotation.mul_vec3(anchor_a);
+//   let pos_b       = tb.position + tb.rotation.mul_vec3(anchor_b);
+//   let inv_mass_a  = ...;
+//   let inv_mass_b  = ...;
+//   let total       = inv_mass_a + inv_mass_b;
+//   if total == 0.0 { continue; }
+//
+// `JointBodies::resolve` bu bloğu bir kez çözer ve `None` döndürerek
+// `continue` mantığını çağırana bırakır.
+
+struct JointBodies {
+    pos_a:        Vec3,
+    pos_b:        Vec3,
+    rot_a:        gizmo_math::Quat,
+    rot_b:        gizmo_math::Quat,
+    inv_mass_a:   f32,
+    inv_mass_b:   f32,
+    inv_inertia_a: Vec3,
+    inv_inertia_b: Vec3,
+    total_inv_mass: f32,
+}
+
+impl JointBodies {
+    /// Transforms ve RigidBody'lerden joint verilerini çıkarır.
+    /// İki statik nesne veya eksik bileşen durumunda `None` döndürür.
+    fn resolve(
+        joint:      &Joint,
+        transforms: &gizmo_core::SparseSet<crate::components::Transform>,
+        rbs:        &gizmo_core::SparseSet<crate::components::RigidBody>,
+    ) -> Option<Self> {
+        let ta = *transforms.get(joint.entity_a)?;
+        let tb = *transforms.get(joint.entity_b)?;
+
+        let inv_mass_of = |rb: &crate::components::RigidBody| -> (f32, Vec3) {
+            if rb.mass > 0.0 { (1.0 / rb.mass, rb.inverse_inertia) } else { (0.0, Vec3::ZERO) }
+        };
+
+        let (inv_mass_a, inv_inertia_a) = rbs.get(joint.entity_a).map_or((0.0, Vec3::ZERO), inv_mass_of);
+        let (inv_mass_b, inv_inertia_b) = rbs.get(joint.entity_b).map_or((0.0, Vec3::ZERO), inv_mass_of);
+        let total_inv_mass = inv_mass_a + inv_mass_b;
+
+        if total_inv_mass == 0.0 {
+            return None; // İki statik nesne — solver etkisiz
+        }
+
+        Some(Self {
+            pos_a:         ta.position + ta.rotation.mul_vec3(joint.anchor_a),
+            pos_b:         tb.position + tb.rotation.mul_vec3(joint.anchor_b),
+            rot_a:         ta.rotation,
+            rot_b:         tb.rotation,
+            inv_mass_a,
+            inv_mass_b,
+            inv_inertia_a,
+            inv_inertia_b,
+            total_inv_mass,
+        })
+    }
+}
+
 /// Fiziksel Kısıtlayıcı Türleri (Joints & Constraints)
 /// İki entity arasında fiziksel bağlantı oluşturur
 
@@ -291,40 +354,10 @@ pub fn solve_constraints(joint_world: &JointWorld, world: &gizmo_core::World, dt
 
     for _iter in 0..iterations {
         for (_, joint) in &joint_world.joints {
-            let ta = match transforms.get(joint.entity_a) {
-                Some(ta) => *ta,
-                None => continue,
-            };
-            let tb = match transforms.get(joint.entity_b) {
-                Some(tb) => *tb,
-                None => continue,
-            };
-
-            let pos_a = ta.position + ta.rotation.mul_vec3(joint.anchor_a);
-            let pos_b = tb.position + tb.rotation.mul_vec3(joint.anchor_b);
-            let rot_a = ta.rotation;
-            let rot_b = tb.rotation;
-
-            let (inv_mass_a, inv_inertia_a) =
-                rbs.get(joint.entity_a).map_or((0.0, Vec3::ZERO), |rb| {
-                    if rb.mass > 0.0 {
-                        (1.0 / rb.mass, rb.inverse_inertia)
-                    } else {
-                        (0.0, Vec3::ZERO)
-                    }
-                });
-            let (inv_mass_b, inv_inertia_b) =
-                rbs.get(joint.entity_b).map_or((0.0, Vec3::ZERO), |rb| {
-                    if rb.mass > 0.0 {
-                        (1.0 / rb.mass, rb.inverse_inertia)
-                    } else {
-                        (0.0, Vec3::ZERO)
-                    }
-                });
-            let total_inv_mass = inv_mass_a + inv_mass_b;
-            if total_inv_mass == 0.0 {
-                continue;
-            }
+            let Some(JointBodies {
+                pos_a, pos_b, rot_a, rot_b,
+                inv_mass_a, inv_mass_b, inv_inertia_a, inv_inertia_b, total_inv_mass,
+            }) = JointBodies::resolve(joint, &transforms, &rbs) else { continue };
 
             match &joint.kind {
                 JointKind::BallSocket => {
@@ -673,36 +706,9 @@ pub fn solve_constraints(joint_world: &JointWorld, world: &gizmo_core::World, dt
     const POSITION_SLOP: f32 = 0.001; // 1mm'den küçük hataları yoksay
 
     for (_, joint) in &joint_world.joints {
-        let ta = match transforms.get(joint.entity_a) {
-            Some(ta) => *ta,
-            None => continue,
-        };
-        let tb = match transforms.get(joint.entity_b) {
-            Some(tb) => *tb,
-            None => continue,
-        };
-
-        let pos_a = ta.position + ta.rotation.mul_vec3(joint.anchor_a);
-        let pos_b = tb.position + tb.rotation.mul_vec3(joint.anchor_b);
-
-        let (inv_mass_a, _) = rbs.get(joint.entity_a).map_or((0.0, Vec3::ZERO), |rb| {
-            if rb.mass > 0.0 {
-                (1.0 / rb.mass, rb.inverse_inertia)
-            } else {
-                (0.0, Vec3::ZERO)
-            }
-        });
-        let (inv_mass_b, _) = rbs.get(joint.entity_b).map_or((0.0, Vec3::ZERO), |rb| {
-            if rb.mass > 0.0 {
-                (1.0 / rb.mass, rb.inverse_inertia)
-            } else {
-                (0.0, Vec3::ZERO)
-            }
-        });
-        let total_inv_mass = inv_mass_a + inv_mass_b;
-        if total_inv_mass == 0.0 {
-            continue;
-        }
+        let Some(JointBodies {
+            pos_a, pos_b, inv_mass_a, inv_mass_b, total_inv_mass, ..
+        }) = JointBodies::resolve(joint, &transforms, &rbs) else { continue };
 
         match &joint.kind {
             JointKind::BallSocket | JointKind::Fixed { .. } | JointKind::Hinge { .. } => {
