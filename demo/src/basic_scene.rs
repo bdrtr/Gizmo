@@ -355,6 +355,57 @@ pub fn setup_basic_scene(
         world.add_component(coin, EntityName(format!("Golden Coin {}", i)));
     }
 
+    // ==================== DOMINolar (1000 ADET SPIRAL) ====================
+    let domino_mesh = gizmo::renderer::asset::AssetManager::create_cube(&renderer.device);
+    let domino_mat = Material::new(base_tbind.clone()).with_unlit(Vec4::new(0.05, 0.05, 0.1, 1.0)); // Koyu siyah domino
+    let domino_mat_red = Material::new(base_tbind.clone()).with_unlit(Vec4::new(0.8, 0.1, 0.1, 1.0)); // Ara sira kirmizi
+    
+    gizmo::gizmo_log!(Info, "1000 adet domino tasi diziliyor...");
+    
+    let mut theta = 0.0_f32;
+    let b = 0.8; // spiral genisleme hizi
+    for i in 0..1000 {
+        let r = 5.0 + b * theta; // Merkezden 5m uzaktan basla
+        let x = r * theta.cos();
+        let z = r * theta.sin();
+        let pos = Vec3::new(x, 1.05, z); // 1.05: zemin uzerinde (half_height=1.0)
+        
+        let dx = b * theta.cos() - r * theta.sin();
+        let dz = b * theta.sin() + r * theta.cos();
+        
+        // Atan2: x ve z yer degistirmis olabilir ama domino yuzunu tegete dogrultmaliyiz
+        let tangent_angle = dx.atan2(dz);
+        let mut rot = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), tangent_angle + std::f32::consts::FRAC_PI_2);
+        
+        if i == 0 {
+            // Ilk dominoyu egerek zincirleme reaksiyonu baslat (teget yonune dogru egilim)
+            let tilt = Quat::from_axis_angle(Vec3::new(0.0, 0.0, 1.0), 0.3);
+            rot = rot * tilt;
+        }
+
+        let d_ent = world.spawn();
+        world.add_component(d_ent, Transform::new(pos).with_rotation(rot).with_scale(Vec3::new(0.2, 2.0, 1.0)));
+        world.add_component(d_ent, domino_mesh.clone());
+        
+        if i % 10 == 0 {
+            world.add_component(d_ent, domino_mat_red.clone());
+        } else {
+            world.add_component(d_ent, domino_mat.clone());
+        }
+        
+        world.add_component(d_ent, gizmo::renderer::components::MeshRenderer::new());
+        world.add_component(d_ent, Collider::new_aabb(0.1, 1.0, 0.5));
+        
+        let mut rb = RigidBody::new(2.0, 0.1, 0.8, false); // Kutle 2.0
+        rb.ccd_enabled = false; // Performans icin dominolarda CCD'yi kapali tutalim
+        world.add_component(d_ent, rb);
+        world.add_component(d_ent, Velocity::new(Vec3::ZERO));
+        world.add_component(d_ent, EntityName(format!("Domino {}", i)));
+        
+        // 1.5 metre araliklarla diz
+        theta += 1.5 / r.max(0.1); 
+    }
+
     BasicSceneState {
         player_entity: car.id(), // Kamera Artık Arabayı Takip Etsin!
         camera_entity: camera_entity.id(),
