@@ -125,7 +125,7 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                 .iter()
                 .map(|e| &e.entity)
                 .filter_map(|&e| {
-                    if rbs.get(e).is_some_and(|rb| rb.mass == 0.0) {
+                    if rbs.get(e).is_some_and(|rb| rb.mass < 1e-6) {
                         let t = ts.get(e)?;
                         let col = cols.get(e)?;
                         match &col.shape {

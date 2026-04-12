@@ -712,9 +712,12 @@ pub fn solve_constraints(joint_world: &JointWorld, world: &gizmo_core::World, dt
                     let correction = error * (POSITION_CORRECTION_FACTOR / total_inv_mass);
                     if let Some(t_a) = transforms.get_mut(joint.entity_a) {
                         t_a.position += correction * inv_mass_a;
+                        // Matrix'i güncelle — aynı karedeki sonraki okumalar stale kalmasın
+                        t_a.update_local_matrix();
                     }
                     if let Some(t_b) = transforms.get_mut(joint.entity_b) {
                         t_b.position -= correction * inv_mass_b;
+                        t_b.update_local_matrix();
                     }
                 }
             }
@@ -730,9 +733,11 @@ pub fn solve_constraints(joint_world: &JointWorld, world: &gizmo_core::World, dt
                     let correction = dir * (error * POSITION_CORRECTION_FACTOR / total_inv_mass);
                     if let Some(t_a) = transforms.get_mut(joint.entity_a) {
                         t_a.position += correction * inv_mass_a;
+                        t_a.update_local_matrix();
                     }
                     if let Some(t_b) = transforms.get_mut(joint.entity_b) {
                         t_b.position -= correction * inv_mass_b;
+                        t_b.update_local_matrix();
                     }
                 }
             }
