@@ -1,322 +1,417 @@
-/// Gizmo Yarış — Burnout Revenge Lone Peak Haritası
-///
-/// Kontroller:
-///   W / ↑   — Gaz         S / ↓   — Fren/Geri
-///   A / ←   — Sola        D / →   — Sağa
-///   Space   — El freni    R       — Sıfırla / Yeni yarış
+use gizmo::prelude::*;
 use gizmo::physics::components::{PhysicsConfig, RigidBody, Velocity};
 use gizmo::physics::shape::Collider;
-use gizmo::physics::system::{physics_collision_system, PhysicsSolverState};
-use gizmo::physics::vehicle::{physics_vehicle_system, VehicleController, Wheel};
-use gizmo::physics::{
-    integration::{physics_apply_forces_system, physics_movement_system},
-    race_ai::{race_ai_system, RaceAI},
-    JointWorld,
-};
-use gizmo::prelude::*;
+use gizmo::physics::system::PhysicsSolverState;
+use gizmo::physics::JointWorld;
+use gizmo::renderer::asset::AssetManager;
+use gizmo::renderer::components::{DirectionalLight, MeshRenderer};
+ 
+const DOMINO_COUNT: usize = 500;
 
-// ─── Oyun Durumu ──────────────────────────────────────────────────────────────
+// ─── Domino boyutları (yarı-uzunluklar) ───
+// Gerçekçi domino oranları: genişlik:yükseklik:kalınlık = 1:2:0.4
+const HX: f32 = 0.10;   // genişlik  → 0.20 m
+const HY: f32 = 0.50;   // yükseklik → 1.00 m
+const HZ: f32 = 0.06;   // kalınlık  → 0.12 m
 
-#[derive(Clone, Debug, PartialEq)]
-enum Phase { Countdown(f32), Racing, Finished(f32) }
+// Standart aralık: taş yüksekliğinin ~%70'i yeterli olmalı
+const GAP: f32 = 0.35;
 
-struct GameState {
-    player_id: u32,
-    camera_id: u32,
-    ai_id:     u32,
-    phase: Phase,
-    race_timer:      f32,
-    player_laps:     u32,
-    player_last_wp:  usize,
-    player_wp_total: u32,
-    ai_laps:         u32,
-    spawn_pos: Vec3,
-    spawn_rot: Quat,
+const GROUND_Y: f32 = 0.0;
+const DOMINO_MASS: f32 = 0.3;   // Biraz daha ağır = daha kararlı çarpışma
+const BALL_MASS: f32 = 1.0;
+const BALL_RADIUS: f32 = 0.20;
+ 
+struct DominoGame {
+    domino_ids: Vec<u32>,
+    ball_id: u32,
+    cam_id: u32,
+    cam_yaw: f32,
+    cam_pitch: f32,
+    cam_pos: Vec3,
+    cam_speed: f32,
+    triggered: bool,
     physics_acc: f32,
+    physics_dt: f32,
+    fps_timer: f32,
+    frames: u32,
+    fps: f32,
 }
-
-const TOTAL_LAPS: u32  = 3;
-const PHYSICS_HZ: f32  = 120.0;
-
-// ─── Burnout Lone Peak — Harita Parametreleri ─────────────────────────────────
-//
-// Modeli çalıştırınca bu değerleri kameradan bakarak ayarla.
-// Başlangıç için pist genellikle Y≈0 seviyesinde, X/Z boyutu ~200-400 birim.
-//
-const MAP_PATH:  &str = "demo/assets/burnout_revenge_lone_peak.glb";
-const MAP_SCALE: Vec3 = Vec3::new(1.0, 1.0, 1.0); // Gerekirse (0.1,0.1,0.1) ile küçült
-
-// Araç başlangıç noktası (modeli açınca cam ile bakarak ayarla)
-const START_POS: Vec3 = Vec3::new(0.0, 3.0, 0.0);
-const START_YAW: f32  = 0.0; // Radyan. 0 = +Z yönüne bak
-
-// ─── Waypoint'ler ─────────────────────────────────────────────────────────────
-// İlk çalıştırmada araç pist üzerinde gezinirken pozisyonları not al,
-// sonra buraya yaz. Şimdilik büyük oval placeholder.
-fn track_waypoints() -> Vec<Vec3> {
-    let n  = 24usize;
-    let rx = 80.0_f32;
-    let rz = 120.0_f32;
-    (0..n).map(|i| {
-        let a = (i as f32 / n as f32) * std::f32::consts::TAU;
-        Vec3::new(a.cos() * rx, 1.0, a.sin() * rz)
-    }).collect()
+ 
+impl DominoGame {
+    fn new() -> Self {
+        Self {
+            domino_ids: Vec::new(),
+            ball_id: 0,
+            cam_id: 0,
+            cam_yaw: -std::f32::consts::FRAC_PI_2,
+            cam_pitch: -0.4,
+            cam_pos: Vec3::new(0.0, 8.0, 20.0),
+            cam_speed: 15.0,
+            triggered: false,
+            physics_acc: 0.0,
+            physics_dt: 1.0 / 120.0,  // 120 Hz — daha az sub-step = daha az drag sönümleme
+            fps_timer: 0.0,
+            frames: 0,
+            fps: 0.0,
+        }
+    }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-
+ 
 fn main() {
-    App::<GameState>::new("Gizmo Yarış — Burnout Lone Peak", 1280, 720)
+    App::<DominoGame>::new("Gizmo — Domino Oyunu (500 taş)", 1600, 900)
+        .add_event::<gizmo::physics::CollisionEvent>()
         .set_setup(|world, renderer| {
-            world.insert_resource(PhysicsSolverState::new());
-            world.insert_resource(JointWorld::new());
-            world.insert_resource(PhysicsConfig { ground_y: -2.0, ..Default::default() });
-
-            let mut cmd = Commands::new(world, renderer);
-
-            // ── Çevre ──
-            cmd.spawn_skybox(Color::rgb(0.60, 0.70, 0.85)).with_name("Skybox");
-            cmd.spawn_sun(Vec3::new(-0.6, -1.0, 0.4), Color::rgb(1.0, 0.95, 0.88), 2.5)
-                .with_name("Sun");
-
-            // ── GLB Harita ──
-            // Görsel olarak yüklenir; fizik zemini + duvarlar ayrı AABB ile eklenir.
-            {
-                cmd.spawn_gltf(Vec3::ZERO, MAP_PATH).with_name("Track");
-            }
-
-            // ── Fizik Zemini ──
-            // Burnout Lone Peak genellikle bir şehir + dağ yolunu temsil eder.
-            // Modelin zemin Y ≈ 0. Büyük düz AABB ile kaplıyoruz.
-            // NOT: Gerçek mesh collision yok; zemin düzdür.
-            {
-                let e = cmd.world.spawn();
-                cmd.world.add_component(e, Transform::new(Vec3::new(0.0, -0.2, 0.0)));
-                cmd.world.add_component(e, RigidBody::new_static());
-                cmd.world.add_component(e, Collider::new_aabb(500.0, 0.2, 500.0));
-            }
-
-            // ── Araçlar ──
-            let start_pos = START_POS;
-            let start_rot = Quat::from_axis_angle(Vec3::Y, START_YAW);
-
-            let player_e  = spawn_car(cmd.world, cmd.renderer, start_pos, start_rot, Color::rgb(0.9, 0.15, 0.1));
-            let player_id = player_e.id();
-            cmd.world.add_component(player_e, EntityName("Oyuncu".into()));
-
-            let ai_pos    = start_pos + Vec3::new(4.0, 0.0, 0.0);
-            let ai_e      = spawn_car(cmd.world, cmd.renderer, ai_pos, start_rot, Color::rgb(0.1, 0.3, 0.9));
-            let ai_id     = ai_e.id();
-            cmd.world.add_component(ai_e, EntityName("AI".into()));
-            cmd.world.add_component(ai_e, RaceAI::new(track_waypoints(), 0.80, 10.0));
-
-            // ── Chase Kamera ──
-            let cam_e     = cmd.world.spawn();
-            let camera_id = cam_e.id();
-            cmd.world.add_component(cam_e, Transform::new(start_pos + Vec3::new(0.0, 5.0, -13.0)));
-            cmd.world.add_component(cam_e, Camera {
-                fov: 72.0_f32.to_radians(), near: 0.1, far: 2000.0,
-                yaw: 0.0, pitch: -0.2, primary: true,
-            });
-
-            GameState {
-                player_id, camera_id, ai_id,
-                phase: Phase::Countdown(4.0),
-                race_timer: 0.0, player_laps: 0,
-                player_last_wp: 0, player_wp_total: 0, ai_laps: 0,
-                spawn_pos: start_pos, spawn_rot: start_rot,
-                physics_acc: 0.0,
-            }
+            let mut game = setup_scene(world, renderer);
+            
+            let cam_entity = world.spawn();
+            world.add_component(
+                cam_entity,
+                Transform::new(game.cam_pos)
+                    .with_rotation(pitch_yaw_quat(game.cam_pitch, game.cam_yaw)),
+            );
+            world.add_component(
+                cam_entity,
+                Camera::new(
+                    std::f32::consts::FRAC_PI_3,
+                    0.1,
+                    500.0,
+                    game.cam_yaw,
+                    game.cam_pitch,
+                    true,
+                ),
+            );
+            world.add_component(cam_entity, EntityName("Kamera".into()));
+            
+            game.cam_id = cam_entity.id();
+            game
         })
         .set_update(|world, state, dt, input| {
-            // ── Sabit Fizik Adımı ─────────────────────────────────
+            // FPS
+            state.fps_timer += dt;
+            state.frames += 1;
+            if state.fps_timer >= 1.0 {
+                state.fps = state.frames as f32 / state.fps_timer;
+                state.frames = 0;
+                state.fps_timer = 0.0;
+            }
+
+            // Space → trigger
+            if input.is_key_pressed(KeyCode::Space as u32) && !state.triggered {
+                trigger_first_domino(world, state);
+                state.triggered = true;
+            }
+            
+            // Mouse camera rotation
+            if input.is_mouse_button_pressed(gizmo::core::input::mouse::RIGHT) {
+                let delta = input.mouse_delta();
+                let sens = 0.003_f32;
+                state.cam_yaw += delta.0 * sens;
+                state.cam_pitch -= delta.1 * sens;
+                state.cam_pitch = state.cam_pitch.clamp(
+                    -std::f32::consts::FRAC_PI_2 + 0.05,
+                    std::f32::consts::FRAC_PI_2 - 0.05,
+                );
+            }
+
+            update_camera(world, state, input, dt);
+
+            // Fizik sub-stepping
             state.physics_acc += dt;
-            let step = 1.0 / PHYSICS_HZ;
-            while state.physics_acc >= step {
-                physics_apply_forces_system(world, step);
-                physics_vehicle_system(world, step);
-                race_ai_system(world, step);
-                physics_collision_system(world, step);
-                physics_movement_system(world, step);
-                state.physics_acc -= step;
-            }
-
-            // ── Araç Girişi ────────────────────────────────────────
-            let racing = state.phase == Phase::Racing;
-            if let Some(mut vcs) = world.borrow_mut::<VehicleController>() {
-                if let Some(vc) = vcs.get_mut(state.player_id) {
-                    if racing {
-                        let gas   = input.pressed(Key::ArrowUp)   || input.pressed(Key::KeyW);
-                        let rev   = input.pressed(Key::ArrowDown)  || input.pressed(Key::KeyS);
-                        let left  = input.pressed(Key::ArrowLeft)  || input.pressed(Key::KeyA);
-                        let right = input.pressed(Key::ArrowRight) || input.pressed(Key::KeyD);
-                        vc.engine_force   = if gas { 16000.0 } else if rev { -8000.0 } else { 0.0 };
-                        vc.brake_force    = if input.pressed(Key::Space) { 25000.0 } else { 0.0 };
-                        vc.steering_angle = if left { 0.42 } else if right { -0.42 } else {
-                            vc.steering_angle * 0.78
-                        };
-                    } else {
-                        vc.engine_force = 0.0; vc.brake_force = 30000.0; vc.steering_angle = 0.0;
-                    }
-                }
-            }
-
-            // ── Otomatik Respawn ────────────────────────────────────
-            let fell = world.borrow::<Transform>()
-                .and_then(|ts| ts.get(state.player_id).map(|t| t.position.y < -5.0))
-                .unwrap_or(false);
-            if fell { reset_car(world, state.player_id, state.spawn_pos, state.spawn_rot); }
-
-            // R → sıfırla / yeni yarış
-            if input.just_pressed(Key::KeyR) {
-                match &state.phase {
-                    Phase::Finished(_) => {
-                        reset_car(world, state.player_id, state.spawn_pos, state.spawn_rot);
-                        reset_car(world, state.ai_id, state.spawn_pos + Vec3::new(4.0,0.0,0.0), state.spawn_rot);
-                        if let Some(mut ais) = world.borrow_mut::<RaceAI>() {
-                            if let Some(ai) = ais.get_mut(state.ai_id) {
-                                ai.laps_completed = 0; ai.total_wp_passed = 0;
-                            }
-                        }
-                        state.race_timer = 0.0; state.player_laps = 0;
-                        state.player_last_wp = 0; state.player_wp_total = 0; state.ai_laps = 0;
-                        state.phase = Phase::Countdown(4.0);
-                    }
-                    _ => reset_car(world, state.player_id, state.spawn_pos, state.spawn_rot),
-                }
-            }
-
-            // ── Phase Güncelleme ─────────────────────────────────────
-            let waypoints = track_waypoints();
-            let wp_count  = waypoints.len();
-            match &mut state.phase {
-                Phase::Countdown(t) => { *t -= dt; if *t <= 0.0 { state.phase = Phase::Racing; } }
-                Phase::Racing => {
-                    state.race_timer += dt;
-                    let pp = world.borrow::<Transform>()
-                        .and_then(|ts| ts.get(state.player_id).map(|t| t.position));
-                    if let Some(pos) = pp {
-                        let next = state.player_last_wp % wp_count;
-                        let wp = waypoints[next];
-                        if ((pos.x-wp.x).powi(2) + (pos.z-wp.z).powi(2)).sqrt() < 12.0 {
-                            state.player_last_wp += 1; state.player_wp_total += 1;
-                            if state.player_last_wp >= wp_count {
-                                state.player_last_wp = 0; state.player_laps += 1;
-                                println!("[Yarış] TUR {}! {:.2}s", state.player_laps, state.race_timer);
-                                if state.player_laps >= TOTAL_LAPS {
-                                    let t = state.race_timer;
-                                    state.phase = Phase::Finished(t);
-                                }
-                            }
-                        }
-                    }
-                    if let Some(ais) = world.borrow::<RaceAI>() {
-                        if let Some(ai) = ais.get(state.ai_id) { state.ai_laps = ai.laps_completed; }
-                    }
-                }
-                Phase::Finished(_) => {}
-            }
-
-            // ── Chase Kamera ─────────────────────────────────────────
-            let car_info = world.borrow::<Transform>()
-                .and_then(|ts| ts.get(state.player_id).map(|t| (t.position, t.rotation)));
-            if let Some((cp, cr)) = car_info {
-                let fwd = cr.mul_vec3(Vec3::new(0.0, 0.0, 1.0));
-                let tgt = cp - fwd * 13.0 + Vec3::new(0.0, 5.5, 0.0);
-                if let Some(mut ts) = world.borrow_mut::<Transform>() {
-                    if let Some(ct) = ts.get_mut(state.camera_id) {
-                        ct.position = ct.position.lerp(tgt, (dt * 5.0).min(1.0));
-                        ct.update_local_matrix();
-                    }
-                }
-                let ldir = world.borrow::<Transform>()
-                    .and_then(|ts| ts.get(state.camera_id).map(|ct| {
-                        (cp + Vec3::new(0.0, 1.2, 0.0) - ct.position).normalize()
-                    }));
-                if let Some(d) = ldir {
-                    if let Some(mut cams) = world.borrow_mut::<Camera>() {
-                        if let Some(cam) = cams.get_mut(state.camera_id) {
-                            cam.yaw   = d.x.atan2(d.z);
-                            cam.pitch = (-d.y).asin().clamp(-0.5, 0.35);
-                        }
-                    }
-                }
+            let fixed_dt = state.physics_dt;
+            state.physics_acc = state.physics_acc.min(fixed_dt * 8.0);
+            
+            while state.physics_acc >= fixed_dt {
+                step_physics(world, fixed_dt);
+                state.physics_acc -= fixed_dt;
             }
         })
-        .set_render(|world, state, encoder, view, renderer, _t| {
-            default_render_pass(world, encoder, view, renderer);
-
-            let speed = world.borrow::<Velocity>()
-                .and_then(|vs| vs.get(state.player_id).map(|v| v.linear.length() * 3.6))
-                .unwrap_or(0.0);
-            match &state.phase {
-                Phase::Countdown(t) => {
-                    let s = if *t > 3.0 { "HAZIR OL..." }
-                              else if *t > 2.0 { "3" } else if *t > 1.0 { "2" } else { "1 — GİT!" };
-                    eprintln!("\r[GİZMO YARIŞ] {}", s);
-                }
-                Phase::Racing => {
-                    let m = state.race_timer as u32 / 60;
-                    let s = state.race_timer % 60.0;
-                    eprint!("\r Tur {}/{TOTAL_LAPS} | {:02}:{:05.2} | {:.0} km/h | AI: {} tur   ",
-                        state.player_laps, m, s, speed, state.ai_laps);
-                }
-                Phase::Finished(t) => {
-                    eprintln!("\r[BİTİŞ!] {:.2}s  |  R = Yeni Yarış          ", t);
-                }
-            }
+        .set_ui(|_world, state, ctx| {
+            gizmo::prelude::egui::Window::new("FPS")
+                .anchor(gizmo::prelude::egui::Align2::LEFT_TOP, gizmo::prelude::egui::vec2(10.0, 10.0))
+                .title_bar(false)
+                .resizable(false)
+                .frame(gizmo::prelude::egui::Frame::window(&ctx.style()).fill(gizmo::prelude::egui::Color32::from_black_alpha(150)))
+                .show(ctx, |ui| {
+                    ui.label(
+                        gizmo::prelude::egui::RichText::new(format!("FPS: {:.0}", state.fps))
+                            .color(gizmo::prelude::egui::Color32::WHITE)
+                            .strong()
+                            .size(24.0),
+                    );
+                });
+        })
+        .set_render(|world, _state, encoder, view, renderer, _light_time| {
+            gizmo::default_systems::default_render_pass(world, encoder, view, renderer);
         })
         .run();
 }
+ 
+fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> DominoGame {
+    println!("Domino sahne kuruluyor: {} taş…", DOMINO_COUNT);
+ 
+    world.insert_resource(PhysicsConfig {
+        ground_y: GROUND_Y,
+        max_linear_velocity: 50.0,
+        max_angular_velocity: 50.0,
+        ..Default::default()
+    });
+    world.insert_resource(JointWorld::new());
+    world.insert_resource(PhysicsSolverState::new());
+ 
+    let mut asset_manager = AssetManager::new();
+ 
+    let tex = asset_manager.create_white_texture(
+        &renderer.device,
+        &renderer.queue,
+        &renderer.scene.texture_bind_group_layout,
+    );
+ 
+    // Zemin
+    let ground_mesh = AssetManager::create_plane(&renderer.device, 200.0);
+    let ground = world.spawn();
+    world.add_component(
+        ground,
+        Transform::new(Vec3::new(0.0, GROUND_Y, 0.0))
+            .with_scale(Vec3::new(1.0, 1.0, 1.0)),
+    );
+    world.add_component(ground, ground_mesh);
+    world.add_component(
+        ground,
+        Material::new(tex.clone()).with_pbr(Vec4::new(0.55, 0.5, 0.45, 1.0), 0.9, 0.0),
+    );
+    world.add_component(ground, MeshRenderer::new());
+    world.add_component(ground, RigidBody::new_static());
+    world.add_component(ground, Collider::new_aabb(100.0, 0.05, 100.0));
+ 
+    // Güneş ışığı
+    let sun = world.spawn();
+    world.add_component(
+        sun,
+        Transform::new(Vec3::new(30.0, 80.0, 40.0)).with_rotation(
+            Quat::from_axis_angle(Vec3::new(1.0, 0.3, 0.0).normalize(), -0.8),
+        ),
+    );
+    world.add_component(
+        sun,
+        DirectionalLight::new(Vec3::new(1.0, 0.97, 0.90), 2.5, true),
+    );
+ 
+    let domino_mesh = AssetManager::create_cube(&renderer.device);
+    let mut game = DominoGame::new();
+    let positions = spiral_positions(DOMINO_COUNT);
 
-// ─── Araç ─────────────────────────────────────────────────────────────────────
-
-fn spawn_car(
-    world: &mut World,
-    renderer: &gizmo::renderer::Renderer,
-    pos: Vec3, rot: Quat, color: Color,
-) -> Entity {
-    use gizmo::renderer::{asset::AssetManager, components::MeshRenderer};
-    let entity = world.spawn();
-
-    let mut t = Transform::new(pos).with_rotation(rot).with_scale(Vec3::new(1.8, 0.55, 4.0));
-    t.update_local_matrix();
-    world.add_component(entity, t);
-
-    let mesh = AssetManager::create_cube(&renderer.device);
-    let mut am = AssetManager::new();
-    let tex = am.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
-    world.add_component(entity, mesh);
-    world.add_component(entity, Material::new(tex).with_pbr(color.to_vec4(), 0.3, 0.1));
-    world.add_component(entity, MeshRenderer::new());
-
-    let mut rb = RigidBody::new(900.0, 0.02, 0.7, true);
-    rb.calculate_box_inertia(1.8, 0.55, 4.0);
-    rb.ccd_enabled = true;
-    world.add_component(entity, rb);
-    world.add_component(entity, Velocity::new(Vec3::ZERO));
-    world.add_component(entity, Collider::new_aabb(0.9, 0.275, 2.0));
-
-    let rest = 0.50; let k = 28000.0; let d = 3500.0; let r = 0.36;
-    let mut vc = VehicleController::new();
-    vc.lateral_grip = 12000.0; vc.steering_force_mult = 10000.0;
-    vc.anti_slide_force = 9000.0; vc.drag_coefficient = 0.20;
-    vc.add_wheel(Wheel::new(Vec3::new(-0.82, -0.28,  1.5), rest, k, d, r));
-    vc.add_wheel(Wheel::new(Vec3::new( 0.82, -0.28,  1.5), rest, k, d, r));
-    vc.add_wheel(Wheel::new(Vec3::new(-0.82, -0.28, -1.5), rest, k, d, r).with_drive());
-    vc.add_wheel(Wheel::new(Vec3::new( 0.82, -0.28, -1.5), rest, k, d, r).with_drive());
-    world.add_component(entity, vc);
-    entity
+    // Domino texture yükle
+    let domino_tex = asset_manager.load_material_texture(
+        &renderer.device,
+        &renderer.queue,
+        &renderer.scene.texture_bind_group_layout,
+        "tut/assets/domino_real.png",
+    ).unwrap_or_else(|e| {
+        eprintln!("Domino texture yüklenemedi: {}. Beyaz fallback kullanılıyor.", e);
+        tex.clone()
+    });
+ 
+    for (i, pos) in positions.iter().enumerate() {
+        let t = i as f32 / DOMINO_COUNT as f32;
+        let color = Vec4::new(
+            1.0,
+            t * 0.85,
+            0.05,
+            1.0,
+        );
+ 
+        // pos.x = world X, pos.y = world Z, pos.z = rotation angle around Y
+        let transform = Transform::new(Vec3::new(
+            pos.x,
+            GROUND_Y + HY,  // tabanı zemine oturtuyoruz
+            pos.y,
+        ))
+        .with_rotation(Quat::from_axis_angle(
+            Vec3::new(0.0, 1.0, 0.0),
+            pos.z,
+        ))
+        .with_scale(Vec3::new(HX, HY, HZ));
+ 
+        let entity = world.spawn();
+ 
+        world.add_component(entity, transform);
+        world.add_component(entity, domino_mesh.clone());
+        world.add_component(
+            entity,
+            Material::new(domino_tex.clone()).with_pbr(color, 0.7, 0.02),
+        );
+        world.add_component(entity, MeshRenderer::new());
+ 
+        let mut rb = RigidBody::new(DOMINO_MASS, 0.05, 0.6, true);
+        rb.ccd_enabled = false;
+        rb.calculate_box_inertia(HX * 2.0, HY * 2.0, HZ * 2.0);
+        world.add_component(entity, rb);
+        world.add_component(entity, Velocity::new(Vec3::ZERO));
+        
+        world.add_component(entity, Collider::new_aabb(HX, HY, HZ));
+        world.add_component(entity, EntityName(format!("Domino_{}", i)));
+ 
+        game.domino_ids.push(entity.id());
+    }
+ 
+    // İtme topu — ilk dominonun arkasına yerleştir
+    let ball_mesh = AssetManager::create_sphere(&renderer.device, 1.0, 12, 12);
+    let ball = world.spawn();
+    let first_pos = positions[0];
+    // pos.z = atan2(dx,dz) ile hesaplanan açı
+    // Quat::from_axis_angle(Y, angle) ile local +Z → tangent yönüne döner
+    // Yani topun ileri yönü: (sin(angle), 0, cos(angle))
+    let angle = first_pos.z;
+    let tangent = Vec3::new(angle.sin(), 0.0, angle.cos());
+    
+    world.add_component(
+        ball,
+        Transform::new(Vec3::new(
+            first_pos.x - tangent.x * 1.5,
+            GROUND_Y + BALL_RADIUS,
+            first_pos.y - tangent.z * 1.5,
+        ))
+        .with_scale(Vec3::splat(BALL_RADIUS)),
+    );
+    world.add_component(ball, ball_mesh);
+    world.add_component(
+        ball,
+        Material::new(tex.clone())
+            .with_pbr(Vec4::new(0.1, 0.4, 1.0, 1.0), 0.2, 0.8),
+    );
+    world.add_component(ball, MeshRenderer::new());
+ 
+    let mut ball_rb = RigidBody::new(BALL_MASS, 0.5, 0.3, true);
+    ball_rb.ccd_enabled = true;
+    ball_rb.calculate_sphere_inertia(BALL_RADIUS);
+    world.add_component(ball, ball_rb);
+    world.add_component(ball, Velocity::new(Vec3::ZERO));
+    world.add_component(ball, Collider::new_sphere(BALL_RADIUS));
+    world.add_component(ball, EntityName("İtme Topu".into()));
+ 
+    game.ball_id = ball.id();
+    world.insert_resource(asset_manager);
+ 
+    println!("Sahne hazır: {} domino taşı + 1 top", DOMINO_COUNT);
+    game
 }
+ 
+/// Arşimet sarmalı üzerinde sabit aralıkla domino konumları üretir.
+/// Her Vec3: (x, z_world, rotation_angle)
+fn spiral_positions(count: usize) -> Vec<Vec3> {
+    let mut out = Vec::with_capacity(count);
+    
+    let a = 2.5_f32;    // başlangıç yarıçapı
+    let b = 0.40_f32;   // sarmal büyüme oranı (halka arası ~2.5 m)
+    
+    let mut theta = 0.0_f32;
+    for _ in 0..count {
+        let r = a + b * theta;
+        let x = theta.cos() * r;
+        let z = theta.sin() * r;
+        
+        // Sonraki noktaya teğet yönünü hesapla — finite difference
+        let dt = 0.01;
+        let r2 = a + b * (theta + dt);
+        let nx = (theta + dt).cos() * r2;
+        let nz = (theta + dt).sin() * r2;
+        let dx = nx - x;
+        let dz = nz - z;
+        
+        // atan2(dx, dz): 0 = +Z yönü, PI/2 = +X yönü
+        // Quat::from_axis_angle(Y, angle) ile local +Z bu yöne döner
+        let angle = dx.atan2(dz);
+        
+        out.push(Vec3::new(x, z, angle));
+        
+        // Sabit yay uzunluğu adımı: ds = GAP, ds ≈ r·dθ (spiral için düzeltmeli)
+        let d_theta = GAP / (r * r + b * b).sqrt();
+        theta += d_theta;
+    }
+ 
+    out
+}
+ 
+fn trigger_first_domino(world: &mut World, game: &DominoGame) {
+    println!("İlk domino taşı tetiklendi!");
+ 
+    // İlk dominonun teğet yönünü al
+    let angle = {
+        let positions = spiral_positions(1);
+        positions[0].z
+    };
+    let fwd = Vec3::new(angle.sin(), 0.0, angle.cos());
 
-fn reset_car(world: &mut World, id: u32, pos: Vec3, rot: Quat) {
-    if let Some(mut ts) = world.borrow_mut::<Transform>() {
-        if let Some(t) = ts.get_mut(id) { t.position = pos; t.rotation = rot; t.update_local_matrix(); }
+    if let (Some(mut vels), Some(mut rbs)) = (world.borrow_mut::<Velocity>(), world.borrow_mut::<RigidBody>()) {
+        // Topa hız ver — ilk dominoya doğru
+        if let Some(v) = vels.get_mut(game.ball_id) {
+            v.linear = fwd * 4.0;  // Hafif itme, çok güçlü → yığılma
+        }
+        if let Some(rb) = rbs.get_mut(game.ball_id) {
+            rb.wake_up();
+        }
+        
+        // İlk dominoyu da dürt — teğet yönünde devrilecek şekilde
+        if let Some(first_id) = game.domino_ids.first() {
+            if let Some(v) = vels.get_mut(*first_id) {
+                // Y × fwd = sağ yöndeki eksen → taşı ileri doğru devirir
+                let pitch_axis = Vec3::new(0.0, 1.0, 0.0).cross(fwd);
+                if pitch_axis.length_squared() > 0.001 {
+                    v.angular = pitch_axis.normalize() * 5.0;
+                }
+            }
+            if let Some(rb) = rbs.get_mut(*first_id) {
+                rb.wake_up();
+            }
+        }
     }
-    if let Some(mut vs) = world.borrow_mut::<Velocity>() {
-        if let Some(v) = vs.get_mut(id) { v.linear = Vec3::ZERO; v.angular = Vec3::ZERO; }
+}
+ 
+fn step_physics(world: &mut World, dt: f32) {
+    gizmo::physics::integration::physics_apply_forces_system(world, dt);
+    gizmo::physics::system::physics_collision_system(world, dt);
+    gizmo::physics::integration::physics_movement_system(world, dt);
+}
+ 
+fn update_camera(
+    world: &mut World,
+    state: &mut DominoGame,
+    input: &gizmo::core::input::Input,
+    dt: f32,
+) {
+    let fx = state.cam_yaw.cos() * state.cam_pitch.cos();
+    let fy = state.cam_pitch.sin();
+    let fz = state.cam_yaw.sin() * state.cam_pitch.cos();
+    let fwd = Vec3::new(fx, fy, fz).normalize();
+    let right = fwd.cross(Vec3::new(0.0, 1.0, 0.0)).normalize();
+ 
+    let speed = state.cam_speed * dt;
+ 
+    if input.is_key_pressed(KeyCode::KeyW as u32) { state.cam_pos += fwd * speed; }
+    if input.is_key_pressed(KeyCode::KeyS as u32) { state.cam_pos -= fwd * speed; }
+    if input.is_key_pressed(KeyCode::KeyA as u32) { state.cam_pos -= right * speed; }
+    if input.is_key_pressed(KeyCode::KeyD as u32) { state.cam_pos += right * speed; }
+    if input.is_key_pressed(KeyCode::KeyQ as u32) { state.cam_pos.y -= speed; }
+    if input.is_key_pressed(KeyCode::KeyE as u32) { state.cam_pos.y += speed; }
+ 
+    if let Some(mut trans) = world.borrow_mut::<Transform>() {
+        if let Some(t) = trans.get_mut(state.cam_id) {
+            t.position = state.cam_pos;
+            t.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
+            t.update_local_matrix();
+        }
     }
-    if let Some(mut rbs) = world.borrow_mut::<RigidBody>() {
-        if let Some(rb) = rbs.get_mut(id) { rb.wake_up(); }
+    if let Some(mut cams) = world.borrow_mut::<Camera>() {
+        if let Some(c) = cams.get_mut(state.cam_id) {
+            c.yaw = state.cam_yaw;
+            c.pitch = state.cam_pitch;
+        }
     }
+}
+ 
+fn pitch_yaw_quat(pitch: f32, yaw: f32) -> Quat {
+    let q_yaw = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), yaw);
+    let q_pitch = Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), pitch);
+    q_yaw * q_pitch
 }

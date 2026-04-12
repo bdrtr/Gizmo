@@ -131,46 +131,35 @@ impl ColliderShape {
                 max_height,
             } => {
                 let local_dir = rot.inverse().mul_vec3(dir);
-                let mut best_dot = f32::NEG_INFINITY;
-                let mut best_local = Vec3::ZERO;
-
-                let sx_f = (*segments_x).saturating_sub(1).max(1) as f32;
-                let sz_f = (*segments_z).saturating_sub(1).max(1) as f32;
                 let half_w = *width * 0.5;
                 let half_d = *depth * 0.5;
 
-                for gz in 0..*segments_z {
-                    let fz = gz as f32 / sz_f;
-                    let lz = -half_d + *depth * fz;
-                    for gx in 0..*segments_x {
-                        let fx = gx as f32 / sx_f;
-                        let lx = -half_w + *width * fx;
+                // X ve Z eksenlerinde yön işaretine göre kenar seç
+                let lx = if local_dir.x >= 0.0 { half_w } else { -half_w };
+                let lz = if local_dir.z >= 0.0 { half_d } else { -half_d };
 
-                        let idx = (gz * *segments_x + gx) as usize;
-                        let h = if idx < heights.len() {
-                            heights[idx] * *max_height
-                        } else {
-                            0.0
-                        };
+                // Y ekseni: yön aşağıya ise taban (y=0), yukarıya ise en yüksek grid noktası
+                let ly = if local_dir.y >= 0.0 {
+                    // Yukarı yön: 4 köşe grid noktasının yüksekliklerinden en büyüğü
+                    // artı tüm grid'in max'ı da kontrol et
+                    let sx = (*segments_x).saturating_sub(1) as usize;
+                    let sz = (*segments_z).saturating_sub(1) as usize;
+                    let h = |gx: usize, gz: usize| -> f32 {
+                        let idx = gz * (*segments_x as usize) + gx;
+                        if idx < heights.len() { heights[idx] * *max_height } else { 0.0 }
+                    };
+                    // Kenar köşelerin yükseklikleri
+                    let h00 = h(0, 0);
+                    let h10 = h(sx, 0);
+                    let h01 = h(0, sz);
+                    let h11 = h(sx, sz);
+                    h00.max(h10).max(h01).max(h11)
+                } else {
+                    0.0 // Taban
+                };
 
-                        // Yüzey (tepe) noktası
-                        let pt = Vec3::new(lx, h, lz);
-                        let d = local_dir.dot(pt);
-                        if d > best_dot {
-                            best_dot = d;
-                            best_local = pt;
-                        }
-
-                        // Alt zemin hacmi sağlamak için taban noktası
-                        let pt_bot = Vec3::new(lx, 0.0, lz);
-                        let d_bot = local_dir.dot(pt_bot);
-                        if d_bot > best_dot {
-                            best_dot = d_bot;
-                            best_local = pt_bot;
-                        }
-                    }
-                }
-                pos + rot.mul_vec3(best_local)
+                // Seçilen kenar noktayı lokal uzaydan dünya uzayına çevir
+                pos + rot.mul_vec3(Vec3::new(lx, ly, lz))
             }
         }
     }
