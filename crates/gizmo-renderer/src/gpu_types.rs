@@ -56,8 +56,10 @@ impl Vertex {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct LightData {
-    pub position: [f32; 4],
-    pub color: [f32; 4],
+    pub position: [f32; 4],  // xyz=pos, w=intensity
+    pub color: [f32; 4],     // rgb=color, a=radius
+    pub direction: [f32; 4], // xyz=direction (spot), w=inner_cutoff_cos
+    pub params: [f32; 4],    // x=outer_cutoff_cos, y=light_type (0=point,1=spot,2=directional), zw=unused
 }
 
 #[repr(C)]

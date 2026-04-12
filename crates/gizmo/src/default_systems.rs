@@ -48,6 +48,8 @@ pub fn default_render_pass(
         lights: [crate::renderer::gpu_types::LightData {
             position: [0.0; 4],
             color: [0.0; 4],
+            direction: [0.0, -1.0, 0.0, 0.0],
+            params: [0.0; 4],
         }; 10],
         light_view_proj: Mat4::IDENTITY.to_cols_array_2d(),
         num_lights: 0,
@@ -69,8 +71,8 @@ pub fn default_render_pass(
     }
 
     let renderers = world.borrow::<MeshRenderer>();
-    if let Some(q) = world.query_ref_ref_ref::<Mesh, Transform, Material>() {
-        for (e, mesh, trans, mat) in q.iter() {
+    if let Some(mut q) = world.query::<(&Mesh, &Transform, &Material)>() {
+        for (e, (mesh, trans, mat)) in q.iter_mut() {
             if renderers.as_ref().map_or(true, |r| r.get(e).is_none()) {
                 continue;
             }

@@ -52,17 +52,41 @@ pub fn execute_render_pipeline(
     let mut lights_data = [gizmo::renderer::renderer::LightData {
         position: [0.0; 4],
         color: [0.0; 4],
+        direction: [0.0, -1.0, 0.0, 0.0],
+        params: [0.0; 4],
     }; 10];
     let mut num_lights = 0;
 
-    if let Some(q) = world.query_ref_ref::<PointLight, Transform>() {
-        for (_e, l, t) in q.iter() {
+    if let Some(mut q) = world.query::<(&PointLight, &Transform)>() {
+        for (_e, (l, t)) in q.iter_mut() {
             if num_lights >= 10 {
                 break;
             }
             lights_data[num_lights as usize] = gizmo::renderer::renderer::LightData {
                 position: [t.position.x, t.position.y, t.position.z, l.intensity],
-                color: [l.color.x, l.color.y, l.color.z, 0.0],
+                color: [l.color.x, l.color.y, l.color.z, l.radius],
+                direction: [0.0, -1.0, 0.0, 0.0],
+                params: [0.0, 0.0, 0.0, 0.0], // light_type=0 -> Point
+            };
+            num_lights += 1;
+        }
+    }
+
+    // --- SpotLight Taraması ---
+    if let Some(mut q) = world.query::<(&gizmo::renderer::SpotLight, &Transform)>() {
+        for (_e, (sl, t)) in q.iter_mut() {
+            if num_lights >= 10 {
+                break;
+            }
+            // Transform'un forward vektörü spot ışık yönü olarak kullanılır
+            let fwd = t.rotation.mul_vec3(Vec3::new(0.0, 0.0, -1.0));
+            let inner_cos = sl.inner_angle.cos();
+            let outer_cos = sl.outer_angle.cos();
+            lights_data[num_lights as usize] = gizmo::renderer::renderer::LightData {
+                position: [t.position.x, t.position.y, t.position.z, sl.intensity],
+                color: [sl.color.x, sl.color.y, sl.color.z, sl.radius],
+                direction: [fwd.x, fwd.y, fwd.z, inner_cos],
+                params: [outer_cos, 1.0, 0.0, 0.0], // light_type=1 -> Spot
             };
             num_lights += 1;
         }
@@ -72,10 +96,10 @@ pub fn execute_render_pipeline(
     let mut sun_dir = [0.0, -1.0, 0.0, 0.0];
     let mut sun_col = [0.0, 0.0, 0.0, 0.0];
 
-    if let Some(q) =
-        world.query_ref_ref::<gizmo::renderer::components::DirectionalLight, Transform>()
+    if let Some(mut q) =
+        world.query::<(&gizmo::renderer::components::DirectionalLight, &Transform)>()
     {
-        for (_e, dl, t) in q.iter() {
+        for (_e, (dl, t)) in q.iter_mut() {
             if dl.is_sun {
                 // Transform'un rotasyonundan ileri vektörü hesapla (Güneşin baktığı yön)
                 // Standartlara göre ışık '-Z' ye bakar
@@ -172,8 +196,8 @@ pub fn execute_render_pipeline(
     let skeletons = world.borrow::<gizmo::renderer::components::Skeleton>();
     let lod_groups = world.borrow::<gizmo::renderer::components::LodGroup>();
 
-    if let Some(q) = world.query_ref_ref_ref::<Mesh, Transform, Material>() {
-        for (e, mesh, trans, mat) in q.iter() {
+    if let Some(mut q) = world.query::<(&Mesh, &Transform, &Material)>() {
+        for (e, (mesh, trans, mat)) in q.iter_mut() {
             // Sadece MeshRenderer tagli olanları çiz:
             if let Some(r) = &renderers {
                 if r.get(e).is_none() {
@@ -371,12 +395,12 @@ pub fn execute_render_pipeline(
     process_batches(transparent_batches, true, false);
 
     if !all_instances.is_empty() {
-        let limit = 100_000;
-        let safe_len = std::cmp::min(all_instances.len(), limit);
+        // Grow GPU buffer if scene has more instances than current capacity
+        renderer.ensure_instance_capacity(all_instances.len());
         renderer.queue.write_buffer(
             &renderer.scene.instance_buffer,
             0,
-            bytemuck::cast_slice(&all_instances[0..safe_len]),
+            bytemuck::cast_slice(&all_instances),
         );
     }
 
@@ -478,10 +502,10 @@ pub fn execute_render_pipeline(
 
         // Tıpkı main render gibi gruplanmış nesneleri tek draw çağrısıyla bas
         for batch in &flat_batches {
-            if batch.start_instance >= 100_000 {
+            if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                 continue;
             }
-            let safe_end = std::cmp::min(batch.end_instance, 100_000);
+            let safe_end = std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
 
             shadow_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
             shadow_pass.set_bind_group(1, &batch.skeleton_bg, &[]);
@@ -526,10 +550,10 @@ pub fn execute_render_pipeline(
             if batch.is_transparent || batch.is_double_sided || batch.is_skybox {
                 continue;
             } // Şeffafları, Skybox'ı ve çift yönlüleri atla
-            if batch.start_instance >= 100_000 {
+            if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                 continue;
             }
-            let safe_end = std::cmp::min(batch.end_instance, 100_000);
+            let safe_end = std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
 
             render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
             render_pass.set_bind_group(1, &batch.bind_group, &[]);
@@ -546,10 +570,10 @@ pub fn execute_render_pipeline(
             if batch.is_transparent || !batch.is_double_sided || batch.is_skybox {
                 continue;
             }
-            if batch.start_instance >= 100_000 {
+            if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                 continue;
             }
-            let safe_end = std::cmp::min(batch.end_instance, 100_000);
+            let safe_end = std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
 
             render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
             render_pass.set_bind_group(1, &batch.bind_group, &[]);
@@ -571,10 +595,10 @@ pub fn execute_render_pipeline(
             if !batch.is_skybox {
                 continue;
             } // Sadece Skybox'u çiz
-            if batch.start_instance >= 100_000 {
+            if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                 continue;
             }
-            let safe_end = std::cmp::min(batch.end_instance, 100_000);
+            let safe_end = std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
 
             render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
             render_pass.set_bind_group(1, &batch.bind_group, &[]);
@@ -591,10 +615,10 @@ pub fn execute_render_pipeline(
             if !batch.is_transparent {
                 continue;
             } // Sadece şeffafları çiz
-            if batch.start_instance >= 100_000 {
+            if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                 continue;
             }
-            let safe_end = std::cmp::min(batch.end_instance, 100_000);
+            let safe_end = std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
 
             render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
             render_pass.set_bind_group(1, &batch.bind_group, &[]);

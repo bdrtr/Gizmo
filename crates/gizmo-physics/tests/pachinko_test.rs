@@ -79,9 +79,7 @@ fn test_pachinko_broadphase_benchmark() {
         physics_collision_system(&mut world, dt);
         gizmo_physics::physics_apply_forces_system(&world, dt);
         gizmo_physics::physics_movement_system(&world, dt);
-        if let Some(jw) = world.get_resource::<JointWorld>() {
-            gizmo_physics::solve_constraints(&*jw, &world, dt);
-        }
+
 
         let step_dur = step_start.elapsed().as_secs_f64() * 1000.0; // Milisaniye (ms)
         total_time += step_dur;

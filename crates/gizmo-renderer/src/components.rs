@@ -284,6 +284,22 @@ impl DirectionalLight {
     }
 }
 
+/// Spot ışık — koni şeklinde yayılan ışık (araç farları, projektörler, sokak lambası)
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct SpotLight {
+    pub color: Vec3,
+    pub intensity: f32,
+    pub radius: f32,       // Etki mesafesi
+    pub inner_angle: f32,  // İç koni açısı (radyan)
+    pub outer_angle: f32,  // Dış koni açısı (radyan) — kenar yumuşatma
+}
+
+impl SpotLight {
+    pub fn new(color: Vec3, intensity: f32, radius: f32, inner_angle: f32, outer_angle: f32) -> Self {
+        Self { color, intensity, radius, inner_angle, outer_angle }
+    }
+}
+
 /// LOD (Level of Detail) — Kameraya olan mesafeye göre farklı detay seviyelerinde mesh seçimi
 #[derive(Clone)]
 pub struct LodGroup {

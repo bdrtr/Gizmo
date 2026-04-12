@@ -57,7 +57,7 @@ pub fn client_network_system(world: &mut World, dt: f32) {
                 if let Ok(ServerMessage::WorldStateUpdate { players }) = bincode::deserialize(&msg)
                 {
                     // Update local transforms for these IDs
-                    if let Some(mut query) = world.query_mut::<&mut gizmo::prelude::Transform>() {
+                    if let Some(mut query) = world.query::<&mut gizmo::prelude::Transform>() {
                         for (raw_id, t) in query.iter_mut() {
                             if let Some(data) = players.get(&(raw_id as u64)) {
                                 t.position =

@@ -16,7 +16,7 @@ pub use animation_system::animation_update_system;
 pub use asset::{AssetManager, GltfNodeData};
 pub use components::{
     Camera, Camera2D, DirectionalLight, LodGroup, LodLevel, Material, Mesh, MeshRenderer,
-    PointLight, Sprite,
+    PointLight, SpotLight, Sprite,
 };
 pub use game_ui::{Anchor, UiCanvas, UiElement, UiKind};
 pub use gpu_types::{InstanceRaw, LightData, PostProcessUniforms, SceneUniforms, Vertex};

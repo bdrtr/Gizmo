@@ -1,4 +1,5 @@
 use gizmo_math::Vec3;
+use crate::integration::apply_inv_inertia;
 
 // ─── Yardımcı: JointBodies ───────────────────────────────────────────────────
 //
@@ -14,22 +15,23 @@ use gizmo_math::Vec3;
 // `JointBodies::resolve` bu bloğu bir kez çözer ve `None` döndürerek
 // `continue` mantığını çağırana bırakır.
 
-struct JointBodies {
-    pos_a:        Vec3,
-    pos_b:        Vec3,
-    rot_a:        gizmo_math::Quat,
-    rot_b:        gizmo_math::Quat,
-    inv_mass_a:   f32,
-    inv_mass_b:   f32,
-    inv_inertia_a: Vec3,
-    inv_inertia_b: Vec3,
-    total_inv_mass: f32,
+#[derive(Clone, Debug)]
+pub struct JointBodies {
+    pub pos_a:        Vec3,
+    pub pos_b:        Vec3,
+    pub rot_a:        gizmo_math::Quat,
+    pub rot_b:        gizmo_math::Quat,
+    pub inv_mass_a:   f32,
+    pub inv_mass_b:   f32,
+    pub inv_inertia_a: Vec3,
+    pub inv_inertia_b: Vec3,
+    pub total_inv_mass: f32,
 }
 
 impl JointBodies {
     /// Transforms ve RigidBody'lerden joint verilerini çıkarır.
     /// İki statik nesne veya eksik bileşen durumunda `None` döndürür.
-    fn resolve(
+    pub fn resolve(
         joint:      &Joint,
         transforms: &gizmo_core::SparseSet<crate::components::Transform>,
         rbs:        &gizmo_core::SparseSet<crate::components::RigidBody>,
@@ -339,417 +341,274 @@ impl Default for JointWorld {
 
 /// Kısıtlayıcıları fizik adımında çözen sistem
 /// 15 iterasyon ile kararlılık sağlar (Gauss-Seidel)
-pub fn solve_constraints(joint_world: &JointWorld, world: &gizmo_core::World, dt: f32) {
-    if joint_world.joints.is_empty() {
-        return;
-    }
 
+/// Hız çözümü iterasyonu. Sequential Impulse döngüsü içinde çağrılacaktır.
+pub fn solve_joint_velocity(
+    dt: f32,
+    joint: &Joint,
+    jb: &JointBodies,
+    va_lin: &mut Vec3,
+    va_ang: &mut Vec3,
+    vb_lin: &mut Vec3,
+    vb_ang: &mut Vec3,
+) {
     let beta = 0.2;
-    let iterations = 15;
+    let pos_a = jb.pos_a;
+    let pos_b = jb.pos_b;
+    let rot_a = jb.rot_a;
+    let rot_b = jb.rot_b;
+    let inv_mass_a = jb.inv_mass_a;
+    let inv_mass_b = jb.inv_mass_b;
+    let inv_inertia_a = jb.inv_inertia_a;
+    let inv_inertia_b = jb.inv_inertia_b;
+    let total_inv_mass = jb.total_inv_mass;
 
-    // Tüm borrow'ları DÖNGÜ DIŞINDA bir kez al — RefCell overhead ortadan kalkar
-    // FIX #16: Transform da dahil tüm bileşenler en başta mut olarak alınır.
-    let mut transforms = match world.borrow_mut::<crate::components::Transform>() {
-        Some(t) => t,
-        None => return,
-    };
-    let rbs = match world.borrow::<crate::components::RigidBody>() {
-        Some(r) => r,
-        None => return,
-    };
-    let mut vels = match world.borrow_mut::<crate::components::Velocity>() {
-        Some(v) => v,
-        None => return,
-    };
+    match &joint.kind {
+        JointKind::BallSocket => {
+            let r_a = rot_a.mul_vec3(joint.anchor_a);
+            let r_b = rot_b.mul_vec3(joint.anchor_b);
+            let diff = pos_b - pos_a;
 
-    for _iter in 0..iterations {
-        for (_, joint) in &joint_world.joints {
-            let Some(JointBodies {
-                pos_a, pos_b, rot_a, rot_b,
-                inv_mass_a, inv_mass_b, inv_inertia_a, inv_inertia_b, total_inv_mass,
-            }) = JointBodies::resolve(joint, &transforms, &rbs) else { continue };
+            let bias = diff * (beta / dt) * joint.stiffness;
 
-            match &joint.kind {
-                JointKind::BallSocket => {
-                    let r_a = rot_a.mul_vec3(joint.anchor_a);
-                    let r_b = rot_b.mul_vec3(joint.anchor_b);
-                    let diff = pos_b - pos_a;
-
-                    let mut va_lin = vels.get(joint.entity_a).map_or(Vec3::ZERO, |v| v.linear);
-                    let mut va_ang = vels.get(joint.entity_a).map_or(Vec3::ZERO, |v| v.angular);
-                    let mut vb_lin = vels.get(joint.entity_b).map_or(Vec3::ZERO, |v| v.linear);
-                    let mut vb_ang = vels.get(joint.entity_b).map_or(Vec3::ZERO, |v| v.angular);
-
-                    let bias = diff * (beta / dt) * joint.stiffness;
-
-                    let axes = [
-                        Vec3::new(1.0, 0.0, 0.0),
-                        Vec3::new(0.0, 1.0, 0.0),
-                        Vec3::new(0.0, 0.0, 1.0),
-                    ];
-                    for &axis in &axes {
-                        let vel_a_anchor = va_lin + va_ang.cross(r_a);
-                        let vel_b_anchor = vb_lin + vb_ang.cross(r_b);
-                        let rel_vel = vel_b_anchor - vel_a_anchor;
-                        let rel_vel_n = rel_vel.dot(axis);
-                        let bias_n = bias.dot(axis);
-                        let r_a_cross_n = r_a.cross(axis);
-                        let r_b_cross_n = r_b.cross(axis);
-                        let r_a_cross_n_i = Vec3::new(
-                            r_a_cross_n.x * inv_inertia_a.x,
-                            r_a_cross_n.y * inv_inertia_a.y,
-                            r_a_cross_n.z * inv_inertia_a.z,
-                        );
-                        let r_b_cross_n_i = Vec3::new(
-                            r_b_cross_n.x * inv_inertia_b.x,
-                            r_b_cross_n.y * inv_inertia_b.y,
-                            r_b_cross_n.z * inv_inertia_b.z,
-                        );
-                        let eff_mass_inv = inv_mass_a
-                            + inv_mass_b
-                            + r_a_cross_n_i.dot(r_a_cross_n)
-                            + r_b_cross_n_i.dot(r_b_cross_n);
-                        if eff_mass_inv > 0.0001 {
-                            let lambda = -(rel_vel_n + bias_n) / eff_mass_inv;
-                            let impulse = axis * lambda;
-                            va_lin -= impulse * inv_mass_a;
-                            let va_torque = r_a.cross(impulse);
-                            va_ang -= Vec3::new(
-                                va_torque.x * inv_inertia_a.x,
-                                va_torque.y * inv_inertia_a.y,
-                                va_torque.z * inv_inertia_a.z,
-                            );
-                            vb_lin += impulse * inv_mass_b;
-                            let vb_torque = r_b.cross(impulse);
-                            vb_ang += Vec3::new(
-                                vb_torque.x * inv_inertia_b.x,
-                                vb_torque.y * inv_inertia_b.y,
-                                vb_torque.z * inv_inertia_b.z,
-                            );
-                        }
-                    }
-                    if let Some(v_a) = vels.get_mut(joint.entity_a) {
-                        v_a.linear = va_lin;
-                        v_a.angular = va_ang;
-                    }
-                    if let Some(v_b) = vels.get_mut(joint.entity_b) {
-                        v_b.linear = vb_lin;
-                        v_b.angular = vb_ang;
-                    }
+            let axes = [
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ];
+            for &axis in &axes {
+                let vel_a_anchor = *va_lin + va_ang.cross(r_a);
+                let vel_b_anchor = *vb_lin + vb_ang.cross(r_b);
+                let rel_vel = vel_b_anchor - vel_a_anchor;
+                let rel_vel_n = rel_vel.dot(axis);
+                let bias_n = bias.dot(axis);
+                let r_a_cross_n = r_a.cross(axis);
+                let r_b_cross_n = r_b.cross(axis);
+                let r_a_cross_n_i = apply_inv_inertia(r_a_cross_n, inv_inertia_a, rot_a);
+                let r_b_cross_n_i = apply_inv_inertia(r_b_cross_n, inv_inertia_b, rot_b);
+                let eff_mass_inv = inv_mass_a
+                    + inv_mass_b
+                    + r_a_cross_n_i.dot(r_a_cross_n)
+                    + r_b_cross_n_i.dot(r_b_cross_n);
+                if eff_mass_inv > 0.0001 {
+                    let lambda = -(rel_vel_n + bias_n) / eff_mass_inv;
+                    let impulse = axis * lambda;
+                    *va_lin -= impulse * inv_mass_a;
+                    *va_ang -= apply_inv_inertia(r_a.cross(impulse), inv_inertia_a, rot_a);
+                    *vb_lin += impulse * inv_mass_b;
+                    *vb_ang += apply_inv_inertia(r_b.cross(impulse), inv_inertia_b, rot_b);
                 }
-                JointKind::Fixed { relative_rotation } => {
-                    let diff = pos_b - pos_a;
-                    let correction = diff * (beta / dt) * joint.stiffness;
-                    if let Some(v_a) = vels.get_mut(joint.entity_a) {
-                        v_a.linear += correction * (inv_mass_a / total_inv_mass);
-                    }
-                    if let Some(v_b) = vels.get_mut(joint.entity_b) {
-                        v_b.linear -= correction * (inv_mass_b / total_inv_mass);
-                    }
-                    let target_rot = rot_a * *relative_rotation;
-                    let error_rot = target_rot * rot_b.conjugate();
-                    let (axis, angle) = error_rot.to_axis_angle();
-                    if angle.abs() > 0.001 {
-                        let angular_correction = axis * angle * (beta / dt) * joint.stiffness;
-                        if let Some(v_a) = vels.get_mut(joint.entity_a) {
-                            v_a.angular -= angular_correction * 0.5;
-                        }
-                        if let Some(v_b) = vels.get_mut(joint.entity_b) {
-                            v_b.angular += angular_correction * 0.5;
-                        }
-                    }
-                }
-                JointKind::Distance { length } => {
-                    // Anchor'lardan merkeze lever arm (world-space)
-                    let r_a = rot_a.mul_vec3(joint.anchor_a);
-                    let r_b = rot_b.mul_vec3(joint.anchor_b);
+            }
+        }
+        JointKind::Fixed { relative_rotation } => {
+            let diff = pos_b - pos_a;
+            let correction = diff * (beta / dt) * joint.stiffness;
+            *va_lin += correction * (inv_mass_a / total_inv_mass);
+            *vb_lin -= correction * (inv_mass_b / total_inv_mass);
+            
+            let target_rot = rot_a * *relative_rotation;
+            let error_rot = target_rot * rot_b.conjugate();
+            let (axis, angle) = error_rot.to_axis_angle();
+            if angle.abs() > 0.001 {
+                let angular_correction = axis * angle * (beta / dt) * joint.stiffness;
+                *va_ang -= angular_correction * 0.5;
+                *vb_ang += angular_correction * 0.5;
+            }
+        }
+        JointKind::Distance { length } => {
+            let r_a = rot_a.mul_vec3(joint.anchor_a);
+            let r_b = rot_b.mul_vec3(joint.anchor_b);
 
-                    let diff = pos_b - pos_a;
-                    let current_len = diff.length();
-                    if current_len < 0.0001 {
-                        continue;
-                    }
-                    let dir = diff / current_len;
-                    let error = current_len - length;
+            let diff = pos_b - pos_a;
+            let current_len = diff.length();
+            if current_len >= 0.0001 {
+                let dir = diff / current_len;
+                let error = current_len - length;
 
-                    // Anchor hızlarını hesapla (linear + angular katkısıyla)
-                    let va_lin = vels.get(joint.entity_a).map_or(Vec3::ZERO, |v| v.linear);
-                    let va_ang = vels.get(joint.entity_a).map_or(Vec3::ZERO, |v| v.angular);
-                    let vb_lin = vels.get(joint.entity_b).map_or(Vec3::ZERO, |v| v.linear);
-                    let vb_ang = vels.get(joint.entity_b).map_or(Vec3::ZERO, |v| v.angular);
+                let vel_a_anchor = *va_lin + va_ang.cross(r_a);
+                let vel_b_anchor = *vb_lin + vb_ang.cross(r_b);
+                let rel_vel_along_dir = (vel_b_anchor - vel_a_anchor).dot(dir);
 
-                    let vel_a_anchor = va_lin + va_ang.cross(r_a);
-                    let vel_b_anchor = vb_lin + vb_ang.cross(r_b);
-                    let rel_vel_along_dir = (vel_b_anchor - vel_a_anchor).dot(dir);
+                let r_a_cross_dir = r_a.cross(dir);
+                let r_b_cross_dir = r_b.cross(dir);
+                let ang_a = apply_inv_inertia(r_a_cross_dir, inv_inertia_a, rot_a);
+                let ang_b = apply_inv_inertia(r_b_cross_dir, inv_inertia_b, rot_b);
+                let eff_mass_inv = inv_mass_a
+                    + inv_mass_b
+                    + ang_a.dot(r_a_cross_dir)
+                    + ang_b.dot(r_b_cross_dir);
 
-                    // Etkin kütle: Lineer + Rotasyonel katkı
-                    // Önceki hata: total_inv_mass yalnızca lineer kütleyi kapsıyordu →
-                    // impulse fazla büyük, angular kol hiç güncellenmiyordu
-                    let r_a_cross_dir = r_a.cross(dir);
-                    let r_b_cross_dir = r_b.cross(dir);
-                    let ang_a = Vec3::new(
-                        r_a_cross_dir.x * inv_inertia_a.x,
-                        r_a_cross_dir.y * inv_inertia_a.y,
-                        r_a_cross_dir.z * inv_inertia_a.z,
-                    );
-                    let ang_b = Vec3::new(
-                        r_b_cross_dir.x * inv_inertia_b.x,
-                        r_b_cross_dir.y * inv_inertia_b.y,
-                        r_b_cross_dir.z * inv_inertia_b.z,
-                    );
-                    let eff_mass_inv = inv_mass_a
-                        + inv_mass_b
-                        + ang_a.dot(r_a_cross_dir)
-                        + ang_b.dot(r_b_cross_dir);
-
-                    if eff_mass_inv < 1e-8 {
-                        continue;
-                    }
-
-                    // Baumgarte konum düzeltmesi + hız düzeltmesi
+                if eff_mass_inv >= 1e-8 {
                     let bias = error * (beta / dt) * joint.stiffness;
                     let lambda = -(rel_vel_along_dir + bias) / eff_mass_inv;
                     let impulse = dir * lambda;
 
-                    // Linear VE Angular impulse uygula
-                    // Önceki kod sadece linear uyguluyordu → sarkık obje sallanmak yerine dönüyordu
-                    if let Some(v_a) = vels.get_mut(joint.entity_a) {
-                        v_a.linear -= impulse * inv_mass_a;
-                        // angular -= I⁻¹ · (r_a × impulse)
-                        let torque_a = r_a.cross(impulse);
-                        v_a.angular -= Vec3::new(
-                            torque_a.x * inv_inertia_a.x,
-                            torque_a.y * inv_inertia_a.y,
-                            torque_a.z * inv_inertia_a.z,
-                        );
-                    }
-                    if let Some(v_b) = vels.get_mut(joint.entity_b) {
-                        v_b.linear += impulse * inv_mass_b;
-                        // angular += I⁻¹ · (r_b × impulse)
-                        let torque_b = r_b.cross(impulse);
-                        v_b.angular += Vec3::new(
-                            torque_b.x * inv_inertia_b.x,
-                            torque_b.y * inv_inertia_b.y,
-                            torque_b.z * inv_inertia_b.z,
-                        );
-                    }
+                    *va_lin -= impulse * inv_mass_a;
+                    *va_ang -= apply_inv_inertia(r_a.cross(impulse), inv_inertia_a, rot_a);
+                    *vb_lin += impulse * inv_mass_b;
+                    *vb_ang += apply_inv_inertia(r_b.cross(impulse), inv_inertia_b, rot_b);
                 }
-                JointKind::Spring {
-                    rest_length,
-                    spring_constant,
-                } => {
-                    let diff = pos_b - pos_a;
-                    let current_len = diff.length();
-                    if current_len < 0.0001 {
-                        continue;
-                    }
-                    let dir = diff / current_len;
-                    let displacement = current_len - rest_length;
-                    let spring_force = dir * displacement * (*spring_constant);
-                    let va = vels.get(joint.entity_a).map_or(Vec3::ZERO, |v| v.linear);
-                    let vb = vels.get(joint.entity_b).map_or(Vec3::ZERO, |v| v.linear);
-                    let damping_force = dir * (vb - va).dot(dir) * joint.damping;
-                    let total_force = spring_force + damping_force;
-                    if let Some(v_a) = vels.get_mut(joint.entity_a) {
-                        v_a.linear += total_force * inv_mass_a * dt;
-                    }
-                    if let Some(v_b) = vels.get_mut(joint.entity_b) {
-                        v_b.linear -= total_force * inv_mass_b * dt;
-                    }
+            }
+        }
+        JointKind::Spring {
+            rest_length,
+            spring_constant,
+        } => {
+            let diff = pos_b - pos_a;
+            let current_len = diff.length();
+            if current_len >= 0.0001 {
+                let dir = diff / current_len;
+                let displacement = current_len - rest_length;
+                let spring_force = dir * displacement * (*spring_constant);
+                let damping_force = dir * (*vb_lin - *va_lin).dot(dir) * joint.damping;
+                let total_force = spring_force + damping_force;
+                *va_lin += total_force * inv_mass_a * dt;
+                *vb_lin -= total_force * inv_mass_b * dt;
+            }
+        }
+        JointKind::Hinge {
+            axis,
+            min_angle,
+            max_angle,
+        } => {
+            let diff = pos_b - pos_a;
+            let bias = diff * (beta / dt) * joint.stiffness;
+
+            let r_a = rot_a.mul_vec3(joint.anchor_a);
+            let r_b = rot_b.mul_vec3(joint.anchor_b);
+
+            for &constraint_axis in &[Vec3::X, Vec3::Y, Vec3::Z] {
+                let vel_a_anchor = *va_lin + va_ang.cross(r_a);
+                let vel_b_anchor = *vb_lin + vb_ang.cross(r_b);
+                let rel_vel_n = (vel_b_anchor - vel_a_anchor).dot(constraint_axis);
+                let bias_n = bias.dot(constraint_axis);
+                let ra_x_n = r_a.cross(constraint_axis);
+                let rb_x_n = r_b.cross(constraint_axis);
+                let ia = apply_inv_inertia(ra_x_n, inv_inertia_a, rot_a);
+                let ib = apply_inv_inertia(rb_x_n, inv_inertia_b, rot_b);
+                let eff = inv_mass_a + inv_mass_b + ia.dot(ra_x_n) + ib.dot(rb_x_n);
+                if eff > 1e-6 {
+                    let lambda = -(rel_vel_n + bias_n) / eff;
+                    let impulse = constraint_axis * lambda;
+                    *va_lin -= impulse * inv_mass_a;
+                    *va_ang -= apply_inv_inertia(r_a.cross(impulse), inv_inertia_a, rot_a);
+                    *vb_lin += impulse * inv_mass_b;
+                    *vb_ang += apply_inv_inertia(r_b.cross(impulse), inv_inertia_b, rot_b);
                 }
-                JointKind::Hinge {
-                    axis,
-                    min_angle,
-                    max_angle,
-                } => {
-                    // 1. Pozisyon kısıtlayıcısı (BallSocket gibi çalışır)
-                    let diff = pos_b - pos_a;
-                    let bias = diff * (beta / dt) * joint.stiffness;
+            }
 
-                    let mut va_lin = vels.get(joint.entity_a).map_or(Vec3::ZERO, |v| v.linear);
-                    let mut va_ang = vels.get(joint.entity_a).map_or(Vec3::ZERO, |v| v.angular);
-                    let mut vb_lin = vels.get(joint.entity_b).map_or(Vec3::ZERO, |v| v.linear);
-                    let mut vb_ang = vels.get(joint.entity_b).map_or(Vec3::ZERO, |v| v.angular);
+            let hinge_axis_world = rot_a.mul_vec3(*axis);
+            let perp1 = {
+                let candidate = if hinge_axis_world.x.abs() < 0.9 {
+                    Vec3::X
+                } else {
+                    Vec3::Y
+                };
+                hinge_axis_world.cross(candidate).normalize()
+            };
+            let perp2 = hinge_axis_world.cross(perp1);
 
-                    let r_a = rot_a.mul_vec3(joint.anchor_a);
-                    let r_b = rot_b.mul_vec3(joint.anchor_b);
+            for &perp in &[perp1, perp2] {
+                let rel_ang_n = (*vb_ang - *va_ang).dot(perp);
+                let ia = apply_inv_inertia(perp, inv_inertia_a, rot_a);
+                let ib = apply_inv_inertia(perp, inv_inertia_b, rot_b);
+                let eff_ang = ia.dot(perp) + ib.dot(perp);
+                if eff_ang > 1e-8 {
+                    let lambda_ang = -rel_ang_n / eff_ang;
+                    let ang_impulse = perp * lambda_ang;
+                    *va_ang -= apply_inv_inertia(ang_impulse, inv_inertia_a, rot_a);
+                    *vb_ang += apply_inv_inertia(ang_impulse, inv_inertia_b, rot_b);
+                }
+            }
 
-                    // a — çeviri kısıtlayıcısı (3 eksen)
-                    for &constraint_axis in &[Vec3::X, Vec3::Y, Vec3::Z] {
-                        let vel_a_anchor = va_lin + va_ang.cross(r_a);
-                        let vel_b_anchor = vb_lin + vb_ang.cross(r_b);
-                        let rel_vel_n = (vel_b_anchor - vel_a_anchor).dot(constraint_axis);
-                        let bias_n = bias.dot(constraint_axis);
-                        let ra_x_n = r_a.cross(constraint_axis);
-                        let rb_x_n = r_b.cross(constraint_axis);
-                        let ia = Vec3::new(
-                            ra_x_n.x * inv_inertia_a.x,
-                            ra_x_n.y * inv_inertia_a.y,
-                            ra_x_n.z * inv_inertia_a.z,
-                        );
-                        let ib = Vec3::new(
-                            rb_x_n.x * inv_inertia_b.x,
-                            rb_x_n.y * inv_inertia_b.y,
-                            rb_x_n.z * inv_inertia_b.z,
-                        );
-                        let eff = inv_mass_a + inv_mass_b + ia.dot(ra_x_n) + ib.dot(rb_x_n);
-                        if eff > 1e-6 {
-                            let lambda = -(rel_vel_n + bias_n) / eff;
-                            let impulse = constraint_axis * lambda;
-                            va_lin -= impulse * inv_mass_a;
-                            va_ang -= Vec3::new(
-                                (r_a.cross(impulse)).x * inv_inertia_a.x,
-                                (r_a.cross(impulse)).y * inv_inertia_a.y,
-                                (r_a.cross(impulse)).z * inv_inertia_a.z,
-                            );
-                            vb_lin += impulse * inv_mass_b;
-                            vb_ang += Vec3::new(
-                                (r_b.cross(impulse)).x * inv_inertia_b.x,
-                                (r_b.cross(impulse)).y * inv_inertia_b.y,
-                                (r_b.cross(impulse)).z * inv_inertia_b.z,
-                            );
-                        }
-                    }
+            if *min_angle > f32::NEG_INFINITY || *max_angle < f32::INFINITY {
+                let hinge_world = rot_a.mul_vec3(*axis);
+                let rel_rot = rot_a.conjugate() * rot_b;
+                let (rel_axis_local, angle) = rel_rot.to_axis_angle();
+                let rel_axis_world = rot_a.mul_vec3(rel_axis_local);
+                let signed_angle = if rel_axis_world.dot(hinge_world) >= 0.0 {
+                    angle
+                } else {
+                    -angle
+                };
 
-                    // b — Dönüş kısıtlayıcısı: menteseye dik 2 eksende açısal hızı sıfırla
-                    // axis'e dik iki vektörü bul
-                    let hinge_axis_world = rot_a.mul_vec3(*axis);
-                    let perp1 = {
-                        let candidate = if hinge_axis_world.x.abs() < 0.9 {
-                            Vec3::X
-                        } else {
-                            Vec3::Y
-                        };
-                        hinge_axis_world.cross(candidate).normalize()
+                let mut error = 0.0;
+                if signed_angle < *min_angle {
+                    error = *min_angle - signed_angle;
+                } else if signed_angle > *max_angle {
+                    error = signed_angle - *max_angle;
+                }
+                
+                if error != 0.0 {
+                    let constraint_axis = if signed_angle < *min_angle {
+                        hinge_world
+                    } else {
+                        -hinge_world
                     };
-                    let perp2 = hinge_axis_world.cross(perp1);
-
-                    for &perp in &[perp1, perp2] {
-                        let rel_ang_n = (vb_ang - va_ang).dot(perp);
-                        // Etkin atalet tahmini: her eksenin ters atalet toplamı / 2
-                        let eff_ang = (inv_inertia_a.x
-                            + inv_inertia_a.y
-                            + inv_inertia_a.z
-                            + inv_inertia_b.x
-                            + inv_inertia_b.y
-                            + inv_inertia_b.z)
-                            / 6.0;
-                        if eff_ang > 1e-8 {
-                            let lambda_ang = -rel_ang_n / eff_ang;
-                            let ang_impulse = perp * lambda_ang;
-                            va_ang -= Vec3::new(
-                                ang_impulse.x * inv_inertia_a.x,
-                                ang_impulse.y * inv_inertia_a.y,
-                                ang_impulse.z * inv_inertia_a.z,
-                            );
-                            vb_ang += Vec3::new(
-                                ang_impulse.x * inv_inertia_b.x,
-                                ang_impulse.y * inv_inertia_b.y,
-                                ang_impulse.z * inv_inertia_b.z,
-                            );
-                        }
-                    }
-
-                    if let Some(v_a) = vels.get_mut(joint.entity_a) {
-                        v_a.linear = va_lin;
-                        v_a.angular = va_ang;
-                    }
-                    if let Some(v_b) = vels.get_mut(joint.entity_b) {
-                        v_b.linear = vb_lin;
-                        v_b.angular = vb_ang;
-                    }
-
-                    // c — Açı limiti
-                    if *min_angle > f32::NEG_INFINITY || *max_angle < f32::INFINITY {
-                        // `axis` entity_a'nın local-space'inde saklanır.
-                        // Anlık world-space ekseni her frame yeniden hesaplanmalıdır.
-                        let hinge_world = rot_a.mul_vec3(*axis);
-
-                        // rel_rot: B'nin A'ya göre göreli dönüşü (A-local uzayında)
-                        let rel_rot = rot_a.conjugate() * rot_b;
-                        let (rel_axis_local, angle) = rel_rot.to_axis_angle();
-
-                        // rel_axis_local, A'nın yerel uzayında — world-space'e çevir
-                        let rel_axis_world = rot_a.mul_vec3(rel_axis_local);
-
-                        // Dönüş yönü, world-space hinge_world eksenine göre işaretlenir
-                        let signed_angle = if rel_axis_world.dot(hinge_world) >= 0.0 {
-                            angle
-                        } else {
-                            -angle
-                        };
-
-                        if signed_angle < *min_angle {
-                            let correction = hinge_world * (*min_angle - signed_angle) * (beta / dt);
-                            if let Some(v_b) = vels.get_mut(joint.entity_b) {
-                                v_b.angular += correction;
-                            }
-                        } else if signed_angle > *max_angle {
-                            let correction = hinge_world * (signed_angle - *max_angle) * (beta / dt);
-                            if let Some(v_b) = vels.get_mut(joint.entity_b) {
-                                v_b.angular -= correction;
-                            }
-                        }
+                    
+                    let rel_ang_n = (*vb_ang - *va_ang).dot(constraint_axis);
+                    let bias_n = error * (beta / dt);
+                    
+                    let ia = apply_inv_inertia(constraint_axis, inv_inertia_a, rot_a);
+                    let ib = apply_inv_inertia(constraint_axis, inv_inertia_b, rot_b);
+                    let eff_ang = ia.dot(constraint_axis) + ib.dot(constraint_axis);
+                    
+                    // Debug kaldırılarak temizlendi
+                    
+                    if eff_ang > 1e-8 {
+                        let lambda_ang = -(rel_ang_n + bias_n) / eff_ang;
+                        let ang_impulse = constraint_axis * lambda_ang;
+                        *va_ang -= apply_inv_inertia(ang_impulse, inv_inertia_a, rot_a);
+                        *vb_ang += apply_inv_inertia(ang_impulse, inv_inertia_b, rot_b);
                     }
                 }
             }
         }
     }
+}
 
-    // === POSITION PROJECTION PASS ===
-    // Velocity solver sonrası, kalan konumsal hatayı (drift) doğrudan Transform'a uygula.
-    // Bu, Baumgarte stabilization'ın yakınsayamadığı büyük hataları düzeltir.
-    // FIX #16: Yukarıda zaten mut olarak aldığımız `transforms` kullanılmaya devam ediyor.
+/// Pozisyonların son düzeltmesi. Island solver bittikten sonra çalıştırılır.
+pub fn solve_joint_position(
+    joint: &Joint,
+    jb: &JointBodies,
+    pos_a_mut: &mut Vec3,
+    pos_b_mut: &mut Vec3,
+) {
+    const POSITION_CORRECTION_FACTOR: f32 = 0.8;
+    const POSITION_SLOP: f32 = 0.001;
 
+    let pos_a = jb.pos_a;
+    let pos_b = jb.pos_b;
+    let inv_mass_a = jb.inv_mass_a;
+    let inv_mass_b = jb.inv_mass_b;
+    let total_inv_mass = jb.total_inv_mass;
+    if total_inv_mass == 0.0 {
+        return;
+    }
 
-    const POSITION_CORRECTION_FACTOR: f32 = 0.8; // %80 düzeltme (overshooting koruması)
-    const POSITION_SLOP: f32 = 0.001; // 1mm'den küçük hataları yoksay
-
-    for (_, joint) in &joint_world.joints {
-        let Some(JointBodies {
-            pos_a, pos_b, inv_mass_a, inv_mass_b, total_inv_mass, ..
-        }) = JointBodies::resolve(joint, &transforms, &rbs) else { continue };
-
-        match &joint.kind {
-            JointKind::BallSocket | JointKind::Fixed { .. } | JointKind::Hinge { .. } => {
-                let error = pos_b - pos_a;
-                let error_len = error.length();
-                if error_len > POSITION_SLOP {
-                    let correction = error * (POSITION_CORRECTION_FACTOR / total_inv_mass);
-                    if let Some(t_a) = transforms.get_mut(joint.entity_a) {
-                        t_a.position += correction * inv_mass_a;
-                        // Matrix'i güncelle — aynı karedeki sonraki okumalar stale kalmasın
-                        t_a.update_local_matrix();
-                    }
-                    if let Some(t_b) = transforms.get_mut(joint.entity_b) {
-                        t_b.position -= correction * inv_mass_b;
-                        t_b.update_local_matrix();
-                    }
-                }
+    match &joint.kind {
+        JointKind::BallSocket | JointKind::Fixed { .. } | JointKind::Hinge { .. } => {
+            let error = pos_b - pos_a;
+            let error_len = error.length();
+            if error_len > POSITION_SLOP {
+                let correction = error * (POSITION_CORRECTION_FACTOR / total_inv_mass);
+                *pos_a_mut += correction * inv_mass_a;
+                *pos_b_mut -= correction * inv_mass_b;
             }
-            JointKind::Distance { length } => {
-                let diff = pos_b - pos_a;
-                let current_len = diff.length();
-                if current_len < 0.0001 {
-                    continue;
-                }
+        }
+        JointKind::Distance { length } => {
+            let diff = pos_b - pos_a;
+            let current_len = diff.length();
+            if current_len >= 0.0001 {
                 let dir = diff / current_len;
                 let error = current_len - length;
                 if error.abs() > POSITION_SLOP {
                     let correction = dir * (error * POSITION_CORRECTION_FACTOR / total_inv_mass);
-                    if let Some(t_a) = transforms.get_mut(joint.entity_a) {
-                        t_a.position += correction * inv_mass_a;
-                        t_a.update_local_matrix();
-                    }
-                    if let Some(t_b) = transforms.get_mut(joint.entity_b) {
-                        t_b.position -= correction * inv_mass_b;
-                        t_b.update_local_matrix();
-                    }
+                    *pos_a_mut += correction * inv_mass_a;
+                    *pos_b_mut -= correction * inv_mass_b;
                 }
             }
-            JointKind::Spring { .. } => {
-                // Spring'ler esnek bağlantı — pozisyon düzeltmesi yapılmaz
-            }
         }
+        JointKind::Spring { .. } => {}
     }
 }

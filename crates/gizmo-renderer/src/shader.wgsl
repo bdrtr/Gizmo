@@ -1,6 +1,8 @@
 struct LightData {
-    position: vec4<f32>,
-    color: vec4<f32>,
+    position:  vec4<f32>,  // xyz=pos, w=intensity
+    color:     vec4<f32>,  // rgb=color, a=radius
+    direction: vec4<f32>,  // xyz=dir (spot/directional), w=inner_cutoff_cos
+    params:    vec4<f32>,  // x=outer_cutoff_cos, y=light_type (0=point,1=spot,2=dir)
 };
 
 // Inverse of a 3x3 matrix for correct normal transformation under non-uniform scale
@@ -241,17 +243,45 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         total_specular += f0 * spec * (1.0 - min_roughness) * sun_color * intensity * shadow_visibility;
     }
 
-    // --- 2. Point Lights ---
+    // --- 2. Dynamic Lights (Point / Spot / Directional) ---
     for (var i = 0u; i < scene.num_lights; i++) {
         let light = scene.lights[i];
-        let L = normalize(light.position.xyz - in.world_position);
+        let light_type = u32(light.params.y);
+        let intensity = light.position.w;
+        
+        var L: vec3<f32>;
+        var attenuation: f32 = 1.0;
+
+        if (light_type == 2u) {
+            // --- Directional Light ---
+            L = normalize(-light.direction.xyz);
+            attenuation = 1.0;
+        } else {
+            // --- Point & Spot: distance-based attenuation ---
+            let to_light = light.position.xyz - in.world_position;
+            let distance = length(to_light);
+            let radius = max(light.color.a, 0.001);
+            L = normalize(to_light);
+            // Smooth inverse-square falloff with radius cutoff
+            let d_over_r = distance / radius;
+            attenuation = clamp(1.0 - d_over_r * d_over_r * d_over_r * d_over_r, 0.0, 1.0);
+            attenuation = (attenuation * attenuation) / (distance * distance + 1.0);
+
+            if (light_type == 1u) {
+                // --- Spot cone attenuation ---
+                let spot_dir = normalize(light.direction.xyz);
+                let cos_angle = dot(-L, spot_dir);
+                let inner_cos = light.direction.w;
+                let outer_cos = light.params.x;
+                let epsilon = max(inner_cos - outer_cos, 0.001);
+                let spot_factor = clamp((cos_angle - outer_cos) / epsilon, 0.0, 1.0);
+                attenuation *= spot_factor * spot_factor; // Smooth edge
+            }
+        }
+
         let diff = max(dot(N, L), 0.0);
         let reflect_dir = reflect(-L, N);
         let spec = pow(max(dot(view_dir, reflect_dir), 0.0), shininess);
-        
-        let distance = length(light.position.xyz - in.world_position);
-        let attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * (distance * distance));
-        let intensity = light.position.w;
 
         total_diffuse += base_color * (1.0 - metallic) * diff * light.color.rgb * attenuation * intensity;
         total_specular += f0 * spec * (1.0 - min_roughness) * light.color.rgb * attenuation * intensity;

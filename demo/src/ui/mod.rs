@@ -68,8 +68,8 @@ fn render_devtools(ctx: &egui::Context, state: &mut GameState, world: &World) {
 
             let entity_count = world.entity_count();
             let draw_calls = world
-                .query_ref::<gizmo::renderer::components::MeshRenderer>()
-                .map(|q| q.s1.dense.len())
+                .borrow::<gizmo::renderer::components::MeshRenderer>()
+                .map(|q| q.dense.len())
                 .unwrap_or(0);
 
             ui.horizontal(|ui| {

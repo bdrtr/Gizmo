@@ -9,14 +9,18 @@
 use gizmo_core::World;
 use gizmo_math::{Quat, Vec3};
 use gizmo_physics::components::{RigidBody, Transform, Velocity};
-use gizmo_physics::constraints::{solve_constraints, Joint, JointWorld};
+use gizmo_physics::constraints::{Joint, JointWorld};
 
 const DT: f32 = 1.0 / 60.0;
 const ITERS: usize = 60; // 1 saniyelik simülasyon
 
 fn make_world() -> World {
     World::new()
-}
+    
+    
+    
+    
+    }
 
 /// Yardımcı: entity oluştur ve tüm bileşenleri ekle.
 fn spawn_body(
@@ -34,6 +38,7 @@ fn spawn_body(
         linear: Vec3::ZERO,
         angular: ang_vel,
     });
+    world.add_component(e, gizmo_physics::Collider::new_sphere(0.5));
     e.id()
 }
 
@@ -57,7 +62,7 @@ fn test_hinge_free_rotation() {
     ));
 
     for _ in 0..ITERS {
-        solve_constraints(&jw, &world, DT);
+        gizmo_physics::system::physics_collision_system(&mut world, DT);
     }
 
     let v_b = world.borrow::<Velocity>().unwrap().get(b).unwrap().clone();
@@ -106,9 +111,13 @@ fn test_hinge_limit_min_clamp() {
     ));
 
     // 30 frame ile limit aşımını test et
+    world.insert_resource(jw);
+    // 30 frame ile limit aşımını test et
     for _ in 0..30 {
-        solve_constraints(&jw, &world, DT);
+        gizmo_physics::system::physics_collision_system(&mut world, DT);
         gizmo_physics::physics_movement_system(&world, DT);
+        
+        
     }
 
     // B'nin eklem angüler hızı negatif Y'de frenlemiş olmalı
@@ -141,8 +150,9 @@ fn test_hinge_limit_max_clamp() {
         0.5_f32,
     ));
 
+    world.insert_resource(jw);
     for _ in 0..30 {
-        solve_constraints(&jw, &world, DT);
+        gizmo_physics::system::physics_collision_system(&mut world, DT);
         gizmo_physics::physics_movement_system(&world, DT);
     }
 
@@ -188,8 +198,9 @@ fn test_hinge_axis_worldspace_after_rotation() {
     ));
 
     // 20 frame çalıştır — limit clamping doğru çalışıyorsa crash/NaN olmaz
+    world.insert_resource(jw);
     for _ in 0..20 {
-        solve_constraints(&jw, &world, DT);
+        gizmo_physics::system::physics_collision_system(&mut world, DT);
         gizmo_physics::physics_movement_system(&world, DT);
     }
 
@@ -233,7 +244,7 @@ fn test_hinge_perpendicular_axes_no_nan() {
     ));
 
     for _ in 0..ITERS {
-        solve_constraints(&jw, &world, DT);
+        gizmo_physics::system::physics_collision_system(&mut world, DT);
     }
 
     let v_b = world.borrow::<Velocity>().unwrap().get(b).unwrap().clone();

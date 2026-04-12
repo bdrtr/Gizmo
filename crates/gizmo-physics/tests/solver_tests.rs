@@ -1,10 +1,11 @@
 use gizmo_core::World;
 use gizmo_math::{Quat, Vec3};
 use gizmo_physics::components::{RigidBody, Transform, Velocity};
-use gizmo_physics::constraints::{solve_constraints, Joint, JointKind, JointWorld};
+use gizmo_physics::constraints::{Joint, JointKind, JointWorld};
 
 fn setup_world() -> World {
-    World::new()
+    let mut w = World::new();
+    w
 }
 
 #[test]
@@ -18,6 +19,7 @@ fn test_fixed_joint_pull() {
     let rb_a = RigidBody::new(1000.0, 0.0, 0.5, false);
     world.add_component(entity_a, rb_a);
     world.add_component(entity_a, Velocity::new(Vec3::ZERO));
+    world.add_component(entity_a, gizmo_physics::Collider::new_sphere(0.5));
 
     let entity_b = world.spawn();
     world.add_component(entity_b, Transform::new(Vec3::new(2.0, 0.0, 0.0)));
@@ -25,6 +27,7 @@ fn test_fixed_joint_pull() {
     world.add_component(entity_b, rb_b);
     let vel_b = Velocity::new(Vec3::new(100.0, 0.0, 0.0));
     world.add_component(entity_b, vel_b);
+    world.add_component(entity_b, gizmo_physics::Collider::new_sphere(0.5));
 
     // A ve B'yi Fixed Joint ile bağla
     let joint = Joint {
@@ -45,7 +48,8 @@ fn test_fixed_joint_pull() {
     // Hızın pozisyona dönüşmesi ve constraint'in onu geri çekmesi için movement system çalışmalı
     gizmo_physics::physics_apply_forces_system(&world, 0.016);
     gizmo_physics::physics_movement_system(&world, 0.016);
-    solve_constraints(&joint_world, &world, 0.016);
+    world.insert_resource(joint_world);
+    gizmo_physics::system::physics_collision_system(&mut world, 0.016);
 
     let v_a = world
         .borrow::<Velocity>()
