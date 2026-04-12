@@ -809,6 +809,23 @@ impl AssetManager {
         Ok(bg)
     }
 
+    /// Cache'i zorla silerek bir dokunun diskten tekrar yüklenmesini ve Bind Group'un güncellenmesini sağlar
+    pub fn reload_material_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layout: &wgpu::BindGroupLayout,
+        path: &str,
+    ) -> Result<Arc<wgpu::BindGroup>, String> {
+        let canonical = std::path::Path::new(path)
+            .canonicalize()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| path.to_string());
+        
+        self.texture_cache.remove(&canonical);
+        self.load_material_texture(device, queue, layout, path)
+    }
+
     /// Dümdüz 1x1 beyaz (katı) bir kaplama üretir. Doku içermeyen materyallerin varsayılan kaplamasıdır.
     pub fn create_white_texture(
         &mut self,
@@ -1066,21 +1083,28 @@ impl AssetManager {
                 if let Some(inputs) = reader.read_inputs() {
                     let times: Vec<f32> = inputs.collect();
 
-                    if let Some(outputs) = reader.read_outputs() {
-                        match outputs {
-                            gltf::animation::util::ReadOutputs::Translations(tr) => {
-                                let mut kfs = Vec::new();
-                                for (time, val) in times.iter().zip(tr) {
-                                    kfs.push(Keyframe {
-                                        time: *time,
-                                        value: Vec3::new(val[0], val[1], val[2]),
+                        let interp_mode = match channel.sampler().interpolation() {
+                            gltf::animation::Interpolation::Step => crate::animation::InterpolationMode::Step,
+                            gltf::animation::Interpolation::CubicSpline => crate::animation::InterpolationMode::CubicSpline,
+                            _ => crate::animation::InterpolationMode::Linear,
+                        };
+
+                        if let Some(outputs) = reader.read_outputs() {
+                            match outputs {
+                                gltf::animation::util::ReadOutputs::Translations(tr) => {
+                                    let mut kfs = Vec::new();
+                                    for (time, val) in times.iter().zip(tr) {
+                                        kfs.push(Keyframe {
+                                            time: *time,
+                                            value: Vec3::new(val[0], val[1], val[2]),
+                                        });
+                                    }
+                                    transl.push(Track {
+                                        target_node,
+                                        interpolation: interp_mode,
+                                        keyframes: kfs,
                                     });
                                 }
-                                transl.push(Track {
-                                    target_node,
-                                    keyframes: kfs,
-                                });
-                            }
                             gltf::animation::util::ReadOutputs::Rotations(rt) => {
                                 let mut kfs = Vec::new();
                                 for (time, val) in times.iter().zip(rt.into_f32()) {
@@ -1089,10 +1113,11 @@ impl AssetManager {
                                         value: Quat::from_xyzw(val[0], val[1], val[2], val[3]),
                                     });
                                 }
-                                rot.push(Track {
-                                    target_node,
-                                    keyframes: kfs,
-                                });
+                                    rot.push(Track {
+                                        target_node,
+                                        interpolation: interp_mode,
+                                        keyframes: kfs,
+                                    });
                             }
                             gltf::animation::util::ReadOutputs::Scales(sc) => {
                                 let mut kfs = Vec::new();
@@ -1102,10 +1127,11 @@ impl AssetManager {
                                         value: Vec3::new(val[0], val[1], val[2]),
                                     });
                                 }
-                                scl.push(Track {
-                                    target_node,
-                                    keyframes: kfs,
-                                });
+                                    scl.push(Track {
+                                        target_node,
+                                        interpolation: interp_mode,
+                                        keyframes: kfs,
+                                    });
                             }
                             _ => {} // Morph targets vb. goz ardi edildi
                         }

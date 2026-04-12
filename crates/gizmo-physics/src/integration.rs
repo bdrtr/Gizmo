@@ -36,11 +36,14 @@ fn physics_apply_forces_system_impl(world: &World, dt: f32) {
                 if let Some(v) = vel_storage.get_mut(entity) {
                     if rb.mass > 0.0 {
                         // Lineer ve açısal hızı AYRI AYRI değerlendir:
-                        // Bunlar farklı birimler (m/s vs rad/s) — toplayıp eşik ile karşılaştırmak
-                        // boyutsel olarak yanlış. Her ekseni kendi eşiğiyle kontrol et.
                         let lin_sq = v.linear.length_squared();
                         let ang_sq = v.angular.length_squared();
-                        let is_still = lin_sq < SLEEP_LINEAR_SQ && ang_sq < SLEEP_ANGULAR_SQ;
+                        
+                        // Rolling average: Çok ufak dt ve sönümleme katsayısı kullanılarak titreşim (jitter) filtrelemesi
+                        rb.avg_linear_sq = rb.avg_linear_sq * 0.9 + lin_sq * 0.1;
+                        rb.avg_angular_sq = rb.avg_angular_sq * 0.9 + ang_sq * 0.1;
+
+                        let is_still = rb.avg_linear_sq < SLEEP_LINEAR_SQ && rb.avg_angular_sq < SLEEP_ANGULAR_SQ;
 
                         if is_still {
                             rb.sleep_timer += dt;

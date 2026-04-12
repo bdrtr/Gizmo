@@ -181,7 +181,7 @@ pub fn spawn_gltf_map(
 
 pub fn setup_headless_scene(world: &mut World) -> crate::state::GameState {
     world.insert_resource(gizmo::core::input::ActionMap::new());
-    world.insert_resource(gizmo::physics::components::PhysicsConfig { ground_y: -0.5 });
+    world.insert_resource(gizmo::physics::components::PhysicsConfig { ground_y: -0.5, ..Default::default() });
     world.insert_resource(gizmo::physics::JointWorld::new());
     world.insert_resource(gizmo::physics::system::PhysicsSolverState::new());
 

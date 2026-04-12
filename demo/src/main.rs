@@ -140,6 +140,36 @@ fn main() {
                 }
             }
 
+            // Texture reload isteği
+            let mut texture_reloads = Vec::new();
+            if let Some(mut events) = world
+                .get_resource_mut::<gizmo::core::event::Events<crate::state::TextureLoadEvent>>()
+            {
+                texture_reloads.extend(events.drain());
+            }
+
+            if !texture_reloads.is_empty() {
+                if let Some(mut asset_mgr) = world.get_resource_mut::<gizmo::renderer::asset::AssetManager>() {
+                    for load_ev in texture_reloads {
+                        let path = &load_ev.path;
+                        println!("[Demo Engine] Texture GPU'ya yeniden yukleniyor: {}", path);
+                        
+                        if let Ok(new_bg) = asset_mgr.reload_material_texture(
+                            &renderer.device,
+                            &renderer.queue,
+                            &renderer.scene.texture_bind_group_layout,
+                            path,
+                        ) {
+                            if let Some(mut materials) = world.borrow_mut::<gizmo::renderer::components::Material>() {
+                                if let Some(mat) = materials.get_mut(load_ev.entity_id) {
+                                    mat.bind_group = new_bg;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             render_pipeline::execute_render_pipeline(
                 world, state, encoder, view, renderer, light_time,
             );

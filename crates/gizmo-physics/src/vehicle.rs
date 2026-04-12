@@ -98,14 +98,14 @@ use crate::shape::{Collider, ColliderShape};
 use gizmo_core::World;
 pub fn physics_vehicle_system(world: &World, dt: f32) {
     // Statik objeleri topla (Raycast testleri için)
-    enum StaticCol {
+    enum StaticCol<'a> {
         Aabb {
             position: Vec3,
             half_extents: Vec3,
         },
         HeightField {
             position: Vec3,
-            heights: std::sync::Arc<Vec<f32>>,
+            heights: &'a [f32],
             segments_x: u32,
             segments_z: u32,
             width: f32,
@@ -149,7 +149,7 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                             } => {
                                 return Some(StaticCol::HeightField {
                                     position: t.position,
-                                    heights: std::sync::Arc::new(heights.clone()),
+                                    heights: heights.as_slice(),
                                     segments_x: *segments_x,
                                     segments_z: *segments_z,
                                     width: *width * t.scale.x,

@@ -160,10 +160,19 @@ impl Joint {
     }
 
     /// Sabit bağlantı (iki obje yapışık)
-    pub fn fixed(entity_a: u32, entity_b: u32, anchor_a: Vec3, anchor_b: Vec3) -> Self {
+    pub fn fixed(
+        entity_a: u32, 
+        entity_b: u32, 
+        anchor_a: Vec3, 
+        anchor_b: Vec3,
+        rot_a: gizmo_math::Quat,
+        rot_b: gizmo_math::Quat
+    ) -> Self {
+        // FIX #15: Anlık rotasyon farkını kaydet
+        let relative_rotation = rot_a.inverse() * rot_b;
         Self {
             kind: JointKind::Fixed {
-                relative_rotation: gizmo_math::Quat::IDENTITY,
+                relative_rotation,
             },
             entity_a,
             entity_b,
@@ -339,7 +348,8 @@ pub fn solve_constraints(joint_world: &JointWorld, world: &gizmo_core::World, dt
     let iterations = 15;
 
     // Tüm borrow'ları DÖNGÜ DIŞINDA bir kez al — RefCell overhead ortadan kalkar
-    let transforms = match world.borrow::<crate::components::Transform>() {
+    // FIX #16: Transform da dahil tüm bileşenler en başta mut olarak alınır.
+    let mut transforms = match world.borrow_mut::<crate::components::Transform>() {
         Some(t) => t,
         None => return,
     };
@@ -689,18 +699,8 @@ pub fn solve_constraints(joint_world: &JointWorld, world: &gizmo_core::World, dt
     // === POSITION PROJECTION PASS ===
     // Velocity solver sonrası, kalan konumsal hatayı (drift) doğrudan Transform'a uygula.
     // Bu, Baumgarte stabilization'ın yakınsayamadığı büyük hataları düzeltir.
-    drop(vels); // velocity borrow'unu bırak
-    drop(rbs); // rbs borrow'unu bırak
-    drop(transforms); // transforms borrow'unu bırak
+    // FIX #16: Yukarıda zaten mut olarak aldığımız `transforms` kullanılmaya devam ediyor.
 
-    let mut transforms = match world.borrow_mut::<crate::components::Transform>() {
-        Some(t) => t,
-        None => return,
-    };
-    let rbs = match world.borrow::<crate::components::RigidBody>() {
-        Some(r) => r,
-        None => return,
-    };
 
     const POSITION_CORRECTION_FACTOR: f32 = 0.8; // %80 düzeltme (overshooting koruması)
     const POSITION_SLOP: f32 = 0.001; // 1mm'den küçük hataları yoksay

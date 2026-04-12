@@ -176,9 +176,17 @@ pub(crate) fn audio_update_system(world: &mut World, state: &mut GameState) {
                 if let Some(audio_src) = audio_sources.get_mut(e) {
                     let curr_pos = transforms.get(e).map_or(Vec3::ZERO, |t| t.position);
 
+                    // Fake pos to isolate Panning (fixed distance = 1.0)
+                    let dir = if curr_pos == cam_pos {
+                        Vec3::new(0.0, 0.0, 1.0)
+                    } else {
+                        (curr_pos - cam_pos).normalize()
+                    };
+                    let fake_pos = cam_pos + dir * 1.0;
+
                     // Henüz ses başlamamışsa (ilk kare veya yeniden tetikleme)
                     if audio_src._internal_sink_id.is_none() {
-                        let emitter = [curr_pos.x, curr_pos.y, curr_pos.z];
+                        let emitter = [fake_pos.x, fake_pos.y, fake_pos.z];
                         let r_ear = [right_ear.x, right_ear.y, right_ear.z];
                         let l_ear = [left_ear.x, left_ear.y, left_ear.z];
 
@@ -207,7 +215,7 @@ pub(crate) fn audio_update_system(world: &mut World, state: &mut GameState) {
                             if audio_src.is_3d {
                                 am.update_spatial_sink(
                                     sid,
-                                    [curr_pos.x, curr_pos.y, curr_pos.z],
+                                    [fake_pos.x, fake_pos.y, fake_pos.z],
                                     [right_ear.x, right_ear.y, right_ear.z],
                                     [left_ear.x, left_ear.y, left_ear.z],
                                 );

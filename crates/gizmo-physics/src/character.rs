@@ -288,15 +288,22 @@ fn resolve_capsule_collisions(
             correction -= normal * depth;
 
             // Zemin tespiti: normal yukarı bakıyorsa (Y > 0.7 ≈ 45°) yerdeyiz
-            if normal.y < -0.7 {
-                // Normal A'dan B'ye bakıyor, karakter A olduğu için ters
+            let n_y = normal.y;
+            if n_y < -0.7 {
                 is_grounded = true;
-                ground_normal = normal * -1.0;
-            } else if normal.y > 0.7 {
+                ground_normal += normal * -1.0;
+            } else if n_y > 0.7 {
                 is_grounded = true;
-                ground_normal = normal;
+                ground_normal += normal;
             }
         }
+    }
+
+    if is_grounded && ground_normal.length_squared() > 0.001 {
+        // Fix #22: Çoklu objelerden gelen normalleri toplayıp ortalamasını (bileşkeyi) alıyoruz
+        ground_normal = ground_normal.normalize();
+    } else {
+        ground_normal = Vec3::new(0.0, 1.0, 0.0);
     }
 
     (correction, ground_normal, is_grounded)

@@ -81,14 +81,37 @@ pub struct RigidBody {
     pub local_inertia: Vec3,
     pub inverse_inertia: Vec3,
 
-    // Island Sleeping (Uyku Süreci)
+    // Island Sleeping (Uyku Süreci) - Fix #12: Rolling Average ile stabil uyku
     pub is_sleeping: bool,
     #[serde(skip)]
     pub sleep_timer: f32,
+    #[serde(skip)]
+    pub avg_linear_sq: f32, 
+    #[serde(skip)]
+    pub avg_angular_sq: f32,
+    
     /// Continuous Collision Detection aktif mi? (hızlı objeler için)
     #[serde(default)]
     pub ccd_enabled: bool,
+
+    // ─── Çarpışma Katmanı (Collision Layer/Mask) — Fix #35 ───────────────
+    //
+    // Her bit bir katmanı temsil eder (0-31).
+    // A ile B çarpışabilir ancak ve ancak:
+    //   (a.collision_layer & b.collision_mask) != 0
+    //   (b.collision_layer & a.collision_mask) != 0
+    //
+    // Varsayılan: layer=1, mask=0xFFFF_FFFF (tüm katmanlarla çarpışır)
+    /// Bu objenin ait olduğu katman bitleri
+    #[serde(default = "default_collision_layer")]
+    pub collision_layer: u32,
+    /// Bu objenin çarpışabileceği katman bitleri
+    #[serde(default = "default_collision_mask")]
+    pub collision_mask: u32,
 }
+
+fn default_collision_layer() -> u32 { 1 }
+fn default_collision_mask()  -> u32 { 0xFFFF_FFFF }
 
 impl RigidBody {
     /// Yeni rigid body oluştur. ⚠️ Varsayılan 1x1x1 küp eylemsizliği hesaplanır!
@@ -104,10 +127,14 @@ impl RigidBody {
             inverse_inertia: Vec3::ZERO,
             is_sleeping: false,
             sleep_timer: 0.0,
+            avg_linear_sq: 0.0,
+            avg_angular_sq: 0.0,
             ccd_enabled: false,
+            collision_layer: 1,
+            collision_mask: 0xFFFF_FFFF,
         };
         if mass > 0.0 {
-            rb.calculate_box_inertia(1.0, 1.0, 1.0); // Varsayılan 1x1x1
+            rb.calculate_box_inertia(1.0, 1.0, 1.0);
         }
         rb
     }
@@ -122,7 +149,11 @@ impl RigidBody {
             inverse_inertia: Vec3::ZERO,
             is_sleeping: true,
             sleep_timer: 0.0,
+            avg_linear_sq: 0.0,
+            avg_angular_sq: 0.0,
             ccd_enabled: false,
+            collision_layer: 1,
+            collision_mask: 0xFFFF_FFFF,
         }
     }
 
@@ -212,10 +243,25 @@ impl RigidBody {
 pub struct PhysicsConfig {
     /// Fallback zemin yüksekliği (collider yoksa) — varsayılan: -1.0
     pub ground_y: f32,
+    /// Lineer hız üst limiti (m/s) — Fix #5. Varsayılan: 200.0
+    pub max_linear_velocity: f32,
+    /// Açısal hız üst limiti (rad/s) — Fix #5. Varsayılan: 100.0
+    pub max_angular_velocity: f32,
+    /// Çift başına maksimum warm-start cache girişi — Fix #6. Varsayılan: 4
+    pub max_contact_points_per_pair: usize,
+    /// Collision event'leri throttle: aynı çift için minimum frame aralığı
+    /// 0 = devre dışı (tüm eventler fırlatılır). Fix #31. Varsayılan: 4
+    pub collision_event_throttle_frames: u32,
 }
 
 impl Default for PhysicsConfig {
     fn default() -> Self {
-        Self { ground_y: -1.0 }
+        Self {
+            ground_y:                       -1.0,
+            max_linear_velocity:            200.0,
+            max_angular_velocity:           100.0,
+            max_contact_points_per_pair:    4,
+            collision_event_throttle_frames: 4,
+        }
     }
 }

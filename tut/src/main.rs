@@ -70,7 +70,7 @@ fn main() {
         .set_setup(|world, renderer| {
             world.insert_resource(PhysicsSolverState::new());
             world.insert_resource(JointWorld::new());
-            world.insert_resource(PhysicsConfig { ground_y: -2.0 });
+            world.insert_resource(PhysicsConfig { ground_y: -2.0, ..Default::default() });
 
             let mut cmd = Commands::new(world, renderer);
 
