@@ -3,7 +3,7 @@ use crate::integration::apply_inv_inertia;
 use crate::shape::Collider;
 use crate::vehicle::VehicleController;
 use gizmo_core::World;
-use gizmo_math::Vec3;
+use gizmo_math::{Mat3, Vec3};
 use std::collections::HashMap;
 
 // ─── Veri Yapıları ────────────────────────────────────────────────────────────
@@ -33,8 +33,8 @@ struct StoredContact {
     normal: Vec3,
     inv_mass_a: f32,
     inv_mass_b: f32,
-    inv_inertia_a: Vec3,
-    inv_inertia_b: Vec3,
+    inv_inertia_a: Mat3,
+    inv_inertia_b: Mat3,
     restitution: f32,
     friction: f32,
     penetration: f32,
@@ -121,29 +121,38 @@ fn ensure_node(parent: &mut HashMap<u32, u32>, rank: &mut HashMap<u32, u8>, i: u
     rank.entry(i).or_insert(0);
 }
 
-/// Kökü döndürür — iki geçişli tam path compression uygular.
+/// Kökü döndürür — **tam path compression** (iteratif, ek `Vec` yok).
 ///
-/// 1. Geçiş: root'a kadar olan zinciri `path` vektörüne topla.
-/// 2. Geçiş: zincirdeki her node'u doğrudan root'a bağla.
+/// 1. Geçiş: `i`'den üst zinciri izleyerek kökü bul.
+/// 2. Geçiş: aynı zinciri yeniden yürüyüp her düğümün `parent`'ını doğrudan köke yaz.
 ///
-/// Bir sonraki find_root çağrısında bu node'lar O(1) ile root'a ulaşır.
+/// Böylece uzun constraint zincirlerinde tekrarlı `find_root` ortalama ~α(N) kalır.
 fn find_root(parent: &mut HashMap<u32, u32>, i: u32) -> u32 {
-    let mut path = Vec::new();
-    let mut cur = i;
+    // 1) Kökü bul
+    let mut root = i;
     loop {
-        let p = match parent.get(&cur) {
-            Some(&p) => p,
-            None => cur,
+        let p = match parent.get(&root).copied() {
+            Some(p) => p,
+            None => {
+                // Haritada yoksa kendi kökü (ensure_node atlanmış statik vb.)
+                parent.insert(root, root);
+                break;
+            }
         };
-        if p == cur {
+        if p == root {
             break;
         }
-        path.push(cur);
-        cur = p;
+        root = p;
     }
-    let root = cur;
-    for node in path {
-        parent.insert(node, root);
+    // 2) Path compression: i → … → root zincirindeki her düğümü root'a bağla
+    let mut cur = i;
+    while cur != root {
+        let next = match parent.get(&cur).copied() {
+            Some(n) if n != cur => n,
+            _ => break,
+        };
+        parent.insert(cur, root);
+        cur = next;
     }
     root
 }
@@ -181,8 +190,10 @@ fn union_nodes(
 /// FAZ 1 — Broad-Phase: Sweep & Prune (active-list, dinamik eksen seçimi)
 ///
 /// Her entity'nin dünya-uzayı AABB'sini hesaplar (CCD sweep dahil),
-/// varyans bazlı eksen seçimiyle sıralayıp aktif-liste geçişiyle
-/// olası çarpışma çiftlerini O(N log N + N·k) karmaşıklıkta döndürür.
+/// her karede **her eksen için tüm AABB uçları** (`min`/`max` köşe projeksiyonları)
+/// üzerinden varyans hesaplanır; en yüksek varyanslı eksende sıralama yapılır.
+/// (Yalnızca merkez varyansı, X'te ince ama Y/Z'te geniş düzenlerde zayıf kalabilir.)
+/// Aktif liste, seçilen eksende `max[j] < min[i]` ile güvenli biçimde budanır; çift testi tam 3B AABB.
 fn broad_phase(
     transforms: &gizmo_core::SparseSet<Transform>,
     colliders: &gizmo_core::SparseSet<Collider>,
@@ -298,26 +309,32 @@ fn broad_phase(
         return Vec::new();
     }
 
-    // Merkezlerin varyansından en geniş dağılım eksenini seç
-    let mut sum = Vec3::ZERO;
-    let mut sum_sq = Vec3::ZERO;
-    for iv in &intervals {
-        let center = (iv.min + iv.max) * 0.5;
-        sum += center;
-        sum_sq.x += center.x * center.x;
-        sum_sq.y += center.y * center.y;
-        sum_sq.z += center.z * center.z;
-    }
-    let count = intervals.len() as f32;
-    let mean = sum / count;
-    let variance = Vec3::new(
-        sum_sq.x / count - mean.x * mean.x,
-        sum_sq.y / count - mean.y * mean.y,
-        sum_sq.z / count - mean.z * mean.z,
-    );
-    let axis: u8 = if variance.y >= variance.x && variance.y >= variance.z {
+    // Eksen başına: o eksendeki tüm min/max uçları (2N örnek) üzerinden varyans.
+    // Böylece Y/Z'de geniş, X'te dar kutular da doğru eksende sıralanır.
+    let axis_endpoint_variance = |axis: u8| -> f32 {
+        let mut sum = 0.0f32;
+        let mut sum_sq = 0.0f32;
+        for iv in &intervals {
+            let (lo, hi) = match axis {
+                0 => (iv.min.x, iv.max.x),
+                1 => (iv.min.y, iv.max.y),
+                _ => (iv.min.z, iv.max.z),
+            };
+            sum += lo + hi;
+            sum_sq += lo * lo + hi * hi;
+        }
+        let count = (intervals.len() * 2) as f32;
+        let mean = sum / count;
+        (sum_sq / count - mean * mean).max(0.0)
+    };
+
+    let vx = axis_endpoint_variance(0);
+    let vy = axis_endpoint_variance(1);
+    let vz = axis_endpoint_variance(2);
+
+    let axis: u8 = if vy >= vx && vy >= vz {
         1
-    } else if variance.z >= variance.x && variance.z >= variance.y {
+    } else if vz >= vx && vz >= vy {
         2
     } else {
         0
@@ -362,162 +379,248 @@ fn broad_phase(
     pairs
 }
 
-/// FAZ 2 — Narrow-Phase: Her çarpışma çifti için GJK/EPA veya analitik test + CCD bisection.
-///
-/// Bağımsız hesaplamalar Rayon ile paralel çalışır; thread-safe immutable referanslar kullanır.
-/// Her çift için `DetectionResult` döndürür (temas noktaları + uyandırılacak entityler).
-fn detect_collisions(
-    collision_pairs: &[(u32, u32)],
-    transforms:  &gizmo_core::SparseSet<Transform>,
-    colliders:   &gizmo_core::SparseSet<Collider>,
+fn merge_detection_results(mut acc: DetectionResult, mut item: DetectionResult) -> DetectionResult {
+    if acc.contacts.is_empty() && acc.wake_entities.is_empty() {
+        return item;
+    }
+    if item.contacts.is_empty() && item.wake_entities.is_empty() {
+        return acc;
+    }
+    acc.contacts.append(&mut item.contacts);
+    acc.wake_entities.append(&mut item.wake_entities);
+    acc
+}
+
+fn detect_single_collision_pair(
+    ent_a: u32,
+    ent_b: u32,
+    transforms: &gizmo_core::SparseSet<Transform>,
+    colliders: &gizmo_core::SparseSet<Collider>,
     rigidbodies: &gizmo_core::SparseSet<RigidBody>,
-    velocities:  &gizmo_core::SparseSet<Velocity>,
+    velocities: &gizmo_core::SparseSet<Velocity>,
     vehicle_entities: &std::collections::HashSet<u32>,
     has_vehicles: bool,
     dt: f32,
-) -> DetectionResult {
+) -> Option<DetectionResult> {
     use crate::shape::ColliderShape;
-    use rayon::prelude::*;
 
-    let t_dense  = &transforms.dense;
+    let t_dense = &transforms.dense;
     let t_sparse = &transforms.sparse;
-    let c_dense  = &colliders.dense;
+    let c_dense = &colliders.dense;
     let c_sparse = &colliders.sparse;
     let rb_dense = &rigidbodies.dense;
     let rb_sparse = &rigidbodies.sparse;
-    let v_dense  = &velocities.dense;
+    let v_dense = &velocities.dense;
     let v_sparse = &velocities.sparse;
-    let v_set    = vehicle_entities;
+    let v_set = vehicle_entities;
+
+    let rb_a = rb_sparse.get(&ent_a).map(|&i| &rb_dense[i])?;
+    let rb_b = rb_sparse.get(&ent_b).map(|&i| &rb_dense[i])?;
+
+    if rb_a.data.mass == 0.0 && rb_b.data.mass == 0.0 {
+        return None;
+    }
+    let both_dynamic_sleeping = rb_a.data.mass > 0.0
+        && rb_b.data.mass > 0.0
+        && rb_a.data.is_sleeping
+        && rb_b.data.is_sleeping;
+    if both_dynamic_sleeping {
+        return None;
+    }
+    let layers_compatible = (rb_a.data.collision_layer & rb_b.data.collision_mask) != 0
+        && (rb_b.data.collision_layer & rb_a.data.collision_mask) != 0;
+    if !layers_compatible {
+        return None;
+    }
+    if has_vehicles
+        && ((v_set.contains(&ent_a) && rb_b.data.mass == 0.0)
+            || (v_set.contains(&ent_b) && rb_a.data.mass == 0.0))
+    {
+        return None;
+    }
+
+    let col_a = c_sparse.get(&ent_a).map(|&i| &c_dense[i])?;
+    let col_b = c_sparse.get(&ent_b).map(|&i| &c_dense[i])?;
+    let t_a = t_sparse.get(&ent_a).map(|&i| &t_dense[i])?;
+    let t_b = t_sparse.get(&ent_b).map(|&i| &t_dense[i])?;
+    let (pos_a, rot_a) = (t_a.data.position, t_a.data.rotation);
+    let (pos_b, rot_b) = (t_b.data.position, t_b.data.rotation);
+
+    let mut ccd_pos_a = None;
+    let mut ccd_pos_b = None;
+
+    let is_rot_a_identity =
+        rot_a.x.abs() < 0.001 && rot_a.y.abs() < 0.001 && rot_a.z.abs() < 0.001;
+    let is_rot_b_identity =
+        rot_b.x.abs() < 0.001 && rot_b.y.abs() < 0.001 && rot_b.z.abs() < 0.001;
+
+    let manifold = detect_pair(
+        &col_a.data.shape,
+        pos_a,
+        rot_a,
+        is_rot_a_identity,
+        &col_b.data.shape,
+        pos_b,
+        rot_b,
+        is_rot_b_identity,
+    );
+
+    let manifold = if !manifold.is_colliding && (rb_a.data.ccd_enabled || rb_b.data.ccd_enabled) {
+        let v_a_lin = v_sparse
+            .get(&ent_a)
+            .map(|&i| v_dense[i].data.linear)
+            .unwrap_or(Vec3::ZERO);
+        let v_b_lin = v_sparse
+            .get(&ent_b)
+            .map(|&i| v_dense[i].data.linear)
+            .unwrap_or(Vec3::ZERO);
+        let rel_v = v_b_lin - v_a_lin;
+
+        if rel_v.length() * dt > 0.1 {
+            ccd_bisect(
+                &col_a.data.shape,
+                pos_a,
+                rot_a,
+                &col_b.data.shape,
+                pos_b,
+                rot_b,
+                v_a_lin,
+                v_b_lin,
+                dt,
+                &mut ccd_pos_a,
+                &mut ccd_pos_b,
+            )
+        } else {
+            manifold
+        }
+    } else {
+        manifold
+    };
+
+    if !manifold.is_colliding || manifold.contact_points.is_empty() {
+        return None;
+    }
+
+    let inv_mass_a = if rb_a.data.mass == 0.0 {
+        0.0
+    } else {
+        1.0 / rb_a.data.mass
+    };
+    let inv_mass_b = if rb_b.data.mass == 0.0 {
+        0.0
+    } else {
+        1.0 / rb_b.data.mass
+    };
+
+    let mut wakes = Vec::new();
+    if rb_a.data.is_sleeping && rb_a.data.mass > 0.0 {
+        wakes.push(ent_a);
+    }
+    if rb_b.data.is_sleeping && rb_b.data.mass > 0.0 {
+        wakes.push(ent_b);
+    }
+
+    let mut result = DetectionResult {
+        contacts: Vec::new(),
+        wake_entities: wakes,
+    };
+
+    for (contact_point, pen) in &manifold.contact_points {
+        let mut r_a = *contact_point - pos_a;
+        let mut r_b = *contact_point - pos_b;
+        if let ColliderShape::Sphere(s) = &col_a.data.shape {
+            r_a = manifold.normal * s.radius;
+        }
+        if let ColliderShape::Sphere(s) = &col_b.data.shape {
+            r_b = manifold.normal * -s.radius;
+        }
+        result.contacts.push(StoredContact {
+            ent_a,
+            ent_b,
+            normal: manifold.normal,
+            inv_mass_a,
+            inv_mass_b,
+            inv_inertia_a: rb_a.data.inverse_inertia_local,
+            inv_inertia_b: rb_b.data.inverse_inertia_local,
+            restitution: rb_a.data.restitution.max(rb_b.data.restitution),
+            friction: (rb_a.data.friction * rb_b.data.friction).sqrt(),
+            penetration: *pen,
+            r_a,
+            r_b,
+            rot_a: t_a.data.rotation,
+            rot_b: t_b.data.rotation,
+            accumulated_j: 0.0,
+            accumulated_friction: Vec3::ZERO,
+            ccd_offset_a: ccd_pos_a.unwrap_or(Vec3::ZERO),
+            ccd_offset_b: ccd_pos_b.unwrap_or(Vec3::ZERO),
+            world_point: *contact_point,
+        });
+    }
+
+    Some(result)
+}
+
+/// FAZ 2 — Narrow-Phase: Her çarpışma çifti için GJK/EPA veya analitik test + CCD bisection.
+///
+/// `parallel_narrow_phase`: `true` ise Rayon (sıra birleştirmesi platforma göre değişebilir);
+/// tekrarlanabilir simülasyon için `PhysicsConfig::deterministic_simulation` ile `false` kullanılır.
+fn detect_collisions(
+    collision_pairs: &[(u32, u32)],
+    transforms: &gizmo_core::SparseSet<Transform>,
+    colliders: &gizmo_core::SparseSet<Collider>,
+    rigidbodies: &gizmo_core::SparseSet<RigidBody>,
+    velocities: &gizmo_core::SparseSet<Velocity>,
+    vehicle_entities: &std::collections::HashSet<u32>,
+    has_vehicles: bool,
+    dt: f32,
+    parallel_narrow_phase: bool,
+) -> DetectionResult {
+    if !parallel_narrow_phase {
+        let mut acc = DetectionResult {
+            contacts: Vec::new(),
+            wake_entities: Vec::new(),
+        };
+        for &(ent_a, ent_b) in collision_pairs {
+            if let Some(item) = detect_single_collision_pair(
+                ent_a,
+                ent_b,
+                transforms,
+                colliders,
+                rigidbodies,
+                velocities,
+                vehicle_entities,
+                has_vehicles,
+                dt,
+            ) {
+                acc = merge_detection_results(acc, item);
+            }
+        }
+        return acc;
+    }
+
+    use rayon::prelude::*;
 
     collision_pairs
         .par_iter()
         .filter_map(|&(ent_a, ent_b)| {
-            let rb_a = rb_sparse.get(&ent_a).map(|&i| &rb_dense[i])?;
-            let rb_b = rb_sparse.get(&ent_b).map(|&i| &rb_dense[i])?;
-
-            // İki statik obje asla etkileşemez
-            if rb_a.data.mass == 0.0 && rb_b.data.mass == 0.0 {
-                return None;
-            }
-            // İki dinamik uyuyan obje birbirini uyandıramaz
-            let both_dynamic_sleeping = rb_a.data.mass > 0.0
-                && rb_b.data.mass > 0.0
-                && rb_a.data.is_sleeping
-                && rb_b.data.is_sleeping;
-            if both_dynamic_sleeping {
-                return None;
-            }
-            // Collision layer/mask filtresi — Fix #35
-            // A ile B ancak kendi layer biti diğerinin mask'inde varsa çarpışır
-            let layers_compatible =
-                (rb_a.data.collision_layer & rb_b.data.collision_mask) != 0
-                && (rb_b.data.collision_layer & rb_a.data.collision_mask) != 0;
-            if !layers_compatible {
-                return None;
-            }
-            // Araç ↔ statik çarpışmasını filtrele (raycast süspansiyon bunu yönetir)
-            if has_vehicles
-                && ((v_set.contains(&ent_a) && rb_b.data.mass == 0.0)
-                    || (v_set.contains(&ent_b) && rb_a.data.mass == 0.0))
-            {
-                return None;
-            }
-
-            let col_a = c_sparse.get(&ent_a).map(|&i| &c_dense[i])?;
-            let col_b = c_sparse.get(&ent_b).map(|&i| &c_dense[i])?;
-            let t_a   = t_sparse.get(&ent_a).map(|&i| &t_dense[i])?;
-            let t_b   = t_sparse.get(&ent_b).map(|&i| &t_dense[i])?;
-            let (pos_a, rot_a) = (t_a.data.position, t_a.data.rotation);
-            let (pos_b, rot_b) = (t_b.data.position, t_b.data.rotation);
-
-            let mut ccd_pos_a = None;
-            let mut ccd_pos_b = None;
-
-            // Rotasyon kontrolü: AABB fast-path sadece eksen-hizalı kutular için güvenli
-            let is_rot_a_identity = rot_a.x.abs() < 0.001 && rot_a.y.abs() < 0.001 && rot_a.z.abs() < 0.001;
-            let is_rot_b_identity = rot_b.x.abs() < 0.001 && rot_b.y.abs() < 0.001 && rot_b.z.abs() < 0.001;
-
-            let manifold = detect_pair(
-                &col_a.data.shape, pos_a, rot_a, is_rot_a_identity,
-                &col_b.data.shape, pos_b, rot_b, is_rot_b_identity,
-            );
-
-            // CCD bisection — sadece hızlı/mermi objeler için
-            let manifold = if !manifold.is_colliding
-                && (rb_a.data.ccd_enabled || rb_b.data.ccd_enabled)
-            {
-                let v_a_lin = v_sparse.get(&ent_a).map(|&i| v_dense[i].data.linear).unwrap_or(Vec3::ZERO);
-                let v_b_lin = v_sparse.get(&ent_b).map(|&i| v_dense[i].data.linear).unwrap_or(Vec3::ZERO);
-                let rel_v = v_b_lin - v_a_lin;
-
-                if rel_v.length() * dt > 0.1 {
-                    ccd_bisect(
-                        &col_a.data.shape, pos_a, rot_a,
-                        &col_b.data.shape, pos_b, rot_b,
-                        v_a_lin, v_b_lin, rel_v, dt,
-                        &mut ccd_pos_a, &mut ccd_pos_b,
-                    )
-                } else {
-                    manifold
-                }
-            } else {
-                manifold
-            };
-
-            if !manifold.is_colliding || manifold.contact_points.is_empty() {
-                return None;
-            }
-
-            let inv_mass_a = if rb_a.data.mass == 0.0 { 0.0 } else { 1.0 / rb_a.data.mass };
-            let inv_mass_b = if rb_b.data.mass == 0.0 { 0.0 } else { 1.0 / rb_b.data.mass };
-
-            // Sadece zaten uyuyan dinamik objeleri uyandır
-            let mut wakes = Vec::new();
-            if rb_a.data.is_sleeping && rb_a.data.mass > 0.0 { wakes.push(ent_a); }
-            if rb_b.data.is_sleeping && rb_b.data.mass > 0.0 { wakes.push(ent_b); }
-
-            let mut result = DetectionResult { contacts: Vec::new(), wake_entities: wakes };
-
-            for (contact_point, pen) in &manifold.contact_points {
-                let mut r_a = *contact_point - pos_a;
-                let mut r_b = *contact_point - pos_b;
-                if let ColliderShape::Sphere(s) = &col_a.data.shape {
-                    r_a = manifold.normal * s.radius;
-                }
-                if let ColliderShape::Sphere(s) = &col_b.data.shape {
-                    r_b = manifold.normal * -s.radius;
-                }
-                result.contacts.push(StoredContact {
-                    ent_a, ent_b,
-                    normal: manifold.normal,
-                    inv_mass_a, inv_mass_b,
-                    inv_inertia_a: rb_a.data.inverse_inertia,
-                    inv_inertia_b: rb_b.data.inverse_inertia,
-                    restitution: rb_a.data.restitution.max(rb_b.data.restitution),
-                    friction: (rb_a.data.friction * rb_b.data.friction).sqrt(),
-                    penetration: *pen,
-                    r_a, r_b,
-                    rot_a: t_a.data.rotation,
-                    rot_b: t_b.data.rotation,
-                    accumulated_j: 0.0,
-                    accumulated_friction: Vec3::ZERO,
-                    ccd_offset_a: ccd_pos_a.unwrap_or(Vec3::ZERO),
-                    ccd_offset_b: ccd_pos_b.unwrap_or(Vec3::ZERO),
-                    world_point: *contact_point,
-                });
-            }
-
-            Some(result)
+            detect_single_collision_pair(
+                ent_a,
+                ent_b,
+                transforms,
+                colliders,
+                rigidbodies,
+                velocities,
+                vehicle_entities,
+                has_vehicles,
+                dt,
+            )
         })
         .reduce(
-            || DetectionResult { contacts: Vec::new(), wake_entities: Vec::new() },
-            |mut acc, mut item| {
-                if acc.contacts.is_empty() && acc.wake_entities.is_empty() { return item; }
-                if item.contacts.is_empty() && item.wake_entities.is_empty() { return acc; }
-                acc.contacts.append(&mut item.contacts);
-                acc.wake_entities.append(&mut item.wake_entities);
-                acc
-            }
+            || DetectionResult {
+                contacts: Vec::new(),
+                wake_entities: Vec::new(),
+            },
+            merge_detection_results,
         )
 }
 
@@ -595,14 +698,21 @@ fn detect_pair(
 ///
 /// Mermi hızındaki nesnelerin bir frame'de tünel geçmesini önler.
 /// `ccd_offset_a` / `ccd_offset_b` çıkışları, TOI anından itibaren pozisyon offsetidir.
+///
+/// Alt aralık `[t_low, t_mid]` için: A dünya konumunda `pos_a + v_a*t_low` (sabit), B aynı anda
+/// `pos_b + v_b*t_low`; bu alt süre boyunca **göreli** yer değiştirme `(v_b - v_a) * (t_mid - t_low)`.
+/// Yani süpürme vektörü her zaman **o aralığın başındaki** konumlara göre; `t=0` ile karıştırılmaz.
 fn ccd_bisect(
     shape_a: &crate::shape::ColliderShape, pos_a: Vec3, rot_a: gizmo_math::Quat,
     shape_b: &crate::shape::ColliderShape, pos_b: Vec3, rot_b: gizmo_math::Quat,
-    v_a_lin: Vec3, v_b_lin: Vec3, rel_v: Vec3, dt: f32,
+    v_a_lin: Vec3, v_b_lin: Vec3, dt: f32,
     ccd_offset_a: &mut Option<Vec3>,
     ccd_offset_b: &mut Option<Vec3>,
 ) -> crate::collision::CollisionManifold {
-    // Ön test: [0, dt] boyunca hiç kesişme var mı?
+    // Göreli lineer hız (A'nın t_low anındaki dünya çerçevesinde B'nin görünen hızı).
+    let rel_v = v_b_lin - v_a_lin;
+
+    // Ön test: [0, dt] — konumlar kare başı (t=0), süpürme rel_v * dt.
     let swept_b_full = crate::shape::ColliderShape::Swept {
         base: Box::new(shape_b.clone()),
         sweep_vector: rel_v * dt,
@@ -621,14 +731,25 @@ fn ccd_bisect(
     let mut t_high = dt;
 
     for _ in 0..16 {
-        let t_mid  = (t_low + t_high) * 0.5;
-        let pa_low = pos_a + v_a_lin * t_low;
-        let pb_low = pos_b + v_b_lin * t_low;
+        let t_mid = (t_low + t_high) * 0.5;
+        let dt_seg = t_mid - t_low;
+        // Aralık başı t_low: dünya uzayında o anki merkezler.
+        let pos_a_at_t_low = pos_a + v_a_lin * t_low;
+        let pos_b_at_t_low = pos_b + v_b_lin * t_low;
+        // [t_low, t_mid] içinde B'nin A'ya göre yer değiştirmesi (A bu alt aralıkta sabitlenmiş).
+        let rel_disp_t_low_to_mid = rel_v * dt_seg;
         let sweep_half = crate::shape::ColliderShape::Swept {
             base: Box::new(shape_b.clone()),
-            sweep_vector: (v_b_lin - v_a_lin) * (t_mid - t_low),
+            sweep_vector: rel_disp_t_low_to_mid,
         };
-        let (hit_first, _) = crate::gjk::gjk_intersect(shape_a, pa_low, rot_a, &sweep_half, pb_low, rot_b);
+        let (hit_first, _) = crate::gjk::gjk_intersect(
+            shape_a,
+            pos_a_at_t_low,
+            rot_a,
+            &sweep_half,
+            pos_b_at_t_low,
+            rot_b,
+        );
         if hit_first { t_high = t_mid; } else { t_low = t_mid; }
     }
 
@@ -783,15 +904,243 @@ fn build_islands(
 /// Warm-start: önceki frame'in impulslarını %80 azaltarak başlangıç noktası olarak kullanır.
 /// SI çözücü: Baumgarte stabilizasyonu + Coulomb sürtünme.
 /// Position Projection: doğrudan pozisyon düzeltmesi (penetrasyon giderme).
+///
+/// `parallel_island_solve`: deterministik modda `false` (ada sırası sabit, tek iş parçacığı).
+fn solve_single_island(island: &mut Island, solver_iters: u32, frame_count: u64, dt: f32) {
+    const MAX_ANG: f32 = 100.0;
+    const MAX_LIN: f32 = 200.0;
+
+    // Frame-seeded Fisher-Yates shuffle (çözüm bias'ını önler)
+    let contacts_len = island.contacts.len();
+    if contacts_len > 1 {
+        let seed = frame_count as usize;
+        for i in 0..(contacts_len - 1) {
+            let range = contacts_len - i;
+            let h = (i.wrapping_add(1).wrapping_mul(2654435761).wrapping_add(seed)) ^ seed;
+            let swap_idx = i + (h % range);
+            island.contacts.swap(i, swap_idx);
+        }
+    }
+
+    // Sequential Impulse iterasyonları
+    for _iter in 0..solver_iters {
+        for c in island.contacts.iter_mut() {
+            let va = island
+                .velocities
+                .get(&c.ent_a)
+                .cloned()
+                .unwrap_or(Velocity::new(Vec3::ZERO));
+            let vb = island
+                .velocities
+                .get(&c.ent_b)
+                .cloned()
+                .unwrap_or(Velocity::new(Vec3::ZERO));
+
+            let rel =
+                (vb.linear + vb.angular.cross(c.r_b)) - (va.linear + va.angular.cross(c.r_a));
+            let vn = rel.dot(c.normal);
+
+            let e = if vn.abs() < 0.2 { 0.0 } else { c.restitution };
+
+            let ra_x_n = c.r_a.cross(c.normal);
+            let rb_x_n = c.r_b.cross(c.normal);
+            let ang_a = apply_inv_inertia(ra_x_n, c.inv_inertia_a, c.rot_a)
+                .cross(c.r_a)
+                .dot(c.normal);
+            let ang_b = apply_inv_inertia(rb_x_n, c.inv_inertia_b, c.rot_b)
+                .cross(c.r_b)
+                .dot(c.normal);
+            let eff_mass = c.inv_mass_a + c.inv_mass_b + ang_a + ang_b;
+            if eff_mass == 0.0 {
+                continue;
+            }
+
+            let bias = ((0.2 / 1.0) * (c.penetration - 0.005).max(0.0)).min(20.0);
+            let j_new = (-(1.0 + e) * vn + bias) / eff_mass;
+            let old_acc = c.accumulated_j;
+            c.accumulated_j = (c.accumulated_j + j_new).max(0.0);
+            let j = c.accumulated_j - old_acc;
+
+            if j.abs() > 1e-8 {
+                let impulse = c.normal * j;
+                if let Some(v_a) = island.velocities.get_mut(&c.ent_a) {
+                    v_a.linear -= impulse * c.inv_mass_a;
+                    v_a.linear.x = v_a.linear.x.clamp(-MAX_LIN, MAX_LIN);
+                    v_a.linear.y = v_a.linear.y.clamp(-MAX_LIN, MAX_LIN);
+                    v_a.linear.z = v_a.linear.z.clamp(-MAX_LIN, MAX_LIN);
+                    v_a.angular += apply_inv_inertia(
+                        c.r_a.cross(impulse * -1.0),
+                        c.inv_inertia_a,
+                        c.rot_a,
+                    );
+                    v_a.angular.x = v_a.angular.x.clamp(-MAX_ANG, MAX_ANG);
+                    v_a.angular.y = v_a.angular.y.clamp(-MAX_ANG, MAX_ANG);
+                    v_a.angular.z = v_a.angular.z.clamp(-MAX_ANG, MAX_ANG);
+                }
+                if let Some(v_b) = island.velocities.get_mut(&c.ent_b) {
+                    v_b.linear += impulse * c.inv_mass_b;
+                    v_b.linear.x = v_b.linear.x.clamp(-MAX_LIN, MAX_LIN);
+                    v_b.linear.y = v_b.linear.y.clamp(-MAX_LIN, MAX_LIN);
+                    v_b.linear.z = v_b.linear.z.clamp(-MAX_LIN, MAX_LIN);
+                    v_b.angular += apply_inv_inertia(c.r_b.cross(impulse), c.inv_inertia_b, c.rot_b);
+                    v_b.angular.x = v_b.angular.x.clamp(-MAX_ANG, MAX_ANG);
+                    v_b.angular.y = v_b.angular.y.clamp(-MAX_ANG, MAX_ANG);
+                    v_b.angular.z = v_b.angular.z.clamp(-MAX_ANG, MAX_ANG);
+                }
+            }
+
+            let va2 = island
+                .velocities
+                .get(&c.ent_a)
+                .cloned()
+                .unwrap_or(Velocity::new(Vec3::ZERO));
+            let vb2 = island
+                .velocities
+                .get(&c.ent_b)
+                .cloned()
+                .unwrap_or(Velocity::new(Vec3::ZERO));
+            let rel2 =
+                (vb2.linear + vb2.angular.cross(c.r_b)) - (va2.linear + va2.angular.cross(c.r_a));
+            let tangent_vel = rel2 - c.normal * rel2.dot(c.normal);
+            let ts = tangent_vel.length();
+
+            if ts > 0.001 {
+                let tangent_dir = tangent_vel / ts;
+                let ra_cross_t = c.r_a.cross(tangent_dir);
+                let rb_cross_t = c.r_b.cross(tangent_dir);
+                let tangent_eff_mass = c.inv_mass_a
+                    + c.inv_mass_b
+                    + apply_inv_inertia(ra_cross_t, c.inv_inertia_a, c.rot_a)
+                        .cross(c.r_a)
+                        .dot(tangent_dir)
+                    + apply_inv_inertia(rb_cross_t, c.inv_inertia_b, c.rot_b)
+                        .cross(c.r_b)
+                        .dot(tangent_dir);
+
+                if tangent_eff_mass > 0.0 {
+                    let jt = -ts / tangent_eff_mass;
+                    let max_friction = c.accumulated_j * c.friction;
+                    let old_friction = c.accumulated_friction;
+                    let mut new_friction = old_friction + tangent_dir * jt;
+                    let friction_len = new_friction.length();
+                    if friction_len > max_friction {
+                        let kinetic_limit = c.accumulated_j * (c.friction * 0.7);
+                        new_friction *= kinetic_limit / friction_len;
+                    }
+                    let fi = new_friction - old_friction;
+                    c.accumulated_friction = new_friction;
+
+                    if let Some(v) = island.velocities.get_mut(&c.ent_a) {
+                        v.linear -= fi * c.inv_mass_a;
+                        v.angular +=
+                            apply_inv_inertia(c.r_a.cross(fi * -1.0), c.inv_inertia_a, c.rot_a);
+                        v.angular.x = v.angular.x.clamp(-MAX_ANG, MAX_ANG);
+                        v.angular.y = v.angular.y.clamp(-MAX_ANG, MAX_ANG);
+                        v.angular.z = v.angular.z.clamp(-MAX_ANG, MAX_ANG);
+                    }
+                    if let Some(v) = island.velocities.get_mut(&c.ent_b) {
+                        v.linear += fi * c.inv_mass_b;
+                        v.angular += apply_inv_inertia(c.r_b.cross(fi), c.inv_inertia_b, c.rot_b);
+                        v.angular.x = v.angular.x.clamp(-MAX_ANG, MAX_ANG);
+                        v.angular.y = v.angular.y.clamp(-MAX_ANG, MAX_ANG);
+                        v.angular.z = v.angular.z.clamp(-MAX_ANG, MAX_ANG);
+                    }
+                }
+            }
+        }
+
+        for (_, joint, jb) in island.joints.iter() {
+            let va = island
+                .velocities
+                .get(&joint.entity_a)
+                .cloned()
+                .unwrap_or(Velocity::new(Vec3::ZERO));
+            let vb = island
+                .velocities
+                .get(&joint.entity_b)
+                .cloned()
+                .unwrap_or(Velocity::new(Vec3::ZERO));
+
+            let mut va_lin = va.linear;
+            let mut va_ang = va.angular;
+            let mut vb_lin = vb.linear;
+            let mut vb_ang = vb.angular;
+
+            crate::constraints::solve_joint_velocity(
+                dt, joint, jb, &mut va_lin, &mut va_ang, &mut vb_lin, &mut vb_ang,
+            );
+
+            if let Some(v) = island.velocities.get_mut(&joint.entity_a) {
+                v.linear = va_lin;
+                v.angular = va_ang;
+            }
+            if let Some(v) = island.velocities.get_mut(&joint.entity_b) {
+                v.linear = vb_lin;
+                v.angular = vb_ang;
+            }
+        }
+    }
+
+    for c in &island.contacts {
+        let correction = (c.penetration - 0.005).max(0.0) * 0.4;
+        if correction > 0.0 {
+            let total_inv = c.inv_mass_a + c.inv_mass_b;
+            if total_inv > 0.0 {
+                let push = c.normal * (correction / total_inv);
+                if let Some(p) = island.poses.get_mut(&c.ent_a) {
+                    p.position -= push * c.inv_mass_a;
+                }
+                if let Some(p) = island.poses.get_mut(&c.ent_b) {
+                    p.position += push * c.inv_mass_b;
+                }
+            }
+        }
+    }
+
+    for (_, joint, jb) in island.joints.iter() {
+        let mut pos_a = jb.pos_a;
+        let mut pos_b = jb.pos_b;
+        if let Some(p) = island.poses.get(&joint.entity_a) {
+            pos_a = p.position + p.rotation.mul_vec3(joint.anchor_a);
+        }
+        if let Some(p) = island.poses.get(&joint.entity_b) {
+            pos_b = p.position + p.rotation.mul_vec3(joint.anchor_b);
+        }
+
+        let mut pos_a_core = island
+            .poses
+            .get(&joint.entity_a)
+            .map(|p| p.position)
+            .unwrap_or(Vec3::ZERO);
+        let mut pos_b_core = island
+            .poses
+            .get(&joint.entity_b)
+            .map(|p| p.position)
+            .unwrap_or(Vec3::ZERO);
+
+        let mut latest_jb = jb.clone();
+        latest_jb.pos_a = pos_a;
+        latest_jb.pos_b = pos_b;
+
+        crate::constraints::solve_joint_position(joint, &latest_jb, &mut pos_a_core, &mut pos_b_core);
+
+        if let Some(p) = island.poses.get_mut(&joint.entity_a) {
+            p.position = pos_a_core;
+        }
+        if let Some(p) = island.poses.get_mut(&joint.entity_b) {
+            p.position = pos_b_core;
+        }
+    }
+}
+
 fn solve_islands(
     islands: &mut Vec<Island>,
     contact_cache: &HashMap<(u32, u32), Vec<CachedContact>>,
     solver_iters: u32,
     frame_count: u64,
     dt: f32,
+    parallel_island_solve: bool,
 ) {
-    use rayon::prelude::*;
-
     // Warm-start: önceki frame'in impulslarını temas eşlemesiyle aktar
     for island in islands.iter_mut() {
         for c in island.contacts.iter_mut() {
@@ -833,170 +1182,16 @@ fn solve_islands(
         }
     }
 
-    const MAX_ANG: f32 = 100.0;
-    const MAX_LIN: f32 = 200.0;
-
-    // Paralel island çözümü — Sequential Impulse + Coulomb Sürtünme + Position Projection
-    islands.par_iter_mut().for_each(|island| {
-        // Frame-seeded Fisher-Yates shuffle (çözüm bias'ını önler)
-        let contacts_len = island.contacts.len();
-        if contacts_len > 1 {
-            let seed = frame_count as usize;
-            for i in 0..(contacts_len - 1) {
-                let range = contacts_len - i;
-                let h = (i.wrapping_add(1).wrapping_mul(2654435761).wrapping_add(seed)) ^ seed;
-                let swap_idx = i + (h % range);
-                island.contacts.swap(i, swap_idx);
-            }
+    if parallel_island_solve {
+        use rayon::prelude::*;
+        islands.par_iter_mut().for_each(|island| {
+            solve_single_island(island, solver_iters, frame_count, dt);
+        });
+    } else {
+        for island in islands.iter_mut() {
+            solve_single_island(island, solver_iters, frame_count, dt);
         }
-
-        // Sequential Impulse iterasyonları
-        for _iter in 0..solver_iters {
-            for c in island.contacts.iter_mut() {
-                let va = island.velocities.get(&c.ent_a).cloned().unwrap_or(Velocity::new(Vec3::ZERO));
-                let vb = island.velocities.get(&c.ent_b).cloned().unwrap_or(Velocity::new(Vec3::ZERO));
-
-                let rel = (vb.linear + vb.angular.cross(c.r_b)) - (va.linear + va.angular.cross(c.r_a));
-                let vn  = rel.dot(c.normal);
-
-                let e = if vn.abs() < 0.2 { 0.0 } else { c.restitution };
-
-                let ra_x_n = c.r_a.cross(c.normal);
-                let rb_x_n = c.r_b.cross(c.normal);
-                let ang_a  = apply_inv_inertia(ra_x_n, c.inv_inertia_a, c.rot_a).cross(c.r_a).dot(c.normal);
-                let ang_b  = apply_inv_inertia(rb_x_n, c.inv_inertia_b, c.rot_b).cross(c.r_b).dot(c.normal);
-                let eff_mass = c.inv_mass_a + c.inv_mass_b + ang_a + ang_b;
-                if eff_mass == 0.0 { continue; }
-
-                // Baumgarte stabilizasyonu
-                let bias     = ((0.2 / 1.0) * (c.penetration - 0.005).max(0.0)).min(20.0);
-                let j_new    = (-(1.0 + e) * vn + bias) / eff_mass;
-                let old_acc  = c.accumulated_j;
-                c.accumulated_j = (c.accumulated_j + j_new).max(0.0);
-                let j = c.accumulated_j - old_acc;
-
-                if j.abs() > 1e-8 {
-                    let impulse = c.normal * j;
-                    if let Some(v_a) = island.velocities.get_mut(&c.ent_a) {
-                        v_a.linear  -= impulse * c.inv_mass_a;
-                        v_a.linear.x = v_a.linear.x.clamp(-MAX_LIN, MAX_LIN);
-                        v_a.linear.y = v_a.linear.y.clamp(-MAX_LIN, MAX_LIN);
-                        v_a.linear.z = v_a.linear.z.clamp(-MAX_LIN, MAX_LIN);
-                        v_a.angular += apply_inv_inertia(c.r_a.cross(impulse * -1.0), c.inv_inertia_a, c.rot_a);
-                        v_a.angular.x = v_a.angular.x.clamp(-MAX_ANG, MAX_ANG);
-                        v_a.angular.y = v_a.angular.y.clamp(-MAX_ANG, MAX_ANG);
-                        v_a.angular.z = v_a.angular.z.clamp(-MAX_ANG, MAX_ANG);
-                    }
-                    if let Some(v_b) = island.velocities.get_mut(&c.ent_b) {
-                        v_b.linear  += impulse * c.inv_mass_b;
-                        v_b.linear.x = v_b.linear.x.clamp(-MAX_LIN, MAX_LIN);
-                        v_b.linear.y = v_b.linear.y.clamp(-MAX_LIN, MAX_LIN);
-                        v_b.linear.z = v_b.linear.z.clamp(-MAX_LIN, MAX_LIN);
-                        v_b.angular += apply_inv_inertia(c.r_b.cross(impulse), c.inv_inertia_b, c.rot_b);
-                        v_b.angular.x = v_b.angular.x.clamp(-MAX_ANG, MAX_ANG);
-                        v_b.angular.y = v_b.angular.y.clamp(-MAX_ANG, MAX_ANG);
-                        v_b.angular.z = v_b.angular.z.clamp(-MAX_ANG, MAX_ANG);
-                    }
-                }
-
-                // Coulomb Sürtünme (statik/kinetik)
-                let va2 = island.velocities.get(&c.ent_a).cloned().unwrap_or(Velocity::new(Vec3::ZERO));
-                let vb2 = island.velocities.get(&c.ent_b).cloned().unwrap_or(Velocity::new(Vec3::ZERO));
-                let rel2 = (vb2.linear + vb2.angular.cross(c.r_b)) - (va2.linear + va2.angular.cross(c.r_a));
-                let tangent_vel = rel2 - c.normal * rel2.dot(c.normal);
-                let ts = tangent_vel.length();
-
-                if ts > 0.001 {
-                    let tangent_dir = tangent_vel / ts;
-                    let ra_cross_t  = c.r_a.cross(tangent_dir);
-                    let rb_cross_t  = c.r_b.cross(tangent_dir);
-                    let tangent_eff_mass = c.inv_mass_a + c.inv_mass_b
-                        + apply_inv_inertia(ra_cross_t, c.inv_inertia_a, c.rot_a).cross(c.r_a).dot(tangent_dir)
-                        + apply_inv_inertia(rb_cross_t, c.inv_inertia_b, c.rot_b).cross(c.r_b).dot(tangent_dir);
-
-                    if tangent_eff_mass > 0.0 {
-                        let jt            = -ts / tangent_eff_mass;
-                        let max_friction  = c.accumulated_j * c.friction;
-                        let old_friction  = c.accumulated_friction;
-                        let mut new_friction = old_friction + tangent_dir * jt;
-                        let friction_len  = new_friction.length();
-                        if friction_len > max_friction {
-                            let kinetic_limit = c.accumulated_j * (c.friction * 0.7);
-                            new_friction *= kinetic_limit / friction_len;
-                        }
-                        let fi = new_friction - old_friction;
-                        c.accumulated_friction = new_friction;
-
-                        if let Some(v) = island.velocities.get_mut(&c.ent_a) {
-                            v.linear  -= fi * c.inv_mass_a;
-                            v.angular += apply_inv_inertia(c.r_a.cross(fi * -1.0), c.inv_inertia_a, c.rot_a);
-                            v.angular.x = v.angular.x.clamp(-MAX_ANG, MAX_ANG);
-                            v.angular.y = v.angular.y.clamp(-MAX_ANG, MAX_ANG);
-                            v.angular.z = v.angular.z.clamp(-MAX_ANG, MAX_ANG);
-                        }
-                        if let Some(v) = island.velocities.get_mut(&c.ent_b) {
-                            v.linear  += fi * c.inv_mass_b;
-                            v.angular += apply_inv_inertia(c.r_b.cross(fi), c.inv_inertia_b, c.rot_b);
-                            v.angular.x = v.angular.x.clamp(-MAX_ANG, MAX_ANG);
-                            v.angular.y = v.angular.y.clamp(-MAX_ANG, MAX_ANG);
-                            v.angular.z = v.angular.z.clamp(-MAX_ANG, MAX_ANG);
-                        }
-                    }
-                }
-            }
-
-            for (_, joint, jb) in island.joints.iter() {
-                let mut va = island.velocities.get(&joint.entity_a).cloned().unwrap_or(Velocity::new(Vec3::ZERO));
-                let mut vb = island.velocities.get(&joint.entity_b).cloned().unwrap_or(Velocity::new(Vec3::ZERO));
-                
-                let mut va_lin = va.linear; let mut va_ang = va.angular;
-                let mut vb_lin = vb.linear; let mut vb_ang = vb.angular;
-
-                crate::constraints::solve_joint_velocity(
-                    dt, joint, jb, &mut va_lin, &mut va_ang, &mut vb_lin, &mut vb_ang
-                );
-                
-                if let Some(v) = island.velocities.get_mut(&joint.entity_a) {
-                    v.linear = va_lin; v.angular = va_ang;
-                }
-                if let Some(v) = island.velocities.get_mut(&joint.entity_b) {
-                    v.linear = vb_lin; v.angular = vb_ang;
-                }
-            }
-        }
-
-        // Position Projection — nesneleri doğrudan penetrasyon derinliği kadar ayır
-        for c in &island.contacts {
-            let correction = (c.penetration - 0.005).max(0.0) * 0.4;
-            if correction > 0.0 {
-                let total_inv = c.inv_mass_a + c.inv_mass_b;
-                if total_inv > 0.0 {
-                    let push = c.normal * (correction / total_inv);
-                    if let Some(p) = island.poses.get_mut(&c.ent_a) { p.position -= push * c.inv_mass_a; }
-                    if let Some(p) = island.poses.get_mut(&c.ent_b) { p.position += push * c.inv_mass_b; }
-                }
-            }
-        }
-        
-        for (_, joint, jb) in island.joints.iter() {
-            let mut pos_a = jb.pos_a;
-            let mut pos_b = jb.pos_b;
-            if let Some(p) = island.poses.get(&joint.entity_a) { pos_a = p.position + p.rotation.mul_vec3(joint.anchor_a); }
-            if let Some(p) = island.poses.get(&joint.entity_b) { pos_b = p.position + p.rotation.mul_vec3(joint.anchor_b); }
-            
-            let mut pos_a_core = island.poses.get(&joint.entity_a).map(|p| p.position).unwrap_or(Vec3::ZERO);
-            let mut pos_b_core = island.poses.get(&joint.entity_b).map(|p| p.position).unwrap_or(Vec3::ZERO);
-            
-            let mut latest_jb = jb.clone();
-            latest_jb.pos_a = pos_a; 
-            latest_jb.pos_b = pos_b;
-            
-            crate::constraints::solve_joint_position(joint, &latest_jb, &mut pos_a_core, &mut pos_b_core);
-            
-            if let Some(p) = island.poses.get_mut(&joint.entity_a) { p.position = pos_a_core; }
-            if let Some(p) = island.poses.get_mut(&joint.entity_b) { p.position = pos_b_core; }
-        }
-    });
+    }
 }
 
 /// FAZ 5 — Write-Back: çözüm sonuçlarını ECS'e yaz, cache'i güncelle, eventleri fırlat.
@@ -1078,11 +1273,19 @@ fn write_back(
 /// broad_phase → detect_collisions → build_islands → solve_islands → write_back
 /// ```
 ///
+/// [`crate::components::PhysicsConfig::deterministic_simulation`] açıkken dar faz ve ada çözümü
+/// Rayon kullanmaz (sıralı, tekrarlanabilir birleştirme).
+///
 /// Her aşama bağımsız, test edilebilir bir fonksiyon; yan etkiler yalnızca
 /// `write_back` içinde ECS'e yansıtılır.
 pub fn physics_collision_system(world: &mut World, dt: f32) {
     let mut entities_to_wake: Vec<u32> = Vec::new();
     let mut collision_events: Vec<crate::CollisionEvent> = Vec::new();
+
+    let parallel_physics = !world
+        .get_resource::<crate::components::PhysicsConfig>()
+        .map(|c| c.deterministic_simulation)
+        .unwrap_or(false);
 
     {
         // Borrow scope — tüm ECS borrow'ları burada yaşar
@@ -1106,11 +1309,17 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
             return;
         }
 
-        // 2. Narrow-phase — gerçek temas tespiti (paralel)
+        // 2. Narrow-phase — gerçek temas tespiti (isteğe bağlı Rayon)
         let detection_results = detect_collisions(
             &collision_pairs,
-            &transforms, &colliders, &rigidbodies, &velocities,
-            &vehicle_entities, has_vehicles, dt,
+            &transforms,
+            &colliders,
+            &rigidbodies,
+            &velocities,
+            &vehicle_entities,
+            has_vehicles,
+            dt,
+            parallel_physics,
         );
 
         // 3. Island generation — Union-Find ile gruplama
@@ -1135,7 +1344,14 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
             HashMap::new()
         };
 
-        solve_islands(&mut islands, &contact_cache, solver_iters, frame_count, dt);
+        solve_islands(
+            &mut islands,
+            &contact_cache,
+            solver_iters,
+            frame_count,
+            dt,
+            parallel_physics,
+        );
 
         // PhysicsConfig'den limitleri oku — Fix #5, #6, #31
         let (max_contacts_per_pair, event_throttle_frames) =

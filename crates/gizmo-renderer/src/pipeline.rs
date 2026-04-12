@@ -1,4 +1,5 @@
-use crate::gpu_types::{LightData, SceneUniforms, Vertex};
+use crate::csm::SHADOW_MAP_RES;
+use crate::gpu_types::{LightData, SceneUniforms, ShadowVsUniform, Vertex};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
@@ -16,7 +17,15 @@ pub struct SceneState {
     pub global_bind_group: wgpu::BindGroup,
     pub shadow_bind_group_layout: wgpu::BindGroupLayout,
     pub shadow_bind_group: wgpu::BindGroup,
+    /// Depth `texture_2d_array` (all CSM layers) for comparison sampling in lit shaders.
     pub shadow_texture_view: wgpu::TextureView,
+    /// One 2D depth view per cascade for shadow map rendering passes.
+    pub shadow_cascade_layer_views: [wgpu::TextureView; 4],
+    pub shadow_depth_texture: wgpu::Texture,
+    pub shadow_pass_bind_group_layout: wgpu::BindGroupLayout,
+    /// One uniform buffer + bind group per CSM cascade (avoids per-pass overwrite races on the queue).
+    pub shadow_cascade_uniform_buffers: [wgpu::Buffer; 4],
+    pub shadow_pass_bind_groups: [wgpu::BindGroup; 4],
     pub texture_bind_group_layout: wgpu::BindGroupLayout,
     pub skeleton_bind_group_layout: wgpu::BindGroupLayout,
     pub dummy_skeleton_bind_group: Arc<wgpu::BindGroup>,
@@ -76,6 +85,7 @@ fn load_shader(
 
 pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     // Global Uniform Buffer
+    let id4 = [[1.0f32, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
     let initial_uniforms = SceneUniforms {
         view_proj: [[0.0; 4]; 4],
         camera_pos: [0.0; 4],
@@ -87,7 +97,10 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
             direction: [0.0, -1.0, 0.0, 0.0],
             params: [0.0; 4],
         }; 10],
-        light_view_proj: [[0.0; 4]; 4],
+        light_view_proj: [id4; 4],
+        cascade_splits: [1.0, 10.0, 50.0, 500.0],
+        camera_forward: [0.0, 0.0, -1.0, 0.0],
+        cascade_params: [0.1, 1.0 / SHADOW_MAP_RES as f32, 0.0, 0.0],
         num_lights: 0,
         _padding: [0; 3],
     };
@@ -97,22 +110,43 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
 
-    // Shadow Texture
-    let shadow_texture = device.create_texture(&wgpu::TextureDescriptor {
+    // CSM: one depth layer per cascade
+    let shadow_depth_texture = device.create_texture(&wgpu::TextureDescriptor {
         size: wgpu::Extent3d {
-            width: 4096,
-            height: 4096,
-            depth_or_array_layers: 1,
+            width: SHADOW_MAP_RES,
+            height: SHADOW_MAP_RES,
+            depth_or_array_layers: 4,
         },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Depth32Float,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-        label: Some("shadow_texture"),
+        label: Some("shadow_csm_texture"),
         view_formats: &[],
     });
-    let shadow_texture_view = shadow_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let shadow_texture_view = shadow_depth_texture.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("shadow_csm_array_view"),
+        format: None,
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        aspect: wgpu::TextureAspect::All,
+        base_mip_level: 0,
+        mip_level_count: None,
+        base_array_layer: 0,
+        array_layer_count: None,
+    });
+    let shadow_cascade_layer_views = std::array::from_fn(|i| {
+        shadow_depth_texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some(&format!("shadow_cascade_layer_{i}")),
+            format: None,
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            aspect: wgpu::TextureAspect::DepthOnly,
+            base_mip_level: 0,
+            mip_level_count: None,
+            base_array_layer: i as u32,
+            array_layer_count: Some(1),
+        })
+    });
     let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         address_mode_u: wgpu::AddressMode::ClampToEdge,
         address_mode_v: wgpu::AddressMode::ClampToEdge,
@@ -158,7 +192,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
                         sample_type: wgpu::TextureSampleType::Depth,
                     },
                     count: None,
@@ -185,6 +219,42 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
             },
         ],
         label: Some("shadow_bind_group"),
+    });
+
+    let shadow_pass_bind_group_layout =
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("shadow_pass_bind_group_layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+    let shadow_cascade_uniform_buffers = std::array::from_fn(|i| {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("Shadow cascade VS uniform {i}")),
+            contents: bytemuck::bytes_of(&ShadowVsUniform {
+                light_view_proj: id4,
+            }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })
+    });
+
+    let shadow_pass_bind_groups = std::array::from_fn(|i| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &shadow_pass_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: shadow_cascade_uniform_buffers[i].as_entire_binding(),
+            }],
+            label: Some(&format!("shadow_pass_bind_group_{i}")),
+        })
     });
 
     let texture_bind_group_layout =
@@ -380,7 +450,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Shadow Pipeline Layout"),
         bind_group_layouts: &[
-            &global_bind_group_layout,
+            &shadow_pass_bind_group_layout,
             &skeleton_bind_group_layout,
             &instance_bind_group_layout,
         ],
@@ -431,6 +501,11 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         shadow_bind_group_layout,
         shadow_bind_group,
         shadow_texture_view,
+        shadow_cascade_layer_views,
+        shadow_depth_texture,
+        shadow_pass_bind_group_layout,
+        shadow_cascade_uniform_buffers,
+        shadow_pass_bind_groups,
         texture_bind_group_layout,
         skeleton_bind_group_layout,
         dummy_skeleton_bind_group,
@@ -537,7 +612,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Shadow Pipeline Layout"),
         bind_group_layouts: &[
-            &renderer.scene.global_bind_group_layout,
+            &renderer.scene.shadow_pass_bind_group_layout,
             &renderer.scene.skeleton_bind_group_layout,
             &renderer.scene.instance_bind_group_layout,
         ],

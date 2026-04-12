@@ -40,8 +40,12 @@ pub fn default_render_pass(
         }
     }
 
+    let view_proj = proj * view_mat;
+    let frustum = crate::renderer::Frustum::from_matrix(&view_proj);
+
+    let id = Mat4::IDENTITY.to_cols_array_2d();
     let scene_uniform_data = crate::renderer::gpu_types::SceneUniforms {
-        view_proj: (proj * view_mat).to_cols_array_2d(),
+        view_proj: view_proj.to_cols_array_2d(),
         camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
         sun_direction: [0.0, -1.0, 0.0, 1.0],
         sun_color: [1.0, 1.0, 1.0, 1.0],
@@ -51,7 +55,10 @@ pub fn default_render_pass(
             direction: [0.0, -1.0, 0.0, 0.0],
             params: [0.0; 4],
         }; 10],
-        light_view_proj: Mat4::IDENTITY.to_cols_array_2d(),
+        light_view_proj: [id; 4],
+        cascade_splits: [10.0, 50.0, 200.0, 2000.0],
+        camera_forward: [0.0, 0.0, -1.0, 0.0],
+        cascade_params: [0.1, 1.0 / crate::renderer::SHADOW_MAP_RES as f32, 0.0, 0.0],
         num_lights: 0,
         _padding: [0; 3],
     };
@@ -78,8 +85,12 @@ pub fn default_render_pass(
             }
 
             let center_mat = Mat4::from_translation(mesh.center_offset);
+            let model = trans.global_matrix * center_mat;
+            if !crate::renderer::visible_in_frustum(&frustum, &model, &mesh.bounds) {
+                continue;
+            }
             let instance_data = crate::renderer::gpu_types::InstanceRaw {
-                model: (trans.global_matrix * center_mat).to_cols_array_2d(),
+                model: model.to_cols_array_2d(),
                 albedo_color: [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
                 roughness: mat.roughness,
                 metallic: mat.metallic,

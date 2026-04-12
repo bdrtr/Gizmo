@@ -25,8 +25,12 @@ struct SceneUniforms {
     sun_direction: vec4<f32>,
     sun_color: vec4<f32>,
     lights: array<LightData, 10>,
-    light_view_proj: mat4x4<f32>,
+    light_view_proj: array<mat4x4<f32>, 4>,
+    cascade_splits: vec4<f32>,
+    camera_forward: vec4<f32>,
+    cascade_params: vec4<f32>,
     num_lights: u32,
+    _pad_scene: vec3<u32>,
 };
 
 
@@ -35,7 +39,7 @@ struct SceneUniforms {
 var<uniform> scene: SceneUniforms;
 
 @group(2) @binding(0)
-var t_shadow: texture_depth_2d;
+var t_shadow: texture_depth_2d_array;
 
 @group(2) @binding(1)
 var s_shadow: sampler_comparison;
@@ -78,9 +82,8 @@ struct VertexOutput {
     @location(1) normal: vec3<f32>,
     @location(2) tex_coords: vec2<f32>,
     @location(3) world_position: vec3<f32>,
-    @location(4) light_space_pos: vec4<f32>,
-    @location(5) inst_albedo: vec4<f32>,
-    @location(6) inst_pbr: vec4<f32>,
+    @location(4) inst_albedo: vec4<f32>,
+    @location(5) inst_pbr: vec4<f32>,
 };
 
 @vertex
@@ -131,10 +134,14 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     // Kameraya yansıt
     out.clip_position = scene.view_proj * world_pos;
     
-    // Işık kamerasına yansıt (Gölge Haritası İçin)
-    out.light_space_pos = scene.light_view_proj * world_pos;
-    
     return out;
+}
+
+fn select_cascade(view_depth: f32) -> u32 {
+    if (view_depth < scene.cascade_splits.x) { return 0u; }
+    if (view_depth < scene.cascade_splits.y) { return 1u; }
+    if (view_depth < scene.cascade_splits.z) { return 2u; }
+    return 3u;
 }
 
 @fragment
@@ -197,32 +204,37 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     
     let fake_ibl_specular = f0 * fake_env_color * ((1.0 - min_roughness) * (1.0 - min_roughness) * 2.0);
 
-    // --- Gölge Hesaplama (Shadow Mapping with PCF) ---
+    // --- CSM Gölge (PCF, doğrudan güneş açıkken) ---
     var shadow_visibility = 1.0;
-    let light_ndc = in.light_space_pos.xyz / in.light_space_pos.w;
-    let shadow_uv = vec2<f32>(
-        light_ndc.x * 0.5 + 0.5,
-        (light_ndc.y * -0.5) + 0.5
-    );
-    
-    if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 && light_ndc.z <= 1.0) {
-        let L_dir = normalize(-scene.sun_direction.xyz);
-        let slope = 1.0 - max(dot(N, L_dir), 0.0);
-        let bias = max(0.005 * slope, 0.001); 
-        
-        var pcf_visibility = 0.0;
-        let texel_size = 1.0 / 4096.0; // 4K Gölge Ebatı
-        for (var x = -1; x <= 1; x++) {
-            for (var y = -1; y <= 1; y++) {
-                let offset = vec2<f32>(f32(x), f32(y)) * texel_size;
-                pcf_visibility += textureSampleCompare(
-                    t_shadow, s_shadow,
-                    shadow_uv + offset,
-                    light_ndc.z - bias
-                );
+    if (scene.sun_direction.w > 0.5) {
+        let view_depth = dot(in.world_position - scene.camera_pos.xyz, scene.camera_forward.xyz);
+        let ci = select_cascade(view_depth);
+        let light_vp = scene.light_view_proj[ci];
+        let light_clip = light_vp * vec4<f32>(in.world_position, 1.0);
+        let light_ndc = light_clip.xyz / light_clip.w;
+        let shadow_uv = vec2<f32>(
+            light_ndc.x * 0.5 + 0.5,
+            (light_ndc.y * -0.5) + 0.5
+        );
+        if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 && light_ndc.z <= 1.0) {
+            let L_dir = normalize(-scene.sun_direction.xyz);
+            let slope = 1.0 - max(dot(N, L_dir), 0.0);
+            let bias = max(0.005 * slope, 0.001);
+            var pcf_visibility = 0.0;
+            let texel_size = scene.cascade_params.y;
+            for (var x = -1; x <= 1; x++) {
+                for (var y = -1; y <= 1; y++) {
+                    let offset = vec2<f32>(f32(x), f32(y)) * texel_size;
+                    pcf_visibility += textureSampleCompare(
+                        t_shadow, s_shadow,
+                        shadow_uv + offset,
+                        ci,
+                        light_ndc.z - bias
+                    );
+                }
             }
+            shadow_visibility = pcf_visibility / 9.0;
         }
-        shadow_visibility = pcf_visibility / 9.0;
     }
     
     var total_diffuse = vec3<f32>(0.0);

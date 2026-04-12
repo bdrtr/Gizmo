@@ -90,3 +90,39 @@ impl Frustum {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Frustum;
+    use crate::aabb::Aabb;
+    use glam::{Mat4, Vec3};
+
+    #[test]
+    fn frustum_contains_aabb_in_front_of_camera() {
+        let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 8.0), Vec3::ZERO, Vec3::Y);
+        let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, 1.0, 0.1, 100.0);
+        let vp = proj * view;
+        let frustum = Frustum::from_matrix(&vp);
+
+        let unit_cube = Aabb::new(Vec3::splat(-0.5), Vec3::splat(0.5));
+        assert!(
+            frustum.contains_aabb(&unit_cube),
+            "origin cube should intersect camera frustum"
+        );
+    }
+
+    #[test]
+    fn frustum_rejects_aabb_far_behind_camera() {
+        let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 8.0), Vec3::ZERO, Vec3::Y);
+        let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, 1.0, 0.1, 100.0);
+        let vp = proj * view;
+        let frustum = Frustum::from_matrix(&vp);
+
+        // Well behind the camera (positive Z in world space for this setup).
+        let behind = Aabb::new(Vec3::new(-1.0, -1.0, 50.0), Vec3::new(1.0, 1.0, 52.0));
+        assert!(
+            !frustum.contains_aabb(&behind),
+            "AABB far behind camera should be culled"
+        );
+    }
+}

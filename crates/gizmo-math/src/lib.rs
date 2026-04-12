@@ -4,7 +4,7 @@ pub mod ray;
 
 // Geriye dönük uyumluluk veya ekstra yardımcı metodlar için pub modüller kalsın
 // ama custom tipleri glam ile değiştiriyoruz.
-pub use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
+pub use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
 
 pub use aabb::Aabb;
 pub use frustum::Frustum;

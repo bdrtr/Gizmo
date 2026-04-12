@@ -90,7 +90,8 @@ fn domino_chain_reaction() {
     let r = 0.5;
     let inertia = (2.0 / 5.0) * ball_rb.mass * (r * r);
     ball_rb.local_inertia = Vec3::new(inertia, inertia, inertia);
-    ball_rb.inverse_inertia = Vec3::new(1.0 / inertia, 1.0 / inertia, 1.0 / inertia);
+    ball_rb.inverse_inertia_local =
+        gizmo_math::Mat3::from_diagonal(Vec3::splat(1.0 / inertia));
 
     world.add_component(heavy_ball, ball_rb);
     world.add_component(

@@ -247,6 +247,7 @@ pub fn setup_car_scene(
         count: 0,
     });
     world.insert_resource(asset_manager);
+    world.insert_resource(gizmo::renderer::AsyncAssetLoader::new());
 
     if let Ok(engine) = gizmo::scripting::ScriptEngine::new() {
         world.insert_resource(engine);

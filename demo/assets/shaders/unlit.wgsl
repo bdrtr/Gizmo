@@ -1,6 +1,8 @@
 struct LightData {
-    position: vec4<f32>,
-    color: vec4<f32>,
+    position:  vec4<f32>,  // xyz=pos, w=intensity
+    color:     vec4<f32>,  // rgb=color, a=radius
+    direction: vec4<f32>,  // xyz=dir (spot/directional), w=inner_cutoff_cos
+    params:    vec4<f32>,  // x=outer_cutoff_cos, y=light_type (0=point,1=spot,2=dir)
 };
 
 struct SceneUniforms {
@@ -9,8 +11,12 @@ struct SceneUniforms {
     sun_direction: vec4<f32>,
     sun_color: vec4<f32>,
     lights: array<LightData, 10>,
-    light_view_proj: mat4x4<f32>,
+    light_view_proj: array<mat4x4<f32>, 4>,
+    cascade_splits: vec4<f32>,
+    camera_forward: vec4<f32>,
+    cascade_params: vec4<f32>,
     num_lights: u32,
+    _pad_scene: vec3<u32>,
 };
 
 @group(0) @binding(0)
@@ -27,7 +33,7 @@ struct SkeletonData {
 @group(3) @binding(0)
 var<uniform> skeleton: SkeletonData;
 
-struct InstanceData {
+struct InstanceRaw {
     model_matrix_0: vec4<f32>,
     model_matrix_1: vec4<f32>,
     model_matrix_2: vec4<f32>,
@@ -37,7 +43,7 @@ struct InstanceData {
 };
 
 @group(4) @binding(0)
-var<storage, read> instances: array<InstanceData>;
+var<storage, read> instances: array<InstanceRaw>;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -68,7 +74,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
         inst.model_matrix_2,
         inst.model_matrix_3,
     );
-
+    out.inst_albedo = inst.albedo_color;
     var skin_mat = mat4x4<f32>(
         vec4<f32>(1.0, 0.0, 0.0, 0.0),
         vec4<f32>(0.0, 1.0, 0.0, 0.0),
@@ -97,7 +103,12 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
     let base_color = in.inst_albedo.rgb * tex_color.rgb;
+    
+    var v_color = in.color;
+    if (length(v_color) < 0.0001) {
+        v_color = vec3<f32>(1.0, 1.0, 1.0);
+    }
     // Düz rengini doğrudan döndür (Işıklandırma devre dışı)
-    let final_color = in.color * base_color;
+    let final_color = v_color * base_color;
     return vec4<f32>(final_color, in.inst_albedo.a * tex_color.a);
 }
