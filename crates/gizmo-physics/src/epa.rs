@@ -182,12 +182,6 @@ fn generate_face_contacts(
         for pt in &inc_face {
             let mut dist = (*pt - ref_face[0]).dot(ref_normal);
 
-            if extent_a > extent_b {
-                // B reference face olduğunda normal A->B veya B->A metrikleri ters yönlü olabileceği için
-                // sign correction uygulanıyor, bu sayede temas noktaları doğru generate ediliyor.
-                dist = -dist;
-            }
-
             // distance <= 0.05 anlamına gelir ki noktanın yüksekliği referans düzleminin altına girmiş
             if dist <= 0.05 {
                 final_contacts.push((*pt, -dist.min(0.0)));
@@ -451,7 +445,7 @@ fn get_closest_face(polytope: &[SupportPoint], faces: &[usize]) -> (usize, Vec3,
 fn add_edge_if_unique(edges: &mut Vec<(usize, usize)>, a: usize, b: usize) {
     // Aynı kenar zıt yönde var mı (b, a)? Varsa onu sil, demek ki bu iç kenar! Biz dış delik arıyoruz.
     if let Some(pos) = edges.iter().position(|&(ea, eb)| ea == b && eb == a) {
-        edges.remove(pos);
+        edges.swap_remove(pos);
     } else {
         edges.push((a, b));
     }

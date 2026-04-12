@@ -287,12 +287,13 @@ fn resolve_capsule_collisions(
             // Kapsülü collider'dan dışarı it
             correction -= normal * depth;
 
-            // Zemin tespiti: normal yukarı bakıyorsa (Y > 0.7 ≈ 45°) yerdeyiz
+            // Zemin tespiti: yüzey normal açısı slope limitten küçük mü (zemin mi?)
+            let limit_cos = cc.slope_limit.to_radians().cos();
             let n_y = normal.y;
-            if n_y < -0.7 {
+            if n_y < -limit_cos {
                 is_grounded = true;
                 ground_normal += normal * -1.0;
-            } else if n_y > 0.7 {
+            } else if n_y > limit_cos {
                 is_grounded = true;
                 ground_normal += normal;
             }
@@ -448,9 +449,9 @@ pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
                 let horizontal_move = Vec3::new(move_delta.x, 0.0, move_delta.z);
                 if horizontal_move.length_squared() > 0.0001 {
                     let step_test_pos = Vec3::new(
-                        t.position.x + horizontal_move.x,
-                        t.position.y + cc.step_height,
-                        t.position.z + horizontal_move.z,
+                        new_pos.x + horizontal_move.x,
+                        new_pos.y + cc.step_height,
+                        new_pos.z + horizontal_move.z,
                     );
 
                     let (step_correction, _, _) = resolve_capsule_collisions(
