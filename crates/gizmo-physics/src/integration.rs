@@ -1,6 +1,6 @@
 use crate::components::{RigidBody, Transform, Velocity};
 use gizmo_core::World;
-use gizmo_math::{Quat, Vec3};
+use gizmo_math::{Mat3, Quat, Vec3};
 
 /// Uyku eşikleri — her biri kendi biriminde ayrı değerlendirilir.
 ///
@@ -11,14 +11,87 @@ const SLEEP_LINEAR_SQ: f32 = 0.01 * 0.01;  // 1 cm/s
 const SLEEP_ANGULAR_SQ: f32 = 0.05 * 0.05; // 0.05 rad/s
 const SLEEP_TIMER_THRESHOLD: f32 = 2.0;    // saniye
 
-pub fn apply_inv_inertia(torque: Vec3, inv_inertia: Vec3, rot: Quat) -> Vec3 {
+/// Dünya uzayında tork `τ` için açısal ivme benzeri vektör `I⁻¹ τ` (burada `I⁻¹` dünya uzayında
+/// `R I_body⁻¹ Rᵀ`). `inverse_inertia_local` gövde çerçevesinde simetrik ters eylemsizlik matrisidir.
+pub fn apply_inv_inertia(torque: Vec3, inverse_inertia_local: Mat3, rot: Quat) -> Vec3 {
     let local_t = rot.inverse().mul_vec3(torque);
-    let local_ang = Vec3::new(
-        local_t.x * inv_inertia.x,
-        local_t.y * inv_inertia.y,
-        local_t.z * inv_inertia.z,
-    );
+    let local_ang = inverse_inertia_local * local_t;
     rot.mul_vec3(local_ang)
+}
+
+/// Tek iş parçacığı, skalar f32 — SIMD/AVX2 yok; `PhysicsConfig::deterministic_simulation` ile seçilir.
+fn physics_apply_forces_scalar(world: &World, dt: f32) {
+    if let (Some(mut vel_storage), Some(mut rbs)) = (
+        world.borrow_mut::<Velocity>(),
+        world.borrow_mut::<RigidBody>(),
+    ) {
+        let entities: Vec<u32> = vel_storage.dense.iter().map(|e| e.entity).collect();
+        let mut active_ents = Vec::with_capacity(entities.len());
+        for &entity in &entities {
+            if let Some(rb) = rbs.get_mut(entity) {
+                if let Some(v) = vel_storage.get_mut(entity) {
+                    if rb.mass > 0.0 {
+                        let lin_sq = v.linear.length_squared();
+                        let ang_sq = v.angular.length_squared();
+                        rb.avg_linear_sq = rb.avg_linear_sq * 0.9 + lin_sq * 0.1;
+                        rb.avg_angular_sq = rb.avg_angular_sq * 0.9 + ang_sq * 0.1;
+                        let is_still =
+                            rb.avg_linear_sq < SLEEP_LINEAR_SQ && rb.avg_angular_sq < SLEEP_ANGULAR_SQ;
+                        if is_still {
+                            rb.sleep_timer += dt;
+                            if rb.sleep_timer > SLEEP_TIMER_THRESHOLD {
+                                rb.is_sleeping = true;
+                                v.linear = Vec3::ZERO;
+                                v.angular = Vec3::ZERO;
+                            }
+                        } else {
+                            rb.wake_up();
+                        }
+                    }
+                    if !rb.is_sleeping && rb.mass > 0.0 {
+                        active_ents.push(entity);
+                    }
+                }
+            }
+        }
+
+        let linear_drag = (-0.5 * dt).exp();
+        let angular_drag = (-3.0 * dt).exp();
+
+        for &e in &active_ents {
+            if let Some(v) = vel_storage.get_mut(e) {
+                let g = rbs
+                    .get(e)
+                    .map(|rb| if rb.use_gravity { 9.81 } else { 0.0 })
+                    .unwrap_or(0.0);
+                let mut lx = v.linear.x;
+                let mut ly = v.linear.y;
+                let mut lz = v.linear.z;
+                let mut ax = v.angular.x;
+                let mut ay = v.angular.y;
+                let mut az = v.angular.z;
+
+                ly -= g * dt;
+                lx *= linear_drag;
+                ly *= linear_drag;
+                lz *= linear_drag;
+                ax *= angular_drag;
+                ay *= angular_drag;
+                az *= angular_drag;
+
+                v.linear = Vec3::new(
+                    lx.clamp(-200.0, 200.0),
+                    ly.clamp(-200.0, 200.0),
+                    lz.clamp(-200.0, 200.0),
+                );
+                v.angular = Vec3::new(
+                    ax.clamp(-100.0, 100.0),
+                    ay.clamp(-100.0, 100.0),
+                    az.clamp(-100.0, 100.0),
+                );
+            }
+        }
+    }
 }
 
 #[inline(always)]
@@ -156,6 +229,16 @@ unsafe fn physics_apply_forces_system_avx2(world: &World, dt: f32) {
 }
 
 pub fn physics_apply_forces_system(world: &World, dt: f32) {
+    let deterministic = world
+        .get_resource::<crate::components::PhysicsConfig>()
+        .map(|c| c.deterministic_simulation)
+        .unwrap_or(false);
+
+    if deterministic {
+        physics_apply_forces_scalar(world, dt);
+        return;
+    }
+
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         if is_x86_feature_detected!("avx2") {
@@ -165,7 +248,7 @@ pub fn physics_apply_forces_system(world: &World, dt: f32) {
             }
         }
     }
-    // Fallback: SSE, NEON veya safcalar LLVM auto-vectorization
+    // Fallback: SSE, NEON veya skalar `wide` yolu
     physics_apply_forces_system_impl(world, dt);
 }
 
@@ -229,7 +312,23 @@ pub fn physics_movement_system(world: &World, dt: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gizmo_math::Mat4;
+    use gizmo_math::{Mat3, Mat4};
+
+    #[test]
+    fn apply_inv_inertia_diagonal_mat3_matches_principal_formula() {
+        let rot = Quat::from_rotation_y(0.4) * Quat::from_rotation_z(-0.2);
+        let inv_diag = Vec3::new(2.0, 0.5, 1.25);
+        let inv = Mat3::from_diagonal(inv_diag);
+        let tau = Vec3::new(0.3, -1.1, 0.8);
+        let local_t = rot.inverse().mul_vec3(tau);
+        let expected = rot.mul_vec3(Vec3::new(
+            local_t.x * inv_diag.x,
+            local_t.y * inv_diag.y,
+            local_t.z * inv_diag.z,
+        ));
+        let got = apply_inv_inertia(tau, inv, rot);
+        assert!((got - expected).length() < 1e-5, "got {got:?} expected {expected:?}");
+    }
 
     #[test]
     fn test_physics_dirty_flag_matrix_update() {

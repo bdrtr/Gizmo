@@ -30,6 +30,10 @@ pub fn execute_render_pipeline(
     let mut proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 2000.0);
     let mut view_mat = Mat4::from_translation(Vec3::ZERO);
     let mut cam_pos = Vec3::ZERO;
+    let mut cam_near = 0.1f32;
+    let mut cam_far = 2000.0f32;
+    let mut cam_fov = std::f32::consts::FRAC_PI_4;
+    let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
     let _is_hidden_guard = world.borrow::<gizmo::core::component::IsHidden>();
 
     if let (Some(cameras), Some(transforms)) =
@@ -42,6 +46,10 @@ pub fn execute_render_pipeline(
             proj = cam.get_projection(aspect);
             view_mat = cam.get_view(trans.position);
             cam_pos = trans.position;
+            cam_near = cam.near;
+            cam_far = cam.far;
+            cam_fov = cam.fov;
+            cam_forward = cam.get_front();
         }
     }
 
@@ -114,29 +122,55 @@ pub fn execute_render_pipeline(
         }
     }
 
-    // Shadow Mapping İçin Dinamik Ana Işık Kamerası Hazırla
-    let mut light_view_proj = Mat4::IDENTITY;
-    if sun_dir[3] > 0.5 {
-        // Dinamik Frustum: Gölge kamerasını oyuncunun (cam_pos) tam üstüne/arkasına kilitleriz.
-        let light_direction = Vec3::new(sun_dir[0], sun_dir[1], sun_dir[2]).normalize();
-        // Güneşi kameranın çok uzağına yerleştirip, devasa şehri tamamen kapsamasını sağla
-        let light_pos = cam_pos - light_direction * 150.0;
+    let identity_m = Mat4::IDENTITY.to_cols_array_2d();
+    let mut light_view_proj_cascades = [identity_m; 4];
+    let mut cascade_splits = gizmo::renderer::cascade_split_distances(cam_near, cam_far, 0.75);
 
-        let light_view = Mat4::look_at_rh(light_pos, cam_pos, Vec3::new(0.0, 1.0, 0.0));
-        // Devasa şehir haritaları için gölge projeksiyon kutusunu 100 metre yarıçapına çıkarıyoruz
-        let light_proj = Mat4::orthographic_rh(-100.0, 100.0, -100.0, 100.0, 0.1, 300.0);
-        light_view_proj = light_proj * light_view;
+    if sun_dir[3] > 0.5 {
+        let light_direction = Vec3::new(sun_dir[0], sun_dir[1], sun_dir[2]).normalize();
+        let mats = gizmo::renderer::directional_cascade_view_projs(
+            cam_pos,
+            cam_forward,
+            aspect,
+            cam_fov,
+            cam_near,
+            &cascade_splits,
+            light_direction,
+            gizmo::renderer::SHADOW_MAP_RES,
+        );
+        for i in 0..4 {
+            light_view_proj_cascades[i] = mats[i].to_cols_array_2d();
+        }
     } else if num_lights > 0 {
-        // Fallback: PointLight taklidi
         let l_pos = Vec3::new(
             lights_data[0].position[0],
             lights_data[0].position[1],
             lights_data[0].position[2],
         );
-        let light_view = Mat4::look_at_rh(l_pos, Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0));
-        let light_proj = Mat4::orthographic_rh(-10.0, 10.0, -10.0, 10.0, 0.1, 100.0);
-        light_view_proj = light_proj * light_view;
+        let toward = (Vec3::ZERO - l_pos).normalize();
+        cascade_splits = gizmo::renderer::cascade_split_distances(cam_near, cam_far, 0.75);
+        let mats = gizmo::renderer::directional_cascade_view_projs(
+            cam_pos,
+            cam_forward,
+            aspect,
+            cam_fov,
+            cam_near,
+            &cascade_splits,
+            toward,
+            gizmo::renderer::SHADOW_MAP_RES,
+        );
+        for i in 0..4 {
+            light_view_proj_cascades[i] = mats[i].to_cols_array_2d();
+        }
     }
+
+    let cascade_params = [
+        cam_near,
+        1.0 / gizmo::renderer::SHADOW_MAP_RES as f32,
+        0.0,
+        0.0,
+    ];
+    let camera_forward_u = [cam_forward.x, cam_forward.y, cam_forward.z, 0.0];
 
     // Global Uniforms (Her frame sadece 1 kere gönderilir)
     let scene_uniform_data = gizmo::renderer::renderer::SceneUniforms {
@@ -145,7 +179,10 @@ pub fn execute_render_pipeline(
         sun_direction: sun_dir,
         sun_color: sun_col,
         lights: lights_data,
-        light_view_proj: light_view_proj.to_cols_array_2d(),
+        light_view_proj: light_view_proj_cascades,
+        cascade_splits,
+        camera_forward: camera_forward_u,
+        cascade_params,
         num_lights,
         _padding: [0; 3],
     };
@@ -158,7 +195,7 @@ pub fn execute_render_pipeline(
     // --- BATCHING (INSTANCING) HAZIRLIĞI VE FRUSTUM CULLING ---
     use gizmo::renderer::renderer::InstanceRaw;
 
-    let frustum = gizmo::math::frustum::Frustum::from_matrix(&view_proj);
+    let frustum = gizmo::renderer::Frustum::from_matrix(&view_proj);
 
     struct BatchData {
         vbuf: std::sync::Arc<wgpu::Buffer>,
@@ -225,10 +262,8 @@ pub fn execute_render_pipeline(
             let center_mat = Mat4::from_translation(mesh.center_offset);
             let model = global_model * center_mat;
 
-            // Frustum Culling
-            let world_aabb = mesh.bounds.transform(&model);
-            // Gelişmiş Editör Gizmo veya skybox istisnaları şimdilik stüdyoda devre dışı bırakıldı
-            if !frustum.contains_aabb(&world_aabb) {
+            // Frustum Culling (AABB vs view-projection frustum)
+            if !gizmo::renderer::visible_in_frustum(&frustum, &model, &mesh.bounds) {
                 continue;
             }
 
@@ -442,13 +477,21 @@ pub fn execute_render_pipeline(
         physics.compute_pass(encoder);
     }
 
-    // --- 1. GÖLGE PASS (Shadow Pass) ---
-    {
+    // --- 1. CSM GÖLGE PASS ---
+    for cascade_i in 0..4usize {
+        renderer.queue.write_buffer(
+            &renderer.scene.shadow_cascade_uniform_buffers[cascade_i],
+            0,
+            gizmo::bytemuck::bytes_of(&gizmo::renderer::ShadowVsUniform {
+                light_view_proj: light_view_proj_cascades[cascade_i],
+            }),
+        );
+
         let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Shadow Pass"),
-            color_attachments: &[], // Shadow pass sadece Depth'e çizer
+            label: Some(&format!("Shadow Pass cascade {cascade_i}")),
+            color_attachments: &[],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &renderer.scene.shadow_texture_view,
+                view: &renderer.scene.shadow_cascade_layer_views[cascade_i],
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
                     store: wgpu::StoreOp::Store,
@@ -461,14 +504,18 @@ pub fn execute_render_pipeline(
 
         shadow_pass.set_pipeline(&renderer.scene.shadow_pipeline);
 
-        // Tıpkı main render gibi gruplanmış nesneleri tek draw çağrısıyla bas
         for batch in &flat_batches {
             if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                 continue;
             }
-            let safe_end = std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
+            let safe_end =
+                std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
 
-            shadow_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+            shadow_pass.set_bind_group(
+                0,
+                &renderer.scene.shadow_pass_bind_groups[cascade_i],
+                &[],
+            );
             shadow_pass.set_bind_group(1, &batch.skeleton_bg, &[]);
             shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
             shadow_pass.set_vertex_buffer(0, batch.vbuf.slice(..));

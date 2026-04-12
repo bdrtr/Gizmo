@@ -7,9 +7,100 @@ use std::sync::Arc;
 use tobj;
 use wgpu::util::DeviceExt;
 
+/// Decode an image file to RGBA8 on a background thread (CPU only).
+pub fn decode_rgba_image_file(path: &str) -> Result<(Vec<u8>, u32, u32), String> {
+    let img = image::open(path)
+        .map_err(|e| format!("Doku okunamadi ({path}): {e}"))?
+        .to_rgba8();
+    let (w, h) = img.dimensions();
+    Ok((img.into_raw(), w, h))
+}
+
+/// OBJ → vertices + AABB without GPU (for [`crate::async_assets::AsyncAssetLoader`]).
+pub fn decode_obj_vertices_for_async(file_path: &str) -> Result<(Vec<Vertex>, gizmo_math::Aabb), String> {
+    let (models, _materials) = tobj::load_obj(
+        file_path,
+        &tobj::LoadOptions {
+            single_index: true,
+            triangulate: true,
+            ignore_points: true,
+            ignore_lines: true,
+        },
+    )
+    .map_err(|e| format!("OBJ ({file_path}): {e}"))?;
+
+    if models.is_empty() {
+        return Err(format!("OBJ dosyasinda model yok: {file_path}"));
+    }
+
+    let mut aabb = gizmo_math::Aabb::empty();
+    let mut vertices = Vec::new();
+    let m = &models[0].mesh;
+
+    for i in &m.indices {
+        let idx = *i as usize;
+        let position = [
+            m.positions[idx * 3],
+            m.positions[idx * 3 + 1],
+            m.positions[idx * 3 + 2],
+        ];
+        aabb.extend(Vec3::new(position[0], position[1], position[2]));
+
+        let normal = if !m.normals.is_empty() {
+            [
+                m.normals[idx * 3],
+                m.normals[idx * 3 + 1],
+                m.normals[idx * 3 + 2],
+            ]
+        } else {
+            [0.0, 1.0, 0.0]
+        };
+
+        let tex_coords = if !m.texcoords.is_empty() {
+            [m.texcoords[idx * 2], 1.0 - m.texcoords[idx * 2 + 1]]
+        } else {
+            [0.0, 0.0]
+        };
+
+        vertices.push(Vertex {
+            position,
+            normal,
+            tex_coords,
+            color: [1.0, 1.0, 1.0],
+            joint_indices: [0; 4],
+            joint_weights: [0.0; 4],
+        });
+    }
+
+    if m.normals.is_empty() {
+        for chunk in vertices.chunks_exact_mut(3) {
+            let p0 = chunk[0].position;
+            let p1 = chunk[1].position;
+            let p2 = chunk[2].position;
+            let v0 = Vec3::new(p0[0], p0[1], p0[2]);
+            let v1 = Vec3::new(p1[0], p1[1], p1[2]);
+            let v2 = Vec3::new(p2[0], p2[1], p2[2]);
+            let norm = (v1 - v0).cross(v2 - v0);
+            let final_norm = if norm.length_squared() > 1e-6 {
+                norm.normalize()
+            } else {
+                Vec3::new(0.0, 1.0, 0.0)
+            };
+            let n_arr = [final_norm.x, final_norm.y, final_norm.z];
+            chunk[0].normal = n_arr;
+            chunk[1].normal = n_arr;
+            chunk[2].normal = n_arr;
+        }
+    }
+
+    Ok((vertices, aabb))
+}
+
 pub struct AssetManager {
     mesh_cache: std::collections::HashMap<String, Mesh>,
     pub texture_cache: std::collections::HashMap<String, Arc<wgpu::BindGroup>>,
+    /// Reused for [`Self::loading_placeholder_mesh`] while async mesh loads complete.
+    placeholder_mesh: Option<Mesh>,
 }
 
 impl Default for AssetManager {
@@ -23,106 +114,84 @@ impl AssetManager {
         Self {
             mesh_cache: std::collections::HashMap::new(),
             texture_cache: std::collections::HashMap::new(),
+            placeholder_mesh: None,
         }
     }
 
-    /// Bir .obj dosyasını diskten okur ve Mesh ECS bileşenine dönüştürür.
-    /// Daha önce okunmuşsa, RAM ve VRAM tüketimini önlemek için önbellekten direkt kopya döndürür.
-    pub fn load_obj(&mut self, device: &wgpu::Device, file_path: &str) -> Mesh {
-        if let Some(cached) = self.mesh_cache.get(file_path) {
-            return cached.clone(); // Orijinal veri Arc<Buffer> olduğu için direkt kopya döner (sıfır maliyet)
+    /// Küçük renkli placeholder (async OBJ/GLTF beklerken kullanılır).
+    pub fn loading_placeholder_mesh(&mut self, device: &wgpu::Device) -> Mesh {
+        if let Some(ref m) = self.placeholder_mesh {
+            return m.clone();
         }
+        let m = Self::create_loading_placeholder(device);
+        self.placeholder_mesh = Some(m.clone());
+        m
+    }
 
-        let (models, _materials) = tobj::load_obj(
-            file_path,
-            &tobj::LoadOptions {
-                single_index: true,
-                triangulate: true,
-                ignore_points: true,
-                ignore_lines: true,
-            },
-        )
-        .unwrap_or_else(|e| panic!("AssetManager: OBJ yuklenirken hata! {} ({})", file_path, e));
-
-        if models.is_empty() {
-            panic!(
-                "AssetManager: OBJ dosyasinda model bulunamadi: {}",
-                file_path
-            );
-        }
-
-        let mut aabb = gizmo_math::Aabb::empty();
-        let mut vertices = Vec::new();
-        let m = &models[0].mesh;
-
-        for i in &m.indices {
-            let idx = *i as usize;
-
-            let position = [
-                m.positions[idx * 3],
-                m.positions[idx * 3 + 1],
-                m.positions[idx * 3 + 2],
-            ];
-            aabb.extend(Vec3::new(position[0], position[1], position[2]));
-
-            let normal = if !m.normals.is_empty() {
-                [
-                    m.normals[idx * 3],
-                    m.normals[idx * 3 + 1],
-                    m.normals[idx * 3 + 2],
-                ]
-            } else {
-                [0.0, 1.0, 0.0]
-            };
-
-            let tex_coords = if !m.texcoords.is_empty() {
-                [m.texcoords[idx * 2], 1.0 - m.texcoords[idx * 2 + 1]]
-            } else {
-                [0.0, 0.0]
-            };
-
-            vertices.push(Vertex {
-                position,
-                normal,
-                tex_coords,
-                color: [1.0, 1.0, 1.0],
-                joint_indices: [0; 4],
-                joint_weights: [0.0; 4],
-            });
-        }
-
-        // Eğer dosya normal içermiyorsa, [0,1,0] ile saçmalamak yerine
-        // üçgen yüzeylerinden flat (düz) normaller hesaplayalım:
-        if m.normals.is_empty() {
-            for chunk in vertices.chunks_exact_mut(3) {
-                let p0 = chunk[0].position;
-                let p1 = chunk[1].position;
-                let p2 = chunk[2].position;
-                let v0 = Vec3::new(p0[0], p0[1], p0[2]);
-                let v1 = Vec3::new(p1[0], p1[1], p1[2]);
-                let v2 = Vec3::new(p2[0], p2[1], p2[2]);
-
-                let norm = (v1 - v0).cross(v2 - v0);
-                // Sıfır uzunluklu cross product'tan kaçın
-                let final_norm = if norm.length_squared() > 1e-6 {
-                    norm.normalize()
-                } else {
-                    Vec3::new(0.0, 1.0, 0.0)
-                };
-                let n_arr = [final_norm.x, final_norm.y, final_norm.z];
-
-                chunk[0].normal = n_arr;
-                chunk[1].normal = n_arr;
-                chunk[2].normal = n_arr;
+    fn create_loading_placeholder(device: &wgpu::Device) -> Mesh {
+        // Octahedron — küçük, her açıdan görünür
+        let p = [
+            [1.0f32, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ];
+        let col = [0.95, 0.45, 0.95];
+        let idx: [[usize; 3]; 8] = [
+            [0, 2, 4],
+            [2, 1, 4],
+            [1, 3, 4],
+            [3, 0, 4],
+            [2, 0, 5],
+            [1, 2, 5],
+            [3, 1, 5],
+            [0, 3, 5],
+        ];
+        let mut vertices = Vec::with_capacity(24);
+        for tri in idx {
+            for &i in &tri {
+                let pos = p[i];
+                let n = Vec3::new(pos[0], pos[1], pos[2]).normalize();
+                vertices.push(Vertex {
+                    position: pos,
+                    normal: [n.x, n.y, n.z],
+                    tex_coords: [0.0, 0.0],
+                    color: col,
+                    joint_indices: [0; 4],
+                    joint_weights: [0.0; 4],
+                });
             }
         }
+        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Async loading placeholder"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let aabb = gizmo_math::Aabb::new(Vec3::splat(-1.2), Vec3::splat(1.2));
+        Mesh::new(
+            Arc::new(vbuf),
+            vertices.len() as u32,
+            Vec3::ZERO,
+            "__async_loading__".to_string(),
+            aabb,
+        )
+    }
 
+    /// GPU'ya OBJ vertex verisini yazar ve önbelleğe koyar ([`AsyncAssetLoader`](crate::async_assets::AsyncAssetLoader) tamamlanınca).
+    pub fn install_obj_mesh(
+        &mut self,
+        device: &wgpu::Device,
+        file_path: &str,
+        vertices: Vec<Vertex>,
+        aabb: gizmo_math::Aabb,
+    ) -> Mesh {
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(&format!("Obj VBuf: {}", file_path)),
             contents: bytemuck::cast_slice(&vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
-
         let mesh = Mesh::new(
             Arc::new(vbuf),
             vertices.len() as u32,
@@ -132,6 +201,19 @@ impl AssetManager {
         );
         self.mesh_cache.insert(file_path.to_string(), mesh.clone());
         mesh
+    }
+
+    /// Bir .obj dosyasını diskten okur ve Mesh ECS bileşenine dönüştürür.
+    /// Daha önce okunmuşsa, RAM ve VRAM tüketimini önlemek için önbellekten direkt kopya döndürür.
+    pub fn load_obj(&mut self, device: &wgpu::Device, file_path: &str) -> Mesh {
+        if let Some(cached) = self.mesh_cache.get(file_path) {
+            return cached.clone();
+        }
+
+        let (vertices, aabb) = decode_obj_vertices_for_async(file_path).unwrap_or_else(|e| {
+            panic!("AssetManager: OBJ yuklenirken hata! {} ({})", file_path, e)
+        });
+        self.install_obj_mesh(device, file_path, vertices, aabb)
     }
 
     /// İçi boş ters yüzlü küp (Skybox) mesh üretir.
@@ -725,6 +807,91 @@ impl AssetManager {
         Ok((mesh, heights, img_width, img_height))
     }
 
+    /// Decode edilmiş RGBA8'i GPU'ya yükler ve `texture_cache`'e yazar ([`crate::async_assets::AsyncAssetLoader`] tamamlanınca).
+    pub fn install_decoded_material_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layout: &wgpu::BindGroupLayout,
+        cache_key: &str,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<Arc<wgpu::BindGroup>, String> {
+        let expected = (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(4);
+        if rgba.len() != expected {
+            return Err(format!(
+                "RGBA boyut uyumsuz: {} byte, beklenen {} ({}x{}x4)",
+                rgba.len(),
+                expected,
+                width,
+                height
+            ));
+        }
+
+        let texture_size = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            size: texture_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            label: Some(cache_key),
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * width),
+                rows_per_image: Some(height),
+            },
+            texture_size,
+        );
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let bg = Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(cache_key),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        }));
+
+        self.texture_cache.insert(cache_key.to_string(), bg.clone());
+        Ok(bg)
+    }
+
     /// Bir resmi okuyup Bind Group (Material Texture + Sampler) haline getirir
     pub fn load_material_texture(
         &mut self,
@@ -744,69 +911,8 @@ impl AssetManager {
             return Ok(cached.clone());
         }
 
-        let img = image::open(path)
-            .map_err(|e| format!("Doku yuklenirken hata! {} ({})", path, e))?
-            .to_rgba8();
-        let dimensions = img.dimensions();
-        let texture_size = wgpu::Extent3d {
-            width: dimensions.0,
-            height: dimensions.1,
-            depth_or_array_layers: 1,
-        };
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            size: texture_size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            label: Some(path),
-            view_formats: &[],
-        });
-        queue.write_texture(
-            wgpu::ImageCopyTexture {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &img,
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * dimensions.0),
-                rows_per_image: Some(dimensions.1),
-            },
-            texture_size,
-        );
-
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-
-        let bg = Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(path),
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        }));
-
-        self.texture_cache.insert(path.to_string(), bg.clone());
-        Ok(bg)
+        let (rgba, w, h) = decode_rgba_image_file(path)?;
+        self.install_decoded_material_texture(device, queue, layout, path, &rgba, w, h)
     }
 
     /// Cache'i zorla silerek bir dokunun diskten tekrar yüklenmesini ve Bind Group'un güncellenmesini sağlar
@@ -913,7 +1019,30 @@ impl AssetManager {
     ) -> Result<GltfSceneAsset, String> {
         let (document, buffers, images) = gltf::import(file_path)
             .map_err(|e| format!("GLTF dosyasi yuklenemedi ({}). Hata: {}", file_path, e))?;
+        self.load_gltf_from_import(
+            device,
+            queue,
+            texture_bind_group_layout,
+            default_tbind,
+            file_path,
+            document,
+            buffers,
+            images,
+        )
+    }
 
+    /// `gltf::import` ana iş parçacığı dışında çalıştırıldıktan sonra GPU yüklemesi için.
+    pub fn load_gltf_from_import(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture_bind_group_layout: &wgpu::BindGroupLayout,
+        default_tbind: Arc<wgpu::BindGroup>,
+        file_path: &str,
+        document: gltf::Document,
+        buffers: Vec<gltf::buffer::Data>,
+        images: Vec<gltf::image::Data>,
+    ) -> Result<GltfSceneAsset, String> {
         // --- 1. RESİMLERİ TEXTURE & BINDGROUP YAPMA ---
         let mut gltf_textures = Vec::new();
 

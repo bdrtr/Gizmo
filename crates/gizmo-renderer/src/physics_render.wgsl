@@ -1,15 +1,27 @@
-// --- Bindings ---
-@group(0) @binding(0) var<uniform> scene: SceneUniforms;
-@group(0) @binding(1) var s_shadow: sampler_comparison;
-@group(0) @binding(2) var t_shadow: texture_depth_2d;
+// Uses the same `SceneUniforms` / global buffer layout as the main scene (binding 0 only).
+
+struct LightData {
+    position:  vec4<f32>,
+    color:     vec4<f32>,
+    direction: vec4<f32>,
+    params:    vec4<f32>,
+};
 
 struct SceneUniforms {
     view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
     sun_direction: vec4<f32>,
     sun_color: vec4<f32>,
-    // we omit the rest of the struct since we don't strictly need it for basic sphere shading
-}
+    lights: array<LightData, 10>,
+    light_view_proj: array<mat4x4<f32>, 4>,
+    cascade_splits: vec4<f32>,
+    camera_forward: vec4<f32>,
+    cascade_params: vec4<f32>,
+    num_lights: u32,
+    _pad_scene: vec3<u32>,
+};
+
+@group(0) @binding(0) var<uniform> scene: SceneUniforms;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -38,7 +50,6 @@ fn vs_main(
 ) -> VertexOutput {
     var out: VertexOutput;
     
-    // Scale local model by radius, then translate by instance.pos
     let r = instance.pos_radius.w;
     let world_pos = (model.position * r) + instance.pos_radius.xyz;
     
@@ -59,7 +70,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let base_color = in.color.rgb;
     let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
     
-    // Basit bir Işık Modeli
     let ambient = base_color * 0.3;
     var diffuse = vec3<f32>(0.0);
     var specular = vec3<f32>(0.0);

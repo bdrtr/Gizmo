@@ -17,8 +17,9 @@ pub struct World {
     storages: HashMap<TypeId, RefCell<Box<dyn ComponentStorage>>>,
     // Entity'den bağımsız global veriler (Time, WindowSize, Input vs.)
     resources: HashMap<TypeId, RefCell<Box<dyn std::any::Any>>>,
-    // Entity başına hangi TypeId'lerde component var — despawn'da O(S) yerine O(C) tarama
-    entity_components: HashMap<u32, Vec<TypeId>>,
+    // Entity başına hangi TypeId'lerde component var — despawn'da O(S) yerine O(C) tarama.
+    // HashSet: aynı tür iki kez `add_component` ile eklenemez; despawn'ta `remove_entity` yalnızca bir kez çağrılır.
+    entity_components: HashMap<u32, HashSet<TypeId>>,
 }
 
 impl World {
@@ -126,15 +127,12 @@ impl World {
             sparse_set.insert(entity.id(), component);
         }
 
-        // Entity → TypeId takibini güncelle (despawn optimizasyonu için)
-        let types = self
-            .entity_components
+        // Entity → TypeId takibini güncelle (despawn optimizasyonu için).
+        // `insert`: ikinci kez aynı tür eklenirse yine tek kayıt (SparseSet zaten üzerine yazar).
+        self.entity_components
             .entry(entity.id())
-            .or_insert_with(Vec::new);
-
-        if !types.contains(&type_id) {
-            types.push(type_id);
-        }
+            .or_default()
+            .insert(type_id);
     }
 
     /// Sistemden component silme
@@ -153,9 +151,7 @@ impl World {
         }
 
         if let Some(types) = self.entity_components.get_mut(&entity.id()) {
-            if let Some(pos) = types.iter().position(|x| *x == type_id) {
-                types.remove(pos);
-            }
+            types.remove(&type_id);
         }
     }
 
@@ -425,5 +421,26 @@ mod tests {
 
         let hp = world.borrow::<Health>().unwrap();
         assert_eq!(hp.get(e.id()).unwrap().0, 50);
+    }
+
+    /// Aynı component türü iki kez eklenince entity_components'ta tek TypeId kalmalı;
+    /// despawn SparseSet'te remove_entity'yi yalnızca bir kez tetiklemeli (çift silme / panic yok).
+    #[test]
+    fn test_double_add_component_despawn_safe() {
+        let mut world = World::new();
+        let e = world.spawn();
+        let id = e.id();
+        world.add_component(e, Health(100));
+        world.add_component(e, Health(50));
+
+        world.despawn(e);
+
+        assert!(!world.is_alive(e));
+        assert!(world.borrow::<Health>().unwrap().get(id).is_none());
+
+        // ID yeniden kullanıldığında eski Health taşınmamalı
+        let e2 = world.spawn();
+        assert_eq!(e2.id(), id);
+        assert!(world.borrow::<Health>().unwrap().get(e2.id()).is_none());
     }
 }

@@ -73,6 +73,13 @@ pub struct PostProcessUniforms {
     pub _padding: [f32; 3],
 }
 
+/// Uniform block for the shadow pass vertex shader only (one cascade matrix per draw).
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub struct ShadowVsUniform {
+    pub light_view_proj: [[f32; 4]; 4],
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct SceneUniforms {
@@ -81,7 +88,14 @@ pub struct SceneUniforms {
     pub sun_direction: [f32; 4],
     pub sun_color: [f32; 4],
     pub lights: [LightData; 10],
-    pub light_view_proj: [[f32; 4]; 4],
+    /// Directional CSM: world → light clip space per cascade (same order as shadow array layers).
+    pub light_view_proj: [[[f32; 4]; 4]; 4],
+    /// Far distance (along `camera_forward`) for cascades 0..3; `w` is always camera far plane.
+    pub cascade_splits: [f32; 4],
+    /// xyz = normalized camera forward in world space (for view-depth cascade selection).
+    pub camera_forward: [f32; 4],
+    /// x = camera z_near, y = 1 / shadow map resolution (PCF texel size), zw unused.
+    pub cascade_params: [f32; 4],
     pub num_lights: u32,
     pub _padding: [u32; 3],
 }

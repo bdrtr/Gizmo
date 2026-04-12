@@ -1,7 +1,23 @@
 struct LightData {
-    position: vec4<f32>,
-    color: vec4<f32>,
+    position:  vec4<f32>,  // xyz=pos, w=intensity
+    color:     vec4<f32>,  // rgb=color, a=radius
+    direction: vec4<f32>,  // xyz=dir (spot/directional), w=inner_cutoff_cos
+    params:    vec4<f32>,  // x=outer_cutoff_cos, y=light_type (0=point,1=spot,2=dir)
 };
+
+// Inverse of a 3x3 matrix for correct normal transformation under non-uniform scale
+fn inverse_transpose_3x3(m: mat3x3<f32>) -> mat3x3<f32> {
+    let cross01 = cross(m[0], m[1]);
+    let cross12 = cross(m[1], m[2]);
+    let cross20 = cross(m[2], m[0]);
+    let inv_det = 1.0 / dot(m[2], cross01);
+
+    return mat3x3<f32>(
+        cross12 * inv_det,
+        cross20 * inv_det,
+        cross01 * inv_det
+    );
+}
 
 struct SceneUniforms {
     view_proj: mat4x4<f32>,
@@ -9,8 +25,12 @@ struct SceneUniforms {
     sun_direction: vec4<f32>,
     sun_color: vec4<f32>,
     lights: array<LightData, 10>,
-    light_view_proj: mat4x4<f32>,
+    light_view_proj: array<mat4x4<f32>, 4>,
+    cascade_splits: vec4<f32>,
+    camera_forward: vec4<f32>,
+    cascade_params: vec4<f32>,
     num_lights: u32,
+    _pad_scene: vec3<u32>,
 };
 
 
@@ -19,7 +39,7 @@ struct SceneUniforms {
 var<uniform> scene: SceneUniforms;
 
 @group(2) @binding(0)
-var t_shadow: texture_depth_2d;
+var t_shadow: texture_depth_2d_array;
 
 @group(2) @binding(1)
 var s_shadow: sampler_comparison;
@@ -62,10 +82,8 @@ struct VertexOutput {
     @location(1) normal: vec3<f32>,
     @location(2) tex_coords: vec2<f32>,
     @location(3) world_position: vec3<f32>,
-    @location(4) light_space_pos: vec4<f32>,
-    @location(5) inst_albedo: vec4<f32>,
-    @location(6) inst_pbr: vec4<f32>,
-    @location(7) local_normal: vec3<f32>,
+    @location(4) inst_albedo: vec4<f32>,
+    @location(5) inst_pbr: vec4<f32>,
 };
 
 @vertex
@@ -104,17 +122,10 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     let world_pos = model * vec4<f32>(skinned_pos.xyz, 1.0);
     out.world_position = world_pos.xyz;
     
-    // Obje veya animasyon döndürüldüğünde ışık da tepki versin
+    // Obje veya animasyon döndürüldüğünde ışık da tepki versin (Non-uniform scale desteği ile)
     let skinned_normal = skin_mat * vec4<f32>(input.normal, 0.0);
-    // Şimdilik inverse-transpose yerine basit tutuyoruz ama normalize eklendi (Scale bozulmalarını minimuma indirir)
-    let world_normal_raw = (model * vec4<f32>(skinned_normal.xyz, 0.0)).xyz;
-    
-    // ÇOK ÖNEMLİ: Sıfıra bölme (Division by Zero) WGSL'de mix fonksiyonu etrafında bile NaN üretebilir. 
-    // safe_len ile bunu matematiğe girmeden kesiyoruz!
-    let wn_len = length(world_normal_raw);
-    let safe_wn_len = max(wn_len, 0.0001);
-    let world_normal = mix(vec3<f32>(0.0, 1.0, 0.0), world_normal_raw / safe_wn_len, step(0.0001, wn_len));
-    
+    let normal_matrix = inverse_transpose_3x3(mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz));
+    let world_normal = normal_matrix * skinned_normal.xyz;
     out.normal = world_normal;
     
     out.inst_albedo = inst.albedo_color;
@@ -122,25 +133,33 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
 
     // Kameraya yansıt
     out.clip_position = scene.view_proj * world_pos;
-    out.local_normal = input.normal;
-    
-    // Işık kamerasına yansıt (Gölge Haritası İçin)
-    out.light_space_pos = scene.light_view_proj * world_pos;
     
     return out;
 }
 
+fn select_cascade(view_depth: f32) -> u32 {
+    if (view_depth < scene.cascade_splits.x) { return 0u; }
+    if (view_depth < scene.cascade_splits.y) { return 1u; }
+    if (view_depth < scene.cascade_splits.z) { return 2u; }
+    return 3u;
+}
+
 @fragment
-fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
-    // Fragment içinde in.normal'in sıfır olup NaN patlamasını engelleyen matematik (Division By Zero engelli!):
-    var n_len = length(in.normal);
-    var safe_n_len = max(n_len, 0.0001);
-    var N = mix(vec3<f32>(0.0, 1.0, 0.0), in.normal / safe_n_len, step(0.0001, n_len));
     
-    if (!is_front) {
-        N = -N;
+    // Alpha Cutoff (Alpha Test)
+    let final_alpha = in.inst_albedo.a * tex_color.a;
+    if (final_alpha < 0.5) {
+        discard;
     }
+
+    var raw_normal = in.normal;
+    if (length(raw_normal) < 0.001) {
+        // Hatalı (sıfır) normalleri olan modeller için NaN hatasını engelle!
+        raw_normal = vec3<f32>(0.0, 1.0, 0.0);
+    }
+    let N = normalize(raw_normal);
     
     // Temel Yüzey Rengi (Albedo Rengi * Texture Rengi)
     let base_color = in.inst_albedo.rgb * tex_color.rgb;
@@ -171,96 +190,132 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
     let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
     let f0 = mix(vec3<f32>(0.04), base_color, metallic);
     
-    let ambient = base_color * 0.4; // 0.15'ten 0.4'e çıkartarak gölgelerin kapkaranlık olmasını engelledik
+    // --- Golden Hour (Gün Batımı) Hemispheric (Yarı-küresel) Ortam Işığı ---
+    let sky_ambient = vec3<f32>(0.8, 0.5, 0.4) * 0.7; // Gün batımı gökyüzünden yansıyan kızıl ışık
+    let ground_ambient = vec3<f32>(0.15, 0.1, 0.15); // Yerden seken morumsu gölge 
+    let hemi_mix = N.y * 0.5 + 0.5;
+    let ambient = base_color * mix(ground_ambient, sky_ambient, hemi_mix);
     
-    // --- Gölge Hesaplama (Shadow Mapping with PCF) ---
+    // --- Fake IBL (Image Based Lighting) Yansıması ---
+    let R = reflect(-view_dir, N);
+    let reflect_mix = clamp(R.y * 0.5 + 0.5, 0.0, 1.0);
+    // Yansımaları gökyüzü rengine (gün batımına) uydur
+    let fake_env_color = mix(ground_ambient, vec3<f32>(1.0, 0.6, 0.4), reflect_mix);
+    
+    let fake_ibl_specular = f0 * fake_env_color * ((1.0 - min_roughness) * (1.0 - min_roughness) * 2.0);
+
+    // --- CSM Gölge (PCF, doğrudan güneş açıkken) ---
     var shadow_visibility = 1.0;
-    
-    // Homojen koordinatlara (NDCs) çevir [-1, 1]
-    let light_ndc = in.light_space_pos.xyz / in.light_space_pos.w;
-    
-    // NDC -> Doku Koordinatları (Orijin sol üst)
-    let shadow_uv = vec2<f32>(
-        light_ndc.x * 0.5 + 0.5,
-        (light_ndc.y * -0.5) + 0.5
-    );
-    
-    // Eğer noktamız ışık kamerasının görüş alanı içerisindeyse
-    if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 && light_ndc.z <= 1.0) {
-        // Yüzey normaline ve ışık açısına bağlı adaptif Bias (Shadow Acne'yi düzeltir)
-        let L_dir = normalize(-scene.sun_direction.xyz);
-        let current_bias = max(0.001, 0.008 * (1.0 - max(dot(N, L_dir), 0.0)));
-        
-        var pcf_visibility = 0.0;
-        let texel_size = 1.0 / 2048.0; // Texture ebadına göre 1 piksel boyutu
-        for (var x = -1; x <= 1; x++) {
-            for (var y = -1; y <= 1; y++) {
-                let offset = vec2<f32>(f32(x), f32(y)) * texel_size;
-                pcf_visibility += textureSampleCompare(
-                    t_shadow, s_shadow,
-                    shadow_uv + offset,
-                    light_ndc.z - current_bias
-                );
+    if (scene.sun_direction.w > 0.5) {
+        let view_depth = dot(in.world_position - scene.camera_pos.xyz, scene.camera_forward.xyz);
+        let ci = select_cascade(view_depth);
+        let light_vp = scene.light_view_proj[ci];
+        let light_clip = light_vp * vec4<f32>(in.world_position, 1.0);
+        let light_ndc = light_clip.xyz / light_clip.w;
+        let shadow_uv = vec2<f32>(
+            light_ndc.x * 0.5 + 0.5,
+            (light_ndc.y * -0.5) + 0.5
+        );
+        if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 && light_ndc.z <= 1.0) {
+            let L_dir = normalize(-scene.sun_direction.xyz);
+            let slope = 1.0 - max(dot(N, L_dir), 0.0);
+            let bias = max(0.005 * slope, 0.001);
+            var pcf_visibility = 0.0;
+            let texel_size = scene.cascade_params.y;
+            for (var x = -1; x <= 1; x++) {
+                for (var y = -1; y <= 1; y++) {
+                    let offset = vec2<f32>(f32(x), f32(y)) * texel_size;
+                    pcf_visibility += textureSampleCompare(
+                        t_shadow, s_shadow,
+                        shadow_uv + offset,
+                        ci,
+                        light_ndc.z - bias
+                    );
+                }
             }
+            shadow_visibility = pcf_visibility / 9.0;
         }
-        shadow_visibility = pcf_visibility / 9.0;
     }
     
     var total_diffuse = vec3<f32>(0.0);
     var total_specular = vec3<f32>(0.0);
 
-    // --- 1. Directional Light (Güneş / Ana Işık) Hesaplaması ---
-    if (scene.sun_direction.w > 0.5) { // Eğer güneş açıksa
-        // Işık vektörü, güneş ışığına doğru bakan vektördür (yönün tersi)
+    // --- 1. Directional Light (Güneş) ---
+    if (scene.sun_direction.w > 0.5) { 
         let L = normalize(-scene.sun_direction.xyz);
         let diff = max(dot(N, L), 0.0);
         
-        var spec = 0.0;
-        // Eğer yüzey ışığa dönük değilse, specular highlight oluşmamalı! (Işık sızmasını engeller)
-        if (diff > 0.0) {
-            let reflect_dir = reflect(-L, N);
-            // KORUMA: Linux Mesa sürücülerinde pow(0.0, shininess) NaN çıkarıp bütün ekranı siyah yapabilir! Bu yüzden 0.0001 limiti kondu.
-            spec = pow(max(dot(view_dir, reflect_dir), 0.0001), shininess);
-        }
+        let reflect_dir = reflect(-L, N);
+        let spec = pow(max(dot(view_dir, reflect_dir), 0.0), shininess);
         
         let intensity = scene.sun_color.w;
         let sun_color = scene.sun_color.rgb;
 
-        // Gölge (shadow_visibility) sadece Güneş ışığını doğrudan maskeler
         total_diffuse += base_color * (1.0 - metallic) * diff * sun_color * intensity * shadow_visibility;
         total_specular += f0 * spec * (1.0 - min_roughness) * sun_color * intensity * shadow_visibility;
     }
 
-    // --- 2. Point Lights Hesaplaması ---
+    // --- 2. Dynamic Lights (Point / Spot / Directional) ---
     for (var i = 0u; i < scene.num_lights; i++) {
         let light = scene.lights[i];
-        
-        let L = normalize(light.position.xyz - in.world_position);
-        let diff = max(dot(N, L), 0.0);
-        
-        var spec = 0.0;
-        if (diff > 0.0) {
-            let reflect_dir = reflect(-L, N);
-            // KORUMA: Linux Mesa pow() NaN bug'ı koruması
-            spec = pow(max(dot(view_dir, reflect_dir), 0.0001), shininess);
-        }
-        
-        let distance = length(light.position.xyz - in.world_position);
-        let attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * (distance * distance));
+        let light_type = u32(light.params.y);
         let intensity = light.position.w;
+        
+        var L: vec3<f32>;
+        var attenuation: f32 = 1.0;
 
-        // Noktasal ışıklar şu an için gölge üretmiyor
+        if (light_type == 2u) {
+            // --- Directional Light ---
+            L = normalize(-light.direction.xyz);
+            attenuation = 1.0;
+        } else {
+            // --- Point & Spot: distance-based attenuation ---
+            let to_light = light.position.xyz - in.world_position;
+            let distance = length(to_light);
+            let radius = max(light.color.a, 0.001);
+            L = normalize(to_light);
+            // Smooth inverse-square falloff with radius cutoff
+            let d_over_r = distance / radius;
+            attenuation = clamp(1.0 - d_over_r * d_over_r * d_over_r * d_over_r, 0.0, 1.0);
+            attenuation = (attenuation * attenuation) / (distance * distance + 1.0);
+
+            if (light_type == 1u) {
+                // --- Spot cone attenuation ---
+                let spot_dir = normalize(light.direction.xyz);
+                let cos_angle = dot(-L, spot_dir);
+                let inner_cos = light.direction.w;
+                let outer_cos = light.params.x;
+                let epsilon = max(inner_cos - outer_cos, 0.001);
+                let spot_factor = clamp((cos_angle - outer_cos) / epsilon, 0.0, 1.0);
+                attenuation *= spot_factor * spot_factor; // Smooth edge
+            }
+        }
+
+        let diff = max(dot(N, L), 0.0);
+        let reflect_dir = reflect(-L, N);
+        let spec = pow(max(dot(view_dir, reflect_dir), 0.0), shininess);
+
         total_diffuse += base_color * (1.0 - metallic) * diff * light.color.rgb * attenuation * intensity;
         total_specular += f0 * spec * (1.0 - min_roughness) * light.color.rgb * attenuation * intensity;
     }
     
-    // Eksik veya simsiyah (0,0,0) kaydedilmiş Vertex Color'ları tespit et ve kurtar:
-    // Eğer in.color tamamen siyahsa veya siyaha çok yakınsa, onu 1.0 (Beyaz) kabul et ki objeyi zifiri karanlık yapmasın!
-    let use_vertex_color = step(0.01, length(in.color));
-    let vc = mix(vec3<f32>(1.0), in.color, use_vertex_color);
+    // Parçaları topla
+    var v_color = in.color;
+    if (length(v_color) < 0.0001) {
+        v_color = vec3<f32>(1.0, 1.0, 1.0);
+    }
+    var final_color = v_color * (ambient + total_diffuse + total_specular + fake_ibl_specular);
     
-    // Parçaları topla (Tavsiye edildiği gibi vc değişkeni eklendi)
-    let final_color = vc * (ambient + total_diffuse + total_specular);
+    // --- ACES Tone Mapping (Filmik Renk Düzenlemesi) ---
+    // Patlayan aşırı beyaz/parlak renkleri yumuşatarak sinematik ve gerçekçi bir filtre atar
+    let a = 2.51;
+    let b = 0.03;
+    let c = 2.43;
+    let d = 0.59;
+    let e = 0.14;
+    final_color = clamp((final_color * (a * final_color + b)) / (final_color * (c * final_color + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
+    // Srgb gamma düzeltmesi
+    final_color = pow(final_color, vec3<f32>(1.0 / 2.2));
     
     return vec4<f32>(final_color, in.inst_albedo.a * tex_color.a);
 }

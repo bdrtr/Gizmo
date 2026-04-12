@@ -1,3 +1,10 @@
+//! Dosya izleme (`AssetWatcher`) ile hot-reload.
+//!
+//! Görüntü dosyaları için decode işini ana iş parçacığını kilitlememek adına
+//! [`crate::async_assets::AsyncAssetLoader`] kuyruğuna verin; her karede
+//! `drain_completed` sonrası [`crate::asset::AssetManager::install_decoded_material_texture`]
+//! ile GPU yüklemesi yapın (ör. `demo` render döngüsü).
+
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use wgpu::{util::DeviceExt, Device, Queue, Surface, SurfaceConfiguration};
 use winit::window::Window;
 
-pub use crate::gpu_types::{InstanceRaw, LightData, PostProcessUniforms, SceneUniforms, Vertex};
+pub use crate::gpu_types::{InstanceRaw, LightData, PostProcessUniforms, SceneUniforms, ShadowVsUniform, Vertex};
 pub use crate::pipeline::SceneState;
 pub use crate::post_process::PostProcessState;
 
@@ -138,6 +138,11 @@ impl<'a> Renderer<'a> {
             shadow_pipeline: scene.shadow_pipeline,
             transparent_pipeline: scene.transparent_pipeline,
             shadow_texture_view: scene.shadow_texture_view,
+            shadow_cascade_layer_views: scene.shadow_cascade_layer_views,
+            shadow_depth_texture: scene.shadow_depth_texture,
+            shadow_pass_bind_group_layout: scene.shadow_pass_bind_group_layout,
+            shadow_cascade_uniform_buffers: scene.shadow_cascade_uniform_buffers,
+            shadow_pass_bind_groups: scene.shadow_pass_bind_groups,
             global_uniform_buffer: scene.global_uniform_buffer,
             global_bind_group_layout: scene.global_bind_group_layout,
             global_bind_group: scene.global_bind_group,

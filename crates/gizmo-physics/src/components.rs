@@ -1,4 +1,4 @@
-use gizmo_math::{Mat4, Quat, Vec3};
+use gizmo_math::{Mat3, Mat4, Quat, Vec3};
 
 fn default_mat4() -> Mat4 {
     Mat4::IDENTITY
@@ -69,17 +69,65 @@ impl Velocity {
     }
 }
 
+/// Serde: `inverse_inertia_local` (Mat3) veya eski `inverse_inertia` ([Ix⁻¹,Iy⁻¹,Iz⁻¹]) veya yalnızca
+/// `local_inertia` ile türetilmiş diyagonal I⁻¹.
+#[derive(serde::Deserialize)]
+struct RigidBodyDeser {
+    mass: f32,
+    restitution: f32,
+    friction: f32,
+    use_gravity: bool,
+    local_inertia: Vec3,
+    #[serde(default)]
+    inverse_inertia_local: Option<Mat3>,
+    /// Eski sahne formatı — gövde ekseninde diyagonal ters eylemsizlik (Vec3).
+    #[serde(default)]
+    inverse_inertia: Option<Vec3>,
+    #[serde(default)]
+    is_sleeping: bool,
+    #[serde(default)]
+    ccd_enabled: bool,
+    #[serde(default = "default_collision_layer")]
+    collision_layer: u32,
+    #[serde(default = "default_collision_mask")]
+    collision_mask: u32,
+}
+
+#[inline]
+fn inv_from_local_diag(local: Vec3) -> Mat3 {
+    Mat3::from_diagonal(Vec3::new(
+        if local.x > 0.0 {
+            1.0 / local.x
+        } else {
+            0.0
+        },
+        if local.y > 0.0 {
+            1.0 / local.y
+        } else {
+            0.0
+        },
+        if local.z > 0.0 {
+            1.0 / local.z
+        } else {
+            0.0
+        },
+    ))
+}
+
 // Fiziksel ağırlık ve dış güçlerin nasıl etki edeceğini belirten kütle özellikleri
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "RigidBodyDeser")]
 pub struct RigidBody {
     pub mass: f32, // Eğer mass == 0.0 ise bu obje sabittir (Duvar/Zemin) ve itilemez!
     pub restitution: f32, // Sekme katsayısı (0.0 = sekmez, 1.0 = sonsuz teper)
     pub friction: f32, // Sürtünme katsayısı
     pub use_gravity: bool, // Yerçekiminden etkileniyor mu?
 
-    // Eylemsizlik Temsili (Inertia Tensor) - objenin kendi ekseni etrafında dönmeye direncini temsil eder
+    // Eylemsizlik: `local_inertia` teşhis / AABB yaklaşımı için ana eksen (diyagonal) I değerleri.
+    // Fizik çözücü `inverse_inertia_local` kullanır — gövde çerçevesinde simetrik I⁻¹ (Mat3).
+    // Şekil gövde eksenlerinde tam diyagonal değilse burada off-diagonal da doldurulmalıdır.
     pub local_inertia: Vec3,
-    pub inverse_inertia: Vec3,
+    pub inverse_inertia_local: Mat3,
 
     // Island Sleeping (Uyku Süreci) - Fix #12: Rolling Average ile stabil uyku
     pub is_sleeping: bool,
@@ -110,6 +158,33 @@ pub struct RigidBody {
     pub collision_mask: u32,
 }
 
+impl From<RigidBodyDeser> for RigidBody {
+    fn from(d: RigidBodyDeser) -> Self {
+        let inverse_inertia_local = if let Some(m) = d.inverse_inertia_local {
+            m
+        } else if let Some(inv) = d.inverse_inertia {
+            Mat3::from_diagonal(inv)
+        } else {
+            inv_from_local_diag(d.local_inertia)
+        };
+        Self {
+            mass: d.mass,
+            restitution: d.restitution,
+            friction: d.friction,
+            use_gravity: d.use_gravity,
+            local_inertia: d.local_inertia,
+            inverse_inertia_local,
+            is_sleeping: d.is_sleeping,
+            sleep_timer: 0.0,
+            avg_linear_sq: 0.0,
+            avg_angular_sq: 0.0,
+            ccd_enabled: d.ccd_enabled,
+            collision_layer: d.collision_layer,
+            collision_mask: d.collision_mask,
+        }
+    }
+}
+
 fn default_collision_layer() -> u32 { 1 }
 fn default_collision_mask()  -> u32 { 0xFFFF_FFFF }
 
@@ -124,7 +199,7 @@ impl RigidBody {
             friction,
             use_gravity,
             local_inertia: Vec3::new(1.0, 1.0, 1.0),
-            inverse_inertia: Vec3::ZERO,
+            inverse_inertia_local: Mat3::ZERO,
             is_sleeping: false,
             sleep_timer: 0.0,
             avg_linear_sq: 0.0,
@@ -146,7 +221,7 @@ impl RigidBody {
             friction: 1.0,
             use_gravity: false,
             local_inertia: Vec3::ZERO,
-            inverse_inertia: Vec3::ZERO,
+            inverse_inertia_local: Mat3::ZERO,
             is_sleeping: true,
             sleep_timer: 0.0,
             avg_linear_sq: 0.0,
@@ -171,11 +246,11 @@ impl RigidBody {
                 (1.0 / 12.0) * self.mass * (width * width + depth * depth),
                 (1.0 / 12.0) * self.mass * (width * width + height * height),
             );
-            self.inverse_inertia = Vec3::new(
+            self.inverse_inertia_local = Mat3::from_diagonal(Vec3::new(
                 1.0 / self.local_inertia.x,
                 1.0 / self.local_inertia.y,
                 1.0 / self.local_inertia.z,
-            );
+            ));
         }
     }
 
@@ -186,7 +261,8 @@ impl RigidBody {
         // I = 2/5 * m * r^2
         let inertia = (2.0 / 5.0) * self.mass * (radius * radius);
         self.local_inertia = Vec3::new(inertia, inertia, inertia);
-        self.inverse_inertia = Vec3::new(1.0 / inertia, 1.0 / inertia, 1.0 / inertia);
+        self.inverse_inertia_local =
+            Mat3::from_diagonal(Vec3::splat(1.0 / inertia));
     }
 
     /// Kapsül için eylemsizlik tensörü hesaplar (silindir + iki yarıküre)
@@ -205,7 +281,11 @@ impl RigidBody {
                 + sphere_mass * (2.0 * r2 / 5.0 + h * h / 4.0 + 3.0 * h * radius / 8.0);
 
             self.local_inertia = Vec3::new(ix, iy, ix);
-            self.inverse_inertia = Vec3::new(1.0 / ix, 1.0 / iy, 1.0 / ix);
+            self.inverse_inertia_local = Mat3::from_diagonal(Vec3::new(
+                1.0 / ix,
+                1.0 / iy,
+                1.0 / ix,
+            ));
         }
     }
 
@@ -228,19 +308,99 @@ impl RigidBody {
             crate::shape::ColliderShape::Capsule(capsule) => {
                 self.calculate_capsule_inertia(capsule.radius, capsule.half_height);
             }
-            crate::shape::ColliderShape::ConvexHull(_)
-            | crate::shape::ColliderShape::HeightField { .. }
-            | crate::shape::ColliderShape::Swept { .. } => {
-                // Approximate fallback
-                self.calculate_box_inertia(1.0, 1.0, 1.0);
+            crate::shape::ColliderShape::ConvexHull(hull) => {
+                if hull.vertices.len() >= 2 {
+                    let (principal, inv) = crate::inertia::inverse_inertia_from_point_cloud(
+                        self.mass,
+                        &hull.vertices,
+                    );
+                    self.local_inertia = principal;
+                    self.inverse_inertia_local = inv;
+                } else {
+                    self.calculate_box_inertia(1.0, 1.0, 1.0);
+                }
+            }
+            crate::shape::ColliderShape::HeightField {
+                heights,
+                segments_x,
+                segments_z,
+                width,
+                depth,
+                max_height,
+            } => {
+                let pts = crate::inertia::heightfield_sample_vertices(
+                    heights,
+                    *segments_x,
+                    *segments_z,
+                    *width,
+                    *depth,
+                    *max_height,
+                );
+                if pts.len() >= 2 {
+                    let (principal, inv) =
+                        crate::inertia::inverse_inertia_from_point_cloud(self.mass, &pts);
+                    self.local_inertia = principal;
+                    self.inverse_inertia_local = inv;
+                } else {
+                    self.calculate_box_inertia(
+                        width.max(1e-3),
+                        max_height.max(1e-3),
+                        depth.max(1e-3),
+                    );
+                }
+            }
+            crate::shape::ColliderShape::Swept { base, .. } => {
+                self.update_inertia_from_shape(base);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod rigid_body_serde_tests {
+    use super::*;
+    use gizmo_math::Mat3;
+
+    #[test]
+    fn deser_legacy_inverse_inertia_vec3() {
+        let json = r#"{
+            "mass": 2.0,
+            "restitution": 0.5,
+            "friction": 0.25,
+            "use_gravity": true,
+            "local_inertia": [3.0, 4.0, 5.0],
+            "inverse_inertia": [0.5, 0.25, 0.2],
+            "is_sleeping": false,
+            "ccd_enabled": false,
+            "collision_layer": 1,
+            "collision_mask": 4294967295
+        }"#;
+        let rb: RigidBody = serde_json::from_str(json).expect("legacy json");
+        assert_eq!(
+            rb.inverse_inertia_local,
+            Mat3::from_diagonal(Vec3::new(0.5, 0.25, 0.2))
+        );
+    }
+
+    #[test]
+    fn roundtrip_inverse_inertia_local_mat3() {
+        let mut rb = RigidBody::new(1.0, 0.1, 0.2, true);
+        rb.inverse_inertia_local = Mat3::from_diagonal(Vec3::new(1.0, 2.0, 3.0));
+        let s = serde_json::to_string(&rb).unwrap();
+        let back: RigidBody = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.inverse_inertia_local, rb.inverse_inertia_local);
     }
 }
 
 /// Global fizik konfigürasyonu — World resource olarak saklanır
 #[derive(Debug, Clone, Copy)]
 pub struct PhysicsConfig {
+    /// `true` iken SIMD (AVX2/`wide`) ve Rayon paralel dar faz / ada çözümü kapatılır; aynı girdi ve
+    /// sabit `dt` ile tek iş parçacığında tekrarlanabilir sonuçlar hedeflenir (replay, test, kilitli
+    /// tick ağı). Tam platformlar arası determinizm için ek olarak sabit nokta veya WASM gibi
+    /// kontrollü bir ortam gerekir — bu bayrak yalnızca eşzamanlılık ve vektörleştirme kaynaklı
+    /// farkları giderir.
+    pub deterministic_simulation: bool,
     /// Fallback zemin yüksekliği (collider yoksa) — varsayılan: -1.0
     pub ground_y: f32,
     /// Lineer hız üst limiti (m/s) — Fix #5. Varsayılan: 200.0
@@ -257,6 +417,7 @@ pub struct PhysicsConfig {
 impl Default for PhysicsConfig {
     fn default() -> Self {
         Self {
+            deterministic_simulation:       false,
             ground_y:                       -1.0,
             max_linear_velocity:            200.0,
             max_angular_velocity:           100.0,

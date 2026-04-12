@@ -193,7 +193,7 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
             rb.wake_up();
 
             let inv_mass = if rb.mass > 0.0 { 1.0 / rb.mass } else { 0.0 };
-            let inv_inertia = rb.inverse_inertia;
+            let inv_inertia = rb.inverse_inertia_local;
 
             let mut total_linear_impulse = Vec3::ZERO;
             let mut total_angular_impulse = Vec3::ZERO;

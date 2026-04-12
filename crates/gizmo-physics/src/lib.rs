@@ -4,6 +4,7 @@ pub mod components;
 pub mod constraints;
 pub mod epa;
 pub mod gjk;
+mod inertia;
 pub mod integration;
 pub mod shape;
 pub mod system;

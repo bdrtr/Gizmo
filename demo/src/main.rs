@@ -140,7 +140,50 @@ fn main() {
                 }
             }
 
-            // Texture reload isteği
+            // Arka planda decode edilen dokular (hot-reload); GPU upload burada tek karede
+            let async_done = world
+                .get_resource::<gizmo::renderer::AsyncAssetLoader>()
+                .map(|l| l.drain_completed());
+            if let Some(done) = async_done {
+                for tex in done.textures {
+                    if let Some(mut asset_mgr) =
+                        world.get_resource_mut::<gizmo::renderer::asset::AssetManager>()
+                    {
+                        asset_mgr.texture_cache.remove(&tex.cache_key);
+                        match asset_mgr.install_decoded_material_texture(
+                            &renderer.device,
+                            &renderer.queue,
+                            &renderer.scene.texture_bind_group_layout,
+                            &tex.cache_key,
+                            &tex.rgba,
+                            tex.width,
+                            tex.height,
+                        ) {
+                            Ok(new_bg) => {
+                                if let Some(mut materials) = world
+                                    .borrow_mut::<gizmo::renderer::components::Material>()
+                                {
+                                    for eid in &tex.entity_ids {
+                                        if let Some(mat) = materials.get_mut(*eid) {
+                                            mat.bind_group = new_bg.clone();
+                                        }
+                                    }
+                                }
+                                println!(
+                                    "[Demo Engine] Texture (async) GPU'ya yuklendi: {}",
+                                    tex.cache_key
+                                );
+                            }
+                            Err(e) => eprintln!(
+                                "[Demo Engine] Async texture GPU yukleme hatasi: {}",
+                                e
+                            ),
+                        }
+                    }
+                }
+            }
+
+            // Texture reload isteği (senkron yol; AsyncAssetLoader yoksa veya manuel event)
             let mut texture_reloads = Vec::new();
             if let Some(mut events) = world
                 .get_resource_mut::<gizmo::core::event::Events<crate::state::TextureLoadEvent>>()

@@ -1,22 +1,10 @@
-struct LightData {
-    position:  vec4<f32>,  // xyz=pos, w=intensity
-    color:     vec4<f32>,  // rgb=color, a=radius
-    direction: vec4<f32>,  // xyz=dir (spot/directional), w=inner_cutoff_cos
-    params:    vec4<f32>,  // x=outer_cutoff_cos, y=light_type (0=point,1=spot,2=dir)
-};
-
-struct SceneUniforms {
-    view_proj: mat4x4<f32>,
-    camera_pos: vec4<f32>,
-    sun_direction: vec4<f32>,
-    sun_color: vec4<f32>,
-    lights: array<LightData, 10>,
+/// Uniform for shadow-map vertex transform (one directional CSM cascade per pass).
+struct ShadowVsUniform {
     light_view_proj: mat4x4<f32>,
-    num_lights: u32,
 };
 
 @group(0) @binding(0)
-var<uniform> scene: SceneUniforms;
+var<uniform> shadow_vs: ShadowVsUniform;
 
 struct SkeletonData {
     joints: array<mat4x4<f32>, 64>,
@@ -72,5 +60,5 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> @b
 
     let skinned_pos = skin_mat * vec4<f32>(input.position, 1.0);
     let world_pos = model * vec4<f32>(skinned_pos.xyz, 1.0);
-    return scene.light_view_proj * world_pos;
+    return shadow_vs.light_view_proj * world_pos;
 }

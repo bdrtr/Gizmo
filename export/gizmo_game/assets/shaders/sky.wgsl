@@ -1,6 +1,8 @@
 struct LightData {
-    position: vec4<f32>,
-    color: vec4<f32>,
+    position:  vec4<f32>,  // xyz=pos, w=intensity
+    color:     vec4<f32>,  // rgb=color, a=radius
+    direction: vec4<f32>,  // xyz=dir (spot/directional), w=inner_cutoff_cos
+    params:    vec4<f32>,  // x=outer_cutoff_cos, y=light_type (0=point,1=spot,2=dir)
 };
 
 struct SceneUniforms {
@@ -9,8 +11,12 @@ struct SceneUniforms {
     sun_direction: vec4<f32>,
     sun_color: vec4<f32>,
     lights: array<LightData, 10>,
-    light_view_proj: mat4x4<f32>,
+    light_view_proj: array<mat4x4<f32>, 4>,
+    cascade_splits: vec4<f32>,
+    camera_forward: vec4<f32>,
+    cascade_params: vec4<f32>,
     num_lights: u32,
+    _pad_scene: vec3<u32>,
 };
 
 @group(0) @binding(0)
@@ -22,7 +28,7 @@ var t_diffuse: texture_2d<f32>;
 var s_diffuse: sampler;
 
 // Shadow bg
-@group(2) @binding(0) var t_shadow: texture_depth_2d;
+@group(2) @binding(0) var t_shadow: texture_depth_2d_array;
 @group(2) @binding(1) var s_shadow: sampler_comparison;
 
 struct SkeletonData {

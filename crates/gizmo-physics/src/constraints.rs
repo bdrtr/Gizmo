@@ -1,4 +1,4 @@
-use gizmo_math::Vec3;
+use gizmo_math::{Mat3, Vec3};
 use crate::integration::apply_inv_inertia;
 
 // ─── Yardımcı: JointBodies ───────────────────────────────────────────────────
@@ -23,8 +23,8 @@ pub struct JointBodies {
     pub rot_b:        gizmo_math::Quat,
     pub inv_mass_a:   f32,
     pub inv_mass_b:   f32,
-    pub inv_inertia_a: Vec3,
-    pub inv_inertia_b: Vec3,
+    pub inv_inertia_a: Mat3,
+    pub inv_inertia_b: Mat3,
     pub total_inv_mass: f32,
 }
 
@@ -39,12 +39,18 @@ impl JointBodies {
         let ta = *transforms.get(joint.entity_a)?;
         let tb = *transforms.get(joint.entity_b)?;
 
-        let inv_mass_of = |rb: &crate::components::RigidBody| -> (f32, Vec3) {
-            if rb.mass > 0.0 { (1.0 / rb.mass, rb.inverse_inertia) } else { (0.0, Vec3::ZERO) }
+        let inv_mass_of = |rb: &crate::components::RigidBody| -> (f32, Mat3) {
+            if rb.mass > 0.0 {
+                (1.0 / rb.mass, rb.inverse_inertia_local)
+            } else {
+                (0.0, Mat3::ZERO)
+            }
         };
 
-        let (inv_mass_a, inv_inertia_a) = rbs.get(joint.entity_a).map_or((0.0, Vec3::ZERO), inv_mass_of);
-        let (inv_mass_b, inv_inertia_b) = rbs.get(joint.entity_b).map_or((0.0, Vec3::ZERO), inv_mass_of);
+        let (inv_mass_a, inv_inertia_a) =
+            rbs.get(joint.entity_a).map_or((0.0, Mat3::ZERO), inv_mass_of);
+        let (inv_mass_b, inv_inertia_b) =
+            rbs.get(joint.entity_b).map_or((0.0, Mat3::ZERO), inv_mass_of);
         let total_inv_mass = inv_mass_a + inv_mass_b;
 
         if total_inv_mass == 0.0 {
