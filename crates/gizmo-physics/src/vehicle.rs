@@ -268,9 +268,8 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                             let t_near = t1x.min(t2x).max(t1y.min(t2y)).max(t1z.min(t2z));
                             let t_far  = t1x.max(t2x).min(t1y.max(t2y)).min(t1z.max(t2z));
 
-                            if t_near <= t_far && t_far > 0.0 && t_near < hit_t {
-                                let ht = if t_near > 0.0 { t_near } else { 0.0 };
-                                hit_t = ht;
+                            if t_near > 0.0 && t_near <= t_far && t_far > 0.0 && t_near < hit_t {
+                                hit_t = t_near;
 
                                 // Hangi slab'dan girildi? — o slab'ın normali = contact_normal
                                 // t_near'ın katkısını sağlayan eksen en büyük t_near'ı veriyor.
@@ -411,9 +410,11 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                     // === FREN ===
                     if brake_force > 0.01 {
                         let forward_speed = v.linear.dot(forward);
-                        let brake_impulse =
-                            forward * (-forward_speed.signum() * brake_force / num_wheels) * dt;
-                        total_linear_impulse += brake_impulse;
+                        if forward_speed.abs() > 0.01 {
+                            let brake_impulse =
+                                forward * (-forward_speed.signum() * brake_force / num_wheels) * dt;
+                            total_linear_impulse += brake_impulse;
+                        }
                     }
 
                     // === DİREKSİYON (Ön tekerlekler — drive olmayan) ===
