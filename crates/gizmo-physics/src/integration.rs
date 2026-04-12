@@ -2,6 +2,15 @@ use crate::components::{RigidBody, Transform, Velocity};
 use gizmo_core::World;
 use gizmo_math::{Quat, Vec3};
 
+/// Uyku eşikleri — her biri kendi biriminde ayrı değerlendirilir.
+///
+/// Lineer: (m/s)² — obje bu hızın altına düştüğünde uyku sayıcısı artar.
+/// Açısal: (rad/s)² — ayrı eşik; dönerken lineer sıfır olsa da uyanmalı.
+/// İkkisini toplamak boyutsel olarak anlamsız (m/s ≠ rad/s) — ayrı kontrol zorunlu.
+const SLEEP_LINEAR_SQ: f32 = 0.01 * 0.01;  // 1 cm/s
+const SLEEP_ANGULAR_SQ: f32 = 0.05 * 0.05; // 0.05 rad/s
+const SLEEP_TIMER_THRESHOLD: f32 = 2.0;    // saniye
+
 pub fn apply_inv_inertia(torque: Vec3, inv_inertia: Vec3, rot: Quat) -> Vec3 {
     let local_t = rot.inverse().mul_vec3(torque);
     let local_ang = Vec3::new(
@@ -26,10 +35,16 @@ fn physics_apply_forces_system_impl(world: &World, dt: f32) {
             if let Some(rb) = rbs.get_mut(entity) {
                 if let Some(v) = vel_storage.get_mut(entity) {
                     if rb.mass > 0.0 {
-                        let speed_sq = v.linear.length_squared() + v.angular.length_squared();
-                        if speed_sq < 0.0001 {
+                        // Lineer ve açısal hızı AYRI AYRI değerlendir:
+                        // Bunlar farklı birimler (m/s vs rad/s) — toplayıp eşik ile karşılaştırmak
+                        // boyutsel olarak yanlış. Her ekseni kendi eşiğiyle kontrol et.
+                        let lin_sq = v.linear.length_squared();
+                        let ang_sq = v.angular.length_squared();
+                        let is_still = lin_sq < SLEEP_LINEAR_SQ && ang_sq < SLEEP_ANGULAR_SQ;
+
+                        if is_still {
                             rb.sleep_timer += dt;
-                            if rb.sleep_timer > 2.0 {
+                            if rb.sleep_timer > SLEEP_TIMER_THRESHOLD {
                                 rb.is_sleeping = true;
                                 v.linear = Vec3::ZERO;
                                 v.angular = Vec3::ZERO;
@@ -86,9 +101,13 @@ fn physics_apply_forces_system_impl(world: &World, dt: f32) {
             // 1. YERÇEKİMİ UYGULASI (Daha Kararlı)
             y_v -= g_v * wf_dt;
 
-            // 2. DOĞRU DAMPING / DRAG HESABI (Üstel sönümleme yaklaşımı ile kararlı)
-            let linear_drag = f32x8::splat(1.0 / (1.0 + dt * 0.5));
-            let angular_drag = f32x8::splat(1.0 / (1.0 + dt * 3.0));
+            // 2. DOĞRU DAMPING / DRAG HESABI (Gerçek frame-rate bağımsız üstel sönümleme)
+            // e^(-k·dt) formülü: fps'ten bağımsız, her zaman aynı saniyesel sönümleme oranını verir.
+            // 1/(1+k·dt) yaklaşımı ise farklı fps değerlerinde farklı sonuç üretir.
+            //   k=0.5 → lineer drag: saniyede e^(-0.5) ≈ %60 hız kalır
+            //   k=3.0 → angular drag: saniyede e^(-3) ≈ %5 hız kalır (hızlı sönümleme)
+            let linear_drag = f32x8::splat((-0.5 * dt).exp());
+            let angular_drag = f32x8::splat((-3.0 * dt).exp());
             x_v *= linear_drag;
             y_v *= linear_drag;
             z_v *= linear_drag;
