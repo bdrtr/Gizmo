@@ -6,9 +6,17 @@ pub struct Keyframe<T> {
     pub value: T,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum InterpolationMode {
+    Linear,
+    Step,
+    CubicSpline,
+}
+
 #[derive(Clone, Debug)]
 pub struct Track<T> {
     pub target_node: usize,
+    pub interpolation: InterpolationMode,
     pub keyframes: Vec<Keyframe<T>>,
 }
 
@@ -36,10 +44,17 @@ impl<T: Clone + Copy> Track<T> {
         }
         let i = idx - 1;
         let k1 = &self.keyframes[i];
-        let k2 = &self.keyframes[i + 1.min(last_idx)];
+        let k2 = &self.keyframes[(i + 1).min(last_idx)];
         let dt = k2.time - k1.time;
         let t = if dt > 0.0 { (time - k1.time) / dt } else { 0.0 };
-        Some(interpolator(k1.value, k2.value, t))
+
+        match self.interpolation {
+            InterpolationMode::Step => Some(k1.value),
+            InterpolationMode::Linear | InterpolationMode::CubicSpline => {
+                // Fallback CubicSpline to Linear if tangents are unavailable in simple T values
+                Some(interpolator(k1.value, k2.value, t))
+            }
+        }
     }
 }
 
@@ -71,28 +86,31 @@ impl SkeletonHierarchy {
     pub fn calculate_global_matrices(&self, local_poses: &[Mat4]) -> Vec<Mat4> {
         let mut globals: Vec<Option<Mat4>> = vec![None; self.joints.len()];
 
-        // Recursive & Memoized fonksiyon ile derinlik öncelikli ağaç taraması
-        fn compute_global(
-            i: usize,
-            joints: &[SkeletonJoint],
-            local_poses: &[Mat4],
-            globals: &mut [Option<Mat4>],
-        ) -> Mat4 {
-            if let Some(mat) = globals[i] {
-                return mat;
+        // İteratif BFS / Topological Sıralama (Derin iskeletlerde Stack Overflow'u önler - O(N))
+        let mut children_map = vec![vec![]; self.joints.len()];
+        let mut roots = Vec::new();
+
+        for (i, joint) in self.joints.iter().enumerate() {
+            if let Some(parent_idx) = joint.parent_index {
+                children_map[parent_idx].push(i);
+            } else {
+                roots.push(i);
             }
-            let local_mat = local_poses[i];
-            let global_mat = if let Some(parent) = joints[i].parent_index {
-                compute_global(parent, joints, local_poses, globals) * local_mat
+        }
+
+        let mut queue = roots;
+        while let Some(node) = queue.pop() {
+            let local_mat = local_poses[node];
+            let global_mat = if let Some(parent_idx) = self.joints[node].parent_index {
+                globals[parent_idx].unwrap() * local_mat
             } else {
                 local_mat
             };
-            globals[i] = Some(global_mat);
-            global_mat
-        }
+            globals[node] = Some(global_mat);
 
-        for i in 0..self.joints.len() {
-            compute_global(i, &self.joints, local_poses, &mut globals);
+            for &child in &children_map[node] {
+                queue.push(child);
+            }
         }
 
         globals.into_iter().map(|m| m.unwrap()).collect()

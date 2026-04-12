@@ -9,6 +9,10 @@ pub fn execute_render_pipeline(
     renderer: &mut gizmo::renderer::Renderer,
     _light_time: f32,
 ) {
+    // --- SKELETAL ANIMATION UPDATE (Done before any ECS borrows!) ---
+    let delta_time = 1.0 / (state.current_fps.max(1.0));
+    gizmo::renderer::animation_update_system(world, delta_time, &renderer.queue);
+
     let aspect = if renderer.size.height > 0 {
         renderer.size.width as f32 / renderer.size.height as f32
     } else {
@@ -42,74 +46,7 @@ pub fn execute_render_pipeline(
     // Event: Spawning moved to spawner_update_system.
     // Event: Texture Loading moved to main render loop pass before execute_render_pipeline.
 
-    // --- SKELETAL ANIMATION UPDATE ---
-    let delta_time = 1.0 / (state.current_fps.max(1.0));
 
-    if let Some(mut q) = world.query_mut_mut::<gizmo::renderer::components::AnimationPlayer, gizmo::renderer::components::Skeleton>() {
-            for (_e, anim_player, skeleton) in q.iter_mut() {
-                if anim_player.animations.is_empty() { continue; }
-                
-                let active_idx = anim_player.active_animation.min(anim_player.animations.len() - 1);
-                let anim = &anim_player.animations[active_idx];
-                
-                // Zamanı ilerlet
-                anim_player.current_time += delta_time;
-                if anim_player.current_time > anim.duration {
-                    if anim_player.loop_anim {
-                        anim_player.current_time %= anim.duration.max(0.001); // 0 div fix
-                    } else {
-                        anim_player.current_time = anim.duration;
-                    }
-                }
-                
-                let time = anim_player.current_time;
-                
-                // 1) Local Poses hesapla (Sadece animasyondan gelenleri ez, geri kalanı orijinal local_bind kalsın)
-                let hierarchy = &skeleton.hierarchy;
-                let mut local_poses = vec![Mat4::IDENTITY; hierarchy.joints.len()];
-                
-                for (b_idx, joint) in hierarchy.joints.iter().enumerate() {
-                    let (mut s, mut r, mut t) = joint.local_bind_transform.to_scale_rotation_translation();
-                    
-                    if let Some(track) = anim.translations.iter().find(|tr| tr.target_node == joint.node_index) {
-                        if let Some(val) = track.get_interpolated(time, |a, b, lerp_t| a.lerp(b, lerp_t)) {
-                            t = val;
-                        }
-                    }
-                    
-                    if let Some(track) = anim.rotations.iter().find(|tr| tr.target_node == joint.node_index) {
-                        if let Some(val) = track.get_interpolated(time, |a, b, lerp_t| a.slerp(b, lerp_t)) {
-                            r = Quat::from_xyzw(val.x, val.y, val.z, val.w);
-                        }
-                    }
-                    
-                    if let Some(track) = anim.scales.iter().find(|tr| tr.target_node == joint.node_index) {
-                        if let Some(val) = track.get_interpolated(time, |a, b, lerp_t| a.lerp(b, lerp_t)) {
-                            s = val;
-                        }
-                    }
-                    
-                    local_poses[b_idx] = Mat4::from_scale_rotation_translation(s, r, t);
-                }
-
-                // 2) Global matrisleri hesapla (Hierarchy)
-                let globals = hierarchy.calculate_global_matrices(&local_poses);
-                
-                // 3) Inverse Bind Matrices ile çarpıp Skeleton'un local_poses alanına yaz (ki shader bilsin)
-                skeleton.local_poses.clear();
-                for (i, global_mat) in globals.iter().enumerate() {
-                    let final_mat = *global_mat * hierarchy.joints[i].inverse_bind_matrix;
-                    skeleton.local_poses.push(final_mat);
-                }
-                
-                // 4) GPU'ya gönder! (En faza 64 kemik)
-                let mut gpu_data = [[[0.0f32; 4]; 4]; 64];
-                for i in 0..skeleton.local_poses.len().min(64) {
-                    gpu_data[i] = skeleton.local_poses[i].to_cols_array_2d();
-                }
-                renderer.queue.write_buffer(&skeleton.buffer, 0, bytemuck::cast_slice(&gpu_data));
-            }
-        }
 
     // Işık kaynaklarını topla (Maksimum 10)
     let mut lights_data = [gizmo::renderer::renderer::LightData {
@@ -359,37 +296,73 @@ pub fn execute_render_pipeline(
     let mut process_batches = |batches: std::collections::HashMap<_, BatchData>,
                                is_transparent: bool,
                                is_double_sided: bool| {
-        for (_, mut batch) in batches {
-            // Şeffaf objelerin arka plandan öne doğru sıralanması (Z-Sorting)
-            // Instance'ın model matrisinden world pozisyonunu çekip kameraya uzaklığına göre sıralıyoruz
-            if is_transparent {
-                batch.instances.sort_by(|a, b| {
-                    let pos_a = Vec3::new(a.model[3][0], a.model[3][1], a.model[3][2]);
-                    let pos_b = Vec3::new(b.model[3][0], b.model[3][1], b.model[3][2]);
-                    let dist_a = cam_pos.distance_squared(pos_a);
-                    let dist_b = cam_pos.distance_squared(pos_b);
-                    // Uzak olanlar ÖNCE çizilmeli (Azalan sıralama)
-                    dist_b
-                        .partial_cmp(&dist_a)
-                        .unwrap_or(std::cmp::Ordering::Equal)
+        if is_transparent {
+            // Şeffaf nesneleri farklı mesh tipleri arasında da Z-Sort yapabilmek için 
+            // her bir instance'ı tekil olarak kaydedip global olarak sıralıyoruz.
+            struct TransparentSortData {
+                vbuf: std::sync::Arc<wgpu::Buffer>,
+                vertex_count: u32,
+                bind_group: std::sync::Arc<wgpu::BindGroup>,
+                skeleton_bg: std::sync::Arc<wgpu::BindGroup>,
+                is_skybox: bool,
+                instance: InstanceRaw,
+                dist_sq: f32,
+            }
+            
+            let mut trans_items = Vec::new();
+            for (_, batch) in batches {
+                for inst in batch.instances {
+                    let pos = Vec3::new(inst.model[3][0], inst.model[3][1], inst.model[3][2]);
+                    let dist = cam_pos.distance_squared(pos);
+                    trans_items.push(TransparentSortData {
+                        vbuf: batch.vbuf.clone(),
+                        vertex_count: batch.vertex_count,
+                        bind_group: batch.bind_group.clone(),
+                        skeleton_bg: batch.skeleton_bg.clone(),
+                        is_skybox: batch.is_skybox,
+                        instance: inst,
+                        dist_sq: dist,
+                    });
+                }
+            }
+            
+            // Uzak olanlar ÖNCE çizilmeli (Azalan sıralama)
+            trans_items.sort_by(|a, b| b.dist_sq.partial_cmp(&a.dist_sq).unwrap_or(std::cmp::Ordering::Equal));
+            
+            for item in trans_items {
+                let start = all_instances.len() as u32;
+                all_instances.push(item.instance);
+                flat_batches.push(FlatBatchData {
+                    vbuf: item.vbuf,
+                    vertex_count: item.vertex_count,
+                    bind_group: item.bind_group,
+                    skeleton_bg: item.skeleton_bg,
+                    start_instance: start,
+                    end_instance: start + 1,
+                    is_transparent: true,
+                    is_double_sided: false,
+                    is_skybox: item.is_skybox,
                 });
             }
+        } else {
+            // Opaque objeler için klasik gruplama 
+            for (_, mut batch) in batches {
+                let start = all_instances.len() as u32;
+                let count = batch.instances.len() as u32;
+                all_instances.append(&mut batch.instances);
 
-            let start = all_instances.len() as u32;
-            let count = batch.instances.len() as u32;
-            all_instances.append(&mut batch.instances);
-
-            flat_batches.push(FlatBatchData {
-                vbuf: batch.vbuf,
-                vertex_count: batch.vertex_count,
-                bind_group: batch.bind_group,
-                skeleton_bg: batch.skeleton_bg,
-                start_instance: start,
-                end_instance: start + count,
-                is_transparent,
-                is_double_sided,
-                is_skybox: batch.is_skybox,
-            });
+                flat_batches.push(FlatBatchData {
+                    vbuf: batch.vbuf,
+                    vertex_count: batch.vertex_count,
+                    bind_group: batch.bind_group,
+                    skeleton_bg: batch.skeleton_bg,
+                    start_instance: start,
+                    end_instance: start + count,
+                    is_transparent,
+                    is_double_sided,
+                    is_skybox: batch.is_skybox,
+                });
+            }
         }
     };
 

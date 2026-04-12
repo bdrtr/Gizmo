@@ -299,9 +299,19 @@ impl World {
         let type_id = TypeId::of::<T>();
         let storage = self.resources.get(&type_id)?;
 
-        Some(Ref::map(storage.borrow(), |s| {
-            s.downcast_ref::<T>().unwrap()
-        }))
+        match storage.try_borrow() {
+            Ok(borrowed) => Some(Ref::map(borrowed, |s| {
+                s.downcast_ref::<T>().unwrap()
+            })),
+            Err(_) => {
+                crate::gizmo_log!(
+                    Warning,
+                    "[ECS] get_resource<{}> başarısız — mutable borrow aktif!",
+                    std::any::type_name::<T>()
+                );
+                None
+            }
+        }
     }
 
     /// Global bir Resource'u değiştirmek için çağrılır (Mutable Borrow)
@@ -309,9 +319,19 @@ impl World {
         let type_id = TypeId::of::<T>();
         let storage = self.resources.get(&type_id)?;
 
-        Some(RefMut::map(storage.borrow_mut(), |s| {
-            s.downcast_mut::<T>().unwrap()
-        }))
+        match storage.try_borrow_mut() {
+            Ok(borrowed) => Some(RefMut::map(borrowed, |s| {
+                s.downcast_mut::<T>().unwrap()
+            })),
+            Err(_) => {
+                crate::gizmo_log!(
+                    Warning,
+                    "[ECS] get_resource_mut<{}> başarısız — başka bir borrow aktif!",
+                    std::any::type_name::<T>()
+                );
+                None
+            }
+        }
     }
 
     /// Global bir Resource yoksa Default olarak oluşturur, ardından Mutable Borrow döndürür.

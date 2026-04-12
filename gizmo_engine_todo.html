@@ -1,0 +1,193 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-sans); }
+.container { padding: 1rem 0; }
+.header { display: flex; align-items: center; gap: 12px; margin-bottom: 1.5rem; }
+.header h2 { font-size: 18px; font-weight: 500; color: var(--color-text-primary); }
+.stats { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.stat { font-size: 12px; padding: 3px 10px; border-radius: 99px; font-weight: 500; }
+.stat.crit { background: #FCEBEB; color: #A32D2D; }
+.stat.warn { background: #FAEEDA; color: #854F0B; }
+.stat.low { background: #EAF3DE; color: #3B6D11; }
+.stat.done { background: #E1F5EE; color: #0F6E56; }
+.filters { display: flex; gap: 6px; margin-bottom: 1rem; flex-wrap: wrap; }
+.filter-btn { font-size: 12px; padding: 4px 12px; border-radius: 99px; border: 0.5px solid var(--color-border-secondary); background: var(--color-background-primary); color: var(--color-text-secondary); cursor: pointer; transition: all 0.15s; }
+.filter-btn:hover { background: var(--color-background-secondary); }
+.filter-btn.active { background: var(--color-background-secondary); color: var(--color-text-primary); border-color: var(--color-border-primary); font-weight: 500; }
+.progress-bar { height: 4px; border-radius: 99px; background: var(--color-border-tertiary); margin-bottom: 1.5rem; overflow: hidden; }
+.progress-fill { height: 100%; border-radius: 99px; background: #1D9E75; transition: width 0.4s; }
+.section { margin-bottom: 1.5rem; }
+.section-header { font-size: 13px; font-weight: 500; color: var(--color-text-secondary); letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 0.5px solid var(--color-border-tertiary); display: flex; align-items: center; justify-content: space-between; }
+.section-count { font-size: 11px; font-weight: 400; }
+.todo-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: var(--border-radius-md); border: 0.5px solid var(--color-border-tertiary); background: var(--color-background-primary); margin-bottom: 6px; cursor: pointer; transition: all 0.15s; user-select: none; }
+.todo-item:hover { border-color: var(--color-border-secondary); background: var(--color-background-secondary); }
+.todo-item.done { opacity: 0.5; }
+.todo-item.done .todo-title { text-decoration: line-through; }
+.checkbox { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid var(--color-border-secondary); flex-shrink: 0; margin-top: 2px; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
+.todo-item.done .checkbox { background: #1D9E75; border-color: #1D9E75; }
+.checkmark { width: 8px; height: 6px; display: none; }
+.todo-item.done .checkmark { display: block; }
+.checkmark::before { content: ''; display: block; width: 8px; height: 6px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 6'%3E%3Cpath d='M1 3L3 5L7 1' stroke='white' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E") no-repeat center; }
+.todo-content { flex: 1; min-width: 0; }
+.todo-title { font-size: 14px; color: var(--color-text-primary); line-height: 1.4; margin-bottom: 2px; }
+.todo-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.todo-file { font-size: 11px; color: var(--color-text-tertiary); font-family: var(--font-mono); }
+.priority-badge { font-size: 10px; padding: 1px 7px; border-radius: 99px; font-weight: 500; flex-shrink: 0; }
+.p-critical { background: #FCEBEB; color: #A32D2D; }
+.p-high { background: #FAEEDA; color: #854F0B; }
+.p-medium { background: #E6F1FB; color: #185FA5; }
+.p-low { background: #EAF3DE; color: #3B6D11; }
+.empty { text-align: center; padding: 2rem; color: var(--color-text-tertiary); font-size: 14px; }
+</style>
+
+<div class="container">
+<div class="header">
+  <h2>Gizmo Engine — Todo List</h2>
+  <div class="stats">
+    <span class="stat crit" id="s-critical">0 kritik</span>
+    <span class="stat warn" id="s-high">0 yüksek</span>
+    <span class="stat low" id="s-med">0 orta</span>
+    <span class="stat done" id="s-done">0 tamamlandı</span>
+  </div>
+</div>
+
+<div class="progress-bar"><div class="progress-fill" id="progress" style="width:0%"></div></div>
+
+<div class="filters">
+  <button class="filter-btn active" onclick="setFilter('all')">Tümü</button>
+  <button class="filter-btn" onclick="setFilter('Fizik')">Fizik</button>
+  <button class="filter-btn" onclick="setFilter('Renderer')">Renderer</button>
+  <button class="filter-btn" onclick="setFilter('ECS / Core')">ECS / Core</button>
+  <button class="filter-btn" onclick="setFilter('Araç Fiziği')">Araç Fiziği</button>
+  <button class="filter-btn" onclick="setFilter('Animasyon')">Animasyon</button>
+  <button class="filter-btn" onclick="setFilter('Karakter')">Karakter</button>
+  <button class="filter-btn" onclick="setFilter('Editör')">Editör</button>
+  <button class="filter-btn" onclick="setFilter('Mimari')">Mimari</button>
+</div>
+
+<div id="list"></div>
+</div>
+
+<script>
+const todos = [
+  { id:1, title:"Broad-phase Sweep & Prune yalnızca X ekseninde yapılıyor — Y/Z ayrı eksen taraması yok, dar açıda sıkışan objeler false-negative üretiyor", file:"gizmo-physics/src/system.rs", priority:"critical", cat:"Fizik", done:false },
+  { id:2, title:"Island generation'da Union-Find path compression uygulanmıyor — büyük sahnelerde find_root() O(N) degrade edebilir", file:"gizmo-physics/src/system.rs", priority:"high", cat:"Fizik", done:false },
+  { id:3, title:"Warm-start cache her frame tamamen temizleniyor (state.contact_cache.clear()), ölü entity referansları temizlenmiyor — bellek sızıntısı riski", file:"gizmo-physics/src/system.rs", priority:"high", cat:"Fizik", done:false },
+  { id:4, title:"CCD bisection: sweep_vector yalnızca bağıl hız kullanıyor, her iki obje CCD aktifse çift sweep oluşturuluyor (bağıl hız yeterli değil)", file:"gizmo-physics/src/system.rs", priority:"high", cat:"Fizik", done:false },
+  { id:5, title:"MAX_ANG (100.0) ve MAX_LIN (200.0) sabit kodlanmış — PhysicsConfig'den okunması gerekiyor", file:"gizmo-physics/src/system.rs", priority:"medium", cat:"Fizik", done:false },
+  { id:6, title:"contact_cache başına max 4 giriş var ama entry.len() < 4 koşulu aynı kareye ait noktaları kesiyor — manifold başına değil çift başına olmalı", file:"gizmo-physics/src/system.rs", priority:"medium", cat:"Fizik", done:false },
+  { id:7, title:"OBB-OBB SAT: en az penetrasyon ekseni face-face temas için doğru ama edge-edge temas için cross ürün eksenlerinin ayrıca normalize edilmesi gerekiyor", file:"gizmo-physics/src/collision.rs", priority:"critical", cat:"Fizik", done:false },
+  { id:8, title:"check_aabb_aabb_manifold tek temas noktası döndürüyor — stacking (üst üste kutu) senaryolarında yalnızca 1 contact point yeterli değil, 4 köşe döndürmeli", file:"gizmo-physics/src/collision.rs", priority:"high", cat:"Fizik", done:false },
+  { id:9, title:"Sphere merkeze tam denk geldiğinde check_sphere_aabb_manifold 'diff_center.normalize()' çağrısı sıfır vektörde NaN üretebilir", file:"gizmo-physics/src/collision.rs", priority:"critical", cat:"Fizik", done:false },
+  { id:10, title:"EPA'nın degenerate simpleks (neredeyse sıfır hacimli tetrahedra) durumunda sonsuz döngüye girebileceği edge case yok — max iterasyon guard yok", file:"gizmo-physics/src/epa.rs", priority:"high", cat:"Fizik", done:false },
+  { id:11, title:"ConvexHull vs CharacterController çarpışması implement edilmemiş — None döndürüyor", file:"gizmo-physics/src/character.rs", priority:"high", cat:"Karakter", done:false },
+  { id:12, title:"HeightField vs CharacterController çarpışması implement edilmemiş — None döndürüyor, terrain üzerinde yürüyüş çalışmıyor", file:"gizmo-physics/src/character.rs", priority:"critical", cat:"Karakter", done:false },
+  { id:13, title:"CharacterController zemin tespitinde normal.y > 0.7 sabit eşiği — slope_limit ile senkronize değil, kullanıcı tanımlı eğime göre grounded durumu yanlış", file:"gizmo-physics/src/character.rs", priority:"medium", cat:"Karakter", done:false },
+  { id:14, title:"Step climbing: step_test_pos'tan aşağı inişte yerçekimi bir sonraki frame'e bırakılmış — tek kare merdiven titremesi (jitter) yaratıyor", file:"gizmo-physics/src/character.rs", priority:"medium", cat:"Karakter", done:false },
+  { id:15, title:"Araç raycaster HeightField'da biyolineer interpolasyon yok — .round() ile en yakın grid noktası kullanılıyor, tümsekli arazi geçişi sarsıntılı", file:"gizmo-physics/src/vehicle.rs", priority:"high", cat:"Araç Fiziği", done:false },
+  { id:16, title:"Ön tekerlek direksiyonu is_drive_wheel=false ise çalışıyor — RWD'de ön tekerlek aynı zamanda sürücü ise direksiyon çalışmaz", file:"gizmo-physics/src/vehicle.rs", priority:"high", cat:"Araç Fiziği", done:false },
+  { id:17, title:"Hava direnci sabit katsayılı (0.3) ve hardcoded — VehicleController'a drag_coefficient alanı eklenmeli", file:"gizmo-physics/src/vehicle.rs", priority:"low", cat:"Araç Fiziği", done:false },
+  { id:18, title:"Tekerlek görsel dönmesi yalnızca forward hıza göre hesaplanıyor — yan kayma (drift) sırasında dönme açısı yanlış", file:"gizmo-physics/src/vehicle.rs", priority:"low", cat:"Araç Fiziği", done:false },
+  { id:19, title:"Animasyon Track<T> get_interpolated: idx == 0 guard'ından sonra i = idx-1 hesaplaması — idx=1 iken i=0, k2=keyframes[0.min(last_idx)] olabilir (son keyframe tekrar), clamp gerekiyor", file:"gizmo-renderer/src/animation.rs", priority:"high", cat:"Animasyon", done:false },
+  { id:20, title:"SkeletonHierarchy::calculate_global_matrices recursive compute_global — derin iskelet hiyerarşilerinde (30+ joint) stack overflow riski, iteratif topological sort gerekiyor", file:"gizmo-renderer/src/animation.rs", priority:"high", cat:"Animasyon", done:false },
+  { id:21, title:"AnimationClip'te STEP ve CUBIC_SPLINE interpolasyon modu yok — yalnızca linear; GLTF animasyonları bozuk oynatılabilir", file:"gizmo-renderer/src/animation.rs", priority:"high", cat:"Animasyon", done:false },
+  { id:22, title:"GPU skinning shader'ı yok — joint matrix uniform olarak gönderilmiyor; skeletal animation CPU'da çözülüyor, büyük karakterlerde performans sorunu", file:"gizmo-renderer/src", priority:"high", cat:"Animasyon", done:false },
+  { id:23, title:"Renderer tek directional light destekliyor — point/spot light için shadow map atlas veya cube map yok", file:"gizmo-renderer/src/renderer.rs", priority:"high", cat:"Renderer", done:false },
+  { id:24, title:"Z-sorting sadece kamera mesafesine göre yapılıyor — yarı saydam nesneler iç içe geçtiğinde OIT (Order Independent Transparency) gerekiyor", file:"gizmo-renderer/src/renderer.rs", priority:"medium", cat:"Renderer", done:false },
+  { id:25, title:"Hot-reload texture güncellemesi bind group'u yeniden oluşturmuyor — eski texture GPU'da kalıyor, descriptor güncellenmesi şart", file:"gizmo-renderer/src/hot_reload.rs", priority:"high", cat:"Renderer", done:false },
+  { id:26, title:"Particle compute shader'da particle count sabit — runtime'da dinamik emit/destroy yoksa bellek havuzu boşa gidiyor", file:"gizmo-renderer/src/particle_renderer.rs", priority:"medium", cat:"Renderer", done:false },
+  { id:27, title:"physics_compute.wgsl mevcut — ama CPU fizik sistemiyle entegrasyonu belirsiz, aynı veri iki kez işlenebilir (double simulation riski)", file:"gizmo-renderer/src/physics_compute.wgsl", priority:"high", cat:"Renderer", done:false },
+  { id:28, title:"ECS borrow_mut iki kez aynı SparseSet için çağrılırsa runtime panic — vehicle system'de trans_storage hem immutable hem mutable kullanılıyor, RefCell double-borrow riski", file:"gizmo-core", priority:"critical", cat:"ECS / Core", done:false },
+  { id:29, title:"SparseSet entity_dense.clone() her frame çağrılıyor — iterasyon sırasında modifikasyonu önlemek için, büyük sahnelerde frame başına büyük heap alloc yapıyor", file:"gizmo-physics/src/system.rs", priority:"medium", cat:"ECS / Core", done:false },
+  { id:30, title:"World::get_resource_mut içeri aldığı tipte birden fazla mutable borrow alınabiliyorsa güvenlik garantisi yok — resource çakışması kontrolü eksik", file:"gizmo-core", priority:"high", cat:"ECS / Core", done:false },
+  { id:31, title:"Collision event Events<CollisionEvent> resource auto-init var — ama aynı çiftten saniyede yüzlerce event atılabilir, throttle/dedup mekanizması yok", file:"gizmo-physics/src/system.rs", priority:"medium", cat:"ECS / Core", done:false },
+  { id:32, title:"Editör gizmo: rotate ve scale handle'ları eksik — yalnızca translate handle mevcut", file:"gizmo-editor", priority:"high", cat:"Editör", done:false },
+  { id:33, title:"Asset browser: texture silindiğinde bağlı materyaller güncellenmeden sahne bozuluyor — asset bağımlılık grafiği (dependency graph) yok", file:"gizmo-editor", priority:"high", cat:"Editör", done:false },
+  { id:34, title:"Sahne kayıt formatında float32 hassasiyeti yeterli değil — büyük dünya koordinatlarında pozisyon kayması (floating point drift) oluşabilir", file:"gizmo-scene", priority:"medium", cat:"Mimari", done:false },
+  { id:35, title:"Collision layer/mask sistemi yok — tüm objeler birbirleriyle çarpışıyor, vehicle filter hardcoded; genel amaçlı filtreleme API'si şart", file:"gizmo-physics/src/system.rs", priority:"critical", cat:"Mimari", done:false },
+  { id:36, title:"Input sistemi ECS'e entegre değil — raw winit event'leri kullanılıyor, action mapping (Jump = Space veya GamepadA) yok", file:"gizmo-app", priority:"high", cat:"Mimari", done:false },
+  { id:37, title:"Lua scripting API eksik — transform, velocity, input, event sistemi Lua'dan tam kontrol edilemiyor", file:"gizmo-scripting", priority:"high", cat:"Mimari", done:false },
+];
+
+let currentFilter = 'all';
+let doneSet = new Set(JSON.parse(localStorage.getItem('gizmo_done') || '[]'));
+
+function saveDone() {
+  try { localStorage.setItem('gizmo_done', JSON.stringify([...doneSet])); } catch(e) {}
+}
+
+function setFilter(f) {
+  currentFilter = f;
+  document.querySelectorAll('.filter-btn').forEach(b => {
+    b.classList.toggle('active', b.textContent === f || (f === 'all' && b.textContent === 'Tümü'));
+  });
+  render();
+}
+
+function toggle(id) {
+  if (doneSet.has(id)) doneSet.delete(id);
+  else doneSet.add(id);
+  saveDone();
+  render();
+}
+
+function render() {
+  const cats = {};
+  const filtered = todos.filter(t => currentFilter === 'all' || t.cat === currentFilter);
+  
+  filtered.forEach(t => {
+    t.done = doneSet.has(t.id);
+    if (!cats[t.cat]) cats[t.cat] = [];
+    cats[t.cat].push(t);
+  });
+
+  const pOrder = { critical:0, high:1, medium:2, low:3 };
+  Object.values(cats).forEach(arr => arr.sort((a,b) => {
+    if (a.done !== b.done) return a.done ? 1 : -1;
+    return pOrder[a.priority] - pOrder[b.priority];
+  }));
+
+  const total = todos.length;
+  const doneCount = todos.filter(t => doneSet.has(t.id)).length;
+  document.getElementById('progress').style.width = (doneCount/total*100).toFixed(1) + '%';
+  document.getElementById('s-critical').textContent = todos.filter(t=>t.priority==='critical'&&!doneSet.has(t.id)).length + ' kritik';
+  document.getElementById('s-high').textContent = todos.filter(t=>t.priority==='high'&&!doneSet.has(t.id)).length + ' yüksek';
+  document.getElementById('s-med').textContent = todos.filter(t=>t.priority==='medium'&&!doneSet.has(t.id)).length + ' orta';
+  document.getElementById('s-done').textContent = doneCount + ' tamamlandı';
+
+  const pLabel = { critical:'Kritik', high:'Yüksek', medium:'Orta', low:'Düşük' };
+  const pClass = { critical:'p-critical', high:'p-high', medium:'p-medium', low:'p-low' };
+
+  let html = '';
+  if (Object.keys(cats).length === 0) {
+    html = '<div class="empty">Bu kategoride görev yok</div>';
+  } else {
+    for (const [cat, items] of Object.entries(cats)) {
+      const open = items.filter(i=>!i.done).length;
+      const total = items.length;
+      html += `<div class="section">
+        <div class="section-header">
+          <span>${cat}</span>
+          <span class="section-count">${open}/${total} açık</span>
+        </div>`;
+      items.forEach(t => {
+        html += `<div class="todo-item ${t.done?'done':''}" onclick="toggle(${t.id})">
+          <div class="checkbox"><span class="checkmark"></span></div>
+          <div class="todo-content">
+            <div class="todo-title">${t.title}</div>
+            <div class="todo-meta">
+              <span class="priority-badge ${pClass[t.priority]}">${pLabel[t.priority]}</span>
+              <span class="todo-file">${t.file}</span>
+            </div>
+          </div>
+        </div>`;
+      });
+      html += '</div>';
+    }
+  }
+  document.getElementById('list').innerHTML = html;
+}
+
+render();
+</script>

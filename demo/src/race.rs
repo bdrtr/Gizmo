@@ -239,6 +239,7 @@ pub fn setup_race_scene(
     // Fizik konfigürasyonu
     world.insert_resource(gizmo::physics::components::PhysicsConfig {
         ground_y: config.ground_y,
+        ..Default::default()
     });
     world.insert_resource(gizmo::physics::JointWorld::new());
     world.insert_resource(gizmo::physics::system::PhysicsSolverState::new());

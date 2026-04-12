@@ -11,6 +11,8 @@ pub mod post_process;
 pub mod renderer;
 
 pub use animation::{AnimationClip, Keyframe, SkeletonHierarchy, SkeletonJoint, Track};
+pub mod animation_system;
+pub use animation_system::animation_update_system;
 pub use asset::{AssetManager, GltfNodeData};
 pub use components::{
     Camera, Camera2D, DirectionalLight, LodGroup, LodLevel, Material, Mesh, MeshRenderer,

@@ -20,6 +20,7 @@ fn make_world() -> World {
     let mut w = World::new();
     w.insert_resource(PhysicsConfig {
         ground_y: -1000.0, // Yerçekimini etkisiz kıl — izole test
+        ..Default::default()
     });
     w.insert_resource(PhysicsSolverState::new());
     w

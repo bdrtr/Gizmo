@@ -32,7 +32,7 @@ pub fn setup_basic_scene(
     action_map.bind_action("Reload", KeyCode::KeyR as u32); // R Tuşu sarjörü (ammo) doldursun
     world.insert_resource(action_map);
 
-    world.insert_resource(gizmo::physics::components::PhysicsConfig { ground_y: -0.5 });
+    world.insert_resource(gizmo::physics::components::PhysicsConfig { ground_y: -0.5, ..Default::default() });
     world.insert_resource(gizmo::physics::JointWorld::new());
     world.insert_resource(gizmo::physics::system::PhysicsSolverState::new());
 

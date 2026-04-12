@@ -1,0 +1,215 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+.container { padding: 1rem 0; }
+.header { display: flex; align-items: center; gap: 12px; margin-bottom: 1.5rem; flex-wrap: wrap; }
+.header h2 { font-size: 18px; font-weight: 500; color: var(--color-text-primary); }
+.stats { display: flex; gap: 8px; flex-wrap: wrap; }
+.stat { font-size: 12px; padding: 3px 10px; border-radius: 99px; font-weight: 500; }
+.stat.crit { background: #FCEBEB; color: #A32D2D; }
+.stat.warn { background: #FAEEDA; color: #854F0B; }
+.stat.med { background: #E6F1FB; color: #185FA5; }
+.stat.done { background: #E1F5EE; color: #0F6E56; }
+.filters { display: flex; gap: 6px; margin-bottom: 1rem; flex-wrap: wrap; }
+.filter-btn { font-size: 12px; padding: 4px 12px; border-radius: 99px; border: 0.5px solid var(--color-border-secondary); background: var(--color-background-primary); color: var(--color-text-secondary); cursor: pointer; transition: all 0.15s; }
+.filter-btn:hover { background: var(--color-background-secondary); }
+.filter-btn.active { background: var(--color-background-secondary); color: var(--color-text-primary); border-color: var(--color-border-primary); font-weight: 500; }
+.progress-bar { height: 4px; border-radius: 99px; background: var(--color-border-tertiary); margin-bottom: 1.5rem; overflow: hidden; }
+.progress-fill { height: 100%; border-radius: 99px; background: #1D9E75; transition: width 0.4s; }
+.section { margin-bottom: 1.5rem; }
+.section-header { font-size: 13px; font-weight: 500; color: var(--color-text-secondary); letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 0.5px solid var(--color-border-tertiary); display: flex; align-items: center; justify-content: space-between; }
+.section-count { font-size: 11px; font-weight: 400; }
+.todo-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: var(--border-radius-md); border: 0.5px solid var(--color-border-tertiary); background: var(--color-background-primary); margin-bottom: 6px; cursor: pointer; transition: all 0.15s; user-select: none; }
+.todo-item:hover { border-color: var(--color-border-secondary); background: var(--color-background-secondary); }
+.todo-item.done { opacity: 0.45; }
+.todo-item.done .todo-title { text-decoration: line-through; }
+.todo-item.new-item { border-color: #9FE1CB; }
+.new-badge { font-size: 10px; padding: 1px 6px; border-radius: 99px; background: #E1F5EE; color: #0F6E56; font-weight: 500; flex-shrink: 0; }
+.checkbox { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid var(--color-border-secondary); flex-shrink: 0; margin-top: 2px; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
+.todo-item.done .checkbox { background: #1D9E75; border-color: #1D9E75; }
+.checkmark { width: 8px; height: 6px; display: none; }
+.todo-item.done .checkmark { display: block; }
+.checkmark::before { content: ''; display: block; width: 8px; height: 6px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 6'%3E%3Cpath d='M1 3L3 5L7 1' stroke='white' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E") no-repeat center; }
+.todo-content { flex: 1; min-width: 0; }
+.todo-title { font-size: 14px; color: var(--color-text-primary); line-height: 1.4; margin-bottom: 3px; }
+.todo-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.todo-file { font-size: 11px; color: var(--color-text-tertiary); font-family: var(--font-mono); }
+.priority-badge { font-size: 10px; padding: 1px 7px; border-radius: 99px; font-weight: 500; flex-shrink: 0; }
+.p-critical { background: #FCEBEB; color: #A32D2D; }
+.p-high { background: #FAEEDA; color: #854F0B; }
+.p-medium { background: #E6F1FB; color: #185FA5; }
+.p-low { background: #EAF3DE; color: #3B6D11; }
+.empty { text-align: center; padding: 2rem; color: var(--color-text-tertiary); font-size: 14px; }
+</style>
+
+<div class="container">
+<div class="header">
+  <h2>Gizmo Engine — Todo List</h2>
+  <div class="stats">
+    <span class="stat crit" id="s-critical">0 kritik</span>
+    <span class="stat warn" id="s-high">0 yüksek</span>
+    <span class="stat med" id="s-med">0 orta</span>
+    <span class="stat done" id="s-done">0 tamamlandı</span>
+  </div>
+</div>
+<div class="progress-bar"><div class="progress-fill" id="progress" style="width:0%"></div></div>
+<div class="filters">
+  <button class="filter-btn active" onclick="setFilter('all')">Tümü</button>
+  <button class="filter-btn" onclick="setFilter('Fizik')">Fizik</button>
+  <button class="filter-btn" onclick="setFilter('Renderer')">Renderer</button>
+  <button class="filter-btn" onclick="setFilter('ECS / Core')">ECS / Core</button>
+  <button class="filter-btn" onclick="setFilter('Araç Fiziği')">Araç Fiziği</button>
+  <button class="filter-btn" onclick="setFilter('Animasyon')">Animasyon</button>
+  <button class="filter-btn" onclick="setFilter('Karakter')">Karakter</button>
+  <button class="filter-btn" onclick="setFilter('Editör')">Editör</button>
+  <button class="filter-btn" onclick="setFilter('Ses')">Ses</button>
+  <button class="filter-btn" onclick="setFilter('Kısıtlar')">Kısıtlar</button>
+  <button class="filter-btn" onclick="setFilter('Mimari')">Mimari</button>
+</div>
+<div id="list"></div>
+</div>
+
+<script>
+const todos = [
+  // === FİZİK ===
+  { id:1,  title:"Broad-phase S&P yalnızca X ekseninde yapılıyor — Y/Z ayrı eksen taraması yok, dar açıda sıkışan objeler false-negative üretiyor", file:"gizmo-physics/src/system.rs", priority:"critical", cat:"Fizik", isNew:false },
+  { id:2,  title:"Island generation'da Union-Find path compression eksik — find_root() büyük sahnelerde O(N) degrade edebilir", file:"gizmo-physics/src/system.rs", priority:"high", cat:"Fizik", isNew:false },
+  { id:3,  title:"Warm-start cache her frame contact_cache.clear() ile tamamen siliniyor — ölü entity referansları temizlenmiyor, bellek sızıntısı riski var", file:"gizmo-physics/src/system.rs", priority:"high", cat:"Fizik", isNew:false },
+  { id:4,  title:"CCD bisection: sweep_vector yalnızca bağıl hız kullanıyor, her iki obje CCD aktifse çift sweep oluşturuluyor", file:"gizmo-physics/src/system.rs", priority:"high", cat:"Fizik", isNew:false },
+  { id:5,  title:"MAX_ANG (100.0) ve MAX_LIN (200.0) integration.rs ve system.rs'de ayrı ayrı hardcoded — PhysicsConfig'den okunmalı, senkronize değil", file:"gizmo-physics/src/integration.rs", priority:"medium", cat:"Fizik", isNew:false },
+  { id:6,  title:"contact_cache başına max 4 giriş: entry.len() < 4 koşulu aynı kareye ait yeni noktaları kesiyor — manifold başına değil çift başına olmalı", file:"gizmo-physics/src/system.rs", priority:"medium", cat:"Fizik", isNew:false },
+  { id:7,  title:"OBB-OBB SAT: edge-edge temas için cross ürün eksenlerinin eff_mass hesabında normalize edilmesi gerekiyor, face-face'de sorun yok", file:"gizmo-physics/src/collision.rs", priority:"critical", cat:"Fizik", isNew:false },
+  { id:8,  title:"check_aabb_aabb_manifold tek temas noktası döndürüyor — stacking (üst üste kutu) senaryolarında 4 köşe temas noktası döndürmeli", file:"gizmo-physics/src/collision.rs", priority:"high", cat:"Fizik", isNew:false },
+  { id:9,  title:"Sphere merkeze tam denk geldiğinde check_sphere_aabb_manifold içinde diff_center.normalize() sıfır vektörde NaN üretebilir", file:"gizmo-physics/src/collision.rs", priority:"critical", cat:"Fizik", isNew:false },
+  { id:10, title:"EPA'da degenerate simpleks (neredeyse sıfır hacimli tetrahedra) durumunda max iterasyon guard yok — sonsuz döngü riski", file:"gizmo-physics/src/epa.rs", priority:"high", cat:"Fizik", isNew:false },
+  { id:11, title:"integration.rs: SIMD batchinin son chunk'ında valid_count < 8 iken geçersiz lane'lerdeki grav[] değerleri 0.0 ile doldurulsa da velocity sıfır olmayan entity'lere yazılıyor, skalar guard ekle", file:"gizmo-physics/src/integration.rs", priority:"medium", cat:"Fizik", isNew:true },
+  { id:12, title:"Sleep sistemi hız eşiğini sadece kare bazlı ölçüyor (speed_sq < 0.01) — titreşen obje bu eşiğin altına inmeden uyumaya gidemiyor, avg veya rolling window kullan", file:"gizmo-physics/src/integration.rs", priority:"medium", cat:"Fizik", isNew:true },
+  { id:13, title:"Angular damping (1.0 - dt*3.0) framerate bağımlı — 120fps'de 2x daha fazla sönümleme oluyor; dt-invariant formüle çevir: (0.97).powf(dt*60.0)", file:"gizmo-physics/src/integration.rs", priority:"high", cat:"Fizik", isNew:true },
+
+  // === KISITLAR ===
+  { id:14, title:"Hinge joint: angular_on_axis ataması entity_a ve entity_b angular velocity'sini tamamen eksen üzerine yansıtıyor — diğer eksenlerdeki açısal hız sıfırlanıyor, yanlış davranış", file:"gizmo-physics/src/constraints.rs", priority:"critical", cat:"Kısıtlar", isNew:true },
+  { id:15, title:"Fixed joint rotasyon düzeltmesi: relative_rotation başlangıçta IDENTITY, yani joint oluşturulduğu anda A'nın rotasyonu yakalanmıyor — joint.fixed() çağrısında anlık rot_a * rot_b.inverse() hesaplanmalı", file:"gizmo-physics/src/constraints.rs", priority:"high", cat:"Kısıtlar", isNew:true },
+  { id:16, title:"solve_constraints döngüde borrow→drop→borrow_mut yapıyor — iki pass yerine tek pass ile çözülebilir, her iterasyonda yeniden borrow maliyeti var", file:"gizmo-physics/src/constraints.rs", priority:"low", cat:"Kısıtlar", isNew:true },
+  { id:17, title:"JointWorld::remove() swap_remove kullanıyor — joint index'leri kayıyor, dışarıda tutulan joint handle'ları geçersiz kalıyor; index bazlı API güvensiz", file:"gizmo-physics/src/constraints.rs", priority:"high", cat:"Kısıtlar", isNew:true },
+
+  // === KARAKTER ===
+  { id:18, title:"ConvexHull vs CharacterController çarpışması implement edilmemiş — None döndürüyor", file:"gizmo-physics/src/character.rs", priority:"high", cat:"Karakter", isNew:false },
+  { id:19, title:"HeightField vs CharacterController çarpışması implement edilmemiş — None döndürüyor, terrain üzerinde yürüyüş çalışmıyor", file:"gizmo-physics/src/character.rs", priority:"critical", cat:"Karakter", isNew:false },
+  { id:20, title:"CharacterController zemin tespitinde normal.y > 0.7 sabit eşiği — slope_limit ile senkronize değil", file:"gizmo-physics/src/character.rs", priority:"medium", cat:"Karakter", isNew:false },
+  { id:21, title:"Step climbing: step_test_pos'tan aşağı inişte yerçekimi bir sonraki frame'e bırakılmış — tek kare merdiven titremesi (jitter) oluşuyor", file:"gizmo-physics/src/character.rs", priority:"medium", cat:"Karakter", isNew:false },
+  { id:22, title:"resolve_capsule_collisions: her obje için ayrı correction birikimi yapılıyor ama correction += şeklinde kümülasyonla en son normal overwrite ediliyor — çok yüzeyli temas normallerini birleştirmiyor", file:"gizmo-physics/src/character.rs", priority:"high", cat:"Karakter", isNew:true },
+
+  // === ARAÇ FİZİĞİ ===
+  { id:23, title:"Araç raycaster HeightField'da biyolinear interpolasyon yok — .round() ile en yakın grid noktası kullanılıyor, tümsekli arazi geçişi sarsıntılı", file:"gizmo-physics/src/vehicle.rs", priority:"high", cat:"Araç Fiziği", isNew:false },
+  { id:24, title:"Ön tekerlek direksiyonu is_drive_wheel=false ise çalışıyor — RWD'de ön tekerlek aynı zamanda drive wheel ise direksiyon çalışmıyor", file:"gizmo-physics/src/vehicle.rs", priority:"high", cat:"Araç Fiziği", isNew:false },
+  { id:25, title:"Hava direnci sabit katsayılı (0.3) ve hardcoded — VehicleController'a drag_coefficient alanı eklenmeli", file:"gizmo-physics/src/vehicle.rs", priority:"low", cat:"Araç Fiziği", isNew:false },
+  { id:26, title:"Tekerlek görsel dönmesi yalnızca forward hıza göre hesaplanıyor — drift sırasında dönme açısı yanlış", file:"gizmo-physics/src/vehicle.rs", priority:"low", cat:"Araç Fiziği", isNew:false },
+  { id:27, title:"static_cols her frame baştan sıfırdan derleniyor (Vec klonlanıyor) — statik objeler değişmiyorsa cache'lenmeli, her frame O(N) tarama gereksiz", file:"gizmo-physics/src/vehicle.rs", priority:"medium", cat:"Araç Fiziği", isNew:true },
+
+  // === ANİMASYON ===
+  { id:28, title:"Track<T>::get_interpolated: idx == 0 guard'ından sonra i = idx-1 hesabında idx=1 iken k2 aynı noktaya işaret edebiliyor", file:"gizmo-renderer/src/animation.rs", priority:"high", cat:"Animasyon", isNew:false },
+  { id:29, title:"SkeletonHierarchy::calculate_global_matrices recursive — derin iskelet hiyerarşilerinde (30+ joint) stack overflow riski, iteratif topological sort gerekiyor", file:"gizmo-renderer/src/animation.rs", priority:"high", cat:"Animasyon", isNew:false },
+  { id:30, title:"AnimationClip'te STEP ve CUBIC_SPLINE interpolasyon modu yok — yalnızca linear; GLTF animasyonları bozuk oynatılabilir", file:"gizmo-renderer/src/animation.rs", priority:"high", cat:"Animasyon", isNew:false },
+  { id:31, title:"GPU skinning shader yok — joint matrix GPU'ya gönderilmiyor; büyük karakterlerde CPU skinning performans sorunu", file:"gizmo-renderer/src", priority:"high", cat:"Animasyon", isNew:false },
+
+  // === RENDERER ===
+  { id:32, title:"Renderer tek directional light destekliyor — point/spot light için shadow map atlas veya cube map yok", file:"gizmo-renderer/src/renderer.rs", priority:"high", cat:"Renderer", isNew:false },
+  { id:33, title:"Z-sorting sadece kamera mesafesine göre — yarı saydam nesneler iç içe geçtiğinde OIT gerekiyor", file:"gizmo-renderer/src/renderer.rs", priority:"medium", cat:"Renderer", isNew:false },
+  { id:34, title:"Hot-reload texture güncellemesi bind group'u yeniden oluşturmuyor — eski texture GPU'da kalıyor", file:"gizmo-renderer/src/hot_reload.rs", priority:"high", cat:"Renderer", isNew:false },
+  { id:35, title:"Particle compute shader'da particle count sabit — runtime'da dinamik emit/destroy yoksa bellek havuzu boşa gidiyor", file:"gizmo-renderer/src/particle_renderer.rs", priority:"medium", cat:"Renderer", isNew:false },
+  { id:36, title:"physics_compute.wgsl mevcut — CPU fizik sistemiyle entegrasyonu belirsiz, aynı veri iki kez işlenebilir", file:"gizmo-renderer/src/physics_compute.wgsl", priority:"high", cat:"Renderer", isNew:false },
+
+  // === ECS / CORE ===
+  { id:37, title:"ECS borrow_mut çakışması: vehicle system trans_storage hem immutable hem mutable kullanıyor — RefCell double-borrow runtime panic riski", file:"gizmo-core/src/world.rs", priority:"critical", cat:"ECS / Core", isNew:false },
+  { id:38, title:"SparseSet entity_dense.clone() her frame çağrılıyor — büyük sahnelerde frame başına büyük heap alloc", file:"gizmo-physics/src/system.rs", priority:"medium", cat:"ECS / Core", isNew:false },
+  { id:39, title:"World::get_resource_mut: borrow_mut() None yerine panic atabilir (unwrap içeriden gelirse) — try_borrow_mut yok, hata mesajı yok", file:"gizmo-core/src/world.rs", priority:"high", cat:"ECS / Core", isNew:true },
+  { id:40, title:"Events<T>::drain() iterator döndürüyor ancak hiç tüketilmezse liste sonsuza büyüyebilir — frame sonunda auto-clear veya read-cursor mekanizması yok", file:"gizmo-core/src/event.rs", priority:"high", cat:"ECS / Core", isNew:true },
+  { id:41, title:"Input::keys_pressed HashSet<u32> raw scancode kullanıyor — winit KeyCode enum'una bağlanmamış, farklı platform layout'larında tutarsız davranış", file:"gizmo-core/src/input.rs", priority:"high", cat:"ECS / Core", isNew:true },
+  { id:42, title:"ActionMap gamepad desteği yok — yalnızca keyboard/mouse binding, konsol controller kullanılamıyor", file:"gizmo-core/src/input.rs", priority:"medium", cat:"ECS / Core", isNew:true },
+  { id:43, title:"Collision event saniyede yüzlerce event atılabilir — throttle/dedup mekanizması yok, ses motoru da bunları dinliyorsa ses spam oluşuyor", file:"gizmo-physics/src/system.rs", priority:"medium", cat:"ECS / Core", isNew:false },
+
+  // === SES ===
+  { id:44, title:"AudioManager::clean_dead_sinks() her frame çağrılmıyorsa active_spatial_sinks büyümeye devam eder — GC çağrısı uygulama döngüsüne bağlanmamış", file:"gizmo-audio/src/lib.rs", priority:"high", cat:"Ses", isNew:true },
+  { id:45, title:"play_3d_internal: bytes.clone() her oynatmada tam ses verisini kopyalıyor — Arc<[u8]> zaten paylaşımlı, Cursor::new(bytes.clone()) yerine Arc::clone(&bytes) kullan", file:"gizmo-audio/src/lib.rs", priority:"high", cat:"Ses", isNew:true },
+  { id:46, title:"AudioSource::_internal_sink_id serde::skip ile işaretli — sahne kaydedilip yüklendiğinde önceki sink ID'leri kaybolur, ses entity'leri yeniden başlatılmıyor", file:"gizmo-audio/src/lib.rs", priority:"medium", cat:"Ses", isNew:true },
+  { id:47, title:"max_distance alanı var ama distance attenuation curve AudioManager'da uygulanmıyor — uzaklık sadece SpatialSink'in kendi hesabına bırakılmış, özelleştirilebilir curve yok", file:"gizmo-audio/src/lib.rs", priority:"medium", cat:"Ses", isNew:true },
+  { id:48, title:"AudioManager::new() Option<Self> döndürüyor ama ses cihazı bulunamazsa motor sessizce devam ediyor — hata event'i fırlatılmıyor, log yetersiz", file:"gizmo-audio/src/lib.rs", priority:"low", cat:"Ses", isNew:true },
+
+  // === EDİTÖR ===
+  { id:49, title:"Editör gizmo: rotate ve scale handle'ları eksik — yalnızca translate handle mevcut", file:"gizmo-editor", priority:"high", cat:"Editör", isNew:false },
+  { id:50, title:"Asset browser: texture silindiğinde bağlı materyaller güncellenmeden sahne bozuluyor — asset bağımlılık grafiği yok", file:"gizmo-editor", priority:"high", cat:"Editör", isNew:false },
+
+  // === MİMARİ ===
+  { id:51, title:"Collision layer/mask sistemi yok — tüm objeler birbirleriyle çarpışıyor, vehicle filter hardcoded; genel amaçlı filtreleme API şart", file:"gizmo-physics/src/system.rs", priority:"critical", cat:"Mimari", isNew:false },
+  { id:52, title:"Input sistemi winit event'lerini raw alıyor, action mapping Lua'ya expose edilmiyor — scripting ile input bağlantısı kopuk", file:"gizmo-app", priority:"high", cat:"Mimari", isNew:false },
+  { id:53, title:"Lua scripting API eksik — transform, velocity, input, event sistemi Lua'dan tam kontrol edilemiyor", file:"gizmo-scripting", priority:"high", cat:"Mimari", isNew:false },
+  { id:54, title:"Sahne kayıt formatında float32 hassasiyeti yetersiz — büyük dünya koordinatlarında pozisyon kayması (floating point drift)", file:"gizmo-scene", priority:"medium", cat:"Mimari", isNew:false },
+];
+
+let currentFilter = 'all';
+let doneSet = new Set();
+try { doneSet = new Set(JSON.parse(localStorage.getItem('gizmo_done_v2') || '[]')); } catch(e){}
+
+function saveDone() { try { localStorage.setItem('gizmo_done_v2', JSON.stringify([...doneSet])); } catch(e){} }
+function setFilter(f) {
+  currentFilter = f;
+  document.querySelectorAll('.filter-btn').forEach(b => {
+    b.classList.toggle('active', b.textContent === f || (f==='all' && b.textContent==='Tümü'));
+  });
+  render();
+}
+function toggle(id) {
+  if (doneSet.has(id)) doneSet.delete(id); else doneSet.add(id);
+  saveDone(); render();
+}
+
+function render() {
+  const cats = {};
+  const filtered = todos.filter(t => currentFilter === 'all' || t.cat === currentFilter);
+  filtered.forEach(t => {
+    t.done = doneSet.has(t.id);
+    if (!cats[t.cat]) cats[t.cat] = [];
+    cats[t.cat].push(t);
+  });
+  const pOrder = { critical:0, high:1, medium:2, low:3 };
+  Object.values(cats).forEach(arr => arr.sort((a,b) => {
+    if (a.done !== b.done) return a.done ? 1 : -1;
+    return pOrder[a.priority] - pOrder[b.priority];
+  }));
+
+  const total = todos.length;
+  const doneCount = todos.filter(t => doneSet.has(t.id)).length;
+  document.getElementById('progress').style.width = (doneCount/total*100).toFixed(1)+'%';
+  document.getElementById('s-critical').textContent = todos.filter(t=>t.priority==='critical'&&!doneSet.has(t.id)).length+' kritik';
+  document.getElementById('s-high').textContent = todos.filter(t=>t.priority==='high'&&!doneSet.has(t.id)).length+' yüksek';
+  document.getElementById('s-med').textContent = todos.filter(t=>t.priority==='medium'&&!doneSet.has(t.id)).length+' orta';
+  document.getElementById('s-done').textContent = doneCount+' tamamlandı';
+
+  const pLabel = { critical:'Kritik', high:'Yüksek', medium:'Orta', low:'Düşük' };
+  const pClass = { critical:'p-critical', high:'p-high', medium:'p-medium', low:'p-low' };
+  let html = '';
+  if (!Object.keys(cats).length) { html='<div class="empty">Bu kategoride görev yok</div>'; }
+  else {
+    for (const [cat, items] of Object.entries(cats)) {
+      const open = items.filter(i=>!i.done).length;
+      html += `<div class="section"><div class="section-header"><span>${cat}</span><span class="section-count">${open}/${items.length} açık</span></div>`;
+      items.forEach(t => {
+        html += `<div class="todo-item ${t.done?'done':''} ${t.isNew&&!t.done?'new-item':''}" onclick="toggle(${t.id})">
+          <div class="checkbox"><span class="checkmark"></span></div>
+          <div class="todo-content">
+            <div class="todo-title">${t.title}</div>
+            <div class="todo-meta">
+              <span class="priority-badge ${pClass[t.priority]}">${pLabel[t.priority]}</span>
+              ${t.isNew ? '<span class="new-badge">yeni</span>' : ''}
+              <span class="todo-file">${t.file}</span>
+            </div>
+          </div>
+        </div>`;
+      });
+      html += '</div>';
+    }
+  }
+  document.getElementById('list').innerHTML = html;
+}
+render();
+</script>

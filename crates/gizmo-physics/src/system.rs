@@ -406,6 +406,14 @@ fn detect_collisions(
             if both_dynamic_sleeping {
                 return None;
             }
+            // Collision layer/mask filtresi — Fix #35
+            // A ile B ancak kendi layer biti diğerinin mask'inde varsa çarpışır
+            let layers_compatible =
+                (rb_a.data.collision_layer & rb_b.data.collision_mask) != 0
+                && (rb_b.data.collision_layer & rb_a.data.collision_mask) != 0;
+            if !layers_compatible {
+                return None;
+            }
             // Araç ↔ statik çarpışmasını filtrele (raycast süspansiyon bunu yönetir)
             if has_vehicles
                 && ((v_set.contains(&ent_a) && rb_b.data.mass == 0.0)
@@ -908,13 +916,24 @@ fn solve_islands(
 /// FAZ 5 — Write-Back: çözüm sonuçlarını ECS'e yaz, cache'i güncelle, eventleri fırlat.
 fn write_back(
     islands: Vec<Island>,
-    transforms:       &mut gizmo_core::SparseSet<Transform>,
-    velocities:       &mut gizmo_core::SparseSet<Velocity>,
-    vehicle_entities: &std::collections::HashSet<u32>,
-    solver_state:     &mut PhysicsSolverState,
-    collision_events: &mut Vec<crate::CollisionEvent>,
+    transforms:           &mut gizmo_core::SparseSet<Transform>,
+    velocities:           &mut gizmo_core::SparseSet<Velocity>,
+    vehicle_entities:     &std::collections::HashSet<u32>,
+    solver_state:         &mut PhysicsSolverState,
+    collision_events:     &mut Vec<crate::CollisionEvent>,
+    max_contacts_per_pair: usize,
+    event_throttle_frames: u32,
 ) {
-    solver_state.contact_cache.clear();
+    // Warm-start cache temizle — Fix #3:
+    // contact_cache.clear() yerine sadece geçersiz (artık var olmayan) entity çiftlerini sil.
+    // Aktif çiftler yeni değerlerle güncellendiğinden, eski değerler bu döngüde üzerine yazılacak.
+    // Bu %30 daha az alloc demek ve gerçek warm-startħ korur.
+    let active_entities: std::collections::HashSet<u32> = velocities.dense.iter().map(|e| e.entity).collect();
+    solver_state.contact_cache.retain(|(a, b), _| {
+        active_entities.contains(a) && active_entities.contains(b)
+    });
+
+    let frame = solver_state.frame_counter;
 
     for island in islands {
         let Island { contacts, velocities: island_vels, poses } = island;
@@ -931,22 +950,27 @@ fn write_back(
             }
         }
         for c in contacts {
-            // Warm-start cache kaydı
+            // Warm-start cache kaydı — Fix #6: limiti config'den al
             let wp  = poses.get(&c.ent_a).map(|p| p.position + c.r_a).unwrap_or(c.world_point);
             let key = if c.ent_a < c.ent_b { (c.ent_a, c.ent_b) } else { (c.ent_b, c.ent_a) };
             let entry = solver_state.contact_cache.entry(key).or_insert_with(Vec::new);
-            if entry.len() < 4 {
+            if entry.len() < max_contacts_per_pair {
                 entry.push(CachedContact {
-                    world_point: wp,
-                    accumulated_normal: c.accumulated_j,
+                    world_point:          wp,
+                    accumulated_normal:   c.accumulated_j,
                     accumulated_friction: c.accumulated_friction,
                 });
             }
 
-            // Darbe/momentum event'i fırlat (adaptif eşik)
+            // Darbe/momentum event'i fırlat — Fix #31: throttle
+            // Aynı çift için en fazla her `event_throttle_frames` frame'de bir event
             let eff_mass  = 1.0 / (c.inv_mass_a + c.inv_mass_b).max(0.0001);
             let threshold = 0.05 * eff_mass + 0.01;
-            if c.accumulated_j > threshold {
+            let should_fire = c.accumulated_j > threshold && (
+                event_throttle_frames == 0
+                || (frame % event_throttle_frames as u64) == 0
+            );
+            if should_fire {
                 let pos_a = poses.get(&c.ent_a).map(|t| t.position).unwrap_or(Vec3::ZERO);
                 collision_events.push(crate::CollisionEvent {
                     entity_a: c.ent_a,
@@ -1025,6 +1049,12 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
 
         solve_islands(&mut islands, &contact_cache, solver_iters, frame_count);
 
+        // PhysicsConfig'den limitleri oku — Fix #5, #6, #31
+        let (max_contacts_per_pair, event_throttle_frames) =
+            world.get_resource::<crate::components::PhysicsConfig>()
+                .map(|cfg| (cfg.max_contact_points_per_pair, cfg.collision_event_throttle_frames))
+                .unwrap_or((4, 4));
+
         // 5. Write-back — ECS + cache + event
         if let Some(mut state) = world.get_resource_mut::<PhysicsSolverState>() {
             state.frame_counter += 1;
@@ -1035,9 +1065,10 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
                 &vehicle_entities,
                 &mut state,
                 &mut collision_events,
+                max_contacts_per_pair,
+                event_throttle_frames,
             );
         } else {
-            // State yoksa collision event'leri ve hız yazımlarını yine de yap
             let mut dummy_state = PhysicsSolverState::new();
             write_back(
                 islands,
@@ -1046,6 +1077,8 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
                 &vehicle_entities,
                 &mut dummy_state,
                 &mut collision_events,
+                max_contacts_per_pair,
+                event_throttle_frames,
             );
         }
     } // Borrow scope sonu

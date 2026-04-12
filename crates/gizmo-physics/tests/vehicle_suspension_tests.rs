@@ -17,7 +17,7 @@ const DT: f32 = 1.0 / 60.0;
 
 fn make_world_with_ground(ground_y: f32) -> World {
     let mut w = World::new();
-    w.insert_resource(PhysicsConfig { ground_y });
+    w.insert_resource(PhysicsConfig { ground_y, ..Default::default() });
     w
 }
 
