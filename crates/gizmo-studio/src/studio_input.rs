@@ -8,9 +8,10 @@ pub fn handle_studio_input(
     ray: Ray,
     player_id: u32,
     do_raycast: bool,
+    ctrl_pressed: bool,
 ) {
     if do_raycast {
-        perform_raycast(world, state, ray, player_id);
+        perform_raycast(world, state, ray, player_id, ctrl_pressed);
     } else if let Some(axis) = state.dragging_axis {
         perform_drag(world, state, ray, axis);
     }
@@ -50,7 +51,7 @@ fn perform_drag(
     }
 }
 
-fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_id: u32) {
+fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_id: u32, ctrl_pressed: bool) {
     state.do_raycast = false;
 
     let mut closest_t = std::f32::MAX;
@@ -99,15 +100,11 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
     }
 
     if let Some(hit) = hit_entity {
-        let _handled = world
-            .get_resource::<gizmo::winit::window::Window>()
-            .map_or(false, |_| false);
-
-        // Gizmo Drag Check kaldırıldı. Artık egui-gizmo var!
-
-        // Raycast işleminde Ctrl desteği input parametresi gelmeden sağlanamayabilir.
-        // O yüzden şimdilik "Eğer hit tıklanmışsa, ve seçili değilse tek onu seç"
-        state.select_exclusive(hit);
+        if ctrl_pressed {
+            state.toggle_selection(hit);
+        } else {
+            state.select_exclusive(hit);
+        }
 
         // Seçim değiştiği için Editör sekmesine Transform verisini logla/yedekle
         if let Some(transforms) = world.borrow::<Transform>() {

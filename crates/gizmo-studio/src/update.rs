@@ -46,12 +46,17 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
                     editor_state.do_raycast = false;
                     state.do_raycast = false;
                 }
+                
+                let ctrl_pressed = input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ControlLeft as u32) 
+                                || input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ControlRight as u32);
+                                
                 studio_input::handle_studio_input(
                     world,
                     &mut editor_state,
                     ray,
                     state.editor_camera,
                     do_rc,
+                    ctrl_pressed,
                 );
             }
         }
@@ -331,10 +336,16 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
             });
         }
 
-        // Klavyeden Undo/Redo tetiklemeleri
-        if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ControlLeft as u32) {
+        // --- EDITOR KISAYOLLARI (SHORTCUTS) ---
+        let ctrl_pressed = input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ControlLeft as u32)
+            || input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ControlRight as u32);
+        let shift_pressed = input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ShiftLeft as u32)
+            || input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ShiftRight as u32);
+
+        // Kısayol: Undo / Redo
+        if ctrl_pressed {
             if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyZ as u32) {
-                if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ShiftLeft as u32) {
+                if shift_pressed {
                     editor_state.history.redo(world);
                 } else {
                     editor_state.history.undo(world);
@@ -344,28 +355,24 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
             }
 
             // Kısayol: Ctrl + D (Çoğalt)
-            let ctrl_pressed = input
-                .is_key_pressed(gizmo::winit::keyboard::KeyCode::ControlLeft as u32)
-                || input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ControlRight as u32);
-            if ctrl_pressed
-                && input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyD as u32)
-            {
+            if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyD as u32) {
                 for &entity in editor_state.selected_entities.iter() {
                     editor_state.duplicate_requests.push(entity);
                 }
             }
-        } else {
-            // Kısayol: Delete (Sil)
-            if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Delete as u32) {
-                for &entity in editor_state.selected_entities.iter() {
-                    editor_state.despawn_requests.push(entity);
-                }
-                editor_state.clear_selection();
-            }
+        }
 
-            // Kısayol: F (Seçili Objeye Odaklan)
-            if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyF as u32) {
-                if !editor_state.selected_entities.is_empty() {
+        // Kısayol: Delete (Sil) (Ctrl durumundan bağımsız tetiklenmeli)
+        if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Delete as u32) {
+            for &entity in editor_state.selected_entities.iter() {
+                editor_state.despawn_requests.push(entity);
+            }
+            editor_state.clear_selection();
+        }
+
+        // Kısayol: F (Seçili Objeye Odaklan) (Yine Ctrl'den bağımsız tetiklenmeli)
+        if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyF as u32) {
+            if !editor_state.selected_entities.is_empty() {
                     if let Some(transforms) = world.borrow::<Transform>() {
                         let mut center_pos = gizmo::math::Vec3::ZERO;
                         let mut count = 0.0;
