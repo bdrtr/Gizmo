@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+
 use crate::component::{Component, SparseSet, DenseEntry};
 use crate::world::World;
 use std::cell::{Ref, RefMut};

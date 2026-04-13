@@ -117,19 +117,22 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
     // Procedural 3D Grid Lines and Infinite Axes
     // HDR uyumlu, hafif transparan çok şık ve ferah bir Grid materyali
     let grid_mat = gizmo::prelude::Material::new(white_tex.clone())
-        .with_unlit(Vec4::new(0.2, 0.2, 0.2, 0.4))
+        // Shader'da 'if (alpha < 0.5) discard;' kontrolü olduğu için alfa daima > 0.5 olmalı.
+        // Silik görünüm için RGB'yi kısıp alfayı 0.55'te tutuyoruz.
+        .with_unlit(Vec4::new(0.15, 0.15, 0.15, 0.55))
         .with_transparent(true);
 
-    for i in -50..=50 {
-        // Her kare 10.0 metre genişliğinde çok ferah bir zemin
-        let offset = i as f32 * 10.0;
+    for i in -100..=100 {
+        // Standart grid ölçüsü: Her kare 1.0 metre genişliğinde
+        let offset = i as f32 * 1.0;
 
         let is_center = i == 0;
-        // Merkezi eksen kılavuzları sonsuza, normal ızgara çizgileri +500/-500 uzantıya gidiyor
-        let len = if is_center { 10000.0 } else { 1000.0 };
+        let is_major = i % 10 == 0;
+        
+        let len = 200.0; // 200m toplam genişlik
 
-        // Çizgiler çok ince ve zarif
-        let t_width = if is_center { 0.02 } else { 0.01 };
+        // Çok ince olup Anti-Aliasing kurbanı olmaması için min 0.012 kalınlık
+        let t_width = if is_center { 0.035 } else if is_major { 0.02 } else { 0.012 };
 
         // X eksenine paralel çizgiler
         let mat_x = if is_center {
@@ -243,52 +246,11 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
         highlight_box,
         gizmo::renderer::components::MeshRenderer::new(),
     );
-    // --- GIZMO HANDLES (TRANSLATE) ---
-    let mut create_handle = |name: &str,
-                             mat: gizmo::renderer::components::Material,
-                             extents: Vec3,
-                             pos_offset: Vec3|
-     -> u32 {
-        let ent = world.spawn();
-        world.add_component(ent, gizmo::core::component::EntityName(name.to_string()));
-        world.add_component(ent, Transform::new(pos_offset).with_scale(extents));
-        world.add_component(
-            ent,
-            gizmo::renderer::asset::AssetManager::create_cube(&renderer.device),
-        );
-        world.add_component(ent, mat);
-        world.add_component(ent, gizmo::renderer::components::MeshRenderer::new());
-        // Normal bounding box is 1.0 half extents, so bounding_box_half_extents equals scale
-        world.add_component(ent, Collider::new_aabb(extents.x, extents.y, extents.z));
-        world.add_component(ent, gizmo::core::component::IsHidden); // Hide initially
-        ent.id()
-    };
-
-    let thickness = 0.08;
-    let length = 1.5;
-    let handle_x = create_handle(
-        "Editor Gizmo Handle X",
-        axis_x_mat.clone(),
-        Vec3::new(length, thickness, thickness),
-        Vec3::new(length, 0.0, 0.0),
-    );
-    let handle_y = create_handle(
-        "Editor Gizmo Handle Y",
-        _axis_y_mat.clone(),
-        Vec3::new(thickness, length, thickness),
-        Vec3::new(0.0, length, 0.0),
-    );
-    let handle_z = create_handle(
-        "Editor Gizmo Handle Z",
-        axis_z_mat.clone(),
-        Vec3::new(thickness, thickness, length),
-        Vec3::new(0.0, 0.0, length),
-    );
-
+    // --- GIZMO HANDLES (TRANSLATE) EGUI-GIZMO İÇİN İPTAL EDİLDİ ---
+    
     let mut editor_state = EditorState::new();
     editor_state.open = true; // Always open in Studio!
     editor_state.highlight_box = highlight_box.id();
-    editor_state.gizmo_handles = [handle_x, handle_y, handle_z];
 
     world.insert_resource(editor_state);
 

@@ -60,7 +60,9 @@ pub fn default_render_pass(
         camera_forward: [0.0, 0.0, -1.0, 0.0],
         cascade_params: [0.1, 1.0 / crate::renderer::SHADOW_MAP_RES as f32, 0.0, 0.0],
         num_lights: 0,
-        _padding: [0; 3],
+        _align_pad: [0; 3],
+        _pad_scene: [0; 3],
+        _end_pad: 0,
     };
     renderer.queue.write_buffer(
         &renderer.scene.global_uniform_buffer,

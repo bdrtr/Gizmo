@@ -102,7 +102,9 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         camera_forward: [0.0, 0.0, -1.0, 0.0],
         cascade_params: [0.1, 1.0 / SHADOW_MAP_RES as f32, 0.0, 0.0],
         num_lights: 0,
-        _padding: [0; 3],
+        _align_pad: [0; 3],
+        _pad_scene: [0; 3],
+        _end_pad: 0,
     };
     let global_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Global Uniform Buffer"),
