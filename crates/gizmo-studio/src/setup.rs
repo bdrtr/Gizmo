@@ -247,6 +247,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
 
     StudioState {
         current_fps: 0.0,
+        actual_dt: 0.0,
         editor_camera: cam.id(),
         do_raycast: false,
         physics_accumulator: 0.0,

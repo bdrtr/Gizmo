@@ -10,7 +10,7 @@ pub fn execute_render_pipeline(
     _light_time: f32,
 ) {
     // --- SKELETAL ANIMATION UPDATE (Done before any ECS borrows!) ---
-    let delta_time = 1.0 / (state.current_fps.max(1.0));
+    let delta_time = state.actual_dt;
     gizmo::renderer::animation_update_system(world, delta_time, &renderer.queue);
 
     let mut aspect = if renderer.size.height > 0 {

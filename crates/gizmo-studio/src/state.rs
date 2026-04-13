@@ -1,5 +1,6 @@
 pub struct StudioState {
     pub current_fps: f32,
+    pub actual_dt: f32,
     pub editor_camera: u32,
     pub do_raycast: bool,
     pub physics_accumulator: f32,
