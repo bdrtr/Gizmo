@@ -6,6 +6,7 @@ use gizmo::prelude::*;
 
 pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input: &Input) {
     state.current_fps = 1.0 / dt;
+    state.actual_dt = dt;
 
     let mut look_delta = None;
     let mut pan_delta = None;
