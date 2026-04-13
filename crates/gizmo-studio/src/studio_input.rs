@@ -100,11 +100,9 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
         }
     }
 
-    let mut is_hidden_mod = world.borrow_mut::<gizmo::core::component::IsHidden>();
-
-    // Highlight Box Güncellemesi (Tıklanan objenin etrafındaki transparan çerçeve)
-    if let Some(mut trans) = world.borrow_mut::<Transform>() {
-        if any_selected {
+    if any_selected {
+        // Obje seçiliyse Highlight Box pozisyonunu ve boyutunu güncelle
+        if let Some(mut trans) = world.borrow_mut::<Transform>() {
             if let Some(hb) = (*trans).get_mut(state.highlight_box) {
                 hb.position = selected_pos;
                 hb.rotation = selected_rot;
@@ -116,15 +114,16 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
 
                 hb.scale = base_extents * 1.05; // Çerçeveyi tam objenin collision AABB bounds'una sığdır
             }
+        }
 
-            // GIZMO TRANSFORMS SYNC kapatıldı (egui-gizmo handle'ları UI'dan çizer)
-        } else {
-            // Hiçbir şey seçili değilse uzağa sakla
-            if let Some(t) = (*trans).get_mut(state.highlight_box) {
-                t.position = Vec3::new(0.0, -10000.0, 0.0);
-            }
-
-            // Gizmo handle gizleme kaldırıldı
+        // ECS üzerinden görünür yap
+        if let Some(entity_hb) = world.get_entity(state.highlight_box) {
+            world.remove_component::<gizmo::core::component::IsHidden>(entity_hb);
+        }
+    } else {
+        // Hiçbir şey seçili değilse 't.position = -10000' hack'i yerine ECS üzerinden render'ı atla
+        if let Some(entity_hb) = world.get_entity(state.highlight_box) {
+            world.add_component(entity_hb, gizmo::core::component::IsHidden);
         }
     }
 }
