@@ -80,6 +80,18 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                     state.gizmo_local_space = !state.gizmo_local_space;
                 }
 
+                let snap_color = if state.snap_enabled {
+                    egui::Color32::from_rgb(100, 200, 255)
+                } else {
+                    egui::Color32::GRAY
+                };
+                if ui
+                    .button(egui::RichText::new("🧲 Snap").color(snap_color))
+                    .clicked()
+                {
+                    state.snap_enabled = !state.snap_enabled;
+                }
+
                 ui.separator();
 
                 // === PENCERELER ===
