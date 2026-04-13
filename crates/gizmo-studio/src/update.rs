@@ -287,31 +287,6 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
                             }
 
                             log("\n== [Adım 3/3] Assetler Taşınıyor ==");
-                            fn copy_dir_all(
-                                src: impl AsRef<std::path::Path>,
-                                dst: impl AsRef<std::path::Path>,
-                                log: &dyn Fn(&str),
-                            ) -> std::io::Result<()> {
-                                std::fs::create_dir_all(&dst)?;
-                                for entry in std::fs::read_dir(src)? {
-                                    let entry = entry?;
-                                    let ty = entry.file_type()?;
-                                    if ty.is_dir() {
-                                        copy_dir_all(
-                                            entry.path(),
-                                            dst.as_ref().join(entry.file_name()),
-                                            log,
-                                        )?;
-                                    } else {
-                                        std::fs::copy(
-                                            entry.path(),
-                                            dst.as_ref().join(entry.file_name()),
-                                        )?;
-                                    }
-                                }
-                                Ok(())
-                            }
-
                             let _ = copy_dir_all("demo/assets", export_dir.join("assets"), &log);
                             log("Kopyalandı -> assets/");
                             let _ = copy_dir_all("demo/scenes", export_dir.join("scenes"), &log);
@@ -856,4 +831,23 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
             }
         }
     }
+}
+
+/// Dizin kopyalama yardımcı fonksiyonu
+fn copy_dir_all(
+    src: impl AsRef<std::path::Path>,
+    dst: impl AsRef<std::path::Path>,
+    log: &dyn Fn(&str),
+) -> std::io::Result<()> {
+    std::fs::create_dir_all(&dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(entry.path(), dst.as_ref().join(entry.file_name()), log)?;
+        } else {
+            std::fs::copy(entry.path(), dst.as_ref().join(entry.file_name()))?;
+        }
+    }
+    Ok(())
 }
