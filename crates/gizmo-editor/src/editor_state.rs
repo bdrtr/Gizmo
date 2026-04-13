@@ -108,6 +108,8 @@ pub struct EditorState {
     pub camera_focus_distance: f32,
     /// Grid görünür mü?
     pub show_grid: bool,
+    /// Kamera pozisyon, yaw ve pitch bookmarkları (Ctrl+0..9)
+    pub camera_bookmarks: [Option<(gizmo_math::Vec3, f32, f32)>; 10],
     /// Snap özelliği açık mı?
     pub snap_enabled: bool,
     /// Snap miktarı (Translate)
@@ -217,6 +219,7 @@ impl EditorState {
             camera_speed: 8.0,
             camera_focus_distance: 10.0,
             show_grid: true,
+            camera_bookmarks: [None; 10],
             snap_enabled: false,
             snap_translate: 0.5,
             snap_rotate_deg: 15.0,
