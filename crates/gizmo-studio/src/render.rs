@@ -114,10 +114,13 @@ pub fn render_studio(
                 std::sync::Arc::new(dummy_bg),
             );
             world.insert_resource(asset_manager);
-            // Highlight box'ı sıfırla (artık geçerli konumda)
             if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
                 ed.clear_selection();
                 ed.log_info("Sahne yüklendi.");
+            }
+        } else {
+            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+                ed.log_error("Kritik Hata: Sahne yüklenemedi. AssetManager bulunamadı!");
             }
         }
     }
@@ -162,6 +165,10 @@ pub fn render_studio(
             if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
                 ed.log_info("Prefab yüklendi.");
             }
+        } else {
+            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+                ed.log_error("Kritik Hata: Prefab yüklenemedi. AssetManager bulunamadı!");
+            }
         }
     }
 
@@ -190,6 +197,10 @@ pub fn render_studio(
             world.insert_resource(asset_manager);
             if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
                 ed.log_info("Obje çoğaltıldı.");
+            }
+        } else {
+            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+                ed.log_error("Kritik Hata: Obje çoğaltılamadı. AssetManager bulunamadı!");
             }
         }
         
@@ -277,6 +288,10 @@ pub fn render_studio(
                 }
             }
             world.insert_resource(asset_manager);
+        } else {
+            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+                ed.log_error("Kritik Hata: Terrain üretilemedi. AssetManager bulunamadı!");
+            }
         }
     }
 
