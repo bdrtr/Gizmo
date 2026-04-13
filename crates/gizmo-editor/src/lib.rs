@@ -190,9 +190,9 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                                 egui_gizmo::GizmoOrientation::Global
                             };
 
-                            let snap_enabled = ui.input(|i| i.modifiers.command); // Ctrl (Windows/Linux) veya Cmd (Mac)
-                            let snap_distance = 0.5;
-                            let snap_angle = 15.0_f32.to_radians();
+                            let snap_enabled = self.state.snap_enabled || ui.input(|i| i.modifiers.command); // Kullanıcı tuşa basar veya UI'dan açarsa
+                            let snap_distance = self.state.snap_translate;
+                            let snap_angle = self.state.snap_rotate_deg.to_radians();
 
                             let gizmo = egui_gizmo::Gizmo::new("scene_gizmo")
                                 .view_matrix(view_mat.to_cols_array_2d().into())

@@ -106,6 +106,8 @@ pub struct EditorState {
     pub camera_focus_distance: f32,
     /// Grid görünür mü?
     pub show_grid: bool,
+    /// Snap özelliği açık mı?
+    pub snap_enabled: bool,
     /// Snap miktarı (Translate)
     pub snap_translate: f32,
     /// Snap açısı (Rotate, derece)
@@ -212,6 +214,7 @@ impl EditorState {
             camera_speed: 8.0,
             camera_focus_distance: 10.0,
             show_grid: true,
+            snap_enabled: false,
             snap_translate: 0.5,
             snap_rotate_deg: 15.0,
             snap_scale: 0.1,
