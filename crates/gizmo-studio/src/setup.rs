@@ -122,60 +122,36 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
         .with_unlit(Vec4::new(0.15, 0.15, 0.15, 0.55))
         .with_transparent(true);
 
-    for i in -100..=100 {
-        // Standart grid ölçüsü: Her kare 1.0 metre genişliğinde
-        let offset = i as f32 * 1.0;
+    // Tekil Procedural Grid (1 Entity, 1 Draw Call - Zero Entity Overhead)
+    let grid_mesh = gizmo::renderer::asset::AssetManager::create_editor_grid_mesh(&renderer.device, 100, 1.0);
+    let grid_entity = world.spawn();
+    world.add_component(grid_entity, Transform::new(Vec3::ZERO));
+    world.add_component(grid_entity, grid_mesh);
+    world.add_component(grid_entity, grid_mat);
+    world.add_component(grid_entity, gizmo::renderer::components::MeshRenderer::new());
+    world.add_component(grid_entity, gizmo::core::component::Parent(gizmo_root.id()));
+    gizmo_children.push(grid_entity.id());
 
-        let is_center = i == 0;
-        let is_major = i % 10 == 0;
-        
-        let len = 200.0; // 200m toplam genişlik
+    // Merkez X Ekseni (Kırmızı Çizgi)
+    let len = 200.0;
+    let center_width = 0.035;
+    
+    let center_x = world.spawn();
+    world.add_component(center_x, Transform::new(Vec3::ZERO).with_scale(Vec3::new(len, center_width, center_width)));
+    world.add_component(center_x, gizmo::renderer::asset::AssetManager::create_cube(&renderer.device));
+    world.add_component(center_x, axis_x_mat.clone());
+    world.add_component(center_x, gizmo::renderer::components::MeshRenderer::new());
+    world.add_component(center_x, gizmo::core::component::Parent(gizmo_root.id()));
+    gizmo_children.push(center_x.id());
 
-        // Çok ince olup Anti-Aliasing kurbanı olmaması için min 0.012 kalınlık
-        let t_width = if is_center { 0.035 } else if is_major { 0.02 } else { 0.012 };
-
-        // X eksenine paralel çizgiler
-        let mat_x = if is_center {
-            axis_x_mat.clone()
-        } else {
-            grid_mat.clone()
-        };
-        let line_x = world.spawn();
-        world.add_component(
-            line_x,
-            Transform::new(Vec3::new(0.0, 0.0, offset))
-                .with_scale(Vec3::new(len, t_width, t_width)),
-        );
-        world.add_component(
-            line_x,
-            gizmo::renderer::asset::AssetManager::create_cube(&renderer.device),
-        );
-        world.add_component(line_x, mat_x);
-        world.add_component(line_x, gizmo::renderer::components::MeshRenderer::new());
-        world.add_component(line_x, gizmo::core::component::Parent(gizmo_root.id()));
-        gizmo_children.push(line_x.id());
-
-        // Z eksenine paralel çizgiler
-        let mat_z = if is_center {
-            axis_z_mat.clone()
-        } else {
-            grid_mat.clone()
-        };
-        let line_z = world.spawn();
-        world.add_component(
-            line_z,
-            Transform::new(Vec3::new(offset, 0.0, 0.0))
-                .with_scale(Vec3::new(t_width, t_width, len)),
-        );
-        world.add_component(
-            line_z,
-            gizmo::renderer::asset::AssetManager::create_cube(&renderer.device),
-        );
-        world.add_component(line_z, mat_z);
-        world.add_component(line_z, gizmo::renderer::components::MeshRenderer::new());
-        world.add_component(line_z, gizmo::core::component::Parent(gizmo_root.id()));
-        gizmo_children.push(line_z.id());
-    }
+    // Merkez Z Ekseni (Mavi Çizgi)
+    let center_z = world.spawn();
+    world.add_component(center_z, Transform::new(Vec3::ZERO).with_scale(Vec3::new(center_width, center_width, len)));
+    world.add_component(center_z, gizmo::renderer::asset::AssetManager::create_cube(&renderer.device));
+    world.add_component(center_z, axis_z_mat.clone());
+    world.add_component(center_z, gizmo::renderer::components::MeshRenderer::new());
+    world.add_component(center_z, gizmo::core::component::Parent(gizmo_root.id()));
+    gizmo_children.push(center_z.id());
 
     // Attach all children to root
     world.add_component(gizmo_root, gizmo::core::component::Children(gizmo_children));

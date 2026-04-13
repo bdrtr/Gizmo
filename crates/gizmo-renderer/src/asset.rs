@@ -513,6 +513,64 @@ impl AssetManager {
         )
     }
 
+    /// Editör sahneleri için CPU'yu boğmayacak (Zero-Entity-Overhead) tekil bir 3D Grid mesh'i üretir.
+    pub fn create_editor_grid_mesh(device: &wgpu::Device, extents: i32, spacing: f32) -> Mesh {
+        let mut vertices = Vec::new();
+        let total_size = (extents as f32 * 2.0) * spacing;
+        
+        let mut add_box = |pos: Vec3, scale: Vec3| {
+            let p: [[f32; 3]; 8] = [
+                [-1.0, -1.0, -1.0], [1.0, -1.0, -1.0], [1.0, 1.0, -1.0], [-1.0, 1.0, -1.0],
+                [-1.0, -1.0,  1.0], [1.0, -1.0,  1.0], [1.0, 1.0,  1.0], [-1.0, 1.0,  1.0],
+            ];
+            let faces: [[usize; 6]; 6] = [
+                [0, 2, 1, 0, 3, 2], [4, 5, 6, 4, 6, 7], [0, 1, 5, 0, 5, 4],
+                [3, 6, 2, 3, 7, 6], [0, 4, 7, 0, 7, 3], [1, 2, 6, 1, 6, 5],
+            ];
+            let normals = [
+                [0.0, 0.0, -1.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0],
+                [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]
+            ];
+            for (f, face) in faces.iter().enumerate() {
+                for &idx in face {
+                    let px = p[idx][0] * scale.x + pos.x;
+                    let py = p[idx][1] * scale.y + pos.y;
+                    let pz = p[idx][2] * scale.z + pos.z;
+                    vertices.push(Vertex {
+                        position: [px, py, pz],
+                        color: [1.0, 1.0, 1.0],
+                        normal: normals[f],
+                        tex_coords: [0.0, 0.0],
+                        joint_indices: [0; 4],
+                        joint_weights: [0.0; 4],
+                    });
+                }
+            }
+        };
+
+        for i in -extents..=extents {
+            let offset = i as f32 * spacing;
+            let is_major = i % 10 == 0;
+            let is_center = i == 0;
+            if is_center { continue; } // X and Z axes are drawn separately for color
+            
+            let t_width = if is_major { 0.02 } else { 0.012 };
+            // Parallel to X
+            add_box(Vec3::new(0.0, 0.0, offset), Vec3::new(total_size / 2.0, t_width, t_width));
+            // Parallel to Z
+            add_box(Vec3::new(offset, 0.0, 0.0), Vec3::new(t_width, t_width, total_size / 2.0));
+        }
+
+        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Editor Grid VBuf"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let aabb = gizmo_math::Aabb::new(Vec3::new(-total_size, -0.1, -total_size), Vec3::new(total_size, 0.1, total_size));
+        Mesh::new(Arc::new(vbuf), vertices.len() as u32, Vec3::ZERO, "editor_grid".to_string(), aabb)
+    }
+
     /// 2D Sprite dörtgeni oluşturur (XY düzleminde, kameraya paralel).
     /// Ortografik projeksiyon ile kullanıldığında 2D oyun desteği sağlar.
     pub fn create_sprite_quad(device: &wgpu::Device, width: f32, height: f32) -> Mesh {

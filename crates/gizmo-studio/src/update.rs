@@ -404,7 +404,6 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
                     }
                 }
             }
-        }
 
         // --- HOT RELOAD POLLING SİSTEMİ ---
         if let Some(watcher) = &mut state.asset_watcher {
