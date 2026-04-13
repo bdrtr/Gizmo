@@ -32,13 +32,7 @@ pub enum EditorMode {
     Paused,
 }
 
-/// Hangi eksende sürüklendiğini belirtir
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum DragAxis {
-    X,
-    Y,
-    Z,
-}
+
 
 /// Editörün tüm durumunu tutan yapı
 pub struct EditorState {
@@ -58,11 +52,7 @@ pub struct EditorState {
 
     // --- Etkileşim & Sürükleme Durumları ---
     pub do_raycast: bool,
-    pub dragging_axis: Option<DragAxis>,
-    pub drag_original_pos: gizmo_math::Vec3,
-    pub drag_original_scale: gizmo_math::Vec3,
-    pub drag_original_rot: gizmo_math::Quat,
-    pub drag_start_t: f32,
+
     pub mouse_ndc: Option<gizmo_math::Vec2>,
     pub gizmo_local_space: bool,
     // Egui-Gizmo kullanımda olduğu için fiziksel gizmo kolları (gizmo_handles) silindi
@@ -185,11 +175,7 @@ impl EditorState {
             highlight_box: 0,
 
             do_raycast: false,
-            dragging_axis: None,
-            drag_original_pos: gizmo_math::Vec3::new(0.0, 0.0, 0.0),
-            drag_original_scale: gizmo_math::Vec3::new(1.0, 1.0, 1.0),
-            drag_original_rot: gizmo_math::Quat::default(),
-            drag_start_t: 0.0,
+
             mouse_ndc: None,
             gizmo_local_space: false,
             // gizmo_handles kaldırıldı

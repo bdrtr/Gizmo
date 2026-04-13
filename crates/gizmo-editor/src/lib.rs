@@ -14,7 +14,7 @@ pub mod history;
 pub mod inspector;
 pub mod toolbar;
 
-pub use editor_state::{BuildTarget, DragAxis, EditorMode, EditorState, GizmoMode};
+pub use editor_state::{BuildTarget, EditorMode, EditorState, GizmoMode};
 pub use gui::EditorContext;
 
 use gizmo_core::World;
@@ -131,10 +131,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                     }
                 }
 
-                // Fareyi bırakırsa sürükleme (axis_drag) iptal olur
-                if ui.input(|i| i.pointer.any_released()) && self.state.dragging_axis.is_some() {
-                    self.state.dragging_axis = None;
-                }
+
 
                 // Dışarıdan veya UI'dan sürüklenen objeyi Scene View'a bırakma yakakalayıcısı
                 if let Some(dragged_path) = ui.memory(|m| {
