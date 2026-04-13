@@ -229,7 +229,7 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
                 let mut command = std::process::Command::new("cargo");
                 command
                     .args(&args)
-                    .stdout(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::piped());
 
                 match command.spawn() {
