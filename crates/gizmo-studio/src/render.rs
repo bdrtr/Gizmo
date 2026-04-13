@@ -166,8 +166,11 @@ pub fn render_studio(
     }
 
     for ent_id in duplicate_reqs {
-        let temp_path = "demo/assets/prefabs/temp_duplicate.prefab";
-        gizmo::scene::SceneData::save_prefab(world, ent_id, temp_path);
+        // Çakışmaları(Race condition) engellemek için temp dosyasını entity id ve zaman damgasıyla eşsiz(unique) yapıyoruz
+        let time_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos();
+        let temp_path = format!("demo/assets/prefabs/temp_duplicate_{}_{}.prefab", ent_id, time_ns);
+
+        gizmo::scene::SceneData::save_prefab(world, ent_id, &temp_path);
 
         if let Some(mut asset_manager) =
             world.remove_resource::<gizmo::renderer::asset::AssetManager>()
@@ -175,7 +178,7 @@ pub fn render_studio(
             let dummy_rgba = [255, 255, 255, 255];
             let dummy_bg = renderer.create_texture(&dummy_rgba, 1, 1);
             gizmo::scene::SceneData::load_prefab(
-                temp_path,
+                &temp_path,
                 None,
                 world,
                 &renderer.device,
@@ -189,6 +192,9 @@ pub fn render_studio(
                 ed.log_info("Obje çoğaltıldı.");
             }
         }
+        
+        // İşlem biter bitmez arkamızdaki kalıntıyı diskten temizleyelim
+        let _ = std::fs::remove_file(&temp_path);
     }
 
     let mut terrain_reqs = Vec::new();
