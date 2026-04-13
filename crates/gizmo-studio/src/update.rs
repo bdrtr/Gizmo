@@ -230,19 +230,35 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
                 let mut command = std::process::Command::new("cargo");
                 command
                     .args(&args)
-                    .stdout(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::piped());
 
                 match command.spawn() {
                     Ok(mut child) => {
                         let stderr = child.stderr.take().unwrap();
-                        let logs_queue_clone = logs_queue.clone();
+                        let stdout = child.stdout.take().unwrap();
+
+                        let logs_queue_err = logs_queue.clone();
+                        let logs_queue_out = logs_queue.clone();
+
                         let stderr_thread = std::thread::spawn(move || {
                             use std::io::{BufRead, BufReader};
                             let reader = BufReader::new(stderr);
                             for line in reader.lines() {
                                 if let Ok(l) = line {
-                                    if let Ok(mut l_lock) = logs_queue_clone.lock() {
+                                    if let Ok(mut l_lock) = logs_queue_err.lock() {
+                                        l_lock.push(l);
+                                    }
+                                }
+                            }
+                        });
+
+                        let stdout_thread = std::thread::spawn(move || {
+                            use std::io::{BufRead, BufReader};
+                            let reader = BufReader::new(stdout);
+                            for line in reader.lines() {
+                                if let Ok(l) = line {
+                                    if let Ok(mut l_lock) = logs_queue_out.lock() {
                                         l_lock.push(l);
                                     }
                                 }
@@ -251,6 +267,7 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
 
                         let status = child.wait().unwrap();
                         let _ = stderr_thread.join();
+                        let _ = stdout_thread.join();
 
                         if status.success() {
                             log("\n== [Adım 2/3] Derleme Başarılı! Dosyalar Kopyalanıyor ==");
