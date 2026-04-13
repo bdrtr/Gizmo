@@ -12,42 +12,6 @@ pub fn handle_studio_input(
 ) {
     if do_raycast {
         perform_raycast(world, state, ray, player_id, ctrl_pressed);
-    } else if let Some(axis) = state.dragging_axis {
-        perform_drag(world, state, ray, axis);
-    }
-}
-
-fn perform_drag(
-    world: &mut World,
-    state: &mut EditorState,
-    ray: Ray,
-    axis: gizmo::editor::DragAxis,
-) {
-    if let Some(&selected) = state.selected_entities.iter().next() {
-        let axis_dir = match axis {
-            gizmo::editor::DragAxis::X => Vec3::new(1.0, 0.0, 0.0),
-            gizmo::editor::DragAxis::Y => Vec3::new(0.0, 1.0, 0.0),
-            gizmo::editor::DragAxis::Z => Vec3::new(0.0, 0.0, 1.0),
-        };
-
-        let w0 = ray.origin - state.drag_original_pos;
-        let b = ray.direction.dot(axis_dir);
-        let d = ray.direction.dot(w0);
-        let e = axis_dir.dot(w0);
-        let denom = 1.0 - b * b;
-
-        if denom.abs() > 0.0001 {
-            let current_t = (e - b * d) / denom;
-            let delta_t = current_t - state.drag_start_t;
-
-            if let Some(mut trans) = world.borrow_mut::<Transform>() {
-                if let Some(t) = trans.get_mut(selected) {
-                    if state.gizmo_mode == gizmo::editor::GizmoMode::Translate {
-                        t.position = state.drag_original_pos + axis_dir * delta_t;
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -106,14 +70,7 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
             state.select_exclusive(hit);
         }
 
-        // Seçim değiştiği için Editör sekmesine Transform verisini logla/yedekle
-        if let Some(transforms) = world.borrow::<Transform>() {
-            if let Some(t) = transforms.get(hit) {
-                state.drag_original_pos = t.position;
-                state.drag_original_rot = t.rotation;
-                state.drag_original_scale = t.scale;
-            }
-        }
+
     } else {
         state.clear_selection();
     }
