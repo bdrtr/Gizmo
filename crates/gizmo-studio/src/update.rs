@@ -370,7 +370,9 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
                                     t_mut.get_mut(state.editor_camera),
                                     cam_mut.get_mut(state.editor_camera),
                                 ) {
-                                    let offset = cam.get_front() * -10.0;
+                                    // Hedef odak mesafesi dinamik. Şimdilik 10.0 varsayılan.
+                                    editor_state.camera_focus_distance = 10.0;
+                                    let offset = cam.get_front() * -editor_state.camera_focus_distance;
                                     cam_t.position = target_pos + offset;
                                     cam_t.update_local_matrix();
                                 }
@@ -705,11 +707,13 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
         world.insert_resource(editor_state);
     }
 
-    // Editör kamera hızını world'dan oku
-    let camera_speed = world
-        .get_resource::<EditorState>()
-        .map(|es| es.camera_speed)
-        .unwrap_or(8.0);
+    // Editör kamera değişkenlerini world'dan oku
+    let mut camera_speed = 8.0;
+    let mut camera_focus_distance = 10.0;
+    if let Some(es) = world.get_resource::<EditorState>() {
+        camera_speed = es.camera_speed;
+        camera_focus_distance = es.camera_focus_distance;
+    }
 
     // Editor Camera WASD Controller
     if let (Some(mut transforms), Some(mut cameras)) = (
@@ -787,7 +791,8 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
 
             // 3. Orta Tık Pan (Kaydırma)
             if let Some(pan) = pan_delta {
-                let pan_speed = 0.01;
+                // Pan hızı sabit değere (0.01) tıkalı olmak yerine odak mesafesiyle dinamik
+                let pan_speed = camera_focus_distance * 0.0015;
                 t.position += right * (-pan.x * pan_speed);
                 t.position += up * (pan.y * pan_speed);
             }
@@ -796,8 +801,8 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
             if let Some(orbit) = orbit_delta {
                 let orbit_speed = 0.005;
 
-                // Pivot noktasını bul (Kameranın 10 birim önü)
-                let pivot = t.position + forward * 10.0;
+                // Pivot noktasını dinamik odak mesafesinden bul
+                let pivot = t.position + forward * camera_focus_distance;
 
                 cam.yaw += orbit.x * orbit_speed;
                 cam.pitch -= orbit.y * orbit_speed;
@@ -821,15 +826,25 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
                 t.rotation = q_yaw * q_pitch;
 
                 // Yeni pozisyonu pivota göre konumlandır
-                t.position = pivot - (t.rotation * gizmo::math::Vec3::new(0.0, 0.0, 1.0)) * 10.0;
+                t.position = pivot - (t.rotation * gizmo::math::Vec3::new(0.0, 0.0, 1.0)) * camera_focus_distance;
             }
 
             // 5. Scroll Zoom (İleri / Geri)
             if let Some(scroll) = scroll_delta {
-                let zoom_speed = 0.5;
-                t.position += forward * (scroll * zoom_speed);
+                // Zoom hızı da odak noktasına yaklaştıkça yavaşlayıp hassaslaşacak
+                let zoom_amount = scroll * camera_focus_distance * 0.1;
+                camera_focus_distance -= zoom_amount;
+                if camera_focus_distance < 0.1 {
+                    camera_focus_distance = 0.1;
+                }
+                t.position += forward * zoom_amount;
             }
         }
+    }
+
+    // Kamera kontrolü sonrasında değişen focus distance'i EditorState'e geri yaz (Write-back)
+    if let Some(mut es) = world.get_resource_mut::<EditorState>() {
+        es.camera_focus_distance = camera_focus_distance;
     }
 }
 

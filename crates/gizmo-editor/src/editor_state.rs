@@ -102,6 +102,8 @@ pub struct EditorState {
     pub scene_path: String,
     /// Editör kamera hızı (WASD)
     pub camera_speed: f32,
+    /// Kamera Orbit/Focus Pivot Mesafesi
+    pub camera_focus_distance: f32,
     /// Grid görünür mü?
     pub show_grid: bool,
     /// Snap miktarı (Translate)
@@ -208,6 +210,7 @@ impl EditorState {
             status_message: "Hazır".to_string(),
             scene_path: "scene.giz".to_string(),
             camera_speed: 8.0,
+            camera_focus_distance: 10.0,
             show_grid: true,
             snap_translate: 0.5,
             snap_rotate_deg: 15.0,
