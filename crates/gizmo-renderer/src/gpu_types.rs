@@ -97,7 +97,9 @@ pub struct SceneUniforms {
     /// x = camera z_near, y = 1 / shadow map resolution (PCF texel size), zw unused.
     pub cascade_params: [f32; 4],
     pub num_lights: u32,
-    pub _padding: [u32; 3],
+    pub _align_pad: [u32; 3], // Matches WGSL implicit padding before vec3
+    pub _pad_scene: [u32; 3], // Matches the vec3<u32> content
+    pub _end_pad: u32,        // Matches WGSL implicit padding at the end of the struct
 }
 
 #[repr(C)]

@@ -13,6 +13,33 @@ pub struct EditorContext {
 impl EditorContext {
     pub fn new(device: &wgpu::Device, output_format: wgpu::TextureFormat, window: &Window) -> Self {
         let context = Context::default();
+
+        // 1. Gelişmiş Dark Tema ve Renkler (Professional Look)
+        let mut visuals = egui::Visuals::dark();
+        visuals.window_rounding = egui::Rounding::same(8.0);
+        visuals.menu_rounding = egui::Rounding::same(6.0);
+        let widget_rounding = egui::Rounding::same(4.0);
+        visuals.widgets.noninteractive.rounding = widget_rounding;
+        visuals.widgets.inactive.rounding = widget_rounding;
+        visuals.widgets.hovered.rounding = widget_rounding;
+        visuals.widgets.active.rounding = widget_rounding;
+
+        // Dark Slate (Uzay Grisi) Tonları
+        visuals.window_fill = egui::Color32::from_rgb(22, 22, 24);
+        visuals.panel_fill = egui::Color32::from_rgb(28, 28, 30);
+        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(45, 45, 48); // Buton arkaplan
+        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(60, 60, 63);  // Hover
+        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(80, 80, 85);   // Click
+        visuals.selection.bg_fill = egui::Color32::from_rgb(0, 110, 200);       // Vurgu (Highlight)
+        context.set_visuals(visuals);
+
+        // 2. Padding ve Ferahlık (Cramped görünümü iptal eder)
+        let mut style = (*context.style()).clone();
+        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+        style.spacing.button_padding = egui::vec2(8.0, 4.0);
+        style.spacing.window_margin = egui::Margin::same(10.0);
+        context.set_style(style);
+
         let viewport_id = context.viewport_id();
 
         let state = State::new(

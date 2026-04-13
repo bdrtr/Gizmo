@@ -42,9 +42,7 @@ Sahneyi gerçek zamanlı denetlemek için oyuna gömülü (In-Game) çalışan U
 
 Motor gücünü test etmek için hazırlanan araç / render senkronizasyon karelerinden bazıları:
 
-<video src="media/newtons_cradle.mp4" controls="controls" width="100%"></video>
 
-<video src="media/domino_demo.mp4" controls="controls" width="100%"></video>
 
 ![Gizmo City High-Res Rendering & GPU Particles](media/gizmo_city_demo.jpg)
 

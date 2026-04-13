@@ -184,7 +184,9 @@ pub fn execute_render_pipeline(
         camera_forward: camera_forward_u,
         cascade_params,
         num_lights,
-        _padding: [0; 3],
+        _align_pad: [0; 3],
+        _pad_scene: [0; 3],
+        _end_pad: 0,
     };
     renderer.queue.write_buffer(
         &renderer.scene.global_uniform_buffer,
