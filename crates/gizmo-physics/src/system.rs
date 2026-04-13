@@ -46,6 +46,8 @@ struct StoredContact {
     accumulated_friction: Vec3,
     ccd_offset_a: Vec3,
     ccd_offset_b: Vec3,
+    /// Döngü öncesi hesaplanan restitution (sekme) hedef hızı
+    bias_bounce: f32,
     /// Dünya koordinatlarındaki temas noktası (warm-start eşleme için)
     world_point: Vec3,
 }
@@ -70,7 +72,7 @@ struct Island {
 const MATCH_THRESHOLD_SQ: f32 = 0.02 * 0.02;
 
 /// Warm-start sönümleme faktörü (%80 — patlama riskini azaltır)
-const WARM_START_FACTOR: f32 = 0.4;  // 0.8 çok agresif → yapışma, 0.4 = dengeli
+const WARM_START_FACTOR: f32 = 0.0;  // 0.8 çok agresif → yapışma, 0.4 = dengeli. NOT! Newton sarkacı gibi %100 momentum aktarımı yapan sistemlerde Warm-Start (gecikmeli enerji cache'i) uyuma sırasında tamamen sapıttığı için 0.0 (kapalı) yapıldı!
 
 /// Kalıcı Çözücü Durumu (Warm-Starting Cache için)
 pub struct PhysicsSolverState {
@@ -553,6 +555,7 @@ fn detect_single_collision_pair(
             accumulated_friction: Vec3::ZERO,
             ccd_offset_a: ccd_pos_a.unwrap_or(Vec3::ZERO),
             ccd_offset_b: ccd_pos_b.unwrap_or(Vec3::ZERO),
+            bias_bounce: 0.0,
             world_point: *contact_point,
         });
     }
@@ -922,6 +925,21 @@ fn solve_single_island(island: &mut Island, solver_iters: u32, frame_count: u64,
         }
     }
 
+    // PGS (Gauss-Seidel) Iterasyonları Öncesi: Başlangıç Hızlarına Göre Bounce (Sekme) Hedeflerini Sabitle.
+    // Eğer iterations döngüsünün içinde güncel hıza göre e * vn hesaplarsak, Newton Sarkacı gibi sistemlerde
+    // hız aktarılırken osilasyon (sarmal momentum) oluşur ve toplar yavaşlayarak birbirine yapışır (çamurlaşır)!
+    for c in island.contacts.iter_mut() {
+        let va = island.velocities.get(&c.ent_a).cloned().unwrap_or(Velocity::new(Vec3::ZERO));
+        let vb = island.velocities.get(&c.ent_b).cloned().unwrap_or(Velocity::new(Vec3::ZERO));
+        let rel = (vb.linear + vb.angular.cross(c.r_b)) - (va.linear + va.angular.cross(c.r_a));
+        let vn = rel.dot(c.normal);
+        
+        let e = if vn.abs() < 0.01 { 0.0 } else { c.restitution };
+        
+        // Sadece yaklaşıyorlarsa (vn < 0) sekme hedeflenir. Ayrılıyorlarsa sekme 0'dır.
+        c.bias_bounce = if vn < 0.0 { -e * vn } else { 0.0 };
+    }
+
     // Sequential Impulse iterasyonları
     for _iter in 0..solver_iters {
         for c in island.contacts.iter_mut() {
@@ -940,8 +958,6 @@ fn solve_single_island(island: &mut Island, solver_iters: u32, frame_count: u64,
                 (vb.linear + vb.angular.cross(c.r_b)) - (va.linear + va.angular.cross(c.r_a));
             let vn = rel.dot(c.normal);
 
-            let e = if vn.abs() < 0.2 { 0.0 } else { c.restitution };
-
             let ra_x_n = c.r_a.cross(c.normal);
             let rb_x_n = c.r_b.cross(c.normal);
             let ang_a = apply_inv_inertia(ra_x_n, c.inv_inertia_a, c.rot_a)
@@ -956,7 +972,13 @@ fn solve_single_island(island: &mut Island, solver_iters: u32, frame_count: u64,
             }
 
             let bias = ((0.15 / 1.0) * (c.penetration - 0.005).max(0.0)).min(2.0);
-            let j_new = (-(1.0 + e) * vn + bias) / eff_mass;
+            
+            // J_new formülünde -(1+e)*vn yerine: -vn + c.bias_bounce kullanılır!
+            // Ayrıca Baumgarte bias'ının kusursuz elastik çarpışmalarda sonsuz enerji üretmesini önlemek için,
+            // eğer sekme hızı zaten bias'ı aşıyorsa bias'ı sıfırlıyoruz. (Baumgarte patlaması engellendi)
+            let effective_bias = (bias - c.bias_bounce).max(0.0);
+            let j_new = (-vn + c.bias_bounce + effective_bias) / eff_mass;
+            
             let old_acc = c.accumulated_j;
             c.accumulated_j = (c.accumulated_j + j_new).max(0.0);
             let j = c.accumulated_j - old_acc;
