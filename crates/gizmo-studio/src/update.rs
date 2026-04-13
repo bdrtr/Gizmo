@@ -857,6 +857,63 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
                 }
                 t.position += forward * zoom_amount;
             }
+
+            // 6. Ortografik / Sabit Bakış Açıları (Numpad 1, 3, 7)
+            if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Numpad1 as u32) {
+                cam.yaw = 0.0;
+                cam.pitch = 0.0;
+            }
+            if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Numpad3 as u32) {
+                cam.yaw = -std::f32::consts::FRAC_PI_2;
+                cam.pitch = 0.0;
+            }
+            if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Numpad7 as u32) {
+                cam.yaw = 0.0;
+                cam.pitch = -std::f32::consts::FRAC_PI_2;
+            }
+
+            // 7. Bookmark Kaydet / Yükle (Ctrl + 0..9)
+            let digits = [
+                gizmo::winit::keyboard::KeyCode::Digit0, gizmo::winit::keyboard::KeyCode::Digit1,
+                gizmo::winit::keyboard::KeyCode::Digit2, gizmo::winit::keyboard::KeyCode::Digit3,
+                gizmo::winit::keyboard::KeyCode::Digit4, gizmo::winit::keyboard::KeyCode::Digit5,
+                gizmo::winit::keyboard::KeyCode::Digit6, gizmo::winit::keyboard::KeyCode::Digit7,
+                gizmo::winit::keyboard::KeyCode::Digit8, gizmo::winit::keyboard::KeyCode::Digit9,
+            ];
+            let ctrl = input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ControlLeft as u32) || input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ControlRight as u32);
+            for (i, &key) in digits.iter().enumerate() {
+                if input.is_key_just_pressed(key as u32) {
+                    if ctrl { // Bookmark Save
+                        if let Some(mut es) = world.get_resource_mut::<EditorState>() {
+                            es.camera_bookmarks[i] = Some((t.position, cam.yaw, cam.pitch));
+                            es.log_info(&format!("Kamera #{} kaydedildi.", i));
+                        }
+                    } else { // Bookmark Load
+                        if let Some(mut es) = world.get_resource_mut::<EditorState>() {
+                            if let Some((pos, yaw, pitch)) = es.camera_bookmarks[i] {
+                                t.position = pos;
+                                cam.yaw = yaw;
+                                cam.pitch = pitch;
+                                es.log_info(&format!("Kamera #{} yüklendi.", i));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Gimbal Lock sınırlaması ve yansıtması
+            let max_pitch = 89.0_f32.to_radians();
+            cam.pitch = cam.pitch.clamp(-max_pitch, max_pitch);
+
+            let q_yaw = gizmo::math::Quat::from_axis_angle(
+                gizmo::math::Vec3::new(0.0, 1.0, 0.0),
+                cam.yaw,
+            );
+            let q_pitch = gizmo::math::Quat::from_axis_angle(
+                gizmo::math::Vec3::new(1.0, 0.0, 0.0),
+                cam.pitch,
+            );
+            t.rotation = q_yaw * q_pitch;
         }
     }
 
