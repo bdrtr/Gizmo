@@ -16,6 +16,7 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     ui.horizontal(|ui| {
         ui.label("🔍");
         ui.text_edit_singleline(&mut state.hierarchy_filter);
+        ui.checkbox(&mut state.hide_editor_entities, "Sistem Objelerini Gizle");
     });
     ui.separator();
 
@@ -96,7 +97,7 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
                 .map(|e| e.0.starts_with("Editor ") || e.0 == "Highlight Box")
                 .unwrap_or(false);
 
-            if is_editor_only {
+            if state.hide_editor_entities && is_editor_only {
                 continue;
             }
 
@@ -132,8 +133,8 @@ fn draw_entity_node(
         .map(|n| n.0.clone())
         .unwrap_or_else(|| format!("Entity_{}", entity_id));
 
-    // Editor objelerini Hiyerarşiden tamamen gizle
-    if entity_name.starts_with("Editor ") || entity_name == "Highlight Box" {
+    // Editor objelerini Hiyerarşiden tamamen gizle (eğer ayar açıksa)
+    if state.hide_editor_entities && (entity_name.starts_with("Editor ") || entity_name == "Highlight Box") {
         return;
     }
 

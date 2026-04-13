@@ -88,6 +88,8 @@ pub struct EditorState {
     pub settings_open: bool,
     /// Filtre metni (hierarchy arama)
     pub hierarchy_filter: String,
+    /// Dahili editör nesnelerini gizleme tetiği
+    pub hide_editor_entities: bool,
     /// Asset browser filtre metni
     pub asset_filter: String,
     /// Asset browser kök dizini
@@ -205,6 +207,7 @@ impl EditorState {
             show_toolbar: true,
             settings_open: false,
             hierarchy_filter: String::new(),
+            hide_editor_entities: true,
             asset_filter: String::new(),
             asset_root: "demo/assets".to_string(),
             add_component_open: false,
