@@ -676,15 +676,19 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
 
         // --- PARENT DEĞİŞTİRME (Reparent) ---
         if let Some((child_id, new_parent_id)) = editor_state.reparent_request.take() {
-            // Eski parent'ın children listesinden çıkar
-            if let Some(mut children_comp) = world.borrow_mut::<gizmo::core::component::Children>()
-            {
-                let alive_ids: Vec<u32> = world.iter_alive_entities().map(|e| e.id()).collect();
-                for id in alive_ids {
-                    if let Some(ch) = children_comp.get_mut(id) {
+            // Eski parent'ı O(1) maliyetle bul
+            let old_parent_id = world
+                .borrow::<gizmo::core::component::Parent>()
+                .and_then(|p| p.get(child_id).map(|c| c.0));
+
+            // Eski parent'ın children listesinden çıkar ve yeni parent'a ekle
+            if let Some(mut children_comp) = world.borrow_mut::<gizmo::core::component::Children>() {
+                if let Some(old_pid) = old_parent_id {
+                    if let Some(ch) = children_comp.get_mut(old_pid) {
                         ch.0.retain(|&cid| cid != child_id);
                     }
                 }
+                
                 // Yeni parent'a ekle
                 if let Some(ch) = children_comp.get_mut(new_parent_id) {
                     if !ch.0.contains(&child_id) {
@@ -692,6 +696,7 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
                     }
                 }
             }
+            
             if let Some(child_ent) = world.get_entity(child_id) {
                 world.add_component(child_ent, gizmo::core::component::Parent(new_parent_id));
                 editor_state.log_info(&format!(
@@ -703,15 +708,19 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
 
         // --- PARENT KALDIR (Root Yap) ---
         if let Some(child_id) = editor_state.unparent_request.take() {
-            if let Some(mut children_comp) = world.borrow_mut::<gizmo::core::component::Children>()
-            {
-                let alive_ids: Vec<u32> = world.iter_alive_entities().map(|e| e.id()).collect();
-                for id in alive_ids {
-                    if let Some(ch) = children_comp.get_mut(id) {
+            // Eski parent'ı O(1) maliyetle bul
+            let old_parent_id = world
+                .borrow::<gizmo::core::component::Parent>()
+                .and_then(|p| p.get(child_id).map(|c| c.0));
+
+            if let Some(old_pid) = old_parent_id {
+                if let Some(mut children_comp) = world.borrow_mut::<gizmo::core::component::Children>() {
+                    if let Some(ch) = children_comp.get_mut(old_pid) {
                         ch.0.retain(|&cid| cid != child_id);
                     }
                 }
             }
+            
             if let Some(child_ent) = world.get_entity(child_id) {
                 world.remove_component::<gizmo::core::component::Parent>(child_ent);
                 editor_state.log_info(&format!("Entity {} kök (root) yapıldı.", child_id));
