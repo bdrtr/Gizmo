@@ -152,7 +152,7 @@ pub fn check_sphere_aabb_manifold(
         } else {
             let diff_center = pos_aabb - pos_s;
             let n = if diff_center.length_squared() > 1e-6 {
-                diff_center.normalize() * -1.0
+                diff_center.normalize() // A -> B
             } else {
                 Vec3::new(0.0, 1.0, 0.0)
             };
@@ -193,7 +193,8 @@ pub fn check_sphere_obb_manifold(
         local_s.z.clamp(-obb.half_extents.z, obb.half_extents.z),
     );
 
-    let local_diff = local_s - closest_local;
+    // En yakın noktadan küreye olan vektör yerine, Küreden en yakın noktaya (A->B) vektör oluştur.
+    let local_diff = closest_local - local_s;
     let dist_sq = local_diff.length_squared();
 
     if dist_sq < sphere.radius * sphere.radius {
@@ -570,23 +571,39 @@ pub fn check_capsule_aabb_manifold(
         // Degenerate kapsül (nokta) — merkez kullan
         pos_cap
     } else {
-        // AABB merkezine en yakın segment noktasını başlangıç tahmini olarak kullan
-        // sonra iteratif olarak iyileştir (2 adım yeterli — Voronoi bölge yakınsaması)
-        let mut best_t = ((pos_aabb - cap_bot).dot(seg_dir) / seg_len_sq).clamp(0.0, 1.0);
-
-        for _ in 0..3 {
-            let seg_pt = cap_bot + seg_dir * best_t;
-            // Bu segment noktasının AABB'ye en yakın noktası
+        let t_center = ((pos_aabb - cap_bot).dot(seg_dir) / seg_len_sq).clamp(0.0, 1.0);
+        
+        let mut candidates = vec![0.0, 1.0, t_center];
+        
+        // Eksenel durumlarda (paralel segmentler) köşelerden projeksiyon hayat kurtarır
+        for &t in &[0.0, 1.0] {
+            let seg_pt = cap_bot + seg_dir * t;
             let clamped = Vec3::new(
                 seg_pt.x.max(min_b.x).min(max_b.x),
                 seg_pt.y.max(min_b.y).min(max_b.y),
                 seg_pt.z.max(min_b.z).min(max_b.z),
             );
-            // Bu AABB noktasına en yakın segment noktasını bul (ters yönlü projeksiyon)
-            best_t = ((clamped - cap_bot).dot(seg_dir) / seg_len_sq).clamp(0.0, 1.0);
+            candidates.push(((clamped - cap_bot).dot(seg_dir) / seg_len_sq).clamp(0.0, 1.0));
         }
 
-        cap_bot + seg_dir * best_t
+        let mut min_dist_sq = f32::MAX;
+        let mut best_cap_point = cap_bot;
+
+        for t in candidates {
+            let seg_pt = cap_bot + seg_dir * t;
+            let clamped = Vec3::new(
+                seg_pt.x.max(min_b.x).min(max_b.x),
+                seg_pt.y.max(min_b.y).min(max_b.y),
+                seg_pt.z.max(min_b.z).min(max_b.z),
+            );
+            let dist_sq = seg_pt.distance_squared(clamped);
+            if dist_sq < min_dist_sq {
+                min_dist_sq = dist_sq;
+                best_cap_point = seg_pt;
+            }
+        }
+
+        best_cap_point
     };
 
     // En yakın noktadan Sphere-AABB çarpışmasına indirge

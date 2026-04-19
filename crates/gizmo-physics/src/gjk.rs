@@ -177,7 +177,6 @@ fn handle_simplex(simplex: &mut Simplex, dir: &mut Vec3) -> bool {
                 // AB kenarının dışı (Dışa bakan yön: ab x abc_normal)
                 if ab.cross(abc_normal).dot(ao) > 0.0 {
                     if ab.dot(ao) > 0.0 {
-                        simplex.points[2] = simplex.points[1];
                         simplex.size = 2;
                         *dir = ab.cross(ao).cross(ab);
                     } else {

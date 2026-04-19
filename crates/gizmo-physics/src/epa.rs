@@ -36,7 +36,7 @@ pub fn epa_solve(
         // Eğer yeni bulduğumuz nokta (support), o yüzeyin orijine olan uzaklığından öteye gidemiyorsa
         // (ya da çok çok az öteye gidiyorsa, toleransımız 0.005),
         // sınırımıza ulaştık demektir! Bu yüzey dış sınırdır.
-        if (support_dist - dist).abs() < 0.005 {
+        if (support_dist - dist).abs() < 0.0001 {
             break;
         }
 
@@ -154,11 +154,11 @@ fn generate_face_contacts(
     // B her zaman Incident Face, A Reference Face gibi ele alacağız
     // İhtiyacımız olan Contact noktalarını "reference yüzeyine" düşen noktalar oluşturur.
     // a_is_ref: penetrasyon derinliği hesabında collision normal yönünü belirler
-    let (ref_face, mut inc_face, ref_normal, a_is_ref) = if extent_a <= extent_b {
-        // A'yı Reference Face yap (Normal A'dan B'ye)
+    let (ref_face, mut inc_face, ref_normal, a_is_ref) = if extent_a >= extent_b {
+        // A daha büyük (veya eşit) -> A Reference Face, B Incident Face
         (face_a.clone(), face_b.clone(), normal_a, true)
     } else {
-        // B'yi Reference Face yap (Normal B'dan A'ya)
+        // B daha büyük -> B Reference Face, A Incident Face
         (face_b.clone(), face_a.clone(), normal_b, false)
     };
 
@@ -284,7 +284,7 @@ fn find_support_face(shape: &ColliderShape, pos: Vec3, rot: Quat, dir: Vec3) -> 
 
     match shape {
         ColliderShape::ConvexHull(hull) => {
-            let mut max_proj = f32::MIN;
+            let mut max_proj = f32::NEG_INFINITY;
             let mut world_verts: Vec<(Vec3, f32)> = Vec::with_capacity(hull.vertices.len());
 
             for v in &hull.vertices {

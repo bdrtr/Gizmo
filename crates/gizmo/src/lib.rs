@@ -4,7 +4,6 @@ pub mod prelude;
 pub mod spawner;
 
 // === Motor Alt Sistemleri ===
-pub use default_systems as default_plugins;
 pub use gizmo_ai as ai;
 pub use gizmo_app as app;
 pub use gizmo_core as core;
@@ -12,6 +11,9 @@ pub use gizmo_math as math;
 pub use gizmo_physics as physics;
 pub use gizmo_renderer as renderer;
 pub use gizmo_window as window;
+
+// Sık kullanılan matematik tiplerini lib.rs'ten doğrudan aç:
+pub use math::{Vec2, Vec3, Vec4, Mat4, Quat};
 
 // === Opsiyonel Modüller ===
 #[cfg(feature = "audio")]

@@ -64,42 +64,24 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
         // 3. Island generation — Union-Find ile gruplama
         let mut islands = build_islands(detection_results, &transforms, &velocities, &mut entities_to_wake, &rigidbodies, joint_world.as_deref());
 
-        // 4. Çözücü — warm-start + SI + position projection (paralel island başına)
-        let (solver_iters, frame_count) =
-            if let Some(state) = world.get_resource_mut::<PhysicsSolverState>() {
-                (state.solver_iterations, state.frame_counter)
-            } else {
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[Physics WARN] PhysicsSolverState bulunamadı. \
-                     Warm-start devre dışı. world.insert_resource(PhysicsSolverState::new()) ekleyin."
-                );
-                (8, 0)
-            };
-
-        let contact_cache = if let Some(state) = world.get_resource_mut::<PhysicsSolverState>() {
-            state.contact_cache.clone()
-        } else {
-            HashMap::new()
-        };
-
-        solve_islands(
-            &mut islands,
-            &contact_cache,
-            solver_iters,
-            frame_count,
-            dt,
-            parallel_physics,
-        );
-
         // PhysicsConfig'den limitleri oku
         let (max_contacts_per_pair, event_throttle_frames) =
             world.get_resource::<crate::components::PhysicsConfig>()
                 .map(|cfg| (cfg.max_contact_points_per_pair, cfg.collision_event_throttle_frames))
                 .unwrap_or((4, 4));
 
-        // 5. Write-back — ECS + cache + event
+        // 4. Çözücü — warm-start + SI + position projection (paralel island başına)
         if let Some(mut state) = world.get_resource_mut::<PhysicsSolverState>() {
+            solve_islands(
+                &mut islands,
+                &state.contact_cache,
+                state.solver_iterations,
+                state.frame_counter,
+                dt,
+                parallel_physics,
+            );
+
+            // 5. Write-back — ECS + cache + event
             state.frame_counter += 1;
             write_back(
                 islands,
@@ -112,7 +94,22 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
                 event_throttle_frames,
             );
         } else {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[Physics WARN] PhysicsSolverState bulunamadı. \
+                 Warm-start devre dışı. world.insert_resource(PhysicsSolverState::new()) ekleyin."
+            );
+            
             let mut dummy_state = PhysicsSolverState::new();
+            solve_islands(
+                &mut islands,
+                &dummy_state.contact_cache,
+                8, // default solver_iterations
+                0, // default frame_counter
+                dt,
+                parallel_physics,
+            );
+            
             write_back(
                 islands,
                 &mut transforms,
