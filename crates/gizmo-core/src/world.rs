@@ -264,10 +264,7 @@ impl World {
     /// World mutable borrow gerektirir, böylece hashmap'e güvenle kayıt yapılabilir.
     pub fn get_resource_mut_or_default<T: Default + 'static>(&mut self) -> RefMut<'_, T> {
         let type_id = TypeId::of::<T>();
-        if !self.resources.contains_key(&type_id) {
-            self.resources
-                .insert(type_id, RefCell::new(Box::new(T::default())));
-        }
+        self.resources.entry(type_id).or_insert_with(|| RefCell::new(Box::new(T::default())));
 
         let storage = self.resources.get(&type_id).unwrap();
         RefMut::map(storage.borrow_mut(), |s| s.downcast_mut::<T>().unwrap())

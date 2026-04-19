@@ -33,6 +33,7 @@ pub enum MaterialType {
     Pbr,
     Unlit,
     Water,
+    Grid,
 }
 
 #[derive(Clone)]

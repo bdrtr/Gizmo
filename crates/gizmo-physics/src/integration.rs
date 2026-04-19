@@ -1,6 +1,6 @@
 use crate::components::{RigidBody, Transform, Velocity};
 use gizmo_core::World;
-use gizmo_math::{Mat3, Quat, Vec3};
+use gizmo_math::{Mat3, Mat4, Quat, Vec3};
 
 /// Uyku eşikleri — her biri kendi biriminde ayrı değerlendirilir.
 ///
@@ -270,7 +270,10 @@ pub fn physics_movement_system(world: &World, dt: f32) {
         // BATCH 3: Pozisyon Entegrasyonu & CCD (Continuous Collision Detection) - Skalar Loop
         for &e in &active_ents {
             let _rb = rbs.get(e).unwrap();
-            let v = *vel_storage.get(e).unwrap();
+            let v = match vel_storage.get(e) {
+                Some(v) => *v,
+                None => continue, // Velocity yoksa hareketi es geç
+            };
             let t = match trans_storage.get_mut(e) {
                 Some(t) => t,
                 None => continue,
@@ -376,5 +379,44 @@ mod tests {
             t2.global_matrix,
             Mat4::from_scale_rotation_translation(Vec3::new(1.0, 1.0, 1.0), Quat::IDENTITY, Vec3::new(1.0, 0.0, 0.0))
         );
+    }
+}
+
+pub fn update_transform_hierarchy(world: &World) {
+    use gizmo_core::component::{Parent, Children};
+    if let Some(mut transforms) = world.borrow_mut::<Transform>() {
+        let parents = world.borrow::<Parent>();
+        let children = world.borrow::<Children>();
+        
+        let mut stack = Vec::new();
+        // find root nodes (entities WITH Transform but NO Parent)
+        for e in transforms.dense.iter() {
+            let id = e.entity;
+            let has_parent = parents.as_ref().map(|p| p.contains(id)).unwrap_or(false);
+            if !has_parent {
+                stack.push((id, Mat4::IDENTITY));
+            }
+        }
+        
+        while let Some((id, parent_mat)) = stack.pop() {
+            let mut current_mat;
+            if let Some(t) = transforms.get_mut(id) {
+                current_mat = parent_mat * t.local_matrix();
+                if current_mat.is_nan() {
+                    current_mat = Mat4::IDENTITY; // Safe fallback
+                }
+                t.global_matrix = current_mat;
+            } else {
+                continue;
+            }
+            
+            if let Some(ch_store) = &children {
+                if let Some(ch) = ch_store.get(id) {
+                    for &c in &ch.0 {
+                        stack.push((c, current_mat));
+                    }
+                }
+            }
+        }
     }
 }

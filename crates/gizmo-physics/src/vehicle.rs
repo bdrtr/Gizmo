@@ -1,8 +1,7 @@
 use gizmo_math::Vec3;
 
-#[derive(Debug, Clone)]
-pub struct Wheel {
-    pub connection_point: Vec3, // Gövde merkezine (Center of Mass) göre lokal pozisyonu
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WheelComponent {
     pub direction: Vec3,        // Süspansiyonun yere uzanma yönü (genelde 0, -1, 0)
     pub axle: Vec3,             // Tekerleğin dönme ekseni (genelde -1, 0, 0 veya 1, 0, 0)
 
@@ -12,33 +11,44 @@ pub struct Wheel {
     pub wheel_radius: f32,           // Tekerleğin yarıçapı
 
     pub is_drive_wheel: bool, // Bu tekerlek motor gücü alıyor mu (FWD/RWD/4WD)
-    pub is_grounded: bool,
-    pub compression: f32,    // Yerdeyse yayın ne kadar sıkıştığı
-    pub contact_point: Vec3, // Çarpışma noktası
-    pub rotation_angle: f32, // Animasyon için görsel dönüş açısı
+
+    #[serde(skip)] pub is_grounded: bool,
+    #[serde(skip)] pub compression: f32,    // Yerdeyse yayın ne kadar sıkıştığı
+    #[serde(skip)] pub contact_point: Vec3, // Çarpışma noktası
+    #[serde(skip)] pub rotation_angle: f32, // Animasyon için görsel dönüş açısı
 }
 
-impl Wheel {
+impl Default for WheelComponent {
+    fn default() -> Self {
+        Self {
+            direction: Vec3::new(0.0, -1.0, 0.0),
+            axle: Vec3::new(-1.0, 0.0, 0.0),
+            suspension_rest_length: 1.0,
+            suspension_stiffness: 20000.0,
+            suspension_damping: 2000.0,
+            wheel_radius: 0.5,
+            is_drive_wheel: false,
+            is_grounded: false,
+            compression: 0.0,
+            contact_point: Vec3::ZERO,
+            rotation_angle: 0.0,
+        }
+    }
+}
+
+impl WheelComponent {
     pub fn new(
-        connection_point: Vec3,
         rest_length: f32,
         stiffness: f32,
         damping: f32,
         radius: f32,
     ) -> Self {
         Self {
-            connection_point,
-            direction: Vec3::new(0.0, -1.0, 0.0),
-            axle: Vec3::new(-1.0, 0.0, 0.0),
             suspension_rest_length: rest_length,
             suspension_stiffness: stiffness,
             suspension_damping: damping,
             wheel_radius: radius,
-            is_drive_wheel: false,
-            is_grounded: false,
-            compression: 0.0,
-            contact_point: Vec3::ZERO,
-            rotation_angle: 0.0,
+            ..Default::default()
         }
     }
 
@@ -50,9 +60,8 @@ impl Wheel {
 }
 
 /// Raycast Vehicle Controller. Araç gövdesine (Chassis) RigidBody ile birlikte eklenmelidir.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VehicleController {
-    pub wheels: Vec<Wheel>,
     pub engine_force: f32,   // Motor gücü (Newton). Pozitif = ileri, Negatif = geri
     pub steering_angle: f32, // Direksiyon açısı (Radyan). Pozitif = sola, Negatif = sağa
     pub brake_force: f32,    // Fren kuvveti (Newton)
@@ -75,7 +84,6 @@ impl Default for VehicleController {
 impl VehicleController {
     pub fn new() -> Self {
         Self {
-            wheels: Vec::new(),
             engine_force: 0.0,
             steering_angle: 0.0,
             brake_force: 0.0,
@@ -85,10 +93,6 @@ impl VehicleController {
             // 0.3 ≈ kötü aerodinamiği olan bir sedan/SUV için gerçekçi Cd·ρA
             drag_coefficient: 0.3,
         }
-    }
-
-    pub fn add_wheel(&mut self, wheel: Wheel) {
-        self.wheels.push(wheel);
     }
 }
 
@@ -168,11 +172,13 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
         }
     };
 
-    if let (Some(trans_storage), Some(mut vel_storage), Some(mut rbs), Some(mut vehicles)) = (
-        world.borrow::<Transform>(),     // Sadece okuma — borrow_mut gerekmiyor (runtime panic önlenir)
+    if let (Some(mut trans_storage), Some(mut vel_storage), Some(mut rbs), Some(vehicles), Some(children_storage), Some(mut wheel_storage)) = (
+        world.borrow_mut::<Transform>(),
         world.borrow_mut::<Velocity>(),
         world.borrow_mut::<RigidBody>(),
-        world.borrow_mut::<VehicleController>(),
+        world.borrow::<VehicleController>(),
+        world.borrow::<gizmo_core::component::Children>(),
+        world.borrow_mut::<WheelComponent>(),
     ) {
         let entities: Vec<u32> = vehicles.dense.iter().map(|e| e.entity).collect();
         for entity in entities {
@@ -188,7 +194,7 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                 Some(r) => r,
                 None => continue,
             };
-            let vehicle = vehicles.get_mut(entity).unwrap();
+            let vehicle = vehicles.get(entity).unwrap();
 
             rb.wake_up();
 
@@ -201,25 +207,51 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
             let forward = t.rotation.mul_vec3(Vec3::new(0.0, 0.0, 1.0)).normalize();
             let right = t.rotation.mul_vec3(Vec3::new(1.0, 0.0, 0.0)).normalize();
 
-            let num_wheels = vehicle.wheels.len() as f32;
+            let mut wheel_entities = Vec::new();
+            if let Some(children) = children_storage.get(entity) {
+                for &child_id in &children.0 {
+                    if wheel_storage.contains(child_id) {
+                        wheel_entities.push(child_id);
+                    }
+                }
+            }
+
+            let num_wheels = wheel_entities.len() as f32;
+            if num_wheels < 1.0 { continue; }
+
             let engine_force = vehicle.engine_force;
             let steering_angle = vehicle.steering_angle;
             let brake_force = vehicle.brake_force;
             let steer_mult = vehicle.steering_force_mult;
             let lat_grip = vehicle.lateral_grip;
             let anti_slide_k = vehicle.anti_slide_force;
-            let drive_wheel_count = vehicle
-                .wheels
-                .iter()
-                .filter(|w| w.is_drive_wheel)
-                .count()
-                .max(1) as f32;
+            
+            let mut drive_wheel_count: f32 = 0.0;
+            for &c in &wheel_entities {
+                if let Some(w) = wheel_storage.get(c) {
+                    if w.is_drive_wheel {
+                        drive_wheel_count += 1.0;
+                    }
+                }
+            }
+            let drive_wheel_count = drive_wheel_count.max(1.0);
 
-            for (_i, wheel) in vehicle.wheels.iter_mut().enumerate() {
-                // Lokal bağlantı noktasını dünya haritasına çevir
-                let r_ws = t.rotation.mul_vec3(wheel.connection_point);
-                let origin = t.position + r_ws;
+            for &wheel_entity in &wheel_entities {
+                let wheel_trans = match trans_storage.get(wheel_entity) {
+                    Some(wt) => *wt, // clone the current transform state
+                    None => continue,
+                };
+                let wheel = wheel_storage.get_mut(wheel_entity).unwrap();
+                
+                let wheel_mat = wheel_trans.global_matrix;
+                let origin = Vec3::new(wheel_mat.w_axis.x, wheel_mat.w_axis.y, wheel_mat.w_axis.z);
+                
+                let r_ws = origin - t.position;
                 let dir = t.rotation.mul_vec3(wheel.direction).normalize();
+
+                // Süspansiyon uzunluklarını vehicle scale ile çarp (child'ın da scale'i olabilir ama parent'ını kullanalım)
+                let scaled_rest_length = wheel.suspension_rest_length * t.scale.y;
+                let scaled_radius = wheel.wheel_radius * t.scale.y;
 
                 // === RAYCASTING — hit_t (mesafe) + contact_normal (yüzey normali) ===
                 //
@@ -370,23 +402,22 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                 }
 
                 // === SÜSPANSİYON YAYLANMASI (Hooke Yasası + Damper) ===
-                if hit_t <= wheel.suspension_rest_length + wheel.wheel_radius {
+                if hit_t <= scaled_rest_length + scaled_radius {
                     wheel.is_grounded = true;
                     // X = Dinlenme uzunluğu (rest) eksi, ulaşılan ray uzaklığı.
                     // Tekerlek lastiği de pay içerdiği için çıkarılır.
-                    let tire_margin = wheel.wheel_radius;
+                    let tire_margin = scaled_radius;
                     // Tam Hooke Sıkıştırması:
-                    wheel.compression = (wheel.suspension_rest_length + tire_margin) - hit_t;
+                    wheel.compression = (scaled_rest_length + tire_margin) - hit_t;
 
                     if wheel.compression > 0.0 {
                         let spring_force = wheel.suspension_stiffness * wheel.compression;
 
                         let wheel_vel = v.linear + v.angular.cross(r_ws);
                         // Sönümleme: hız bileşenini gerçek terrein normaline göre ölç.
-                        // Düz zeminde contact_normal ≈ Vec3::Y olduğundan davranış değişmez.
+                        // Damping hıza zıt yönde etki etmelidir! eksi işareti hayati önem taşır.
                         let vel_along_normal = wheel_vel.dot(contact_normal);
-
-                        let damping_force = wheel.suspension_damping * vel_along_normal;
+                        let damping_force = -wheel.suspension_damping * vel_along_normal;
                         let total_suspension_force = (spring_force + damping_force).max(0.0);
 
                         // Kuvveti terrein normaline göre uygula — eğimde titreşim önlenir.
@@ -444,7 +475,18 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
 
                     // Görsel tekerlek dönmesi (hıza göre tekerlek çevresini hesaplayarak döndür)
                     let speed = v.linear.dot(forward);
-                    wheel.rotation_angle += (speed / wheel.wheel_radius) * dt;
+                    wheel.rotation_angle += (speed / scaled_radius) * dt;
+
+                    if let Some(wt) = trans_storage.get_mut(wheel_entity) {
+                        let base_rot = gizmo_math::Quat::from_axis_angle(wheel.axle, wheel.rotation_angle);
+                        let steer_rot = if !wheel.is_drive_wheel {
+                            gizmo_math::Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), steering_angle)
+                        } else {
+                            gizmo_math::Quat::IDENTITY
+                        };
+                        wt.rotation = steer_rot * base_rot;
+                        wt.update_local_matrix();
+                    }
                 } else {
                     wheel.is_grounded = false;
                     wheel.compression = 0.0;

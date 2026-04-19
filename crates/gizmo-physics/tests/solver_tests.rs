@@ -4,7 +4,7 @@ use gizmo_physics::components::{RigidBody, Transform, Velocity};
 use gizmo_physics::constraints::{Joint, JointKind, JointWorld};
 
 fn setup_world() -> World {
-    let mut w = World::new();
+    let w = World::new();
     w
 }
 

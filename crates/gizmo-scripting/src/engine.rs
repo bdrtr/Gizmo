@@ -11,6 +11,7 @@ use crate::api_input;
 use crate::api_physics;
 use crate::api_scene;
 use crate::api_time;
+use crate::api_vehicle;
 use crate::commands::{CommandQueue, ScriptCommand};
 
 /// Lua Scripting Motoru — Genişletilmiş API ile oyun mantığını yönetir
@@ -22,9 +23,10 @@ pub struct ScriptEngine {
 }
 
 /// ECS Componenti: Varlığın üzerine hangi Lua script'inin takılı olduğunu tutar
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Script {
     pub file_path: String,
+    #[serde(default, skip)]
     pub initialized: bool, // on_init çağrıldı mı?
 }
 
@@ -172,6 +174,7 @@ impl ScriptEngine {
         api_scene::register_scene_api(&lua, command_queue.clone())?;
         api_audio::register_audio_api(&lua, command_queue.clone())?;
         api_time::register_time_api(&lua)?;
+        api_vehicle::register_vehicle_api(&lua, command_queue.clone())?;
 
         Ok(Self {
             lua,
@@ -412,6 +415,28 @@ impl ScriptEngine {
                             }
                         }
                         world.add_component(e, col);
+                    }
+                }
+                
+                ScriptCommand::SetVehicleEngineForce(id, force) => {
+                    if let Some(mut vehicles) = world.borrow_mut::<gizmo_physics::vehicle::VehicleController>() {
+                        if let Some(vc) = vehicles.get_mut(id) {
+                            vc.engine_force = force;
+                        }
+                    }
+                }
+                ScriptCommand::SetVehicleSteering(id, angle) => {
+                    if let Some(mut vehicles) = world.borrow_mut::<gizmo_physics::vehicle::VehicleController>() {
+                        if let Some(vc) = vehicles.get_mut(id) {
+                            vc.steering_angle = angle;
+                        }
+                    }
+                }
+                ScriptCommand::SetVehicleBrake(id, force) => {
+                    if let Some(mut vehicles) = world.borrow_mut::<gizmo_physics::vehicle::VehicleController>() {
+                        if let Some(vc) = vehicles.get_mut(id) {
+                            vc.brake_force = force;
+                        }
                     }
                 }
 

@@ -24,6 +24,7 @@ pub mod api_input;
 pub mod api_physics;
 pub mod api_scene;
 pub mod api_time;
+pub mod api_vehicle;
 pub mod commands;
 pub mod engine;
 

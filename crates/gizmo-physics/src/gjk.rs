@@ -250,7 +250,7 @@ fn handle_simplex(simplex: &mut Simplex, dir: &mut Vec3) -> bool {
                 // Normal tetrahedronun dışına bakmalı (A'nın tersi yönünde)
                 let ba = simplex.points[0].v - simplex.points[1].v;
                 if bcd_normal.dot(ba) > 0.0 {
-                    bcd_normal = bcd_normal * -1.0; // Flip: A'dan uzağa baksın
+                    bcd_normal *= -1.0; // Flip: A'dan uzağa baksın
                 }
                 let bo = simplex.points[1].v * -1.0;
 

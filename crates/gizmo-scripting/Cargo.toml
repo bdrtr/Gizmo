@@ -9,3 +9,4 @@ gizmo-core = { path = "../gizmo-core" }
 gizmo-math = { path = "../gizmo-math" }
 gizmo-physics = { path = "../gizmo-physics" }
 notify = "8.2.0"
+serde = { version = "1.0.228", features = ["derive"] }

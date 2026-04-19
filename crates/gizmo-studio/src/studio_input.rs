@@ -13,6 +13,79 @@ pub fn handle_studio_input(
     if do_raycast {
         perform_raycast(world, state, ray, player_id, ctrl_pressed);
     }
+
+    if let Some((start, end)) = state.rubber_band_request.take() {
+        perform_rubber_band_selection(world, state, start, end, player_id, ctrl_pressed);
+    }
+}
+
+fn perform_rubber_band_selection(
+    world: &mut World,
+    state: &mut EditorState,
+    start: gizmo::math::Vec2,
+    end: gizmo::math::Vec2,
+    player_id: u32,
+    ctrl_pressed: bool,
+) {
+    if state.camera_view.is_none() || state.camera_proj.is_none() || state.scene_view_rect.is_none() {
+        return;
+    }
+
+    let view_mat = state.camera_view.unwrap();
+    let proj_mat = state.camera_proj.unwrap();
+    let vp_mat = proj_mat * view_mat;
+    
+    // Egui tiplerine dokunmadan koordinatlari aliyoruz. scene_view_rect bir egui::Rect
+    let rect_left = state.scene_view_rect.unwrap().min.x;
+    let rect_top = state.scene_view_rect.unwrap().min.y;
+    let rect_width = state.scene_view_rect.unwrap().max.x - rect_left;
+    let rect_height = state.scene_view_rect.unwrap().max.y - rect_top;
+
+    let min_x = start.x.min(end.x);
+    let max_x = start.x.max(end.x);
+    let min_y = start.y.min(end.y);
+    let max_y = start.y.max(end.y);
+
+    if !ctrl_pressed {
+        state.selected_entities.clear();
+    }
+
+    if let Some(transforms) = world.borrow::<Transform>() {
+        let is_hidden = world.borrow::<gizmo::core::component::IsHidden>();
+
+        for i in 0..transforms.dense.len() {
+            let id = transforms.dense[i].entity;
+
+            if id == player_id || id == state.highlight_box {
+                continue;
+            }
+
+            if let Some(hidden) = &is_hidden {
+                if hidden.contains(id) {
+                    continue;
+                }
+            }
+
+            let t = transforms.dense[i].data;
+            let clip_pos = vp_mat * gizmo::math::Vec4::new(t.position.x, t.position.y, t.position.z, 1.0);
+
+            // Kamera arkasindaysa atla
+            if clip_pos.w <= 0.0 {
+                continue;
+            }
+
+            let ndc = gizmo::math::Vec3::new(clip_pos.x, clip_pos.y, clip_pos.z) / clip_pos.w;
+
+            // NDC'yi Screen koordinatina cevir
+            let screen_x = ((ndc.x + 1.0) / 2.0) * rect_width + rect_left;
+            let screen_y = ((1.0 - ndc.y) / 2.0) * rect_height + rect_top;
+
+            // Dörtgen icinde kalip kalmadigini kontrol et
+            if screen_x >= min_x && screen_x <= max_x && screen_y >= min_y && screen_y <= max_y {
+                state.selected_entities.insert(id);
+            }
+        }
+    }
 }
 
 fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_id: u32, ctrl_pressed: bool) {

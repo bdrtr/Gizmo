@@ -15,8 +15,8 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     // Arama kutusu
     ui.horizontal(|ui| {
         ui.label("🔍");
-        ui.text_edit_singleline(&mut state.hierarchy_filter);
-        ui.checkbox(&mut state.hide_editor_entities, "Sistem Objelerini Gizle");
+        ui.add(egui::TextEdit::singleline(&mut state.hierarchy_filter).desired_width(120.0));
+        ui.checkbox(&mut state.hide_editor_entities, "Gizle");
     });
     ui.separator();
 
@@ -143,7 +143,9 @@ fn draw_entity_node(
         // Bu entity filtrede yoksa ama child'ları olabilir — onları kontrol et
         if let Some(children) = children_comp.as_ref().and_then(|c| c.get(entity_id)) {
             for &child_id in &children.0 {
-                draw_entity_node(ui, world, child_id, state, names, children_comp, filter);
+                if world.is_alive(gizmo_core::entity::Entity::new(child_id, 0)) {
+                    draw_entity_node(ui, world, child_id, state, names, children_comp, filter);
+                }
             }
         }
         return;
@@ -248,7 +250,9 @@ fn draw_entity_node(
             .body(|ui| {
                 if let Some(children) = children_comp.as_ref().and_then(|c| c.get(entity_id)) {
                     for &child_id in &children.0 {
-                        draw_entity_node(ui, world, child_id, state, names, children_comp, filter);
+                        if world.is_alive(gizmo_core::entity::Entity::new(child_id, 0)) {
+                            draw_entity_node(ui, world, child_id, state, names, children_comp, filter);
+                        }
                     }
                 }
             });

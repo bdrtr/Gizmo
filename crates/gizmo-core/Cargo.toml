@@ -9,3 +9,4 @@ description.workspace = true
 rayon = "1.11.0"
 ron = "0.8"
 serde = { version = "1.0.228", features = ["derive"] }
+uuid = { version = "1.23.0", features = ["v4", "serde"] }

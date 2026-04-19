@@ -1,5 +1,61 @@
 use crate::StudioState;
 use gizmo::prelude::*;
+use std::cell::RefCell;
+
+type BatchKey = (
+    *const wgpu::Buffer,
+    *const wgpu::BindGroup,
+    *const wgpu::BindGroup,
+);
+
+struct BatchData {
+    vbuf: std::sync::Arc<wgpu::Buffer>,
+    vertex_count: u32,
+    bind_group: std::sync::Arc<wgpu::BindGroup>,
+    skeleton_bg: std::sync::Arc<wgpu::BindGroup>,
+    instances: Vec<gizmo::renderer::InstanceRaw>,
+    is_skybox: bool,
+    is_grid: bool,
+}
+
+struct FlatBatchData {
+    vbuf: std::sync::Arc<wgpu::Buffer>,
+    vertex_count: u32,
+    bind_group: std::sync::Arc<wgpu::BindGroup>,
+    skeleton_bg: std::sync::Arc<wgpu::BindGroup>,
+    start_instance: u32,
+    end_instance: u32,
+    is_transparent: bool,
+    is_double_sided: bool,
+    is_skybox: bool,
+    is_grid: bool,
+}
+
+struct PipelineCache {
+    opaque_batches: std::collections::HashMap<BatchKey, BatchData>,
+    opaque_double_sided_batches: std::collections::HashMap<BatchKey, BatchData>,
+    transparent_batches: std::collections::HashMap<BatchKey, BatchData>,
+    all_instances: Vec<gizmo::renderer::InstanceRaw>,
+    flat_batches: Vec<FlatBatchData>,
+    vec_pool: Vec<Vec<gizmo::renderer::InstanceRaw>>,
+}
+
+impl Default for PipelineCache {
+    fn default() -> Self {
+        Self {
+            opaque_batches: std::collections::HashMap::with_capacity(256),
+            opaque_double_sided_batches: std::collections::HashMap::with_capacity(256),
+            transparent_batches: std::collections::HashMap::with_capacity(256),
+            all_instances: Vec::with_capacity(10000),
+            flat_batches: Vec::with_capacity(256),
+            vec_pool: Vec::with_capacity(256),
+        }
+    }
+}
+
+thread_local! {
+    static CACHE: RefCell<PipelineCache> = RefCell::new(PipelineCache::default());
+}
 
 pub fn execute_render_pipeline(
     world: &mut World,
@@ -199,42 +255,33 @@ pub fn execute_render_pipeline(
 
     let frustum = gizmo::renderer::Frustum::from_matrix(&view_proj);
 
-    struct BatchData {
-        vbuf: std::sync::Arc<wgpu::Buffer>,
-        vertex_count: u32,
-        bind_group: std::sync::Arc<wgpu::BindGroup>,
-        skeleton_bg: std::sync::Arc<wgpu::BindGroup>,
-        instances: Vec<InstanceRaw>,
-        is_skybox: bool,
-    }
+    CACHE.with(|cache_ref| {
+        let mut cache = cache_ref.borrow_mut();
+        let PipelineCache {
+            opaque_batches,
+            opaque_double_sided_batches,
+            transparent_batches,
+            all_instances,
+            flat_batches,
+            vec_pool
+        } = &mut *cache;
 
-    // Anahtarlar aynı, fakat şeffaflığa ve çift taraflılığa göre ayrı tablolar tutuyoruz
-    let mut opaque_batches: std::collections::HashMap<
-        (
-            *const wgpu::Buffer,
-            *const wgpu::BindGroup,
-            *const wgpu::BindGroup,
-        ),
-        BatchData,
-    > = std::collections::HashMap::new();
-    let mut opaque_double_sided_batches: std::collections::HashMap<
-        (
-            *const wgpu::Buffer,
-            *const wgpu::BindGroup,
-            *const wgpu::BindGroup,
-        ),
-        BatchData,
-    > = std::collections::HashMap::new();
-    let mut transparent_batches: std::collections::HashMap<
-        (
-            *const wgpu::Buffer,
-            *const wgpu::BindGroup,
-            *const wgpu::BindGroup,
-        ),
-        BatchData,
-    > = std::collections::HashMap::new();
+        for (_, mut b) in opaque_batches.drain() {
+            b.instances.clear();
+            vec_pool.push(b.instances);
+        }
+        for (_, mut b) in opaque_double_sided_batches.drain() {
+            b.instances.clear();
+            vec_pool.push(b.instances);
+        }
+        for (_, mut b) in transparent_batches.drain() {
+            b.instances.clear();
+            vec_pool.push(b.instances);
+        }
+        all_instances.clear();
+        flat_batches.clear();
 
-    let renderers = world.borrow::<gizmo::renderer::components::MeshRenderer>();
+        let renderers = world.borrow::<gizmo::renderer::components::MeshRenderer>();
     let skeletons = world.borrow::<gizmo::renderer::components::Skeleton>();
     let lod_groups = world.borrow::<gizmo::renderer::components::LodGroup>();
 
@@ -293,20 +340,12 @@ pub fn execute_render_pipeline(
             };
 
             // --- SKELETON (KEMİK) ARAMASI ---
-            // Yalnızca child meshin değil, atalarından (Root) herhangi birisinde Skeleton var mı diye tırman:
+            // Skeleton bind group, skinned mesh'ler spawn edilirken doğrudan entity'ye önbelleklenmelidir.
+            // Bu nedenle her frame parent zincirini tırmanıp Skeleton aramak yerine doğrudan kendi üzerindekini kullanıyoruz.
             let mut skel_bg = renderer.scene.dummy_skeleton_bind_group.clone();
             if let Some(skels) = &skeletons {
                 if let Some(s) = skels.get(e) {
                     skel_bg = s.bind_group.clone();
-                } else if let Some(parents) = world.borrow::<Parent>() {
-                    let mut curr = e;
-                    while let Some(p) = parents.get(curr) {
-                        if let Some(s) = skels.get(p.0) {
-                            skel_bg = s.bind_group.clone();
-                            break;
-                        }
-                        curr = p.0;
-                    }
                 }
             }
 
@@ -315,11 +354,11 @@ pub fn execute_render_pipeline(
             let skel_ptr = std::sync::Arc::as_ptr(&skel_bg);
 
             let batches = if mat.is_transparent {
-                &mut transparent_batches
+                &mut *transparent_batches
             } else if mat.is_double_sided {
-                &mut opaque_double_sided_batches
+                &mut *opaque_double_sided_batches
             } else {
-                &mut opaque_batches
+                &mut *opaque_batches
             };
 
             let batch = batches
@@ -329,33 +368,22 @@ pub fn execute_render_pipeline(
                     vertex_count: active_mesh.vertex_count,
                     bind_group: mat.bind_group.clone(),
                     skeleton_bg: skel_bg,
-                    instances: Vec::new(),
+                    instances: vec_pool.pop().unwrap_or_else(|| Vec::with_capacity(32)),
                     is_skybox: mat.unlit == 2.0,
+                    is_grid: mat.material_type == gizmo::renderer::components::MaterialType::Grid,
                 });
 
             batch.instances.push(instance_data);
         }
     }
 
-    struct FlatBatchData {
-        vbuf: std::sync::Arc<wgpu::Buffer>,
-        vertex_count: u32,
-        bind_group: std::sync::Arc<wgpu::BindGroup>,
-        skeleton_bg: std::sync::Arc<wgpu::BindGroup>,
-        start_instance: u32,
-        end_instance: u32,
-        is_transparent: bool,
-        is_double_sided: bool,
-        is_skybox: bool,
-    }
-
-    let mut all_instances = Vec::new();
-    let mut flat_batches = Vec::new();
-
-    let mut process_batches = |batches: std::collections::HashMap<_, BatchData>,
+    let process_batches = |batches: &mut std::collections::HashMap<BatchKey, BatchData>,
                                is_transparent: bool,
-                               is_double_sided: bool| {
-        for (_, mut batch) in batches {
+                               is_double_sided: bool,
+                               all_inst: &mut Vec<gizmo::renderer::InstanceRaw>,
+                               flat_b: &mut Vec<FlatBatchData>,
+                               vec_pool: &mut Vec<Vec<gizmo::renderer::InstanceRaw>>| {
+        for (_, mut batch) in batches.drain() {
             // Şeffaf objelerin arka plandan öne doğru sıralanması (Z-Sorting)
             // Instance'ın model matrisinden world pozisyonunu çekip kameraya uzaklığına göre sıralıyoruz
             if is_transparent {
@@ -371,11 +399,12 @@ pub fn execute_render_pipeline(
                 });
             }
 
-            let start = all_instances.len() as u32;
+            let start = all_inst.len() as u32;
             let count = batch.instances.len() as u32;
-            all_instances.append(&mut batch.instances);
+            all_inst.append(&mut batch.instances);
+            vec_pool.push(batch.instances); // Empty vec with capacity is pushed back!
 
-            flat_batches.push(FlatBatchData {
+            flat_b.push(FlatBatchData {
                 vbuf: batch.vbuf,
                 vertex_count: batch.vertex_count,
                 bind_group: batch.bind_group,
@@ -385,20 +414,22 @@ pub fn execute_render_pipeline(
                 is_transparent,
                 is_double_sided,
                 is_skybox: batch.is_skybox,
+                is_grid: batch.is_grid,
             });
         }
     };
 
-    process_batches(opaque_batches, false, false);
-    process_batches(opaque_double_sided_batches, false, true);
-    process_batches(transparent_batches, true, false);
+    // Process
+    process_batches(opaque_batches, false, false, all_instances, flat_batches, vec_pool);
+    process_batches(opaque_double_sided_batches, false, true, all_instances, flat_batches, vec_pool);
+    process_batches(transparent_batches, true, false, all_instances, flat_batches, vec_pool);
 
     if !all_instances.is_empty() {
         renderer.ensure_instance_capacity(all_instances.len());
         renderer.queue.write_buffer(
             &renderer.scene.instance_buffer,
             0,
-            bytemuck::cast_slice(&all_instances),
+            bytemuck::cast_slice(all_instances),
         );
     }
 
@@ -506,7 +537,7 @@ pub fn execute_render_pipeline(
 
         shadow_pass.set_pipeline(&renderer.scene.shadow_pipeline);
 
-        for batch in &flat_batches {
+        for batch in &*flat_batches {
             if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                 continue;
             }
@@ -555,12 +586,11 @@ pub fn execute_render_pipeline(
             occlusion_query_set: None,
         });
 
-        // 1. OPAQUE OBJELERİ ÇİZ (Sırtı Cull edilen normal objeler)
         render_pass.set_pipeline(&renderer.scene.render_pipeline);
-        for batch in &flat_batches {
-            if batch.is_transparent || batch.is_double_sided || batch.is_skybox {
+        for batch in &*flat_batches {
+            if batch.is_transparent || batch.is_double_sided || batch.is_skybox || batch.is_grid {
                 continue;
-            } // Şeffafları, Skybox'ı ve çift yönlüleri atla
+            } // Şeffafları, Skybox'ı, Çift Yönlüleri ve Grid'i atla
             if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                 continue;
             }
@@ -577,8 +607,8 @@ pub fn execute_render_pipeline(
 
         // 2. ÇİFT YÖNLÜ OPAQUE OBJELER (Kumaşlar, cull_mode = None)
         render_pass.set_pipeline(&renderer.scene.render_double_sided_pipeline);
-        for batch in &flat_batches {
-            if batch.is_transparent || !batch.is_double_sided || batch.is_skybox {
+        for batch in &*flat_batches {
+            if batch.is_transparent || !batch.is_double_sided || batch.is_skybox || batch.is_grid {
                 continue;
             }
             if batch.start_instance >= renderer.scene.instance_capacity as u32 {
@@ -602,7 +632,7 @@ pub fn execute_render_pipeline(
 
         // 3. SKYBOX YAKALAMA VE ÖZEL PIPELINE İLE ÇİZİM
         render_pass.set_pipeline(&renderer.scene.sky_pipeline);
-        for batch in &flat_batches {
+        for batch in &*flat_batches {
             if !batch.is_skybox {
                 continue;
             } // Sadece Skybox'u çiz
@@ -622,10 +652,30 @@ pub fn execute_render_pipeline(
 
         // 4. TRANSPARENT OBJELERİ ÇİZ (Depth yazması kapalı, Opaque'nin üstüne blend olur)
         render_pass.set_pipeline(&renderer.scene.transparent_pipeline);
-        for batch in &flat_batches {
-            if !batch.is_transparent {
+        for batch in &*flat_batches {
+            if !batch.is_transparent || batch.is_grid {
                 continue;
-            } // Sadece şeffafları çiz
+            } // Sadece saydamları çiz
+            if batch.start_instance >= renderer.scene.instance_capacity as u32 {
+                continue;
+            }
+            let safe_end = std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
+
+            render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+            render_pass.set_bind_group(1, &batch.bind_group, &[]);
+            render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+            render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
+            render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
+            render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
+        }
+
+        // 5. GRID ÇİZİMİ
+        render_pass.set_pipeline(&renderer.scene.grid_pipeline);
+        for batch in &*flat_batches {
+            if !batch.is_grid {
+                continue;
+            }
             if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                 continue;
             }
@@ -649,6 +699,9 @@ pub fn execute_render_pipeline(
             render_pass.draw(0..4, 0..gpu_particles.active_particles);
         }
     }
+
+    }); // Cikis: CACHE.with bloğu
+
 
     // --- 3. POST-PROCESSING (Bloom + Tone Mapping → Ekrana Yaz) ---
     let render_target = world.get_resource::<gizmo::renderer::components::EditorRenderTarget>();

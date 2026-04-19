@@ -107,51 +107,34 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
     world.add_component(gizmo_root, Transform::new(Vec3::ZERO));
     let mut gizmo_children = Vec::new();
 
-    let axis_x_mat =
-        gizmo::prelude::Material::new(white_tex.clone()).with_unlit(Vec4::new(0.8, 0.1, 0.1, 1.0)); // Kırmızı (X)
-    let _axis_y_mat =
-        gizmo::prelude::Material::new(white_tex.clone()).with_unlit(Vec4::new(0.1, 0.8, 0.1, 1.0)); // Yeşil (Y)
-    let axis_z_mat =
-        gizmo::prelude::Material::new(white_tex.clone()).with_unlit(Vec4::new(0.1, 0.4, 0.9, 1.0)); // Mavi (Z)
+
 
     // Procedural 3D Grid Lines and Infinite Axes
     // HDR uyumlu, hafif transparan çok şık ve ferah bir Grid materyali
-    let grid_mat = gizmo::prelude::Material::new(white_tex.clone())
-        // Shader'da 'if (alpha < 0.5) discard;' kontrolü olduğu için alfa daima > 0.5 olmalı.
-        // Silik görünüm için RGB'yi kısıp alfayı 0.55'te tutuyoruz.
-        .with_unlit(Vec4::new(0.15, 0.15, 0.15, 0.55))
-        .with_transparent(true);
-
-    // Tekil Procedural Grid (1 Entity, 1 Draw Call - Zero Entity Overhead)
-    let grid_mesh = gizmo::renderer::asset::AssetManager::create_editor_grid_mesh(&renderer.device, 100, 1.0);
     let grid_entity = world.spawn();
+    world.add_component(
+        grid_entity,
+        gizmo::core::component::EntityName("Editor Grid".to_string()),
+    );
     world.add_component(grid_entity, Transform::new(Vec3::ZERO));
+    world.add_component(grid_entity, gizmo::core::component::Parent(gizmo_root.id()));
+
+    let grid_mesh = gizmo::renderer::asset::AssetManager::create_editor_grid_mesh(&renderer.device, 500.0);
+    
+    // Grid Material
+    let mut grid_mat = gizmo::prelude::Material::new(white_tex.clone());
+    grid_mat.albedo = gizmo::math::Vec4::new(1.0, 1.0, 1.0, 1.0);
+    grid_mat.material_type = gizmo::renderer::components::MaterialType::Grid;
+    grid_mat.unlit = 0.0;
+    
+    // Editörün arka plan matris nesnesi olarak mesh ata. Pickable OLMASIN (fare engellemesin).
     world.add_component(grid_entity, grid_mesh);
     world.add_component(grid_entity, grid_mat);
     world.add_component(grid_entity, gizmo::renderer::components::MeshRenderer::new());
-    world.add_component(grid_entity, gizmo::core::component::Parent(gizmo_root.id()));
     gizmo_children.push(grid_entity.id());
 
-    // Merkez X Ekseni (Kırmızı Çizgi)
-    let len = 200.0;
-    let center_width = 0.035;
-    
-    let center_x = world.spawn();
-    world.add_component(center_x, Transform::new(Vec3::ZERO).with_scale(Vec3::new(len, center_width, center_width)));
-    world.add_component(center_x, gizmo::renderer::asset::AssetManager::create_cube(&renderer.device));
-    world.add_component(center_x, axis_x_mat.clone());
-    world.add_component(center_x, gizmo::renderer::components::MeshRenderer::new());
-    world.add_component(center_x, gizmo::core::component::Parent(gizmo_root.id()));
-    gizmo_children.push(center_x.id());
-
-    // Merkez Z Ekseni (Mavi Çizgi)
-    let center_z = world.spawn();
-    world.add_component(center_z, Transform::new(Vec3::ZERO).with_scale(Vec3::new(center_width, center_width, len)));
-    world.add_component(center_z, gizmo::renderer::asset::AssetManager::create_cube(&renderer.device));
-    world.add_component(center_z, axis_z_mat.clone());
-    world.add_component(center_z, gizmo::renderer::components::MeshRenderer::new());
-    world.add_component(center_z, gizmo::core::component::Parent(gizmo_root.id()));
-    gizmo_children.push(center_z.id());
+    // Merkez Eksenler (Kırmızı/Mavi Çizgiler) artık Grid Shader (grid.wgsl) tarafından
+    // tam kalbinde 0 GPU sızıntısı ile çizilmektedir! Bu yüzden gereksiz Transform küplerini sildik.
 
     // Attach all children to root
     world.add_component(gizmo_root, gizmo::core::component::Children(gizmo_children));
@@ -178,11 +161,19 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
     world.add_component(cube1, gizmo::renderer::components::MeshRenderer::new());
     world.add_component(cube1, Collider::new_aabb(1.0, 1.0, 1.0)); // Visual mesh is 2x2x2 (from -1 to +1)
 
+    // Fizik sistemleri için gereksinimler
+    world.insert_resource(gizmo::physics::JointWorld::new());
+    world.insert_resource(gizmo::physics::PhysicsSolverState::new());
+
     // Custom Skybox or proper horizon color
     world.insert_resource(asset_manager);
 
     // Editor Camera
     let cam = world.spawn();
+    world.add_component(
+        cam,
+        gizmo::core::component::EntityName("Editor Camera".to_string()),
+    );
     let q_yaw = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), -std::f32::consts::FRAC_PI_2);
     let q_pitch = Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), -0.4);
     world.add_component(

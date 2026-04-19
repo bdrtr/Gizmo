@@ -177,7 +177,7 @@ fn resolve_capsule_collisions(
             ),
             ColliderShape::ConvexHull(_) => {
                 let test_pos = cap_pos;
-                let cap_shape = ColliderShape::Capsule(cap.clone());
+                let cap_shape = ColliderShape::Capsule(*cap);
                 let (hit, sim) = crate::gjk::gjk_intersect(
                     &cap_shape,
                     test_pos,

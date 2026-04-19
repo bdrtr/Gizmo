@@ -177,6 +177,7 @@ impl<State: 'static> App<State> {
                     &renderer.scene.texture_bind_group_layout,
                     &mut asset_manager,
                     Arc::new(dummy_bg),
+                    &gizmo_scene::registry::SceneRegistry::default(),
                 );
 
                 self.world.insert_resource(asset_manager);
