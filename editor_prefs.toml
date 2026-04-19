@@ -1,0 +1,8 @@
+camera_speed = 10.0
+camera_focus_distance = 10.0
+show_grid = true
+snap_enabled = false
+snap_translate = 1.0
+snap_rotate_deg = 15.0
+snap_scale = 0.10000000149011612
+gizmo_size = 75.0
