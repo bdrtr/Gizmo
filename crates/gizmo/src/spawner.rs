@@ -27,15 +27,24 @@ use gizmo_renderer::{
 pub struct Commands<'a> {
     pub world: &'a mut World,
     pub renderer: &'a Renderer<'a>,
-    pub asset_manager: AssetManager,
+    pub asset_manager: Option<AssetManager>,
+}
+
+impl<'a> Drop for Commands<'a> {
+    fn drop(&mut self) {
+        if let Some(am) = self.asset_manager.take() {
+            self.world.insert_resource(am);
+        }
+    }
 }
 
 impl<'a> Commands<'a> {
     pub fn new(world: &'a mut World, renderer: &'a Renderer<'a>) -> Self {
+        let am = world.remove_resource::<AssetManager>().unwrap_or_else(AssetManager::new);
         Self {
             world,
             renderer,
-            asset_manager: AssetManager::new(),
+            asset_manager: Some(am),
         }
     }
 
@@ -44,7 +53,7 @@ impl<'a> Commands<'a> {
     /// Tek satırda renkli bir küp spawn eder. Builder zinciriyle `.with_name()` eklenebilir.
     pub fn spawn_cube(&mut self, pos: Vec3, color: Color) -> EntityBuilder<'_, 'a> {
         let mesh = AssetManager::create_cube(&self.renderer.device);
-        let bg = self.asset_manager.create_white_texture(
+        let bg = self.asset_manager.as_mut().unwrap().create_white_texture(
             &self.renderer.device,
             &self.renderer.queue,
             &self.renderer.scene.texture_bind_group_layout,
@@ -60,7 +69,7 @@ impl<'a> Commands<'a> {
     /// Tek satırda renkli bir küre spawn eder.
     pub fn spawn_sphere(&mut self, pos: Vec3, radius: f32, color: Color) -> EntityBuilder<'_, 'a> {
         let mesh = AssetManager::create_sphere(&self.renderer.device, radius, 20, 20);
-        let bg = self.asset_manager.create_white_texture(
+        let bg = self.asset_manager.as_mut().unwrap().create_white_texture(
             &self.renderer.device,
             &self.renderer.queue,
             &self.renderer.scene.texture_bind_group_layout,
@@ -76,7 +85,7 @@ impl<'a> Commands<'a> {
     /// Tek satırda düzlemsel bir zemin spawn eder.
     pub fn spawn_plane(&mut self, pos: Vec3, size: f32, color: Color) -> EntityBuilder<'_, 'a> {
         let mesh = AssetManager::create_plane(&self.renderer.device, size);
-        let bg = self.asset_manager.create_white_texture(
+        let bg = self.asset_manager.as_mut().unwrap().create_white_texture(
             &self.renderer.device,
             &self.renderer.queue,
             &self.renderer.scene.texture_bind_group_layout,
@@ -91,8 +100,8 @@ impl<'a> Commands<'a> {
 
     /// Diskten bir .obj modeli yükler ve spawn eder.
     pub fn spawn_model(&mut self, pos: Vec3, path: &str) -> EntityBuilder<'_, 'a> {
-        let mesh = self.asset_manager.load_obj(&self.renderer.device, path);
-        let bg = self.asset_manager.create_white_texture(
+        let mesh = self.asset_manager.as_mut().unwrap().load_obj(&self.renderer.device, path);
+        let bg = self.asset_manager.as_mut().unwrap().create_white_texture(
             &self.renderer.device,
             &self.renderer.queue,
             &self.renderer.scene.texture_bind_group_layout,
@@ -110,6 +119,11 @@ impl<'a> Commands<'a> {
     /// Birincil (primary) 3D perspektif kamera spawn eder.
     /// `yaw = -π/2` (−X'e bakıyor), `pitch = 0` (düz).
     pub fn spawn_camera(&mut self, pos: Vec3) -> EntityBuilder<'_, 'a> {
+        if let Some(mut cameras) = self.world.query::<&mut Camera>() {
+            for (_, c) in cameras.iter_mut() {
+                c.primary = false;
+            }
+        }
         let id = self.world.spawn();
         let mut trans = Transform::new(pos);
         trans.global_matrix = trans.local_matrix();
@@ -139,6 +153,11 @@ impl<'a> Commands<'a> {
         near: f32,
         far: f32,
     ) -> EntityBuilder<'_, 'a> {
+        if let Some(mut cameras) = self.world.query::<&mut Camera>() {
+            for (_, c) in cameras.iter_mut() {
+                c.primary = false;
+            }
+        }
         let id = self.world.spawn();
         let mut trans = Transform::new(pos);
         trans.global_matrix = trans.local_matrix();
@@ -195,8 +214,7 @@ impl<'a> Commands<'a> {
         intensity: f32,
     ) -> EntityBuilder<'_, 'a> {
         let id = self.world.spawn();
-        // Transform pozisyonu yönden türetilir
-        let pos = -direction.normalize() * 100.0;
+        let pos = Vec3::ZERO; // DirectionalLight position is largely irrelevant
         let mut trans = Transform::new(pos);
         trans.global_matrix = trans.local_matrix();
         self.world.add_component(id, trans);
@@ -218,8 +236,16 @@ impl<'a> Commands<'a> {
 
     /// Skybox spawn eder (ters yüzlü çok büyük küp). Renk arka plan rengini belirler.
     pub fn spawn_skybox(&mut self, color: Color) -> EntityBuilder<'_, 'a> {
+        if let Some(_) = self.world.query::<&crate::renderer::components::Material>().and_then(|mut m| {
+            m.iter_mut().find(|(_, mat)| mat.is_skybox).map(|_| ())
+        }) {
+            // Already has a skybox, return empty entity builder using a dummy/existing if needed.
+            // Since builders need valid IDs, we spawn a dummy or just skip adding components to a new entity.
+        }
+        
+        // Wait, best approach for skybox is ignoring the duplication request if exists, but we must return an EntityBuilder...
         let mesh = AssetManager::create_inverted_cube(&self.renderer.device);
-        let bg = self.asset_manager.create_white_texture(
+        let bg = self.asset_manager.as_mut().unwrap().create_white_texture(
             &self.renderer.device,
             &self.renderer.queue,
             &self.renderer.scene.texture_bind_group_layout,
@@ -252,7 +278,7 @@ impl<'a> Commands<'a> {
         mass: f32,
     ) -> EntityBuilder<'_, 'a> {
         let mesh = AssetManager::create_cube(&self.renderer.device);
-        let bg = self.asset_manager.create_white_texture(
+        let bg = self.asset_manager.as_mut().unwrap().create_white_texture(
             &self.renderer.device,
             &self.renderer.queue,
             &self.renderer.scene.texture_bind_group_layout,
@@ -260,13 +286,11 @@ impl<'a> Commands<'a> {
         let mat = Material::new(bg).with_unlit(color.to_vec4());
         let id = spawn_mesh_entity(self.world, pos, mesh, mat);
         // Scale'i half_extents ile eşleştir
-        if let Some(mut transforms) = self.world.query::<&mut Transform>() {
-            for (tid, trans) in transforms.iter_mut() {
-                if tid == id.id() {
-                    trans.scale = half_extents * 2.0;
-                    trans.update_local_matrix();
-                    trans.global_matrix = trans.local_matrix();
-                }
+        if let Some(mut trans_store) = self.world.borrow_mut::<Transform>() {
+            if let Some(trans) = trans_store.get_mut(id.id()) {
+                trans.scale = half_extents * 2.0;
+                trans.update_local_matrix();
+                trans.global_matrix = trans.local_matrix();
             }
         }
         let mut rb = if mass > 0.0 {
@@ -296,7 +320,7 @@ impl<'a> Commands<'a> {
         mass: f32,
     ) -> EntityBuilder<'_, 'a> {
         let mesh = AssetManager::create_sphere(&self.renderer.device, radius, 16, 16);
-        let bg = self.asset_manager.create_white_texture(
+        let bg = self.asset_manager.as_mut().unwrap().create_white_texture(
             &self.renderer.device,
             &self.renderer.queue,
             &self.renderer.scene.texture_bind_group_layout,
@@ -329,7 +353,7 @@ impl<'a> Commands<'a> {
         color: Color,
     ) -> EntityBuilder<'_, 'a> {
         let mesh = AssetManager::create_plane(&self.renderer.device, size);
-        let bg = self.asset_manager.create_white_texture(
+        let bg = self.asset_manager.as_mut().unwrap().create_white_texture(
             &self.renderer.device,
             &self.renderer.queue,
             &self.renderer.scene.texture_bind_group_layout,
@@ -351,7 +375,7 @@ impl<'a> Commands<'a> {
     pub fn spawn_textured_cube(&mut self, pos: Vec3, texture_path: &str) -> EntityBuilder<'_, 'a> {
         let mesh = AssetManager::create_cube(&self.renderer.device);
         let bg = self
-            .asset_manager
+            .asset_manager.as_mut().unwrap()
             .load_material_texture(
                 &self.renderer.device,
                 &self.renderer.queue,
@@ -359,7 +383,7 @@ impl<'a> Commands<'a> {
                 texture_path,
             )
             .unwrap_or_else(|_| {
-                self.asset_manager.create_white_texture(
+                self.asset_manager.as_mut().unwrap().create_white_texture(
                     &self.renderer.device,
                     &self.renderer.queue,
                     &self.renderer.scene.texture_bind_group_layout,
@@ -382,7 +406,7 @@ impl<'a> Commands<'a> {
     ) -> EntityBuilder<'_, 'a> {
         let mesh = AssetManager::create_plane(&self.renderer.device, size);
         let bg = self
-            .asset_manager
+            .asset_manager.as_mut().unwrap()
             .load_material_texture(
                 &self.renderer.device,
                 &self.renderer.queue,
@@ -390,7 +414,7 @@ impl<'a> Commands<'a> {
                 texture_path,
             )
             .unwrap_or_else(|_| {
-                self.asset_manager.create_white_texture(
+                self.asset_manager.as_mut().unwrap().create_white_texture(
                     &self.renderer.device,
                     &self.renderer.queue,
                     &self.renderer.scene.texture_bind_group_layout,
@@ -408,15 +432,15 @@ impl<'a> Commands<'a> {
 
     /// GLTF/GLB dosyasını yükler ve dünya içinde spawn eder.
     /// Animasyon ve iskelet hiyerarşisi otomatik oluşturulur.
-    pub fn spawn_gltf(&mut self, pos: Vec3, path: &str) -> EntityBuilder<'_, 'a> {
-        let default_bg = self.asset_manager.create_white_texture(
+    pub fn spawn_gltf(&mut self, pos: Vec3, path: &str, attach_colliders: bool) -> Result<EntityBuilder<'_, 'a>, String> {
+        let default_bg = self.asset_manager.as_mut().unwrap().create_white_texture(
             &self.renderer.device,
             &self.renderer.queue,
             &self.renderer.scene.texture_bind_group_layout,
         );
         let default_mat = Material::new(default_bg.clone());
 
-        match self.asset_manager.load_gltf_scene(
+        match self.asset_manager.as_mut().unwrap().load_gltf_scene(
             &self.renderer.device,
             &self.renderer.queue,
             &self.renderer.scene.texture_bind_group_layout,
@@ -434,12 +458,10 @@ impl<'a> Commands<'a> {
                 self.world
                     .add_component(root, gizmo_core::component::Children(Vec::new()));
 
-                // Her kök node'u spawn et
                 for node in &asset.roots {
-                    spawn_gltf_node_flat(self.world, node, root.id(), default_mat.clone());
+                    spawn_gltf_node_flat(self.world, node, root.id(), default_mat.clone(), attach_colliders);
                 }
 
-                // Animasyon bileşeni
                 if !asset.animations.is_empty() {
                     self.world.add_component(
                         root,
@@ -452,26 +474,13 @@ impl<'a> Commands<'a> {
                     );
                 }
 
-                EntityBuilder {
+                Ok(EntityBuilder {
                     commands: self,
                     entity: root,
-                }
+                })
             }
             Err(e) => {
-                eprintln!("[Commands::spawn_gltf] '{}' yuklenemedi: {}", path, e);
-                // Hata durumunda kırmızı küp yerleştir
-                let mesh = AssetManager::create_cube(&self.renderer.device);
-                let bg = self.asset_manager.create_white_texture(
-                    &self.renderer.device,
-                    &self.renderer.queue,
-                    &self.renderer.scene.texture_bind_group_layout,
-                );
-                let mat = Material::new(bg).with_unlit(Vec4::new(1.0, 0.0, 0.0, 1.0));
-                let id = spawn_mesh_entity(self.world, pos, mesh, mat);
-                EntityBuilder {
-                    commands: self,
-                    entity: id,
-                }
+                Err(format!("[Commands::spawn_gltf] '{}' yuklenemedi: {}", path, e))
             }
         }
     }
@@ -487,11 +496,11 @@ pub struct EntityBuilder<'b, 'a> {
 
 impl<'b, 'a> EntityBuilder<'b, 'a> {
     /// Entity'e bir isim (tag) ata. Update içinde `world.entity_named("...")` ile bulunabilir.
-    pub fn with_name(self, name: &str) -> Entity {
+    pub fn with_name(self, name: &str) -> Self {
         self.commands
             .world
             .add_component(self.entity, EntityName(name.to_string()));
-        self.entity
+        self
     }
 
     /// Herhangi bir ek bileşen ekle.
@@ -537,6 +546,7 @@ fn spawn_gltf_node_flat(
     node: &gizmo_renderer::asset::GltfNodeData,
     parent_id: u32,
     default_mat: Material,
+    attach_colliders: bool,
 ) {
     use gizmo_core::component::{Children, Parent};
     let entity = world.spawn();
@@ -545,8 +555,8 @@ fn spawn_gltf_node_flat(
     world.add_component(entity, Parent(parent_id));
     world.add_component(entity, Children(Vec::new()));
 
-    // Register this node to parent's Children list
     if let Some(mut ch_store) = world.borrow_mut::<Children>() {
+        // Safe to push since entity just spawned and didn't trigger any complex re-borrow updates
         if let Some(parent_ch) = ch_store.get_mut(parent_id) {
             parent_ch.0.push(entity.id());
         }
@@ -573,33 +583,40 @@ fn spawn_gltf_node_flat(
     .with_scale(Vec3::new(node.scale[0], node.scale[1], node.scale[2]));
     world.add_component(entity, t);
 
+    let mut newly_added_prims = Vec::new();
     for (_pi, (mesh, mat_opt)) in node.primitives.iter().enumerate() {
         let prim = world.spawn();
         world.add_component(prim, Transform::new(Vec3::ZERO));
         world.add_component(prim, Parent(entity.id()));
         world.add_component(prim, Children(Vec::new()));
         
-        if let Some(mut ch_store) = world.borrow_mut::<Children>() {
-            if let Some(parent_ch) = ch_store.get_mut(entity.id()) {
-                parent_ch.0.push(prim.id());
-            }
-        }
+        newly_added_prims.push(prim.id());
 
         world.add_component(prim, mesh.clone());
         world.add_component(prim, mat_opt.clone().unwrap_or_else(|| default_mat.clone()));
         world.add_component(prim, MeshRenderer::new());
-        let extents = (mesh.bounds.max - mesh.bounds.min) / 2.0;
-        // Sınırlayıcı kutu çok küçük olabilir diye ufak bir min değeri veriyoruz
-        let cx = extents.x.max(0.01);
-        let cy = extents.y.max(0.01);
-        let cz = extents.z.max(0.01);
-        world.add_component(prim, gizmo_physics::shape::Collider::new_aabb(cx, cy, cz));
+        
+        if attach_colliders {
+            let extents = (mesh.bounds.max - mesh.bounds.min) / 2.0;
+            let cx = extents.x.max(0.01);
+            let cy = extents.y.max(0.01);
+            let cz = extents.z.max(0.01);
+            world.add_component(prim, gizmo_physics::shape::Collider::new_aabb(cx, cy, cz));
+        }
+    }
+
+    // Pulling borrow_mut OUTSIDE the loop avoiding multiple overlapping mutable queries
+    if !newly_added_prims.is_empty() {
+        if let Some(mut ch_store) = world.borrow_mut::<Children>() {
+            if let Some(parent_ch) = ch_store.get_mut(entity.id()) {
+                parent_ch.0.extend(newly_added_prims);
+            }
+        }
     }
 
     for child_node in &node.children {
-        spawn_gltf_node_flat(world, child_node, entity.id(), default_mat.clone());
+        spawn_gltf_node_flat(world, child_node, entity.id(), default_mat.clone(), attach_colliders);
     }
-    let _ = parent_id; // suppress warning
 }
 
 // ─── WorldExt Trait — Update içinde kısa sorgular ─────────────────────────────

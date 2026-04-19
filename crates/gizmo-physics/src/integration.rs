@@ -7,8 +7,8 @@ use gizmo_math::{Mat3, Mat4, Quat, Vec3};
 /// Lineer: (m/s)² — obje bu hızın altına düştüğünde uyku sayıcısı artar.
 /// Açısal: (rad/s)² — ayrı eşik; dönerken lineer sıfır olsa da uyanmalı.
 /// İkkisini toplamak boyutsel olarak anlamsız (m/s ≠ rad/s) — ayrı kontrol zorunlu.
-const SLEEP_LINEAR_SQ: f32 = 0.05 * 0.05;  // 5 cm/s — Bullet Physics standardı
-const SLEEP_ANGULAR_SQ: f32 = 0.15 * 0.15;  // 0.15 rad/s (~8.6°/s)
+const SLEEP_LINEAR_SQ: f32 = 0.04;  // 0.2 m/s (Endüstri standardı)
+const SLEEP_ANGULAR_SQ: f32 = 0.04; // 0.2 rad/s (Normalize edilmiş açısal eşik)
 const SLEEP_TIMER_THRESHOLD: f32 = 1.0;     // 1 saniye — 2s çok uzun, jitter uzar
 
 /// Dünya uzayında tork `τ` için açısal ivme benzeri vektör `I⁻¹ τ` (burada `I⁻¹` dünya uzayında
@@ -32,7 +32,7 @@ fn physics_apply_forces_scalar(world: &World, dt: f32) {
                 if let Some(v) = vel_storage.get_mut(entity) {
                     if rb.mass > 0.0 {
                         let lin_sq = v.linear.length_squared();
-                        let ang_sq = v.angular.length_squared();
+                        let ang_sq = v.angular.length_squared() * 0.01;
                         rb.avg_linear_sq = rb.avg_linear_sq * 0.9 + lin_sq * 0.1;
                         rb.avg_angular_sq = rb.avg_angular_sq * 0.9 + ang_sq * 0.1;
                         let is_still =
@@ -110,7 +110,7 @@ fn physics_apply_forces_system_impl(world: &World, dt: f32) {
                     if rb.mass > 0.0 {
                         // Lineer ve açısal hızı AYRI AYRI değerlendir:
                         let lin_sq = v.linear.length_squared();
-                        let ang_sq = v.angular.length_squared();
+                        let ang_sq = v.angular.length_squared() * 0.01;
                         
                         // Rolling average: Çok ufak dt ve sönümleme katsayısı kullanılarak titreşim (jitter) filtrelemesi
                         rb.avg_linear_sq = rb.avg_linear_sq * 0.9 + lin_sq * 0.1;

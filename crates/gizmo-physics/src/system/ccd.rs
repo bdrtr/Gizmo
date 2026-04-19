@@ -38,38 +38,46 @@ pub fn ccd_bisect(
 
     for _ in 0..16 {
         let t_mid = (t_low + t_high) * 0.5;
-        let dt_seg = t_mid - t_low;
         // Aralık başı t_low: dünya uzayında o anki merkezler.
         let pos_a_at_t_low = pos_a + v_a_lin * t_low;
         let pos_b_at_t_low = pos_b + v_b_lin * t_low;
-        // [t_low, t_mid] içinde B'nin A'ya göre yer değiştirmesi (A bu alt aralıkta sabitlenmiş).
-        let rel_disp_t_low_to_mid = rel_v * dt_seg;
-        let sweep_half = crate::shape::ColliderShape::Swept {
+        // Bisection HER ZAMAN aralığın sadece İLK YARISINI test etmeli. ([t_low, t_mid])
+        let rel_disp = rel_v * (t_mid - t_low);
+        let sweep_mid = crate::shape::ColliderShape::Swept {
             base: Box::new(shape_b.clone()),
-            sweep_vector: rel_disp_t_low_to_mid,
+            sweep_vector: rel_disp,
         };
         let (hit_first, _) = crate::gjk::gjk_intersect(
             shape_a,
             pos_a_at_t_low,
             rot_a,
-            &sweep_half,
+            &sweep_mid,
             pos_b_at_t_low,
             rot_b,
         );
         if hit_first { t_high = t_mid; } else { t_low = t_mid; }
     }
 
-    let t_hit  = (t_high + dt * 0.001).min(dt);
+    // TOI: Kesin çarpışma anı t_high civarındadır.
+    // Çok mermi hızında t_high anında objeler henüz dokunuyor olabilir. İç içe geçmeyi t_high ile sağlarız.
+    // Sabit hızla çok küçük bir saniye ekleyerek minimal penetrasyon (EPA için) garanti edelim.
+    // Ancak çok hızlı objelerin içinden geçmesini önlemek için mesafe bazlı limitleme yapalım (Maks 1 cm).
+    let speed = rel_v.length();
+    let safe_offset = if speed > 1.0 { (0.01 / speed).min(dt * 0.05) } else { dt * 0.001 };
+    let t_hit  = (t_high + safe_offset).min(dt);
+    
     let pa_hit = pos_a + v_a_lin * t_hit;
     let pb_hit = pos_b + v_b_lin * t_hit;
 
     let (hit, sim) = crate::gjk::gjk_intersect(shape_a, pa_hit, rot_a, shape_b, pb_hit, rot_b);
     if !hit {
+        // Eğer çok hızlılarsa ve offset onları tamamen dışarı attıysa, mecburi çarpışmayı üret.
+        let normal = if speed > 0.001 { -rel_v.normalize() } else { Vec3::new(0.0, 1.0, 0.0) };
         return crate::collision::CollisionManifold {
-            is_colliding: false,
-            normal: Vec3::ZERO,
-            penetration: 0.0,
-            contact_points: vec![],
+            is_colliding: true, // CCD bisection ile çarpıştığını biliyoruz
+            normal,
+            penetration: 0.01,
+            contact_points: vec![((pa_hit + pb_hit) * 0.5, 0.01)],
         };
     }
 
@@ -81,8 +89,8 @@ pub fn ccd_bisect(
         if vn < 0.0 {
             manifold.penetration += -vn * remaining_t;
         }
-        // Temas noktalarını TOI anına geri taşı
-        let cp_offset = (v_a_lin + v_b_lin) * 0.5 * t_hit;
+        // Temas noktalarını TOI anına geri taşı (A'nın referans çerçevesine)
+        let cp_offset = v_a_lin * t_hit;
         for cp in &mut manifold.contact_points {
             cp.0 -= cp_offset;
         }

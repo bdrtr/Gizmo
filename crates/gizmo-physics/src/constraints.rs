@@ -423,8 +423,17 @@ pub fn solve_joint_velocity(
             let (axis, angle) = error_rot.to_axis_angle();
             if angle.abs() > 0.001 {
                 let angular_correction = axis * angle * (beta / dt) * joint.stiffness;
-                *va_ang -= angular_correction * 0.5;
-                *vb_ang += angular_correction * 0.5;
+                let eff_inv_a = apply_inv_inertia(axis, inv_inertia_a, rot_a).dot(axis);
+                let eff_inv_b = apply_inv_inertia(axis, inv_inertia_b, rot_b).dot(axis);
+                let total_eff_inv = eff_inv_a + eff_inv_b;
+                
+                if total_eff_inv > 1e-8 {
+                    *va_ang -= angular_correction * (eff_inv_a / total_eff_inv);
+                    *vb_ang += angular_correction * (eff_inv_b / total_eff_inv);
+                } else {
+                    *va_ang -= angular_correction * 0.5;
+                    *vb_ang += angular_correction * 0.5;
+                }
             }
         }
         JointKind::Distance { length } => {

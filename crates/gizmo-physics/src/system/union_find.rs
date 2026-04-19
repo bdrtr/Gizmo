@@ -13,32 +13,12 @@ pub fn ensure_node(parent: &mut HashMap<u32, u32>, rank: &mut HashMap<u32, u8>, 
 ///
 /// Böylece uzun constraint zincirlerinde tekrarlı `find_root` ortalama ~α(N) kalır.
 pub fn find_root(parent: &mut HashMap<u32, u32>, i: u32) -> u32 {
-    // 1) Kökü bul
-    let mut root = i;
-    loop {
-        let p = match parent.get(&root).copied() {
-            Some(p) => p,
-            None => {
-                // Haritada yoksa kendi kökü (ensure_node atlanmış statik vb.)
-                parent.insert(root, root);
-                break;
-            }
-        };
-        if p == root {
-            break;
-        }
-        root = p;
+    let root_val = *parent.entry(i).or_insert(i);
+    if root_val == i {
+        return i;
     }
-    // 2) Path compression: i → … → root zincirindeki her düğümü root'a bağla
-    let mut cur = i;
-    while cur != root {
-        let next = match parent.get(&cur).copied() {
-            Some(n) if n != cur => n,
-            _ => break,
-        };
-        parent.insert(cur, root);
-        cur = next;
-    }
+    let root = find_root(parent, root_val);
+    parent.insert(i, root);
     root
 }
 

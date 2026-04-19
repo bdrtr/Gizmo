@@ -69,9 +69,9 @@ pub fn detect_single_collision_pair(
     let mut ccd_pos_b = None;
 
     let is_rot_a_identity =
-        rot_a.x.abs() < 0.001 && rot_a.y.abs() < 0.001 && rot_a.z.abs() < 0.001;
+        rot_a.x.abs() < 0.001 && rot_a.y.abs() < 0.001 && rot_a.z.abs() < 0.001 && (rot_a.w - 1.0).abs() < 0.001;
     let is_rot_b_identity =
-        rot_b.x.abs() < 0.001 && rot_b.y.abs() < 0.001 && rot_b.z.abs() < 0.001;
+        rot_b.x.abs() < 0.001 && rot_b.y.abs() < 0.001 && rot_b.z.abs() < 0.001 && (rot_b.w - 1.0).abs() < 0.001;
 
     let manifold = detect_pair(
         &col_a.data.shape,
@@ -151,7 +151,8 @@ pub fn detect_single_collision_pair(
             r_a = manifold.normal * s.radius;
         }
         if let ColliderShape::Sphere(s) = &col_b.data.shape {
-            r_b = manifold.normal * -s.radius;
+            // Doğrusu: B'nin merkezi normali takip eder, negatif olmamalı.
+            r_b = manifold.normal * s.radius;
         }
         result.contacts.push(StoredContact {
             ent_a,

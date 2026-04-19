@@ -17,6 +17,7 @@ impl Color {
     pub const ORANGE: Color = Color(Vec4::new(1.0, 0.5, 0.0, 1.0));
     pub const GRAY: Color = Color(Vec4::new(0.5, 0.5, 0.5, 1.0));
     pub const DARK_GRAY: Color = Color(Vec4::new(0.2, 0.2, 0.2, 1.0));
+    pub const TRANSPARENT: Color = Color(Vec4::new(0.0, 0.0, 0.0, 0.0));
 
     // ─── Yapıcılar ────────────────────────────────────────────────────────────
 
@@ -43,15 +44,46 @@ impl Color {
         ))
     }
 
-    /// Hex string ile oluştur. Örnek: `Color::hex("#FF5733")` veya `Color::hex("FF5733")`.
+    /// Hex string ile oluştur. Örnek: `Color::hex("#FF5733")`, `Color::hex("FF5733")` veya RGBA `#FF5733AA`.
     pub fn hex(s: &str) -> Self {
         let s = s.trim_start_matches('#');
-        let parse = |i: usize| u8::from_str_radix(&s[i..i + 2], 16).unwrap_or(255) as f32 / 255.0;
-        if s.len() >= 6 {
+        let bytes = s.as_bytes();
+        let parse = |i: usize| -> f32 {
+            let slice = std::str::from_utf8(&bytes[i..i + 2]).unwrap_or("ff");
+            u8::from_str_radix(slice, 16).unwrap_or(255) as f32 / 255.0
+        };
+        if bytes.len() >= 8 {
+            Color(Vec4::new(parse(0), parse(2), parse(4), parse(6)))
+        } else if bytes.len() >= 6 {
             Color(Vec4::new(parse(0), parse(2), parse(4), 1.0))
         } else {
             Color::WHITE
         }
+    }
+
+    /// Rengi Hex formatına dönüştürüp döndürür. Örnek: "#FF5733"
+    pub fn to_hex(self) -> String {
+        let r = (self.0.x.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let g = (self.0.y.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let b = (self.0.z.clamp(0.0, 1.0) * 255.0).round() as u8;
+        
+        if self.0.w < 0.999 {
+            let a = (self.0.w.clamp(0.0, 1.0) * 255.0).round() as u8;
+            format!("#{:02X}{:02X}{:02X}{:02X}", r, g, b, a)
+        } else {
+            format!("#{:02X}{:02X}{:02X}", r, g, b)
+        }
+    }
+
+    /// İki renk arasında lineer interpolasyon (karıştırma) yapar.
+    pub fn lerp(self, other: Color, t: f32) -> Color {
+        let t = t.clamp(0.0, 1.0);
+        Color(Vec4::new(
+            self.0.x + (other.0.x - self.0.x) * t,
+            self.0.y + (other.0.y - self.0.y) * t,
+            self.0.z + (other.0.z - self.0.z) * t,
+            self.0.w + (other.0.w - self.0.w) * t,
+        ))
     }
 
     /// Alfa (şeffaflık) ile birleştir.

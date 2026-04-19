@@ -442,21 +442,16 @@ pub fn write_back(
 
     let frame = solver_state.frame_counter;
 
-    for island in islands {
-        let Island { contacts, joints: _, velocities: island_vels, poses } = island;
-
-        for (ent, vel) in &island_vels {
-            if let Some(v) = velocities.get_mut(*ent) { *v = *vel; }
-        }
-        for (ent, tbox) in &poses {
-            if let Some(t) = transforms.get_mut(*ent) {
-                *t = *tbox;
-                t.update_local_matrix();
-            }
-        }
-        for c in contacts {
+    for island in &islands {
+        for c in &island.contacts {
             // Warm-start cache kaydı — Fix #6: limiti config'den al
-            let wp  = poses.get(&c.ent_a).map(|p| p.position + c.r_a).unwrap_or(c.world_point);
+            // Fix: poses'da entity yoksa (statik cisimler gibi) c.world_point CCD-öncesi
+            // eski değerdir. Bunun yerine write-back ile zaten güncellenmiş olan
+            // transforms'tan oku — solver-sonrası doğru pozisyon garanti edilir.
+            let wp = island.poses.get(&c.ent_a)
+                .map(|p| p.position + c.r_a)
+                .or_else(|| transforms.get(c.ent_a).map(|t| t.position + c.r_a))
+                .unwrap_or(c.world_point);
             let key = if c.ent_a < c.ent_b { (c.ent_a, c.ent_b) } else { (c.ent_b, c.ent_a) };
             let entry = solver_state.contact_cache.entry(key).or_default();
             if entry.len() < max_contacts_per_pair {
@@ -476,7 +471,10 @@ pub fn write_back(
                 || frame.is_multiple_of(event_throttle_frames as u64)
             );
             if should_fire {
-                let pos_a = poses.get(&c.ent_a).map(|t| t.position).unwrap_or(Vec3::ZERO);
+                let pos_a = island.poses.get(&c.ent_a)
+                    .map(|t| t.position)
+                    .or_else(|| transforms.get(c.ent_a).map(|t| t.position))
+                    .unwrap_or(Vec3::ZERO);
                 collision_events.push(crate::CollisionEvent {
                     entity_a: c.ent_a,
                     entity_b: c.ent_b,
@@ -484,6 +482,18 @@ pub fn write_back(
                     normal:   c.normal,
                     impulse:  c.accumulated_j,
                 });
+            }
+        }
+    }
+
+    for island in islands {
+        for (ent, vel) in island.velocities {
+            if let Some(v) = velocities.get_mut(ent) { *v = vel; }
+        }
+        for (ent, tbox) in island.poses {
+            if let Some(t) = transforms.get_mut(ent) {
+                *t = tbox;
+                t.update_local_matrix();
             }
         }
     }

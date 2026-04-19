@@ -8,6 +8,13 @@ use crate::renderer::{
 use bytemuck;
 use wgpu;
 
+pub struct DrawItem {
+    vbuf: std::sync::Arc<wgpu::Buffer>,
+    vertex_count: u32,
+    bind_group: std::sync::Arc<wgpu::BindGroup>,
+    unlit: bool,
+}
+
 /// Bevy'nin DefaultPlugins davranisini taklit eden, sadece modelleri
 /// isiklandirip hizlica ekrana basmaya yarayan kutudan cikmis Render Motoru.
 /// Yeni acilan `tut` gibi bos projelerde yuzlerce satir kod yazmamak icin kullanilir.
@@ -25,10 +32,16 @@ pub fn default_render_pass(
     let mut proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 2000.0);
     let mut view_mat = Mat4::from_translation(Vec3::ZERO);
     let mut cam_pos = Vec3::ZERO;
+    let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
+
+    // TODO: Bütün nesnelerin (özellikle kamera ve çizilecek objelerin) global matrix'leri
+    // bu pass çağrılmadan hemen önce bir `update_transforms(world)` sistemiyle güncellenmiş olmalıdır.
 
     if let (Some(cameras), Some(transforms)) =
         (world.borrow::<Camera>(), world.borrow::<Transform>())
     {
+        // TODO: Aktif kamera için `ActiveCamera` tarzı bir marker bileşeni kullanılmalı.
+        // ECS array sırası stabil değildir. Şimdilik geçici çözüm olarak ilki alınıyor.
         if let Some(active_cam) = cameras.dense.first().map(|e| &e.entity) {
             if let (Some(cam), Some(trans)) =
                 (cameras.get(*active_cam), transforms.get(*active_cam))
@@ -36,6 +49,7 @@ pub fn default_render_pass(
                 proj = cam.get_projection(aspect);
                 view_mat = cam.get_view(trans.position);
                 cam_pos = trans.position;
+                cam_forward = trans.rotation * Vec3::new(0.0, 0.0, -1.0);
             }
         }
     }
@@ -57,9 +71,10 @@ pub fn default_render_pass(
         }; 10],
         light_view_proj: [id; 4],
         cascade_splits: [10.0, 50.0, 200.0, 2000.0],
-        camera_forward: [0.0, 0.0, -1.0, 0.0],
+        camera_forward: [cam_forward.x, cam_forward.y, cam_forward.z, 0.0],
         cascade_params: [0.1, 1.0 / crate::renderer::SHADOW_MAP_RES as f32, 0.0, 0.0],
         num_lights: 0,
+        // _align_pad ve _pad_scene: wgpu Uniform alignment kuralları gereği son paddingler
         _align_pad: [0; 3],
         _pad_scene: [0; 3],
         _end_pad: 0,
@@ -69,15 +84,6 @@ pub fn default_render_pass(
         0,
         bytemuck::cast_slice(&[scene_uniform_data]),
     );
-
-    let mut instances = Vec::new();
-    let mut draw_items = Vec::new();
-
-    struct DrawItem {
-        vbuf: std::sync::Arc<wgpu::Buffer>,
-        vertex_count: u32,
-        bind_group: std::sync::Arc<wgpu::BindGroup>,
-    }
 
     let renderers = world.borrow::<MeshRenderer>();
     if let Some(mut q) = world.query::<(&Mesh, &Transform, &Material)>() {
@@ -104,9 +110,15 @@ pub fn default_render_pass(
                 vbuf: mesh.vbuf.clone(),
                 vertex_count: mesh.vertex_count,
                 bind_group: mat.bind_group.clone(),
+                unlit: mat.unlit,
             });
         }
     }
+
+    // Instance limiti kontrolü (Taşmaları önlemek için capaciteyi zorla)
+    // TODO: Eğer needed > capacity ise çalışma zamanı pipeline re-allocation yapılmalı.
+    let max_instances = renderer.scene.instance_capacity as usize;
+    let instances: Vec<_> = instances.into_iter().take(max_instances).collect();
 
     if !instances.is_empty() {
         renderer.queue.write_buffer(
@@ -143,16 +155,22 @@ pub fn default_render_pass(
             timestamp_writes: None,
             occlusion_query_set: None,
         });
+        // TODO: Shadow map pass eksik, render_pass öncesinde directional shadow mapping calistirilmali!
 
-        render_pass.set_pipeline(&renderer.scene.unlit_pipeline);
+        // Draw loop disina sabit BindGroupLayout lari aliyoruz (Performans optimizasyonu)
+        render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+        render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+        render_pass.set_bind_group(3, &renderer.scene.dummy_skeleton_bind_group, &[]);
+        render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
 
         for (i, item) in draw_items.iter().enumerate() {
-            render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+            let pipeline = if item.unlit {
+                &renderer.scene.unlit_pipeline
+            } else {
+                &renderer.scene.pbr_pipeline
+            };
+            render_pass.set_pipeline(pipeline);
             render_pass.set_bind_group(1, &item.bind_group, &[]);
-            render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-            render_pass.set_bind_group(3, &renderer.scene.dummy_skeleton_bind_group, &[]);
-            render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
-
             render_pass.set_vertex_buffer(0, item.vbuf.slice(..));
             render_pass.draw(0..item.vertex_count, (i as u32)..((i as u32) + 1));
         }

@@ -10,7 +10,7 @@ pub use crate::core::{
 };
 
 // === Matematik ===
-pub use crate::math::{Mat4, Quat, Ray, Vec2, Vec3, Vec4};
+pub use crate::math::{EulerRot, Mat4, Quat, Ray, Vec2, Vec3, Vec4};
 
 // === Sadelik API (Bevy tarzı) ===
 pub use crate::color::Color;
@@ -31,20 +31,25 @@ pub use crate::renderer::Renderer;
 
 // === Uygulama Çerçevesi ===
 pub use crate::app::App;
-pub use crate::default_systems::default_render_pass;
 
 // === Windowing & Input ===
-pub use crate::core::input::{mouse, Input};
-pub use winit::event::{DeviceEvent, ElementState, Event, MouseButton, WindowEvent};
+pub use crate::core::input::Input;
+pub use winit::event::{ElementState, MouseButton};
+pub use winit::keyboard::{KeyCode, PhysicalKey};
 /// `input.key(Key::W)` kısaltması için `KeyCode` alias'ı.
 pub use winit::keyboard::KeyCode as Key;
-pub use winit::keyboard::{KeyCode, PhysicalKey};
 
 // === GPU (sık kullanılan tipler) ===
-pub use bytemuck;
-pub use egui;
 pub use wgpu;
 
 // === Audio (feature flag ile) ===
 #[cfg(feature = "audio")]
-pub use crate::audio as gizmo_audio;
+pub use crate::audio::{AudioManager, AudioSource};
+
+// === Scene (feature flag ile) ===
+#[cfg(feature = "scene")]
+pub use crate::scene::{SceneData, SceneRegistry};
+
+// === Scripting (feature flag ile) ===
+#[cfg(feature = "scripting")]
+pub use crate::scripting as gizmo_scripting;

@@ -11,6 +11,8 @@ pub struct WheelComponent {
     pub wheel_radius: f32,           // Tekerleğin yarıçapı
 
     pub is_drive_wheel: bool, // Bu tekerlek motor gücü alıyor mu (FWD/RWD/4WD)
+    #[serde(default)]
+    pub is_steering_wheel: bool, // Bu tekerleğe direksiyon uygulanıyor mu?
 
     #[serde(skip)] pub is_grounded: bool,
     #[serde(skip)] pub compression: f32,    // Yerdeyse yayın ne kadar sıkıştığı
@@ -28,6 +30,7 @@ impl Default for WheelComponent {
             suspension_damping: 2000.0,
             wheel_radius: 0.5,
             is_drive_wheel: false,
+            is_steering_wheel: false,
             is_grounded: false,
             compression: 0.0,
             contact_point: Vec3::ZERO,
@@ -55,6 +58,12 @@ impl WheelComponent {
     /// Motorlu tekerlek olarak ayarla
     pub fn with_drive(mut self) -> Self {
         self.is_drive_wheel = true;
+        self
+    }
+
+    /// Direksiyon tekerleği olarak ayarla
+    pub fn with_steering(mut self) -> Self {
+        self.is_steering_wheel = true;
         self
     }
 }
@@ -236,14 +245,13 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
             }
             let drive_wheel_count = drive_wheel_count.max(1.0);
 
-            for &wheel_entity in &wheel_entities {
-                let wheel_trans = match trans_storage.get(wheel_entity) {
-                    Some(wt) => *wt, // clone the current transform state
+                let wt = match trans_storage.get_mut(wheel_entity) {
+                    Some(wt) => wt, // get mutable reference once
                     None => continue,
                 };
                 let wheel = wheel_storage.get_mut(wheel_entity).unwrap();
                 
-                let wheel_mat = wheel_trans.global_matrix;
+                let wheel_mat = wt.global_matrix;
                 let origin = Vec3::new(wheel_mat.w_axis.x, wheel_mat.w_axis.y, wheel_mat.w_axis.z);
                 
                 let r_ws = origin - t.position;
@@ -448,8 +456,8 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                         }
                     }
 
-                    // === DİREKSİYON (Ön tekerlekler — drive olmayan) ===
-                    if !wheel.is_drive_wheel {
+                    // === DİREKSİYON (is_steering_wheel) ===
+                    if wheel.is_steering_wheel {
                         let wheel_vel = v.linear + v.angular.cross(r_ws);
                         let lateral_vel = wheel_vel.dot(right);
                         let steer_force = steering_angle * steer_mult;
@@ -462,8 +470,8 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                             apply_inv_inertia(steer_torque, inv_inertia, t.rotation);
                     }
 
-                    // Yanal Sürtünme / Tutuş (Arka tekerlek drift algısı)
-                    if wheel.is_drive_wheel {
+                    // Yanal Sürtünme / Tutuş (Arka tekerlek drift algısı, direksiyon OLMAYANLAR)
+                    if !wheel.is_steering_wheel {
                         let wheel_vel = v.linear + v.angular.cross(r_ws);
                         let lateral_vel = wheel_vel.dot(right);
                         let anti_slide = right * (-lateral_vel * anti_slide_k / num_wheels) * dt;
@@ -477,41 +485,35 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                     let speed = v.linear.dot(forward);
                     wheel.rotation_angle += (speed / scaled_radius) * dt;
 
-                    if let Some(wt) = trans_storage.get_mut(wheel_entity) {
-                        let base_rot = gizmo_math::Quat::from_axis_angle(wheel.axle, wheel.rotation_angle);
-                        let steer_rot = if !wheel.is_drive_wheel {
-                            gizmo_math::Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), steering_angle)
-                        } else {
-                            gizmo_math::Quat::IDENTITY
-                        };
-                        wt.rotation = steer_rot * base_rot;
-                        wt.update_local_matrix();
-                    }
+                    let base_rot = gizmo_math::Quat::from_axis_angle(wheel.axle, wheel.rotation_angle);
+                    let steer_rot = if wheel.is_steering_wheel {
+                        gizmo_math::Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), steering_angle)
+                    } else {
+                        gizmo_math::Quat::IDENTITY
+                    };
+                    wt.rotation = steer_rot * base_rot;
+                    wt.update_local_matrix();
                 } else {
                     wheel.is_grounded = false;
                     wheel.compression = 0.0;
                 }
             }
 
+            v.linear += total_linear_impulse * inv_mass;
+            v.angular += total_angular_impulse;
+
             // === HAVA DİRENCI (Kuadratik Sürükleme) ===
-            // Gerçek aerodinamik formül: F_drag = -½ · Cd·ρA · |v|² · v̂
-            // Impulse = F_drag · dt,  Δv = impulse · (1/m)
-            // Önceki hatalar:
-            //   1) speed_sq.sqrt() * v.linear → net v² etkisi tesadüfen doğruydu, ama okunaksız.
-            //   2) inv_mass ile **çarpılmıyordu** → kütle bağımsız direnç (50 kg = 5000 kg aynı etki).
-            //   3) Katsayı hardcoded magic number'dı; artık VehicleController::drag_coefficient'ten okunuyor.
+            // Geleneksel simülasyonlarda F_drag = -½ · Cd·ρA · |v|² formülü kullanılır ve mass'e bölünür.
+            // Fakat oyun motorlarında mass genelde 1.0 (veya keyfi) bırakıldığı için bu, birim tutarsızlığına
+            // (1 tonluk araç ile 1 kg'lık aracın 1000 kat farklı yavaşlamasına) yol açar.
+            // Bunun yerine hava direncini kütleden bağımsız saf hıza etki eden bir "yavaşlama (deceleration)" faktörü olarak uygularız.
             let speed_sq = v.linear.length_squared();
             if speed_sq > 0.01 {
                 let cd = vehicle.drag_coefficient;
-                // F_drag yönü: hıza zıt → v̂ = v / |v|, |v|² · v̂ = |v| · v
-                // impulse = -½·Cd·|v|²·v̂ · dt = -½·Cd·|v|·v · dt
-                let drag_impulse = v.linear * (-0.5 * cd * speed_sq.sqrt() * dt);
-                // Δv = impulse / m — kütle-bağımlı hava direnci
-                total_linear_impulse += drag_impulse * inv_mass;
+                // Δv = -½ * Cd * |v| * v * dt
+                let drag_dv = v.linear * (-0.5 * cd * speed_sq.sqrt() * dt);
+                v.linear += drag_dv;
             }
-
-            v.linear += total_linear_impulse * inv_mass;
-            v.angular += total_angular_impulse;
         }
     }
 }
