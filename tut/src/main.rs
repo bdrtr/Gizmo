@@ -6,7 +6,7 @@ use gizmo::physics::JointWorld;
 use gizmo::renderer::asset::AssetManager;
 use gizmo::renderer::components::{DirectionalLight, MeshRenderer};
  
-const DOMINO_COUNT: usize = 500;
+const DOMINO_COUNT: usize = 1000;
 
 // ─── Domino boyutları (yarı-uzunluklar) ───
 // Gerçekçi domino oranları: genişlik:yükseklik:kalınlık = 1:2:0.4
@@ -302,8 +302,8 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
 fn spiral_positions(count: usize) -> Vec<Vec3> {
     let mut out = Vec::with_capacity(count);
     
-    let a = 2.5_f32;    // başlangıç yarıçapı
-    let b = 0.40_f32;   // sarmal büyüme oranı (halka arası ~2.5 m)
+    let a = 2.0_f32;     // başlangıç yarıçapı
+    let b = 0.25_f32;    // sarmal büyüme oranı (daha sıkı halkalar)
     
     let mut theta = 0.0_f32;
     for _ in 0..count {
@@ -311,22 +311,20 @@ fn spiral_positions(count: usize) -> Vec<Vec3> {
         let x = theta.cos() * r;
         let z = theta.sin() * r;
         
-        // Sonraki noktaya teğet yönünü hesapla — finite difference
-        let dt = 0.01;
-        let r2 = a + b * (theta + dt);
-        let nx = (theta + dt).cos() * r2;
-        let nz = (theta + dt).sin() * r2;
-        let dx = nx - x;
-        let dz = nz - z;
-        
-        // atan2(dx, dz): 0 = +Z yönü, PI/2 = +X yönü
-        // Quat::from_axis_angle(Y, angle) ile local +Z bu yöne döner
-        let angle = dx.atan2(dz);
+        // Teğet yönü (analitik türev):
+        // dx/dθ = -r·sin(θ) + b·cos(θ)
+        // dz/dθ =  r·cos(θ) + b·sin(θ)
+        let tx = -r * theta.sin() + b * theta.cos();
+        let tz =  r * theta.cos() + b * theta.sin();
+        let angle = tx.atan2(tz);
         
         out.push(Vec3::new(x, z, angle));
         
-        // Sabit yay uzunluğu adımı: ds = GAP, ds ≈ r·dθ (spiral için düzeltmeli)
-        let d_theta = GAP / (r * r + b * b).sqrt();
+        // Sabit yay uzunluğu adımı: ds = GAP
+        // ds² = (dx/dθ)² + (dz/dθ)² = r² + b²  (Arşimet spirali özelliği)
+        // dθ = ds / sqrt(r² + b²)
+        let arc_speed = (r * r + b * b).sqrt();
+        let d_theta = GAP / arc_speed;
         theta += d_theta;
     }
  

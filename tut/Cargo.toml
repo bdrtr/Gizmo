@@ -1,10 +1,9 @@
 [package]
 name = "tut"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-gizmo = { path = "../crates/gizmo" }
-gizmo-app = { path = "../crates/gizmo-app" }
+gizmo = { path = "../crates/gizmo", features = ["audio", "scripting", "scene"] }
 pollster = "0.3"
-wgpu = "0.20.1"
+winit = { workspace = true }

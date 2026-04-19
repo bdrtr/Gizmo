@@ -9,7 +9,7 @@ members = [
     "crates/gizmo-app",
     "crates/gizmo-scripting",
     "crates/gizmo-scene",
-    "demo", "server", "tut",
+    "server", "tut", "cradle"
 ]
 
 [workspace.package]
