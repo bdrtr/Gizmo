@@ -80,6 +80,7 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
             draw_vehicle_controller_section(ui, world, entity_id);
             draw_audio_source_section(ui, world, entity_id);
             draw_terrain_section(ui, world, entity_id, state);
+            draw_script_section(ui, world, entity_id, state);
 
             ui.separator();
 
@@ -272,13 +273,41 @@ fn draw_rigidbody_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
 }
 
 fn draw_collider_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(colliders) = world.borrow::<Collider>() {
-        if let Some(collider) = colliders.get(entity_id) {
+    if let Some(mut colliders) = world.borrow_mut::<Collider>() {
+        if let Some(collider) = colliders.get_mut(entity_id) {
             egui::CollapsingHeader::new("🛡️ Collider")
-                .default_open(false)
+                .default_open(true)
                 .show(ui, |ui| {
-                    let shape_name = format!("{:?}", collider.shape);
-                    ui.label(format!("Şekil: {}", shape_name));
+                    match &mut collider.shape {
+                        gizmo_physics::shape::ColliderShape::Aabb(aabb) => {
+                            ui.label("Mod: Kutu (AABB)");
+                            ui.horizontal(|ui| {
+                                ui.label("Extents:");
+                                ui.add(egui::DragValue::new(&mut aabb.half_extents.x).speed(0.1).prefix("X: "));
+                                ui.add(egui::DragValue::new(&mut aabb.half_extents.y).speed(0.1).prefix("Y: "));
+                                ui.add(egui::DragValue::new(&mut aabb.half_extents.z).speed(0.1).prefix("Z: "));
+                            });
+                        }
+                        gizmo_physics::shape::ColliderShape::Sphere(sphere) => {
+                            ui.label("Mod: Küre (Sphere)");
+                            ui.horizontal(|ui| {
+                                ui.label("Yarıçap:");
+                                ui.add(egui::DragValue::new(&mut sphere.radius).speed(0.1));
+                            });
+                        }
+                        gizmo_physics::shape::ColliderShape::Capsule(capsule) => {
+                            ui.label("Mod: Kapsül");
+                            ui.horizontal(|ui| {
+                                ui.label("Yarıçap:");
+                                ui.add(egui::DragValue::new(&mut capsule.radius).speed(0.1));
+                                ui.label("Y. Yükseklik:");
+                                ui.add(egui::DragValue::new(&mut capsule.half_height).speed(0.1));
+                            });
+                        }
+                        other => {
+                            ui.label(format!("Şekil: {:?}", other));
+                        }
+                    }
                 });
             ui.separator();
         }
@@ -449,19 +478,37 @@ fn draw_vehicle_controller_section(ui: &mut egui::Ui, world: &World, entity_id: 
                         ui.label("Fren Gücü:");
                         ui.add(egui::Slider::new(&mut vrc.brake_force, 0.0..=50000.0));
                     });
+                });
+            ui.separator();
+        }
+    }
+}
+
+fn draw_script_section(ui: &mut egui::Ui, world: &World, entity_id: u32, state: &mut EditorState) {
+    if let Some(mut scripts) = world.borrow_mut::<gizmo_scripting::engine::Script>() {
+        // Drop wrapper ile borrow bitimine izin verelim diye clone alıyoruz ama
+        // text_edit bağlamak için referans lazım.
+        if let Some(script) = scripts.get_mut(entity_id) {
+            egui::CollapsingHeader::new("📜 Script")
+                .default_open(true)
+                .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("Süsp. Sertliği:");
-                        let mut stiffness =
-                            vrc.wheels.first().map_or(20.0, |w| w.suspension_stiffness);
-                        if ui
-                            .add(egui::Slider::new(&mut stiffness, 0.0..=100.0))
-                            .changed()
-                        {
-                            for w in &mut vrc.wheels {
-                                w.suspension_stiffness = stiffness;
-                            }
-                        }
+                        ui.label("Dosya Yolu:");
+                        ui.text_edit_singleline(&mut script.file_path);
                     });
+                    
+                    if ui.button("✏️ Düzenle (Kod Editörü)").clicked() {
+                        if std::path::Path::new(&script.file_path).exists() {
+                            if let Ok(content) = std::fs::read_to_string(&script.file_path) {
+                                state.active_script_content = content;
+                            }
+                        } else {
+                            // Dosya yoksa boş
+                            state.active_script_content = "-- Gizmo Script\nfunction on_update(dt)\n\nend".to_string();
+                        }
+                        state.active_script_path = script.file_path.clone();
+                        state.script_editor_open = true;
+                    }
                 });
             ui.separator();
         }
@@ -490,6 +537,7 @@ fn draw_add_component_menu(
                 "Script",
                 "AudioSource",
                 "Terrain",
+                "VehicleController",
             ];
 
             egui::ComboBox::from_id_source("add_comp_combo")

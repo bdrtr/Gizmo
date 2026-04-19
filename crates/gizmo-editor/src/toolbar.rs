@@ -5,6 +5,27 @@ use egui;
 
 /// Toolbar panelini çizer
 pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
+    // ==== Check for pending dialog results ====
+    if let Some(rx) = &state.pending_dialog_rx {
+        match rx.try_recv() {
+            Ok((is_save, Some(path_str))) => {
+                state.scene_path = path_str.clone();
+                if is_save {
+                    state.status_message = format!("Sahne kaydediliyor → {}", path_str);
+                    state.scene_save_request = Some(path_str);
+                } else {
+                    state.status_message = format!("Sahne yükleniyor ← {}", path_str);
+                    state.scene_load_request = Some(path_str);
+                }
+                state.pending_dialog_rx = None;
+            }
+            Ok((_, None)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                state.pending_dialog_rx = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {} // Still waiting
+        }
+    }
+
     egui::TopBottomPanel::top("toolbar_panel")
         .exact_height(36.0)
         .show(ctx, |ui| {
@@ -12,17 +33,35 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                 ui.spacing_mut().item_spacing.x = 8.0;
 
                 // === DOSYA İŞLEMLERİ ===
+                if ui.button("🪄 Yeni/Temizle").on_hover_text("Sahneyi sıfırla").clicked() {
+                    state.scene_clear_request = true;
+                }
+
                 ui.label("Sahne:");
                 ui.add(egui::TextEdit::singleline(&mut state.scene_path).desired_width(120.0));
 
                 if ui.button("💾 Kaydet").clicked() {
-                    state.status_message = format!("Sahne kaydediliyor → {}", state.scene_path);
-                    state.scene_save_request = Some(state.scene_path.clone());
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    state.pending_dialog_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let res = rfd::FileDialog::new()
+                            .add_filter("Gizmo Scene", &["scene"])
+                            .set_directory(".")
+                            .save_file();
+                        let _ = tx.send((true, res.map(|p| p.to_string_lossy().to_string())));
+                    });
                 }
 
                 if ui.button("📂 Yükle").clicked() {
-                    state.status_message = format!("Sahne yükleniyor ← {}", state.scene_path);
-                    state.scene_load_request = Some(state.scene_path.clone());
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    state.pending_dialog_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let res = rfd::FileDialog::new()
+                            .add_filter("Gizmo Scene", &["scene"])
+                            .set_directory(".")
+                            .pick_file();
+                        let _ = tx.send((false, res.map(|p| p.to_string_lossy().to_string())));
+                    });
                 }
 
                 ui.separator();
@@ -80,16 +119,19 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                     state.gizmo_local_space = !state.gizmo_local_space;
                 }
 
-                let snap_color = if state.snap_enabled {
-                    egui::Color32::from_rgb(100, 200, 255)
+                let snap_color = if state.prefs.snap_enabled {
+                    egui::Color32::from_rgb(100, 255, 100) // Aktif (yeşil)
                 } else {
-                    egui::Color32::GRAY
+                    ui.visuals().text_color() // Pasif
                 };
+
                 if ui
                     .button(egui::RichText::new("🧲 Snap").color(snap_color))
+                    .on_hover_text("Grid yapılarına (hareket/döndürme) yapışma")
                     .clicked()
                 {
-                    state.snap_enabled = !state.snap_enabled;
+                    state.prefs.snap_enabled = !state.prefs.snap_enabled;
+                    state.prefs.save();
                 }
 
                 ui.separator();

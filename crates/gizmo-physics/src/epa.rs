@@ -194,7 +194,7 @@ fn generate_face_contacts(
             }
         }
 
-        if final_contacts.len() > 0 {
+        if !final_contacts.is_empty() {
             return final_contacts;
         } else {
             // Clipping produced 0 points, return center of ref_face to avoid stale index panic in fallback

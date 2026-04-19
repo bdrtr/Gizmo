@@ -431,6 +431,8 @@ impl<'a> Commands<'a> {
                 self.world.add_component(root, trans);
                 self.world
                     .add_component(root, EntityName(format!("GLTF: {}", path)));
+                self.world
+                    .add_component(root, gizmo_core::component::Children(Vec::new()));
 
                 // Her kök node'u spawn et
                 for node in &asset.roots {
@@ -536,23 +538,38 @@ fn spawn_gltf_node_flat(
     parent_id: u32,
     default_mat: Material,
 ) {
-    use gizmo_core::component::Parent;
+    use gizmo_core::component::{Children, Parent};
     let entity = world.spawn();
     let name = node.name.clone().unwrap_or_else(|| "GLTF_Node".to_string());
     world.add_component(entity, EntityName(name));
     world.add_component(entity, Parent(parent_id));
+    world.add_component(entity, Children(Vec::new()));
+
+    // Register this node to parent's Children list
+    if let Some(mut ch_store) = world.borrow_mut::<Children>() {
+        if let Some(parent_ch) = ch_store.get_mut(parent_id) {
+            parent_ch.0.push(entity.id());
+        }
+    }
+
+    let raw_rot = Quat::from_xyzw(
+        node.rotation[0],
+        node.rotation[1],
+        node.rotation[2],
+        node.rotation[3],
+    );
+    let rot = if raw_rot.is_nan() || raw_rot.length() < 0.0001 {
+        Quat::IDENTITY
+    } else {
+        raw_rot.normalize()
+    };
 
     let t = Transform::new(Vec3::new(
         node.translation[0],
         node.translation[1],
         node.translation[2],
     ))
-    .with_rotation(Quat::from_xyzw(
-        node.rotation[0],
-        node.rotation[1],
-        node.rotation[2],
-        node.rotation[3],
-    ))
+    .with_rotation(rot)
     .with_scale(Vec3::new(node.scale[0], node.scale[1], node.scale[2]));
     world.add_component(entity, t);
 
@@ -560,9 +577,23 @@ fn spawn_gltf_node_flat(
         let prim = world.spawn();
         world.add_component(prim, Transform::new(Vec3::ZERO));
         world.add_component(prim, Parent(entity.id()));
+        world.add_component(prim, Children(Vec::new()));
+        
+        if let Some(mut ch_store) = world.borrow_mut::<Children>() {
+            if let Some(parent_ch) = ch_store.get_mut(entity.id()) {
+                parent_ch.0.push(prim.id());
+            }
+        }
+
         world.add_component(prim, mesh.clone());
         world.add_component(prim, mat_opt.clone().unwrap_or_else(|| default_mat.clone()));
         world.add_component(prim, MeshRenderer::new());
+        let extents = (mesh.bounds.max - mesh.bounds.min) / 2.0;
+        // Sınırlayıcı kutu çok küçük olabilir diye ufak bir min değeri veriyoruz
+        let cx = extents.x.max(0.01);
+        let cy = extents.y.max(0.01);
+        let cz = extents.z.max(0.01);
+        world.add_component(prim, gizmo_physics::shape::Collider::new_aabb(cx, cy, cz));
     }
 
     for child_node in &node.children {

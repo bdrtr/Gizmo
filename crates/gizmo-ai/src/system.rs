@@ -91,7 +91,7 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
             agent.last_target_pos = Some(target_pos);
             agent.path_recalc_timer = 1.0;
 
-            if let Some(new_path) = find_path(&*grid, t.position, target_pos) {
+            if let Some(new_path) = find_path(&grid, t.position, target_pos) {
                 agent.path = new_path;
                 agent.current_path_index = 0; // Yeni yol — baştan başla
             } else {

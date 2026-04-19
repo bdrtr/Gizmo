@@ -258,7 +258,7 @@ impl ActionMap {
     pub fn bind_action(&mut self, action_name: &str, keycode: u32) {
         self.bindings
             .entry(action_name.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(keycode);
     }
 

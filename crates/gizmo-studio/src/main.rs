@@ -7,6 +7,7 @@ pub mod setup;
 pub mod state;
 pub mod studio_input;
 pub mod update;
+pub mod systems;
 
 pub use state::{DebugAssets, StudioState};
 pub use studio_input::*;

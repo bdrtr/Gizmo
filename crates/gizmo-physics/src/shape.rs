@@ -28,6 +28,7 @@ pub struct ConvexHull {
 
 // ECS Component'i olmak üzere hazırlanmış Çarpışma Şekilleri listesi
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type")]
 pub enum ColliderShape {
     Sphere(Sphere),
     Aabb(Aabb),

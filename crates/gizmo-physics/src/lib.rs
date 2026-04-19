@@ -20,7 +20,7 @@ pub use constraints::{Joint, JointKind, JointWorld};
 pub use integration::{physics_apply_forces_system, physics_movement_system};
 pub use shape::{Aabb, Capsule, Collider, ColliderShape, ConvexHull, Sphere};
 pub use system::{physics_collision_system, PhysicsSolverState};
-pub use vehicle::{physics_vehicle_system, VehicleController, Wheel};
+pub use vehicle::{physics_vehicle_system, VehicleController, WheelComponent};
 pub mod race_ai;
 pub use race_ai::{race_ai_system, RaceAI};
 

@@ -314,8 +314,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let d = 0.59;
     let e = 0.14;
     final_color = clamp((final_color * (a * final_color + b)) / (final_color * (c * final_color + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
-    // Srgb gamma düzeltmesi
-    final_color = pow(final_color, vec3<f32>(1.0 / 2.2));
+    // Srgb gamma düzeltmesi (WGPU textureView formatı sRGB olduğu için donanım zaten uyguluyor, yoruma alındı)
+    // final_color = pow(final_color, vec3<f32>(1.0 / 2.2));
     
     return vec4<f32>(final_color, in.inst_albedo.a * tex_color.a);
 }

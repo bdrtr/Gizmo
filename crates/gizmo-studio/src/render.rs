@@ -12,9 +12,11 @@ pub fn render_studio(
     light_time: f32,
 ) {
     let mut save_req = None;
+    let mut clear_req = false;
     let mut load_req = None;
     let mut prefab_save_req = None;
     let mut prefab_load_req = None;
+    let mut gltf_req = None;
     let mut duplicate_reqs = Vec::new();
     let mut play_start = false;
     let mut play_stop = false;
@@ -23,8 +25,11 @@ pub fn render_studio(
     if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
         save_req = ed.scene_save_request.take();
         load_req = ed.scene_load_request.take();
+        clear_req = ed.scene_clear_request;
+        ed.scene_clear_request = false;
         prefab_save_req = ed.prefab_save_request.take();
         prefab_load_req = ed.prefab_load_request.take();
+        gltf_req = ed.gltf_load_request.take();
         duplicate_reqs = ed.duplicate_requests.drain(..).collect();
         highlight_box_id = ed.highlight_box;
 
@@ -38,25 +43,83 @@ pub fn render_studio(
         }
     }
 
-    let play_backup_path = "demo/assets/scenes/.gizmo_play_backup";
+    if let Some((path, pos)) = gltf_req {
+        let mut cmds = gizmo::spawner::Commands::new(world, renderer);
+        cmds.spawn_gltf(pos.unwrap_or(gizmo::math::Vec3::ZERO), &path);
+        
+        if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+            ed.log_info(&format!("Model sahneye eklendi: {}", path));
+        }
+    }
+
+    let play_backup_path = format!("{}/.play_backup.scene", std::env::var("CARGO_MANIFEST_DIR").unwrap_or(".".to_string()));
 
     if play_start {
-        gizmo::scene::SceneData::save(world, play_backup_path);
+        let _ = gizmo::scene::SceneData::save(world, &play_backup_path, &gizmo::scene::SceneRegistry::default());
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             ed.log_info("▶ Play: Sahne yedeği alındı ve simülasyon başladı.");
         }
     }
 
     if play_stop {
-        load_req = Some(play_backup_path.to_string());
+        load_req = Some(play_backup_path.clone());
         // Eski fizikten kalan bağlantı (Joint) kalıntılarını temizle
         world.insert_resource(gizmo::physics::JointWorld::new());
+        world.insert_resource(gizmo::physics::PhysicsSolverState::new());
+        if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+            ed.log_info("Sahne yedeğe geri dönüldü.");
+        }
     }
 
     if let Some(path) = save_req {
-        gizmo::scene::SceneData::save(world, &path);
+        let _ = gizmo::scene::SceneData::save(world, &path, &gizmo::scene::SceneRegistry::default());
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             ed.log_info("Sahne kaydedildi.");
+        }
+    }
+
+    if clear_req {
+        let ents = world.alive_entities();
+        let mut protected_ids = std::collections::HashSet::new();
+        protected_ids.insert(state.editor_camera);
+        protected_ids.insert(highlight_box_id);
+
+        if let Some(names) = world.borrow::<gizmo::core::component::EntityName>() {
+            for e in &ents {
+                if let Some(name) = names.get(e.id()) {
+                    if name.0.starts_with("Editor ") || name.0 == "Highlight Box" {
+                        protected_ids.insert(e.id());
+                    }
+                }
+            }
+        }
+
+        if let Some(children) = world.borrow::<gizmo::core::component::Children>() {
+            let mut i = 0;
+            let mut pro_list: Vec<u32> = protected_ids.iter().copied().collect();
+            while i < pro_list.len() {
+                let id = pro_list[i];
+                if let Some(c) = children.get(id) {
+                    for &child_id in &c.0 {
+                        if protected_ids.insert(child_id) {
+                            pro_list.push(child_id);
+                        }
+                    }
+                }
+                i += 1;
+            }
+        }
+
+        for e in ents {
+            if protected_ids.contains(&e.id()) {
+                continue;
+            }
+            world.despawn(e);
+        }
+        if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+            ed.clear_selection();
+            ed.log_info("Sahne temizlendi. Yeni sahne hazır.");
+            ed.scene_path = String::new();
         }
     }
 
@@ -70,7 +133,7 @@ pub fn render_studio(
         if let Some(names) = world.borrow::<gizmo::core::component::EntityName>() {
             for e in &ents {
                 if let Some(name) = names.get(e.id()) {
-                    if name.0 == "Editor Guidelines" || name.0 == "Highlight Box" {
+                    if name.0.starts_with("Editor ") || name.0 == "Highlight Box" {
                         protected_ids.insert(e.id());
                     }
                 }
@@ -112,6 +175,7 @@ pub fn render_studio(
                 &renderer.scene.texture_bind_group_layout,
                 &mut asset_manager,
                 std::sync::Arc::new(dummy_bg),
+                &gizmo::scene::SceneRegistry::default(),
             );
             world.insert_resource(asset_manager);
             if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
@@ -126,7 +190,7 @@ pub fn render_studio(
     }
 
     if let Some((ent_id, path)) = prefab_save_req {
-        gizmo::scene::SceneData::save_prefab(world, ent_id, &path);
+        let _ = gizmo::scene::SceneData::save_prefab(world, ent_id, &path, &gizmo::scene::SceneRegistry::default());
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             ed.log_info("Prefab kaydedildi.");
         }
@@ -147,6 +211,7 @@ pub fn render_studio(
                 &renderer.scene.texture_bind_group_layout,
                 &mut asset_manager,
                 std::sync::Arc::new(dummy_bg),
+                &gizmo::scene::SceneRegistry::default(),
             );
 
             // Prefab spawn pozisyonunu (Asset browser'dan drop edilmişse) uygula
@@ -177,7 +242,7 @@ pub fn render_studio(
         let time_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos();
         let temp_path = format!("demo/assets/prefabs/temp_duplicate_{}_{}.prefab", ent_id, time_ns);
 
-        gizmo::scene::SceneData::save_prefab(world, ent_id, &temp_path);
+        let _ = gizmo::scene::SceneData::save_prefab(world, ent_id, &temp_path, &gizmo::scene::SceneRegistry::default());
 
         if let Some(mut asset_manager) =
             world.remove_resource::<gizmo::renderer::asset::AssetManager>()
@@ -193,6 +258,7 @@ pub fn render_studio(
                 &renderer.scene.texture_bind_group_layout,
                 &mut asset_manager,
                 std::sync::Arc::new(dummy_bg),
+                &gizmo::scene::SceneRegistry::default(),
             );
             world.insert_resource(asset_manager);
             if let Some(mut ed) = world.get_resource_mut::<EditorState>() {

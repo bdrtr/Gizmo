@@ -3,21 +3,46 @@
 use crate::editor_state::EditorState;
 use egui;
 use std::path::Path;
+use std::sync::{Arc, Mutex, OnceLock};
+
+static PICKED_WORKSPACE: OnceLock<Arc<Mutex<Option<String>>>> = OnceLock::new();
+
+fn get_picked_workspace() -> Arc<Mutex<Option<String>>> {
+    PICKED_WORKSPACE.get_or_init(|| Arc::new(Mutex::new(None))).clone()
+}
 
 /// Asset Browser sekmesini çizer
 pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
+    if let Ok(mut lock) = get_picked_workspace().try_lock() {
+        if let Some(path) = lock.take() {
+            state.asset_root = path;
+        }
+    }
+
     ui.horizontal(|ui| {
         ui.heading("🗂️ Asset Browser");
         ui.separator();
 
         // Geri git
-        if state.asset_root != "demo/assets" {
-            if ui.button("⬅").on_hover_text("Üst Dizin (Geri)").clicked() {
-                if let Some(parent) = Path::new(&state.asset_root).parent() {
-                    state.asset_root = parent.to_string_lossy().to_string();
-                }
+        if ui.button("⬅").on_hover_text("Üst Dizin (Geri)").clicked() {
+            if let Some(parent) = Path::new(&state.asset_root).parent() {
+                state.asset_root = parent.to_string_lossy().to_string();
             }
         }
+
+        // Workspace seçici
+        if ui.button("📁 Workspace Aç").on_hover_text("Bilgisayardan bir çalışma dizini seçin").clicked() {
+            let picked = get_picked_workspace();
+            std::thread::spawn(move || {
+                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                    if let Ok(mut lock) = picked.lock() {
+                        *lock = Some(folder.to_string_lossy().to_string());
+                    }
+                }
+            });
+        }
+        
+        ui.separator();
 
         ui.label("🔍");
         ui.text_edit_singleline(&mut state.asset_filter);
@@ -144,24 +169,21 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
 
                     // Sağ tık menüsü
                     response.context_menu(|ui| {
-                        if is_model {
-                            if ui.button("⚙️ Sahneye Ekle").clicked() {
+                        if is_model
+                            && ui.button("⚙️ Sahneye Ekle").clicked() {
                                 state.spawn_asset_request = Some(path_str.clone());
                                 ui.close_menu();
                             }
-                        }
-                        if is_prefab {
-                            if ui.button("⚙️ Prefab Olarak Ekle").clicked() {
+                        if is_prefab
+                            && ui.button("⚙️ Prefab Olarak Ekle").clicked() {
                                 state.prefab_load_request = Some((path_str.clone(), None, None));
                                 ui.close_menu();
                             }
-                        }
-                        if is_scene {
-                            if ui.button("📂 Bu Sahneyi Yükle").clicked() {
+                        if is_scene
+                            && ui.button("📂 Bu Sahneyi Yükle").clicked() {
                                 state.scene_load_request = Some(path_str.clone());
                                 ui.close_menu();
                             }
-                        }
                         if ui.button("📋 Yolu Kopyala").clicked() {
                             ui.output_mut(|o| o.copied_text = path_str.clone());
                             ui.close_menu();
@@ -178,12 +200,11 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
                         });
                     }
 
-                    if response.double_clicked() {
-                        if is_dir {
+                    if response.double_clicked()
+                        && is_dir {
                             // Klasöre gir (çift tık)
                             state.asset_root = path_str.clone();
                         }
-                    }
 
                     // Tek tıklama mantığı
                     if response.clicked() {

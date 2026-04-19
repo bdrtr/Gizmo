@@ -38,6 +38,11 @@ pub enum ScriptCommand {
         radius: f32,
     },
 
+    // Vehicle
+    SetVehicleEngineForce(u32, f32),
+    SetVehicleSteering(u32, f32),
+    SetVehicleBrake(u32, f32),
+
     // Entity Lifecycle
     SpawnEntity {
         name: String,

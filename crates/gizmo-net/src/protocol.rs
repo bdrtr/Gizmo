@@ -38,9 +38,9 @@ pub enum ServerChannel {
     Unreliable,
 }
 
-impl Into<u8> for ServerChannel {
-    fn into(self) -> u8 {
-        match self {
+impl From<ServerChannel> for u8 {
+    fn from(val: ServerChannel) -> Self {
+        match val {
             ServerChannel::Reliable => 0,
             ServerChannel::Unreliable => 1,
         }
@@ -51,9 +51,9 @@ pub enum ClientChannel {
     Command,
 }
 
-impl Into<u8> for ClientChannel {
-    fn into(self) -> u8 {
-        match self {
+impl From<ClientChannel> for u8 {
+    fn from(val: ClientChannel) -> Self {
+        match val {
             ClientChannel::Command => 0,
         }
     }

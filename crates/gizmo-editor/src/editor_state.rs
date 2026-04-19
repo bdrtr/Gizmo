@@ -1,4 +1,6 @@
 //! Editor State — Editörün global durumunu yönetir
+use crate::prefs::EditorPrefs;
+use std::collections::HashMap;
 
 /// Gizmo aracı modu
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -86,6 +88,12 @@ pub struct EditorState {
     pub show_toolbar: bool,
     /// Settings penceresi açık mı?
     pub settings_open: bool,
+    /// Dahili Script Editor açık mı?
+    pub script_editor_open: bool,
+    /// Script Editor üzerinde açık olan Lua dosyasının yolu
+    pub active_script_path: String,
+    /// Script Editor içeriği
+    pub active_script_content: String,
     /// Filtre metni (hierarchy arama)
     pub hierarchy_filter: String,
     /// Dahili editör nesnelerini gizleme tetiği
@@ -102,22 +110,13 @@ pub struct EditorState {
     pub status_message: String,
     /// Sahne dosya yolu
     pub scene_path: String,
-    /// Editör kamera hızı (WASD)
-    pub camera_speed: f32,
-    /// Kamera Orbit/Focus Pivot Mesafesi
-    pub camera_focus_distance: f32,
-    /// Grid görünür mü?
-    pub show_grid: bool,
+    
+    /// Ortaklandırılmış config ayarları (TOML olarak diske kaydedilir)
+    pub prefs: EditorPrefs,
+
     /// Kamera pozisyon, yaw ve pitch bookmarkları (Ctrl+0..9)
     pub camera_bookmarks: [Option<(gizmo_math::Vec3, f32, f32)>; 10],
-    /// Snap özelliği açık mı?
-    pub snap_enabled: bool,
-    /// Snap miktarı (Translate)
-    pub snap_translate: f32,
-    /// Snap açısı (Rotate, derece)
-    pub snap_rotate_deg: f32,
-    /// Snap ölçeği (Scale)
-    pub snap_scale: f32,
+
     /// Silme talebi gönderilen entity ID
     pub despawn_requests: Vec<u32>,
     /// Arazi yeniden oluşturulması gereken Entity ID'leri
@@ -126,6 +125,8 @@ pub struct EditorState {
     pub scene_save_request: Option<String>,
     /// Sahne yükleme isteği (Dosya yolu)
     pub scene_load_request: Option<String>,
+    /// Sahneyi temizleme (Yeni Sahne) isteği
+    pub scene_clear_request: bool,
     /// Prefab kaydetme isteği (Entity ID, Dosya yolu)
     pub prefab_save_request: Option<(u32, String)>,
     /// Prefab yükleme isteği (Dosya yolu, Opsiyonel Parent ID, Opsiyonel Pozisyon)
@@ -138,6 +139,7 @@ pub struct EditorState {
     pub spawn_asset_request: Option<String>,
     /// İsteğe bağlı, ekrandan (drag&drop) atılan pozisyon
     pub spawn_asset_position: Option<gizmo_math::Vec3>,
+    pub gltf_load_request: Option<(String, Option<gizmo_math::Vec3>)>,
     /// Entity ebeveyn değiştirme (Dragged ID, Target Parent ID)
     pub reparent_request: Option<(u32, u32)>,
     /// Entity ebeveyni silme (Root yapma) - Drag ID
@@ -146,6 +148,12 @@ pub struct EditorState {
     pub toggle_visibility_request: Option<u32>,
     /// Seçili Obje ID'sine yeni obje tipi ekleme
     pub add_component_request: Option<(u32, String)>,
+    
+    // YENİ: Rubber Band (Çoklu Seçici) Referansları
+    pub rubber_band_start: Option<gizmo_math::Vec2>,
+    pub rubber_band_current: Option<gizmo_math::Vec2>,
+    pub rubber_band_request: Option<(gizmo_math::Vec2, gizmo_math::Vec2)>,
+
     /// Hangi kameraların çizileceğini anlamak için bayraklar
     pub scene_view_visible: bool,
     pub game_view_visible: bool,
@@ -168,6 +176,9 @@ pub struct EditorState {
     )>,
     /// Ekranda belirip silinmesi gereken Debug çizim objeleri (Timer, EntityID)
     pub debug_spawned_entities: Vec<(f32, u32)>,
+
+    /// YENİ: Arka planda çalışan asenkron file dialog receiver'ı (is_save, maybe_path)
+    pub pending_dialog_rx: Option<std::sync::mpsc::Receiver<(bool, Option<String>)>>,
 }
 
 impl EditorState {
@@ -194,7 +205,7 @@ impl EditorState {
             build_logs: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
 
             history: crate::history::History::default(),
-            gizmo_original_transforms: std::collections::HashMap::new(),
+            gizmo_original_transforms: HashMap::new(),
 
             camera_look_delta: None,
             camera_pan_delta: None,
@@ -208,6 +219,9 @@ impl EditorState {
             show_asset_browser: true,
             show_toolbar: true,
             settings_open: false,
+            script_editor_open: false,
+            active_script_path: "".to_string(),
+            active_script_content: "".to_string(),
             hierarchy_filter: String::new(),
             hide_editor_entities: true,
             asset_filter: String::new(),
@@ -215,29 +229,31 @@ impl EditorState {
             add_component_open: false,
             last_error: None,
             status_message: "Hazır".to_string(),
-            scene_path: "scene.giz".to_string(),
-            camera_speed: 8.0,
-            camera_focus_distance: 10.0,
-            show_grid: true,
-            camera_bookmarks: [None; 10],
-            snap_enabled: false,
-            snap_translate: 0.5,
-            snap_rotate_deg: 15.0,
-            snap_scale: 0.1,
+            scene_path: String::new(),
+            
+            prefs: EditorPrefs::load(),
+
+            camera_bookmarks: Default::default(),
+            
             despawn_requests: Vec::new(),
             generate_terrain_requests: Vec::new(),
             scene_save_request: None,
             scene_load_request: None,
+            scene_clear_request: false,
             prefab_save_request: None,
             prefab_load_request: None,
             duplicate_requests: Vec::new(),
             spawn_request: None,
             spawn_asset_request: None,
             spawn_asset_position: None,
+            gltf_load_request: None,
             reparent_request: None,
             unparent_request: None,
             toggle_visibility_request: None,
             add_component_request: None,
+            rubber_band_start: None,
+            rubber_band_current: None,
+            rubber_band_request: None,
             scene_view_visible: true,
             game_view_visible: false,
             scene_view_rect: None,
@@ -246,6 +262,7 @@ impl EditorState {
             dock_state: Self::load_layout().unwrap_or_else(create_default_dock_state),
             debug_draw_requests: Vec::new(),
             debug_spawned_entities: Vec::new(),
+            pending_dialog_rx: None,
         }
     }
 

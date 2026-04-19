@@ -325,7 +325,7 @@ impl Schedule {
             return;
         }
         
-        let mut configs = std::mem::take(&mut self.unbuilt_configs);
+        let configs = std::mem::take(&mut self.unbuilt_configs);
         let count = configs.len();
         
         // Adjacency list: edges[A] = [B, C] indicates A must run BEFORE B and C.
@@ -419,13 +419,13 @@ mod tests {
         let tracker = Arc::new(Mutex::new(Vec::new()));
         
         let t1 = tracker.clone();
-        let mut sys_a = move || { t1.lock().unwrap().push("A"); };
+        let sys_a = move || { t1.lock().unwrap().push("A"); };
         
         let t2 = tracker.clone();
-        let mut sys_b = move || { t2.lock().unwrap().push("B"); };
+        let sys_b = move || { t2.lock().unwrap().push("B"); };
         
         let t3 = tracker.clone();
-        let mut sys_c = move || { t3.lock().unwrap().push("C"); };
+        let sys_c = move || { t3.lock().unwrap().push("C"); };
 
         let mut schedule = Schedule::new();
         // Insert out of order: B, C, A. But specify A before B, B before C.

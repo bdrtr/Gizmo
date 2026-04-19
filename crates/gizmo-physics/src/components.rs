@@ -71,7 +71,7 @@ impl Velocity {
 
 /// Serde: `inverse_inertia_local` (Mat3) veya eski `inverse_inertia` ([Ix⁻¹,Iy⁻¹,Iz⁻¹]) veya yalnızca
 /// `local_inertia` ile türetilmiş diyagonal I⁻¹.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 struct RigidBodyDeser {
     mass: f32,
     restitution: f32,
@@ -116,7 +116,7 @@ fn inv_from_local_diag(local: Vec3) -> Mat3 {
 
 // Fiziksel ağırlık ve dış güçlerin nasıl etki edeceğini belirten kütle özellikleri
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(from = "RigidBodyDeser")]
+#[serde(from = "RigidBodyDeser", into = "RigidBodyDeser")]
 pub struct RigidBody {
     pub mass: f32, // Eğer mass == 0.0 ise bu obje sabittir (Duvar/Zemin) ve itilemez!
     pub restitution: f32, // Sekme katsayısı (0.0 = sekmez, 1.0 = sonsuz teper)
@@ -181,6 +181,24 @@ impl From<RigidBodyDeser> for RigidBody {
             ccd_enabled: d.ccd_enabled,
             collision_layer: d.collision_layer,
             collision_mask: d.collision_mask,
+        }
+    }
+}
+
+impl From<RigidBody> for RigidBodyDeser {
+    fn from(val: RigidBody) -> Self {
+        RigidBodyDeser {
+            mass: val.mass,
+            restitution: val.restitution,
+            friction: val.friction,
+            use_gravity: val.use_gravity,
+            local_inertia: val.local_inertia,
+            inverse_inertia: None, // Legacy field
+            inverse_inertia_local: Some(val.inverse_inertia_local),
+            is_sleeping: val.is_sleeping,
+            ccd_enabled: val.ccd_enabled,
+            collision_layer: val.collision_layer,
+            collision_mask: val.collision_mask,
         }
     }
 }
