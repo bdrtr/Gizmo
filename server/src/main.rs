@@ -57,7 +57,7 @@ pub fn server_network_system(world: &mut World, dt: f32) {
         let mut players_map = HashMap::new();
         if let Some(mut query) = world.query::<&mut Transform>() {
             for (id, t) in query.iter_mut() {
-                let t_ref = t.clone();
+                let t_ref = *t;
                 players_map.insert(
                     id as u64,
                     TransformData {

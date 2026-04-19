@@ -23,3 +23,9 @@ ray_test
 scratch.rs
 demo/scratch.rs
 scratch/
+.play_backup.scene
+araba sahnesi
+*.py
+tut/test
+tut/assets/domino.png
+tut/assets/domino_real.png
