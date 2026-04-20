@@ -1,0 +1,19 @@
+(
+    root_id: 2,
+    entities: [
+        (
+            original_id: 2,
+            name: Some("Default Cube"),
+            mesh_source: Some("standard_cube"),
+            material_source: Some((
+                albedo: (0.21, 0.21, 0.21, 1.0),
+                roughness: 0.5,
+                metallic: 0.0,
+                unlit: 0.0,
+                texture_source: None,
+            )),
+            parent_id: None,
+            components: {},
+        ),
+    ],
+)

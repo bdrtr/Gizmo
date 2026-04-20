@@ -6,7 +6,7 @@
 // === ECS Temelleri ===
 pub use crate::core::{
     component::{Children, Parent},
-    Component, Entity, EntityName, Events, Schedule, SparseSet, Time, World,
+    Component, Entity, EntityName, Events, Schedule, SparseSet, Time, WindowInfo, World,
 };
 
 // === Matematik ===

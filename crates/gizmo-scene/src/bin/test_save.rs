@@ -13,7 +13,7 @@ fn main() {
     
     SceneData::save(&world, "test_backup.scene", &registry).unwrap();
     
-    let entities = world.alive_entities();
+    let entities = world.iter_alive_entities().collect::<Vec<_>>();
     for e in entities {
         world.despawn_by_id(e.id());
     }

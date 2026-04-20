@@ -41,7 +41,7 @@ pub fn handle_editor_shortcuts(world: &mut World, editor_state: &mut EditorState
         // Kısayol: F (Seçili Objeye Odaklan) (Yine Ctrl'den bağımsız tetiklenmeli)
         if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyF as u32) {
             if !editor_state.selected_entities.is_empty() {
-                    if let Some(transforms) = world.borrow::<Transform>() {
+                    if let Some(transforms) = world.borrow::<Transform>().expect("ECS Aliasing Error") {
                         let mut center_pos = gizmo::math::Vec3::ZERO;
                         let mut count = 0.0;
                         for &target_id in editor_state.selected_entities.iter() {
@@ -56,8 +56,8 @@ pub fn handle_editor_shortcuts(world: &mut World, editor_state: &mut EditorState
                             drop(transforms); // Ödünç almayı bırak
 
                             if let (Some(mut t_mut), Some(mut cam_mut)) = (
-                                world.borrow_mut::<Transform>(),
-                                world.borrow_mut::<gizmo::renderer::components::Camera>(),
+                                world.borrow_mut::<Transform>().expect("ECS Aliasing Error"),
+                                world.borrow_mut::<gizmo::renderer::components::Camera>().expect("ECS Aliasing Error"),
                             ) {
                                 if let (Some(cam_t), Some(cam)) = (
                                     t_mut.get_mut(state.editor_camera),

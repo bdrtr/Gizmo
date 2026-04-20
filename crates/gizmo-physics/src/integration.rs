@@ -22,10 +22,10 @@ pub fn apply_inv_inertia(torque: Vec3, inverse_inertia_local: Mat3, rot: Quat) -
 /// Tek iş parçacığı, skalar f32 — SIMD/AVX2 yok; `PhysicsConfig::deterministic_simulation` ile seçilir.
 fn physics_apply_forces_scalar(world: &World, dt: f32) {
     if let (Some(mut vel_storage), Some(mut rbs)) = (
-        world.borrow_mut::<Velocity>(),
-        world.borrow_mut::<RigidBody>(),
+        world.borrow_mut::<Velocity>().expect("ECS Aliasing Error"),
+        world.borrow_mut::<RigidBody>().expect("ECS Aliasing Error"),
     ) {
-        let entities: Vec<u32> = vel_storage.dense.iter().map(|e| e.entity).collect();
+        let entities: Vec<u32> = vel_storage.iter().map(|(e, _)| e).collect();
         let mut active_ents = Vec::with_capacity(entities.len());
         for &entity in &entities {
             if let Some(rb) = rbs.get_mut(entity) {
@@ -97,12 +97,12 @@ fn physics_apply_forces_scalar(world: &World, dt: f32) {
 #[inline(always)]
 fn physics_apply_forces_system_impl(world: &World, dt: f32) {
     if let (Some(mut vel_storage), Some(mut rbs)) = (
-        world.borrow_mut::<Velocity>(),
-        world.borrow_mut::<RigidBody>(),
+        world.borrow_mut::<Velocity>().expect("ECS Aliasing Error"),
+        world.borrow_mut::<RigidBody>().expect("ECS Aliasing Error"),
     ) {
         use wide::f32x8;
 
-        let entities: Vec<u32> = vel_storage.dense.iter().map(|e| e.entity).collect();
+        let entities: Vec<u32> = vel_storage.iter().map(|(e, _)| e).collect();
         let mut active_ents = Vec::with_capacity(entities.len());
         for &entity in &entities {
             if let Some(rb) = rbs.get_mut(entity) {
@@ -229,7 +229,7 @@ unsafe fn physics_apply_forces_system_avx2(world: &World, dt: f32) {
 
 pub fn physics_apply_forces_system(world: &World, dt: f32) {
     let deterministic = world
-        .get_resource::<crate::components::PhysicsConfig>()
+        .get_resource::<crate::components::PhysicsConfig>().expect("ECS Aliasing Error")
         .map(|c| c.deterministic_simulation)
         .unwrap_or(false);
 
@@ -253,11 +253,11 @@ pub fn physics_apply_forces_system(world: &World, dt: f32) {
 
 pub fn physics_movement_system(world: &World, dt: f32) {
     if let (Some(mut trans_storage), Some(vel_storage), Some(rbs)) = (
-        world.borrow_mut::<Transform>(),
-        world.borrow::<Velocity>(),
-        world.borrow::<RigidBody>(),
+        world.borrow_mut::<Transform>().expect("ECS Aliasing Error"),
+        world.borrow::<Velocity>().expect("ECS Aliasing Error"),
+        world.borrow::<RigidBody>().expect("ECS Aliasing Error"),
     ) {
-        let entities: Vec<u32> = trans_storage.dense.iter().map(|e| e.entity).collect();
+        let entities: Vec<u32> = trans_storage.iter().map(|(e, _)| e).collect();
         let mut active_ents = Vec::with_capacity(entities.len());
         for &entity in &entities {
             if let Some(rb) = rbs.get(entity) {
@@ -366,7 +366,7 @@ mod tests {
         // Run movement
         physics_movement_system(&world, 0.1);
 
-        let transforms = world.borrow::<Transform>().unwrap();
+        let transforms = world.borrow::<Transform>().expect("ECS Aliasing Error").unwrap();
 
         // Stationary -> Hız < 1e-6, update_local_matrix çağrılmamalı! Bozuk matris korunmalı.
         let t1 = transforms.get(e_static.id()).unwrap();
@@ -384,14 +384,13 @@ mod tests {
 
 pub fn update_transform_hierarchy(world: &World) {
     use gizmo_core::component::{Parent, Children};
-    if let Some(mut transforms) = world.borrow_mut::<Transform>() {
-        let parents = world.borrow::<Parent>();
-        let children = world.borrow::<Children>();
+    if let Some(mut transforms) = world.borrow_mut::<Transform>().expect("ECS Aliasing Error") {
+        let parents = world.borrow::<Parent>().expect("ECS Aliasing Error");
+        let children = world.borrow::<Children>().expect("ECS Aliasing Error");
         
         let mut stack = Vec::new();
         // find root nodes (entities WITH Transform but NO Parent)
-        for e in transforms.dense.iter() {
-            let id = e.entity;
+        for (id, _) in transforms.iter() {
             let has_parent = parents.as_ref().map(|p| p.contains(id)).unwrap_or(false);
             if !has_parent {
                 stack.push((id, Mat4::IDENTITY));
@@ -399,7 +398,7 @@ pub fn update_transform_hierarchy(world: &World) {
         }
         
         while let Some((id, parent_mat)) = stack.pop() {
-            let mut current_mat;
+            let mut current_mat: Mat4;
             if let Some(t) = transforms.get_mut(id) {
                 current_mat = parent_mat * t.local_matrix();
                 if current_mat.is_nan() {

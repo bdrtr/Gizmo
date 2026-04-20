@@ -34,7 +34,7 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
                     ),
                     "Material" => {
                         let white_tex = world
-                            .get_resource::<DebugAssets>()
+                            .get_resource::<DebugAssets>().expect("ECS Aliasing Error")
                             .map(|a| a.white_tex.clone());
                         if let Some(tex) = white_tex {
                             world.add_component(ent, gizmo::prelude::Material::new(tex));
@@ -48,7 +48,7 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
                         .add_component(ent, gizmo::renderer::components::ParticleEmitter::new()),
                     "AudioSource" => world.add_component(
                         ent,
-                        gizmo_audio::AudioSource {
+                        gizmo::prelude::AudioSource {
                             sound_name: "".to_string(),
                             is_3d: true,
                             max_distance: 100.0,
@@ -92,7 +92,7 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
                         ];
 
                         let mut children = Vec::new();
-                        if let Some(ch_storage) = world.borrow::<gizmo::core::component::Children>() {
+                        if let Some(ch_storage) = world.borrow::<gizmo::core::component::Children>().expect("ECS Aliasing Error") {
                             if let Some(existing) = ch_storage.get(ent_id) {
                                 children.extend(&existing.0);
                             }
@@ -126,11 +126,11 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
                 editor_state.selected_entities.remove(&ent_id);
                 
                 // 1. Parent'ın Children listesinden kendini çıkar
-                if let Some(parent_storage) = world.borrow::<gizmo::core::component::Parent>() {
+                if let Some(parent_storage) = world.borrow::<gizmo::core::component::Parent>().expect("ECS Aliasing Error") {
                     if let Some(p) = parent_storage.get(ent_id) {
                         let parent_id = p.0;
                         drop(parent_storage);
-                        if let Some(mut children_storage) = world.borrow_mut::<gizmo::core::component::Children>() {
+                        if let Some(mut children_storage) = world.borrow_mut::<gizmo::core::component::Children>().expect("ECS Aliasing Error") {
                             if let Some(c) = children_storage.get_mut(parent_id) {
                                 c.0.retain(|&id| id != ent_id);
                             }
@@ -140,7 +140,7 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
 
                 // 2. Tüm çocuklarını topla
                 let mut ids_to_delete = vec![ent_id];
-                if let Some(children_storage) = world.borrow::<gizmo::core::component::Children>() {
+                if let Some(children_storage) = world.borrow::<gizmo::core::component::Children>().expect("ECS Aliasing Error") {
                     let mut i = 0;
                     while i < ids_to_delete.len() {
                         let current = ids_to_delete[i];
@@ -180,7 +180,7 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
         // --- YENİ ENTITY OLUŞTURMA (Küp / Küre / Boş) ---
         if let Some(kind) = editor_state.spawn_request.take() {
             let pending_assets = world
-                .get_resource::<DebugAssets>()
+                .get_resource::<DebugAssets>().expect("ECS Aliasing Error")
                 .map(|a| (a.cube.clone(), a.white_tex.clone()));
 
             if let Some((cube_mesh, white_tex)) = pending_assets {
@@ -245,7 +245,7 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
         if let Some(ent_id) = editor_state.toggle_visibility_request.take() {
             if let Some(ent) = world.get_entity(ent_id) {
                 let currently_hidden = world
-                    .borrow::<gizmo::core::component::IsHidden>()
+                    .borrow::<gizmo::core::component::IsHidden>().expect("ECS Aliasing Error")
                     .map_or(false, |h| h.contains(ent_id));
                 if currently_hidden {
                     world.remove_component::<gizmo::core::component::IsHidden>(ent);
@@ -261,11 +261,11 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
         if let Some((child_id, new_parent_id)) = editor_state.reparent_request.take() {
             // Eski parent'ı O(1) maliyetle bul
             let old_parent_id = world
-                .borrow::<gizmo::core::component::Parent>()
+                .borrow::<gizmo::core::component::Parent>().expect("ECS Aliasing Error")
                 .and_then(|p| p.get(child_id).map(|c| c.0));
 
             // Eski parent'ın children listesinden çıkar ve yeni parent'a ekle
-            if let Some(mut children_comp) = world.borrow_mut::<gizmo::core::component::Children>() {
+            if let Some(mut children_comp) = world.borrow_mut::<gizmo::core::component::Children>().expect("ECS Aliasing Error") {
                 if let Some(old_pid) = old_parent_id {
                     if let Some(ch) = children_comp.get_mut(old_pid) {
                         ch.0.retain(|&cid| cid != child_id);
@@ -293,11 +293,11 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
         if let Some(child_id) = editor_state.unparent_request.take() {
             // Eski parent'ı O(1) maliyetle bul
             let old_parent_id = world
-                .borrow::<gizmo::core::component::Parent>()
+                .borrow::<gizmo::core::component::Parent>().expect("ECS Aliasing Error")
                 .and_then(|p| p.get(child_id).map(|c| c.0));
 
             if let Some(old_pid) = old_parent_id {
-                if let Some(mut children_comp) = world.borrow_mut::<gizmo::core::component::Children>() {
+                if let Some(mut children_comp) = world.borrow_mut::<gizmo::core::component::Children>().expect("ECS Aliasing Error") {
                     if let Some(ch) = children_comp.get_mut(old_pid) {
                         ch.0.retain(|&cid| cid != child_id);
                     }

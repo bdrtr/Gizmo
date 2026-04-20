@@ -193,8 +193,8 @@ pub fn update_scene_api(lua: &Lua, world: &World) -> Result<(), LuaError> {
 
     // İsim → ID eşleme tablosu
     let name_map = lua.create_table()?;
-    if let Some(names) = world.borrow::<gizmo_core::EntityName>() {
-        for eid in names.dense.iter().map(|e| e.entity) {
+    if let Some(names) = world.borrow::<gizmo_core::EntityName>().expect("ECS Aliasing Error") {
+        for (eid, _) in names.iter() {
             if let Some(n) = names.get(eid) {
                 name_map.set(n.0.clone(), eid)?;
             }

@@ -20,7 +20,7 @@ pub fn broad_phase(
 ) -> Vec<(u32, u32)> {
     use crate::shape::ColliderShape;
 
-    let entities: Vec<u32> = transforms.dense.iter().map(|e| e.entity).collect();
+    let entities: Vec<u32> = transforms.iter().map(|(e, _)| e).collect();
     let mut intervals = Vec::with_capacity(entities.len());
 
     for &e in &entities {

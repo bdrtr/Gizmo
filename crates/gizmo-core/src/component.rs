@@ -3,12 +3,20 @@ use std::collections::HashMap;
 
 pub trait Component: 'static + Any {}
 
-// Blanket implementation — her 'static + Any tip otomatik Component olur
-impl<T: 'static + Any> Component for T {}
+#[macro_export]
+macro_rules! impl_component {
+    ($($t:ty),+ $(,)?) => {
+        $(
+            impl $crate::Component for $t {}
+        )+
+    };
+}
 
 pub trait ComponentStorage {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn get_component_as_any(&self, entity: u32) -> Option<&dyn Any>;
+    fn get_component_mut_as_any(&mut self, entity: u32) -> Option<&mut dyn Any>;
     fn remove_entity(&mut self, entity: u32);
 }
 
@@ -19,8 +27,8 @@ pub struct DenseEntry<T> {
 }
 
 pub struct SparseSet<T: Component> {
-    pub dense: Vec<DenseEntry<T>>,
-    pub sparse: HashMap<u32, usize>, // entity id → dense index (O(1) lookup)
+    pub(crate) dense: Vec<DenseEntry<T>>,
+    pub(crate) sparse: HashMap<u32, usize>, // entity id → dense index (O(1) lookup)
 }
 
 impl<T: Component> SparseSet<T> {
@@ -61,19 +69,34 @@ impl<T: Component> SparseSet<T> {
         }
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = (u32, &T)> {
+        self.dense.iter().map(|entry| (entry.entity, &entry.data))
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (u32, &mut T)> {
+        self.dense.iter_mut().map(|entry| (entry.entity, &mut entry.data))
+    }
+
     /// Swap-and-pop çıkarma — O(1) amortized.
     /// Son elemanı silinen elemanın yerine koyar, dense dizisini bitişik tutar.
     pub fn remove(&mut self, entity: u32) -> Option<T> {
-        if let Some(dense_idx) = self.sparse.remove(&entity) {
+        if let Some(&dense_idx) = self.sparse.get(&entity) {
             if dense_idx >= self.dense.len() {
                 // Koleksiyonlar arasında senkronizasyon kayması yaşanmış, güvenli bir şekilde dön
-                crate::gizmo_log!(
-                    Warning,
-                    "SparseSet desync: entity {} idx {} len {}",
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "Warning: SparseSet desync: entity {} idx {} len {}",
                     entity,
                     dense_idx,
                     self.dense.len()
                 );
+                self.sparse.remove(&entity); // Sparse'daki bozuk kaydı temizle
+                return None;
+            }
+
+            self.sparse.remove(&entity);
+            
+            if self.dense.is_empty() {
                 return None;
             }
 
@@ -124,6 +147,12 @@ impl<T: Component> ComponentStorage for SparseSet<T> {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+    fn get_component_as_any(&self, entity: u32) -> Option<&dyn Any> {
+        self.get(entity).map(|c| c as &dyn Any)
+    }
+    fn get_component_mut_as_any(&mut self, entity: u32) -> Option<&mut dyn Any> {
+        self.get_mut(entity).map(|c| c as &mut dyn Any)
+    }
     fn remove_entity(&mut self, entity: u32) {
         self.remove(entity);
     }
@@ -150,12 +179,19 @@ impl EntityName {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IsHidden;
 
+/// Prefab spawn talebi. Entity'ye eklendiğinde prefab yükleme sistemi tarafından işlenir
+/// ve işlendikten sonra component kaldırılır.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PrefabRequest(pub String);
 
 impl PrefabRequest {
     pub fn new(name: &str) -> Self {
         Self(name.to_string())
+    }
+
+    /// Prefab adını döndürür.
+    pub fn name(&self) -> &str {
+        &self.0
     }
 }
 
@@ -164,3 +200,5 @@ impl std::fmt::Display for EntityName {
         write!(f, "{}", self.0)
     }
 }
+
+impl_component!(Parent, Children, EntityName, IsHidden, PrefabRequest);

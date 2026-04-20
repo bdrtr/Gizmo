@@ -105,7 +105,7 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 }
 
 fn draw_name_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut names) = world.borrow_mut::<EntityName>() {
+    if let Some(mut names) = world.borrow_mut::<EntityName>().expect("ECS Aliasing Error") {
         if let Some(name) = names.get_mut(entity_id) {
             ui.horizontal(|ui| {
                 ui.label("İsim:");
@@ -117,7 +117,7 @@ fn draw_name_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
 }
 
 fn draw_transform_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut transforms) = world.borrow_mut::<Transform>() {
+    if let Some(mut transforms) = world.borrow_mut::<Transform>().expect("ECS Aliasing Error") {
         if let Some(t) = transforms.get_mut(entity_id) {
             egui::CollapsingHeader::new("📐 Transform")
                 .default_open(true)
@@ -176,7 +176,7 @@ fn draw_transform_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
 }
 
 fn draw_velocity_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut velocities) = world.borrow_mut::<Velocity>() {
+    if let Some(mut velocities) = world.borrow_mut::<Velocity>().expect("ECS Aliasing Error") {
         if let Some(v) = velocities.get_mut(entity_id) {
             egui::CollapsingHeader::new("💨 Velocity")
                 .default_open(false)
@@ -224,7 +224,7 @@ fn draw_velocity_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
 }
 
 fn draw_rigidbody_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut rigidbodies) = world.borrow_mut::<RigidBody>() {
+    if let Some(mut rigidbodies) = world.borrow_mut::<RigidBody>().expect("ECS Aliasing Error") {
         if let Some(rb) = rigidbodies.get_mut(entity_id) {
             egui::CollapsingHeader::new("⚙️ RigidBody")
                 .default_open(false)
@@ -273,7 +273,7 @@ fn draw_rigidbody_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
 }
 
 fn draw_collider_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut colliders) = world.borrow_mut::<Collider>() {
+    if let Some(mut colliders) = world.borrow_mut::<Collider>().expect("ECS Aliasing Error") {
         if let Some(collider) = colliders.get_mut(entity_id) {
             egui::CollapsingHeader::new("🛡️ Collider")
                 .default_open(true)
@@ -315,7 +315,7 @@ fn draw_collider_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
 }
 
 fn draw_camera_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut cameras) = world.borrow_mut::<Camera>() {
+    if let Some(mut cameras) = world.borrow_mut::<Camera>().expect("ECS Aliasing Error") {
         if let Some(cam) = cameras.get_mut(entity_id) {
             egui::CollapsingHeader::new("📷 Camera")
                 .default_open(false)
@@ -359,7 +359,7 @@ fn draw_camera_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
 }
 
 fn draw_point_light_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut lights) = world.borrow_mut::<PointLight>() {
+    if let Some(mut lights) = world.borrow_mut::<PointLight>().expect("ECS Aliasing Error") {
         if let Some(light) = lights.get_mut(entity_id) {
             egui::CollapsingHeader::new("💡 PointLight")
                 .default_open(false)
@@ -386,7 +386,7 @@ fn draw_point_light_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
 }
 
 fn draw_material_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut materials) = world.borrow_mut::<Material>() {
+    if let Some(mut materials) = world.borrow_mut::<Material>().expect("ECS Aliasing Error") {
         if let Some(mat) = materials.get_mut(entity_id) {
             egui::CollapsingHeader::new("🎨 Material")
                 .default_open(false)
@@ -434,7 +434,7 @@ fn draw_material_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
 }
 
 fn draw_particle_emitter_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut emitters) = world.borrow_mut::<ParticleEmitter>() {
+    if let Some(mut emitters) = world.borrow_mut::<ParticleEmitter>().expect("ECS Aliasing Error") {
         if let Some(emitter) = emitters.get_mut(entity_id) {
             egui::CollapsingHeader::new("✨ Particle Emitter")
                 .default_open(false)
@@ -465,7 +465,7 @@ fn draw_particle_emitter_section(ui: &mut egui::Ui, world: &World, entity_id: u3
 }
 
 fn draw_vehicle_controller_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut vehicles) = world.borrow_mut::<VehicleController>() {
+    if let Some(mut vehicles) = world.borrow_mut::<VehicleController>().expect("ECS Aliasing Error") {
         if let Some(vrc) = vehicles.get_mut(entity_id) {
             egui::CollapsingHeader::new("🚗 Vehicle")
                 .default_open(false)
@@ -485,7 +485,7 @@ fn draw_vehicle_controller_section(ui: &mut egui::Ui, world: &World, entity_id: 
 }
 
 fn draw_script_section(ui: &mut egui::Ui, world: &World, entity_id: u32, state: &mut EditorState) {
-    if let Some(mut scripts) = world.borrow_mut::<gizmo_scripting::engine::Script>() {
+    if let Some(mut scripts) = world.borrow_mut::<gizmo_scripting::engine::Script>().expect("ECS Aliasing Error") {
         // Drop wrapper ile borrow bitimine izin verelim diye clone alıyoruz ama
         // text_edit bağlamak için referans lazım.
         if let Some(script) = scripts.get_mut(entity_id) {
@@ -555,7 +555,7 @@ fn draw_add_component_menu(
 }
 
 fn draw_audio_source_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut audios) = world.borrow_mut::<AudioSource>() {
+    if let Some(mut audios) = world.borrow_mut::<AudioSource>().expect("ECS Aliasing Error") {
         if let Some(audio) = audios.get_mut(entity_id) {
             egui::CollapsingHeader::new("🔊 AudioSource")
                 .default_open(true)
@@ -595,7 +595,7 @@ fn draw_audio_source_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
 }
 
 fn draw_terrain_section(ui: &mut egui::Ui, world: &World, entity_id: u32, state: &mut EditorState) {
-    if let Some(mut terrains) = world.borrow_mut::<gizmo_renderer::components::Terrain>() {
+    if let Some(mut terrains) = world.borrow_mut::<gizmo_renderer::components::Terrain>().expect("ECS Aliasing Error") {
         if let Some(terrain) = terrains.get_mut(entity_id) {
             let mut changed = false;
             egui::CollapsingHeader::new("🏔 Terrain")

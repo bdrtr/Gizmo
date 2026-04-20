@@ -15,28 +15,27 @@ use crate::components::{RigidBody, Transform, Velocity};
 use crate::shape::Collider;
 use crate::vehicle::VehicleController;
 use gizmo_core::World;
-use std::collections::HashMap;
 
 pub fn physics_collision_system(world: &mut World, dt: f32) {
     let mut entities_to_wake: Vec<u32> = Vec::new();
     let mut collision_events: Vec<crate::CollisionEvent> = Vec::new();
 
     let parallel_physics = !world
-        .get_resource::<crate::components::PhysicsConfig>()
+        .get_resource::<crate::components::PhysicsConfig>().expect("ECS Aliasing Error")
         .map(|c| c.deterministic_simulation)
         .unwrap_or(false);
 
     {
         // Borrow scope — tüm ECS borrow'ları burada yaşar
-        let mut transforms  = match world.borrow_mut::<Transform>()  { Some(t) => t, None => return };
-        let mut velocities  = match world.borrow_mut::<Velocity>()   { Some(v) => v, None => return };
-        let colliders       = match world.borrow::<Collider>()        { Some(c) => c, None => return };
-        let rigidbodies     = match world.borrow::<RigidBody>()       { Some(r) => r, None => return };
-        let vehicles        = world.borrow::<VehicleController>();
-        let joint_world     = world.get_resource::<crate::constraints::JointWorld>();
+        let mut transforms  = match world.borrow_mut::<Transform>().expect("ECS Aliasing Error")  { Some(t) => t, None => return };
+        let mut velocities  = match world.borrow_mut::<Velocity>().expect("ECS Aliasing Error")   { Some(v) => v, None => return };
+        let colliders       = match world.borrow::<Collider>().expect("ECS Aliasing Error")        { Some(c) => c, None => return };
+        let rigidbodies     = match world.borrow::<RigidBody>().expect("ECS Aliasing Error")       { Some(r) => r, None => return };
+        let vehicles        = world.borrow::<VehicleController>().expect("ECS Aliasing Error");
+        let joint_world     = world.get_resource::<crate::constraints::JointWorld>().expect("ECS Aliasing Error");
 
         let vehicle_entities: std::collections::HashSet<u32> = match &vehicles {
-            Some(v) => v.dense.iter().map(|e| e.entity).collect(),
+            Some(v) => v.iter().map(|(e, _)| e).collect(),
             None    => std::collections::HashSet::new(),
         };
         let has_vehicles = vehicles.is_some();
@@ -66,12 +65,12 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
 
         // PhysicsConfig'den limitleri oku
         let (max_contacts_per_pair, event_throttle_frames) =
-            world.get_resource::<crate::components::PhysicsConfig>()
+            world.get_resource::<crate::components::PhysicsConfig>().expect("ECS Aliasing Error")
                 .map(|cfg| (cfg.max_contact_points_per_pair, cfg.collision_event_throttle_frames))
                 .unwrap_or((4, 4));
 
         // 4. Çözücü — warm-start + SI + position projection (paralel island başına)
-        if let Some(mut state) = world.get_resource_mut::<PhysicsSolverState>() {
+        if let Some(mut state) = world.get_resource_mut::<PhysicsSolverState>().expect("ECS Aliasing Error") {
             solve_islands(
                 &mut islands,
                 &state.contact_cache,
@@ -133,7 +132,7 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
 
     // Uyuyan nesneleri uyandır
     if !entities_to_wake.is_empty() {
-        if let Some(mut rbs) = world.borrow_mut::<RigidBody>() {
+        if let Some(mut rbs) = world.borrow_mut::<RigidBody>().expect("ECS Aliasing Error") {
             for e in entities_to_wake {
                 if let Some(rb) = rbs.get_mut(e) {
                     rb.wake_up();

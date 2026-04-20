@@ -50,12 +50,10 @@ fn perform_rubber_band_selection(
         state.selected_entities.clear();
     }
 
-    if let Some(transforms) = world.borrow::<Transform>() {
-        let is_hidden = world.borrow::<gizmo::core::component::IsHidden>();
+    if let Some(transforms) = world.borrow::<Transform>().expect("ECS Aliasing Error") {
+        let is_hidden = world.borrow::<gizmo::core::component::IsHidden>().expect("ECS Aliasing Error");
 
-        for i in 0..transforms.dense.len() {
-            let id = transforms.dense[i].entity;
-
+        for (id, t) in transforms.iter() {
             if id == player_id || id == state.highlight_box {
                 continue;
             }
@@ -66,7 +64,6 @@ fn perform_rubber_band_selection(
                 }
             }
 
-            let t = transforms.dense[i].data;
             let clip_pos = vp_mat * gizmo::math::Vec4::new(t.position.x, t.position.y, t.position.z, 1.0);
 
             // Kamera arkasindaysa atla
@@ -95,13 +92,11 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
     let mut hit_entity = None;
 
     if let (Some(colliders), Some(transforms)) =
-        (world.borrow::<Collider>(), world.borrow::<Transform>())
+        (world.borrow::<Collider>().expect("ECS Aliasing Error"), world.borrow::<Transform>().expect("ECS Aliasing Error"))
     {
-        let is_hidden = world.borrow::<gizmo::core::component::IsHidden>();
+        let is_hidden = world.borrow::<gizmo::core::component::IsHidden>().expect("ECS Aliasing Error");
 
-        for i in 0..colliders.dense.len() {
-            let id = colliders.dense[i].entity;
-
+        for (id, col) in colliders.iter() {
             // Editör objelerini, highlight box'ı es geç
             if id == player_id || id == state.highlight_box {
                 continue;
@@ -115,8 +110,7 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
             }
 
             if let Some(t) = (*transforms).get(id) {
-                let extents = colliders.dense[i]
-                    .data
+                let extents = col
                     .shape
                     .bounding_box_half_extents(t.rotation);
                 let scaled_half = Vec3::new(
@@ -157,14 +151,14 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
     let mut selected_col = None;
 
     if let Some(&selected) = state.selected_entities.iter().next() {
-        if let Some(transforms) = world.borrow::<Transform>() {
+        if let Some(transforms) = world.borrow::<Transform>().expect("ECS Aliasing Error") {
             if let Some(t) = transforms.get(selected) {
                 any_selected = true;
                 selected_pos = t.position;
                 selected_rot = t.rotation;
                 selected_scale = t.scale;
 
-                if let Some(colls) = world.borrow::<Collider>() {
+                if let Some(colls) = world.borrow::<Collider>().expect("ECS Aliasing Error") {
                     if let Some(c) = colls.get(selected) {
                         selected_col = Some(c.clone());
                     }
@@ -175,7 +169,7 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
 
     if any_selected {
         // Obje seçiliyse Highlight Box pozisyonunu ve boyutunu güncelle
-        if let Some(mut trans) = world.borrow_mut::<Transform>() {
+        if let Some(mut trans) = world.borrow_mut::<Transform>().expect("ECS Aliasing Error") {
             if let Some(hb) = (*trans).get_mut(state.highlight_box) {
                 hb.position = selected_pos;
                 hb.rotation = selected_rot;
@@ -210,8 +204,8 @@ pub fn build_ray(
     _wh: f32,
 ) -> Option<Ray> {
     if let (Some(transforms), Some(cameras)) = (
-        world.borrow::<Transform>(),
-        world.borrow::<gizmo::renderer::components::Camera>(),
+        world.borrow::<Transform>().expect("ECS Aliasing Error"),
+        world.borrow::<gizmo::renderer::components::Camera>().expect("ECS Aliasing Error"),
     ) {
         if let (Some(cam_t), Some(cam)) = (transforms.get(player_id), cameras.get(player_id)) {
             let view = cam.get_view(cam_t.position);

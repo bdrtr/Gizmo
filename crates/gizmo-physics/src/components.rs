@@ -444,3 +444,5 @@ impl Default for PhysicsConfig {
         }
     }
 }
+
+gizmo_core::impl_component!(Transform, Velocity, RigidBody, PhysicsConfig);

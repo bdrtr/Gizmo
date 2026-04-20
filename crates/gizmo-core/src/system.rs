@@ -1,10 +1,12 @@
 use crate::world::World;
+use std::collections::HashSet;
 
+/// Bir sistem: her frame'de çalıştırılabilir mantık birimi.
 pub trait System {
     fn run(&mut self, world: &mut World, dt: f32);
 }
 
-// Orijinal System Tanımı (Basit fonksiyonlar için)
+// Basit fonksiyonlar için blanket impl: fn(&mut World, f32)
 impl<F> System for F
 where
     F: FnMut(&mut World, f32),
@@ -15,7 +17,7 @@ where
 }
 
 // ==============================================================
-// DEPENDENCY INJECTION SİSTEMİ (BEVY TARZI)
+// DEPENDENCY INJECTION SİSTEMİ
 // ==============================================================
 
 use std::cell::{Ref, RefMut};
@@ -28,7 +30,7 @@ pub trait SystemParam {
 
 /// Salt okunur (Immutable) Resource enjeksiyonu
 pub struct Res<'w, T: 'static> {
-    pub value: Ref<'w, T>,
+    value: Ref<'w, T>,
 }
 
 impl<'w, T: 'static> std::ops::Deref for Res<'w, T> {
@@ -41,14 +43,14 @@ impl<'w, T: 'static> std::ops::Deref for Res<'w, T> {
 impl<T: 'static> SystemParam for Res<'static, T> {
     type Item<'w> = Res<'w, T>;
     fn fetch<'w>(world: &'w World, _dt: f32) -> Option<Self::Item<'w>> {
-        let value = world.get_resource::<T>()?;
+        let value = world.get_resource::<T>().expect("ECS Aliasing Error: Resource borrow conflict")?;
         Some(Res { value })
     }
 }
 
 /// Yazılabilir (Mutable) Resource enjeksiyonu
 pub struct ResMut<'w, T: 'static> {
-    pub value: RefMut<'w, T>,
+    value: RefMut<'w, T>,
 }
 
 impl<'w, T: 'static> std::ops::Deref for ResMut<'w, T> {
@@ -67,13 +69,21 @@ impl<'w, T: 'static> std::ops::DerefMut for ResMut<'w, T> {
 impl<T: 'static> SystemParam for ResMut<'static, T> {
     type Item<'w> = ResMut<'w, T>;
     fn fetch<'w>(world: &'w World, _dt: f32) -> Option<Self::Item<'w>> {
-        let value = world.get_resource_mut::<T>()?;
+        let value = world.get_resource_mut::<T>().expect("ECS Aliasing Error: Resource mutable borrow conflict")?;
         Some(ResMut { value })
     }
 }
 
+/// dt (delta time) enjeksiyonu — f32 parametresi olarak alınabilir.
+impl SystemParam for f32 {
+    type Item<'w> = f32;
+    fn fetch<'w>(_world: &'w World, dt: f32) -> Option<Self::Item<'w>> {
+        Some(dt)
+    }
+}
+
 // ==============================================================
-// INTO SYSTEM (FONKSİYONLARDAN SİSTEME DÖNÜŞÜM)
+// INTO SYSTEM — FONKSİYONLARDAN SİSTEME DÖNÜŞÜM (MAKRO İLE)
 // ==============================================================
 
 pub trait IntoSystem<Params> {
@@ -92,153 +102,45 @@ where
     }
 }
 
-// dt enjeksiyonu için
-impl SystemParam for f32 {
-    type Item<'w> = f32;
-    fn fetch<'w>(_world: &'w World, dt: f32) -> Option<Self::Item<'w>> {
-        Some(dt)
-    }
-}
-
-// 1 Parametre
-impl<F, P1> IntoSystem<(P1,)> for F
-where
-    F: FnMut(P1::Item<'_>) + 'static,
-    P1: SystemParam + 'static,
-{
-    fn into_system(mut self) -> Box<dyn System> {
-        Box::new(move |world: &mut World, dt: f32| {
-            if let Some(p1) = P1::fetch(world, dt) {
-                (self)(p1);
+/// 1-8 parametreli IntoSystem implementasyonlarını üretir.
+macro_rules! impl_into_system {
+    ($($P:ident),+) => {
+        #[allow(non_snake_case)]
+        impl<F, $($P),+> IntoSystem<($($P,)+)> for F
+        where
+            F: FnMut($($P::Item<'_>),+) + 'static,
+            $($P: SystemParam + 'static,)+
+        {
+            fn into_system(mut self) -> Box<dyn System> {
+                Box::new(move |world: &mut World, dt: f32| {
+                    $(let $P = $P::fetch(world, dt);)+
+                    if let ($(Some($P),)+) = ($($P,)+) {
+                        (self)($($P),+);
+                    }
+                })
             }
-        })
-    }
+        }
+    };
 }
 
-// 2 Parametre
-impl<F, P1, P2> IntoSystem<(P1, P2)> for F
-where
-    F: FnMut(P1::Item<'_>, P2::Item<'_>) + 'static,
-    P1: SystemParam + 'static,
-    P2: SystemParam + 'static,
-{
-    fn into_system(mut self) -> Box<dyn System> {
-        Box::new(move |world: &mut World, dt: f32| {
-            if let (Some(p1), Some(p2)) = (P1::fetch(world, dt), P2::fetch(world, dt)) {
-                (self)(p1, p2);
-            }
-        })
-    }
-}
-
-// 3 Parametre
-impl<F, P1, P2, P3> IntoSystem<(P1, P2, P3)> for F
-where
-    F: FnMut(P1::Item<'_>, P2::Item<'_>, P3::Item<'_>) + 'static,
-    P1: SystemParam + 'static,
-    P2: SystemParam + 'static,
-    P3: SystemParam + 'static,
-{
-    fn into_system(mut self) -> Box<dyn System> {
-        Box::new(move |world: &mut World, dt: f32| {
-            if let (Some(p1), Some(p2), Some(p3)) = (
-                P1::fetch(world, dt),
-                P2::fetch(world, dt),
-                P3::fetch(world, dt),
-            ) {
-                (self)(p1, p2, p3);
-            }
-        })
-    }
-}
-
-// 4 Parametre
-impl<F, P1, P2, P3, P4> IntoSystem<(P1, P2, P3, P4)> for F
-where
-    F: FnMut(P1::Item<'_>, P2::Item<'_>, P3::Item<'_>, P4::Item<'_>) + 'static,
-    P1: SystemParam + 'static,
-    P2: SystemParam + 'static,
-    P3: SystemParam + 'static,
-    P4: SystemParam + 'static,
-{
-    fn into_system(mut self) -> Box<dyn System> {
-        Box::new(move |world: &mut World, dt: f32| {
-            if let (Some(p1), Some(p2), Some(p3), Some(p4)) = (
-                P1::fetch(world, dt),
-                P2::fetch(world, dt),
-                P3::fetch(world, dt),
-                P4::fetch(world, dt),
-            ) {
-                (self)(p1, p2, p3, p4);
-            }
-        })
-    }
-}
-
-// 5 Parametre
-impl<F, P1, P2, P3, P4, P5> IntoSystem<(P1, P2, P3, P4, P5)> for F
-where
-    F: FnMut(P1::Item<'_>, P2::Item<'_>, P3::Item<'_>, P4::Item<'_>, P5::Item<'_>) + 'static,
-    P1: SystemParam + 'static,
-    P2: SystemParam + 'static,
-    P3: SystemParam + 'static,
-    P4: SystemParam + 'static,
-    P5: SystemParam + 'static,
-{
-    fn into_system(mut self) -> Box<dyn System> {
-        Box::new(move |world: &mut World, dt: f32| {
-            if let (Some(p1), Some(p2), Some(p3), Some(p4), Some(p5)) = (
-                P1::fetch(world, dt),
-                P2::fetch(world, dt),
-                P3::fetch(world, dt),
-                P4::fetch(world, dt),
-                P5::fetch(world, dt),
-            ) {
-                (self)(p1, p2, p3, p4, p5);
-            }
-        })
-    }
-}
-
-// 6 Parametre
-impl<F, P1, P2, P3, P4, P5, P6> IntoSystem<(P1, P2, P3, P4, P5, P6)> for F
-where
-    F: FnMut(P1::Item<'_>, P2::Item<'_>, P3::Item<'_>, P4::Item<'_>, P5::Item<'_>, P6::Item<'_>)
-        + 'static,
-    P1: SystemParam + 'static,
-    P2: SystemParam + 'static,
-    P3: SystemParam + 'static,
-    P4: SystemParam + 'static,
-    P5: SystemParam + 'static,
-    P6: SystemParam + 'static,
-{
-    fn into_system(mut self) -> Box<dyn System> {
-        Box::new(move |world: &mut World, dt: f32| {
-            if let (Some(p1), Some(p2), Some(p3), Some(p4), Some(p5), Some(p6)) = (
-                P1::fetch(world, dt),
-                P2::fetch(world, dt),
-                P3::fetch(world, dt),
-                P4::fetch(world, dt),
-                P5::fetch(world, dt),
-                P6::fetch(world, dt),
-            ) {
-                (self)(p1, p2, p3, p4, p5, p6);
-            }
-        })
-    }
-}
-
-
+impl_into_system!(P1);
+impl_into_system!(P1, P2);
+impl_into_system!(P1, P2, P3);
+impl_into_system!(P1, P2, P3, P4);
+impl_into_system!(P1, P2, P3, P4, P5);
+impl_into_system!(P1, P2, P3, P4, P5, P6);
+impl_into_system!(P1, P2, P3, P4, P5, P6, P7);
+impl_into_system!(P1, P2, P3, P4, P5, P6, P7, P8);
 
 // ==============================================================
-// DEPENDENCY GRAPH (EXECUTION ORDER)
+// SYSTEM CONFIG — LABEL / BEFORE / AFTER SİSTEMİ
 // ==============================================================
 
 pub struct SystemConfig {
-    pub system: Box<dyn System>,
-    pub labels: Vec<&'static str>,
-    pub before: Vec<&'static str>,
-    pub after: Vec<&'static str>,
+    system: Box<dyn System>,
+    labels: Vec<&'static str>,
+    before: Vec<&'static str>,
+    after: Vec<&'static str>,
 }
 
 impl SystemConfig {
@@ -289,11 +191,17 @@ impl<Params, T: IntoSystem<Params>> IntoSystemConfig<Params> for T {
     }
 }
 
+// SystemConfig zaten config — identity dönüşümü. .label().before() zinciri
+// SystemConfig ürettiği için add_di_system()'a geçilebilmesi gerekir.
 impl IntoSystemConfig<()> for SystemConfig {
     fn into_config(self) -> SystemConfig {
         self
     }
 }
+
+// ==============================================================
+// SCHEDULE — SİSTEM ÇALIŞMA SIRASI VE DEPENDENCY GRAPH
+// ==============================================================
 
 pub struct Schedule {
     unbuilt_configs: Vec<SystemConfig>,
@@ -310,17 +218,33 @@ impl Schedule {
         }
     }
 
+    /// DI destekli sistem ekler. `.label()`, `.before()`, `.after()` zincirlenebilir.
     pub fn add_di_system<Params, S: IntoSystemConfig<Params>>(&mut self, system: S) {
         self.unbuilt_configs.push(system.into_config());
         self.is_built = false;
     }
 
+    /// Basit sistem ekler: `fn(&mut World, f32)` veya `impl System`.
     pub fn add_system<S: System + 'static>(&mut self, system: S) {
         self.unbuilt_configs.push(SystemConfig::new(Box::new(system)));
         self.is_built = false;
     }
 
-    pub fn build(&mut self) {
+    /// Zaten boxed olarak oluşturulmuş bir sistemi ekler.
+    /// `IntoSystem::into_system()` ile elde edilen `Box<dyn System>` için kullanılır.
+    pub fn add_system_boxed(&mut self, system: Box<dyn System>) {
+        self.unbuilt_configs.push(SystemConfig::new(system));
+        self.is_built = false;
+    }
+
+    /// Dependency graph'ı doğrular. Döngüsel bağımlılık varsa panic yapar.
+    /// `run()` öncesinde erken hata tespiti için kullanılabilir.
+    pub fn validate(&mut self) {
+        self.build();
+    }
+
+    /// Dependency graph'ı oluşturur ve sistemleri topological sort ile sıralar.
+    fn build(&mut self) {
         if self.is_built {
             return;
         }
@@ -328,29 +252,59 @@ impl Schedule {
         let configs = std::mem::take(&mut self.unbuilt_configs);
         let count = configs.len();
         
-        // Adjacency list: edges[A] = [B, C] indicates A must run BEFORE B and C.
+        if count == 0 {
+            self.is_built = true;
+            return;
+        }
+
+        // Deduplicated edge set — aynı (i → j) kenarı bir kez eklenir.
+        let mut edge_set: HashSet<(usize, usize)> = HashSet::new();
         let mut adj = vec![Vec::new(); count];
-        let mut in_degree = vec![0; count];
+        let mut in_degree = vec![0usize; count];
         
+        // Yardımcı: kenar ekle (deduplicated)
+        let mut add_edge = |from: usize, to: usize| {
+            if edge_set.insert((from, to)) {
+                adj[from].push(to);
+                in_degree[to] += 1;
+            }
+        };
+
         // Resolve relations
         for i in 0..count {
             // "before": config[i] runs before config[j]
             for before_label in &configs[i].before {
+                let mut found = false;
                 for j in 0..count {
                     if i != j && configs[j].labels.contains(before_label) {
-                        adj[i].push(j);
-                        in_degree[j] += 1;
+                        add_edge(i, j);
+                        found = true;
                     }
+                }
+                if !found {
+                    crate::gizmo_log!(
+                        Warning,
+                        "[Schedule] Sistem {}'in before('{}') label'ı hiçbir sistemle eşleşmiyor!",
+                        i, before_label
+                    );
                 }
             }
             
             // "after": config[i] runs after config[j]
             for after_label in &configs[i].after {
+                let mut found = false;
                 for j in 0..count {
                     if i != j && configs[j].labels.contains(after_label) {
-                        adj[j].push(i);
-                        in_degree[i] += 1;
+                        add_edge(j, i);
+                        found = true;
                     }
+                }
+                if !found {
+                    crate::gizmo_log!(
+                        Warning,
+                        "[Schedule] Sistem {}'in after('{}') label'ı hiçbir sistemle eşleşmiyor!",
+                        i, after_label
+                    );
                 }
             }
         }
@@ -375,11 +329,14 @@ impl Schedule {
         }
         
         if sorted_indices.len() != count {
-            panic!("Cyclic dependency detected in System execution graph!");
+            panic!(
+                "Cyclic dependency detected in System execution graph! \
+                 {} sistem var ama sadece {} tanesi sıralanabildi.",
+                count, sorted_indices.len()
+            );
         }
         
-        // We must extract systems by taking ownership.
-        // We temporarily replace configs with a dummy to grab the Box<dyn System>
+        // Sıralı sistemleri oluştur
         let mut final_systems = Vec::with_capacity(count);
         let mut dummy_configs: Vec<Option<SystemConfig>> = configs.into_iter().map(Some).collect();
         
@@ -388,6 +345,7 @@ impl Schedule {
             final_systems.push(config.system);
         }
         
+        // Mevcut sistemlerin üzerine yaz — tüm sistemler unbuilt_configs'tan geliyor
         self.systems = final_systems;
         self.is_built = true;
     }
@@ -413,6 +371,8 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    // ──── Execution Order ────
+
     #[test]
     fn test_system_execution_order() {
         let mut world = World::new();
@@ -428,7 +388,7 @@ mod tests {
         let sys_c = move || { t3.lock().unwrap().push("C"); };
 
         let mut schedule = Schedule::new();
-        // Insert out of order: B, C, A. But specify A before B, B before C.
+        // Out of order ekle: B, C, A. A→B→C sırası bekleniyor.
         schedule.add_di_system(sys_b.label("B").after("A"));
         schedule.add_di_system(sys_c.label("C").after("B"));
         schedule.add_di_system(sys_a.label("A"));
@@ -438,4 +398,169 @@ mod tests {
         let final_order = tracker.lock().unwrap().clone();
         assert_eq!(final_order, vec!["A", "B", "C"]);
     }
+
+    // ──── Duplicate Edge ────
+
+    #[test]
+    fn test_duplicate_edge_dedup() {
+        let mut world = World::new();
+        let tracker = Arc::new(Mutex::new(Vec::new()));
+
+        let t1 = tracker.clone();
+        let sys_a = move || { t1.lock().unwrap().push("A"); };
+
+        let t2 = tracker.clone();
+        let sys_b = move || { t2.lock().unwrap().push("B"); };
+
+        let mut schedule = Schedule::new();
+        // A.before("B") + B.after("A") → aynı kenar iki kez deneniyor
+        schedule.add_di_system(sys_a.label("A").before("B"));
+        schedule.add_di_system(sys_b.label("B").after("A"));
+
+        schedule.run(&mut world, 0.1);
+
+        let final_order = tracker.lock().unwrap().clone();
+        assert_eq!(final_order, vec!["A", "B"]);
+    }
+
+    // ──── Cyclic Dependency ────
+
+    #[test]
+    #[should_panic(expected = "Cyclic dependency")]
+    fn test_cyclic_dependency_panics() {
+        let mut world = World::new();
+        let sys_a = move || {};
+        let sys_b = move || {};
+
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(sys_a.label("A").before("B"));
+        schedule.add_di_system(sys_b.label("B").before("A"));
+
+        schedule.run(&mut world, 0.1);
+    }
+
+    // ──── Validate ────
+
+    #[test]
+    #[should_panic(expected = "Cyclic dependency")]
+    fn test_validate_catches_cycle_early() {
+        let sys_a = move || {};
+        let sys_b = move || {};
+
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(sys_a.label("X").after("Y"));
+        schedule.add_di_system(sys_b.label("Y").after("X"));
+
+        schedule.validate(); // run() olmadan hata yakalanır
+    }
+
+    // ──── DI — Resource Injection ────
+
+    #[test]
+    fn test_di_resource_injection() {
+        let mut world = World::new();
+        world.insert_resource(42_u32);
+        world.insert_resource(0_i32);
+
+        fn read_sys(val: Res<u32>, mut out: ResMut<i32>) {
+            *out = *val as i32;
+        }
+
+        let mut schedule = Schedule::new();
+        let sys: Box<dyn System> = IntoSystem::<(Res<'static, u32>, ResMut<'static, i32>)>::into_system(read_sys);
+        schedule.add_system_boxed(sys);
+        schedule.run(&mut world, 0.0);
+
+        assert_eq!(*world.get_resource::<i32>().unwrap().unwrap(), 42);
+    }
+
+    #[test]
+    fn test_di_resource_mutation() {
+        let mut world = World::new();
+        world.insert_resource(10_u32);
+
+        fn inc_sys(mut val: ResMut<u32>) {
+            *val += 5;
+        }
+
+        let mut schedule = Schedule::new();
+        let sys: Box<dyn System> = IntoSystem::<(ResMut<'static, u32>,)>::into_system(inc_sys);
+        schedule.add_system_boxed(sys);
+        schedule.run(&mut world, 0.0);
+
+        assert_eq!(*world.get_resource::<u32>().unwrap().unwrap(), 15);
+    }
+
+    #[test]
+    fn test_di_dt_injection() {
+        let mut world = World::new();
+        world.insert_resource(0.0_f64);
+
+        fn dt_sys(dt: f32, mut out: ResMut<f64>) {
+            *out = dt as f64;
+        }
+
+        let mut schedule = Schedule::new();
+        let sys: Box<dyn System> = IntoSystem::<(f32, ResMut<'static, f64>)>::into_system(dt_sys);
+        schedule.add_system_boxed(sys);
+        schedule.run(&mut world, 0.016);
+
+        let val = *world.get_resource::<f64>().unwrap().unwrap();
+        assert!((0.016 - val).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_di_multi_param() {
+        let mut world = World::new();
+        world.insert_resource(100_u32);
+        world.insert_resource(String::from("hello"));
+        world.insert_resource(Vec::<String>::new());
+
+        fn multi_sys(num: Res<u32>, text: Res<String>, dt: f32, mut out: ResMut<Vec<String>>) {
+            out.push(format!("{}-{}-{:.2}", *num, *text, dt));
+        }
+
+        let mut schedule = Schedule::new();
+        let sys: Box<dyn System> = IntoSystem::<(Res<'static, u32>, Res<'static, String>, f32, ResMut<'static, Vec<String>>)>::into_system(multi_sys);
+        schedule.add_system_boxed(sys);
+        schedule.run(&mut world, 1.5);
+
+        let out = world.get_resource::<Vec<String>>().unwrap().unwrap();
+        assert_eq!(out[0], "100-hello-1.50");
+    }
+
+    // ──── add_system (basit fn) ────
+
+    #[test]
+    fn test_add_system_basic() {
+        let mut world = World::new();
+        world.insert_resource(0u32);
+
+        let mut schedule = Schedule::new();
+        schedule.add_system(|world: &mut World, _dt: f32| {
+            if let Ok(Some(mut val)) = world.get_resource_mut::<u32>() {
+                *val += 1;
+            }
+        });
+
+        schedule.run(&mut world, 0.0);
+        schedule.run(&mut world, 0.0);
+
+        assert_eq!(*world.get_resource::<u32>().unwrap().unwrap(), 2);
+    }
+
+    // ──── Eşleşmeyen label (warning, panic değil) ────
+
+    #[test]
+    fn test_unmatched_label_does_not_panic() {
+        let mut world = World::new();
+        let sys = move || {};
+
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(sys.after("nonexistent_label"));
+        
+        // Panic olmamalı — sadece warning loglanır
+        schedule.run(&mut world, 0.1);
+    }
 }
+

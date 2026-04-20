@@ -9,7 +9,7 @@ use winit::{
     window::WindowBuilder,
 };
 
-pub struct App<State: 'static> {
+pub struct App<State: 'static = ()> {
     pub world: World,
     pub schedule: Schedule,
     window_title: String,
@@ -63,7 +63,7 @@ impl<State: 'static> App<State> {
         self.world
             .insert_resource(gizmo_core::event::Events::<T>::new());
         self.event_updaters.push(Box::new(|world| {
-            if let Some(mut events) = world.get_resource_mut::<gizmo_core::event::Events<T>>() {
+            if let Some(mut events) = world.get_resource_mut::<gizmo_core::event::Events<T>>().expect("ECS Aliasing Error") {
                 events.update();
             }
         }));
@@ -158,7 +158,7 @@ impl<State: 'static> App<State> {
         let mut state = if let Some(setup) = self.setup_fn.take() {
             setup(&mut self.world, &renderer)
         } else {
-            panic!("setup() fonksiyonu atanmadi! (App State yaratilamadi)");
+            panic!("setup() fonksiyonu atanmadi! Lütfen set_setup çağırın veya State yapılandırmanızı kontrol edin.");
         };
 
         if let Some(scene_path) = self.initial_scene.take() {
@@ -224,10 +224,9 @@ impl<State: 'static> App<State> {
                             WindowEvent::CloseRequested => current_window.exit(),
                             WindowEvent::Resized(physical_size) => {
                                 renderer.resize(*physical_size);
-                                self.input.on_window_resized(
-                                    physical_size.width as f32,
-                                    physical_size.height as f32,
-                                );
+                                let mut win_info = self.world.get_resource_mut_or_default::<gizmo_core::window::WindowInfo>();
+                                win_info.width = physical_size.width as f32;
+                                win_info.height = physical_size.height as f32;
                             }
                             WindowEvent::KeyboardInput {
                                 event: kb_event, ..
@@ -240,9 +239,10 @@ impl<State: 'static> App<State> {
                                     codes_to_press.push(keycode as u32);
                                 }
                                 // Mantıksal Tuş (LogicalKey Fallback)
-                                if let winit::keyboard::Key::Character(c) =
-                                    kb_event.logical_key.as_ref()
-                                {
+                                if codes_to_press.is_empty() {
+                                    if let winit::keyboard::Key::Character(c) =
+                                        kb_event.logical_key.as_ref()
+                                    {
                                     match c.to_lowercase().as_str() {
                                         "w" => codes_to_press
                                             .push(winit::keyboard::KeyCode::KeyW as u32),
@@ -273,6 +273,7 @@ impl<State: 'static> App<State> {
                                         _ => {}
                                     }
                                 }
+                                } // Ends the 'if codes_to_press.is_empty()' block
 
                                 for code in codes_to_press {
                                     if kb_event.state == winit::event::ElementState::Pressed {
@@ -297,12 +298,14 @@ impl<State: 'static> App<State> {
                                     winit::event::MouseButton::Middle => {
                                         gizmo_core::input::mouse::MIDDLE
                                     }
-                                    _ => 99,
+                                    _ => u32::MAX,
                                 };
-                                if *m_state == winit::event::ElementState::Pressed {
-                                    self.input.on_mouse_button_pressed(btn_code);
-                                } else {
-                                    self.input.on_mouse_button_released(btn_code);
+                                if btn_code != u32::MAX {
+                                    if *m_state == winit::event::ElementState::Pressed {
+                                        self.input.on_mouse_button_pressed(btn_code);
+                                    } else {
+                                        self.input.on_mouse_button_released(btn_code);
+                                    }
                                 }
                             }
                             WindowEvent::CursorMoved { position, .. } => {
@@ -324,15 +327,18 @@ impl<State: 'static> App<State> {
                                 ui_hk(&mut self.world, &mut state, &editor.context);
                             }
 
+                            // İşlemlerin bitiminde frame-özel input girdilerini temizle
+                            self.input.begin_frame();
+                            
                             // --- Scene View RTT (Render To Texture) YÖNETİMİ ---
                             if self
                                 .world
-                                .get_resource::<gizmo_editor::EditorState>()
+                                .get_resource::<gizmo_editor::EditorState>().expect("ECS Aliasing Error")
                                 .is_some()
                             {
-                                let mut ed_state = self
+                                let mut ed_state_ref = self
                                     .world
-                                    .remove_resource::<gizmo_editor::EditorState>()
+                                    .get_resource_mut::<gizmo_editor::EditorState>().expect("ECS Aliasing Error")
                                     .unwrap();
 
                                 let w = renderer.size.width;
@@ -342,7 +348,7 @@ impl<State: 'static> App<State> {
                                 if let Some(target) = self
                                     .world
                                     .get_resource::<gizmo_renderer::components::EditorRenderTarget>(
-                                ) {
+                                ).expect("ECS Aliasing Error") {
                                     if target.width != w || target.height != h {
                                         needs_recreate = true;
                                     }
@@ -351,7 +357,7 @@ impl<State: 'static> App<State> {
                                 }
 
                                 if needs_recreate && w > 0 && h > 0 {
-                                    if let Some(old_id) = ed_state.scene_texture_id {
+                                    if let Some(old_id) = ed_state_ref.scene_texture_id {
                                         editor.renderer.free_texture(&old_id);
                                     }
 
@@ -381,7 +387,8 @@ impl<State: 'static> App<State> {
                                         wgpu::FilterMode::Linear,
                                     );
 
-                                    ed_state.scene_texture_id = Some(id);
+                                    ed_state_ref.scene_texture_id = Some(id);
+                                    drop(ed_state_ref); // Borrow'u kapat ki insert_resource yapabilelim
                                     self.world.insert_resource(
                                         gizmo_renderer::components::EditorRenderTarget {
                                             view: std::sync::Arc::new(view),
@@ -390,31 +397,33 @@ impl<State: 'static> App<State> {
                                         },
                                     );
                                 }
-
-                                self.world.insert_resource(ed_state);
                             }
+
+                            // ECS Sistemlerini Çalıştırmadan önce DI için Core Resource'ları Güncelle
+                            self.world.insert_resource(self.input.clone());
+                            {
+                                let has_time = self.world.get_resource::<gizmo_core::time::Time>().expect("ECS Aliasing Error").is_some();
+                                if has_time {
+                                    let mut time = self.world.get_resource_mut::<gizmo_core::time::Time>().expect("ECS Aliasing Error").unwrap();
+                                    time.update(dt);
+                                } else {
+                                    let mut time = gizmo_core::time::Time::new();
+                                    time.update(dt);
+                                    self.world.insert_resource(time);
+                                }
+                            }
+
+                            // ECS Sistemlerini Çalıştır
+                            self.schedule.run(&mut self.world, dt);
 
                             if let Some(update_hk) = self.update_fn.as_mut() {
                                 update_hk(&mut self.world, &mut state, dt, &self.input);
                             }
 
-                            // ECS Sistemlerini Çalıştırmadan önce DI için Core Resource'ları Güncelle
-                            self.world.insert_resource(self.input.clone());
-                            self.world.insert_resource(gizmo_core::time::Time {
-                                dt,
-                                elapsed_seconds: light_time as f64,
-                            });
-
-                            // ECS Sistemlerini Çalıştır
-                            self.schedule.run(&mut self.world, dt);
-
                             // Olayları Güncelle (Çift-buffer temizliği)
                             for updater in &mut self.event_updaters {
                                 updater(&mut self.world);
                             }
-
-                            // İşlemlerin bitiminde frame-özel input girdilerini temizle
-                            self.input.begin_frame();
 
                             // --- DRAW KISMI ---
                             let output = match renderer.surface.get_current_texture() {

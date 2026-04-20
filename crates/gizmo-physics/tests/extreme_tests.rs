@@ -41,7 +41,7 @@ fn test_extreme_quantum_stack_explosion() {
     // Objelere test: NaN olmamalılar ve şiddetli şekilde dışarı saçılmış olmalılar
     for i in 0..num_objects {
         let t = world
-            .borrow::<Transform>()
+            .borrow::<Transform>().expect("ECS Aliasing Error")
             .unwrap()
             .get(entities[i].id())
             .unwrap()
@@ -93,13 +93,13 @@ fn test_extreme_mass_disparity() {
     }
 
     let vel_feather = world
-        .borrow::<Velocity>()
+        .borrow::<Velocity>().expect("ECS Aliasing Error")
         .unwrap()
         .get(feather.id())
         .unwrap()
         .clone();
     let vel_ball = world
-        .borrow::<Velocity>()
+        .borrow::<Velocity>().expect("ECS Aliasing Error")
         .unwrap()
         .get(ball.id())
         .unwrap()
@@ -150,13 +150,13 @@ fn test_extreme_needle_wall_ccd() {
     physics_movement_system(&world, 0.1);
 
     let t = world
-        .borrow::<Transform>()
+        .borrow::<Transform>().expect("ECS Aliasing Error")
         .unwrap()
         .get(bullet.id())
         .unwrap()
         .clone();
     let v = world
-        .borrow::<Velocity>()
+        .borrow::<Velocity>().expect("ECS Aliasing Error")
         .unwrap()
         .get(bullet.id())
         .unwrap()
@@ -214,7 +214,7 @@ fn test_extreme_spring_snap() {
     gizmo_physics::system::physics_collision_system(&mut world, 0.016);
 
     let v_sat = world
-        .borrow::<Velocity>()
+        .borrow::<Velocity>().expect("ECS Aliasing Error")
         .unwrap()
         .get(satellite.id())
         .unwrap()

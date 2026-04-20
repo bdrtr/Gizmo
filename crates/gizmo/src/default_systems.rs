@@ -38,13 +38,13 @@ pub fn default_render_pass(
     // bu pass çağrılmadan hemen önce bir `update_transforms(world)` sistemiyle güncellenmiş olmalıdır.
 
     if let (Some(cameras), Some(transforms)) =
-        (world.borrow::<Camera>(), world.borrow::<Transform>())
+        (world.borrow::<Camera>().expect("ECS Aliasing Error"), world.borrow::<Transform>().expect("ECS Aliasing Error"))
     {
         // TODO: Aktif kamera için `ActiveCamera` tarzı bir marker bileşeni kullanılmalı.
         // ECS array sırası stabil değildir. Şimdilik geçici çözüm olarak ilki alınıyor.
-        if let Some(active_cam) = cameras.dense.first().map(|e| &e.entity) {
+        if let Some((active_cam, _)) = cameras.iter().next() {
             if let (Some(cam), Some(trans)) =
-                (cameras.get(*active_cam), transforms.get(*active_cam))
+                (cameras.get(active_cam), transforms.get(active_cam))
             {
                 proj = cam.get_projection(aspect);
                 view_mat = cam.get_view(trans.position);
@@ -85,7 +85,9 @@ pub fn default_render_pass(
         bytemuck::cast_slice(&[scene_uniform_data]),
     );
 
-    let renderers = world.borrow::<MeshRenderer>();
+    let renderers = world.borrow::<MeshRenderer>().expect("ECS Aliasing Error");
+    let mut instances = Vec::new();
+    let mut draw_items = Vec::new();
     if let Some(mut q) = world.query::<(&Mesh, &Transform, &Material)>() {
         for (e, (mesh, trans, mat)) in q.iter_mut() {
             if renderers.as_ref().map_or(true, |r| r.get(e).is_none()) {
@@ -110,7 +112,7 @@ pub fn default_render_pass(
                 vbuf: mesh.vbuf.clone(),
                 vertex_count: mesh.vertex_count,
                 bind_group: mat.bind_group.clone(),
-                unlit: mat.unlit,
+                unlit: mat.unlit > 0.5,
             });
         }
     }
@@ -167,7 +169,7 @@ pub fn default_render_pass(
             let pipeline = if item.unlit {
                 &renderer.scene.unlit_pipeline
             } else {
-                &renderer.scene.pbr_pipeline
+                &renderer.scene.render_pipeline
             };
             render_pass.set_pipeline(pipeline);
             render_pass.set_bind_group(1, &item.bind_group, &[]);

@@ -1,4 +1,4 @@
-use gizmo_core::logger::{LogLevel, GLOBAL_LOGS};
+use gizmo_core::logger::{self, LogLevel};
 
 pub fn ui_console(ui: &mut egui::Ui) {
     ui.heading("Geliştirici Konsolu");
@@ -7,8 +7,8 @@ pub fn ui_console(ui: &mut egui::Ui) {
         .auto_shrink([false, false])
         .stick_to_bottom(true)
         .show(ui, |ui| {
-            if let Ok(logs) = GLOBAL_LOGS.lock() {
-                for log in logs.iter() {
+            logger::get_logs(|logs| {
+                for log in logs {
                     let color = match log.level {
                         LogLevel::Info => egui::Color32::WHITE,
                         LogLevel::Warning => egui::Color32::from_rgb(255, 200, 0),
@@ -16,6 +16,6 @@ pub fn ui_console(ui: &mut egui::Ui) {
                     };
                     ui.label(egui::RichText::new(&log.message).color(color));
                 }
-            }
+            });
         });
 }

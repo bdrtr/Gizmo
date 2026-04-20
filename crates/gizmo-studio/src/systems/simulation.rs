@@ -13,7 +13,7 @@ pub fn handle_simulation(world: &mut World, editor_state: &mut EditorState, stat
                     if is_script {
                         editor_state.log_info(&format!("🔥 Script Hot-Reload: {}", path_str));
                         if let Some(mut engine) =
-                            world.get_resource_mut::<gizmo::scripting::ScriptEngine>()
+                            world.get_resource_mut::<gizmo::scripting::ScriptEngine>().expect("ECS Aliasing Error")
                         {
                             if let Err(e) = engine.load_script(&path_str) {
                                 editor_state.log_error(&format!("❌ Script yüklenemedi: {}", e));
@@ -25,13 +25,13 @@ pub fn handle_simulation(world: &mut World, editor_state: &mut EditorState, stat
                             path_str
                         ));
                         // WGPU Shader hot reload events can be integrated here similarly
-                        let has_events = world.get_resource::<gizmo::core::event::Events<crate::state::ShaderReloadEvent>>().is_some();
+                        let has_events = world.get_resource::<gizmo::core::event::Events<crate::state::ShaderReloadEvent>>().expect("ECS Aliasing Error").is_some();
                         if !has_events {
                             world.insert_resource(gizmo::core::event::Events::<
                                 crate::state::ShaderReloadEvent,
                             >::new());
                         }
-                        if let Some(mut events) = world.get_resource_mut::<gizmo::core::event::Events<crate::state::ShaderReloadEvent>>() {
+                        if let Some(mut events) = world.get_resource_mut::<gizmo::core::event::Events<crate::state::ShaderReloadEvent>>().expect("ECS Aliasing Error") {
                             events.push(crate::state::ShaderReloadEvent);
                         }
                     }
@@ -55,9 +55,9 @@ pub fn handle_simulation(world: &mut World, editor_state: &mut EditorState, stat
                 }
 
                 // Call per-entity updates
-                if let Some(scripts) = world.borrow::<gizmo::scripting::Script>() {
+                if let Some(scripts) = world.borrow::<gizmo::scripting::Script>().expect("ECS Aliasing Error") {
                     let mut entity_calls = Vec::new();
-                    for entity_id in scripts.dense.iter().map(|e| e.entity) {
+                    for (entity_id, _) in scripts.iter() {
                         if let Some(script) = scripts.get(entity_id) {
                             entity_calls.push((entity_id, script.file_path.clone()));
                         }

@@ -1,17 +1,19 @@
 use std::any::TypeId;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::{
     cell::RefCell,
-    cell::{Ref, RefMut},
+    cell::{Ref, RefMut, BorrowError, BorrowMutError},
 };
 
 use crate::component::{Component, ComponentStorage, SparseSet};
 use crate::entity::Entity;
 
+pub type DespawnHook = fn(&mut World, Entity);
+
 pub struct World {
     next_entity_id: u32,
     generations: Vec<u32>,
-    free_ids: Vec<u32>,
+    free_ids: VecDeque<u32>,
     free_set: HashSet<u32>, // O(1) contains() kontrolü için
     // RefCell: Aynı anda farklı Component dizilerini eşzamanlı olarak ödünç alabilmek (Borrow) için çok kritiktir.
     storages: HashMap<TypeId, RefCell<Box<dyn ComponentStorage>>>,
@@ -20,6 +22,10 @@ pub struct World {
     // Entity başına hangi TypeId'lerde component var — despawn'da O(S) yerine O(C) tarama.
     // HashSet: aynı tür iki kez `add_component` ile eklenemez; despawn'ta `remove_entity` yalnızca bir kez çağrılır.
     entity_components: HashMap<u32, HashSet<TypeId>>,
+    
+    despawn_hooks: Vec<DespawnHook>,
+    entities_to_despawn: Vec<Entity>,
+    is_despawning: bool,
 }
 
 impl World {
@@ -27,11 +33,14 @@ impl World {
         Self {
             next_entity_id: 0,
             generations: Vec::new(),
-            free_ids: Vec::new(),
+            free_ids: VecDeque::new(),
             free_set: HashSet::new(),
             storages: HashMap::new(),
             resources: HashMap::new(),
             entity_components: HashMap::new(),
+            despawn_hooks: Vec::new(),
+            entities_to_despawn: Vec::new(),
+            is_despawning: false,
         }
     }
 }
@@ -44,7 +53,7 @@ impl Default for World {
 
 impl World {
     pub fn spawn(&mut self) -> Entity {
-        if let Some(id) = self.free_ids.pop() {
+        if let Some(id) = self.free_ids.pop_front() {
             self.free_set.remove(&id);
             let gen = self.generations[id as usize];
             Entity::new(id, gen)
@@ -63,14 +72,35 @@ impl World {
         None
     }
 
-    pub fn despawn(&mut self, entity: Entity) {
-        if self.is_alive(entity) {
-            let id = entity.id();
-            self.generations[id as usize] += 1;
-            self.free_ids.push(id);
-            self.free_set.insert(id);
+    pub fn register_despawn_hook(&mut self, hook: DespawnHook) {
+        self.despawn_hooks.push(hook);
+    }
 
-            // Sadece bu entity'nin component'ı olan storage'lara dokunur — O(C) (C = entity'nin component sayısı)
+    pub fn despawn(&mut self, entity: Entity) {
+        self.entities_to_despawn.push(entity);
+        if self.is_despawning {
+            return;
+        }
+        self.is_despawning = true;
+
+        while let Some(e) = self.entities_to_despawn.pop() {
+            if !self.is_alive(e) {
+                continue;
+            }
+
+            // Güvenli kanca çağrısı: fn işaretçilerini cloneluyoruz (re-entrancy güvenli)
+            let hooks = self.despawn_hooks.clone();
+            for hook in hooks {
+                hook(self, e);
+            }
+
+            let id = e.id();
+            self.generations[id as usize] += 1;
+            if self.free_set.insert(id) {
+                self.free_ids.push_back(id);
+            }
+
+            // Sadece bu entity'nin component'ı olan storage'lara dokunur
             if let Some(type_ids) = self.entity_components.remove(&id) {
                 for type_id in type_ids {
                     if let Some(storage) = self.storages.get_mut(&type_id) {
@@ -79,12 +109,12 @@ impl World {
                 }
             }
         }
+        self.is_despawning = false;
     }
 
     pub fn despawn_by_id(&mut self, id: u32) {
-        if (id as usize) < self.generations.len() {
-            let gen = self.generations[id as usize];
-            self.despawn(Entity::new(id, gen));
+        if let Some(entity) = self.get_entity(id) {
+            self.despawn(entity);
         }
     }
 
@@ -98,10 +128,7 @@ impl World {
         }
     }
 
-    /// Tüm yaşayan entity'leri Vec olarak döndürür (kolaylık metodu)
-    pub fn alive_entities(&self) -> Vec<Entity> {
-        self.iter_alive_entities().collect()
-    }
+
 
     #[inline]
     pub fn is_alive(&self, entity: Entity) -> bool {
@@ -156,42 +183,34 @@ impl World {
     }
 
     /// Component dizisine okuma erişimi (Read-Only, Ref ile paylaşılabilir).
-    pub fn borrow<T: Component>(&self) -> Option<Ref<'_, SparseSet<T>>> {
+    pub fn borrow<T: Component>(&self) -> Result<Option<Ref<'_, SparseSet<T>>>, BorrowError> {
         let type_id = TypeId::of::<T>();
-        let storage = self.storages.get(&type_id)?;
+        let storage = match self.storages.get(&type_id) {
+            Some(s) => s,
+            None => return Ok(None),
+        };
 
         match storage.try_borrow() {
-            Ok(borrowed) => Some(Ref::map(borrowed, |s| {
+            Ok(borrowed) => Ok(Some(Ref::map(borrowed, |s| {
                 s.as_any().downcast_ref::<SparseSet<T>>().unwrap()
-            })),
-            Err(_) => {
-                panic!(
-                    "[ECS] PANIC: borrow<{}> failed — a mutable borrow is already active! \
-                    This usually means another query or system is currently holding a mutable \
-                    reference to this component type. Fix the aliasing conflict.",
-                    std::any::type_name::<T>()
-                );
-            }
+            }))),
+            Err(e) => Err(e),
         }
     }
 
     /// Component dizisine yazma erişimi (Mutable, tekil sahiplik).
-    pub fn borrow_mut<T: Component>(&self) -> Option<RefMut<'_, SparseSet<T>>> {
+    pub fn borrow_mut<T: Component>(&self) -> Result<Option<RefMut<'_, SparseSet<T>>>, BorrowMutError> {
         let type_id = TypeId::of::<T>();
-        let storage = self.storages.get(&type_id)?;
+        let storage = match self.storages.get(&type_id) {
+            Some(s) => s,
+            None => return Ok(None),
+        };
 
         match storage.try_borrow_mut() {
-            Ok(borrowed) => Some(RefMut::map(borrowed, |s| {
+            Ok(borrowed) => Ok(Some(RefMut::map(borrowed, |s| {
                 s.as_any_mut().downcast_mut::<SparseSet<T>>().unwrap()
-            })),
-            Err(_) => {
-                panic!(
-                    "[ECS] PANIC: borrow_mut<{}> failed — another borrow is already active! \
-                    This happens when multiple queries attempt to access the same component simultaneously \
-                    where at least one is a mutable access. Fix the aliasing conflict.",
-                    std::any::type_name::<T>()
-                );
-            }
+            }))),
+            Err(e) => Err(e),
         }
     }
 
@@ -206,7 +225,7 @@ impl World {
     /// Toplam yaşayan entity sayısı
     #[inline]
     pub fn entity_count(&self) -> u32 {
-        self.next_entity_id - self.free_ids.len() as u32
+        self.next_entity_id.saturating_sub(self.free_ids.len() as u32)
     }
 
     // ==========================================================
@@ -221,42 +240,34 @@ impl World {
     }
 
     /// Global bir Resource'u okumak için çağrılır (Immutable Borrow)
-    pub fn get_resource<T: 'static>(&self) -> Option<Ref<'_, T>> {
+    pub fn get_resource<T: 'static>(&self) -> Result<Option<Ref<'_, T>>, BorrowError> {
         let type_id = TypeId::of::<T>();
-        let storage = self.resources.get(&type_id)?;
+        let storage = match self.resources.get(&type_id) {
+            Some(s) => s,
+            None => return Ok(None),
+        };
 
         match storage.try_borrow() {
-            Ok(borrowed) => Some(Ref::map(borrowed, |s| {
+            Ok(borrowed) => Ok(Some(Ref::map(borrowed, |s| {
                 s.downcast_ref::<T>().unwrap()
-            })),
-            Err(_) => {
-                crate::gizmo_log!(
-                    Warning,
-                    "[ECS] get_resource<{}> başarısız — mutable borrow aktif!",
-                    std::any::type_name::<T>()
-                );
-                None
-            }
+            }))),
+            Err(e) => Err(e),
         }
     }
 
     /// Global bir Resource'u değiştirmek için çağrılır (Mutable Borrow)
-    pub fn get_resource_mut<T: 'static>(&self) -> Option<RefMut<'_, T>> {
+    pub fn get_resource_mut<T: 'static>(&self) -> Result<Option<RefMut<'_, T>>, BorrowMutError> {
         let type_id = TypeId::of::<T>();
-        let storage = self.resources.get(&type_id)?;
+        let storage = match self.resources.get(&type_id) {
+            Some(s) => s,
+            None => return Ok(None),
+        };
 
         match storage.try_borrow_mut() {
-            Ok(borrowed) => Some(RefMut::map(borrowed, |s| {
+            Ok(borrowed) => Ok(Some(RefMut::map(borrowed, |s| {
                 s.downcast_mut::<T>().unwrap()
-            })),
-            Err(_) => {
-                crate::gizmo_log!(
-                    Warning,
-                    "[ECS] get_resource_mut<{}> başarısız — başka bir borrow aktif!",
-                    std::any::type_name::<T>()
-                );
-                None
-            }
+            }))),
+            Err(e) => Err(e),
         }
     }
 
@@ -287,7 +298,7 @@ pub struct AliveEntityIter<'a> {
     current_id: u32,
     max_id: u32,
     free_set: &'a HashSet<u32>,
-    generations: &'a Vec<u32>,
+    generations: &'a [u32],
 }
 
 impl<'a> Iterator for AliveEntityIter<'a> {
@@ -316,6 +327,7 @@ impl<'a> Iterator for AliveEntityIter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::impl_component;
 
     // Test component types
     #[derive(Debug, Clone, PartialEq)]
@@ -326,6 +338,8 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq)]
     struct Health(u32);
+
+    impl_component!(Position, Health);
 
     #[test]
     fn test_spawn_and_alive_count() {
@@ -346,14 +360,14 @@ mod tests {
         world.add_component(e1, Position { x: 1.0, y: 2.0 });
         world.add_component(e1, Health(100));
 
-        assert!(world.borrow::<Position>().unwrap().get(e1.id()).is_some());
-        assert!(world.borrow::<Health>().unwrap().get(e1.id()).is_some());
+        assert!(world.borrow::<Position>().unwrap().unwrap().get(e1.id()).is_some());
+        assert!(world.borrow::<Health>().unwrap().unwrap().get(e1.id()).is_some());
 
         world.despawn(e1);
 
         assert!(!world.is_alive(e1));
-        assert!(world.borrow::<Position>().unwrap().get(e1.id()).is_none());
-        assert!(world.borrow::<Health>().unwrap().get(e1.id()).is_none());
+        assert!(world.borrow::<Position>().unwrap().unwrap().get(e1.id()).is_none());
+        assert!(world.borrow::<Health>().unwrap().unwrap().get(e1.id()).is_none());
     }
 
     #[test]
@@ -370,8 +384,8 @@ mod tests {
         // Despawn e1 — should not affect e2
         world.despawn(e1);
 
-        assert!(world.borrow::<Position>().unwrap().get(e2.id()).is_some());
-        assert!(world.borrow::<Health>().unwrap().get(e2.id()).is_some());
+        assert!(world.borrow::<Position>().unwrap().unwrap().get(e2.id()).is_some());
+        assert!(world.borrow::<Health>().unwrap().unwrap().get(e2.id()).is_some());
         assert_eq!(world.entity_count(), 1);
     }
 
@@ -416,7 +430,7 @@ mod tests {
         world.add_component(e, Health(100));
         world.add_component(e, Health(50)); // Overwrite
 
-        let hp = world.borrow::<Health>().unwrap();
+        let hp = world.borrow::<Health>().unwrap().unwrap();
         assert_eq!(hp.get(e.id()).unwrap().0, 50);
     }
 
@@ -433,11 +447,11 @@ mod tests {
         world.despawn(e);
 
         assert!(!world.is_alive(e));
-        assert!(world.borrow::<Health>().unwrap().get(id).is_none());
+        assert!(world.borrow::<Health>().unwrap().unwrap().get(id).is_none());
 
         // ID yeniden kullanıldığında eski Health taşınmamalı
         let e2 = world.spawn();
         assert_eq!(e2.id(), id);
-        assert!(world.borrow::<Health>().unwrap().get(e2.id()).is_none());
+        assert!(world.borrow::<Health>().unwrap().unwrap().get(e2.id()).is_none());
     }
 }
