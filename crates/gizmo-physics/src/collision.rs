@@ -28,7 +28,7 @@ pub struct CollisionManifold {
     pub is_colliding: bool,
     pub normal: Vec3,
     pub penetration: f32,
-    pub contact_points: Vec<(Vec3, f32)>,
+    pub contact_points: arrayvec::ArrayVec<(Vec3, f32), 4>,
 }
 
 pub fn check_aabb_aabb_manifold(
@@ -76,14 +76,14 @@ pub fn check_aabb_aabb_manifold(
             is_colliding: true,
             normal,
             penetration: p,
-            contact_points: vec![(contact_point, p)],
+            contact_points: { let mut v = arrayvec::ArrayVec::new(); v.push((contact_point, p)); v },
         }
     } else {
         CollisionManifold {
             is_colliding: false,
             normal: Vec3::ZERO,
             penetration: 0.0,
-            contact_points: vec![],
+            contact_points: arrayvec::ArrayVec::new(),
         }
     }
 }
@@ -113,14 +113,14 @@ pub fn check_sphere_sphere_manifold(
             is_colliding: true,
             normal,
             penetration,
-            contact_points: vec![(contact_point, penetration)],
+            contact_points: { let mut v = arrayvec::ArrayVec::new(); v.push((contact_point, penetration)); v },
         }
     } else {
         CollisionManifold {
             is_colliding: false,
             normal: Vec3::ZERO,
             penetration: 0.0,
-            contact_points: vec![],
+            contact_points: arrayvec::ArrayVec::new(),
         }
     }
 }
@@ -147,12 +147,12 @@ pub fn check_sphere_aabb_manifold(
         let dist = dist_sq.sqrt();
 
         let (normal, penetration) = if dist > 0.0001 {
-            let n = diff / dist;
+            let n = -(diff / dist);
             (n, sphere.radius - dist)
         } else {
             let diff_center = pos_aabb - pos_s;
             let n = if diff_center.length_squared() > 1e-6 {
-                diff_center.normalize() // A -> B
+                -(diff_center.normalize()) // B -> A (Dışarı yönü)
             } else {
                 Vec3::new(0.0, 1.0, 0.0)
             };
@@ -163,14 +163,14 @@ pub fn check_sphere_aabb_manifold(
             is_colliding: true,
             normal,
             penetration,
-            contact_points: vec![(closest_point, penetration)],
+            contact_points: { let mut v = arrayvec::ArrayVec::new(); v.push((closest_point, penetration)); v },
         }
     } else {
         CollisionManifold {
             is_colliding: false,
             normal: Vec3::ZERO,
             penetration: 0.0,
-            contact_points: vec![],
+            contact_points: arrayvec::ArrayVec::new(),
         }
     }
 }
@@ -203,11 +203,11 @@ pub fn check_sphere_obb_manifold(
 
         let dist = dist_sq.sqrt();
         let (normal, penetration) = if dist > 0.0001 {
-            let n = rot_obb.mul_vec3(local_diff / dist);
+            let n = -rot_obb.mul_vec3(local_diff / dist); // İçeri itmemesi için ters normal
             (n, sphere.radius - dist)
         } else {
             // Tam merkezdeyse rastgele yön fırlat
-            let n = rot_obb.mul_vec3(Vec3::new(0.0, 1.0, 0.0));
+            let n = Vec3::new(0.0, 1.0, 0.0); // World-space Up sabit yön
             (n, sphere.radius)
         };
 
@@ -215,14 +215,14 @@ pub fn check_sphere_obb_manifold(
             is_colliding: true,
             normal,
             penetration,
-            contact_points: vec![(closest_world, penetration)],
+            contact_points: { let mut v = arrayvec::ArrayVec::new(); v.push((closest_world, penetration)); v },
         }
     } else {
         CollisionManifold {
             is_colliding: false,
             normal: Vec3::ZERO,
             penetration: 0.0,
-            contact_points: vec![],
+            contact_points: arrayvec::ArrayVec::new(),
         }
     }
 }
@@ -264,7 +264,7 @@ pub fn check_obb_obb_manifold(
         }
     }
 
-    for mut axis in test_axes {
+    for axis in test_axes {
         let ra = ea.x * axis.dot(axes_a[0]).abs()
             + ea.y * axis.dot(axes_a[1]).abs()
             + ea.z * axis.dot(axes_a[2]).abs();
@@ -278,15 +278,12 @@ pub fn check_obb_obb_manifold(
                 is_colliding: false,
                 normal: Vec3::ZERO,
                 penetration: 0.0,
-                contact_points: vec![],
+                contact_points: arrayvec::ArrayVec::new(),
             };
         }
         if p < min_penetration {
             min_penetration = p;
-            if t.dot(axis) < 0.0 {
-                axis *= -1.0;
-            }
-            best_axis = axis;
+            best_axis = if t.dot(axis) < 0.0 { axis * -1.0 } else { axis };
         }
     }
 
@@ -321,7 +318,7 @@ fn obb_obb_contact_points(
     eb: Vec3,
     normal: Vec3,
     penetration: f32,
-) -> Vec<(Vec3, f32)> {
+) -> arrayvec::ArrayVec<(Vec3, f32), 4> {
     // A'nın normal yönündeki destek noktası (köşe)
     let local_dir_a = rot_a.inverse().mul_vec3(normal);
     let sup_a = pos_a
@@ -429,17 +426,19 @@ fn obb_obb_contact_points(
         poly = next_poly;
     }
 
-    let mut result = Vec::with_capacity(poly.len());
+    let mut result = arrayvec::ArrayVec::new();
     for p in poly {
-        let dep = penetration.min((ref_face_center - p).dot(normal) + penetration);
-        if dep >= 0.0 {
-            result.push((p, dep.max(0.001)));
+        let dep = (ref_face_center - p).dot(normal);
+        if dep >= -0.001 {
+            if result.try_push((p, dep.max(0.001))).is_err() {
+                break; // Maksimum kapasite (4) dolduysa çık
+            }
         }
     }
 
     // Hiç köşe yoksa orta nokta fallback
     if result.is_empty() {
-        result.push(((sup_a + sup_b) * 0.5, penetration));
+        let _ = result.try_push(((sup_a + sup_b) * 0.5, penetration));
     }
     result
 }
@@ -480,7 +479,9 @@ fn closest_points_on_segments(
             s = if denom.abs() > 1e-6 {
                 ((b * f - c * e) / denom).clamp(0.0, 1.0)
             } else {
-                0.0
+                // Paralel durum: A'nın merkezini B'ye project et ve ortadan temas ara
+                let t_mid = ((p_a - p_b + d_a * 0.5).dot(d_b) / e).clamp(0.0, 1.0);
+                ((p_b + d_b * t_mid - p_a).dot(d_a) / a).clamp(0.0, 1.0)
             };
 
             t = ((b * s + f) / e).clamp(0.0, 1.0);
@@ -573,10 +574,11 @@ pub fn check_capsule_aabb_manifold(
     } else {
         let t_center = ((pos_aabb - cap_bot).dot(seg_dir) / seg_len_sq).clamp(0.0, 1.0);
         
-        let mut candidates = vec![0.0, 1.0, t_center];
+        let mut candidates = vec![t_center];
         
         // Eksenel durumlarda (paralel segmentler) köşelerden projeksiyon hayat kurtarır
         for &t in &[0.0, 1.0] {
+            candidates.push(t);
             let seg_pt = cap_bot + seg_dir * t;
             let clamped = Vec3::new(
                 seg_pt.x.max(min_b.x).min(max_b.x),
@@ -806,5 +808,31 @@ mod tests {
         assert!(manifold.normal.y.is_finite());
         assert!(manifold.normal.z.is_finite());
     }
-}
+    #[test]
+    fn test_sphere_aabb_normal_direction() {
+        let sphere = Sphere { radius: 1.0 };
+        let aabb = Aabb { half_extents: Vec3::splat(1.0) };
+        // X+ (1.5) yönünden yaklaşan küre için, AABB'den dışarıya (küreye doğru) fırlatacak normal +X olmalıdır.
+        let m = check_sphere_aabb_manifold(
+            Vec3::new(1.5, 0.0, 0.0), &sphere,
+            Vec3::ZERO, &aabb,
+        );
+        assert!(m.normal.x > 0.0, "Normal should point away from AABB towards the Sphere (expected +X, got {:?})", m.normal);
+    }
 
+    #[test]
+    fn test_capsule_aabb_parallel_collision() {
+        let cap = Capsule { radius: 0.5, half_height: 1.0 };
+        let aabb = Aabb { half_extents: Vec3::new(5.0, 1.0, 5.0) };
+
+        // Yatay duran kapsül (90 derece dönmüş)
+        let rot = gizmo_math::Quat::from_axis_angle(Vec3::new(0.0, 0.0, 1.0), std::f32::consts::FRAC_PI_2);
+        let m = check_capsule_aabb_manifold(
+            Vec3::new(0.0, 1.2, 0.0), rot, &cap, 
+            Vec3::ZERO, &aabb,
+        );
+        assert!(m.is_colliding, "Yatay kapsul ve zemin carpismali");
+        // Paralel oldugu icin contact noktasi rastgele bir köşe değil, tam ortadan project alan 0.0 civarı çıkmalıdır.
+        assert!(m.contact_points[0].0.x.abs() < 0.1, "En yakin nokta merkeze ortalanmali");
+    }
+}
