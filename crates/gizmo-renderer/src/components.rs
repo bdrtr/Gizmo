@@ -387,4 +387,10 @@ pub struct EditorRenderTarget {
     pub height: u32,
 }
 
-gizmo_core::impl_component!(Mesh, Material, Skeleton, AnimationPlayer, MeshRenderer, Camera, Sprite, Camera2D, PointLight, Terrain, DirectionalLight, SpotLight, LodGroup, LodLevel, ParticleEmitter, EditorRenderTarget);
+pub struct GameRenderTarget {
+    pub view: std::sync::Arc<wgpu::TextureView>,
+    pub width: u32,
+    pub height: u32,
+}
+
+gizmo_core::impl_component!(Mesh, Material, Skeleton, AnimationPlayer, MeshRenderer, Camera, Sprite, Camera2D, PointLight, Terrain, DirectionalLight, SpotLight, LodGroup, LodLevel, ParticleEmitter, EditorRenderTarget, GameRenderTarget);

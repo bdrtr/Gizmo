@@ -2,7 +2,6 @@
 
 use crate::editor_state::EditorState;
 use egui;
-use gizmo_audio::AudioSource;
 use gizmo_core::{EntityName, World};
 use gizmo_math::{Vec3, Vec4};
 use gizmo_physics::components::{RigidBody, Transform, Velocity};
@@ -12,7 +11,7 @@ use gizmo_renderer::components::{Camera, Material, ParticleEmitter, PointLight};
 
 /// Inspector sekmesini çizer
 pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
-    let sel_len = state.selected_entities.len();
+    let sel_len = state.selection.entities.len();
     if sel_len == 0 {
         ui.label(egui::RichText::new("Hiçbir obje seçili değil.").color(egui::Color32::GRAY));
         return;
@@ -28,7 +27,7 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
             .button(egui::RichText::new("🗑️ Seçili Objeleri Sil").color(egui::Color32::RED))
             .clicked()
         {
-            for &entity in state.selected_entities.iter() {
+            for &entity in state.selection.entities.iter() {
                 state.despawn_requests.push(entity);
             }
         }
@@ -36,8 +35,11 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     }
 
     // Tekli seçim durumu
-    if let Some(&entity_id) = state.selected_entities.iter().next() {
-        ui.heading(format!("🔧 Inspector [{}]", entity_id));
+    if let Some(&entity_id) = state.selection.entities.iter().next() {
+        if !world.is_alive(entity_id) {
+            return;
+        }
+        ui.heading(format!("🔧 Inspector [{}]", entity_id.id()));
 
         if ui
             .button(egui::RichText::new("🗑️ Seçili Objeyi Sil").color(egui::Color32::RED))
@@ -50,35 +52,35 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             // === ENTITY NAME ===
-            draw_name_section(ui, world, entity_id);
+            draw_name_section(ui, world, entity_id, state);
 
             // === TRANSFORM ===
-            draw_transform_section(ui, world, entity_id);
+            draw_transform_section(ui, world, entity_id, state);
 
             // === VELOCITY ===
-            draw_velocity_section(ui, world, entity_id);
+            draw_velocity_section(ui, world, entity_id, state);
 
             // === RIGIDBODY ===
-            draw_rigidbody_section(ui, world, entity_id);
+            draw_rigidbody_section(ui, world, entity_id, state);
 
             // === COLLIDER ===
-            draw_collider_section(ui, world, entity_id);
+            draw_collider_section(ui, world, entity_id, state);
 
             // === CAMERA ===
-            draw_camera_section(ui, world, entity_id);
+            draw_camera_section(ui, world, entity_id, state);
 
             // === POINT LIGHT ===
-            draw_point_light_section(ui, world, entity_id);
+            draw_point_light_section(ui, world, entity_id, state);
 
             // === MATERIAL ===
-            draw_material_section(ui, world, entity_id);
+            draw_material_section(ui, world, entity_id, state);
 
             // === PARTICLE EMITTER ===
-            draw_particle_emitter_section(ui, world, entity_id);
+            draw_particle_emitter_section(ui, world, entity_id, state);
 
             // === VEHICLE CONTROLLER ===
-            draw_vehicle_controller_section(ui, world, entity_id);
-            draw_audio_source_section(ui, world, entity_id);
+            draw_vehicle_controller_section(ui, world, entity_id, state);
+            
             draw_terrain_section(ui, world, entity_id, state);
             draw_script_section(ui, world, entity_id, state);
 
@@ -104,9 +106,9 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     }
 }
 
-fn draw_name_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut names) = world.borrow_mut::<EntityName>().expect("ECS Aliasing Error") {
-        if let Some(name) = names.get_mut(entity_id) {
+fn draw_name_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+    if let Ok(Some(mut names)) = world.borrow_mut::<EntityName>() {
+        if let Some(name) = names.get_mut(entity_id.id()) {
             ui.horizontal(|ui| {
                 ui.label("İsim:");
                 ui.text_edit_singleline(&mut name.0);
@@ -116,9 +118,9 @@ fn draw_name_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
     }
 }
 
-fn draw_transform_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut transforms) = world.borrow_mut::<Transform>().expect("ECS Aliasing Error") {
-        if let Some(t) = transforms.get_mut(entity_id) {
+fn draw_transform_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+    if let Ok(Some(mut transforms)) = world.borrow_mut::<Transform>() {
+        if let Some(t) = transforms.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("📐 Transform")
                 .default_open(true)
                 .show(ui, |ui| {
@@ -175,9 +177,9 @@ fn draw_transform_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
     }
 }
 
-fn draw_velocity_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut velocities) = world.borrow_mut::<Velocity>().expect("ECS Aliasing Error") {
-        if let Some(v) = velocities.get_mut(entity_id) {
+fn draw_velocity_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+    if let Ok(Some(mut velocities)) = world.borrow_mut::<Velocity>() {
+        if let Some(v) = velocities.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("💨 Velocity")
                 .default_open(false)
                 .show(ui, |ui| {
@@ -223,9 +225,9 @@ fn draw_velocity_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
     }
 }
 
-fn draw_rigidbody_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut rigidbodies) = world.borrow_mut::<RigidBody>().expect("ECS Aliasing Error") {
-        if let Some(rb) = rigidbodies.get_mut(entity_id) {
+fn draw_rigidbody_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+    if let Ok(Some(mut rigidbodies)) = world.borrow_mut::<RigidBody>() {
+        if let Some(rb) = rigidbodies.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("⚙️ RigidBody")
                 .default_open(false)
                 .show(ui, |ui| {
@@ -272,9 +274,9 @@ fn draw_rigidbody_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
     }
 }
 
-fn draw_collider_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut colliders) = world.borrow_mut::<Collider>().expect("ECS Aliasing Error") {
-        if let Some(collider) = colliders.get_mut(entity_id) {
+fn draw_collider_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+    if let Ok(Some(mut colliders)) = world.borrow_mut::<Collider>() {
+        if let Some(collider) = colliders.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("🛡️ Collider")
                 .default_open(true)
                 .show(ui, |ui| {
@@ -305,7 +307,7 @@ fn draw_collider_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
                             });
                         }
                         other => {
-                            ui.label(format!("Şekil: {:?}", other));
+                            ui.label(egui::RichText::new(format!("Şekil: {:?} (Sadece Okunur)", other)).color(egui::Color32::GRAY));
                         }
                     }
                 });
@@ -314,9 +316,9 @@ fn draw_collider_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
     }
 }
 
-fn draw_camera_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut cameras) = world.borrow_mut::<Camera>().expect("ECS Aliasing Error") {
-        if let Some(cam) = cameras.get_mut(entity_id) {
+fn draw_camera_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+    if let Ok(Some(mut cameras)) = world.borrow_mut::<Camera>() {
+        if let Some(cam) = cameras.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("📷 Camera")
                 .default_open(false)
                 .show(ui, |ui| {
@@ -358,9 +360,9 @@ fn draw_camera_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
     }
 }
 
-fn draw_point_light_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut lights) = world.borrow_mut::<PointLight>().expect("ECS Aliasing Error") {
-        if let Some(light) = lights.get_mut(entity_id) {
+fn draw_point_light_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+    if let Ok(Some(mut lights)) = world.borrow_mut::<PointLight>() {
+        if let Some(light) = lights.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("💡 PointLight")
                 .default_open(false)
                 .show(ui, |ui| {
@@ -385,9 +387,9 @@ fn draw_point_light_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
     }
 }
 
-fn draw_material_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut materials) = world.borrow_mut::<Material>().expect("ECS Aliasing Error") {
-        if let Some(mat) = materials.get_mut(entity_id) {
+fn draw_material_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+    if let Ok(Some(mut materials)) = world.borrow_mut::<Material>() {
+        if let Some(mat) = materials.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("🎨 Material")
                 .default_open(false)
                 .show(ui, |ui| {
@@ -415,9 +417,9 @@ fn draw_material_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
                         );
                     });
 
-                    let mode = if mat.unlit == 0.0 {
+                    let mode = if mat.unlit < 0.5 {
                         "PBR"
-                    } else if mat.unlit == 1.0 {
+                    } else if mat.unlit < 1.5 {
                         "Unlit"
                     } else {
                         "Skybox"
@@ -433,9 +435,9 @@ fn draw_material_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
     }
 }
 
-fn draw_particle_emitter_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut emitters) = world.borrow_mut::<ParticleEmitter>().expect("ECS Aliasing Error") {
-        if let Some(emitter) = emitters.get_mut(entity_id) {
+fn draw_particle_emitter_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+    if let Ok(Some(mut emitters)) = world.borrow_mut::<ParticleEmitter>() {
+        if let Some(emitter) = emitters.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("✨ Particle Emitter")
                 .default_open(false)
                 .show(ui, |ui| {
@@ -464,9 +466,9 @@ fn draw_particle_emitter_section(ui: &mut egui::Ui, world: &World, entity_id: u3
     }
 }
 
-fn draw_vehicle_controller_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut vehicles) = world.borrow_mut::<VehicleController>().expect("ECS Aliasing Error") {
-        if let Some(vrc) = vehicles.get_mut(entity_id) {
+fn draw_vehicle_controller_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+    if let Ok(Some(mut vehicles)) = world.borrow_mut::<VehicleController>() {
+        if let Some(vrc) = vehicles.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("🚗 Vehicle")
                 .default_open(false)
                 .show(ui, |ui| {
@@ -484,11 +486,12 @@ fn draw_vehicle_controller_section(ui: &mut egui::Ui, world: &World, entity_id: 
     }
 }
 
-fn draw_script_section(ui: &mut egui::Ui, world: &World, entity_id: u32, state: &mut EditorState) {
-    if let Some(mut scripts) = world.borrow_mut::<gizmo_scripting::engine::Script>().expect("ECS Aliasing Error") {
-        // Drop wrapper ile borrow bitimine izin verelim diye clone alıyoruz ama
-        // text_edit bağlamak için referans lazım.
-        if let Some(script) = scripts.get_mut(entity_id) {
+fn draw_script_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+    let mut pending_text = None;
+    let mut file_path = String::new();
+    if let Ok(Some(mut scripts)) = world.borrow_mut::<gizmo_scripting::engine::Script>() {
+        if let Some(script) = scripts.get_mut(entity_id.id()) {
+            file_path = script.file_path.clone();
             egui::CollapsingHeader::new("📜 Script")
                 .default_open(true)
                 .show(ui, |ui| {
@@ -497,111 +500,55 @@ fn draw_script_section(ui: &mut egui::Ui, world: &World, entity_id: u32, state: 
                         ui.text_edit_singleline(&mut script.file_path);
                     });
                     
-                    if ui.button("✏️ Düzenle (Kod Editörü)").clicked() {
-                        if std::path::Path::new(&script.file_path).exists() {
-                            if let Ok(content) = std::fs::read_to_string(&script.file_path) {
-                                state.active_script_content = content;
-                            }
-                        } else {
-                            // Dosya yoksa boş
-                            state.active_script_content = "-- Gizmo Script\nfunction on_update(dt)\n\nend".to_string();
+                    if ui.button("✏️ Düzenle").clicked() {
+                        match std::fs::read_to_string(&script.file_path) {
+                            Ok(content) => pending_text = Some(content),
+                            Err(e) => { state.last_error = Some(format!("Script okuma hatası: {}", e)); }
                         }
-                        state.active_script_path = script.file_path.clone();
-                        state.script_editor_open = true;
                     }
                 });
             ui.separator();
         }
     }
+    
+    if let Some(content) = pending_text {
+        state.script.active_content = Some(content);
+        state.script.active_path = Some(file_path);
+        state.script.is_dirty = false;
+        state.script.pending_clear_confirm = false;
+        state.open_tab(crate::editor_state::EditorTab::ScriptEditor);
+    }
 }
 
-fn draw_add_component_menu(
-    ui: &mut egui::Ui,
-    _world: &World,
-    _entity_id: u32,
-    state: &mut EditorState,
-) {
+fn draw_add_component_menu(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
     ui.group(|ui| {
-        ui.horizontal(|ui| {
-            ui.label("Eklenecek Bileşen:");
+        ui.label("Eklenebilecek Bileşenler");
+        ui.separator();
 
-            let components = [
-                "Transform",
-                "Velocity",
-                "RigidBody",
-                "Collider",
-                "Camera",
-                "PointLight",
-                "Material",
-                "ParticleEmitter",
-                "Script",
-                "AudioSource",
-                "Terrain",
-                "VehicleController",
-            ];
-
-            egui::ComboBox::from_id_source("add_comp_combo")
-                .selected_text("Seçiniz...")
-                .show_ui(ui, |ui| {
-                    for comp_name in &components {
-                        if ui.selectable_label(false, *comp_name).clicked() {
-                            state.add_component_open = false;
-                            state.add_component_request = Some((_entity_id, comp_name.to_string()));
-                        }
-                    }
-                });
-        });
+        if let Ok(Some(registry)) = world.get_resource::<gizmo_core::ComponentRegistry>() {
+            let names = registry.all_names();
+            for comp_name in names {
+                // TODO: Entity üzerinde component olup olmadığını gizmo_core registry üzerinden checkle.
+                if ui.button(format!("🔹 {}", comp_name)).clicked() {
+                    state.add_component_request = Some((entity_id, comp_name.to_string()));
+                    state.add_component_open = false;
+                }
+            }
+        } else {
+            ui.label(egui::RichText::new("ComponentRegistry bulunamadi!").color(egui::Color32::RED));
+        }
     });
 }
 
-fn draw_audio_source_section(ui: &mut egui::Ui, world: &World, entity_id: u32) {
-    if let Some(mut audios) = world.borrow_mut::<AudioSource>().expect("ECS Aliasing Error") {
-        if let Some(audio) = audios.get_mut(entity_id) {
-            egui::CollapsingHeader::new("🔊 AudioSource")
-                .default_open(true)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Ses Dosyası:");
-                        ui.label(
-                            egui::RichText::new(&audio.sound_name)
-                                .color(egui::Color32::from_rgb(100, 200, 255)),
-                        );
-                    });
-                    ui.checkbox(&mut audio.is_3d, "3D Uzamsal Ses");
-                    ui.checkbox(&mut audio.loop_sound, "Döngü (Loop)");
-
-                    ui.horizontal(|ui| {
-                        ui.label("Ses Şiddeti (Volume):");
-                        ui.add(egui::Slider::new(&mut audio.volume, 0.0..=5.0));
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Ses İnceliği (Pitch):");
-                        ui.add(egui::Slider::new(&mut audio.pitch, 0.1..=3.0));
-                    });
-
-                    if audio.is_3d {
-                        ui.horizontal(|ui| {
-                            ui.label("Maksimum Mesafe:");
-                            ui.add(
-                                egui::Slider::new(&mut audio.max_distance, 1.0..=1000.0)
-                                    .suffix("m"),
-                            );
-                        });
-                    }
-                });
-            ui.separator();
-        }
-    }
-}
-
-fn draw_terrain_section(ui: &mut egui::Ui, world: &World, entity_id: u32, state: &mut EditorState) {
-    if let Some(mut terrains) = world.borrow_mut::<gizmo_renderer::components::Terrain>().expect("ECS Aliasing Error") {
-        if let Some(terrain) = terrains.get_mut(entity_id) {
+fn draw_terrain_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+    if let Ok(Some(mut terrains)) = world.borrow_mut::<gizmo_renderer::components::Terrain>() {
+        if let Some(terrain) = terrains.get_mut(entity_id.id()) {
             let mut changed = false;
             egui::CollapsingHeader::new("🏔 Terrain")
                 .default_open(true)
                 .show(ui, |ui| {
-                    ui.label(format!("Heightmap: {}", terrain.heightmap_path));
+                    ui.horizontal(|ui| { ui.label("Dosya Yolu:"); ui.text_edit_singleline(&mut terrain.heightmap_path); });
+                    ui.label(format!("Boyut: {}x{}", terrain.width, terrain.depth));
                     ui.horizontal(|ui| {
                         ui.label("Genişlik (X):");
                         if ui

@@ -23,8 +23,8 @@ pub fn handle_input_and_scene_view(world: &mut World, editor_state: &mut EditorS
                     transforms.get(state.editor_camera),
                     cameras.get(state.editor_camera),
                 ) {
-                    editor_state.camera_view = Some(cam.get_view(t.position));
-                    editor_state.camera_proj = Some(cam.get_projection(aspect));
+                    editor_state.camera.view = Some(cam.get_view(t.position));
+                    editor_state.camera.proj = Some(cam.get_projection(aspect));
                 }
             }
 
@@ -114,7 +114,7 @@ pub fn handle_input_and_scene_view(world: &mut World, editor_state: &mut EditorS
                         (world.borrow::<Collider>().expect("ECS Aliasing Error"), world.borrow::<Transform>().expect("ECS Aliasing Error"))
                     {
                         for (id, col) in colliders.iter() {
-                            if id == state.editor_camera || id == editor_state.highlight_box {
+                            if id == state.editor_camera || Some(gizmo::prelude::Entity::new(id, 0)) == editor_state.selection.highlight_box {
                                 continue;
                             }
 
@@ -157,7 +157,7 @@ pub fn handle_input_and_scene_view(world: &mut World, editor_state: &mut EditorS
             if asset_path.ends_with(".prefab") {
                 editor_state.prefab_load_request = Some((asset_path, None, final_pos));
             } else if asset_path.ends_with(".gizmo") {
-                editor_state.scene_load_request = Some(asset_path);
+                editor_state.scene.load_request = Some(asset_path);
             } else if asset_path.ends_with(".glb") || asset_path.ends_with(".gltf") || asset_path.ends_with(".obj") {
                 editor_state.gltf_load_request = Some((asset_path, final_pos));
             } else {

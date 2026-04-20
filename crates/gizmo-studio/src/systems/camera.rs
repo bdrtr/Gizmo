@@ -174,12 +174,12 @@ pub fn handle_camera(world: &mut World, state: &mut StudioState, dt: f32, input:
                 if input.is_key_just_pressed(key as u32) {
                     if ctrl { // Bookmark Save
                         if let Some(mut es) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
-                            es.camera_bookmarks[i] = Some((t.position, cam.yaw, cam.pitch));
+                            es.camera.bookmarks[i] = Some((t.position, cam.yaw, cam.pitch));
                             es.log_info(&format!("Kamera #{} kaydedildi.", i));
                         }
                     } else { // Bookmark Load
                         if let Some(mut es) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
-                            if let Some((pos, yaw, pitch)) = es.camera_bookmarks[i] {
+                            if let Some((pos, yaw, pitch)) = es.camera.bookmarks[i] {
                                 t.position = pos;
                                 cam.yaw = yaw;
                                 cam.pitch = pitch;

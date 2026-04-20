@@ -14,7 +14,7 @@ pub fn handle_studio_input(
         perform_raycast(world, state, ray, player_id, ctrl_pressed);
     }
 
-    if let Some((start, end)) = state.rubber_band_request.take() {
+    if let Some((start, end)) = state.selection.rubber_band_request.take() {
         perform_rubber_band_selection(world, state, start, end, player_id, ctrl_pressed);
     }
 }
@@ -27,12 +27,12 @@ fn perform_rubber_band_selection(
     player_id: u32,
     ctrl_pressed: bool,
 ) {
-    if state.camera_view.is_none() || state.camera_proj.is_none() || state.scene_view_rect.is_none() {
+    if state.camera.view.is_none() || state.camera.proj.is_none() || state.scene_view_rect.is_none() {
         return;
     }
 
-    let view_mat = state.camera_view.unwrap();
-    let proj_mat = state.camera_proj.unwrap();
+    let view_mat = state.camera.view.unwrap();
+    let proj_mat = state.camera.proj.unwrap();
     let vp_mat = proj_mat * view_mat;
     
     // Egui tiplerine dokunmadan koordinatlari aliyoruz. scene_view_rect bir egui::Rect
@@ -47,14 +47,14 @@ fn perform_rubber_band_selection(
     let max_y = start.y.max(end.y);
 
     if !ctrl_pressed {
-        state.selected_entities.clear();
+        state.selection.entities.clear();
     }
 
     if let Some(transforms) = world.borrow::<Transform>().expect("ECS Aliasing Error") {
         let is_hidden = world.borrow::<gizmo::core::component::IsHidden>().expect("ECS Aliasing Error");
 
         for (id, t) in transforms.iter() {
-            if id == player_id || id == state.highlight_box {
+            if id == player_id || state.selection.highlight_box.map(|h| h.id()) == Some(id) {
                 continue;
             }
 
@@ -79,7 +79,7 @@ fn perform_rubber_band_selection(
 
             // Dörtgen icinde kalip kalmadigini kontrol et
             if screen_x >= min_x && screen_x <= max_x && screen_y >= min_y && screen_y <= max_y {
-                state.selected_entities.insert(id);
+                state.selection.entities.insert(gizmo::prelude::Entity::new(id, 0));
             }
         }
     }
@@ -98,7 +98,7 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
 
         for (id, col) in colliders.iter() {
             // Editör objelerini, highlight box'ı es geç
-            if id == player_id || id == state.highlight_box {
+            if id == player_id || state.selection.highlight_box.map(|h| h.id()) == Some(id) {
                 continue;
             }
             // Gizli component'i olan objeleri tıklanabilir yapma.
@@ -132,9 +132,9 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
 
     if let Some(hit) = hit_entity {
         if ctrl_pressed {
-            state.toggle_selection(hit);
+            state.toggle_selection(gizmo::prelude::Entity::new(hit, 0));
         } else {
-            state.select_exclusive(hit);
+            state.select_exclusive(gizmo::prelude::Entity::new(hit, 0));
         }
 
 
@@ -150,16 +150,16 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
     let mut selected_scale = gizmo::math::Vec3::ONE;
     let mut selected_col = None;
 
-    if let Some(&selected) = state.selected_entities.iter().next() {
+    if let Some(&selected) = state.selection.entities.iter().next() {
         if let Some(transforms) = world.borrow::<Transform>().expect("ECS Aliasing Error") {
-            if let Some(t) = transforms.get(selected) {
+            if let Some(t) = transforms.get(selected.id()) {
                 any_selected = true;
                 selected_pos = t.position;
                 selected_rot = t.rotation;
                 selected_scale = t.scale;
 
                 if let Some(colls) = world.borrow::<Collider>().expect("ECS Aliasing Error") {
-                    if let Some(c) = colls.get(selected) {
+                    if let Some(c) = colls.get(selected.id()) {
                         selected_col = Some(c.clone());
                     }
                 }
@@ -170,7 +170,7 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
     if any_selected {
         // Obje seçiliyse Highlight Box pozisyonunu ve boyutunu güncelle
         if let Some(mut trans) = world.borrow_mut::<Transform>().expect("ECS Aliasing Error") {
-            if let Some(hb) = (*trans).get_mut(state.highlight_box) {
+            if let Some(hb) = (*trans).get_mut(state.selection.highlight_box.unwrap_or(gizmo::prelude::Entity::new(0,0)).id()) {
                 hb.position = selected_pos;
                 hb.rotation = selected_rot;
 
@@ -184,12 +184,12 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
         }
 
         // ECS üzerinden görünür yap
-        if let Some(entity_hb) = world.get_entity(state.highlight_box) {
+        if let Some(entity_hb) = world.get_entity(state.selection.highlight_box.unwrap_or(gizmo::prelude::Entity::new(0,0)).id()) {
             world.remove_component::<gizmo::core::component::IsHidden>(entity_hb);
         }
     } else {
         // Hiçbir şey seçili değilse 't.position = -10000' hack'i yerine ECS üzerinden render'ı atla
-        if let Some(entity_hb) = world.get_entity(state.highlight_box) {
+        if let Some(entity_hb) = world.get_entity(state.selection.highlight_box.unwrap_or(gizmo::prelude::Entity::new(0,0)).id()) {
             world.add_component(entity_hb, gizmo::core::component::IsHidden);
         }
     }

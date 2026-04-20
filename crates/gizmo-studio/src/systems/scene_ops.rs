@@ -6,7 +6,7 @@ use gizmo::prelude::*;
 pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState, _state: &mut StudioState) {
         // --- DİNAMİK COMPONENT EKLEME İŞLEMİ ---
         if let Some((ent_id, comp_name)) = editor_state.add_component_request.take() {
-            if let Some(ent) = world.get_entity(ent_id) {
+            if let Some(ent) = world.get_entity(ent_id.id()) {
                 match comp_name.as_str() {
                     "Transform" => world.add_component(ent, Transform::new(Vec3::ZERO)),
                     "Velocity" => {
@@ -93,7 +93,7 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
 
                         let mut children = Vec::new();
                         if let Some(ch_storage) = world.borrow::<gizmo::core::component::Children>().expect("ECS Aliasing Error") {
-                            if let Some(existing) = ch_storage.get(ent_id) {
+                            if let Some(existing) = ch_storage.get(ent_id.id()) {
                                 children.extend(&existing.0);
                             }
                         }
@@ -106,7 +106,7 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
                             let mut wc = gizmo::physics::vehicle::WheelComponent::new(spring, stiff, damp, r);
                             if drive { wc = wc.with_drive() }
                             world.add_component(child, wc);
-                            world.add_component(child, gizmo::core::component::Parent(ent_id));
+                            world.add_component(child, gizmo::core::component::Parent(ent_id.id()));
                             children.push(child.id());
                         }
 
@@ -121,25 +121,25 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
 
         if !editor_state.despawn_requests.is_empty() {
             let mut history_backup = Vec::new();
-            let despawn_reqs: Vec<u32> = editor_state.despawn_requests.drain(..).collect();
+            let despawn_reqs: Vec<gizmo::prelude::Entity> = editor_state.despawn_requests.drain(..).collect();
             for ent_id in despawn_reqs {
-                editor_state.selected_entities.remove(&ent_id);
+                editor_state.selection.entities.remove(&ent_id);
                 
                 // 1. Parent'ın Children listesinden kendini çıkar
                 if let Some(parent_storage) = world.borrow::<gizmo::core::component::Parent>().expect("ECS Aliasing Error") {
-                    if let Some(p) = parent_storage.get(ent_id) {
+                    if let Some(p) = parent_storage.get(ent_id.id()) {
                         let parent_id = p.0;
                         drop(parent_storage);
                         if let Some(mut children_storage) = world.borrow_mut::<gizmo::core::component::Children>().expect("ECS Aliasing Error") {
                             if let Some(c) = children_storage.get_mut(parent_id) {
-                                c.0.retain(|&id| id != ent_id);
+                                c.0.retain(|&id| id != ent_id.id());
                             }
                         }
                     }
                 }
 
                 // 2. Tüm çocuklarını topla
-                let mut ids_to_delete = vec![ent_id];
+                let mut ids_to_delete = vec![ent_id.id()];
                 if let Some(children_storage) = world.borrow::<gizmo::core::component::Children>().expect("ECS Aliasing Error") {
                     let mut i = 0;
                     while i < ids_to_delete.len() {
@@ -154,8 +154,8 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
                 }
 
                 // 3. Geçmişe kaydet (yalnızca kökü kaydediyoruz şimdilik) ve hepsini despawn et
-                if let Some(_ent) = world.get_entity(ent_id) {
-                    let backup = gizmo::scene::SceneData::serialize_entities(world, vec![ent_id], &gizmo::scene::SceneRegistry::default());
+                if let Some(_ent) = world.get_entity(ent_id.id()) {
+                    let backup = gizmo::scene::SceneData::serialize_entities(world, vec![ent_id.id()], &gizmo::scene::SceneRegistry::default());
                     if let Some(data) = backup.into_iter().next() {
                         if let Ok(bytes) = bincode::serialize(&data) {
                             history_backup.push(bytes);
@@ -163,7 +163,7 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
                     }
                     
                     for &id in &ids_to_delete {
-                        world.despawn_by_id(id);
+                        if let Some(ent) = world.get_entity(id) { world.despawn(ent); }
                     }
                     editor_state.log_info(&format!("Entity {} ve {} çocuğu silindi.", ent_id, ids_to_delete.len() - 1));
                 }
@@ -232,21 +232,22 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
                     }
                 }
 
-                editor_state.select_exclusive(e.id());
+                editor_state.select_exclusive(e);
                 editor_state
                     .history
                     .push(gizmo::editor::history::EditorAction::EntitySpawned {
-                        entity_ids: vec![e.id()],
+                        entity_ids: vec![e],
                     });
             }
         }
 
         // --- GÖRÜNÜRLÜK AÇMA / KAPATMA ---
-        if let Some(ent_id) = editor_state.toggle_visibility_request.take() {
-            if let Some(ent) = world.get_entity(ent_id) {
+        let toggle_requests: Vec<_> = editor_state.toggle_visibility_requests.drain(..).collect();
+        for ent_id in toggle_requests {
+            if let Some(ent) = world.get_entity(ent_id.id()) {
                 let currently_hidden = world
                     .borrow::<gizmo::core::component::IsHidden>().expect("ECS Aliasing Error")
-                    .map_or(false, |h| h.contains(ent_id));
+                    .map_or(false, |h| h.contains(ent_id.id()));
                 if currently_hidden {
                     world.remove_component::<gizmo::core::component::IsHidden>(ent);
                     editor_state.log_info(&format!("Entity {} görünür yapıldı.", ent_id));
@@ -262,26 +263,26 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
             // Eski parent'ı O(1) maliyetle bul
             let old_parent_id = world
                 .borrow::<gizmo::core::component::Parent>().expect("ECS Aliasing Error")
-                .and_then(|p| p.get(child_id).map(|c| c.0));
+                .and_then(|p| p.get(child_id.id()).map(|c| c.0));
 
             // Eski parent'ın children listesinden çıkar ve yeni parent'a ekle
             if let Some(mut children_comp) = world.borrow_mut::<gizmo::core::component::Children>().expect("ECS Aliasing Error") {
                 if let Some(old_pid) = old_parent_id {
                     if let Some(ch) = children_comp.get_mut(old_pid) {
-                        ch.0.retain(|&cid| cid != child_id);
+                        ch.0.retain(|&cid| cid != child_id.id());
                     }
                 }
                 
                 // Yeni parent'a ekle
-                if let Some(ch) = children_comp.get_mut(new_parent_id) {
-                    if !ch.0.contains(&child_id) {
-                        ch.0.push(child_id);
+                if let Some(ch) = children_comp.get_mut(new_parent_id.id()) {
+                    if !ch.0.contains(&child_id.id()) {
+                        ch.0.push(child_id.id());
                     }
                 }
             }
             
-            if let Some(child_ent) = world.get_entity(child_id) {
-                world.add_component(child_ent, gizmo::core::component::Parent(new_parent_id));
+            if let Some(child_ent) = world.get_entity(child_id.id()) {
+                world.add_component(child_ent, gizmo::core::component::Parent(new_parent_id.id()));
                 editor_state.log_info(&format!(
                     "Entity {} parent {} olarak ayarlandı.",
                     child_id, new_parent_id
@@ -294,17 +295,17 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
             // Eski parent'ı O(1) maliyetle bul
             let old_parent_id = world
                 .borrow::<gizmo::core::component::Parent>().expect("ECS Aliasing Error")
-                .and_then(|p| p.get(child_id).map(|c| c.0));
+                .and_then(|p| p.get(child_id.id()).map(|c| c.0));
 
             if let Some(old_pid) = old_parent_id {
                 if let Some(mut children_comp) = world.borrow_mut::<gizmo::core::component::Children>().expect("ECS Aliasing Error") {
                     if let Some(ch) = children_comp.get_mut(old_pid) {
-                        ch.0.retain(|&cid| cid != child_id);
+                        ch.0.retain(|&cid| cid != child_id.id());
                     }
                 }
             }
             
-            if let Some(child_ent) = world.get_entity(child_id) {
+            if let Some(child_ent) = world.get_entity(child_id.id()) {
                 world.remove_component::<gizmo::core::component::Parent>(child_ent);
                 editor_state.log_info(&format!("Entity {} kök (root) yapıldı.", child_id));
             }

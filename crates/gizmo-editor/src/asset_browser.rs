@@ -3,19 +3,12 @@
 use crate::editor_state::EditorState;
 use egui;
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
-
-static PICKED_WORKSPACE: OnceLock<Arc<Mutex<Option<String>>>> = OnceLock::new();
-
-fn get_picked_workspace() -> Arc<Mutex<Option<String>>> {
-    PICKED_WORKSPACE.get_or_init(|| Arc::new(Mutex::new(None))).clone()
-}
 
 /// Asset Browser sekmesini çizer
 pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
-    if let Ok(mut lock) = get_picked_workspace().try_lock() {
-        if let Some(path) = lock.take() {
-            state.asset_root = path;
+    if let Some(rx) = &state.assets.workspace_rx {
+        if let Ok(path) = rx.try_recv() {
+            state.assets.root = path;
         }
     }
 
@@ -25,46 +18,47 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
 
         // Geri git
         if ui.button("⬅").on_hover_text("Üst Dizin (Geri)").clicked() {
-            if let Some(parent) = Path::new(&state.asset_root).parent() {
-                state.asset_root = parent.to_string_lossy().to_string();
+            if let Some(parent) = Path::new(&state.assets.root).parent() {
+                state.assets.root = parent.to_string_lossy().to_string();
             }
         }
 
         // Workspace seçici
-        if ui.button("📁 Workspace Aç").on_hover_text("Bilgisayardan bir çalışma dizini seçin").clicked() {
-            let picked = get_picked_workspace();
-            std::thread::spawn(move || {
-                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                    if let Ok(mut lock) = picked.lock() {
-                        *lock = Some(folder.to_string_lossy().to_string());
+        if state.assets.workspace_rx.is_none() {
+            if ui.button("📁 Workspace Aç").on_hover_text("Bilgisayardan bir çalışma dizini seçin").clicked() {
+                let (tx, rx) = std::sync::mpsc::channel();
+                state.assets.workspace_rx = Some(rx);
+                std::thread::spawn(move || {
+                    if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                        let _ = tx.send(folder.to_string_lossy().to_string());
                     }
-                }
-            });
+                });
+            }
+        } else {
+            let _ = ui.add_enabled(false, egui::Button::new("📁 Workspace Aç")).on_hover_text("Dizin seçimi bekleniyor...");
         }
         
         ui.separator();
 
         ui.label("🔍");
-        ui.text_edit_singleline(&mut state.asset_filter);
+        ui.text_edit_singleline(&mut state.assets.filter);
         ui.separator();
 
         // Breadcrumb tarzında yol gösterimi
-        let current_root = state.asset_root.clone();
+        let current_root = state.assets.root.clone();
         ui.horizontal(|ui| {
-            let path_parts: Vec<&str> = current_root.split('/').collect();
-            let mut current_path = String::new();
+            let components: Vec<_> = Path::new(&current_root).components().collect();
+            let mut current_path = std::path::PathBuf::new();
 
-            for (i, part) in path_parts.iter().enumerate() {
-                if i > 0 {
-                    current_path.push('/');
-                }
-                current_path.push_str(part);
+            for (i, comp) in components.iter().enumerate() {
+                current_path.push(comp);
+                let part_str = comp.as_os_str().to_string_lossy();
 
-                if ui.add(egui::Button::new(*part).frame(false)).clicked() {
-                    state.asset_root = current_path.clone();
+                if ui.add(egui::Button::new(part_str).frame(false)).clicked() {
+                    state.assets.root = current_path.to_string_lossy().to_string();
                 }
 
-                if i < path_parts.len() - 1 {
+                if i < components.len() - 1 {
                     ui.label("›"); // Breadcrumb separator
                 }
             }
@@ -74,9 +68,9 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
     // Hızlı aksiyon butonu satırı
     ui.horizontal(|ui| {
         if ui.small_button("📦 Sahneden Prefab Oluştur").clicked() {
-            if let Some(&selected) = state.selected_entities.iter().next() {
-                let path = format!("demo/assets/prefabs/prefab_{}.prefab", selected);
-                state.prefab_save_request = Some((selected, path));
+            if let Some(&selected) = state.selection.entities.iter().next() {
+                let path = Path::new(&state.assets.root).join(format!("prefab_{}.prefab", selected));
+                state.prefab_save_request = Some((selected, path.to_string_lossy().to_string()));
             } else {
                 state.log_warning("Önce bir entity seçin.");
             }
@@ -87,7 +81,7 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
 
     egui::ScrollArea::both().show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
-            let root = Path::new(&state.asset_root);
+            let root = Path::new(&state.assets.root);
             if !root.exists() || !root.is_dir() {
                 ui.label(
                     egui::RichText::new("⚠ Asset dizini bulunamadı").color(egui::Color32::YELLOW),
@@ -95,32 +89,46 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
                 return;
             }
 
-            let Ok(entries) = std::fs::read_dir(root) else {
+            let now = std::time::Instant::now();
+            let mut need_refresh = true;
+            if let Some((cached_path, last_update, _)) = &state.assets.cached_dir {
+                if cached_path == &state.assets.root && now.duration_since(*last_update).as_secs_f32() < 1.0 {
+                    need_refresh = false;
+                }
+            }
+
+            if need_refresh {
+                if let Ok(entries) = std::fs::read_dir(root) {
+                    let mut file_cache = Vec::new();
+                    for entry in entries.filter_map(|e| e.ok()) {
+                        let is_dir = entry.path().is_dir();
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        file_cache.push((entry.path(), name, is_dir));
+                    }
+                    file_cache.sort_by(|a, b| {
+                        b.2.cmp(&a.2).then(a.1.cmp(&b.1))
+                    });
+                    state.assets.cached_dir = Some((state.assets.root.clone(), now, file_cache));
+                }
+            }
+
+            let file_entries = if let Some((_, _, cache)) = &state.assets.cached_dir {
+                cache.clone()
+            } else {
                 return;
             };
-            let mut files: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-            files.sort_by(|a, b| {
-                // Klasörler önce
-                let a_dir = a.path().is_dir();
-                let b_dir = b.path().is_dir();
-                b_dir.cmp(&a_dir).then(a.file_name().cmp(&b.file_name()))
-            });
 
-            for entry in files {
-                let path = entry.path();
-                let name = entry.file_name().to_string_lossy().to_string();
+            let filter_lower = state.assets.filter.to_lowercase();
+
+            for (path, name, is_dir) in file_entries {
 
                 // Filtre
-                if !state.asset_filter.is_empty()
-                    && !name
-                        .to_lowercase()
-                        .contains(&state.asset_filter.to_lowercase())
-                {
+                let name_lower = name.to_lowercase();
+                if !filter_lower.is_empty() && !name_lower.contains(&filter_lower) {
                     continue;
                 }
 
                 let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
-                let is_dir = path.is_dir();
                 let is_prefab = ext == "prefab";
                 let is_scene = ext == "gizmo" || ext == "giz";
                 let is_model = ext == "glb" || ext == "gltf" || ext == "obj";
@@ -152,8 +160,8 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
                             .fill(egui::Color32::from_rgba_premultiplied(30, 30, 30, 180)),
                     );
 
-                    // Tooltip
-                    response.clone().on_hover_text(format!(
+                    // Tooltip (Reassign response because on_hover_text consumes it)
+                    let response = response.on_hover_text(format!(
                         "{}\n{}",
                         name,
                         if is_prefab {
@@ -167,7 +175,55 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
                         }
                     ));
 
-                    // Sağ tık menüsü
+                    // Sağ tık menüsü en sonda atanacak
+
+                    // Drag & Drop başlatma (viewport'ta yakalanır)
+                    let drag_id = egui::Id::new("drag_asset").with(path.as_os_str());
+                    let drag_response = ui.interact(response.rect, drag_id, egui::Sense::drag());
+                    if drag_response.drag_started() {
+                        state.dragged_asset = Some(path_str.clone());
+                    }
+
+                    if response.double_clicked() {
+                        if is_dir {
+                            // Klasöre gir (çift tık)
+                            state.assets.root = path_str.clone();
+                        }
+                    } else if response.clicked() {
+                        if is_prefab {
+                            // ✅ TEK TIKLA prefab sahneye ekle
+                            state.prefab_load_request = Some((path_str.clone(), None, None));
+                            state.status_message = format!("Prefab eklendi: {}", name);
+                        } else if is_scene {
+                            // ✅ TEK TIKLA sahneyi yükle
+                            if state.has_unsaved_changes {
+                                state.scene.load_confirm_dialog = Some(path_str.clone());
+                            } else {
+                                state.scene.load_request = Some(path_str.clone());
+                                state.status_message = format!("Sahne yükleniyor: {}", name);
+                            }
+                        } else if is_model {
+                            state.status_message = format!("Seçilen: {} (Model)", name);
+                        } else {
+                            state.status_message = format!("Seçilen: {}", name);
+                        }
+                    }
+
+                    // Dosya adı (kısa gösterim)
+                    let char_count = name.chars().count();
+                    let short_name = if char_count > 11 {
+                        let truncated: String = name.chars().take(9).collect();
+                        format!("{}...", truncated)
+                    } else {
+                        name.clone()
+                    };
+                    ui.label(
+                        egui::RichText::new(short_name)
+                            .small()
+                            .color(egui::Color32::from_rgb(200, 200, 200)),
+                    );
+
+                    // Context Menu tüketimini güvenli hale getirmek için scope'un en sonunda çağrılır
                     response.context_menu(|ui| {
                         if is_model
                             && ui.button("⚙️ Sahneye Ekle").clicked() {
@@ -181,7 +237,7 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
                             }
                         if is_scene
                             && ui.button("📂 Bu Sahneyi Yükle").clicked() {
-                                state.scene_load_request = Some(path_str.clone());
+                                state.scene.load_request = Some(path_str.clone());
                                 ui.close_menu();
                             }
                         if ui.button("📋 Yolu Kopyala").clicked() {
@@ -189,49 +245,6 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
                             ui.close_menu();
                         }
                     });
-
-                    // Drag & Drop başlatma
-                    let drag_id = egui::Id::new("drag_asset").with(&path);
-                    let drag_response = ui.interact(response.rect, drag_id, egui::Sense::drag());
-                    if drag_response.drag_started() {
-                        ui.memory_mut(|m| {
-                            m.data
-                                .insert_temp(egui::Id::new("dragged_asset_path"), path_str.clone())
-                        });
-                    }
-
-                    if response.double_clicked()
-                        && is_dir {
-                            // Klasöre gir (çift tık)
-                            state.asset_root = path_str.clone();
-                        }
-
-                    // Tek tıklama mantığı
-                    if response.clicked() {
-                        if is_prefab {
-                            // ✅ TEK TIKLA prefab sahneye ekle
-                            state.prefab_load_request = Some((path_str.clone(), None, None));
-                            state.status_message = format!("Prefab eklendi: {}", name);
-                        } else if is_scene {
-                            // ✅ TEK TIKLA sahneyi yükle
-                            state.scene_load_request = Some(path_str.clone());
-                            state.status_message = format!("Sahne yükleniyor: {}", name);
-                        } else {
-                            state.status_message = format!("Seçilen: {}", name);
-                        }
-                    }
-
-                    // Dosya adı (kısa gösterim)
-                    let short_name = if name.len() > 11 {
-                        format!("{}...", &name[..9])
-                    } else {
-                        name.clone()
-                    };
-                    ui.label(
-                        egui::RichText::new(short_name)
-                            .small()
-                            .color(egui::Color32::from_rgb(200, 200, 200)),
-                    );
                 });
             }
         });
@@ -240,17 +253,15 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
 
 /// Dosya uzantısına göre ikon döndürür
 fn get_file_icon(filename: &str) -> &'static str {
-    let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
-    match ext.as_str() {
-        "obj" | "glb" | "gltf" | "fbx" => "🗿",
-        "jpg" | "jpeg" | "png" | "bmp" | "tga" => "🖼️",
-        "wav" | "ogg" | "mp3" | "flac" => "🔊",
-        "lua" => "📜",
-        "json" | "toml" | "ron" => "📋",
-        "prefab" => "📦",
-        "gizmo" | "giz" => "🎬",
-        "wgsl" | "glsl" | "hlsl" => "🎨",
-        _ if filename.contains('.') => "📄",
-        _ => "📁", // Kazıca veya dizin
-    }
+    let ext = filename.rsplit('.').next().unwrap_or("");
+    if ext.eq_ignore_ascii_case("obj") || ext.eq_ignore_ascii_case("glb") || ext.eq_ignore_ascii_case("gltf") || ext.eq_ignore_ascii_case("fbx") { return "🗿"; }
+    if ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg") || ext.eq_ignore_ascii_case("png") || ext.eq_ignore_ascii_case("bmp") || ext.eq_ignore_ascii_case("tga") { return "🖼️"; }
+    if ext.eq_ignore_ascii_case("wav") || ext.eq_ignore_ascii_case("ogg") || ext.eq_ignore_ascii_case("mp3") || ext.eq_ignore_ascii_case("flac") { return "🔊"; }
+    if ext.eq_ignore_ascii_case("lua") { return "📜"; }
+    if ext.eq_ignore_ascii_case("json") || ext.eq_ignore_ascii_case("toml") || ext.eq_ignore_ascii_case("ron") { return "📋"; }
+    if ext.eq_ignore_ascii_case("prefab") { return "📦"; }
+    if ext.eq_ignore_ascii_case("gizmo") || ext.eq_ignore_ascii_case("giz") { return "🎬"; }
+    if ext.eq_ignore_ascii_case("wgsl") || ext.eq_ignore_ascii_case("glsl") || ext.eq_ignore_ascii_case("hlsl") { return "🎨"; }
+    if filename.contains('.') { return "📄"; }
+    "📁"
 }
