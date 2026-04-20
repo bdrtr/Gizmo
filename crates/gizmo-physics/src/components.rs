@@ -430,6 +430,11 @@ pub struct PhysicsConfig {
     /// Collision event'leri throttle: aynı çift için minimum frame aralığı
     /// 0 = devre dışı (tüm eventler fırlatılır). Fix #31. Varsayılan: 4
     pub collision_event_throttle_frames: u32,
+    /// Hareketin hızına bağlı CCD devreye girme eşiği (m/frame). Varsayılan: 0.1
+    pub ccd_velocity_threshold: f32,
+    /// Stiff yığınlar ve uzun domino zincirleri için 16-32 önerilir.
+    /// Newton sarkacı gibi izole çarpışmalar için 4-8 yeterli.
+    pub solver_iterations: u32,
 }
 
 impl Default for PhysicsConfig {
@@ -441,6 +446,8 @@ impl Default for PhysicsConfig {
             max_angular_velocity:           100.0,
             max_contact_points_per_pair:    4,
             collision_event_throttle_frames: 4,
+            ccd_velocity_threshold:         0.1,
+            solver_iterations:              16,
         }
     }
 }

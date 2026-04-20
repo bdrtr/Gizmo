@@ -1,35 +1,52 @@
 use gizmo_math::Vec3;
 
 /// Sürekli Çarpışma Tespiti (CCD) — bisection yöntemi ile TOI (Time of Impact) bulur.
-///
-/// Mermi hızındaki nesnelerin bir frame'de tünel geçmesini önler.
-/// `ccd_offset_a` / `ccd_offset_b` çıkışları, TOI anından itibaren pozisyon offsetidir.
-///
 /// Alt aralık `[t_low, t_mid]` için: A dünya konumunda `pos_a + v_a*t_low` (sabit), B aynı anda
 /// `pos_b + v_b*t_low`; bu alt süre boyunca **göreli** yer değiştirme `(v_b - v_a) * (t_mid - t_low)`.
-/// Yani süpürme vektörü her zaman **o aralığın başındaki** konumlara göre; `t=0` ile karıştırılmaz.
-pub fn ccd_bisect(
-    shape_a: &crate::shape::ColliderShape, pos_a: Vec3, rot_a: gizmo_math::Quat,
-    shape_b: &crate::shape::ColliderShape, pos_b: Vec3, rot_b: gizmo_math::Quat,
-    v_a_lin: Vec3, v_b_lin: Vec3, dt: f32,
-    ccd_offset_a: &mut Option<Vec3>,
-    ccd_offset_b: &mut Option<Vec3>,
-) -> crate::collision::CollisionManifold {
-    // Göreli lineer hız (A'nın t_low anındaki dünya çerçevesinde B'nin görünen hızı).
-    let rel_v = v_b_lin - v_a_lin;
+#[inline]
+fn integrate_rot(rot: gizmo_math::Quat, ang_vel: Vec3, t: f32) -> gizmo_math::Quat {
+    if ang_vel.length_squared() > 1e-6 {
+        gizmo_math::Quat::from_axis_angle(ang_vel.normalize(), ang_vel.length() * t) * rot
+    } else {
+        rot
+    }
+}
 
-    // Ön test: [0, dt] — konumlar kare başı (t=0), süpürme rel_v * dt.
-    let swept_b_full = crate::shape::ColliderShape::Swept {
-        base: Box::new(shape_b.clone()),
+pub struct CcdInput<'a> {
+    pub shape: &'a crate::shape::ColliderShape,
+    pub pos: Vec3,
+    pub rot: gizmo_math::Quat,
+    pub vel_lin: Vec3,
+    pub vel_ang: Vec3,
+}
+
+pub struct CcdResult {
+    pub manifold: crate::collision::CollisionManifold,
+    pub remaining_time: f32,
+    pub ccd_offset_a: Option<Vec3>,
+    pub ccd_offset_b: Option<Vec3>,
+}
+
+pub fn ccd_bisect(a: CcdInput, b: CcdInput, dt: f32) -> CcdResult {
+    let rel_v = b.vel_lin - a.vel_lin;
+
+    let mut swept_b = crate::shape::ColliderShape::Swept {
+        base: Box::new(b.shape.clone()),
         sweep_vector: rel_v * dt,
     };
-    let (hit_any, _) = crate::gjk::gjk_intersect(shape_a, pos_a, rot_a, &swept_b_full, pos_b, rot_b);
+
+    let (hit_any, _) = crate::gjk::gjk_intersect(a.shape, a.pos, a.rot, &swept_b, b.pos, b.rot);
     if !hit_any {
-        return crate::collision::CollisionManifold {
-            is_colliding: false,
-            normal: Vec3::ZERO,
-            penetration: 0.0,
-            contact_points: vec![],
+        return CcdResult {
+            manifold: crate::collision::CollisionManifold {
+                is_colliding: false,
+                normal: Vec3::ZERO,
+                penetration: 0.0,
+                contact_points: arrayvec::ArrayVec::new(),
+            },
+            remaining_time: 0.0,
+            ccd_offset_a: None,
+            ccd_offset_b: None,
         };
     }
 
@@ -38,67 +55,77 @@ pub fn ccd_bisect(
 
     for _ in 0..16 {
         let t_mid = (t_low + t_high) * 0.5;
-        // Aralık başı t_low: dünya uzayında o anki merkezler.
-        let pos_a_at_t_low = pos_a + v_a_lin * t_low;
-        let pos_b_at_t_low = pos_b + v_b_lin * t_low;
-        // Bisection HER ZAMAN aralığın sadece İLK YARISINI test etmeli. ([t_low, t_mid])
+        if (t_high - t_low) < 1e-4 { break; }
+
+        let a_pos_mid = a.pos + a.vel_lin * t_low;
+        let b_pos_mid = b.pos + b.vel_lin * t_low;
+        let a_rot_mid = integrate_rot(a.rot, a.vel_ang, t_low);
+        let b_rot_mid = integrate_rot(b.rot, b.vel_ang, t_low);
+
         let rel_disp = rel_v * (t_mid - t_low);
-        let sweep_mid = crate::shape::ColliderShape::Swept {
-            base: Box::new(shape_b.clone()),
-            sweep_vector: rel_disp,
-        };
+        if let crate::shape::ColliderShape::Swept { ref mut sweep_vector, .. } = swept_b {
+            *sweep_vector = rel_disp;
+        }
+
         let (hit_first, _) = crate::gjk::gjk_intersect(
-            shape_a,
-            pos_a_at_t_low,
-            rot_a,
-            &sweep_mid,
-            pos_b_at_t_low,
-            rot_b,
+            a.shape, a_pos_mid, a_rot_mid,
+            &swept_b, b_pos_mid, b_rot_mid,
         );
         if hit_first { t_high = t_mid; } else { t_low = t_mid; }
     }
 
-    // TOI: Kesin çarpışma anı t_high civarındadır.
-    // Çok mermi hızında t_high anında objeler henüz dokunuyor olabilir. İç içe geçmeyi t_high ile sağlarız.
-    // Sabit hızla çok küçük bir saniye ekleyerek minimal penetrasyon (EPA için) garanti edelim.
-    // Ancak çok hızlı objelerin içinden geçmesini önlemek için mesafe bazlı limitleme yapalım (Maks 1 cm).
-    let speed = rel_v.length();
-    let safe_offset = if speed > 1.0 { (0.01 / speed).min(dt * 0.05) } else { dt * 0.001 };
-    let t_hit  = (t_high + safe_offset).min(dt);
+    let t_hit = t_low;
     
-    let pa_hit = pos_a + v_a_lin * t_hit;
-    let pb_hit = pos_b + v_b_lin * t_hit;
+    let a_pos_hit = a.pos + a.vel_lin * t_hit;
+    let b_pos_hit = b.pos + b.vel_lin * t_hit;
+    let a_rot_hit = integrate_rot(a.rot, a.vel_ang, t_hit);
+    let b_rot_hit = integrate_rot(b.rot, b.vel_ang, t_hit);
 
-    let (hit, sim) = crate::gjk::gjk_intersect(shape_a, pa_hit, rot_a, shape_b, pb_hit, rot_b);
+    let (hit, sim) = crate::gjk::gjk_intersect(a.shape, a_pos_hit, a_rot_hit, b.shape, b_pos_hit, b_rot_hit);
     if !hit {
-        // Eğer statik GJK sınırda tam kesişemediyse mecburi çarpışmayı üret.
-        let normal = if speed > 0.001 { -rel_v.normalize() } else { Vec3::new(0.0, 1.0, 0.0) };
-        let sup_a = shape_a.support_point(pa_hit, rot_a, -normal);
-        let sup_b = shape_b.support_point(pb_hit, rot_b, normal);
+        let normal = if rel_v.length_squared() > 1e-6 { -rel_v.normalize() } else { Vec3::new(0.0, 1.0, 0.0) };
+        let sup_a = a.shape.support_point(a_pos_hit, a_rot_hit, -normal);
+        let sup_b = b.shape.support_point(b_pos_hit, b_rot_hit, normal);
         
-        return crate::collision::CollisionManifold {
-            is_colliding: true, // CCD bisection ile çarpıştığını biliyoruz
-            normal,
-            penetration: 0.01,
-            contact_points: vec![((sup_a + sup_b) * 0.5, 0.01)],
+        return CcdResult {
+            manifold: crate::collision::CollisionManifold {
+                is_colliding: true,
+                normal,
+                penetration: 0.01,
+                contact_points: { let mut v = arrayvec::ArrayVec::new(); v.push(((sup_a + sup_b) * 0.5, 0.01)); v },
+            },
+            remaining_time: dt - t_hit,
+            ccd_offset_a: Some(a_pos_hit - a.pos),
+            ccd_offset_b: Some(b_pos_hit - b.pos),
         };
     }
 
-    let mut manifold = crate::epa::epa_solve(sim, shape_a, pa_hit, rot_a, shape_b, pb_hit, rot_b);
+    let mut manifold = crate::epa::epa_solve(sim, a.shape, a_pos_hit, a_rot_hit, b.shape, b_pos_hit, b_rot_hit);
+    let mut remaining_t = 0.0;
+    let mut off_a = None;
+    let mut off_b = None;
+
     if manifold.is_colliding {
-        // Kalan süre boyunca penetrasyonu yapay artır (tünellemeyi önle)
-        let remaining_t = dt - t_hit;
-        let vn = rel_v.dot(manifold.normal);
-        if vn < 0.0 {
-            manifold.penetration += -vn * remaining_t;
-        }
-        // Temas noktalarını TOI anına geri taşı (A'nın referans çerçevesine)
-        let cp_offset = v_a_lin * t_hit;
+        remaining_t = dt - t_hit;
+        
+        // ÖNEMLİ (Space Transformation): 
+        // EPA'dan dönen `contact_points`, vurulma anındaki (t_hit) Dünya Uzayındadır (World Space).
+        // Ancak narrow_phase algoritmaları ve warm-starting cache, temasları karenin BAŞINDAKİ (t=0)
+        // Dünya Uzayı referans çerçevesine (World Space) göre saklar ve eşler.
+        // Bu yüzden noktalara `a.vel_lin * t_hit` kadar ters bir offset uygulayarak noktaları 
+        // A objesinin t=0 anındaki referans çerçevesine (Dünya Uzayı üzerine) geri çekiyoruz.
+        let cp_offset = a.vel_lin * t_hit;
         for cp in &mut manifold.contact_points {
             cp.0 -= cp_offset;
         }
-        *ccd_offset_a = Some(pa_hit - pos_a);
-        *ccd_offset_b = Some(pb_hit - pos_b);
+        off_a = Some(a_pos_hit - a.pos);
+        off_b = Some(b_pos_hit - b.pos);
     }
-    manifold
+
+    CcdResult {
+        manifold,
+        remaining_time: remaining_t,
+        ccd_offset_a: off_a,
+        ccd_offset_b: off_b,
+    }
 }

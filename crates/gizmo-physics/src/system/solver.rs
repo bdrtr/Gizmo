@@ -2,20 +2,20 @@ use std::collections::HashMap;
 use gizmo_math::Vec3;
 use crate::components::{Transform, RigidBody, Velocity};
 use super::types::{DetectionResult, Island, PhysicsSolverState, CachedContact, MATCH_THRESHOLD_SQ, WARM_START_FACTOR};
-use super::union_find::{ensure_node, find_root, union_nodes};
+use super::union_find::UnionFind;
 use crate::integration::apply_inv_inertia;
 
 
 
 
-pub fn match_cached_contact(new_point: Vec3, cached: &[CachedContact]) -> Option<(f32, Vec3)> {
+pub fn match_cached_contact(new_point: Vec3, cached: &[CachedContact]) -> Option<f32> {
     let mut best_dist_sq = f32::MAX;
     let mut best = None;
     for cc in cached {
         let d = (new_point - cc.world_point).length_squared();
         if d < best_dist_sq && d < MATCH_THRESHOLD_SQ {
             best_dist_sq = d;
-            best = Some((cc.accumulated_normal, cc.accumulated_friction));
+            best = Some(cc.accumulated_normal);
         }
     }
     best
@@ -33,8 +33,7 @@ pub fn build_islands(
     rbs: &gizmo_core::SparseSet<RigidBody>,
     joint_world_opt: Option<&crate::constraints::JointWorld>,
 ) -> Vec<Island> {
-    let mut parent_map: HashMap<u32, u32> = HashMap::new();
-    let mut rank_map:   HashMap<u32, u8>  = HashMap::new();
+    let mut uf = UnionFind::new();
 
     entities_to_wake.extend(detection_result.wake_entities);
     let all_contacts = detection_result.contacts;
@@ -43,13 +42,11 @@ pub fn build_islands(
         let a_dyn = c.inv_mass_a > 0.0;
         let b_dyn = c.inv_mass_b > 0.0;
         if a_dyn && b_dyn {
-            ensure_node(&mut parent_map, &mut rank_map, c.ent_a);
-            ensure_node(&mut parent_map, &mut rank_map, c.ent_b);
-            union_nodes(&mut parent_map, &mut rank_map, c.ent_a, c.ent_b);
+            uf.union_nodes(c.ent_a, c.ent_b);
         } else if a_dyn {
-            ensure_node(&mut parent_map, &mut rank_map, c.ent_a);
+            uf.find_root(c.ent_a);
         } else if b_dyn {
-            ensure_node(&mut parent_map, &mut rank_map, c.ent_b);
+            uf.find_root(c.ent_b);
         }
     }
 
@@ -57,9 +54,7 @@ pub fn build_islands(
     if let Some(jw) = joint_world_opt {
         for (id, joint) in jw.joints.iter() {
             if let Some(jb) = crate::constraints::JointBodies::resolve(joint, transforms, rbs) {
-                ensure_node(&mut parent_map, &mut rank_map, joint.entity_a);
-                ensure_node(&mut parent_map, &mut rank_map, joint.entity_b);
-                union_nodes(&mut parent_map, &mut rank_map, joint.entity_a, joint.entity_b);
+                uf.union_nodes(joint.entity_a, joint.entity_b);
                 resolved_joints.push((*id, joint.clone(), jb));
             }
         }
@@ -70,9 +65,9 @@ pub fn build_islands(
     for c in all_contacts {
         let a_dyn = c.inv_mass_a > 0.0;
         let root = if a_dyn {
-            find_root(&mut parent_map, c.ent_a)
+            uf.find_root(c.ent_a)
         } else {
-            find_root(&mut parent_map, c.ent_b)
+            uf.find_root(c.ent_b)
         };
         let island = islands_map.entry(root).or_insert_with(|| Island {
             joints: Vec::new(),
@@ -84,7 +79,7 @@ pub fn build_islands(
     }
 
     for (id, joint, jb) in resolved_joints {
-        let root = find_root(&mut parent_map, joint.entity_a);
+        let root = uf.find_root(joint.entity_a);
         let island = islands_map.entry(root).or_insert_with(|| Island {
             joints: Vec::new(),
             contacts: Vec::new(),
@@ -123,6 +118,18 @@ pub fn build_islands(
         }
     }
 
+    // Warm-start uygulanmadan önce ECS'den gelen orijinal hızlarla Bias Bounce hedeflerini sabitle:
+    for island in islands_map.values_mut() {
+        for c in island.contacts.iter_mut() {
+            let va_orig = island.velocities.get(&c.ent_a).cloned().unwrap_or(Velocity::new(Vec3::ZERO));
+            let vb_orig = island.velocities.get(&c.ent_b).cloned().unwrap_or(Velocity::new(Vec3::ZERO));
+            let rel_orig = (vb_orig.linear + vb_orig.angular.cross(c.r_b)) - (va_orig.linear + va_orig.angular.cross(c.r_a));
+            let vn_orig = rel_orig.dot(c.normal);
+            let e = if vn_orig.abs() < 0.01 { 0.0 } else { c.restitution };
+            c.bias_bounce = if vn_orig < -0.01 { -e * vn_orig } else { 0.0 };
+        }
+    }
+
     islands_map.into_values().collect()
 }
 
@@ -137,31 +144,25 @@ pub fn solve_single_island(island: &mut Island, solver_iters: u32, frame_count: 
     const MAX_ANG: f32 = 100.0;
     const MAX_LIN: f32 = 200.0;
 
-    // Frame-seeded Fisher-Yates shuffle (çözüm bias'ını önler)
+    // Frame-seeded yates-shuffle yerine standart LCG (Linear Congruential Generator)
     let contacts_len = island.contacts.len();
     if contacts_len > 1 {
-        let seed = frame_count as usize;
-        for i in 0..(contacts_len - 1) {
-            let range = contacts_len - i;
-            let h = (i.wrapping_add(1).wrapping_mul(2654435761).wrapping_add(seed)) ^ seed;
-            let swap_idx = i + (h % range);
-            island.contacts.swap(i, swap_idx);
+        let seed = frame_count as u64;
+        let mut rng = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        for i in (1..contacts_len).rev() {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let j = (rng >> 33) as usize % (i + 1);
+            island.contacts.swap(i, j);
         }
     }
 
-    // PGS (Gauss-Seidel) Iterasyonları Öncesi: Başlangıç Hızlarına Göre Bounce (Sekme) Hedeflerini Sabitle.
-    // Eğer iterations döngüsünün içinde güncel hıza göre e * vn hesaplarsak, Newton Sarkacı gibi sistemlerde
-    // hız aktarılırken osilasyon (sarmal momentum) oluşur ve toplar yavaşlayarak birbirine yapışır (çamurlaşır)!
+    // PGS (Gauss-Seidel) Iterasyonları
+    // Not: bias_bounce hedefleri artık build_islands içerisinde warm-start'tan ÖNCE 
+    // sabitlendiği için burada tekrardan mevcut değişmiş hızlara göre hesaplanmıyor.
+    
+    // Sıralı impulse döngüsü öncesi bu frame'in sürtünme birikimini sıfırlıyoruz.
     for c in island.contacts.iter_mut() {
-        let va = island.velocities.get(&c.ent_a).cloned().unwrap_or(Velocity::new(Vec3::ZERO));
-        let vb = island.velocities.get(&c.ent_b).cloned().unwrap_or(Velocity::new(Vec3::ZERO));
-        let rel = (vb.linear + vb.angular.cross(c.r_b)) - (va.linear + va.angular.cross(c.r_a));
-        let vn = rel.dot(c.normal);
-        
-        let e = if vn.abs() < 0.01 { 0.0 } else { c.restitution };
-        
-        // Sadece yaklaşıyorlarsa (vn < 0) sekme hedeflenir. Ayrılıyorlarsa sekme 0'dır.
-        c.bias_bounce = if vn < 0.0 { -e * vn } else { 0.0 };
+        c.accumulated_friction = Vec3::ZERO;
     }
 
     // Sequential Impulse iterasyonları
@@ -196,12 +197,8 @@ pub fn solve_single_island(island: &mut Island, solver_iters: u32, frame_count: 
             }
 
             let bias = ((0.15 / 1.0) * (c.penetration - 0.005).max(0.0)).min(2.0);
-            
-            // J_new formülünde -(1+e)*vn yerine: -vn + c.bias_bounce kullanılır!
-            // Ayrıca Baumgarte bias'ının kusursuz elastik çarpışmalarda sonsuz enerji üretmesini önlemek için,
-            // eğer sekme hızı zaten bias'ı aşıyorsa bias'ı sıfırlıyoruz. (Baumgarte patlaması engellendi)
-            let effective_bias = (bias - c.bias_bounce).max(0.0);
-            let j_new = (-vn + c.bias_bounce + effective_bias) / eff_mass;
+            let mut j_new = (-vn + c.bias_bounce + bias) / eff_mass;
+            j_new = j_new.min(10.0 / dt);
             
             let old_acc = c.accumulated_j;
             c.accumulated_j = (c.accumulated_j + j_new).max(0.0);
@@ -270,7 +267,7 @@ pub fn solve_single_island(island: &mut Island, solver_iters: u32, frame_count: 
                     let mut new_friction = old_friction + tangent_dir * jt;
                     let friction_len = new_friction.length();
                     if friction_len > max_friction {
-                        let kinetic_limit = c.accumulated_j * (c.friction * 0.7);
+                        let kinetic_limit = max_friction * 0.7; // kinetic slip 30% reduction
                         new_friction *= kinetic_limit / friction_len;
                     }
                     let fi = new_friction - old_friction;
@@ -327,9 +324,21 @@ pub fn solve_single_island(island: &mut Island, solver_iters: u32, frame_count: 
         }
     }
 
-    // NOT: Position projection kaldırıldı — Baumgarte bias (satır 958) zaten
-    // hız seviyesinde penetrasyon düzeltmesi yapıyor. İkisinin birden aktif olması
-    // çift düzeltme üretip objeleri havaya fırlatıyordu.
+    // Pseudo-Velocity / Position Projection (Penetrasyonları doğrudan çöz, domino kaymasını önle)
+    for c in island.contacts.iter() {
+        if c.penetration > 0.01 {
+            let correction = c.normal * (c.penetration - 0.01) * 0.4;
+            let total_inv_mass = c.inv_mass_a + c.inv_mass_b;
+            if total_inv_mass > 0.0 {
+                if let Some(p) = island.poses.get_mut(&c.ent_a) {
+                    p.position -= correction * (c.inv_mass_a / total_inv_mass);
+                }
+                if let Some(p) = island.poses.get_mut(&c.ent_b) {
+                    p.position += correction * (c.inv_mass_b / total_inv_mass);
+                }
+            }
+        }
+    }
 
     for (_, joint, jb) in island.joints.iter() {
         let mut pos_a = jb.pos_a;
@@ -341,16 +350,14 @@ pub fn solve_single_island(island: &mut Island, solver_iters: u32, frame_count: 
             pos_b = p.position + p.rotation.mul_vec3(joint.anchor_b);
         }
 
-        let mut pos_a_core = island
-            .poses
-            .get(&joint.entity_a)
-            .map(|p| p.position)
-            .unwrap_or(Vec3::ZERO);
-        let mut pos_b_core = island
-            .poses
-            .get(&joint.entity_b)
-            .map(|p| p.position)
-            .unwrap_or(Vec3::ZERO);
+        let mut pos_a_core = match island.poses.get(&joint.entity_a) {
+            Some(p) => p.position,
+            None => continue,
+        };
+        let mut pos_b_core = match island.poses.get(&joint.entity_b) {
+            Some(p) => p.position,
+            None => continue,
+        };
 
         let mut latest_jb = jb.clone();
         latest_jb.pos_a = pos_a;
@@ -383,7 +390,7 @@ pub fn solve_islands(
         for c in island.contacts.iter_mut() {
             let key = if c.ent_a < c.ent_b { (c.ent_a, c.ent_b) } else { (c.ent_b, c.ent_a) };
             if let Some(cached) = contact_cache.get(&key) {
-                if let Some((cached_j, _cached_friction)) = match_cached_contact(c.world_point, cached) {
+                if let Some(cached_j) = match_cached_contact(c.world_point, cached) {
                     c.accumulated_j = (cached_j * WARM_START_FACTOR).min(5.0);
                     // c.accumulated_friction kasıtlı olarak sıfır bırakılıyor
                 }
@@ -444,6 +451,15 @@ pub fn write_back(
 
     for island in &islands {
         for c in &island.contacts {
+            let key = if c.ent_a < c.ent_b { (c.ent_a, c.ent_b) } else { (c.ent_b, c.ent_a) };
+            if let Some(entry) = solver_state.contact_cache.get_mut(&key) {
+                entry.clear();
+            }
+        }
+    }
+
+    for island in &islands {
+        for c in &island.contacts {
             // Warm-start cache kaydı — Fix #6: limiti config'den al
             // Fix: poses'da entity yoksa (statik cisimler gibi) c.world_point CCD-öncesi
             // eski değerdir. Bunun yerine write-back ile zaten güncellenmiş olan
@@ -458,7 +474,6 @@ pub fn write_back(
                 entry.push(CachedContact {
                     world_point:          wp,
                     accumulated_normal:   c.accumulated_j,
-                    accumulated_friction: c.accumulated_friction,
                 });
             }
 
@@ -471,10 +486,12 @@ pub fn write_back(
                 || frame.is_multiple_of(event_throttle_frames as u64)
             );
             if should_fire {
-                let pos_a = island.poses.get(&c.ent_a)
+                let pos_a = match island.poses.get(&c.ent_a)
                     .map(|t| t.position)
-                    .or_else(|| transforms.get(c.ent_a).map(|t| t.position))
-                    .unwrap_or(Vec3::ZERO);
+                    .or_else(|| transforms.get(c.ent_a).map(|t| t.position)) {
+                        Some(p) => p,
+                        None => continue,
+                    };
                 collision_events.push(crate::CollisionEvent {
                     entity_a: c.ent_a,
                     entity_b: c.ent_b,

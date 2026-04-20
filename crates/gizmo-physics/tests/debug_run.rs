@@ -25,7 +25,11 @@ fn test_broadphase_debug() {
     transforms.insert(1, t_cube);
     colliders.insert(1, Collider::new_convex(cube_vertices));
 
-    let pairs = broad_phase(&transforms, &colliders);
+    let rigidbodies = gizmo_core::SparseSet::new();
+    let velocities = gizmo_core::SparseSet::new();
+    let dt = 1.0/60.0;
+    let parallel_physics = false;
+    let pairs = broad_phase(&transforms, &colliders, &rigidbodies, &velocities, dt, parallel_physics);
     println!("Broadphase pairs: {:?}", pairs);
     assert!(!pairs.is_empty());
 }

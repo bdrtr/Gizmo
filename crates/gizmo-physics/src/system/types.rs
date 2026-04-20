@@ -9,10 +9,7 @@ use crate::components::{Transform, Velocity};
 pub struct CachedContact {
     /// Dünya koordinatlarında temas noktası (eşleme anahtarı)
     pub world_point: Vec3,
-    /// Birikmiş normal impuls
     pub accumulated_normal: f32,
-    /// Birikmiş sürtünme impulsu
-    pub accumulated_friction: Vec3,
 }
 
 /// Broad-phase için entity'nin dünya-uzayı AABB sınırları
@@ -46,6 +43,7 @@ pub struct StoredContact {
     pub bias_bounce: f32,
     /// Dünya koordinatlarındaki temas noktası (warm-start eşleme için)
     pub world_point: Vec3,
+    pub remaining_time: f32,
 }
 
 /// Paralel algılama adımının tek-çiftten dönen sonucu
@@ -65,17 +63,15 @@ pub struct Island {
 // ─── Çözücü Durumu ───────────────────────────────────────────────────────────
 
 /// Contact Point Matching eşik değeri (2cm yarıçap)
-pub const MATCH_THRESHOLD_SQ: f32 = 0.02 * 0.02;
+pub const MATCH_THRESHOLD_SQ: f32 = 0.1 * 0.1;
 
 /// Warm-start sönümleme faktörü (%80 — patlama riskini azaltır)
-pub const WARM_START_FACTOR: f32 = 0.0;  // 0.8 çok agresif → yapışma, 0.4 = dengeli. NOT! Newton sarkacı gibi %100 momentum aktarımı yapan sistemlerde Warm-Start (gecikmeli enerji cache'i) uyuma sırasında tamamen sapıttığı için 0.0 (kapalı) yapıldı!
+pub const WARM_START_FACTOR: f32 = 0.4;  // 0.8 çok agresif → yapışma, 0.4 = dengeli. Newton sarkacı krizi (bias_bounce sırası) çözüldüğü için artık güvenle aktif!
 
 /// Kalıcı Çözücü Durumu (Warm-Starting Cache için)
 pub struct PhysicsSolverState {
     /// Önceki karedeki temas noktalarının entity-çifti bazlı cache'i
     pub contact_cache: HashMap<(u32, u32), Vec<CachedContact>>,
-    /// Konfigüre edilebilir çözücü iterasyon sayısı (varsayılan: 8)
-    pub solver_iterations: u32,
     /// Frame sayacı — contact shuffle için seed olarak kullanılır
     pub frame_counter: u64,
 }
@@ -90,8 +86,13 @@ impl PhysicsSolverState {
     pub fn new() -> Self {
         Self {
             contact_cache: HashMap::new(),
-            solver_iterations: 8,
             frame_counter: 0,
         }
     }
 }
+
+#[inline]
+pub fn is_near_identity(q: gizmo_math::Quat) -> bool {
+    q.x.abs() < 1e-4 && q.y.abs() < 1e-4 && q.z.abs() < 1e-4
+}
+

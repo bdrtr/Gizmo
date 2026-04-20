@@ -92,7 +92,7 @@ pub fn epa_solve(
             is_colliding: false,
             normal: Vec3::ZERO,
             penetration: 0.0,
-            contact_points: vec![],
+            contact_points: arrayvec::ArrayVec::new(),
         };
     }
     let (closest_face_idx, face_normal, dist) = get_closest_face(&polytope, &faces);
@@ -140,7 +140,7 @@ fn generate_face_contacts(
     polytope: &[SupportPoint],
     faces: &[usize],
     closest_face_idx: usize,
-) -> Vec<(Vec3, f32)> {
+) -> arrayvec::ArrayVec<(Vec3, f32), 4> {
     // Her iki şeklin temas yüzeyini bul, KÜÇÜK olanı kullan!
     // Normal A→B yönünde: A'nın face'i = normal yönünde, B'nin face'i = -normal yönünde
     let (face_a, normal_a) = find_support_face(shape_a, pos_a, rot_a, normal);
@@ -177,7 +177,7 @@ fn generate_face_contacts(
 
         // Clip sonrası dışarı taşan (Reference yüzeyinin önünde kalan) noktaları filtrele
         // Sadece içeri giren (penetration) noktaları Manifold olarak kabul et
-        let mut final_contacts = Vec::new();
+        let mut final_contacts = arrayvec::ArrayVec::new();
         // inc_face şuan kırpma (clipping) sınırlarını geçen noktaları barındırır.
         for pt in &inc_face {
             // Incident noktanın reference düzlemine olan signed mesafesi.
@@ -198,7 +198,7 @@ fn generate_face_contacts(
         }
     } else if inc_face.len() >= 1 {
         // Kenar - Yüzey veya Nokta - Yüzey temasında çarpan Incident noktasını dönmeliyiz, Reference (Zemin) noktalarını DEĞİL.
-        let mut final_contacts = Vec::new();
+        let mut final_contacts = arrayvec::ArrayVec::new();
         for pt in &inc_face {
             let raw_dist = (*pt - ref_face[0]).dot(ref_normal);
             let dist = if a_is_ref { raw_dist } else { -raw_dist };
@@ -250,7 +250,7 @@ fn generate_face_contacts(
         w_b = 0.333;
     }
     let contact_point = a_sup.a * u_b + b_sup.a * v_b + c_sup.a * w_b;
-    vec![(contact_point, _penetration)]
+    { let mut v = arrayvec::ArrayVec::new(); v.push((contact_point, _penetration)); v }
 }
 
 /// Bir yüzeyin köşelerinin toplam yayılım alanını (bounding extent) hesapla.

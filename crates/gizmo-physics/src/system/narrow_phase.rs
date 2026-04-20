@@ -5,12 +5,16 @@ use super::types::{StoredContact, DetectionResult};
 use super::ccd::ccd_bisect;
 
 pub fn merge_detection_results(mut acc: DetectionResult, mut item: DetectionResult) -> DetectionResult {
-    if acc.contacts.is_empty() && acc.wake_entities.is_empty() {
-        return item;
-    }
-    if item.contacts.is_empty() && item.wake_entities.is_empty() {
+    let item_empty = item.contacts.is_empty() && item.wake_entities.is_empty();
+    if item_empty {
         return acc;
     }
+    
+    let acc_empty = acc.contacts.is_empty() && acc.wake_entities.is_empty();
+    if acc_empty {
+        return item;
+    }
+
     acc.contacts.append(&mut item.contacts);
     acc.wake_entities.append(&mut item.wake_entities);
     acc
@@ -23,9 +27,8 @@ pub fn detect_single_collision_pair(
     colliders: &gizmo_core::SparseSet<Collider>,
     rigidbodies: &gizmo_core::SparseSet<RigidBody>,
     velocities: &gizmo_core::SparseSet<Velocity>,
-    _vehicle_entities: &std::collections::HashSet<u32>,
-    _has_vehicles: bool,
     dt: f32,
+    ccd_velocity_threshold: f32,
 ) -> Option<DetectionResult> {
     use crate::shape::ColliderShape;
 
@@ -58,10 +61,9 @@ pub fn detect_single_collision_pair(
     let mut ccd_pos_a = None;
     let mut ccd_pos_b = None;
 
-    let is_rot_a_identity =
-        rot_a.x.abs() < 0.001 && rot_a.y.abs() < 0.001 && rot_a.z.abs() < 0.001 && (rot_a.w - 1.0).abs() < 0.001;
-    let is_rot_b_identity =
-        rot_b.x.abs() < 0.001 && rot_b.y.abs() < 0.001 && rot_b.z.abs() < 0.001 && (rot_b.w - 1.0).abs() < 0.001;
+    use crate::system::types::is_near_identity;
+    let is_rot_a_identity = is_near_identity(rot_a);
+    let is_rot_b_identity = is_near_identity(rot_b);
 
     let manifold = detect_pair(
         &col_a.shape,
@@ -74,30 +76,29 @@ pub fn detect_single_collision_pair(
         is_rot_b_identity,
     );
 
-    let manifold = if !manifold.is_colliding && (rb_a.ccd_enabled || rb_b.ccd_enabled) {
+    let (manifold, remaining_time) = if !manifold.is_colliding && (rb_a.ccd_enabled || rb_b.ccd_enabled) {
         let v_a_lin = velocities.get(ent_a).map(|v| v.linear).unwrap_or(Vec3::ZERO);
         let v_b_lin = velocities.get(ent_b).map(|v| v.linear).unwrap_or(Vec3::ZERO);
+        let v_a_ang = velocities.get(ent_a).map(|v| v.angular).unwrap_or(Vec3::ZERO);
+        let v_b_ang = velocities.get(ent_b).map(|v| v.angular).unwrap_or(Vec3::ZERO);
         let rel_v = v_b_lin - v_a_lin;
 
-        if rel_v.length() * dt > 0.1 {
-            ccd_bisect(
-                &col_a.shape,
-                pos_a,
-                rot_a,
-                &col_b.shape,
-                pos_b,
-                rot_b,
-                v_a_lin,
-                v_b_lin,
+        if rel_v.length() * dt > ccd_velocity_threshold {
+            let res = ccd_bisect(
+                crate::system::ccd::CcdInput { shape: &col_a.shape, pos: pos_a, rot: rot_a, vel_lin: v_a_lin, vel_ang: v_a_ang },
+                crate::system::ccd::CcdInput { shape: &col_b.shape, pos: pos_b, rot: rot_b, vel_lin: v_b_lin, vel_ang: v_b_ang },
                 dt,
-                &mut ccd_pos_a,
-                &mut ccd_pos_b,
-            )
+            );
+            if res.manifold.is_colliding {
+                ccd_pos_a = res.ccd_offset_a;
+                ccd_pos_b = res.ccd_offset_b;
+            }
+            (res.manifold, res.remaining_time)
         } else {
-            manifold
+            (manifold, dt)
         }
     } else {
-        manifold
+        (manifold, dt)
     };
 
     if !manifold.is_colliding || manifold.contact_points.is_empty() {
@@ -135,8 +136,8 @@ pub fn detect_single_collision_pair(
             r_a = manifold.normal * s.radius;
         }
         if let ColliderShape::Sphere(s) = &col_b.shape {
-            // Doğrusu: B'nin merkezi normali takip eder, negatif olmamalı.
-            r_b = manifold.normal * s.radius;
+            // Doğrusu: B'nin merkezi temas noktasına giderken negatif normali takip eder.
+            r_b = -manifold.normal * s.radius;
         }
         result.contacts.push(StoredContact {
             ent_a,
@@ -146,7 +147,7 @@ pub fn detect_single_collision_pair(
             inv_mass_b,
             inv_inertia_a: rb_a.inverse_inertia_local,
             inv_inertia_b: rb_b.inverse_inertia_local,
-            restitution: rb_a.restitution.max(rb_b.restitution),
+            restitution: rb_a.restitution.min(rb_b.restitution),
             friction: (rb_a.friction * rb_b.friction).sqrt(),
             penetration: *pen,
             r_a,
@@ -159,6 +160,7 @@ pub fn detect_single_collision_pair(
             ccd_offset_b: ccd_pos_b.unwrap_or(Vec3::ZERO),
             bias_bounce: 0.0,
             world_point: *contact_point,
+            remaining_time,
         });
     }
 
@@ -175,10 +177,9 @@ pub fn detect_collisions(
     colliders: &gizmo_core::SparseSet<Collider>,
     rigidbodies: &gizmo_core::SparseSet<RigidBody>,
     velocities: &gizmo_core::SparseSet<Velocity>,
-    vehicle_entities: &std::collections::HashSet<u32>,
-    has_vehicles: bool,
     dt: f32,
     parallel_narrow_phase: bool,
+    ccd_velocity_threshold: f32,
 ) -> DetectionResult {
     if !parallel_narrow_phase {
         let mut acc = DetectionResult {
@@ -193,9 +194,8 @@ pub fn detect_collisions(
                 colliders,
                 rigidbodies,
                 velocities,
-                vehicle_entities,
-                has_vehicles,
                 dt,
+                ccd_velocity_threshold,
             ) {
                 acc = merge_detection_results(acc, item);
             }
@@ -203,6 +203,12 @@ pub fn detect_collisions(
         return acc;
     }
 
+    // NOT: Paralel reduce (par_iter().reduce) kullanıldığında işletim sisteminin thread bitirme 
+    // zamanlamasına bağlı olarak contact listesi içine objelerin eklenme sırası farklılık gösterebilir.
+    // Bu durum, Solver içerisindeki Warm-Start cache mekanizmasının index'lere dayalı eşleştirme yapması 
+    // durumunda non-deterministic (her çalışmada ufak farklar yaratan) bir jitter oluşturur.
+    // Tamamen deterministic (tekrar edilebilir) sonuçlar isteniyorsa `PhysicsConfig::deterministic_simulation = true` 
+    // ayarlanarak bu paralel ağın bypass edilmesi gereklidir.
     use rayon::prelude::*;
 
     collision_pairs
@@ -215,9 +221,8 @@ pub fn detect_collisions(
                 colliders,
                 rigidbodies,
                 velocities,
-                vehicle_entities,
-                has_vehicles,
                 dt,
+                ccd_velocity_threshold,
             )
         })
         .reduce(
@@ -271,16 +276,26 @@ pub fn detect_pair(
             m.normal *= -1.0;
             m
         }
-        (Capsule(c), Aabb(a)) => {
+        (Capsule(c), Aabb(a)) if rot_b_identity => {
             crate::collision::check_capsule_aabb_manifold(pos_a, rot_a, c, pos_b, a)
         }
-        (Aabb(a), Capsule(c)) => {
+        (Aabb(a), Capsule(c)) if rot_a_identity => {
             let mut m = crate::collision::check_capsule_aabb_manifold(pos_b, rot_b, c, pos_a, a);
             m.normal *= -1.0;
             m
         }
         (Sphere(s1), Sphere(s2)) => {
             crate::collision::check_sphere_sphere_manifold(pos_a, s1, pos_b, s2)
+        }
+        (HeightField { .. }, _) | (_, HeightField { .. }) => {
+            #[cfg(debug_assertions)]
+            eprintln!("[Physics WARN] HeightField çarpışmaları henüz GJK ile çözülemez (Convex değil). Dar faz atlanıyor.");
+            crate::collision::CollisionManifold {
+                is_colliding: false,
+                normal: Vec3::ZERO,
+                penetration: 0.0,
+                contact_points: arrayvec::ArrayVec::new(),
+            }
         }
         _ => {
             // GJK + EPA fallback (ConvexHull ve karışık şekiller için)
@@ -292,7 +307,7 @@ pub fn detect_pair(
                     is_colliding: false,
                     normal: Vec3::ZERO,
                     penetration: 0.0,
-                    contact_points: vec![],
+                    contact_points: arrayvec::ArrayVec::new(),
                 }
             }
         }

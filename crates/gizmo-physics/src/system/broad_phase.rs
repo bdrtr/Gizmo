@@ -1,10 +1,42 @@
 use gizmo_math::Vec3;
+use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+use std::collections::BinaryHeap;
 use crate::components::{Transform, RigidBody, Velocity};
 use crate::shape::Collider;
 use super::types::Interval;
 
+#[derive(Clone, Copy)]
+struct ActiveItem {
+    max_val: f32,
+    index: usize,
+}
+impl PartialEq for ActiveItem {
+    fn eq(&self, other: &Self) -> bool { self.max_val == other.max_val }
+}
+impl Eq for ActiveItem {}
+impl PartialOrd for ActiveItem {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        // Min-heap için ters sıralama (küçük max_val en üstte olur)
+        other.max_val.partial_cmp(&self.max_val)
+    }
+}
+impl Ord for ActiveItem {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
+use crate::system::types::is_near_identity;
+
+static LAST_AXIS: AtomicU8 = AtomicU8::new(0);
+static FRAME_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// FAZ 1 — Broad-Phase: Sweep & Prune (active-list, dinamik eksen seçimi)
+/// 
+/// CONTRACT / RETURNS:
+/// Çarpışan her çift (Entity_A, Entity_B) şeklinde döndürülür ve HİÇBİR ZAMAN
+/// tersi dönmez. Daima `Entity_A < Entity_B` garantisi vardır.
+/// Narrow-phase, çarpışma algoritmaları ve warm-starting önbelleği manifoldları
+/// doğru hash/eşleştirme yapabilmek için bu sıralamaya DAİMA güvenir.
 ///
 /// Her entity'nin dünya-uzayı AABB'sini hesaplar (CCD sweep dahil),
 /// her karede **her eksen için tüm AABB uçları** (`min`/`max` köşe projeksiyonları)
@@ -17,26 +49,22 @@ pub fn broad_phase(
     rigidbodies: &gizmo_core::SparseSet<RigidBody>,
     velocities: &gizmo_core::SparseSet<Velocity>,
     dt: f32,
+    parallel_physics: bool,
 ) -> Vec<(u32, u32)> {
     use crate::shape::ColliderShape;
 
-    let entities: Vec<u32> = transforms.iter().map(|(e, _)| e).collect();
-    let mut intervals = Vec::with_capacity(entities.len());
+    assert!(dt >= 0.0, "Timestep dt must be non-negative");
 
-    for &e in &entities {
-        let t = match transforms.get(e) {
-            Some(t) => t,
-            None => continue,
-        };
-        let col = match colliders.get(e) {
-            Some(c) => c,
-            None => continue,
-        };
+    let entities: Vec<u32> = transforms.iter().map(|(e, _)| e).collect();
+
+    let map_fn = |&e: &u32| -> Option<Interval> {
+        let t = transforms.get(e)?;
+        let col = colliders.get(e)?;
 
         let (mut min, mut max) = match &col.shape {
             ColliderShape::Aabb(a) => {
-                let he = a.half_extents;
-                let is_identity = t.rotation.x.abs() < 0.001 && t.rotation.y.abs() < 0.001 && t.rotation.z.abs() < 0.001 && t.rotation.w.abs() > 0.999;
+                let he = Vec3::new(a.half_extents.x * t.scale.x, a.half_extents.y * t.scale.y, a.half_extents.z * t.scale.z);
+                let is_identity = is_near_identity(t.rotation);
                 if is_identity {
                     (t.position - he, t.position + he)
                 } else {
@@ -61,14 +89,16 @@ pub fn broad_phase(
                 }
             }
             ColliderShape::Sphere(s) => {
-                let r = Vec3::new(s.radius, s.radius, s.radius);
+                let max_s = t.scale.x.max(t.scale.y).max(t.scale.z);
+                let r = Vec3::new(s.radius * max_s, s.radius * max_s, s.radius * max_s);
                 (t.position - r, t.position + r)
             }
             ColliderShape::Capsule(c) => {
-                let up = t.rotation.mul_vec3(Vec3::new(0.0, c.half_height, 0.0));
+                let max_s_xz = t.scale.x.max(t.scale.z);
+                let up = t.rotation.mul_vec3(Vec3::new(0.0, c.half_height * t.scale.y, 0.0));
                 let top = t.position + up;
                 let bot = t.position - up;
-                let r = Vec3::new(c.radius, c.radius, c.radius);
+                let r = Vec3::new(c.radius * max_s_xz, c.radius * max_s_xz, c.radius * max_s_xz);
                 let mn = Vec3::new(top.x.min(bot.x), top.y.min(bot.y), top.z.min(bot.z)) - r;
                 let mx = Vec3::new(top.x.max(bot.x), top.y.max(bot.y), top.z.max(bot.z)) + r;
                 (mn, mx)
@@ -77,33 +107,36 @@ pub fn broad_phase(
                 let mut mn = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
                 let mut mx = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
                 for v in &hull.vertices {
-                    let wv = t.position + t.rotation.mul_vec3(*v);
+                    let wv = t.position + t.rotation.mul_vec3(Vec3::new(v.x * t.scale.x, v.y * t.scale.y, v.z * t.scale.z));
                     mn.x = mn.x.min(wv.x); mn.y = mn.y.min(wv.y); mn.z = mn.z.min(wv.z);
                     mx.x = mx.x.max(wv.x); mx.y = mx.y.max(wv.y); mx.z = mx.z.max(wv.z);
                 }
                 (mn, mx)
             }
             ColliderShape::Swept { .. } => {
-                eprintln!("[Physics WARN] Swept shape found in ECS for entity {}! Skipping.", e);
-                continue;
+                static WARNED_SWEPT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                if !WARNED_SWEPT.swap(true, Ordering::Relaxed) {
+                    eprintln!("[Physics WARN] Swept shape found in ECS for entity {}! Skipping. (Further swept warnings suppressed)", e);
+                }
+                return None;
             }
             ColliderShape::HeightField { width, max_height, depth, .. } => {
-                let he = Vec3::new(width * 0.5, max_height * 0.5, depth * 0.5);
-                let off = Vec3::new(0.0, max_height * 0.5, 0.0);
-                let is_identity = t.rotation.x.abs() < 0.001 && t.rotation.y.abs() < 0.001 && t.rotation.z.abs() < 0.001 && t.rotation.w.abs() > 0.999;
+                let scaled_w = width * t.scale.x;
+                let scaled_h = max_height * t.scale.y;
+                let scaled_d = depth * t.scale.z;
+                let is_identity = is_near_identity(t.rotation);
                 if is_identity {
-                    let center = t.position + off;
-                    (center - he, center + he)
+                    (t.position, t.position + Vec3::new(scaled_w, scaled_h, scaled_d))
                 } else {
                     let corners = [
-                        Vec3::new( he.x,  he.y,  he.z) + off,
-                        Vec3::new( he.x,  he.y, -he.z) + off,
-                        Vec3::new( he.x, -he.y,  he.z) + off,
-                        Vec3::new( he.x, -he.y, -he.z) + off,
-                        Vec3::new(-he.x,  he.y,  he.z) + off,
-                        Vec3::new(-he.x,  he.y, -he.z) + off,
-                        Vec3::new(-he.x, -he.y,  he.z) + off,
-                        Vec3::new(-he.x, -he.y, -he.z) + off,
+                        Vec3::new(0.0, 0.0, 0.0),
+                        Vec3::new(scaled_w, 0.0, 0.0),
+                        Vec3::new(0.0, scaled_h, 0.0),
+                        Vec3::new(scaled_w, scaled_h, 0.0),
+                        Vec3::new(0.0, 0.0, scaled_d),
+                        Vec3::new(scaled_w, 0.0, scaled_d),
+                        Vec3::new(0.0, scaled_h, scaled_d),
+                        Vec3::new(scaled_w, scaled_h, scaled_d),
                     ];
                     let mut mn = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
                     let mut mx = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
@@ -130,43 +163,59 @@ pub fn broad_phase(
             }
         }
 
-        intervals.push(Interval { entity: e, min, max });
-    }
+        Some(Interval { entity: e, min, max })
+    };
+
+    let mut intervals: Vec<Interval> = if parallel_physics {
+        use rayon::prelude::*;
+        entities.par_iter().filter_map(map_fn).collect()
+    } else {
+        entities.iter().filter_map(map_fn).collect()
+    };
 
     if intervals.is_empty() {
         return Vec::new();
     }
 
-    // Eksen başına: o eksendeki tüm min/max uçları (2N örnek) üzerinden varyans.
-    // Böylece Y/Z'de geniş, X'te dar kutular da doğru eksende sıralanır.
-    let axis_endpoint_variance = |axis: u8| -> f32 {
-        let mut sum = 0.0f32;
-        let mut sum_sq = 0.0f32;
-        for iv in &intervals {
-            let (lo, hi) = match axis {
-                0 => (iv.min.x, iv.max.x),
-                1 => (iv.min.y, iv.max.y),
-                _ => (iv.min.z, iv.max.z),
-            };
-            sum += lo + hi;
-            sum_sq += lo * lo + hi * hi;
-        }
+    // Eksen başına: o eksendeki tüm min/max uçları (2N örnek) üzerinden varyans hesaplanır.
+    // Performans için aralıklarla (örneğin 60 karede bir) tek döngüde yenilenir ve atomik olarak önbelleğe alınır.
+    let frame = FRAME_COUNT.fetch_add(1, Ordering::Relaxed);
+    let axis: u8;
+
+    if frame % 60 == 0 || intervals.len() < 10 {
         let count = (intervals.len() * 2) as f32;
-        let mean = sum / count;
-        (sum_sq / count - mean * mean).max(0.0)
-    };
+        let mut sum_x = 0.0; let mut sum_y = 0.0; let mut sum_z = 0.0;
+        let mut sq_x = 0.0;  let mut sq_y = 0.0;  let mut sq_z = 0.0;
 
-    let vx = axis_endpoint_variance(0);
-    let vy = axis_endpoint_variance(1);
-    let vz = axis_endpoint_variance(2);
+        for iv in &intervals {
+            sum_x += iv.min.x + iv.max.x;
+            sum_y += iv.min.y + iv.max.y;
+            sum_z += iv.min.z + iv.max.z;
 
-    let axis: u8 = if vy >= vx && vy >= vz {
-        1
-    } else if vz >= vx && vz >= vy {
-        2
+            sq_x += iv.min.x * iv.min.x + iv.max.x * iv.max.x;
+            sq_y += iv.min.y * iv.min.y + iv.max.y * iv.max.y;
+            sq_z += iv.min.z * iv.min.z + iv.max.z * iv.max.z;
+        }
+
+        let mean_x = sum_x / count;
+        let mean_y = sum_y / count;
+        let mean_z = sum_z / count;
+
+        let vx = (sq_x / count - mean_x * mean_x).max(0.0);
+        let vy = (sq_y / count - mean_y * mean_y).max(0.0);
+        let vz = (sq_z / count - mean_z * mean_z).max(0.0);
+
+        axis = if vy >= vx && vy >= vz {
+            1
+        } else if vz >= vx && vz >= vy {
+            2
+        } else {
+            0
+        };
+        LAST_AXIS.store(axis, Ordering::Relaxed);
     } else {
-        0
-    };
+        axis = LAST_AXIS.load(Ordering::Relaxed);
+    }
 
     let min_on_axis = |iv: &Interval| -> f32 {
         if axis == 0 { iv.min.x } else if axis == 1 { iv.min.y } else { iv.min.z }
@@ -178,20 +227,30 @@ pub fn broad_phase(
     intervals.sort_unstable_by(|a, b| min_on_axis(a).total_cmp(&min_on_axis(b)));
 
     let len = intervals.len();
-    let mut active_list: Vec<usize> = Vec::with_capacity(32);
+    let mut active_list: BinaryHeap<ActiveItem> = BinaryHeap::with_capacity(len);
     let mut pairs: Vec<(u32, u32)> = Vec::new();
 
     for i in 0..len {
         let cur_min = min_on_axis(&intervals[i]);
-        active_list.retain(|&j| max_on_axis(&intervals[j]) >= cur_min);
+        
+        while let Some(top) = active_list.peek() {
+            if top.max_val < cur_min {
+                active_list.pop();
+            } else {
+                break;
+            }
+        }
 
         let a = &intervals[i];
-        for &j in &active_list {
+        for item in active_list.iter() {
+            let j = item.index;
             let b = &intervals[j];
             let overlap = a.min.x <= b.max.x && a.max.x >= b.min.x
                 && a.min.y <= b.max.y && a.max.y >= b.min.y
                 && a.min.z <= b.max.z && a.max.z >= b.min.z;
             if overlap {
+                // CONTRACT: Çiftler her zaman `a < b` (entity) şeklinde sıralıdır.
+                // Narrow-phase ve warm-starting yapısı bu küçükten büyüğe sıraya güvenir.
                 let pair = if a.entity < b.entity {
                     (a.entity, b.entity)
                 } else {
@@ -200,9 +259,10 @@ pub fn broad_phase(
                 pairs.push(pair);
             }
         }
-        active_list.push(i);
+        active_list.push(ActiveItem { max_val: max_on_axis(&intervals[i]), index: i });
     }
 
     pairs.sort_unstable();
+    pairs.dedup();
     pairs
 }
