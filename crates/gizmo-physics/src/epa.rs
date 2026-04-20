@@ -193,23 +193,24 @@ fn generate_face_contacts(
                 final_contacts.push((*pt, -dist.min(0.0)));
             }
         }
-
         if !final_contacts.is_empty() {
             return final_contacts;
-        } else {
-            // Clipping produced 0 points, return center of ref_face to avoid stale index panic in fallback
-            let mut center = Vec3::ZERO;
-            for p in &ref_face {
-                center += *p;
-            }
-            if !ref_face.is_empty() {
-                center /= ref_face.len() as f32;
-            }
-            return vec![(center, _penetration)];
         }
-    } else if ref_face.len() >= 2 {
-        // Kenar - Yüzey veya benzer azınlık temasında direkt orijinalini dön, hepsine uniform pen ver.
-        return ref_face.into_iter().map(|v| (v, _penetration)).collect();
+    } else if inc_face.len() >= 1 {
+        // Kenar - Yüzey veya Nokta - Yüzey temasında çarpan Incident noktasını dönmeliyiz, Reference (Zemin) noktalarını DEĞİL.
+        let mut final_contacts = Vec::new();
+        for pt in &inc_face {
+            let raw_dist = (*pt - ref_face[0]).dot(ref_normal);
+            let dist = if a_is_ref { raw_dist } else { -raw_dist };
+            if dist <= 0.05 {
+                final_contacts.push((*pt, -dist.min(0.0)));
+            }
+        }
+        if !final_contacts.is_empty() {
+            return final_contacts;
+        }
+        // Eğer penetre eden yoksa ama yine de buraya düştüysek, orijinal inc_face'i dön
+        return inc_face.into_iter().map(|v| (v, _penetration)).collect();
     }
 
     // Köşe teması veya küre gibi yuvarlak şekil → tek noktaya fallback (eski yöntem)
@@ -323,14 +324,14 @@ fn find_support_face(shape: &ColliderShape, pos: Vec3, rot: Quat, dir: Vec3) -> 
                 local_normal = Vec3::new(sign, 0.0, 0.0);
                 if sign > 0.0 {
                     local_corners.push(Vec3::new(he.x, he.y, -he.z));
+                    local_corners.push(Vec3::new(-he.x, he.y, -he.z));
+                    local_corners.push(Vec3::new(-he.x, he.y, he.z));
                     local_corners.push(Vec3::new(he.x, he.y, he.z));
-                    local_corners.push(Vec3::new(he.x, -he.y, he.z));
-                    local_corners.push(Vec3::new(he.x, -he.y, -he.z));
                 } else {
                     local_corners.push(Vec3::new(-he.x, he.y, he.z));
+                    local_corners.push(Vec3::new(he.x, he.y, he.z));
+                    local_corners.push(Vec3::new(he.x, he.y, -he.z));
                     local_corners.push(Vec3::new(-he.x, he.y, -he.z));
-                    local_corners.push(Vec3::new(-he.x, -he.y, -he.z));
-                    local_corners.push(Vec3::new(-he.x, -he.y, he.z));
                 }
             } else if abs_y >= abs_x && abs_y >= abs_z {
                 let sign = local_dir.y.signum();

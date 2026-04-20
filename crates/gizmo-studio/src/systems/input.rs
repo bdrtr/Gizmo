@@ -5,10 +5,10 @@ use gizmo::physics::components::Transform;
 use gizmo::physics::shape::Collider;
 use gizmo::prelude::*;
 
-pub fn handle_input_and_scene_view(world: &mut World, editor_state: &mut EditorState, state: &mut StudioState, dt: f32, input: &Input) {
+pub fn handle_input_and_scene_view(world: &mut World, editor_state: &mut EditorState, state: &mut StudioState, dt: f32, input: &Input, window: &gizmo::prelude::WindowInfo) {
         // Editör Scene View üzerinden gelen NDC ve raycast tetiğini okuyalım
         if let Some(ndc) = editor_state.mouse_ndc {
-            let (ww, wh) = input.window_size();
+            let (ww, wh) = window.size();
             let aspect = if let Some(rect) = editor_state.scene_view_rect {
                 rect.width() / rect.height()
             } else {
@@ -16,8 +16,8 @@ pub fn handle_input_and_scene_view(world: &mut World, editor_state: &mut EditorS
             };
 
             if let (Some(transforms), Some(cameras)) = (
-                world.borrow::<Transform>(),
-                world.borrow::<gizmo::renderer::components::Camera>(),
+                world.borrow::<Transform>().expect("ECS Aliasing Error"),
+                world.borrow::<gizmo::renderer::components::Camera>().expect("ECS Aliasing Error"),
             ) {
                 if let (Some(t), Some(cam)) = (
                     transforms.get(state.editor_camera),
@@ -68,7 +68,7 @@ pub fn handle_input_and_scene_view(world: &mut World, editor_state: &mut EditorS
         // Yeni debug istekleri spawnla
         if !editor_state.debug_draw_requests.is_empty() {
             let mut pending_debug_assets = None;
-            if let Some(debug_assets) = world.get_resource::<DebugAssets>() {
+            if let Some(debug_assets) = world.get_resource::<DebugAssets>().expect("ECS Aliasing Error") {
                 pending_debug_assets =
                     Some((debug_assets.cube.clone(), debug_assets.white_tex.clone()));
             }
@@ -98,7 +98,7 @@ pub fn handle_input_and_scene_view(world: &mut World, editor_state: &mut EditorS
         if let Some(asset_path) = editor_state.spawn_asset_request.take() {
             let mut final_pos = None;
             if let Some(ndc) = editor_state.spawn_asset_position {
-                let (ww, wh) = input.window_size();
+                let (ww, wh) = window.size();
                 let aspect = if let Some(rect) = editor_state.scene_view_rect {
                     rect.width() / rect.height()
                 } else {
@@ -111,17 +111,15 @@ pub fn handle_input_and_scene_view(world: &mut World, editor_state: &mut EditorS
                     // Raycast yap (Gizmo'ları yoksayarak)
                     let mut closest_t = std::f32::MAX;
                     if let (Some(colliders), Some(transforms)) =
-                        (world.borrow::<Collider>(), world.borrow::<Transform>())
+                        (world.borrow::<Collider>().expect("ECS Aliasing Error"), world.borrow::<Transform>().expect("ECS Aliasing Error"))
                     {
-                        for i in 0..colliders.dense.len() {
-                            let id = colliders.dense[i].entity;
+                        for (id, col) in colliders.iter() {
                             if id == state.editor_camera || id == editor_state.highlight_box {
                                 continue;
                             }
 
                             if let Some(t) = (*transforms).get(id) {
-                                let extents = colliders.dense[i]
-                                    .data
+                                let extents = col
                                     .shape
                                     .bounding_box_half_extents(t.rotation);
                                 let scaled_half = gizmo::math::Vec3::new(

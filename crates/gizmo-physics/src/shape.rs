@@ -274,3 +274,5 @@ impl Collider {
         }
     }
 }
+
+gizmo_core::impl_component!(Collider);

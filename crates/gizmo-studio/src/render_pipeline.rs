@@ -75,7 +75,7 @@ pub fn execute_render_pipeline(
         1.0
     };
 
-    if let Some(ed_state) = world.get_resource::<gizmo::editor::EditorState>() {
+    if let Some(ed_state) = world.get_resource::<gizmo::editor::EditorState>().expect("ECS Aliasing Error") {
         if let Some(rect) = ed_state.scene_view_rect {
             if rect.height() > 0.0 {
                 aspect = rect.width() / rect.height();
@@ -90,10 +90,10 @@ pub fn execute_render_pipeline(
     let mut cam_far = 2000.0f32;
     let mut cam_fov = std::f32::consts::FRAC_PI_4;
     let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
-    let _is_hidden_guard = world.borrow::<gizmo::core::component::IsHidden>();
+    let _is_hidden_guard = world.borrow::<gizmo::core::component::IsHidden>().expect("ECS Aliasing Error");
 
     if let (Some(cameras), Some(transforms)) =
-        (world.borrow::<Camera>(), world.borrow::<Transform>())
+        (world.borrow::<Camera>().expect("ECS Aliasing Error"), world.borrow::<Transform>().expect("ECS Aliasing Error"))
     {
         if let (Some(cam), Some(trans)) = (
             cameras.get(state.editor_camera),
@@ -247,7 +247,7 @@ pub fn execute_render_pipeline(
     renderer.queue.write_buffer(
         &renderer.scene.global_uniform_buffer,
         0,
-        bytemuck::cast_slice(&[scene_uniform_data]),
+        gizmo::bytemuck::cast_slice(&[scene_uniform_data]),
     );
 
     // --- BATCHING (INSTANCING) HAZIRLIĞI VE FRUSTUM CULLING ---
@@ -281,9 +281,9 @@ pub fn execute_render_pipeline(
         all_instances.clear();
         flat_batches.clear();
 
-        let renderers = world.borrow::<gizmo::renderer::components::MeshRenderer>();
-    let skeletons = world.borrow::<gizmo::renderer::components::Skeleton>();
-    let lod_groups = world.borrow::<gizmo::renderer::components::LodGroup>();
+        let renderers = world.borrow::<gizmo::renderer::components::MeshRenderer>().expect("ECS Aliasing Error");
+    let skeletons = world.borrow::<gizmo::renderer::components::Skeleton>().expect("ECS Aliasing Error");
+    let lod_groups = world.borrow::<gizmo::renderer::components::LodGroup>().expect("ECS Aliasing Error");
 
     if let Some(mut q) = world.query::<(&Mesh, &Transform, &Material)>() {
         for (e, (mesh, trans, mat)) in q.iter_mut() {
@@ -297,7 +297,7 @@ pub fn execute_render_pipeline(
             }
 
             // Gizli olarak işaretlenmiş objeleri atla!
-            if let Some(hidden) = world.borrow::<gizmo::core::component::IsHidden>() {
+            if let Some(hidden) = world.borrow::<gizmo::core::component::IsHidden>().expect("ECS Aliasing Error") {
                 if hidden.contains(e) {
                     continue;
                 }
@@ -429,7 +429,7 @@ pub fn execute_render_pipeline(
         renderer.queue.write_buffer(
             &renderer.scene.instance_buffer,
             0,
-            bytemuck::cast_slice(all_instances),
+            gizmo::bytemuck::cast_slice(all_instances),
         );
     }
 
@@ -439,14 +439,14 @@ pub fn execute_render_pipeline(
 
         // --- YENİ PARTİCÜL SPAWNLAMA (CPU -> GPU) ---
         if let Some(mut emitters) =
-            world.borrow_mut::<gizmo::renderer::components::ParticleEmitter>()
+            world.borrow_mut::<gizmo::renderer::components::ParticleEmitter>().expect("ECS Aliasing Error")
         {
-            if let Some(transforms) = world.borrow::<Transform>() {
+            if let Some(transforms) = world.borrow::<Transform>().expect("ECS Aliasing Error") {
                 use rand::Rng;
                 let mut rng = rand::rng();
                 let mut all_new_particles = Vec::new();
 
-                let emitter_entities: Vec<u32> = emitters.dense.iter().map(|e| e.entity).collect();
+                let emitter_entities: Vec<u32> = emitters.iter().map(|(id, _)| id).collect();
                 for e_id in emitter_entities {
                     if let Some(emitter) = emitters.get_mut(e_id) {
                         if !emitter.is_active || emitter.spawn_rate <= 0.0 {
@@ -704,7 +704,7 @@ pub fn execute_render_pipeline(
 
 
     // --- 3. POST-PROCESSING (Bloom + Tone Mapping → Ekrana Yaz) ---
-    let render_target = world.get_resource::<gizmo::renderer::components::EditorRenderTarget>();
+    let render_target = world.get_resource::<gizmo::renderer::components::EditorRenderTarget>().expect("ECS Aliasing Error");
     let output_view = if let Some(target) = &render_target {
         // Ana ekranı siyah ile mecburi temizleyelim (Swapchain error önleme)
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

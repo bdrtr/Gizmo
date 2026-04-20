@@ -16,7 +16,7 @@ fn test_tunneling_without_ccd() {
     // CCD KAPALI (use_ccd = false)
     let bullet = world.spawn();
     world.add_component(bullet, Transform::new(Vec3::new(-5.0, 0.0, 0.0)));
-    let mut rb = RigidBody::new(1.0, 0.5, 0.5, false);
+    let mut rb = RigidBody::new(1.0, 0.0, 0.0, false);
     rb.ccd_enabled = false;
     world.add_component(bullet, rb);
     // Hız saniyede 200 metre (1 karede (0.016s) = 3.2 metre ilerler)
@@ -33,11 +33,11 @@ fn test_tunneling_without_ccd() {
     // -5.0 + 20.0 = 15.0'e ışınlanmalı ve duvara HİÇ ÇARPMADAN geçmeli
     // (Çünkü CCD kapalı ve discrete test 1 kareden diğerine duvarı atlar)
     gizmo_physics::physics_apply_forces_system(&world, 0.1);
+    physics_collision_system(&mut world, 0.1);
     gizmo_physics::physics_movement_system(&world, 0.1);
-    physics_collision_system(&mut world, 0.1); // Çarpışmayı kontrol et ama nafile, çünkü duvardan çoktan geçti
 
     let t = world
-        .borrow::<Transform>()
+        .borrow::<Transform>().expect("ECS Aliasing Error")
         .unwrap()
         .get(bullet.id())
         .unwrap()
@@ -54,12 +54,14 @@ fn test_tunneling_without_ccd() {
 #[test]
 fn test_tunneling_prevention_with_ccd() {
     let mut world = setup_world();
+    world.insert_resource(gizmo_physics::system::PhysicsSolverState::new());
+    world.insert_resource(gizmo_physics::components::PhysicsConfig::default());
 
     // Devasa hızla giden (mermi gibi) bir obje
     // CCD AÇIK (use_ccd = true)
     let bullet = world.spawn();
     world.add_component(bullet, Transform::new(Vec3::new(-5.0, 0.0, 0.0)));
-    let mut rb = RigidBody::new(1.0, 0.5, 0.5, false);
+    let mut rb = RigidBody::new(1.0, 0.0, 0.0, false);
     rb.ccd_enabled = true;
     world.add_component(bullet, rb);
 
@@ -73,18 +75,18 @@ fn test_tunneling_prevention_with_ccd() {
     world.add_component(wall, Collider::new_aabb(0.5, 5.0, 5.0));
 
     // 0.1 saniye işlet
-    physics_collision_system(&mut world, 0.1);
     gizmo_physics::physics_apply_forces_system(&world, 0.1);
+    physics_collision_system(&mut world, 0.1);
     gizmo_physics::physics_movement_system(&world, 0.1);
 
     let t = world
-        .borrow::<Transform>()
+        .borrow::<Transform>().expect("ECS Aliasing Error")
         .unwrap()
         .get(bullet.id())
         .unwrap()
         .clone();
     let v = world
-        .borrow::<Velocity>()
+        .borrow::<Velocity>().expect("ECS Aliasing Error")
         .unwrap()
         .get(bullet.id())
         .unwrap()

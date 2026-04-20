@@ -129,8 +129,7 @@ fn resolve_capsule_collisions(
     let mut ground_normal = Vec3::new(0.0, 1.0, 0.0);
     let mut is_grounded = false;
 
-    for other_entity in colliders.dense.iter().map(|e| &e.entity) {
-        let other_id = *other_entity;
+    for (other_id, _) in colliders.iter() {
         if other_id == entity_id {
             continue;
         }
@@ -334,16 +333,16 @@ fn slope_angle(normal: Vec3) -> f32 {
 /// 6. Eğim limiti kontrolü
 pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
     // Collider'ları ayrıca borrow'lamak lazım
-    let colliders = match world.borrow::<Collider>() {
+    let colliders = match world.borrow::<Collider>().expect("ECS Aliasing Error") {
         Some(c) => c,
         None => return,
     };
 
     if let (Some(mut trans_storage), Some(mut controllers)) = (
-        world.borrow_mut::<Transform>(),
-        world.borrow_mut::<CharacterController>(),
+        world.borrow_mut::<Transform>().expect("ECS Aliasing Error"),
+        world.borrow_mut::<CharacterController>().expect("ECS Aliasing Error"),
     ) {
-        let entities: Vec<u32> = controllers.dense.iter().map(|e| e.entity).collect();
+        let entities: Vec<u32> = controllers.iter().map(|(id, _)| id).collect();
         for entity in entities {
             let t = match trans_storage.get(entity) {
                 Some(t) => *t,
@@ -414,7 +413,7 @@ pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
 
             // === 4. Zemin düzlemi kontrolü (fallback — collider yoksa) ===
             let ground_y = world
-                .get_resource::<crate::components::PhysicsConfig>()
+                .get_resource::<crate::components::PhysicsConfig>().expect("ECS Aliasing Error")
                 .map(|c| c.ground_y)
                 .unwrap_or(-1.0);
             let foot_y = new_pos.y - cc.half_height - cc.radius;
@@ -493,3 +492,5 @@ pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
         }
     }
 }
+
+gizmo_core::impl_component!(CharacterController);

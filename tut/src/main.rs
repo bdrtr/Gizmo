@@ -127,15 +127,15 @@ fn main() {
             }
         })
         .set_ui(|_world, state, ctx| {
-            gizmo::prelude::egui::Window::new("FPS")
-                .anchor(gizmo::prelude::egui::Align2::LEFT_TOP, gizmo::prelude::egui::vec2(10.0, 10.0))
+            gizmo::egui::Window::new("FPS")
+                .anchor(gizmo::egui::Align2::LEFT_TOP, gizmo::egui::vec2(10.0, 10.0))
                 .title_bar(false)
                 .resizable(false)
-                .frame(gizmo::prelude::egui::Frame::window(&ctx.style()).fill(gizmo::prelude::egui::Color32::from_black_alpha(150)))
+                .frame(gizmo::egui::Frame::window(&ctx.style()).fill(gizmo::egui::Color32::from_black_alpha(150)))
                 .show(ctx, |ui| {
                     ui.label(
-                        gizmo::prelude::egui::RichText::new(format!("FPS: {:.0}", state.fps))
-                            .color(gizmo::prelude::egui::Color32::WHITE)
+                        gizmo::egui::RichText::new(format!("FPS: {:.0}", state.fps))
+                            .color(gizmo::egui::Color32::WHITE)
                             .strong()
                             .size(24.0),
                     );
@@ -341,7 +341,7 @@ fn trigger_first_domino(world: &mut World, game: &DominoGame) {
     };
     let fwd = Vec3::new(angle.sin(), 0.0, angle.cos());
 
-    if let (Some(mut vels), Some(mut rbs)) = (world.borrow_mut::<Velocity>(), world.borrow_mut::<RigidBody>()) {
+    if let (Some(mut vels), Some(mut rbs)) = (world.borrow_mut::<Velocity>().expect("ECS Error"), world.borrow_mut::<RigidBody>().expect("ECS Error")) {
         // Topa hız ver — ilk dominoya doğru
         if let Some(v) = vels.get_mut(game.ball_id) {
             v.linear = fwd * 4.0;  // Hafif itme, çok güçlü → yığılma
@@ -393,14 +393,14 @@ fn update_camera(
     if input.is_key_pressed(KeyCode::KeyQ as u32) { state.cam_pos.y -= speed; }
     if input.is_key_pressed(KeyCode::KeyE as u32) { state.cam_pos.y += speed; }
  
-    if let Some(mut trans) = world.borrow_mut::<Transform>() {
+    if let Some(mut trans) = world.borrow_mut::<Transform>().expect("ECS Error") {
         if let Some(t) = trans.get_mut(state.cam_id) {
             t.position = state.cam_pos;
             t.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
             t.update_local_matrix();
         }
     }
-    if let Some(mut cams) = world.borrow_mut::<Camera>() {
+    if let Some(mut cams) = world.borrow_mut::<Camera>().expect("ECS Error") {
         if let Some(c) = cams.get_mut(state.cam_id) {
             c.yaw = state.cam_yaw;
             c.pitch = state.cam_pitch;

@@ -1,77 +1,212 @@
-/// Gizmo ECS Event System
+/// Gizmo ECS Event System — Double-buffered olay kuyruğu.
 ///
-/// `World` içerisinde Resource olarak tutulan evrensel olay (event) kuyruklarıdır.
-/// Örnek Kullanım:
+/// Her frame'de `update()` çağrıldığında, önceki frame'in eventleri atılır ve
+/// mevcut frame'in eventleri "önceki" konumuna taşınır. Bu sayede:
+/// - Yazarlar (`send`) her zaman `current` buffer'a yazar.
+/// - Okuyucular (`iter`) her zaman `previous` buffer'dan okur (non-destructive).
+/// - Birden fazla sistem aynı eventleri bağımsız olarak okuyabilir.
+///
+/// # Kullanım
 /// ```rust,ignore
-/// world.insert_resource(Events::<CollisionEvent>::new());
+/// // Kayıt (App seviyesinde):
+/// app.add_event::<CollisionEvent>();
 ///
-/// // Olay Fırlatma:
-/// world.get_resource_mut::<Events<CollisionEvent>>().unwrap().push(CollisionEvent(..));
+/// // Olay gönderme (herhangi bir sistem):
+/// world.get_resource_mut::<Events<CollisionEvent>>().unwrap().send(CollisionEvent(..));
 ///
-/// // Olay Okuma:
-/// for event in world.get_resource_mut::<Events<CollisionEvent>>().unwrap().drain() {
-///    println!("Çarpışma oldu!");
+/// // Olay okuma (herhangi bir sistem, non-destructive):
+/// let events = world.get_resource::<Events<CollisionEvent>>().unwrap();
+/// for event in events.iter() {
+///     println!("Çarpışma oldu: {:?}", event);
 /// }
 /// ```
-pub struct Events<T: 'static> {
-    pub events_a: Vec<T>,
-    pub events_b: Vec<T>,
-    pub a_is_active: bool,
+pub struct Events<T> {
+    /// Bu frame'e yazılan eventler.
+    current: Vec<T>,
+    /// Önceki frame'den kalan, okunabilir eventler.
+    previous: Vec<T>,
 }
 
 impl<T> Events<T> {
     pub fn new() -> Self {
         Self {
-            events_a: Vec::new(),
-            events_b: Vec::new(),
-            a_is_active: true,
+            current: Vec::new(),
+            previous: Vec::new(),
         }
     }
 
+    /// Yeni bir event gönderir (mevcut frame'in buffer'ına yazar).
+    #[inline]
+    pub fn send(&mut self, event: T) {
+        self.current.push(event);
+    }
+
+    /// Geriye dönük uyumluluk — `send()` ile aynı.
+    #[inline]
     pub fn push(&mut self, event: T) {
-        if self.a_is_active {
-            self.events_a.push(event);
-        } else {
-            self.events_b.push(event);
-        }
+        self.send(event);
     }
 
-    /// Çift-buffer (Double-buffer) çerçeve ilerletmesi.
-    /// En eski buffer'ı temizler ve aktif yazma hedefini diğerine kaydırır.
+    /// Frame sonu: önceki frame'in eventlerini temizler, mevcut frame'i önceki konuma taşır.
+    ///
+    /// Bu metot her frame sonunda **bir kez** çağrılmalıdır — `App::add_event()` bunu
+    /// otomatik olarak yapar.
     pub fn update(&mut self) {
-        if self.a_is_active {
-            self.events_b.clear();
-        } else {
-            self.events_a.clear();
-        }
-        self.a_is_active = !self.a_is_active;
+        self.previous.clear();
+        std::mem::swap(&mut self.current, &mut self.previous);
     }
 
-    /// Olayları tüketmek (işlemek) için tüm kuyruğu boşaltır. (Geriye dönük uyumluluk)
-    pub fn drain(&mut self) -> std::vec::IntoIter<T> {
-        let mut all = Vec::new();
-        if self.a_is_active {
-            all.append(&mut self.events_b);
-            all.append(&mut self.events_a);
-        } else {
-            all.append(&mut self.events_a);
-            all.append(&mut self.events_b);
-        }
-        all.into_iter()
+    /// Önceki frame'in eventlerini okumak için non-destructive iterator.
+    /// Birden fazla sistem aynı eventleri bağımsız olarak okuyabilir.
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.previous.iter()
     }
 
+    /// Önceki frame'deki event sayısı.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.previous.len()
+    }
+
+    /// Önceki frame'de event var mı?
+    #[inline]
     pub fn is_empty(&self) -> bool {
-        self.events_a.is_empty() && self.events_b.is_empty()
+        self.previous.is_empty()
     }
 
+    /// Tüm eventleri (hem mevcut hem önceki) temizler.
     pub fn clear(&mut self) {
-        self.events_a.clear();
-        self.events_b.clear();
+        self.current.clear();
+        self.previous.clear();
+    }
+
+    /// Eventleri tüketmek için destructive iterator.
+    /// **Dikkat:** Bu metot tüm eventleri (önceki frame) tüketir. Birden fazla okuyucu
+    /// varsa diğer okuyucular eventleri kaçırır. Mümkünse `iter()` tercih edin.
+    pub fn drain(&mut self) -> std::vec::IntoIter<T> {
+        self.previous.drain(..).collect::<Vec<_>>().into_iter()
     }
 }
 
 impl<T> Default for Events<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_send_and_iter() {
+        let mut events = Events::new();
+        events.send(1);
+        events.send(2);
+        events.send(3);
+
+        // Henüz update() çağrılmadı — iter() önceki frame (boş)
+        assert!(events.iter().next().is_none());
+        assert!(events.is_empty());
+
+        // Frame ilerlet
+        events.update();
+
+        // Artık eventler okunabilir
+        let collected: Vec<&i32> = events.iter().collect();
+        assert_eq!(collected, vec![&1, &2, &3]);
+        assert_eq!(events.len(), 3);
+    }
+
+    #[test]
+    fn test_non_destructive_iter() {
+        let mut events = Events::new();
+        events.send(42);
+        events.update();
+
+        // İlk okuma
+        assert_eq!(events.iter().next(), Some(&42));
+        // İkinci okuma — hâlâ erişilebilir
+        assert_eq!(events.iter().next(), Some(&42));
+    }
+
+    #[test]
+    fn test_double_buffer_isolation() {
+        let mut events = Events::new();
+
+        // Frame 1: event gönder
+        events.send(1);
+        events.update();
+
+        // Frame 2: yeni event gönder + eski eventleri oku
+        events.send(2);
+        let frame1_events: Vec<&i32> = events.iter().collect();
+        assert_eq!(frame1_events, vec![&1]); // Sadece önceki frame
+
+        events.update();
+
+        // Frame 3: frame 2'nin eventleri okunabilir, frame 1'inkiler gitmiş
+        let frame2_events: Vec<&i32> = events.iter().collect();
+        assert_eq!(frame2_events, vec![&2]);
+    }
+
+    #[test]
+    fn test_update_clears_previous() {
+        let mut events = Events::new();
+        events.send(1);
+        events.update();
+        assert_eq!(events.len(), 1);
+
+        // Yeni frame — eski event temizlenmeli
+        events.update();
+        assert!(events.is_empty());
+        assert_eq!(events.len(), 0);
+    }
+
+    #[test]
+    fn test_push_backward_compat() {
+        let mut events = Events::new();
+        events.push(99); // Eski API
+        events.update();
+        assert_eq!(events.iter().next(), Some(&99));
+    }
+
+    #[test]
+    fn test_clear() {
+        let mut events = Events::new();
+        events.send(1);
+        events.update();
+        events.send(2);
+
+        events.clear();
+        assert!(events.is_empty());
+
+        events.update();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_drain_consumes() {
+        let mut events = Events::new();
+        events.send(10);
+        events.send(20);
+        events.update();
+
+        let drained: Vec<i32> = events.drain().collect();
+        assert_eq!(drained, vec![10, 20]);
+
+        // drain sonrası boş
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_no_static_bound() {
+        // 'static bound kaldırıldığını doğrula — kısa ömürlü tipler de çalışır
+        struct Ephemeral<'a>(&'a str);
+        let mut events = Events::new();
+        let msg = String::from("test");
+        events.send(Ephemeral(&msg));
+        events.update();
+        assert_eq!(events.iter().next().unwrap().0, "test");
     }
 }

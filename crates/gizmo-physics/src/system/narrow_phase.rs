@@ -23,47 +23,37 @@ pub fn detect_single_collision_pair(
     colliders: &gizmo_core::SparseSet<Collider>,
     rigidbodies: &gizmo_core::SparseSet<RigidBody>,
     velocities: &gizmo_core::SparseSet<Velocity>,
-    vehicle_entities: &std::collections::HashSet<u32>,
+    _vehicle_entities: &std::collections::HashSet<u32>,
     _has_vehicles: bool,
     dt: f32,
 ) -> Option<DetectionResult> {
     use crate::shape::ColliderShape;
 
-    let t_dense = &transforms.dense;
-    let t_sparse = &transforms.sparse;
-    let c_dense = &colliders.dense;
-    let c_sparse = &colliders.sparse;
-    let rb_dense = &rigidbodies.dense;
-    let rb_sparse = &rigidbodies.sparse;
-    let v_dense = &velocities.dense;
-    let v_sparse = &velocities.sparse;
-    let _v_set = vehicle_entities;
+    let rb_a = rigidbodies.get(ent_a)?;
+    let rb_b = rigidbodies.get(ent_b)?;
 
-    let rb_a = rb_sparse.get(&ent_a).map(|&i| &rb_dense[i])?;
-    let rb_b = rb_sparse.get(&ent_b).map(|&i| &rb_dense[i])?;
-
-    if rb_a.data.mass == 0.0 && rb_b.data.mass == 0.0 {
+    if rb_a.mass == 0.0 && rb_b.mass == 0.0 {
         return None;
     }
-    let both_dynamic_sleeping = rb_a.data.mass > 0.0
-        && rb_b.data.mass > 0.0
-        && rb_a.data.is_sleeping
-        && rb_b.data.is_sleeping;
+    let both_dynamic_sleeping = rb_a.mass > 0.0
+        && rb_b.mass > 0.0
+        && rb_a.is_sleeping
+        && rb_b.is_sleeping;
     if both_dynamic_sleeping {
         return None;
     }
-    let layers_compatible = (rb_a.data.collision_layer & rb_b.data.collision_mask) != 0
-        && (rb_b.data.collision_layer & rb_a.data.collision_mask) != 0;
+    let layers_compatible = (rb_a.collision_layer & rb_b.collision_mask) != 0
+        && (rb_b.collision_layer & rb_a.collision_mask) != 0;
     if !layers_compatible {
         return None;
     }
 
-    let col_a = c_sparse.get(&ent_a).map(|&i| &c_dense[i])?;
-    let col_b = c_sparse.get(&ent_b).map(|&i| &c_dense[i])?;
-    let t_a = t_sparse.get(&ent_a).map(|&i| &t_dense[i])?;
-    let t_b = t_sparse.get(&ent_b).map(|&i| &t_dense[i])?;
-    let (pos_a, rot_a) = (t_a.data.position, t_a.data.rotation);
-    let (pos_b, rot_b) = (t_b.data.position, t_b.data.rotation);
+    let col_a = colliders.get(ent_a)?;
+    let col_b = colliders.get(ent_b)?;
+    let t_a = transforms.get(ent_a)?;
+    let t_b = transforms.get(ent_b)?;
+    let (pos_a, rot_a) = (t_a.position, t_a.rotation);
+    let (pos_b, rot_b) = (t_b.position, t_b.rotation);
 
     let mut ccd_pos_a = None;
     let mut ccd_pos_b = None;
@@ -74,33 +64,27 @@ pub fn detect_single_collision_pair(
         rot_b.x.abs() < 0.001 && rot_b.y.abs() < 0.001 && rot_b.z.abs() < 0.001 && (rot_b.w - 1.0).abs() < 0.001;
 
     let manifold = detect_pair(
-        &col_a.data.shape,
+        &col_a.shape,
         pos_a,
         rot_a,
         is_rot_a_identity,
-        &col_b.data.shape,
+        &col_b.shape,
         pos_b,
         rot_b,
         is_rot_b_identity,
     );
 
-    let manifold = if !manifold.is_colliding && (rb_a.data.ccd_enabled || rb_b.data.ccd_enabled) {
-        let v_a_lin = v_sparse
-            .get(&ent_a)
-            .map(|&i| v_dense[i].data.linear)
-            .unwrap_or(Vec3::ZERO);
-        let v_b_lin = v_sparse
-            .get(&ent_b)
-            .map(|&i| v_dense[i].data.linear)
-            .unwrap_or(Vec3::ZERO);
+    let manifold = if !manifold.is_colliding && (rb_a.ccd_enabled || rb_b.ccd_enabled) {
+        let v_a_lin = velocities.get(ent_a).map(|v| v.linear).unwrap_or(Vec3::ZERO);
+        let v_b_lin = velocities.get(ent_b).map(|v| v.linear).unwrap_or(Vec3::ZERO);
         let rel_v = v_b_lin - v_a_lin;
 
         if rel_v.length() * dt > 0.1 {
             ccd_bisect(
-                &col_a.data.shape,
+                &col_a.shape,
                 pos_a,
                 rot_a,
-                &col_b.data.shape,
+                &col_b.shape,
                 pos_b,
                 rot_b,
                 v_a_lin,
@@ -120,22 +104,22 @@ pub fn detect_single_collision_pair(
         return None;
     }
 
-    let inv_mass_a = if rb_a.data.mass == 0.0 {
+    let inv_mass_a = if rb_a.mass == 0.0 {
         0.0
     } else {
-        1.0 / rb_a.data.mass
+        1.0 / rb_a.mass
     };
-    let inv_mass_b = if rb_b.data.mass == 0.0 {
+    let inv_mass_b = if rb_b.mass == 0.0 {
         0.0
     } else {
-        1.0 / rb_b.data.mass
+        1.0 / rb_b.mass
     };
 
     let mut wakes = Vec::new();
-    if rb_a.data.is_sleeping && rb_a.data.mass > 0.0 {
+    if rb_a.is_sleeping && rb_a.mass > 0.0 {
         wakes.push(ent_a);
     }
-    if rb_b.data.is_sleeping && rb_b.data.mass > 0.0 {
+    if rb_b.is_sleeping && rb_b.mass > 0.0 {
         wakes.push(ent_b);
     }
 
@@ -147,10 +131,10 @@ pub fn detect_single_collision_pair(
     for (contact_point, pen) in &manifold.contact_points {
         let mut r_a = *contact_point - pos_a;
         let mut r_b = *contact_point - pos_b;
-        if let ColliderShape::Sphere(s) = &col_a.data.shape {
+        if let ColliderShape::Sphere(s) = &col_a.shape {
             r_a = manifold.normal * s.radius;
         }
-        if let ColliderShape::Sphere(s) = &col_b.data.shape {
+        if let ColliderShape::Sphere(s) = &col_b.shape {
             // Doğrusu: B'nin merkezi normali takip eder, negatif olmamalı.
             r_b = manifold.normal * s.radius;
         }
@@ -160,15 +144,15 @@ pub fn detect_single_collision_pair(
             normal: manifold.normal,
             inv_mass_a,
             inv_mass_b,
-            inv_inertia_a: rb_a.data.inverse_inertia_local,
-            inv_inertia_b: rb_b.data.inverse_inertia_local,
-            restitution: rb_a.data.restitution.max(rb_b.data.restitution),
-            friction: (rb_a.data.friction * rb_b.data.friction).sqrt(),
+            inv_inertia_a: rb_a.inverse_inertia_local,
+            inv_inertia_b: rb_b.inverse_inertia_local,
+            restitution: rb_a.restitution.max(rb_b.restitution),
+            friction: (rb_a.friction * rb_b.friction).sqrt(),
             penetration: *pen,
             r_a,
             r_b,
-            rot_a: t_a.data.rotation,
-            rot_b: t_b.data.rotation,
+            rot_a: t_a.rotation,
+            rot_b: t_b.rotation,
             accumulated_j: 0.0,
             accumulated_friction: Vec3::ZERO,
             ccd_offset_a: ccd_pos_a.unwrap_or(Vec3::ZERO),

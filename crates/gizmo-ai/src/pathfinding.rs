@@ -17,13 +17,17 @@ impl GridPos {
 
 pub struct NavGrid {
     pub cell_size: f32,
+    pub width: i32,
+    pub height: i32,
     pub obstacles: HashSet<GridPos>,
 }
 
 impl NavGrid {
-    pub fn new(cell_size: f32) -> Self {
+    pub fn new(cell_size: f32, width: i32, height: i32) -> Self {
         Self {
             cell_size,
+            width,
+            height,
             obstacles: HashSet::new(),
         }
     }
@@ -55,29 +59,29 @@ impl NavGrid {
     }
 
     pub fn is_walkable(&self, pos: GridPos) -> bool {
-        // Zemin veya uzay sınırları kontrol edilebilir (Şimdilik limitsiz).
+        if pos.x < 0 || pos.x >= self.width || pos.z < 0 || pos.z >= self.height {
+            return false;
+        }
         !self.obstacles.contains(&pos) // Engel yoksa yürünebilir
     }
 
     // Yalnızca X,Z düzleminde Dört yön hareket algılayan komşuluk.
-    // Eğer 3 boyutlu uçan ajan istersek y de eklenebilir.
     pub fn get_neighbors(&self, pos: GridPos) -> Vec<GridPos> {
         let mut neighbors = Vec::with_capacity(8);
-        let dirs = [(1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1)];
-
-        let diagonals = [(1, 0, 1), (-1, 0, -1), (-1, 0, 1), (1, 0, -1)];
+        let dirs = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+        let diagonals = [(1, 1), (-1, -1), (-1, 1), (1, -1)];
 
         // 1. Düz yönler
-        for (dx, dy, dz) in dirs.iter() {
-            let n = GridPos::new(pos.x + dx, pos.y + dy, pos.z + dz);
+        for (dx, dz) in dirs.iter() {
+            let n = GridPos::new(pos.x + dx, pos.y, pos.z + dz);
             if self.is_walkable(n) {
                 neighbors.push(n);
             }
         }
 
         // 2. Çapraz yönler (Köşeden geçerken her iki kenarın da açık olması şart! Yoksa çarpar)
-        for (dx, dy, dz) in diagonals.iter() {
-            let n = GridPos::new(pos.x + dx, pos.y + dy, pos.z + dz);
+        for (dx, dz) in diagonals.iter() {
+            let n = GridPos::new(pos.x + dx, pos.y, pos.z + dz);
             let side1 = GridPos::new(pos.x + dx, pos.y, pos.z);
             let side2 = GridPos::new(pos.x, pos.y, pos.z + dz);
 
@@ -115,84 +119,92 @@ impl PartialOrd for AStarNode {
     }
 }
 
-/// Manhattan mesafe tahmini
+/// Octile mesafe tahmini (Çapraz harekete uygun)
 fn heuristic(a: GridPos, b: GridPos) -> u32 {
-    ((a.x - b.x).abs() + (a.y - b.y).abs() + (a.z - b.z).abs()) as u32 * 10
+    let dx = (a.x - b.x).abs() as u32;
+    let dz = (a.z - b.z).abs() as u32;
+    let (mn, mx) = if dx < dz { (dx, dz) } else { (dz, dx) };
+    14 * mn + 10 * (mx - mn)
 }
 
-/// A* Pathfinding Fonksiyonu
-pub fn find_path(grid: &NavGrid, start_world: Vec3, end_world: Vec3) -> Option<Vec<Vec3>> {
-    let start = grid.world_to_grid(start_world);
-    let end = grid.world_to_grid(end_world);
+impl NavGrid {
+    /// A* Pathfinding Fonksiyonu
+    pub fn find_path(&self, start_world: Vec3, end_world: Vec3) -> Option<Vec<Vec3>> {
+        let start = self.world_to_grid(start_world);
+        let end = self.world_to_grid(end_world);
 
-    if !grid.is_walkable(end) {
-        return None; // Hedef duvar içinde
-    }
-
-    let mut open_set = BinaryHeap::new();
-    let mut came_from: HashMap<GridPos, GridPos> = HashMap::new();
-    let mut g_score: HashMap<GridPos, u32> = HashMap::new();
-
-    open_set.push(AStarNode {
-        pos: start,
-        cost: 0,
-    });
-    g_score.insert(start, 0);
-
-    let manhattan_dist = ((start.x - end.x).abs() + (start.z - end.z).abs()) as u32;
-    let max_iterations = (manhattan_dist as usize * 10).clamp(500, 5000);
-
-    let mut iterations = 0usize;
-    while let Some(current_node) = open_set.pop() {
-        iterations += 1;
-        if iterations > max_iterations {
-            eprintln!(
-                "[AI] Pathfinding limit aşıldı ({}/{}). Ulaşılamaz rota?",
-                iterations, max_iterations
-            );
-            break;
+        if !self.is_walkable(end) || !self.is_walkable(start) {
+            return None; // Hedef duvar içinde
         }
 
-        let current = current_node.pos;
+        let mut open_set = BinaryHeap::new();
+        let mut came_from: HashMap<GridPos, GridPos> = HashMap::new();
+        let mut g_score: HashMap<GridPos, u32> = HashMap::new();
+        let mut closed_set: HashSet<GridPos> = HashSet::new();
 
-        if current == end {
-            // Yolu Geri İzle
-            let mut path = Vec::new();
-            let mut curr = end;
-            while curr != start {
-                path.push(grid.grid_to_world(curr));
-                curr = *came_from.get(&curr).unwrap();
+        open_set.push(AStarNode {
+            pos: start,
+            cost: 0,
+        });
+        g_score.insert(start, 0);
+
+        let max_iterations = 25_000usize;
+
+        let mut iterations = 0usize;
+        while let Some(current_node) = open_set.pop() {
+            iterations += 1;
+            if iterations > max_iterations {
+                eprintln!(
+                    "[AI] Pathfinding limit aşıldı ({}/{}). Ulaşılamaz rota?",
+                    iterations, max_iterations
+                );
+                break;
             }
-            // Başlangıç noktasını da ekle (veya dahil etme)
-            // path.push(grid.grid_to_world(start));
 
-            path.reverse();
-            return Some(path);
-        }
+            let current = current_node.pos;
+            
+            if closed_set.contains(&current) { continue; }
+            closed_set.insert(current);
 
-        let curr_g = *g_score.get(&current).unwrap_or(&u32::MAX);
+            if current == end {
+                // Yolu Geri İzle
+                let mut path = Vec::new();
+                let mut curr = end;
+                while curr != start {
+                    path.push(self.grid_to_world(curr));
+                    curr = match came_from.get(&curr) {
+                        Some(p) => *p,
+                        None => break,
+                    };
+                }
+                path.reverse();
+                return Some(path);
+            }
 
-        for neighbor in grid.get_neighbors(current) {
-            // Çaprazlar 14, düzler 10 birim maliyet.
-            let move_cost = if neighbor.x != current.x && neighbor.z != current.z {
-                14
-            } else {
-                10
-            };
-            let tentative_g = curr_g + move_cost;
+            let curr_g = *g_score.get(&current).unwrap_or(&u32::MAX);
 
-            if tentative_g < *g_score.get(&neighbor).unwrap_or(&u32::MAX) {
-                came_from.insert(neighbor, current);
-                g_score.insert(neighbor, tentative_g);
+            for neighbor in self.get_neighbors(current) {
+                // Çaprazlar 14, düzler 10 birim maliyet.
+                let move_cost = if neighbor.x != current.x && neighbor.z != current.z {
+                    14
+                } else {
+                    10
+                };
+                let tentative_g = curr_g + move_cost;
 
-                let f_score = tentative_g + heuristic(neighbor, end);
-                open_set.push(AStarNode {
-                    pos: neighbor,
-                    cost: f_score,
-                });
+                if tentative_g < *g_score.get(&neighbor).unwrap_or(&u32::MAX) {
+                    came_from.insert(neighbor, current);
+                    g_score.insert(neighbor, tentative_g);
+
+                    let f_score = tentative_g + heuristic(neighbor, end);
+                    open_set.push(AStarNode {
+                        pos: neighbor,
+                        cost: f_score,
+                    });
+                }
             }
         }
-    }
 
-    None // Yol bulunamadı
+        None // Yol bulunamadı
+    }
 }

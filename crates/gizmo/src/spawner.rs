@@ -10,7 +10,7 @@ use crate::color::Color;
 /// })
 /// ```
 use gizmo_core::{Entity, EntityName, World};
-use gizmo_math::{Quat, Vec3, Vec4};
+use gizmo_math::{Quat, Vec3};
 use gizmo_physics::{
     components::{RigidBody, Velocity},
     shape::Collider,
@@ -209,7 +209,7 @@ impl<'a> Commands<'a> {
     /// `direction`: normallenmiş ışık yönü (aşağı bakan = negatif Y).
     pub fn spawn_sun(
         &mut self,
-        direction: Vec3,
+        _direction: Vec3,
         color: Color,
         intensity: f32,
     ) -> EntityBuilder<'_, 'a> {
@@ -236,12 +236,7 @@ impl<'a> Commands<'a> {
 
     /// Skybox spawn eder (ters yüzlü çok büyük küp). Renk arka plan rengini belirler.
     pub fn spawn_skybox(&mut self, color: Color) -> EntityBuilder<'_, 'a> {
-        if let Some(_) = self.world.query::<&crate::renderer::components::Material>().and_then(|mut m| {
-            m.iter_mut().find(|(_, mat)| mat.is_skybox).map(|_| ())
-        }) {
-            // Already has a skybox, return empty entity builder using a dummy/existing if needed.
-            // Since builders need valid IDs, we spawn a dummy or just skip adding components to a new entity.
-        }
+        // Skip existing check since is_skybox is removed
         
         // Wait, best approach for skybox is ignoring the duplication request if exists, but we must return an EntityBuilder...
         let mesh = AssetManager::create_inverted_cube(&self.renderer.device);
@@ -286,7 +281,7 @@ impl<'a> Commands<'a> {
         let mat = Material::new(bg).with_unlit(color.to_vec4());
         let id = spawn_mesh_entity(self.world, pos, mesh, mat);
         // Scale'i half_extents ile eşleştir
-        if let Some(mut trans_store) = self.world.borrow_mut::<Transform>() {
+        if let Some(mut trans_store) = self.world.borrow_mut::<Transform>().expect("ECS Aliasing Error") {
             if let Some(trans) = trans_store.get_mut(id.id()) {
                 trans.scale = half_extents * 2.0;
                 trans.update_local_matrix();
@@ -555,7 +550,7 @@ fn spawn_gltf_node_flat(
     world.add_component(entity, Parent(parent_id));
     world.add_component(entity, Children(Vec::new()));
 
-    if let Some(mut ch_store) = world.borrow_mut::<Children>() {
+    if let Some(mut ch_store) = world.borrow_mut::<Children>().expect("ECS Aliasing Error") {
         // Safe to push since entity just spawned and didn't trigger any complex re-borrow updates
         if let Some(parent_ch) = ch_store.get_mut(parent_id) {
             parent_ch.0.push(entity.id());
@@ -607,7 +602,7 @@ fn spawn_gltf_node_flat(
 
     // Pulling borrow_mut OUTSIDE the loop avoiding multiple overlapping mutable queries
     if !newly_added_prims.is_empty() {
-        if let Some(mut ch_store) = world.borrow_mut::<Children>() {
+        if let Some(mut ch_store) = world.borrow_mut::<Children>().expect("ECS Aliasing Error") {
             if let Some(parent_ch) = ch_store.get_mut(entity.id()) {
                 parent_ch.0.extend(newly_added_prims);
             }
@@ -684,7 +679,7 @@ impl WorldExt for World {
 
     fn position_of(&self, name: &str) -> Option<Vec3> {
         let target_id = self.entity_named(name)?;
-        let transforms = self.borrow::<gizmo_physics::Transform>()?;
+        let transforms = self.borrow::<gizmo_physics::Transform>().expect("ECS Aliasing Error")?;
         transforms.get(target_id).map(|t| t.position)
     }
 
@@ -708,7 +703,7 @@ impl WorldExt for World {
             }
         };
         if let Some(target_id) = target {
-            if let Some(mut storage) = self.borrow_mut::<T>() {
+            if let Some(mut storage) = self.borrow_mut::<T>().expect("ECS Aliasing Error") {
                 if let Some(comp) = storage.get_mut(target_id) {
                     f(comp);
                 }
@@ -742,14 +737,14 @@ pub trait InputExt {
 impl InputExt for gizmo_core::input::Input {
     #[inline]
     fn pressed(&self, keycode: winit::keyboard::KeyCode) -> bool {
-        self.key(keycode as u32)
+        self.is_key_pressed(keycode as u32)
     }
     #[inline]
     fn just_pressed(&self, keycode: winit::keyboard::KeyCode) -> bool {
-        self.key_just(keycode as u32)
+        self.is_key_just_pressed(keycode as u32)
     }
     #[inline]
     fn just_released(&self, keycode: winit::keyboard::KeyCode) -> bool {
-        self.key_released(keycode as u32)
+        self.is_key_just_released(keycode as u32)
     }
 }

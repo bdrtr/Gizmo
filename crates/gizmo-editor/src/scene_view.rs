@@ -118,7 +118,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
     {
         if !state.selected_entities.is_empty() {
             if let Some(mut transforms) = world
-                .borrow_mut::<gizmo_physics::components::Transform>()
+                .borrow_mut::<gizmo_physics::components::Transform>().expect("ECS Aliasing Error")
             {
                 let primary_id = *state.selected_entities.iter().next().unwrap();
                 let mut primary_model_mat = gizmo_math::Mat4::IDENTITY;

@@ -127,17 +127,16 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
         },
     }
 
-    let colliders_storage = world.borrow::<Collider>();
+    let colliders_storage = world.borrow::<Collider>().expect("ECS Aliasing Error");
     let static_cols: Vec<StaticCol> = {
         if let (Some(rbs), Some(ref cols), Some(ts)) = (
-            world.borrow::<RigidBody>(),
+            world.borrow::<RigidBody>().expect("ECS Aliasing Error"),
             &colliders_storage,
-            world.borrow::<Transform>(),
+            world.borrow::<Transform>().expect("ECS Aliasing Error"),
         ) {
-            cols.dense
-                .iter()
-                .map(|e| &e.entity)
-                .filter_map(|&e| {
+            cols.iter()
+                .map(|(e, _)| e)
+                .filter_map(|e| {
                     if rbs.get(e).is_some_and(|rb| rb.mass < 1e-6) {
                         let t = ts.get(e)?;
                         let col = cols.get(e)?;
@@ -182,14 +181,14 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
     };
 
     if let (Some(mut trans_storage), Some(mut vel_storage), Some(mut rbs), Some(vehicles), Some(children_storage), Some(mut wheel_storage)) = (
-        world.borrow_mut::<Transform>(),
-        world.borrow_mut::<Velocity>(),
-        world.borrow_mut::<RigidBody>(),
-        world.borrow::<VehicleController>(),
-        world.borrow::<gizmo_core::component::Children>(),
-        world.borrow_mut::<WheelComponent>(),
+        world.borrow_mut::<Transform>().expect("ECS Aliasing Error"),
+        world.borrow_mut::<Velocity>().expect("ECS Aliasing Error"),
+        world.borrow_mut::<RigidBody>().expect("ECS Aliasing Error"),
+        world.borrow::<VehicleController>().expect("ECS Aliasing Error"),
+        world.borrow::<gizmo_core::component::Children>().expect("ECS Aliasing Error"),
+        world.borrow_mut::<WheelComponent>().expect("ECS Aliasing Error"),
     ) {
-        let entities: Vec<u32> = vehicles.dense.iter().map(|e| e.entity).collect();
+        let entities: Vec<u32> = vehicles.iter().map(|(e, _)| e).collect();
         for entity in entities {
             let t = match trans_storage.get(entity) {
                 Some(t) => *t,
@@ -245,6 +244,7 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
             }
             let drive_wheel_count = drive_wheel_count.max(1.0);
 
+            for &wheel_entity in &wheel_entities {
                 let wt = match trans_storage.get_mut(wheel_entity) {
                     Some(wt) => wt, // get mutable reference once
                     None => continue,
@@ -271,7 +271,7 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
 
                 // 1. Zemin Yüzeyi fallback (PhysicsConfig'den oku)
                 let ground_y = world
-                    .get_resource::<crate::components::PhysicsConfig>()
+                    .get_resource::<crate::components::PhysicsConfig>().expect("ECS Aliasing Error")
                     .map(|c| c.ground_y)
                     .unwrap_or(-1.0);
                 if dir.y < -0.001 && origin.y > ground_y {
@@ -340,8 +340,8 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
 
                             let local_x = origin.x - position.x;
                             let local_z = origin.z - position.z;
-                            let half_w = *width * 0.5;
-                            let half_d = *depth * 0.5;
+                            let half_w = width * 0.5;
+                            let half_d = depth * 0.5;
 
                             if local_x >= -half_w
                                 && local_x <= half_w
@@ -349,8 +349,8 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                                 && local_z <= half_d
                             {
                                 // Normalize [0, 1] aralığına taşı
-                                let nx = (local_x + half_w) / *width;
-                                let nz = (local_z + half_d) / *depth;
+                                let nx = (local_x + half_w) / width;
+                                let nz = (local_z + half_d) / depth;
 
                                 // Grid hücresi sol-alt köşesi (floor)
                                 let sx = *segments_x as f32 - 1.0;
@@ -365,7 +365,7 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                                 // Dört köşe yükseklikleri
                                 let h = |gx: u32, gz: u32| -> f32 {
                                     let idx = (gz * *segments_x + gx) as usize;
-                                    if idx < heights.len() { heights[idx] * *max_height } else { 0.0 }
+                                    if idx < heights.len() { heights[idx] * max_height } else { 0.0 }
                                 };
                                 let h00 = h(gx0, gz0);
                                 let h10 = h(gx1, gz0);
@@ -391,8 +391,8 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                                         // Bilinear türev ile terrein normali
                                         // ∂h/∂x ≈ bilinear türev x yönünde
                                         // ∂h/∂z ≈ bilinear türev z yönünde
-                                        let cell_w = *width / sx;
-                                        let cell_d = *depth / sz_;
+                                        let cell_w = width / sx;
+                                        let cell_d = depth / sz_;
                                         let dh_dx = ((h10 - h00) * (1.0 - tz)
                                             + (h11 - h01) * tz)
                                             / cell_w;
@@ -519,3 +519,5 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
 }
 
 // Varlıkların fiziksel hareketlerini, yerçekimi ve sürtünme etkileriyle uygulayan sistem
+
+gizmo_core::impl_component!(VehicleController, WheelComponent);

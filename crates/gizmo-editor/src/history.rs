@@ -51,7 +51,7 @@ impl History {
         if let Some(action) = self.undo_stack.pop() {
             match action {
                 EditorAction::TransformsChanged { changes } => {
-                    if let Some(mut transforms) = world.borrow_mut::<Transform>() {
+                    if let Some(mut transforms) = world.borrow_mut::<Transform>().expect("ECS Aliasing Error") {
                         for (entity_id, old_transform, _new_transform) in changes.iter() {
                             if let Some(t) = transforms.get_mut(*entity_id) {
                                 *t = *old_transform;
@@ -72,7 +72,7 @@ impl History {
         if let Some(action) = self.redo_stack.pop() {
             match action {
                 EditorAction::TransformsChanged { changes } => {
-                    if let Some(mut transforms) = world.borrow_mut::<Transform>() {
+                    if let Some(mut transforms) = world.borrow_mut::<Transform>().expect("ECS Aliasing Error") {
                         for (entity_id, _old_transform, new_transform) in changes.iter() {
                             if let Some(t) = transforms.get_mut(*entity_id) {
                                 *t = *new_transform;

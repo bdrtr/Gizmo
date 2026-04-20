@@ -4,10 +4,10 @@ use gizmo_math::{Mat4, Quat, Vec3};
 
 pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) {
     if let (Some(mut players), Some(mut skeletons)) = (
-        world.borrow_mut::<AnimationPlayer>(),
-        world.borrow_mut::<Skeleton>(),
+        world.borrow_mut::<AnimationPlayer>().expect("ECS Aliasing Error"),
+        world.borrow_mut::<Skeleton>().expect("ECS Aliasing Error"),
     ) {
-        let entities: Vec<u32> = players.dense.iter().map(|e| e.entity).collect();
+        let entities: Vec<u32> = players.iter().map(|(e, _)| e).collect();
         for entity in entities {
             let player = match players.get_mut(entity) {
                 Some(p) => p,

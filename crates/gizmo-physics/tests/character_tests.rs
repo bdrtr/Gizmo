@@ -30,13 +30,13 @@ fn test_character_gravity_and_grounding() {
     physics_character_system(&world, dt);
 
     let _t = world
-        .borrow::<Transform>()
+        .borrow::<Transform>().expect("ECS Aliasing Error")
         .unwrap()
         .get(char_entity.id())
         .unwrap()
         .clone();
     let cc = world
-        .borrow::<CharacterController>()
+        .borrow::<CharacterController>().expect("ECS Aliasing Error")
         .unwrap()
         .get(char_entity.id())
         .unwrap()
@@ -55,13 +55,13 @@ fn test_character_gravity_and_grounding() {
     }
 
     let t2 = world
-        .borrow::<Transform>()
+        .borrow::<Transform>().expect("ECS Aliasing Error")
         .unwrap()
         .get(char_entity.id())
         .unwrap()
         .clone();
     let cc2 = world
-        .borrow::<CharacterController>()
+        .borrow::<CharacterController>().expect("ECS Aliasing Error")
         .unwrap()
         .get(char_entity.id())
         .unwrap()
@@ -106,7 +106,7 @@ fn test_character_step_climbing() {
     physics_character_system(&world, 0.1);
 
     let t = world
-        .borrow::<Transform>()
+        .borrow::<Transform>().expect("ECS Aliasing Error")
         .unwrap()
         .get(char_entity.id())
         .unwrap()
@@ -153,13 +153,13 @@ fn test_character_slope_sliding() {
     }
 
     let cc_out = world
-        .borrow::<CharacterController>()
+        .borrow::<CharacterController>().expect("ECS Aliasing Error")
         .unwrap()
         .get(char_entity.id())
         .unwrap()
         .clone();
     let t_out = world
-        .borrow::<Transform>()
+        .borrow::<Transform>().expect("ECS Aliasing Error")
         .unwrap()
         .get(char_entity.id())
         .unwrap()

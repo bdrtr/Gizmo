@@ -435,7 +435,7 @@ pub fn write_back(
     // contact_cache.clear() yerine sadece geçersiz (artık var olmayan) entity çiftlerini sil.
     // Aktif çiftler yeni değerlerle güncellendiğinden, eski değerler bu döngüde üzerine yazılacak.
     // Bu %30 daha az alloc demek ve gerçek warm-startħ korur.
-    let active_entities: std::collections::HashSet<u32> = velocities.dense.iter().map(|e| e.entity).collect();
+    let active_entities: std::collections::HashSet<u32> = velocities.iter().map(|(e, _)| e).collect();
     solver_state.contact_cache.retain(|(a, b), _| {
         active_entities.contains(a) && active_entities.contains(b)
     });

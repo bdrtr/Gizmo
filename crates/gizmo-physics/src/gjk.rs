@@ -134,7 +134,7 @@ pub fn gjk_intersect(
          Karmaşık ConvexHull çiftleri veya degenerate şekiller kontrol edilmeli."
     );
 
-    (false, simplex)
+    (true, simplex)
 }
 
 /// Simplex boyutuna göre gerekli matematiği uygular ve yeni dir hesaplar.

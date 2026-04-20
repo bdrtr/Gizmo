@@ -71,13 +71,16 @@ pub fn ccd_bisect(
 
     let (hit, sim) = crate::gjk::gjk_intersect(shape_a, pa_hit, rot_a, shape_b, pb_hit, rot_b);
     if !hit {
-        // Eğer çok hızlılarsa ve offset onları tamamen dışarı attıysa, mecburi çarpışmayı üret.
+        // Eğer statik GJK sınırda tam kesişemediyse mecburi çarpışmayı üret.
         let normal = if speed > 0.001 { -rel_v.normalize() } else { Vec3::new(0.0, 1.0, 0.0) };
+        let sup_a = shape_a.support_point(pa_hit, rot_a, -normal);
+        let sup_b = shape_b.support_point(pb_hit, rot_b, normal);
+        
         return crate::collision::CollisionManifold {
             is_colliding: true, // CCD bisection ile çarpıştığını biliyoruz
             normal,
             penetration: 0.01,
-            contact_points: vec![((pa_hit + pb_hit) * 0.5, 0.01)],
+            contact_points: vec![((sup_a + sup_b) * 0.5, 0.01)],
         };
     }
 

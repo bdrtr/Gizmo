@@ -73,9 +73,9 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 
     // Entity listesini oluştur
     egui::ScrollArea::vertical().show(ui, |ui| {
-        let names = world.borrow::<EntityName>();
-        let parents = world.borrow::<Parent>();
-        let children_comp = world.borrow::<Children>();
+        let names = world.borrow::<EntityName>().expect("ECS Aliasing Error");
+        let parents = world.borrow::<Parent>().expect("ECS Aliasing Error");
+        let children_comp = world.borrow::<Children>().expect("ECS Aliasing Error");
 
         // ROOT entity'leri bul (parent'ı olmayanlar)
         let mut root_entities = Vec::new();
@@ -164,7 +164,7 @@ fn draw_entity_node(
         egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
             .show_header(ui, |ui| {
                 let is_hidden = world
-                    .borrow::<gizmo_core::component::IsHidden>()
+                    .borrow::<gizmo_core::component::IsHidden>().expect("ECS Aliasing Error")
                     .map(|hc| hc.contains(entity_id))
                     .unwrap_or(false);
                 let label_text = if is_hidden {
@@ -217,7 +217,7 @@ fn draw_entity_node(
 
                 response.context_menu(|ui| {
                     let is_hidden = world
-                        .borrow::<gizmo_core::component::IsHidden>()
+                        .borrow::<gizmo_core::component::IsHidden>().expect("ECS Aliasing Error")
                         .map(|c| c.contains(entity_id))
                         .unwrap_or(false);
                     let hide_text = if is_hidden {
@@ -259,7 +259,7 @@ fn draw_entity_node(
     } else {
         // Yaprak düğümü (çocuğu yok)
         let is_hidden = world
-            .borrow::<gizmo_core::component::IsHidden>()
+            .borrow::<gizmo_core::component::IsHidden>().expect("ECS Aliasing Error")
             .map(|hc| hc.contains(entity_id))
             .unwrap_or(false);
         let label_text = if is_hidden {
@@ -312,7 +312,7 @@ fn draw_entity_node(
 
         response.context_menu(|ui| {
             let is_hidden = world
-                .borrow::<gizmo_core::component::IsHidden>()
+                .borrow::<gizmo_core::component::IsHidden>().expect("ECS Aliasing Error")
                 .map(|c| c.contains(entity_id))
                 .unwrap_or(false);
             let hide_text = if is_hidden {
