@@ -590,36 +590,15 @@ fn draw_terrain_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core:
 // === YARDIMCI FONKSİYONLAR ===
 
 fn quat_to_euler_deg(q: gizmo_math::Quat) -> (f32, f32, f32) {
-    // Quaternion → Euler (XYZ sırası) dönüşümü
-    let sinr_cosp = 2.0 * (q.w * q.x + q.y * q.z);
-    let cosr_cosp = 1.0 - 2.0 * (q.x * q.x + q.y * q.y);
-    let roll = sinr_cosp.atan2(cosr_cosp);
-
-    let sinp = 2.0 * (q.w * q.y - q.z * q.x);
-    let pitch = if sinp.abs() >= 1.0 {
-        std::f32::consts::FRAC_PI_2.copysign(sinp)
-    } else {
-        sinp.asin()
-    };
-
-    let siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
-    let cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
-    let yaw = siny_cosp.atan2(cosy_cosp);
-
-    (roll.to_degrees(), pitch.to_degrees(), yaw.to_degrees())
+    let (x, y, z) = q.to_euler(gizmo_math::EulerRot::XYZ);
+    (x.to_degrees(), y.to_degrees(), z.to_degrees())
 }
 
 fn euler_deg_to_quat(rx: f32, ry: f32, rz: f32) -> gizmo_math::Quat {
-    let (rx, ry, rz) = (rx.to_radians(), ry.to_radians(), rz.to_radians());
-
-    let (sx, cx) = (rx * 0.5).sin_cos();
-    let (sy, cy) = (ry * 0.5).sin_cos();
-    let (sz, cz) = (rz * 0.5).sin_cos();
-
-    gizmo_math::Quat::from_xyzw(
-        sx * cy * cz - cx * sy * sz,
-        cx * sy * cz + sx * cy * sz,
-        cx * cy * sz - sx * sy * cz,
-        cx * cy * cz + sx * sy * sz,
+    gizmo_math::Quat::from_euler(
+        gizmo_math::EulerRot::XYZ,
+        rx.to_radians(),
+        ry.to_radians(),
+        rz.to_radians(),
     )
 }
