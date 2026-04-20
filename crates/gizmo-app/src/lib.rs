@@ -186,7 +186,7 @@ impl<State: 'static> App<State> {
             }
         }
 
-        let mut editor = EditorContext::new(&renderer.device, renderer.config.format, &window);
+        let mut editor = EditorContext::new(&renderer.device, renderer.config.format, &window, 1);
 
         let mut last_frame_time = std::time::Instant::now();
         let mut light_time = 0.0;
@@ -322,10 +322,11 @@ impl<State: 'static> App<State> {
                             light_time += dt;
 
                             // Update
-                            editor.begin_frame(&window);
-                            if let Some(ui_hk) = self.ui_fn.as_mut() {
-                                ui_hk(&mut self.world, &mut state, &editor.context);
-                            }
+                            let full_output = editor.run(&window, |ctx| {
+                                if let Some(ui_hk) = self.ui_fn.as_mut() {
+                                    ui_hk(&mut self.world, &mut state, ctx);
+                                }
+                            });
 
                             // İşlemlerin bitiminde frame-özel input girdilerini temizle
                             self.input.begin_frame();
@@ -340,62 +341,67 @@ impl<State: 'static> App<State> {
                                     .world
                                     .get_resource_mut::<gizmo_editor::EditorState>().expect("ECS Aliasing Error")
                                     .unwrap();
+                                let scene_w = ed_state_ref.scene_view_size.map(|s| s.x as u32).unwrap_or(renderer.size.width);
+                                let scene_h = ed_state_ref.scene_view_size.map(|s| s.y as u32).unwrap_or(renderer.size.height);
+                                let game_w = ed_state_ref.game_view_size.map(|s| s.x as u32).unwrap_or(renderer.size.width);
+                                let game_h = ed_state_ref.game_view_size.map(|s| s.y as u32).unwrap_or(renderer.size.height);
 
-                                let w = renderer.size.width;
-                                let h = renderer.size.height;
+                                let mut new_scene_target = None;
+                                let mut new_game_target = None;
 
-                                let mut needs_recreate = false;
-                                if let Some(target) = self
-                                    .world
-                                    .get_resource::<gizmo_renderer::components::EditorRenderTarget>(
-                                ).expect("ECS Aliasing Error") {
-                                    if target.width != w || target.height != h {
-                                        needs_recreate = true;
-                                    }
-                                } else {
-                                    needs_recreate = true;
-                                }
+                                // Scene View RTT
+                                let mut needs_recreate_scene = false;
+                                if let Some(target) = self.world.get_resource::<gizmo_renderer::components::EditorRenderTarget>().expect("ECS Aliasing Error") {
+                                    if target.width != scene_w || target.height != scene_h { needs_recreate_scene = true; }
+                                } else { needs_recreate_scene = true; }
 
-                                if needs_recreate && w > 0 && h > 0 {
+                                if needs_recreate_scene && scene_w > 0 && scene_h > 0 {
                                     if let Some(old_id) = ed_state_ref.scene_texture_id {
                                         editor.renderer.free_texture(&old_id);
                                     }
+                                    let texture = renderer.device.create_texture(&wgpu::TextureDescriptor {
+                                        label: Some("Editor RTT"),
+                                        size: wgpu::Extent3d { width: scene_w, height: scene_h, depth_or_array_layers: 1 },
+                                        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+                                        format: renderer.config.format,
+                                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                                        view_formats: &[],
+                                    });
+                                    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                                    ed_state_ref.scene_texture_id = Some(editor.renderer.register_native_texture(&renderer.device, &view, wgpu::FilterMode::Linear));
+                                    new_scene_target = Some((std::sync::Arc::new(view), scene_w, scene_h));
+                                }
 
-                                    let texture =
-                                        renderer.device.create_texture(&wgpu::TextureDescriptor {
-                                            label: Some("Editor RTT"),
-                                            size: wgpu::Extent3d {
-                                                width: w,
-                                                height: h,
-                                                depth_or_array_layers: 1,
-                                            },
-                                            mip_level_count: 1,
-                                            sample_count: 1,
-                                            dimension: wgpu::TextureDimension::D2,
-                                            format: renderer.config.format,
-                                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                                                | wgpu::TextureUsages::TEXTURE_BINDING,
-                                            view_formats: &[],
-                                        });
+                                // Game View RTT
+                                let mut needs_recreate_game = false;
+                                if let Some(target) = self.world.get_resource::<gizmo_renderer::components::GameRenderTarget>().expect("ECS Aliasing Error") {
+                                    if target.width != game_w || target.height != game_h { needs_recreate_game = true; }
+                                } else { needs_recreate_game = true; }
 
-                                    let view = texture
-                                        .create_view(&wgpu::TextureViewDescriptor::default());
+                                if needs_recreate_game && game_w > 0 && game_h > 0 {
+                                    if let Some(old_id) = ed_state_ref.game_texture_id {
+                                        editor.renderer.free_texture(&old_id);
+                                    }
+                                    let texture = renderer.device.create_texture(&wgpu::TextureDescriptor {
+                                        label: Some("Game RTT"),
+                                        size: wgpu::Extent3d { width: game_w, height: game_h, depth_or_array_layers: 1 },
+                                        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+                                        format: renderer.config.format,
+                                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                                        view_formats: &[],
+                                    });
+                                    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                                    ed_state_ref.game_texture_id = Some(editor.renderer.register_native_texture(&renderer.device, &view, wgpu::FilterMode::Linear));
+                                    new_game_target = Some((std::sync::Arc::new(view), game_w, game_h));
+                                }
+                                
+                                drop(ed_state_ref);
 
-                                    let id = editor.renderer.register_native_texture(
-                                        &renderer.device,
-                                        &view,
-                                        wgpu::FilterMode::Linear,
-                                    );
-
-                                    ed_state_ref.scene_texture_id = Some(id);
-                                    drop(ed_state_ref); // Borrow'u kapat ki insert_resource yapabilelim
-                                    self.world.insert_resource(
-                                        gizmo_renderer::components::EditorRenderTarget {
-                                            view: std::sync::Arc::new(view),
-                                            width: w,
-                                            height: h,
-                                        },
-                                    );
+                                if let Some((view, w, h)) = new_scene_target {
+                                    self.world.insert_resource(gizmo_renderer::components::EditorRenderTarget { view, width: w, height: h });
+                                }
+                                if let Some((view, w, h)) = new_game_target {
+                                    self.world.insert_resource(gizmo_renderer::components::GameRenderTarget { view, width: w, height: h });
                                 }
                             }
 
@@ -463,6 +469,7 @@ impl<State: 'static> App<State> {
                                 &renderer.queue,
                                 &mut encoder,
                                 &view,
+                                full_output
                             );
 
                             renderer.queue.submit(std::iter::once(encoder.finish()));

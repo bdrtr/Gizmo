@@ -9,9 +9,11 @@ pub enum LogLevel {
 }
 
 /// Tek bir log kaydı.
+#[derive(Clone)]
 pub struct LogEntry {
     pub message: String,
     pub level: LogLevel,
+    pub timestamp: String,
     /// Kaynak dosya yolu (compile-time).
     pub file: &'static str,
     /// Kaynak satır numarası (compile-time).
@@ -27,6 +29,12 @@ static MIN_LOG_LEVEL: Mutex<LogLevel> = Mutex::new(LogLevel::Info);
 
 // Global logger. Mutex poisoning durumunda into_inner() ile kurtarma yapılır.
 static GLOBAL_LOGS: Mutex<Vec<LogEntry>> = Mutex::new(Vec::new());
+static LOG_VERSION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Logların değişip değişmediğini anlamak için versiyon numarası döner
+pub fn get_log_version() -> usize {
+    LOG_VERSION.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Mutex lock'u güvenli şekilde alan yardımcı — poisoned olsa bile veriyi kurtarır.
 fn lock_logs() -> std::sync::MutexGuard<'static, Vec<LogEntry>> {
@@ -63,18 +71,23 @@ pub fn log_message(level: LogLevel, msg: String, file: &'static str, line: u32) 
         logs.remove(0);
     }
 
+    let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();
+
     logs.push(LogEntry {
         message: msg.clone(),
         level,
+        timestamp: timestamp.clone(),
         file,
         line,
     });
+    
+    LOG_VERSION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
     // Konsol çıktısı — Warning ve Error stderr'e gider
     match level {
-        LogLevel::Info    => println!("[INFO]  {}:{} — {}", file, line, msg),
-        LogLevel::Warning => eprintln!("[WARN]  {}:{} — {}", file, line, msg),
-        LogLevel::Error   => eprintln!("[ERROR] {}:{} — {}", file, line, msg),
+        LogLevel::Info    => println!("[{}] [INFO]  {}:{} — {}", timestamp, file, line, msg),
+        LogLevel::Warning => eprintln!("[{}] [WARN]  {}:{} — {}", timestamp, file, line, msg),
+        LogLevel::Error   => eprintln!("[{}] [ERROR] {}:{} — {}", timestamp, file, line, msg),
     }
 }
 
@@ -93,11 +106,14 @@ where
 /// Tüm log kayıtlarını temizler.
 pub fn clear_logs() {
     lock_logs().clear();
+    LOG_VERSION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// Tüm log kayıtlarını alır ve kuyruktan siler (drain).
 pub fn drain_logs() -> Vec<LogEntry> {
-    lock_logs().drain(..).collect()
+    let drained = lock_logs().drain(..).collect();
+    LOG_VERSION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    drained
 }
 
 /// Log entry sayısını döndürür.

@@ -11,10 +11,10 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
     let mut orbit_delta = None;
     let mut scroll_delta = None;
     if let Some(mut editor_state) = world.remove_resource::<EditorState>() {
-        look_delta = editor_state.camera_look_delta;
-        pan_delta = editor_state.camera_pan_delta;
-        orbit_delta = editor_state.camera_orbit_delta;
-        scroll_delta = editor_state.camera_scroll_delta;
+        look_delta = editor_state.camera.look_delta;
+        pan_delta = editor_state.camera.pan_delta;
+        orbit_delta = editor_state.camera.orbit_delta;
+        scroll_delta = editor_state.camera.scroll_delta;
 
         let win_info = world.get_resource::<WindowInfo>().unwrap().map_or(WindowInfo::default(), |w| *w);
         crate::systems::input::handle_input_and_scene_view(world, &mut editor_state, state, dt, input, &win_info);

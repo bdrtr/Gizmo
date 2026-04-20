@@ -23,15 +23,15 @@ pub fn render_studio(
     let mut highlight_box_id = 0u32;
 
     if let Some(mut ed) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
-        save_req = ed.scene_save_request.take();
-        load_req = ed.scene_load_request.take();
-        clear_req = ed.scene_clear_request;
-        ed.scene_clear_request = false;
+        save_req = ed.scene.save_request.take();
+        load_req = ed.scene.load_request.take();
+        clear_req = ed.scene.clear_request;
+        ed.scene.clear_request = false;
         prefab_save_req = ed.prefab_save_request.take();
         prefab_load_req = ed.prefab_load_request.take();
         gltf_req = ed.gltf_load_request.take();
         duplicate_reqs = ed.duplicate_requests.drain(..).collect();
-        highlight_box_id = ed.highlight_box;
+        highlight_box_id = ed.selection.highlight_box.map(|h| h.id()).unwrap_or(0);
 
         if ed.play_start_request {
             ed.play_start_request = false;
@@ -191,7 +191,7 @@ pub fn render_studio(
     }
 
     if let Some((ent_id, path)) = prefab_save_req {
-        let _ = gizmo::scene::SceneData::save_prefab(world, ent_id, &path, &gizmo::scene::SceneRegistry::default());
+        let _ = gizmo::scene::SceneData::save_prefab(world, ent_id.id(), &path, &gizmo::scene::SceneRegistry::default());
         if let Some(mut ed) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
             ed.log_info("Prefab kaydedildi.");
         }
@@ -205,7 +205,7 @@ pub fn render_studio(
             let dummy_bg = renderer.create_texture(&dummy_rgba, 1, 1);
             let loaded_root = gizmo::scene::SceneData::load_prefab(
                 &path,
-                parent,
+                parent.map(|p| p.id()),
                 world,
                 &renderer.device,
                 &renderer.queue,
@@ -243,7 +243,7 @@ pub fn render_studio(
         let time_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos();
         let temp_path = format!("demo/assets/prefabs/temp_duplicate_{}_{}.prefab", ent_id, time_ns);
 
-        let _ = gizmo::scene::SceneData::save_prefab(world, ent_id, &temp_path, &gizmo::scene::SceneRegistry::default());
+        let _ = gizmo::scene::SceneData::save_prefab(world, ent_id.id(), &temp_path, &gizmo::scene::SceneRegistry::default());
 
         if let Some(mut asset_manager) =
             world.remove_resource::<gizmo::renderer::asset::AssetManager>()
@@ -290,7 +290,7 @@ pub fn render_studio(
                 let mut p_path = String::new();
 
                 if let Some(terrains) = world.borrow::<gizmo::renderer::components::Terrain>().expect("ECS Aliasing Error") {
-                    if let Some(t) = terrains.get(ent_id) {
+                    if let Some(t) = terrains.get(ent_id.id()) {
                         p_width = t.width;
                         p_depth = t.depth;
                         p_max_h = t.max_height;
@@ -307,7 +307,7 @@ pub fn render_studio(
                         p_max_h,
                     ) {
                         Ok((mesh, heights, w, d)) => {
-                            if let Some(ent) = world.get_entity(ent_id) {
+                            if let Some(ent) = world.get_entity(ent_id.id()) {
                                 // Material yoksa beyaz default ekle
                                 let has_mat = world
                                     .borrow::<gizmo::prelude::Material>().expect("ECS Aliasing Error")

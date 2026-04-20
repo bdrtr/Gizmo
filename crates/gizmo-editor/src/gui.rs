@@ -8,13 +8,40 @@ pub struct EditorContext {
     pub context: Context,
     pub state: State,
     pub renderer: Renderer,
+    pub frame_count: usize,
 }
 
 impl EditorContext {
-    pub fn new(device: &wgpu::Device, output_format: wgpu::TextureFormat, window: &Window) -> Self {
+    pub fn new(device: &wgpu::Device, output_format: wgpu::TextureFormat, window: &Window, sample_count: u32) -> Self {
         let context = Context::default();
 
-        // 1. Gelişmiş Dark Tema ve Renkler (Professional Look)
+        let mut fonts = egui::FontDefinitions::default();
+        // TODO: Load missing Emoji/Turkish TTF bytes here for comprehensive support.
+        // fonts.font_data.insert("emoji".to_owned(), egui::FontData::from_static(include_bytes!("...")));
+        context.set_fonts(fonts);
+
+        let viewport_id = context.viewport_id();
+        let state = State::new(
+            context.clone(),
+            viewport_id,
+            window,
+            Some(window.scale_factor() as f32),
+            None,
+        );
+
+        let renderer = Renderer::new(device, output_format, None, sample_count);
+
+        let ctx = Self {
+            context,
+            state,
+            renderer,
+            frame_count: 0,
+        };
+        ctx.apply_theme();
+        ctx
+    }
+
+    pub fn apply_theme(&self) {
         let mut visuals = egui::Visuals::dark();
         visuals.window_rounding = egui::Rounding::same(8.0);
         visuals.menu_rounding = egui::Rounding::same(6.0);
@@ -23,40 +50,21 @@ impl EditorContext {
         visuals.widgets.inactive.rounding = widget_rounding;
         visuals.widgets.hovered.rounding = widget_rounding;
         visuals.widgets.active.rounding = widget_rounding;
+        visuals.widgets.open.rounding = widget_rounding;
 
-        // Dark Slate (Uzay Grisi) Tonları
         visuals.window_fill = egui::Color32::from_rgb(22, 22, 24);
         visuals.panel_fill = egui::Color32::from_rgb(28, 28, 30);
-        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(45, 45, 48); // Buton arkaplan
-        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(60, 60, 63);  // Hover
-        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(80, 80, 85);   // Click
-        visuals.selection.bg_fill = egui::Color32::from_rgb(0, 110, 200);       // Vurgu (Highlight)
-        context.set_visuals(visuals);
+        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(45, 45, 48);
+        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(60, 60, 63);
+        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(80, 80, 85);
+        visuals.selection.bg_fill = egui::Color32::from_rgb(0, 110, 200);
+        self.context.set_visuals(visuals);
 
-        // 2. Padding ve Ferahlık (Cramped görünümü iptal eder)
-        let mut style = (*context.style()).clone();
+        let mut style = (*self.context.style()).clone();
         style.spacing.item_spacing = egui::vec2(8.0, 6.0);
         style.spacing.button_padding = egui::vec2(8.0, 4.0);
         style.spacing.window_margin = egui::Margin::same(10.0);
-        context.set_style(style);
-
-        let viewport_id = context.viewport_id();
-
-        let state = State::new(
-            context.clone(),
-            viewport_id,
-            window,
-            Some(window.scale_factor() as f32),
-            None, // TEMA
-        );
-
-        let renderer = Renderer::new(device, output_format, None, 1);
-
-        Self {
-            context,
-            state,
-            renderer,
-        }
+        self.context.set_style(style);
     }
 
     pub fn handle_event(&mut self, window: &Window, event: &WindowEvent) -> bool {
@@ -64,10 +72,14 @@ impl EditorContext {
         response.consumed
     }
 
-    // Her frame öncesi winit inputlarını Egui Context'e iletir.
-    pub fn begin_frame(&mut self, window: &Window) {
+    pub fn run<F>(&mut self, window: &Window, ui_fn: F) -> egui::FullOutput
+    where
+        F: FnOnce(&Context),
+    {
         let raw_input = self.state.take_egui_input(window);
         self.context.begin_frame(raw_input);
+        ui_fn(&self.context);
+        self.context.end_frame()
     }
 
     // Oyun Çizildikten SONRA bu fonksiyon ekrana Overlay UI çizdirecek!
@@ -77,11 +89,12 @@ impl EditorContext {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView, // Wgpu'nun sahneyi boyadığı tuvalin referansı
+        view: &wgpu::TextureView,
+        full_output: egui::FullOutput
     ) {
-        let full_output = self.context.end_frame();
         self.state
-            .handle_platform_output(window, full_output.platform_output.clone());
+            .handle_platform_output(window, full_output.platform_output);
+        self.frame_count += 1;
 
         let paint_jobs = self
             .context
@@ -104,7 +117,7 @@ impl EditorContext {
         // -- EGUI ÇİZİCİSİNİ AKTİFLEŞTİR: Motorun Pass'inin Üzerine Ek Çizim Yapar --
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Egui Render Pass"),
+                label: Some(&format!("Egui Render Pass #{}", self.frame_count)),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,
                     resolve_target: None,

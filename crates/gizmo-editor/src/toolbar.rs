@@ -5,26 +5,6 @@ use egui;
 
 /// Toolbar panelini çizer
 pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
-    // ==== Check for pending dialog results ====
-    if let Some(rx) = &state.pending_dialog_rx {
-        match rx.try_recv() {
-            Ok((is_save, Some(path_str))) => {
-                state.scene_path = path_str.clone();
-                if is_save {
-                    state.status_message = format!("Sahne kaydediliyor → {}", path_str);
-                    state.scene_save_request = Some(path_str);
-                } else {
-                    state.status_message = format!("Sahne yükleniyor ← {}", path_str);
-                    state.scene_load_request = Some(path_str);
-                }
-                state.pending_dialog_rx = None;
-            }
-            Ok((_, None)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                state.pending_dialog_rx = None;
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {} // Still waiting
-        }
-    }
 
     egui::TopBottomPanel::top("toolbar_panel")
         .exact_height(36.0)
@@ -34,59 +14,73 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
 
                 // === DOSYA İŞLEMLERİ ===
                 if ui.button("🪄 Yeni/Temizle").on_hover_text("Sahneyi sıfırla").clicked() {
-                    state.scene_clear_request = true;
+                    state.scene.clear_request = true;
                 }
 
                 ui.label("Sahne:");
                 ui.add(egui::TextEdit::singleline(&mut state.scene_path).desired_width(120.0));
 
-                if ui.button("💾 Kaydet").clicked() {
+                let is_dialog_open = state.pending_dialog_rx.is_some();
+
+                if ui.add_enabled(!is_dialog_open, egui::Button::new("💾 Kaydet")).clicked() {
                     let (tx, rx) = std::sync::mpsc::channel();
                     state.pending_dialog_rx = Some(rx);
+                    let scene_path = state.scene_path.clone();
                     std::thread::spawn(move || {
+                        let mut initial_dir = std::path::PathBuf::from(".");
+                        if let Some(parent) = std::path::Path::new(&scene_path).parent() {
+                            if parent.exists() && parent.is_dir() {
+                                initial_dir = parent.to_path_buf();
+                            }
+                        }
                         let res = rfd::FileDialog::new()
                             .add_filter("Gizmo Scene", &["scene"])
-                            .set_directory(".")
+                            .set_directory(&initial_dir)
                             .save_file();
-                        let _ = tx.send((true, res.map(|p| p.to_string_lossy().to_string())));
+                        let _ = tx.send((true, res.map(|p| {
+                            let s = p.to_string_lossy().to_string();
+                            if s.starts_with(r"\\?\") { s[4..].to_string() } else { s }
+                        })));
                     });
                 }
 
-                if ui.button("📂 Yükle").clicked() {
+                if ui.add_enabled(!is_dialog_open, egui::Button::new("📂 Yükle")).clicked() {
                     let (tx, rx) = std::sync::mpsc::channel();
                     state.pending_dialog_rx = Some(rx);
+                    let scene_path = state.scene_path.clone();
                     std::thread::spawn(move || {
+                        let mut initial_dir = std::path::PathBuf::from(".");
+                        if let Some(parent) = std::path::Path::new(&scene_path).parent() {
+                            if parent.exists() && parent.is_dir() {
+                                initial_dir = parent.to_path_buf();
+                            }
+                        }
                         let res = rfd::FileDialog::new()
                             .add_filter("Gizmo Scene", &["scene"])
-                            .set_directory(".")
+                            .set_directory(&initial_dir)
                             .pick_file();
-                        let _ = tx.send((false, res.map(|p| p.to_string_lossy().to_string())));
+                        let _ = tx.send((false, res.map(|p| {
+                            let s = p.to_string_lossy().to_string();
+                            if s.starts_with(r"\\?\") { s[4..].to_string() } else { s }
+                        })));
                     });
                 }
 
                 ui.separator();
 
-                // === PLAY/PAUSE/STOP ===
-                let play_text = match state.mode {
-                    EditorMode::Edit => "▶ Başlat",
-                    EditorMode::Play => "⏹ Durdur",
-                    EditorMode::Paused => "▶ Devam",
-                };
-                let play_color = match state.mode {
-                    EditorMode::Edit => egui::Color32::from_rgb(80, 200, 80),
-                    EditorMode::Play => egui::Color32::from_rgb(200, 80, 80),
-                    EditorMode::Paused => egui::Color32::from_rgb(200, 200, 80),
-                };
+                if state.mode == EditorMode::Edit {
+                    if ui.button(egui::RichText::new("▶ Başlat").color(egui::Color32::from_rgb(80, 200, 80))).clicked() {
+                        state.toggle_play();
+                    }
+                } else {
+                    let pause_text = if state.mode == EditorMode::Play { "⏸ Duraklat" } else { "▶ Devam" };
+                    if ui.button(egui::RichText::new(pause_text).color(egui::Color32::from_rgb(200, 200, 80))).clicked() {
+                        state.toggle_pause();
+                    }
 
-                if ui
-                    .button(egui::RichText::new(play_text).color(play_color))
-                    .clicked()
-                {
-                    state.toggle_play();
-                }
-
-                if state.mode == EditorMode::Play && ui.button("⏸ Duraklat").clicked() {
-                    state.toggle_pause();
+                    if ui.button(egui::RichText::new("⏹ Durdur").color(egui::Color32::from_rgb(200, 80, 80))).clicked() {
+                        state.toggle_play();
+                    }
                 }
 
                 ui.separator();
@@ -131,7 +125,7 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                     .clicked()
                 {
                     state.prefs.snap_enabled = !state.prefs.snap_enabled;
-                    state.prefs.save();
+                    state.prefs.mark_dirty();
                 }
 
                 ui.separator();
@@ -151,7 +145,7 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                 ui.separator();
 
                 // === AYARLAR ===
-                let settings_color = if state.settings_open {
+                let settings_color = if state.is_tab_open(&crate::editor_state::EditorTab::Settings) {
                     egui::Color32::from_rgb(100, 200, 255)
                 } else {
                     egui::Color32::GRAY
@@ -160,44 +154,49 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                     .button(egui::RichText::new("⚙️ Ayarlar").color(settings_color))
                     .clicked()
                 {
-                    state.settings_open = !state.settings_open;
+                    state.open_tab(crate::editor_state::EditorTab::Settings);
                 }
 
                 ui.separator();
 
                 // === BUILD SİSTEMİ ===
-                if state.is_building.load(std::sync::atomic::Ordering::SeqCst) {
+                if state.build.is_building.load(std::sync::atomic::Ordering::Acquire) {
                     ui.add(egui::Spinner::new());
-                    ui.label(egui::RichText::new("Derleniyor...").color(egui::Color32::YELLOW));
+                    if let Some(st) = state.build.start_time {
+                        let elapsed = st.elapsed().as_secs();
+                        ui.label(egui::RichText::new(format!("Derleniyor... ({}s)", elapsed)).color(egui::Color32::YELLOW));
+                    } else {
+                        ui.label(egui::RichText::new("Derleniyor...").color(egui::Color32::YELLOW));
+                    }
                 } else {
                     // -- İşletim Sistemi Seçimi --
-                    let target_label = match state.build_target {
-                        BuildTarget::Native => "💻 Native",
+                    let target_label = match state.build.target {
+                        BuildTarget::Native => "💻 Native (Mevcut OS)",
                         BuildTarget::Linux => "🐧 Linux",
                         BuildTarget::Windows => "🪟 Windows",
                         BuildTarget::MacOs => "🍎 macOS",
                     };
-                    egui::ComboBox::from_id_source("build_target_combo")
+                    egui::ComboBox::from_id_source(egui::Id::new("build_target_combo"))
                         .selected_text(target_label)
                         .width(105.0)
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
-                                &mut state.build_target,
+                                &mut state.build.target,
                                 BuildTarget::Native,
                                 "💻 Native (Mevcut OS)",
                             );
                             ui.selectable_value(
-                                &mut state.build_target,
+                                &mut state.build.target,
                                 BuildTarget::Linux,
                                 "🐧 Linux (ELF)",
                             );
                             ui.selectable_value(
-                                &mut state.build_target,
+                                &mut state.build.target,
                                 BuildTarget::Windows,
                                 "🪟 Windows (.exe)",
                             );
                             ui.selectable_value(
-                                &mut state.build_target,
+                                &mut state.build.target,
                                 BuildTarget::MacOs,
                                 "🍎 macOS",
                             );
@@ -211,14 +210,11 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                         )
                         .clicked()
                     {
-                        state.build_request = true;
+                        state.build.request = true;
+                        state.build.start_time = Some(std::time::Instant::now());
+                        state.open_tab(crate::editor_state::EditorTab::BuildConsole);
                     }
                 }
-
-                // === DURUM MESAJI (sağ taraf) ===
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new(&state.status_message).weak().small());
-                });
             });
         });
 }

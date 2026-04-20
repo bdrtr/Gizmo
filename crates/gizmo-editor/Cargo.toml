@@ -21,3 +21,4 @@ serde_json = "1.0.149"
 toml = "0.8"
 rfd = "0.17.2"
 gizmo-scripting = { version = "0.1.0", path = "../gizmo-scripting" }
+dirs = "6.0.0"

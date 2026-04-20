@@ -217,7 +217,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
     
     let mut editor_state = EditorState::new();
     editor_state.open = true; // Always open in Studio!
-    editor_state.highlight_box = highlight_box.id();
+    editor_state.selection.highlight_box = Some(highlight_box);
 
     world.insert_resource(editor_state);
 

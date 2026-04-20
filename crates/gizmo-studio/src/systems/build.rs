@@ -3,23 +3,23 @@ use gizmo::editor::{BuildTarget, EditorState};
 use crate::update::copy_dir_all;
 pub fn handle_build_requests(editor_state: &mut EditorState) {
         // --- BUILD SİSTEMİ (STANDALONE EXPORTER) ---
-        if editor_state.build_request {
-            editor_state.build_request = false;
-            editor_state
-                .is_building
+        if editor_state.build.request {
+            editor_state.build.request = false;
+            editor_state.build.is_building
                 .store(true, std::sync::atomic::Ordering::SeqCst);
-            editor_state.build_logs.lock().unwrap().clear();
+            editor_state.build.cached_logs.clear();
 
-            let is_building_flag = editor_state.is_building.clone();
-            let logs_queue = editor_state.build_logs.clone();
-            let build_target = editor_state.build_target;
+            let is_building_flag = editor_state.build.is_building.clone();
+            
+            let (tx, rx) = std::sync::mpsc::channel();
+            editor_state.build.logs_rx = Some(rx);
+            let build_target = editor_state.build.target;
 
             std::thread::spawn(move || {
                 let log = |msg: &str| {
-                    if let Ok(mut l) = logs_queue.lock() {
-                        l.push(msg.to_string());
-                    }
+                    let _ = tx.send(msg.to_string());
                 };
+
 
                 // Hedefe göre cargo args belirle
                 let (target_triple, exe_name, target_label) = match build_target {
@@ -61,17 +61,15 @@ pub fn handle_build_requests(editor_state: &mut EditorState) {
                         let stderr = child.stderr.take().unwrap();
                         let stdout = child.stdout.take().unwrap();
 
-                        let logs_queue_err = logs_queue.clone();
-                        let logs_queue_out = logs_queue.clone();
+                        let tx_err = tx.clone();
+                        let tx_out = tx.clone();
 
                         let stderr_thread = std::thread::spawn(move || {
                             use std::io::{BufRead, BufReader};
                             let reader = BufReader::new(stderr);
                             for line in reader.lines() {
                                 if let Ok(l) = line {
-                                    if let Ok(mut l_lock) = logs_queue_err.lock() {
-                                        l_lock.push(l);
-                                    }
+                                    let _ = tx_err.send(l);
                                 }
                             }
                         });
@@ -81,9 +79,7 @@ pub fn handle_build_requests(editor_state: &mut EditorState) {
                             let reader = BufReader::new(stdout);
                             for line in reader.lines() {
                                 if let Ok(l) = line {
-                                    if let Ok(mut l_lock) = logs_queue_out.lock() {
-                                        l_lock.push(l);
-                                    }
+                                    let _ = tx_out.send(l);
                                 }
                             }
                         });
