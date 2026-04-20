@@ -438,10 +438,7 @@ pub fn write_back(
     max_contacts_per_pair: usize,
     event_throttle_frames: u32,
 ) {
-    // Warm-start cache temizle — Fix #3:
-    // contact_cache.clear() yerine sadece geçersiz (artık var olmayan) entity çiftlerini sil.
-    // Aktif çiftler yeni değerlerle güncellendiğinden, eski değerler bu döngüde üzerine yazılacak.
-    // Bu %30 daha az alloc demek ve gerçek warm-startħ korur.
+    // Delete invalid entity pairs from cache
     let active_entities: std::collections::HashSet<u32> = velocities.iter().map(|(e, _)| e).collect();
     solver_state.contact_cache.retain(|(a, b), _| {
         active_entities.contains(a) && active_entities.contains(b)

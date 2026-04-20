@@ -41,7 +41,7 @@ impl CharacterController {
             half_height,
             step_height: 0.3,
             slope_limit: 45.0,
-            skin_width: 0.08, // Daha kalın bir güvenlik tamponu (Unity Standardı) titremeyi önler
+            skin_width: 0.08,
             is_grounded: false,
             ground_normal: Vec3::new(0.0, 1.0, 0.0),
             vertical_velocity: 0.0,
@@ -439,17 +439,13 @@ pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
 
             // === 5. Eğim kontrolü ===
             if cc.is_grounded {
-                // Trigonometrik arc-cosine kullanmadan doğrudan cosinüs değerleri üzerinden test et:
-                // normal.y = cos(açı). Eğer cos(açı) < limit_cos ise, açı slope_limit'ten BÜYÜKTÜR (aşılmıştır).
                 if cc.ground_normal.y < limit_cos {
-                    // Eğim çok dik — kayma uygula
                     let slide_dir = Vec3::new(cc.ground_normal.x, 0.0, cc.ground_normal.z);
                     if slide_dir.length_squared() > 0.001 {
-                        // Eğimin yatay bileşeni ne kadar uzun olursa o kadar fazla kaydırır
                         let slide_force = slide_dir.normalize() * 9.81 * (1.0 - cc.ground_normal.y * cc.ground_normal.y).sqrt() * dt;
                         new_pos += slide_force;
                     }
-                    cc.is_grounded = false; // Kontrol kaybı
+                    cc.is_grounded = false;
                 }
             }
 
@@ -513,10 +509,6 @@ pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
                 t_mut.update_local_matrix();
             }
 
-            // desired_velocity'yi sıfırla (her frame yeniden ayarlanmalı)
-            // LÜTFEN DİKKAT: Bu durum Input sistemi ile KCC arasında "implicit contract" oluşturur.
-            // Karakteri hareket ettiren sistemin HER FRAME cc.desired_velocity'yi ataması gerekir, 
-            // aksi takdirde karakter derhal duracaktır.
             cc.desired_velocity = Vec3::ZERO;
         }
     }
