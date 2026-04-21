@@ -30,18 +30,17 @@ impl SceneRegistry {
         self.serializers.insert(
             name_ser,
             Box::new(move |world, entity_id| {
-                if let Some(storage) = world.borrow::<T>().expect("ECS Aliasing Error") {
-                    if let Some(comp) = storage.get(entity_id) {
-                        // RON String'e dönüştür ve oradan AST'ye (Value) Parse et
-                        match ron::ser::to_string(comp) {
-                            Ok(string_repr) => {
-                                match ron::from_str::<Value>(&string_repr) {
-                                    Ok(val) => return Some(val),
-                                    Err(e) => println!("[SceneRegistry] AST Donusturme Hatasi ({}): {}", std::any::type_name::<T>(), e),
-                                }
+                let storage = world.borrow::<T>().expect("ECS Aliasing Error");
+                if let Some(comp) = storage.get(entity_id) {
+                    // RON String'e dönüştür ve oradan AST'ye (Value) Parse et
+                    match ron::ser::to_string(comp) {
+                        Ok(string_repr) => {
+                            match ron::from_str::<Value>(&string_repr) {
+                                Ok(val) => return Some(val),
+                                Err(e) => println!("[SceneRegistry] AST Donusturme Hatasi ({}): {}", std::any::type_name::<T>(), e),
                             }
-                            Err(e) => println!("[SceneRegistry] Serilestirme Hatasi ({}): {}", std::any::type_name::<T>(), e),
                         }
+                        Err(e) => println!("[SceneRegistry] Serilestirme Hatasi ({}): {}", std::any::type_name::<T>(), e),
                     }
                 }
                 None

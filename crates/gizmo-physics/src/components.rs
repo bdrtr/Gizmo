@@ -442,12 +442,12 @@ impl Default for PhysicsConfig {
         Self {
             deterministic_simulation:       false,
             ground_y:                       -1.0,
-            max_linear_velocity:            200.0,
-            max_angular_velocity:           100.0,
+            max_linear_velocity:            100.0,   // PhysX: 100 m/s
+            max_angular_velocity:            50.0,   // PhysX: 50 rad/s (~7 tur/s)
             max_contact_points_per_pair:    4,
             collision_event_throttle_frames: 4,
-            ccd_velocity_threshold:         0.1,
-            solver_iterations:              16,
+            ccd_velocity_threshold:         0.04,    // Obje yarıçapının yarısı (Bullet standardı)
+            solver_iterations:              8,       // PhysX: 4-8, Unity: 6
         }
     }
 }

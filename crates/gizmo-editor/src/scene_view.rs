@@ -122,13 +122,12 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                 Err(e) => {
                     eprintln!("ECS borrow hatası: {:?}", e);
                 }
-                Ok(None) => {}
-                Ok(Some(mut transforms)) => {
+                Ok(mut transforms) => {
                     let primary_id = state.selection.primary.unwrap_or_else(|| *state.selection.entities.iter().next().unwrap());
-                let mut primary_model_mat = gizmo_math::Mat4::IDENTITY;
-                if let Some(primary_t) = transforms.get(primary_id.id()) {
-                    primary_model_mat = primary_t.model_matrix();
-                }
+                    let mut primary_model_mat = gizmo_math::Mat4::IDENTITY;
+                    if let Some(primary_t) = transforms.get(primary_id.id()) {
+                        primary_model_mat = primary_t.model_matrix();
+                    }
 
                 let gizmo_mode = match state.gizmo_mode {
                     crate::editor_state::GizmoMode::Translate => {

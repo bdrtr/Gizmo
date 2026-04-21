@@ -17,9 +17,13 @@ pub struct Interval {
     pub entity: u32,
     pub min: Vec3,
     pub max: Vec3,
+    /// Broad-phase erken eleme: uyuyan çiftleri ve uyuyan+statik çiftleri atla
+    pub is_sleeping: bool,
+    pub is_static: bool,
 }
 
 /// Narrow-phase çözücüsünün bir adım için gereken tüm veriler (17 alan)
+#[derive(Clone, Debug)]
 pub struct StoredContact {
     pub ent_a: u32,
     pub ent_b: u32,
@@ -47,6 +51,7 @@ pub struct StoredContact {
 }
 
 /// Paralel algılama adımının tek-çiftten dönen sonucu
+#[derive(Clone, Debug)]
 pub struct DetectionResult {
     pub contacts: Vec<StoredContact>,
     pub wake_entities: Vec<u32>,
@@ -62,11 +67,11 @@ pub struct Island {
 
 // ─── Çözücü Durumu ───────────────────────────────────────────────────────────
 
-/// Contact Point Matching eşik değeri (2cm yarıçap)
-pub const MATCH_THRESHOLD_SQ: f32 = 0.1 * 0.1;
+/// Contact Point Matching eşik değeri (4cm yarıçap — Bullet standardı)
+pub const MATCH_THRESHOLD_SQ: f32 = 0.04 * 0.04;
 
-/// Warm-start sönümleme faktörü (%80 — patlama riskini azaltır)
-pub const WARM_START_FACTOR: f32 = 0.4;  // 0.8 çok agresif → yapışma, 0.4 = dengeli. Newton sarkacı krizi (bias_bounce sırası) çözüldüğü için artık güvenle aktif!
+/// Warm-start sönümleme faktörü (Bullet: 0.85, Rapier: 0.8)
+pub const WARM_START_FACTOR: f32 = 0.85;
 
 /// Kalıcı Çözücü Durumu (Warm-Starting Cache için)
 pub struct PhysicsSolverState {

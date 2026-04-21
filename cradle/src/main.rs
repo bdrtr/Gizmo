@@ -7,6 +7,9 @@ use gizmo::physics::constraints::Joint;
 use gizmo::renderer::asset::AssetManager;
 use gizmo::renderer::components::{DirectionalLight, MeshRenderer};
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 const GROUND_Y: f32 = 0.0;
 const BALL_MASS: f32 = 1.0;
 const BALL_RADIUS: f32 = 0.5;
@@ -351,7 +354,7 @@ fn dir_to_quat(dir: Vec3) -> Quat {
 }
 
 fn update_ropes(world: &mut World, game: &CradleGame) {
-    if let Some(mut transforms) = world.borrow_mut::<Transform>().expect("ECS Aliasing Error") {
+    if let Ok(mut transforms) = world.borrow_mut::<Transform>() {
         let mut updates = Vec::new();
         
         for rope in &game.ropes {
@@ -385,10 +388,10 @@ fn update_ropes(world: &mut World, game: &CradleGame) {
 fn trigger_cradle(world: &mut World, game: &mut CradleGame) {
     println!("Sarkaç bırakıldı!");
 
-    if let (Some(mut transforms), Some(mut vels), Some(mut rbs)) = (
-        world.borrow_mut::<Transform>().expect("ECS Aliasing Error"),
-        world.borrow_mut::<Velocity>().expect("ECS Aliasing Error"),
-        world.borrow_mut::<RigidBody>().expect("ECS Aliasing Error")
+    if let (Ok(mut transforms), Ok(mut vels), Ok(mut rbs)) = (
+        world.borrow_mut::<Transform>(),
+        world.borrow_mut::<Velocity>(),
+        world.borrow_mut::<RigidBody>()
     ) {
         if let Some(&first_id) = game.ball_ids.first() {
             if let Some(t) = transforms.get_mut(first_id) {
@@ -410,7 +413,7 @@ fn trigger_cradle(world: &mut World, game: &mut CradleGame) {
                 v.angular = Vec3::ZERO;
             }
             if let Some(rb) = rbs.get_mut(first_id) {
-                rb.wake_up();
+                (rb as &mut RigidBody).wake_up();
                 rb.sleep_timer = 0.0;
             }
         }
@@ -423,10 +426,10 @@ fn reset_cradle(world: &mut World, game: &mut CradleGame) {
     let diameter = (BALL_RADIUS * 2.0) + gap;
     let start_x = -((BALL_COUNT as f32 - 1.0) / 2.0) * diameter;
 
-    if let (Some(mut transforms), Some(mut vels), Some(mut rbs)) = (
-        world.borrow_mut::<Transform>().expect("ECS Aliasing Error"),
-        world.borrow_mut::<Velocity>().expect("ECS Aliasing Error"),
-        world.borrow_mut::<RigidBody>().expect("ECS Aliasing Error")
+    if let (Ok(mut transforms), Ok(mut vels), Ok(mut rbs)) = (
+        world.borrow_mut::<Transform>(),
+        world.borrow_mut::<Velocity>(),
+        world.borrow_mut::<RigidBody>()
     ) {
         for (i, &ball_id) in game.ball_ids.iter().enumerate() {
             let x = start_x + (i as f32) * diameter;
@@ -446,7 +449,7 @@ fn reset_cradle(world: &mut World, game: &mut CradleGame) {
                 v.angular = Vec3::ZERO;
             }
             if let Some(rb) = rbs.get_mut(ball_id) {
-                rb.wake_up();
+                (rb as &mut RigidBody).wake_up();
                 rb.sleep_timer = 0.0;
             }
         }
@@ -481,14 +484,14 @@ fn update_camera(
     if input.is_key_pressed(KeyCode::KeyQ as u32) { state.cam_pos.y -= speed; }
     if input.is_key_pressed(KeyCode::KeyE as u32) { state.cam_pos.y += speed; }
  
-    if let Some(mut trans) = world.borrow_mut::<Transform>().expect("ECS Aliasing Error") {
+    if let Ok(mut trans) = world.borrow_mut::<Transform>() {
         if let Some(t) = trans.get_mut(state.cam_id) {
             t.position = state.cam_pos;
             t.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
             t.update_local_matrix();
         }
     }
-    if let Some(mut cams) = world.borrow_mut::<Camera>().expect("ECS Aliasing Error") {
+    if let Ok(mut cams) = world.borrow_mut::<Camera>() {
         if let Some(c) = cams.get_mut(state.cam_id) {
             c.yaw = state.cam_yaw;
             c.pitch = state.cam_pitch;

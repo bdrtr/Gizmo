@@ -21,3 +21,4 @@ description = "A custom ECS and physics engine aimed for realistic simulations."
 # Bağımlılıkları tek bir yerden yönetmek için (Inherited Dependencies)
 [workspace.dependencies]
 winit = "0.29"
+mimalloc = { version = "0.1", default-features = false }

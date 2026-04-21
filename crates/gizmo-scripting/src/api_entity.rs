@@ -145,14 +145,14 @@ pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> 
     let scales = lua.create_table()?;
     let names = lua.create_table()?;
 
-    if let Some(transforms) = world.borrow::<gizmo_physics::components::Transform>().expect("ECS Aliasing Error") {
-        for (eid, _) in transforms.iter() {
-            if let Some(t) = transforms.get(eid) {
-                let pos = lua.create_table()?;
-                pos.set("x", t.position.x)?;
-                pos.set("y", t.position.y)?;
-                pos.set("z", t.position.z)?;
-                positions.set(eid, pos)?;
+    let transforms = world.borrow::<gizmo_physics::components::Transform>().expect("ECS Aliasing Error");
+    for (eid, _) in transforms.iter() {
+        if let Some(t) = transforms.get(eid) {
+            let pos = lua.create_table()?;
+            pos.set("x", t.position.x)?;
+            pos.set("y", t.position.y)?;
+            pos.set("z", t.position.z)?;
+            positions.set(eid, pos)?;
 
                 let rot = lua.create_table()?;
                 rot.set("x", t.rotation.x)?;
@@ -165,28 +165,25 @@ pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> 
                 scl.set("x", t.scale.x)?;
                 scl.set("y", t.scale.y)?;
                 scl.set("z", t.scale.z)?;
-                scales.set(eid, scl)?;
-            }
+            scales.set(eid, scl)?;
         }
     }
 
-    if let Some(vels) = world.borrow::<gizmo_physics::components::Velocity>().expect("ECS Aliasing Error") {
-        for (eid, _) in vels.iter() {
-            if let Some(v) = vels.get(eid) {
-                let vel = lua.create_table()?;
-                vel.set("x", v.linear.x)?;
-                vel.set("y", v.linear.y)?;
-                vel.set("z", v.linear.z)?;
-                velocities.set(eid, vel)?;
-            }
+    let vels = world.borrow::<gizmo_physics::components::Velocity>().expect("ECS Aliasing Error");
+    for (eid, _) in vels.iter() {
+        if let Some(v) = vels.get(eid) {
+            let vel = lua.create_table()?;
+            vel.set("x", v.linear.x)?;
+            vel.set("y", v.linear.y)?;
+            vel.set("z", v.linear.z)?;
+            velocities.set(eid, vel)?;
         }
     }
 
-    if let Some(entity_names) = world.borrow::<gizmo_core::EntityName>().expect("ECS Aliasing Error") {
-        for (eid, _) in entity_names.iter() {
-            if let Some(n) = entity_names.get(eid) {
-                names.set(eid, n.0.clone())?;
-            }
+    let entity_names = world.borrow::<gizmo_core::EntityName>().expect("ECS Aliasing Error");
+    for (eid, _) in entity_names.iter() {
+        if let Some(n) = entity_names.get(eid) {
+            names.set(eid, n.0.clone())?;
         }
     }
 

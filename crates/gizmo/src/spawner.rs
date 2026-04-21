@@ -281,7 +281,7 @@ impl<'a> Commands<'a> {
         let mat = Material::new(bg).with_unlit(color.to_vec4());
         let id = spawn_mesh_entity(self.world, pos, mesh, mat);
         // Scale'i half_extents ile eşleştir
-        if let Some(mut trans_store) = self.world.borrow_mut::<Transform>().expect("ECS Aliasing Error") {
+        if let Ok(mut trans_store) = self.world.borrow_mut::<Transform>() {
             if let Some(trans) = trans_store.get_mut(id.id()) {
                 trans.scale = half_extents * 2.0;
                 trans.update_local_matrix();
@@ -550,7 +550,7 @@ fn spawn_gltf_node_flat(
     world.add_component(entity, Parent(parent_id));
     world.add_component(entity, Children(Vec::new()));
 
-    if let Some(mut ch_store) = world.borrow_mut::<Children>().expect("ECS Aliasing Error") {
+    if let Ok(mut ch_store) = world.borrow_mut::<Children>() {
         // Safe to push since entity just spawned and didn't trigger any complex re-borrow updates
         if let Some(parent_ch) = ch_store.get_mut(parent_id) {
             parent_ch.0.push(entity.id());
@@ -602,7 +602,7 @@ fn spawn_gltf_node_flat(
 
     // Pulling borrow_mut OUTSIDE the loop avoiding multiple overlapping mutable queries
     if !newly_added_prims.is_empty() {
-        if let Some(mut ch_store) = world.borrow_mut::<Children>().expect("ECS Aliasing Error") {
+        if let Ok(mut ch_store) = world.borrow_mut::<Children>() {
             if let Some(parent_ch) = ch_store.get_mut(entity.id()) {
                 parent_ch.0.extend(newly_added_prims);
             }
@@ -679,7 +679,7 @@ impl WorldExt for World {
 
     fn position_of(&self, name: &str) -> Option<Vec3> {
         let target_id = self.entity_named(name)?;
-        let transforms = self.borrow::<gizmo_physics::Transform>().expect("ECS Aliasing Error")?;
+        let transforms = self.borrow::<gizmo_physics::components::Transform>().expect("ECS Aliasing Error");
         transforms.get(target_id).map(|t| t.position)
     }
 
@@ -703,7 +703,7 @@ impl WorldExt for World {
             }
         };
         if let Some(target_id) = target {
-            if let Some(mut storage) = self.borrow_mut::<T>().expect("ECS Aliasing Error") {
+            if let Ok(mut storage) = self.borrow_mut::<T>() {
                 if let Some(comp) = storage.get_mut(target_id) {
                     f(comp);
                 }

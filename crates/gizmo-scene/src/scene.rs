@@ -77,7 +77,7 @@ impl SceneData {
         let parents = world.borrow::<Parent>().expect("ECS Aliasing Error");
 
         for &id in &entity_ids {
-            let name = names.as_ref().and_then(|s| s.get(id)).map(|n| n.0.clone());
+            let name = names.get(id).map(|n| n.0.clone());
 
             // Gizmo Studio'nun içsel araçlarını kaydetme (Gizmo kurguları, Highlight box, grid vs.)
             if let Some(ref n) = name {
@@ -87,13 +87,11 @@ impl SceneData {
             }
 
             let mesh_source = meshes
-                .as_ref()
-                .and_then(|s| s.get(id))
+                .get(id)
                 .map(|m| m.source.clone());
             let material_source =
                 materials
-                    .as_ref()
-                    .and_then(|s| s.get(id))
+                    .get(id)
                     .map(|m| MaterialData {
                         albedo: m.albedo,
                         roughness: m.roughness,
@@ -101,7 +99,7 @@ impl SceneData {
                         unlit: m.unlit,
                         texture_source: m.texture_source.clone(),
                     });
-            let parent_id = parents.as_ref().and_then(|s| s.get(id)).map(|p| p.0);
+            let parent_id = parents.get(id).map(|p| p.0);
 
             // Dinamik bileşenleri Registry üzerinden tarayarak JSON AST'sine (ron::Value) dönüştür
             let mut dynamic_components = std::collections::BTreeMap::new();
@@ -330,7 +328,7 @@ impl SceneData {
         let mut i = 0;
         while i < ids_to_save.len() {
             let current = ids_to_save[i];
-            if let Some(children_comp) = children_storage.as_ref().and_then(|s| s.get(current)) {
+            if let Some(children_comp) = children_storage.get(current) {
                 for &child_id in &children_comp.0 {
                     ids_to_save.push(child_id);
                 }
@@ -407,9 +405,9 @@ impl SceneData {
             let mut children_list = Vec::new();
             if let Some(existing_children) = world
                 .borrow::<Children>().expect("ECS Aliasing Error")
-                .and_then(|c| c.get(p_id).cloned())
+                .get(p_id)
             {
-                children_list = existing_children.0;
+                children_list = existing_children.0.clone();
             }
             children_list.push(new_r);
             world.add_component(
@@ -425,11 +423,10 @@ impl SceneData {
     /// Entity listesini döndürür (Lua API'si için)
     pub fn get_entity_names(world: &World) -> Vec<(u32, String)> {
         let mut result = Vec::new();
-        if let Some(names) = world.borrow::<EntityName>().expect("ECS Aliasing Error") {
-            for (entity_id, _) in names.iter() {
-                if let Some(name) = names.get(entity_id) {
-                    result.push((entity_id, name.0.clone()));
-                }
+        let names = world.borrow::<EntityName>().expect("ECS Aliasing Error");
+        for (entity_id, _) in names.iter() {
+            if let Some(name) = names.get(entity_id) {
+                result.push((entity_id, name.0.clone()));
             }
         }
         result
@@ -437,12 +434,11 @@ impl SceneData {
 
     /// İsme göre entity bul
     pub fn find_entity_by_name(world: &World, target_name: &str) -> Option<u32> {
-        if let Some(names) = world.borrow::<EntityName>().expect("ECS Aliasing Error") {
-            for (entity_id, _) in names.iter() {
-                if let Some(name) = names.get(entity_id) {
-                    if name.0 == target_name {
-                        return Some(entity_id);
-                    }
+        let names = world.borrow::<EntityName>().expect("ECS Aliasing Error");
+        for (entity_id, _) in names.iter() {
+            if let Some(name) = names.get(entity_id) {
+                if name.0 == target_name {
+                    return Some(entity_id);
                 }
             }
         }

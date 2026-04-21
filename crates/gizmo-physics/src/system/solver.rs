@@ -27,10 +27,10 @@ pub fn match_cached_contact(new_point: Vec3, cached: &[CachedContact]) -> Option
 
 pub fn build_islands(
     detection_result: DetectionResult,
-    transforms:  &gizmo_core::SparseSet<Transform>,
-    velocities:  &gizmo_core::SparseSet<Velocity>,
+    transforms:  &gizmo_core::StorageView<'_, Transform>,
+    velocities:  &gizmo_core::StorageView<'_, Velocity>,
     entities_to_wake: &mut Vec<u32>,
-    rbs: &gizmo_core::SparseSet<RigidBody>,
+    rbs: &gizmo_core::StorageView<'_, RigidBody>,
     joint_world_opt: Option<&crate::constraints::JointWorld>,
 ) -> Vec<Island> {
     let mut uf = UnionFind::new();
@@ -196,9 +196,10 @@ pub fn solve_single_island(island: &mut Island, solver_iters: u32, frame_count: 
                 continue;
             }
 
-            let bias = ((0.15 / 1.0) * (c.penetration - 0.005).max(0.0)).min(2.0);
-            let mut j_new = (-vn + c.bias_bounce + bias) / eff_mass;
-            j_new = j_new.min(10.0 / dt);
+            // Baumgarte stabilization: β=0.2, slop=0.01m (Sektör standardı: PhysX/Rapier)
+            // SPLIT IMPULSE: Bias yalnızca position correction'a gider, velocity'ye enerji EKLEMEZ.
+            // Bu Newton Sarkacı gibi elastik çarpışmalarda enerji korunumunu sağlar.
+            let j_new = (-vn + c.bias_bounce) / eff_mass;
             
             let old_acc = c.accumulated_j;
             c.accumulated_j = (c.accumulated_j + j_new).max(0.0);
@@ -326,8 +327,10 @@ pub fn solve_single_island(island: &mut Island, solver_iters: u32, frame_count: 
 
     // Pseudo-Velocity / Position Projection (Penetrasyonları doğrudan çöz, domino kaymasını önle)
     for c in island.contacts.iter() {
-        if c.penetration > 0.01 {
-            let correction = c.normal * (c.penetration - 0.01) * 0.4;
+        // Position projection: slop=0.01m, correction_factor=0.2 (PhysX standard)
+        let pos_slop = 0.01_f32;
+        if c.penetration > pos_slop {
+            let correction = c.normal * (c.penetration - pos_slop) * 0.2;
             let total_inv_mass = c.inv_mass_a + c.inv_mass_b;
             if total_inv_mass > 0.0 {
                 if let Some(p) = island.poses.get_mut(&c.ent_a) {
@@ -430,8 +433,8 @@ pub fn solve_islands(
 
 pub fn write_back(
     islands: Vec<Island>,
-    transforms:           &mut gizmo_core::SparseSet<Transform>,
-    velocities:           &mut gizmo_core::SparseSet<Velocity>,
+    transforms:           &mut gizmo_core::StorageViewMut<'_, Transform>,
+    velocities:           &mut gizmo_core::StorageViewMut<'_, Velocity>,
     _vehicle_entities:     &std::collections::HashSet<u32>,
     solver_state:         &mut PhysicsSolverState,
     collision_events:     &mut Vec<crate::CollisionEvent>,

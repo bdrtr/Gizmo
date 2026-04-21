@@ -90,10 +90,10 @@ pub fn execute_render_pipeline(
     let mut cam_far = 2000.0f32;
     let mut cam_fov = std::f32::consts::FRAC_PI_4;
     let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
-    let _is_hidden_guard = world.borrow::<gizmo::core::component::IsHidden>().expect("ECS Aliasing Error");
+    let _is_hidden_guard = world.borrow::<gizmo::core::component::IsHidden>();
 
-    if let (Some(cameras), Some(transforms)) =
-        (world.borrow::<Camera>().expect("ECS Aliasing Error"), world.borrow::<Transform>().expect("ECS Aliasing Error"))
+    if let (Ok(cameras), Ok(transforms)) =
+        (world.borrow::<Camera>(), world.borrow::<Transform>())
     {
         if let (Some(cam), Some(trans)) = (
             cameras.get(state.editor_camera),
@@ -281,14 +281,15 @@ pub fn execute_render_pipeline(
         all_instances.clear();
         flat_batches.clear();
 
-        let renderers = world.borrow::<gizmo::renderer::components::MeshRenderer>().expect("ECS Aliasing Error");
-    let skeletons = world.borrow::<gizmo::renderer::components::Skeleton>().expect("ECS Aliasing Error");
-    let lod_groups = world.borrow::<gizmo::renderer::components::LodGroup>().expect("ECS Aliasing Error");
+        let renderers = world.borrow::<gizmo::renderer::components::MeshRenderer>();
+    let skeletons = world.borrow::<gizmo::renderer::components::Skeleton>();
+    let lod_groups = world.borrow::<gizmo::renderer::components::LodGroup>();
 
     if let Some(mut q) = world.query::<(&Mesh, &Transform, &Material)>() {
         for (e, (mesh, trans, mat)) in q.iter_mut() {
             // Sadece MeshRenderer tagli olanları çiz:
-            if let Some(r) = &renderers {
+            // Sadece MeshRenderer tagli olanları çiz:
+            if let Ok(r) = &renderers {
                 if r.get(e).is_none() {
                     continue;
                 }
@@ -297,7 +298,8 @@ pub fn execute_render_pipeline(
             }
 
             // Gizli olarak işaretlenmiş objeleri atla!
-            if let Some(hidden) = world.borrow::<gizmo::core::component::IsHidden>().expect("ECS Aliasing Error") {
+            // Gizli olarak işaretlenmiş objeleri atla!
+            if let Ok(hidden) = world.borrow::<gizmo::core::component::IsHidden>() {
                 if hidden.contains(e) {
                     continue;
                 }
@@ -318,7 +320,7 @@ pub fn execute_render_pipeline(
 
             // --- LOD (Level of Detail) SEÇİMİ ---
             // Eğer entity'de LodGroup varsa, kameraya mesafeye göre düşük/yüksek detay mesh seç
-            let active_mesh = if let Some(lods) = &lod_groups {
+            let active_mesh = if let Ok(lods) = &lod_groups {
                 if let Some(lod) = lods.get(e) {
                     let world_pos = Vec3::new(model.w_axis.x, model.w_axis.y, model.w_axis.z);
                     let dist = cam_pos.distance(world_pos);
@@ -343,7 +345,7 @@ pub fn execute_render_pipeline(
             // Skeleton bind group, skinned mesh'ler spawn edilirken doğrudan entity'ye önbelleklenmelidir.
             // Bu nedenle her frame parent zincirini tırmanıp Skeleton aramak yerine doğrudan kendi üzerindekini kullanıyoruz.
             let mut skel_bg = renderer.scene.dummy_skeleton_bind_group.clone();
-            if let Some(skels) = &skeletons {
+            if let Ok(skels) = &skeletons {
                 if let Some(s) = skels.get(e) {
                     skel_bg = s.bind_group.clone();
                 }
@@ -438,10 +440,10 @@ pub fn execute_render_pipeline(
         gpu_particles.update_params(&renderer.queue, delta_time);
 
         // --- YENİ PARTİCÜL SPAWNLAMA (CPU -> GPU) ---
-        if let Some(mut emitters) =
-            world.borrow_mut::<gizmo::renderer::components::ParticleEmitter>().expect("ECS Aliasing Error")
+        if let Ok(mut emitters) =
+            world.borrow_mut::<gizmo::renderer::components::ParticleEmitter>()
         {
-            if let Some(transforms) = world.borrow::<Transform>().expect("ECS Aliasing Error") {
+            if let Ok(transforms) = world.borrow::<Transform>() {
                 use rand::Rng;
                 let mut rng = rand::rng();
                 let mut all_new_particles = Vec::new();

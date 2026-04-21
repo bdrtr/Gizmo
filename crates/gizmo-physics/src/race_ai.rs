@@ -34,18 +34,9 @@ impl RaceAI {
 /// AI araçlarını her fizik adımında günceleyen sistem.
 /// Sonraki waypoint'e doğru `engine_force` ve `steering_angle` hesaplar.
 pub fn race_ai_system(world: &gizmo_core::World, _dt: f32) {
-    let transforms = match world.borrow::<crate::components::Transform>().expect("ECS Aliasing Error") {
-        Some(t) => t,
-        None => return,
-    };
-    let mut vehicles = match world.borrow_mut::<crate::vehicle::VehicleController>().expect("ECS Aliasing Error") {
-        Some(v) => v,
-        None => return,
-    };
-    let mut ais = match world.borrow_mut::<RaceAI>().expect("ECS Aliasing Error") {
-        Some(a) => a,
-        None => return,
-    };
+    let transforms = world.borrow::<crate::components::Transform>().expect("ECS Aliasing Error");
+    let mut vehicles = world.borrow_mut::<crate::vehicle::VehicleController>().expect("ECS Aliasing Error");
+    let mut ais = world.borrow_mut::<RaceAI>().expect("ECS Aliasing Error");
 
     let entity_ids: Vec<u32> = ais.iter().map(|(id, _)| id).collect();
 

@@ -127,69 +127,61 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
         },
     }
 
-    let colliders_storage = world.borrow::<Collider>().expect("ECS Aliasing Error");
-    let static_cols: Vec<StaticCol> = {
-        if let (Some(rbs), Some(ref cols), Some(ts)) = (
-            world.borrow::<RigidBody>().expect("ECS Aliasing Error"),
-            &colliders_storage,
-            world.borrow::<Transform>().expect("ECS Aliasing Error"),
-        ) {
-            cols.iter()
-                .map(|(e, _)| e)
-                .filter_map(|e| {
-                    if rbs.get(e).is_some_and(|rb| rb.mass < 1e-6) {
-                        let t = ts.get(e)?;
-                        let col = cols.get(e)?;
-                        match &col.shape {
-                            ColliderShape::Aabb(aabb) => {
-                                return Some(StaticCol::Aabb {
-                                    position: t.position,
-                                    half_extents: Vec3::new(
-                                        aabb.half_extents.x * t.scale.x,
-                                        aabb.half_extents.y * t.scale.y,
-                                        aabb.half_extents.z * t.scale.z,
-                                    ),
-                                });
-                            }
-                            ColliderShape::HeightField {
-                                heights,
-                                segments_x,
-                                segments_z,
-                                width,
-                                depth,
-                                max_height,
-                            } => {
-                                return Some(StaticCol::HeightField {
-                                    position: t.position,
-                                    heights: heights.as_slice(),
-                                    segments_x: *segments_x,
-                                    segments_z: *segments_z,
-                                    width: *width * t.scale.x,
-                                    depth: *depth * t.scale.z,
-                                    max_height: *max_height * t.scale.y,
-                                });
-                            }
-                            _ => return None,
-                        }
-                    }
-                    None
-                })
-                .collect()
-        } else {
-            Vec::new()
-        }
-    };
+    let colliders_storage = world.borrow::<Collider>().unwrap();
+    let rbs = world.borrow::<RigidBody>().unwrap();
+    let ts = world.borrow::<Transform>().unwrap();
 
-    if let (Some(mut trans_storage), Some(mut vel_storage), Some(mut rbs), Some(vehicles), Some(children_storage), Some(mut wheel_storage)) = (
-        world.borrow_mut::<Transform>().expect("ECS Aliasing Error"),
-        world.borrow_mut::<Velocity>().expect("ECS Aliasing Error"),
-        world.borrow_mut::<RigidBody>().expect("ECS Aliasing Error"),
-        world.borrow::<VehicleController>().expect("ECS Aliasing Error"),
-        world.borrow::<gizmo_core::component::Children>().expect("ECS Aliasing Error"),
-        world.borrow_mut::<WheelComponent>().expect("ECS Aliasing Error"),
-    ) {
-        let entities: Vec<u32> = vehicles.iter().map(|(e, _)| e).collect();
-        for entity in entities {
+    let static_cols: Vec<StaticCol> = colliders_storage.entities()
+        .filter_map(|e| {
+            if rbs.get(e).is_some_and(|rb| rb.mass < 1e-6) {
+                let t = ts.get(e)?;
+                let col = colliders_storage.get(e)?;
+                match &col.shape {
+                    ColliderShape::Aabb(aabb) => {
+                        Some(StaticCol::Aabb {
+                            position: t.position,
+                            half_extents: Vec3::new(
+                                aabb.half_extents.x * t.scale.x,
+                                aabb.half_extents.y * t.scale.y,
+                                aabb.half_extents.z * t.scale.z,
+                            ),
+                        })
+                    }
+                    ColliderShape::HeightField {
+                        heights,
+                        segments_x,
+                        segments_z,
+                        width,
+                        depth,
+                        max_height,
+                    } => {
+                        Some(StaticCol::HeightField {
+                            position: t.position,
+                            heights: heights.as_slice(),
+                            segments_x: *segments_x,
+                            segments_z: *segments_z,
+                            width: *width * t.scale.x,
+                            depth: *depth * t.scale.z,
+                            max_height: *max_height * t.scale.y,
+                        })
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let mut trans_storage = world.borrow_mut::<Transform>().unwrap();
+    let mut vel_storage = world.borrow_mut::<Velocity>().unwrap();
+    let mut rb_storage = world.borrow_mut::<RigidBody>().unwrap();
+    let vehicles = world.borrow::<VehicleController>().unwrap();
+    let children_storage = world.borrow::<gizmo_core::component::Children>().unwrap();
+    let mut wheel_storage = world.borrow_mut::<WheelComponent>().unwrap();
+
+    let entities: Vec<u32> = vehicles.entities().collect();
+    for entity in entities {
             let t = match trans_storage.get(entity) {
                 Some(t) => *t,
                 None => continue,
@@ -198,7 +190,7 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                 Some(v) => v,
                 None => continue,
             };
-            let rb = match rbs.get_mut(entity) {
+            let rb = match rb_storage.get_mut(entity) {
                 Some(r) => r,
                 None => continue,
             };
@@ -514,7 +506,6 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                 let drag_dv = v.linear * (-0.5 * cd * speed_sq.sqrt() * dt);
                 v.linear += drag_dv;
             }
-        }
     }
 }
 

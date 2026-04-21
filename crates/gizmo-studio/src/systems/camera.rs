@@ -12,16 +12,16 @@ pub fn handle_camera(world: &mut World, state: &mut StudioState, dt: f32, input:
     let mut camera_speed = 8.0;
     let mut camera_focus_distance = 10.0;
     let mut is_playing = false;
-    if let Some(es) = world.get_resource::<EditorState>().expect("ECS Aliasing Error") {
+    if let Ok(Some(es)) = world.get_resource::<EditorState>() {
         camera_speed = es.prefs.camera_speed;
         camera_focus_distance = es.prefs.camera_focus_distance;
         is_playing = es.is_playing();
     }
 
     // Editor Camera WASD Controller
-    if let (Some(mut transforms), Some(mut cameras)) = (
-        world.borrow_mut::<Transform>().expect("ECS Aliasing Error"),
-        world.borrow_mut::<gizmo::renderer::components::Camera>().expect("ECS Aliasing Error"),
+    if let (Ok(mut transforms), Ok(mut cameras)) = (
+        world.borrow_mut::<Transform>(),
+        world.borrow_mut::<gizmo::renderer::components::Camera>(),
     ) {
         if let (Some(t), Some(cam)) = (
             transforms.get_mut(state.editor_camera),
@@ -173,12 +173,12 @@ pub fn handle_camera(world: &mut World, state: &mut StudioState, dt: f32, input:
             for (i, &key) in digits.iter().enumerate() {
                 if input.is_key_just_pressed(key as u32) {
                     if ctrl { // Bookmark Save
-                        if let Some(mut es) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+                        if let Ok(Some(mut es)) = world.get_resource_mut::<EditorState>() {
                             es.camera.bookmarks[i] = Some((t.position, cam.yaw, cam.pitch));
                             es.log_info(&format!("Kamera #{} kaydedildi.", i));
                         }
                     } else { // Bookmark Load
-                        if let Some(mut es) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+                        if let Ok(Some(mut es)) = world.get_resource_mut::<EditorState>() {
                             if let Some((pos, yaw, pitch)) = es.camera.bookmarks[i] {
                                 t.position = pos;
                                 cam.yaw = yaw;
@@ -206,7 +206,7 @@ pub fn handle_camera(world: &mut World, state: &mut StudioState, dt: f32, input:
         }
     }
 
-    if let Some(mut es) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+    if let Ok(Some(mut es)) = world.get_resource_mut::<EditorState>() {
         es.prefs.camera_focus_distance = camera_focus_distance;
     }
 }

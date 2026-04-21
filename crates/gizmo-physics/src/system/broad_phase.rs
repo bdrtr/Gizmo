@@ -44,10 +44,10 @@ static FRAME_COUNT: AtomicU32 = AtomicU32::new(0);
 /// (Yalnızca merkez varyansı, X'te ince ama Y/Z'te geniş düzenlerde zayıf kalabilir.)
 /// Aktif liste, seçilen eksende `max[j] < min[i]` ile güvenli biçimde budanır; çift testi tam 3B AABB.
 pub fn broad_phase(
-    transforms: &gizmo_core::SparseSet<Transform>,
-    colliders: &gizmo_core::SparseSet<Collider>,
-    rigidbodies: &gizmo_core::SparseSet<RigidBody>,
-    velocities: &gizmo_core::SparseSet<Velocity>,
+    transforms: &gizmo_core::StorageView<'_, Transform>,
+    colliders: &gizmo_core::StorageView<'_, Collider>,
+    rigidbodies: &gizmo_core::StorageView<'_, RigidBody>,
+    velocities: &gizmo_core::StorageView<'_, Velocity>,
     dt: f32,
     parallel_physics: bool,
 ) -> Vec<(u32, u32)> {
@@ -63,7 +63,9 @@ pub fn broad_phase(
 
         let (mut min, mut max) = match &col.shape {
             ColliderShape::Aabb(a) => {
-                let he = Vec3::new(a.half_extents.x * t.scale.x, a.half_extents.y * t.scale.y, a.half_extents.z * t.scale.z);
+                // Collider half_extents zaten dünya uzayında — scale UYGULANMAZ.
+                // Narrow-phase de scale uygulamaz; burada tutarlı olmalıyız.
+                let he = a.half_extents;
                 let is_identity = is_near_identity(t.rotation);
                 if is_identity {
                     (t.position - he, t.position + he)
@@ -89,25 +91,26 @@ pub fn broad_phase(
                 }
             }
             ColliderShape::Sphere(s) => {
-                let max_s = t.scale.x.max(t.scale.y).max(t.scale.z);
-                let r = Vec3::new(s.radius * max_s, s.radius * max_s, s.radius * max_s);
+                // Sphere radius zaten dünya uzayında — scale UYGULANMAZ.
+                let r = Vec3::splat(s.radius);
                 (t.position - r, t.position + r)
             }
             ColliderShape::Capsule(c) => {
-                let max_s_xz = t.scale.x.max(t.scale.z);
-                let up = t.rotation.mul_vec3(Vec3::new(0.0, c.half_height * t.scale.y, 0.0));
+                // Capsule boyutları zaten dünya uzayında — scale UYGULANMAZ.
+                let up = t.rotation.mul_vec3(Vec3::new(0.0, c.half_height, 0.0));
                 let top = t.position + up;
                 let bot = t.position - up;
-                let r = Vec3::new(c.radius * max_s_xz, c.radius * max_s_xz, c.radius * max_s_xz);
+                let r = Vec3::splat(c.radius);
                 let mn = Vec3::new(top.x.min(bot.x), top.y.min(bot.y), top.z.min(bot.z)) - r;
                 let mx = Vec3::new(top.x.max(bot.x), top.y.max(bot.y), top.z.max(bot.z)) + r;
                 (mn, mx)
             }
             ColliderShape::ConvexHull(hull) => {
+                // Hull vertex'leri zaten dünya uzayında — scale UYGULANMAZ.
                 let mut mn = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
                 let mut mx = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
                 for v in &hull.vertices {
-                    let wv = t.position + t.rotation.mul_vec3(Vec3::new(v.x * t.scale.x, v.y * t.scale.y, v.z * t.scale.z));
+                    let wv = t.position + t.rotation.mul_vec3(*v);
                     mn.x = mn.x.min(wv.x); mn.y = mn.y.min(wv.y); mn.z = mn.z.min(wv.z);
                     mx.x = mx.x.max(wv.x); mx.y = mx.y.max(wv.y); mx.z = mx.z.max(wv.z);
                 }
@@ -121,22 +124,20 @@ pub fn broad_phase(
                 return None;
             }
             ColliderShape::HeightField { width, max_height, depth, .. } => {
-                let scaled_w = width * t.scale.x;
-                let scaled_h = max_height * t.scale.y;
-                let scaled_d = depth * t.scale.z;
+                // HeightField boyutları zaten dünya uzayında — scale UYGULANMAZ.
                 let is_identity = is_near_identity(t.rotation);
                 if is_identity {
-                    (t.position, t.position + Vec3::new(scaled_w, scaled_h, scaled_d))
+                    (t.position, t.position + Vec3::new(*width, *max_height, *depth))
                 } else {
                     let corners = [
                         Vec3::new(0.0, 0.0, 0.0),
-                        Vec3::new(scaled_w, 0.0, 0.0),
-                        Vec3::new(0.0, scaled_h, 0.0),
-                        Vec3::new(scaled_w, scaled_h, 0.0),
-                        Vec3::new(0.0, 0.0, scaled_d),
-                        Vec3::new(scaled_w, 0.0, scaled_d),
-                        Vec3::new(0.0, scaled_h, scaled_d),
-                        Vec3::new(scaled_w, scaled_h, scaled_d),
+                        Vec3::new(*width, 0.0, 0.0),
+                        Vec3::new(0.0, *max_height, 0.0),
+                        Vec3::new(*width, *max_height, 0.0),
+                        Vec3::new(0.0, 0.0, *depth),
+                        Vec3::new(*width, 0.0, *depth),
+                        Vec3::new(0.0, *max_height, *depth),
+                        Vec3::new(*width, *max_height, *depth),
                     ];
                     let mut mn = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
                     let mut mx = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
@@ -151,7 +152,8 @@ pub fn broad_phase(
         };
 
         // CCD: hızlı hareket eden objeler için AABB'yi hareket yönünde uzat
-        if let Some(rb) = rigidbodies.get(e) {
+        let rb_opt = rigidbodies.get(e);
+        if let Some(rb) = rb_opt {
             if rb.ccd_enabled {
                 if let Some(v) = velocities.get(e) {
                     let sweep = v.linear * dt;
@@ -163,7 +165,12 @@ pub fn broad_phase(
             }
         }
 
-        Some(Interval { entity: e, min, max })
+        let (is_sleeping, is_static) = match rb_opt {
+            Some(rb) => (rb.is_sleeping, rb.mass == 0.0),
+            None => (false, true),
+        };
+
+        Some(Interval { entity: e, min, max, is_sleeping, is_static })
     };
 
     let mut intervals: Vec<Interval> = if parallel_physics {
@@ -249,8 +256,16 @@ pub fn broad_phase(
                 && a.min.y <= b.max.y && a.max.y >= b.min.y
                 && a.min.z <= b.max.z && a.max.z >= b.min.z;
             if overlap {
+                // Erken eleme: her iki taraf da uyuyor veya her ikisi de statik → çift gereksiz.
+                // NOT: sleeping+static filtrelenmez çünkü uyuyan cisim aynı frame'de
+                // başka bir uyanık cisim tarafından uyandırılabilir ve zemin desteğine ihtiyaç duyar.
+                let both_sleeping = a.is_sleeping && b.is_sleeping;
+                let both_static = a.is_static && b.is_static;
+                if both_sleeping || both_static {
+                    continue;
+                }
+
                 // CONTRACT: Çiftler her zaman `a < b` (entity) şeklinde sıralıdır.
-                // Narrow-phase ve warm-starting yapısı bu küçükten büyüğe sıraya güvenir.
                 let pair = if a.entity < b.entity {
                     (a.entity, b.entity)
                 } else {
