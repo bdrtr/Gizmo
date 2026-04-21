@@ -35,8 +35,7 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
                     "Material" => {
                         let white_tex = world
                             .get_resource::<DebugAssets>()
-                            .ok()
-                            .and_then(|a| a.as_ref().map(|a| a.white_tex.clone()));
+                            .map(|a| a.white_tex.clone());
                         if let Some(tex) = white_tex {
                             world.add_component(ent, gizmo::prelude::Material::new(tex));
                         }
@@ -93,7 +92,7 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
                         ];
 
                         let mut children = Vec::new();
-                        if let Ok(ch_storage) = world.borrow::<gizmo::core::component::Children>() {
+                        { let ch_storage = world.borrow::<gizmo::core::component::Children>();
                             if let Some(existing) = ch_storage.get(ent_id.id()) {
                                 children.extend(&existing.0);
                             }
@@ -127,11 +126,11 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
                 editor_state.selection.entities.remove(&ent_id);
                 
                 // 1. Parent'ın Children listesinden kendini çıkar
-                if let Ok(parent_storage) = world.borrow::<gizmo::core::component::Parent>() {
+                { let parent_storage = world.borrow::<gizmo::core::component::Parent>();
                     if let Some(p) = parent_storage.get(ent_id.id()) {
                         let parent_id = p.0;
                         drop(parent_storage);
-                        if let Ok(mut children_storage) = world.borrow_mut::<gizmo::core::component::Children>() {
+                        { let mut children_storage = world.borrow_mut::<gizmo::core::component::Children>();
                             if let Some(c) = children_storage.get_mut(parent_id) {
                                 c.0.retain(|&id| id != ent_id.id());
                             }
@@ -141,7 +140,7 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
 
                 // 2. Tüm çocuklarını topla
                 let mut ids_to_delete = vec![ent_id.id()];
-                if let Ok(children_storage) = world.borrow::<gizmo::core::component::Children>() {
+                { let children_storage = world.borrow::<gizmo::core::component::Children>();
                     let mut i = 0;
                     while i < ids_to_delete.len() {
                         let current = ids_to_delete[i];
@@ -182,8 +181,7 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
         if let Some(kind) = editor_state.spawn_request.take() {
             let pending_assets = world
                 .get_resource::<DebugAssets>()
-                .ok()
-                .and_then(|a| a.as_ref().map(|a| (a.cube.clone(), a.white_tex.clone())));
+                .map(|a| (a.cube.clone(), a.white_tex.clone()));
 
             if let Some((cube_mesh, white_tex)) = pending_assets {
                 let e = world.spawn();
@@ -248,8 +246,7 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
         for ent_id in toggle_requests {
             if let Some(ent) = world.get_entity(ent_id.id()) {
                 let currently_hidden = world
-                    .borrow::<gizmo::core::component::IsHidden>()
-                    .map_or(false, |h| h.contains(ent_id.id()));
+                    .borrow::<gizmo::core::component::IsHidden>().contains(ent_id.id());
                 if currently_hidden {
                     world.remove_component::<gizmo::core::component::IsHidden>(ent);
                     editor_state.log_info(&format!("Entity {} görünür yapıldı.", ent_id));
@@ -264,12 +261,10 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
         if let Some((child_id, new_parent_id)) = editor_state.reparent_request.take() {
             // Eski parent'ı O(1) maliyetle bul
             let old_parent_id = world
-                .borrow::<gizmo::core::component::Parent>()
-                .ok()
-                .and_then(|p| p.get(child_id.id()).map(|c| c.0));
+                .borrow::<gizmo::core::component::Parent>().get(child_id.id()).map(|c| c.0);
 
             // Eski parent'ın children listesinden çıkar ve yeni parent'a ekle
-            if let Ok(mut children_comp) = world.borrow_mut::<gizmo::core::component::Children>() {
+            { let mut children_comp = world.borrow_mut::<gizmo::core::component::Children>();
                 if let Some(old_pid) = old_parent_id {
                     if let Some(ch) = children_comp.get_mut(old_pid) {
                         ch.0.retain(|&cid| cid != child_id.id());
@@ -297,12 +292,10 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
         if let Some(child_id) = editor_state.unparent_request.take() {
             // Eski parent'ı O(1) maliyetle bul
             let old_parent_id = world
-                .borrow::<gizmo::core::component::Parent>()
-                .ok()
-                .and_then(|p| p.get(child_id.id()).map(|c| c.0));
+                .borrow::<gizmo::core::component::Parent>().get(child_id.id()).map(|c| c.0);
 
             if let Some(old_pid) = old_parent_id {
-                if let Ok(mut children_comp) = world.borrow_mut::<gizmo::core::component::Children>() {
+                { let mut children_comp = world.borrow_mut::<gizmo::core::component::Children>();
                     if let Some(ch) = children_comp.get_mut(old_pid) {
                         ch.0.retain(|&cid| cid != child_id.id());
                     }

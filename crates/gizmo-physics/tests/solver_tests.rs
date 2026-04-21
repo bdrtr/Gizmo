@@ -52,14 +52,12 @@ fn test_fixed_joint_pull() {
     gizmo_physics::system::physics_collision_system(&mut world, 0.016);
 
     let v_a = world
-        .borrow::<Velocity>().expect("ECS Aliasing Error")
-        .unwrap()
+        .borrow::<Velocity>()
         .get(entity_a.id())
         .unwrap()
         .clone();
     let v_b = world
-        .borrow::<Velocity>().expect("ECS Aliasing Error")
-        .unwrap()
+        .borrow::<Velocity>()
         .get(entity_b.id())
         .unwrap()
         .clone();

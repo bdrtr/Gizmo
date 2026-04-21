@@ -5,7 +5,7 @@ pub fn ui_build_console(ui: &mut egui::Ui, state: &mut EditorState) {
     
     // Asenkron logları topla (Thread-safe)
     if let Some(rx) = &state.build.logs_rx {
-        while let Ok(log) = rx.try_recv() {
+        while let Ok(log) = rx.lock().unwrap().try_recv() {
             let lower_log = log.to_lowercase();
             let color = if lower_log.starts_with("error") || lower_log.contains("error[") || lower_log.contains("❌") || lower_log.contains("hata") {
                 egui::Color32::RED

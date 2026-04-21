@@ -24,8 +24,8 @@ pub fn apply_inv_inertia(torque: Vec3, inverse_inertia_local: Mat3, rot: Quat) -
 
 /// Tek iş parçacığı, skalar f32 — SIMD/AVX2 yok; `PhysicsConfig::deterministic_simulation` ile seçilir.
 fn physics_apply_forces_scalar(world: &World, dt: f32) {
-    let mut vel_storage = world.borrow_mut::<Velocity>().expect("ECS Aliasing Error");
-    let mut rbs = world.borrow_mut::<RigidBody>().expect("ECS Aliasing Error");
+    let mut vel_storage = world.borrow_mut::<Velocity>();
+    let mut rbs = world.borrow_mut::<RigidBody>();
     {
         let entities: Vec<u32> = vel_storage.iter().map(|(e, _)| e).collect();
         let mut active_ents = Vec::with_capacity(entities.len());
@@ -98,8 +98,8 @@ fn physics_apply_forces_scalar(world: &World, dt: f32) {
 
 #[inline(always)]
 fn physics_apply_forces_system_impl(world: &World, dt: f32) {
-    let mut vel_storage = world.borrow_mut::<Velocity>().expect("ECS Aliasing Error");
-    let mut rbs = world.borrow_mut::<RigidBody>().expect("ECS Aliasing Error");
+    let mut vel_storage = world.borrow_mut::<Velocity>();
+    let mut rbs = world.borrow_mut::<RigidBody>();
     {
         use wide::f32x8;
 
@@ -230,7 +230,7 @@ unsafe fn physics_apply_forces_system_avx2(world: &World, dt: f32) {
 
 pub fn physics_apply_forces_system(world: &World, dt: f32) {
     let deterministic = world
-        .get_resource::<crate::components::PhysicsConfig>().expect("ECS Aliasing Error")
+        .get_resource::<crate::components::PhysicsConfig>()
         .map(|c| c.deterministic_simulation)
         .unwrap_or(false);
 
@@ -253,9 +253,9 @@ pub fn physics_apply_forces_system(world: &World, dt: f32) {
 }
 
 pub fn physics_movement_system(world: &World, dt: f32) {
-    let mut trans_storage = world.borrow_mut::<Transform>().expect("ECS Aliasing Error");
-    let vel_storage = world.borrow::<Velocity>().expect("ECS Aliasing Error");
-    let rbs = world.borrow::<RigidBody>().expect("ECS Aliasing Error");
+    let mut trans_storage = world.borrow_mut::<Transform>();
+    let vel_storage = world.borrow::<Velocity>();
+    let rbs = world.borrow::<RigidBody>();
     {
         let entities: Vec<u32> = trans_storage.iter().map(|(e, _)| e).collect();
         let mut active_ents = Vec::with_capacity(entities.len());
@@ -371,7 +371,7 @@ mod tests {
         // Run movement
         physics_movement_system(&world, 0.1);
 
-        let transforms = world.borrow::<Transform>().expect("ECS Aliasing Error");
+        let transforms = world.borrow::<Transform>();
 
         // Stationary -> Hız < 1e-6, update_local_matrix çağrılmamalı! Bozuk matris korunmalı.
         let t1 = transforms.get(e_static.id()).unwrap();
@@ -389,9 +389,9 @@ mod tests {
 
 pub fn update_transform_hierarchy(world: &World) {
     use gizmo_core::component::{Parent, Children};
-    let mut transforms = world.borrow_mut::<Transform>().expect("ECS Aliasing Error");
-    let parents = world.borrow::<Parent>().expect("ECS Aliasing Error");
-    let children = world.borrow::<Children>().expect("ECS Aliasing Error");
+    let mut transforms = world.borrow_mut::<Transform>();
+    let parents = world.borrow::<Parent>();
+    let children = world.borrow::<Children>();
     
     let mut stack = Vec::new();
     // find root nodes (entities WITH Transform but NO Parent)

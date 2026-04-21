@@ -117,7 +117,7 @@ fn domino_chain_reaction() {
     // 5. SONUÇLARI DOĞRULA (ASSERTION)
     // Son dominonun pozisyonuna bakalım.
     let last_id = last_domino_id.expect("Son domino oluşturulamadı");
-    let transforms = world.borrow::<Transform>().expect("ECS Aliasing Error").unwrap();
+    let transforms = world.borrow::<Transform>();
 
     let last_transform = transforms.get(last_id).expect("Son dominoyu bulamadık");
 

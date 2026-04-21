@@ -75,7 +75,7 @@ pub fn execute_render_pipeline(
         1.0
     };
 
-    if let Some(ed_state) = world.get_resource::<gizmo::editor::EditorState>().expect("ECS Aliasing Error") {
+    if let Some(ed_state) = world.get_resource::<gizmo::editor::EditorState>() {
         if let Some(rect) = ed_state.scene_view_rect {
             if rect.height() > 0.0 {
                 aspect = rect.width() / rect.height();
@@ -92,9 +92,7 @@ pub fn execute_render_pipeline(
     let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
     let _is_hidden_guard = world.borrow::<gizmo::core::component::IsHidden>();
 
-    if let (Ok(cameras), Ok(transforms)) =
-        (world.borrow::<Camera>(), world.borrow::<Transform>())
-    {
+    let cameras = world.borrow::<Camera>(); let transforms = world.borrow::<Transform>(); {
         if let (Some(cam), Some(trans)) = (
             cameras.get(state.editor_camera),
             transforms.get(state.editor_camera),
@@ -289,7 +287,7 @@ pub fn execute_render_pipeline(
         for (e, (mesh, trans, mat)) in q.iter_mut() {
             // Sadece MeshRenderer tagli olanları çiz:
             // Sadece MeshRenderer tagli olanları çiz:
-            if let Ok(r) = &renderers {
+            let r = &renderers; if true {
                 if r.get(e).is_none() {
                     continue;
                 }
@@ -299,7 +297,7 @@ pub fn execute_render_pipeline(
 
             // Gizli olarak işaretlenmiş objeleri atla!
             // Gizli olarak işaretlenmiş objeleri atla!
-            if let Ok(hidden) = world.borrow::<gizmo::core::component::IsHidden>() {
+            let hidden = world.borrow::<gizmo::core::component::IsHidden>(); {
                 if hidden.contains(e) {
                     continue;
                 }
@@ -320,7 +318,8 @@ pub fn execute_render_pipeline(
 
             // --- LOD (Level of Detail) SEÇİMİ ---
             // Eğer entity'de LodGroup varsa, kameraya mesafeye göre düşük/yüksek detay mesh seç
-            let active_mesh = if let Ok(lods) = &lod_groups {
+            let lods = &lod_groups;
+            let active_mesh = if true {
                 if let Some(lod) = lods.get(e) {
                     let world_pos = Vec3::new(model.w_axis.x, model.w_axis.y, model.w_axis.z);
                     let dist = cam_pos.distance(world_pos);
@@ -345,7 +344,7 @@ pub fn execute_render_pipeline(
             // Skeleton bind group, skinned mesh'ler spawn edilirken doğrudan entity'ye önbelleklenmelidir.
             // Bu nedenle her frame parent zincirini tırmanıp Skeleton aramak yerine doğrudan kendi üzerindekini kullanıyoruz.
             let mut skel_bg = renderer.scene.dummy_skeleton_bind_group.clone();
-            if let Ok(skels) = &skeletons {
+            let skels = &skeletons; if true {
                 if let Some(s) = skels.get(e) {
                     skel_bg = s.bind_group.clone();
                 }
@@ -440,10 +439,8 @@ pub fn execute_render_pipeline(
         gpu_particles.update_params(&renderer.queue, delta_time);
 
         // --- YENİ PARTİCÜL SPAWNLAMA (CPU -> GPU) ---
-        if let Ok(mut emitters) =
-            world.borrow_mut::<gizmo::renderer::components::ParticleEmitter>()
-        {
-            if let Ok(transforms) = world.borrow::<Transform>() {
+        let mut emitters = world.borrow_mut::<gizmo::renderer::components::ParticleEmitter>(); {
+            let transforms = world.borrow::<Transform>(); {
                 use rand::Rng;
                 let mut rng = rand::rng();
                 let mut all_new_particles = Vec::new();
@@ -706,7 +703,7 @@ pub fn execute_render_pipeline(
 
 
     // --- 3. POST-PROCESSING (Bloom + Tone Mapping → Ekrana Yaz) ---
-    let render_target = world.get_resource::<gizmo::renderer::components::EditorRenderTarget>().expect("ECS Aliasing Error");
+    let render_target = world.get_resource::<gizmo::renderer::components::EditorRenderTarget>();
     let output_view = if let Some(target) = &render_target {
         // Ana ekranı siyah ile mecburi temizleyelim (Swapchain error önleme)
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

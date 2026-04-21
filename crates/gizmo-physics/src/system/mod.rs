@@ -26,42 +26,27 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
     let mut collision_events: Vec<crate::CollisionEvent> = Vec::new();
 
     let (parallel_physics, max_contacts_per_pair, event_throttle_frames, ccd_velocity_threshold, solver_iterations) = {
-        match world.get_resource::<crate::components::PhysicsConfig>() {
-            Ok(Some(cfg)) => (!cfg.deterministic_simulation, cfg.max_contact_points_per_pair, cfg.collision_event_throttle_frames, cfg.ccd_velocity_threshold, cfg.solver_iterations),
-            Err(e) => {
-                eprintln!("[Physics WARN] PhysicsConfig aliasing hatası: {:?}", e);
-                (false, 4, 4, 0.1, 8)
-            }
-            Ok(None) => (false, 4, 4, 0.1, 8),
+        if let Some(cfg) = world.get_resource::<crate::components::PhysicsConfig>() {
+            (!cfg.deterministic_simulation, cfg.max_contact_points_per_pair, cfg.collision_event_throttle_frames, cfg.ccd_velocity_threshold, cfg.solver_iterations)
+        } else {
+            (false, 4, 4, 0.1, 8)
         }
     };
 
     'physics: {
         // Borrow scope — tüm ECS borrow'ları burada yaşar
-        let colliders = match world.borrow::<Collider>() {
-            Ok(c) => c,
-            Err(e) => { eprintln!("[Physics ERROR] Collider borrow hatası: {:?}", e); break 'physics; }
-        };
-        let rigidbodies = match world.borrow::<RigidBody>() {
-            Ok(r) => r,
-            Err(e) => { eprintln!("[Physics ERROR] RigidBody borrow hatası: {:?}", e); break 'physics; }
-        };
-        let joint_world = match world.get_resource::<crate::constraints::JointWorld>() {
-            Ok(jw) => jw,
-            Err(e) => { eprintln!("[Physics WARN] JointWorld aliasing: {:?}", e); None }
-        };
+        let colliders = world.borrow::<Collider>();
+        let rigidbodies = world.borrow::<RigidBody>();
+        let joint_world = world.get_resource::<crate::constraints::JointWorld>();
 
         let vehicle_entities: std::collections::HashSet<u32> = {
-            match world.borrow::<VehicleController>() {
-                Ok(v) => v.entities().collect(),
-                _ => std::collections::HashSet::new(),
-            }
+            world.borrow::<VehicleController>().entities().collect()
         };
 
         // 1. Broad-phase, 2. Narrow-phase & 3. Island generation — SHARED BORROW
         let (_detection_results, islands) = {
-            let transforms = world.borrow::<Transform>().expect("ECS Aliasing Error");
-            let velocities = world.borrow::<Velocity>().expect("ECS Aliasing Error");
+            let transforms = world.borrow::<Transform>();
+            let velocities = world.borrow::<Velocity>();
 
             let pairs = broad_phase(&transforms, &colliders, &rigidbodies, &velocities, dt, parallel_physics);
             
@@ -86,16 +71,13 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
         };
 
         // 4. Solver — MUTABLE BORROW
-        let mut transforms = world.borrow_mut::<Transform>().expect("ECS Aliasing Error");
-        let mut velocities = world.borrow_mut::<Velocity>().expect("ECS Aliasing Error");
+        let mut transforms = world.borrow_mut::<Transform>();
+        let mut velocities = world.borrow_mut::<Velocity>();
 
         let mut islands = islands; // Move islands to outer scope
 
         // 4. Çözücü — warm-start + SI + position projection (paralel island başına)
-        let solver_state = match world.get_resource_mut::<PhysicsSolverState>() {
-            Ok(state) => state,
-            Err(e) => { eprintln!("[Physics ERROR] PhysicsSolverState aliasing: {:?}", e); None }
-        };
+        let solver_state = world.get_resource_mut::<PhysicsSolverState>();
         if let Some(mut state) = solver_state {
             solve_islands(
                 &mut islands,
@@ -160,11 +142,10 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
     // Uyuyan nesneleri uyandır
     // (RigidBody mut borrow çakışmasını önlemek için borrow scope dışında uygulanır)
     if !entities_to_wake.is_empty() {
-        if let Ok(mut rbs) = world.borrow_mut::<RigidBody>() {
-            for e in entities_to_wake {
-                if let Some(rb) = rbs.get_mut(e) {
-                    rb.wake_up();
-                }
+        let mut rbs = world.borrow_mut::<RigidBody>();
+        for e in entities_to_wake {
+            if let Some(rb) = rbs.get_mut(e) {
+                rb.wake_up();
             }
         }
     }

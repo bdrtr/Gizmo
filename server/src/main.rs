@@ -13,7 +13,7 @@ pub fn server_network_system(world: &mut World, dt: f32) {
 
     let mut messages_to_broadcast = Vec::new();
 
-    if let Some(mut server_res) = world.get_resource_mut::<NetworkServer>().expect("ECS Aliasing Error") {
+    if let Some(mut server_res) = world.get_resource_mut::<NetworkServer>() {
         server_res.update(dt_f64);
 
         while let Some(event) = server_res.server.get_event() {
@@ -106,7 +106,7 @@ fn main() {
     loop {
         let start = std::time::Instant::now();
 
-        let mut time = world.get_resource_mut::<Time>().expect("ECS Aliasing Error").unwrap();
+        let mut time = world.get_resource_mut::<Time>().unwrap();
         time.update(target_dt as f32);
         drop(time);
 

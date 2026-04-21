@@ -321,7 +321,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Cradl
         let mut joint_front = Joint::distance(beam_entity_front.id(), ball.id(), anchor_a_front, anchor_b, dist_len);
         joint_front.damping = 0.0; 
         
-        let mut jw = world.get_resource_mut::<JointWorld>().expect("ECS Aliasing Error").unwrap();
+        let mut jw = world.get_resource_mut::<JointWorld>().expect("ECS Aliasing Error");
         jw.add(joint_back);
         jw.add(joint_front);
     }
@@ -354,7 +354,7 @@ fn dir_to_quat(dir: Vec3) -> Quat {
 }
 
 fn update_ropes(world: &mut World, game: &CradleGame) {
-    if let Ok(mut transforms) = world.borrow_mut::<Transform>() {
+    let mut transforms = world.borrow_mut::<Transform>(); {
         let mut updates = Vec::new();
         
         for rope in &game.ropes {
@@ -388,11 +388,7 @@ fn update_ropes(world: &mut World, game: &CradleGame) {
 fn trigger_cradle(world: &mut World, game: &mut CradleGame) {
     println!("Sarkaç bırakıldı!");
 
-    if let (Ok(mut transforms), Ok(mut vels), Ok(mut rbs)) = (
-        world.borrow_mut::<Transform>(),
-        world.borrow_mut::<Velocity>(),
-        world.borrow_mut::<RigidBody>()
-    ) {
+    let mut transforms = world.borrow_mut::<Transform>(); let mut vels = world.borrow_mut::<Velocity>(); let mut rbs = world.borrow_mut::<RigidBody>(); {
         if let Some(&first_id) = game.ball_ids.first() {
             if let Some(t) = transforms.get_mut(first_id) {
                 let gap = 0.0;
@@ -426,11 +422,7 @@ fn reset_cradle(world: &mut World, game: &mut CradleGame) {
     let diameter = (BALL_RADIUS * 2.0) + gap;
     let start_x = -((BALL_COUNT as f32 - 1.0) / 2.0) * diameter;
 
-    if let (Ok(mut transforms), Ok(mut vels), Ok(mut rbs)) = (
-        world.borrow_mut::<Transform>(),
-        world.borrow_mut::<Velocity>(),
-        world.borrow_mut::<RigidBody>()
-    ) {
+    let mut transforms = world.borrow_mut::<Transform>(); let mut vels = world.borrow_mut::<Velocity>(); let mut rbs = world.borrow_mut::<RigidBody>(); {
         for (i, &ball_id) in game.ball_ids.iter().enumerate() {
             let x = start_x + (i as f32) * diameter;
             
@@ -484,14 +476,14 @@ fn update_camera(
     if input.is_key_pressed(KeyCode::KeyQ as u32) { state.cam_pos.y -= speed; }
     if input.is_key_pressed(KeyCode::KeyE as u32) { state.cam_pos.y += speed; }
  
-    if let Ok(mut trans) = world.borrow_mut::<Transform>() {
+    let mut trans = world.borrow_mut::<Transform>(); {
         if let Some(t) = trans.get_mut(state.cam_id) {
             t.position = state.cam_pos;
             t.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
             t.update_local_matrix();
         }
     }
-    if let Ok(mut cams) = world.borrow_mut::<Camera>() {
+    let mut cams = world.borrow_mut::<Camera>(); {
         if let Some(c) = cams.get_mut(state.cam_id) {
             c.yaw = state.cam_yaw;
             c.pitch = state.cam_pitch;

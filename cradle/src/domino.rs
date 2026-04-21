@@ -248,14 +248,14 @@ fn update_camera(
     if input.is_key_pressed(KeyCode::KeyQ as u32) { state.cam_pos.y -= speed; }
     if input.is_key_pressed(KeyCode::KeyE as u32) { state.cam_pos.y += speed; }
  
-    if let Ok(mut trans) = world.borrow_mut::<Transform>() {
+    let mut trans = world.borrow_mut::<Transform>(); {
         if let Some(t) = trans.get_mut(state.cam_id) {
             t.position = state.cam_pos;
             t.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
             t.update_local_matrix();
         }
     }
-    if let Ok(mut cams) = world.borrow_mut::<Camera>() {
+    let mut cams = world.borrow_mut::<Camera>(); {
         if let Some(c) = cams.get_mut(state.cam_id) {
             c.yaw = state.cam_yaw;
             c.pitch = state.cam_pitch;

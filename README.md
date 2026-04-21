@@ -43,7 +43,12 @@ Sahneyi gerçek zamanlı denetlemek için oyuna gömülü (In-Game) çalışan U
 ## 📊 Endüstri Standartları Teknik Değerlendirmesi
 Gizmo Engine'in güncel mimarisi, modern AAA teknolojilerine (Unreal, Unity, Bevy/Flecs) kıyasla değerlendirildiğinde motorun gücü ve geliştirilme yol haritası (roadmap) şu şekildedir:
 
-* **ECS ve Bellek Mimarisi (4.5 / 5):** Archetype (Sütun/Columnar) tabanlı veri yapısıyla en güncel endüstri standartlarındadır. Yüksek performanslı Global Allocator (`mimalloc`) kullanımıyla Cache-Locality zirvededir. Multithread otomatik query dağıtımı için iş havuzu (work-stealing) otonomisine geçiş hedeflenmektedir.
+* **ECS ve Bellek Mimarisi (4.5 / 5):** Archetype (Sütun/Columnar) tabanlı veri yapısıyla en güncel endüstri standartlarındadır. Yüksek performanslı Global Allocator (`mimalloc`) kullanımıyla Cache-Locality zirvededir. Lock-free (RwLock) veri okuma/yazma erişimleri kusursuzdur.
+  * **TODO (AAA Seviyesi Hedefler):**
+    * **Command Buffer:** Multithread sistemler çalışırken veri kilitlenmesi yaşamadan (Deadlock-free) Entity ekleme/silme yapılabilmesi için ertelenmiş komut kuyruğu.
+    * **System Dependency Graph:** Bileşen okuma/yazma gereksinimlerine göre sistemleri (`System`) otomatik paralelleştiren Yönlü Döngüsüz Grafik (DAG) zamanlayıcısı.
+    * **Change Detection (Tick):** Sadece o karede değişmiş (mutasyon geçirmiş) komponentleri sorgulayabilme (`Changed<T>`) zekası.
+    * **İlişkisel Archetype Hiyerarşisi:** Archetype dizilimlerinin Parent-Child hafıza kaydırmalarına entegre edilmesi.
 * **Fizik Motoru (4.0 / 5):** GJK/EPA dar fazı (narrow-phase), Broad-phase algoritması ve Gauss-Seidel Sıralı İmpuls (Sequential Impulse) mekaniği doğrudan PhysX standardıdır. İlerleyen safhalarda, Kumaş (Soft-Body) fizikleri eklenecektir.
 * **Grafik ve Render (3.5 / 5):** Vulkan (`wgpu`) tabanlı yapı; PBR render, Compute Shader parçacıkları (Particles) ve Dinamik gölgeler (CSM) ile başarılıdır. İleri seviye standardizasyon için Mesh Shader tabanlı GPU-Culling ve Temporal uzamsal filtrelemeler hedeflenmektedir.
 * **Editör ve Tooling (3.5 / 5):** `egui` tabanlı anlık editör, docking ve sahne yönetim özelliği esnek bir zemin sunar. Tam teşekküllü bir AAA stüdyo deneyimi için Görsel Profilci (Flamegraphs & GPU Profiler) ve Geri Al (Undo Command Pattern) hedefler arasındadır.

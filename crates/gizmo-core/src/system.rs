@@ -20,7 +20,7 @@ where
 // DEPENDENCY INJECTION SİSTEMİ
 // ==============================================================
 
-use std::cell::{Ref, RefMut};
+use crate::world::{ResourceReadGuard, ResourceWriteGuard};
 
 /// Bir fonksiyonun sistem parametresi olarak alabileceği argümanları tanımlar.
 pub trait SystemParam {
@@ -28,9 +28,8 @@ pub trait SystemParam {
     fn fetch<'w>(world: &'w World, dt: f32) -> Option<Self::Item<'w>>;
 }
 
-/// Salt okunur (Immutable) Resource enjeksiyonu
 pub struct Res<'w, T: 'static> {
-    value: Ref<'w, T>,
+    value: ResourceReadGuard<'w, T>,
 }
 
 impl<'w, T: 'static> std::ops::Deref for Res<'w, T> {
@@ -43,14 +42,13 @@ impl<'w, T: 'static> std::ops::Deref for Res<'w, T> {
 impl<T: 'static> SystemParam for Res<'static, T> {
     type Item<'w> = Res<'w, T>;
     fn fetch<'w>(world: &'w World, _dt: f32) -> Option<Self::Item<'w>> {
-        let value = world.get_resource::<T>().expect("ECS Aliasing Error: Resource borrow conflict")?;
+        let value = world.get_resource::<T>()?;
         Some(Res { value })
     }
 }
 
-/// Yazılabilir (Mutable) Resource enjeksiyonu
 pub struct ResMut<'w, T: 'static> {
-    value: RefMut<'w, T>,
+    value: ResourceWriteGuard<'w, T>,
 }
 
 impl<'w, T: 'static> std::ops::Deref for ResMut<'w, T> {
@@ -69,7 +67,7 @@ impl<'w, T: 'static> std::ops::DerefMut for ResMut<'w, T> {
 impl<T: 'static> SystemParam for ResMut<'static, T> {
     type Item<'w> = ResMut<'w, T>;
     fn fetch<'w>(world: &'w World, _dt: f32) -> Option<Self::Item<'w>> {
-        let value = world.get_resource_mut::<T>().expect("ECS Aliasing Error: Resource mutable borrow conflict")?;
+        let value = world.get_resource_mut::<T>()?;
         Some(ResMut { value })
     }
 }
@@ -356,6 +354,12 @@ impl Schedule {
         }
         for system in &mut self.systems {
             system.run(world, dt);
+
+            // Command Queue Flush - Run deferred operations
+            let queue_opt = world.get_resource::<crate::commands::CommandQueue>().map(|q| (*q).clone());
+            if let Some(queue) = queue_opt {
+                queue.apply(world);
+            }
         }
     }
 }
@@ -471,7 +475,7 @@ mod tests {
         schedule.add_system_boxed(sys);
         schedule.run(&mut world, 0.0);
 
-        assert_eq!(*world.get_resource::<i32>().unwrap().unwrap(), 42);
+        assert_eq!(*world.get_resource::<i32>().unwrap(), 42);
     }
 
     #[test]
@@ -488,7 +492,7 @@ mod tests {
         schedule.add_system_boxed(sys);
         schedule.run(&mut world, 0.0);
 
-        assert_eq!(*world.get_resource::<u32>().unwrap().unwrap(), 15);
+        assert_eq!(*world.get_resource::<u32>().unwrap(), 15);
     }
 
     #[test]
@@ -505,8 +509,8 @@ mod tests {
         schedule.add_system_boxed(sys);
         schedule.run(&mut world, 0.016);
 
-        let val = *world.get_resource::<f64>().unwrap().unwrap();
-        assert!((0.016 - val).abs() < 0.001);
+        let val = *world.get_resource::<f64>().unwrap();
+        assert!((0.016_f64 - val).abs() < 0.001);
     }
 
     #[test]
@@ -525,7 +529,7 @@ mod tests {
         schedule.add_system_boxed(sys);
         schedule.run(&mut world, 1.5);
 
-        let out = world.get_resource::<Vec<String>>().unwrap().unwrap();
+        let out = world.get_resource::<Vec<String>>().unwrap();
         assert_eq!(out[0], "100-hello-1.50");
     }
 
@@ -538,7 +542,7 @@ mod tests {
 
         let mut schedule = Schedule::new();
         schedule.add_system(|world: &mut World, _dt: f32| {
-            if let Ok(Some(mut val)) = world.get_resource_mut::<u32>() {
+            if let Some(mut val) = world.get_resource_mut::<u32>() {
                 *val += 1;
             }
         });
@@ -546,7 +550,7 @@ mod tests {
         schedule.run(&mut world, 0.0);
         schedule.run(&mut world, 0.0);
 
-        assert_eq!(*world.get_resource::<u32>().unwrap().unwrap(), 2);
+        assert_eq!(*world.get_resource::<u32>().unwrap(), 2);
     }
 
     // ──── Eşleşmeyen label (warning, panic değil) ────

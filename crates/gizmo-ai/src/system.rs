@@ -20,14 +20,14 @@ use gizmo_physics::components::{Transform, Velocity};
 /// Bu nedenle AI sistemi fizik adım döngüsü **içinde** çağrılmalıdır (main.rs),
 /// dışardan paralel çağrılmamalıdır.
 pub fn ai_navigation_system(world: &World, dt: f32) {
-    let grid = match world.get_resource::<NavGrid>().expect("ECS Aliasing Error") {
+    let grid = match world.get_resource::<NavGrid>() {
         Some(g) => g,
         None => return,
     };
 
-    let mut agents = world.borrow_mut::<NavAgent>().expect("ECS Aliasing Error");
-    let transforms = world.borrow::<Transform>().expect("ECS Aliasing Error");
-    let mut velocities = world.borrow_mut::<Velocity>().expect("ECS Aliasing Error");
+    let mut agents = world.borrow_mut::<NavAgent>();
+    let transforms = world.borrow::<Transform>();
+    let mut velocities = world.borrow_mut::<Velocity>();
 
     let mut agent_entities: Vec<u32> = Vec::with_capacity(agents.len());
     for (id, _) in agents.iter() {

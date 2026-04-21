@@ -71,10 +71,10 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 
     // Entity listesini oluştur
     egui::ScrollArea::vertical().show(ui, |ui| {
-        let names = world.borrow::<EntityName>().expect("ECS Aliasing Error");
-        let parents = world.borrow::<Parent>().expect("ECS Aliasing Error");
-        let children_comp = world.borrow::<Children>().expect("ECS Aliasing Error");
-        let is_hidden_comp = world.borrow::<gizmo_core::component::IsHidden>().expect("ECS Aliasing Error");
+        let names = world.borrow::<EntityName>();
+        let parents = world.borrow::<Parent>();
+        let children_comp = world.borrow::<Children>();
+        let is_hidden_comp = world.borrow::<gizmo_core::component::IsHidden>();
 
         let filter_lower = state.hierarchy_filter.to_lowercase(); // Bir kez hesaplanır
 

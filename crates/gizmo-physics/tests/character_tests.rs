@@ -30,14 +30,12 @@ fn test_character_gravity_and_grounding() {
     physics_character_system(&world, dt);
 
     let _t = world
-        .borrow::<Transform>().expect("ECS Aliasing Error")
-        .unwrap()
+        .borrow::<Transform>()
         .get(char_entity.id())
         .unwrap()
         .clone();
     let cc = world
-        .borrow::<CharacterController>().expect("ECS Aliasing Error")
-        .unwrap()
+        .borrow::<CharacterController>()
         .get(char_entity.id())
         .unwrap()
         .clone();
@@ -55,14 +53,12 @@ fn test_character_gravity_and_grounding() {
     }
 
     let t2 = world
-        .borrow::<Transform>().expect("ECS Aliasing Error")
-        .unwrap()
+        .borrow::<Transform>()
         .get(char_entity.id())
         .unwrap()
         .clone();
     let cc2 = world
-        .borrow::<CharacterController>().expect("ECS Aliasing Error")
-        .unwrap()
+        .borrow::<CharacterController>()
         .get(char_entity.id())
         .unwrap()
         .clone();
@@ -106,8 +102,7 @@ fn test_character_step_climbing() {
     physics_character_system(&world, 0.1);
 
     let t = world
-        .borrow::<Transform>().expect("ECS Aliasing Error")
-        .unwrap()
+        .borrow::<Transform>()
         .get(char_entity.id())
         .unwrap()
         .clone();
@@ -122,6 +117,7 @@ fn test_character_step_climbing() {
 #[test]
 fn test_character_slope_sliding() {
     let mut world = setup_world();
+    world.insert_resource(gizmo_physics::components::PhysicsConfig { ground_y: -100.0, ..Default::default() });
 
     // Zemin olarak devasa bir Küre kullanalım (AABB'ler rotation almaz, bu yüzden eğim oluşturmak için küre şart).
     // Küre yarıçapı 10.0. Merkezi orijinde (0,0,0).
@@ -153,14 +149,12 @@ fn test_character_slope_sliding() {
     }
 
     let cc_out = world
-        .borrow::<CharacterController>().expect("ECS Aliasing Error")
-        .unwrap()
+        .borrow::<CharacterController>()
         .get(char_entity.id())
         .unwrap()
         .clone();
     let t_out = world
-        .borrow::<Transform>().expect("ECS Aliasing Error")
-        .unwrap()
+        .borrow::<Transform>()
         .get(char_entity.id())
         .unwrap()
         .clone();
@@ -168,7 +162,7 @@ fn test_character_slope_sliding() {
     // Eğim aşıldığı için karakter dengesizleşmeli (is_grounded false olmalı)
     assert!(
         !cc_out.is_grounded,
-        "Eğimi aştığı için yere bağlı sayılamaz!"
+        "Eğimi aştığı için yere bağlı sayılamaz! Normal: {:?}, vertical_velocity: {}", cc_out.ground_normal, cc_out.vertical_velocity
     );
     // Yerçekimi ve slope sliding yüzünden daha da sağa/aşağı kaymış olmalı (X > 9.959, Y < 5.75)
     assert!(

@@ -1,6 +1,6 @@
 use std::any::Any;
 
-pub trait Component: 'static + Any {}
+pub trait Component: 'static + Any + Send + Sync {}
 
 #[macro_export]
 macro_rules! impl_component {

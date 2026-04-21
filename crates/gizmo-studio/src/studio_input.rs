@@ -50,7 +50,7 @@ fn perform_rubber_band_selection(
         state.selection.entities.clear();
     }
 
-    if let Ok(transforms) = world.borrow::<Transform>() {
+    let transforms = world.borrow::<Transform>(); {
         let is_hidden = world.borrow::<gizmo::core::component::IsHidden>();
 
         for (id, t) in transforms.iter() {
@@ -58,10 +58,9 @@ fn perform_rubber_band_selection(
                 continue;
             }
 
-            if let Ok(hidden) = &is_hidden {
-                if hidden.contains(id) {
-                    continue;
-                }
+            let hidden = &is_hidden;
+            if hidden.contains(id) {
+                continue;
             }
 
             let clip_pos = vp_mat * gizmo::math::Vec4::new(t.position.x, t.position.y, t.position.z, 1.0);
@@ -91,9 +90,7 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
     let mut closest_t = std::f32::MAX;
     let mut hit_entity = None;
 
-    if let (Ok(colliders), Ok(transforms)) =
-        (world.borrow::<Collider>(), world.borrow::<Transform>())
-    {
+    let colliders = world.borrow::<Collider>(); let transforms = world.borrow::<Transform>(); {
         let is_hidden = world.borrow::<gizmo::core::component::IsHidden>();
 
         for (id, col) in colliders.iter() {
@@ -103,10 +100,9 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
             }
             // Gizli component'i olan objeleri tıklanabilir yapma.
             // Seçili objemiz bittiğinde Gizmo okları IsHidden alır, o yüzden tıklanmazlar.
-            if let Ok(hidden) = &is_hidden {
-                if hidden.contains(id) {
-                    continue;
-                }
+            let hidden = &is_hidden;
+            if hidden.contains(id) {
+                continue;
             }
 
             if let Some(t) = transforms.get(id) {
@@ -151,14 +147,14 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
     let mut selected_col = None;
 
     if let Some(&selected) = state.selection.entities.iter().next() {
-        if let Ok(transforms) = world.borrow::<Transform>() {
+        let transforms = world.borrow::<Transform>(); {
             if let Some(t) = transforms.get(selected.id()) {
                 any_selected = true;
                 selected_pos = t.position;
                 selected_rot = t.rotation;
                 selected_scale = t.scale;
 
-                if let Ok(colls) = world.borrow::<Collider>() {
+                let colls = world.borrow::<Collider>(); {
                     if let Some(c) = colls.get(selected.id()) {
                         selected_col = Some(c.clone());
                     }
@@ -169,7 +165,7 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
 
     if any_selected {
         // Obje seçiliyse Highlight Box pozisyonunu ve boyutunu güncelle
-        if let Ok(mut trans) = world.borrow_mut::<Transform>() {
+        { let mut trans = world.borrow_mut::<Transform>();
             if let Some(hb) = trans.get_mut(state.selection.highlight_box.unwrap_or(gizmo::prelude::Entity::new(0,0)).id()) {
                 hb.position = selected_pos;
                 hb.rotation = selected_rot;
@@ -203,10 +199,7 @@ pub fn build_ray(
     aspect: f32,
     _wh: f32,
 ) -> Option<Ray> {
-    if let (Ok(transforms), Ok(cameras)) = (
-        world.borrow::<Transform>(),
-        world.borrow::<gizmo::renderer::components::Camera>(),
-    ) {
+    let transforms = world.borrow::<Transform>(); let cameras = world.borrow::<gizmo::renderer::components::Camera>(); {
         if let (Some(cam_t), Some(cam)) = (transforms.get(player_id), cameras.get(player_id)) {
             let view = cam.get_view(cam_t.position);
             let proj = cam.get_projection(aspect);

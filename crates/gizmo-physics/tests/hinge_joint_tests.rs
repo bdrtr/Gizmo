@@ -65,7 +65,7 @@ fn test_hinge_free_rotation() {
         gizmo_physics::system::physics_collision_system(&mut world, DT);
     }
 
-    let v_b = world.borrow::<Velocity>().expect("ECS Aliasing Error").unwrap().get(b).unwrap().clone();
+    let v_b = world.borrow::<Velocity>().get(b).unwrap().clone();
 
     // Y boyunca açısal hız Gauss-Seidel iterasyonlarından sonra kısmen korunmaal
     // (tamamen sıfırlanmamalı — hinge axis boyunca serbest dönüş var)
@@ -121,7 +121,7 @@ fn test_hinge_limit_min_clamp() {
     }
 
     // B'nin eklem angüler hızı negatif Y'de frenlemiş olmalı
-    let v_b = world.borrow::<Velocity>().expect("ECS Aliasing Error").unwrap().get(b).unwrap().clone();
+    let v_b = world.borrow::<Velocity>().get(b).unwrap().clone();
     assert!(
         v_b.angular.y > -8.0,
         "Hinge min_angle kısıtı uygulanmadı, B hâlâ -Y yönünde dönüyor: {}",
@@ -156,7 +156,7 @@ fn test_hinge_limit_max_clamp() {
         gizmo_physics::physics_movement_system(&world, DT);
     }
 
-    let v_b = world.borrow::<Velocity>().expect("ECS Aliasing Error").unwrap().get(b).unwrap().clone();
+    let v_b = world.borrow::<Velocity>().get(b).unwrap().clone();
     assert!(
         v_b.angular.y < 8.0,
         "Hinge max_angle kısıtı uygulanmadı, B hâlâ +Y yönünde dönüyor: {}",
@@ -204,7 +204,7 @@ fn test_hinge_axis_worldspace_after_rotation() {
         gizmo_physics::physics_movement_system(&world, DT);
     }
 
-    let v_b = world.borrow::<Velocity>().expect("ECS Aliasing Error").unwrap().get(b_id).unwrap().clone();
+    let v_b = world.borrow::<Velocity>().get(b_id).unwrap().clone();
 
     // NaN / inf kontrolü — world-space dönüşümü hatalı olursa NaN üretilir
     assert!(
@@ -247,7 +247,7 @@ fn test_hinge_perpendicular_axes_no_nan() {
         gizmo_physics::system::physics_collision_system(&mut world, DT);
     }
 
-    let v_b = world.borrow::<Velocity>().expect("ECS Aliasing Error").unwrap().get(b).unwrap().clone();
+    let v_b = world.borrow::<Velocity>().get(b).unwrap().clone();
 
     // NaN / inf kontrolü — solver hata durumunda bunları üretir
     assert!(

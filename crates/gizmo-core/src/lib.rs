@@ -1,5 +1,6 @@
 // ──── Modüller (alfabetik) ────
 pub mod archetype;
+pub mod commands;
 pub mod component;
 pub mod entity;
 pub mod event;
@@ -15,6 +16,7 @@ pub mod world;
 
 // ──── Explicit re-exports ────
 pub use archetype::{Archetype, EntityLocation, ComponentInfo};
+pub use commands::{Commands, EntityCommands, CommandQueue};
 pub use component::{Component, EntityName, IsHidden, PrefabRequest};
 pub use storage::{StorageView, StorageViewMut};
 pub use entity::Entity;
@@ -31,7 +33,7 @@ pub use world::World;
 /// Tek bir `use gizmo_core::prelude::*;` ile tüm temel tiplere erişim.
 pub mod prelude {
     pub use super::{
-        Component, Entity, EntityName, Events, Input, ActionMap, InputBinding,
+        Component, Commands, CommandQueue, Entity, EntityName, Events, Input, ActionMap, InputBinding,
         IntoSystem, IsHidden, PrefabRequest, Query, Res, ResMut, Schedule, StorageView, StorageViewMut, System,
         SystemParam, Time, WindowInfo, World,
     };

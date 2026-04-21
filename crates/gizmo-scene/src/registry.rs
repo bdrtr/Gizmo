@@ -30,7 +30,7 @@ impl SceneRegistry {
         self.serializers.insert(
             name_ser,
             Box::new(move |world, entity_id| {
-                let storage = world.borrow::<T>().expect("ECS Aliasing Error");
+                let storage = world.borrow::<T>();
                 if let Some(comp) = storage.get(entity_id) {
                     // RON String'e dönüştür ve oradan AST'ye (Value) Parse et
                     match ron::ser::to_string(comp) {

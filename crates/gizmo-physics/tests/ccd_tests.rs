@@ -37,8 +37,7 @@ fn test_tunneling_without_ccd() {
     gizmo_physics::physics_movement_system(&world, 0.1);
 
     let t = world
-        .borrow::<Transform>().expect("ECS Aliasing Error")
-        .unwrap()
+        .borrow::<Transform>()
         .get(bullet.id())
         .unwrap()
         .clone();
@@ -80,14 +79,12 @@ fn test_tunneling_prevention_with_ccd() {
     gizmo_physics::physics_movement_system(&world, 0.1);
 
     let t = world
-        .borrow::<Transform>().expect("ECS Aliasing Error")
-        .unwrap()
+        .borrow::<Transform>()
         .get(bullet.id())
         .unwrap()
         .clone();
     let v = world
-        .borrow::<Velocity>().expect("ECS Aliasing Error")
-        .unwrap()
+        .borrow::<Velocity>()
         .get(bullet.id())
         .unwrap()
         .clone();

@@ -15,10 +15,9 @@ pub fn handle_input_and_scene_view(world: &mut World, editor_state: &mut EditorS
                 ww / wh
             };
 
-            if let (Ok(transforms), Ok(cameras)) = (
-                world.borrow::<Transform>(),
-                world.borrow::<gizmo::renderer::components::Camera>(),
-            ) {
+            {
+                let transforms = world.borrow::<Transform>();
+                let cameras = world.borrow::<gizmo::renderer::components::Camera>();
                 if let (Some(t), Some(cam)) = (
                     transforms.get(state.editor_camera),
                     cameras.get(state.editor_camera),
@@ -68,7 +67,7 @@ pub fn handle_input_and_scene_view(world: &mut World, editor_state: &mut EditorS
         // Yeni debug istekleri spawnla
         if !editor_state.debug_draw_requests.is_empty() {
             let mut pending_debug_assets = None;
-            if let Ok(Some(debug_assets)) = world.get_resource::<DebugAssets>() {
+            if let Some(debug_assets) = world.get_resource::<DebugAssets>() {
                 pending_debug_assets =
                     Some((debug_assets.cube.clone(), debug_assets.white_tex.clone()));
             }
@@ -110,9 +109,7 @@ pub fn handle_input_and_scene_view(world: &mut World, editor_state: &mut EditorS
                 {
                     // Raycast yap (Gizmo'ları yoksayarak)
                     let mut closest_t = std::f32::MAX;
-                    if let (Ok(colliders), Ok(transforms)) =
-                        (world.borrow::<Collider>(), world.borrow::<Transform>())
-                    {
+                    let colliders = world.borrow::<Collider>(); let transforms = world.borrow::<Transform>(); {
                         for (id, col) in colliders.iter() {
                             if id == state.editor_camera || Some(gizmo::prelude::Entity::new(id, 0)) == editor_state.selection.highlight_box {
                                 continue;

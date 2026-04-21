@@ -16,7 +16,7 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
         orbit_delta = editor_state.camera.orbit_delta;
         scroll_delta = editor_state.camera.scroll_delta;
 
-        let win_info = world.get_resource::<WindowInfo>().unwrap().map_or(WindowInfo::default(), |w| *w);
+        let win_info = world.get_resource::<WindowInfo>().map(|w| w.clone()).unwrap_or_default();
         crate::systems::input::handle_input_and_scene_view(world, &mut editor_state, state, dt, input, &win_info);
         crate::systems::build::handle_build_requests(&mut editor_state);
         crate::systems::shortcuts::handle_editor_shortcuts(world, &mut editor_state, state, input);

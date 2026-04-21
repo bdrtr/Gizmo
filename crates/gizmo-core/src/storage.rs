@@ -1,4 +1,4 @@
-use std::cell::{Ref, RefMut};
+use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 use std::marker::PhantomData;
 use crate::archetype::{Column, EntityLocation};
 use crate::component::Component;
@@ -7,7 +7,7 @@ use crate::component::Component;
 /// SparseSet ile aynı API'yi (get, iter) sunarak geriye uyumluluk sağlar.
 pub struct StorageView<'w, T: Component> {
     /// Her bir archetype için (entities, column) ikilisi
-    pub(crate) archetypes: Vec<(&'w [u32], Ref<'w, Column>)>,
+    pub(crate) archetypes: Vec<(&'w [u32], RwLockReadGuard<'w, Column>)>,
     /// Archetype ID -> archetypes içindeki indeksi
     pub(crate) arch_id_to_idx: Vec<Option<usize>>,
     pub(crate) entity_locations: &'w [EntityLocation],
@@ -88,7 +88,7 @@ impl<'w, T: Component> IntoIterator for StorageView<'w, T> {
 
 pub struct StorageViewMut<'w, T: Component> {
     /// Her bir archetype için (entities, column) ikilisi
-    pub(crate) archetypes: Vec<(&'w [u32], RefMut<'w, Column>)>,
+    pub(crate) archetypes: Vec<(&'w [u32], RwLockWriteGuard<'w, Column>)>,
     /// Archetype ID -> archetypes içindeki indeksi
     pub(crate) arch_id_to_idx: Vec<Option<usize>>,
     pub(crate) entity_locations: &'w [EntityLocation],
