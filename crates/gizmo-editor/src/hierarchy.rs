@@ -80,6 +80,7 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 
         // ROOT entity'leri filtrele (Iter alive bazından cachelenir) O(N) tek geçiş
         let root_entities: Vec<gizmo_core::entity::Entity> = world.iter_alive_entities()
+            .into_iter()
             .filter(|e| !parents.contains(e.id()))
             .collect();
 

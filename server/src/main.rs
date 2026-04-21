@@ -8,7 +8,7 @@ use gizmo_net::server::NetworkServer;
 use gizmo_physics::components::Transform;
 use std::collections::HashMap;
 
-pub fn server_network_system(world: &mut World, dt: f32) {
+pub fn server_network_system(world: &World, dt: f32) {
     let dt_f64 = dt as f64;
 
     let mut messages_to_broadcast = Vec::new();
@@ -55,7 +55,7 @@ pub fn server_network_system(world: &mut World, dt: f32) {
         }
 
         let mut players_map = HashMap::new();
-        if let Some(mut query) = world.query::<&mut Transform>() {
+        if let Some(mut query) = world.query::<gizmo_core::prelude::Mut<Transform>>() {
             for (id, t) in query.iter_mut() {
                 let t_ref = *t;
                 players_map.insert(

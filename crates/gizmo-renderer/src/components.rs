@@ -125,6 +125,7 @@ pub struct AnimationPlayer {
     pub loop_anim: bool,
     pub animations: Arc<Vec<crate::animation::AnimationClip>>,
 }
+#[derive(Clone)]
 pub struct MeshRenderer;
 
 impl MeshRenderer {
@@ -381,12 +382,14 @@ impl ParticleEmitter {
     }
 }
 
+#[derive(Clone)]
 pub struct EditorRenderTarget {
     pub view: std::sync::Arc<wgpu::TextureView>,
     pub width: u32,
     pub height: u32,
 }
 
+#[derive(Clone)]
 pub struct GameRenderTarget {
     pub view: std::sync::Arc<wgpu::TextureView>,
     pub width: u32,

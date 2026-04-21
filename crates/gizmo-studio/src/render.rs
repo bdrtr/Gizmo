@@ -80,7 +80,7 @@ pub fn render_studio(
     }
 
     if clear_req {
-        let ents = world.iter_alive_entities().collect::<Vec<_>>();
+        let ents = world.iter_alive_entities();
         let mut protected_ids = std::collections::HashSet::new();
         protected_ids.insert(state.editor_camera);
         protected_ids.insert(highlight_box_id);
@@ -125,7 +125,7 @@ pub fn render_studio(
     }
 
     if let Some(path) = load_req {
-        let ents = world.iter_alive_entities().collect::<Vec<_>>();
+        let ents = world.iter_alive_entities();
 
         let mut protected_ids = std::collections::HashSet::new();
         protected_ids.insert(state.editor_camera);

@@ -22,7 +22,7 @@ pub use storage::{StorageView, StorageViewMut};
 pub use entity::Entity;
 pub use event::Events;
 pub use input::{ActionMap, Input, InputBinding};
-pub use query::{FetchComponent, Query, WorldQuery};
+pub use query::{FetchComponent, Query, WorldQuery, Mut, Changed};
 pub use registry::ComponentRegistry;
 pub use system::{IntoSystem, Res, ResMut, Schedule, System, SystemParam};
 pub use time::Time;
@@ -35,7 +35,7 @@ pub mod prelude {
     pub use super::{
         Component, Commands, CommandQueue, Entity, EntityName, Events, Input, ActionMap, InputBinding,
         IntoSystem, IsHidden, PrefabRequest, Query, Res, ResMut, Schedule, StorageView, StorageViewMut, System,
-        SystemParam, Time, WindowInfo, World,
+        SystemParam, Time, WindowInfo, World, Mut, Changed,
     };
     pub use super::input::mouse;
 }

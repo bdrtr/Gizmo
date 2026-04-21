@@ -119,8 +119,8 @@ impl<'a> Commands<'a> {
     /// Birincil (primary) 3D perspektif kamera spawn eder.
     /// `yaw = -π/2` (−X'e bakıyor), `pitch = 0` (düz).
     pub fn spawn_camera(&mut self, pos: Vec3) -> EntityBuilder<'_, 'a> {
-        if let Some(mut cameras) = self.world.query::<&mut Camera>() {
-            for (_, c) in cameras.iter_mut() {
+        if let Some(mut cameras) = self.world.query::<gizmo_core::prelude::Mut<Camera>>() {
+            for (_, mut c) in cameras.iter_mut() {
                 c.primary = false;
             }
         }
@@ -153,8 +153,8 @@ impl<'a> Commands<'a> {
         near: f32,
         far: f32,
     ) -> EntityBuilder<'_, 'a> {
-        if let Some(mut cameras) = self.world.query::<&mut Camera>() {
-            for (_, c) in cameras.iter_mut() {
+        if let Some(mut cameras) = self.world.query::<gizmo_core::prelude::Mut<Camera>>() {
+            for (_, mut c) in cameras.iter_mut() {
                 c.primary = false;
             }
         }
@@ -668,10 +668,10 @@ impl WorldExt for World {
             }
         };
         if let Some(target_id) = target {
-            if let Some(mut transforms) = self.query::<&mut gizmo_physics::Transform>() {
-                for (tid, trans) in transforms.iter_mut() {
+            if let Some(mut transforms) = self.query::<gizmo_core::prelude::Mut<gizmo_physics::Transform>>() {
+                for (tid, mut trans) in transforms.iter_mut() {
                     if tid == target_id {
-                        f(trans);
+                        f(&mut *trans);
                         trans.update_local_matrix();
                         trans.global_matrix = trans.local_matrix();
                     }

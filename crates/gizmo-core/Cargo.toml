@@ -7,6 +7,7 @@ description.workspace = true
 
 [dependencies]
 chrono = "0.4.44"
+crossbeam-queue = "0.3.12"
 rayon = "1.11.0"
 ron = "0.8"
 serde = { version = "1.0.228", features = ["derive"] }
