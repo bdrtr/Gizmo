@@ -163,16 +163,21 @@ macro_rules! gizmo_log {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
+
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// Her test öncesi logları temizle
-    fn setup() {
+    fn setup() -> MutexGuard<'static, ()> {
+        let guard = TEST_LOCK.lock().expect("logger test lock poisoned");
         clear_logs();
         set_min_log_level(LogLevel::Info);
+        guard
     }
 
     #[test]
     fn test_log_and_read() {
-        setup();
+        let _guard = setup();
         log_message(LogLevel::Info, "test mesajı".into(), "test.rs", 1);
 
         get_logs(|logs| {
@@ -186,7 +191,7 @@ mod tests {
 
     #[test]
     fn test_drain_clears() {
-        setup();
+        let _guard = setup();
         log_message(LogLevel::Warning, "w1".into(), "test.rs", 10);
         log_message(LogLevel::Error, "e1".into(), "test.rs", 20);
 
@@ -197,7 +202,7 @@ mod tests {
 
     #[test]
     fn test_clear_logs() {
-        setup();
+        let _guard = setup();
         log_message(LogLevel::Info, "clear me".into(), "test.rs", 1);
         assert_eq!(log_count(), 1);
 
@@ -207,7 +212,7 @@ mod tests {
 
     #[test]
     fn test_ring_buffer_capacity() {
-        setup();
+        let _guard = setup();
         // Kapasiteyi aşacak kadar log yaz
         for i in 0..MAX_LOG_ENTRIES + 500 {
             log_message(LogLevel::Info, format!("cap_test_{}", i), "test.rs", i as u32);
@@ -224,7 +229,7 @@ mod tests {
 
     #[test]
     fn test_min_level_filter() {
-        setup();
+        let _guard = setup();
         set_min_log_level(LogLevel::Warning);
 
         log_message(LogLevel::Info, "filtered".into(), "test.rs", 1);

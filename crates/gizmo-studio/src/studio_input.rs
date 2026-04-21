@@ -220,8 +220,8 @@ pub fn build_ray(
             let world_dir = (far_vec - near_vec).normalize();
 
             return Some(Ray {
-                origin: near_vec,
-                direction: world_dir,
+                origin: near_vec.into(),
+                direction: world_dir.into(),
             });
         }
     }

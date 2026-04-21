@@ -8,6 +8,6 @@ pub use gizmo_math::{Aabb, Frustum, Mat4};
 
 /// Returns `true` if the world AABB of `local_aabb` after `model_matrix` intersects `frustum`.
 #[inline]
-pub fn visible_in_frustum(frustum: &Frustum, model_matrix: &Mat4, local_aabb: &Aabb) -> bool {
-    frustum.intersects_aabb(&local_aabb.transform(model_matrix))
+pub fn visible_in_frustum(frustum: &Frustum, model_matrix: &Mat4, local_aabb: Aabb) -> bool {
+    frustum.intersects_aabb(local_aabb.transform(model_matrix))
 }
