@@ -80,15 +80,14 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 
         // ROOT entity'leri filtrele (Iter alive bazından cachelenir) O(N) tek geçiş
         let root_entities: Vec<gizmo_core::entity::Entity> = world.iter_alive_entities()
-            .filter(|e| !parents.as_ref().map(|p| p.contains(e.id())).unwrap_or(false))
+            .filter(|e| !parents.contains(e.id()))
             .collect();
 
         // Root entity'leri çiz
         for entity in root_entities {
             // Editor-only (Hayali) objeleri hiyerarşide listeleme
             let is_editor_only = names
-                .as_ref()
-                .and_then(|n| n.get(entity.id()))
+                .get(entity.id())
                 .map(|e| e.0.starts_with("Editor ") || e.0 == "Highlight Box")
                 .unwrap_or(false);
 
@@ -119,14 +118,13 @@ fn draw_entity_node(
     world: &World,
     entity: gizmo_core::entity::Entity,
     state: &mut EditorState,
-    names: &Option<std::cell::Ref<'_, gizmo_core::SparseSet<EntityName>>>,
-    children_comp: &Option<std::cell::Ref<'_, gizmo_core::SparseSet<Children>>>,
-    is_hidden_comp: &Option<std::cell::Ref<'_, gizmo_core::SparseSet<gizmo_core::component::IsHidden>>>,
+    names: &gizmo_core::storage::StorageView<EntityName>,
+    children_comp: &gizmo_core::storage::StorageView<Children>,
+    is_hidden_comp: &gizmo_core::storage::StorageView<gizmo_core::component::IsHidden>,
     filter_lower: &str,
 ) {
     let entity_name = names
-        .as_ref()
-        .and_then(|n| n.get(entity.id()))
+        .get(entity.id())
         .map(|n| n.0.clone())
         .unwrap_or_else(|| format!("Entity_{}", entity.id()));
 
@@ -138,7 +136,7 @@ fn draw_entity_node(
     // Filtre uygulaması
     if !filter_lower.is_empty() && !entity_name.to_lowercase().contains(filter_lower) {
         // Bu entity filtrede yoksa ama child'ları olabilir — onları kontrol et
-        if let Some(children) = children_comp.as_ref().and_then(|c| c.get(entity.id())) {
+        if let Some(children) = children_comp.get(entity.id()) {
             for &child_id in &children.0 {
                 // Generation güvenliği sağlandı, world üzerinden çekildi
                 if let Some(child_ent) = world.get_entity(child_id) {
@@ -153,12 +151,11 @@ fn draw_entity_node(
 
     let is_selected = state.is_selected(entity);
     let has_children = children_comp
-        .as_ref()
-        .and_then(|c| c.get(entity.id()))
+        .get(entity.id())
         .map(|c| !c.0.is_empty())
         .unwrap_or(false);
 
-    let is_hidden = is_hidden_comp.as_ref().map(|hc| hc.contains(entity.id())).unwrap_or(false);
+    let is_hidden = is_hidden_comp.contains(entity.id());
 
     // Düğüm Çizimi + Drag Drop Kapsüllemesi (Satır Duplicate Engellendi)
     let mut draw_row = |ui: &mut egui::Ui| {
@@ -223,7 +220,7 @@ fn draw_entity_node(
         egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
             .show_header(ui, |ui| { draw_row(ui); })
             .body(|ui| {
-                if let Some(children) = children_comp.as_ref().and_then(|c| c.get(entity.id())) {
+                if let Some(children) = children_comp.get(entity.id()) {
                     for &child_id in &children.0 {
                         if let Some(child_ent) = world.get_entity(child_id) {
                             if world.is_alive(child_ent) {

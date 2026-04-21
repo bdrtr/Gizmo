@@ -50,15 +50,15 @@ fn perform_rubber_band_selection(
         state.selection.entities.clear();
     }
 
-    if let Some(transforms) = world.borrow::<Transform>().expect("ECS Aliasing Error") {
-        let is_hidden = world.borrow::<gizmo::core::component::IsHidden>().expect("ECS Aliasing Error");
+    if let Ok(transforms) = world.borrow::<Transform>() {
+        let is_hidden = world.borrow::<gizmo::core::component::IsHidden>();
 
         for (id, t) in transforms.iter() {
             if id == player_id || state.selection.highlight_box.map(|h| h.id()) == Some(id) {
                 continue;
             }
 
-            if let Some(hidden) = &is_hidden {
+            if let Ok(hidden) = &is_hidden {
                 if hidden.contains(id) {
                     continue;
                 }
@@ -91,10 +91,10 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
     let mut closest_t = std::f32::MAX;
     let mut hit_entity = None;
 
-    if let (Some(colliders), Some(transforms)) =
-        (world.borrow::<Collider>().expect("ECS Aliasing Error"), world.borrow::<Transform>().expect("ECS Aliasing Error"))
+    if let (Ok(colliders), Ok(transforms)) =
+        (world.borrow::<Collider>(), world.borrow::<Transform>())
     {
-        let is_hidden = world.borrow::<gizmo::core::component::IsHidden>().expect("ECS Aliasing Error");
+        let is_hidden = world.borrow::<gizmo::core::component::IsHidden>();
 
         for (id, col) in colliders.iter() {
             // Editör objelerini, highlight box'ı es geç
@@ -103,13 +103,13 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
             }
             // Gizli component'i olan objeleri tıklanabilir yapma.
             // Seçili objemiz bittiğinde Gizmo okları IsHidden alır, o yüzden tıklanmazlar.
-            if let Some(hidden) = &is_hidden {
+            if let Ok(hidden) = &is_hidden {
                 if hidden.contains(id) {
                     continue;
                 }
             }
 
-            if let Some(t) = (*transforms).get(id) {
+            if let Some(t) = transforms.get(id) {
                 let extents = col
                     .shape
                     .bounding_box_half_extents(t.rotation);
@@ -151,14 +151,14 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
     let mut selected_col = None;
 
     if let Some(&selected) = state.selection.entities.iter().next() {
-        if let Some(transforms) = world.borrow::<Transform>().expect("ECS Aliasing Error") {
+        if let Ok(transforms) = world.borrow::<Transform>() {
             if let Some(t) = transforms.get(selected.id()) {
                 any_selected = true;
                 selected_pos = t.position;
                 selected_rot = t.rotation;
                 selected_scale = t.scale;
 
-                if let Some(colls) = world.borrow::<Collider>().expect("ECS Aliasing Error") {
+                if let Ok(colls) = world.borrow::<Collider>() {
                     if let Some(c) = colls.get(selected.id()) {
                         selected_col = Some(c.clone());
                     }
@@ -169,8 +169,8 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
 
     if any_selected {
         // Obje seçiliyse Highlight Box pozisyonunu ve boyutunu güncelle
-        if let Some(mut trans) = world.borrow_mut::<Transform>().expect("ECS Aliasing Error") {
-            if let Some(hb) = (*trans).get_mut(state.selection.highlight_box.unwrap_or(gizmo::prelude::Entity::new(0,0)).id()) {
+        if let Ok(mut trans) = world.borrow_mut::<Transform>() {
+            if let Some(hb) = trans.get_mut(state.selection.highlight_box.unwrap_or(gizmo::prelude::Entity::new(0,0)).id()) {
                 hb.position = selected_pos;
                 hb.rotation = selected_rot;
 
@@ -203,9 +203,9 @@ pub fn build_ray(
     aspect: f32,
     _wh: f32,
 ) -> Option<Ray> {
-    if let (Some(transforms), Some(cameras)) = (
-        world.borrow::<Transform>().expect("ECS Aliasing Error"),
-        world.borrow::<gizmo::renderer::components::Camera>().expect("ECS Aliasing Error"),
+    if let (Ok(transforms), Ok(cameras)) = (
+        world.borrow::<Transform>(),
+        world.borrow::<gizmo::renderer::components::Camera>(),
     ) {
         if let (Some(cam_t), Some(cam)) = (transforms.get(player_id), cameras.get(player_id)) {
             let view = cam.get_view(cam_t.position);

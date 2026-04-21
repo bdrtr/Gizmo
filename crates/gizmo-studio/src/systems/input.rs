@@ -15,9 +15,9 @@ pub fn handle_input_and_scene_view(world: &mut World, editor_state: &mut EditorS
                 ww / wh
             };
 
-            if let (Some(transforms), Some(cameras)) = (
-                world.borrow::<Transform>().expect("ECS Aliasing Error"),
-                world.borrow::<gizmo::renderer::components::Camera>().expect("ECS Aliasing Error"),
+            if let (Ok(transforms), Ok(cameras)) = (
+                world.borrow::<Transform>(),
+                world.borrow::<gizmo::renderer::components::Camera>(),
             ) {
                 if let (Some(t), Some(cam)) = (
                     transforms.get(state.editor_camera),
@@ -68,7 +68,7 @@ pub fn handle_input_and_scene_view(world: &mut World, editor_state: &mut EditorS
         // Yeni debug istekleri spawnla
         if !editor_state.debug_draw_requests.is_empty() {
             let mut pending_debug_assets = None;
-            if let Some(debug_assets) = world.get_resource::<DebugAssets>().expect("ECS Aliasing Error") {
+            if let Ok(Some(debug_assets)) = world.get_resource::<DebugAssets>() {
                 pending_debug_assets =
                     Some((debug_assets.cube.clone(), debug_assets.white_tex.clone()));
             }
@@ -110,15 +110,15 @@ pub fn handle_input_and_scene_view(world: &mut World, editor_state: &mut EditorS
                 {
                     // Raycast yap (Gizmo'ları yoksayarak)
                     let mut closest_t = std::f32::MAX;
-                    if let (Some(colliders), Some(transforms)) =
-                        (world.borrow::<Collider>().expect("ECS Aliasing Error"), world.borrow::<Transform>().expect("ECS Aliasing Error"))
+                    if let (Ok(colliders), Ok(transforms)) =
+                        (world.borrow::<Collider>(), world.borrow::<Transform>())
                     {
                         for (id, col) in colliders.iter() {
                             if id == state.editor_camera || Some(gizmo::prelude::Entity::new(id, 0)) == editor_state.selection.highlight_box {
                                 continue;
                             }
 
-                            if let Some(t) = (*transforms).get(id) {
+                            if let Some(t) = transforms.get(id) {
                                 let extents = col
                                     .shape
                                     .bounding_box_half_extents(t.rotation);

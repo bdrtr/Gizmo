@@ -85,7 +85,7 @@ pub fn render_studio(
         protected_ids.insert(state.editor_camera);
         protected_ids.insert(highlight_box_id);
 
-        if let Some(names) = world.borrow::<gizmo::core::component::EntityName>().expect("ECS Aliasing Error") {
+        if let Ok(names) = world.borrow::<gizmo::core::component::EntityName>() {
             for e in &ents {
                 if let Some(name) = names.get(e.id()) {
                     if name.0.starts_with("Editor ") || name.0 == "Highlight Box" {
@@ -95,7 +95,7 @@ pub fn render_studio(
             }
         }
 
-        if let Some(children) = world.borrow::<gizmo::core::component::Children>().expect("ECS Aliasing Error") {
+        if let Ok(children) = world.borrow::<gizmo::core::component::Children>() {
             let mut i = 0;
             let mut pro_list: Vec<u32> = protected_ids.iter().copied().collect();
             while i < pro_list.len() {
@@ -131,7 +131,7 @@ pub fn render_studio(
         protected_ids.insert(state.editor_camera);
         protected_ids.insert(highlight_box_id);
 
-        if let Some(names) = world.borrow::<gizmo::core::component::EntityName>().expect("ECS Aliasing Error") {
+        if let Ok(names) = world.borrow::<gizmo::core::component::EntityName>() {
             for e in &ents {
                 if let Some(name) = names.get(e.id()) {
                     if name.0.starts_with("Editor ") || name.0 == "Highlight Box" {
@@ -141,7 +141,7 @@ pub fn render_studio(
             }
         }
 
-        if let Some(children) = world.borrow::<gizmo::core::component::Children>().expect("ECS Aliasing Error") {
+        if let Ok(children) = world.borrow::<gizmo::core::component::Children>() {
             let mut i = 0;
             let mut pro_list: Vec<u32> = protected_ids.iter().copied().collect();
             while i < pro_list.len() {
@@ -217,8 +217,8 @@ pub fn render_studio(
 
             // Prefab spawn pozisyonunu (Asset browser'dan drop edilmişse) uygula
             if let (Some(root_id), Some(pos)) = (loaded_root, target_pos) {
-                if let Some(mut transforms) =
-                    world.borrow_mut::<gizmo::physics::components::Transform>().expect("ECS Aliasing Error")
+                if let Ok(mut transforms) =
+                    world.borrow_mut::<gizmo::physics::components::Transform>()
                 {
                     if let Some(t) = transforms.get_mut(root_id) {
                         t.position = pos;
@@ -289,7 +289,7 @@ pub fn render_studio(
                 let mut p_max_h = 20.0;
                 let mut p_path = String::new();
 
-                if let Some(terrains) = world.borrow::<gizmo::renderer::components::Terrain>().expect("ECS Aliasing Error") {
+                if let Ok(terrains) = world.borrow::<gizmo::renderer::components::Terrain>() {
                     if let Some(t) = terrains.get(ent_id.id()) {
                         p_width = t.width;
                         p_depth = t.depth;
@@ -310,7 +310,7 @@ pub fn render_studio(
                             if let Some(ent) = world.get_entity(ent_id.id()) {
                                 // Material yoksa beyaz default ekle
                                 let has_mat = world
-                                    .borrow::<gizmo::prelude::Material>().expect("ECS Aliasing Error")
+                                    .borrow::<gizmo::prelude::Material>()
                                     .map(|m| m.contains(ent.id()))
                                     .unwrap_or(false);
                                 if !has_mat {

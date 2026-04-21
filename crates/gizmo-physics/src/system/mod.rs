@@ -38,24 +38,12 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
 
     'physics: {
         // Borrow scope — tüm ECS borrow'ları burada yaşar
-        let mut transforms = match world.borrow_mut::<Transform>() {
-            Ok(Some(t)) => t,
-            Ok(None) => break 'physics,
-            Err(e) => { eprintln!("[Physics ERROR] Transform borrow hatası: {:?}", e); break 'physics; }
-        };
-        let mut velocities = match world.borrow_mut::<Velocity>() {
-            Ok(Some(v)) => v,
-            Ok(None) => break 'physics,
-            Err(e) => { eprintln!("[Physics ERROR] Velocity borrow hatası: {:?}", e); break 'physics; }
-        };
         let colliders = match world.borrow::<Collider>() {
-            Ok(Some(c)) => c,
-            Ok(None) => break 'physics,
+            Ok(c) => c,
             Err(e) => { eprintln!("[Physics ERROR] Collider borrow hatası: {:?}", e); break 'physics; }
         };
         let rigidbodies = match world.borrow::<RigidBody>() {
-            Ok(Some(r)) => r,
-            Ok(None) => break 'physics,
+            Ok(r) => r,
             Err(e) => { eprintln!("[Physics ERROR] RigidBody borrow hatası: {:?}", e); break 'physics; }
         };
         let joint_world = match world.get_resource::<crate::constraints::JointWorld>() {
@@ -65,32 +53,43 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
 
         let vehicle_entities: std::collections::HashSet<u32> = {
             match world.borrow::<VehicleController>() {
-                Ok(Some(v)) => v.iter().map(|(e, _)| e).collect(),
+                Ok(v) => v.entities().collect(),
                 _ => std::collections::HashSet::new(),
             }
         };
 
-        // 1. Broad-phase — olası çarpışma çiftleri
-        let collision_pairs = broad_phase(&transforms, &colliders, &rigidbodies, &velocities, dt, parallel_physics);
-        let has_joints = joint_world.as_ref().map_or(false, |jw| !jw.joints.is_empty());
-        if collision_pairs.is_empty() && !has_joints {
-            break 'physics;
-        }
+        // 1. Broad-phase, 2. Narrow-phase & 3. Island generation — SHARED BORROW
+        let (_detection_results, islands) = {
+            let transforms = world.borrow::<Transform>().expect("ECS Aliasing Error");
+            let velocities = world.borrow::<Velocity>().expect("ECS Aliasing Error");
 
-        // 2. Narrow-phase — gerçek temas tespiti (isteğe bağlı Rayon)
-        let detection_results = detect_collisions(
-            &collision_pairs,
-            &transforms,
-            &colliders,
-            &rigidbodies,
-            &velocities,
-            dt,
-            parallel_physics,
-            ccd_velocity_threshold,
-        );
+            let pairs = broad_phase(&transforms, &colliders, &rigidbodies, &velocities, dt, parallel_physics);
+            
+            let has_joints = joint_world.as_ref().map_or(false, |jw| !jw.joints.is_empty());
+            if pairs.is_empty() && !has_joints {
+                break 'physics;
+            }
 
-        // 3. Island generation — Union-Find ile gruplama
-        let mut islands = build_islands(detection_results, &transforms, &velocities, &mut entities_to_wake, &rigidbodies, joint_world.as_deref());
+            let results = detect_collisions(
+                &pairs,
+                &transforms,
+                &colliders,
+                &rigidbodies,
+                &velocities,
+                dt,
+                parallel_physics,
+                ccd_velocity_threshold,
+            );
+
+            let islands = build_islands(results.clone(), &transforms, &velocities, &mut entities_to_wake, &rigidbodies, joint_world.as_deref());
+            (results, islands)
+        };
+
+        // 4. Solver — MUTABLE BORROW
+        let mut transforms = world.borrow_mut::<Transform>().expect("ECS Aliasing Error");
+        let mut velocities = world.borrow_mut::<Velocity>().expect("ECS Aliasing Error");
+
+        let mut islands = islands; // Move islands to outer scope
 
         // 4. Çözücü — warm-start + SI + position projection (paralel island başına)
         let solver_state = match world.get_resource_mut::<PhysicsSolverState>() {
@@ -161,7 +160,7 @@ pub fn physics_collision_system(world: &mut World, dt: f32) {
     // Uyuyan nesneleri uyandır
     // (RigidBody mut borrow çakışmasını önlemek için borrow scope dışında uygulanır)
     if !entities_to_wake.is_empty() {
-        if let Ok(Some(mut rbs)) = world.borrow_mut::<RigidBody>() {
+        if let Ok(mut rbs) = world.borrow_mut::<RigidBody>() {
             for e in entities_to_wake {
                 if let Some(rb) = rbs.get_mut(e) {
                     rb.wake_up();

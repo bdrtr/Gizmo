@@ -196,7 +196,7 @@ fn generate_face_contacts(
         if !final_contacts.is_empty() {
             return final_contacts;
         }
-    } else if inc_face.len() >= 1 {
+    } else if inc_face.len() >= 1 && !ref_face.is_empty() {
         // Kenar - Yüzey veya Nokta - Yüzey temasında çarpan Incident noktasını dönmeliyiz, Reference (Zemin) noktalarını DEĞİL.
         let mut final_contacts = arrayvec::ArrayVec::new();
         for pt in &inc_face {

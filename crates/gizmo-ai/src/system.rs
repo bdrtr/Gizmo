@@ -25,20 +25,9 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
         None => return,
     };
 
-    let mut agents = match world.borrow_mut::<NavAgent>().expect("ECS Aliasing Error") {
-        Some(a) => a,
-        None => return,
-    };
-
-    let transforms = match world.borrow::<Transform>().expect("ECS Aliasing Error") {
-        Some(t) => t,
-        None => return,
-    };
-
-    let mut velocities = match world.borrow_mut::<Velocity>().expect("ECS Aliasing Error") {
-        Some(v) => v,
-        None => return,
-    };
+    let mut agents = world.borrow_mut::<NavAgent>().expect("ECS Aliasing Error");
+    let transforms = world.borrow::<Transform>().expect("ECS Aliasing Error");
+    let mut velocities = world.borrow_mut::<Velocity>().expect("ECS Aliasing Error");
 
     let mut agent_entities: Vec<u32> = Vec::with_capacity(agents.len());
     for (id, _) in agents.iter() {

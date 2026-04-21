@@ -18,6 +18,7 @@ const HZ: f32 = 0.06;   // kalınlık  → 0.12 m
 const GAP: f32 = 0.35;
 
 const GROUND_Y: f32 = 0.0;
+const GROUND_HALF_Y: f32 = 0.05; // zemin collider yarı yüksekliği (Collider::new_aabb ikinci parametre)
 const DOMINO_MASS: f32 = 0.3;   // Biraz daha ağır = daha kararlı çarpışma
 const BALL_MASS: f32 = 1.0;
 const BALL_RADIUS: f32 = 0.20;
@@ -50,7 +51,7 @@ impl DominoGame {
             cam_speed: 15.0,
             triggered: false,
             physics_acc: 0.0,
-            physics_dt: 1.0 / 120.0,  // 120 Hz — daha az sub-step = daha az drag sönümleme
+            physics_dt: 1.0 / 60.0,  // 60 Hz — performans/kalite dengesi
             fps_timer: 0.0,
             frames: 0,
             fps: 0.0,
@@ -152,9 +153,6 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
  
     world.insert_resource(PhysicsConfig {
         ground_y: GROUND_Y,
-        max_linear_velocity: 50.0,
-        max_angular_velocity: 50.0,
-        solver_iterations: 32,
         ..Default::default()
     });
     world.insert_resource(JointWorld::new());
@@ -225,7 +223,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
         // pos.x = world X, pos.y = world Z, pos.z = rotation angle around Y
         let transform = Transform::new(Vec3::new(
             pos.x,
-            GROUND_Y + HY,  // tabanı zemine oturtuyoruz
+            GROUND_Y + GROUND_HALF_Y + HY,  // zemin üst yüzeyi + yarı yükseklik
             pos.y,
         ))
         .with_rotation(Quat::from_axis_angle(
@@ -246,6 +244,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
  
         let mut rb = RigidBody::new(DOMINO_MASS, 0.05, 0.6, true);
         rb.ccd_enabled = false;
+        rb.is_sleeping = true; // Başlangıçta uyku — sadece çarpışma gelince uyanır
         rb.calculate_box_inertia(HX * 2.0, HY * 2.0, HZ * 2.0);
         world.add_component(entity, rb);
         world.add_component(entity, Velocity::new(Vec3::ZERO));
@@ -270,7 +269,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
         ball,
         Transform::new(Vec3::new(
             first_pos.x - tangent.x * 1.5,
-            GROUND_Y + BALL_RADIUS,
+            GROUND_Y + GROUND_HALF_Y + BALL_RADIUS,
             first_pos.y - tangent.z * 1.5,
         ))
         .with_scale(Vec3::splat(BALL_RADIUS)),
@@ -285,6 +284,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
  
     let mut ball_rb = RigidBody::new(BALL_MASS, 0.5, 0.3, true);
     ball_rb.ccd_enabled = true;
+    ball_rb.is_sleeping = true; // Space'e basılana kadar uyku
     ball_rb.calculate_sphere_inertia(BALL_RADIUS);
     world.add_component(ball, ball_rb);
     world.add_component(ball, Velocity::new(Vec3::ZERO));
@@ -342,7 +342,7 @@ fn trigger_first_domino(world: &mut World, game: &DominoGame) {
     };
     let fwd = Vec3::new(angle.sin(), 0.0, angle.cos());
 
-    if let (Some(mut vels), Some(mut rbs)) = (world.borrow_mut::<Velocity>().expect("ECS Error"), world.borrow_mut::<RigidBody>().expect("ECS Error")) {
+    if let (Ok(mut vels), Ok(mut rbs)) = (world.borrow_mut::<Velocity>(), world.borrow_mut::<RigidBody>()) {
         // Topa hız ver — ilk dominoya doğru
         if let Some(v) = vels.get_mut(game.ball_id) {
             v.linear = fwd * 4.0;  // Hafif itme, çok güçlü → yığılma
@@ -394,14 +394,14 @@ fn update_camera(
     if input.is_key_pressed(KeyCode::KeyQ as u32) { state.cam_pos.y -= speed; }
     if input.is_key_pressed(KeyCode::KeyE as u32) { state.cam_pos.y += speed; }
  
-    if let Some(mut trans) = world.borrow_mut::<Transform>().expect("ECS Error") {
+    if let Ok(mut trans) = world.borrow_mut::<Transform>() {
         if let Some(t) = trans.get_mut(state.cam_id) {
             t.position = state.cam_pos;
             t.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
             t.update_local_matrix();
         }
     }
-    if let Some(mut cams) = world.borrow_mut::<Camera>().expect("ECS Error") {
+    if let Ok(mut cams) = world.borrow_mut::<Camera>() {
         if let Some(c) = cams.get_mut(state.cam_id) {
             c.yaw = state.cam_yaw;
             c.pitch = state.cam_pitch;

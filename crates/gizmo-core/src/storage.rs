@@ -14,7 +14,21 @@ pub struct StorageView<'w, T: Component> {
     pub(crate) _marker: PhantomData<T>,
 }
 
+unsafe impl<'w, T: Component + Sync> Sync for StorageView<'w, T> {}
+unsafe impl<'w, T: Component + Send> Send for StorageView<'w, T> {}
+
 impl<'w, T: Component> StorageView<'w, T> {
+    /// Bu görünümde hiç varlık olup olmadığını kontrol eder.
+    pub fn is_empty(&self) -> bool {
+        self.archetypes.iter().all(|(entities, _)| entities.is_empty())
+    }
+
+    /// Bu görünümdeki tüm varlık ID'lerini döndüren bir iterator sağlar.
+    /// View'ı tüketmez.
+    pub fn entities(&self) -> impl Iterator<Item = u32> + '_ {
+        self.archetypes.iter().flat_map(|(entities, _)| entities.iter().copied())
+    }
+
     /// Bir entity için component verisini döndürür.
     #[inline]
     pub fn get(&self, entity_id: u32) -> Option<&T> {
@@ -32,9 +46,27 @@ impl<'w, T: Component> StorageView<'w, T> {
         }
     }
 
+    /// Bir varlığın bu görünümde olup olmadığını kontrol eder.
+    #[inline]
+    pub fn contains(&self, entity_id: u32) -> bool {
+        self.get(entity_id).is_some()
+    }
+
     /// Tüm bileşenler üzerinden iterasyon yapar.
-    pub fn iter(self) -> impl Iterator<Item = (u32, &'w T)> {
-        self.into_iter()
+    pub fn iter(&self) -> impl Iterator<Item = (u32, &T)> + '_ {
+        self.archetypes.iter().flat_map(|(entities, col)| {
+            entities.iter().copied().zip(0..entities.len()).map(move |(entity, row)| {
+                unsafe {
+                    let ptr = col.get_ptr(row) as *const T;
+                    (entity, &*ptr)
+                }
+            })
+        })
+    }
+
+    /// Toplam bileşen sayısını döner.
+    pub fn len(&self) -> usize {
+        self.archetypes.iter().map(|(entities, _)| entities.len()).sum()
     }
 }
 
@@ -63,7 +95,21 @@ pub struct StorageViewMut<'w, T: Component> {
     pub(crate) _marker: PhantomData<T>,
 }
 
+unsafe impl<'w, T: Component + Sync> Sync for StorageViewMut<'w, T> {}
+unsafe impl<'w, T: Component + Send> Send for StorageViewMut<'w, T> {}
+
 impl<'w, T: Component> StorageViewMut<'w, T> {
+    /// Bu görünümde hiç varlık olup olmadığını kontrol eder.
+    pub fn is_empty(&self) -> bool {
+        self.archetypes.iter().all(|(entities, _)| entities.is_empty())
+    }
+
+    /// Bu görünümdeki tüm varlık ID'lerini döndüren bir iterator sağlar.
+    /// View'ı tüketmez.
+    pub fn entities(&self) -> impl Iterator<Item = u32> + '_ {
+        self.archetypes.iter().flat_map(|(entities, _)| entities.iter().copied())
+    }
+
     #[inline]
     pub fn get(&self, entity_id: u32) -> Option<&T> {
         let loc = self.entity_locations.get(entity_id as usize)?;
@@ -78,6 +124,24 @@ impl<'w, T: Component> StorageViewMut<'w, T> {
             let ptr = col.get_ptr(loc.row as usize) as *const T;
             Some(&*ptr)
         }
+    }
+
+    /// Bir varlığın bu görünümde olup olmadığını kontrol eder.
+    #[inline]
+    pub fn contains(&self, entity_id: u32) -> bool {
+        self.get(entity_id).is_some()
+    }
+
+    /// Read-only iterator over entities and components in a mutable view.
+    pub fn iter(&self) -> impl Iterator<Item = (u32, &T)> + '_ {
+        self.archetypes.iter().flat_map(|(entities, col)| {
+            entities.iter().copied().zip(0..entities.len()).map(move |(entity, row)| {
+                unsafe {
+                    let ptr = col.get_ptr(row) as *const T;
+                    (entity, &*ptr)
+                }
+            })
+        })
     }
 
     #[inline]
@@ -103,6 +167,11 @@ impl<'w, T: Component> StorageViewMut<'w, T> {
     /// Tüm bileşenler üzerinden mutable iterasyon yapar.
     pub fn iter_mut(self) -> impl Iterator<Item = (u32, &'w mut T)> {
         self.into_iter()
+    }
+
+    /// Toplam bileşen sayısını döner.
+    pub fn len(&self) -> usize {
+        self.archetypes.iter().map(|(entities, _)| entities.len()).sum()
     }
 }
 

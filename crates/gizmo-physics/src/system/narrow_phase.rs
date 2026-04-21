@@ -23,10 +23,10 @@ pub fn merge_detection_results(mut acc: DetectionResult, mut item: DetectionResu
 pub fn detect_single_collision_pair(
     ent_a: u32,
     ent_b: u32,
-    transforms: &gizmo_core::SparseSet<Transform>,
-    colliders: &gizmo_core::SparseSet<Collider>,
-    rigidbodies: &gizmo_core::SparseSet<RigidBody>,
-    velocities: &gizmo_core::SparseSet<Velocity>,
+    transforms: &gizmo_core::StorageView<'_, Transform>,
+    colliders: &gizmo_core::StorageView<'_, Collider>,
+    rigidbodies: &gizmo_core::StorageView<'_, RigidBody>,
+    velocities: &gizmo_core::StorageView<'_, Velocity>,
     dt: f32,
     ccd_velocity_threshold: f32,
 ) -> Option<DetectionResult> {
@@ -117,11 +117,18 @@ pub fn detect_single_collision_pair(
     };
 
     let mut wakes = Vec::new();
+    // Uyuyan cismi yalnızca UYANIK ve DİNAMİK bir cisimle çarpışırsa uyandır.
+    // Statik zemine temas eden uyuyan cisimler uyandırılmaz — aksi halde
+    // her karede uyandır→yerçekimi→solver→uyu döngüsü jitter yaratır.
     if rb_a.is_sleeping && rb_a.mass > 0.0 {
-        wakes.push(ent_a);
+        if rb_b.mass > 0.0 && !rb_b.is_sleeping {
+            wakes.push(ent_a);
+        }
     }
     if rb_b.is_sleeping && rb_b.mass > 0.0 {
-        wakes.push(ent_b);
+        if rb_a.mass > 0.0 && !rb_a.is_sleeping {
+            wakes.push(ent_b);
+        }
     }
 
     let mut result = DetectionResult {
@@ -173,10 +180,10 @@ pub fn detect_single_collision_pair(
 /// tekrarlanabilir simülasyon için `PhysicsConfig::deterministic_simulation` ile `false` kullanılır.
 pub fn detect_collisions(
     collision_pairs: &[(u32, u32)],
-    transforms: &gizmo_core::SparseSet<Transform>,
-    colliders: &gizmo_core::SparseSet<Collider>,
-    rigidbodies: &gizmo_core::SparseSet<RigidBody>,
-    velocities: &gizmo_core::SparseSet<Velocity>,
+    transforms: &gizmo_core::StorageView<'_, Transform>,
+    colliders: &gizmo_core::StorageView<'_, Collider>,
+    rigidbodies: &gizmo_core::StorageView<'_, RigidBody>,
+    velocities: &gizmo_core::StorageView<'_, Velocity>,
     dt: f32,
     parallel_narrow_phase: bool,
     ccd_velocity_threshold: f32,

@@ -55,8 +55,8 @@ pub fn handle_simulation(world: &mut World, editor_state: &mut EditorState, stat
                 }
 
                 // Call per-entity updates
-                if let Some(scripts) = world.borrow::<gizmo::scripting::Script>().expect("ECS Aliasing Error") {
-                    let mut entity_calls = Vec::new();
+                if let Ok(scripts) = world.borrow::<gizmo::scripting::Script>() {
+                    let mut entity_calls: Vec<(u32, String)> = Vec::new();
                     for (entity_id, _) in scripts.iter() {
                         if let Some(script) = scripts.get(entity_id) {
                             entity_calls.push((entity_id, script.file_path.clone()));

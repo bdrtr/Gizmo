@@ -6,10 +6,13 @@ use gizmo_math::{Mat3, Mat4, Quat, Vec3};
 ///
 /// Lineer: (m/s)² — obje bu hızın altına düştüğünde uyku sayıcısı artar.
 /// Açısal: (rad/s)² — ayrı eşik; dönerken lineer sıfır olsa da uyanmalı.
-/// İkkisini toplamak boyutsel olarak anlamsız (m/s ≠ rad/s) — ayrı kontrol zorunlu.
-const SLEEP_LINEAR_SQ: f32 = 0.04;  // 0.2 m/s (Endüstri standardı)
-const SLEEP_ANGULAR_SQ: f32 = 0.04; // 0.2 rad/s (Normalize edilmiş açısal eşik)
-const SLEEP_TIMER_THRESHOLD: f32 = 1.0;     // 1 saniye — 2s çok uzun, jitter uzar
+/// İkisini toplamak boyutsel olarak anlamsız (m/s ≠ rad/s) — ayrı kontrol zorunlu.
+///
+/// Referans değerler: PhysX sleep threshold = 0.005 m²/s² (energy),
+/// Rapier = 0.1 m/s lineer. Biz velocity-squared kullanıyoruz.
+const SLEEP_LINEAR_SQ: f32 = 0.01;   // ~0.1 m/s (Rapier standardı)
+const SLEEP_ANGULAR_SQ: f32 = 0.01;  // ~0.1 rad/s
+const SLEEP_TIMER_THRESHOLD: f32 = 0.5;  // 0.5 saniye (PhysX default)
 
 /// Dünya uzayında tork `τ` için açısal ivme benzeri vektör `I⁻¹ τ` (burada `I⁻¹` dünya uzayında
 /// `R I_body⁻¹ Rᵀ`). `inverse_inertia_local` gövde çerçevesinde simetrik ters eylemsizlik matrisidir.
@@ -21,10 +24,9 @@ pub fn apply_inv_inertia(torque: Vec3, inverse_inertia_local: Mat3, rot: Quat) -
 
 /// Tek iş parçacığı, skalar f32 — SIMD/AVX2 yok; `PhysicsConfig::deterministic_simulation` ile seçilir.
 fn physics_apply_forces_scalar(world: &World, dt: f32) {
-    if let (Some(mut vel_storage), Some(mut rbs)) = (
-        world.borrow_mut::<Velocity>().expect("ECS Aliasing Error"),
-        world.borrow_mut::<RigidBody>().expect("ECS Aliasing Error"),
-    ) {
+    let mut vel_storage = world.borrow_mut::<Velocity>().expect("ECS Aliasing Error");
+    let mut rbs = world.borrow_mut::<RigidBody>().expect("ECS Aliasing Error");
+    {
         let entities: Vec<u32> = vel_storage.iter().map(|(e, _)| e).collect();
         let mut active_ents = Vec::with_capacity(entities.len());
         for &entity in &entities {
@@ -96,10 +98,9 @@ fn physics_apply_forces_scalar(world: &World, dt: f32) {
 
 #[inline(always)]
 fn physics_apply_forces_system_impl(world: &World, dt: f32) {
-    if let (Some(mut vel_storage), Some(mut rbs)) = (
-        world.borrow_mut::<Velocity>().expect("ECS Aliasing Error"),
-        world.borrow_mut::<RigidBody>().expect("ECS Aliasing Error"),
-    ) {
+    let mut vel_storage = world.borrow_mut::<Velocity>().expect("ECS Aliasing Error");
+    let mut rbs = world.borrow_mut::<RigidBody>().expect("ECS Aliasing Error");
+    {
         use wide::f32x8;
 
         let entities: Vec<u32> = vel_storage.iter().map(|(e, _)| e).collect();
@@ -252,11 +253,10 @@ pub fn physics_apply_forces_system(world: &World, dt: f32) {
 }
 
 pub fn physics_movement_system(world: &World, dt: f32) {
-    if let (Some(mut trans_storage), Some(vel_storage), Some(rbs)) = (
-        world.borrow_mut::<Transform>().expect("ECS Aliasing Error"),
-        world.borrow::<Velocity>().expect("ECS Aliasing Error"),
-        world.borrow::<RigidBody>().expect("ECS Aliasing Error"),
-    ) {
+    let mut trans_storage = world.borrow_mut::<Transform>().expect("ECS Aliasing Error");
+    let vel_storage = world.borrow::<Velocity>().expect("ECS Aliasing Error");
+    let rbs = world.borrow::<RigidBody>().expect("ECS Aliasing Error");
+    {
         let entities: Vec<u32> = trans_storage.iter().map(|(e, _)| e).collect();
         let mut active_ents = Vec::with_capacity(entities.len());
         for &entity in &entities {
@@ -279,14 +279,19 @@ pub fn physics_movement_system(world: &World, dt: f32) {
                 None => continue,
             };
             let mut is_dirty = false;
-            
-            // Eğer objenin lineer hızı kayda değer değilse pozisyonu rölantide tut (mikro-jitter engeller)
-            if v.linear.length_squared() > 0.000001 {
+
+            // Velocity Dead-Zone (PhysX/Bullet standardı):
+            // Solver sonrası kalan mikro-hızları sıfırla — gravity-solver salınımını görünmez yap.
+            // Eşik: 0.0025 m²/s² = ~0.05 m/s (sleep threshold'un altında, dinamik davranışı etkilemez)
+            let lin_sq = v.linear.length_squared();
+            let ang_sq = v.angular.length_squared();
+
+            if lin_sq > 0.0025 {
                 t.position += v.linear * dt;
                 is_dirty = true;
             }
 
-            if v.angular.length_squared() > 0.0001 {
+            if ang_sq > 0.0025 {
                 let w_quat = Quat::from_xyzw(v.angular.x, v.angular.y, v.angular.z, 0.0);
                 let q = t.rotation;
                 let dq = w_quat * q;
@@ -366,7 +371,7 @@ mod tests {
         // Run movement
         physics_movement_system(&world, 0.1);
 
-        let transforms = world.borrow::<Transform>().expect("ECS Aliasing Error").unwrap();
+        let transforms = world.borrow::<Transform>().expect("ECS Aliasing Error");
 
         // Stationary -> Hız < 1e-6, update_local_matrix çağrılmamalı! Bozuk matris korunmalı.
         let t1 = transforms.get(e_static.id()).unwrap();
@@ -384,37 +389,34 @@ mod tests {
 
 pub fn update_transform_hierarchy(world: &World) {
     use gizmo_core::component::{Parent, Children};
-    if let Some(mut transforms) = world.borrow_mut::<Transform>().expect("ECS Aliasing Error") {
-        let parents = world.borrow::<Parent>().expect("ECS Aliasing Error");
-        let children = world.borrow::<Children>().expect("ECS Aliasing Error");
-        
-        let mut stack = Vec::new();
-        // find root nodes (entities WITH Transform but NO Parent)
-        for (id, _) in transforms.iter() {
-            let has_parent = parents.as_ref().map(|p| p.contains(id)).unwrap_or(false);
-            if !has_parent {
-                stack.push((id, Mat4::IDENTITY));
+    let mut transforms = world.borrow_mut::<Transform>().expect("ECS Aliasing Error");
+    let parents = world.borrow::<Parent>().expect("ECS Aliasing Error");
+    let children = world.borrow::<Children>().expect("ECS Aliasing Error");
+    
+    let mut stack = Vec::new();
+    // find root nodes (entities WITH Transform but NO Parent)
+    for (id, _) in transforms.iter() {
+        let has_parent = parents.get(id).is_some();
+        if !has_parent {
+            stack.push((id, Mat4::IDENTITY));
+        }
+    }
+    
+    while let Some((id, parent_mat)) = stack.pop() {
+        let mut current_mat: Mat4;
+        if let Some(t) = transforms.get_mut(id) {
+            current_mat = parent_mat * t.local_matrix();
+            if current_mat.is_nan() {
+                current_mat = Mat4::IDENTITY; // Safe fallback
             }
+            t.global_matrix = current_mat;
+        } else {
+            continue;
         }
         
-        while let Some((id, parent_mat)) = stack.pop() {
-            let mut current_mat: Mat4;
-            if let Some(t) = transforms.get_mut(id) {
-                current_mat = parent_mat * t.local_matrix();
-                if current_mat.is_nan() {
-                    current_mat = Mat4::IDENTITY; // Safe fallback
-                }
-                t.global_matrix = current_mat;
-            } else {
-                continue;
-            }
-            
-            if let Some(ch_store) = &children {
-                if let Some(ch) = ch_store.get(id) {
-                    for &c in &ch.0 {
-                        stack.push((c, current_mat));
-                    }
-                }
+        if let Some(ch) = children.get(id) {
+            for &c in &ch.0 {
+                stack.push((c, current_mat));
             }
         }
     }

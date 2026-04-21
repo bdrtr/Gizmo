@@ -319,18 +319,12 @@ fn resolve_capsule_collisions<'a>(
 /// 5. Basamak çıkma kontrolü
 /// 6. Eğim limiti kontrolü
 pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
-    // Collider'ları ayrıca borrow'lamak lazım
-    let colliders = match world.borrow::<Collider>().unwrap_or(None) {
-        Some(c) => c,
-        None => return,
-    };
+    let colliders = world.borrow::<Collider>().unwrap();
+    let mut trans_storage = world.borrow_mut::<Transform>().unwrap();
+    let mut controllers = world.borrow_mut::<CharacterController>().unwrap();
 
-    if let (Some(mut trans_storage), Some(mut controllers)) = (
-        world.borrow_mut::<Transform>().unwrap_or(None),
-        world.borrow_mut::<CharacterController>().unwrap_or(None),
-    ) {
-        let entities: Vec<u32> = controllers.iter().map(|(id, _)| id).collect();
-        for entity in entities {
+    let entities: Vec<u32> = controllers.entities().collect();
+    for entity in entities {
             let t = match trans_storage.get(entity) {
                 Some(t) => *t,
                 None => continue,
@@ -510,7 +504,6 @@ pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
             }
 
             cc.desired_velocity = Vec3::ZERO;
-        }
     }
 }
 

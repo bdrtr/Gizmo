@@ -33,8 +33,8 @@ impl JointBodies {
     /// İki statik nesne veya eksik bileşen durumunda `None` döndürür.
     pub fn resolve(
         joint:      &Joint,
-        transforms: &gizmo_core::SparseSet<crate::components::Transform>,
-        rbs:        &gizmo_core::SparseSet<crate::components::RigidBody>,
+        transforms: &gizmo_core::StorageView<'_, crate::components::Transform>,
+        rbs:        &gizmo_core::StorageView<'_, crate::components::RigidBody>,
     ) -> Option<Self> {
         // Self-joint guard: aynı entity'ye bağlı joint fiziksel olarak anlamsız
         // ve velocity çözümünde ikinci yazma ilkini ezer → sessiz bug

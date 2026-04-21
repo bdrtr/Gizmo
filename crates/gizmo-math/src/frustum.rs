@@ -1,5 +1,5 @@
 use crate::aabb::Aabb;
-use glam::{Mat4, Vec3A, Vec4, Vec4Swizzles};
+use glam::{Mat4, Vec3A, Vec4};
 
 // ---------------------------------------------------------------------------
 // Intersection result
@@ -92,13 +92,6 @@ pub struct Frustum {
 }
 
 impl Frustum {
-    // Plane index constants for clarity
-    const LEFT: usize   = 0;
-    const RIGHT: usize  = 1;
-    const BOTTOM: usize = 2;
-    const TOP: usize    = 3;
-    const NEAR: usize   = 4;
-    const FAR: usize    = 5;
 
     /// Extracts the frustum planes from a Projection × View (VP) matrix.
     ///

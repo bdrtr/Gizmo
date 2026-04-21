@@ -3,11 +3,10 @@ use gizmo_core::World;
 use gizmo_math::{Mat4, Quat, Vec3};
 
 pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) {
-    if let (Some(mut players), Some(mut skeletons)) = (
-        world.borrow_mut::<AnimationPlayer>().expect("ECS Aliasing Error"),
-        world.borrow_mut::<Skeleton>().expect("ECS Aliasing Error"),
-    ) {
-        let entities: Vec<u32> = players.iter().map(|(e, _)| e).collect();
+    let mut players = world.borrow_mut::<AnimationPlayer>().unwrap();
+    let mut skeletons = world.borrow_mut::<Skeleton>().unwrap();
+    {
+        let entities: Vec<u32> = players.entities().collect();
         for entity in entities {
             let player = match players.get_mut(entity) {
                 Some(p) => p,
@@ -50,18 +49,19 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
                 std::collections::HashMap::new();
 
             // Hangi joint'in gltf node index'ine göre track edildiğini bul (O(N^2) yerine hashing de yapılabilir ama N <= 64)
+            // Track'leri işle
             for track in &anim.translations {
-                if let Some(val) = track.get_interpolated(t, |a, b, frac| a.lerp(b, frac)) {
+                if let Some(val) = track.get_interpolated(t, |a: Vec3, b: Vec3, frac: f32| a.lerp(b, frac)) {
                     node_changes.entry(track.target_node).or_default().0 = Some(val);
                 }
             }
             for track in &anim.rotations {
-                if let Some(val) = track.get_interpolated(t, |a, b, frac| a.slerp(b, frac)) {
+                if let Some(val) = track.get_interpolated(t, |a: Quat, b: Quat, frac: f32| a.slerp(b, frac)) {
                     node_changes.entry(track.target_node).or_default().1 = Some(val.normalize());
                 }
             }
             for track in &anim.scales {
-                if let Some(val) = track.get_interpolated(t, |a, b, frac| a.lerp(b, frac)) {
+                if let Some(val) = track.get_interpolated(t, |a: Vec3, b: Vec3, frac: f32| a.lerp(b, frac)) {
                     node_changes.entry(track.target_node).or_default().2 = Some(val);
                 }
             }

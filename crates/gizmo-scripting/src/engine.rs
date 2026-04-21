@@ -277,80 +277,57 @@ impl ScriptEngine {
         for cmd in commands {
             match cmd {
                 ScriptCommand::SetPosition(id, pos) => {
-                    if let Some(mut transforms) =
-                        world.borrow_mut::<gizmo_physics::components::Transform>().expect("ECS Aliasing Error")
-                    {
-                        if let Some(t) = transforms.get_mut(id) {
-                            t.position = pos;
-                        }
+                    let mut transforms = world.borrow_mut::<gizmo_physics::components::Transform>().expect("ECS Aliasing Error");
+                    if let Some(t) = transforms.get_mut(id) {
+                        t.position = pos;
                     }
                 }
                 ScriptCommand::SetRotation(id, rot) => {
-                    if let Some(mut transforms) =
-                        world.borrow_mut::<gizmo_physics::components::Transform>().expect("ECS Aliasing Error")
-                    {
-                        if let Some(t) = transforms.get_mut(id) {
-                            t.rotation = rot;
-                        }
+                    let mut transforms = world.borrow_mut::<gizmo_physics::components::Transform>().expect("ECS Aliasing Error");
+                    if let Some(t) = transforms.get_mut(id) {
+                        t.rotation = rot;
                     }
                 }
                 ScriptCommand::SetScale(id, scale) => {
-                    if let Some(mut transforms) =
-                        world.borrow_mut::<gizmo_physics::components::Transform>().expect("ECS Aliasing Error")
-                    {
-                        if let Some(t) = transforms.get_mut(id) {
-                            t.scale = scale;
-                        }
+                    let mut transforms = world.borrow_mut::<gizmo_physics::components::Transform>().expect("ECS Aliasing Error");
+                    if let Some(t) = transforms.get_mut(id) {
+                        t.scale = scale;
                     }
                 }
                 ScriptCommand::SetVelocity(id, vel) => {
-                    if let Some(mut velocities) =
-                        world.borrow_mut::<gizmo_physics::components::Velocity>().expect("ECS Aliasing Error")
-                    {
-                        if let Some(v) = velocities.get_mut(id) {
-                            v.linear = vel;
-                        }
+                    let mut velocities = world.borrow_mut::<gizmo_physics::components::Velocity>().expect("ECS Aliasing Error");
+                    if let Some(v) = velocities.get_mut(id) {
+                        v.linear = vel;
                     }
                 }
                 ScriptCommand::SetAngularVelocity(id, ang_vel) => {
-                    if let Some(mut velocities) =
-                        world.borrow_mut::<gizmo_physics::components::Velocity>().expect("ECS Aliasing Error")
-                    {
-                        if let Some(v) = velocities.get_mut(id) {
-                            v.angular = ang_vel;
-                        }
+                    let mut velocities = world.borrow_mut::<gizmo_physics::components::Velocity>().expect("ECS Aliasing Error");
+                    if let Some(v) = velocities.get_mut(id) {
+                        v.angular = ang_vel;
                     }
                 }
                 ScriptCommand::ApplyForce(id, force) => {
-                    if let Some(rbs) = world.borrow::<gizmo_physics::components::RigidBody>().expect("ECS Aliasing Error") {
-                        if let Some(rb) = rbs.get(id) {
-                            if rb.mass > 0.0 {
-                                let accel = force * (1.0 / rb.mass);
-                                drop(rbs);
-                                if let Some(mut vels) =
-                                    world.borrow_mut::<gizmo_physics::components::Velocity>().expect("ECS Aliasing Error")
-                                {
-                                    if let Some(v) = vels.get_mut(id) {
-                                        v.linear += accel * dt;
-                                    }
-                                }
+                    let rbs = world.borrow::<gizmo_physics::components::RigidBody>().expect("ECS Aliasing Error");
+                    if let Some(rb) = rbs.get(id) {
+                        if rb.mass > 0.0 {
+                            let accel = force * (1.0 / rb.mass);
+                            drop(rbs);
+                            let mut vels = world.borrow_mut::<gizmo_physics::components::Velocity>().expect("ECS Aliasing Error");
+                            if let Some(v) = vels.get_mut(id) {
+                                v.linear += accel * dt;
                             }
                         }
                     }
                 }
                 ScriptCommand::ApplyImpulse(id, impulse) => {
-                    if let Some(rbs) = world.borrow::<gizmo_physics::components::RigidBody>().expect("ECS Aliasing Error") {
-                        if let Some(rb) = rbs.get(id) {
-                            if rb.mass > 0.0 {
-                                let delta_v = impulse * (1.0 / rb.mass);
-                                drop(rbs);
-                                if let Some(mut vels) =
-                                    world.borrow_mut::<gizmo_physics::components::Velocity>().expect("ECS Aliasing Error")
-                                {
-                                    if let Some(v) = vels.get_mut(id) {
-                                        v.linear += delta_v;
-                                    }
-                                }
+                    let rbs = world.borrow::<gizmo_physics::components::RigidBody>().expect("ECS Aliasing Error");
+                    if let Some(rb) = rbs.get(id) {
+                        if rb.mass > 0.0 {
+                            let delta_v = impulse * (1.0 / rb.mass);
+                            drop(rbs);
+                            let mut vels = world.borrow_mut::<gizmo_physics::components::Velocity>().expect("ECS Aliasing Error");
+                            if let Some(v) = vels.get_mut(id) {
+                                v.linear += delta_v;
                             }
                         }
                     }
@@ -370,17 +347,16 @@ impl ScriptEngine {
                             friction,
                             use_gravity,
                         );
-                        if let Some(cols) = world.borrow::<gizmo_physics::shape::Collider>().expect("ECS Aliasing Error") {
-                            if let Some(col) = cols.get(id) {
-                                rb.update_inertia_from_shape(&col.shape);
-                            }
+                        let cols = world.borrow::<gizmo_physics::shape::Collider>().expect("ECS Aliasing Error");
+                        if let Some(col) = cols.get(id) {
+                            rb.update_inertia_from_shape(&col.shape);
                         }
+                        drop(cols);
                         world.add_component(e, rb);
                         // Make sure velocity exists so it can move
                         if world
                             .borrow::<gizmo_physics::components::Velocity>().expect("ECS Aliasing Error")
-                            .map(|v| v.get(id).is_none())
-                            .unwrap_or(true)
+                            .get(id).is_none()
                         {
                             world.add_component(
                                 e,
@@ -393,13 +369,11 @@ impl ScriptEngine {
                     let entity = world.iter_alive_entities().find(|e| e.id() == id);
                     if let Some(e) = entity {
                         let col = gizmo_physics::shape::Collider::new_aabb(hx, hy, hz);
-                        if let Some(mut rbs) =
-                            world.borrow_mut::<gizmo_physics::components::RigidBody>().expect("ECS Aliasing Error")
-                        {
-                            if let Some(rb) = rbs.get_mut(id) {
-                                rb.update_inertia_from_shape(&col.shape);
-                            }
+                        let mut rbs = world.borrow_mut::<gizmo_physics::components::RigidBody>().expect("ECS Aliasing Error");
+                        if let Some(rb) = rbs.get_mut(id) {
+                            rb.update_inertia_from_shape(&col.shape);
                         }
+                        drop(rbs);
                         world.add_component(e, col);
                     }
                 }
@@ -407,36 +381,31 @@ impl ScriptEngine {
                     let entity = world.iter_alive_entities().find(|e| e.id() == id);
                     if let Some(e) = entity {
                         let col = gizmo_physics::shape::Collider::new_sphere(radius);
-                        if let Some(mut rbs) =
-                            world.borrow_mut::<gizmo_physics::components::RigidBody>().expect("ECS Aliasing Error")
-                        {
-                            if let Some(rb) = rbs.get_mut(id) {
-                                rb.update_inertia_from_shape(&col.shape);
-                            }
+                        let mut rbs = world.borrow_mut::<gizmo_physics::components::RigidBody>().expect("ECS Aliasing Error");
+                        if let Some(rb) = rbs.get_mut(id) {
+                            rb.update_inertia_from_shape(&col.shape);
                         }
+                        drop(rbs);
                         world.add_component(e, col);
                     }
                 }
                 
                 ScriptCommand::SetVehicleEngineForce(id, force) => {
-                    if let Some(mut vehicles) = world.borrow_mut::<gizmo_physics::vehicle::VehicleController>().expect("ECS Aliasing Error") {
-                        if let Some(vc) = vehicles.get_mut(id) {
-                            vc.engine_force = force;
-                        }
+                    let mut vehicles = world.borrow_mut::<gizmo_physics::vehicle::VehicleController>().expect("ECS Aliasing Error");
+                    if let Some(vc) = vehicles.get_mut(id) {
+                        vc.engine_force = force;
                     }
                 }
                 ScriptCommand::SetVehicleSteering(id, angle) => {
-                    if let Some(mut vehicles) = world.borrow_mut::<gizmo_physics::vehicle::VehicleController>().expect("ECS Aliasing Error") {
-                        if let Some(vc) = vehicles.get_mut(id) {
-                            vc.steering_angle = angle;
-                        }
+                    let mut vehicles = world.borrow_mut::<gizmo_physics::vehicle::VehicleController>().expect("ECS Aliasing Error");
+                    if let Some(vc) = vehicles.get_mut(id) {
+                        vc.steering_angle = angle;
                     }
                 }
                 ScriptCommand::SetVehicleBrake(id, force) => {
-                    if let Some(mut vehicles) = world.borrow_mut::<gizmo_physics::vehicle::VehicleController>().expect("ECS Aliasing Error") {
-                        if let Some(vc) = vehicles.get_mut(id) {
-                            vc.brake_force = force;
-                        }
+                    let mut vehicles = world.borrow_mut::<gizmo_physics::vehicle::VehicleController>().expect("ECS Aliasing Error");
+                    if let Some(vc) = vehicles.get_mut(id) {
+                        vc.brake_force = force;
                     }
                 }
 
@@ -466,10 +435,9 @@ impl ScriptEngine {
                     println!("[Lua] Entity destroyed: {}", id);
                 }
                 ScriptCommand::SetEntityName(id, name) => {
-                    if let Some(mut names) = world.borrow_mut::<gizmo_core::EntityName>().expect("ECS Aliasing Error") {
-                        if let Some(n) = names.get_mut(id) {
-                            n.0 = name;
-                        }
+                    let mut names = world.borrow_mut::<gizmo_core::EntityName>().expect("ECS Aliasing Error");
+                    if let Some(n) = names.get_mut(id) {
+                        n.0 = name;
                     }
                 }
                 ScriptCommand::SaveScene(_)

@@ -1,6 +1,9 @@
 use gizmo::editor::EditorState;
 use gizmo::prelude::*;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 pub mod render;
 pub mod render_pipeline;
 pub mod setup;

@@ -10,13 +10,13 @@ Gizmo Engine, Rust programlama dili kullanılarak sıfırdan geliştirilen; yük
 
 Gizmo Engine salt bir görüntüleyici olmanın ötesinde endüstri standardı özellikler sunan tam teşekküllü bir sistemdir. Motorun temel bileşenleri ve öne çıkan kabiliyetleri şunlardır:
 
-### 🧩 Pürüzsüz ECS (Entity Component System)
-Motorun kalbinde, tüm nesnelerin ve mantıksal sistemlerin ayrıştırıldığı hafıza-dostu bir ECS mimarisi yatar. Bellek ve `RefCell` yükleri minimuma indirilmiş yapı sayesinde on binlerce "entity" darboğaz yaşanmadan aynı anda güncellenebilir.
+### 🧩 Archetype Tabanlı Pürüzsüz ECS (Entity Component System)
+Motorun kalbinde, tüm nesnelerin ve mantıksal sistemlerin veri-odaklı (DOD) olarak ayrıştırıldığı *Archetype* tabanlı, sütun (columnar) yapılı modern bir ECS miramisi yatar. `mimalloc` gibi global bellek tahsis edicilerle ve SIMD-uyumlu ArrayVec yapılarıyla bellek yükü (Allocation Overhead) ve Cache Miss oranları minimuma indirilmiştir. Çoklu sistemler darboğaz yaşamadan on binlerce "entity" güncelleyebilir.
 
 ### 🌌 Vektörel Gizmo Fizik Motoru
 Üçüncü parti bir fizik API'si (Jolt, Rapier vb.) kullanılmadan **tamamen matematiksel vektör hesabı** ile inşa edilmiş, multi-body yapılar için destek sunan özel fizik çözücüsü:
 * **Sweep and Prune (3D Broad-Phase):** 10.000'den fazla hareket eden nesne arasındaki olası çarpışmaları bulmak için Rayon destekli Çoklu-iş parçacığı (Multi-thread) kaba eleme algoritması.
-* **Narrow-Phase & GJK/EPA:** Karmaşık poligon, küre (sphere), kapsül (capsule) ve Convex Hull geometriler için kusursuz temas (contact) ve penetrasyon hesaplamaları.
+* **Narrow-Phase & GJK/EPA:** Karmaşık poligon, küre, kapsül ve Convex Hull geometriler için kusursuz temas ve penetrasyon hesaplamaları. Çarpışma manifoldları (Collision Manifolds) *sıfır-tahsisli* (zero-allocation) `ArrayVec` yapısıyla saniyede binlerce çarpışmayı GC (Garbage Collection) vuruşu yaşamadan çözer.
 * **Angular Jacobian Solver:** Eklemlerde (Ball-Socket, Hinge) açısal ivme ve tork üzerinden sequential impulse (iteratif vuruş) uygulayan pürüzsüz joint mekaniği.
 * **Coulomb Sürtünme & Moment of Inertia:** Gerçekçi statik/dinamik sürtünme modellerine sahip, nesnenin atalet (eylemsizlik) momentini dikkate alan kusursuz fizik iterasyonları.
 
@@ -29,6 +29,8 @@ Vulkan/WGSL altyapısı sayesinde devasa sahneleri belleğe tek seferde kopyalay
 * **Dynamic Shadows & Post-Processing:** Gerçek zamanlı yönlü ışık gölgeleri, Bloom parlaması, HDR ton haritalama (Tone Mapping) ve Vignette gibi atmosferik iyileştirmeler.
 * **Particle System & FX:** Karakterler veya drift dumanları gibi parçacık efektlerini draw-call yaratmadan üreten sistemler.
 
+### 📐 Özel Matematik ve SIMD Mimarlığı
+Üçüncü parti matematik veya vektör kütüphanesine bağlanmayan sıfırdan yazılmış geometri alt yapısı; Slab ve Möller–Trumbore gibi gelişmiş "Raycasting" kesişim algoritmalarını ve vektörel SIMD-tabanlı AABB/Frustum örtüşme testlerini içerir.
 ### 🎧 3D Uzamsal (Spatial) Ses Motoru
 Karakterlerin veya motor seslerinin, ana kameraya veya oyuncuya olan uzaklığına/yakınlığına göre şiddeti azalıp artan, objenin yönüne bağlı panoramik (Örn: Motor solda çalışıyorsa sol kulaklıktan gelmesi) ortam üreten RAM-cache optimizasyonlu sistem. Doppler efekti ve mesafe zayıflatması (Distance Attenuation) desteki.
 
@@ -37,6 +39,15 @@ Sahneyi gerçek zamanlı denetlemek için oyuna gömülü (In-Game) çalışan U
 * Gizli dosyaları ve nesneleri bulabileceğiniz dinamik hierarchy (Entity Ağacı).
 * Pozisyon, rotasyon ve özellikleri anlık olarak değiştirebileceğiniz Inspector.
 * Sürükle-bırak destekli "Prefab" sistemi ve sahne yönetim hiyerarşisi.
+
+## 📊 Endüstri Standartları Teknik Değerlendirmesi
+Gizmo Engine'in güncel mimarisi, modern AAA teknolojilerine (Unreal, Unity, Bevy/Flecs) kıyasla değerlendirildiğinde motorun gücü ve geliştirilme yol haritası (roadmap) şu şekildedir:
+
+* **ECS ve Bellek Mimarisi (4.5 / 5):** Archetype (Sütun/Columnar) tabanlı veri yapısıyla en güncel endüstri standartlarındadır. Yüksek performanslı Global Allocator (`mimalloc`) kullanımıyla Cache-Locality zirvededir. Multithread otomatik query dağıtımı için iş havuzu (work-stealing) otonomisine geçiş hedeflenmektedir.
+* **Fizik Motoru (4.0 / 5):** GJK/EPA dar fazı (narrow-phase), Broad-phase algoritması ve Gauss-Seidel Sıralı İmpuls (Sequential Impulse) mekaniği doğrudan PhysX standardıdır. İlerleyen safhalarda, Kumaş (Soft-Body) fizikleri eklenecektir.
+* **Grafik ve Render (3.5 / 5):** Vulkan (`wgpu`) tabanlı yapı; PBR render, Compute Shader parçacıkları (Particles) ve Dinamik gölgeler (CSM) ile başarılıdır. İleri seviye standardizasyon için Mesh Shader tabanlı GPU-Culling ve Temporal uzamsal filtrelemeler hedeflenmektedir.
+* **Editör ve Tooling (3.5 / 5):** `egui` tabanlı anlık editör, docking ve sahne yönetim özelliği esnek bir zemin sunar. Tam teşekküllü bir AAA stüdyo deneyimi için Görsel Profilci (Flamegraphs & GPU Profiler) ve Geri Al (Undo Command Pattern) hedefler arasındadır.
+* **Ses ve Math SIMD (3.5 / 5):** Gerçek zamanlı Doppler özellikli 3D Uzamsal (Spatial) Ses motoru ve SIMD-destekli (Slab, Möller-Trumbore) özel Culling/Raycast matematik çekirdeği ile bağımsızlığını kanıtlar.
 
 ## 📸 Motordan Görüntüler
 

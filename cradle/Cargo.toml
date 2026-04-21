@@ -9,6 +9,7 @@ gizmo-math = { path = "../crates/gizmo-math" }
 gizmo-core = { path = "../crates/gizmo-core" }
 pollster = "0.3"
 winit = { workspace = true }
+mimalloc = { workspace = true }
 
 [[bin]]
 name = "domino_visual"
