@@ -154,6 +154,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
         ground_y: GROUND_Y,
         max_linear_velocity: 50.0,
         max_angular_velocity: 50.0,
+        solver_iterations: 32,
         ..Default::default()
     });
     world.insert_resource(JointWorld::new());

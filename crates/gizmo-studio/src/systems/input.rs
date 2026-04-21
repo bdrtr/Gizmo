@@ -140,15 +140,15 @@ pub fn handle_input_and_scene_view(world: &mut World, editor_state: &mut EditorS
                     }
 
                     if closest_t < std::f32::MAX {
-                        final_pos = Some(ray.origin + ray.direction * closest_t);
+                        final_pos = Some((ray.origin + ray.direction * closest_t).into());
                     } else {
                         // Basit bir Z=0 / Y=0 zemin kesişimi yapalım
                         if ray.direction.y < -0.0001 {
                             let t = -ray.origin.y / ray.direction.y;
-                            final_pos = Some(ray.origin + ray.direction * t);
+                            final_pos = Some((ray.origin + ray.direction * t).into());
                         } else {
                             // Işık yukarı bakıyorsa 15 birim öteye atalım
-                            final_pos = Some(ray.origin + ray.direction * 15.0);
+                            final_pos = Some((ray.origin + ray.direction * 15.0).into());
                         }
                     }
                 }

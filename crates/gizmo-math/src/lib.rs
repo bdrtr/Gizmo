@@ -17,7 +17,7 @@ pub mod ray;
 
 // Geriye dönük uyumluluk veya ekstra yardımcı metodlar için pub modüller kalsın
 // ama custom tipleri glam ile değiştiriyoruz.
-pub use glam::{EulerRot, Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
+pub use glam::{EulerRot, Mat3, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 
 pub use aabb::Aabb;
 pub use frustum::{Frustum, Intersection, Plane};
@@ -39,13 +39,13 @@ mod tests {
         let aabb = Aabb::new(Vec3::splat(-1.0), Vec3::splat(1.0));
 
         // Ensure AABB is cleanly within the camera frustum limits
-        assert_eq!(frustum.test_aabb(&aabb), Intersection::Inside);
+        assert_eq!(frustum.test_aabb(aabb), Intersection::Inside);
 
         // Ray shooting exactly down the -Z axis from the camera position targeting the object
         let ray = Ray::new(Vec3::new(0.0, 0.0, 5.0), Vec3::new(0.0, 0.0, -1.0));
 
         // Math simulation verification: It should collide with the box
-        let t = ray.intersect_aabb(&aabb);
+        let t = ray.intersect_aabb(aabb);
         assert!(t.is_some());
         
         let intersection_distance = t.unwrap();
@@ -67,11 +67,11 @@ mod tests {
         // Scene Step 1: Object is pushed into the active view frustum
         let inside_mat = Mat4::from_translation(Vec3::new(0.0, 0.0, -10.0));
         let world_aabb_inside = local_aabb.transform(&inside_mat);
-        assert_eq!(frustum.test_aabb(&world_aabb_inside), Intersection::Inside);
+        assert_eq!(frustum.test_aabb(world_aabb_inside), Intersection::Inside);
 
         // Scene Step 2: Object is rotated and pushed way outside to the right of the visible frustum limits
         let outside_mat = Mat4::from_translation(Vec3::new(100.0, 0.0, 0.0));
         let world_aabb_outside = local_aabb.transform(&outside_mat);
-        assert_eq!(frustum.test_aabb(&world_aabb_outside), Intersection::Outside);
+        assert_eq!(frustum.test_aabb(world_aabb_outside), Intersection::Outside);
     }
 }

@@ -147,12 +147,12 @@ pub fn check_sphere_aabb_manifold(
         let dist = dist_sq.sqrt();
 
         let (normal, penetration) = if dist > 0.0001 {
-            let n = -(diff / dist);
+            let n = diff / dist;
             (n, sphere.radius - dist)
         } else {
             let diff_center = pos_aabb - pos_s;
             let n = if diff_center.length_squared() > 1e-6 {
-                -(diff_center.normalize())
+                diff_center.normalize()
             } else {
                 Vec3::new(0.0, 1.0, 0.0)
             };
@@ -203,7 +203,7 @@ pub fn check_sphere_obb_manifold(
 
         let dist = dist_sq.sqrt();
         let (normal, penetration) = if dist > 0.0001 {
-            let n = -rot_obb.mul_vec3(local_diff / dist);
+            let n = rot_obb.mul_vec3(local_diff / dist);
             (n, sphere.radius - dist)
         } else {
             // Tam merkezdeyse rastgele yön fırlat

@@ -96,7 +96,7 @@ pub fn default_render_pass(
 
             let center_mat = Mat4::from_translation(mesh.center_offset);
             let model = trans.global_matrix * center_mat;
-            if !crate::renderer::visible_in_frustum(&frustum, &model, &mesh.bounds) {
+            if !crate::renderer::visible_in_frustum(&frustum, &model, mesh.bounds) {
                 continue;
             }
             let instance_data = crate::renderer::gpu_types::InstanceRaw {

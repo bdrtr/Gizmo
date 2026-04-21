@@ -4,10 +4,13 @@ use gizmo_physics::components::*;
 use gizmo_physics::shape::*;
 use gizmo_physics::system::*;
 
-/// Setup a fresh physics world state
 fn create_physics_world() -> World {
     let mut world = World::new();
     world.insert_resource(PhysicsSolverState::new());
+    world.insert_resource(gizmo_physics::components::PhysicsConfig {
+        solver_iterations: 32,
+        ..Default::default()
+    });
     world
 }
 
@@ -52,6 +55,7 @@ fn domino_chain_reaction() {
     // Domino ebatları (Yarı boyut: en, boy, kalınlık) => G:0.2, Y:1.0, K:0.1
     let (dx, dy, dz) = (0.2, 1.0, 0.1);
     let mut last_domino_id = None;
+    let mut all_domino_ids = Vec::new();
 
     for i in 0..num_dominoes {
         let domino = world.spawn();
@@ -77,6 +81,7 @@ fn domino_chain_reaction() {
         if i == num_dominoes - 1 {
             last_domino_id = Some(domino.id());
         }
+        all_domino_ids.push(domino.id());
     }
 
     // 3. AĞIR KÜRE (Tetikleyici)
@@ -115,6 +120,13 @@ fn domino_chain_reaction() {
     let transforms = world.borrow::<Transform>().expect("ECS Aliasing Error").unwrap();
 
     let last_transform = transforms.get(last_id).expect("Son dominoyu bulamadık");
+
+    for (i, id) in all_domino_ids.iter().enumerate() {
+        if i < 5 || i > 95 || i % 10 == 0 {
+            let t = transforms.get(*id).unwrap();
+            println!("Domino {} -> Y: {:.3}, Z: {:.3}", i, t.position.y, t.position.z);
+        }
+    }
 
     assert!(
         last_transform.position.y < dy - 0.2,

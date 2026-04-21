@@ -312,7 +312,7 @@ pub fn execute_render_pipeline(
             let model = global_model * center_mat;
 
             // Frustum Culling (AABB vs view-projection frustum)
-            if !gizmo::renderer::visible_in_frustum(&frustum, &model, &mesh.bounds) {
+            if !gizmo::renderer::visible_in_frustum(&frustum, &model, mesh.bounds) {
                 continue;
             }
 

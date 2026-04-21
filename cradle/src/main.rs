@@ -64,7 +64,7 @@ fn main() {
             // Yüksek İterasyon: Newton sarkacı gibi klasik enerji dalgası taşınan simülasyonlarda
             // "hepsi birlikte hareket ediyor" sorununu çözmek ve impulse'un tüm zinciri
             // temiz bir şekilde aşmasını sağlamak için 8 yerine 64 Gaussian-Seidel iterasyonu atıyoruz.
-            world.get_resource_mut_or_default::<gizmo::physics::system::PhysicsSolverState>().solver_iterations = 120;
+            // world.get_resource_mut_or_default::<gizmo::physics::system::PhysicsSolverState>().solver_iterations = 120;
             
             let cam_entity = world.spawn();
             world.add_component(
