@@ -281,17 +281,15 @@ fn resolve_capsule_collisions<'a>(
         };
 
         if let Some((normal, depth)) = hit {
-            // Kapsülü collider'dan dışarı it (+normal * depth)
-            correction += normal * depth;
+            // Kapsülü collider'dan dışarı it (-normal * depth)
+            correction -= normal * depth;
 
             // Zemin tespiti: yüzey normal açısı slope limitten küçük mü (zemin mi?)
-            let n_y = normal.y;
-            if n_y < -limit_cos {
+            let actual_ground_normal = -normal;
+            let n_y = actual_ground_normal.y;
+            if n_y > limit_cos {
                 is_grounded = true;
-                ground_normal += normal * -1.0;
-            } else if n_y > limit_cos {
-                is_grounded = true;
-                ground_normal += normal;
+                ground_normal += actual_ground_normal;
             }
         }
     }
@@ -319,9 +317,9 @@ fn resolve_capsule_collisions<'a>(
 /// 5. Basamak çıkma kontrolü
 /// 6. Eğim limiti kontrolü
 pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
-    let colliders = world.borrow::<Collider>().unwrap();
-    let mut trans_storage = world.borrow_mut::<Transform>().unwrap();
-    let mut controllers = world.borrow_mut::<CharacterController>().unwrap();
+    let colliders = world.borrow::<Collider>();
+    let mut trans_storage = world.borrow_mut::<Transform>();
+    let mut controllers = world.borrow_mut::<CharacterController>();
 
     let entities: Vec<u32> = controllers.entities().collect();
     for entity in entities {
@@ -412,7 +410,7 @@ pub fn physics_character_system(world: &gizmo_core::World, dt: f32) {
 
             // === 4. Zemin düzlemi kontrolü (fallback — collider yoksa) ===
             let ground_y = world
-                .get_resource::<crate::components::PhysicsConfig>().expect("ECS Aliasing Error")
+                .get_resource::<crate::components::PhysicsConfig>()
                 .map(|c| c.ground_y)
                 .unwrap_or(-1.0);
             let foot_y = new_pos.y - cc.half_height - cc.radius;

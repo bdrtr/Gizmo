@@ -29,7 +29,7 @@ fn main() {
 
     app = app.set_ui(|world, _state, ctx| {
         // Draw the editor filling the screen
-        if let Some(mut editor_state) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+        if let Some(mut editor_state) = world.get_resource_mut::<EditorState>() {
             gizmo::egui::CentralPanel::default().show(ctx, |_ui| {
                 gizmo::editor::draw_editor(ctx, world, &mut editor_state);
             });

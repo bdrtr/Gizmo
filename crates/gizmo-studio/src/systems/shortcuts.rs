@@ -41,7 +41,7 @@ pub fn handle_editor_shortcuts(world: &mut World, editor_state: &mut EditorState
         // Kısayol: F (Seçili Objeye Odaklan) (Yine Ctrl'den bağımsız tetiklenmeli)
         if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyF as u32) {
             if !editor_state.selection.entities.is_empty() {
-                    if let Ok(transforms) = world.borrow::<Transform>() {
+                    let transforms = world.borrow::<Transform>(); {
                         let mut center_pos = gizmo::math::Vec3::ZERO;
                         let mut count = 0.0;
                         for &target_id in editor_state.selection.entities.iter() {
@@ -55,10 +55,7 @@ pub fn handle_editor_shortcuts(world: &mut World, editor_state: &mut EditorState
                             let target_pos = center_pos / count;
                             drop(transforms); // Ödünç almayı bırak
 
-                            if let (Ok(mut t_mut), Ok(mut cam_mut)) = (
-                                world.borrow_mut::<Transform>(),
-                                world.borrow_mut::<gizmo::renderer::components::Camera>(),
-                            ) {
+                            let mut t_mut = world.borrow_mut::<Transform>(); let mut cam_mut = world.borrow_mut::<gizmo::renderer::components::Camera>(); {
                                 if let (Some(cam_t), Some(cam)) = (
                                     t_mut.get_mut(state.editor_camera),
                                     cam_mut.get_mut(state.editor_camera),

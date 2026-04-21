@@ -24,7 +24,7 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
 
                 if ui.add_enabled(!is_dialog_open, egui::Button::new("💾 Kaydet")).clicked() {
                     let (tx, rx) = std::sync::mpsc::channel();
-                    state.pending_dialog_rx = Some(rx);
+                    state.pending_dialog_rx = Some(std::sync::Mutex::new(rx));
                     let scene_path = state.scene_path.clone();
                     std::thread::spawn(move || {
                         let mut initial_dir = std::path::PathBuf::from(".");
@@ -46,7 +46,7 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
 
                 if ui.add_enabled(!is_dialog_open, egui::Button::new("📂 Yükle")).clicked() {
                     let (tx, rx) = std::sync::mpsc::channel();
-                    state.pending_dialog_rx = Some(rx);
+                    state.pending_dialog_rx = Some(std::sync::Mutex::new(rx));
                     let scene_path = state.scene_path.clone();
                     std::thread::spawn(move || {
                         let mut initial_dir = std::path::PathBuf::from(".");

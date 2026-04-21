@@ -67,24 +67,28 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
 /// Tüm editör panellerini tek çağrıyla çizer
 pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) {
     // ==== Asenkron İletişim (Dialog vb.) Olay Döngüsü ====
-    if let Some(rx) = &state.pending_dialog_rx {
-        match rx.try_recv() {
-            Ok((is_save, Some(path_str))) => {
-                state.scene_path = path_str.clone();
-                if is_save {
-                    state.status_message = format!("Sahne kaydediliyor → {}", path_str);
-                    state.scene.save_request = Some(path_str);
-                } else {
-                    state.status_message = format!("Sahne yüklendi ← {}", path_str);
-                    state.scene.load_request = Some(path_str);
-                }
-                state.pending_dialog_rx = None;
-            }
-            Ok((_, None)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                state.pending_dialog_rx = None;
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {} // Still waiting
+    let msg = if let Some(rx) = &state.pending_dialog_rx {
+        match rx.lock().unwrap().try_recv() {
+            Ok(v) => Some(v),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some((false, None)),
+            Err(_) => None,
         }
+    } else {
+        None
+    };
+
+    if let Some((is_save, opt_path)) = msg {
+        if let Some(path_str) = opt_path {
+            state.scene_path = path_str.clone();
+            if is_save {
+                state.status_message = format!("Sahne kaydediliyor → {}", path_str);
+                state.scene.save_request = Some(path_str);
+            } else {
+                state.status_message = format!("Sahne yüklendi ← {}", path_str);
+                state.scene.load_request = Some(path_str);
+            }
+        }
+        state.pending_dialog_rx = None;
     }
 
     // 1. Status Bar (En altta)

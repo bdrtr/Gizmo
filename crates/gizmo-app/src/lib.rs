@@ -59,11 +59,11 @@ impl<State: 'static> App<State> {
 
     /// Sisteme yeni bir Olay (Event) türü kaydeder.
     /// Bu işlem sayesinde her kare bitişinde çift-buffer `update()` otomatik çalışır.
-    pub fn add_event<T: 'static>(mut self) -> Self {
+    pub fn add_event<T: 'static + Send + Sync>(mut self) -> Self {
         self.world
             .insert_resource(gizmo_core::event::Events::<T>::new());
         self.event_updaters.push(Box::new(|world| {
-            if let Some(mut events) = world.get_resource_mut::<gizmo_core::event::Events<T>>().expect("ECS Aliasing Error") {
+            if let Some(mut events) = world.get_resource_mut::<gizmo_core::event::Events<T>>() {
                 events.update();
             }
         }));
@@ -334,12 +334,12 @@ impl<State: 'static> App<State> {
                             // --- Scene View RTT (Render To Texture) YÖNETİMİ ---
                             if self
                                 .world
-                                .get_resource::<gizmo_editor::EditorState>().expect("ECS Aliasing Error")
+                                .get_resource::<gizmo_editor::EditorState>()
                                 .is_some()
                             {
                                 let mut ed_state_ref = self
                                     .world
-                                    .get_resource_mut::<gizmo_editor::EditorState>().expect("ECS Aliasing Error")
+                                    .get_resource_mut::<gizmo_editor::EditorState>()
                                     .unwrap();
                                 let scene_w = ed_state_ref.scene_view_size.map(|s| s.x as u32).unwrap_or(renderer.size.width);
                                 let scene_h = ed_state_ref.scene_view_size.map(|s| s.y as u32).unwrap_or(renderer.size.height);
@@ -351,7 +351,7 @@ impl<State: 'static> App<State> {
 
                                 // Scene View RTT
                                 let mut needs_recreate_scene = false;
-                                if let Some(target) = self.world.get_resource::<gizmo_renderer::components::EditorRenderTarget>().expect("ECS Aliasing Error") {
+                                if let Some(target) = self.world.get_resource::<gizmo_renderer::components::EditorRenderTarget>() {
                                     if target.width != scene_w || target.height != scene_h { needs_recreate_scene = true; }
                                 } else { needs_recreate_scene = true; }
 
@@ -374,7 +374,7 @@ impl<State: 'static> App<State> {
 
                                 // Game View RTT
                                 let mut needs_recreate_game = false;
-                                if let Some(target) = self.world.get_resource::<gizmo_renderer::components::GameRenderTarget>().expect("ECS Aliasing Error") {
+                                if let Some(target) = self.world.get_resource::<gizmo_renderer::components::GameRenderTarget>() {
                                     if target.width != game_w || target.height != game_h { needs_recreate_game = true; }
                                 } else { needs_recreate_game = true; }
 
@@ -408,9 +408,9 @@ impl<State: 'static> App<State> {
                             // ECS Sistemlerini Çalıştırmadan önce DI için Core Resource'ları Güncelle
                             self.world.insert_resource(self.input.clone());
                             {
-                                let has_time = self.world.get_resource::<gizmo_core::time::Time>().expect("ECS Aliasing Error").is_some();
+                                let has_time = self.world.get_resource::<gizmo_core::time::Time>().is_some();
                                 if has_time {
-                                    let mut time = self.world.get_resource_mut::<gizmo_core::time::Time>().expect("ECS Aliasing Error").unwrap();
+                                    let mut time = self.world.get_resource_mut::<gizmo_core::time::Time>().unwrap();
                                     time.update(dt);
                                 } else {
                                     let mut time = gizmo_core::time::Time::new();

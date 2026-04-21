@@ -145,7 +145,7 @@ pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> 
     let scales = lua.create_table()?;
     let names = lua.create_table()?;
 
-    let transforms = world.borrow::<gizmo_physics::components::Transform>().expect("ECS Aliasing Error");
+    let transforms = world.borrow::<gizmo_physics::components::Transform>();
     for (eid, _) in transforms.iter() {
         if let Some(t) = transforms.get(eid) {
             let pos = lua.create_table()?;
@@ -169,7 +169,7 @@ pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> 
         }
     }
 
-    let vels = world.borrow::<gizmo_physics::components::Velocity>().expect("ECS Aliasing Error");
+    let vels = world.borrow::<gizmo_physics::components::Velocity>();
     for (eid, _) in vels.iter() {
         if let Some(v) = vels.get(eid) {
             let vel = lua.create_table()?;
@@ -180,7 +180,7 @@ pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> 
         }
     }
 
-    let entity_names = world.borrow::<gizmo_core::EntityName>().expect("ECS Aliasing Error");
+    let entity_names = world.borrow::<gizmo_core::EntityName>();
     for (eid, _) in entity_names.iter() {
         if let Some(n) = entity_names.get(eid) {
             names.set(eid, n.0.clone())?;

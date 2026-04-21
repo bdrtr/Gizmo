@@ -70,7 +70,7 @@ pub struct BuildState {
     pub request: bool,
     pub target: BuildTarget,
     pub is_building: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    pub logs_rx: Option<std::sync::mpsc::Receiver<String>>,
+    pub logs_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
     pub cached_logs: Vec<(String, egui::Color32)>,
     pub start_time: Option<std::time::Instant>,
 }
@@ -84,7 +84,7 @@ pub struct AssetBrowserState {
     pub filter: String,
     pub root: String,
     pub show: bool,
-    pub workspace_rx: Option<std::sync::mpsc::Receiver<String>>,
+    pub workspace_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
     pub cached_dir: Option<(String, std::time::Instant, Vec<(std::path::PathBuf, String, bool)>)>,
 }
 impl Default for AssetBrowserState {
@@ -241,7 +241,7 @@ pub struct EditorState {
     )>,
     pub debug_spawned_entities: Vec<(f32, u32)>,
 
-    pub pending_dialog_rx: Option<std::sync::mpsc::Receiver<(bool, Option<String>)>>,
+    pub pending_dialog_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<(bool, Option<String>)>>>,
 }
 
 impl EditorState {

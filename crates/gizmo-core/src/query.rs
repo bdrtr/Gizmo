@@ -138,6 +138,53 @@ impl<'w, Q: WorldQuery<'w>> Query<'w, Q> {
             .map(|&idx| self.world.archetype_index.archetypes[idx].len())
             .sum()
     }
+
+    /// İş parçacığı havuzu (Work-Stealing) ile çalışan lock-free paralel iterasyon
+    pub fn par_for_each<F>(&self, func: F)
+    where
+        F: Fn((u32, Q::Item<'_>)) + Send + Sync,
+    {
+        use rayon::prelude::*;
+
+        // Pointer taşıyıcı wrapper — Güvenlidir çünkü Query::new() check_aliasing yapmıştır
+        #[derive(Copy, Clone)]
+        struct FetchWrapper<T>(T);
+        unsafe impl<T> Send for FetchWrapper<T> {}
+        unsafe impl<T> Sync for FetchWrapper<T> {}
+
+        impl<T: Copy> FetchWrapper<T> {
+            fn get(&self) -> T {
+                self.0
+            }
+        }
+
+        self.matching_archetypes.par_iter().for_each(|&arch_idx| {
+            let arch = &self.world.archetype_index.archetypes[arch_idx];
+            if let Some(fetch) = unsafe { Q::fetch_raw(arch) } {
+                let len = arch.len();
+                let wrapped_fetch = FetchWrapper(fetch);
+                let entities_ptr = FetchWrapper(arch.entities().as_ptr());
+                let func_ref = &func;
+
+                // Her Archetype'ı cache dostu chunk'lar halinde ayırıp process ediyoruz
+                // Chunk size: 512 (Bevy benzeri)
+                (0..len).into_par_iter().with_min_len(512).for_each(move |row| {
+                    unsafe {
+                        let id = *entities_ptr.get().add(row);
+                        let item = Q::get_item(wrapped_fetch.get(), row);
+                        func_ref((id, item));
+                    }
+                });
+            }
+        });
+    }
+
+    pub fn par_for_each_mut<F>(&mut self, func: F)
+    where
+        F: Fn((u32, Q::Item<'_>)) + Send + Sync,
+    {
+        self.par_for_each(func);
+    }
 }
 
 // =========================================================================

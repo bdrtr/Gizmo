@@ -127,9 +127,9 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
         },
     }
 
-    let colliders_storage = world.borrow::<Collider>().unwrap();
-    let rbs = world.borrow::<RigidBody>().unwrap();
-    let ts = world.borrow::<Transform>().unwrap();
+    let colliders_storage = world.borrow::<Collider>();
+    let rbs = world.borrow::<RigidBody>();
+    let ts = world.borrow::<Transform>();
 
     let static_cols: Vec<StaticCol> = colliders_storage.entities()
         .filter_map(|e| {
@@ -173,12 +173,12 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
         })
         .collect();
 
-    let mut trans_storage = world.borrow_mut::<Transform>().unwrap();
-    let mut vel_storage = world.borrow_mut::<Velocity>().unwrap();
-    let mut rb_storage = world.borrow_mut::<RigidBody>().unwrap();
-    let vehicles = world.borrow::<VehicleController>().unwrap();
-    let children_storage = world.borrow::<gizmo_core::component::Children>().unwrap();
-    let mut wheel_storage = world.borrow_mut::<WheelComponent>().unwrap();
+    let mut trans_storage = world.borrow_mut::<Transform>();
+    let mut vel_storage = world.borrow_mut::<Velocity>();
+    let mut rb_storage = world.borrow_mut::<RigidBody>();
+    let vehicles = world.borrow::<VehicleController>();
+    let children_storage = world.borrow::<gizmo_core::component::Children>();
+    let mut wheel_storage = world.borrow_mut::<WheelComponent>();
 
     let entities: Vec<u32> = vehicles.entities().collect();
     for entity in entities {
@@ -263,7 +263,7 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
 
                 // 1. Zemin Yüzeyi fallback (PhysicsConfig'den oku)
                 let ground_y = world
-                    .get_resource::<crate::components::PhysicsConfig>().expect("ECS Aliasing Error")
+                    .get_resource::<crate::components::PhysicsConfig>()
                     .map(|c| c.ground_y)
                     .unwrap_or(-1.0);
                 if dir.y < -0.001 && origin.y > ground_y {

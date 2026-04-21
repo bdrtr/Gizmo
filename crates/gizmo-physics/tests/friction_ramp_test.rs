@@ -26,14 +26,14 @@ fn run_simulation(world: &mut gizmo_core::World, dt: f32, steps: usize) {
 
 /// Belirli bir entity'nin Transform pozisyonunu oku
 fn get_position(world: &gizmo_core::World, entity_id: u32) -> Vec3 {
-    let ts = world.borrow::<gizmo_physics::Transform>().unwrap();
-    ts.unwrap().get(entity_id).unwrap().position
+    let ts = world.borrow::<gizmo_physics::Transform>();
+    ts.get(entity_id).unwrap().position
 }
 
 /// Belirli bir entity'nin Velocity'sini oku
 fn get_velocity(world: &gizmo_core::World, entity_id: u32) -> gizmo_physics::Velocity {
-    let vs = world.borrow::<gizmo_physics::Velocity>().unwrap();
-    *vs.unwrap().get(entity_id).unwrap()
+    let vs = world.borrow::<gizmo_physics::Velocity>();
+    *vs.get(entity_id).unwrap()
 }
 
 /// Rampa + küp + zemin sahnesi oluştur. Küpü rampa üstünden bırak.

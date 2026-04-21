@@ -3,8 +3,8 @@ use gizmo_core::World;
 use gizmo_math::{Mat4, Quat, Vec3};
 
 pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) {
-    let mut players = world.borrow_mut::<AnimationPlayer>().unwrap();
-    let mut skeletons = world.borrow_mut::<Skeleton>().unwrap();
+    let mut players = world.borrow_mut::<AnimationPlayer>();
+    let mut skeletons = world.borrow_mut::<Skeleton>();
     {
         let entities: Vec<u32> = players.entities().collect();
         for entity in entities {

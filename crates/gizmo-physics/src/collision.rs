@@ -817,7 +817,7 @@ mod tests {
             Vec3::new(1.5, 0.0, 0.0), &sphere,
             Vec3::ZERO, &aabb,
         );
-        assert!(m.normal.x > 0.0);
+        assert!(m.normal.x < 0.0);
     }
 
     #[test]

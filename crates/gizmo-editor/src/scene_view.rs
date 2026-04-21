@@ -117,12 +117,9 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
         (state.camera.view, state.camera.proj)
     {
         if !state.selection.entities.is_empty() {
-            let transforms_storage = world.borrow_mut::<gizmo_physics::components::Transform>();
-            match transforms_storage {
-                Err(e) => {
-                    eprintln!("ECS borrow hatası: {:?}", e);
-                }
-                Ok(mut transforms) => {
+            let mut transforms = world.borrow_mut::<gizmo_physics::components::Transform>();
+            {
+                {
                     let primary_id = state.selection.primary.unwrap_or_else(|| *state.selection.entities.iter().next().unwrap());
                     let mut primary_model_mat = gizmo_math::Mat4::IDENTITY;
                     if let Some(primary_t) = transforms.get(primary_id.id()) {

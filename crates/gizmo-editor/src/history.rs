@@ -66,7 +66,7 @@ impl History {
         if let Some(action) = self.undo_stack.pop_back() {
             match action.clone() {
                 EditorAction::TransformsChanged { changes } => {
-                    if let Ok(mut transforms) = world.borrow_mut::<Transform>() {
+                    let mut transforms = world.borrow_mut::<Transform>(); {
                         for (entity, old_transform, _new_transform) in changes.iter() {
                             if let Some(t) = transforms.get_mut(entity.id()) {
                                 *t = *old_transform;
@@ -91,7 +91,7 @@ impl History {
         if let Some(action) = self.redo_stack.pop_back() {
             match action.clone() {
                 EditorAction::TransformsChanged { changes } => {
-                    if let Ok(mut transforms) = world.borrow_mut::<Transform>() {
+                    let mut transforms = world.borrow_mut::<Transform>(); {
                         for (entity, _old_transform, new_transform) in changes.iter() {
                             if let Some(t) = transforms.get_mut(entity.id()) {
                                 *t = *new_transform;

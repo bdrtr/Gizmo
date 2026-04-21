@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-mlua = { version = "0.9", features = ["lua54", "vendored"] }
+mlua = { version = "0.9", features = ["lua54", "vendored", "send"] }
 gizmo-core = { path = "../gizmo-core" }
 gizmo-math = { path = "../gizmo-math" }
 gizmo-physics = { path = "../gizmo-physics" }

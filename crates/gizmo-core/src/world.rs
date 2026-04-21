@@ -1,9 +1,8 @@
 use std::any::TypeId;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::{
-    cell::RefCell,
-    cell::{Ref, RefMut, BorrowError, BorrowMutError},
     marker::PhantomData,
+    sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
 use crate::archetype::{Archetype, ComponentInfo, EntityLocation};
@@ -201,7 +200,7 @@ pub struct World {
     free_set: HashSet<u32>,
     
     // Entity'den bağımsız global veriler (Time, WindowSize, Input vs.)
-    resources: HashMap<TypeId, RefCell<Box<dyn std::any::Any>>>,
+    resources: HashMap<TypeId, RwLock<Box<dyn std::any::Any + Send + Sync>>>,
 
     /// Entity ID → archetype konumu. Hızlı O(1) lookup sağlar.
     /// entity_id indeks olarak kullanılır.
@@ -220,7 +219,7 @@ pub struct World {
 
 impl World {
     pub fn new() -> Self {
-        Self {
+        let mut world = Self {
             next_entity_id: 0,
             generations: Vec::new(),
             free_ids: VecDeque::new(),
@@ -232,7 +231,9 @@ impl World {
             despawn_hooks: Vec::new(),
             entities_to_despawn: Vec::new(),
             is_despawning: false,
-        }
+        };
+        world.insert_resource(crate::commands::CommandQueue::new());
+        world
     }
 }
 
@@ -470,7 +471,7 @@ impl World {
     }
 
     /// Component dizisine okuma erişimi (Read-Only, Ref ile paylaşılabilir).
-    pub fn borrow<T: Component>(&self) -> Result<StorageView<'_, T>, BorrowError> {
+    pub fn borrow<T: Component>(&self) -> StorageView<'_, T> {
         let type_id = TypeId::of::<T>();
         
         // Bu componenti içeren tüm archetype'ları bul
@@ -485,15 +486,15 @@ impl World {
             }
         }
 
-        Ok(StorageView {
+        StorageView {
             archetypes: matching,
             arch_id_to_idx,
             entity_locations: &self.entity_locations,
             _marker: PhantomData,
-        })
+        }
     }
 
-    pub fn borrow_mut<T: Component>(&self) -> Result<StorageViewMut<'_, T>, BorrowMutError> {
+    pub fn borrow_mut<T: Component>(&self) -> StorageViewMut<'_, T> {
         let type_id = TypeId::of::<T>();
         
         let mut matching = Vec::new();
@@ -506,12 +507,12 @@ impl World {
             }
         }
 
-        Ok(StorageViewMut {
+        StorageViewMut {
             archetypes: matching,
             arch_id_to_idx,
             entity_locations: &self.entity_locations,
             _marker: PhantomData,
-        })
+        }
     }
 
     // ComponentStorage/SparseSet tabanlı eski metodlar silindi.
@@ -553,63 +554,78 @@ impl World {
     // ==========================================================
 
     /// Sisteme global bir Resource ekler veya üzerine yazar.
-    pub fn insert_resource<T: 'static>(&mut self, resource: T) {
+    pub fn insert_resource<T: Send + Sync + 'static>(&mut self, resource: T) {
         let type_id = TypeId::of::<T>();
         self.resources
-            .insert(type_id, RefCell::new(Box::new(resource)));
+            .insert(type_id, RwLock::new(Box::new(resource)));
     }
 
     /// Global bir Resource'u okumak için çağrılır (Immutable Borrow)
-    pub fn get_resource<T: 'static>(&self) -> Result<Option<Ref<'_, T>>, BorrowError> {
+    pub fn get_resource<T: 'static>(&self) -> Option<ResourceReadGuard<'_, T>> {
         let type_id = TypeId::of::<T>();
-        let storage = match self.resources.get(&type_id) {
-            Some(s) => s,
-            None => return Ok(None),
-        };
-
-        match storage.try_borrow() {
-            Ok(borrowed) => Ok(Some(Ref::map(borrowed, |s| {
-                s.downcast_ref::<T>().unwrap()
-            }))),
-            Err(e) => Err(e),
-        }
+        let storage = self.resources.get(&type_id)?;
+        let guard = storage.try_read().expect("ECS Aliasing Error: Resource borrow conflict");
+        Some(ResourceReadGuard { guard, _marker: PhantomData })
     }
 
     /// Global bir Resource'u değiştirmek için çağrılır (Mutable Borrow)
-    pub fn get_resource_mut<T: 'static>(&self) -> Result<Option<RefMut<'_, T>>, BorrowMutError> {
+    pub fn get_resource_mut<T: 'static>(&self) -> Option<ResourceWriteGuard<'_, T>> {
         let type_id = TypeId::of::<T>();
-        let storage = match self.resources.get(&type_id) {
-            Some(s) => s,
-            None => return Ok(None),
-        };
-
-        match storage.try_borrow_mut() {
-            Ok(borrowed) => Ok(Some(RefMut::map(borrowed, |s| {
-                s.downcast_mut::<T>().unwrap()
-            }))),
-            Err(e) => Err(e),
-        }
+        let storage = self.resources.get(&type_id)?;
+        let guard = storage.try_write().expect("ECS Aliasing Error: Resource mutable borrow conflict");
+        Some(ResourceWriteGuard { guard, _marker: PhantomData })
     }
 
     /// Global bir Resource yoksa Default olarak oluşturur, ardından Mutable Borrow döndürür.
     /// World mutable borrow gerektirir, böylece hashmap'e güvenle kayıt yapılabilir.
-    pub fn get_resource_mut_or_default<T: Default + 'static>(&mut self) -> RefMut<'_, T> {
+    pub fn get_resource_mut_or_default<T: Default + Send + Sync + 'static>(&mut self) -> ResourceWriteGuard<'_, T> {
         let type_id = TypeId::of::<T>();
-        self.resources.entry(type_id).or_insert_with(|| RefCell::new(Box::new(T::default())));
+        self.resources.entry(type_id).or_insert_with(|| RwLock::new(Box::new(T::default())));
 
         let storage = self.resources.get(&type_id).unwrap();
-        RefMut::map(storage.borrow_mut(), |s| s.downcast_mut::<T>().unwrap())
+        let guard = storage.write().unwrap();
+        ResourceWriteGuard { guard, _marker: PhantomData }
     }
 
     /// Global bir Resource'u ECS'ten tamamen çıkartır ve sahipliğini döndürür
     pub fn remove_resource<T: 'static>(&mut self) -> Option<T> {
         let type_id = TypeId::of::<T>();
         let cell = self.resources.remove(&type_id)?;
-        let boxed_any = cell.into_inner();
+        let boxed_any = cell.into_inner().ok()?;
         match boxed_any.downcast::<T>() {
             Ok(boxed_t) => Some(*boxed_t),
             Err(_) => None,
         }
+    }
+}
+
+pub struct ResourceReadGuard<'a, T> {
+    guard: RwLockReadGuard<'a, Box<dyn std::any::Any + Send + Sync>>,
+    _marker: PhantomData<T>,
+}
+
+impl<'a, T: 'static> std::ops::Deref for ResourceReadGuard<'a, T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        self.guard.downcast_ref::<T>().unwrap()
+    }
+}
+
+pub struct ResourceWriteGuard<'a, T> {
+    guard: RwLockWriteGuard<'a, Box<dyn std::any::Any + Send + Sync>>,
+    _marker: PhantomData<T>,
+}
+
+impl<'a, T: 'static> std::ops::Deref for ResourceWriteGuard<'a, T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        self.guard.downcast_ref::<T>().unwrap()
+    }
+}
+
+impl<'a, T: 'static> std::ops::DerefMut for ResourceWriteGuard<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.guard.downcast_mut::<T>().unwrap()
     }
 }
 
@@ -680,14 +696,14 @@ mod tests {
         world.add_component(e1, Position { x: 1.0, y: 2.0 });
         world.add_component(e1, Health(100));
 
-        assert!(world.borrow::<Position>().unwrap().get(e1.id()).is_some());
-        assert!(world.borrow::<Health>().unwrap().get(e1.id()).is_some());
+        assert!(world.borrow::<Position>().get(e1.id()).is_some());
+        assert!(world.borrow::<Health>().get(e1.id()).is_some());
 
         world.despawn(e1);
 
         assert!(!world.is_alive(e1));
-        assert!(world.borrow::<Position>().unwrap().get(e1.id()).is_none());
-        assert!(world.borrow::<Health>().unwrap().get(e1.id()).is_none());
+        assert!(world.borrow::<Position>().get(e1.id()).is_none());
+        assert!(world.borrow::<Health>().get(e1.id()).is_none());
     }
 
     #[test]
@@ -704,8 +720,8 @@ mod tests {
         // Despawn e1 — should not affect e2
         world.despawn(e1);
 
-        assert!(world.borrow::<Position>().unwrap().get(e2.id()).is_some());
-        assert!(world.borrow::<Health>().unwrap().get(e2.id()).is_some());
+        assert!(world.borrow::<Position>().get(e2.id()).is_some());
+        assert!(world.borrow::<Health>().get(e2.id()).is_some());
         assert_eq!(world.entity_count(), 1);
     }
 
@@ -750,7 +766,7 @@ mod tests {
         world.add_component(e, Health(100));
         world.add_component(e, Health(50)); // Overwrite
 
-        let hp = world.borrow::<Health>().unwrap();
+        let hp = world.borrow::<Health>();
         assert_eq!(hp.get(e.id()).unwrap().0, 50);
     }
 
@@ -766,12 +782,12 @@ mod tests {
         world.despawn(e);
 
         assert!(!world.is_alive(e));
-        assert!(world.borrow::<Health>().unwrap().get(id).is_none());
+        assert!(world.borrow::<Health>().get(id).is_none());
 
         // ID yeniden kullanıldığında eski Health taşınmamalı
         let e2 = world.spawn();
         assert_eq!(e2.id(), id);
-        assert!(world.borrow::<Health>().unwrap().get(e2.id()).is_none());
+        assert!(world.borrow::<Health>().get(e2.id()).is_none());
     }
 
     #[test]

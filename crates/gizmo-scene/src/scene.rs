@@ -71,10 +71,10 @@ impl SceneData {
     /// Belirtilen entity ID'lerini serileştirir
     pub fn serialize_entities(world: &World, entity_ids: Vec<u32>, registry: &crate::registry::SceneRegistry) -> Vec<EntityData> {
         let mut entities_data = Vec::new();
-        let names = world.borrow::<EntityName>().expect("ECS Aliasing Error");
-        let meshes = world.borrow::<Mesh>().expect("ECS Aliasing Error");
-        let materials = world.borrow::<Material>().expect("ECS Aliasing Error");
-        let parents = world.borrow::<Parent>().expect("ECS Aliasing Error");
+        let names = world.borrow::<EntityName>();
+        let meshes = world.borrow::<Mesh>();
+        let materials = world.borrow::<Material>();
+        let parents = world.borrow::<Parent>();
 
         for &id in &entity_ids {
             let name = names.get(id).map(|n| n.0.clone());
@@ -323,7 +323,7 @@ impl SceneData {
         }
 
         let mut ids_to_save = vec![root_entity_id];
-        let children_storage = world.borrow::<Children>().expect("ECS Aliasing Error");
+        let children_storage = world.borrow::<Children>();
         
         let mut i = 0;
         while i < ids_to_save.len() {
@@ -404,7 +404,7 @@ impl SceneData {
             // Root entity'i existing parent'a (daha önce Children var mı yok mu bakarak) ekle!
             let mut children_list = Vec::new();
             if let Some(existing_children) = world
-                .borrow::<Children>().expect("ECS Aliasing Error")
+                .borrow::<Children>()
                 .get(p_id)
             {
                 children_list = existing_children.0.clone();
@@ -423,7 +423,7 @@ impl SceneData {
     /// Entity listesini döndürür (Lua API'si için)
     pub fn get_entity_names(world: &World) -> Vec<(u32, String)> {
         let mut result = Vec::new();
-        let names = world.borrow::<EntityName>().expect("ECS Aliasing Error");
+        let names = world.borrow::<EntityName>();
         for (entity_id, _) in names.iter() {
             if let Some(name) = names.get(entity_id) {
                 result.push((entity_id, name.0.clone()));
@@ -434,7 +434,7 @@ impl SceneData {
 
     /// İsme göre entity bul
     pub fn find_entity_by_name(world: &World, target_name: &str) -> Option<u32> {
-        let names = world.borrow::<EntityName>().expect("ECS Aliasing Error");
+        let names = world.borrow::<EntityName>();
         for (entity_id, _) in names.iter() {
             if let Some(name) = names.get(entity_id) {
                 if name.0 == target_name {

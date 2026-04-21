@@ -12,7 +12,7 @@ pub fn handle_build_requests(editor_state: &mut EditorState) {
             let is_building_flag = editor_state.build.is_building.clone();
             
             let (tx, rx) = std::sync::mpsc::channel();
-            editor_state.build.logs_rx = Some(rx);
+            editor_state.build.logs_rx = Some(std::sync::Mutex::new(rx));
             let build_target = editor_state.build.target;
 
             std::thread::spawn(move || {

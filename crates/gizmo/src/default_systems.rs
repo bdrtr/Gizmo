@@ -37,8 +37,7 @@ pub fn default_render_pass(
     // TODO: Bütün nesnelerin (özellikle kamera ve çizilecek objelerin) global matrix'leri
     // bu pass çağrılmadan hemen önce bir `update_transforms(world)` sistemiyle güncellenmiş olmalıdır.
 
-    if let (Ok(cameras), Ok(transforms)) =
-        (world.borrow::<Camera>(), world.borrow::<Transform>())
+    let cameras = world.borrow::<Camera>(); let transforms = world.borrow::<Transform>();
     {
         // TODO: Aktif kamera için `ActiveCamera` tarzı bir marker bileşeni kullanılmalı.
         // ECS array sırası stabil değildir. Şimdilik geçici çözüm olarak ilki alınıyor.
@@ -85,7 +84,7 @@ pub fn default_render_pass(
         bytemuck::cast_slice(&[scene_uniform_data]),
     );
 
-    let renderers = world.borrow::<MeshRenderer>().expect("ECS Aliasing Error");
+    let renderers = world.borrow::<MeshRenderer>();
     let mut instances = Vec::new();
     let mut draw_items = Vec::new();
     if let Some(mut q) = world.query::<(&Mesh, &Transform, &Material)>() {

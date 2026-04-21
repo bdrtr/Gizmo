@@ -11,7 +11,7 @@
 
 use std::alloc::{self, Layout};
 use std::any::TypeId;
-use std::cell::{Ref, RefCell, RefMut};
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::collections::HashMap;
 use std::ptr::{self, NonNull};
 
@@ -411,9 +411,9 @@ pub struct Archetype {
     /// Component tipi → sütun indeksi (columns vektöründeki)
     column_indices: HashMap<TypeId, usize>,
     /// Sütunların vektörü — her biri bir component tipinin verisi.
-    /// RefCell ile sarmalandı çünkü aynı archetype içindeki farklı sütunlara 
-    /// eşzamanlı erişim (örn: &Transform ve &mut Velocity) gerekebilir.
-    columns: Vec<RefCell<Column>>,
+    /// RwLock ile sarmalandı çünkü aynı archetype içindeki farklı sütunlara 
+    /// eşzamanlı ve multi-thread erişim (örn: &Transform ve &mut Velocity) gerekebilir.
+    columns: Vec<RwLock<Column>>,
     /// Bu archetype'taki entity ID'leri (sıra = satır indeksi)
     entities: Vec<u32>,
     /// Component ekleme/çıkarma geçiş cache'i
@@ -429,7 +429,7 @@ impl Archetype {
 
         for (idx, info) in component_infos.iter().enumerate() {
             column_indices.insert(info.type_id, idx);
-            columns.push(RefCell::new(Column::new(info.type_id, info.layout, info.drop_fn)));
+            columns.push(RwLock::new(Column::new(info.type_id, info.layout, info.drop_fn)));
         }
 
         Self {
@@ -477,21 +477,16 @@ impl Archetype {
         types
     }
 
-    /// Belirtilen component tipinin sütununa RefCell üzerinden immutable erişim
+    /// Belirtilen component tipinin sütununa RwLock üzerinden immutable erişim
     #[inline]
-    pub fn get_column(&self, type_id: TypeId) -> Option<Ref<'_, Column>> {
-        self.column_indices.get(&type_id).map(|&idx| self.columns[idx].borrow())
+    pub fn get_column(&self, type_id: TypeId) -> Option<RwLockReadGuard<'_, Column>> {
+        self.column_indices.get(&type_id).map(|&idx| self.columns[idx].read().unwrap())
     }
 
-    /// Belirtilen component tipinin sütununa RefCell üzerinden mutable erişim
+    /// Belirtilen component tipinin sütununa RwLock üzerinden mutable erişim
     #[inline]
-    pub fn get_column_mut(&self, type_id: TypeId) -> Option<RefMut<'_, Column>> {
-        self.column_indices.get(&type_id).map(|&idx| self.columns[idx].borrow_mut())
-    }
-
-    /// Sütuna doğrudan ham erişim (SAFETY: RefCell'i bypass eder!)
-    pub(crate) unsafe fn get_column_raw(&self, type_id: TypeId) -> Option<*mut Column> {
-        self.column_indices.get(&type_id).map(|&idx| self.columns[idx].as_ptr())
+    pub fn get_column_mut(&self, type_id: TypeId) -> Option<RwLockWriteGuard<'_, Column>> {
+        self.column_indices.get(&type_id).map(|&idx| self.columns[idx].write().unwrap())
     }
 
     /// Yeni bir entity satırı ekler. Tüm sütunlara veri zaten push edilmiş olmalıdır.
@@ -512,7 +507,7 @@ impl Archetype {
         // Tüm sütunlarda swap_remove_and_drop
         for col_cell in &mut self.columns {
             unsafe {
-                col_cell.borrow_mut().swap_remove_and_drop(row);
+                col_cell.get_mut().unwrap().swap_remove_and_drop(row);
             }
         }
 
@@ -536,7 +531,7 @@ impl Archetype {
 
         // 1. Hedef archetype'ın TÜM sütunlarını genişlet (ortak olanları taşı, olmayanları boş bırak)
         for (type_id, &dst_col_idx) in &target.column_indices {
-            let mut dst_col = target.columns[dst_col_idx].borrow_mut();
+            let mut dst_col = target.columns[dst_col_idx].write().unwrap();
             
             // Hedefte her zaman yer açmalıyız ki sütun boyu entity listesiyle uyuşsun
             dst_col.data.reserve(1);
@@ -546,7 +541,7 @@ impl Archetype {
             let dst_ptr = dst_col.data.get_unchecked_mut(row_to_write);
 
             if let Some(&src_col_idx) = self.column_indices.get(type_id) {
-                let mut src_col = self.columns[src_col_idx].borrow_mut();
+                let mut src_col = self.columns[src_col_idx].write().unwrap();
                 // Veriyi kopyala ve kaynak sütunda swap-remove yap
                 src_col.data.swap_remove_unchecked(source_row, dst_ptr);
             } else {
@@ -557,7 +552,7 @@ impl Archetype {
         // 2. Hedefte olmayan ama kaynakta olan component'ları temizle
         for (type_id, &src_col_idx) in &self.column_indices {
             if !target.column_indices.contains_key(type_id) {
-                let mut src_col = self.columns[src_col_idx].borrow_mut();
+                let mut src_col = self.columns[src_col_idx].write().unwrap();
                 src_col.swap_remove_and_drop(source_row);
             }
         }

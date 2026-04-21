@@ -22,7 +22,7 @@ pub fn render_studio(
     let mut play_stop = false;
     let mut highlight_box_id = 0u32;
 
-    if let Some(mut ed) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+    if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
         save_req = ed.scene.save_request.take();
         load_req = ed.scene.load_request.take();
         clear_req = ed.scene.clear_request;
@@ -48,7 +48,7 @@ pub fn render_studio(
         let _ = cmds.spawn_gltf(pos.unwrap_or(gizmo::math::Vec3::ZERO), &path, false);
         drop(cmds);
         
-        if let Some(mut ed) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+        if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             ed.log_info(&format!("Model sahneye eklendi: {}", path));
         }
     }
@@ -57,7 +57,7 @@ pub fn render_studio(
 
     if play_start {
         let _ = gizmo::scene::SceneData::save(world, &play_backup_path, &gizmo::scene::SceneRegistry::default());
-        if let Some(mut ed) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+        if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             ed.log_info("▶ Play: Sahne yedeği alındı ve simülasyon başladı.");
         }
     }
@@ -67,14 +67,14 @@ pub fn render_studio(
         // Eski fizikten kalan bağlantı (Joint) kalıntılarını temizle
         world.insert_resource(gizmo::physics::JointWorld::new());
         world.insert_resource(gizmo::physics::PhysicsSolverState::new());
-        if let Some(mut ed) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+        if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             ed.log_info("Sahne yedeğe geri dönüldü.");
         }
     }
 
     if let Some(path) = save_req {
         let _ = gizmo::scene::SceneData::save(world, &path, &gizmo::scene::SceneRegistry::default());
-        if let Some(mut ed) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+        if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             ed.log_info("Sahne kaydedildi.");
         }
     }
@@ -85,7 +85,7 @@ pub fn render_studio(
         protected_ids.insert(state.editor_camera);
         protected_ids.insert(highlight_box_id);
 
-        if let Ok(names) = world.borrow::<gizmo::core::component::EntityName>() {
+        { let names = world.borrow::<gizmo::core::component::EntityName>();
             for e in &ents {
                 if let Some(name) = names.get(e.id()) {
                     if name.0.starts_with("Editor ") || name.0 == "Highlight Box" {
@@ -95,7 +95,7 @@ pub fn render_studio(
             }
         }
 
-        if let Ok(children) = world.borrow::<gizmo::core::component::Children>() {
+        { let children = world.borrow::<gizmo::core::component::Children>();
             let mut i = 0;
             let mut pro_list: Vec<u32> = protected_ids.iter().copied().collect();
             while i < pro_list.len() {
@@ -117,7 +117,7 @@ pub fn render_studio(
             }
             world.despawn(e);
         }
-        if let Some(mut ed) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+        if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             ed.clear_selection();
             ed.log_info("Sahne temizlendi. Yeni sahne hazır.");
             ed.scene_path = String::new();
@@ -131,7 +131,7 @@ pub fn render_studio(
         protected_ids.insert(state.editor_camera);
         protected_ids.insert(highlight_box_id);
 
-        if let Ok(names) = world.borrow::<gizmo::core::component::EntityName>() {
+        { let names = world.borrow::<gizmo::core::component::EntityName>();
             for e in &ents {
                 if let Some(name) = names.get(e.id()) {
                     if name.0.starts_with("Editor ") || name.0 == "Highlight Box" {
@@ -141,7 +141,7 @@ pub fn render_studio(
             }
         }
 
-        if let Ok(children) = world.borrow::<gizmo::core::component::Children>() {
+        { let children = world.borrow::<gizmo::core::component::Children>();
             let mut i = 0;
             let mut pro_list: Vec<u32> = protected_ids.iter().copied().collect();
             while i < pro_list.len() {
@@ -179,12 +179,12 @@ pub fn render_studio(
                 &gizmo::scene::SceneRegistry::default(),
             );
             world.insert_resource(asset_manager);
-            if let Some(mut ed) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
                 ed.clear_selection();
                 ed.log_info("Sahne yüklendi.");
             }
         } else {
-            if let Some(mut ed) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
                 ed.log_error("Kritik Hata: Sahne yüklenemedi. AssetManager bulunamadı!");
             }
         }
@@ -192,7 +192,7 @@ pub fn render_studio(
 
     if let Some((ent_id, path)) = prefab_save_req {
         let _ = gizmo::scene::SceneData::save_prefab(world, ent_id.id(), &path, &gizmo::scene::SceneRegistry::default());
-        if let Some(mut ed) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+        if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             ed.log_info("Prefab kaydedildi.");
         }
     }
@@ -217,9 +217,7 @@ pub fn render_studio(
 
             // Prefab spawn pozisyonunu (Asset browser'dan drop edilmişse) uygula
             if let (Some(root_id), Some(pos)) = (loaded_root, target_pos) {
-                if let Ok(mut transforms) =
-                    world.borrow_mut::<gizmo::physics::components::Transform>()
-                {
+                let mut transforms = world.borrow_mut::<gizmo::physics::components::Transform>(); {
                     if let Some(t) = transforms.get_mut(root_id) {
                         t.position = pos;
                         t.update_local_matrix();
@@ -228,11 +226,11 @@ pub fn render_studio(
             }
 
             world.insert_resource(asset_manager);
-            if let Some(mut ed) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
                 ed.log_info("Prefab yüklendi.");
             }
         } else {
-            if let Some(mut ed) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
                 ed.log_error("Kritik Hata: Prefab yüklenemedi. AssetManager bulunamadı!");
             }
         }
@@ -262,11 +260,11 @@ pub fn render_studio(
                 &gizmo::scene::SceneRegistry::default(),
             );
             world.insert_resource(asset_manager);
-            if let Some(mut ed) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
                 ed.log_info("Obje çoğaltıldı.");
             }
         } else {
-            if let Some(mut ed) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
                 ed.log_error("Kritik Hata: Obje çoğaltılamadı. AssetManager bulunamadı!");
             }
         }
@@ -276,7 +274,7 @@ pub fn render_studio(
     }
 
     let mut terrain_reqs = Vec::new();
-    if let Some(mut ed) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+    if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
         terrain_reqs = std::mem::take(&mut ed.generate_terrain_requests);
     }
 
@@ -289,7 +287,7 @@ pub fn render_studio(
                 let mut p_max_h = 20.0;
                 let mut p_path = String::new();
 
-                if let Ok(terrains) = world.borrow::<gizmo::renderer::components::Terrain>() {
+                { let terrains = world.borrow::<gizmo::renderer::components::Terrain>();
                     if let Some(t) = terrains.get(ent_id.id()) {
                         p_width = t.width;
                         p_depth = t.depth;
@@ -311,8 +309,7 @@ pub fn render_studio(
                                 // Material yoksa beyaz default ekle
                                 let has_mat = world
                                     .borrow::<gizmo::prelude::Material>()
-                                    .map(|m| m.contains(ent.id()))
-                                    .unwrap_or(false);
+                                    .contains(ent.id());
                                 if !has_mat {
                                     let dummy_rgba = [255, 255, 255, 255];
                                     let dummy_bg = renderer.create_texture(&dummy_rgba, 1, 1);
@@ -347,7 +344,7 @@ pub fn render_studio(
                             }
                         }
                         Err(e) => {
-                            if let Some(mut ed) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+                            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
                                 ed.log_error(&format!("Terrain Error: {}", e));
                             }
                         }
@@ -356,7 +353,7 @@ pub fn render_studio(
             }
             world.insert_resource(asset_manager);
         } else {
-            if let Some(mut ed) = world.get_resource_mut::<EditorState>().expect("ECS Aliasing Error") {
+            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
                 ed.log_error("Kritik Hata: Terrain üretilemedi. AssetManager bulunamadı!");
             }
         }

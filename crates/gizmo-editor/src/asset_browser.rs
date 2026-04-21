@@ -7,7 +7,7 @@ use std::path::Path;
 /// Asset Browser sekmesini çizer
 pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
     if let Some(rx) = &state.assets.workspace_rx {
-        if let Ok(path) = rx.try_recv() {
+        if let Ok(path) = rx.lock().unwrap().try_recv() {
             state.assets.root = path;
         }
     }
@@ -27,7 +27,7 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
         if state.assets.workspace_rx.is_none() {
             if ui.button("📁 Workspace Aç").on_hover_text("Bilgisayardan bir çalışma dizini seçin").clicked() {
                 let (tx, rx) = std::sync::mpsc::channel();
-                state.assets.workspace_rx = Some(rx);
+                state.assets.workspace_rx = Some(std::sync::Mutex::new(rx));
                 std::thread::spawn(move || {
                     if let Some(folder) = rfd::FileDialog::new().pick_folder() {
                         let _ = tx.send(folder.to_string_lossy().to_string());

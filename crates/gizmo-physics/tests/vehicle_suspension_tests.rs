@@ -37,7 +37,8 @@ fn spawn_vehicle(world: &mut World, pos: Vec3, mass: f32) -> (u32, u32) {
     // Add parent/child relationship
     world.add_component(wheel, gizmo_core::component::Parent(e.id()));
     let mut added = false;
-    if let Ok(Some(mut children_storage)) = world.borrow_mut::<gizmo_core::component::Children>() {
+    {
+        let mut children_storage = world.borrow_mut::<gizmo_core::component::Children>();
         if let Some(children) = children_storage.get_mut(e.id()) {
             children.0.push(wheel.id());
             added = true;
@@ -67,8 +68,8 @@ fn test_suspension_spring_force_proportional() {
     gizmo_physics::vehicle::physics_vehicle_system(&world_shallow, DT);
     gizmo_physics::vehicle::physics_vehicle_system(&world_deep, DT);
 
-    let v_shallow = world_shallow.borrow::<Velocity>().expect("ECS Aliasing Error").unwrap().get(ve_shallow).unwrap().clone();
-    let v_deep    = world_deep.borrow::<Velocity>().expect("ECS Aliasing Error").unwrap().get(ve_deep).unwrap().clone();
+    let v_shallow = world_shallow.borrow::<Velocity>().get(ve_shallow).unwrap().clone();
+    let v_deep    = world_deep.borrow::<Velocity>().get(ve_deep).unwrap().clone();
 
     // Derin sıkışmada daha büyük upward impulse → daha yüksek Y hız artışı
     assert!(
@@ -95,8 +96,8 @@ fn test_suspension_mass_scaling() {
     gizmo_physics::vehicle::physics_vehicle_system(&world_light, DT);
     gizmo_physics::vehicle::physics_vehicle_system(&world_heavy, DT);
 
-    let v_light = world_light.borrow::<Velocity>().expect("ECS Aliasing Error").unwrap().get(ve_light).unwrap().clone();
-    let v_heavy = world_heavy.borrow::<Velocity>().expect("ECS Aliasing Error").unwrap().get(ve_heavy).unwrap().clone();
+    let v_light = world_light.borrow::<Velocity>().get(ve_light).unwrap().clone();
+    let v_heavy = world_heavy.borrow::<Velocity>().get(ve_heavy).unwrap().clone();
 
     // Hafif araç daha yüksek Y hız kazanmalı (aynı F, az m → büyük a)
     assert!(
@@ -123,7 +124,8 @@ fn test_suspension_damping_reduces_force() {
     // B: aşağı iniyor (damping kuvveti yay kuvvetini azaltır)
     let mut world_falling = make_world_with_ground(0.0);
     let (ve_falling, _) = spawn_vehicle(&mut world_falling, pos, 1000.0);
-    if let Ok(Some(mut v)) = world_falling.borrow_mut::<Velocity>() {
+    {
+        let mut v = world_falling.borrow_mut::<Velocity>();
         if let Some(vel) = v.get_mut(ve_falling) {
             vel.linear.y = -5.0; // Aşağı iniyor
         }
@@ -132,8 +134,8 @@ fn test_suspension_damping_reduces_force() {
     gizmo_physics::vehicle::physics_vehicle_system(&world_still, DT);
     gizmo_physics::vehicle::physics_vehicle_system(&world_falling, DT);
 
-    let v_still   = world_still.borrow::<Velocity>().expect("ECS Aliasing Error").unwrap().get(ve_still).unwrap().clone();
-    let v_falling = world_falling.borrow::<Velocity>().expect("ECS Aliasing Error").unwrap().get(ve_falling).unwrap().clone();
+    let v_still   = world_still.borrow::<Velocity>().get(ve_still).unwrap().clone();
+    let v_falling = world_falling.borrow::<Velocity>().get(ve_falling).unwrap().clone();
 
     // Durağan araçta yay net kuvveti > düşen araçta (çünkü damping yayı frenler)
     assert!(
@@ -209,7 +211,7 @@ fn test_wheel_grounded_when_near_ground() {
 
     gizmo_physics::vehicle::physics_vehicle_system(&world, DT);
 
-    let vc = world.borrow::<WheelComponent>().expect("ECS Aliasing Error").unwrap().get(whe).unwrap().clone();
+    let vc = world.borrow::<WheelComponent>().get(whe).unwrap().clone();
     assert!(
         vc.is_grounded,
         "Tekerlek zeminde olmalı ama is_grounded=false. compression={:.3}",
@@ -234,7 +236,7 @@ fn test_wheel_not_grounded_when_airborne() {
 
     gizmo_physics::vehicle::physics_vehicle_system(&world, DT);
 
-    let vc = world.borrow::<WheelComponent>().expect("ECS Aliasing Error").unwrap().get(whe).unwrap().clone();
+    let vc = world.borrow::<WheelComponent>().get(whe).unwrap().clone();
     assert!(
         !vc.is_grounded,
         "Araç havada olmalı ama is_grounded=true!"
