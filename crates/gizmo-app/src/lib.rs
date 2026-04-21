@@ -122,7 +122,7 @@ impl<State: 'static> App<State> {
         self
     }
 
-    pub fn add_system(mut self, system: fn(&mut World, f32)) -> Self {
+    pub fn add_system(mut self, system: fn(&World, f32)) -> Self {
         self.schedule.add_system(system);
         self
     }

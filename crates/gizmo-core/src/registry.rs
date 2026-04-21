@@ -14,22 +14,30 @@
 use std::any::TypeId;
 use std::collections::BTreeMap;
 
+/// ECS tabanlı opsiyonel reflection yeteneklerini taşıyan serileştirme yapısı
+pub struct TypeRegistration {
+    pub type_id: TypeId,
+    pub name: String,
+    pub serialize_fn: Option<fn(*const u8) -> Result<String, String>>,
+    pub deserialize_fn: Option<fn(&mut crate::world::World, crate::entity::Entity, &str) -> Result<(), String>>,
+}
+
 /// Component tiplerini isme göre sorgulama ve yönetim kaydı.
 ///
-/// İki yönlü eşleme tutar: isim → TypeId ve TypeId → isim.
+/// İki yönlü eşleme tutar: isim → TypeId ve TypeId → TypeRegistration.
 /// `register()` çift kayıt ve desync'i önler.
 pub struct ComponentRegistry {
     /// İsim → TypeId eşlemesi (sıralı — deterministic iterasyon)
     name_to_type: BTreeMap<String, TypeId>,
-    /// TypeId → İsim eşlemesi (ters lookup)
-    type_to_name: BTreeMap<TypeId, String>,
+    /// TypeId → Reflection & Serialization Kaydı
+    type_to_reg: BTreeMap<TypeId, TypeRegistration>,
 }
 
 impl ComponentRegistry {
     pub fn new() -> Self {
         Self {
             name_to_type: BTreeMap::new(),
-            type_to_name: BTreeMap::new(),
+            type_to_reg: BTreeMap::new(),
         }
     }
 
@@ -54,23 +62,61 @@ impl ComponentRegistry {
             );
         }
 
-        if let Some(existing_name) = self.type_to_name.get(&type_id) {
+        if let Some(existing_reg) = self.type_to_reg.get(&type_id) {
             panic!(
                 "ComponentRegistry: Bu tip zaten '{}' ismiyle kayıtlı, '{}' ile tekrar kayıt edilemez!",
-                existing_name, name
+                existing_reg.name, name
             );
         }
 
         self.name_to_type.insert(name.to_string(), type_id);
-        self.type_to_name.insert(type_id, name.to_string());
+        self.type_to_reg.insert(type_id, TypeRegistration {
+            type_id,
+            name: name.to_string(),
+            serialize_fn: None,
+            deserialize_fn: None,
+        });
+    }
+
+    /// Yeni bir component tipini isme göre ve Reflection (serde) yeteneği ile kaydet.
+    pub fn register_serializable<T: crate::component::Component + serde::Serialize + serde::de::DeserializeOwned>(&mut self, name: &str) {
+        let type_id = TypeId::of::<T>();
+        
+        if let Some(&existing_tid) = self.name_to_type.get(name) {
+            if existing_tid == type_id { return; }
+            panic!("ComponentRegistry: '{}' ismi zaten farklı bir tipe atanmış!", name);
+        }
+        if let Some(existing_reg) = self.type_to_reg.get(&type_id) {
+            panic!("ComponentRegistry: Bu tip zaten '{}' ismiyle kayıtlı!", existing_reg.name);
+        }
+
+        self.name_to_type.insert(name.to_string(), type_id);
+        
+        let serialize_fn: fn(*const u8) -> Result<String, String> = |ptr| {
+            let component = unsafe { &*(ptr as *const T) };
+            ron::to_string(component).map_err(|e| e.to_string())
+        };
+
+        let deserialize_fn: fn(&mut crate::world::World, crate::entity::Entity, &str) -> Result<(), String> = |world, entity, data| {
+            let component: T = ron::from_str(data).map_err(|e| e.to_string())?;
+            world.add_component(entity, component);
+            Ok(())
+        };
+
+        self.type_to_reg.insert(type_id, TypeRegistration {
+            type_id,
+            name: name.to_string(),
+            serialize_fn: Some(serialize_fn),
+            deserialize_fn: Some(deserialize_fn),
+        });
     }
 
     /// Bir tipin kaydını siler. İsim ve TypeId eşlemesi birlikte kaldırılır.
     /// Kayıtlı değilse false döner.
     pub fn unregister<T: 'static>(&mut self) -> bool {
         let type_id = TypeId::of::<T>();
-        if let Some(name) = self.type_to_name.remove(&type_id) {
-            self.name_to_type.remove(&name);
+        if let Some(reg) = self.type_to_reg.remove(&type_id) {
+            self.name_to_type.remove(&reg.name);
             true
         } else {
             false
@@ -80,7 +126,7 @@ impl ComponentRegistry {
     /// İsim ile bir tipin kaydını siler.
     pub fn unregister_by_name(&mut self, name: &str) -> bool {
         if let Some(type_id) = self.name_to_type.remove(name) {
-            self.type_to_name.remove(&type_id);
+            self.type_to_reg.remove(&type_id);
             true
         } else {
             false
@@ -101,7 +147,12 @@ impl ComponentRegistry {
 
     /// TypeId'den isime dönüşüm (runtime TypeId ile)
     pub fn get_name_by_id(&self, type_id: TypeId) -> Option<&str> {
-        self.type_to_name.get(&type_id).map(|s| s.as_str())
+        self.type_to_reg.get(&type_id).map(|reg| reg.name.as_str())
+    }
+
+    /// İlgili TypeId için (varsa) Serialization metodlarını yutar
+    pub fn get_registration(&self, type_id: TypeId) -> Option<&TypeRegistration> {
+        self.type_to_reg.get(&type_id)
     }
 
     /// İsim kayıtlı mı?
@@ -111,7 +162,7 @@ impl ComponentRegistry {
 
     /// Tip kayıtlı mı?
     pub fn contains_type<T: 'static>(&self) -> bool {
-        self.type_to_name.contains_key(&TypeId::of::<T>())
+        self.type_to_reg.contains_key(&TypeId::of::<T>())
     }
 
     /// Kayıtlı tüm component isimlerini sıralı olarak döndürür.
@@ -142,9 +193,19 @@ impl Default for ComponentRegistry {
 mod tests {
     use super::*;
 
-    struct Transform;
+    use crate::impl_component;
+
+    #[derive(serde::Serialize, serde::Deserialize, Clone)]
+    struct Transform { x: f32 }
+    impl_component!(Transform);
+
+    #[derive(serde::Serialize, serde::Deserialize, Clone)]
     struct Camera;
+    impl_component!(Camera);
+
+    #[derive(serde::Serialize, serde::Deserialize, Clone)]
     struct PointLight;
+    impl_component!(PointLight);
 
     #[test]
     fn test_register_and_lookup() {

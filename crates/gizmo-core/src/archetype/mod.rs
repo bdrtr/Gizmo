@@ -7,22 +7,21 @@
 //! - [`BlobVec`]  — Tip-silinmiş, hizalanmış vektör. Tek bir component sütunu için ham bellek.
 //! - [`Column`]   — `BlobVec` + `TypeId` sarmalayıcı.
 //! - [`Archetype`] — Birden fazla `Column` ve entity listesi barındıran tablo.
-//! - [`EntityLocation`] — Entity'nin hangi archetype'ta, hangi satırda olduğu.
+pub mod blob;
+pub mod column;
+pub mod index;
 
-use std::alloc::{self, Layout};
+pub use self::blob::*;
+pub use self::column::*;
+pub use self::index::*;
+
+use std::collections::HashMap;
 use std::any::TypeId;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::collections::HashMap;
-use std::ptr::{self, NonNull};
-
-// ═══════════════════════════════════════════════════════════════════════════
-// ENTITY LOCATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Entity'nin World içindeki fiziksel konumu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EntityLocation {
-    /// Hangi archetype tablosunda
     pub archetype_id: u32,
     /// Archetype içindeki satır indeksi
     pub row: u32,
@@ -40,364 +39,11 @@ impl EntityLocation {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// BLOB VEC — Tip-silinmiş vektör
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Tip bilgisi olmadan ham bayt dizisi olarak component verisi saklayan vektör.
-///
-/// `Layout` ile hizalanmış bellek bloğu kullanır. Her eleman `item_layout.size()` bayttır.
-/// Destructor, `drop_fn` fonksiyon pointer'ı ile çağrılır.
-pub struct BlobVec {
-    /// Her elemanın bellek yerleşimi (boyut + hizalama)
-    item_layout: Layout,
-    /// Destructor fonksiyonu — None ise drop gerekmez (Copy tipler)
-    drop_fn: Option<unsafe fn(*mut u8)>,
-    /// Tahsis edilmiş bellek bloğunun başlangıcı
-    data: NonNull<u8>,
-    /// Mevcut eleman sayısı
-    len: usize,
-    /// Tahsis edilmiş kapasite (eleman cinsinden)
-    capacity: usize,
-}
-
-// BlobVec Send + Sync güvenlidir çünkü:
-// - Tüm erişim &self veya &mut self üzerinden yapılır
-// - İç pointer'a eşzamanlı erişim RefCell guard'ları ile korunur
-unsafe impl Send for BlobVec {}
-unsafe impl Sync for BlobVec {}
-
-impl BlobVec {
-    /// Yeni boş BlobVec oluşturur.
-    ///
-    /// # Arguments
-    /// * `item_layout` — Her elemanın Layout'u (boyut + hizalama)
-    /// * `drop_fn` — Eleman düşürme fonksiyonu. `None` ise drop çağrılmaz.
-    pub fn new(item_layout: Layout, drop_fn: Option<unsafe fn(*mut u8)>) -> Self {
-        // ZST (zero-sized type) kontrolü
-        let (data, capacity) = if item_layout.size() == 0 {
-            (NonNull::dangling(), usize::MAX)
-        } else {
-            (NonNull::dangling(), 0)
-        };
-
-        Self {
-            item_layout,
-            drop_fn,
-            data,
-            len: 0,
-            capacity,
-        }
-    }
-
-    /// Mevcut eleman sayısı
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    /// Boş mu?
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    /// Belirtilen indeksteki elemanın ham pointer'ını döndürür.
-    ///
-    /// # Safety
-    /// `index < self.len` olmalıdır.
-    #[inline]
-    pub unsafe fn get_unchecked(&self, index: usize) -> *const u8 {
-        debug_assert!(index < self.len, "BlobVec::get_unchecked: index {} >= len {}", index, self.len);
-        self.data.as_ptr().add(index * self.item_layout.size())
-    }
-
-    /// Belirtilen indeksteki elemanın mutable ham pointer'ını döndürür.
-    ///
-    /// # Safety
-    /// `index < self.len` olmalıdır.
-    #[inline]
-    pub unsafe fn get_unchecked_mut(&self, index: usize) -> *mut u8 {
-        debug_assert!(index < self.len, "BlobVec::get_unchecked_mut: index {} >= len {}", index, self.len);
-        self.data.as_ptr().add(index * self.item_layout.size())
-    }
-
-    /// Yeni bir elemanı sona ekler (ham bayt olarak).
-    ///
-    /// # Safety
-    /// `value` pointer'ı `item_layout.size()` bayt okunabilir belleğe işaret etmelidir.
-    /// Çağıran, `value`'nun sahipliğini BlobVec'e devreder — value'dan sonra okuma yapmamalıdır.
-    pub unsafe fn push(&mut self, value: *const u8) {
-        if self.item_layout.size() == 0 {
-            self.len += 1;
-            return;
-        }
-        self.reserve(1);
-        let dst = self.data.as_ptr().add(self.len * self.item_layout.size());
-        ptr::copy_nonoverlapping(value, dst, self.item_layout.size());
-        self.len += 1;
-    }
-
-    /// Veri alanının ham pointer'ını döndürür.
-    pub fn as_ptr(&self) -> *const u8 {
-        self.data.as_ptr()
-    }
-
-    /// Son elemanı swap-and-pop ile belirtilen indeksten çıkarır ve eski değeri düşürür.
-    ///
-    /// # Safety
-    /// `index < self.len` olmalıdır.
-    pub unsafe fn swap_remove_and_drop(&mut self, index: usize) {
-        debug_assert!(index < self.len);
-        let last = self.len - 1;
-
-        if index != last {
-            let src = self.get_unchecked(last) as *const u8;
-            let dst = self.get_unchecked_mut(index);
-            // Önce eski değeri düşür
-            if let Some(drop_fn) = self.drop_fn {
-                drop_fn(dst);
-            }
-            // Sonra son elemanı kopyala
-            ptr::copy_nonoverlapping(src, dst, self.item_layout.size());
-        } else {
-            // Son eleman zaten silinecek olan — sadece düşür
-            if let Some(drop_fn) = self.drop_fn {
-                let ptr = self.get_unchecked_mut(index);
-                drop_fn(ptr);
-            }
-        }
-
-        self.len -= 1;
-    }
-
-    /// Son elemanı swap-and-pop ile çıkarır, eski değeri `out` pointer'ına taşır (düşürmez).
-    ///
-    /// # Safety
-    /// - `index < self.len` olmalıdır
-    /// - `out` pointer'ı `item_layout.size()` bayt yazılabilir belleğe işaret etmelidir
-    pub unsafe fn swap_remove_unchecked(&mut self, index: usize, out: *mut u8) {
-        debug_assert!(index < self.len);
-        let last = self.len - 1;
-
-        // Çıkarılan elemanı out'a kopyala
-        let src = self.get_unchecked(index) as *const u8;
-        ptr::copy_nonoverlapping(src, out, self.item_layout.size());
-
-        if index != last {
-            // Son elemanı çıkarılan yere taşı
-            let last_src = self.get_unchecked(last) as *const u8;
-            let dst = self.get_unchecked_mut(index);
-            ptr::copy_nonoverlapping(last_src, dst, self.item_layout.size());
-        }
-
-        self.len -= 1;
-    }
-
-    /// Yeterli kapasite yoksa büyüt.
-    pub(crate) fn reserve(&mut self, additional: usize) {
-        let required = self.len + additional;
-        if required <= self.capacity {
-            return;
-        }
-
-        let new_capacity = required.max(self.capacity * 2).max(4);
-        self.grow(new_capacity);
-    }
-
-    /// Kapasiteyi belirtilen değere büyüt.
-    fn grow(&mut self, new_capacity: usize) {
-        assert!(new_capacity > self.capacity);
-        let item_size = self.item_layout.size();
-        if item_size == 0 {
-            return;
-        }
-
-        let new_layout = Layout::from_size_align(item_size * new_capacity, self.item_layout.align())
-            .expect("BlobVec::grow: Layout overflow");
-
-        let new_data = if self.capacity == 0 {
-            // İlk tahsis
-            unsafe { alloc::alloc(new_layout) }
-        } else {
-            // Yeniden tahsis
-            let old_layout = Layout::from_size_align(item_size * self.capacity, self.item_layout.align())
-                .expect("BlobVec::grow: Old layout overflow");
-            unsafe { alloc::realloc(self.data.as_ptr(), old_layout, new_layout.size()) }
-        };
-
-        self.data = NonNull::new(new_data).expect("BlobVec::grow: Allocation failed (OOM)");
-        self.capacity = new_capacity;
-    }
-
-    /// Tüm elemanları düşürür (belleği serbest bırakmadan).
-    fn clear(&mut self) {
-        if let Some(drop_fn) = self.drop_fn {
-            let item_size = self.item_layout.size();
-            for i in 0..self.len {
-                unsafe {
-                    let ptr = self.data.as_ptr().add(i * item_size);
-                    drop_fn(ptr);
-                }
-            }
-        }
-        self.len = 0;
-    }
-}
-
-impl Drop for BlobVec {
-    fn drop(&mut self) {
-        self.clear();
-        let item_size = self.item_layout.size();
-        if item_size > 0 && self.capacity > 0 {
-            let layout = Layout::from_size_align(item_size * self.capacity, self.item_layout.align())
-                .expect("BlobVec::drop: Layout error");
-            unsafe {
-                alloc::dealloc(self.data.as_ptr(), layout);
-            }
-        }
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// COLUMN — Tip-silinmiş sütun
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Archetype içindeki tek bir component tipinin sütunu.
-pub struct Column {
-    pub(crate) data: BlobVec,
-    type_id: TypeId,
-}
-
-impl Column {
-    /// Yeni boş sütun oluşturur.
-    pub fn new(type_id: TypeId, item_layout: Layout, drop_fn: Option<unsafe fn(*mut u8)>) -> Self {
-        Self {
-            data: BlobVec::new(item_layout, drop_fn),
-            type_id,
-        }
-    }
-
-    #[inline]
-    pub fn type_id(&self) -> TypeId {
-        self.type_id
-    }
-
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.data.len()
-    }
-
-    /// Belirtilen satırdaki component'a immutable pointer döndürür.
-    ///
-    /// # Safety
-    /// - `row < self.len()` olmalıdır
-    /// - Dönen pointer geçerli bir `T` tipindeki veriye işaret eder
-    #[inline]
-    pub unsafe fn get_ptr(&self, row: usize) -> *const u8 {
-        self.data.get_unchecked(row)
-    }
-
-    /// Belirtilen satırdaki component'a mutable pointer döndürür.
-    ///
-    /// # Safety
-    /// - `row < self.len()` olmalıdır
-    /// Sütun verisinin başlangıç pointer'ını döndürür.
-    #[inline]
-    pub fn data_ptr(&self) -> *const u8 {
-        self.data.as_ptr()
-    }
-
-    /// Sütun verisinin başlangıç pointer'ını döndürür (mutable).
-    #[inline]
-    pub fn data_ptr_mut(&self) -> *mut u8 {
-        unsafe { self.data.as_ptr() as *mut u8 }
-    }
-
-    /// - Dönen pointer geçerli bir `T` tipindeki veriye işaret eder
-    #[inline]
-    pub unsafe fn get_mut_ptr(&self, row: usize) -> *mut u8 {
-        self.data.get_unchecked_mut(row)
-    }
-
-    /// Ham bayt olarak yeni bir değer ekler.
-    ///
-    /// # Safety
-    /// `value` pointer'ı bu sütunun tip boyutu kadar okunabilir belleğe işaret etmelidir.
-    #[inline]
-    pub unsafe fn push_raw(&mut self, value: *const u8) {
-        self.data.push(value);
-    }
-
-    /// Belirtilen satırı swap-remove ile çıkarır ve düşürür.
-    ///
-    /// # Safety
-    /// `row < self.len()` olmalıdır.
-    #[inline]
-    pub unsafe fn swap_remove_and_drop(&mut self, row: usize) {
-        self.data.swap_remove_and_drop(row);
-    }
-
-    /// Belirtilen satırı swap-remove ile çıkarır, değeri `out`'a taşır.
-    ///
-    /// # Safety
-    /// - `row < self.len()` olmalıdır
-    /// - `out` pointer'ı yeterli boyutta yazılabilir belleğe işaret etmelidir
-    #[inline]
-    pub unsafe fn swap_remove_move(&mut self, row: usize, out: *mut u8) {
-        self.data.swap_remove_unchecked(row, out);
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// ARCHETYPE EDGE — Component ekleme/çıkarma geçiş cache'i
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Bir component tipinin eklenmesi veya çıkarılması sonucu hangi archetype'a
-/// geçileceğini cache'leyen kenar yapısı.
-#[derive(Debug, Clone, Copy)]
 pub struct ArchetypeEdge {
     /// Bu component tipi eklenince hedef archetype
     pub add: Option<u32>,
     /// Bu component tipi çıkarılınca hedef archetype
     pub remove: Option<u32>,
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// COMPONENT INFO — Runtime tip bilgisi
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Bir component tipinin runtime'daki meta bilgileri.
-/// Column oluştururken ve archetype migration'da kullanılır.
-#[derive(Clone, Copy)]
-pub struct ComponentInfo {
-    pub type_id: TypeId,
-    pub layout: Layout,
-    pub drop_fn: Option<unsafe fn(*mut u8)>,
-}
-
-impl ComponentInfo {
-    /// Belirtilen Rust tipi için ComponentInfo oluşturur.
-    pub fn of<T: 'static>() -> Self {
-        Self {
-            type_id: TypeId::of::<T>(),
-            layout: Layout::new::<T>(),
-            drop_fn: if std::mem::needs_drop::<T>() {
-                Some(|ptr: *mut u8| unsafe { ptr::drop_in_place(ptr as *mut T) })
-            } else {
-                None
-            },
-        }
-    }
-
-    /// Sadece TypeId biliniyorsa (registry durumları), kısıtlı bir ComponentInfo oluşturur.
-    pub fn of_type_id(type_id: TypeId) -> Self {
-        Self {
-            type_id,
-            layout: Layout::from_size_align(0, 1).unwrap(), // Geçici, gerçek layout registry'den gelmeli
-            drop_fn: None,
-        }
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -418,7 +64,7 @@ pub struct Archetype {
     entities: Vec<u32>,
     /// Component ekleme/çıkarma geçiş cache'i
     /// TypeId → ArchetypeEdge
-    edges: HashMap<TypeId, ArchetypeEdge>,
+    pub(crate) edges: HashMap<TypeId, ArchetypeEdge>,
 }
 
 impl Archetype {
@@ -429,7 +75,7 @@ impl Archetype {
 
         for (idx, info) in component_infos.iter().enumerate() {
             column_indices.insert(info.type_id, idx);
-            columns.push(RwLock::new(Column::new(info.type_id, info.layout, info.drop_fn)));
+            columns.push(RwLock::new(Column::new(info.type_id, info.layout, info.drop_fn, info.clone_fn)));
         }
 
         Self {
@@ -451,6 +97,19 @@ impl Archetype {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.entities.is_empty()
+    }
+
+    /// Belirtilen iki satırın (row) verilerini ve entity kimliğini fiziksel olarak takaslar.
+    pub(crate) unsafe fn swap_rows(&mut self, a: usize, b: usize) {
+        if a == b {
+            return;
+        }
+        // Tüm sütunlarda takas işlemini gerçekleştir
+        for col_cell in &mut self.columns {
+            col_cell.write().unwrap().swap_rows(a, b);
+        }
+        // Entity ID'lerini takasla
+        self.entities.swap(a, b);
     }
 
     /// Entity ID listesine referans
@@ -544,8 +203,11 @@ impl Archetype {
                 let mut src_col = self.columns[src_col_idx].write().unwrap();
                 // Veriyi kopyala ve kaynak sütunda swap-remove yap
                 src_col.data.swap_remove_unchecked(source_row, dst_ptr);
+                let tick = src_col.ticks.swap_remove(source_row);
+                dst_col.ticks.push(tick);
             } else {
                 // Bu sütun kaynakta yok (yeni ekleniyor), yer ayırt ama veri yazma (caller yapacak)
+                dst_col.ticks.push(ComponentTicks::new(0)); // Caller should update this tick
             }
         }
 
@@ -592,6 +254,33 @@ impl Archetype {
     pub fn set_remove_edge(&mut self, type_id: TypeId, target: u32) {
         let edge = self.edges.entry(type_id).or_insert(ArchetypeEdge { add: None, remove: None });
         edge.remove = Some(target);
+    }
+
+    /// Bir entity'nin bulunduğu satırı N kez kopyalar ve yeni entity kimliklerini ilişkilendirir.
+    pub(crate) unsafe fn batch_clone_row(&mut self, row: usize, count: usize, new_eids: &[u32], tick: u32) -> Vec<u32> {
+        if count == 0 { return Vec::new(); }
+        
+        for col_cell in &mut self.columns {
+            let mut col = col_cell.write().unwrap();
+            let src_ptr = col.get_ptr(row);
+            col.push_cloned_batch(src_ptr, count, tick);
+        }
+
+        let mut new_rows = Vec::with_capacity(count);
+        for &id in new_eids {
+            new_rows.push(self.push_entity(id));
+        }
+        new_rows
+    }
+
+    /// Bellek boyutlarını (kapasite) aktif varlık sayısına göre daraltır.
+    pub fn shrink_to_fit(&mut self) {
+        self.entities.shrink_to_fit();
+        for col_cell in &mut self.columns {
+            col_cell.write().unwrap().shrink_to_fit();
+        }
+        self.edges.shrink_to_fit();
+        self.column_indices.shrink_to_fit();
     }
 }
 
@@ -689,12 +378,12 @@ mod tests {
     #[test]
     fn column_basic_ops() {
         let info = ComponentInfo::of::<f32>();
-        let mut col = Column::new(info.type_id, info.layout, info.drop_fn);
+        let mut col = Column::new(info.type_id, info.layout, info.drop_fn, info.clone_fn);
 
         let vals: Vec<f32> = vec![1.0, 2.0, 3.0];
         for v in &vals {
             unsafe {
-                col.push_raw(v as *const f32 as *const u8);
+                col.push_raw(v as *const f32 as *const u8, 1);
             }
         }
 
@@ -724,8 +413,8 @@ mod tests {
         let pos: f32 = 10.0;
         let hp: u32 = 100;
         unsafe {
-            arch.get_column_mut(TypeId::of::<f32>()).unwrap().push_raw(&pos as *const f32 as *const u8);
-            arch.get_column_mut(TypeId::of::<u32>()).unwrap().push_raw(&hp as *const u32 as *const u8);
+            arch.get_column_mut(TypeId::of::<f32>()).unwrap().push_raw(&pos as *const f32 as *const u8, 1);
+            arch.get_column_mut(TypeId::of::<u32>()).unwrap().push_raw(&hp as *const u32 as *const u8, 1);
         }
         let row = arch.push_entity(42);
         assert_eq!(row, 0);
@@ -736,8 +425,8 @@ mod tests {
         let pos2: f32 = 20.0;
         let hp2: u32 = 50;
         unsafe {
-            arch.get_column_mut(TypeId::of::<f32>()).unwrap().push_raw(&pos2 as *const f32 as *const u8);
-            arch.get_column_mut(TypeId::of::<u32>()).unwrap().push_raw(&hp2 as *const u32 as *const u8);
+            arch.get_column_mut(TypeId::of::<f32>()).unwrap().push_raw(&pos2 as *const f32 as *const u8, 1);
+            arch.get_column_mut(TypeId::of::<u32>()).unwrap().push_raw(&hp2 as *const u32 as *const u8, 1);
         }
         arch.push_entity(99);
 

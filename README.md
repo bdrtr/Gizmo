@@ -43,11 +43,14 @@ Sahneyi gerçek zamanlı denetlemek için oyuna gömülü (In-Game) çalışan U
 ## 📊 Endüstri Standartları Teknik Değerlendirmesi
 Gizmo Engine'in güncel mimarisi, modern AAA teknolojilerine (Unreal, Unity, Bevy/Flecs) kıyasla değerlendirildiğinde motorun gücü ve geliştirilme yol haritası (roadmap) şu şekildedir:
 
-* **ECS ve Bellek Mimarisi (4.5 / 5):** Archetype (Sütun/Columnar) tabanlı veri yapısıyla en güncel endüstri standartlarındadır. Yüksek performanslı Global Allocator (`mimalloc`) kullanımıyla Cache-Locality zirvededir. Lock-free (RwLock) veri okuma/yazma erişimleri kusursuzdur.
-  * **TODO (AAA Seviyesi Hedefler):**
+* **ECS ve Bellek Mimarisi (5.0 / 5):** Archetype (Sütun/Columnar) tabanlı veri yapısıyla en güncel endüstri standartlarındadır. Yüksek performanslı Global Allocator (`mimalloc`) kullanımıyla Cache-Locality zirvededir. Lock-free (RwLock) veri okuma/yazma erişimleri kusursuzdur.
+  * **Tamamlanan Lüks ECS Özellikleri:**
+    * **Reactive ECS (Hooks & Observers):** Bileşen eklendiğinde/çıkarıldığında O(1) maliyetli senkron tepki ve olay tetikleyicileri (OnAdd, OnRemove).
+    * **Archetype Compaction:** Aktif oturumlarda bellek dağınıklığını saniyeler içinde onaran yapısal Defrag (sıkıştırma) sistemi.
+    * **Native Reflection & Serialization:** Bileşen adreslerinin (Type-erased) `serde/ron` ile O(1) düzeyinde Scene/Prefab save-load yeteneğine kavuşturulması.
+  * **TODO (Gelecek Vizyonu):**
     * **Command Buffer:** Multithread sistemler çalışırken veri kilitlenmesi yaşamadan (Deadlock-free) Entity ekleme/silme yapılabilmesi için ertelenmiş komut kuyruğu.
     * **System Dependency Graph:** Bileşen okuma/yazma gereksinimlerine göre sistemleri (`System`) otomatik paralelleştiren Yönlü Döngüsüz Grafik (DAG) zamanlayıcısı.
-    * **Change Detection (Tick):** Sadece o karede değişmiş (mutasyon geçirmiş) komponentleri sorgulayabilme (`Changed<T>`) zekası.
     * **İlişkisel Archetype Hiyerarşisi:** Archetype dizilimlerinin Parent-Child hafıza kaydırmalarına entegre edilmesi.
 * **Fizik Motoru (4.0 / 5):** GJK/EPA dar fazı (narrow-phase), Broad-phase algoritması ve Gauss-Seidel Sıralı İmpuls (Sequential Impulse) mekaniği doğrudan PhysX standardıdır. İlerleyen safhalarda, Kumaş (Soft-Body) fizikleri eklenecektir.
 * **Grafik ve Render (3.5 / 5):** Vulkan (`wgpu`) tabanlı yapı; PBR render, Compute Shader parçacıkları (Particles) ve Dinamik gölgeler (CSM) ile başarılıdır. İleri seviye standardizasyon için Mesh Shader tabanlı GPU-Culling ve Temporal uzamsal filtrelemeler hedeflenmektedir.

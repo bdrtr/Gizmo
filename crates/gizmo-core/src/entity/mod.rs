@@ -154,3 +154,4 @@ mod tests {
         assert_eq!(e, deserialized);
     }
 }
+pub mod allocator;
