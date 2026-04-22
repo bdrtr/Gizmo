@@ -94,8 +94,6 @@ impl SceneRegistry {
         reg.register::<gizmo_physics::components::Velocity>("Velocity");
         reg.register::<gizmo_physics::components::RigidBody>("RigidBody");
         reg.register::<gizmo_physics::shape::Collider>("Collider");
-        reg.register::<gizmo_physics::vehicle::VehicleController>("VehicleController");
-        reg.register::<gizmo_physics::vehicle::WheelComponent>("WheelComponent");
         
         reg.register::<gizmo_renderer::components::Camera>("Camera");
         reg.register::<gizmo_renderer::components::PointLight>("PointLight");

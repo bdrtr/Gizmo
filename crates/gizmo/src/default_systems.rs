@@ -1,10 +1,10 @@
 use crate::core::World;
 use crate::math::{Mat4, Vec3};
-use crate::physics::Transform;
 use crate::renderer::{
     components::{Camera, Material, Mesh, MeshRenderer},
     Renderer,
 };
+use crate::physics::{Collider, ColliderShape, GpuPhysicsLink, RigidBody, Transform, Velocity};
 use bytemuck;
 use wgpu;
 
@@ -19,7 +19,7 @@ pub struct DrawItem {
 /// isiklandirip hizlica ekrana basmaya yarayan kutudan cikmis Render Motoru.
 /// Yeni acilan `tut` gibi bos projelerde yuzlerce satir kod yazmamak icin kullanilir.
 pub fn default_render_pass(
-    world: &World,
+    world: &mut World,
     encoder: &mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,
     renderer: &mut Renderer,
@@ -36,7 +36,12 @@ pub fn default_render_pass(
 
     // TODO: Bütün nesnelerin (özellikle kamera ve çizilecek objelerin) global matrix'leri
     // bu pass çağrılmadan hemen önce bir `update_transforms(world)` sistemiyle güncellenmiş olmalıdır.
+    
+    // ECS veri GPU'ya basılır ve GPU verisi ECS'ye alınır
+    gpu_physics_submit_system(world, renderer);
+    gpu_physics_readback_system(world, renderer);
 
+    // KAMERALARI BUL VE MATRIX YARAT
     let cameras = world.borrow::<Camera>(); let transforms = world.borrow::<Transform>();
     {
         // TODO: Aktif kamera için `ActiveCamera` tarzı bir marker bileşeni kullanılmalı.
@@ -129,6 +134,14 @@ pub fn default_render_pass(
         );
     }
 
+    if let Some(physics) = &renderer.gpu_physics {
+        // Her frame başında sıradaki state'i çekmek için WGPU CommandEncoder'a asenkron mapping iste.
+        physics.request_readback(encoder);
+        
+        physics.compute_pass(encoder);
+        physics.cull_pass(encoder, &renderer.scene.global_bind_group);
+    }
+
     {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Default Engine Render Pass"),
@@ -175,7 +188,163 @@ pub fn default_render_pass(
             render_pass.set_vertex_buffer(0, item.vbuf.slice(..));
             render_pass.draw(0..item.vertex_count, (i as u32)..((i as u32) + 1));
         }
+
+        // Draw GPU Physics Spheres!
+        if let Some(physics) = &renderer.gpu_physics {
+            physics.render_pass(&mut render_pass, &renderer.scene.global_bind_group);
+        }
+
+        if let Some(gizmos) = world.get_resource::<crate::renderer::Gizmos>() {
+            if let Some(debug_renderer) = &mut renderer.debug_renderer {
+                debug_renderer.update(&renderer.queue, &gizmos);
+                debug_renderer.render(&mut render_pass, &renderer.scene.global_bind_group, gizmos.depth_test);
+            }
+        }
+    }
+
+    // Auto-clear gizmos for the next frame
+    if let Some(mut gizmos) = world.get_resource_mut::<crate::renderer::Gizmos>() {
+        gizmos.clear();
     }
 
     renderer.run_post_processing(encoder, view);
+}
+
+/// Basit bir sistem: Sahnede bulunan tüm fizik Collider'larının etrafına
+/// yeşil bir Gizmo AABB kutusu çizer. 
+/// Bu sayede geliştirici 물리 objelerinin nerede olduğunu görsel olarak test edebilir.
+pub fn physics_debug_system(world: &crate::core::World) {
+    if let Some(mut gizmos) = world.get_resource_mut::<crate::renderer::Gizmos>() {
+        // Renk: Parlak Yeşil (R, G, B, A)
+        let color = [0.1, 0.9, 0.1, 1.0];
+        
+        if let Some(q) = world.query::<(&crate::physics::Transform, &gizmo_physics::Collider)>() {
+            for (_, (trans, col)) in q.iter() {
+                // Not: tam bir döndürme (rotation) desteği istenirse draw_obb şeklinde
+                // daha gelişmiş bir gizmo methodu eklenebilir. Şimdilik AABB (Eksen Hizalı) çiziyoruz.
+                // Col.bounds aslında aabb_min ve aabb_max'ını barındırıyorsa ona göre de alınabilir.
+                // Biz burada tahmini (veya objenin etrafındaki) bir kutu çizdirebiliriz.
+                // GizmoMotor collider şeklini tam çizdirsin diye:
+                match &col.shape {
+                    gizmo_physics::shape::ColliderShape::Aabb(a) => {
+                        let h = a.half_extents;
+                        let min = trans.position - h;
+                        let max = trans.position + h;
+                        gizmos.draw_box(min, max, color);
+                    }
+                    gizmo_physics::shape::ColliderShape::Sphere(s) => {
+                        let r = s.radius;
+                        let min = trans.position - Vec3::new(r, r, r);
+                        let max = trans.position + Vec3::new(r, r, r);
+                        gizmos.draw_box(min, max, color);
+                    }
+                    _ => {
+                        // Kapsül, Konveks, Mesh vs için genel bir min-max kutusu uyduralım
+                        let min = trans.position - Vec3::new(1.0, 1.0, 1.0);
+                        let max = trans.position + Vec3::new(1.0, 1.0, 1.0);
+                        gizmos.draw_box(min, max, color);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// ECS'deki yeni yaratılmış Fiziksel Objeleri (RigidBody + Transform + Collider)
+/// GPU Physics çekirdeğinin otoyoluna (GpuPhysicsSystem::spheres_buffer) kaydeder.
+pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Renderer) {
+    if let Some(physics) = &renderer.gpu_physics {
+        let mut unlinked_entities = Vec::new();
+        if let Some(q) = world.query::<(&RigidBody, &Transform, &Collider)>() {
+            let links = world.borrow::<GpuPhysicsLink>();
+            for (e, (rb, trans, col)) in q.iter() {
+                if links.get(e).is_none() {
+                    unlinked_entities.push((e, *rb, *trans, col.clone()));
+                }
+            }
+        }
+        
+        let mut next_id = world.query::<&GpuPhysicsLink>().map(|q| q.iter().count() as u32).unwrap_or(0);
+        
+        for (e, rb, trans, col) in unlinked_entities {
+            let id = next_id;
+            next_id += 1;
+            
+            if rb.mass == 0.0 || rb.is_sleeping {
+                // Statik engel
+                let gpu_col = gizmo_renderer::physics_renderer::GpuCollider {
+                    shape_type: match col.shape {
+                        ColliderShape::Plane { .. } => 1,
+                        _ => 0, // Varsayılan Box (AABB)
+                    },
+                    _pad1: [0; 3],
+                    data1: match &col.shape {
+                        ColliderShape::Plane { normal, .. } => [normal.x, normal.y, normal.z, 0.0],
+                        ColliderShape::Aabb(aabb) => {
+                            let min = trans.position - aabb.half_extents;
+                            [min.x, min.y, min.z, 0.0]
+                        },
+                        _ => [0.0; 4],
+                    },
+                    data2: match &col.shape {
+                        ColliderShape::Plane { constant, .. } => [*constant, 0.0, 0.0, 0.0],
+                        ColliderShape::Aabb(aabb) => {
+                            let max = trans.position + aabb.half_extents;
+                            [max.x, max.y, max.z, 0.0]
+                        },
+                        _ => [0.0; 4],
+                    },
+                };
+                // ID eşleştirmesi farklı olabilir ama basitlik adına collider sonuna ekle:
+                // Şu an id uyuşmazlığı olabilir, demo için statik slotlara (0-50 arası) atıldığını varsayıyoruz.
+                // Gerçek mimaride GpuColliderLink ayrı tutulmalı.
+                physics.update_collider(&renderer.queue, id % 50, &gpu_col);
+            } else {
+                // Dinamik Kutu (AABB)
+                let extents = match &col.shape {
+                    ColliderShape::Aabb(s) => [s.half_extents.x, s.half_extents.y, s.half_extents.z],
+                    _ => [0.5, 0.5, 0.5], 
+                };
+                
+                let gpu_box = gizmo_renderer::physics_renderer::GpuBox {
+                    position: [trans.position.x, trans.position.y, trans.position.z],
+                    mass: rb.mass,
+                    velocity: [0.0, 0.0, 0.0],
+                    state: 0,
+                    rotation: [trans.rotation.x, trans.rotation.y, trans.rotation.z, trans.rotation.w],
+                    angular_velocity: [0.0, 0.0, 0.0],
+                    sleep_counter: 0,
+                    color: [0.3, 0.8, 1.0, 1.0], // Default color for ECS spawned
+                    half_extents: extents,
+                    _pad: 0,
+                };
+                physics.update_box(&renderer.queue, id, &gpu_box);
+                
+                world.add_component(
+                    world.get_entity(e).unwrap(),
+                    GpuPhysicsLink { id },
+                );
+            }
+        }
+    }
+}
+
+/// GPU'dan Asenkron (0ms) çekilen devasa Fizik lokasyon durumlarını,
+/// Ekrandaki objelerin render edilmesi için ECS'deki Transform'larına kopyalar.
+pub fn gpu_physics_readback_system(world: &mut crate::core::World, renderer: &Renderer) {
+    if let Some(physics) = &renderer.gpu_physics {
+        if let Some(gpu_data) = physics.poll_readback_data(&renderer.device) {
+            if let Some(mut q) = world.query::<(gizmo_core::prelude::Mut<Transform>, &GpuPhysicsLink)>() {
+                for (_, (mut trans, link)) in q.iter_mut() {
+                    let idx = link.id as usize;
+                    if idx < gpu_data.len() {
+                        let box_data = &gpu_data[idx];
+                        trans.position = gizmo_math::Vec3::new(box_data.position[0], box_data.position[1], box_data.position[2]);
+                        trans.rotation = gizmo_math::Quat::from_xyzw(box_data.rotation[0], box_data.rotation[1], box_data.rotation[2], box_data.rotation[3]);
+                        trans.update_local_matrix();
+                    }
+                }
+            }
+        }
+    }
 }

@@ -1,20 +1,26 @@
 use wgpu::util::DeviceExt;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct GpuSphere {
+pub struct GpuBox {
     pub position: [f32; 3],
-    pub radius: f32,
-    pub velocity: [f32; 3],
     pub mass: f32,
+    pub velocity: [f32; 3],
+    pub state: u32,
+    pub rotation: [f32; 4],
+    pub angular_velocity: [f32; 3],
+    pub sleep_counter: u32,
     pub color: [f32; 4],
-    pub _padding: [f32; 4],
+    pub half_extents: [f32; 3],
+    pub _pad: u32,
 }
 
-impl GpuSphere {
+impl GpuBox {
     pub fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
         wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<GpuSphere>() as wgpu::BufferAddress,
+            array_stride: std::mem::size_of::<GpuBox>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &[
                 wgpu::VertexAttribute {
@@ -32,29 +38,58 @@ impl GpuSphere {
                     shader_location: 8,
                     format: wgpu::VertexFormat::Float32x4,
                 },
+                wgpu::VertexAttribute {
+                    offset: 48,
+                    shader_location: 9,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 64,
+                    shader_location: 10,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 80,
+                    shader_location: 11,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
             ],
         }
     }
 }
 
 #[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GpuCollider {
+    pub shape_type: u32, // 0 = AABB, 1 = Plane
+    pub _pad1: [u32; 3],
+    pub data1: [f32; 4], // AABB: min, Plane: normal
+    pub data2: [f32; 4], // AABB: max, Plane: [d, pad, pad, pad]
+}
+
+#[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PhysicsSimParams {
     pub dt: f32,
+    pub _padding0: [u32; 3],
     pub _pad1: [f32; 3],
+    pub _padding1: u32,
     pub gravity: [f32; 3],
     pub damping: f32,
-    pub num_spheres: u32,
-    pub _pad2: [f32; 3],
+    pub num_boxes: u32,
+    pub num_colliders: u32,
+    pub _pad2: [u32; 2],
 }
 
 pub struct GpuPhysicsSystem {
-    pub max_spheres: u32,
+    pub max_boxes: u32,
     pub grid_size: u32,
-    pub spheres_buffer: wgpu::Buffer,
+    pub boxes_buffer: wgpu::Buffer,
     pub params_buffer: wgpu::Buffer,
     pub grid_heads_buffer: wgpu::Buffer,
     pub linked_nodes_buffer: wgpu::Buffer,
+    pub colliders_buffer: wgpu::Buffer,
+    pub awake_flags_buffer: wgpu::Buffer,
 
     pub pipeline_clear: wgpu::ComputePipeline,
     pub pipeline_build: wgpu::ComputePipeline,
@@ -63,50 +98,119 @@ pub struct GpuPhysicsSystem {
 
     pub compute_bind_group: wgpu::BindGroup,
     pub render_pipeline: wgpu::RenderPipeline,
-    pub sphere_vertex_buffer: wgpu::Buffer,
-    pub sphere_index_buffer: wgpu::Buffer,
+    pub box_vertex_buffer: wgpu::Buffer,
+    pub box_index_buffer: wgpu::Buffer,
     pub index_count: u32,
+
+    pub readback_buffer: wgpu::Buffer,
+    // 0 = Idle, 1 = Copied to buffer (awaiting map), 2 = Mapping, 3 = Mapped (ready to read)
+    pub readback_state: Arc<AtomicU8>,
+    
+    pub indirect_buffer: wgpu::Buffer,
+    pub culled_boxes_buffer: wgpu::Buffer,
+    pub culling_bind_group: wgpu::BindGroup,
+    pub pipeline_culling: wgpu::ComputePipeline,
 }
 
 impl GpuPhysicsSystem {
     pub fn new(
         device: &wgpu::Device,
-        max_spheres: u32,
+        max_boxes: u32,
         global_bind_group_layout: &wgpu::BindGroupLayout,
         output_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
     ) -> Self {
-        let mut initial_spheres = Vec::with_capacity(max_spheres as usize);
-        for i in 0..max_spheres {
-            let x = ((i as f32 * 13.0) % 40.0) - 20.0;
-            let y = 50.0 + (i as f32 % 50.0) * 2.0;
-            let z = ((i as f32 * 23.0) % 40.0) - 20.0;
+        let mut initial_boxes = Vec::with_capacity(max_boxes as usize);
+        let grid_dim = (max_boxes as f32).powf(1.0 / 3.0).ceil() as u32;
+        let spacing = 2.1f32; 
+        let offset = (grid_dim as f32 * spacing) / 2.0;
 
-            initial_spheres.push(GpuSphere {
+        for i in 0..max_boxes {
+            let ix = i % grid_dim;
+            let iy = (i / grid_dim) % grid_dim;
+            let iz = i / (grid_dim * grid_dim);
+
+            let x = (ix as f32 * spacing) - offset;
+            let y = 30.0 + (iy as f32 * spacing); // Y=30'dan yukarı doğru diz
+            let z = (iz as f32 * spacing) - offset;
+
+            // Görselliği arttırmak için Y koordinatına göre renk gradyanı:
+            let color_r = (ix as f32 / grid_dim as f32);
+            let color_g = (iy as f32 / grid_dim as f32);
+            let color_b = (iz as f32 / grid_dim as f32);
+
+            initial_boxes.push(GpuBox {
                 position: [x, y, z],
-                radius: 1.0,
-                velocity: [0.0, 0.0, 0.0],
                 mass: 1.0,
-                color: [0.8, 0.2, 0.2, 1.0],
-                _padding: [0.0; 4],
+                velocity: [0.0, 0.0, 0.0],
+                state: 0,
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                angular_velocity: [0.0, 0.0, 0.0],
+                sleep_counter: 0,
+                color: [color_r, color_g, color_b, 1.0],
+                half_extents: [1.0, 1.0, 1.0],
+                _pad: 0,
             });
         }
 
-        let spheres_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let boxes_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("GPU Physics Buffer"),
-            contents: bytemuck::cast_slice(&initial_spheres),
+            contents: bytemuck::cast_slice(&initial_boxes),
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::VERTEX
-                | wgpu::BufferUsages::COPY_DST,
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+        });
+
+        let mut initial_colliders = Vec::new();
+        // 1. Zemin (Sonsuz Plane) -> Y = 0
+        initial_colliders.push(GpuCollider {
+            shape_type: 1,
+            _pad1: [0; 3],
+            data1: [0.0, 1.0, 0.0, 0.0], // Normal vec
+            data2: [0.0, 0.0, 0.0, 0.0], // distance = 0
+        });
+        
+        // 2. Ortadaki Devasa Zemin Platformu (AABB)
+        initial_colliders.push(GpuCollider {
+            shape_type: 0,
+            _pad1: [0; 3],
+            data1: [-40.0, 0.0, -40.0, 0.0], // aabb_min
+            data2: [40.0, 20.0, 40.0, 0.0],  // aabb_max
+        });
+
+        // 3. Eğik bir rampa veya duvar
+        initial_colliders.push(GpuCollider {
+            shape_type: 0,
+            _pad1: [0; 3],
+            data1: [45.0, 0.0, -40.0, 0.0], // aabb_min
+            data2: [55.0, 40.0, 40.0, 0.0], // aabb_max (Sağ Duvar)
+        });
+
+        let colliders_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("GPU Static Colliders Buffer"),
+            contents: bytemuck::cast_slice(&initial_colliders),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // Uyandırma bayrakları (Her objeye 1 u32, başlangıç 0)
+        let initial_awake_flags: Vec<u32> = vec![0; max_boxes as usize];
+        let awake_flags_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("GPU Physics Awake Flags Buffer"),
+            contents: bytemuck::cast_slice(&initial_awake_flags),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
         let params = PhysicsSimParams {
             dt: 0.016,
+            _padding0: [0; 3],
             _pad1: [0.0; 3],
+            _padding1: 0,
             gravity: [0.0, -9.81, 0.0],
             damping: 0.99,
-            num_spheres: max_spheres,
-            _pad2: [0.0; 3],
+            num_boxes: max_boxes,
+            num_colliders: initial_colliders.len() as u32,
+            _pad2: [0; 2],
         };
 
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -124,8 +228,8 @@ impl GpuPhysicsSystem {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
-        // linked nodes, size = max_spheres
-        let initial_nodes = vec![-1i32; max_spheres as usize];
+        // linked nodes, size = max_boxes
+        let initial_nodes = vec![-1i32; max_boxes as usize];
         let linked_nodes_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("GPU Physics Linked Nodes Buffer"),
             contents: bytemuck::cast_slice(&initial_nodes),
@@ -179,6 +283,28 @@ impl GpuPhysicsSystem {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        // statik colliders
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        // awake_flags
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
                 label: Some("physics_compute_layout"),
             });
@@ -192,7 +318,7 @@ impl GpuPhysicsSystem {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: spheres_buffer.as_entire_binding(),
+                    resource: boxes_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -201,6 +327,14 @@ impl GpuPhysicsSystem {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: linked_nodes_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: colliders_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: awake_flags_buffer.as_entire_binding(),
                 },
             ],
             label: Some("physics_compute_bind_group"),
@@ -264,7 +398,7 @@ impl GpuPhysicsSystem {
             vertex: wgpu::VertexState {
                 module: &render_shader,
                 entry_point: "vs_main",
-                buffers: &[crate::gpu_types::Vertex::desc(), GpuSphere::desc()],
+                buffers: &[crate::gpu_types::Vertex::desc(), GpuBox::desc()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &render_shader,
@@ -292,37 +426,149 @@ impl GpuPhysicsSystem {
             multiview: None,
         });
 
-        let (vertices, indices) = create_ico_sphere(2);
+        let (vertices, indices) = create_cube();
 
-        let sphere_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Sphere Vertex Buffer"),
+        let box_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Box Vertex Buffer"),
             contents: bytemuck::cast_slice(&vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        let sphere_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Sphere Index Buffer"),
+        let box_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Box Index Buffer"),
             contents: bytemuck::cast_slice(&indices),
             usage: wgpu::BufferUsages::INDEX,
         });
 
+        let indirect_data: [u32; 5] = [
+            indices.len() as u32, // vertex_count
+            0, // instance_count
+            0, // first_index
+            0, // base_vertex
+            0, // first_instance
+        ];
+        
+        let indirect_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Culling Indirect Buffer"),
+            contents: bytemuck::cast_slice(&indirect_data),
+            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let culled_boxes_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Culled Boxes Buffer"),
+            size: (max_boxes as wgpu::BufferAddress) * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
+            mapped_at_creation: false,
+        });
+
+        let culling_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None },
+                        count: None,
+                    },
+                ],
+                label: Some("physics_culling_layout"),
+            });
+
+        let culling_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &culling_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: boxes_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: culled_boxes_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: indirect_buffer.as_entire_binding() },
+            ],
+            label: Some("physics_culling_bind_group"),
+        });
+
+        let culling_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Physics Culling Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("physics_culling.wgsl").into()),
+        });
+
+        let culling_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Physics Culling Pipeline Layout"),
+                bind_group_layouts: &[global_bind_group_layout, &culling_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let pipeline_culling = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Physics Culling Pipeline"),
+            layout: Some(&culling_pipeline_layout),
+            module: &culling_shader,
+            entry_point: "cull_main",
+        });
+
         Self {
-            max_spheres,
+            max_boxes,
             grid_size,
-            spheres_buffer,
+            boxes_buffer,
             params_buffer,
             grid_heads_buffer,
             linked_nodes_buffer,
+            colliders_buffer,
+            awake_flags_buffer,
             pipeline_clear,
             pipeline_build,
             pipeline_solve,
             pipeline_integrate,
             compute_bind_group,
             render_pipeline,
-            sphere_vertex_buffer,
-            sphere_index_buffer,
+            box_vertex_buffer,
+            box_index_buffer,
             index_count: indices.len() as u32,
+            
+            readback_buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("GPU Physics Readback Buffer"),
+                size: (max_boxes as wgpu::BufferAddress) * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            readback_state: Arc::new(AtomicU8::new(0)),
+            
+            indirect_buffer,
+            culled_boxes_buffer,
+            culling_bind_group,
+            pipeline_culling,
         }
+    }
+
+    /// Update or Add a sphere at a specific index
+    pub fn update_box(&self, queue: &wgpu::Queue, index: u32, box_struct: &GpuBox) {
+        if index < self.max_boxes {
+            let offset = (index as wgpu::BufferAddress) * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress;
+            queue.write_buffer(&self.boxes_buffer, offset, bytemuck::cast_slice(&[*box_struct]));
+        }
+    }
+
+    /// Update or Add a static collider at a specific index
+    pub fn update_collider(&self, queue: &wgpu::Queue, index: u32, collider: &GpuCollider) {
+        // We only reserved 50 colliders usually. We need to be careful of max capacity.
+        let offset = (index as wgpu::BufferAddress) * std::mem::size_of::<GpuCollider>() as wgpu::BufferAddress;
+        queue.write_buffer(&self.colliders_buffer, offset, bytemuck::cast_slice(&[*collider]));
     }
 
     pub fn compute_pass(&self, encoder: &mut wgpu::CommandEncoder) {
@@ -332,21 +578,38 @@ impl GpuPhysicsSystem {
         });
         cpass.set_bind_group(0, &self.compute_bind_group, &[]);
 
-        // Pass 1: Clear
-        cpass.set_pipeline(&self.pipeline_clear);
-        cpass.dispatch_workgroups(self.grid_size.div_ceil(256), 1, 1);
-
-        // Pass 2: Build Grid Linked List
-        cpass.set_pipeline(&self.pipeline_build);
-        cpass.dispatch_workgroups(self.max_spheres.div_ceil(256), 1, 1);
-
-        // Pass 3: Solve Collisions
-        cpass.set_pipeline(&self.pipeline_solve);
-        cpass.dispatch_workgroups(self.max_spheres.div_ceil(256), 1, 1);
-
-        // Pass 4: Integrate Positions
+        // Pass 1: Integrate Positions (Prediction step)
         cpass.set_pipeline(&self.pipeline_integrate);
-        cpass.dispatch_workgroups(self.max_spheres.div_ceil(256), 1, 1);
+        cpass.dispatch_workgroups(self.max_boxes.div_ceil(256), 1, 1);
+
+        // Jacobi Iterations for stability
+        let num_iterations = 4;
+        for _ in 0..num_iterations {
+            // Pass 2: Clear Grid
+            cpass.set_pipeline(&self.pipeline_clear);
+            cpass.dispatch_workgroups(self.grid_size.div_ceil(256), 1, 1);
+
+            // Pass 3: Build Grid Linked List
+            cpass.set_pipeline(&self.pipeline_build);
+            cpass.dispatch_workgroups(self.max_boxes.div_ceil(256), 1, 1);
+
+            // Pass 4: Solve Collisions
+            cpass.set_pipeline(&self.pipeline_solve);
+            cpass.dispatch_workgroups(self.max_boxes.div_ceil(256), 1, 1);
+        }
+    }
+
+    pub fn cull_pass(&self, encoder: &mut wgpu::CommandEncoder, global_bind_group: &wgpu::BindGroup) {
+        encoder.clear_buffer(&self.indirect_buffer, 4, Some(4));
+
+        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Physics Culling Pass"),
+            timestamp_writes: None,
+        });
+        cpass.set_pipeline(&self.pipeline_culling);
+        cpass.set_bind_group(0, global_bind_group, &[]);
+        cpass.set_bind_group(1, &self.culling_bind_group, &[]);
+        cpass.dispatch_workgroups(self.max_boxes.div_ceil(256), 1, 1);
     }
 
     pub fn render_pass<'a>(
@@ -356,17 +619,70 @@ impl GpuPhysicsSystem {
     ) {
         rpass.set_pipeline(&self.render_pipeline);
         rpass.set_bind_group(0, global_bind_group, &[]);
-        rpass.set_vertex_buffer(0, self.sphere_vertex_buffer.slice(..));
-        rpass.set_vertex_buffer(1, self.spheres_buffer.slice(..));
+        rpass.set_vertex_buffer(0, self.box_vertex_buffer.slice(..));
+        rpass.set_vertex_buffer(1, self.culled_boxes_buffer.slice(..));
         rpass.set_index_buffer(
-            self.sphere_index_buffer.slice(..),
+            self.box_index_buffer.slice(..),
             wgpu::IndexFormat::Uint32,
         );
-        rpass.draw_indexed(0..self.index_count, 0, 0..self.max_spheres);
+        rpass.draw_indexed_indirect(&self.indirect_buffer, 0);
+    }
+
+    /// Asynchronously requests a readback of the GPU physics state to the CPU.
+    pub fn request_readback(&self, encoder: &mut wgpu::CommandEncoder) {
+        // Only request if Idle (0)
+        if self.readback_state.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            let size = (self.max_boxes as wgpu::BufferAddress) * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress;
+            
+            // Queue the copy from device to host readback buffer
+            encoder.copy_buffer_to_buffer(
+                &self.boxes_buffer,
+                0,
+                &self.readback_buffer,
+                0,
+                size,
+            );
+            // Notification: WGPU requires queue.submit BEFORE map_async on the same buffer can be used without failing
+            // state becomes 1 ("Copied to buffer")
+        }
+    }
+
+    /// Polls and unmaps the buffer. Should be called periodically on the CPU.
+    pub fn poll_readback_data(&self, device: &wgpu::Device) -> Option<Vec<GpuBox>> {
+        // If state is 1 (Copied), queue was already submitted in previous frame. Setup mapping.
+        if self.readback_state.compare_exchange(1, 2, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            let slice = self.readback_buffer.slice(..);
+            let state_clone = self.readback_state.clone();
+            slice.map_async(wgpu::MapMode::Read, move |result| {
+                if result.is_ok() {
+                    state_clone.store(3, Ordering::SeqCst); // Set to Mapped
+                } else {
+                    state_clone.store(0, Ordering::SeqCst); // Fallback to Idle
+                }
+            });
+        }
+
+        device.poll(wgpu::Maintain::Poll); // Advance map_async callbacks!
+
+        if self.readback_state.load(Ordering::SeqCst) == 3 { // Mapped
+            let slice = self.readback_buffer.slice(..);
+            let view = slice.get_mapped_range();
+            
+            let data: &[GpuBox] = bytemuck::cast_slice(&view);
+            let vec_data = data.to_vec();
+            
+            drop(view);
+            self.readback_buffer.unmap();
+            
+            self.readback_state.store(0, Ordering::SeqCst); // Reset to Idle
+            
+            return Some(vec_data);
+        }
+        None
     }
 }
 
-fn create_ico_sphere(_subdivisions: u32) -> (Vec<crate::gpu_types::Vertex>, Vec<u32>) {
+fn create_cube() -> (Vec<crate::gpu_types::Vertex>, Vec<u32>) {
     let s = 1.0f32;
     let positions = [
         [-s, -s, s],

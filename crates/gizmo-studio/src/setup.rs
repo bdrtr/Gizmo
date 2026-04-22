@@ -161,9 +161,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
     world.add_component(cube1, gizmo::renderer::components::MeshRenderer::new());
     world.add_component(cube1, Collider::new_aabb(1.0, 1.0, 1.0)); // Visual mesh is 2x2x2 (from -1 to +1)
 
-    // Fizik sistemleri için gereksinimler
-    world.insert_resource(gizmo::physics::JointWorld::new());
-    world.insert_resource(gizmo::physics::PhysicsSolverState::new());
+    // Fizik sistemleri
 
     // Custom Skybox or proper horizon color
     world.insert_resource(asset_manager);

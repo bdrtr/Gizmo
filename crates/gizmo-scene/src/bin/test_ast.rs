@@ -2,7 +2,7 @@ use gizmo_physics::shape::Collider;
 use ron::Value;
 
 fn main() {
-    let comp = Collider::new_aabb(1.0, 1.0, 1.0);
+    let comp = Collider::aabb(gizmo_math::Vec3::new(1.0, 1.0, 1.0));
     
     // Step 1: to string
     let string_repr = ron::ser::to_string(&comp).unwrap();

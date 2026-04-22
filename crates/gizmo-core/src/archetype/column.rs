@@ -1,6 +1,5 @@
 use std::any::TypeId;
 use std::alloc::Layout;
-use std::sync::RwLock;
 use super::blob::BlobVec;
 use std::ptr;
 
@@ -67,8 +66,8 @@ impl Column {
 
     /// Sütun verisinin başlangıç pointer'ını döndürür (mutable).
     #[inline]
-    pub fn data_ptr_mut(&self) -> *mut u8 {
-        unsafe { self.data.as_ptr() as *mut u8 }
+    pub fn data_ptr_mut(&mut self) -> *mut u8 {
+        self.data.as_mut_ptr()
     }
 
     /// Sütunun ComponentTick verilerinin başlangıç adresi.
@@ -79,8 +78,8 @@ impl Column {
 
     /// Sütunun ComponentTick verilerinin başlangıç adresi (mutable).
     #[inline]
-    pub fn ticks_ptr_mut(&self) -> *mut ComponentTicks {
-        self.ticks.as_ptr() as *mut ComponentTicks
+    pub fn ticks_ptr_mut(&mut self) -> *mut ComponentTicks {
+        self.ticks.as_mut_ptr()
     }
 
     /// - Dönen pointer geçerli bir `T` tipindeki veriye işaret eder

@@ -13,7 +13,7 @@ pub mod index;
 
 pub use self::blob::*;
 pub use self::column::*;
-pub use self::index::*;
+
 
 use std::collections::HashMap;
 use std::any::TypeId;
@@ -291,6 +291,8 @@ impl Archetype {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::alloc::Layout;
+    use std::ptr;
 
     #[test]
     fn blob_vec_push_and_read() {

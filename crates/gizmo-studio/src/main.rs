@@ -18,7 +18,7 @@ pub use studio_input::*;
 fn main() {
     let mut app = App::<StudioState>::new("Gizmo Studio", 1600, 900)
         .with_icon(include_bytes!("../../../media/logo.png"))
-        .add_event::<gizmo::physics::CollisionEvent>()
+
         .add_event::<crate::state::ShaderReloadEvent>();
 
     app = app.set_setup(|world, renderer| setup::setup_studio_scene(world, renderer));

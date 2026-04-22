@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::marker::PhantomData;
 use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 
@@ -39,6 +38,8 @@ impl<'a, T: 'static> std::ops::DerefMut for ResourceWriteGuard<'a, T> {
 mod tests {
     use super::*;
     use crate::impl_component;
+    use crate::World;
+    use crate::Entity;
 
     // Test component types
     #[derive(Debug, Clone, PartialEq)]
@@ -283,7 +284,8 @@ mod tests {
         let pos_view = world.borrow::<Position>();
         let mut count = 0;
         for e in world.iter_alive_entities() {
-            assert!(pos_view.get(e.id()).is_some());
+            let eid: u32 = e.id();
+            assert!(pos_view.get(eid).is_some());
             count += 1;
         }
         assert_eq!(count, 50);

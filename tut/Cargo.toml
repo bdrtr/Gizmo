@@ -7,3 +7,7 @@ edition.workspace = true
 gizmo = { path = "../crates/gizmo", features = ["audio", "scripting", "scene"] }
 pollster = "0.3"
 winit = { workspace = true }
+
+[[bin]]
+name = "gpu_demo"
+path = "src/gpu_demo.rs"

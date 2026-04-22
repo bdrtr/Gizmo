@@ -52,7 +52,14 @@ Gizmo Engine'in güncel mimarisi, modern AAA teknolojilerine (Unreal, Unity, Bev
     * **Command Buffer:** Multithread sistemler çalışırken veri kilitlenmesi yaşamadan (Deadlock-free) Entity ekleme/silme yapılabilmesi için ertelenmiş komut kuyruğu.
     * **System Dependency Graph:** Bileşen okuma/yazma gereksinimlerine göre sistemleri (`System`) otomatik paralelleştiren Yönlü Döngüsüz Grafik (DAG) zamanlayıcısı.
     * **İlişkisel Archetype Hiyerarşisi:** Archetype dizilimlerinin Parent-Child hafıza kaydırmalarına entegre edilmesi.
-* **Fizik Motoru (4.0 / 5):** GJK/EPA dar fazı (narrow-phase), Broad-phase algoritması ve Gauss-Seidel Sıralı İmpuls (Sequential Impulse) mekaniği doğrudan PhysX standardıdır. İlerleyen safhalarda, Kumaş (Soft-Body) fizikleri eklenecektir.
+* **Fizik Motoru (4.0 / 5):** GJK/EPA dar fazı (narrow-phase), Broad-phase algoritması ve Gauss-Seidel Sıralı İmpuls (Sequential Impulse) mekaniği doğrudan PhysX standardıdır. Rayon ile O(1) Graph-Coloring CPU Threading desteği, XPBD Yumuşak Cisim (Kumaş/Jöle), Articulated Body (Featherstone) ve SPH Sıvı Mekaniği (Fluids) entegredir.
+  * **AAA Vizyonu (Gelecekte Eksik Kalanlar):**
+    * **Tam Kapsamlı GPU Fizik Simülasyonu:** Milyonlarca objenin tamamen ekran kartında (Compute Shader) tünelleme sorunu çözülerek işlendiği mimariler.
+    * **İleri Düzey Parçalanma (Voronoi Fracturing):** Gerçek zamanlı formüllü bina kırılmaları ve dinamik Convex Hull üretimi.
+    * **FEM tabanlı Yumuşak Cisim:** Tetrahredral ağlarla örülü ve tam gerçekçi araba göçmesi (BeamNG stili).
+    * **Exact TOI (Gelişmiş CCD):** "Conservative Advancement" adı verilen, çarpışma yaşanacak salisenin tam bulunup simüle edilmesi.
+    * **Araç Tekerlek Dinamikleri (Pacejka):** Kayma ve tutunma açısı grafikleri (Magic Formula / Brush Model).
+    * **Mutlak Belirlenimcilik (Cross-Platform Determinism):** Multiplayer ağlar için tam lock-step garantili Float matematiği veya Fixed-Point entegrasyonu.
 * **Grafik ve Render (3.5 / 5):** Vulkan (`wgpu`) tabanlı yapı; PBR render, Compute Shader parçacıkları (Particles) ve Dinamik gölgeler (CSM) ile başarılıdır. İleri seviye standardizasyon için Mesh Shader tabanlı GPU-Culling ve Temporal uzamsal filtrelemeler hedeflenmektedir.
 * **Editör ve Tooling (3.5 / 5):** `egui` tabanlı anlık editör, docking ve sahne yönetim özelliği esnek bir zemin sunar. Tam teşekküllü bir AAA stüdyo deneyimi için Görsel Profilci (Flamegraphs & GPU Profiler) ve Geri Al (Undo Command Pattern) hedefler arasındadır.
 * **Ses ve Math SIMD (3.5 / 5):** Gerçek zamanlı Doppler özellikli 3D Uzamsal (Spatial) Ses motoru ve SIMD-destekli (Slab, Möller-Trumbore) özel Culling/Raycast matematik çekirdeği ile bağımsızlığını kanıtlar.

@@ -1,8 +1,5 @@
 use gizmo::prelude::*;
-use gizmo::physics::components::{PhysicsConfig, RigidBody, Velocity};
-use gizmo::physics::shape::Collider;
-use gizmo::physics::system::PhysicsSolverState;
-use gizmo::physics::JointWorld;
+use gizmo::physics::components::{RigidBody, Velocity};
 use gizmo::renderer::asset::AssetManager;
 use gizmo::renderer::components::{DirectionalLight, MeshRenderer};
  
@@ -61,7 +58,6 @@ impl DominoGame {
  
 fn main() {
     App::<DominoGame>::new("Gizmo — Domino Oyunu (500 taş)", 1600, 900)
-        .add_event::<gizmo::physics::CollisionEvent>()
         .set_setup(|world, renderer| {
             let mut game = setup_scene(world, renderer);
             
@@ -150,13 +146,6 @@ fn main() {
  
 fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> DominoGame {
     println!("Domino sahne kuruluyor: {} taş…", DOMINO_COUNT);
- 
-    world.insert_resource(PhysicsConfig {
-        ground_y: GROUND_Y,
-        ..Default::default()
-    });
-    world.insert_resource(JointWorld::new());
-    world.insert_resource(PhysicsSolverState::new());
  
     let mut asset_manager = AssetManager::new();
  
@@ -368,9 +357,7 @@ fn trigger_first_domino(world: &mut World, game: &DominoGame) {
 }
  
 fn step_physics(world: &mut World, dt: f32) {
-    gizmo::physics::integration::physics_apply_forces_system(world, dt);
-    gizmo::physics::system::physics_collision_system(world, dt);
-    gizmo::physics::integration::physics_movement_system(world, dt);
+
 }
  
 fn update_camera(
