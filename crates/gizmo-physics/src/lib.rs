@@ -1,7 +1,8 @@
 pub mod components;
 pub mod shape;
+pub mod fracture;
 
-pub use components::{RigidBody, Transform, Velocity};
+pub use components::{RigidBody, Transform, Velocity, Breakable};
 pub use shape::{Collider, ColliderShape};
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]

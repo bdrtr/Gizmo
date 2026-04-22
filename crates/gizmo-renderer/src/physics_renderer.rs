@@ -187,6 +187,14 @@ impl GpuPhysicsSystem {
             data2: [55.0, 40.0, 40.0, 0.0], // aabb_max (Sağ Duvar)
         });
 
+        // Reserve space for more static colliders (e.g., dynamically spawned from ECS)
+        let max_static_colliders = 100;
+        let num_initial = initial_colliders.len();
+        if num_initial < max_static_colliders {
+            let empty_col = GpuCollider { shape_type: 0, _pad1: [0; 3], data1: [0.0;4], data2: [0.0;4] };
+            initial_colliders.resize(max_static_colliders, empty_col);
+        }
+
         let colliders_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("GPU Static Colliders Buffer"),
             contents: bytemuck::cast_slice(&initial_colliders),
@@ -566,9 +574,11 @@ impl GpuPhysicsSystem {
 
     /// Update or Add a static collider at a specific index
     pub fn update_collider(&self, queue: &wgpu::Queue, index: u32, collider: &GpuCollider) {
-        // We only reserved 50 colliders usually. We need to be careful of max capacity.
-        let offset = (index as wgpu::BufferAddress) * std::mem::size_of::<GpuCollider>() as wgpu::BufferAddress;
-        queue.write_buffer(&self.colliders_buffer, offset, bytemuck::cast_slice(&[*collider]));
+        // We reserved 100 colliders
+        if index < 100 {
+            let offset = (index as wgpu::BufferAddress) * std::mem::size_of::<GpuCollider>() as wgpu::BufferAddress;
+            queue.write_buffer(&self.colliders_buffer, offset, bytemuck::cast_slice(&[*collider]));
+        }
     }
 
     pub fn compute_pass(&self, encoder: &mut wgpu::CommandEncoder) {

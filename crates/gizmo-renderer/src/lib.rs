@@ -34,6 +34,7 @@ pub mod hot_reload;
 pub mod debug_renderer;
 pub mod particle_renderer;
 pub mod physics_renderer;
+pub mod gpu_fluid_system;
 pub mod pipeline;
 pub mod post_process;
 pub mod renderer;

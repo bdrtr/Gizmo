@@ -141,6 +141,11 @@ pub fn default_render_pass(
         physics.compute_pass(encoder);
         physics.cull_pass(encoder, &renderer.scene.global_bind_group);
     }
+    
+    // Gpu Fluid Processing
+    if let Some(fluid) = &renderer.gpu_fluid {
+        fluid.compute_pass(encoder);
+    }
 
     {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -192,6 +197,11 @@ pub fn default_render_pass(
         // Draw GPU Physics Spheres!
         if let Some(physics) = &renderer.gpu_physics {
             physics.render_pass(&mut render_pass, &renderer.scene.global_bind_group);
+        }
+
+        // Draw SPH fluid
+        if let Some(fluid) = &renderer.gpu_fluid {
+            fluid.render_pass(&mut render_pass, &renderer.scene.global_bind_group);
         }
 
         if let Some(gizmos) = world.get_resource::<crate::renderer::Gizmos>() {

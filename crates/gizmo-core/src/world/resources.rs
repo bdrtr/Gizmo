@@ -1,5 +1,12 @@
+use std::any::TypeId;
 use std::marker::PhantomData;
 use std::sync::{RwLockReadGuard, RwLockWriteGuard};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceFetchError {
+    NotFound(TypeId),
+    BorrowConflict(TypeId),
+}
 
 pub struct ResourceReadGuard<'a, T> {
     pub(crate) guard: RwLockReadGuard<'a, Box<dyn std::any::Any + Send + Sync>>,
@@ -36,7 +43,6 @@ impl<'a, T: 'static> std::ops::DerefMut for ResourceWriteGuard<'a, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::impl_component;
     use crate::World;
     use crate::Entity;

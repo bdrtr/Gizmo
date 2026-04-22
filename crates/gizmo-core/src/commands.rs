@@ -43,10 +43,10 @@ pub struct Commands<'w> {
 impl SystemParam for Commands<'static> {
     type Item<'w> = Commands<'w>;
 
-    fn fetch<'w>(world: &'w World, dt: f32) -> Option<Self::Item<'w>> {
+    fn fetch<'w>(world: &'w World, dt: f32) -> Result<Self::Item<'w>, crate::system::SystemParamFetchError> {
         let queue = <Res<'static, CommandQueue> as SystemParam>::fetch(world, dt)?;
         let entities = <Res<'static, crate::entity::allocator::Entities> as SystemParam>::fetch(world, dt)?;
-        Some(Commands { queue, entities })
+        Ok(Commands { queue, entities })
     }
 
     fn get_access_info(info: &mut crate::system::AccessInfo) {

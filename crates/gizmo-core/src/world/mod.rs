@@ -484,8 +484,7 @@ impl World {
         }
     }
 
-    // ComponentStorage/SparseSet tabanlı eski metodlar silindi.
-    // Query sistemi artık StorageView ve Archetype üzerinden çalışmaktadır.
+    // Query sistemi `StorageView` ve `Archetype` üzerinden çalışır.
 
     // ==========================================================
     // ERGONOMİK SORGULAR (QUERY API)
@@ -533,18 +532,28 @@ impl World {
 
     /// Global bir Resource'u okumak için çağrılır (Immutable Borrow)
     pub fn get_resource<T: 'static>(&self) -> Option<ResourceReadGuard<'_, T>> {
-        let type_id = TypeId::of::<T>();
-        let storage = self.resources.get(&type_id)?;
-        let guard = storage.try_read().expect("ECS Aliasing Error: Resource borrow conflict");
-        Some(ResourceReadGuard { guard, _marker: PhantomData })
+        self.try_get_resource::<T>().ok()
     }
 
     /// Global bir Resource'u değiştirmek için çağrılır (Mutable Borrow)
     pub fn get_resource_mut<T: 'static>(&self) -> Option<ResourceWriteGuard<'_, T>> {
+        self.try_get_resource_mut::<T>().ok()
+    }
+
+    /// `get_resource` ile aynı işlev, ama hata sebebini `Result` ile taşır.
+    pub fn try_get_resource<T: 'static>(&self) -> Result<ResourceReadGuard<'_, T>, ResourceFetchError> {
         let type_id = TypeId::of::<T>();
-        let storage = self.resources.get(&type_id)?;
-        let guard = storage.try_write().expect("ECS Aliasing Error: Resource mutable borrow conflict");
-        Some(ResourceWriteGuard { guard, _marker: PhantomData })
+        let storage = self.resources.get(&type_id).ok_or(ResourceFetchError::NotFound(type_id))?;
+        let guard = storage.try_read().map_err(|_| ResourceFetchError::BorrowConflict(type_id))?;
+        Ok(ResourceReadGuard { guard, _marker: PhantomData })
+    }
+
+    /// `get_resource_mut` ile aynı işlev, ama hata sebebini `Result` ile taşır.
+    pub fn try_get_resource_mut<T: 'static>(&self) -> Result<ResourceWriteGuard<'_, T>, ResourceFetchError> {
+        let type_id = TypeId::of::<T>();
+        let storage = self.resources.get(&type_id).ok_or(ResourceFetchError::NotFound(type_id))?;
+        let guard = storage.try_write().map_err(|_| ResourceFetchError::BorrowConflict(type_id))?;
+        Ok(ResourceWriteGuard { guard, _marker: PhantomData })
     }
 
     /// Global bir Resource yoksa Default olarak oluşturur, ardından Mutable Borrow döndürür.

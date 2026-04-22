@@ -67,9 +67,20 @@ pub trait System: Send + Sync {
 
 use crate::world::{ResourceReadGuard, ResourceWriteGuard};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemParamFetchError {
+    Resource(crate::world::ResourceFetchError),
+}
+
+impl From<crate::world::ResourceFetchError> for SystemParamFetchError {
+    fn from(value: crate::world::ResourceFetchError) -> Self {
+        Self::Resource(value)
+    }
+}
+
 pub trait SystemParam {
     type Item<'w>;
-    fn fetch<'w>(world: &'w World, dt: f32) -> Option<Self::Item<'w>>;
+    fn fetch<'w>(world: &'w World, dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError>;
     fn get_access_info(info: &mut AccessInfo);
 }
 
@@ -86,9 +97,9 @@ impl<'w, T: 'static> std::ops::Deref for Res<'w, T> {
 
 impl<T: 'static> SystemParam for Res<'static, T> {
     type Item<'w> = Res<'w, T>;
-    fn fetch<'w>(world: &'w World, _dt: f32) -> Option<Self::Item<'w>> {
-        let value = world.get_resource::<T>()?;
-        Some(Res::<T> { value })
+    fn fetch<'w>(world: &'w World, _dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError> {
+        let value = world.try_get_resource::<T>()?;
+        Ok(Res::<T> { value })
     }
     fn get_access_info(info: &mut AccessInfo) {
         info.resource_reads.push(TypeId::of::<T>());
@@ -114,9 +125,9 @@ impl<'w, T: 'static> std::ops::DerefMut for ResMut<'w, T> {
 
 impl<T: 'static> SystemParam for ResMut<'static, T> {
     type Item<'w> = ResMut<'w, T>;
-    fn fetch<'w>(world: &'w World, _dt: f32) -> Option<Self::Item<'w>> {
-        let value = world.get_resource_mut::<T>()?;
-        Some(ResMut::<T> { value })
+    fn fetch<'w>(world: &'w World, _dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError> {
+        let value = world.try_get_resource_mut::<T>()?;
+        Ok(ResMut::<T> { value })
     }
     fn get_access_info(info: &mut AccessInfo) {
         info.resource_writes.push(TypeId::of::<T>());
@@ -125,8 +136,8 @@ impl<T: 'static> SystemParam for ResMut<'static, T> {
 
 impl SystemParam for f32 {
     type Item<'w> = f32;
-    fn fetch<'w>(_world: &'w World, dt: f32) -> Option<Self::Item<'w>> {
-        Some(dt)
+    fn fetch<'w>(_world: &'w World, dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError> {
+        Ok(dt)
     }
     fn get_access_info(_info: &mut AccessInfo) {}
 }
@@ -175,10 +186,21 @@ macro_rules! impl_into_system {
                     $($P: SystemParam + 'static,)+
                 {
                     fn run(&mut self, world: &World, dt: f32) {
-                        $(let $P = $P::fetch(world, dt);)+
-                        if let ($(Some($P),)+) = ($($P,)+) {
-                            (self.func)($($P),+);
-                        }
+                        $(
+                            let $P = match $P::fetch(world, dt) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    crate::gizmo_log!(
+                                        Warning,
+                                        "[SystemParam] fetch failed for {}: {:?}",
+                                        std::any::type_name::<$P>(),
+                                        e
+                                    );
+                                    return;
+                                }
+                            };
+                        )+
+                        (self.func)($($P),+);
                     }
                     fn access_info(&self) -> AccessInfo {
                         let mut info = AccessInfo::new();
