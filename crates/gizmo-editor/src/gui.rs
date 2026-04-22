@@ -15,7 +15,7 @@ impl EditorContext {
     pub fn new(device: &wgpu::Device, output_format: wgpu::TextureFormat, window: &Window, sample_count: u32) -> Self {
         let context = Context::default();
 
-        let mut fonts = egui::FontDefinitions::default();
+        let fonts = egui::FontDefinitions::default();
         // TODO: Load missing Emoji/Turkish TTF bytes here for comprehensive support.
         // fonts.font_data.insert("emoji".to_owned(), egui::FontData::from_static(include_bytes!("...")));
         context.set_fonts(fonts);

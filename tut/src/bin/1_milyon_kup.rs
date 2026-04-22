@@ -27,10 +27,14 @@ impl MillionKupGame {
 }
 
 fn main() {
-    App::<MillionKupGame>::new("Gizmo — 1 Milyon Küp Simülasyonu", 1600, 900)
-        .set_setup(|world, _renderer| {
+    run(50_000); // 1 Milyon tam OBB fizik iterasyonu GPU'yu kitler, 50k ile 60+ FPS alalım!
+}
+
+fn run(cube_count: u32) {
+    App::<MillionKupGame>::new("Gizmo — 50 Bin Küp Simülasyonu", 1600, 900)
+        .set_setup(move |world, _renderer| {
             println!("##################################################");
-            println!("    1 Milyon GPU Küp Simülasyonu Başlıyor...");
+            println!("    {} GPU Küp Simülasyonu Başlıyor...", cube_count);
             println!("##################################################");
             
             let mut game = MillionKupGame::new();
@@ -108,7 +112,7 @@ fn main() {
             }
 
             // Transformu Güncelle
-            if let Some(mut tr) = world.borrow_mut::<Transform>().get_mut(state.cam_id) {
+            if let Some(tr) = world.borrow_mut::<Transform>().get_mut(state.cam_id) {
                 let rot = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
                 tr.rotation = rot;
 
@@ -133,7 +137,7 @@ fn main() {
                     );
                 });
         })
-        .set_render(|world, _state, encoder, view, renderer, light_time| {
+        .set_render(|world, _state, encoder, view, renderer, _light_time| {
             gizmo::default_systems::default_render_pass(
                 world, encoder, view, renderer
             );

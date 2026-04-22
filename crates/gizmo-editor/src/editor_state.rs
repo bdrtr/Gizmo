@@ -1,8 +1,6 @@
 //! Editor State — Editörün global durumunu yönetir
 use crate::prefs::EditorPrefs;
-use rfd;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Hash, Debug)]
 pub enum EditorTab {

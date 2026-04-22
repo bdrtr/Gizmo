@@ -135,9 +135,9 @@ impl GpuPhysicsSystem {
             let z = (iz as f32 * spacing) - offset;
 
             // Görselliği arttırmak için Y koordinatına göre renk gradyanı:
-            let color_r = (ix as f32 / grid_dim as f32);
-            let color_g = (iy as f32 / grid_dim as f32);
-            let color_b = (iz as f32 / grid_dim as f32);
+            let color_r = ix as f32 / grid_dim as f32;
+            let color_g = iy as f32 / grid_dim as f32;
+            let color_b = iz as f32 / grid_dim as f32;
 
             initial_boxes.push(GpuBox {
                 position: [x, y, z],

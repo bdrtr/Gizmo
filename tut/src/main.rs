@@ -356,7 +356,7 @@ fn trigger_first_domino(world: &mut World, game: &DominoGame) {
     }
 }
  
-fn step_physics(world: &mut World, dt: f32) {
+fn step_physics(_world: &mut World, _dt: f32) {
 
 }
  

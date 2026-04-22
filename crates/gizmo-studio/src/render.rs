@@ -301,7 +301,7 @@ pub fn render_studio(
                         p_depth,
                         p_max_h,
                     ) {
-                        Ok((mesh, heights, w, d)) => {
+                        Ok((mesh, _heights, _w, _d)) => {
                             if let Some(ent) = world.get_entity(ent_id.id()) {
                                 // Material yoksa beyaz default ekle
                                 let has_mat = world

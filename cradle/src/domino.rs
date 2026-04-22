@@ -211,7 +211,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
     DominoGame::new()
 }
 
-fn step_physics(world: &mut World, dt: f32) {
+fn step_physics(_world: &mut World, _dt: f32) {
 
 }
 
