@@ -372,10 +372,30 @@ where
 // ALIASING & IMPLS
 // =========================================================================
 
+/// Mutable aliasing kontrolü — aynı `TypeId`'ye iki mutable erişim varsa **UB** olur.
+///
+/// # Invariant
+/// Bir query içinde aynı component tipine birden fazla mutable erişim (`Mut<T>`)
+/// **kesinlikle yasaktır**. `Query<(Mut<Position>, Mut<Position>)>` gibi bir kullanım
+/// çalışma zamanında panic atar. Bu kontrol compile-time'da yapılamaz çünkü Rust'ın
+/// tip sistemi `TypeId` eşitliğini const-context'te karşılaştıramaz.
+///
+/// # Güvenli Kullanım
+/// - `Query<(&Position, Mut<Velocity>)>` → ✅ (farklı tipler)
+/// - `Query<(Mut<Position>, Mut<Velocity>)>` → ✅ (farklı tipler)
+/// - `Query<(Mut<Position>, Mut<Position>)>` → ❌ PANIC!
+/// - `Query<(&Position, &Position)>` → ✅ (ikisi de immutable — aliasing güvenli)
 #[inline]
 fn check(tid: TypeId, is_mut: bool, types: &mut Vec<(TypeId, bool)>) {
-    if types.iter().any(|(t, m)| *t == tid && (*m || is_mut)) {
-        panic!("Aliasing UB in Query!");
+    for &(existing_tid, existing_mut) in types.iter() {
+        if existing_tid == tid && (existing_mut || is_mut) {
+            panic!(
+                "Query aliasing UB detected! Component TypeId {:?} is accessed mutably more than once \
+                 in the same query. This would cause undefined behavior. \
+                 Use separate queries for components of the same type that need independent mutable access.",
+                tid
+            );
+        }
     }
     types.push((tid, is_mut));
 }
@@ -563,4 +583,73 @@ impl<'w, T1: WorldQuery<'w>, T2: WorldQuery<'w>> WorldQuery<'w> for Or<T1, T2> {
     unsafe fn filter_row(_fetch: Self::Fetch, _row: usize, _tick: u32) -> bool { true }
     unsafe fn get_item<'a>(_fetch: Self::Fetch, _row: usize) -> Self::Item<'a> where 'w: 'a { () }
     unsafe fn get_slice<'a>(_fetch: Self::Fetch, _len: usize) -> Self::Slice<'a> where 'w: 'a { () }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::impl_component;
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct Position { x: f32, y: f32 }
+    impl_component!(Position);
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct Velocity { x: f32, y: f32 }
+    impl_component!(Velocity);
+
+    /// `Query<(Mut<Position>, Mut<Position>)>` gibi aynı tipe çift mutable erişim
+    /// denemesi panic ile engellenmeli.
+    #[test]
+    #[should_panic(expected = "Query aliasing UB detected")]
+    fn test_same_type_mut_mut_panics() {
+        let mut types = Vec::new();
+        // İlk Mut<Position> — sorunsuz eklenir
+        check(TypeId::of::<Position>(), true, &mut types);
+        // İkinci Mut<Position> — PANIC olmalı!
+        check(TypeId::of::<Position>(), true, &mut types);
+    }
+
+    /// `Query<(&Position, Mut<Position>)>` — bir immutable, bir mutable aynı tipe erişim:
+    /// Bu da panic olmalı çünkü &T + &mut T alias oluşturur.
+    #[test]
+    #[should_panic(expected = "Query aliasing UB detected")]
+    fn test_same_type_ref_mut_panics() {
+        let mut types = Vec::new();
+        check(TypeId::of::<Position>(), false, &mut types); // &Position
+        check(TypeId::of::<Position>(), true, &mut types);  // Mut<Position> — PANIC!
+    }
+
+    /// `Query<(Mut<Position>, Mut<Velocity>)>` — farklı tipler, sorunsuz çalışmalı.
+    #[test]
+    fn test_different_types_mut_mut_ok() {
+        let mut types = Vec::new();
+        check(TypeId::of::<Position>(), true, &mut types);
+        check(TypeId::of::<Velocity>(), true, &mut types);
+        assert_eq!(types.len(), 2);
+    }
+
+    /// `Query<(&Position, &Position)>` — aynı tipe çift immutable erişim güvenlidir.
+    #[test]
+    fn test_same_type_ref_ref_ok() {
+        let mut types = Vec::new();
+        check(TypeId::of::<Position>(), false, &mut types);
+        check(TypeId::of::<Position>(), false, &mut types);
+        assert_eq!(types.len(), 2);
+    }
+
+    /// World üzerinden Query oluşturulduğunda aliasing kontrolünün çalıştığını doğrular.
+    #[test]
+    fn test_query_new_with_valid_types() {
+        let mut world = crate::World::new();
+        world.register_component_type::<Position>();
+        world.register_component_type::<Velocity>();
+        let e = world.spawn();
+        world.add_component(e, Position { x: 1.0, y: 2.0 });
+        world.add_component(e, Velocity { x: 0.0, y: 0.0 });
+
+        // Farklı tipler — Query oluşturulabilmeli
+        let q = world.query::<(Mut<Position>, Mut<Velocity>)>();
+        assert!(q.is_some());
+    }
 }

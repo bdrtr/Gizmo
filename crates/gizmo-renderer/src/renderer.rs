@@ -24,8 +24,10 @@ pub struct Renderer<'a> {
     // === PARTİKÜL SİSTEMİ ===
     pub gpu_particles: Option<crate::particle_renderer::GpuParticleSystem>,
 
-    // === GPU FİZİK SİSTEMİ ===
     pub gpu_physics: Option<crate::physics_renderer::GpuPhysicsSystem>,
+
+    // === GPU SIVI SİSTEMİ ===
+    pub gpu_fluid: Option<crate::gpu_fluid_system::GpuFluidSystem>,
 
     // === GIZMO HATA AYIKLAMA (Debug Lines) ===
     pub debug_renderer: Option<crate::debug_renderer::GizmoRendererSystem>,
@@ -139,6 +141,14 @@ impl<'a> Renderer<'a> {
             wgpu::TextureFormat::Depth32Float,
         ));
 
+        let gpu_fluid = Some(crate::gpu_fluid_system::GpuFluidSystem::new(
+            &device,
+            &queue,
+            15_000, // 15K SPH particles for performance demo
+            &scene.global_bind_group_layout,
+            wgpu::TextureFormat::Rgba16Float,
+        ));
+
         let debug_renderer = Some(crate::debug_renderer::GizmoRendererSystem::new(
             &device,
             &scene.global_bind_group_layout,
@@ -208,6 +218,7 @@ impl<'a> Renderer<'a> {
             post: post_state,
             gpu_particles,
             gpu_physics,
+            gpu_fluid,
             debug_renderer,
         }
     }

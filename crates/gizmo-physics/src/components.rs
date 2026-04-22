@@ -1,4 +1,3 @@
-use gizmo_core::impl_component;
 use gizmo_math::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
@@ -141,4 +140,21 @@ impl RigidBody {
     pub fn update_inertia_from_shape(&mut self, _shape: &crate::shape::ColliderShape) {}
 }
 
-impl_component!(Transform, Velocity, RigidBody);
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct Breakable {
+    pub max_pieces: u32,
+    pub threshold: f32, // required impulse/force to break
+    pub is_broken: bool,
+}
+
+impl Default for Breakable {
+    fn default() -> Self {
+        Self {
+            max_pieces: 10,
+            threshold: 100.0,
+            is_broken: false,
+        }
+    }
+}
+
+gizmo_core::impl_component!(Transform, Velocity, RigidBody, Breakable);

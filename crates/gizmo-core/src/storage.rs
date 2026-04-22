@@ -4,7 +4,7 @@ use crate::archetype::{Column, EntityLocation};
 use crate::component::Component;
 
 /// Archetype tabanlı depolamaya dışarıdan (Physics, Editor vb.) erişim sağlayan görünüm.
-/// SparseSet ile aynı API'yi (get, iter) sunarak geriye uyumluluk sağlar.
+/// `StorageView`, archetype/column yapısı üzerinde `get`/`iter` gibi ergonomik okuma API'leri sağlar.
 pub struct StorageView<'w, T: Component> {
     /// Her bir archetype için (entities, column) ikilisi
     pub(crate) archetypes: Vec<(&'w [u32], RwLockReadGuard<'w, Column>)>,
