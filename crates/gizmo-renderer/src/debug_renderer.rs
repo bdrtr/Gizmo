@@ -1,5 +1,4 @@
-use wgpu::util::DeviceExt;
-use gizmo_math::{Vec3, Quat};
+use gizmo_math::Vec3;
 #[derive(Clone, Default)]
 pub struct Gizmos {
     pub lines: Vec<GizmoVertex>,

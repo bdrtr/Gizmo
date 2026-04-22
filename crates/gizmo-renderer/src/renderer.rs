@@ -129,8 +129,8 @@ impl<'a> Renderer<'a> {
             wgpu::TextureFormat::Rgba16Float,
         ));
 
-        // GPU Physics buffer boyutu -- Pachinko simülasyonu
-        let max_physics_spheres: u32 = 1_000_000;
+        // GPU Physics buffer boyutu -- 1 Milyon tam OBB fizik iterasyonu GPU'yu kitler, 50k ile 60+ FPS alalım!
+        let max_physics_spheres: u32 = 50_000;
         let gpu_physics = Some(crate::physics_renderer::GpuPhysicsSystem::new(
             &device,
             max_physics_spheres,

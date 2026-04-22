@@ -102,7 +102,7 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     }
 }
 
-fn draw_name_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+fn draw_name_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, _state: &mut EditorState) {
     let mut names = world.borrow_mut::<EntityName>(); {
         if let Some(name) = names.get_mut(entity_id.id()) {
             ui.horizontal(|ui| {
@@ -114,7 +114,7 @@ fn draw_name_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::en
     }
 }
 
-fn draw_transform_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+fn draw_transform_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, _state: &mut EditorState) {
     let mut transforms = world.borrow_mut::<Transform>(); {
         if let Some(t) = transforms.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("📐 Transform")
@@ -173,7 +173,7 @@ fn draw_transform_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_cor
     }
 }
 
-fn draw_velocity_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+fn draw_velocity_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, _state: &mut EditorState) {
     let mut velocities = world.borrow_mut::<Velocity>(); {
         if let Some(v) = velocities.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("💨 Velocity")
@@ -221,7 +221,7 @@ fn draw_velocity_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core
     }
 }
 
-fn draw_rigidbody_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+fn draw_rigidbody_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, _state: &mut EditorState) {
     let mut rigidbodies = world.borrow_mut::<RigidBody>(); {
         if let Some(rb) = rigidbodies.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("⚙️ RigidBody")
@@ -270,7 +270,7 @@ fn draw_rigidbody_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_cor
     }
 }
 
-fn draw_collider_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+fn draw_collider_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, _state: &mut EditorState) {
     let mut colliders = world.borrow_mut::<Collider>(); {
         if let Some(collider) = colliders.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("🛡️ Collider")
@@ -312,7 +312,7 @@ fn draw_collider_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core
     }
 }
 
-fn draw_camera_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+fn draw_camera_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, _state: &mut EditorState) {
     let mut cameras = world.borrow_mut::<Camera>(); {
         if let Some(cam) = cameras.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("📷 Camera")
@@ -356,7 +356,7 @@ fn draw_camera_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::
     }
 }
 
-fn draw_point_light_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+fn draw_point_light_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, _state: &mut EditorState) {
     let mut lights = world.borrow_mut::<PointLight>(); {
         if let Some(light) = lights.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("💡 PointLight")
@@ -383,7 +383,7 @@ fn draw_point_light_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_c
     }
 }
 
-fn draw_material_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+fn draw_material_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, _state: &mut EditorState) {
     let mut materials = world.borrow_mut::<Material>(); {
         if let Some(mat) = materials.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("🎨 Material")
@@ -431,7 +431,7 @@ fn draw_material_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core
     }
 }
 
-fn draw_particle_emitter_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+fn draw_particle_emitter_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, _state: &mut EditorState) {
     let mut emitters = world.borrow_mut::<ParticleEmitter>(); {
         if let Some(emitter) = emitters.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("✨ Particle Emitter")

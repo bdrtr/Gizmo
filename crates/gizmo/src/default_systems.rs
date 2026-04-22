@@ -4,7 +4,7 @@ use crate::renderer::{
     components::{Camera, Material, Mesh, MeshRenderer},
     Renderer,
 };
-use crate::physics::{Collider, ColliderShape, GpuPhysicsLink, RigidBody, Transform, Velocity};
+use crate::physics::{Collider, ColliderShape, GpuPhysicsLink, RigidBody, Transform};
 use bytemuck;
 use wgpu;
 

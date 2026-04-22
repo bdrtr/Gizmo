@@ -295,12 +295,12 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Cradl
         // Constraint (Mesafe İpi)
         // Fiziksel olarak topun ağırlık merkezi (Vec3::ZERO) hedeflenir ki sarkarken tork yaratmasın ve takla atmasın.
         // Görsel ipler ise update_ropes içerisinde topun "yüzeyine" gidecek.
-        let anchor_b = Vec3::ZERO; 
+        let _anchor_b = Vec3::ZERO; 
         
         // anchor_a'lar beam'e LOCAL koordinattadır! Beam'ler zaten z=-1.5 ve z=1.5'te duruyor!
         // O yüzden local z ekseni 0.0 olmalı.
-        let anchor_a_back = Vec3::new(x, 0.0, 0.0);
-        let anchor_a_front = Vec3::new(x, 0.0, 0.0);
+        let _anchor_a_back = Vec3::new(x, 0.0, 0.0);
+        let _anchor_a_front = Vec3::new(x, 0.0, 0.0);
     }
 
     world.insert_resource(asset_manager);

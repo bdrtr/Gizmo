@@ -378,11 +378,11 @@ impl ScriptEngine {
                     }
                 }
                 
-                ScriptCommand::SetVehicleEngineForce(id, force) => {
+                ScriptCommand::SetVehicleEngineForce(_id, _force) => {
                 }
-                ScriptCommand::SetVehicleSteering(id, angle) => {
+                ScriptCommand::SetVehicleSteering(_id, _angle) => {
                 }
-                ScriptCommand::SetVehicleBrake(id, force) => {
+                ScriptCommand::SetVehicleBrake(_id, _force) => {
                 }
 
                 ScriptCommand::SpawnEntity { name, position } => {
