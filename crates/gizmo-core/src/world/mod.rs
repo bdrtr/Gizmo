@@ -1,14 +1,11 @@
 use std::collections::HashMap;
-use std::any::{TypeId, Any};
+use std::any::TypeId;
 use std::sync::RwLock;
 use crate::entity::Entity;
 use crate::archetype::{EntityLocation, ComponentInfo, Archetype};
 use crate::archetype::index::ArchetypeIndex;
 use crate::storage::{StorageView, StorageViewMut};
 use std::marker::PhantomData;
-use std::sync::{RwLockReadGuard, RwLockWriteGuard};
-use self::hooks::*;
-use self::resources::*;
 use crate::component::Component;
 
 pub mod hooks;
@@ -197,7 +194,8 @@ impl World {
                 row,
             };
             self.archetype_index.entity_archetype.insert(id, arch_id);
-            self.archetype_index.on_spawn(id);
+            // NOT: on_spawn çağırmıyoruz çünkü batch_clone_row zaten entity'yi
+            // doğru archetype'a ekledi. on_spawn boş archetype'a (0) tekrar eklerdi.
         }
 
         Some(new_entities)
@@ -333,7 +331,7 @@ impl World {
             // Zaten bu archetype'ta (aynı tip tekrar eklenmiş olabilir) — sadece üzerine yaz
             {
                 let arch = &self.archetype_index.archetypes[target_arch_id];
-                let col = arch.get_column_mut(type_id).unwrap();
+                let mut col = arch.get_column_mut(type_id).unwrap();
                 unsafe {
                     let ptr = col.get_ptr(old_loc.row as usize) as *mut T;
                     *ptr = component;
@@ -368,7 +366,7 @@ impl World {
         // 3. Yeni component'ı hedef archetype'a ekle
         {
             let arch = &self.archetype_index.archetypes[target_arch_id];
-            let col = arch.get_column_mut(type_id).expect("Mandatory component column missing");
+            let mut col = arch.get_column_mut(type_id).expect("Mandatory component column missing");
             unsafe {
                 let ptr = col.get_ptr(new_row as usize) as *mut T;
                 std::ptr::write(ptr, component);

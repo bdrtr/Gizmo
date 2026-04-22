@@ -116,6 +116,7 @@ impl ArchetypeIndex {
     }
 
     /// Entity despawn — archetype'dan çıkar
+    #[allow(dead_code)]
     pub(crate) fn on_despawn(&mut self, entity_id: u32) {
         if let Some(_arch_id) = self.entity_archetype.remove(&entity_id) {
             // Satır bilgisini EntityLocation'dan alacağız, burada sadece remove edebiliriz
@@ -162,12 +163,14 @@ impl ArchetypeIndex {
 
     /// Toplam archetype sayısı
     #[inline]
+    #[allow(dead_code)]
     pub(crate) fn archetype_count(&self) -> usize {
         self.archetypes.len()
     }
 
     /// Entity'nin mevcut archetype indeksini döndürür
     #[inline]
+    #[allow(dead_code)]
     pub(crate) fn entity_archetype_id(&self, entity_id: u32) -> Option<usize> {
         self.entity_archetype.get(&entity_id).copied()
     }

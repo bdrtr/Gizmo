@@ -134,6 +134,11 @@ impl BlobVec {
         self.data.as_ptr()
     }
 
+    /// Veri alanının mutable ham pointer'ını döndürür.
+    pub fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.data.as_ptr()
+    }
+
     /// Son elemanı swap-and-pop ile belirtilen indeksten çıkarır ve eski değeri düşürür.
     ///
     /// # Safety

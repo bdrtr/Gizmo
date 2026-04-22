@@ -25,8 +25,7 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
         world.insert_resource(editor_state);
     }
     
-    // Resolve all Transform hierarchy parent-child matrices BEFORE rendering.
-    gizmo::physics::integration::update_transform_hierarchy(world);
+    // Resolve all Transform hierarchy
     
     // Kamera sistemine editor state'e geri dönmüş haliyle pas atıyoruz (scroll delta Optional'ı unwrap_or(0.0) diye verdik, orijinal kodda Optional idi ama sistem f32 bekliyor. Bizim argüman f32, Option verilmiş. Düzeltilecekti). Wait, let's fix it properly.
     if scroll_delta.is_none() { scroll_delta = Some(0.0); }

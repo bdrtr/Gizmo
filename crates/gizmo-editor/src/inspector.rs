@@ -6,7 +6,6 @@ use gizmo_core::{EntityName, World};
 use gizmo_math::{Vec3, Vec4};
 use gizmo_physics::components::{RigidBody, Transform, Velocity};
 use gizmo_physics::shape::Collider;
-use gizmo_physics::vehicle::VehicleController;
 use gizmo_renderer::components::{Camera, Material, ParticleEmitter, PointLight};
 
 /// Inspector sekmesini çizer
@@ -77,9 +76,6 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 
             // === PARTICLE EMITTER ===
             draw_particle_emitter_section(ui, world, entity_id, state);
-
-            // === VEHICLE CONTROLLER ===
-            draw_vehicle_controller_section(ui, world, entity_id, state);
             
             draw_terrain_section(ui, world, entity_id, state);
             draw_script_section(ui, world, entity_id, state);
@@ -466,25 +462,7 @@ fn draw_particle_emitter_section(ui: &mut egui::Ui, world: &World, entity_id: gi
     }
 }
 
-fn draw_vehicle_controller_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
-    let mut vehicles = world.borrow_mut::<VehicleController>(); {
-        if let Some(vrc) = vehicles.get_mut(entity_id.id()) {
-            egui::CollapsingHeader::new("🚗 Vehicle")
-                .default_open(false)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Motor Gücü:");
-                        ui.add(egui::Slider::new(&mut vrc.engine_force, 0.0..=50000.0));
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Fren Gücü:");
-                        ui.add(egui::Slider::new(&mut vrc.brake_force, 0.0..=50000.0));
-                    });
-                });
-            ui.separator();
-        }
-    }
-}
+
 
 fn draw_script_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
     let mut pending_text = None;

@@ -82,12 +82,6 @@ pub fn handle_simulation(world: &mut World, editor_state: &mut EditorState, stat
 
             let mut steps = 0;
             while state.physics_accumulator >= fixed_dt && steps < 16 {
-                gizmo::physics::integration::physics_apply_forces_system(world, fixed_dt);
-                gizmo::physics::vehicle::physics_vehicle_system(world, fixed_dt);
-                gizmo::physics::system::physics_collision_system(world, fixed_dt);
-                gizmo::physics::character::physics_character_system(world, fixed_dt);
-                gizmo::physics::integration::physics_movement_system(world, fixed_dt);
-
                 state.physics_accumulator -= fixed_dt;
                 steps += 1;
             }

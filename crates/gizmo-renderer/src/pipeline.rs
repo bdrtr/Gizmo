@@ -163,7 +163,7 @@ fn build_layouts(device: &wgpu::Device) -> Layouts {
     let global = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("global_bind_group_layout"),
         entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0, visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+            binding: 0, visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
             ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
             count: None,
         }],

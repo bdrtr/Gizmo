@@ -344,17 +344,12 @@ impl ScriptEngine {
                 } => {
                     let entity = world.iter_alive_entities().into_iter().find(|e| e.id() == id);
                     if let Some(e) = entity {
-                        let mut rb = gizmo_physics::components::RigidBody::new(
+                        let rb = gizmo_physics::components::RigidBody::new(
                             mass,
                             restitution,
                             friction,
                             use_gravity,
                         );
-                        let cols = world.borrow::<gizmo_physics::shape::Collider>();
-                        if let Some(col) = cols.get(id) {
-                            rb.update_inertia_from_shape(&col.shape);
-                        }
-                        drop(cols);
                         world.add_component(e, rb);
                         // Make sure velocity exists so it can move
                         if world
@@ -371,45 +366,23 @@ impl ScriptEngine {
                 ScriptCommand::AddBoxCollider { id, hx, hy, hz } => {
                     let entity = world.iter_alive_entities().into_iter().find(|e| e.id() == id);
                     if let Some(e) = entity {
-                        let col = gizmo_physics::shape::Collider::new_aabb(hx, hy, hz);
-                        let mut rbs = world.borrow_mut::<gizmo_physics::components::RigidBody>();
-                        if let Some(rb) = rbs.get_mut(id) {
-                            rb.update_inertia_from_shape(&col.shape);
-                        }
-                        drop(rbs);
+                        let col = gizmo_physics::shape::Collider::aabb(gizmo_math::Vec3::new(hx, hy, hz));
                         world.add_component(e, col);
                     }
                 }
                 ScriptCommand::AddSphereCollider { id, radius } => {
                     let entity = world.iter_alive_entities().into_iter().find(|e| e.id() == id);
                     if let Some(e) = entity {
-                        let col = gizmo_physics::shape::Collider::new_sphere(radius);
-                        let mut rbs = world.borrow_mut::<gizmo_physics::components::RigidBody>();
-                        if let Some(rb) = rbs.get_mut(id) {
-                            rb.update_inertia_from_shape(&col.shape);
-                        }
-                        drop(rbs);
+                        let col = gizmo_physics::shape::Collider::sphere(radius);
                         world.add_component(e, col);
                     }
                 }
                 
                 ScriptCommand::SetVehicleEngineForce(id, force) => {
-                    let mut vehicles = world.borrow_mut::<gizmo_physics::vehicle::VehicleController>();
-                    if let Some(vc) = vehicles.get_mut(id) {
-                        vc.engine_force = force;
-                    }
                 }
                 ScriptCommand::SetVehicleSteering(id, angle) => {
-                    let mut vehicles = world.borrow_mut::<gizmo_physics::vehicle::VehicleController>();
-                    if let Some(vc) = vehicles.get_mut(id) {
-                        vc.steering_angle = angle;
-                    }
                 }
                 ScriptCommand::SetVehicleBrake(id, force) => {
-                    let mut vehicles = world.borrow_mut::<gizmo_physics::vehicle::VehicleController>();
-                    if let Some(vc) = vehicles.get_mut(id) {
-                        vc.brake_force = force;
-                    }
                 }
 
                 ScriptCommand::SpawnEntity { name, position } => {

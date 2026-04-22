@@ -1,5 +1,4 @@
 use std::collections::{HashSet, VecDeque};
-use std::sync::Mutex;
 use super::Entity;
 
 #[derive(Default)]

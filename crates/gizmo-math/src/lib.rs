@@ -14,6 +14,7 @@
 pub mod aabb;
 pub mod frustum;
 pub mod ray;
+pub mod spatial;
 
 // Geriye dönük uyumluluk veya ekstra yardımcı metodlar için pub modüller kalsın
 // ama custom tipleri glam ile değiştiriyoruz.

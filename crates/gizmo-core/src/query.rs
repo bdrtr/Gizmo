@@ -85,7 +85,7 @@ impl<'w, T: 'static> FetchComponent<'w> for Mut<'w, T> {
     const IS_MUT: bool = true;
 
     unsafe fn fetch_raw(arch: &Archetype, system_tick: u32) -> Option<Self::Fetch> {
-        let col = arch.get_column_mut(TypeId::of::<T>())?;
+        let mut col = arch.get_column_mut(TypeId::of::<T>())?;
         Some((col.data_ptr_mut(), col.ticks_ptr_mut(), system_tick))
     }
     
@@ -296,10 +296,18 @@ where
             let fetch = match self.current_fetch {
                 Some(f) => f,
                 None => {
-                    let f = unsafe { Q::fetch_raw(arch, self.world.tick)? };
-                    self.current_fetch = Some(f);
-                    self.current_row = 0;
-                    f
+                    match unsafe { Q::fetch_raw(arch, self.world.tick) } {
+                        Some(f) => {
+                            self.current_fetch = Some(f);
+                            self.current_row = 0;
+                            f
+                        }
+                        None => {
+                            // Bu archetype bu query'ye uymuyor, sonrakine geç
+                            self.current_arch_idx += 1;
+                            continue;
+                        }
+                    }
                 }
             };
 

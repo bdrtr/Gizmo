@@ -64,9 +64,6 @@ pub fn render_studio(
 
     if play_stop {
         load_req = Some(play_backup_path.clone());
-        // Eski fizikten kalan bağlantı (Joint) kalıntılarını temizle
-        world.insert_resource(gizmo::physics::JointWorld::new());
-        world.insert_resource(gizmo::physics::PhysicsSolverState::new());
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             ed.log_info("Sahne yedeğe geri dönüldü.");
         }
@@ -328,16 +325,7 @@ pub fn render_studio(
                                 );
                                 world.add_component(
                                     ent,
-                                    gizmo::physics::Collider {
-                                        shape: gizmo::physics::shape::ColliderShape::HeightField {
-                                            heights,
-                                            segments_x: w,
-                                            segments_z: d,
-                                            width: p_width,
-                                            depth: p_depth,
-                                            max_height: p_max_h,
-                                        },
-                                    },
+                                    gizmo::physics::Collider::aabb(gizmo::math::Vec3::new(p_width / 2.0, p_max_h / 2.0, p_depth / 2.0)),
                                 );
                                 // Yerçekimi etkilemesin
                                 world.add_component(ent, gizmo::physics::RigidBody::new_static());

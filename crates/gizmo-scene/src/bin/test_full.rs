@@ -9,7 +9,7 @@ fn main() {
     let ent = world.spawn();
     
     world.add_component(ent, RigidBody::new(1.0, 0.5, 0.5, true));
-    world.add_component(ent, Collider::new_aabb(1.0, 1.0, 1.0));
+    world.add_component(ent, Collider::aabb(gizmo_math::Vec3::new(1.0, 1.0, 1.0)));
     
     let registry = SceneRegistry::default();
     let ent_ids = vec![ent.id()];

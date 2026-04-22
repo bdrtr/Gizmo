@@ -1,7 +1,6 @@
 use gizmo::prelude::*;
-use gizmo::physics::components::{PhysicsConfig, RigidBody, Velocity};
-use gizmo::physics::shape::{Collider, ColliderShape, Aabb, Sphere};
-use gizmo::physics::system::PhysicsSolverState;
+use gizmo::physics::components::{RigidBody, Velocity};
+
 use gizmo::renderer::asset::AssetManager;
 use gizmo::renderer::components::{DirectionalLight, MeshRenderer};
 
@@ -120,16 +119,8 @@ fn main() {
 fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> DominoGame {
     println!("Domino Zinciri kuruluyor...");
 
-    world.insert_resource(PhysicsConfig {
-        ground_y: -0.5,
-        max_linear_velocity: 200.0,
-        max_angular_velocity: 100.0,
-        deterministic_simulation: false,
-        solver_iterations: 32,
-        ..Default::default()
-    });
-    world.insert_resource(gizmo::physics::constraints::JointWorld::new());
-    world.insert_resource(PhysicsSolverState::new());
+
+
 
     let mut asset_manager = AssetManager::new();
 
@@ -207,7 +198,6 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
     let r = 0.5;
     let inertia = (2.0 / 5.0) * ball_rb.mass * (r * r);
     ball_rb.local_inertia = Vec3::new(inertia, inertia, inertia);
-    ball_rb.inverse_inertia_local = gizmo_math::Mat3::from_diagonal(Vec3::splat(1.0 / inertia));
 
     world.add_component(heavy_ball, ball_rb);
     world.add_component(
@@ -222,9 +212,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
 }
 
 fn step_physics(world: &mut World, dt: f32) {
-    gizmo::physics::integration::physics_apply_forces_system(world, dt);
-    gizmo::physics::system::physics_collision_system(world, dt);
-    gizmo::physics::integration::physics_movement_system(world, dt);
+
 }
 
 fn update_camera(

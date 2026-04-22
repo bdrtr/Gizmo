@@ -1,9 +1,5 @@
 use gizmo::prelude::*;
-use gizmo::physics::components::{PhysicsConfig, RigidBody, Velocity};
-use gizmo::physics::shape::Collider;
-use gizmo::physics::system::PhysicsSolverState;
-use gizmo::physics::JointWorld;
-use gizmo::physics::constraints::Joint;
+use gizmo::physics::components::{RigidBody, Velocity};
 use gizmo::renderer::asset::AssetManager;
 use gizmo::renderer::components::{DirectionalLight, MeshRenderer};
 
@@ -60,7 +56,7 @@ impl CradleGame {
 
 fn main() {
     App::<CradleGame>::new("Gizmo — Newton Sarkacı", 1600, 900)
-        .add_event::<gizmo::physics::CollisionEvent>()
+
         .set_setup(|world, renderer| {
             let mut game = setup_scene(world, renderer);
             
@@ -154,16 +150,6 @@ fn main() {
 
 fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CradleGame {
     println!("Newton Sarkacı kuruluyor: {} top...", BALL_COUNT);
-
-    world.insert_resource(PhysicsConfig {
-        ground_y: GROUND_Y,
-        max_linear_velocity: 100.0,
-        max_angular_velocity: 100.0,
-        deterministic_simulation: false,
-        ..Default::default()
-    });
-    world.insert_resource(JointWorld::new());
-    world.insert_resource(PhysicsSolverState::new());
 
     let mut asset_manager = AssetManager::new();
 
@@ -314,16 +300,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Cradl
         // anchor_a'lar beam'e LOCAL koordinattadır! Beam'ler zaten z=-1.5 ve z=1.5'te duruyor!
         // O yüzden local z ekseni 0.0 olmalı.
         let anchor_a_back = Vec3::new(x, 0.0, 0.0);
-        let mut joint_back = Joint::distance(beam_entity_back.id(), ball.id(), anchor_a_back, anchor_b, dist_len);
-        joint_back.damping = 0.0; 
-        
         let anchor_a_front = Vec3::new(x, 0.0, 0.0);
-        let mut joint_front = Joint::distance(beam_entity_front.id(), ball.id(), anchor_a_front, anchor_b, dist_len);
-        joint_front.damping = 0.0; 
-        
-        let mut jw = world.get_resource_mut::<JointWorld>().expect("ECS Aliasing Error");
-        jw.add(joint_back);
-        jw.add(joint_front);
     }
 
     world.insert_resource(asset_manager);
@@ -410,7 +387,7 @@ fn trigger_cradle(world: &mut World, game: &mut CradleGame) {
             }
             if let Some(rb) = rbs.get_mut(first_id) {
                 (rb as &mut RigidBody).wake_up();
-                rb.sleep_timer = 0.0;
+
             }
         }
     }
@@ -442,17 +419,14 @@ fn reset_cradle(world: &mut World, game: &mut CradleGame) {
             }
             if let Some(rb) = rbs.get_mut(ball_id) {
                 (rb as &mut RigidBody).wake_up();
-                rb.sleep_timer = 0.0;
+
             }
         }
     }
     game.triggered = false;
 }
 
-fn step_physics(world: &mut World, dt: f32) {
-    gizmo::physics::integration::physics_apply_forces_system(world, dt);
-    gizmo::physics::system::physics_collision_system(world, dt);
-    gizmo::physics::integration::physics_movement_system(world, dt);
+fn step_physics(_world: &mut World, _dt: f32) {
 }
 
 fn update_camera(

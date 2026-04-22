@@ -30,10 +30,21 @@ struct VertexInput {
     @location(3) tex_coords: vec2<f32>,
 }
 
-struct GpuSphere {
-    @location(6) pos_radius: vec4<f32>,
-    @location(7) vel_mass: vec4<f32>,
-    @location(8) color: vec4<f32>,
+struct GpuBox {
+    @location(6) pos_mass: vec4<f32>,
+    @location(7) vel_state: vec4<f32>,
+    @location(8) rotation: vec4<f32>,
+    @location(9) ang_sleep: vec4<f32>,
+    @location(10) color: vec4<f32>,
+    @location(11) extents_pad: vec4<f32>,
+}
+
+fn rotate_vector_by_quat(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {
+    let u = q.xyz;
+    let s = q.w;
+    return 2.0 * dot(u, v) * u
+         + (s * s - dot(u, u)) * v
+         + 2.0 * s * cross(u, v);
 }
 
 struct VertexOutput {
@@ -46,17 +57,27 @@ struct VertexOutput {
 @vertex
 fn vs_main(
     model: VertexInput,
-    instance: GpuSphere,
+    instance: GpuBox,
 ) -> VertexOutput {
     var out: VertexOutput;
     
-    let r = instance.pos_radius.w;
-    let world_pos = (model.position * r) + instance.pos_radius.xyz;
-    
+    let half_extents = instance.extents_pad.xyz;
+    let scaled_pos = model.position * half_extents;
+    let rotated_pos = rotate_vector_by_quat(scaled_pos, instance.rotation);
+    let world_pos = rotated_pos + instance.pos_mass.xyz;
     out.world_position = world_pos;
     out.clip_position = scene.view_proj * vec4<f32>(world_pos, 1.0);
-    out.color = instance.color;
-    out.normal = model.normal;
+    
+    let state = bitcast<u32>(instance.vel_state.w);
+    
+    if (state == 1u) {
+        // Sleep state: Darken the color
+        out.color = vec4<f32>(instance.color.xyz * 0.2, 1.0);
+    } else {
+        out.color = instance.color;
+    }
+    
+    out.normal = rotate_vector_by_quat(model.normal, instance.rotation);
     
     return out;
 }

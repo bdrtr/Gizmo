@@ -26,7 +26,7 @@ impl Ray {
     /// Bir eksen kısıtlı boundary kutusuyla kesişim testi yapar (Slab Algorithm).
     /// Kesişiyorsa t_near mesafesini döner, kesişmiyorsa None döner.
     #[inline]
-    pub(crate) fn intersect_bounds(self, min: Vec3A, max: Vec3A) -> Option<f32> {
+    pub fn intersect_bounds(self, min: Vec3A, max: Vec3A) -> Option<f32> {
         let inv_dir = self.direction.recip();
 
         let t0 = (min - self.origin) * inv_dir;

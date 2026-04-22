@@ -20,7 +20,8 @@ pub use crate::spawner::{Commands, InputExt, WorldExt};
 pub use crate::gizmo_log;
 
 // === Fizik ===
-pub use crate::physics::{Aabb, Collider, ColliderShape, RigidBody, Sphere, Transform, Velocity};
+pub use crate::physics::{Collider, ColliderShape, RigidBody, Transform, Velocity};
+pub use gizmo_physics::shape::{Aabb, Sphere};
 
 // === Renderer Bileşenleri ===
 pub use crate::renderer::asset::AssetManager;

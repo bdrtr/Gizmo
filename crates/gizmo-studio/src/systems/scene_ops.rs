@@ -15,7 +15,7 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
                     "RigidBody" => world
                         .add_component(ent, gizmo::physics::RigidBody::new(1.0, 0.5, 0.5, true)),
                     "Collider" => {
-                        world.add_component(ent, gizmo::physics::Collider::new_aabb(1.0, 1.0, 1.0))
+                        world.add_component(ent, gizmo::physics::Collider::aabb(gizmo::math::Vec3::new(1.0, 1.0, 1.0)))
                     }
                     "Camera" => world.add_component(
                         ent,
@@ -71,49 +71,7 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
                         // Request rendering mesh creation
                         editor_state.generate_terrain_requests.push(ent_id);
                     }
-                    "VehicleController" => {
-                        let vc = gizmo::physics::vehicle::VehicleController::new();
-                        world.add_component(ent, vc);
 
-                        use gizmo::math::Vec3;
-                        let w_x = 1.0;
-                        let w_y = -0.5;
-                        let w_z = 1.5;
-                        let r = 0.4; // yarıçap
-                        let spring = 2.0; 
-                        let stiff = 20.0;
-                        let damp = 2.0;
-
-                        let positions = [
-                            (-w_x, w_y, w_z, false),
-                            (w_x, w_y, w_z, false),
-                            (-w_x, w_y, -w_z, true),
-                            (w_x, w_y, -w_z, true),
-                        ];
-
-                        let mut children = Vec::new();
-                        { let ch_storage = world.borrow::<gizmo::core::component::Children>();
-                            if let Some(existing) = ch_storage.get(ent_id.id()) {
-                                children.extend(&existing.0);
-                            }
-                        }
-
-                        for (x, y, z, drive) in positions {
-                            let child = world.spawn();
-                            world.add_component(child, gizmo::core::component::EntityName(format!("Wheel_{}_{}", x, z)));
-                            world.add_component(child, gizmo::physics::components::Transform::new(Vec3::new(x, y, z)));
-                            
-                            let mut wc = gizmo::physics::vehicle::WheelComponent::new(spring, stiff, damp, r);
-                            if drive { wc = wc.with_drive() }
-                            world.add_component(child, wc);
-                            world.add_component(child, gizmo::core::component::Parent(ent_id.id()));
-                            children.push(child.id());
-                        }
-
-                        world.add_component(ent, gizmo::core::component::Children(children));
-                        
-                        editor_state.log_info("VehicleController (4 Teker Child) eklendi.");
-                    }
                     _ => editor_state.log_warning(&format!("Bilinmeyen component: {}", comp_name)),
                 }
             }
@@ -203,7 +161,7 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
                                 0.0,
                             ),
                         );
-                        world.add_component(e, gizmo::physics::Collider::new_aabb(1.0, 1.0, 1.0));
+                        world.add_component(e, gizmo::physics::Collider::aabb(gizmo::math::Vec3::new(1.0, 1.0, 1.0)));
                         editor_state.log_info("Yeni küp oluşturuldu.");
                     }
                     "Sphere" => {
@@ -220,7 +178,7 @@ pub fn handle_scene_operations(world: &mut World, editor_state: &mut EditorState
                                 0.0,
                             ),
                         );
-                        world.add_component(e, gizmo::physics::Collider::new_sphere(1.0));
+                        world.add_component(e, gizmo::physics::Collider::sphere(1.0));
                         editor_state.log_info("Yeni küre oluşturuldu.");
                     }
                     _ => {

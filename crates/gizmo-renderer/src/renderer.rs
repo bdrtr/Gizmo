@@ -26,6 +26,9 @@ pub struct Renderer<'a> {
 
     // === GPU FİZİK SİSTEMİ ===
     pub gpu_physics: Option<crate::physics_renderer::GpuPhysicsSystem>,
+
+    // === GIZMO HATA AYIKLAMA (Debug Lines) ===
+    pub debug_renderer: Option<crate::debug_renderer::GizmoRendererSystem>,
 }
 
 impl<'a> Renderer<'a> {
@@ -69,6 +72,7 @@ impl<'a> Renderer<'a> {
                     required_limits: wgpu::Limits {
                         max_bind_groups: 6,
                         max_storage_buffers_per_shader_stage: 8,
+                        max_storage_buffer_binding_size: 256 << 20, // 256 MB buffer limit
                         ..wgpu::Limits::default()
                     },
                     label: None,
@@ -126,8 +130,21 @@ impl<'a> Renderer<'a> {
         ));
 
         // GPU Physics buffer boyutu -- Pachinko simülasyonu
-        let _max_physics_spheres: u32 = 50_000;
-        let gpu_physics: Option<crate::physics_renderer::GpuPhysicsSystem> = None;
+        let max_physics_spheres: u32 = 1_000_000;
+        let gpu_physics = Some(crate::physics_renderer::GpuPhysicsSystem::new(
+            &device,
+            max_physics_spheres,
+            &scene.global_bind_group_layout,
+            wgpu::TextureFormat::Rgba16Float,
+            wgpu::TextureFormat::Depth32Float,
+        ));
+
+        let debug_renderer = Some(crate::debug_renderer::GizmoRendererSystem::new(
+            &device,
+            &scene.global_bind_group_layout,
+            wgpu::TextureFormat::Rgba16Float,
+            wgpu::TextureFormat::Depth32Float,
+        ));
 
         let scene_state = SceneState {
             render_pipeline: scene.render_pipeline,
@@ -191,6 +208,7 @@ impl<'a> Renderer<'a> {
             post: post_state,
             gpu_particles,
             gpu_physics,
+            debug_renderer,
         }
     }
 

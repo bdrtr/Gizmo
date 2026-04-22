@@ -2,7 +2,7 @@ use crate::component::Component;
 use crate::entity::Entity;
 use crate::system::{Res, SystemParam};
 use crate::world::World;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use crossbeam_queue::SegQueue;
 
