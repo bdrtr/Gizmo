@@ -40,12 +40,11 @@ impl<'a, T: 'static> std::ops::DerefMut for ResourceWriteGuard<'a, T> {
 
 /// Sıfır allocation ile yaşayan entity'ler üzerinde iterasyon yapan iterator.
 
-
 #[cfg(test)]
 mod tests {
     use crate::impl_component;
-    use crate::World;
     use crate::Entity;
+    use crate::World;
 
     // Test component types
     #[derive(Debug, Clone, PartialEq)]
@@ -210,7 +209,7 @@ mod tests {
         REMOVE_COUNT.store(0, Ordering::SeqCst);
 
         let mut world = World::new();
-        
+
         world.register_on_add::<HookTracker>(|_, _| {
             ADD_COUNT.fetch_add(1, Ordering::SeqCst);
         });
@@ -245,7 +244,7 @@ mod tests {
         world.add_component(e1, HookTracker(3));
         assert_eq!(ADD_COUNT.load(Ordering::SeqCst), 2); // added again
         assert_eq!(SET_COUNT.load(Ordering::SeqCst), 3);
-        
+
         world.despawn(e1);
         assert_eq!(REMOVE_COUNT.load(Ordering::SeqCst), 2); // removed again via despawn
     }
@@ -262,10 +261,10 @@ mod tests {
         }
 
         assert_eq!(world.archetype_index.archetype_count(), 3); // 0 (empty), 1 (Pos), 2 (Pos, Health)
-        
+
         let all_entities = world.iter_alive_entities();
-        
-        // Remove 'Health' from the first 50 entities. 
+
+        // Remove 'Health' from the first 50 entities.
         // This moves them back to Archetype 1 (Pos).
         for e in all_entities.iter().take(50) {
             world.remove_component::<Health>(*e);
@@ -279,13 +278,13 @@ mod tests {
         // Wait, removing components moved the 50 entities to archetype index 1.
         // Despawning the remaining 50 means archetype index 2 has 0 entities.
         assert_eq!(world.archetype_index.archetypes[2].len(), 0);
-        
+
         // Call compaction
         world.compact();
 
         // The empty archetype 2 should be gone.
         assert_eq!(world.archetype_index.archetype_count(), 2);
-        
+
         // The remaining 50 entities should still be fully accessible
         let pos_view = world.borrow::<Position>();
         let mut count = 0;

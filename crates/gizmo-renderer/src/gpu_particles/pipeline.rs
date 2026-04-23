@@ -60,18 +60,18 @@ pub fn create_particle_pipelines(
         source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/particle_compute.wgsl").into()),
     });
 
-    let compute_pipeline_layout =
-        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Particle Compute Pipeline Layout"),
-            bind_group_layouts: &[&compute_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+    let compute_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Particle Compute Pipeline Layout"),
+        bind_group_layouts: &[&compute_bind_group_layout],
+        push_constant_ranges: &[],
+    });
 
     let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("Particle Compute Pipeline"),
         layout: Some(&compute_pipeline_layout),
         module: &compute_shader,
         entry_point: "main",
+        compilation_options: Default::default(),
     });
 
     let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -79,12 +79,11 @@ pub fn create_particle_pipelines(
         source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/particle_render.wgsl").into()),
     });
 
-    let render_pipeline_layout =
-        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Particle Render Pipeline Layout"),
-            bind_group_layouts: &[global_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+    let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Particle Render Pipeline Layout"),
+        bind_group_layouts: &[global_bind_group_layout],
+        push_constant_ranges: &[],
+    });
 
     let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Particle Render Pipeline"),
@@ -92,6 +91,7 @@ pub fn create_particle_pipelines(
         vertex: wgpu::VertexState {
             module: &render_shader,
             entry_point: "vs_main",
+            compilation_options: Default::default(),
             buffers: &[
                 wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
@@ -104,6 +104,7 @@ pub fn create_particle_pipelines(
         fragment: Some(wgpu::FragmentState {
             module: &render_shader,
             entry_point: "fs_main",
+            compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: output_format,
                 blend: Some(wgpu::BlendState::ALPHA_BLENDING),

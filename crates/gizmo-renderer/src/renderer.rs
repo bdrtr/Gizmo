@@ -2,7 +2,9 @@ use std::sync::Arc;
 use wgpu::{util::DeviceExt, Device, Queue, Surface, SurfaceConfiguration};
 use winit::window::Window;
 
-pub use crate::gpu_types::{InstanceRaw, LightData, PostProcessUniforms, SceneUniforms, ShadowVsUniform, Vertex};
+pub use crate::gpu_types::{
+    InstanceRaw, LightData, PostProcessUniforms, SceneUniforms, ShadowVsUniform, Vertex,
+};
 pub use crate::pipeline::SceneState;
 pub use crate::post_process::PostProcessState;
 
@@ -144,9 +146,11 @@ impl<'a> Renderer<'a> {
         let gpu_fluid = Some(crate::gpu_fluid::GpuFluidSystem::new(
             &device,
             &queue,
-            100_000, // 100K parçacık!
+            25_000, // Tankı dolduracak kadar SPH parçacığı
             &scene.global_bind_group_layout,
             wgpu::TextureFormat::Rgba16Float,
+            size.width,
+            size.height,
         ));
 
         let debug_renderer = Some(crate::debug_renderer::GizmoRendererSystem::new(
@@ -186,6 +190,7 @@ impl<'a> Renderer<'a> {
         };
 
         let post_state = PostProcessState {
+            hdr_texture: post_res.hdr_texture,
             hdr_texture_view: post_res.hdr_texture_view,
             hdr_bind_group: post_res.hdr_bind_group,
             bloom_extract_texture_view: post_res.bloom_extract_texture_view,
@@ -249,7 +254,7 @@ impl<'a> Renderer<'a> {
                 min_filter: wgpu::FilterMode::Linear,
                 ..Default::default()
             });
-            let (hdr_tv, hdr_bg, be_tv, be_bg, bb_tv, bb_bg, cb_bg) =
+            let (hdr_t, hdr_tv, hdr_bg, be_tv, be_bg, bb_tv, bb_bg, cb_bg) =
                 crate::post_process::create_post_textures(
                     &self.device,
                     &self.post.post_bind_group_layout,
@@ -258,6 +263,7 @@ impl<'a> Renderer<'a> {
                     new_size.width,
                     new_size.height,
                 );
+            self.post.hdr_texture = hdr_t;
             self.post.hdr_texture_view = hdr_tv;
             self.post.hdr_bind_group = hdr_bg;
             self.post.bloom_extract_texture_view = be_tv;
@@ -317,7 +323,9 @@ impl<'a> Renderer<'a> {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
         self.queue.write_texture(
@@ -336,7 +344,13 @@ impl<'a> Renderer<'a> {
             size,
         );
 
-        Self::generate_mipmaps(&self.device, &self.queue, &texture, wgpu::TextureFormat::Rgba8UnormSrgb, mip_level_count);
+        Self::generate_mipmaps(
+            &self.device,
+            &self.queue,
+            &texture,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            mip_level_count,
+        );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -403,11 +417,13 @@ impl<'a> Renderer<'a> {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",
+                compilation_options: Default::default(),
                 buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: "fs_main",
+                compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: None,
@@ -502,7 +518,7 @@ mod tests {
         let height = 2048u32;
         let mip_level_count = width.max(height).ilog2() + 1;
         assert_eq!(mip_level_count, 13); // 4096 -> 2^12. Level count is 13 (with level 0)
-        
+
         let width2 = 512u32;
         let height2 = 512u32;
         assert_eq!(width2.max(height2).ilog2() + 1, 10);
@@ -516,28 +532,35 @@ mod tests {
                 ..Default::default()
             });
 
-            let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::LowPower,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            }).await;
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    compatible_surface: None,
+                    force_fallback_adapter: false,
+                })
+                .await;
 
             let adapter = match adapter {
                 Some(a) => a,
                 None => {
-                    println!("No suitable GPU adapter found for headless test. Skipping wgpu test.");
+                    println!(
+                        "No suitable GPU adapter found for headless test. Skipping wgpu test."
+                    );
                     return;
                 }
             };
 
-            let (device, queue) = adapter.request_device(
-                &wgpu::DeviceDescriptor {
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::downlevel_defaults(),
-                    label: None,
-                },
-                None,
-            ).await.unwrap();
+            let (device, queue) = adapter
+                .request_device(
+                    &wgpu::DeviceDescriptor {
+                        required_features: wgpu::Features::empty(),
+                        required_limits: wgpu::Limits::downlevel_defaults(),
+                        label: None,
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
 
             let width = 256u32;
             let height = 256u32;
@@ -545,17 +568,29 @@ mod tests {
 
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("Test Texture"),
-                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
                 view_formats: &[],
             });
 
             // This should compile the WGSL and execute without panicking or creating wgpu validation errors
-            Renderer::generate_mipmaps(&device, &queue, &texture, wgpu::TextureFormat::Rgba8UnormSrgb, mip_level_count);
+            Renderer::generate_mipmaps(
+                &device,
+                &queue,
+                &texture,
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+                mip_level_count,
+            );
 
             device.poll(wgpu::Maintain::Wait);
         });

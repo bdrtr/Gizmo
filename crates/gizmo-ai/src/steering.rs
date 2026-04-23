@@ -224,13 +224,8 @@ pub fn combined_steering(
     }
 
     if weights.avoid > 0.0 && !obstacles.is_empty() {
-        total_force += avoid_obstacles(
-            current_pos,
-            current_vel,
-            obstacles,
-            max_speed,
-            max_force,
-        ) * weights.avoid;
+        total_force += avoid_obstacles(current_pos, current_vel, obstacles, max_speed, max_force)
+            * weights.avoid;
     }
 
     if !neighbors.is_empty() {

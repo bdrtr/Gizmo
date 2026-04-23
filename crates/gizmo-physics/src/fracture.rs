@@ -1,5 +1,5 @@
 use gizmo_math::Vec3;
-use rand::{RngExt, SeedableRng, rngs::StdRng};
+use rand::{rngs::StdRng, RngExt, SeedableRng};
 
 #[derive(Clone, Debug)]
 pub struct ProceduralChunk {
@@ -30,13 +30,9 @@ impl MathPlane {
     }
 }
 
-pub fn voronoi_shatter(
-    extents: Vec3, 
-    num_pieces: u32,
-    seed: u64
-) -> Vec<ProceduralChunk> {
+pub fn voronoi_shatter(extents: Vec3, num_pieces: u32, seed: u64) -> Vec<ProceduralChunk> {
     let mut rng = StdRng::seed_from_u64(seed);
-    
+
     // 1. Generate seeds
     let mut seeds = Vec::with_capacity(num_pieces as usize);
     for _ in 0..num_pieces {
@@ -60,15 +56,19 @@ pub fn voronoi_shatter(
 
     for i in 0..num_pieces as usize {
         let p_i = seeds[i];
-        
+
         let mut planes = box_planes.clone();
-        
+
         for j in 0..num_pieces as usize {
-            if i == j { continue; }
+            if i == j {
+                continue;
+            }
             let p_j = seeds[j];
             let dir = p_j - p_i;
             let length = dir.length();
-            if length < 0.001 { continue; }
+            if length < 0.001 {
+                continue;
+            }
             let normal = dir / length;
             let mid = (p_i + p_j) * 0.5;
             planes.push(MathPlane::from_point_normal(mid, normal));
@@ -77,16 +77,21 @@ pub fn voronoi_shatter(
         // Find vertices via plane intersections
         let mut raw_vertices = Vec::new();
         let num_planes = planes.len();
-        
+
         for p1 in 0..num_planes {
-            for p2 in (p1+1)..num_planes {
-                for p3 in (p2+1)..num_planes {
-                    if let Some(intersection) = intersect_planes(&planes[p1], &planes[p2], &planes[p3]) {
+            for p2 in (p1 + 1)..num_planes {
+                for p3 in (p2 + 1)..num_planes {
+                    if let Some(intersection) =
+                        intersect_planes(&planes[p1], &planes[p2], &planes[p3])
+                    {
                         // Check if it's inside all other planes
                         let mut is_inside = true;
                         for (k, plane) in planes.iter().enumerate() {
-                            if k == p1 || k == p2 || k == p3 { continue; }
-                            if plane.distance(intersection) > 0.001 { // Slight epsilon
+                            if k == p1 || k == p2 || k == p3 {
+                                continue;
+                            }
+                            if plane.distance(intersection) > 0.001 {
+                                // Slight epsilon
                                 is_inside = false;
                                 break;
                             }
@@ -136,8 +141,9 @@ pub fn voronoi_shatter(
             }
             if face_verts.len() >= 3 {
                 // Sort vertices around the plane normal, projecting onto a 2D coordinate system
-                let face_center = face_verts.iter().copied().fold(Vec3::ZERO, |a, b| a + b) / face_verts.len() as f32;
-                
+                let face_center = face_verts.iter().copied().fold(Vec3::ZERO, |a, b| a + b)
+                    / face_verts.len() as f32;
+
                 // create local basis
                 let n = plane.normal;
                 let ref_v = (face_verts[0] - face_center).normalize();
@@ -149,12 +155,14 @@ pub fn voronoi_shatter(
                     let dir_b = *b - face_center;
                     let angle_a = f32::atan2(dir_a.dot(tangent), dir_a.dot(bitangent));
                     let angle_b = f32::atan2(dir_b.dot(tangent), dir_b.dot(bitangent));
-                    angle_a.partial_cmp(&angle_b).unwrap_or(std::cmp::Ordering::Equal)
+                    angle_a
+                        .partial_cmp(&angle_b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 });
 
                 // Fan triangulation
                 let base_idx = out_vertices.len() as u32;
-                
+
                 // To keep hard edges, duplicate the vertices for this face and calculate proper normals
                 let norm = plane.normal;
                 for v in &face_verts {
@@ -193,11 +201,10 @@ fn intersect_planes(p1: &MathPlane, p2: &MathPlane, p3: &MathPlane) -> Option<Ve
     if det.abs() < 0.0001 {
         return None; // Planes do not intersect at a single point (parallel)
     }
-    
+
     let inv_det = 1.0 / det;
-    let res = (cross * p1.d)
-            + (p3.normal.cross(p1.normal) * p2.d)
-            + (p1.normal.cross(p2.normal) * p3.d);
+    let res =
+        (cross * p1.d) + (p3.normal.cross(p1.normal) * p2.d) + (p1.normal.cross(p2.normal) * p3.d);
 
     Some(res * inv_det)
 }

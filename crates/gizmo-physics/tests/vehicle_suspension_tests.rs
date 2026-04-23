@@ -17,7 +17,10 @@ const DT: f32 = 1.0 / 60.0;
 
 fn make_world_with_ground(ground_y: f32) -> World {
     let mut w = World::new();
-    w.insert_resource(PhysicsConfig { ground_y, ..Default::default() });
+    w.insert_resource(PhysicsConfig {
+        ground_y,
+        ..Default::default()
+    });
     w
 }
 
@@ -33,7 +36,7 @@ fn spawn_vehicle(world: &mut World, pos: Vec3, mass: f32) -> (u32, u32) {
     let wheel = world.spawn();
     world.add_component(wheel, Transform::new(Vec3::ZERO));
     world.add_component(wheel, WheelComponent::new(0.5, 5000.0, 200.0, 0.3));
-    
+
     // Add parent/child relationship
     world.add_component(wheel, gizmo_core::component::Parent(e.id()));
     let mut added = false;
@@ -68,8 +71,16 @@ fn test_suspension_spring_force_proportional() {
     gizmo_physics::vehicle::physics_vehicle_system(&world_shallow, DT);
     gizmo_physics::vehicle::physics_vehicle_system(&world_deep, DT);
 
-    let v_shallow = world_shallow.borrow::<Velocity>().get(ve_shallow).unwrap().clone();
-    let v_deep    = world_deep.borrow::<Velocity>().get(ve_deep).unwrap().clone();
+    let v_shallow = world_shallow
+        .borrow::<Velocity>()
+        .get(ve_shallow)
+        .unwrap()
+        .clone();
+    let v_deep = world_deep
+        .borrow::<Velocity>()
+        .get(ve_deep)
+        .unwrap()
+        .clone();
 
     // Derin sıkışmada daha büyük upward impulse → daha yüksek Y hız artışı
     assert!(
@@ -96,8 +107,16 @@ fn test_suspension_mass_scaling() {
     gizmo_physics::vehicle::physics_vehicle_system(&world_light, DT);
     gizmo_physics::vehicle::physics_vehicle_system(&world_heavy, DT);
 
-    let v_light = world_light.borrow::<Velocity>().get(ve_light).unwrap().clone();
-    let v_heavy = world_heavy.borrow::<Velocity>().get(ve_heavy).unwrap().clone();
+    let v_light = world_light
+        .borrow::<Velocity>()
+        .get(ve_light)
+        .unwrap()
+        .clone();
+    let v_heavy = world_heavy
+        .borrow::<Velocity>()
+        .get(ve_heavy)
+        .unwrap()
+        .clone();
 
     // Hafif araç daha yüksek Y hız kazanmalı (aynı F, az m → büyük a)
     assert!(
@@ -134,8 +153,16 @@ fn test_suspension_damping_reduces_force() {
     gizmo_physics::vehicle::physics_vehicle_system(&world_still, DT);
     gizmo_physics::vehicle::physics_vehicle_system(&world_falling, DT);
 
-    let v_still   = world_still.borrow::<Velocity>().get(ve_still).unwrap().clone();
-    let v_falling = world_falling.borrow::<Velocity>().get(ve_falling).unwrap().clone();
+    let v_still = world_still
+        .borrow::<Velocity>()
+        .get(ve_still)
+        .unwrap()
+        .clone();
+    let v_falling = world_falling
+        .borrow::<Velocity>()
+        .get(ve_falling)
+        .unwrap()
+        .clone();
 
     // Durağan araçta yay net kuvveti > düşen araçta (çünkü damping yayı frenler)
     assert!(
@@ -159,9 +186,7 @@ fn test_drag_quadratic_scaling() {
 
     let cd = 0.3_f32;
 
-    let drag_force = |speed: f32| -> f32 {
-        0.5 * cd * speed * speed
-    };
+    let drag_force = |speed: f32| -> f32 { 0.5 * cd * speed * speed };
 
     let f10 = drag_force(10.0);
     let f20 = drag_force(20.0);
@@ -237,10 +262,7 @@ fn test_wheel_not_grounded_when_airborne() {
     gizmo_physics::vehicle::physics_vehicle_system(&world, DT);
 
     let vc = world.borrow::<WheelComponent>().get(whe).unwrap().clone();
-    assert!(
-        !vc.is_grounded,
-        "Araç havada olmalı ama is_grounded=true!"
-    );
+    assert!(!vc.is_grounded, "Araç havada olmalı ama is_grounded=true!");
     assert!(
         vc.compression == 0.0,
         "Havada sıkışma 0 olmalı, elde: {}",

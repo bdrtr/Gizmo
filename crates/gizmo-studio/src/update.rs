@@ -16,20 +16,41 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
         orbit_delta = editor_state.camera.orbit_delta;
         scroll_delta = editor_state.camera.scroll_delta;
 
-        let win_info = world.get_resource::<WindowInfo>().map(|w| w.clone()).unwrap_or_default();
-        crate::systems::input::handle_input_and_scene_view(world, &mut editor_state, state, dt, input, &win_info);
+        let win_info = world
+            .get_resource::<WindowInfo>()
+            .map(|w| w.clone())
+            .unwrap_or_default();
+        crate::systems::input::handle_input_and_scene_view(
+            world,
+            &mut editor_state,
+            state,
+            dt,
+            input,
+            &win_info,
+        );
         crate::systems::build::handle_build_requests(&mut editor_state);
         crate::systems::shortcuts::handle_editor_shortcuts(world, &mut editor_state, state, input);
         crate::systems::simulation::handle_simulation(world, &mut editor_state, state, dt, input);
         crate::systems::scene_ops::handle_scene_operations(world, &mut editor_state, state);
         world.insert_resource(editor_state);
     }
-    
+
     // Resolve all Transform hierarchy
-    
+
     // Kamera sistemine editor state'e geri dönmüş haliyle pas atıyoruz (scroll delta Optional'ı unwrap_or(0.0) diye verdik, orijinal kodda Optional idi ama sistem f32 bekliyor. Bizim argüman f32, Option verilmiş. Düzeltilecekti). Wait, let's fix it properly.
-    if scroll_delta.is_none() { scroll_delta = Some(0.0); }
-    crate::systems::camera::handle_camera(world, state, dt, input, look_delta, pan_delta, orbit_delta, scroll_delta.unwrap_or(0.0));
+    if scroll_delta.is_none() {
+        scroll_delta = Some(0.0);
+    }
+    crate::systems::camera::handle_camera(
+        world,
+        state,
+        dt,
+        input,
+        look_delta,
+        pan_delta,
+        orbit_delta,
+        scroll_delta.unwrap_or(0.0),
+    );
 }
 
 /// Dizin kopyalama yardımcı fonksiyonu

@@ -1,5 +1,5 @@
-use std::ops::{Add, Mul, Sub};
 use crate::{Mat3, Vec3};
+use std::ops::{Add, Mul, Sub};
 
 /// Plücker Coordinate (Spatial Vector)
 /// Temsil ettiği kavrama göre:
@@ -45,9 +45,7 @@ impl SpatialVector {
 
     /// U * U^T = 6x6 Spatial Matrix
     pub fn outer_product(self, other: Self) -> SpatialMatrix {
-        let outer = |a: Vec3, b: Vec3| -> Mat3 {
-            Mat3::from_cols(a * b.x, a * b.y, a * b.z)
-        };
+        let outer = |a: Vec3, b: Vec3| -> Mat3 { Mat3::from_cols(a * b.x, a * b.y, a * b.z) };
         SpatialMatrix {
             m00: outer(self.w, other.w),
             m01: outer(self.w, other.v),
@@ -104,24 +102,6 @@ impl SpatialMatrix {
         m11: Mat3::ZERO,
     };
 
-    pub fn add(self, other: Self) -> Self {
-        Self {
-            m00: self.m00 + other.m00,
-            m01: self.m01 + other.m01,
-            m10: self.m10 + other.m10,
-            m11: self.m11 + other.m11,
-        }
-    }
-
-    pub fn sub(self, other: Self) -> Self {
-        Self {
-            m00: self.m00 - other.m00,
-            m01: self.m01 - other.m01,
-            m10: self.m10 - other.m10,
-            m11: self.m11 - other.m11,
-        }
-    }
-
     pub fn mul_vec(self, v: SpatialVector) -> SpatialVector {
         SpatialVector {
             w: self.m00 * v.w + self.m01 * v.v,
@@ -139,13 +119,37 @@ impl SpatialMatrix {
     }
 }
 
+impl Add for SpatialMatrix {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        Self {
+            m00: self.m00 + rhs.m00,
+            m01: self.m01 + rhs.m01,
+            m10: self.m10 + rhs.m10,
+            m11: self.m11 + rhs.m11,
+        }
+    }
+}
+
+impl Sub for SpatialMatrix {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self {
+        Self {
+            m00: self.m00 - rhs.m00,
+            m01: self.m01 - rhs.m01,
+            m10: self.m10 - rhs.m10,
+            m11: self.m11 - rhs.m11,
+        }
+    }
+}
+
 /// Spatial Inertia Tensor (6x6 Matris Karşılığı)
 /// Bir RigidBody modelinin eylemsizlik profilidir.
 #[derive(Clone, Copy, Debug)]
 pub struct SpatialInertia {
-    pub rot: Mat3,     // Angular Inertia (I) 
-    pub mass: f32,     // Linear Mass (m)
-    pub com: Vec3,     // Center of Mass (c) - Origin'e göre offset
+    pub rot: Mat3, // Angular Inertia (I)
+    pub mass: f32, // Linear Mass (m)
+    pub com: Vec3, // Center of Mass (c) - Origin'e göre offset
 }
 
 impl SpatialInertia {
@@ -156,7 +160,7 @@ impl SpatialInertia {
             com: com_offset,
         }
     }
-    
+
     pub fn from_mass_inertia(mass: f32, inertia: Mat3) -> Self {
         Self {
             rot: inertia,
@@ -172,15 +176,15 @@ impl SpatialInertia {
         // Basitleştirilmiş COM = 0 hali için:
         let com_cross_v = self.com.cross(v.v);
         let com_cross_w = self.com.cross(v.w);
-        
+
         let mut force_w = self.rot.mul_vec3(v.w) + com_cross_v * self.mass;
         // Parallel axis theorem correction if COM offset is non-zero
         if self.com != Vec3::ZERO {
             force_w += self.com.cross(com_cross_w) * self.mass;
         }
-        
-        let force_v = v.v * self.mass - com_cross_w * self.mass;
-        
+
+        let force_v = v.v * self.mass + com_cross_w * self.mass;
+
         SpatialVector::new(force_w, force_v)
     }
 
@@ -190,12 +194,20 @@ impl SpatialInertia {
             return Self::from_mass_inertia(0.0, Mat3::ZERO);
         }
         let total_com = (self.com * self.mass + other.com * other.mass) * (1.0 / total_mass);
-        
-        // Approximation: rot1 + rot2 (Gerçek rigid body birleşimi için parallel axis eklenmeli)
+
+        // Her body için parallel axis theorem uygula
+        let shift = |inertia: &SpatialInertia| -> Mat3 {
+            let d = inertia.com - total_com; // yeni COM'a offset
+            let d_sq = d.dot(d);
+            // I_new = I + m*(|d|²E - d⊗d)
+            inertia.rot + Mat3::from_diagonal(Vec3::splat(inertia.mass * d_sq))
+                - Mat3::from_cols(d * d.x, d * d.y, d * d.z) * inertia.mass
+        };
+
         Self {
             mass: total_mass,
             com: total_com,
-            rot: self.rot + other.rot,
+            rot: shift(&self) + shift(&other),
         }
     }
 
@@ -203,7 +215,7 @@ impl SpatialInertia {
     pub fn to_matrix(self) -> SpatialMatrix {
         let m = self.mass;
         let c = self.com;
-        
+
         let c_cross = Mat3::from_cols(
             Vec3::new(0.0, c.z, -c.y),
             Vec3::new(-c.z, 0.0, c.x),
@@ -211,7 +223,7 @@ impl SpatialInertia {
         );
         let mc_cross = c_cross * m;
         let mc_cross_t = mc_cross.transpose();
-        
+
         let c_cross_c_cross = c_cross * c_cross;
         let rot_shifted = self.rot + c_cross_c_cross * m;
 

@@ -59,7 +59,7 @@ pub struct LightData {
     pub position: [f32; 4],  // xyz=pos, w=intensity
     pub color: [f32; 4],     // rgb=color, a=radius
     pub direction: [f32; 4], // xyz=direction (spot), w=inner_cutoff_cos
-    pub params: [f32; 4],    // x=outer_cutoff_cos, y=light_type (0=point,1=spot,2=directional), zw=unused
+    pub params: [f32; 4], // x=outer_cutoff_cos, y=light_type (0=point,1=spot,2=directional), zw=unused
 }
 
 #[repr(C)]
@@ -99,12 +99,12 @@ pub struct SceneUniforms {
     pub num_lights: u32,
     // WGSL: _align_pad: vec3<u32> has alignment 16.
     // After num_lights at offset 1060, WGSL inserts 12 bytes implicit padding → offset 1072
-    pub _pre_align_pad: [u32; 3],  // offset 1060-1071 (WGSL implicit padding before vec3)
-    pub _align_pad: [u32; 3],      // offset 1072-1083 (WGSL _align_pad: vec3<u32>)
-    pub _post_align_pad: u32,      // offset 1084-1087 (WGSL implicit padding, next vec3 align 16)
-    pub _pad_scene: [u32; 3],      // offset 1088-1099 (WGSL _pad_scene: vec3<u32>)
-    pub _end_pad: u32,             // offset 1100-1103 (WGSL _end_pad: u32)
-    // Total: 1104 bytes
+    pub _pre_align_pad: [u32; 3], // offset 1060-1071 (WGSL implicit padding before vec3)
+    pub _align_pad: [u32; 3],     // offset 1072-1083 (WGSL _align_pad: vec3<u32>)
+    pub _post_align_pad: u32,     // offset 1084-1087 (WGSL implicit padding, next vec3 align 16)
+    pub _pad_scene: [u32; 3],     // offset 1088-1099 (WGSL _pad_scene: vec3<u32>)
+    pub _end_pad: u32,            // offset 1100-1103 (WGSL _end_pad: u32)
+                                  // Total: 1104 bytes
 }
 
 #[repr(C)]

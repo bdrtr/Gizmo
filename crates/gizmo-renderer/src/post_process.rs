@@ -12,6 +12,7 @@ pub struct PostProcessState {
     pub bloom_extract_pipeline: wgpu::RenderPipeline,
     pub bloom_blur_pipeline: wgpu::RenderPipeline,
     pub composite_pipeline: wgpu::RenderPipeline,
+    pub hdr_texture: wgpu::Texture,
     pub hdr_texture_view: wgpu::TextureView,
     pub hdr_bind_group: wgpu::BindGroup,
     pub bloom_extract_texture_view: wgpu::TextureView,
@@ -149,6 +150,7 @@ pub fn build_post_process_resources(
 
     let post_sampler = create_post_sampler(device);
     let (
+        hdr_texture,
         hdr_texture_view,
         hdr_bind_group,
         bloom_extract_texture_view,
@@ -178,6 +180,7 @@ pub fn build_post_process_resources(
         bloom_extract_pipeline,
         bloom_blur_pipeline,
         composite_pipeline,
+        hdr_texture,
         hdr_texture_view,
         hdr_bind_group,
         bloom_extract_texture_view,
@@ -215,11 +218,13 @@ fn build_post_pipelines(
         vertex: wgpu::VertexState {
             module: post_shader,
             entry_point: "vs_fullscreen",
+            compilation_options: Default::default(),
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
             module: post_shader,
             entry_point: "fs_bright_extract",
+            compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba16Float,
                 blend: Some(wgpu::BlendState::REPLACE),
@@ -246,11 +251,13 @@ fn build_post_pipelines(
         vertex: wgpu::VertexState {
             module: post_shader,
             entry_point: "vs_fullscreen",
+            compilation_options: Default::default(),
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
             module: post_shader,
             entry_point: "fs_blur",
+            compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba16Float,
                 blend: Some(wgpu::BlendState::REPLACE),
@@ -277,11 +284,13 @@ fn build_post_pipelines(
         vertex: wgpu::VertexState {
             module: post_shader,
             entry_point: "vs_fullscreen",
+            compilation_options: Default::default(),
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
             module: post_shader,
             entry_point: "fs_composite",
+            compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: surface_format,
                 blend: Some(wgpu::BlendState::REPLACE),
@@ -337,6 +346,7 @@ pub fn create_post_textures(
     width: u32,
     height: u32,
 ) -> (
+    wgpu::Texture,
     wgpu::TextureView,
     wgpu::BindGroup,
     wgpu::TextureView,
@@ -345,7 +355,7 @@ pub fn create_post_textures(
     wgpu::BindGroup,
     wgpu::BindGroup,
 ) {
-    let make = |label: &str| -> (wgpu::TextureView, wgpu::BindGroup) {
+    let make = |label: &str| -> (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup) {
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d {
@@ -357,7 +367,9 @@ pub fn create_post_textures(
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
@@ -375,12 +387,12 @@ pub fn create_post_textures(
             ],
             label: Some(&format!("{}_bind_group", label)),
         });
-        (view, bg)
+        (tex, view, bg)
     };
 
-    let (hdr_v, hdr_bg) = make("HDR Texture");
-    let (be_v, be_bg) = make("Bloom Extract Texture");
-    let (bb_v, bb_bg) = make("Bloom Blur Texture");
+    let (hdr_t, hdr_v, hdr_bg) = make("HDR Texture");
+    let (_be_t, be_v, be_bg) = make("Bloom Extract Texture");
+    let (_bb_t, bb_v, bb_bg) = make("Bloom Blur Texture");
 
     let cb_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: composite_bloom_bgl,
@@ -397,7 +409,7 @@ pub fn create_post_textures(
         label: Some("composite_bloom_bind_group"),
     });
 
-    (hdr_v, hdr_bg, be_v, be_bg, bb_v, bb_bg, cb_bg)
+    (hdr_t, hdr_v, hdr_bg, be_v, be_bg, bb_v, bb_bg, cb_bg)
 }
 
 pub fn create_blur_buffers(

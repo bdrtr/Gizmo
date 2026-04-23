@@ -83,11 +83,7 @@ fn test_tunneling_prevention_with_ccd() {
         .get(bullet.id())
         .unwrap()
         .clone();
-    let v = world
-        .borrow::<Velocity>()
-        .get(bullet.id())
-        .unwrap()
-        .clone();
+    let v = world.borrow::<Velocity>().get(bullet.id()).unwrap().clone();
 
     // CCD Açıkken merminin duvarın ÖNÜNDE (yaklaşık x = -0.6 civarı) kalması gerekir
     // X = 0.0 duvar merkezi. -0.5 duvar sonu. -0.1 yarıçap. O halde tahmini pos: X=-0.6

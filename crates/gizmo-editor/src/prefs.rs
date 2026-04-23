@@ -52,7 +52,7 @@ impl EditorPrefs {
                 Ok(mut prefs) => {
                     prefs.validate();
                     prefs
-                },
+                }
                 Err(e) => {
                     eprintln!("[EditorPrefs] Parse hatası: {}, varsayılan kullanılıyor", e);
                     // Bozuk dosyayı yedekle

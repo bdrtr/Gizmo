@@ -47,7 +47,6 @@ pub enum EditorMode {
     Paused,
 }
 
-
 // --- Alt Durum Yapilari ---
 pub struct CameraState {
     pub look_delta: Option<gizmo_math::Vec2>,
@@ -60,7 +59,15 @@ pub struct CameraState {
 }
 impl Default for CameraState {
     fn default() -> Self {
-        Self { look_delta: None, pan_delta: None, orbit_delta: None, scroll_delta: None, view: None, proj: None, bookmarks: [None; 10] }
+        Self {
+            look_delta: None,
+            pan_delta: None,
+            orbit_delta: None,
+            scroll_delta: None,
+            view: None,
+            proj: None,
+            bookmarks: [None; 10],
+        }
     }
 }
 
@@ -74,7 +81,14 @@ pub struct BuildState {
 }
 impl Default for BuildState {
     fn default() -> Self {
-        Self { request: false, target: BuildTarget::Native, is_building: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), logs_rx: None, cached_logs: Vec::new(), start_time: None }
+        Self {
+            request: false,
+            target: BuildTarget::Native,
+            is_building: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            logs_rx: None,
+            cached_logs: Vec::new(),
+            start_time: None,
+        }
     }
 }
 
@@ -83,11 +97,21 @@ pub struct AssetBrowserState {
     pub root: String,
     pub show: bool,
     pub workspace_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
-    pub cached_dir: Option<(String, std::time::Instant, Vec<(std::path::PathBuf, String, bool)>)>,
+    pub cached_dir: Option<(
+        String,
+        std::time::Instant,
+        Vec<(std::path::PathBuf, String, bool)>,
+    )>,
 }
 impl Default for AssetBrowserState {
     fn default() -> Self {
-        Self { filter: String::new(), root: "demo/assets".to_string(), show: true, workspace_rx: None, cached_dir: None }
+        Self {
+            filter: String::new(),
+            root: "demo/assets".to_string(),
+            show: true,
+            workspace_rx: None,
+            cached_dir: None,
+        }
     }
 }
 
@@ -96,11 +120,18 @@ pub struct SceneState {
     pub load_request: Option<String>,
     pub clear_request: bool,
     pub load_confirm_dialog: Option<String>,
-    pub gizmo_original_transforms: std::collections::HashMap<gizmo_core::entity::Entity, gizmo_physics::components::Transform>,
+    pub gizmo_original_transforms:
+        std::collections::HashMap<gizmo_core::entity::Entity, gizmo_physics::components::Transform>,
 }
 impl Default for SceneState {
     fn default() -> Self {
-        Self { save_request: None, load_request: None, clear_request: false, load_confirm_dialog: None, gizmo_original_transforms: std::collections::HashMap::new() }
+        Self {
+            save_request: None,
+            load_request: None,
+            clear_request: false,
+            load_confirm_dialog: None,
+            gizmo_original_transforms: std::collections::HashMap::new(),
+        }
     }
 }
 
@@ -114,7 +145,14 @@ pub struct SelectionState {
 }
 impl Default for SelectionState {
     fn default() -> Self {
-        Self { entities: std::collections::HashSet::new(), primary: None, highlight_box: None, rubber_band_start: None, rubber_band_current: None, rubber_band_request: None }
+        Self {
+            entities: std::collections::HashSet::new(),
+            primary: None,
+            highlight_box: None,
+            rubber_band_start: None,
+            rubber_band_current: None,
+            rubber_band_request: None,
+        }
     }
 }
 
@@ -126,16 +164,23 @@ pub struct ScriptEditorState {
     pub pending_clear_confirm: bool,
 }
 impl Default for ScriptEditorState {
-    fn default() -> Self { Self { open: false, active_path: None, active_content: None, is_dirty: false, pending_clear_confirm: false } }
+    fn default() -> Self {
+        Self {
+            open: false,
+            active_path: None,
+            active_content: None,
+            is_dirty: false,
+            pending_clear_confirm: false,
+        }
+    }
 }
-
 
 pub struct ConsoleState {
     pub show_info: bool,
     pub show_warn: bool,
     pub show_error: bool,
     pub filter_text: String,
-    
+
     // Cache
     pub cached_logs: Vec<gizmo_core::logger::LogEntry>,
     pub last_version: usize,
@@ -162,14 +207,12 @@ impl Default for ConsoleState {
     }
 }
 
-
-
 /// Editörün tüm durumunu tutan yapı
 pub struct EditorState {
     pub open: bool,
     pub mode: EditorMode,
     pub gizmo_mode: GizmoMode,
-    
+
     pub play_start_request: bool,
     pub play_stop_request: bool,
 
@@ -212,7 +255,11 @@ pub struct EditorState {
     pub toggle_visibility_requests: Vec<gizmo_core::entity::Entity>,
 
     pub prefab_save_request: Option<(gizmo_core::entity::Entity, String)>,
-    pub prefab_load_request: Option<(String, Option<gizmo_core::entity::Entity>, Option<gizmo_math::Vec3>)>,
+    pub prefab_load_request: Option<(
+        String,
+        Option<gizmo_core::entity::Entity>,
+        Option<gizmo_math::Vec3>,
+    )>,
     pub spawn_request: Option<String>,
     pub spawn_asset_request: Option<String>,
     pub spawn_asset_position: Option<gizmo_math::Vec3>,
@@ -239,7 +286,8 @@ pub struct EditorState {
     )>,
     pub debug_spawned_entities: Vec<(f32, u32)>,
 
-    pub pending_dialog_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<(bool, Option<String>)>>>,
+    pub pending_dialog_rx:
+        Option<std::sync::Mutex<std::sync::mpsc::Receiver<(bool, Option<String>)>>>,
 }
 
 impl EditorState {
@@ -256,7 +304,7 @@ impl EditorState {
             do_raycast: false,
             mouse_ndc: None,
             gizmo_local_space: false,
-            
+
             history: crate::history::History::new(prefs.max_history),
 
             show_hierarchy: true,
@@ -305,7 +353,7 @@ impl EditorState {
             game_view_size: None,
             scene_texture_id: None,
             game_texture_id: None,
-            
+
             dock_state: Self::load_layout().unwrap_or_else(create_default_dock_state),
 
             debug_draw_requests: Vec::new(),
@@ -326,7 +374,7 @@ impl EditorState {
             self.dock_state.push_to_first_leaf(tab);
         }
     }
-    
+
     pub fn open_tab(&mut self, tab: EditorTab) {
         if !self.is_tab_open(&tab) {
             self.dock_state.push_to_first_leaf(tab);
@@ -405,15 +453,30 @@ impl EditorState {
     }
 
     pub fn log_info(&mut self, msg: &str) {
-        gizmo_core::logger::log_message(gizmo_core::logger::LogLevel::Info, msg.to_string(), file!(), line!());
+        gizmo_core::logger::log_message(
+            gizmo_core::logger::LogLevel::Info,
+            msg.to_string(),
+            file!(),
+            line!(),
+        );
     }
 
     pub fn log_warning(&mut self, msg: &str) {
-        gizmo_core::logger::log_message(gizmo_core::logger::LogLevel::Warning, msg.to_string(), file!(), line!());
+        gizmo_core::logger::log_message(
+            gizmo_core::logger::LogLevel::Warning,
+            msg.to_string(),
+            file!(),
+            line!(),
+        );
     }
 
     pub fn log_error(&mut self, msg: &str) {
-        gizmo_core::logger::log_message(gizmo_core::logger::LogLevel::Error, msg.to_string(), file!(), line!());
+        gizmo_core::logger::log_message(
+            gizmo_core::logger::LogLevel::Error,
+            msg.to_string(),
+            file!(),
+            line!(),
+        );
         self.last_error = Some(msg.to_string());
     }
 
@@ -435,10 +498,10 @@ impl EditorState {
                 return Some(dock);
             } else {
                 gizmo_core::logger::log_message(
-                    gizmo_core::logger::LogLevel::Error, 
-                    "editor_layout.json parse hatasi!".to_string(), 
-                    file!(), 
-                    line!()
+                    gizmo_core::logger::LogLevel::Error,
+                    "editor_layout.json parse hatasi!".to_string(),
+                    file!(),
+                    line!(),
                 );
             }
         }
@@ -465,11 +528,8 @@ fn create_default_dock_state() -> egui_dock::DockState<EditorTab> {
         surface.split_above(right_panel, 0.4, vec![EditorTab::Hierarchy]);
 
     // Bottom Split for Asset Browser
-    let [_main, _bottom] = surface.split_below(
-        main,
-        0.7,
-        vec![EditorTab::AssetBrowser, EditorTab::Console],
-    );
+    let [_main, _bottom] =
+        surface.split_below(main, 0.7, vec![EditorTab::AssetBrowser, EditorTab::Console]);
 
     state
 }

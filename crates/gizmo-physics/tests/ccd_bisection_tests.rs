@@ -51,7 +51,11 @@ fn test_ccd_toi_precision() {
     physics_collision_system(&mut world, DT);
     gizmo_physics::physics_movement_system(&world, DT);
 
-    let t = world.borrow::<Transform>().get(bullet.id()).unwrap().clone();
+    let t = world
+        .borrow::<Transform>()
+        .get(bullet.id())
+        .unwrap()
+        .clone();
 
     // Mermi duvara çarpıp durmalı: wall.x - aabb.x/2 - sphere.r = 0.5 - 0.1 - 0.05 = 0.35
     // %10 tolerans
@@ -133,7 +137,11 @@ fn test_ccd_one_sided_detection() {
     physics_collision_system(&mut world, DT);
     gizmo_physics::physics_movement_system(&world, DT);
 
-    let t = world.borrow::<Transform>().get(bullet.id()).unwrap().clone();
+    let t = world
+        .borrow::<Transform>()
+        .get(bullet.id())
+        .unwrap()
+        .clone();
 
     // Mermi duvara saplanmamalı (x > 0.7 ise tünellendi)
     assert!(
@@ -178,7 +186,8 @@ fn test_ccd_no_penetration_smoke() {
     assert!(
         ta.position.x.is_finite() && va.linear.x.is_finite(),
         "CCD sonrası NaN/inf algılandı: pos={:.3}, vel={:.3}",
-        ta.position.x, va.linear.x
+        ta.position.x,
+        va.linear.x
     );
 }
 
@@ -207,13 +216,18 @@ fn test_ccd_grazing_shot_no_false_stop() {
     gizmo_physics::physics_movement_system(&world, DT);
 
     let v = world.borrow::<Velocity>().get(bullet.id()).unwrap().clone();
-    let t = world.borrow::<Transform>().get(bullet.id()).unwrap().clone();
+    let t = world
+        .borrow::<Transform>()
+        .get(bullet.id())
+        .unwrap()
+        .clone();
 
     // Sonucu doğrula: hız ve pozisyon sonlu (NaN yok), X'te kaldı ya da geçti
     assert!(
         v.linear.x.is_finite() && t.position.x.is_finite(),
         "Kayan atış sonrası NaN algılandı: vel.x={}, pos.x={}",
-        v.linear.x, t.position.x
+        v.linear.x,
+        t.position.x
     );
     // Hız 0'a düşmediyse (kesinlikle derunlamayla durdurulmadıysa) test geçer
     // NOT: broad-phase sweep etkisi nedeniyle hız düşlebilir; bu bir bilinen sınırdır.

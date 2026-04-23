@@ -1,8 +1,8 @@
 use crate::components::NavAgent;
-use gizmo_math::Vec3;
 use crate::pathfinding::NavGrid;
 use crate::steering;
 use gizmo_core::World;
+use gizmo_math::Vec3;
 use gizmo_physics::components::{Transform, Velocity};
 
 /// AI Navigasyon Sistemi — Per-frame ajan güncelleme döngüsü.
@@ -59,7 +59,8 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
 
         // Stuck Algılama
         if let Some(last_pos) = agent.last_agent_pos {
-            if (t.position - last_pos).length_squared() < 0.0025 { // 0.05^2
+            if (t.position - last_pos).length_squared() < 0.0025 {
+                // 0.05^2
                 agent.stuck_timer += dt;
                 if agent.stuck_timer > 2.0 {
                     agent.state = crate::components::NavAgentState::Stuck;
@@ -78,8 +79,7 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
         target_pos.y = t.position.y;
 
         agent.recalc.timer -= dt;
-        let mut needs_recalc =
-            agent.is_done() || agent.recalc.timer <= 0.0;
+        let mut needs_recalc = agent.is_done() || agent.recalc.timer <= 0.0;
 
         // Hedef çok yer değiştirdiyse yeniden hesapla
         if let Some(last_pos) = agent.recalc.last_target_pos {
@@ -138,14 +138,14 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
                         agent.steering_force,
                         agent.arrival_radius * 2.0,
                     );
-                    
+
                     v.linear += steering_force * dt;
                     let speed = v.linear.length();
                     if speed > agent.max_speed {
                         v.linear = (v.linear / speed) * agent.max_speed;
                     }
                     v.linear.y = 0.0;
-                    
+
                     agent.target = None;
                     agent.state = crate::components::NavAgentState::Reached;
                     continue;
@@ -199,7 +199,7 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
             agent.max_speed,
             agent.steering_force,
         );
-        
+
         // Final kuvveti hıza ekle
         v.linear += (steering_force + separation * 1.5) * dt;
 

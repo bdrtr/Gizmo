@@ -315,7 +315,8 @@ impl ScriptEngine {
                         if rb.mass > 0.0 {
                             let accel = force * (1.0 / rb.mass);
                             drop(rbs);
-                            let mut vels = world.borrow_mut::<gizmo_physics::components::Velocity>();
+                            let mut vels =
+                                world.borrow_mut::<gizmo_physics::components::Velocity>();
                             if let Some(v) = vels.get_mut(id) {
                                 v.linear += accel * dt;
                             }
@@ -328,7 +329,8 @@ impl ScriptEngine {
                         if rb.mass > 0.0 {
                             let delta_v = impulse * (1.0 / rb.mass);
                             drop(rbs);
-                            let mut vels = world.borrow_mut::<gizmo_physics::components::Velocity>();
+                            let mut vels =
+                                world.borrow_mut::<gizmo_physics::components::Velocity>();
                             if let Some(v) = vels.get_mut(id) {
                                 v.linear += delta_v;
                             }
@@ -342,7 +344,10 @@ impl ScriptEngine {
                     friction,
                     use_gravity,
                 } => {
-                    let entity = world.iter_alive_entities().into_iter().find(|e| e.id() == id);
+                    let entity = world
+                        .iter_alive_entities()
+                        .into_iter()
+                        .find(|e| e.id() == id);
                     if let Some(e) = entity {
                         let rb = gizmo_physics::components::RigidBody::new(
                             mass,
@@ -354,7 +359,8 @@ impl ScriptEngine {
                         // Make sure velocity exists so it can move
                         if world
                             .borrow::<gizmo_physics::components::Velocity>()
-                            .get(id).is_none()
+                            .get(id)
+                            .is_none()
                         {
                             world.add_component(
                                 e,
@@ -364,26 +370,30 @@ impl ScriptEngine {
                     }
                 }
                 ScriptCommand::AddBoxCollider { id, hx, hy, hz } => {
-                    let entity = world.iter_alive_entities().into_iter().find(|e| e.id() == id);
+                    let entity = world
+                        .iter_alive_entities()
+                        .into_iter()
+                        .find(|e| e.id() == id);
                     if let Some(e) = entity {
-                        let col = gizmo_physics::shape::Collider::aabb(gizmo_math::Vec3::new(hx, hy, hz));
+                        let col =
+                            gizmo_physics::shape::Collider::aabb(gizmo_math::Vec3::new(hx, hy, hz));
                         world.add_component(e, col);
                     }
                 }
                 ScriptCommand::AddSphereCollider { id, radius } => {
-                    let entity = world.iter_alive_entities().into_iter().find(|e| e.id() == id);
+                    let entity = world
+                        .iter_alive_entities()
+                        .into_iter()
+                        .find(|e| e.id() == id);
                     if let Some(e) = entity {
                         let col = gizmo_physics::shape::Collider::sphere(radius);
                         world.add_component(e, col);
                     }
                 }
-                
-                ScriptCommand::SetVehicleEngineForce(_id, _force) => {
-                }
-                ScriptCommand::SetVehicleSteering(_id, _angle) => {
-                }
-                ScriptCommand::SetVehicleBrake(_id, _force) => {
-                }
+
+                ScriptCommand::SetVehicleEngineForce(_id, _force) => {}
+                ScriptCommand::SetVehicleSteering(_id, _angle) => {}
+                ScriptCommand::SetVehicleBrake(_id, _force) => {}
 
                 ScriptCommand::SpawnEntity { name, position } => {
                     let entity = world.spawn();

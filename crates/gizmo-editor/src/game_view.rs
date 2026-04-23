@@ -39,7 +39,7 @@ pub fn ui_game_view(ui: &mut egui::Ui, state: &mut EditorState) {
                     .size(26.0)
                     .color(egui::Color32::from_white_alpha(60)),
             );
-            
+
             ui.label(
                 egui::RichText::new(
                     "Toolbar'daki ▶ Başlat butonuna\nbasarak simülasyonu çalıştırın.",
@@ -52,7 +52,6 @@ pub fn ui_game_view(ui: &mut egui::Ui, state: &mut EditorState) {
         ui.separator();
 
         ui.label(egui::RichText::new("📋 Editör Kısayolları").strong());
-        
 
         let shortcuts = [
             ("W / A / S / D", "Kamerayı hareket ettir"),

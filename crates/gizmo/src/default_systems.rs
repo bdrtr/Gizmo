@@ -1,10 +1,10 @@
 use crate::core::World;
 use crate::math::{Mat4, Vec3};
+use crate::physics::{Collider, ColliderShape, GpuPhysicsLink, RigidBody, Transform};
 use crate::renderer::{
     components::{Camera, Material, Mesh, MeshRenderer},
     Renderer,
 };
-use crate::physics::{Collider, ColliderShape, GpuPhysicsLink, RigidBody, Transform};
 use bytemuck;
 use wgpu;
 
@@ -36,19 +36,19 @@ pub fn default_render_pass(
 
     // TODO: Bütün nesnelerin (özellikle kamera ve çizilecek objelerin) global matrix'leri
     // bu pass çağrılmadan hemen önce bir `update_transforms(world)` sistemiyle güncellenmiş olmalıdır.
-    
+
     // ECS veri GPU'ya basılır ve GPU verisi ECS'ye alınır
     gpu_physics_submit_system(world, renderer);
     gpu_physics_readback_system(world, renderer);
 
     // KAMERALARI BUL VE MATRIX YARAT
-    let cameras = world.borrow::<Camera>(); let transforms = world.borrow::<Transform>();
+    let cameras = world.borrow::<Camera>();
+    let transforms = world.borrow::<Transform>();
     {
         // TODO: Aktif kamera için `ActiveCamera` tarzı bir marker bileşeni kullanılmalı.
         // ECS array sırası stabil değildir. Şimdilik geçici çözüm olarak ilki alınıyor.
         if let Some((active_cam, _)) = cameras.iter().next() {
-            if let (Some(cam), Some(trans)) =
-                (cameras.get(active_cam), transforms.get(active_cam))
+            if let (Some(cam), Some(trans)) = (cameras.get(active_cam), transforms.get(active_cam))
             {
                 proj = cam.get_projection(aspect);
                 view_mat = cam.get_view(trans.position);
@@ -101,7 +101,7 @@ pub fn default_render_pass(
             }
 
             let center_mat = Mat4::from_translation(mesh.center_offset);
-            let model = trans.global_matrix * center_mat;
+            let model = trans.local_matrix * center_mat;
             if !crate::renderer::visible_in_frustum(&frustum, &model, mesh.bounds) {
                 continue;
             }
@@ -110,7 +110,11 @@ pub fn default_render_pass(
                 albedo_color: [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
                 roughness: mat.roughness,
                 metallic: mat.metallic,
-                unlit: mat.unlit,
+                unlit: match mat.material_type {
+                    crate::renderer::components::MaterialType::Skybox => 2.0,
+                    crate::renderer::components::MaterialType::Unlit => 1.0,
+                    _ => 0.0,
+                },
                 _padding: 0.0,
             };
             instances.push(instance_data);
@@ -118,7 +122,7 @@ pub fn default_render_pass(
                 vbuf: mesh.vbuf.clone(),
                 vertex_count: mesh.vertex_count,
                 bind_group: mat.bind_group.clone(),
-                unlit: mat.unlit > 0.5,
+                unlit: mat.material_type == crate::renderer::components::MaterialType::Unlit || mat.material_type == crate::renderer::components::MaterialType::Skybox,
             });
         }
     }
@@ -139,14 +143,14 @@ pub fn default_render_pass(
     if let Some(physics) = &renderer.gpu_physics {
         // Her frame başında sıradaki state'i çekmek için WGPU CommandEncoder'a asenkron mapping iste.
         physics.request_readback(encoder);
-        
+
         physics.compute_pass(encoder);
         physics.cull_pass(encoder, &renderer.scene.global_bind_group);
     }
-    
+
     // Gpu Fluid Processing
     if let Some(fluid) = &renderer.gpu_fluid {
-        fluid.compute_pass(encoder, &renderer.queue);
+        fluid.compute_pass(encoder, &renderer.queue, true, fluid.num_particles);
     }
 
     {
@@ -209,7 +213,11 @@ pub fn default_render_pass(
         if let Some(gizmos) = world.get_resource::<crate::renderer::Gizmos>() {
             if let Some(debug_renderer) = &mut renderer.debug_renderer {
                 debug_renderer.update(&renderer.queue, &gizmos);
-                debug_renderer.render(&mut render_pass, &renderer.scene.global_bind_group, gizmos.depth_test);
+                debug_renderer.render(
+                    &mut render_pass,
+                    &renderer.scene.global_bind_group,
+                    gizmos.depth_test,
+                );
             }
         }
     }
@@ -223,13 +231,13 @@ pub fn default_render_pass(
 }
 
 /// Basit bir sistem: Sahnede bulunan tüm fizik Collider'larının etrafına
-/// yeşil bir Gizmo AABB kutusu çizer. 
+/// yeşil bir Gizmo AABB kutusu çizer.
 /// Bu sayede geliştirici 물리 objelerinin nerede olduğunu görsel olarak test edebilir.
 pub fn physics_debug_system(world: &crate::core::World) {
     if let Some(mut gizmos) = world.get_resource_mut::<crate::renderer::Gizmos>() {
         // Renk: Parlak Yeşil (R, G, B, A)
         let color = [0.1, 0.9, 0.1, 1.0];
-        
+
         if let Some(q) = world.query::<(&crate::physics::Transform, &gizmo_physics::Collider)>() {
             for (_, (trans, col)) in q.iter() {
                 // Not: tam bir döndürme (rotation) desteği istenirse draw_obb şeklinde
@@ -265,11 +273,12 @@ pub fn physics_debug_system(world: &crate::core::World) {
 /// ECS'deki yeni yaratılmış Fiziksel Objeleri (RigidBody + Transform + Collider)
 /// GPU Physics çekirdeğinin otoyoluna (GpuPhysicsSystem::spheres_buffer) kaydeder.
 /// Statik collider'lar için ayrı sayaç. İlk 3 slot başlangıç collider'larına ayrılmıştır.
-static NEXT_STATIC_COLLIDER_SLOT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(3);
+static NEXT_STATIC_COLLIDER_SLOT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(3);
 
 pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Renderer) {
     use crate::physics::Velocity;
-    
+
     if let Some(physics) = &renderer.gpu_physics {
         let mut unlinked_entities = Vec::new();
         if let Some(q) = world.query::<(&RigidBody, &Transform, &Collider)>() {
@@ -282,19 +291,23 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
                 }
             }
         }
-        
-        let mut next_dynamic_id = world.query::<&GpuPhysicsLink>().map(|q| q.iter().count() as u32).unwrap_or(0);
-        
+
+        let mut next_dynamic_id = world
+            .query::<&GpuPhysicsLink>()
+            .map(|q| q.iter().count() as u32)
+            .unwrap_or(0);
+
         for (e, rb, trans, col, vel) in unlinked_entities {
             if rb.mass == 0.0 || rb.is_sleeping {
                 // Statik engel — ayrı slot sayacı kullan
-                let slot = NEXT_STATIC_COLLIDER_SLOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let slot =
+                    NEXT_STATIC_COLLIDER_SLOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if slot >= 100 {
                     eprintln!("[GpuPhysics] Statik collider slot limiti (100) aşıldı, collider atlanıyor.");
                     NEXT_STATIC_COLLIDER_SLOT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     continue;
                 }
-                
+
                 let gpu_col = gizmo_renderer::gpu_physics::GpuCollider {
                     shape_type: match col.shape {
                         ColliderShape::Plane { .. } => 1,
@@ -306,7 +319,7 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
                         ColliderShape::Aabb(aabb) => {
                             let min = trans.position - aabb.half_extents;
                             [min.x, min.y, min.z, 0.0]
-                        },
+                        }
                         _ => [0.0; 4],
                     },
                     data2: match &col.shape {
@@ -314,7 +327,7 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
                         ColliderShape::Aabb(aabb) => {
                             let max = trans.position + aabb.half_extents;
                             [max.x, max.y, max.z, 0.0]
-                        },
+                        }
                         _ => [0.0; 4],
                     },
                 };
@@ -323,18 +336,25 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
                 // Dinamik Kutu (AABB)
                 let id = next_dynamic_id;
                 next_dynamic_id += 1;
-                
+
                 let extents = match &col.shape {
-                    ColliderShape::Aabb(s) => [s.half_extents.x, s.half_extents.y, s.half_extents.z],
-                    _ => [0.5, 0.5, 0.5], 
+                    ColliderShape::Aabb(s) => {
+                        [s.half_extents.x, s.half_extents.y, s.half_extents.z]
+                    }
+                    _ => [0.5, 0.5, 0.5],
                 };
-                
+
                 let gpu_box = gizmo_renderer::gpu_physics::GpuBox {
                     position: [trans.position.x, trans.position.y, trans.position.z],
                     mass: rb.mass,
                     velocity: [vel.linear.x, vel.linear.y, vel.linear.z],
                     state: 0,
-                    rotation: [trans.rotation.x, trans.rotation.y, trans.rotation.z, trans.rotation.w],
+                    rotation: [
+                        trans.rotation.x,
+                        trans.rotation.y,
+                        trans.rotation.z,
+                        trans.rotation.w,
+                    ],
                     angular_velocity: [vel.angular.x, vel.angular.y, vel.angular.z],
                     sleep_counter: 0,
                     color: [0.3, 0.8, 1.0, 1.0],
@@ -342,11 +362,8 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
                     _pad: 0,
                 };
                 physics.update_box(&renderer.queue, id, &gpu_box);
-                
-                world.add_component(
-                    world.get_entity(e).unwrap(),
-                    GpuPhysicsLink { id },
-                );
+
+                world.add_component(world.get_entity(e).unwrap(), GpuPhysicsLink { id });
             }
         }
     }
@@ -357,13 +374,24 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
 pub fn gpu_physics_readback_system(world: &mut crate::core::World, renderer: &Renderer) {
     if let Some(physics) = &renderer.gpu_physics {
         if let Some(gpu_data) = physics.poll_readback_data(&renderer.device) {
-            if let Some(mut q) = world.query::<(gizmo_core::prelude::Mut<Transform>, &GpuPhysicsLink)>() {
+            if let Some(mut q) =
+                world.query::<(gizmo_core::prelude::Mut<Transform>, &GpuPhysicsLink)>()
+            {
                 for (_, (mut trans, link)) in q.iter_mut() {
                     let idx = link.id as usize;
                     if idx < gpu_data.len() {
                         let box_data = &gpu_data[idx];
-                        trans.position = gizmo_math::Vec3::new(box_data.position[0], box_data.position[1], box_data.position[2]);
-                        trans.rotation = gizmo_math::Quat::from_xyzw(box_data.rotation[0], box_data.rotation[1], box_data.rotation[2], box_data.rotation[3]);
+                        trans.position = gizmo_math::Vec3::new(
+                            box_data.position[0],
+                            box_data.position[1],
+                            box_data.position[2],
+                        );
+                        trans.rotation = gizmo_math::Quat::from_xyzw(
+                            box_data.rotation[0],
+                            box_data.rotation[1],
+                            box_data.rotation[2],
+                            box_data.rotation[3],
+                        );
                         trans.update_local_matrix();
                     }
                 }

@@ -65,7 +65,14 @@ enum WorkerMsg {
     },
     Gltf {
         path: String,
-        result: Result<(gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>), String>,
+        result: Result<
+            (
+                gltf::Document,
+                Vec<gltf::buffer::Data>,
+                Vec<gltf::image::Data>,
+            ),
+            String,
+        >,
     },
 }
 
@@ -201,7 +208,9 @@ impl AsyncAssetLoader {
                             });
                         }
                         Err(e) => {
-                            eprintln!("[AsyncAssetLoader] Texture decode failed ({request_path}): {e}");
+                            eprintln!(
+                                "[AsyncAssetLoader] Texture decode failed ({request_path}): {e}"
+                            );
                         }
                     }
                 }

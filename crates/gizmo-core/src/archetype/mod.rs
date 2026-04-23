@@ -14,9 +14,8 @@ pub mod index;
 pub use self::blob::*;
 pub use self::column::*;
 
-
-use std::collections::HashMap;
 use std::any::TypeId;
+use std::collections::HashMap;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// Entity'nin World içindeki fiziksel konumu.
@@ -57,7 +56,7 @@ pub struct Archetype {
     /// Component tipi → sütun indeksi (columns vektöründeki)
     column_indices: HashMap<TypeId, usize>,
     /// Sütunların vektörü — her biri bir component tipinin verisi.
-    /// RwLock ile sarmalandı çünkü aynı archetype içindeki farklı sütunlara 
+    /// RwLock ile sarmalandı çünkü aynı archetype içindeki farklı sütunlara
     /// eşzamanlı ve multi-thread erişim (örn: &Transform ve &mut Velocity) gerekebilir.
     columns: Vec<RwLock<Column>>,
     /// Bu archetype'taki entity ID'leri (sıra = satır indeksi)
@@ -75,7 +74,12 @@ impl Archetype {
 
         for (idx, info) in component_infos.iter().enumerate() {
             column_indices.insert(info.type_id, idx);
-            columns.push(RwLock::new(Column::new(info.type_id, info.layout, info.drop_fn, info.clone_fn)));
+            columns.push(RwLock::new(Column::new(
+                info.type_id,
+                info.layout,
+                info.drop_fn,
+                info.clone_fn,
+            )));
         }
 
         Self {
@@ -139,13 +143,17 @@ impl Archetype {
     /// Belirtilen component tipinin sütununa RwLock üzerinden immutable erişim
     #[inline]
     pub fn get_column(&self, type_id: TypeId) -> Option<RwLockReadGuard<'_, Column>> {
-        self.column_indices.get(&type_id).map(|&idx| self.columns[idx].read().unwrap())
+        self.column_indices
+            .get(&type_id)
+            .map(|&idx| self.columns[idx].read().unwrap())
     }
 
     /// Belirtilen component tipinin sütununa RwLock üzerinden mutable erişim
     #[inline]
     pub fn get_column_mut(&self, type_id: TypeId) -> Option<RwLockWriteGuard<'_, Column>> {
-        self.column_indices.get(&type_id).map(|&idx| self.columns[idx].write().unwrap())
+        self.column_indices
+            .get(&type_id)
+            .map(|&idx| self.columns[idx].write().unwrap())
     }
 
     /// Yeni bir entity satırı ekler. Tüm sütunlara veri zaten push edilmiş olmalıdır.
@@ -185,18 +193,22 @@ impl Archetype {
     /// `source_row`: Kaynak archetype'taki satır.
     /// `target`: Hedef archetype.
     /// Dönen değer: Hedef archetype'taki yeni satır indeksi.
-    pub(crate) unsafe fn move_entity_to(&mut self, source_row: usize, target: &mut Archetype) -> (u32, Option<u32>) {
+    pub(crate) unsafe fn move_entity_to(
+        &mut self,
+        source_row: usize,
+        target: &mut Archetype,
+    ) -> (u32, Option<u32>) {
         let entity_id = self.entities[source_row];
 
         // 1. Hedef archetype'ın TÜM sütunlarını genişlet (ortak olanları taşı, olmayanları boş bırak)
         for (type_id, &dst_col_idx) in &target.column_indices {
             let mut dst_col = target.columns[dst_col_idx].write().unwrap();
-            
+
             // Hedefte her zaman yer açmalıyız ki sütun boyu entity listesiyle uyuşsun
             dst_col.data.reserve(1);
             let row_to_write = dst_col.data.len;
             dst_col.data.len += 1; // Önce boyutu artır ki get_unchecked_mut geçsin
-            
+
             let dst_ptr = dst_col.data.get_unchecked_mut(row_to_write);
 
             if let Some(&src_col_idx) = self.column_indices.get(type_id) {
@@ -245,21 +257,35 @@ impl Archetype {
     /// Edge cache'e yeni geçiş hedefi ekle
     #[inline]
     pub fn set_add_edge(&mut self, type_id: TypeId, target: u32) {
-        let edge = self.edges.entry(type_id).or_insert(ArchetypeEdge { add: None, remove: None });
+        let edge = self.edges.entry(type_id).or_insert(ArchetypeEdge {
+            add: None,
+            remove: None,
+        });
         edge.add = Some(target);
     }
 
     /// Edge cache'e çıkarma geçiş hedefi ekle
     #[inline]
     pub fn set_remove_edge(&mut self, type_id: TypeId, target: u32) {
-        let edge = self.edges.entry(type_id).or_insert(ArchetypeEdge { add: None, remove: None });
+        let edge = self.edges.entry(type_id).or_insert(ArchetypeEdge {
+            add: None,
+            remove: None,
+        });
         edge.remove = Some(target);
     }
 
     /// Bir entity'nin bulunduğu satırı N kez kopyalar ve yeni entity kimliklerini ilişkilendirir.
-    pub(crate) unsafe fn batch_clone_row(&mut self, row: usize, count: usize, new_eids: &[u32], tick: u32) -> Vec<u32> {
-        if count == 0 { return Vec::new(); }
-        
+    pub(crate) unsafe fn batch_clone_row(
+        &mut self,
+        row: usize,
+        count: usize,
+        new_eids: &[u32],
+        tick: u32,
+    ) -> Vec<u32> {
+        if count == 0 {
+            return Vec::new();
+        }
+
         for col_cell in &mut self.columns {
             let mut col = col_cell.write().unwrap();
             let src_ptr = col.get_ptr(row);
@@ -415,8 +441,12 @@ mod tests {
         let pos: f32 = 10.0;
         let hp: u32 = 100;
         unsafe {
-            arch.get_column_mut(TypeId::of::<f32>()).unwrap().push_raw(&pos as *const f32 as *const u8, 1);
-            arch.get_column_mut(TypeId::of::<u32>()).unwrap().push_raw(&hp as *const u32 as *const u8, 1);
+            arch.get_column_mut(TypeId::of::<f32>())
+                .unwrap()
+                .push_raw(&pos as *const f32 as *const u8, 1);
+            arch.get_column_mut(TypeId::of::<u32>())
+                .unwrap()
+                .push_raw(&hp as *const u32 as *const u8, 1);
         }
         let row = arch.push_entity(42);
         assert_eq!(row, 0);
@@ -427,8 +457,12 @@ mod tests {
         let pos2: f32 = 20.0;
         let hp2: u32 = 50;
         unsafe {
-            arch.get_column_mut(TypeId::of::<f32>()).unwrap().push_raw(&pos2 as *const f32 as *const u8, 1);
-            arch.get_column_mut(TypeId::of::<u32>()).unwrap().push_raw(&hp2 as *const u32 as *const u8, 1);
+            arch.get_column_mut(TypeId::of::<f32>())
+                .unwrap()
+                .push_raw(&pos2 as *const f32 as *const u8, 1);
+            arch.get_column_mut(TypeId::of::<u32>())
+                .unwrap()
+                .push_raw(&hp2 as *const u32 as *const u8, 1);
         }
         arch.push_entity(99);
 
@@ -460,7 +494,10 @@ mod tests {
         let loc = EntityLocation::INVALID;
         assert!(!loc.is_valid());
 
-        let loc2 = EntityLocation { archetype_id: 0, row: 5 };
+        let loc2 = EntityLocation {
+            archetype_id: 0,
+            row: 5,
+        };
         assert!(loc2.is_valid());
     }
 
@@ -482,7 +519,9 @@ mod tests {
 
         let values: Vec<u32> = vec![10, 20, 30, 40];
         for v in &values {
-            unsafe { blob.push(v as *const u32 as *const u8); }
+            unsafe {
+                blob.push(v as *const u32 as *const u8);
+            }
         }
 
         // index 1'i (20) çıkar ve out'a taşı

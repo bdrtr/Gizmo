@@ -16,28 +16,22 @@ const ITERS: usize = 60; // 1 saniyelik simülasyon
 
 fn make_world() -> World {
     World::new()
-    
-    
-    
-    
-    }
+}
 
 /// Yardımcı: entity oluştur ve tüm bileşenleri ekle.
-fn spawn_body(
-    world: &mut World,
-    pos: Vec3,
-    mass: f32,
-    ang_vel: Vec3,
-) -> u32 {
+fn spawn_body(world: &mut World, pos: Vec3, mass: f32, ang_vel: Vec3) -> u32 {
     let e = world.spawn();
     let mut t = Transform::new(pos);
     t.rotation = Quat::IDENTITY;
     world.add_component(e, t);
     world.add_component(e, RigidBody::new(mass, 1.0, 0.5, false));
-    world.add_component(e, Velocity {
-        linear: Vec3::ZERO,
-        angular: ang_vel,
-    });
+    world.add_component(
+        e,
+        Velocity {
+            linear: Vec3::ZERO,
+            angular: ang_vel,
+        },
+    );
     world.add_component(e, gizmo_physics::Collider::new_sphere(0.5));
     e.id()
 }
@@ -52,10 +46,16 @@ fn test_hinge_free_rotation() {
 
     // A: sabit (kinematik), B: Y ekseninde dönen
     let a = spawn_body(&mut world, Vec3::ZERO, 0.0, Vec3::ZERO);
-    let b = spawn_body(&mut world, Vec3::new(1.0, 0.0, 0.0), 1.0, Vec3::new(0.0, 5.0, 0.0));
+    let b = spawn_body(
+        &mut world,
+        Vec3::new(1.0, 0.0, 0.0),
+        1.0,
+        Vec3::new(0.0, 5.0, 0.0),
+    );
 
     jw.add(Joint::hinge(
-        a, b,
+        a,
+        b,
         Vec3::ZERO,
         Vec3::new(-1.0, 0.0, 0.0),
         Vec3::new(0.0, 1.0, 0.0), // Y ekseni — hinge
@@ -98,16 +98,22 @@ fn test_hinge_limit_min_clamp() {
 
     // A: sabit, B: negatif Y ekseni etrafında dönmeye çalışıyor
     let a = spawn_body(&mut world, Vec3::ZERO, 0.0, Vec3::ZERO);
-    let b = spawn_body(&mut world, Vec3::new(1.0, 0.0, 0.0), 1.0, Vec3::new(0.0, -10.0, 0.0));
+    let b = spawn_body(
+        &mut world,
+        Vec3::new(1.0, 0.0, 0.0),
+        1.0,
+        Vec3::new(0.0, -10.0, 0.0),
+    );
 
     // min_angle = -0.5 rad (~-28°), max_angle = serbest
     jw.add(Joint::hinge_limited(
-        a, b,
+        a,
+        b,
         Vec3::ZERO,
         Vec3::new(-1.0, 0.0, 0.0),
         Vec3::new(0.0, 1.0, 0.0),
-        -0.5_f32,         // min
-        f32::INFINITY,    // max = serbest
+        -0.5_f32,      // min
+        f32::INFINITY, // max = serbest
     ));
 
     // 30 frame ile limit aşımını test et
@@ -116,8 +122,6 @@ fn test_hinge_limit_min_clamp() {
     for _ in 0..30 {
         gizmo_physics::system::physics_collision_system(&mut world, DT);
         gizmo_physics::physics_movement_system(&world, DT);
-        
-        
     }
 
     // B'nin eklem angüler hızı negatif Y'de frenlemiş olmalı
@@ -138,11 +142,17 @@ fn test_hinge_limit_max_clamp() {
     let mut jw = JointWorld::new();
 
     let a = spawn_body(&mut world, Vec3::ZERO, 0.0, Vec3::ZERO);
-    let b = spawn_body(&mut world, Vec3::new(1.0, 0.0, 0.0), 1.0, Vec3::new(0.0, 10.0, 0.0));
+    let b = spawn_body(
+        &mut world,
+        Vec3::new(1.0, 0.0, 0.0),
+        1.0,
+        Vec3::new(0.0, 10.0, 0.0),
+    );
 
     // max_angle = +0.5 rad, min = serbest
     jw.add(Joint::hinge_limited(
-        a, b,
+        a,
+        b,
         Vec3::ZERO,
         Vec3::new(-1.0, 0.0, 0.0),
         Vec3::new(0.0, 1.0, 0.0),
@@ -181,15 +191,27 @@ fn test_hinge_axis_worldspace_after_rotation() {
         t.rotation = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
         world.add_component(e, t);
         world.add_component(e, RigidBody::new(0.0, 0.0, 0.5, false)); // kinematik
-        world.add_component(e, Velocity { linear: Vec3::ZERO, angular: Vec3::ZERO });
+        world.add_component(
+            e,
+            Velocity {
+                linear: Vec3::ZERO,
+                angular: Vec3::ZERO,
+            },
+        );
         e.id()
     };
 
-    let b_id = spawn_body(&mut world, Vec3::new(0.0, 1.0, 0.0), 1.0, Vec3::new(5.0, 0.0, 0.0));
+    let b_id = spawn_body(
+        &mut world,
+        Vec3::new(0.0, 1.0, 0.0),
+        1.0,
+        Vec3::new(5.0, 0.0, 0.0),
+    );
 
     // Hinge local X ekseni; A 90° döndükten sonra world X olarak görünmeli
     jw.add(Joint::hinge_limited(
-        a_id, b_id,
+        a_id,
+        b_id,
         Vec3::ZERO,
         Vec3::new(0.0, -1.0, 0.0),
         Vec3::new(1.0, 0.0, 0.0), // lokalde X — A döndükten sonra world Y
@@ -237,7 +259,8 @@ fn test_hinge_perpendicular_axes_no_nan() {
     );
 
     jw.add(Joint::hinge(
-        a, b,
+        a,
+        b,
         Vec3::ZERO,
         Vec3::new(-1.0, 0.0, 0.0),
         Vec3::new(0.0, 1.0, 0.0),

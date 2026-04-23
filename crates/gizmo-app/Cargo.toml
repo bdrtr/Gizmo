@@ -10,9 +10,9 @@ gizmo-core = { path = "../gizmo-core" }
 gizmo-renderer = { path = "../gizmo-renderer" }
 gizmo-math = { path = "../gizmo-math" }
 winit = "0.29"
-wgpu = "0.19"
+wgpu = "0.20"
 pollster = "0.3"
-egui = "0.26"
+egui = "0.28"
 gizmo-editor = { path = "../gizmo-editor" }
 gizmo-audio = { path = "../gizmo-audio" }
 gizmo-scene = { path = "../gizmo-scene" }

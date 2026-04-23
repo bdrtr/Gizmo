@@ -8,10 +8,48 @@ pub struct Skeleton {
     pub local_poses: Vec<gizmo_math::Mat4>,
 }
 
+impl Skeleton {
+    pub fn new(
+        bind_group: Arc<wgpu::BindGroup>,
+        buffer: Arc<wgpu::Buffer>,
+        hierarchy: Arc<crate::animation::SkeletonHierarchy>,
+        local_poses: Vec<gizmo_math::Mat4>,
+    ) -> Self {
+        assert_eq!(
+            hierarchy.joints.len(),
+            local_poses.len(),
+            "Skeleton joints uzunlugu ile local_poses esit olmali"
+        );
+        Self {
+            bind_group,
+            buffer,
+            hierarchy,
+            local_poses,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AnimationPlayer {
     pub current_time: f32,
     pub active_animation: usize,
     pub loop_anim: bool,
-    pub animations: Arc<Vec<crate::animation::AnimationClip>>,
+    pub animations: Arc<[crate::animation::AnimationClip]>,
+}
+
+impl Default for AnimationPlayer {
+    fn default() -> Self {
+        Self {
+            current_time: 0.0,
+            active_animation: 0,
+            loop_anim: true,
+            animations: Arc::new([]),
+        }
+    }
+}
+
+impl AnimationPlayer {
+    pub fn current_clip(&self) -> Option<&crate::animation::AnimationClip> {
+        self.animations.get(self.active_animation)
+    }
 }

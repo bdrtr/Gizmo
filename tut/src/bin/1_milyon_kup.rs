@@ -36,9 +36,9 @@ fn run(cube_count: u32) {
             println!("##################################################");
             println!("    {} GPU Küp Simülasyonu Başlıyor...", cube_count);
             println!("##################################################");
-            
+
             let mut game = MillionKupGame::new();
-            
+
             let cam_entity = world.spawn();
             world.add_component(
                 cam_entity,
@@ -57,7 +57,7 @@ fn run(cube_count: u32) {
                 ),
             );
             world.add_component(cam_entity, EntityName("Kamera".into()));
-            
+
             game.cam_id = cam_entity.id();
 
             // Siyah ekranı önlemek için sahneye güçlü bir Güneş ekleyelim
@@ -69,7 +69,7 @@ fn run(cube_count: u32) {
             );
             world.add_component(
                 sun,
-                DirectionalLight::new(Vec3::new(1.0, 1.0, 0.95), 3.0, true),
+                DirectionalLight::new(Vec3::new(1.0, 1.0, 0.95), 3.0, gizmo::renderer::components::LightRole::Sun),
             );
 
             game
@@ -92,12 +92,24 @@ fn run(cube_count: u32) {
             }
 
             let mut cam_move = Vec3::ZERO;
-            if input.is_key_pressed(KeyCode::KeyW as u32) { cam_move.z -= 1.0; }
-            if input.is_key_pressed(KeyCode::KeyS as u32) { cam_move.z += 1.0; }
-            if input.is_key_pressed(KeyCode::KeyA as u32) { cam_move.x -= 1.0; }
-            if input.is_key_pressed(KeyCode::KeyD as u32) { cam_move.x += 1.0; }
-            if input.is_key_pressed(KeyCode::KeyQ as u32) { cam_move.y -= 1.0; }
-            if input.is_key_pressed(KeyCode::KeyE as u32) { cam_move.y += 1.0; }
+            if input.is_key_pressed(KeyCode::KeyW as u32) {
+                cam_move.z -= 1.0;
+            }
+            if input.is_key_pressed(KeyCode::KeyS as u32) {
+                cam_move.z += 1.0;
+            }
+            if input.is_key_pressed(KeyCode::KeyA as u32) {
+                cam_move.x -= 1.0;
+            }
+            if input.is_key_pressed(KeyCode::KeyD as u32) {
+                cam_move.x += 1.0;
+            }
+            if input.is_key_pressed(KeyCode::KeyQ as u32) {
+                cam_move.y -= 1.0;
+            }
+            if input.is_key_pressed(KeyCode::KeyE as u32) {
+                cam_move.y += 1.0;
+            }
 
             if cam_move.length_squared() > 0.0 {
                 cam_move = cam_move.normalize() * speed * dt;
@@ -105,7 +117,8 @@ fn run(cube_count: u32) {
 
             // Kamera Fare kontrolü
             let mouse_delta = input.mouse_delta();
-            if input.is_mouse_button_pressed(1) { // 1 = Right Click typically in some engines, or just remove mouse click constraint. Let's just use 1.
+            if input.is_mouse_button_pressed(1) {
+                // 1 = Right Click typically in some engines, or just remove mouse click constraint. Let's just use 1.
                 state.cam_yaw -= mouse_delta.0 * 0.002;
                 state.cam_pitch -= mouse_delta.1 * 0.002;
                 state.cam_pitch = state.cam_pitch.clamp(-1.5, 1.5);
@@ -126,7 +139,7 @@ fn run(cube_count: u32) {
             }
         })
         .set_ui(|_world, state, ctx| {
-            gizmo::egui::Area::new("fps_counter")
+            gizmo::egui::Area::new(gizmo::egui::Id::new("fps_counter"))
                 .anchor(gizmo::egui::Align2::LEFT_TOP, [10.0, 10.0])
                 .show(ctx, |ui| {
                     ui.label(
@@ -138,9 +151,7 @@ fn run(cube_count: u32) {
                 });
         })
         .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            gizmo::default_systems::default_render_pass(
-                world, encoder, view, renderer
-            );
+            gizmo::default_systems::default_render_pass(world, encoder, view, renderer);
         })
         .run();
 }

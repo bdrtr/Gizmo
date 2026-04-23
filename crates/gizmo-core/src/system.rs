@@ -158,8 +158,12 @@ where
     fn into_system(self) -> Box<dyn System> {
         struct ZeroParamSystem<F>(F);
         impl<F: FnMut() + Send + Sync + 'static> System for ZeroParamSystem<F> {
-            fn run(&mut self, _world: &World, _dt: f32) { (self.0)(); }
-            fn access_info(&self) -> AccessInfo { AccessInfo::new() }
+            fn run(&mut self, _world: &World, _dt: f32) {
+                (self.0)();
+            }
+            fn access_info(&self) -> AccessInfo {
+                AccessInfo::new()
+            }
         }
         Box::new(ZeroParamSystem(self))
     }
@@ -179,7 +183,7 @@ macro_rules! impl_into_system {
                     func: F,
                     _marker: std::marker::PhantomData<fn() -> ($($P,)+)>,
                 }
-                
+
                 impl<F, $($P),+> System for MultiParamSystem<F, $($P),+>
                 where
                     F: FnMut($($P::Item<'_>),+) + Send + Sync + 'static,
@@ -208,7 +212,7 @@ macro_rules! impl_into_system {
                         info
                     }
                 }
-                
+
                 Box::new(MultiParamSystem {
                     func: self,
                     _marker: std::marker::PhantomData,
@@ -238,11 +242,10 @@ where
     // Opaque functions act as a full barrier to prevent unsafe overlaps
     fn access_info(&self) -> AccessInfo {
         let mut info = AccessInfo::new();
-        info.is_exclusive = true; 
+        info.is_exclusive = true;
         info
     }
 }
-
 
 // ==============================================================
 // SYSTEM CONFIG — LABEL / BEFORE / AFTER / READS / WRITES
@@ -306,16 +309,56 @@ impl SystemConfig {
 
 pub trait IntoSystemConfig<Params> {
     fn into_config(self) -> SystemConfig;
-    
-    fn label(self, l: &'static str) -> SystemConfig where Self: Sized { self.into_config().label(l) }
-    fn before(self, target: &'static str) -> SystemConfig where Self: Sized { self.into_config().before(target) }
-    fn after(self, target: &'static str) -> SystemConfig where Self: Sized { self.into_config().after(target) }
-    
-    fn reads<C: 'static>(self) -> SystemConfig where Self: Sized { self.into_config().reads::<C>() }
-    fn writes<C: 'static>(self) -> SystemConfig where Self: Sized { self.into_config().writes::<C>() }
-    fn reads_res<C: 'static>(self) -> SystemConfig where Self: Sized { self.into_config().reads_res::<C>() }
-    fn writes_res<C: 'static>(self) -> SystemConfig where Self: Sized { self.into_config().writes_res::<C>() }
-    fn exclusive(self) -> SystemConfig where Self: Sized { self.into_config().exclusive() }
+
+    fn label(self, l: &'static str) -> SystemConfig
+    where
+        Self: Sized,
+    {
+        self.into_config().label(l)
+    }
+    fn before(self, target: &'static str) -> SystemConfig
+    where
+        Self: Sized,
+    {
+        self.into_config().before(target)
+    }
+    fn after(self, target: &'static str) -> SystemConfig
+    where
+        Self: Sized,
+    {
+        self.into_config().after(target)
+    }
+
+    fn reads<C: 'static>(self) -> SystemConfig
+    where
+        Self: Sized,
+    {
+        self.into_config().reads::<C>()
+    }
+    fn writes<C: 'static>(self) -> SystemConfig
+    where
+        Self: Sized,
+    {
+        self.into_config().writes::<C>()
+    }
+    fn reads_res<C: 'static>(self) -> SystemConfig
+    where
+        Self: Sized,
+    {
+        self.into_config().reads_res::<C>()
+    }
+    fn writes_res<C: 'static>(self) -> SystemConfig
+    where
+        Self: Sized,
+    {
+        self.into_config().writes_res::<C>()
+    }
+    fn exclusive(self) -> SystemConfig
+    where
+        Self: Sized,
+    {
+        self.into_config().exclusive()
+    }
 }
 
 impl<Params, T: IntoSystem<Params>> IntoSystemConfig<Params> for T {
@@ -341,32 +384,53 @@ pub struct SystemBatch {
 
 impl SystemBatch {
     pub fn new() -> Self {
-        Self { systems: Vec::new(), access_info: AccessInfo::new() }
+        Self {
+            systems: Vec::new(),
+            access_info: AccessInfo::new(),
+        }
     }
-    
+
     pub fn add_system(&mut self, system: Box<dyn System>, config_info: AccessInfo) {
         let mut sys_info = system.access_info();
         sys_info.component_reads.extend(config_info.component_reads);
-        sys_info.component_writes.extend(config_info.component_writes);
+        sys_info
+            .component_writes
+            .extend(config_info.component_writes);
         sys_info.resource_reads.extend(config_info.resource_reads);
         sys_info.resource_writes.extend(config_info.resource_writes);
         sys_info.is_exclusive = sys_info.is_exclusive || config_info.is_exclusive;
 
-        self.access_info.component_reads.extend(sys_info.component_reads);
-        self.access_info.component_writes.extend(sys_info.component_writes);
-        self.access_info.resource_reads.extend(sys_info.resource_reads);
-        self.access_info.resource_writes.extend(sys_info.resource_writes);
+        self.access_info
+            .component_reads
+            .extend(sys_info.component_reads);
+        self.access_info
+            .component_writes
+            .extend(sys_info.component_writes);
+        self.access_info
+            .resource_reads
+            .extend(sys_info.resource_reads);
+        self.access_info
+            .resource_writes
+            .extend(sys_info.resource_writes);
         self.access_info.is_exclusive = self.access_info.is_exclusive || sys_info.is_exclusive;
 
         self.systems.push(system);
     }
-    
+
     pub fn is_compatible(&self, system: &dyn System, config_info: &AccessInfo) -> bool {
         let mut sys_info = system.access_info();
-        sys_info.component_reads.extend(config_info.component_reads.iter().cloned());
-        sys_info.component_writes.extend(config_info.component_writes.iter().cloned());
-        sys_info.resource_reads.extend(config_info.resource_reads.iter().cloned());
-        sys_info.resource_writes.extend(config_info.resource_writes.iter().cloned());
+        sys_info
+            .component_reads
+            .extend(config_info.component_reads.iter().cloned());
+        sys_info
+            .component_writes
+            .extend(config_info.component_writes.iter().cloned());
+        sys_info
+            .resource_reads
+            .extend(config_info.resource_reads.iter().cloned());
+        sys_info
+            .resource_writes
+            .extend(config_info.resource_writes.iter().cloned());
         sys_info.is_exclusive = sys_info.is_exclusive || config_info.is_exclusive;
 
         self.access_info.is_compatible_with(&sys_info)
@@ -380,7 +444,10 @@ pub struct Schedule {
 
 impl Schedule {
     pub fn new() -> Self {
-        Self { unbuilt_configs: Vec::new(), batches: Vec::new() }
+        Self {
+            unbuilt_configs: Vec::new(),
+            batches: Vec::new(),
+        }
     }
 
     pub fn add_di_system<Params, S: IntoSystemConfig<Params>>(&mut self, system: S) {
@@ -389,7 +456,8 @@ impl Schedule {
     }
 
     pub fn add_system<S: System + 'static>(&mut self, system: S) {
-        self.unbuilt_configs.push(SystemConfig::new(Box::new(system)));
+        self.unbuilt_configs
+            .push(SystemConfig::new(Box::new(system)));
         self.batches.clear();
     }
 
@@ -403,16 +471,20 @@ impl Schedule {
     }
 
     fn build(&mut self) {
-        if !self.batches.is_empty() { return; }
-        
+        if !self.batches.is_empty() {
+            return;
+        }
+
         let configs = std::mem::take(&mut self.unbuilt_configs);
         let count = configs.len();
-        if count == 0 { return; }
+        if count == 0 {
+            return;
+        }
 
         let mut edge_set: HashSet<(usize, usize)> = HashSet::new();
         let mut adj = vec![Vec::new(); count];
         let mut in_degree = vec![0usize; count];
-        
+
         let mut add_edge = |from: usize, to: usize| {
             if edge_set.insert((from, to)) {
                 adj[from].push(to);
@@ -425,48 +497,68 @@ impl Schedule {
                 let mut found = false;
                 for j in 0..count {
                     if i != j && configs[j].labels.contains(before_label) {
-                        add_edge(i, j); found = true;
+                        add_edge(i, j);
+                        found = true;
                     }
                 }
                 if !found {
-                    crate::gizmo_log!(Warning, "[Schedule] Sistem {}'in before('{}') label'ı eşleşmiyor!", i, before_label);
+                    crate::gizmo_log!(
+                        Warning,
+                        "[Schedule] Sistem {}'in before('{}') label'ı eşleşmiyor!",
+                        i,
+                        before_label
+                    );
                 }
             }
             for after_label in &configs[i].after {
                 let mut found = false;
                 for j in 0..count {
                     if i != j && configs[j].labels.contains(after_label) {
-                        add_edge(j, i); found = true;
+                        add_edge(j, i);
+                        found = true;
                     }
                 }
                 if !found {
-                    crate::gizmo_log!(Warning, "[Schedule] Sistem {}'in after('{}') label'ı eşleşmiyor!", i, after_label);
+                    crate::gizmo_log!(
+                        Warning,
+                        "[Schedule] Sistem {}'in after('{}') label'ı eşleşmiyor!",
+                        i,
+                        after_label
+                    );
                 }
             }
         }
-        
+
         let mut queue = std::collections::VecDeque::new();
         for i in 0..count {
-            if in_degree[i] == 0 { queue.push_back(i); }
+            if in_degree[i] == 0 {
+                queue.push_back(i);
+            }
         }
-        
+
         let mut sorted_indices = Vec::with_capacity(count);
         while let Some(node) = queue.pop_front() {
             sorted_indices.push(node);
             for &neighbor in &adj[node] {
                 in_degree[neighbor] -= 1;
-                if in_degree[neighbor] == 0 { queue.push_back(neighbor); }
+                if in_degree[neighbor] == 0 {
+                    queue.push_back(neighbor);
+                }
             }
         }
-        
+
         if sorted_indices.len() != count {
-            panic!("Cyclic dependency detected! {} sistemin {} tanesi sıralanabildi.", count, sorted_indices.len());
+            panic!(
+                "Cyclic dependency detected! {} sistemin {} tanesi sıralanabildi.",
+                count,
+                sorted_indices.len()
+            );
         }
-        
+
         // --- 2. DAG Batching --- //
         let mut dummy_configs: Vec<Option<SystemConfig>> = configs.into_iter().map(Some).collect();
         let mut batches: Vec<SystemBatch> = Vec::new();
-        
+
         for &idx in &sorted_indices {
             let config = dummy_configs[idx].take().unwrap();
             let mut placed = false;
@@ -476,22 +568,25 @@ impl Schedule {
                     placed = true;
                 }
             }
-            
+
             if placed {
-                batches.last_mut().unwrap().add_system(config.system, config.added_info);
+                batches
+                    .last_mut()
+                    .unwrap()
+                    .add_system(config.system, config.added_info);
             } else {
                 let mut new_batch = SystemBatch::new();
                 new_batch.add_system(config.system, config.added_info);
                 batches.push(new_batch);
             }
         }
-        
+
         self.batches = batches;
     }
 
     pub fn run(&mut self, world: &mut World, dt: f32) {
         use rayon::prelude::*;
-        
+
         if self.batches.is_empty() && !self.unbuilt_configs.is_empty() {
             self.build();
         }
@@ -504,7 +599,9 @@ impl Schedule {
             });
 
             // Her batch bitiminde CommandQueue (eklenen entity'leri) çalıştır
-            let queue_opt = world.get_resource::<crate::commands::CommandQueue>().map(|q| (*q).clone());
+            let queue_opt = world
+                .get_resource::<crate::commands::CommandQueue>()
+                .map(|q| (*q).clone());
             if let Some(queue) = queue_opt {
                 queue.apply(world);
             }
@@ -513,5 +610,7 @@ impl Schedule {
 }
 
 impl Default for Schedule {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

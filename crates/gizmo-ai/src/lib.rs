@@ -6,13 +6,14 @@ pub mod system;
 pub use components::{NavAgent, NavAgentState};
 pub use pathfinding::NavGrid; // NavGrid::new() ile constructor açık, low-level fns (GridPos, find_path) encapsulate edildi.
 pub use steering::{
-    alignment, arrive, avoid_obstacles, cohesion, combined_steering, seek, separate, SteeringWeights
+    alignment, arrive, avoid_obstacles, cohesion, combined_steering, seek, separate,
+    SteeringWeights,
 };
 pub use system::ai_navigation_system;
 
 pub mod prelude {
     pub use super::{
-        ai_navigation_system, alignment, arrive, avoid_obstacles, cohesion, combined_steering, seek, separate,
-        NavAgent, NavAgentState, NavGrid, SteeringWeights
+        ai_navigation_system, alignment, arrive, avoid_obstacles, cohesion, combined_steering,
+        seek, separate, NavAgent, NavAgentState, NavGrid, SteeringWeights,
     };
 }

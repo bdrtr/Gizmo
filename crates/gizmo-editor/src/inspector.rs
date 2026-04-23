@@ -76,7 +76,7 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 
             // === PARTICLE EMITTER ===
             draw_particle_emitter_section(ui, world, entity_id, state);
-            
+
             draw_terrain_section(ui, world, entity_id, state);
             draw_script_section(ui, world, entity_id, state);
 
@@ -102,8 +102,14 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     }
 }
 
-fn draw_name_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, _state: &mut EditorState) {
-    let mut names = world.borrow_mut::<EntityName>(); {
+fn draw_name_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    _state: &mut EditorState,
+) {
+    let mut names = world.borrow_mut::<EntityName>();
+    {
         if let Some(name) = names.get_mut(entity_id.id()) {
             ui.horizontal(|ui| {
                 ui.label("İsim:");
@@ -114,8 +120,14 @@ fn draw_name_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::en
     }
 }
 
-fn draw_transform_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, _state: &mut EditorState) {
-    let mut transforms = world.borrow_mut::<Transform>(); {
+fn draw_transform_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    _state: &mut EditorState,
+) {
+    let mut transforms = world.borrow_mut::<Transform>();
+    {
         if let Some(t) = transforms.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("📐 Transform")
                 .default_open(true)
@@ -152,19 +164,19 @@ fn draw_transform_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_cor
                         ui.add(
                             egui::DragValue::new(&mut t.scale.x)
                                 .speed(0.05)
-                                .clamp_range(0.01..=100.0),
+                                .range(0.01..=100.0),
                         );
                         ui.label("Y");
                         ui.add(
                             egui::DragValue::new(&mut t.scale.y)
                                 .speed(0.05)
-                                .clamp_range(0.01..=100.0),
+                                .range(0.01..=100.0),
                         );
                         ui.label("Z");
                         ui.add(
                             egui::DragValue::new(&mut t.scale.z)
                                 .speed(0.05)
-                                .clamp_range(0.01..=100.0),
+                                .range(0.01..=100.0),
                         );
                     });
                 });
@@ -173,8 +185,14 @@ fn draw_transform_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_cor
     }
 }
 
-fn draw_velocity_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, _state: &mut EditorState) {
-    let mut velocities = world.borrow_mut::<Velocity>(); {
+fn draw_velocity_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    _state: &mut EditorState,
+) {
+    let mut velocities = world.borrow_mut::<Velocity>();
+    {
         if let Some(v) = velocities.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("💨 Velocity")
                 .default_open(false)
@@ -221,8 +239,14 @@ fn draw_velocity_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core
     }
 }
 
-fn draw_rigidbody_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, _state: &mut EditorState) {
-    let mut rigidbodies = world.borrow_mut::<RigidBody>(); {
+fn draw_rigidbody_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    _state: &mut EditorState,
+) {
+    let mut rigidbodies = world.borrow_mut::<RigidBody>();
+    {
         if let Some(rb) = rigidbodies.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("⚙️ RigidBody")
                 .default_open(false)
@@ -232,7 +256,7 @@ fn draw_rigidbody_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_cor
                         ui.add(
                             egui::DragValue::new(&mut rb.mass)
                                 .speed(0.5)
-                                .clamp_range(0.0..=100000.0),
+                                .range(0.0..=100000.0),
                         );
                     });
                     ui.horizontal(|ui| {
@@ -240,7 +264,7 @@ fn draw_rigidbody_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_cor
                         ui.add(
                             egui::DragValue::new(&mut rb.restitution)
                                 .speed(0.01)
-                                .clamp_range(0.0..=1.0),
+                                .range(0.0..=1.0),
                         );
                     });
                     ui.horizontal(|ui| {
@@ -248,7 +272,7 @@ fn draw_rigidbody_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_cor
                         ui.add(
                             egui::DragValue::new(&mut rb.friction)
                                 .speed(0.01)
-                                .clamp_range(0.0..=2.0),
+                                .range(0.0..=2.0),
                         );
                     });
                     ui.checkbox(&mut rb.use_gravity, "Yerçekimi");
@@ -270,41 +294,60 @@ fn draw_rigidbody_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_cor
     }
 }
 
-fn draw_collider_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, _state: &mut EditorState) {
-    let mut colliders = world.borrow_mut::<Collider>(); {
+fn draw_collider_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    _state: &mut EditorState,
+) {
+    let mut colliders = world.borrow_mut::<Collider>();
+    {
         if let Some(collider) = colliders.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("🛡️ Collider")
                 .default_open(true)
-                .show(ui, |ui| {
-                    match &mut collider.shape {
-                        gizmo_physics::shape::ColliderShape::Aabb(aabb) => {
-                            ui.label("Mod: Kutu (AABB)");
-                            ui.horizontal(|ui| {
-                                ui.label("Extents:");
-                                ui.add(egui::DragValue::new(&mut aabb.half_extents.x).speed(0.1).prefix("X: "));
-                                ui.add(egui::DragValue::new(&mut aabb.half_extents.y).speed(0.1).prefix("Y: "));
-                                ui.add(egui::DragValue::new(&mut aabb.half_extents.z).speed(0.1).prefix("Z: "));
-                            });
-                        }
-                        gizmo_physics::shape::ColliderShape::Sphere(sphere) => {
-                            ui.label("Mod: Küre (Sphere)");
-                            ui.horizontal(|ui| {
-                                ui.label("Yarıçap:");
-                                ui.add(egui::DragValue::new(&mut sphere.radius).speed(0.1));
-                            });
-                        }
-                        gizmo_physics::shape::ColliderShape::Capsule(capsule) => {
-                            ui.label("Mod: Kapsül");
-                            ui.horizontal(|ui| {
-                                ui.label("Yarıçap:");
-                                ui.add(egui::DragValue::new(&mut capsule.radius).speed(0.1));
-                                ui.label("Y. Yükseklik:");
-                                ui.add(egui::DragValue::new(&mut capsule.half_height).speed(0.1));
-                            });
-                        }
-                        other => {
-                            ui.label(egui::RichText::new(format!("Şekil: {:?} (Sadece Okunur)", other)).color(egui::Color32::GRAY));
-                        }
+                .show(ui, |ui| match &mut collider.shape {
+                    gizmo_physics::shape::ColliderShape::Aabb(aabb) => {
+                        ui.label("Mod: Kutu (AABB)");
+                        ui.horizontal(|ui| {
+                            ui.label("Extents:");
+                            ui.add(
+                                egui::DragValue::new(&mut aabb.half_extents.x)
+                                    .speed(0.1)
+                                    .prefix("X: "),
+                            );
+                            ui.add(
+                                egui::DragValue::new(&mut aabb.half_extents.y)
+                                    .speed(0.1)
+                                    .prefix("Y: "),
+                            );
+                            ui.add(
+                                egui::DragValue::new(&mut aabb.half_extents.z)
+                                    .speed(0.1)
+                                    .prefix("Z: "),
+                            );
+                        });
+                    }
+                    gizmo_physics::shape::ColliderShape::Sphere(sphere) => {
+                        ui.label("Mod: Küre (Sphere)");
+                        ui.horizontal(|ui| {
+                            ui.label("Yarıçap:");
+                            ui.add(egui::DragValue::new(&mut sphere.radius).speed(0.1));
+                        });
+                    }
+                    gizmo_physics::shape::ColliderShape::Capsule(capsule) => {
+                        ui.label("Mod: Kapsül");
+                        ui.horizontal(|ui| {
+                            ui.label("Yarıçap:");
+                            ui.add(egui::DragValue::new(&mut capsule.radius).speed(0.1));
+                            ui.label("Y. Yükseklik:");
+                            ui.add(egui::DragValue::new(&mut capsule.half_height).speed(0.1));
+                        });
+                    }
+                    other => {
+                        ui.label(
+                            egui::RichText::new(format!("Şekil: {:?} (Sadece Okunur)", other))
+                                .color(egui::Color32::GRAY),
+                        );
                     }
                 });
             ui.separator();
@@ -312,8 +355,14 @@ fn draw_collider_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core
     }
 }
 
-fn draw_camera_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, _state: &mut EditorState) {
-    let mut cameras = world.borrow_mut::<Camera>(); {
+fn draw_camera_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    _state: &mut EditorState,
+) {
+    let mut cameras = world.borrow_mut::<Camera>();
+    {
         if let Some(cam) = cameras.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("📷 Camera")
                 .default_open(false)
@@ -325,7 +374,7 @@ fn draw_camera_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::
                             .add(
                                 egui::DragValue::new(&mut fov_deg)
                                     .speed(1.0)
-                                    .clamp_range(10.0..=120.0)
+                                    .range(10.0..=120.0)
                                     .suffix("°"),
                             )
                             .changed()
@@ -338,7 +387,7 @@ fn draw_camera_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::
                         ui.add(
                             egui::DragValue::new(&mut cam.near)
                                 .speed(0.01)
-                                .clamp_range(0.001..=10.0),
+                                .range(0.001..=10.0),
                         );
                     });
                     ui.horizontal(|ui| {
@@ -346,7 +395,7 @@ fn draw_camera_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::
                         ui.add(
                             egui::DragValue::new(&mut cam.far)
                                 .speed(10.0)
-                                .clamp_range(10.0..=50000.0),
+                                .range(10.0..=50000.0),
                         );
                     });
                     ui.checkbox(&mut cam.primary, "Ana Kamera");
@@ -356,8 +405,14 @@ fn draw_camera_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::
     }
 }
 
-fn draw_point_light_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, _state: &mut EditorState) {
-    let mut lights = world.borrow_mut::<PointLight>(); {
+fn draw_point_light_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    _state: &mut EditorState,
+) {
+    let mut lights = world.borrow_mut::<PointLight>();
+    {
         if let Some(light) = lights.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("💡 PointLight")
                 .default_open(false)
@@ -374,7 +429,7 @@ fn draw_point_light_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_c
                         ui.add(
                             egui::DragValue::new(&mut light.intensity)
                                 .speed(0.1)
-                                .clamp_range(0.0..=100.0),
+                                .range(0.0..=100.0),
                         );
                     });
                 });
@@ -383,8 +438,14 @@ fn draw_point_light_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_c
     }
 }
 
-fn draw_material_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, _state: &mut EditorState) {
-    let mut materials = world.borrow_mut::<Material>(); {
+fn draw_material_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    _state: &mut EditorState,
+) {
+    let mut materials = world.borrow_mut::<Material>();
+    {
         if let Some(mat) = materials.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("🎨 Material")
                 .default_open(false)
@@ -401,7 +462,7 @@ fn draw_material_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core
                         ui.add(
                             egui::DragValue::new(&mut mat.metallic)
                                 .speed(0.01)
-                                .clamp_range(0.0..=1.0),
+                                .range(0.0..=1.0),
                         );
                     });
                     ui.horizontal(|ui| {
@@ -409,16 +470,16 @@ fn draw_material_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core
                         ui.add(
                             egui::DragValue::new(&mut mat.roughness)
                                 .speed(0.01)
-                                .clamp_range(0.0..=1.0),
+                                .range(0.0..=1.0),
                         );
                     });
 
-                    let mode = if mat.unlit < 0.5 {
-                        "PBR"
-                    } else if mat.unlit < 1.5 {
-                        "Unlit"
-                    } else {
-                        "Skybox"
+                    let mode = match mat.material_type {
+                        gizmo_renderer::components::MaterialType::Pbr => "PBR",
+                        gizmo_renderer::components::MaterialType::Unlit => "Unlit",
+                        gizmo_renderer::components::MaterialType::Skybox => "Skybox",
+                        gizmo_renderer::components::MaterialType::Water => "Water",
+                        gizmo_renderer::components::MaterialType::Grid => "Grid",
                     };
                     ui.label(format!("Mod: {}", mode));
 
@@ -431,8 +492,14 @@ fn draw_material_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core
     }
 }
 
-fn draw_particle_emitter_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, _state: &mut EditorState) {
-    let mut emitters = world.borrow_mut::<ParticleEmitter>(); {
+fn draw_particle_emitter_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    _state: &mut EditorState,
+) {
+    let mut emitters = world.borrow_mut::<ParticleEmitter>();
+    {
         if let Some(emitter) = emitters.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("✨ Particle Emitter")
                 .default_open(false)
@@ -462,12 +529,16 @@ fn draw_particle_emitter_section(ui: &mut egui::Ui, world: &World, entity_id: gi
     }
 }
 
-
-
-fn draw_script_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+fn draw_script_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    state: &mut EditorState,
+) {
     let mut pending_text = None;
     let mut file_path = String::new();
-    let mut scripts = world.borrow_mut::<gizmo_scripting::engine::Script>(); {
+    let mut scripts = world.borrow_mut::<gizmo_scripting::engine::Script>();
+    {
         if let Some(script) = scripts.get_mut(entity_id.id()) {
             file_path = script.file_path.clone();
             egui::CollapsingHeader::new("📜 Script")
@@ -477,18 +548,20 @@ fn draw_script_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::
                         ui.label("Dosya Yolu:");
                         ui.text_edit_singleline(&mut script.file_path);
                     });
-                    
+
                     if ui.button("✏️ Düzenle").clicked() {
                         match std::fs::read_to_string(&script.file_path) {
                             Ok(content) => pending_text = Some(content),
-                            Err(e) => { state.last_error = Some(format!("Script okuma hatası: {}", e)); }
+                            Err(e) => {
+                                state.last_error = Some(format!("Script okuma hatası: {}", e));
+                            }
                         }
                     }
                 });
             ui.separator();
         }
     }
-    
+
     if let Some(content) = pending_text {
         state.script.active_content = Some(content);
         state.script.active_path = Some(file_path);
@@ -498,7 +571,12 @@ fn draw_script_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::
     }
 }
 
-fn draw_add_component_menu(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
+fn draw_add_component_menu(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    state: &mut EditorState,
+) {
     ui.group(|ui| {
         ui.label("Eklenebilecek Bileşenler");
         ui.separator();
@@ -513,19 +591,30 @@ fn draw_add_component_menu(ui: &mut egui::Ui, world: &World, entity_id: gizmo_co
                 }
             }
         } else {
-            ui.label(egui::RichText::new("ComponentRegistry bulunamadi!").color(egui::Color32::RED));
+            ui.label(
+                egui::RichText::new("ComponentRegistry bulunamadi!").color(egui::Color32::RED),
+            );
         }
     });
 }
 
-fn draw_terrain_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
-    let mut terrains = world.borrow_mut::<gizmo_renderer::components::Terrain>(); {
+fn draw_terrain_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    state: &mut EditorState,
+) {
+    let mut terrains = world.borrow_mut::<gizmo_renderer::components::Terrain>();
+    {
         if let Some(terrain) = terrains.get_mut(entity_id.id()) {
             let mut changed = false;
             egui::CollapsingHeader::new("🏔 Terrain")
                 .default_open(true)
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| { ui.label("Dosya Yolu:"); ui.text_edit_singleline(&mut terrain.heightmap_path); });
+                    ui.horizontal(|ui| {
+                        ui.label("Dosya Yolu:");
+                        ui.text_edit_singleline(&mut terrain.heightmap_path);
+                    });
                     ui.label(format!("Boyut: {}x{}", terrain.width, terrain.depth));
                     ui.horizontal(|ui| {
                         ui.label("Genişlik (X):");

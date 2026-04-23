@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-wgpu = "0.19"
+wgpu = "0.20"
 pollster = "0.3"
 winit = { workspace = true }
 bytemuck = { version = "1.14", features = ["derive"] }

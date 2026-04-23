@@ -1,5 +1,5 @@
-use gizmo::prelude::*;
 use gizmo::physics::components::{RigidBody, Velocity};
+use gizmo::prelude::*;
 use gizmo::renderer::asset::AssetManager;
 use gizmo::renderer::components::{DirectionalLight, MeshRenderer};
 
@@ -56,15 +56,14 @@ impl CradleGame {
 
 fn main() {
     App::<CradleGame>::new("Gizmo — Newton Sarkacı", 1600, 900)
-
         .set_setup(|world, renderer| {
             let mut game = setup_scene(world, renderer);
-            
+
             // Yüksek İterasyon: Newton sarkacı gibi klasik enerji dalgası taşınan simülasyonlarda
             // "hepsi birlikte hareket ediyor" sorununu çözmek ve impulse'un tüm zinciri
             // temiz bir şekilde aşmasını sağlamak için 8 yerine 64 Gaussian-Seidel iterasyonu atıyoruz.
             // world.get_resource_mut_or_default::<gizmo::physics::system::PhysicsSolverState>().solver_iterations = 120;
-            
+
             let cam_entity = world.spawn();
             world.add_component(
                 cam_entity,
@@ -83,7 +82,7 @@ fn main() {
                 ),
             );
             world.add_component(cam_entity, EntityName("Kamera".into()));
-            
+
             game.cam_id = cam_entity.id();
             game
         })
@@ -103,7 +102,7 @@ fn main() {
             if input.is_key_pressed(KeyCode::KeyR as u32) {
                 reset_cradle(world, state);
             }
-            
+
             if input.is_mouse_button_pressed(gizmo::core::input::mouse::RIGHT) {
                 let delta = input.mouse_delta();
                 let sens = 0.003_f32;
@@ -120,7 +119,7 @@ fn main() {
             state.physics_acc += dt;
             let fixed_dt = state.physics_dt;
             state.physics_acc = state.physics_acc.min(fixed_dt * 8.0);
-            
+
             while state.physics_acc >= fixed_dt {
                 step_physics(world, fixed_dt);
                 update_ropes(world, state);
@@ -132,7 +131,10 @@ fn main() {
                 .anchor(gizmo::egui::Align2::LEFT_TOP, gizmo::egui::vec2(10.0, 10.0))
                 .title_bar(false)
                 .resizable(false)
-                .frame(gizmo::egui::Frame::window(&ctx.style()).fill(gizmo::egui::Color32::from_black_alpha(150)))
+                .frame(
+                    gizmo::egui::Frame::window(&ctx.style())
+                        .fill(gizmo::egui::Color32::from_black_alpha(150)),
+                )
                 .show(ctx, |ui| {
                     ui.label(
                         gizmo::egui::RichText::new(format!("FPS: {:.0}", state.fps))
@@ -163,8 +165,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Cradl
     let ground = world.spawn();
     world.add_component(
         ground,
-        Transform::new(Vec3::new(0.0, GROUND_Y, 0.0))
-            .with_scale(Vec3::new(1.0, 1.0, 1.0)),
+        Transform::new(Vec3::new(0.0, GROUND_Y, 0.0)).with_scale(Vec3::new(1.0, 1.0, 1.0)),
     );
     world.add_component(ground, ground_mesh);
     world.add_component(
@@ -178,38 +179,51 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Cradl
     let sun = world.spawn();
     world.add_component(
         sun,
-        Transform::new(Vec3::new(30.0, 80.0, 40.0)).with_rotation(
-            Quat::from_axis_angle(Vec3::new(1.0, 0.3, 0.0).normalize(), -0.8),
-        ),
+        Transform::new(Vec3::new(30.0, 80.0, 40.0)).with_rotation(Quat::from_axis_angle(
+            Vec3::new(1.0, 0.3, 0.0).normalize(),
+            -0.8,
+        )),
     );
     world.add_component(
         sun,
-        DirectionalLight::new(Vec3::new(1.0, 0.97, 0.90), 2.5, true),
+        DirectionalLight::new(Vec3::new(1.0, 0.97, 0.90), 2.5, gizmo::renderer::components::LightRole::Sun),
     );
 
     // Ana asma direkleri (Ön ve Arka)
     let beam_mesh = AssetManager::create_cube(&renderer.device);
     let z_offset = 1.5;
-    
+
     let beam_entity_back = world.spawn();
     world.add_component(
-        beam_entity_back, 
-        Transform::new(Vec3::new(0.0, HINGE_HEIGHT, -z_offset))
-            .with_scale(Vec3::new(BALL_COUNT as f32 * BALL_RADIUS + 0.5, 0.1, 0.1))
+        beam_entity_back,
+        Transform::new(Vec3::new(0.0, HINGE_HEIGHT, -z_offset)).with_scale(Vec3::new(
+            BALL_COUNT as f32 * BALL_RADIUS + 0.5,
+            0.1,
+            0.1,
+        )),
     );
     world.add_component(beam_entity_back, beam_mesh.clone());
-    world.add_component(beam_entity_back, Material::new(tex.clone()).with_pbr(Vec4::new(0.2, 0.2, 0.2, 1.0), 0.5, 0.5));
+    world.add_component(
+        beam_entity_back,
+        Material::new(tex.clone()).with_pbr(Vec4::new(0.2, 0.2, 0.2, 1.0), 0.5, 0.5),
+    );
     world.add_component(beam_entity_back, MeshRenderer::new());
     world.add_component(beam_entity_back, RigidBody::new_static());
 
     let beam_entity_front = world.spawn();
     world.add_component(
-        beam_entity_front, 
-        Transform::new(Vec3::new(0.0, HINGE_HEIGHT, z_offset))
-            .with_scale(Vec3::new(BALL_COUNT as f32 * BALL_RADIUS + 0.5, 0.1, 0.1))
+        beam_entity_front,
+        Transform::new(Vec3::new(0.0, HINGE_HEIGHT, z_offset)).with_scale(Vec3::new(
+            BALL_COUNT as f32 * BALL_RADIUS + 0.5,
+            0.1,
+            0.1,
+        )),
     );
     world.add_component(beam_entity_front, beam_mesh.clone());
-    world.add_component(beam_entity_front, Material::new(tex.clone()).with_pbr(Vec4::new(0.2, 0.2, 0.2, 1.0), 0.5, 0.5));
+    world.add_component(
+        beam_entity_front,
+        Material::new(tex.clone()).with_pbr(Vec4::new(0.2, 0.2, 0.2, 1.0), 0.5, 0.5),
+    );
     world.add_component(beam_entity_front, MeshRenderer::new());
     world.add_component(beam_entity_front, RigidBody::new_static());
 
@@ -233,24 +247,25 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Cradl
         let ball = world.spawn();
         world.add_component(
             ball,
-            Transform::new(Vec3::new(x, ball_y, 0.0))
-                .with_scale(Vec3::splat(BALL_RADIUS)),
+            Transform::new(Vec3::new(x, ball_y, 0.0)).with_scale(Vec3::splat(BALL_RADIUS)),
         );
         world.add_component(ball, ball_mesh.clone());
-        
+
         let color = if i == 0 || i == BALL_COUNT - 1 {
             Vec4::new(0.9, 0.1, 0.1, 1.0)
         } else {
             Vec4::new(0.8, 0.8, 0.8, 1.0)
         };
-        
-        let ball_tex = asset_manager.load_material_texture(
-            &renderer.device,
-            &renderer.queue,
-            &renderer.scene.texture_bind_group_layout,
-            "tut/assets/domino_real.png",
-        ).unwrap_or_else(|_| tex.clone());
-        
+
+        let ball_tex = asset_manager
+            .load_material_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+                "tut/assets/domino_real.png",
+            )
+            .unwrap_or_else(|_| tex.clone());
+
         world.add_component(ball, Material::new(ball_tex).with_pbr(color, 1.0, 0.0));
         world.add_component(ball, MeshRenderer::new());
 
@@ -268,7 +283,10 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Cradl
         let rope_back = world.spawn();
         world.add_component(rope_back, Transform::new(Vec3::ZERO));
         world.add_component(rope_back, beam_mesh.clone());
-        world.add_component(rope_back, Material::new(tex.clone()).with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 0.8, 0.2));
+        world.add_component(
+            rope_back,
+            Material::new(tex.clone()).with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 0.8, 0.2),
+        );
         world.add_component(rope_back, MeshRenderer::new());
         world.add_component(rope_back, EntityName(format!("Rope_Back_{}", i)));
 
@@ -282,7 +300,10 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Cradl
         let rope_front = world.spawn();
         world.add_component(rope_front, Transform::new(Vec3::ZERO));
         world.add_component(rope_front, beam_mesh.clone());
-        world.add_component(rope_front, Material::new(tex.clone()).with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 0.8, 0.2));
+        world.add_component(
+            rope_front,
+            Material::new(tex.clone()).with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 0.8, 0.2),
+        );
         world.add_component(rope_front, MeshRenderer::new());
         world.add_component(rope_front, EntityName(format!("Rope_Front_{}", i)));
 
@@ -295,8 +316,8 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Cradl
         // Constraint (Mesafe İpi)
         // Fiziksel olarak topun ağırlık merkezi (Vec3::ZERO) hedeflenir ki sarkarken tork yaratmasın ve takla atmasın.
         // Görsel ipler ise update_ropes içerisinde topun "yüzeyine" gidecek.
-        let _anchor_b = Vec3::ZERO; 
-        
+        let _anchor_b = Vec3::ZERO;
+
         // anchor_a'lar beam'e LOCAL koordinattadır! Beam'ler zaten z=-1.5 ve z=1.5'te duruyor!
         // O yüzden local z ekseni 0.0 olmalı.
         let _anchor_a_back = Vec3::new(x, 0.0, 0.0);
@@ -321,32 +342,28 @@ fn dir_to_quat(dir: Vec3) -> Quat {
         let axis = up.cross(dir_norm);
         let s = (2.0 * (1.0 + dot)).sqrt();
         let invs = 1.0 / s;
-        Quat::from_xyzw(
-            axis.x * invs,
-            axis.y * invs,
-            axis.z * invs,
-            s * 0.5,
-        ).normalize()
+        Quat::from_xyzw(axis.x * invs, axis.y * invs, axis.z * invs, s * 0.5).normalize()
     }
 }
 
 fn update_ropes(world: &mut World, game: &CradleGame) {
-    let mut transforms = world.borrow_mut::<Transform>(); {
+    let mut transforms = world.borrow_mut::<Transform>();
+    {
         let mut updates = Vec::new();
-        
+
         for rope in &game.ropes {
             if let Some(t_ball) = transforms.get(rope.ball_id) {
                 // Ball'un tepesindeki noktanın dünya konumu
                 let anchor_local = Vec3::new(0.0, BALL_RADIUS, 0.0);
                 let anchor_world = t_ball.position + t_ball.rotation * anchor_local;
-                
+
                 let pivot = rope.pivot;
                 let dir = anchor_world - pivot;
                 let dist = dir.length();
                 let mid = pivot + dir * 0.5;
 
                 let rot = dir_to_quat(dir);
-                
+
                 updates.push((rope.rope_id, mid, dist, rot));
             }
         }
@@ -365,17 +382,20 @@ fn update_ropes(world: &mut World, game: &CradleGame) {
 fn trigger_cradle(world: &mut World, game: &mut CradleGame) {
     println!("Sarkaç bırakıldı!");
 
-    let mut transforms = world.borrow_mut::<Transform>(); let mut vels = world.borrow_mut::<Velocity>(); let mut rbs = world.borrow_mut::<RigidBody>(); {
+    let mut transforms = world.borrow_mut::<Transform>();
+    let mut vels = world.borrow_mut::<Velocity>();
+    let mut rbs = world.borrow_mut::<RigidBody>();
+    {
         if let Some(&first_id) = game.ball_ids.first() {
             if let Some(t) = transforms.get_mut(first_id) {
                 let gap = 0.0;
                 let diameter = (BALL_RADIUS * 2.0) + gap;
                 let start_x = -((BALL_COUNT as f32 - 1.0) / 2.0) * diameter;
-                
+
                 let z_offset = 1.5_f32;
                 let dist_len = 4.0_f32;
                 let dy = (dist_len * dist_len - z_offset * z_offset).sqrt();
-                
+
                 // Topu 90 derece (tamamen yatay) sola kaldırıyoruz:
                 t.position = Vec3::new(start_x - dy, HINGE_HEIGHT, 0.0);
                 t.update_local_matrix();
@@ -387,7 +407,6 @@ fn trigger_cradle(world: &mut World, game: &mut CradleGame) {
             }
             if let Some(rb) = rbs.get_mut(first_id) {
                 (rb as &mut RigidBody).wake_up();
-
             }
         }
     }
@@ -399,15 +418,18 @@ fn reset_cradle(world: &mut World, game: &mut CradleGame) {
     let diameter = (BALL_RADIUS * 2.0) + gap;
     let start_x = -((BALL_COUNT as f32 - 1.0) / 2.0) * diameter;
 
-    let mut transforms = world.borrow_mut::<Transform>(); let mut vels = world.borrow_mut::<Velocity>(); let mut rbs = world.borrow_mut::<RigidBody>(); {
+    let mut transforms = world.borrow_mut::<Transform>();
+    let mut vels = world.borrow_mut::<Velocity>();
+    let mut rbs = world.borrow_mut::<RigidBody>();
+    {
         for (i, &ball_id) in game.ball_ids.iter().enumerate() {
             let x = start_x + (i as f32) * diameter;
-            
+
             let z_offset = 1.5_f32;
             let dist_len = 4.0_f32;
             let dy = (dist_len * dist_len - z_offset * z_offset).sqrt();
             let ball_y = HINGE_HEIGHT - dy;
-            
+
             if let Some(t) = transforms.get_mut(ball_id) {
                 t.position = Vec3::new(x, ball_y, 0.0);
                 t.rotation = Quat::IDENTITY;
@@ -419,15 +441,13 @@ fn reset_cradle(world: &mut World, game: &mut CradleGame) {
             }
             if let Some(rb) = rbs.get_mut(ball_id) {
                 (rb as &mut RigidBody).wake_up();
-
             }
         }
     }
     game.triggered = false;
 }
 
-fn step_physics(_world: &mut World, _dt: f32) {
-}
+fn step_physics(_world: &mut World, _dt: f32) {}
 
 fn update_camera(
     world: &mut World,
@@ -440,24 +460,38 @@ fn update_camera(
     let fz = state.cam_yaw.sin() * state.cam_pitch.cos();
     let fwd = Vec3::new(fx, fy, fz).normalize();
     let right = fwd.cross(Vec3::new(0.0, 1.0, 0.0)).normalize();
- 
+
     let speed = state.cam_speed * dt;
- 
-    if input.is_key_pressed(KeyCode::KeyW as u32) { state.cam_pos += fwd * speed; }
-    if input.is_key_pressed(KeyCode::KeyS as u32) { state.cam_pos -= fwd * speed; }
-    if input.is_key_pressed(KeyCode::KeyA as u32) { state.cam_pos -= right * speed; }
-    if input.is_key_pressed(KeyCode::KeyD as u32) { state.cam_pos += right * speed; }
-    if input.is_key_pressed(KeyCode::KeyQ as u32) { state.cam_pos.y -= speed; }
-    if input.is_key_pressed(KeyCode::KeyE as u32) { state.cam_pos.y += speed; }
- 
-    let mut trans = world.borrow_mut::<Transform>(); {
+
+    if input.is_key_pressed(KeyCode::KeyW as u32) {
+        state.cam_pos += fwd * speed;
+    }
+    if input.is_key_pressed(KeyCode::KeyS as u32) {
+        state.cam_pos -= fwd * speed;
+    }
+    if input.is_key_pressed(KeyCode::KeyA as u32) {
+        state.cam_pos -= right * speed;
+    }
+    if input.is_key_pressed(KeyCode::KeyD as u32) {
+        state.cam_pos += right * speed;
+    }
+    if input.is_key_pressed(KeyCode::KeyQ as u32) {
+        state.cam_pos.y -= speed;
+    }
+    if input.is_key_pressed(KeyCode::KeyE as u32) {
+        state.cam_pos.y += speed;
+    }
+
+    let mut trans = world.borrow_mut::<Transform>();
+    {
         if let Some(t) = trans.get_mut(state.cam_id) {
             t.position = state.cam_pos;
             t.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
             t.update_local_matrix();
         }
     }
-    let mut cams = world.borrow_mut::<Camera>(); {
+    let mut cams = world.borrow_mut::<Camera>();
+    {
         if let Some(c) = cams.get_mut(state.cam_id) {
             c.yaw = state.cam_yaw;
             c.pitch = state.cam_pitch;

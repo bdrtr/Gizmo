@@ -12,7 +12,12 @@ pub struct EditorContext {
 }
 
 impl EditorContext {
-    pub fn new(device: &wgpu::Device, output_format: wgpu::TextureFormat, window: &Window, sample_count: u32) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        output_format: wgpu::TextureFormat,
+        window: &Window,
+        sample_count: u32,
+    ) -> Self {
         let context = Context::default();
 
         let fonts = egui::FontDefinitions::default();
@@ -90,7 +95,7 @@ impl EditorContext {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        full_output: egui::FullOutput
+        full_output: egui::FullOutput,
     ) {
         self.state
             .handle_platform_output(window, full_output.platform_output);

@@ -1,14 +1,14 @@
 //! # Gizmo Math
-//! 
+//!
 //! Gizmo Engine'nin temel matematik altyapısını ve render/fizik veri tiplerini barındırır.
 //!
 //! ## Konvansiyonlar (Conventions)
-//! - **Koordinat Sistemi**: Sağ-Elli (Right-Handed, RH). 
+//! - **Koordinat Sistemi**: Sağ-Elli (Right-Handed, RH).
 //! - **Yukarı Ekseni**: Y-Up (0.0, 1.0, 0.0).
 //! - **İleri Ekseni**: -Z (Kamera her zaman eksi Z eksenine doğru bakar).
 //! - **Matris Düzeni**: Column-Major (glam mimarisi ile uyumlu).
 //!
-//! Normal matrisi hesaplamaları için yapılandırılmış `Mat3`, ve 3B uzay sınırları 
+//! Normal matrisi hesaplamaları için yapılandırılmış `Mat3`, ve 3B uzay sınırları
 //! hesaplamaları için boyut optimize edilmiş `Aabb`, `Frustum`, `Ray` yapıları barındırır.
 
 pub mod aabb;
@@ -48,7 +48,7 @@ mod tests {
         // Math simulation verification: It should collide with the box
         let t = ray.intersect_aabb(aabb);
         assert!(t.is_some());
-        
+
         let intersection_distance = t.unwrap();
         // Distance from camera Z=5 to AABB Front-Face Z=1 requires a travel distance of precisely 4 units
         assert!((intersection_distance - 4.0).abs() < 1e-5);

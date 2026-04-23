@@ -41,7 +41,8 @@ fn main() {
             let cam_entity = world.spawn();
             world.add_component(
                 cam_entity,
-                Transform::new(game.cam_pos).with_rotation(pitch_yaw_quat(game.cam_pitch, game.cam_yaw)),
+                Transform::new(game.cam_pos)
+                    .with_rotation(pitch_yaw_quat(game.cam_pitch, game.cam_yaw)),
             );
             world.add_component(
                 cam_entity,
@@ -66,7 +67,11 @@ fn main() {
             );
             world.add_component(
                 sun,
-                gizmo::renderer::components::DirectionalLight::new(Vec3::new(1.0, 0.9, 0.9), 3.0, true),
+                gizmo::renderer::components::DirectionalLight::new(
+                    Vec3::new(1.0, 0.9, 0.9),
+                    3.0,
+                    gizmo::renderer::components::LightRole::Sun,
+                ),
             );
 
             game
@@ -108,12 +113,24 @@ fn main() {
 
             let speed = state.cam_speed * dt;
 
-            if input.is_key_pressed(KeyCode::KeyW as u32) { state.cam_pos += fwd * speed; }
-            if input.is_key_pressed(KeyCode::KeyS as u32) { state.cam_pos -= fwd * speed; }
-            if input.is_key_pressed(KeyCode::KeyA as u32) { state.cam_pos -= right * speed; }
-            if input.is_key_pressed(KeyCode::KeyD as u32) { state.cam_pos += right * speed; }
-            if input.is_key_pressed(KeyCode::KeyQ as u32) { state.cam_pos.y -= speed; }
-            if input.is_key_pressed(KeyCode::KeyE as u32) { state.cam_pos.y += speed; }
+            if input.is_key_pressed(KeyCode::KeyW as u32) {
+                state.cam_pos += fwd * speed;
+            }
+            if input.is_key_pressed(KeyCode::KeyS as u32) {
+                state.cam_pos -= fwd * speed;
+            }
+            if input.is_key_pressed(KeyCode::KeyA as u32) {
+                state.cam_pos -= right * speed;
+            }
+            if input.is_key_pressed(KeyCode::KeyD as u32) {
+                state.cam_pos += right * speed;
+            }
+            if input.is_key_pressed(KeyCode::KeyQ as u32) {
+                state.cam_pos.y -= speed;
+            }
+            if input.is_key_pressed(KeyCode::KeyE as u32) {
+                state.cam_pos.y += speed;
+            }
 
             let mut trans = world.borrow_mut::<Transform>();
             if let Some(t) = trans.get_mut(state.cam_id) {
@@ -121,7 +138,7 @@ fn main() {
                 t.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
                 t.update_local_matrix();
             }
-            
+
             let mut cams = world.borrow_mut::<Camera>();
             if let Some(c) = cams.get_mut(state.cam_id) {
                 c.yaw = state.cam_yaw;
@@ -133,7 +150,10 @@ fn main() {
                 .anchor(gizmo::egui::Align2::LEFT_TOP, gizmo::egui::vec2(10.0, 10.0))
                 .title_bar(false)
                 .resizable(false)
-                .frame(gizmo::egui::Frame::window(&ctx.style()).fill(gizmo::egui::Color32::from_black_alpha(150)))
+                .frame(
+                    gizmo::egui::Frame::window(&ctx.style())
+                        .fill(gizmo::egui::Color32::from_black_alpha(150)),
+                )
                 .show(ctx, |ui| {
                     ui.label(
                         gizmo::egui::RichText::new(format!("FPS: {:.0}", state.fps))

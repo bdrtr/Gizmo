@@ -5,7 +5,6 @@ use egui;
 
 /// Toolbar panelini çizer
 pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
-
     egui::TopBottomPanel::top("toolbar_panel")
         .exact_height(36.0)
         .show(ctx, |ui| {
@@ -13,7 +12,11 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                 ui.spacing_mut().item_spacing.x = 8.0;
 
                 // === DOSYA İŞLEMLERİ ===
-                if ui.button("🪄 Yeni/Temizle").on_hover_text("Sahneyi sıfırla").clicked() {
+                if ui
+                    .button("🪄 Yeni/Temizle")
+                    .on_hover_text("Sahneyi sıfırla")
+                    .clicked()
+                {
                     state.scene.clear_request = true;
                 }
 
@@ -22,7 +25,10 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
 
                 let is_dialog_open = state.pending_dialog_rx.is_some();
 
-                if ui.add_enabled(!is_dialog_open, egui::Button::new("💾 Kaydet")).clicked() {
+                if ui
+                    .add_enabled(!is_dialog_open, egui::Button::new("💾 Kaydet"))
+                    .clicked()
+                {
                     let (tx, rx) = std::sync::mpsc::channel();
                     state.pending_dialog_rx = Some(std::sync::Mutex::new(rx));
                     let scene_path = state.scene_path.clone();
@@ -37,14 +43,24 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                             .add_filter("Gizmo Scene", &["scene"])
                             .set_directory(&initial_dir)
                             .save_file();
-                        let _ = tx.send((true, res.map(|p| {
-                            let s = p.to_string_lossy().to_string();
-                            if s.starts_with(r"\\?\") { s[4..].to_string() } else { s }
-                        })));
+                        let _ = tx.send((
+                            true,
+                            res.map(|p| {
+                                let s = p.to_string_lossy().to_string();
+                                if s.starts_with(r"\\?\") {
+                                    s[4..].to_string()
+                                } else {
+                                    s
+                                }
+                            }),
+                        ));
                     });
                 }
 
-                if ui.add_enabled(!is_dialog_open, egui::Button::new("📂 Yükle")).clicked() {
+                if ui
+                    .add_enabled(!is_dialog_open, egui::Button::new("📂 Yükle"))
+                    .clicked()
+                {
                     let (tx, rx) = std::sync::mpsc::channel();
                     state.pending_dialog_rx = Some(std::sync::Mutex::new(rx));
                     let scene_path = state.scene_path.clone();
@@ -59,26 +75,55 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                             .add_filter("Gizmo Scene", &["scene"])
                             .set_directory(&initial_dir)
                             .pick_file();
-                        let _ = tx.send((false, res.map(|p| {
-                            let s = p.to_string_lossy().to_string();
-                            if s.starts_with(r"\\?\") { s[4..].to_string() } else { s }
-                        })));
+                        let _ = tx.send((
+                            false,
+                            res.map(|p| {
+                                let s = p.to_string_lossy().to_string();
+                                if s.starts_with(r"\\?\") {
+                                    s[4..].to_string()
+                                } else {
+                                    s
+                                }
+                            }),
+                        ));
                     });
                 }
 
                 ui.separator();
 
                 if state.mode == EditorMode::Edit {
-                    if ui.button(egui::RichText::new("▶ Başlat").color(egui::Color32::from_rgb(80, 200, 80))).clicked() {
+                    if ui
+                        .button(
+                            egui::RichText::new("▶ Başlat")
+                                .color(egui::Color32::from_rgb(80, 200, 80)),
+                        )
+                        .clicked()
+                    {
                         state.toggle_play();
                     }
                 } else {
-                    let pause_text = if state.mode == EditorMode::Play { "⏸ Duraklat" } else { "▶ Devam" };
-                    if ui.button(egui::RichText::new(pause_text).color(egui::Color32::from_rgb(200, 200, 80))).clicked() {
+                    let pause_text = if state.mode == EditorMode::Play {
+                        "⏸ Duraklat"
+                    } else {
+                        "▶ Devam"
+                    };
+                    if ui
+                        .button(
+                            egui::RichText::new(pause_text)
+                                .color(egui::Color32::from_rgb(200, 200, 80)),
+                        )
+                        .clicked()
+                    {
                         state.toggle_pause();
                     }
 
-                    if ui.button(egui::RichText::new("⏹ Durdur").color(egui::Color32::from_rgb(200, 80, 80))).clicked() {
+                    if ui
+                        .button(
+                            egui::RichText::new("⏹ Durdur")
+                                .color(egui::Color32::from_rgb(200, 80, 80)),
+                        )
+                        .clicked()
+                    {
                         state.toggle_play();
                     }
                 }
@@ -145,7 +190,8 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                 ui.separator();
 
                 // === AYARLAR ===
-                let settings_color = if state.is_tab_open(&crate::editor_state::EditorTab::Settings) {
+                let settings_color = if state.is_tab_open(&crate::editor_state::EditorTab::Settings)
+                {
                     egui::Color32::from_rgb(100, 200, 255)
                 } else {
                     egui::Color32::GRAY
@@ -160,11 +206,18 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                 ui.separator();
 
                 // === BUILD SİSTEMİ ===
-                if state.build.is_building.load(std::sync::atomic::Ordering::Acquire) {
+                if state
+                    .build
+                    .is_building
+                    .load(std::sync::atomic::Ordering::Acquire)
+                {
                     ui.add(egui::Spinner::new());
                     if let Some(st) = state.build.start_time {
                         let elapsed = st.elapsed().as_secs();
-                        ui.label(egui::RichText::new(format!("Derleniyor... ({}s)", elapsed)).color(egui::Color32::YELLOW));
+                        ui.label(
+                            egui::RichText::new(format!("Derleniyor... ({}s)", elapsed))
+                                .color(egui::Color32::YELLOW),
+                        );
                     } else {
                         ui.label(egui::RichText::new("Derleniyor...").color(egui::Color32::YELLOW));
                     }

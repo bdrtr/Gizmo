@@ -58,12 +58,17 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         }
 
         // Unparent yapabilmek için (Kök yapmak)
-        if let Some(dragged) =
-            ui.memory(|mem| mem.data.get_temp::<gizmo_core::entity::Entity>(egui::Id::new("dragged_ent")))
-        {
-            if ui.button("Düzene Geri Al (Unparent)").clicked() { // Düzeltildi
+        if let Some(dragged) = ui.memory(|mem| {
+            mem.data
+                .get_temp::<gizmo_core::entity::Entity>(egui::Id::new("dragged_ent"))
+        }) {
+            if ui.button("Düzene Geri Al (Unparent)").clicked() {
+                // Düzeltildi
                 state.unparent_request = Some(dragged);
-                ui.memory_mut(|mem| mem.data.remove::<gizmo_core::entity::Entity>(egui::Id::new("dragged_ent")));
+                ui.memory_mut(|mem| {
+                    mem.data
+                        .remove::<gizmo_core::entity::Entity>(egui::Id::new("dragged_ent"))
+                });
                 ui.close_menu();
             }
         }
@@ -79,7 +84,8 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         let filter_lower = state.hierarchy_filter.to_lowercase(); // Bir kez hesaplanır
 
         // ROOT entity'leri filtrele (Iter alive bazından cachelenir) O(N) tek geçiş
-        let root_entities: Vec<gizmo_core::entity::Entity> = world.iter_alive_entities()
+        let root_entities: Vec<gizmo_core::entity::Entity> = world
+            .iter_alive_entities()
             .into_iter()
             .filter(|e| !parents.contains(e.id()))
             .collect();
@@ -130,7 +136,9 @@ fn draw_entity_node(
         .unwrap_or_else(|| format!("Entity_{}", entity.id()));
 
     // Editor objelerini Hiyerarşiden tamamen gizle (eğer ayar açıksa)
-    if state.hide_editor_entities && (entity_name.starts_with("Editor ") || entity_name == "Highlight Box") {
+    if state.hide_editor_entities
+        && (entity_name.starts_with("Editor ") || entity_name == "Highlight Box")
+    {
         return;
     }
 
@@ -142,7 +150,16 @@ fn draw_entity_node(
                 // Generation güvenliği sağlandı, world üzerinden çekildi
                 if let Some(child_ent) = world.get_entity(child_id) {
                     if world.is_alive(child_ent) {
-                        draw_entity_node(ui, world, child_ent, state, names, children_comp, is_hidden_comp, filter_lower);
+                        draw_entity_node(
+                            ui,
+                            world,
+                            child_ent,
+                            state,
+                            names,
+                            children_comp,
+                            is_hidden_comp,
+                            filter_lower,
+                        );
                     }
                 }
             }
@@ -165,15 +182,17 @@ fn draw_entity_node(
         } else {
             format!("📦 {}", entity_name)
         };
-        
+
         let label = if is_selected {
-            egui::RichText::new(label_text).strong().color(egui::Color32::from_rgb(100, 200, 255))
+            egui::RichText::new(label_text)
+                .strong()
+                .color(egui::Color32::from_rgb(100, 200, 255))
         } else {
             egui::RichText::new(label_text)
         };
 
         let response = ui.selectable_label(is_selected, label);
-        
+
         if response.clicked() {
             if ui.input(|i| i.modifiers.command) {
                 state.toggle_selection(entity);
@@ -191,27 +210,53 @@ fn draw_entity_node(
         }
 
         if drag_response.hovered() {
-            if let Some(dragged) = ui.memory(|m| m.data.get_temp::<gizmo_core::entity::Entity>(egui::Id::new("dragged_ent"))) {
+            if let Some(dragged) = ui.memory(|m| {
+                m.data
+                    .get_temp::<gizmo_core::entity::Entity>(egui::Id::new("dragged_ent"))
+            }) {
                 // Vurgu rengi ile bırakılabilecek yeri göster
-                ui.painter().rect_stroke(response.rect, 2.0, egui::Stroke::new(1.0, egui::Color32::YELLOW));
+                ui.painter().rect_stroke(
+                    response.rect,
+                    2.0,
+                    egui::Stroke::new(1.0, egui::Color32::YELLOW),
+                );
                 if ui.input(|i| i.pointer.any_released()) && dragged != entity {
                     state.reparent_request = Some((dragged, entity));
-                    ui.memory_mut(|m| m.data.remove::<gizmo_core::entity::Entity>(egui::Id::new("dragged_ent")));
+                    ui.memory_mut(|m| {
+                        m.data
+                            .remove::<gizmo_core::entity::Entity>(egui::Id::new("dragged_ent"))
+                    });
                 }
             }
         }
 
         response.context_menu(|ui| {
-            let hide_text = if is_hidden { "👁 Görünür Yap (Göster)" } else { "🙈 Gizle (Sakla)" };
-            if ui.button(hide_text).clicked() { state.toggle_visibility_requests.push(entity); ui.close_menu(); }
+            let hide_text = if is_hidden {
+                "👁 Görünür Yap (Göster)"
+            } else {
+                "🙈 Gizle (Sakla)"
+            };
+            if ui.button(hide_text).clicked() {
+                state.toggle_visibility_requests.push(entity);
+                ui.close_menu();
+            }
             if ui.button("💾 Prefab Olarak Kaydet").clicked() {
                 // Asset path yönetimi standardize edilmeli, şimdilik prefix dinamik
-                let path = format!("demo/assets/prefabs/{}.prefab", entity_name.replace(" ", "_"));
+                let path = format!(
+                    "demo/assets/prefabs/{}.prefab",
+                    entity_name.replace(" ", "_")
+                );
                 state.prefab_save_request = Some((entity, path));
                 ui.close_menu();
             }
-            if ui.button("📑 Çoğalt (Duplicate)").clicked() { state.duplicate_requests.push(entity); ui.close_menu(); }
-            if ui.button("🗑 Sil").clicked() { state.despawn_requests.push(entity); ui.close_menu(); }
+            if ui.button("📑 Çoğalt (Duplicate)").clicked() {
+                state.duplicate_requests.push(entity);
+                ui.close_menu();
+            }
+            if ui.button("🗑 Sil").clicked() {
+                state.despawn_requests.push(entity);
+                ui.close_menu();
+            }
         });
     };
 
@@ -219,13 +264,24 @@ fn draw_entity_node(
         // Katlanabilir ağaç düğümü
         let id = ui.make_persistent_id(format!("entity_{}", entity.id()));
         egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
-            .show_header(ui, |ui| { draw_row(ui); })
+            .show_header(ui, |ui| {
+                draw_row(ui);
+            })
             .body(|ui| {
                 if let Some(children) = children_comp.get(entity.id()) {
                     for &child_id in &children.0 {
                         if let Some(child_ent) = world.get_entity(child_id) {
                             if world.is_alive(child_ent) {
-                                draw_entity_node(ui, world, child_ent, state, names, children_comp, is_hidden_comp, filter_lower);
+                                draw_entity_node(
+                                    ui,
+                                    world,
+                                    child_ent,
+                                    state,
+                                    names,
+                                    children_comp,
+                                    is_hidden_comp,
+                                    filter_lower,
+                                );
                             }
                         }
                     }

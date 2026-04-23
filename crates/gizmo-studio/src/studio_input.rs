@@ -27,14 +27,15 @@ fn perform_rubber_band_selection(
     player_id: u32,
     ctrl_pressed: bool,
 ) {
-    if state.camera.view.is_none() || state.camera.proj.is_none() || state.scene_view_rect.is_none() {
+    if state.camera.view.is_none() || state.camera.proj.is_none() || state.scene_view_rect.is_none()
+    {
         return;
     }
 
     let view_mat = state.camera.view.unwrap();
     let proj_mat = state.camera.proj.unwrap();
     let vp_mat = proj_mat * view_mat;
-    
+
     // Egui tiplerine dokunmadan koordinatlari aliyoruz. scene_view_rect bir egui::Rect
     let rect_left = state.scene_view_rect.unwrap().min.x;
     let rect_top = state.scene_view_rect.unwrap().min.y;
@@ -50,7 +51,8 @@ fn perform_rubber_band_selection(
         state.selection.entities.clear();
     }
 
-    let transforms = world.borrow::<Transform>(); {
+    let transforms = world.borrow::<Transform>();
+    {
         let is_hidden = world.borrow::<gizmo::core::component::IsHidden>();
 
         for (id, t) in transforms.iter() {
@@ -63,7 +65,8 @@ fn perform_rubber_band_selection(
                 continue;
             }
 
-            let clip_pos = vp_mat * gizmo::math::Vec4::new(t.position.x, t.position.y, t.position.z, 1.0);
+            let clip_pos =
+                vp_mat * gizmo::math::Vec4::new(t.position.x, t.position.y, t.position.z, 1.0);
 
             // Kamera arkasindaysa atla
             if clip_pos.w <= 0.0 {
@@ -78,19 +81,30 @@ fn perform_rubber_band_selection(
 
             // Dörtgen icinde kalip kalmadigini kontrol et
             if screen_x >= min_x && screen_x <= max_x && screen_y >= min_y && screen_y <= max_y {
-                state.selection.entities.insert(gizmo::prelude::Entity::new(id, 0));
+                state
+                    .selection
+                    .entities
+                    .insert(gizmo::prelude::Entity::new(id, 0));
             }
         }
     }
 }
 
-fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_id: u32, ctrl_pressed: bool) {
+fn perform_raycast(
+    world: &mut World,
+    state: &mut EditorState,
+    ray: Ray,
+    player_id: u32,
+    ctrl_pressed: bool,
+) {
     state.do_raycast = false;
 
     let mut closest_t = std::f32::MAX;
     let mut hit_entity = None;
 
-    let colliders = world.borrow::<Collider>(); let transforms = world.borrow::<Transform>(); {
+    let colliders = world.borrow::<Collider>();
+    let transforms = world.borrow::<Transform>();
+    {
         let is_hidden = world.borrow::<gizmo::core::component::IsHidden>();
 
         for (id, col) in colliders.iter() {
@@ -106,9 +120,7 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
             }
 
             if let Some(t) = transforms.get(id) {
-                let extents = col
-                    .shape
-                    .bounding_box_half_extents(t.rotation);
+                let extents = col.shape.bounding_box_half_extents(t.rotation);
                 let scaled_half = Vec3::new(
                     extents.x * t.scale.x,
                     extents.y * t.scale.y,
@@ -132,8 +144,6 @@ fn perform_raycast(world: &mut World, state: &mut EditorState, ray: Ray, player_
         } else {
             state.select_exclusive(gizmo::prelude::Entity::new(hit, 0));
         }
-
-
     } else {
         state.clear_selection();
     }
@@ -147,14 +157,16 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
     let mut selected_col = None;
 
     if let Some(&selected) = state.selection.entities.iter().next() {
-        let transforms = world.borrow::<Transform>(); {
+        let transforms = world.borrow::<Transform>();
+        {
             if let Some(t) = transforms.get(selected.id()) {
                 any_selected = true;
                 selected_pos = t.position;
                 selected_rot = t.rotation;
                 selected_scale = t.scale;
 
-                let colls = world.borrow::<Collider>(); {
+                let colls = world.borrow::<Collider>();
+                {
                     if let Some(c) = colls.get(selected.id()) {
                         selected_col = Some(c.clone());
                     }
@@ -165,8 +177,15 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
 
     if any_selected {
         // Obje seçiliyse Highlight Box pozisyonunu ve boyutunu güncelle
-        { let mut trans = world.borrow_mut::<Transform>();
-            if let Some(hb) = trans.get_mut(state.selection.highlight_box.unwrap_or(gizmo::prelude::Entity::new(0,0)).id()) {
+        {
+            let mut trans = world.borrow_mut::<Transform>();
+            if let Some(hb) = trans.get_mut(
+                state
+                    .selection
+                    .highlight_box
+                    .unwrap_or(gizmo::prelude::Entity::new(0, 0))
+                    .id(),
+            ) {
                 hb.position = selected_pos;
                 hb.rotation = selected_rot;
 
@@ -180,12 +199,24 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
         }
 
         // ECS üzerinden görünür yap
-        if let Some(entity_hb) = world.get_entity(state.selection.highlight_box.unwrap_or(gizmo::prelude::Entity::new(0,0)).id()) {
+        if let Some(entity_hb) = world.get_entity(
+            state
+                .selection
+                .highlight_box
+                .unwrap_or(gizmo::prelude::Entity::new(0, 0))
+                .id(),
+        ) {
             world.remove_component::<gizmo::core::component::IsHidden>(entity_hb);
         }
     } else {
         // Hiçbir şey seçili değilse 't.position = -10000' hack'i yerine ECS üzerinden render'ı atla
-        if let Some(entity_hb) = world.get_entity(state.selection.highlight_box.unwrap_or(gizmo::prelude::Entity::new(0,0)).id()) {
+        if let Some(entity_hb) = world.get_entity(
+            state
+                .selection
+                .highlight_box
+                .unwrap_or(gizmo::prelude::Entity::new(0, 0))
+                .id(),
+        ) {
             world.add_component(entity_hb, gizmo::core::component::IsHidden);
         }
     }
@@ -199,7 +230,9 @@ pub fn build_ray(
     aspect: f32,
     _wh: f32,
 ) -> Option<Ray> {
-    let transforms = world.borrow::<Transform>(); let cameras = world.borrow::<gizmo::renderer::components::Camera>(); {
+    let transforms = world.borrow::<Transform>();
+    let cameras = world.borrow::<gizmo::renderer::components::Camera>();
+    {
         if let (Some(cam_t), Some(cam)) = (transforms.get(player_id), cameras.get(player_id)) {
             let view = cam.get_view(cam_t.position);
             let proj = cam.get_projection(aspect);

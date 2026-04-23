@@ -13,12 +13,14 @@ pub enum EditorAction {
     /// TODO: Implement a reliable serialized state buffer format
     EntityDespawned { data: Vec<Vec<u8>> },
     /// Objelerin oluşturulması
-    EntitySpawned { entity_ids: Vec<gizmo_core::entity::Entity> },
+    EntitySpawned {
+        entity_ids: Vec<gizmo_core::entity::Entity>,
+    },
     /// Dinamik / Diğer bileşenlerin değişimi
     ComponentChanged {
         entity: gizmo_core::entity::Entity,
         type_name: String, // Box<dyn Any> does not implement Clone across UI bounds easily, using typed names for future reflection implementation.
-    }
+    },
 }
 
 /// Yapılan eylemlerin kaydını tutan History yöneticisi.
@@ -66,7 +68,8 @@ impl History {
         if let Some(action) = self.undo_stack.pop_back() {
             match action.clone() {
                 EditorAction::TransformsChanged { changes } => {
-                    let mut transforms = world.borrow_mut::<Transform>(); {
+                    let mut transforms = world.borrow_mut::<Transform>();
+                    {
                         for (entity, old_transform, _new_transform) in changes.iter() {
                             if let Some(t) = transforms.get_mut(entity.id()) {
                                 *t = *old_transform;
@@ -81,7 +84,7 @@ impl History {
                     // Henüz implement edilmedi — stack'e geri koy
                     eprintln!("Uyarı: Bu action türü henüz geri alınamıyor (Undo desteklenmiyor).");
                     self.undo_stack.push_back(action);
-                } 
+                }
             }
         }
     }
@@ -91,7 +94,8 @@ impl History {
         if let Some(action) = self.redo_stack.pop_back() {
             match action.clone() {
                 EditorAction::TransformsChanged { changes } => {
-                    let mut transforms = world.borrow_mut::<Transform>(); {
+                    let mut transforms = world.borrow_mut::<Transform>();
+                    {
                         for (entity, _old_transform, new_transform) in changes.iter() {
                             if let Some(t) = transforms.get_mut(entity.id()) {
                                 *t = *new_transform;
@@ -103,9 +107,11 @@ impl History {
                         .push_back(EditorAction::TransformsChanged { changes });
                 }
                 _ => {
-                    eprintln!("Uyarı: Bu action türü henüz ileri alınamıyor (Redo desteklenmiyor).");
+                    eprintln!(
+                        "Uyarı: Bu action türü henüz ileri alınamıyor (Redo desteklenmiyor)."
+                    );
                     self.redo_stack.push_back(action);
-                } 
+                }
             }
         }
     }

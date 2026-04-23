@@ -1,10 +1,10 @@
+use super::decode_obj_vertices_for_async;
+use crate::animation::{AnimationClip, Keyframe, SkeletonHierarchy, SkeletonJoint, Track};
 use crate::components::{Material, Mesh};
-use crate::animation::{AnimationClip, SkeletonHierarchy, SkeletonJoint, Track, Keyframe};
 use crate::renderer::Vertex;
-use gizmo_math::{Vec3, Quat};
+use gizmo_math::{Quat, Vec3};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
-use super::decode_obj_vertices_for_async;
 
 impl super::AssetManager {
     /// GPU'ya OBJ vertex verisini yazar ve önbelleğe koyar ([`AsyncAssetLoader`](crate::async_assets::AsyncAssetLoader) tamamlanınca).
@@ -13,7 +13,7 @@ impl super::AssetManager {
         device: &wgpu::Device,
         file_path: &str,
         vertices: Vec<Vertex>,
-        aabb: gizmo_math::Aabb,
+        _aabb: gizmo_math::Aabb,
     ) -> Mesh {
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(&format!("Obj VBuf: {}", file_path)),
@@ -22,10 +22,9 @@ impl super::AssetManager {
         });
         let mesh = Mesh::new(
             Arc::new(vbuf),
-            vertices.len() as u32,
+            &vertices,
             Vec3::ZERO,
             format!("obj:{}", file_path),
-            aabb,
         );
         self.mesh_cache.insert(file_path.to_string(), mesh.clone());
         mesh
@@ -34,7 +33,13 @@ impl super::AssetManager {
     /// Bir .obj dosyasını diskten okur ve Mesh ECS bileşenine dönüştürür.
     /// Daha önce okunmuşsa, RAM ve VRAM tüketimini önlemek için önbellekten direkt kopya döndürür.
     pub fn load_obj(&mut self, device: &wgpu::Device, file_path_or_uuid: &str) -> Mesh {
-        let file_path = self.resolve_path_from_meta_source(file_path_or_uuid);
+        let file_path = match self.resolve_path_from_meta_source(file_path_or_uuid) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("[AssetManager] Hata: {}", e);
+                return self.loading_placeholder_mesh(device);
+            }
+        };
         let id_str = if let Some(id) = self.get_uuid(&file_path) {
             id.to_string()
         } else {
@@ -48,19 +53,19 @@ impl super::AssetManager {
         let (vertices, aabb) = match decode_obj_vertices_for_async(&file_path) {
             Ok(v) => v,
             Err(e) => {
-                eprintln!("[ERROR] AssetManager: OBJ yuklenirken hata! {} ({})", file_path, e);
+                eprintln!(
+                    "[ERROR] AssetManager: OBJ yuklenirken hata! {} ({})",
+                    file_path, e
+                );
                 // Çökmek yerine WGPU tarafında sorun çıkarmayacak boş (0 vertex) bir Mesh dönüyoruz
                 let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Fallback VBuf (Not Found)"),
                     contents: &[],
                     usage: wgpu::BufferUsages::VERTEX,
                 });
-                let mesh = Mesh::new(
+                let mesh = Mesh::empty(
                     Arc::new(vbuf),
-                    0,
-                    Vec3::ZERO,
                     format!("obj:missing_{}", file_path),
-                    gizmo_math::Aabb::empty(),
                 );
                 return mesh;
             }
@@ -76,7 +81,7 @@ impl super::AssetManager {
         default_tbind: Arc<wgpu::BindGroup>,
         path_or_uuid: &str,
     ) -> Result<GltfSceneAsset, String> {
-        let file_path = self.resolve_path_from_meta_source(path_or_uuid);
+        let file_path = self.resolve_path_from_meta_source(path_or_uuid)?;
         let id_str = if let Some(id) = self.get_uuid(&file_path) {
             id.to_string()
         } else {
@@ -213,7 +218,7 @@ impl super::AssetManager {
                     },
                 ],
             }));
-            
+
             let tex_source = format!("gltf_tex_{}_{}", file_path, i);
             self.texture_cache.insert(tex_source.clone(), bg.clone());
             gltf_textures.push((bg, tex_source));
@@ -240,9 +245,8 @@ impl super::AssetManager {
             mat.albedo =
                 gizmo_math::Vec4::new(base_color[0], base_color[1], base_color[2], base_color[3]);
             mat.metallic = pbr.metallic_factor(); // Araba kaportası gibi yansıyan nesneler simsiyah kalmasın diye kısıtlamayı kaldırdık, çünkü artık shader'da Fake IBL var
-            mat.roughness = pbr.roughness_factor(); 
-                                                             // Varsayılan: PBR açık (unlit=0.0). GLTF modelleri artık ışıklandırma alacak.
-            mat.unlit = 0.0;
+            mat.roughness = pbr.roughness_factor();
+            // Varsayılan: PBR açık. GLTF modelleri artık ışıklandırma alacak.
 
             if material.alpha_mode() == gltf::material::AlphaMode::Blend
                 || material.alpha_mode() == gltf::material::AlphaMode::Mask
@@ -283,28 +287,32 @@ impl super::AssetManager {
                 if let Some(inputs) = reader.read_inputs() {
                     let times: Vec<f32> = inputs.collect();
 
-                        let interp_mode = match channel.sampler().interpolation() {
-                            gltf::animation::Interpolation::Step => crate::animation::InterpolationMode::Step,
-                            gltf::animation::Interpolation::CubicSpline => crate::animation::InterpolationMode::CubicSpline,
-                            _ => crate::animation::InterpolationMode::Linear,
-                        };
+                    let interp_mode = match channel.sampler().interpolation() {
+                        gltf::animation::Interpolation::Step => {
+                            crate::animation::InterpolationMode::Step
+                        }
+                        gltf::animation::Interpolation::CubicSpline => {
+                            crate::animation::InterpolationMode::CubicSpline
+                        }
+                        _ => crate::animation::InterpolationMode::Linear,
+                    };
 
-                        if let Some(outputs) = reader.read_outputs() {
-                            match outputs {
-                                gltf::animation::util::ReadOutputs::Translations(tr) => {
-                                    let mut kfs = Vec::new();
-                                    for (time, val) in times.iter().zip(tr) {
-                                        kfs.push(Keyframe {
-                                            time: *time,
-                                            value: Vec3::new(val[0], val[1], val[2]),
-                                        });
-                                    }
-                                    transl.push(Track {
-                                        target_node,
-                                        interpolation: interp_mode,
-                                        keyframes: kfs,
+                    if let Some(outputs) = reader.read_outputs() {
+                        match outputs {
+                            gltf::animation::util::ReadOutputs::Translations(tr) => {
+                                let mut kfs = Vec::new();
+                                for (time, val) in times.iter().zip(tr) {
+                                    kfs.push(Keyframe {
+                                        time: *time,
+                                        value: Vec3::new(val[0], val[1], val[2]),
                                     });
                                 }
+                                transl.push(Track {
+                                    target_node,
+                                    interpolation: interp_mode,
+                                    keyframes: kfs,
+                                });
+                            }
                             gltf::animation::util::ReadOutputs::Rotations(rt) => {
                                 let mut kfs = Vec::new();
                                 for (time, val) in times.iter().zip(rt.into_f32()) {
@@ -313,11 +321,11 @@ impl super::AssetManager {
                                         value: Quat::from_xyzw(val[0], val[1], val[2], val[3]),
                                     });
                                 }
-                                    rot.push(Track {
-                                        target_node,
-                                        interpolation: interp_mode,
-                                        keyframes: kfs,
-                                    });
+                                rot.push(Track {
+                                    target_node,
+                                    interpolation: interp_mode,
+                                    keyframes: kfs,
+                                });
                             }
                             gltf::animation::util::ReadOutputs::Scales(sc) => {
                                 let mut kfs = Vec::new();
@@ -327,11 +335,11 @@ impl super::AssetManager {
                                         value: Vec3::new(val[0], val[1], val[2]),
                                     });
                                 }
-                                    scl.push(Track {
-                                        target_node,
-                                        interpolation: interp_mode,
-                                        keyframes: kfs,
-                                    });
+                                scl.push(Track {
+                                    target_node,
+                                    interpolation: interp_mode,
+                                    keyframes: kfs,
+                                });
                             }
                             _ => {} // Morph targets vb. goz ardi edildi
                         }
@@ -339,36 +347,34 @@ impl super::AssetManager {
                 }
             }
 
+            let mut duration = 0.0f32;
+            for t in &transl {
+                if let Some(k) = t.keyframes.last() {
+                    duration = duration.max(k.time);
+                }
+            }
+            for t in &rot {
+                if let Some(k) = t.keyframes.last() {
+                    duration = duration.max(k.time);
+                }
+            }
+            for t in &scl {
+                if let Some(k) = t.keyframes.last() {
+                    duration = duration.max(k.time);
+                }
+            }
+
             animations.push(AnimationClip {
                 name: anim.name().unwrap_or("unnamed_anim").to_string(),
-                duration: 0.0, // Hesaplamamiz lazim (track'lerin son keyframe time'larinin max'i)
+                duration,
                 translations: transl,
                 rotations: rot,
                 scales: scl,
             });
         }
 
-        // Sure hesaplama sonradan yapilabilir
-        for anim in &mut animations {
-            let mut max_t = 0.0f32;
-            for t in &anim.translations {
-                if let Some(k) = t.keyframes.last() {
-                    max_t = max_t.max(k.time);
-                }
-            }
-            for t in &anim.rotations {
-                if let Some(k) = t.keyframes.last() {
-                    max_t = max_t.max(k.time);
-                }
-            }
-            for t in &anim.scales {
-                if let Some(k) = t.keyframes.last() {
-                    max_t = max_t.max(k.time);
-                }
-            }
-            anim.duration = max_t;
-        }
-
+        // Not: glTF'te Node hiyerarşisi doküman (scene) seviyesindedir. 
+        // Tüm skin'ler bu global node ağacını (ve dolayısıyla parent-child ilişkisini) referans alır.
         let mut node_parents = std::collections::HashMap::new();
         for node in document.nodes() {
             for child in node.children() {
@@ -443,18 +449,22 @@ impl super::AssetManager {
         let (translation, rotation, scale) = node.transform().decomposed();
 
         let mut primitives = Vec::new();
-        if let Some(_mesh) = node.mesh() {
-            for (prim_i, primitive) in node.mesh().unwrap().primitives().enumerate() {
+        if let Some(mesh) = node.mesh() {
+            for (prim_i, primitive) in mesh.primitives().enumerate() {
                 let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
 
                 let positions = reader
                     .read_positions()
                     .map(|v| v.collect::<Vec<_>>())
                     .unwrap_or_default();
+                let mut has_real_normals = true;
                 let normals = reader
                     .read_normals()
                     .map(|v| v.collect::<Vec<_>>())
-                    .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
+                    .unwrap_or_else(|| {
+                        has_real_normals = false;
+                        vec![[0.0, 1.0, 0.0]; positions.len()]
+                    });
                 let tex_coords = reader
                     .read_tex_coords(0)
                     .map(|v| v.into_f32().collect::<Vec<_>>())
@@ -526,7 +536,7 @@ impl super::AssetManager {
 
                 // EĞER GLTF DOSYASINDA NORMALLER YOKSA VEYA BOZUKSA (HEPSİ [0,1,0] İSE)
                 // Kötü gözükmemesi için Flat Normalleri kendimiz hesaplayalım.
-                let has_real_normals = reader.read_normals().is_some();
+                // Kötü gözükmemesi için Flat Normalleri kendimiz hesaplayalım.
                 if !has_real_normals {
                     for chunk in all_vertices.chunks_exact_mut(3) {
                         let p0 = chunk[0].position;
@@ -559,14 +569,12 @@ impl super::AssetManager {
                 let mesh_source = format!("gltf_mesh_{}_{:?}_p{}", file_name, node.name(), prim_i);
                 let mesh_comp = Mesh::new(
                     Arc::new(vbuf),
-                    all_vertices.len() as u32,
+                    &all_vertices,
                     Vec3::ZERO,
                     mesh_source.clone(),
-                    aabb,
                 );
 
                 self.mesh_cache.insert(mesh_source, mesh_comp.clone());
-
 
                 let mat_opt = primitive
                     .material()
@@ -608,4 +616,3 @@ pub struct GltfSceneAsset {
     pub animations: Vec<AnimationClip>,
     pub skeletons: Vec<SkeletonHierarchy>,
 }
-

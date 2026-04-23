@@ -80,7 +80,6 @@ fn test_pachinko_broadphase_benchmark() {
         gizmo_physics::physics_apply_forces_system(&world, dt);
         gizmo_physics::physics_movement_system(&world, dt);
 
-
         let step_dur = step_start.elapsed().as_secs_f64() * 1000.0; // Milisaniye (ms)
         total_time += step_dur;
         if step_dur > max_time {

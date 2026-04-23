@@ -81,7 +81,8 @@ pub fn directional_cascade_view_projs(
 
     for i in 0..CASCADE_COUNT {
         let zf = splits[i];
-        let corners = frustum_slice_corners(cam_pos, cam_forward, right, up, aspect, fov_y, prev_z, zf);
+        let corners =
+            frustum_slice_corners(cam_pos, cam_forward, right, up, aspect, fov_y, prev_z, zf);
         let mid_dist = (prev_z + zf) * 0.5;
         let slice_center = cam_pos + cam_forward * mid_dist;
         let light_pos = slice_center - light_dir * 250.0;

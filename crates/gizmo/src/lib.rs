@@ -13,7 +13,7 @@ pub use gizmo_renderer as renderer;
 pub use gizmo_window as window;
 
 // Sık kullanılan matematik tiplerini lib.rs'ten doğrudan aç:
-pub use math::{Vec2, Vec3, Vec4, Mat4, Quat};
+pub use math::{Mat4, Quat, Vec2, Vec3, Vec4};
 
 // === Opsiyonel Modüller ===
 #[cfg(feature = "audio")]

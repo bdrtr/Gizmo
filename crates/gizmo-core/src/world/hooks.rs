@@ -1,5 +1,5 @@
-use crate::entity::Entity;
 use super::World;
+use crate::entity::Entity;
 
 pub type DespawnHook = fn(&mut World, Entity);
 
@@ -13,5 +13,3 @@ pub struct ComponentHooks {
     pub on_remove: Vec<RemoveHook>,
     pub on_set: Vec<SetHook>,
 }
-
-
