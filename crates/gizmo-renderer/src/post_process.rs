@@ -32,7 +32,7 @@ pub fn build_post_process_resources(
 ) -> PostProcessState {
     let post_shader = {
         let source = std::fs::read_to_string("demo/assets/shaders/post_process.wgsl")
-            .unwrap_or_else(|_| include_str!("post_process.wgsl").to_string());
+            .unwrap_or_else(|_| include_str!("shaders/post_process.wgsl").to_string());
         device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Post-Processing Shader"),
             source: wgpu::ShaderSource::Wgsl(source.into()),

@@ -55,6 +55,17 @@ fn rotate_vector(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {
          + 2.0 * s * cross(u, v);
 }
 
+fn quat_conjugate(q: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(-q.xyz, q.w);
+}
+
+/// World-space inverse inertia uygulaması: I_world_inv * v = R * (I_local_inv * (R^-1 * v))
+fn apply_inv_inertia(v: vec3<f32>, inv_inertia_local: vec3<f32>, rotation: vec4<f32>) -> vec3<f32> {
+    let local_v = rotate_vector(v, quat_conjugate(rotation));
+    let scaled = local_v * inv_inertia_local;
+    return rotate_vector(scaled, rotation);
+}
+
 fn sat_overlap(
     ax: vec3<f32>,
     posA: vec3<f32>, axesA: array<vec3<f32>, 3>, extA: vec3<f32>,
@@ -184,13 +195,14 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
         rotate_vector(vec3<f32>(0.0, 0.0, 1.0), me.rotation)
     );
     
-    // inertia approx (1/6 * m * size^2)
+    // inertia approx (1/6 * m * size^2) — local-space diagonal
     let sA = me.half_extents * 2.0;
     let invInertiaA = vec3<f32>(
         12.0 / (me.mass * (sA.y * sA.y + sA.z * sA.z)),
         12.0 / (me.mass * (sA.x * sA.x + sA.z * sA.z)),
         12.0 / (me.mass * (sA.x * sA.x + sA.y * sA.y))
     );
+    let rotA = me.rotation;
 
     let v_dt = me.velocity * params.dt;
     let rad_x = max(1i, i32(ceil((abs(v_dt.x) + me.half_extents.x) / CELL_SIZE)));
@@ -307,6 +319,7 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         12.0 / (other.mass * (sB.x * sB.x + sB.z * sB.z)),
                         12.0 / (other.mass * (sB.x * sB.x + sB.y * sB.y))
                     );
+                    let rotB = other.rotation;
 
                     let v1 = me.velocity + cross(me.angular_velocity, r1);
                     let v2 = other.velocity + cross(other.angular_velocity, r2);
@@ -322,8 +335,8 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
                             let crossA = cross(r1, n_b2a);
                             let crossB = cross(r2, n_b2a);
                             
-                            let ptA = crossA * invInertiaA;
-                            let ptB = crossB * invInertiaB;
+                            let ptA = apply_inv_inertia(crossA, invInertiaA, rotA);
+                            let ptB = apply_inv_inertia(crossB, invInertiaB, rotB);
                             
                             let denom = invMassA + invMassB + dot(crossA, ptA) + dot(crossB, ptB);
                             
@@ -337,8 +350,8 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
                                 tangent = tangent / tang_len;
                                 let crossA_t = cross(r1, tangent);
                                 let crossB_t = cross(r2, tangent);
-                                let ptA_t = crossA_t * invInertiaA;
-                                let ptB_t = crossB_t * invInertiaB;
+                                let ptA_t = apply_inv_inertia(crossA_t, invInertiaA, rotA);
+                                let ptB_t = apply_inv_inertia(crossB_t, invInertiaB, rotB);
                                 let denom_t = invMassA + invMassB + dot(crossA_t, ptA_t) + dot(crossB_t, ptB_t);
                                 let jt = -dot(rel_vel, tangent) / denom_t;
                                 
@@ -350,10 +363,10 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
                                 }
                                 
                                 acc_vel_correction += (impulse + friction_impulse) * invMassA;
-                                acc_ang_vel_correction += invInertiaA * cross(r1, impulse + friction_impulse);
+                                acc_ang_vel_correction += apply_inv_inertia(cross(r1, impulse + friction_impulse), invInertiaA, rotA);
                             } else {
                                 acc_vel_correction += impulse * invMassA;
-                                acc_ang_vel_correction += invInertiaA * cross(r1, impulse);
+                                acc_ang_vel_correction += apply_inv_inertia(cross(r1, impulse), invInertiaA, rotA);
                             }
                         }
                     }
@@ -362,12 +375,12 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }}}
     
-    // Apply corrections using Jacobi averaging to avoid race condition explosion
+    // Apply corrections: position Jacobi-averaged, velocity/angular accumulated directly
     if (num_contacts > 0.0) {
-        let relaxation = 0.8; // Jacobi relaxation parameter
+        let relaxation = 0.8; // Jacobi relaxation parameter (position only)
         me.position += (acc_pos_correction / num_contacts) * relaxation;
-        me.velocity += (acc_vel_correction / num_contacts) * relaxation;
-        me.angular_velocity += (acc_ang_vel_correction / num_contacts) * relaxation;
+        me.velocity += acc_vel_correction;
+        me.angular_velocity += acc_ang_vel_correction;
     }
     boxes[idx] = me;
 }
@@ -415,6 +428,7 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
         12.0 / (box_struct.mass * (sA.x * sA.x + sA.y * sA.y))
     );
     let invMass = 1.0 / box_struct.mass;
+    let rot = box_struct.rotation;
 
     // Check against all static colliders
     for (var i = 0u; i < params.num_colliders; i++) {
@@ -505,7 +519,7 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 
                 if (vel_along_normal < 0.0) {
                     let crossA = cross(r1, n);
-                    let ptA = crossA * invInertia;
+                    let ptA = apply_inv_inertia(crossA, invInertia, rot);
                     let denom = invMass + dot(crossA, ptA);
                     
                     let j = -(1.0 + restitution) * vel_along_normal / denom;
@@ -516,7 +530,7 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     if (tang_len > 0.001) {
                         tangent = tangent / tang_len;
                         let crossA_t = cross(r1, tangent);
-                        let ptA_t = crossA_t * invInertia;
+                        let ptA_t = apply_inv_inertia(crossA_t, invInertia, rot);
                         let denom_t = invMass + dot(crossA_t, ptA_t);
                         let jt = -dot(v1, tangent) / denom_t;
                         
@@ -528,10 +542,10 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         }
                         
                         box_struct.velocity += (impulse + friction_impulse) * invMass;
-                        box_struct.angular_velocity += invInertia * cross(r1, impulse + friction_impulse);
+                        box_struct.angular_velocity += apply_inv_inertia(cross(r1, impulse + friction_impulse), invInertia, rot);
                     } else {
                         box_struct.velocity += impulse * invMass;
-                        box_struct.angular_velocity += invInertia * cross(r1, impulse);
+                        box_struct.angular_velocity += apply_inv_inertia(cross(r1, impulse), invInertia, rot);
                     }
                 }
             }
@@ -555,7 +569,7 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 
                 if (vel_along_normal < 0.0) {
                     let crossA = cross(r1, normal);
-                    let ptA = crossA * invInertia;
+                    let ptA = apply_inv_inertia(crossA, invInertia, rot);
                     let denom = invMass + dot(crossA, ptA);
                     
                     let j = -(1.0 + restitution) * vel_along_normal / denom;
@@ -566,7 +580,7 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     if (tang_len > 0.001) {
                         tangent = tangent / tang_len;
                         let crossA_t = cross(r1, tangent);
-                        let ptA_t = crossA_t * invInertia;
+                        let ptA_t = apply_inv_inertia(crossA_t, invInertia, rot);
                         let denom_t = invMass + dot(crossA_t, ptA_t);
                         let jt = -dot(v1, tangent) / denom_t;
                         
@@ -578,10 +592,10 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         }
                         
                         box_struct.velocity += (impulse + friction_impulse) * invMass;
-                        box_struct.angular_velocity += invInertia * cross(r1, impulse + friction_impulse);
+                        box_struct.angular_velocity += apply_inv_inertia(cross(r1, impulse + friction_impulse), invInertia, rot);
                     } else {
                         box_struct.velocity += impulse * invMass;
-                        box_struct.angular_velocity += invInertia * cross(r1, impulse);
+                        box_struct.angular_velocity += apply_inv_inertia(cross(r1, impulse), invInertia, rot);
                     }
                 }
             }
@@ -604,11 +618,11 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
         box_struct.position.z = -bounds;
         box_struct.velocity.z *= -0.8;
     }
-    // Uykuya Geçiş Kontrolü
-    let SLEEP_THRESHOLD: f32 = 0.05;
+    // Uykuya Geçiş Kontrolü — düşük eşik + uzun bekleme süresi ile oscillation önlenir
+    let SLEEP_THRESHOLD: f32 = 0.01;
     if (length(box_struct.velocity) + length(box_struct.angular_velocity) < SLEEP_THRESHOLD) {
         box_struct.sleep_counter++;
-        if (box_struct.sleep_counter > 15u) {
+        if (box_struct.sleep_counter > 90u) { // ~1.5 saniye @ 60fps
             box_struct.state = 1u;
             box_struct.velocity = vec3<f32>(0.0);
             box_struct.angular_velocity = vec3<f32>(0.0);

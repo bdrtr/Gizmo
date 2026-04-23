@@ -101,7 +101,9 @@ fn build_global_uniforms(device: &wgpu::Device) -> wgpu::Buffer {
         camera_forward: [0.0, 0.0, -1.0, 0.0],
         cascade_params: [0.1, 1.0 / SHADOW_MAP_RES as f32, 0.0, 0.0],
         num_lights: 0,
+        _pre_align_pad: [0; 3],
         _align_pad: [0; 3],
+        _post_align_pad: 0,
         _pad_scene: [0; 3],
         _end_pad: 0,
     };
@@ -259,11 +261,11 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
         push_constant_ranges: &[],
     });
 
-    let shader = load_shader(device, "demo/assets/shaders/shader.wgsl", include_str!("shader.wgsl"), "Shader");
-    let unlit_shader = load_shader(device, "demo/assets/shaders/unlit.wgsl", include_str!("unlit.wgsl"), "Unlit Shader");
-    let water_shader = load_shader(device, "demo/assets/shaders/water.wgsl", include_str!("water.wgsl"), "Water Shader");
-    let sky_shader = load_shader(device, "demo/assets/shaders/sky.wgsl", include_str!("sky.wgsl"), "Sky Shader");
-    let grid_shader = load_shader(device, "demo/assets/shaders/grid.wgsl", include_str!("grid.wgsl"), "Grid Shader");
+    let shader = load_shader(device, "demo/assets/shaders/shader.wgsl", include_str!("shaders/shader.wgsl"), "Shader");
+    let unlit_shader = load_shader(device, "demo/assets/shaders/unlit.wgsl", include_str!("shaders/unlit.wgsl"), "Unlit Shader");
+    let water_shader = load_shader(device, "demo/assets/shaders/water.wgsl", include_str!("shaders/water.wgsl"), "Water Shader");
+    let sky_shader = load_shader(device, "demo/assets/shaders/sky.wgsl", include_str!("shaders/sky.wgsl"), "Sky Shader");
+    let grid_shader = load_shader(device, "demo/assets/shaders/grid.wgsl", include_str!("shaders/grid.wgsl"), "Grid Shader");
 
     let create_main = |sm: &wgpu::ShaderModule, label: &str, depth_write: bool, cull: Option<wgpu::Face>, blend: Option<wgpu::BlendState>| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -303,7 +305,7 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
 }
 
 fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs) -> wgpu::RenderPipeline {
-    let shadow_shader = load_shader(device, "demo/assets/shaders/shadow.wgsl", include_str!("shadow.wgsl"), "Shadow Shader");
+    let shadow_shader = load_shader(device, "demo/assets/shaders/shadow.wgsl", include_str!("shaders/shadow.wgsl"), "Shadow Shader");
     let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Shadow Pipeline Layout"),
         bind_group_layouts: &[
@@ -436,7 +438,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
 
 pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     let device = &renderer.device;
-    let post_shader = load_shader(device, "demo/assets/shaders/post_process.wgsl", include_str!("post_process.wgsl"), "Post-Processing Shader");
+    let post_shader = load_shader(device, "demo/assets/shaders/post_process.wgsl", include_str!("shaders/post_process.wgsl"), "Post-Processing Shader");
     
     // Geçici LayoutRefs tutucusu, render pipeline'ı için mevcut layoutları referans alır
     let layouts = LayoutRefs {

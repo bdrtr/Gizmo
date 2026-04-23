@@ -97,9 +97,14 @@ pub struct SceneUniforms {
     /// x = camera z_near, y = 1 / shadow map resolution (PCF texel size), zw unused.
     pub cascade_params: [f32; 4],
     pub num_lights: u32,
-    pub _align_pad: [u32; 3], // Matches WGSL implicit padding before vec3
-    pub _pad_scene: [u32; 3], // Matches the vec3<u32> content
-    pub _end_pad: u32,        // Matches WGSL implicit padding at the end of the struct
+    // WGSL: _align_pad: vec3<u32> has alignment 16.
+    // After num_lights at offset 1060, WGSL inserts 12 bytes implicit padding → offset 1072
+    pub _pre_align_pad: [u32; 3],  // offset 1060-1071 (WGSL implicit padding before vec3)
+    pub _align_pad: [u32; 3],      // offset 1072-1083 (WGSL _align_pad: vec3<u32>)
+    pub _post_align_pad: u32,      // offset 1084-1087 (WGSL implicit padding, next vec3 align 16)
+    pub _pad_scene: [u32; 3],      // offset 1088-1099 (WGSL _pad_scene: vec3<u32>)
+    pub _end_pad: u32,             // offset 1100-1103 (WGSL _end_pad: u32)
+    // Total: 1104 bytes
 }
 
 #[repr(C)]

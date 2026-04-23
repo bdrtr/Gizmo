@@ -78,8 +78,10 @@ pub fn default_render_pass(
         camera_forward: [cam_forward.x, cam_forward.y, cam_forward.z, 0.0],
         cascade_params: [0.1, 1.0 / crate::renderer::SHADOW_MAP_RES as f32, 0.0, 0.0],
         num_lights: 0,
-        // _align_pad ve _pad_scene: wgpu Uniform alignment kuralları gereği son paddingler
+        // WGSL padding: vec3<u32> alignment 16 gerektirir
+        _pre_align_pad: [0; 3],
         _align_pad: [0; 3],
+        _post_align_pad: 0,
         _pad_scene: [0; 3],
         _end_pad: 0,
     };
@@ -144,7 +146,7 @@ pub fn default_render_pass(
     
     // Gpu Fluid Processing
     if let Some(fluid) = &renderer.gpu_fluid {
-        fluid.compute_pass(encoder);
+        fluid.compute_pass(encoder, &renderer.queue);
     }
 
     {
@@ -262,27 +264,38 @@ pub fn physics_debug_system(world: &crate::core::World) {
 
 /// ECS'deki yeni yaratılmış Fiziksel Objeleri (RigidBody + Transform + Collider)
 /// GPU Physics çekirdeğinin otoyoluna (GpuPhysicsSystem::spheres_buffer) kaydeder.
+/// Statik collider'lar için ayrı sayaç. İlk 3 slot başlangıç collider'larına ayrılmıştır.
+static NEXT_STATIC_COLLIDER_SLOT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(3);
+
 pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Renderer) {
+    use crate::physics::Velocity;
+    
     if let Some(physics) = &renderer.gpu_physics {
         let mut unlinked_entities = Vec::new();
         if let Some(q) = world.query::<(&RigidBody, &Transform, &Collider)>() {
             let links = world.borrow::<GpuPhysicsLink>();
+            let velocities = world.borrow::<Velocity>();
             for (e, (rb, trans, col)) in q.iter() {
                 if links.get(e).is_none() {
-                    unlinked_entities.push((e, *rb, *trans, col.clone()));
+                    let vel = velocities.get(e).map(|v| *v).unwrap_or_default();
+                    unlinked_entities.push((e, *rb, *trans, col.clone(), vel));
                 }
             }
         }
         
-        let mut next_id = world.query::<&GpuPhysicsLink>().map(|q| q.iter().count() as u32).unwrap_or(0);
+        let mut next_dynamic_id = world.query::<&GpuPhysicsLink>().map(|q| q.iter().count() as u32).unwrap_or(0);
         
-        for (e, rb, trans, col) in unlinked_entities {
-            let id = next_id;
-            next_id += 1;
-            
+        for (e, rb, trans, col, vel) in unlinked_entities {
             if rb.mass == 0.0 || rb.is_sleeping {
-                // Statik engel
-                let gpu_col = gizmo_renderer::physics_renderer::GpuCollider {
+                // Statik engel — ayrı slot sayacı kullan
+                let slot = NEXT_STATIC_COLLIDER_SLOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if slot >= 100 {
+                    eprintln!("[GpuPhysics] Statik collider slot limiti (100) aşıldı, collider atlanıyor.");
+                    NEXT_STATIC_COLLIDER_SLOT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    continue;
+                }
+                
+                let gpu_col = gizmo_renderer::gpu_physics::GpuCollider {
                     shape_type: match col.shape {
                         ColliderShape::Plane { .. } => 1,
                         _ => 0, // Varsayılan Box (AABB)
@@ -305,26 +318,26 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
                         _ => [0.0; 4],
                     },
                 };
-                // ID eşleştirmesi farklı olabilir ama basitlik adına collider sonuna ekle:
-                // Şu an id uyuşmazlığı olabilir, demo için statik slotlara (0-50 arası) atıldığını varsayıyoruz.
-                // Gerçek mimaride GpuColliderLink ayrı tutulmalı.
-                physics.update_collider(&renderer.queue, id % 50, &gpu_col);
+                physics.update_collider(&renderer.queue, slot, &gpu_col);
             } else {
                 // Dinamik Kutu (AABB)
+                let id = next_dynamic_id;
+                next_dynamic_id += 1;
+                
                 let extents = match &col.shape {
                     ColliderShape::Aabb(s) => [s.half_extents.x, s.half_extents.y, s.half_extents.z],
                     _ => [0.5, 0.5, 0.5], 
                 };
                 
-                let gpu_box = gizmo_renderer::physics_renderer::GpuBox {
+                let gpu_box = gizmo_renderer::gpu_physics::GpuBox {
                     position: [trans.position.x, trans.position.y, trans.position.z],
                     mass: rb.mass,
-                    velocity: [0.0, 0.0, 0.0],
+                    velocity: [vel.linear.x, vel.linear.y, vel.linear.z],
                     state: 0,
                     rotation: [trans.rotation.x, trans.rotation.y, trans.rotation.z, trans.rotation.w],
-                    angular_velocity: [0.0, 0.0, 0.0],
+                    angular_velocity: [vel.angular.x, vel.angular.y, vel.angular.z],
                     sleep_counter: 0,
-                    color: [0.3, 0.8, 1.0, 1.0], // Default color for ECS spawned
+                    color: [0.3, 0.8, 1.0, 1.0],
                     half_extents: extents,
                     _pad: 0,
                 };

@@ -93,7 +93,7 @@ impl GizmoRendererSystem {
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Debug Lines Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("debug_lines.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/debug_lines.wgsl").into()),
         });
 
         let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

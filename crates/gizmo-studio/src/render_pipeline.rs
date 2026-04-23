@@ -238,7 +238,9 @@ pub fn execute_render_pipeline(
         camera_forward: camera_forward_u,
         cascade_params,
         num_lights,
+        _pre_align_pad: [0; 3],
         _align_pad: [0; 3],
+        _post_align_pad: 0,
         _pad_scene: [0; 3],
         _end_pad: 0,
     };
@@ -483,7 +485,7 @@ pub fn execute_render_pipeline(
                             let max_life = (emitter.lifespan + rand_life).max(0.1);
 
                             all_new_particles.push(
-                                gizmo::renderer::particle_renderer::GpuParticle {
+                                gizmo::renderer::gpu_particles::GpuParticle {
                                     position: [base_pos.x, base_pos.y, base_pos.z],
                                     life: 0.0,
                                     velocity: [vel.x, vel.y, vel.z],
@@ -691,7 +693,7 @@ pub fn execute_render_pipeline(
 
         // --- 4. DRAW GPU PARTICLES (Billboard & Şeffaf) ---
         if let Some(gpu_particles) = &renderer.gpu_particles {
-            render_pass.set_pipeline(&gpu_particles.render_pipeline);
+            render_pass.set_pipeline(&gpu_particles.pipelines.render_pipeline);
             render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
             render_pass.set_vertex_buffer(0, gpu_particles.quad_vertex_buffer.slice(..));
             render_pass.set_vertex_buffer(1, gpu_particles.particles_buffer.slice(..));

@@ -37,7 +37,7 @@ fn vs_main(
 ) -> VertexOutput {
     var out: VertexOutput;
     let particle = fluid_particles[instance_index];
-    let world_position = particle.position + model.position * 1.5; // Bubble size
+    let world_position = particle.position + model.position * 0.35; // Gerçek fizik boyutuna uygun görsel
     out.clip_position = scene.view_proj * vec4<f32>(world_position, 1.0);
     
     // Advanced Water/Foam logic
