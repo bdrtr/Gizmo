@@ -22,12 +22,12 @@ pub struct Renderer<'a> {
     pub post: PostProcessState,
 
     // === PARTİKÜL SİSTEMİ ===
-    pub gpu_particles: Option<crate::particle_renderer::GpuParticleSystem>,
+    pub gpu_particles: Option<crate::gpu_particles::GpuParticleSystem>,
 
-    pub gpu_physics: Option<crate::physics_renderer::GpuPhysicsSystem>,
+    pub gpu_physics: Option<crate::gpu_physics::GpuPhysicsSystem>,
 
     // === GPU SIVI SİSTEMİ ===
-    pub gpu_fluid: Option<crate::gpu_fluid_system::GpuFluidSystem>,
+    pub gpu_fluid: Option<crate::gpu_fluid::GpuFluidSystem>,
 
     // === GIZMO HATA AYIKLAMA (Debug Lines) ===
     pub debug_renderer: Option<crate::debug_renderer::GizmoRendererSystem>,
@@ -124,7 +124,7 @@ impl<'a> Renderer<'a> {
 
         // GPU particle buffer boyutu — ihtiyaca göre ayarlanabilir
         let max_particles: u32 = 100_000;
-        let gpu_particles = Some(crate::particle_renderer::GpuParticleSystem::new(
+        let gpu_particles = Some(crate::gpu_particles::GpuParticleSystem::new(
             &device,
             max_particles,
             &scene.global_bind_group_layout,
@@ -133,7 +133,7 @@ impl<'a> Renderer<'a> {
 
         // GPU Physics buffer boyutu -- 1 Milyon tam OBB fizik iterasyonu GPU'yu kitler, 50k ile 60+ FPS alalım!
         let max_physics_spheres: u32 = 50_000;
-        let gpu_physics = Some(crate::physics_renderer::GpuPhysicsSystem::new(
+        let gpu_physics = Some(crate::gpu_physics::GpuPhysicsSystem::new(
             &device,
             max_physics_spheres,
             &scene.global_bind_group_layout,
@@ -141,10 +141,10 @@ impl<'a> Renderer<'a> {
             wgpu::TextureFormat::Depth32Float,
         ));
 
-        let gpu_fluid = Some(crate::gpu_fluid_system::GpuFluidSystem::new(
+        let gpu_fluid = Some(crate::gpu_fluid::GpuFluidSystem::new(
             &device,
             &queue,
-            15_000, // 15K SPH particles for performance demo
+            100_000, // 100K parçacık!
             &scene.global_bind_group_layout,
             wgpu::TextureFormat::Rgba16Float,
         ));
@@ -394,7 +394,7 @@ impl<'a> Renderer<'a> {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Mipmap Blit Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("mipmap.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mipmap.wgsl").into()),
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
