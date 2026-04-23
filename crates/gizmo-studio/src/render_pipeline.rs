@@ -92,7 +92,9 @@ pub fn execute_render_pipeline(
     let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
     let _is_hidden_guard = world.borrow::<gizmo::core::component::IsHidden>();
 
-    let cameras = world.borrow::<Camera>(); let transforms = world.borrow::<Transform>(); {
+    let cameras = world.borrow::<Camera>();
+    let transforms = world.borrow::<Transform>();
+    {
         if let (Some(cam), Some(trans)) = (
             cameras.get(state.editor_camera),
             transforms.get(state.editor_camera),
@@ -111,8 +113,6 @@ pub fn execute_render_pipeline(
 
     // Event: Spawning moved to spawner_update_system.
     // Event: Texture Loading moved to main render loop pass before execute_render_pipeline.
-
-
 
     // Işık kaynaklarını topla (Maksimum 10)
     let mut lights_data = [gizmo::renderer::renderer::LightData {
@@ -165,7 +165,7 @@ pub fn execute_render_pipeline(
         world.query::<(&gizmo::renderer::components::DirectionalLight, &Transform)>()
     {
         for (_e, (dl, t)) in q.iter_mut() {
-            if dl.is_sun {
+            if dl.role == gizmo::renderer::components::LightRole::Sun {
                 // Transform'un rotasyonundan ileri vektörü hesapla (Güneşin baktığı yön)
                 // Standartlara göre ışık '-Z' ye bakar
                 let forward = t.rotation.mul_vec3(Vec3::new(0.0, 0.0, -1.0)).normalize();
@@ -263,7 +263,7 @@ pub fn execute_render_pipeline(
             transparent_batches,
             all_instances,
             flat_batches,
-            vec_pool
+            vec_pool,
         } = &mut *cache;
 
         for (_, mut b) in opaque_batches.drain() {
@@ -282,427 +282,468 @@ pub fn execute_render_pipeline(
         flat_batches.clear();
 
         let renderers = world.borrow::<gizmo::renderer::components::MeshRenderer>();
-    let skeletons = world.borrow::<gizmo::renderer::components::Skeleton>();
-    let lod_groups = world.borrow::<gizmo::renderer::components::LodGroup>();
+        let skeletons = world.borrow::<gizmo::renderer::components::Skeleton>();
+        let lod_groups = world.borrow::<gizmo::renderer::components::LodGroup>();
 
-    if let Some(mut q) = world.query::<(&Mesh, &Transform, &Material)>() {
-        for (e, (mesh, trans, mat)) in q.iter_mut() {
-            // Sadece MeshRenderer tagli olanları çiz:
-            // Sadece MeshRenderer tagli olanları çiz:
-            let r = &renderers; if true {
-                if r.get(e).is_none() {
-                    continue;
-                }
-            } else {
-                continue;
-            }
-
-            // Gizli olarak işaretlenmiş objeleri atla!
-            // Gizli olarak işaretlenmiş objeleri atla!
-            let hidden = world.borrow::<gizmo::core::component::IsHidden>(); {
-                if hidden.contains(e) {
-                    continue;
-                }
-            }
-
-            // --- GLOBAL TRANSFORM HESAPLAMA ---
-            // transform_hierarchy_system() daha önce tüm hiyerarşiyi t.global_matrix'te çözdüğü için
-            // doğrudan global_matrix'i kullanmamız yeterlidir. Çift çarpım yapmıyoruz!
-            let global_model = trans.global_matrix;
-
-            let center_mat = Mat4::from_translation(mesh.center_offset);
-            let model = global_model * center_mat;
-
-            // Frustum Culling (AABB vs view-projection frustum)
-            if !gizmo::renderer::visible_in_frustum(&frustum, &model, mesh.bounds) {
-                continue;
-            }
-
-            // --- LOD (Level of Detail) SEÇİMİ ---
-            // Eğer entity'de LodGroup varsa, kameraya mesafeye göre düşük/yüksek detay mesh seç
-            let lods = &lod_groups;
-            let active_mesh = if true {
-                if let Some(lod) = lods.get(e) {
-                    let world_pos = Vec3::new(model.w_axis.x, model.w_axis.y, model.w_axis.z);
-                    let dist = cam_pos.distance(world_pos);
-                    lod.select_mesh(dist).unwrap_or(mesh)
+        if let Some(mut q) = world.query::<(&Mesh, &Transform, &Material)>() {
+            for (e, (mesh, trans, mat)) in q.iter_mut() {
+                // Sadece MeshRenderer tagli olanları çiz:
+                // Sadece MeshRenderer tagli olanları çiz:
+                let r = &renderers;
+                if true {
+                    if r.get(e).is_none() {
+                        continue;
+                    }
                 } else {
-                    mesh
+                    continue;
                 }
-            } else {
-                mesh
-            };
 
-            let instance_data = InstanceRaw {
-                model: model.to_cols_array_2d(),
-                albedo_color: [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
-                roughness: mat.roughness,
-                metallic: mat.metallic,
-                unlit: mat.unlit,
-                _padding: 0.0,
-            };
-
-            // --- SKELETON (KEMİK) ARAMASI ---
-            // Skeleton bind group, skinned mesh'ler spawn edilirken doğrudan entity'ye önbelleklenmelidir.
-            // Bu nedenle her frame parent zincirini tırmanıp Skeleton aramak yerine doğrudan kendi üzerindekini kullanıyoruz.
-            let mut skel_bg = renderer.scene.dummy_skeleton_bind_group.clone();
-            let skels = &skeletons; if true {
-                if let Some(s) = skels.get(e) {
-                    skel_bg = s.bind_group.clone();
-                }
-            }
-
-            let vbuf_ptr = std::sync::Arc::as_ptr(&active_mesh.vbuf);
-            let bg_ptr = std::sync::Arc::as_ptr(&mat.bind_group);
-            let skel_ptr = std::sync::Arc::as_ptr(&skel_bg);
-
-            let batches = if mat.is_transparent {
-                &mut *transparent_batches
-            } else if mat.is_double_sided {
-                &mut *opaque_double_sided_batches
-            } else {
-                &mut *opaque_batches
-            };
-
-            let batch = batches
-                .entry((vbuf_ptr, bg_ptr, skel_ptr))
-                .or_insert_with(|| BatchData {
-                    vbuf: active_mesh.vbuf.clone(),
-                    vertex_count: active_mesh.vertex_count,
-                    bind_group: mat.bind_group.clone(),
-                    skeleton_bg: skel_bg,
-                    instances: vec_pool.pop().unwrap_or_else(|| Vec::with_capacity(32)),
-                    is_skybox: mat.unlit == 2.0,
-                    is_grid: mat.material_type == gizmo::renderer::components::MaterialType::Grid,
-                });
-
-            batch.instances.push(instance_data);
-        }
-    }
-
-    let process_batches = |batches: &mut std::collections::HashMap<BatchKey, BatchData>,
-                               is_transparent: bool,
-                               is_double_sided: bool,
-                               all_inst: &mut Vec<gizmo::renderer::InstanceRaw>,
-                               flat_b: &mut Vec<FlatBatchData>,
-                               vec_pool: &mut Vec<Vec<gizmo::renderer::InstanceRaw>>| {
-        for (_, mut batch) in batches.drain() {
-            // Şeffaf objelerin arka plandan öne doğru sıralanması (Z-Sorting)
-            // Instance'ın model matrisinden world pozisyonunu çekip kameraya uzaklığına göre sıralıyoruz
-            if is_transparent {
-                batch.instances.sort_by(|a, b| {
-                    let pos_a = Vec3::new(a.model[3][0], a.model[3][1], a.model[3][2]);
-                    let pos_b = Vec3::new(b.model[3][0], b.model[3][1], b.model[3][2]);
-                    let dist_a = cam_pos.distance_squared(pos_a);
-                    let dist_b = cam_pos.distance_squared(pos_b);
-                    // Uzak olanlar ÖNCE çizilmeli (Azalan sıralama)
-                    dist_b
-                        .partial_cmp(&dist_a)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-            }
-
-            let start = all_inst.len() as u32;
-            let count = batch.instances.len() as u32;
-            all_inst.append(&mut batch.instances);
-            vec_pool.push(batch.instances); // Empty vec with capacity is pushed back!
-
-            flat_b.push(FlatBatchData {
-                vbuf: batch.vbuf,
-                vertex_count: batch.vertex_count,
-                bind_group: batch.bind_group,
-                skeleton_bg: batch.skeleton_bg,
-                start_instance: start,
-                end_instance: start + count,
-                is_transparent,
-                is_double_sided,
-                is_skybox: batch.is_skybox,
-                is_grid: batch.is_grid,
-            });
-        }
-    };
-
-    // Process
-    process_batches(opaque_batches, false, false, all_instances, flat_batches, vec_pool);
-    process_batches(opaque_double_sided_batches, false, true, all_instances, flat_batches, vec_pool);
-    process_batches(transparent_batches, true, false, all_instances, flat_batches, vec_pool);
-
-    if !all_instances.is_empty() {
-        renderer.ensure_instance_capacity(all_instances.len());
-        renderer.queue.write_buffer(
-            &renderer.scene.instance_buffer,
-            0,
-            gizmo::bytemuck::cast_slice(all_instances),
-        );
-    }
-
-    // --- 0. COMPUTE PASSES ---
-    if let Some(gpu_particles) = &renderer.gpu_particles {
-        gpu_particles.update_params(&renderer.queue, delta_time);
-
-        // --- YENİ PARTİCÜL SPAWNLAMA (CPU -> GPU) ---
-        let mut emitters = world.borrow_mut::<gizmo::renderer::components::ParticleEmitter>(); {
-            let transforms = world.borrow::<Transform>(); {
-                use rand::Rng;
-                let mut rng = rand::rng();
-                let mut all_new_particles = Vec::new();
-
-                let emitter_entities: Vec<u32> = emitters.iter().map(|(id, _)| id).collect();
-                for e_id in emitter_entities {
-                    if let Some(emitter) = emitters.get_mut(e_id) {
-                        if !emitter.is_active || emitter.spawn_rate <= 0.0 {
-                            continue;
-                        }
-
-                        let base_pos = if let Some(t) = transforms.get(e_id) {
-                            t.position + t.rotation.mul_vec3(emitter.local_offset)
-                        } else {
-                            emitter.local_offset
-                        };
-
-                        emitter.accumulator += delta_time;
-                        // Güvenlik limiti: Frame drop olursa bir frame'de 100'den fazla spawnlamasın
-                        // Aksi takdirde 1 saniye donup binlerce üreterek FPS'i çökertir
-                        let spawn_interval = 1.0 / emitter.spawn_rate;
-                        let mut spawned_this_frame = 0;
-
-                        while emitter.accumulator >= spawn_interval && spawned_this_frame < 100 {
-                            emitter.accumulator -= spawn_interval;
-                            spawned_this_frame += 1;
-
-                            let rand_v_x =
-                                rng.random_range(-1.0..=1.0) * emitter.velocity_randomness;
-                            let rand_v_y =
-                                rng.random_range(-1.0..=1.0) * emitter.velocity_randomness;
-                            let rand_v_z =
-                                rng.random_range(-1.0..=1.0) * emitter.velocity_randomness;
-
-                            let out_dir = Vec3::new(rand_v_x, rand_v_y, rand_v_z);
-                            let vel = emitter.initial_velocity + out_dir;
-
-                            let rand_life =
-                                rng.random_range(-1.0..=1.0) * emitter.lifespan_randomness;
-                            let max_life = (emitter.lifespan + rand_life).max(0.1);
-
-                            all_new_particles.push(
-                                gizmo::renderer::gpu_particles::GpuParticle {
-                                    position: [base_pos.x, base_pos.y, base_pos.z],
-                                    life: 0.0,
-                                    velocity: [vel.x, vel.y, vel.z],
-                                    max_life,
-                                    color: emitter.color_start.into(),
-                                    size_start: emitter.size_start,
-                                    size_end: emitter.size_end,
-                                    _padding: [0.0; 2],
-                                },
-                            );
-                        }
+                // Gizli olarak işaretlenmiş objeleri atla!
+                // Gizli olarak işaretlenmiş objeleri atla!
+                let hidden = world.borrow::<gizmo::core::component::IsHidden>();
+                {
+                    if hidden.contains(e) {
+                        continue;
                     }
                 }
 
-                gpu_particles.spawn_particles(&renderer.queue, &all_new_particles);
+                // --- GLOBAL TRANSFORM HESAPLAMA ---
+                // transform_hierarchy_system() daha önce tüm hiyerarşiyi t.local_matrix'te çözdüğü için
+                // doğrudan local_matrix'i kullanmamız yeterlidir. Çift çarpım yapmıyoruz!
+                let global_model = trans.local_matrix;
+
+                let center_mat = Mat4::from_translation(mesh.center_offset);
+                let model = global_model * center_mat;
+
+                // Frustum Culling (AABB vs view-projection frustum)
+                if !gizmo::renderer::visible_in_frustum(&frustum, &model, mesh.bounds) {
+                    continue;
+                }
+
+                // --- LOD (Level of Detail) SEÇİMİ ---
+                // Eğer entity'de LodGroup varsa, kameraya mesafeye göre düşük/yüksek detay mesh seç
+                let lods = &lod_groups;
+                let active_mesh = if true {
+                    if let Some(lod) = lods.get(e) {
+                        let world_pos = Vec3::new(model.w_axis.x, model.w_axis.y, model.w_axis.z);
+                        let dist = cam_pos.distance(world_pos);
+                        lod.select_mesh(dist).unwrap_or(mesh)
+                    } else {
+                        mesh
+                    }
+                } else {
+                    mesh
+                };
+
+                let instance_data = InstanceRaw {
+                    model: model.to_cols_array_2d(),
+                    albedo_color: [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
+                    roughness: mat.roughness,
+                    metallic: mat.metallic,
+                    unlit: match mat.material_type {
+                        gizmo::renderer::components::MaterialType::Skybox => 2.0,
+                        gizmo::renderer::components::MaterialType::Unlit => 1.0,
+                        _ => 0.0,
+                    },
+                    _padding: 0.0,
+                };
+
+                // --- SKELETON (KEMİK) ARAMASI ---
+                // Skeleton bind group, skinned mesh'ler spawn edilirken doğrudan entity'ye önbelleklenmelidir.
+                // Bu nedenle her frame parent zincirini tırmanıp Skeleton aramak yerine doğrudan kendi üzerindekini kullanıyoruz.
+                let mut skel_bg = renderer.scene.dummy_skeleton_bind_group.clone();
+                let skels = &skeletons;
+                if true {
+                    if let Some(s) = skels.get(e) {
+                        skel_bg = s.bind_group.clone();
+                    }
+                }
+
+                let vbuf_ptr = std::sync::Arc::as_ptr(&active_mesh.vbuf);
+                let bg_ptr = std::sync::Arc::as_ptr(&mat.bind_group);
+                let skel_ptr = std::sync::Arc::as_ptr(&skel_bg);
+
+                let batches = if mat.is_transparent {
+                    &mut *transparent_batches
+                } else if mat.is_double_sided {
+                    &mut *opaque_double_sided_batches
+                } else {
+                    &mut *opaque_batches
+                };
+
+                let batch = batches
+                    .entry((vbuf_ptr, bg_ptr, skel_ptr))
+                    .or_insert_with(|| BatchData {
+                        vbuf: active_mesh.vbuf.clone(),
+                        vertex_count: active_mesh.vertex_count,
+                        bind_group: mat.bind_group.clone(),
+                        skeleton_bg: skel_bg,
+                        instances: vec_pool.pop().unwrap_or_else(|| Vec::with_capacity(32)),
+                        is_skybox: mat.material_type == gizmo::renderer::components::MaterialType::Skybox,
+                        is_grid: mat.material_type
+                            == gizmo::renderer::components::MaterialType::Grid,
+                    });
+
+                batch.instances.push(instance_data);
             }
         }
 
-        gpu_particles.compute_pass(encoder);
-    }
+        let process_batches =
+            |batches: &mut std::collections::HashMap<BatchKey, BatchData>,
+             is_transparent: bool,
+             is_double_sided: bool,
+             all_inst: &mut Vec<gizmo::renderer::InstanceRaw>,
+             flat_b: &mut Vec<FlatBatchData>,
+             vec_pool: &mut Vec<Vec<gizmo::renderer::InstanceRaw>>| {
+                for (_, mut batch) in batches.drain() {
+                    // Şeffaf objelerin arka plandan öne doğru sıralanması (Z-Sorting)
+                    // Instance'ın model matrisinden world pozisyonunu çekip kameraya uzaklığına göre sıralıyoruz
+                    if is_transparent {
+                        batch.instances.sort_by(|a, b| {
+                            let pos_a = Vec3::new(a.model[3][0], a.model[3][1], a.model[3][2]);
+                            let pos_b = Vec3::new(b.model[3][0], b.model[3][1], b.model[3][2]);
+                            let dist_a = cam_pos.distance_squared(pos_a);
+                            let dist_b = cam_pos.distance_squared(pos_b);
+                            // Uzak olanlar ÖNCE çizilmeli (Azalan sıralama)
+                            dist_b
+                                .partial_cmp(&dist_a)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                    }
 
-    if let Some(physics) = &renderer.gpu_physics {
-        physics.compute_pass(encoder);
-    }
+                    let start = all_inst.len() as u32;
+                    let count = batch.instances.len() as u32;
+                    all_inst.append(&mut batch.instances);
+                    vec_pool.push(batch.instances); // Empty vec with capacity is pushed back!
 
-    // --- 1. CSM GÖLGE PASS ---
-    for cascade_i in 0..4usize {
-        renderer.queue.write_buffer(
-            &renderer.scene.shadow_cascade_uniform_buffers[cascade_i],
-            0,
-            gizmo::bytemuck::bytes_of(&gizmo::renderer::ShadowVsUniform {
-                light_view_proj: light_view_proj_cascades[cascade_i],
-            }),
+                    flat_b.push(FlatBatchData {
+                        vbuf: batch.vbuf,
+                        vertex_count: batch.vertex_count,
+                        bind_group: batch.bind_group,
+                        skeleton_bg: batch.skeleton_bg,
+                        start_instance: start,
+                        end_instance: start + count,
+                        is_transparent,
+                        is_double_sided,
+                        is_skybox: batch.is_skybox,
+                        is_grid: batch.is_grid,
+                    });
+                }
+            };
+
+        // Process
+        process_batches(
+            opaque_batches,
+            false,
+            false,
+            all_instances,
+            flat_batches,
+            vec_pool,
+        );
+        process_batches(
+            opaque_double_sided_batches,
+            false,
+            true,
+            all_instances,
+            flat_batches,
+            vec_pool,
+        );
+        process_batches(
+            transparent_batches,
+            true,
+            false,
+            all_instances,
+            flat_batches,
+            vec_pool,
         );
 
-        let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some(&format!("Shadow Pass cascade {cascade_i}")),
-            color_attachments: &[],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &renderer.scene.shadow_cascade_layer_views[cascade_i],
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-
-        shadow_pass.set_pipeline(&renderer.scene.shadow_pipeline);
-
-        for batch in &*flat_batches {
-            if batch.start_instance >= renderer.scene.instance_capacity as u32 {
-                continue;
-            }
-            let safe_end =
-                std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
-
-            shadow_pass.set_bind_group(
+        if !all_instances.is_empty() {
+            renderer.ensure_instance_capacity(all_instances.len());
+            renderer.queue.write_buffer(
+                &renderer.scene.instance_buffer,
                 0,
-                &renderer.scene.shadow_pass_bind_groups[cascade_i],
-                &[],
+                gizmo::bytemuck::cast_slice(all_instances),
             );
-            shadow_pass.set_bind_group(1, &batch.skeleton_bg, &[]);
-            shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
-            shadow_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
-            shadow_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
-        }
-    }
-
-    // --- 2. ANA RENDER PASS (HDR Offscreen Texture'a çiz) ---
-    {
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Main Render Pass (HDR)"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &renderer.post.hdr_texture_view, // Artık ekran yerine HDR texture'a çiziyoruz!
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    // Linear space 0.035 ~= sRGB 0.22 (Blender dark grey) after Gamma Correction / HDR
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.035,
-                        g: 0.035,
-                        b: 0.035,
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &renderer.depth_texture_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-
-        render_pass.set_pipeline(&renderer.scene.render_pipeline);
-        for batch in &*flat_batches {
-            if batch.is_transparent || batch.is_double_sided || batch.is_skybox || batch.is_grid {
-                continue;
-            } // Şeffafları, Skybox'ı, Çift Yönlüleri ve Grid'i atla
-            if batch.start_instance >= renderer.scene.instance_capacity as u32 {
-                continue;
-            }
-            let safe_end = std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
-
-            render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
-            render_pass.set_bind_group(1, &batch.bind_group, &[]);
-            render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-            render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
-            render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
-            render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
         }
 
-        // 2. ÇİFT YÖNLÜ OPAQUE OBJELER (Kumaşlar, cull_mode = None)
-        render_pass.set_pipeline(&renderer.scene.render_double_sided_pipeline);
-        for batch in &*flat_batches {
-            if batch.is_transparent || !batch.is_double_sided || batch.is_skybox || batch.is_grid {
-                continue;
-            }
-            if batch.start_instance >= renderer.scene.instance_capacity as u32 {
-                continue;
-            }
-            let safe_end = std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
-
-            render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
-            render_pass.set_bind_group(1, &batch.bind_group, &[]);
-            render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-            render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
-            render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
-            render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
-        }
-
-        // --- DRAW GPU PHYSICS SPHERES (Katı Obje olarak farz ediliyor) ---
-        if let Some(physics) = &renderer.gpu_physics {
-            physics.render_pass(&mut render_pass, &renderer.scene.global_bind_group);
-        }
-
-        // 3. SKYBOX YAKALAMA VE ÖZEL PIPELINE İLE ÇİZİM
-        render_pass.set_pipeline(&renderer.scene.sky_pipeline);
-        for batch in &*flat_batches {
-            if !batch.is_skybox {
-                continue;
-            } // Sadece Skybox'u çiz
-            if batch.start_instance >= renderer.scene.instance_capacity as u32 {
-                continue;
-            }
-            let safe_end = std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
-
-            render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
-            render_pass.set_bind_group(1, &batch.bind_group, &[]);
-            render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]); // sky.wgsl içinde boş da olsa bağlı kalması gerek
-            render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
-            render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
-            render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
-        }
-
-        // 4. TRANSPARENT OBJELERİ ÇİZ (Depth yazması kapalı, Opaque'nin üstüne blend olur)
-        render_pass.set_pipeline(&renderer.scene.transparent_pipeline);
-        for batch in &*flat_batches {
-            if !batch.is_transparent || batch.is_grid {
-                continue;
-            } // Sadece saydamları çiz
-            if batch.start_instance >= renderer.scene.instance_capacity as u32 {
-                continue;
-            }
-            let safe_end = std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
-
-            render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
-            render_pass.set_bind_group(1, &batch.bind_group, &[]);
-            render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-            render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
-            render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
-            render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
-        }
-
-        // 5. GRID ÇİZİMİ
-        render_pass.set_pipeline(&renderer.scene.grid_pipeline);
-        for batch in &*flat_batches {
-            if !batch.is_grid {
-                continue;
-            }
-            if batch.start_instance >= renderer.scene.instance_capacity as u32 {
-                continue;
-            }
-            let safe_end = std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
-
-            render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
-            render_pass.set_bind_group(1, &batch.bind_group, &[]);
-            render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-            render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
-            render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
-            render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
-        }
-
-        // --- 4. DRAW GPU PARTICLES (Billboard & Şeffaf) ---
+        // --- 0. COMPUTE PASSES ---
         if let Some(gpu_particles) = &renderer.gpu_particles {
-            render_pass.set_pipeline(&gpu_particles.pipelines.render_pipeline);
-            render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, gpu_particles.quad_vertex_buffer.slice(..));
-            render_pass.set_vertex_buffer(1, gpu_particles.particles_buffer.slice(..));
-            render_pass.draw(0..4, 0..gpu_particles.active_particles);
+            gpu_particles.update_params(&renderer.queue, delta_time);
+
+            // --- YENİ PARTİCÜL SPAWNLAMA (CPU -> GPU) ---
+            let mut emitters = world.borrow_mut::<gizmo::renderer::components::ParticleEmitter>();
+            {
+                let transforms = world.borrow::<Transform>();
+                {
+                    use rand::Rng;
+                    let mut rng = rand::rng();
+                    let mut all_new_particles = Vec::new();
+
+                    let emitter_entities: Vec<u32> = emitters.iter().map(|(id, _)| id).collect();
+                    for e_id in emitter_entities {
+                        if let Some(emitter) = emitters.get_mut(e_id) {
+                            if !emitter.is_active || emitter.spawn_rate <= 0.0 {
+                                continue;
+                            }
+
+                            let base_pos = if let Some(t) = transforms.get(e_id) {
+                                t.position + t.rotation.mul_vec3(emitter.local_offset)
+                            } else {
+                                emitter.local_offset
+                            };
+
+                            emitter.add_time(delta_time);
+                            // Güvenlik limiti: Frame drop olursa bir frame'de 100'den fazla spawnlamasın
+                            // Aksi takdirde 1 saniye donup binlerce üreterek FPS'i çökertir
+                            let spawn_interval = 1.0 / emitter.spawn_rate;
+                            let mut spawned_this_frame = 0;
+
+                            while emitter.get_accumulator() >= spawn_interval && spawned_this_frame < 100
+                            {
+                                emitter.consume_time(spawn_interval);
+                                spawned_this_frame += 1;
+
+                                let rand_v_x =
+                                    rng.random_range(-1.0..=1.0) * emitter.velocity_randomness;
+                                let rand_v_y =
+                                    rng.random_range(-1.0..=1.0) * emitter.velocity_randomness;
+                                let rand_v_z =
+                                    rng.random_range(-1.0..=1.0) * emitter.velocity_randomness;
+
+                                let out_dir = Vec3::new(rand_v_x, rand_v_y, rand_v_z);
+                                let vel = emitter.initial_velocity + out_dir;
+
+                                let rand_life =
+                                    rng.random_range(-1.0..=1.0) * emitter.lifespan_randomness;
+                                let max_life = (emitter.lifespan + rand_life).max(0.1);
+
+                                all_new_particles.push(
+                                    gizmo::renderer::gpu_particles::GpuParticle {
+                                        position: [base_pos.x, base_pos.y, base_pos.z],
+                                        life: 0.0,
+                                        velocity: [vel.x, vel.y, vel.z],
+                                        max_life,
+                                        color: emitter.color_start.into(),
+                                        size_start: emitter.size_start,
+                                        size_end: emitter.size_end,
+                                        _padding: [0.0; 2],
+                                    },
+                                );
+                            }
+                        }
+                    }
+
+                    gpu_particles.spawn_particles(&renderer.queue, &all_new_particles);
+                }
+            }
+
+            gpu_particles.compute_pass(encoder);
         }
-    }
 
+        if let Some(physics) = &renderer.gpu_physics {
+            physics.compute_pass(encoder);
+        }
+
+        // --- 1. CSM GÖLGE PASS ---
+        for cascade_i in 0..4usize {
+            renderer.queue.write_buffer(
+                &renderer.scene.shadow_cascade_uniform_buffers[cascade_i],
+                0,
+                gizmo::bytemuck::bytes_of(&gizmo::renderer::ShadowVsUniform {
+                    light_view_proj: light_view_proj_cascades[cascade_i],
+                }),
+            );
+
+            let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(&format!("Shadow Pass cascade {cascade_i}")),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &renderer.scene.shadow_cascade_layer_views[cascade_i],
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            shadow_pass.set_pipeline(&renderer.scene.shadow_pipeline);
+
+            for batch in &*flat_batches {
+                if batch.start_instance >= renderer.scene.instance_capacity as u32 {
+                    continue;
+                }
+                let safe_end =
+                    std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
+
+                shadow_pass.set_bind_group(
+                    0,
+                    &renderer.scene.shadow_pass_bind_groups[cascade_i],
+                    &[],
+                );
+                shadow_pass.set_bind_group(1, &batch.skeleton_bg, &[]);
+                shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
+                shadow_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
+                shadow_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
+            }
+        }
+
+        // --- 2. ANA RENDER PASS (HDR Offscreen Texture'a çiz) ---
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Main Render Pass (HDR)"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &renderer.post.hdr_texture_view, // Artık ekran yerine HDR texture'a çiziyoruz!
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        // Linear space 0.035 ~= sRGB 0.22 (Blender dark grey) after Gamma Correction / HDR
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.035,
+                            g: 0.035,
+                            b: 0.035,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &renderer.depth_texture_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(&renderer.scene.render_pipeline);
+            for batch in &*flat_batches {
+                if batch.is_transparent || batch.is_double_sided || batch.is_skybox || batch.is_grid
+                {
+                    continue;
+                } // Şeffafları, Skybox'ı, Çift Yönlüleri ve Grid'i atla
+                if batch.start_instance >= renderer.scene.instance_capacity as u32 {
+                    continue;
+                }
+                let safe_end =
+                    std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
+
+                render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+                render_pass.set_bind_group(1, &batch.bind_group, &[]);
+                render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+                render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
+                render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
+                render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
+            }
+
+            // 2. ÇİFT YÖNLÜ OPAQUE OBJELER (Kumaşlar, cull_mode = None)
+            render_pass.set_pipeline(&renderer.scene.render_double_sided_pipeline);
+            for batch in &*flat_batches {
+                if batch.is_transparent
+                    || !batch.is_double_sided
+                    || batch.is_skybox
+                    || batch.is_grid
+                {
+                    continue;
+                }
+                if batch.start_instance >= renderer.scene.instance_capacity as u32 {
+                    continue;
+                }
+                let safe_end =
+                    std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
+
+                render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+                render_pass.set_bind_group(1, &batch.bind_group, &[]);
+                render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+                render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
+                render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
+                render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
+            }
+
+            // --- DRAW GPU PHYSICS SPHERES (Katı Obje olarak farz ediliyor) ---
+            if let Some(physics) = &renderer.gpu_physics {
+                physics.render_pass(&mut render_pass, &renderer.scene.global_bind_group);
+            }
+
+            // 3. SKYBOX YAKALAMA VE ÖZEL PIPELINE İLE ÇİZİM
+            render_pass.set_pipeline(&renderer.scene.sky_pipeline);
+            for batch in &*flat_batches {
+                if !batch.is_skybox {
+                    continue;
+                } // Sadece Skybox'u çiz
+                if batch.start_instance >= renderer.scene.instance_capacity as u32 {
+                    continue;
+                }
+                let safe_end =
+                    std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
+
+                render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+                render_pass.set_bind_group(1, &batch.bind_group, &[]);
+                render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]); // sky.wgsl içinde boş da olsa bağlı kalması gerek
+                render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
+                render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
+                render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
+            }
+
+            // 4. TRANSPARENT OBJELERİ ÇİZ (Depth yazması kapalı, Opaque'nin üstüne blend olur)
+            render_pass.set_pipeline(&renderer.scene.transparent_pipeline);
+            for batch in &*flat_batches {
+                if !batch.is_transparent || batch.is_grid {
+                    continue;
+                } // Sadece saydamları çiz
+                if batch.start_instance >= renderer.scene.instance_capacity as u32 {
+                    continue;
+                }
+                let safe_end =
+                    std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
+
+                render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+                render_pass.set_bind_group(1, &batch.bind_group, &[]);
+                render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+                render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
+                render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
+                render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
+            }
+
+            // 5. GRID ÇİZİMİ
+            render_pass.set_pipeline(&renderer.scene.grid_pipeline);
+            for batch in &*flat_batches {
+                if !batch.is_grid {
+                    continue;
+                }
+                if batch.start_instance >= renderer.scene.instance_capacity as u32 {
+                    continue;
+                }
+                let safe_end =
+                    std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
+
+                render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+                render_pass.set_bind_group(1, &batch.bind_group, &[]);
+                render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+                render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
+                render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
+                render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
+            }
+
+            // --- 4. DRAW GPU PARTICLES (Billboard & Şeffaf) ---
+            if let Some(gpu_particles) = &renderer.gpu_particles {
+                render_pass.set_pipeline(&gpu_particles.pipelines.render_pipeline);
+                render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, gpu_particles.quad_vertex_buffer.slice(..));
+                render_pass.set_vertex_buffer(1, gpu_particles.particles_buffer.slice(..));
+                render_pass.draw(0..4, 0..gpu_particles.active_particles);
+            }
+        }
     }); // Cikis: CACHE.with bloğu
-
 
     // --- 3. POST-PROCESSING (Bloom + Tone Mapping → Ekrana Yaz) ---
     let render_target = world.get_resource::<gizmo::renderer::components::EditorRenderTarget>();
@@ -722,7 +763,7 @@ pub fn execute_render_pipeline(
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        &target.view
+        &target.0.view
     } else {
         view
     };

@@ -117,7 +117,10 @@ fn test_character_step_climbing() {
 #[test]
 fn test_character_slope_sliding() {
     let mut world = setup_world();
-    world.insert_resource(gizmo_physics::components::PhysicsConfig { ground_y: -100.0, ..Default::default() });
+    world.insert_resource(gizmo_physics::components::PhysicsConfig {
+        ground_y: -100.0,
+        ..Default::default()
+    });
 
     // Zemin olarak devasa bir Küre kullanalım (AABB'ler rotation almaz, bu yüzden eğim oluşturmak için küre şart).
     // Küre yarıçapı 10.0. Merkezi orijinde (0,0,0).
@@ -162,7 +165,8 @@ fn test_character_slope_sliding() {
     // Eğim aşıldığı için karakter dengesizleşmeli (is_grounded false olmalı)
     assert!(
         !cc_out.is_grounded,
-        "Eğimi aştığı için yere bağlı sayılamaz! Normal: {:?}, vertical_velocity: {}", cc_out.ground_normal, cc_out.vertical_velocity
+        "Eğimi aştığı için yere bağlı sayılamaz! Normal: {:?}, vertical_velocity: {}",
+        cc_out.ground_normal, cc_out.vertical_velocity
     );
     // Yerçekimi ve slope sliding yüzünden daha da sağa/aşağı kaymış olmalı (X > 9.959, Y < 5.75)
     assert!(

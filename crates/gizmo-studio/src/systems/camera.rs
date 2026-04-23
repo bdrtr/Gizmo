@@ -3,11 +3,16 @@ use gizmo::editor::EditorState;
 use gizmo::physics::components::Transform;
 use gizmo::prelude::*;
 
-pub fn handle_camera(world: &mut World, state: &mut StudioState, dt: f32, input: &Input, 
+pub fn handle_camera(
+    world: &mut World,
+    state: &mut StudioState,
+    dt: f32,
+    input: &Input,
     look_delta: Option<gizmo::math::Vec2>,
     pan_delta: Option<gizmo::math::Vec2>,
     orbit_delta: Option<gizmo::math::Vec2>,
-    scroll_delta: f32) {
+    scroll_delta: f32,
+) {
     // Editör kamera değişkenlerini world'dan oku
     let mut camera_speed = 8.0;
     let mut camera_focus_distance = 10.0;
@@ -19,7 +24,9 @@ pub fn handle_camera(world: &mut World, state: &mut StudioState, dt: f32, input:
     }
 
     // Editor Camera WASD Controller
-    let mut transforms = world.borrow_mut::<Transform>(); let mut cameras = world.borrow_mut::<gizmo::renderer::components::Camera>(); {
+    let mut transforms = world.borrow_mut::<Transform>();
+    let mut cameras = world.borrow_mut::<gizmo::renderer::components::Camera>();
+    {
         if let (Some(t), Some(cam)) = (
             transforms.get_mut(state.editor_camera),
             cameras.get_mut(state.editor_camera),
@@ -66,7 +73,7 @@ pub fn handle_camera(world: &mut World, state: &mut StudioState, dt: f32, input:
             let up = gizmo::math::Vec3::new(0.0, 1.0, 0.0);
 
             let mut move_dir = gizmo::math::Vec3::ZERO;
-            
+
             if !is_playing {
                 // Kamera nereye bakıyorsa ORAYA ileri git
                 if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyW as u32) {
@@ -129,7 +136,8 @@ pub fn handle_camera(world: &mut World, state: &mut StudioState, dt: f32, input:
                 t.rotation = q_yaw * q_pitch;
 
                 // Yeni pozisyonu pivota göre konumlandır
-                t.position = pivot - (t.rotation * gizmo::math::Vec3::new(0.0, 0.0, 1.0)) * camera_focus_distance;
+                t.position = pivot
+                    - (t.rotation * gizmo::math::Vec3::new(0.0, 0.0, 1.0)) * camera_focus_distance;
             }
 
             // 5. Scroll Zoom (İleri / Geri)
@@ -160,21 +168,29 @@ pub fn handle_camera(world: &mut World, state: &mut StudioState, dt: f32, input:
 
             // 7. Bookmark Kaydet / Yükle (Ctrl + 0..9)
             let digits = [
-                gizmo::winit::keyboard::KeyCode::Digit0, gizmo::winit::keyboard::KeyCode::Digit1,
-                gizmo::winit::keyboard::KeyCode::Digit2, gizmo::winit::keyboard::KeyCode::Digit3,
-                gizmo::winit::keyboard::KeyCode::Digit4, gizmo::winit::keyboard::KeyCode::Digit5,
-                gizmo::winit::keyboard::KeyCode::Digit6, gizmo::winit::keyboard::KeyCode::Digit7,
-                gizmo::winit::keyboard::KeyCode::Digit8, gizmo::winit::keyboard::KeyCode::Digit9,
+                gizmo::winit::keyboard::KeyCode::Digit0,
+                gizmo::winit::keyboard::KeyCode::Digit1,
+                gizmo::winit::keyboard::KeyCode::Digit2,
+                gizmo::winit::keyboard::KeyCode::Digit3,
+                gizmo::winit::keyboard::KeyCode::Digit4,
+                gizmo::winit::keyboard::KeyCode::Digit5,
+                gizmo::winit::keyboard::KeyCode::Digit6,
+                gizmo::winit::keyboard::KeyCode::Digit7,
+                gizmo::winit::keyboard::KeyCode::Digit8,
+                gizmo::winit::keyboard::KeyCode::Digit9,
             ];
-            let ctrl = input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ControlLeft as u32) || input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ControlRight as u32);
+            let ctrl = input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ControlLeft as u32)
+                || input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ControlRight as u32);
             for (i, &key) in digits.iter().enumerate() {
                 if input.is_key_just_pressed(key as u32) {
-                    if ctrl { // Bookmark Save
+                    if ctrl {
+                        // Bookmark Save
                         if let Some(mut es) = world.get_resource_mut::<EditorState>() {
                             es.camera.bookmarks[i] = Some((t.position, cam.yaw, cam.pitch));
                             es.log_info(&format!("Kamera #{} kaydedildi.", i));
                         }
-                    } else { // Bookmark Load
+                    } else {
+                        // Bookmark Load
                         if let Some(mut es) = world.get_resource_mut::<EditorState>() {
                             if let Some((pos, yaw, pitch)) = es.camera.bookmarks[i] {
                                 t.position = pos;
@@ -191,10 +207,8 @@ pub fn handle_camera(world: &mut World, state: &mut StudioState, dt: f32, input:
             let max_pitch = 89.0_f32.to_radians();
             cam.pitch = cam.pitch.clamp(-max_pitch, max_pitch);
 
-            let q_yaw = gizmo::math::Quat::from_axis_angle(
-                gizmo::math::Vec3::new(0.0, 1.0, 0.0),
-                cam.yaw,
-            );
+            let q_yaw =
+                gizmo::math::Quat::from_axis_angle(gizmo::math::Vec3::new(0.0, 1.0, 0.0), cam.yaw);
             let q_pitch = gizmo::math::Quat::from_axis_angle(
                 gizmo::math::Vec3::new(1.0, 0.0, 0.0),
                 cam.pitch,

@@ -61,7 +61,12 @@ impl BlobVec {
     /// `index < self.len` olmalıdır.
     #[inline]
     pub unsafe fn get_unchecked(&self, index: usize) -> *const u8 {
-        debug_assert!(index < self.len, "BlobVec::get_unchecked: index {} >= len {}", index, self.len);
+        debug_assert!(
+            index < self.len,
+            "BlobVec::get_unchecked: index {} >= len {}",
+            index,
+            self.len
+        );
         self.data.as_ptr().add(index * self.item_layout.size())
     }
 
@@ -71,7 +76,12 @@ impl BlobVec {
     /// `index < self.len` olmalıdır.
     #[inline]
     pub unsafe fn get_unchecked_mut(&self, index: usize) -> *mut u8 {
-        debug_assert!(index < self.len, "BlobVec::get_unchecked_mut: index {} >= len {}", index, self.len);
+        debug_assert!(
+            index < self.len,
+            "BlobVec::get_unchecked_mut: index {} >= len {}",
+            index,
+            self.len
+        );
         self.data.as_ptr().add(index * self.item_layout.size())
     }
 
@@ -90,15 +100,22 @@ impl BlobVec {
     ///
     /// # Safety
     /// `src` pointer'ı `item_layout.size()` bayt okunabilir belleğe işaret etmelidir.
-    pub unsafe fn push_cloned_batch(&mut self, src: *const u8, count: usize, clone_fn: Option<unsafe fn(*const u8, *mut u8, usize)>) {
-        if count == 0 { return; }
+    pub unsafe fn push_cloned_batch(
+        &mut self,
+        src: *const u8,
+        count: usize,
+        clone_fn: Option<unsafe fn(*const u8, *mut u8, usize)>,
+    ) {
+        if count == 0 {
+            return;
+        }
         if self.item_layout.size() == 0 {
             self.len += count;
             return;
         }
         self.reserve(count);
         let dst_start = self.data.as_ptr().add(self.len * self.item_layout.size());
-        
+
         if let Some(c_fn) = clone_fn {
             c_fn(src, dst_start, count);
         } else {
@@ -209,16 +226,18 @@ impl BlobVec {
             return;
         }
 
-        let new_layout = Layout::from_size_align(item_size * new_capacity, self.item_layout.align())
-            .expect("BlobVec::grow: Layout overflow");
+        let new_layout =
+            Layout::from_size_align(item_size * new_capacity, self.item_layout.align())
+                .expect("BlobVec::grow: Layout overflow");
 
         let new_data = if self.capacity == 0 {
             // İlk tahsis
             unsafe { alloc::alloc(new_layout) }
         } else {
             // Yeniden tahsis
-            let old_layout = Layout::from_size_align(item_size * self.capacity, self.item_layout.align())
-                .expect("BlobVec::grow: Old layout overflow");
+            let old_layout =
+                Layout::from_size_align(item_size * self.capacity, self.item_layout.align())
+                    .expect("BlobVec::grow: Old layout overflow");
             unsafe { alloc::realloc(self.data.as_ptr(), old_layout, new_layout.size()) }
         };
 
@@ -239,18 +258,23 @@ impl BlobVec {
 
         if self.len == 0 {
             // Tamamen boşalt, belleği dealloc yap.
-            let old_layout = Layout::from_size_align(item_size * self.capacity, self.item_layout.align()).unwrap();
+            let old_layout =
+                Layout::from_size_align(item_size * self.capacity, self.item_layout.align())
+                    .unwrap();
             unsafe { alloc::dealloc(self.data.as_ptr(), old_layout) };
             self.data = NonNull::dangling();
             self.capacity = 0;
             return;
         }
 
-        let new_layout = Layout::from_size_align(item_size * self.len, self.item_layout.align()).unwrap();
-        let old_layout = Layout::from_size_align(item_size * self.capacity, self.item_layout.align()).unwrap();
+        let new_layout =
+            Layout::from_size_align(item_size * self.len, self.item_layout.align()).unwrap();
+        let old_layout =
+            Layout::from_size_align(item_size * self.capacity, self.item_layout.align()).unwrap();
 
         let new_data = unsafe { alloc::realloc(self.data.as_ptr(), old_layout, new_layout.size()) };
-        self.data = NonNull::new(new_data).expect("BlobVec::shrink_to_fit: Allocation failed (OOM)");
+        self.data =
+            NonNull::new(new_data).expect("BlobVec::shrink_to_fit: Allocation failed (OOM)");
         self.capacity = self.len;
     }
 
@@ -274,8 +298,9 @@ impl Drop for BlobVec {
         self.clear();
         let item_size = self.item_layout.size();
         if item_size > 0 && self.capacity > 0 {
-            let layout = Layout::from_size_align(item_size * self.capacity, self.item_layout.align())
-                .expect("BlobVec::drop: Layout error");
+            let layout =
+                Layout::from_size_align(item_size * self.capacity, self.item_layout.align())
+                    .expect("BlobVec::drop: Layout error");
             unsafe {
                 alloc::dealloc(self.data.as_ptr(), layout);
             }
@@ -285,4 +310,3 @@ impl Drop for BlobVec {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // COLUMN — Tip-silinmiş sütun
-

@@ -37,7 +37,10 @@ impl Plane {
     pub fn from_coefficients(x: f32, y: f32, z: f32, w: f32) -> Self {
         let len_sq = x * x + y * y + z * z;
         if len_sq < 1e-10 {
-            return Self { normal: Vec3A::Z, distance: 0.0 };
+            return Self {
+                normal: Vec3A::Z,
+                distance: 0.0,
+            };
         }
         let inv_len = len_sq.sqrt().recip();
         Self {
@@ -92,7 +95,6 @@ pub struct Frustum {
 }
 
 impl Frustum {
-
     /// Extracts the frustum planes from a Projection × View (VP) matrix.
     ///
     /// Uses the Gribb–Hartmann method: each plane is a linear combination of
@@ -175,7 +177,11 @@ impl Frustum {
             }
         }
 
-        if all_inside { Intersection::Inside } else { Intersection::Partial }
+        if all_inside {
+            Intersection::Inside
+        } else {
+            Intersection::Partial
+        }
     }
 
     /// Returns `true` if the AABB is at least partially visible (not culled).
@@ -221,7 +227,11 @@ impl Frustum {
             // else: fully inside this plane — don't propagate to children.
         }
 
-        let result = if all_inside { Intersection::Inside } else { Intersection::Partial };
+        let result = if all_inside {
+            Intersection::Inside
+        } else {
+            Intersection::Partial
+        };
         (result, out_mask)
     }
 
@@ -298,6 +308,9 @@ mod tests {
     #[test]
     fn aabb_degenerate_point_inside() {
         let frustum = make_frustum();
+        // A point (min == max) has zero volume (is_degenerate() == true) but is
+        // not strictly empty (is_empty() == false). Thus, the intersection test
+        // proceeds and correctly identifies it as inside the frustum.
         let pt = Aabb::new(Vec3::ZERO, Vec3::ZERO);
         assert_eq!(frustum.test_aabb(pt), Intersection::Inside);
     }

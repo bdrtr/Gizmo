@@ -95,7 +95,11 @@ impl Time {
     /// Mevcut FPS (1/raw_dt). raw_dt = 0 ise 0.0 döner.
     #[inline]
     pub fn fps(&self) -> f32 {
-        if self.raw_dt > 0.0 { 1.0 / self.raw_dt } else { 0.0 }
+        if self.raw_dt > 0.0 {
+            1.0 / self.raw_dt
+        } else {
+            0.0
+        }
     }
 
     // ──── Setter'lar ────

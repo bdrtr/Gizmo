@@ -34,13 +34,19 @@ impl SceneRegistry {
                 if let Some(comp) = storage.get(entity_id) {
                     // RON String'e dönüştür ve oradan AST'ye (Value) Parse et
                     match ron::ser::to_string(comp) {
-                        Ok(string_repr) => {
-                            match ron::from_str::<Value>(&string_repr) {
-                                Ok(val) => return Some(val),
-                                Err(e) => println!("[SceneRegistry] AST Donusturme Hatasi ({}): {}", std::any::type_name::<T>(), e),
-                            }
-                        }
-                        Err(e) => println!("[SceneRegistry] Serilestirme Hatasi ({}): {}", std::any::type_name::<T>(), e),
+                        Ok(string_repr) => match ron::from_str::<Value>(&string_repr) {
+                            Ok(val) => return Some(val),
+                            Err(e) => println!(
+                                "[SceneRegistry] AST Donusturme Hatasi ({}): {}",
+                                std::any::type_name::<T>(),
+                                e
+                            ),
+                        },
+                        Err(e) => println!(
+                            "[SceneRegistry] Serilestirme Hatasi ({}): {}",
+                            std::any::type_name::<T>(),
+                            e
+                        ),
                     }
                 }
                 None
@@ -53,11 +59,17 @@ impl SceneRegistry {
                 // RON AST'sinden (Value) doğrudan hedeflenen T türüne çevir (Gereksiz String dönüşümünü atlar ve düzgün parse eder)
                 if let Ok(comp) = value.clone().into_rust::<T>() {
                     world.add_component(
-                        world.get_entity(entity_id).expect("Invalid entity mapping during deserialization!"),
+                        world
+                            .get_entity(entity_id)
+                            .expect("Invalid entity mapping during deserialization!"),
                         comp,
                     );
                 } else {
-                    println!("[SceneRegistry] HATA: {} bileseni yuklenemedi! (Entity: {})", std::any::type_name::<T>(), entity_id);
+                    println!(
+                        "[SceneRegistry] HATA: {} bileseni yuklenemedi! (Entity: {})",
+                        std::any::type_name::<T>(),
+                        entity_id
+                    );
                 }
             }),
         );
@@ -70,8 +82,10 @@ impl SceneRegistry {
         serialize: impl Fn(&World, u32) -> Option<Value> + Send + Sync + 'static,
         deserialize: impl Fn(&mut World, u32, &Value) + Send + Sync + 'static,
     ) {
-        self.serializers.insert(name.to_string(), Box::new(serialize));
-        self.deserializers.insert(name.to_string(), Box::new(deserialize));
+        self.serializers
+            .insert(name.to_string(), Box::new(serialize));
+        self.deserializers
+            .insert(name.to_string(), Box::new(deserialize));
     }
 
     pub fn get_serializer(&self, name: &str) -> Option<&SerializeFn> {
@@ -89,21 +103,21 @@ impl SceneRegistry {
     /// Gizmo motorunun varsayılan bileşenleri eklenmiş halde registry döndürür.
     pub fn with_core_components() -> Self {
         let mut reg = Self::new();
-        
+
         reg.register::<gizmo_physics::components::Transform>("Transform");
         reg.register::<gizmo_physics::components::Velocity>("Velocity");
         reg.register::<gizmo_physics::components::RigidBody>("RigidBody");
         reg.register::<gizmo_physics::shape::Collider>("Collider");
-        
+
         reg.register::<gizmo_renderer::components::Camera>("Camera");
         reg.register::<gizmo_renderer::components::PointLight>("PointLight");
         reg.register::<gizmo_renderer::components::DirectionalLight>("DirectionalLight");
         reg.register::<gizmo_renderer::components::Terrain>("Terrain");
         reg.register::<gizmo_renderer::components::ParticleEmitter>("ParticleEmitter");
-        
+
         reg.register::<gizmo_audio::AudioSource>("AudioSource");
         reg.register::<gizmo_scripting::Script>("Script");
-        
+
         reg
     }
 }

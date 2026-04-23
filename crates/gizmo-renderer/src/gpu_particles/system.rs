@@ -1,7 +1,7 @@
 use wgpu::util::DeviceExt;
 
-use super::types::*;
 use super::pipeline::{create_particle_pipelines, ParticlePipelines};
+use super::types::*;
 
 pub struct GpuParticleSystem {
     pub max_particles: u32,

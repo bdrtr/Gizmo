@@ -19,10 +19,10 @@ gizmo-physics = { path = "../gizmo-physics" }
 gizmo-app = { path = "../gizmo-app" }
 gizmo-ai = { path = "../gizmo-ai" }
 gizmo-audio = { path = "../gizmo-audio", optional = true }
-gizmo-editor = { path = "../gizmo-editor", optional = true }
 gizmo-scripting = { path = "../gizmo-scripting", optional = true }
 gizmo-scene = { path = "../gizmo-scene", optional = true }
 winit = { workspace = true }
-wgpu = "0.19"
-egui = "0.26"
+wgpu = "0.20"
+egui = "0.28"
 bytemuck = "1"
+gizmo-editor = { path = "../gizmo-editor", optional = true }

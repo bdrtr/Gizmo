@@ -80,14 +80,14 @@ pub fn log_message(level: LogLevel, msg: String, file: &'static str, line: u32) 
         file,
         line,
     });
-    
+
     LOG_VERSION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
     // Konsol çıktısı — Warning ve Error stderr'e gider
     match level {
-        LogLevel::Info    => println!("[{}] [INFO]  {}:{} — {}", timestamp, file, line, msg),
+        LogLevel::Info => println!("[{}] [INFO]  {}:{} — {}", timestamp, file, line, msg),
         LogLevel::Warning => eprintln!("[{}] [WARN]  {}:{} — {}", timestamp, file, line, msg),
-        LogLevel::Error   => eprintln!("[{}] [ERROR] {}:{} — {}", timestamp, file, line, msg),
+        LogLevel::Error => eprintln!("[{}] [ERROR] {}:{} — {}", timestamp, file, line, msg),
     }
 }
 
@@ -215,7 +215,12 @@ mod tests {
         let _guard = setup();
         // Kapasiteyi aşacak kadar log yaz
         for i in 0..MAX_LOG_ENTRIES + 500 {
-            log_message(LogLevel::Info, format!("cap_test_{}", i), "test.rs", i as u32);
+            log_message(
+                LogLevel::Info,
+                format!("cap_test_{}", i),
+                "test.rs",
+                i as u32,
+            );
         }
 
         let count = log_count();
@@ -223,7 +228,9 @@ mod tests {
         // ama asla aşmamalı
         assert!(
             count <= MAX_LOG_ENTRIES,
-            "ring buffer kapasitesi aşıldı: {} > {}", count, MAX_LOG_ENTRIES
+            "ring buffer kapasitesi aşıldı: {} > {}",
+            count,
+            MAX_LOG_ENTRIES
         );
     }
 

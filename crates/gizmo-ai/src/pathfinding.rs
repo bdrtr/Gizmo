@@ -162,8 +162,10 @@ impl NavGrid {
             }
 
             let current = current_node.pos;
-            
-            if closed_set.contains(&current) { continue; }
+
+            if closed_set.contains(&current) {
+                continue;
+            }
             closed_set.insert(current);
 
             if current == end {

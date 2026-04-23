@@ -1,5 +1,5 @@
-use gizmo::prelude::*;
 use gizmo::physics::components::{RigidBody, Velocity};
+use gizmo::prelude::*;
 
 use gizmo::renderer::asset::AssetManager;
 use gizmo::renderer::components::{DirectionalLight, MeshRenderer};
@@ -41,7 +41,7 @@ fn main() {
     App::<DominoGame>::new("Gizmo — Domino Reaksiyonu", 1600, 900)
         .set_setup(|world, renderer| {
             let mut game = setup_scene(world, renderer);
-            
+
             let cam_entity = world.spawn();
             world.add_component(
                 cam_entity,
@@ -60,7 +60,7 @@ fn main() {
                 ),
             );
             world.add_component(cam_entity, EntityName("Kamera".into()));
-            
+
             game.cam_id = cam_entity.id();
             game
         })
@@ -89,7 +89,7 @@ fn main() {
             state.physics_acc += dt;
             let fixed_dt = state.physics_dt;
             state.physics_acc = state.physics_acc.min(fixed_dt * 8.0);
-            
+
             while state.physics_acc >= fixed_dt {
                 step_physics(world, fixed_dt);
                 state.physics_acc -= fixed_dt;
@@ -100,7 +100,10 @@ fn main() {
                 .anchor(gizmo::egui::Align2::LEFT_TOP, gizmo::egui::vec2(10.0, 10.0))
                 .title_bar(false)
                 .resizable(false)
-                .frame(gizmo::egui::Frame::window(&ctx.style()).fill(gizmo::egui::Color32::from_black_alpha(150)))
+                .frame(
+                    gizmo::egui::Frame::window(&ctx.style())
+                        .fill(gizmo::egui::Color32::from_black_alpha(150)),
+                )
                 .show(ctx, |ui| {
                     ui.label(
                         gizmo::egui::RichText::new(format!("FPS: {:.0}", state.fps))
@@ -119,9 +122,6 @@ fn main() {
 fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> DominoGame {
     println!("Domino Zinciri kuruluyor...");
 
-
-
-
     let mut asset_manager = AssetManager::new();
 
     let tex = asset_manager.create_white_texture(
@@ -135,8 +135,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
     let ground = world.spawn();
     world.add_component(
         ground,
-        Transform::new(Vec3::new(0.0, -0.5, 0.0))
-            .with_scale(Vec3::new(10.0, 1.0, 120.0)),
+        Transform::new(Vec3::new(0.0, -0.5, 0.0)).with_scale(Vec3::new(10.0, 1.0, 120.0)),
     );
     world.add_component(ground, ground_mesh);
     world.add_component(
@@ -145,33 +144,48 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
     );
     world.add_component(ground, MeshRenderer::new());
     world.add_component(ground, RigidBody::new_static());
-    world.add_component(ground, Collider { shape: ColliderShape::Aabb(Aabb { half_extents: Vec3::new(100.0, 0.5, 120.0) }) });
+    world.add_component(
+        ground,
+        Collider {
+            shape: ColliderShape::Aabb(Aabb {
+                half_extents: Vec3::new(100.0, 0.5, 120.0),
+            }),
+        },
+    );
 
     // Işık
     let sun = world.spawn();
     world.add_component(
         sun,
-        Transform::new(Vec3::new(30.0, 80.0, 40.0)).with_rotation(
-            Quat::from_axis_angle(Vec3::new(1.0, 0.3, 0.0).normalize(), -0.8),
-        ),
+        Transform::new(Vec3::new(30.0, 80.0, 40.0)).with_rotation(Quat::from_axis_angle(
+            Vec3::new(1.0, 0.3, 0.0).normalize(),
+            -0.8,
+        )),
     );
     world.add_component(
         sun,
-        DirectionalLight::new(Vec3::new(1.0, 0.97, 0.90), 2.5, true),
+        DirectionalLight::new(Vec3::new(1.0, 0.97, 0.90), 2.5, gizmo::renderer::components::LightRole::Sun),
     );
 
     let num_dominoes = 100;
     let spacing = 0.8;
     let (dx, dy, dz) = (0.2, 1.0, 0.1);
-    
+
     let domino_mesh = AssetManager::create_cube(&renderer.device);
 
     for i in 0..num_dominoes {
         let domino = world.spawn();
         let pos = Vec3::new(0.0, dy - 0.5, i as f32 * spacing); // Y adjustment for floor
-        world.add_component(domino, Transform::new(pos).with_scale(Vec3::new(dx, dy, dz)));
-        
-        let color = if i % 2 == 0 { Vec4::new(0.8, 0.1, 0.1, 1.0) } else { Vec4::new(0.9, 0.9, 0.9, 1.0) };
+        world.add_component(
+            domino,
+            Transform::new(pos).with_scale(Vec3::new(dx, dy, dz)),
+        );
+
+        let color = if i % 2 == 0 {
+            Vec4::new(0.8, 0.1, 0.1, 1.0)
+        } else {
+            Vec4::new(0.9, 0.9, 0.9, 1.0)
+        };
         world.add_component(domino, Material::new(tex.clone()).with_pbr(color, 1.0, 0.0));
         world.add_component(domino, domino_mesh.clone());
         world.add_component(domino, MeshRenderer::new());
@@ -181,17 +195,27 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
         world.add_component(domino, rb);
         world.add_component(
             domino,
-            Collider { shape: ColliderShape::Aabb(Aabb { half_extents: Vec3::new(dx, dy, dz) }) },
+            Collider {
+                shape: ColliderShape::Aabb(Aabb {
+                    half_extents: Vec3::new(dx, dy, dz),
+                }),
+            },
         );
         world.add_component(domino, Velocity::new(Vec3::ZERO));
     }
 
     // Heavy Ball
     let heavy_ball = world.spawn();
-    world.add_component(heavy_ball, Transform::new(Vec3::new(0.0, dy - 0.5, -1.5)).with_scale(Vec3::splat(0.5)));
+    world.add_component(
+        heavy_ball,
+        Transform::new(Vec3::new(0.0, dy - 0.5, -1.5)).with_scale(Vec3::splat(0.5)),
+    );
     let ball_mesh = AssetManager::create_sphere(&renderer.device, 1.0, 32, 32);
     world.add_component(heavy_ball, ball_mesh);
-    world.add_component(heavy_ball, Material::new(tex.clone()).with_pbr(Vec4::new(0.2, 0.2, 0.2, 1.0), 0.8, 0.5));
+    world.add_component(
+        heavy_ball,
+        Material::new(tex.clone()).with_pbr(Vec4::new(0.2, 0.2, 0.2, 1.0), 0.8, 0.5),
+    );
     world.add_component(heavy_ball, MeshRenderer::new());
 
     let mut ball_rb = RigidBody::new(50.0, 0.2, 0.5, true);
@@ -202,7 +226,9 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
     world.add_component(heavy_ball, ball_rb);
     world.add_component(
         heavy_ball,
-        Collider { shape: ColliderShape::Sphere(Sphere { radius: 0.5 }) },
+        Collider {
+            shape: ColliderShape::Sphere(Sphere { radius: 0.5 }),
+        },
     );
     world.add_component(heavy_ball, Velocity::new(Vec3::new(0.0, 0.0, 25.0)));
 
@@ -211,9 +237,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
     DominoGame::new()
 }
 
-fn step_physics(_world: &mut World, _dt: f32) {
-
-}
+fn step_physics(_world: &mut World, _dt: f32) {}
 
 fn update_camera(
     world: &mut World,
@@ -226,24 +250,38 @@ fn update_camera(
     let fz = state.cam_yaw.sin() * state.cam_pitch.cos();
     let fwd = Vec3::new(fx, fy, fz).normalize();
     let right = fwd.cross(Vec3::new(0.0, 1.0, 0.0)).normalize();
- 
+
     let speed = state.cam_speed * dt;
- 
-    if input.is_key_pressed(KeyCode::KeyW as u32) { state.cam_pos += fwd * speed; }
-    if input.is_key_pressed(KeyCode::KeyS as u32) { state.cam_pos -= fwd * speed; }
-    if input.is_key_pressed(KeyCode::KeyA as u32) { state.cam_pos -= right * speed; }
-    if input.is_key_pressed(KeyCode::KeyD as u32) { state.cam_pos += right * speed; }
-    if input.is_key_pressed(KeyCode::KeyQ as u32) { state.cam_pos.y -= speed; }
-    if input.is_key_pressed(KeyCode::KeyE as u32) { state.cam_pos.y += speed; }
- 
-    let mut trans = world.borrow_mut::<Transform>(); {
+
+    if input.is_key_pressed(KeyCode::KeyW as u32) {
+        state.cam_pos += fwd * speed;
+    }
+    if input.is_key_pressed(KeyCode::KeyS as u32) {
+        state.cam_pos -= fwd * speed;
+    }
+    if input.is_key_pressed(KeyCode::KeyA as u32) {
+        state.cam_pos -= right * speed;
+    }
+    if input.is_key_pressed(KeyCode::KeyD as u32) {
+        state.cam_pos += right * speed;
+    }
+    if input.is_key_pressed(KeyCode::KeyQ as u32) {
+        state.cam_pos.y -= speed;
+    }
+    if input.is_key_pressed(KeyCode::KeyE as u32) {
+        state.cam_pos.y += speed;
+    }
+
+    let mut trans = world.borrow_mut::<Transform>();
+    {
         if let Some(t) = trans.get_mut(state.cam_id) {
             t.position = state.cam_pos;
             t.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
             t.update_local_matrix();
         }
     }
-    let mut cams = world.borrow_mut::<Camera>(); {
+    let mut cams = world.borrow_mut::<Camera>();
+    {
         if let Some(c) = cams.get_mut(state.cam_id) {
             c.yaw = state.cam_yaw;
             c.pitch = state.cam_pitch;

@@ -154,17 +154,17 @@ pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> 
             pos.set("z", t.position.z)?;
             positions.set(eid, pos)?;
 
-                let rot = lua.create_table()?;
-                rot.set("x", t.rotation.x)?;
-                rot.set("y", t.rotation.y)?;
-                rot.set("z", t.rotation.z)?;
-                rot.set("w", t.rotation.w)?;
-                rotations.set(eid, rot)?;
+            let rot = lua.create_table()?;
+            rot.set("x", t.rotation.x)?;
+            rot.set("y", t.rotation.y)?;
+            rot.set("z", t.rotation.z)?;
+            rot.set("w", t.rotation.w)?;
+            rotations.set(eid, rot)?;
 
-                let scl = lua.create_table()?;
-                scl.set("x", t.scale.x)?;
-                scl.set("y", t.scale.y)?;
-                scl.set("z", t.scale.z)?;
+            let scl = lua.create_table()?;
+            scl.set("x", t.scale.x)?;
+            scl.set("y", t.scale.y)?;
+            scl.set("z", t.scale.z)?;
             scales.set(eid, scl)?;
         }
     }

@@ -1,15 +1,25 @@
 use crate::EditorState;
 
 pub fn ui_build_console(ui: &mut egui::Ui, state: &mut EditorState) {
-    let is_building = state.build.is_building.load(std::sync::atomic::Ordering::Acquire);
-    
+    let is_building = state
+        .build
+        .is_building
+        .load(std::sync::atomic::Ordering::Acquire);
+
     // Asenkron logları topla (Thread-safe)
     if let Some(rx) = &state.build.logs_rx {
         while let Ok(log) = rx.lock().unwrap().try_recv() {
             let lower_log = log.to_lowercase();
-            let color = if lower_log.starts_with("error") || lower_log.contains("error[") || lower_log.contains("❌") || lower_log.contains("hata") {
+            let color = if lower_log.starts_with("error")
+                || lower_log.contains("error[")
+                || lower_log.contains("❌")
+                || lower_log.contains("hata")
+            {
                 egui::Color32::RED
-            } else if lower_log.contains("başarılı") || lower_log.contains("tamamlandı") || lower_log.contains("🎉") {
+            } else if lower_log.contains("başarılı")
+                || lower_log.contains("tamamlandı")
+                || lower_log.contains("🎉")
+            {
                 egui::Color32::GREEN
             } else if lower_log.starts_with("warning") || lower_log.contains("⚠") {
                 egui::Color32::YELLOW
@@ -19,11 +29,13 @@ pub fn ui_build_console(ui: &mut egui::Ui, state: &mut EditorState) {
             state.build.cached_logs.push((log, color));
         }
     }
-    
+
     let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
-    egui::ScrollArea::vertical()
-        .max_height(360.0)
-        .show_rows(ui, row_height, state.build.cached_logs.len(), |ui, row_range| {
+    egui::ScrollArea::vertical().max_height(360.0).show_rows(
+        ui,
+        row_height,
+        state.build.cached_logs.len(),
+        |ui, row_range| {
             for (log, color) in &state.build.cached_logs[row_range] {
                 ui.label(
                     egui::RichText::new(log)
@@ -34,11 +46,15 @@ pub fn ui_build_console(ui: &mut egui::Ui, state: &mut EditorState) {
             if is_building {
                 ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
             }
-        });
+        },
+    );
 
     ui.separator();
     if !is_building && !state.build.cached_logs.is_empty() {
-        if ui.button(egui::RichText::new("✖ Konsolu Temizle").strong()).clicked() {
+        if ui
+            .button(egui::RichText::new("✖ Konsolu Temizle").strong())
+            .clicked()
+        {
             state.build.cached_logs.clear();
         }
     } else if is_building {
@@ -61,10 +77,13 @@ pub fn ui_settings_window(ui: &mut egui::Ui, state: &mut EditorState) {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Hareket Hızı:");
-                    if ui.add(
-                        egui::Slider::new(&mut state.prefs.camera_speed, 1.0..=100.0)
-                            .suffix(" m/s"),
-                    ).drag_released() {
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut state.prefs.camera_speed, 1.0..=100.0)
+                                .suffix(" m/s"),
+                        )
+                        .drag_stopped()
+                    {
                         state.prefs.mark_dirty();
                     }
                 });
@@ -83,19 +102,43 @@ pub fn ui_settings_window(ui: &mut egui::Ui, state: &mut EditorState) {
                 );
                 ui.horizontal(|ui| {
                     ui.label("Taşıma:");
-                    if ui.add(egui::DragValue::new(&mut state.prefs.snap_translate).speed(0.05).clamp_range(0.01..=10.0).suffix(" m")).drag_released() {
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut state.prefs.snap_translate)
+                                .speed(0.05)
+                                .range(0.01..=10.0)
+                                .suffix(" m"),
+                        )
+                        .drag_stopped()
+                    {
                         state.prefs.mark_dirty();
                     }
                 });
                 ui.horizontal(|ui| {
                     ui.label("Döndürme:");
-                    if ui.add(egui::DragValue::new(&mut state.prefs.snap_rotate_deg).speed(1.0).clamp_range(1.0..=90.0).suffix("°")).drag_released() {
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut state.prefs.snap_rotate_deg)
+                                .speed(1.0)
+                                .range(1.0..=90.0)
+                                .suffix("°"),
+                        )
+                        .drag_stopped()
+                    {
                         state.prefs.mark_dirty();
                     }
                 });
                 ui.horizontal(|ui| {
                     ui.label("Ölçekleme:");
-                    if ui.add(egui::DragValue::new(&mut state.prefs.snap_scale).speed(0.01).clamp_range(0.01..=5.0).suffix(" x")).drag_released() {
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut state.prefs.snap_scale)
+                                .speed(0.01)
+                                .range(0.01..=5.0)
+                                .suffix(" x"),
+                        )
+                        .drag_stopped()
+                    {
                         state.prefs.mark_dirty();
                     }
                 });
@@ -107,12 +150,18 @@ pub fn ui_settings_window(ui: &mut egui::Ui, state: &mut EditorState) {
         egui::CollapsingHeader::new("📐 Grid & Görünüm")
             .default_open(true)
             .show(ui, |ui| {
-                if ui.checkbox(&mut state.prefs.show_grid, "Grid Çizgilerini Göster").changed() {
+                if ui
+                    .checkbox(&mut state.prefs.show_grid, "Grid Çizgilerini Göster")
+                    .changed()
+                {
                     state.prefs.mark_dirty();
                 }
                 ui.horizontal(|ui| {
                     ui.label("Gizmo Boyutu:");
-                    if ui.add(egui::Slider::new(&mut state.prefs.gizmo_size, 20.0..=200.0)).drag_released() {
+                    if ui
+                        .add(egui::Slider::new(&mut state.prefs.gizmo_size, 20.0..=200.0))
+                        .drag_stopped()
+                    {
                         state.prefs.mark_dirty();
                     }
                 });
@@ -140,7 +189,10 @@ pub fn ui_settings_window(ui: &mut egui::Ui, state: &mut EditorState) {
             .show(ui, |ui| {
                 ui.label("Gizmo Engine — Editör");
                 ui.label(egui::RichText::new("Rust + WGPU + Egui").weak().small());
-                ui.hyperlink_to("GitHub - Gizmo Engine", "https://github.com/Gizmo-engine/Gizmo");
+                ui.hyperlink_to(
+                    "GitHub - Gizmo Engine",
+                    "https://github.com/Gizmo-engine/Gizmo",
+                );
             });
     });
 }
@@ -153,7 +205,9 @@ pub fn ui_script_editor(ui: &mut egui::Ui, state: &mut EditorState) {
         if let Some(path) = current_path {
             ui.label(format!("Düzenleniyor: {}", path));
             if ui.button("💾 Kaydet").clicked() {
-                if let Err(e) = std::fs::write(&path, state.script.active_content.as_deref().unwrap_or("")) {
+                if let Err(e) =
+                    std::fs::write(&path, state.script.active_content.as_deref().unwrap_or(""))
+                {
                     state.log_error(&format!("Script kaydedilemedi: {}", e));
                 } else {
                     state.log_info(&format!("Script kaydedildi: {}", path));
@@ -163,19 +217,41 @@ pub fn ui_script_editor(ui: &mut egui::Ui, state: &mut EditorState) {
         } else {
             ui.label("Yeni Script");
         }
-        
+
         if state.script.pending_clear_confirm {
             let confirm_bg = egui::Color32::from_rgb(200, 50, 50);
-            if ui.add(egui::Button::new(egui::RichText::new("⚠️ Onayla: Sil").color(egui::Color32::WHITE)).fill(confirm_bg)).clicked() {
+            if ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new("⚠️ Onayla: Sil").color(egui::Color32::WHITE),
+                    )
+                    .fill(confirm_bg),
+                )
+                .clicked()
+            {
                 state.script.active_content = None;
                 state.script.active_path = None;
                 state.script.is_dirty = false;
                 state.script.pending_clear_confirm = false;
             }
         } else {
-            let clear_text = if state.script.is_dirty { "❌ İptal/Sil" } else { "❌ Temizle" };
-            let clear_bg = if state.script.is_dirty { egui::Color32::from_rgb(150, 50, 50) } else { ui.visuals().widgets.inactive.bg_fill };
-            if ui.add(egui::Button::new(egui::RichText::new(clear_text).color(egui::Color32::WHITE)).fill(clear_bg)).clicked() {
+            let clear_text = if state.script.is_dirty {
+                "❌ İptal/Sil"
+            } else {
+                "❌ Temizle"
+            };
+            let clear_bg = if state.script.is_dirty {
+                egui::Color32::from_rgb(150, 50, 50)
+            } else {
+                ui.visuals().widgets.inactive.bg_fill
+            };
+            if ui
+                .add(
+                    egui::Button::new(egui::RichText::new(clear_text).color(egui::Color32::WHITE))
+                        .fill(clear_bg),
+                )
+                .clicked()
+            {
                 if state.script.is_dirty {
                     state.script.pending_clear_confirm = true;
                 } else {

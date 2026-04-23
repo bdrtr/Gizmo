@@ -11,7 +11,7 @@ pub struct Transform {
     pub rotation: Quat,
     pub scale: Vec3,
     #[serde(skip, default = "default_mat4")]
-    pub global_matrix: Mat4,
+    pub local_matrix: Mat4,
 }
 
 impl Default for Transform {
@@ -26,7 +26,7 @@ impl Transform {
             position,
             rotation: Quat::IDENTITY,
             scale: Vec3::ONE,
-            global_matrix: Mat4::IDENTITY,
+            local_matrix: Mat4::IDENTITY,
         };
         t.update_local_matrix();
         t
@@ -44,17 +44,28 @@ impl Transform {
         self
     }
 
+    pub fn set_position(&mut self, pos: Vec3) {
+        self.position = pos;
+        self.update_local_matrix();
+    }
+
+    pub fn set_rotation(&mut self, rot: Quat) {
+        self.rotation = rot;
+        self.update_local_matrix();
+    }
+
+    pub fn set_scale(&mut self, scale: Vec3) {
+        self.scale = scale;
+        self.update_local_matrix();
+    }
+
     pub fn update_local_matrix(&mut self) {
-        self.global_matrix =
+        self.local_matrix =
             Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position);
     }
-    
+
     pub fn model_matrix(&self) -> Mat4 {
-        self.global_matrix
-    }
-    
-    pub fn local_matrix(&self) -> Mat4 {
-        Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position)
+        self.local_matrix
     }
 }
 
@@ -116,7 +127,7 @@ impl RigidBody {
             local_inertia: Vec3::splat(1.0),
         }
     }
-    
+
     pub fn new_static() -> Self {
         Self {
             mass: 0.0,
@@ -128,19 +139,78 @@ impl RigidBody {
             local_inertia: Vec3::ZERO,
         }
     }
-    
+
     pub fn wake_up(&mut self) {
         self.is_sleeping = false;
     }
-    
-    pub fn calculate_box_inertia(&mut self, _width: f32, _height: f32, _depth: f32) {}
-    pub fn calculate_sphere_inertia(&mut self, _radius: f32) {}
-    pub fn calculate_capsule_inertia(&mut self, _radius: f32, _half_height: f32) {}
-    
-    pub fn update_inertia_from_shape(&mut self, _shape: &crate::shape::ColliderShape) {}
+
+    #[inline]
+    pub fn inv_mass(&self) -> f32 {
+        if self.mass == 0.0 {
+            0.0
+        } else {
+            1.0 / self.mass
+        }
+    }
+
+    #[inline]
+    pub fn inv_local_inertia(&self) -> gizmo_math::Vec3 {
+        if self.mass == 0.0 {
+            gizmo_math::Vec3::ZERO
+        } else {
+            gizmo_math::Vec3::new(
+                if self.local_inertia.x == 0.0 { 0.0 } else { 1.0 / self.local_inertia.x },
+                if self.local_inertia.y == 0.0 { 0.0 } else { 1.0 / self.local_inertia.y },
+                if self.local_inertia.z == 0.0 { 0.0 } else { 1.0 / self.local_inertia.z },
+            )
+        }
+    }
+
+    pub fn calculate_box_inertia(&mut self, w: f32, h: f32, d: f32) {
+        let m = self.mass;
+        self.local_inertia = Vec3::new(
+            (m / 12.0) * (h * h + d * d),
+            (m / 12.0) * (w * w + d * d),
+            (m / 12.0) * (w * w + h * h),
+        );
+    }
+
+    pub fn calculate_sphere_inertia(&mut self, r: f32) {
+        let i = 0.4 * self.mass * r * r;
+        self.local_inertia = Vec3::splat(i);
+    }
+
+    pub fn calculate_capsule_inertia(&mut self, r: f32, half_h: f32) {
+        let m = self.mass;
+        let h = half_h * 2.0;
+        // Silindir + iki yarım küre yaklaşımı
+        let i_axial = m * (3.0 * r * r + h * h) / 12.0 + m * r * r / 2.0;
+        let i_radial = m * r * r * 2.0 / 5.0;
+        self.local_inertia = Vec3::new(i_axial, i_radial, i_axial);
+    }
+
+    pub fn update_inertia_from_shape(&mut self, shape: &crate::shape::ColliderShape) {
+        match shape {
+            crate::shape::ColliderShape::Aabb(aabb) => {
+                let w = aabb.half_extents.x * 2.0;
+                let h = aabb.half_extents.y * 2.0;
+                let d = aabb.half_extents.z * 2.0;
+                self.calculate_box_inertia(w, h, d);
+            }
+            crate::shape::ColliderShape::Sphere(s) => {
+                self.calculate_sphere_inertia(s.radius);
+            }
+            crate::shape::ColliderShape::Capsule(c) => {
+                self.calculate_capsule_inertia(c.radius, c.half_height);
+            }
+            crate::shape::ColliderShape::Plane { .. } => {
+                self.local_inertia = Vec3::splat(f32::INFINITY);
+            }
+        }
+    }
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Breakable {
     pub max_pieces: u32,
     pub threshold: f32, // required impulse/force to break

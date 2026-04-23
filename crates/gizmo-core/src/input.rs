@@ -198,8 +198,6 @@ impl Input {
     pub fn mouse_scroll(&self) -> f32 {
         self.mouse_scroll_delta
     }
-
-
 }
 
 impl Default for Input {
@@ -360,16 +358,31 @@ mod tests {
 
         // O frame boyunca hem pressed hem just_pressed true olmalı
         assert!(input.is_key_pressed(42), "fast-tap: tuş pressed olmalı");
-        assert!(input.is_key_just_pressed(42), "fast-tap: tuş just_pressed olmalı");
-        assert!(input.is_key_just_released(42), "fast-tap: tuş just_released olmalı");
+        assert!(
+            input.is_key_just_pressed(42),
+            "fast-tap: tuş just_pressed olmalı"
+        );
+        assert!(
+            input.is_key_just_released(42),
+            "fast-tap: tuş just_released olmalı"
+        );
 
         // Sonraki frame
         input.begin_frame();
 
         // Artık hiçbiri true olmamalı
-        assert!(!input.is_key_pressed(42), "sonraki frame: pressed false olmalı");
-        assert!(!input.is_key_just_pressed(42), "sonraki frame: just_pressed false olmalı");
-        assert!(!input.is_key_just_released(42), "sonraki frame: just_released false olmalı");
+        assert!(
+            !input.is_key_pressed(42),
+            "sonraki frame: pressed false olmalı"
+        );
+        assert!(
+            !input.is_key_just_pressed(42),
+            "sonraki frame: just_pressed false olmalı"
+        );
+        assert!(
+            !input.is_key_just_released(42),
+            "sonraki frame: just_released false olmalı"
+        );
     }
 
     #[test]

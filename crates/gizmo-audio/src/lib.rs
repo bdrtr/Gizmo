@@ -107,7 +107,8 @@ impl AudioManager {
 
     /// Sesi diske gidip okuyarak byte array olarak RAM'e kaydeder
     pub fn load_sound(&mut self, name: &str, path: &str) -> Result<(), AudioError> {
-        let mut file = File::open(Path::new(path)).map_err(|_| AudioError::NotFound(path.to_string()))?;
+        let mut file =
+            File::open(Path::new(path)).map_err(|_| AudioError::NotFound(path.to_string()))?;
         let mut buffer = Vec::new();
         file.read_to_end(&mut buffer).map_err(AudioError::Io)?;
         self.sound_buffers.insert(name.to_string(), buffer.into());
@@ -238,7 +239,7 @@ impl AudioManager {
                 1.0
             };
             volume *= base_volume;
-            
+
             sink.set_volume(volume);
         }
     }
@@ -253,7 +254,7 @@ impl AudioManager {
 
     pub fn set_pitch(&mut self, id: u64, pitch: f32) {
         if let Some(sink) = self.active_spatial_sinks.get(&id) {
-            sink.set_speed(pitch); 
+            sink.set_speed(pitch);
         } else if let Some(sink) = self.active_sinks.get(&id) {
             sink.set_speed(pitch);
         }

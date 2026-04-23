@@ -47,29 +47,44 @@ pub struct MaterialData {
 
 impl SceneData {
     /// Mevcut World durumunu JSON dosyası olarak diske kaydeder
-    pub fn save(world: &World, file_path: &str, registry: &crate::registry::SceneRegistry) -> Result<(), String> {
+    pub fn save(
+        world: &World,
+        file_path: &str,
+        registry: &crate::registry::SceneRegistry,
+    ) -> Result<(), String> {
         if let Some(parent) = std::path::Path::new(file_path).parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let entities_data =
-            Self::serialize_entities(world, world.iter_alive_entities().into_iter().map(|e| e.id()).collect(), registry);
+        let entities_data = Self::serialize_entities(
+            world,
+            world
+                .iter_alive_entities()
+                .into_iter()
+                .map(|e| e.id())
+                .collect(),
+            registry,
+        );
 
         let scene = SceneData {
             entities: entities_data,
         };
-        
+
         let string_data = ron::ser::to_string_pretty(&scene, ron::ser::PrettyConfig::default())
             .map_err(|e| format!("[SceneData::save] Serileştirme hatası: {}", e))?;
-            
+
         fs::write(file_path, string_data)
             .map_err(|e| format!("[SceneData::save] Dosya yazma hatası: {}", e))?;
-            
+
         println!("✅ Sahne kaydedildi → {}", file_path);
         Ok(())
     }
 
     /// Belirtilen entity ID'lerini serileştirir
-    pub fn serialize_entities(world: &World, entity_ids: Vec<u32>, registry: &crate::registry::SceneRegistry) -> Vec<EntityData> {
+    pub fn serialize_entities(
+        world: &World,
+        entity_ids: Vec<u32>,
+        registry: &crate::registry::SceneRegistry,
+    ) -> Vec<EntityData> {
         let mut entities_data = Vec::new();
         let names = world.borrow::<EntityName>();
         let meshes = world.borrow::<Mesh>();
@@ -86,19 +101,18 @@ impl SceneData {
                 }
             }
 
-            let mesh_source = meshes
-                .get(id)
-                .map(|m| m.source.clone());
-            let material_source =
-                materials
-                    .get(id)
-                    .map(|m| MaterialData {
-                        albedo: m.albedo,
-                        roughness: m.roughness,
-                        metallic: m.metallic,
-                        unlit: m.unlit,
-                        texture_source: m.texture_source.clone(),
-                    });
+            let mesh_source = meshes.get(id).map(|m| m.source.clone());
+            let material_source = materials.get(id).map(|m| MaterialData {
+                albedo: m.albedo,
+                roughness: m.roughness,
+                metallic: m.metallic,
+                unlit: match m.material_type {
+                    gizmo_renderer::components::MaterialType::Skybox => 2.0,
+                    gizmo_renderer::components::MaterialType::Unlit => 1.0,
+                    _ => 0.0,
+                },
+                texture_source: m.texture_source.clone(),
+            });
             let parent_id = parents.get(id).map(|p| p.0);
 
             // Dinamik bileşenleri Registry üzerinden tarayarak JSON AST'sine (ron::Value) dönüştür
@@ -227,7 +241,11 @@ impl SceneData {
                         // Eğer GLTF RAM'de yoksa, path'i çıkar ve gizlice parse edip Cache'e yükle.
                         let file_path = if let Some(idx) = mesh_src.find(".glb") {
                             Some(&mesh_src["gltf_mesh_".len()..idx + 4])
-                        } else { mesh_src.find(".gltf").map(|idx| &mesh_src["gltf_mesh_".len()..idx + 5]) };
+                        } else {
+                            mesh_src
+                                .find(".gltf")
+                                .map(|idx| &mesh_src["gltf_mesh_".len()..idx + 5])
+                        };
 
                         if let Some(path) = file_path {
                             let _ = asset_manager.load_gltf_scene(
@@ -272,7 +290,13 @@ impl SceneData {
                 mat.albedo = mat_data.albedo;
                 mat.roughness = mat_data.roughness;
                 mat.metallic = mat_data.metallic;
-                mat.unlit = mat_data.unlit;
+                mat.material_type = if mat_data.unlit > 1.5 {
+                    gizmo_renderer::components::MaterialType::Skybox
+                } else if mat_data.unlit > 0.5 {
+                    gizmo_renderer::components::MaterialType::Unlit
+                } else {
+                    gizmo_renderer::components::MaterialType::Pbr
+                };
                 mat.texture_source = mat_data.texture_source;
                 world.add_component(entity, mat);
                 world.add_component(entity, MeshRenderer::new());
@@ -292,10 +316,7 @@ impl SceneData {
 
             if let Some(p_id) = resolved_parent {
                 world.add_component(entity, Parent(p_id));
-                children_map
-                    .entry(p_id)
-                    .or_default()
-                    .push(new_id);
+                children_map.entry(p_id).or_default().push(new_id);
             }
         }
 
@@ -317,14 +338,19 @@ impl SceneData {
     }
 
     /// Prefab kaydet (Verilen entity ve tüm alt çocukları)
-    pub fn save_prefab(world: &World, root_entity_id: u32, file_path: &str, registry: &crate::registry::SceneRegistry) -> Result<(), String> {
+    pub fn save_prefab(
+        world: &World,
+        root_entity_id: u32,
+        file_path: &str,
+        registry: &crate::registry::SceneRegistry,
+    ) -> Result<(), String> {
         if let Some(parent) = std::path::Path::new(file_path).parent() {
             let _ = fs::create_dir_all(parent);
         }
 
         let mut ids_to_save = vec![root_entity_id];
         let children_storage = world.borrow::<Children>();
-        
+
         let mut i = 0;
         while i < ids_to_save.len() {
             let current = ids_to_save[i];
@@ -353,10 +379,10 @@ impl SceneData {
 
         let string_data = ron::ser::to_string_pretty(&prefab, ron::ser::PrettyConfig::default())
             .map_err(|e| format!("[SceneData::save_prefab] Serileştirme hatası: {}", e))?;
-            
+
         fs::write(file_path, string_data)
             .map_err(|e| format!("[SceneData::save_prefab] Dosya yazma hatası: {}", e))?;
-            
+
         println!("✅ Prefab kaydedildi → {}", file_path);
         Ok(())
     }
@@ -403,10 +429,7 @@ impl SceneData {
         if let (Some(new_r), Some(p_id)) = (new_root_id, parent_entity) {
             // Root entity'i existing parent'a (daha önce Children var mı yok mu bakarak) ekle!
             let mut children_list = Vec::new();
-            if let Some(existing_children) = world
-                .borrow::<Children>()
-                .get(p_id)
-            {
+            if let Some(existing_children) = world.borrow::<Children>().get(p_id) {
                 children_list = existing_children.0.clone();
             }
             children_list.push(new_r);

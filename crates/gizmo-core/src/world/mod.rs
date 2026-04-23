@@ -1,12 +1,12 @@
-use std::collections::HashMap;
-use std::any::TypeId;
-use std::sync::RwLock;
-use crate::entity::Entity;
-use crate::archetype::{EntityLocation, ComponentInfo, Archetype};
 use crate::archetype::index::ArchetypeIndex;
-use crate::storage::{StorageView, StorageViewMut};
-use std::marker::PhantomData;
+use crate::archetype::{Archetype, ComponentInfo, EntityLocation};
 use crate::component::Component;
+use crate::entity::Entity;
+use crate::storage::{StorageView, StorageViewMut};
+use std::any::TypeId;
+use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::sync::RwLock;
 
 pub mod hooks;
 pub mod resources;
@@ -28,9 +28,9 @@ pub struct World {
 
     /// Runtime component metadata cache'i. Archetype sütunları oluşturmak için gereklidir.
     component_infos: HashMap<TypeId, ComponentInfo>,
-    
+
     pub(crate) component_hooks: HashMap<TypeId, ComponentHooks>,
-    
+
     despawn_hooks: Vec<DespawnHook>,
     entities_to_despawn: Vec<Entity>,
     is_despawning: bool,
@@ -97,15 +97,27 @@ impl World {
     }
 
     pub fn register_on_add<T: Component>(&mut self, hook: AddHook) {
-        self.component_hooks.entry(TypeId::of::<T>()).or_default().on_add.push(hook);
+        self.component_hooks
+            .entry(TypeId::of::<T>())
+            .or_default()
+            .on_add
+            .push(hook);
     }
 
     pub fn register_on_remove<T: Component>(&mut self, hook: RemoveHook) {
-        self.component_hooks.entry(TypeId::of::<T>()).or_default().on_remove.push(hook);
+        self.component_hooks
+            .entry(TypeId::of::<T>())
+            .or_default()
+            .on_remove
+            .push(hook);
     }
 
     pub fn register_on_set<T: Component>(&mut self, hook: SetHook) {
-        self.component_hooks.entry(TypeId::of::<T>()).or_default().on_set.push(hook);
+        self.component_hooks
+            .entry(TypeId::of::<T>())
+            .or_default()
+            .on_set
+            .push(hook);
     }
 
     pub fn spawn(&mut self) -> Entity {
@@ -113,7 +125,7 @@ impl World {
             let entities = self.get_resource::<Entities>().unwrap();
             entities.reserve_entity()
         };
-        
+
         self.flush_spawn(entity);
         entity
     }
@@ -128,7 +140,8 @@ impl World {
         let row = self.archetype_index.archetypes[0].len() as u32 - 1;
 
         if loc_idx >= self.entity_locations.len() {
-            self.entity_locations.resize(loc_idx + 1, EntityLocation::INVALID);
+            self.entity_locations
+                .resize(loc_idx + 1, EntityLocation::INVALID);
         }
         self.entity_locations[loc_idx] = EntityLocation {
             archetype_id: 0,
@@ -165,7 +178,7 @@ impl World {
         // Kilitlenmeleri engellemek için önce ID'leri üretelim
         let mut new_entities = Vec::with_capacity(count);
         let mut new_eids = Vec::with_capacity(count);
-        
+
         {
             let entities_res = self.get_resource::<Entities>().unwrap();
             for _ in 0..count {
@@ -178,16 +191,15 @@ impl World {
         // Seçilen Archetype içinde kopyalamayı batch halinde yapıyoruz
         let arch = &mut self.archetype_index.archetypes[arch_id];
         let tick = self.tick;
-        let new_rows = unsafe {
-            arch.batch_clone_row(row, count, &new_eids, tick)
-        };
-        
+        let new_rows = unsafe { arch.batch_clone_row(row, count, &new_eids, tick) };
+
         // Location güncellemeleri
         for (i, &id) in new_eids.iter().enumerate() {
             let row = new_rows[i];
             let idx = id as usize;
             if idx >= self.entity_locations.len() {
-                self.entity_locations.resize(idx + 1, EntityLocation::INVALID);
+                self.entity_locations
+                    .resize(idx + 1, EntityLocation::INVALID);
             }
             self.entity_locations[idx] = EntityLocation {
                 archetype_id: arch_id as u32,
@@ -224,7 +236,7 @@ impl World {
 
             let id = e.id();
             let loc = self.entity_locations[id as usize];
-            
+
             if loc.is_valid() {
                 // Call OnRemove hooks for all currently held components
                 let comp_types = {
@@ -239,19 +251,25 @@ impl World {
                         }
                     }
                 }
-                
+
                 // Re-fetch location safely after hooks might have mutated state
                 let loc = self.entity_locations[id as usize];
                 if loc.is_valid() {
                     // Archetype'tan verileri temizle
-                    if let Some(moved_eid) = self.archetype_index.archetypes[loc.archetype_id as usize].swap_remove_entity(loc.row as usize) {
+                    if let Some(moved_eid) = self.archetype_index.archetypes
+                        [loc.archetype_id as usize]
+                        .swap_remove_entity(loc.row as usize)
+                    {
                         // Kayan entity'nin location bilgisini güncelle
                         self.entity_locations[moved_eid as usize].row = loc.row;
                     }
                 }
             }
 
-            { let entities = self.get_resource::<Entities>().unwrap(); entities.free(e); }
+            {
+                let entities = self.get_resource::<Entities>().unwrap();
+                entities.free(e);
+            }
 
             self.archetype_index.entity_archetype.remove(&id);
             self.entity_locations[id as usize] = EntityLocation::INVALID;
@@ -264,19 +282,20 @@ impl World {
     /// Yükleme (Loading) ekranlarında veya düşük yoğunluklu anlarda çağrılması önerilir.
     pub fn compact(&mut self) {
         // 1. Önce eski, kullanılmayan boş archetype'ları silelim (GC)
-        self.archetype_index.gc_empty_archetypes(&mut self.entity_locations);
+        self.archetype_index
+            .gc_empty_archetypes(&mut self.entity_locations);
 
         // 2. Kalan archetype'ların kapasitelerini minimuma indirelim (Shrink To Fit)
         for arch in &mut self.archetype_index.archetypes {
             arch.shrink_to_fit();
         }
-        
+
         self.archetype_index.archetypes.shrink_to_fit();
 
         // 3. World seviyesindeki listeleri daraltalım.
         self.entities_to_despawn.shrink_to_fit();
         self.entity_locations.shrink_to_fit();
-        
+
         let entities = self.get_resource::<Entities>().unwrap();
         let mut state = entities.state.lock().unwrap();
         state.generations.shrink_to_fit();
@@ -304,10 +323,6 @@ impl World {
         alive
     }
 
-
-
-
-
     #[inline]
     pub fn is_alive(&self, entity: Entity) -> bool {
         self.get_resource::<Entities>().unwrap().is_alive(entity)
@@ -324,7 +339,10 @@ impl World {
         let type_id = TypeId::of::<T>();
 
         // 1. Hedef archetype'ı belirle
-        let target_arch_id = self.archetype_index.get_add_component_target(eid, type_id, &self.component_infos).unwrap();
+        let target_arch_id = self
+            .archetype_index
+            .get_add_component_target(eid, type_id, &self.component_infos)
+            .unwrap();
         let old_loc = self.entity_locations[eid as usize];
 
         if old_loc.archetype_id == target_arch_id as u32 {
@@ -335,7 +353,9 @@ impl World {
                 unsafe {
                     let ptr = col.get_ptr(old_loc.row as usize) as *mut T;
                     *ptr = component;
-                    col.ticks_ptr_mut().add(old_loc.row as usize).write(crate::archetype::ComponentTicks::new(self.tick));
+                    col.ticks_ptr_mut()
+                        .add(old_loc.row as usize)
+                        .write(crate::archetype::ComponentTicks::new(self.tick));
                 }
             }
             // Trigger OnSet hooks
@@ -349,13 +369,18 @@ impl World {
         }
 
         // 2. Migration: Verileri eski archetype'tan hedef archetype'a taşı
-        let (eid, old_arch_id, old_row) = (entity.id(), old_loc.archetype_id as usize, old_loc.row as usize);
+        let (eid, old_arch_id, old_row) = (
+            entity.id(),
+            old_loc.archetype_id as usize,
+            old_loc.row as usize,
+        );
 
         let (new_row, moved_eid) = unsafe {
             // Raw pointer ile iki archetype'ı ödünç alıyoruz (farklı indeksler olduğu garantidir)
             let old_arch_ptr = &mut self.archetype_index.archetypes[old_arch_id] as *mut Archetype;
-            let target_arch_ptr = &mut self.archetype_index.archetypes[target_arch_id] as *mut Archetype;
-            
+            let target_arch_ptr =
+                &mut self.archetype_index.archetypes[target_arch_id] as *mut Archetype;
+
             (&mut *old_arch_ptr).move_entity_to(old_row, &mut *target_arch_ptr)
         };
 
@@ -366,11 +391,15 @@ impl World {
         // 3. Yeni component'ı hedef archetype'a ekle
         {
             let arch = &self.archetype_index.archetypes[target_arch_id];
-            let mut col = arch.get_column_mut(type_id).expect("Mandatory component column missing");
+            let mut col = arch
+                .get_column_mut(type_id)
+                .expect("Mandatory component column missing");
             unsafe {
                 let ptr = col.get_ptr(new_row as usize) as *mut T;
                 std::ptr::write(ptr, component);
-                col.ticks_ptr_mut().add(new_row as usize).write(crate::archetype::ComponentTicks::new(self.tick));
+                col.ticks_ptr_mut()
+                    .add(new_row as usize)
+                    .write(crate::archetype::ComponentTicks::new(self.tick));
             }
         }
 
@@ -379,7 +408,9 @@ impl World {
             archetype_id: target_arch_id as u32,
             row: new_row,
         };
-        self.archetype_index.entity_archetype.insert(eid, target_arch_id);
+        self.archetype_index
+            .entity_archetype
+            .insert(eid, target_arch_id);
 
         let hooks = self.component_hooks.get(&type_id).cloned();
         if let Some(hooks) = hooks {
@@ -403,7 +434,9 @@ impl World {
         let old_loc = self.entity_locations[eid as usize];
 
         // 1. Hedef archetype'ı belirle
-        let target_arch_id_opt = self.archetype_index.get_remove_component_target(eid, type_id, &self.component_infos);
+        let target_arch_id_opt =
+            self.archetype_index
+                .get_remove_component_target(eid, type_id, &self.component_infos);
         let target_arch_id = match target_arch_id_opt {
             Some(id) => id,
             None => return, // Zaten yok veya hata
@@ -415,8 +448,10 @@ impl World {
 
         // 2. Migration
         let (new_row, moved_eid) = unsafe {
-            let old_arch_ptr = &mut self.archetype_index.archetypes[old_loc.archetype_id as usize] as *mut Archetype;
-            let target_arch_ptr = &mut self.archetype_index.archetypes[target_arch_id] as *mut Archetype;
+            let old_arch_ptr = &mut self.archetype_index.archetypes[old_loc.archetype_id as usize]
+                as *mut Archetype;
+            let target_arch_ptr =
+                &mut self.archetype_index.archetypes[target_arch_id] as *mut Archetype;
             (&mut *old_arch_ptr).move_entity_to(old_loc.row as usize, &mut *target_arch_ptr)
         };
 
@@ -429,7 +464,9 @@ impl World {
             archetype_id: target_arch_id as u32,
             row: new_row,
         };
-        self.archetype_index.entity_archetype.insert(eid, target_arch_id);
+        self.archetype_index
+            .entity_archetype
+            .insert(eid, target_arch_id);
 
         let hooks = self.component_hooks.get(&type_id).cloned();
         if let Some(hooks) = hooks {
@@ -442,7 +479,7 @@ impl World {
     /// Component dizisine okuma erişimi (Read-Only, Ref ile paylaşılabilir).
     pub fn borrow<T: Component>(&self) -> StorageView<'_, T> {
         let type_id = TypeId::of::<T>();
-        
+
         // Bu componenti içeren tüm archetype'ları bul
         let mut matching = Vec::new();
         // StorageView için bir ID haritası gerekebilir
@@ -465,7 +502,7 @@ impl World {
 
     pub fn borrow_mut<T: Component>(&self) -> StorageViewMut<'_, T> {
         let type_id = TypeId::of::<T>();
-        
+
         let mut matching = Vec::new();
         let mut arch_id_to_idx = vec![None; self.archetype_index.archetypes.len()];
 
@@ -490,13 +527,17 @@ impl World {
     // ERGONOMİK SORGULAR (QUERY API)
     // ==========================================================
 
-    pub fn query<'w, Q: crate::query::WorldQuery<'w>>(&'w self) -> Option<crate::query::Query<'w, Q>> {
+    pub fn query<'w, Q: crate::query::WorldQuery<'w>>(
+        &'w self,
+    ) -> Option<crate::query::Query<'w, Q>> {
         crate::query::Query::new(self)
     }
 
     /// Cache'li query — archetype indeks cache'ini kullanır.
     /// &mut self gerektirdiği için sadece World sahibiyken çağrılabilir.
-    pub fn query_cached<'w, Q: crate::query::WorldQuery<'w>>(&'w mut self) -> Option<crate::query::Query<'w, Q>> {
+    pub fn query_cached<'w, Q: crate::query::WorldQuery<'w>>(
+        &'w mut self,
+    ) -> Option<crate::query::Query<'w, Q>> {
         crate::query::Query::new_cached(self)
     }
 
@@ -516,7 +557,9 @@ impl World {
     pub fn entity_count(&self) -> u32 {
         let entities = self.get_resource::<Entities>().unwrap();
         let state = entities.state.lock().unwrap();
-        state.next_entity_id.saturating_sub(state.free_ids.len() as u32)
+        state
+            .next_entity_id
+            .saturating_sub(state.free_ids.len() as u32)
     }
 
     // ==========================================================
@@ -541,30 +584,57 @@ impl World {
     }
 
     /// `get_resource` ile aynı işlev, ama hata sebebini `Result` ile taşır.
-    pub fn try_get_resource<T: 'static>(&self) -> Result<ResourceReadGuard<'_, T>, ResourceFetchError> {
+    pub fn try_get_resource<T: 'static>(
+        &self,
+    ) -> Result<ResourceReadGuard<'_, T>, ResourceFetchError> {
         let type_id = TypeId::of::<T>();
-        let storage = self.resources.get(&type_id).ok_or(ResourceFetchError::NotFound(type_id))?;
-        let guard = storage.try_read().map_err(|_| ResourceFetchError::BorrowConflict(type_id))?;
-        Ok(ResourceReadGuard { guard, _marker: PhantomData })
+        let storage = self
+            .resources
+            .get(&type_id)
+            .ok_or(ResourceFetchError::NotFound(type_id))?;
+        let guard = storage
+            .try_read()
+            .map_err(|_| ResourceFetchError::BorrowConflict(type_id))?;
+        Ok(ResourceReadGuard {
+            guard,
+            _marker: PhantomData,
+        })
     }
 
     /// `get_resource_mut` ile aynı işlev, ama hata sebebini `Result` ile taşır.
-    pub fn try_get_resource_mut<T: 'static>(&self) -> Result<ResourceWriteGuard<'_, T>, ResourceFetchError> {
+    pub fn try_get_resource_mut<T: 'static>(
+        &self,
+    ) -> Result<ResourceWriteGuard<'_, T>, ResourceFetchError> {
         let type_id = TypeId::of::<T>();
-        let storage = self.resources.get(&type_id).ok_or(ResourceFetchError::NotFound(type_id))?;
-        let guard = storage.try_write().map_err(|_| ResourceFetchError::BorrowConflict(type_id))?;
-        Ok(ResourceWriteGuard { guard, _marker: PhantomData })
+        let storage = self
+            .resources
+            .get(&type_id)
+            .ok_or(ResourceFetchError::NotFound(type_id))?;
+        let guard = storage
+            .try_write()
+            .map_err(|_| ResourceFetchError::BorrowConflict(type_id))?;
+        Ok(ResourceWriteGuard {
+            guard,
+            _marker: PhantomData,
+        })
     }
 
     /// Global bir Resource yoksa Default olarak oluşturur, ardından Mutable Borrow döndürür.
     /// World mutable borrow gerektirir, böylece hashmap'e güvenle kayıt yapılabilir.
-    pub fn get_resource_mut_or_default<T: Default + Send + Sync + 'static>(&mut self) -> ResourceWriteGuard<'_, T> {
+    pub fn get_resource_mut_or_default<T: Default + Send + Sync + 'static>(
+        &mut self,
+    ) -> ResourceWriteGuard<'_, T> {
         let type_id = TypeId::of::<T>();
-        self.resources.entry(type_id).or_insert_with(|| RwLock::new(Box::new(T::default())));
+        self.resources
+            .entry(type_id)
+            .or_insert_with(|| RwLock::new(Box::new(T::default())));
 
         let storage = self.resources.get(&type_id).unwrap();
         let guard = storage.write().unwrap();
-        ResourceWriteGuard { guard, _marker: PhantomData }
+        ResourceWriteGuard {
+            guard,
+            _marker: PhantomData,
+        }
     }
 
     /// Global bir Resource'u ECS'ten tamamen çıkartır ve sahipliğini döndürür
@@ -580,19 +650,23 @@ impl World {
 
     /// Belirli bir Archetype içindeki iki satırı güvenli bir şekilde takaslar ve entity lokasyonlarını günceller.
     pub fn swap_archetype_rows(&mut self, arch_id: u32, row_a: usize, row_b: usize) {
-        if row_a == row_b { return; }
-        
+        if row_a == row_b {
+            return;
+        }
+
         let arch = &self.archetype_index.archetypes[arch_id as usize];
-        if row_a >= arch.len() || row_b >= arch.len() { return; }
+        if row_a >= arch.len() || row_b >= arch.len() {
+            return;
+        }
 
         let entity_a = arch.entities()[row_a];
         let entity_b = arch.entities()[row_b];
-        
+
         unsafe {
             let mut_arch = &mut self.archetype_index.archetypes[arch_id as usize];
             mut_arch.swap_rows(row_a, row_b);
         }
-        
+
         self.entity_locations[entity_a as usize].row = row_b as u32;
         self.entity_locations[entity_b as usize].row = row_a as u32;
     }
@@ -610,23 +684,36 @@ impl World {
 
         for arch_idx in arches_to_sort {
             let arch_len = self.archetype_index.archetypes[arch_idx].len();
-            if arch_len <= 1 { continue; }
+            if arch_len <= 1 {
+                continue;
+            }
 
             let mut visited = std::collections::HashSet::new();
 
             for row in 0..arch_len {
                 let parent_entity_id = self.archetype_index.archetypes[arch_idx].entities()[row];
-                
-                if visited.contains(&parent_entity_id) { continue; }
+
+                if visited.contains(&parent_entity_id) {
+                    continue;
+                }
                 visited.insert(parent_entity_id);
 
                 let children_opt = {
-                    let fetch = unsafe { 
-                        <&crate::component::Children as crate::query::FetchComponent>::fetch_raw(&self.archetype_index.archetypes[arch_idx], self.tick) 
+                    let fetch = unsafe {
+                        <&crate::component::Children as crate::query::FetchComponent>::fetch_raw(
+                            &self.archetype_index.archetypes[arch_idx],
+                            self.tick,
+                        )
                     };
                     if let Some(f) = fetch {
-                        Some(unsafe { <&crate::component::Children as crate::query::FetchComponent>::get_item(f, row) })
-                    } else { None }
+                        Some(unsafe {
+                            <&crate::component::Children as crate::query::FetchComponent>::get_item(
+                                f, row,
+                            )
+                        })
+                    } else {
+                        None
+                    }
                 };
 
                 let children_list = match children_opt {
@@ -640,7 +727,11 @@ impl World {
                     if loc.is_valid() && loc.archetype_id == arch_idx as u32 {
                         let child_row = loc.row as usize;
                         if child_row > current_insert_row {
-                            self.swap_archetype_rows(arch_idx as u32, current_insert_row, child_row);
+                            self.swap_archetype_rows(
+                                arch_idx as u32,
+                                current_insert_row,
+                                child_row,
+                            );
                             visited.insert(child_id);
                             current_insert_row += 1;
                         } else if child_row == current_insert_row {
@@ -653,4 +744,3 @@ impl World {
         }
     }
 }
-

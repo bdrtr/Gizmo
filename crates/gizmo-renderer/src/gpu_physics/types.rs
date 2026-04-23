@@ -1,5 +1,3 @@
-use crate::gpu_types::Vertex;
-
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuBox {
@@ -69,13 +67,13 @@ pub struct GpuCollider {
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PhysicsSimParams {
     // WGSL vec3<f32> → 16-byte alignment. Toplam struct: 64 bytes.
-    pub dt: f32,                 // offset 0
-    pub _pad0: [u32; 3],         // offset 4-15  (WGSL implicit padding — vec3 align 16)
-    pub _pad1: [f32; 3],         // offset 16-27 (WGSL _pad1: vec3<f32>)
-    pub _pad1b: u32,             // offset 28-31 (WGSL implicit padding — vec3 align 16)
-    pub gravity: [f32; 3],       // offset 32-43 (WGSL gravity: vec3<f32>)
-    pub damping: f32,            // offset 44-47
-    pub num_boxes: u32,          // offset 48-51
-    pub num_colliders: u32,      // offset 52-55
-    pub _pad2: [u32; 2],         // offset 56-63 (WGSL _pad2: vec2<u32>)
+    pub dt: f32,            // offset 0
+    pub _pad0: [u32; 3],    // offset 4-15  (WGSL implicit padding — vec3 align 16)
+    pub _pad1: [f32; 3],    // offset 16-27 (WGSL _pad1: vec3<f32>)
+    pub _pad1b: u32,        // offset 28-31 (WGSL implicit padding — vec3 align 16)
+    pub gravity: [f32; 3],  // offset 32-43 (WGSL gravity: vec3<f32>)
+    pub damping: f32,       // offset 44-47
+    pub num_boxes: u32,     // offset 48-51
+    pub num_colliders: u32, // offset 52-55
+    pub _pad2: [u32; 2],    // offset 56-63 (WGSL _pad2: vec2<u32>)
 }

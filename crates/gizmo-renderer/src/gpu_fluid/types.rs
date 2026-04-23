@@ -4,11 +4,9 @@ pub struct FluidParticle {
     pub position: [f32; 3],
     pub density: f32,
     pub velocity: [f32; 3],
-    pub pressure: f32,
+    pub lambda: f32,
+    pub predicted_position: [f32; 3],
     pub phase: u32,
-    pub pad1: u32,
-    pub pad2: u32,
-    pub pad3: u32,
 }
 
 #[repr(C)]
@@ -23,6 +21,8 @@ pub struct ParticleHash {
 pub struct SortParams {
     pub j: u32,
     pub k: u32,
+    pub _pad0: u32,
+    pub _pad1: u32,
 }
 
 #[repr(C)]
@@ -58,9 +58,9 @@ pub struct FluidParams {
     pub mouse_active: f32,
     pub mouse_dir: [f32; 3],
     pub mouse_radius: f32,
-    
+
     pub num_colliders: u32,
-    pub pad1: f32,
+    pub cohesion: f32,
     pub pad2: f32,
     pub pad3: f32,
 }

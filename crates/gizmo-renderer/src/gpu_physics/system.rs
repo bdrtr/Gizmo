@@ -2,8 +2,8 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
-use super::types::*;
 use super::pipeline::{create_physics_pipelines, PhysicsPipelines};
+use super::types::*;
 
 pub struct GpuPhysicsSystem {
     pub max_boxes: u32,
@@ -24,7 +24,7 @@ pub struct GpuPhysicsSystem {
     pub readback_buffer: wgpu::Buffer,
     // 0 = Idle, 1 = Copied to buffer (awaiting map), 2 = Mapping, 3 = Mapped (ready to read)
     pub readback_state: Arc<AtomicU8>,
-    
+
     pub indirect_buffer: wgpu::Buffer,
     pub culled_boxes_buffer: wgpu::Buffer,
 }
@@ -39,7 +39,7 @@ impl GpuPhysicsSystem {
     ) -> Self {
         let mut initial_boxes = Vec::with_capacity(max_boxes as usize);
         let grid_dim = (max_boxes as f32).powf(1.0 / 3.0).ceil() as u32;
-        let spacing = 2.1f32; 
+        let spacing = 2.1f32;
         let offset = (grid_dim as f32 * spacing) / 2.0;
 
         for i in 0..max_boxes {
@@ -87,7 +87,7 @@ impl GpuPhysicsSystem {
             data1: [0.0, 1.0, 0.0, 0.0], // Normal vec
             data2: [0.0, 0.0, 0.0, 0.0], // distance = 0
         });
-        
+
         // 2. Ortadaki Devasa Zemin Platformu (AABB)
         initial_colliders.push(GpuCollider {
             shape_type: 0,
@@ -107,7 +107,12 @@ impl GpuPhysicsSystem {
         let max_static_colliders = 100;
         let num_initial = initial_colliders.len();
         if num_initial < max_static_colliders {
-            let empty_col = GpuCollider { shape_type: 0, _pad1: [0; 3], data1: [0.0;4], data2: [0.0;4] };
+            let empty_col = GpuCollider {
+                shape_type: 0,
+                _pad1: [0; 3],
+                data1: [0.0; 4],
+                data2: [0.0; 4],
+            };
             initial_colliders.resize(max_static_colliders, empty_col);
         }
 
@@ -173,21 +178,24 @@ impl GpuPhysicsSystem {
 
         let indirect_data: [u32; 5] = [
             indices.len() as u32, // vertex_count
-            0, // instance_count
-            0, // first_index
-            0, // base_vertex
-            0, // first_instance
+            0,                    // instance_count
+            0,                    // first_index
+            0,                    // base_vertex
+            0,                    // first_instance
         ];
-        
+
         let indirect_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Culling Indirect Buffer"),
             contents: bytemuck::cast_slice(&indirect_data),
-            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::INDIRECT
+                | wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST,
         });
 
         let culled_boxes_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Culled Boxes Buffer"),
-            size: (max_boxes as wgpu::BufferAddress) * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress,
+            size: (max_boxes as wgpu::BufferAddress)
+                * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
             mapped_at_creation: false,
         });
@@ -220,15 +228,16 @@ impl GpuPhysicsSystem {
             box_vertex_buffer,
             box_index_buffer,
             index_count: indices.len() as u32,
-            
+
             readback_buffer: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("GPU Physics Readback Buffer"),
-                size: (max_boxes as wgpu::BufferAddress) * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress,
+                size: (max_boxes as wgpu::BufferAddress)
+                    * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress,
                 usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
             readback_state: Arc::new(AtomicU8::new(0)),
-            
+
             indirect_buffer,
             culled_boxes_buffer,
         }
@@ -236,15 +245,25 @@ impl GpuPhysicsSystem {
 
     pub fn update_box(&self, queue: &wgpu::Queue, index: u32, box_struct: &GpuBox) {
         if index < self.max_boxes {
-            let offset = (index as wgpu::BufferAddress) * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress;
-            queue.write_buffer(&self.boxes_buffer, offset, bytemuck::cast_slice(&[*box_struct]));
+            let offset = (index as wgpu::BufferAddress)
+                * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress;
+            queue.write_buffer(
+                &self.boxes_buffer,
+                offset,
+                bytemuck::cast_slice(&[*box_struct]),
+            );
         }
     }
 
     pub fn update_collider(&self, queue: &wgpu::Queue, index: u32, collider: &GpuCollider) {
         if index < 100 {
-            let offset = (index as wgpu::BufferAddress) * std::mem::size_of::<GpuCollider>() as wgpu::BufferAddress;
-            queue.write_buffer(&self.colliders_buffer, offset, bytemuck::cast_slice(&[*collider]));
+            let offset = (index as wgpu::BufferAddress)
+                * std::mem::size_of::<GpuCollider>() as wgpu::BufferAddress;
+            queue.write_buffer(
+                &self.colliders_buffer,
+                offset,
+                bytemuck::cast_slice(&[*collider]),
+            );
         }
     }
 
@@ -271,7 +290,11 @@ impl GpuPhysicsSystem {
         cpass.dispatch_workgroups(self.max_boxes.div_ceil(256), 1, 1);
     }
 
-    pub fn cull_pass(&self, encoder: &mut wgpu::CommandEncoder, global_bind_group: &wgpu::BindGroup) {
+    pub fn cull_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        global_bind_group: &wgpu::BindGroup,
+    ) {
         encoder.clear_buffer(&self.indirect_buffer, 4, Some(4));
 
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -293,28 +316,28 @@ impl GpuPhysicsSystem {
         rpass.set_bind_group(0, global_bind_group, &[]);
         rpass.set_vertex_buffer(0, self.box_vertex_buffer.slice(..));
         rpass.set_vertex_buffer(1, self.culled_boxes_buffer.slice(..));
-        rpass.set_index_buffer(
-            self.box_index_buffer.slice(..),
-            wgpu::IndexFormat::Uint32,
-        );
+        rpass.set_index_buffer(self.box_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         rpass.draw_indexed_indirect(&self.indirect_buffer, 0);
     }
 
     pub fn request_readback(&self, encoder: &mut wgpu::CommandEncoder) {
-        if self.readback_state.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-            let size = (self.max_boxes as wgpu::BufferAddress) * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress;
-            encoder.copy_buffer_to_buffer(
-                &self.boxes_buffer,
-                0,
-                &self.readback_buffer,
-                0,
-                size,
-            );
+        if self
+            .readback_state
+            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            let size = (self.max_boxes as wgpu::BufferAddress)
+                * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress;
+            encoder.copy_buffer_to_buffer(&self.boxes_buffer, 0, &self.readback_buffer, 0, size);
         }
     }
 
     pub fn poll_readback_data(&self, device: &wgpu::Device) -> Option<Vec<GpuBox>> {
-        if self.readback_state.compare_exchange(1, 2, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+        if self
+            .readback_state
+            .compare_exchange(1, 2, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
             let slice = self.readback_buffer.slice(..);
             let state_clone = self.readback_state.clone();
             slice.map_async(wgpu::MapMode::Read, move |result| {
@@ -331,15 +354,15 @@ impl GpuPhysicsSystem {
         if self.readback_state.load(Ordering::SeqCst) == 3 {
             let slice = self.readback_buffer.slice(..);
             let view = slice.get_mapped_range();
-            
+
             let data: &[GpuBox] = bytemuck::cast_slice(&view);
             let vec_data = data.to_vec();
-            
+
             drop(view);
             self.readback_buffer.unmap();
-            
+
             self.readback_state.store(0, Ordering::SeqCst);
-            
+
             return Some(vec_data);
         }
         None
@@ -349,12 +372,30 @@ impl GpuPhysicsSystem {
 fn create_cube() -> (Vec<crate::gpu_types::Vertex>, Vec<u32>) {
     let s = 1.0f32;
     let faces: [([f32; 3], [[f32; 3]; 4]); 6] = [
-        ([0.0, 0.0, 1.0],  [[-s,-s, s], [ s,-s, s], [ s, s, s], [-s, s, s]]),
-        ([0.0, 0.0,-1.0],  [[ s,-s,-s], [-s,-s,-s], [-s, s,-s], [ s, s,-s]]),
-        ([1.0, 0.0, 0.0],  [[ s,-s, s], [ s,-s,-s], [ s, s,-s], [ s, s, s]]),
-        ([-1.0,0.0, 0.0],  [[-s,-s,-s], [-s,-s, s], [-s, s, s], [-s, s,-s]]),
-        ([0.0, 1.0, 0.0],  [[-s, s, s], [ s, s, s], [ s, s,-s], [-s, s,-s]]),
-        ([0.0,-1.0, 0.0],  [[-s,-s,-s], [ s,-s,-s], [ s,-s, s], [-s,-s, s]]),
+        (
+            [0.0, 0.0, 1.0],
+            [[-s, -s, s], [s, -s, s], [s, s, s], [-s, s, s]],
+        ),
+        (
+            [0.0, 0.0, -1.0],
+            [[s, -s, -s], [-s, -s, -s], [-s, s, -s], [s, s, -s]],
+        ),
+        (
+            [1.0, 0.0, 0.0],
+            [[s, -s, s], [s, -s, -s], [s, s, -s], [s, s, s]],
+        ),
+        (
+            [-1.0, 0.0, 0.0],
+            [[-s, -s, -s], [-s, -s, s], [-s, s, s], [-s, s, -s]],
+        ),
+        (
+            [0.0, 1.0, 0.0],
+            [[-s, s, s], [s, s, s], [s, s, -s], [-s, s, -s]],
+        ),
+        (
+            [0.0, -1.0, 0.0],
+            [[-s, -s, -s], [s, -s, -s], [s, -s, s], [-s, -s, s]],
+        ),
     ];
 
     let mut vertices = Vec::with_capacity(24);

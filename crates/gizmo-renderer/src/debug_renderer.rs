@@ -31,14 +31,20 @@ impl Gizmos {
         let p6 = Vec3::new(max.x, max.y, max.z);
         let p7 = Vec3::new(min.x, max.y, max.z);
         // Bottom
-        self.draw_line(p0, p1, color); self.draw_line(p1, p2, color);
-        self.draw_line(p2, p3, color); self.draw_line(p3, p0, color);
+        self.draw_line(p0, p1, color);
+        self.draw_line(p1, p2, color);
+        self.draw_line(p2, p3, color);
+        self.draw_line(p3, p0, color);
         // Top
-        self.draw_line(p4, p5, color); self.draw_line(p5, p6, color);
-        self.draw_line(p6, p7, color); self.draw_line(p7, p4, color);
+        self.draw_line(p4, p5, color);
+        self.draw_line(p5, p6, color);
+        self.draw_line(p6, p7, color);
+        self.draw_line(p7, p4, color);
         // Pillers
-        self.draw_line(p0, p4, color); self.draw_line(p1, p5, color);
-        self.draw_line(p2, p6, color); self.draw_line(p3, p7, color);
+        self.draw_line(p0, p4, color);
+        self.draw_line(p1, p5, color);
+        self.draw_line(p2, p6, color);
+        self.draw_line(p3, p7, color);
     }
 }
 
@@ -96,11 +102,12 @@ impl GizmoRendererSystem {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/debug_lines.wgsl").into()),
         });
 
-        let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Debug Lines Pipeline Layout"),
-            bind_group_layouts: &[global_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Debug Lines Pipeline Layout"),
+                bind_group_layouts: &[global_bind_group_layout],
+                push_constant_ranges: &[],
+            });
 
         let mut desc = wgpu::RenderPipelineDescriptor {
             label: Some("Debug Lines Pipeline"),
@@ -108,11 +115,13 @@ impl GizmoRendererSystem {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",
+                compilation_options: Default::default(),
                 buffers: &[GpuGizmoVertex::desc()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: "fs_main",
+                compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: output_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -152,7 +161,8 @@ impl GizmoRendererSystem {
         let max_vertices = 200_000;
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Gizmo Vertex Buffer"),
-            size: (max_vertices as usize * std::mem::size_of::<GpuGizmoVertex>()) as wgpu::BufferAddress,
+            size: (max_vertices as usize * std::mem::size_of::<GpuGizmoVertex>())
+                as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -170,7 +180,7 @@ impl GizmoRendererSystem {
         self.index_count = gizmos.lines.len() as u32;
         if self.index_count > 0 {
             let to_write = self.index_count.min(self.max_vertices) as usize;
-            
+
             // Map gizmo_core::GizmoVertex to GpuGizmoVertex
             let mut gpu_data = Vec::with_capacity(to_write);
             for v in &gizmos.lines[0..to_write] {
@@ -180,11 +190,7 @@ impl GizmoRendererSystem {
                 });
             }
 
-            queue.write_buffer(
-                &self.vertex_buffer,
-                0,
-                bytemuck::cast_slice(&gpu_data),
-            );
+            queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&gpu_data));
         }
     }
 

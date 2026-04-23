@@ -9,8 +9,8 @@ pub mod render_pipeline;
 pub mod setup;
 pub mod state;
 pub mod studio_input;
-pub mod update;
 pub mod systems;
+pub mod update;
 
 pub use state::{DebugAssets, StudioState};
 pub use studio_input::*;
@@ -18,7 +18,6 @@ pub use studio_input::*;
 fn main() {
     let mut app = App::<StudioState>::new("Gizmo Studio", 1600, 900)
         .with_icon(include_bytes!("../../../media/logo.png"))
-
         .add_event::<crate::state::ShaderReloadEvent>();
 
     app = app.set_setup(|world, renderer| setup::setup_studio_scene(world, renderer));

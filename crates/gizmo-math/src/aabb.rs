@@ -37,7 +37,10 @@ impl Aabb {
 
     /// Creates an AABB from a center point and half-extents.
     #[inline]
-    pub fn from_center_half_extents(center: impl Into<Vec3A>, half_extents: impl Into<Vec3A>) -> Self {
+    pub fn from_center_half_extents(
+        center: impl Into<Vec3A>,
+        half_extents: impl Into<Vec3A>,
+    ) -> Self {
         let c = center.into();
         let h = half_extents.into();
         Self {
@@ -61,10 +64,20 @@ impl Aabb {
     // State queries
     // -----------------------------------------------------------------------
 
-    /// Returns `true` if the AABB has no valid volume (min > max on any axis).
+    /// Returns `true` if the AABB has no valid volume and is strictly invalid (min > max on any axis).
+    /// Note: A degenerate point where `min == max` is NOT considered empty.
+    /// This is a deliberate design choice so zero-volume points can still overlap
+    /// with frustums or other shapes. To check for zero volume, use `is_degenerate()`.
     #[inline]
     pub fn is_empty(self) -> bool {
         self.min.x > self.max.x || self.min.y > self.max.y || self.min.z > self.max.z
+    }
+
+    /// Returns `true` if the AABB has zero volume (min >= max on any axis).
+    /// This includes both strictly empty AABBs and degenerate points, lines, or planes.
+    #[inline]
+    pub fn is_degenerate(self) -> bool {
+        self.min.cmpge(self.max).any()
     }
 
     /// Returns `true` if the AABB has a valid volume.
@@ -234,7 +247,10 @@ impl Aabb {
         if new_min.cmpgt(new_max).any() {
             Self::empty()
         } else {
-            Self { min: new_min, max: new_max }
+            Self {
+                min: new_min,
+                max: new_max,
+            }
         }
     }
 
@@ -283,7 +299,10 @@ impl Aabb {
             }
         }
 
-        Self { min: new_min, max: new_max }
+        Self {
+            min: new_min,
+            max: new_max,
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -324,8 +343,7 @@ impl std::fmt::Display for Aabb {
         write!(
             f,
             "Aabb(min: [{:.3}, {:.3}, {:.3}], max: [{:.3}, {:.3}, {:.3}])",
-            self.min.x, self.min.y, self.min.z,
-            self.max.x, self.max.y, self.max.z,
+            self.min.x, self.min.y, self.min.z, self.max.x, self.max.y, self.max.z,
         )
     }
 }
@@ -352,6 +370,15 @@ mod tests {
         let a = Aabb::empty();
         assert!(a.is_empty());
         assert!(!a.is_valid());
+        assert!(a.is_degenerate());
+    }
+
+    #[test]
+    fn test_degenerate_point() {
+        let a = Aabb::new(Vec3::ZERO, Vec3::ZERO);
+        assert!(!a.is_empty()); // min == max is not empty
+        assert!(a.is_valid()); // therefore it is valid
+        assert!(a.is_degenerate()); // but it is degenerate (zero volume)
     }
 
     #[test]
@@ -370,10 +397,7 @@ mod tests {
 
     #[test]
     fn test_from_points() {
-        let pts = [
-            Vec3A::new(1.0, -2.0, 3.0),
-            Vec3A::new(-1.0, 4.0, 0.0),
-        ];
+        let pts = [Vec3A::new(1.0, -2.0, 3.0), Vec3A::new(-1.0, 4.0, 0.0)];
         let a = Aabb::from_points(pts);
         assert!(approx_eq(a.min, Vec3A::new(-1.0, -2.0, 0.0)));
         assert!(approx_eq(a.max, Vec3A::new(1.0, 4.0, 3.0)));
@@ -409,8 +433,8 @@ mod tests {
     fn test_contains_point() {
         let a = Aabb::new(Vec3::ZERO, Vec3::ONE);
         assert!(a.contains_point(Vec3A::splat(0.5)));
-        assert!(a.contains_point(Vec3A::ZERO));   // on boundary
-        assert!(a.contains_point(Vec3A::ONE));    // on boundary
+        assert!(a.contains_point(Vec3A::ZERO)); // on boundary
+        assert!(a.contains_point(Vec3A::ONE)); // on boundary
         assert!(!a.contains_point(Vec3A::splat(1.1)));
         assert!(!a.contains_point(Vec3A::splat(-0.1)));
     }
@@ -465,7 +489,7 @@ mod tests {
     fn test_intersects_edge_touching() {
         let a = Aabb::new(Vec3::ZERO, Vec3::splat(1.0));
         let b = Aabb::new(Vec3::new(1.0, 0.0, 0.0), Vec3::new(2.0, 1.0, 1.0));
-        assert!(a.intersects(b));          // inclusive: edge touch = true
+        assert!(a.intersects(b)); // inclusive: edge touch = true
         assert!(!a.intersects_exclusive(b)); // exclusive: edge touch = false
     }
 

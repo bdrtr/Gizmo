@@ -66,7 +66,7 @@ impl Color {
         let r = (self.0.x.clamp(0.0, 1.0) * 255.0).round() as u8;
         let g = (self.0.y.clamp(0.0, 1.0) * 255.0).round() as u8;
         let b = (self.0.z.clamp(0.0, 1.0) * 255.0).round() as u8;
-        
+
         if self.0.w < 0.999 {
             let a = (self.0.w.clamp(0.0, 1.0) * 255.0).round() as u8;
             format!("#{:02X}{:02X}{:02X}{:02X}", r, g, b, a)

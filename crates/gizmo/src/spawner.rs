@@ -40,7 +40,9 @@ impl<'a> Drop for Commands<'a> {
 
 impl<'a> Commands<'a> {
     pub fn new(world: &'a mut World, renderer: &'a Renderer<'a>) -> Self {
-        let am = world.remove_resource::<AssetManager>().unwrap_or_else(AssetManager::new);
+        let am = world
+            .remove_resource::<AssetManager>()
+            .unwrap_or_else(AssetManager::new);
         Self {
             world,
             renderer,
@@ -100,7 +102,11 @@ impl<'a> Commands<'a> {
 
     /// Diskten bir .obj modeli yükler ve spawn eder.
     pub fn spawn_model(&mut self, pos: Vec3, path: &str) -> EntityBuilder<'_, 'a> {
-        let mesh = self.asset_manager.as_mut().unwrap().load_obj(&self.renderer.device, path);
+        let mesh = self
+            .asset_manager
+            .as_mut()
+            .unwrap()
+            .load_obj(&self.renderer.device, path);
         let bg = self.asset_manager.as_mut().unwrap().create_white_texture(
             &self.renderer.device,
             &self.renderer.queue,
@@ -125,8 +131,8 @@ impl<'a> Commands<'a> {
             }
         }
         let id = self.world.spawn();
-        let mut trans = Transform::new(pos);
-        trans.global_matrix = trans.local_matrix();
+        let trans = Transform::new(pos);
+
         self.world.add_component(id, trans);
         self.world.add_component(
             id,
@@ -159,8 +165,8 @@ impl<'a> Commands<'a> {
             }
         }
         let id = self.world.spawn();
-        let mut trans = Transform::new(pos);
-        trans.global_matrix = trans.local_matrix();
+        let trans = Transform::new(pos);
+
         self.world.add_component(id, trans);
         self.world.add_component(
             id,
@@ -189,14 +195,15 @@ impl<'a> Commands<'a> {
         intensity: f32,
     ) -> EntityBuilder<'_, 'a> {
         let id = self.world.spawn();
-        let mut trans = Transform::new(pos);
-        trans.global_matrix = trans.local_matrix();
+        let trans = Transform::new(pos);
+
         self.world.add_component(id, trans);
         self.world.add_component(
             id,
             PointLight::new(
                 gizmo_math::Vec3::new(color.0.x, color.0.y, color.0.z),
                 intensity,
+                10.0,
             ),
         );
         EntityBuilder {
@@ -215,15 +222,15 @@ impl<'a> Commands<'a> {
     ) -> EntityBuilder<'_, 'a> {
         let id = self.world.spawn();
         let pos = Vec3::ZERO; // DirectionalLight position is largely irrelevant
-        let mut trans = Transform::new(pos);
-        trans.global_matrix = trans.local_matrix();
+        let trans = Transform::new(pos);
+
         self.world.add_component(id, trans);
         self.world.add_component(
             id,
             DirectionalLight {
                 color: Vec3::new(color.0.x, color.0.y, color.0.z),
                 intensity,
-                is_sun: true,
+                role: crate::renderer::components::LightRole::Sun,
             },
         );
         EntityBuilder {
@@ -237,7 +244,7 @@ impl<'a> Commands<'a> {
     /// Skybox spawn eder (ters yüzlü çok büyük küp). Renk arka plan rengini belirler.
     pub fn spawn_skybox(&mut self, color: Color) -> EntityBuilder<'_, 'a> {
         // Skip existing check since is_skybox is removed
-        
+
         // Wait, best approach for skybox is ignoring the duplication request if exists, but we must return an EntityBuilder...
         let mesh = AssetManager::create_inverted_cube(&self.renderer.device);
         let bg = self.asset_manager.as_mut().unwrap().create_white_texture(
@@ -250,7 +257,7 @@ impl<'a> Commands<'a> {
         let mut trans = Transform::new(Vec3::ZERO);
         trans.scale = Vec3::new(500.0, 500.0, 500.0);
         trans.update_local_matrix();
-        trans.global_matrix = trans.local_matrix();
+
         self.world.add_component(id, trans);
         self.world.add_component(id, mesh);
         self.world.add_component(id, mat);
@@ -286,7 +293,6 @@ impl<'a> Commands<'a> {
             if let Some(trans) = trans_store.get_mut(id.id()) {
                 trans.scale = half_extents * 2.0;
                 trans.update_local_matrix();
-                trans.global_matrix = trans.local_matrix();
             }
         }
         let mut rb = if mass > 0.0 {
@@ -371,7 +377,9 @@ impl<'a> Commands<'a> {
     pub fn spawn_textured_cube(&mut self, pos: Vec3, texture_path: &str) -> EntityBuilder<'_, 'a> {
         let mesh = AssetManager::create_cube(&self.renderer.device);
         let bg = self
-            .asset_manager.as_mut().unwrap()
+            .asset_manager
+            .as_mut()
+            .unwrap()
             .load_material_texture(
                 &self.renderer.device,
                 &self.renderer.queue,
@@ -402,7 +410,9 @@ impl<'a> Commands<'a> {
     ) -> EntityBuilder<'_, 'a> {
         let mesh = AssetManager::create_plane(&self.renderer.device, size);
         let bg = self
-            .asset_manager.as_mut().unwrap()
+            .asset_manager
+            .as_mut()
+            .unwrap()
             .load_material_texture(
                 &self.renderer.device,
                 &self.renderer.queue,
@@ -428,7 +438,12 @@ impl<'a> Commands<'a> {
 
     /// GLTF/GLB dosyasını yükler ve dünya içinde spawn eder.
     /// Animasyon ve iskelet hiyerarşisi otomatik oluşturulur.
-    pub fn spawn_gltf(&mut self, pos: Vec3, path: &str, attach_colliders: bool) -> Result<EntityBuilder<'_, 'a>, String> {
+    pub fn spawn_gltf(
+        &mut self,
+        pos: Vec3,
+        path: &str,
+        attach_colliders: bool,
+    ) -> Result<EntityBuilder<'_, 'a>, String> {
         let default_bg = self.asset_manager.as_mut().unwrap().create_white_texture(
             &self.renderer.device,
             &self.renderer.queue,
@@ -447,7 +462,7 @@ impl<'a> Commands<'a> {
                 let root = self.world.spawn();
                 let mut trans = Transform::new(pos);
                 trans.update_local_matrix();
-                trans.global_matrix = trans.local_matrix();
+
                 self.world.add_component(root, trans);
                 self.world
                     .add_component(root, EntityName(format!("GLTF: {}", path)));
@@ -455,7 +470,13 @@ impl<'a> Commands<'a> {
                     .add_component(root, gizmo_core::component::Children(Vec::new()));
 
                 for node in &asset.roots {
-                    spawn_gltf_node_flat(self.world, node, root.id(), default_mat.clone(), attach_colliders);
+                    spawn_gltf_node_flat(
+                        self.world,
+                        node,
+                        root.id(),
+                        default_mat.clone(),
+                        attach_colliders,
+                    );
                 }
 
                 if !asset.animations.is_empty() {
@@ -465,7 +486,7 @@ impl<'a> Commands<'a> {
                             current_time: 0.0,
                             active_animation: 0,
                             loop_anim: true,
-                            animations: std::sync::Arc::new(asset.animations.clone()),
+                            animations: std::sync::Arc::from(asset.animations.clone().into_boxed_slice()),
                         },
                     );
                 }
@@ -475,9 +496,10 @@ impl<'a> Commands<'a> {
                     entity: root,
                 })
             }
-            Err(e) => {
-                Err(format!("[Commands::spawn_gltf] '{}' yuklenemedi: {}", path, e))
-            }
+            Err(e) => Err(format!(
+                "[Commands::spawn_gltf] '{}' yuklenemedi: {}",
+                path, e
+            )),
         }
     }
 }
@@ -528,7 +550,7 @@ fn spawn_mesh_entity(
     let id = world.spawn();
     let mut trans = Transform::new(pos);
     trans.update_local_matrix();
-    trans.global_matrix = trans.local_matrix();
+
     world.add_component(id, trans);
     world.add_component(id, mesh);
     world.add_component(id, mat);
@@ -586,13 +608,13 @@ fn spawn_gltf_node_flat(
         world.add_component(prim, Transform::new(Vec3::ZERO));
         world.add_component(prim, Parent(entity.id()));
         world.add_component(prim, Children(Vec::new()));
-        
+
         newly_added_prims.push(prim.id());
 
         world.add_component(prim, mesh.clone());
         world.add_component(prim, mat_opt.clone().unwrap_or_else(|| default_mat.clone()));
         world.add_component(prim, MeshRenderer::new());
-        
+
         if attach_colliders {
             let extents = (mesh.bounds.max - mesh.bounds.min) / 2.0;
             let cx = extents.x.max(0.01);
@@ -613,7 +635,13 @@ fn spawn_gltf_node_flat(
     }
 
     for child_node in &node.children {
-        spawn_gltf_node_flat(world, child_node, entity.id(), default_mat.clone(), attach_colliders);
+        spawn_gltf_node_flat(
+            world,
+            child_node,
+            entity.id(),
+            default_mat.clone(),
+            attach_colliders,
+        );
     }
 }
 
@@ -668,12 +696,13 @@ impl WorldExt for World {
             }
         };
         if let Some(target_id) = target {
-            if let Some(mut transforms) = self.query::<gizmo_core::prelude::Mut<gizmo_physics::Transform>>() {
+            if let Some(mut transforms) =
+                self.query::<gizmo_core::prelude::Mut<gizmo_physics::Transform>>()
+            {
                 for (tid, mut trans) in transforms.iter_mut() {
                     if tid == target_id {
                         f(&mut *trans);
                         trans.update_local_matrix();
-                        trans.global_matrix = trans.local_matrix();
                     }
                 }
             }

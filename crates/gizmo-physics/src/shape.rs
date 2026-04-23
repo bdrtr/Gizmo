@@ -60,23 +60,32 @@ impl Collider {
             shape: ColliderShape::Aabb(Aabb { half_extents }),
         }
     }
-    
+
     pub fn plane(normal: Vec3, constant: f32) -> Self {
         Self {
             shape: ColliderShape::Plane { normal, constant },
         }
     }
-    
+
     pub fn capsule(radius: f32, half_height: f32) -> Self {
         Self {
-            shape: ColliderShape::Capsule(Capsule { radius, half_height }),
+            shape: ColliderShape::Capsule(Capsule {
+                radius,
+                half_height,
+            }),
         }
     }
-    
+
     // Backwards compatibility wrappers
-    pub fn new_sphere(radius: f32) -> Self { Self::sphere(radius) }
-    pub fn new_aabb(x: f32, y: f32, z: f32) -> Self { Self::aabb(Vec3::new(x, y, z)) }
-    pub fn new_capsule(radius: f32, half_height: f32) -> Self { Self::capsule(radius, half_height) }
+    pub fn new_sphere(radius: f32) -> Self {
+        Self::sphere(radius)
+    }
+    pub fn new_aabb(x: f32, y: f32, z: f32) -> Self {
+        Self::aabb(Vec3::new(x, y, z))
+    }
+    pub fn new_capsule(radius: f32, half_height: f32) -> Self {
+        Self::capsule(radius, half_height)
+    }
 }
 
 impl_component!(Collider);

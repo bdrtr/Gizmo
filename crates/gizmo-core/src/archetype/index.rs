@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use std::any::TypeId;
 use super::{Archetype, EntityLocation};
 use crate::archetype::ComponentInfo;
+use std::any::TypeId;
+use std::collections::HashMap;
 
 pub(crate) struct ArchetypeIndex {
     /// Sıralı component set → archetype indeksi
@@ -40,7 +40,12 @@ impl ArchetypeIndex {
 
     /// Component ekleme — entity'yi yeni archetype'a taşı
     /// NOT: Veri taşıma işlemi World tarafından yapılır, bu metod sadece yapısal geçişi takip eder.
-    pub(crate) fn get_add_component_target(&mut self, entity_id: u32, type_id: TypeId, component_infos: &HashMap<TypeId, ComponentInfo>) -> Option<usize> {
+    pub(crate) fn get_add_component_target(
+        &mut self,
+        entity_id: u32,
+        type_id: TypeId,
+        component_infos: &HashMap<TypeId, ComponentInfo>,
+    ) -> Option<usize> {
         let old_arch_id = *self.entity_archetype.get(&entity_id)?;
 
         // Cache kontrolü (Edge)
@@ -66,7 +71,12 @@ impl ArchetypeIndex {
             // Yeni archetype oluşturmak için ComponentInfo gerekir
             let mut infos = Vec::new();
             for &t in &new_types {
-                infos.push(component_infos.get(&t).cloned().unwrap_or_else(|| ComponentInfo::of_type_id(t)));
+                infos.push(
+                    component_infos
+                        .get(&t)
+                        .cloned()
+                        .unwrap_or_else(|| ComponentInfo::of_type_id(t)),
+                );
             }
             self.archetypes.push(Archetype::new(id as u32, &infos));
             self.set_to_id.insert(new_types, id);
@@ -76,11 +86,16 @@ impl ArchetypeIndex {
         // Edge cache güncelle
         self.archetypes[old_arch_id].set_add_edge(type_id, new_arch_id as u32);
         self.archetypes[new_arch_id].set_remove_edge(type_id, old_arch_id as u32);
-        
+
         Some(new_arch_id)
     }
 
-    pub(crate) fn get_remove_component_target(&mut self, entity_id: u32, type_id: TypeId, component_infos: &HashMap<TypeId, ComponentInfo>) -> Option<usize> {
+    pub(crate) fn get_remove_component_target(
+        &mut self,
+        entity_id: u32,
+        type_id: TypeId,
+        component_infos: &HashMap<TypeId, ComponentInfo>,
+    ) -> Option<usize> {
         let old_arch_id = *self.entity_archetype.get(&entity_id)?;
 
         if let Some(edge) = self.archetypes[old_arch_id].get_edge(type_id) {
@@ -102,7 +117,12 @@ impl ArchetypeIndex {
             let id = self.archetypes.len();
             let mut infos = Vec::new();
             for &t in &new_types {
-                infos.push(component_infos.get(&t).cloned().unwrap_or_else(|| ComponentInfo::of_type_id(t)));
+                infos.push(
+                    component_infos
+                        .get(&t)
+                        .cloned()
+                        .unwrap_or_else(|| ComponentInfo::of_type_id(t)),
+                );
             }
             self.archetypes.push(Archetype::new(id as u32, &infos));
             self.set_to_id.insert(new_types, id);
@@ -111,7 +131,7 @@ impl ArchetypeIndex {
 
         self.archetypes[old_arch_id].set_remove_edge(type_id, new_arch_id as u32);
         self.archetypes[new_arch_id].set_add_edge(type_id, old_arch_id as u32);
-        
+
         Some(new_arch_id)
     }
 
@@ -120,7 +140,7 @@ impl ArchetypeIndex {
     pub(crate) fn on_despawn(&mut self, entity_id: u32) {
         if let Some(_arch_id) = self.entity_archetype.remove(&entity_id) {
             // Satır bilgisini EntityLocation'dan alacağız, burada sadece remove edebiliriz
-            // Ama Archetype::swap_remove_entity row bekler. 
+            // Ama Archetype::swap_remove_entity row bekler.
             // World::despawn içinde location bilgisi olduğu için oradan çağırmak daha sağlıklı.
             self.cache_dirty = true;
         }
@@ -128,7 +148,11 @@ impl ArchetypeIndex {
 
     /// Belirtilen mantıksal query filtresini sağlayan archetype'ların indekslerini döndürür.
     /// Query sistemi tarafından kullanılır.
-    pub(crate) fn matching_archetypes(&mut self, query_type_id: TypeId, predicate: fn(&Archetype) -> bool) -> &[usize] {
+    pub(crate) fn matching_archetypes(
+        &mut self,
+        query_type_id: TypeId,
+        predicate: fn(&Archetype) -> bool,
+    ) -> &[usize] {
         // Cache dirty ise temizle
         if self.cache_dirty {
             self.query_cache.clear();
@@ -145,13 +169,16 @@ impl ArchetypeIndex {
             }
             self.query_cache.insert(query_type_id, matching_indices);
         }
-        
-        self.query_cache.get(&query_type_id).unwrap() 
+
+        self.query_cache.get(&query_type_id).unwrap()
     }
 
     /// Belirtilen mantıksal query filtresini sağlayan archetype'ların indekslerini döndürür.
     /// Immutable versiyon — cache kullanmaz.
-    pub(crate) fn matching_archetypes_readonly(&self, predicate: fn(&Archetype) -> bool) -> Vec<usize> {
+    pub(crate) fn matching_archetypes_readonly(
+        &self,
+        predicate: fn(&Archetype) -> bool,
+    ) -> Vec<usize> {
         let mut result = Vec::new();
         for (idx, arch) in self.archetypes.iter().enumerate() {
             if predicate(arch) {
@@ -216,11 +243,17 @@ impl ArchetypeIndex {
                     let mut dead_edges = Vec::new();
 
                     for (&type_id, edge) in arch.edges.iter_mut() {
-                        if edge.add == Some(target_id) { edge.add = None; }
-                        else if edge.add == Some(last_id) { edge.add = Some(target_id); }
+                        if edge.add == Some(target_id) {
+                            edge.add = None;
+                        } else if edge.add == Some(last_id) {
+                            edge.add = Some(target_id);
+                        }
 
-                        if edge.remove == Some(target_id) { edge.remove = None; }
-                        else if edge.remove == Some(last_id) { edge.remove = Some(target_id); }
+                        if edge.remove == Some(target_id) {
+                            edge.remove = None;
+                        } else if edge.remove == Some(last_id) {
+                            edge.remove = Some(target_id);
+                        }
 
                         if edge.add.is_none() && edge.remove.is_none() {
                             dead_edges.push(type_id);
@@ -234,19 +267,18 @@ impl ArchetypeIndex {
 
                 // Cache invalidate.
                 self.cache_dirty = true;
-                
+
                 // İlerlemeyi durdur (Çünkü i'ye yeni bir Archetype kondu, onu da kontrol etmemiz lazım)
             } else {
                 i += 1;
             }
         }
-        
+
         // Map'leri küçült
         self.set_to_id.shrink_to_fit();
         self.entity_archetype.shrink_to_fit();
         self.query_cache.shrink_to_fit();
-        
+
         removed_count
     }
 }
-

@@ -9,23 +9,23 @@
 //! - **Game View** — Oyunu oynarkenki pencere
 
 pub mod asset_browser;
+pub mod console;
 pub mod editor_state;
+pub mod game_view;
 pub mod gui;
 pub mod hierarchy;
 pub mod history;
 pub mod inspector;
 pub mod prefs;
-pub mod toolbar;
 pub mod scene_view;
-pub mod game_view;
-pub mod console;
+pub mod toolbar;
 pub mod windows;
 
-pub use editor_state::{BuildTarget, EditorMode, EditorState, GizmoMode, EditorTab};
+pub use editor_state::{BuildTarget, EditorMode, EditorState, EditorTab, GizmoMode};
 pub use gui::EditorContext;
 
-use gizmo_core::World;
 use egui_dock::{DockArea, TabViewer};
+use gizmo_core::World;
 
 pub struct EditorTabViewer<'a> {
     pub world: &'a World,
@@ -108,17 +108,15 @@ pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) 
     // Kamera çizim durumları dock içerisinde güncellenecek, frame sonunda/başında başka yerde sıfırlanmalıdır veya flag kilitlenmelidir.
 
     // 2. Docking Alanı (Geri kalan tüm alanı kaplar)
-    let mut dock_state = std::mem::replace(&mut state.dock_state, egui_dock::DockState::new(vec![]));
-    
-    let mut viewer = EditorTabViewer {
-        world,
-        state,
-    };
+    let mut dock_state =
+        std::mem::replace(&mut state.dock_state, egui_dock::DockState::new(vec![]));
+
+    let mut viewer = EditorTabViewer { world, state };
 
     DockArea::new(&mut dock_state)
         .style(egui_dock::Style::from_egui(ctx.style().as_ref()))
         .show(ctx, &mut viewer);
-        
+
     viewer.state.dock_state = dock_state;
 
     // Her çerçevenin sonunda I/O optimizasyonu olarak prefs kirlendiyse dosyaya yaz

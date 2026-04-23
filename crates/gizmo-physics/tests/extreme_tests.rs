@@ -96,11 +96,7 @@ fn test_extreme_mass_disparity() {
         .get(feather.id())
         .unwrap()
         .clone();
-    let vel_ball = world
-        .borrow::<Velocity>()
-        .get(ball.id())
-        .unwrap()
-        .clone();
+    let vel_ball = world.borrow::<Velocity>().get(ball.id()).unwrap().clone();
 
     // Momentum transferi: Tüy fırlamış olmalı (ağır cisim hafif cisme çarptığında büyük hız transferi)
     let feather_speed = vel_feather.linear.length();
@@ -151,11 +147,7 @@ fn test_extreme_needle_wall_ccd() {
         .get(bullet.id())
         .unwrap()
         .clone();
-    let v = world
-        .borrow::<Velocity>()
-        .get(bullet.id())
-        .unwrap()
-        .clone();
+    let v = world.borrow::<Velocity>().get(bullet.id()).unwrap().clone();
 
     // Merminin hızı ne kadar fazla olursa olsun ve duvar ne kadar atomik incelikte olursa olsun
     // CCD duvarın önünde nesneyi tutmayı başarmalı!

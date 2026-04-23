@@ -1,6 +1,6 @@
-use std::any::TypeId;
-use std::alloc::Layout;
 use super::blob::BlobVec;
+use std::alloc::Layout;
+use std::any::TypeId;
 use std::ptr;
 
 #[derive(Debug, Clone, Copy)]
@@ -11,7 +11,10 @@ pub struct ComponentTicks {
 
 impl ComponentTicks {
     pub fn new(tick: u32) -> Self {
-        Self { added: tick, changed: tick }
+        Self {
+            added: tick,
+            changed: tick,
+        }
     }
 }
 
@@ -25,7 +28,12 @@ pub struct Column {
 
 impl Column {
     /// Yeni boş sütun oluşturur.
-    pub fn new(type_id: TypeId, item_layout: Layout, drop_fn: Option<unsafe fn(*mut u8)>, clone_fn: Option<unsafe fn(*const u8, *mut u8, usize)>) -> Self {
+    pub fn new(
+        type_id: TypeId,
+        item_layout: Layout,
+        drop_fn: Option<unsafe fn(*mut u8)>,
+        clone_fn: Option<unsafe fn(*const u8, *mut u8, usize)>,
+    ) -> Self {
         Self {
             data: BlobVec::new(item_layout, drop_fn),
             ticks: Vec::new(),
@@ -109,7 +117,8 @@ impl Column {
     #[inline]
     pub unsafe fn push_cloned_batch(&mut self, src: *const u8, count: usize, tick: u32) {
         self.data.push_cloned_batch(src, count, self.clone_fn);
-        self.ticks.resize(self.ticks.len() + count, ComponentTicks::new(tick));
+        self.ticks
+            .resize(self.ticks.len() + count, ComponentTicks::new(tick));
     }
 
     /// Belirtilen satırı swap-remove ile çıkarır ve düşürür.
@@ -185,5 +194,3 @@ impl ComponentInfo {
         }
     }
 }
-
-

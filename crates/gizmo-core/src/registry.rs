@@ -19,7 +19,8 @@ pub struct TypeRegistration {
     pub type_id: TypeId,
     pub name: String,
     pub serialize_fn: Option<fn(*const u8) -> Result<String, String>>,
-    pub deserialize_fn: Option<fn(&mut crate::world::World, crate::entity::Entity, &str) -> Result<(), String>>,
+    pub deserialize_fn:
+        Option<fn(&mut crate::world::World, crate::entity::Entity, &str) -> Result<(), String>>,
 }
 
 /// Component tiplerini isme göre sorgulama ve yönetim kaydı.
@@ -70,45 +71,68 @@ impl ComponentRegistry {
         }
 
         self.name_to_type.insert(name.to_string(), type_id);
-        self.type_to_reg.insert(type_id, TypeRegistration {
+        self.type_to_reg.insert(
             type_id,
-            name: name.to_string(),
-            serialize_fn: None,
-            deserialize_fn: None,
-        });
+            TypeRegistration {
+                type_id,
+                name: name.to_string(),
+                serialize_fn: None,
+                deserialize_fn: None,
+            },
+        );
     }
 
     /// Yeni bir component tipini isme göre ve Reflection (serde) yeteneği ile kaydet.
-    pub fn register_serializable<T: crate::component::Component + serde::Serialize + serde::de::DeserializeOwned>(&mut self, name: &str) {
+    pub fn register_serializable<
+        T: crate::component::Component + serde::Serialize + serde::de::DeserializeOwned,
+    >(
+        &mut self,
+        name: &str,
+    ) {
         let type_id = TypeId::of::<T>();
-        
+
         if let Some(&existing_tid) = self.name_to_type.get(name) {
-            if existing_tid == type_id { return; }
-            panic!("ComponentRegistry: '{}' ismi zaten farklı bir tipe atanmış!", name);
+            if existing_tid == type_id {
+                return;
+            }
+            panic!(
+                "ComponentRegistry: '{}' ismi zaten farklı bir tipe atanmış!",
+                name
+            );
         }
         if let Some(existing_reg) = self.type_to_reg.get(&type_id) {
-            panic!("ComponentRegistry: Bu tip zaten '{}' ismiyle kayıtlı!", existing_reg.name);
+            panic!(
+                "ComponentRegistry: Bu tip zaten '{}' ismiyle kayıtlı!",
+                existing_reg.name
+            );
         }
 
         self.name_to_type.insert(name.to_string(), type_id);
-        
+
         let serialize_fn: fn(*const u8) -> Result<String, String> = |ptr| {
             let component = unsafe { &*(ptr as *const T) };
             ron::to_string(component).map_err(|e| e.to_string())
         };
 
-        let deserialize_fn: fn(&mut crate::world::World, crate::entity::Entity, &str) -> Result<(), String> = |world, entity, data| {
+        let deserialize_fn: fn(
+            &mut crate::world::World,
+            crate::entity::Entity,
+            &str,
+        ) -> Result<(), String> = |world, entity, data| {
             let component: T = ron::from_str(data).map_err(|e| e.to_string())?;
             world.add_component(entity, component);
             Ok(())
         };
 
-        self.type_to_reg.insert(type_id, TypeRegistration {
+        self.type_to_reg.insert(
             type_id,
-            name: name.to_string(),
-            serialize_fn: Some(serialize_fn),
-            deserialize_fn: Some(deserialize_fn),
-        });
+            TypeRegistration {
+                type_id,
+                name: name.to_string(),
+                serialize_fn: Some(serialize_fn),
+                deserialize_fn: Some(deserialize_fn),
+            },
+        );
     }
 
     /// Bir tipin kaydını siler. İsim ve TypeId eşlemesi birlikte kaldırılır.
@@ -196,7 +220,9 @@ mod tests {
     use crate::impl_component;
 
     #[derive(serde::Serialize, serde::Deserialize, Clone)]
-    struct Transform { x: f32 }
+    struct Transform {
+        x: f32,
+    }
     impl_component!(Transform);
 
     #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -215,7 +241,10 @@ mod tests {
 
         assert_eq!(reg.get_name::<Transform>(), Some("Transform"));
         assert_eq!(reg.get_name::<Camera>(), Some("Camera"));
-        assert_eq!(reg.get_type_id("Transform"), Some(TypeId::of::<Transform>()));
+        assert_eq!(
+            reg.get_type_id("Transform"),
+            Some(TypeId::of::<Transform>())
+        );
         assert_eq!(reg.len(), 2);
     }
 

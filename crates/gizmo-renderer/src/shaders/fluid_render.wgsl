@@ -11,8 +11,10 @@ struct FluidParticle {
     density: f32,
     velocity: vec3<f32>,
     pressure: f32,
-    force: vec3<f32>,
-    next_index: i32,
+    phase: u32,
+    pad1: u32,
+    pad2: u32,
+    pad3: u32,
 }
 @group(1) @binding(1) var<storage, read> fluid_particles: array<FluidParticle>;
 

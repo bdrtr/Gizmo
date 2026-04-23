@@ -36,9 +36,9 @@ pub use crate::app::App;
 // === Windowing & Input ===
 pub use crate::core::input::Input;
 pub use winit::event::{ElementState, MouseButton};
-pub use winit::keyboard::{KeyCode, PhysicalKey};
 /// `input.key(Key::W)` kısaltması için `KeyCode` alias'ı.
 pub use winit::keyboard::KeyCode as Key;
+pub use winit::keyboard::{KeyCode, PhysicalKey};
 
 // === GPU (sık kullanılan tipler) ===
 pub use wgpu;

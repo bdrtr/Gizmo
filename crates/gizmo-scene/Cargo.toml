@@ -9,7 +9,7 @@ gizmo-math = { path = "../gizmo-math" }
 gizmo-physics = { path = "../gizmo-physics" }
 gizmo-renderer = { path = "../gizmo-renderer" }
 serde = { version = "1.0", features = ["derive"] }
-wgpu = "0.19"
+wgpu = "0.20"
 gizmo-audio = { path = "../gizmo-audio" }
 gizmo-scripting = { path = "../gizmo-scripting" }
 ron = "0.12.1"

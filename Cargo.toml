@@ -5,7 +5,6 @@ members = [
     "crates/gizmo-renderer",
     "crates/gizmo-window",
     "crates/gizmo-physics",
-    "crates/gizmo-editor",
     "crates/gizmo-app",
     "crates/gizmo-scripting",
     "crates/gizmo-scene",

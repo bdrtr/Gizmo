@@ -1,7 +1,7 @@
 use crate::EditorState;
 use gizmo_core::World;
 
-pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
+pub fn ui_scene_view(ui: &mut egui::Ui, _world: &World, state: &mut EditorState) {
     state.scene_view_visible = true;
 
     let response = ui.allocate_response(ui.available_size(), egui::Sense::click_and_drag());
@@ -29,14 +29,17 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
     }
 
     // --- GIZMO FARE (MOUSE) ETKİLEŞİMLERİ ---
-    let (alt_pressed, scroll_y, hover_pos, any_released, primary_down, press_origin) = ui.input(|i| (
-        i.modifiers.alt,
-        i.raw_scroll_delta.y,
-        i.pointer.hover_pos(),
-        i.pointer.any_released(),
-        i.pointer.primary_down(),
-        i.pointer.press_origin(),
-    ));
+    let (alt_pressed, scroll_y, hover_pos, any_released, _primary_down, press_origin) =
+        ui.input(|i| {
+            (
+                i.modifiers.alt,
+                i.raw_scroll_delta.y,
+                i.pointer.hover_pos(),
+                i.pointer.any_released(),
+                i.pointer.primary_down(),
+                i.pointer.press_origin(),
+            )
+        });
 
     if response.contains_pointer() || response.dragged() {
         if let Some(pos) = hover_pos {
@@ -56,8 +59,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
         // Sağ tık kamerayı çevirmek için (Egui ham input'u yuttuğu için burdan geçirmeliyiz)
         if response.dragged_by(egui::PointerButton::Secondary) {
             let delta = response.drag_delta();
-            state.camera.look_delta =
-                Some(gizmo_math::Vec2::new(delta.x, delta.y));
+            state.camera.look_delta = Some(gizmo_math::Vec2::new(delta.x, delta.y));
         } else {
             state.camera.look_delta = None;
         }
@@ -65,8 +67,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
         // Orta tık kamerayı kaydırmak (Pan) için
         if response.dragged_by(egui::PointerButton::Middle) {
             let delta = response.drag_delta();
-            state.camera.pan_delta =
-                Some(gizmo_math::Vec2::new(delta.x, delta.y));
+            state.camera.pan_delta = Some(gizmo_math::Vec2::new(delta.x, delta.y));
         } else {
             state.camera.pan_delta = None;
         }
@@ -74,8 +75,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
         // Alt + Sol Tık Orbit için
         if alt_pressed && response.dragged_by(egui::PointerButton::Primary) {
             let delta = response.drag_delta();
-            state.camera.orbit_delta =
-                Some(gizmo_math::Vec2::new(delta.x, delta.y));
+            state.camera.orbit_delta = Some(gizmo_math::Vec2::new(delta.x, delta.y));
         } else {
             state.camera.orbit_delta = None;
         }
@@ -102,7 +102,9 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
             // Farenin bırakıldığı yerin NDC koordinatı ile objeyi spawner'a gönderelim (sıfır değil)
             // Asset Drop Raycasting (Aşama 2):
             if let Some(_ndc) = state.mouse_ndc {
-                todo!("NDC koordinatı kamera raycast'i kullanılarak world position'a dönüştürülmeli");
+                todo!(
+                    "NDC koordinatı kamera raycast'i kullanılarak world position'a dönüştürülmeli"
+                );
             } else {
                 state.spawn_asset_position = Some(gizmo_math::Vec3::ZERO);
             }
@@ -112,7 +114,9 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
     }
 
     // --- EGUI-GIZMO Entegrasyonu (Aşama 1) ---
-    let mut gizmo_interacted = false;
+    // DISABLED: egui-gizmo does not support egui 0.28 yet.
+    let gizmo_interacted = false;
+    /*
     if let (Some(view_mat), Some(proj_mat)) =
         (state.camera.view, state.camera.proj)
     {
@@ -227,6 +231,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
             }
         }
     }
+    */
 
     // --- RUBBER BAND (KUTU İLE ÇOKLU SEÇİM) ---
     let is_dragging_gizmo = gizmo_interacted || !state.scene.gizmo_original_transforms.is_empty();
@@ -241,8 +246,11 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
         }
     }
 
-    if response.drag_released_by(egui::PointerButton::Primary) {
-        if let (Some(start), Some(curr)) = (state.selection.rubber_band_start, state.selection.rubber_band_current) {
+    if response.drag_stopped_by(egui::PointerButton::Primary) {
+        if let (Some(start), Some(curr)) = (
+            state.selection.rubber_band_start,
+            state.selection.rubber_band_current,
+        ) {
             let diff_x = (start.x - curr.x).abs();
             let diff_y = (start.y - curr.y).abs();
             if diff_x > 5.0 || diff_y > 5.0 {
@@ -254,11 +262,12 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
         state.selection.rubber_band_current = None;
     }
 
-    if let (Some(start), Some(curr)) = (state.selection.rubber_band_start, state.selection.rubber_band_current) {
-        let rect = egui::Rect::from_two_pos(
-            egui::pos2(start.x, start.y),
-            egui::pos2(curr.x, curr.y),
-        );
+    if let (Some(start), Some(curr)) = (
+        state.selection.rubber_band_start,
+        state.selection.rubber_band_current,
+    ) {
+        let rect =
+            egui::Rect::from_two_pos(egui::pos2(start.x, start.y), egui::pos2(curr.x, curr.y));
         ui.painter().rect(
             rect,
             0.0,

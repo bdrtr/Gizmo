@@ -25,7 +25,11 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
 
         // Workspace seçici
         if state.assets.workspace_rx.is_none() {
-            if ui.button("📁 Workspace Aç").on_hover_text("Bilgisayardan bir çalışma dizini seçin").clicked() {
+            if ui
+                .button("📁 Workspace Aç")
+                .on_hover_text("Bilgisayardan bir çalışma dizini seçin")
+                .clicked()
+            {
                 let (tx, rx) = std::sync::mpsc::channel();
                 state.assets.workspace_rx = Some(std::sync::Mutex::new(rx));
                 std::thread::spawn(move || {
@@ -35,9 +39,11 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
                 });
             }
         } else {
-            let _ = ui.add_enabled(false, egui::Button::new("📁 Workspace Aç")).on_hover_text("Dizin seçimi bekleniyor...");
+            let _ = ui
+                .add_enabled(false, egui::Button::new("📁 Workspace Aç"))
+                .on_hover_text("Dizin seçimi bekleniyor...");
         }
-        
+
         ui.separator();
 
         ui.label("🔍");
@@ -69,7 +75,8 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
     ui.horizontal(|ui| {
         if ui.small_button("📦 Sahneden Prefab Oluştur").clicked() {
             if let Some(&selected) = state.selection.entities.iter().next() {
-                let path = Path::new(&state.assets.root).join(format!("prefab_{}.prefab", selected));
+                let path =
+                    Path::new(&state.assets.root).join(format!("prefab_{}.prefab", selected));
                 state.prefab_save_request = Some((selected, path.to_string_lossy().to_string()));
             } else {
                 state.log_warning("Önce bir entity seçin.");
@@ -92,7 +99,9 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
             let now = std::time::Instant::now();
             let mut need_refresh = true;
             if let Some((cached_path, last_update, _)) = &state.assets.cached_dir {
-                if cached_path == &state.assets.root && now.duration_since(*last_update).as_secs_f32() < 1.0 {
+                if cached_path == &state.assets.root
+                    && now.duration_since(*last_update).as_secs_f32() < 1.0
+                {
                     need_refresh = false;
                 }
             }
@@ -105,9 +114,7 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
                         let name = entry.file_name().to_string_lossy().to_string();
                         file_cache.push((entry.path(), name, is_dir));
                     }
-                    file_cache.sort_by(|a, b| {
-                        b.2.cmp(&a.2).then(a.1.cmp(&b.1))
-                    });
+                    file_cache.sort_by(|a, b| b.2.cmp(&a.2).then(a.1.cmp(&b.1)));
                     state.assets.cached_dir = Some((state.assets.root.clone(), now, file_cache));
                 }
             }
@@ -121,7 +128,6 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
             let filter_lower = state.assets.filter.to_lowercase();
 
             for (path, name, is_dir) in file_entries {
-
                 // Filtre
                 let name_lower = name.to_lowercase();
                 if !filter_lower.is_empty() && !name_lower.contains(&filter_lower) {
@@ -225,21 +231,18 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
 
                     // Context Menu tüketimini güvenli hale getirmek için scope'un en sonunda çağrılır
                     response.context_menu(|ui| {
-                        if is_model
-                            && ui.button("⚙️ Sahneye Ekle").clicked() {
-                                state.spawn_asset_request = Some(path_str.clone());
-                                ui.close_menu();
-                            }
-                        if is_prefab
-                            && ui.button("⚙️ Prefab Olarak Ekle").clicked() {
-                                state.prefab_load_request = Some((path_str.clone(), None, None));
-                                ui.close_menu();
-                            }
-                        if is_scene
-                            && ui.button("📂 Bu Sahneyi Yükle").clicked() {
-                                state.scene.load_request = Some(path_str.clone());
-                                ui.close_menu();
-                            }
+                        if is_model && ui.button("⚙️ Sahneye Ekle").clicked() {
+                            state.spawn_asset_request = Some(path_str.clone());
+                            ui.close_menu();
+                        }
+                        if is_prefab && ui.button("⚙️ Prefab Olarak Ekle").clicked() {
+                            state.prefab_load_request = Some((path_str.clone(), None, None));
+                            ui.close_menu();
+                        }
+                        if is_scene && ui.button("📂 Bu Sahneyi Yükle").clicked() {
+                            state.scene.load_request = Some(path_str.clone());
+                            ui.close_menu();
+                        }
                         if ui.button("📋 Yolu Kopyala").clicked() {
                             ui.output_mut(|o| o.copied_text = path_str.clone());
                             ui.close_menu();
@@ -254,14 +257,51 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
 /// Dosya uzantısına göre ikon döndürür
 fn get_file_icon(filename: &str) -> &'static str {
     let ext = filename.rsplit('.').next().unwrap_or("");
-    if ext.eq_ignore_ascii_case("obj") || ext.eq_ignore_ascii_case("glb") || ext.eq_ignore_ascii_case("gltf") || ext.eq_ignore_ascii_case("fbx") { return "🗿"; }
-    if ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg") || ext.eq_ignore_ascii_case("png") || ext.eq_ignore_ascii_case("bmp") || ext.eq_ignore_ascii_case("tga") { return "🖼️"; }
-    if ext.eq_ignore_ascii_case("wav") || ext.eq_ignore_ascii_case("ogg") || ext.eq_ignore_ascii_case("mp3") || ext.eq_ignore_ascii_case("flac") { return "🔊"; }
-    if ext.eq_ignore_ascii_case("lua") { return "📜"; }
-    if ext.eq_ignore_ascii_case("json") || ext.eq_ignore_ascii_case("toml") || ext.eq_ignore_ascii_case("ron") { return "📋"; }
-    if ext.eq_ignore_ascii_case("prefab") { return "📦"; }
-    if ext.eq_ignore_ascii_case("gizmo") || ext.eq_ignore_ascii_case("giz") { return "🎬"; }
-    if ext.eq_ignore_ascii_case("wgsl") || ext.eq_ignore_ascii_case("glsl") || ext.eq_ignore_ascii_case("hlsl") { return "🎨"; }
-    if filename.contains('.') { return "📄"; }
+    if ext.eq_ignore_ascii_case("obj")
+        || ext.eq_ignore_ascii_case("glb")
+        || ext.eq_ignore_ascii_case("gltf")
+        || ext.eq_ignore_ascii_case("fbx")
+    {
+        return "🗿";
+    }
+    if ext.eq_ignore_ascii_case("jpg")
+        || ext.eq_ignore_ascii_case("jpeg")
+        || ext.eq_ignore_ascii_case("png")
+        || ext.eq_ignore_ascii_case("bmp")
+        || ext.eq_ignore_ascii_case("tga")
+    {
+        return "🖼️";
+    }
+    if ext.eq_ignore_ascii_case("wav")
+        || ext.eq_ignore_ascii_case("ogg")
+        || ext.eq_ignore_ascii_case("mp3")
+        || ext.eq_ignore_ascii_case("flac")
+    {
+        return "🔊";
+    }
+    if ext.eq_ignore_ascii_case("lua") {
+        return "📜";
+    }
+    if ext.eq_ignore_ascii_case("json")
+        || ext.eq_ignore_ascii_case("toml")
+        || ext.eq_ignore_ascii_case("ron")
+    {
+        return "📋";
+    }
+    if ext.eq_ignore_ascii_case("prefab") {
+        return "📦";
+    }
+    if ext.eq_ignore_ascii_case("gizmo") || ext.eq_ignore_ascii_case("giz") {
+        return "🎬";
+    }
+    if ext.eq_ignore_ascii_case("wgsl")
+        || ext.eq_ignore_ascii_case("glsl")
+        || ext.eq_ignore_ascii_case("hlsl")
+    {
+        return "🎨";
+    }
+    if filename.contains('.') {
+        return "📄";
+    }
     "📁"
 }

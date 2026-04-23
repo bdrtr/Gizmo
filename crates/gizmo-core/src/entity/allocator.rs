@@ -1,5 +1,5 @@
-use std::collections::{HashSet, VecDeque};
 use super::Entity;
+use std::collections::{HashSet, VecDeque};
 
 #[derive(Default)]
 pub struct EntityAllocatorState {
@@ -61,4 +61,3 @@ impl Entities {
         id < state.generations.len() && state.generations[id] == entity.generation()
     }
 }
-

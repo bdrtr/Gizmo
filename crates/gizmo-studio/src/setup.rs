@@ -28,7 +28,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
     );
     world.add_component(
         light,
-        gizmo::renderer::components::DirectionalLight::new(Vec3::new(1.0, 0.95, 0.9), 1.5, true),
+        gizmo::renderer::components::DirectionalLight::new(Vec3::new(1.0, 0.95, 0.9), 1.5, gizmo::renderer::components::LightRole::Sun),
     );
     world.add_component(light, Collider::new_aabb(0.5, 0.5, 0.5));
 
@@ -107,8 +107,6 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
     world.add_component(gizmo_root, Transform::new(Vec3::ZERO));
     let mut gizmo_children = Vec::new();
 
-
-
     // Procedural 3D Grid Lines and Infinite Axes
     // HDR uyumlu, hafif transparan çok şık ve ferah bir Grid materyali
     let grid_entity = world.spawn();
@@ -119,18 +117,21 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
     world.add_component(grid_entity, Transform::new(Vec3::ZERO));
     world.add_component(grid_entity, gizmo::core::component::Parent(gizmo_root.id()));
 
-    let grid_mesh = gizmo::renderer::asset::AssetManager::create_editor_grid_mesh(&renderer.device, 500.0);
-    
+    let grid_mesh =
+        gizmo::renderer::asset::AssetManager::create_editor_grid_mesh(&renderer.device, 500.0);
+
     // Grid Material
     let mut grid_mat = gizmo::prelude::Material::new(white_tex.clone());
     grid_mat.albedo = gizmo::math::Vec4::new(1.0, 1.0, 1.0, 1.0);
     grid_mat.material_type = gizmo::renderer::components::MaterialType::Grid;
-    grid_mat.unlit = 0.0;
-    
+
     // Editörün arka plan matris nesnesi olarak mesh ata. Pickable OLMASIN (fare engellemesin).
     world.add_component(grid_entity, grid_mesh);
     world.add_component(grid_entity, grid_mat);
-    world.add_component(grid_entity, gizmo::renderer::components::MeshRenderer::new());
+    world.add_component(
+        grid_entity,
+        gizmo::renderer::components::MeshRenderer::new(),
+    );
     gizmo_children.push(grid_entity.id());
 
     // Merkez Eksenler (Kırmızı/Mavi Çizgiler) artık Grid Shader (grid.wgsl) tarafından
@@ -212,7 +213,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
         gizmo::renderer::components::MeshRenderer::new(),
     );
     // --- GIZMO HANDLES (TRANSLATE) EGUI-GIZMO İÇİN İPTAL EDİLDİ ---
-    
+
     let mut editor_state = EditorState::new();
     editor_state.open = true; // Always open in Studio!
     editor_state.selection.highlight_box = Some(highlight_box);

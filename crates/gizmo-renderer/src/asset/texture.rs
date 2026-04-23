@@ -1,9 +1,9 @@
-use std::sync::Arc;
 use super::decode_rgba_image_file;
+use std::sync::Arc;
 
 impl super::AssetManager {
     /// Decode edilmiş RGBA8'i GPU'ya yükler ve `texture_cache`'e yazar ([`crate::async_assets::AsyncAssetLoader`] tamamlanınca).
-pub fn install_decoded_material_texture(
+    pub fn install_decoded_material_texture(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -64,7 +64,7 @@ pub fn install_decoded_material_texture(
             address_mode_w: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
 
@@ -88,53 +88,50 @@ pub fn install_decoded_material_texture(
     }
 
     /// Bir resmi okuyup Bind Group (Material Texture + Sampler) haline getirir
-pub fn load_material_texture(
+    pub fn load_material_texture(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         layout: &wgpu::BindGroupLayout,
         path_or_uuid: &str,
     ) -> Result<Arc<wgpu::BindGroup>, String> {
-        let resolved_path = self.resolve_path_from_meta_source(path_or_uuid);
+        let resolved_path = self.resolve_path_from_meta_source(path_or_uuid)?;
 
-        let canonical = std::path::Path::new(&resolved_path)
-            .canonicalize()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| resolved_path.to_string());
-        
-        let id_str = if let Some(id) = self.get_uuid(&canonical) {
+        let id_str = if let Some(id) = self.get_uuid(&resolved_path) {
             id.to_string()
         } else {
-            canonical.clone()
+            resolved_path.clone()
         };
 
         if let Some(cached) = self.texture_cache.get(&id_str) {
             return Ok(cached.clone());
         }
 
-        let (rgba, w, h) = decode_rgba_image_file(&canonical)?;
+        let (rgba, w, h) = decode_rgba_image_file(&resolved_path)?;
         self.install_decoded_material_texture(device, queue, layout, &id_str, &rgba, w, h)
     }
 
     /// Cache'i zorla silerek bir dokunun diskten tekrar yüklenmesini ve Bind Group'un güncellenmesini sağlar
-pub fn reload_material_texture(
+    pub fn reload_material_texture(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         layout: &wgpu::BindGroupLayout,
-        path: &str,
+        path_or_uuid: &str,
     ) -> Result<Arc<wgpu::BindGroup>, String> {
-        let canonical = std::path::Path::new(path)
-            .canonicalize()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| path.to_string());
-        
-        self.texture_cache.remove(&canonical);
-        self.load_material_texture(device, queue, layout, path)
+        let resolved_path = self.resolve_path_from_meta_source(path_or_uuid)?;
+        let id_str = if let Some(id) = self.get_uuid(&resolved_path) {
+            id.to_string()
+        } else {
+            resolved_path.clone()
+        };
+
+        self.texture_cache.remove(&id_str);
+        self.load_material_texture(device, queue, layout, path_or_uuid)
     }
 
     /// Dümdüz 1x1 beyaz (katı) bir kaplama üretir. Doku içermeyen materyallerin varsayılan kaplamasıdır.
-pub fn create_white_texture(
+    pub fn create_white_texture(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -207,6 +204,4 @@ pub fn create_white_texture(
         self.texture_cache.insert(path.to_string(), bg.clone());
         bg
     }
-
-
 }
