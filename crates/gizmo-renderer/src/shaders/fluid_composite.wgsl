@@ -40,24 +40,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return out;
 }
 
-fn compute_normal(uv: vec2<f32>, depth: f32) -> vec3<f32> {
-    let size = textureDimensions(t_depth);
-    let texel = 1.0 / vec2<f32>(f32(size.x), f32(size.y));
-    
-    // Central difference for smoother normals
-    let d_r = textureSampleLevel(t_depth, s_depth, uv + vec2<f32>(texel.x, 0.0), 0.0).x;
-    let d_l = textureSampleLevel(t_depth, s_depth, uv - vec2<f32>(texel.x, 0.0), 0.0).x;
-    let d_u = textureSampleLevel(t_depth, s_depth, uv + vec2<f32>(0.0, texel.y), 0.0).x;
-    let d_d = textureSampleLevel(t_depth, s_depth, uv - vec2<f32>(0.0, texel.y), 0.0).x;
-    
-    let dx = (d_r - d_l) * 0.5;
-    let dy = (d_u - d_d) * 0.5;
-    
-    // Normal strength. Reduced to prevent overly sharp edges on large tanks
-    let normal_strength = 150.0;
-    let N = normalize(vec3<f32>(-dx * normal_strength, dy * normal_strength, 1.0));
-    return N;
-}
+
 
 // Procedural Noise Functions for Water Surface
 fn hash12(p: vec2<f32>) -> f32 {
@@ -96,18 +79,19 @@ fn fbm(p: vec2<f32>) -> f32 {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let depth = textureSample(t_depth, s_depth, in.uv).x;
+    let t_val = textureSample(t_depth, s_depth, in.uv);
+    let depth = t_val.w;
     
     if (depth >= 1.0) {
         discard;
     }
     
     let thickness = textureSample(t_thickness, s_thickness, in.uv).x;
-    let N = compute_normal(in.uv, depth);
+    let N = normalize(t_val.xyz);
     
     // Light and View vectors
     let L = normalize(-scene.sun_direction.xyz);
-    let V = vec3<f32>(0.0, 0.0, 1.0); // View vector in screen space approximation
+    let V = normalize(-scene.camera_forward.xyz); // Correct view vector in world space
     let H = normalize(L + V);
     
     // Beer-Lambert Volume Absorption (Thickness Tinting)
