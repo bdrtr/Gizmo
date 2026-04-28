@@ -3,6 +3,7 @@ pub mod collision;
 pub mod components;
 pub mod fracture;
 pub mod integrator;
+pub mod joints;
 pub mod narrowphase;
 pub mod raycast;
 pub mod solver;
@@ -15,6 +16,10 @@ pub use collision::{
     CollisionEvent, CollisionEventType, ContactManifold, ContactPoint, TriggerEvent,
 };
 pub use integrator::Integrator;
+pub use joints::{
+    Joint, JointData, JointSolver, JointType, HingeJointData, BallSocketJointData,
+    SliderJointData, SpringJointData,
+};
 pub use narrowphase::{Gjk, NarrowPhase};
 pub use raycast::{Ray, Raycast, RaycastHit};
 pub use solver::ConstraintSolver;
