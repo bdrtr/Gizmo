@@ -50,8 +50,8 @@ trait AabbExt {
 impl AabbExt for Aabb {
     /// Get all grid cells this AABB overlaps
     fn overlapping_cells(&self, cell_size: f32) -> Vec<GridCell> {
-        let min_cell = GridCell::from_position(self.min().into(), cell_size);
-        let max_cell = GridCell::from_position(self.max().into(), cell_size);
+        let min_cell = GridCell::from_position(self.min.into(), cell_size);
+        let max_cell = GridCell::from_position(self.max.into(), cell_size);
 
         let mut cells = Vec::new();
         for x in min_cell.x..=max_cell.x {
@@ -143,9 +143,9 @@ mod tests {
     fn test_spatial_hash_basic() {
         let mut hash = SpatialHash::new(10.0);
 
-        let e1 = Entity::from_raw(1);
-        let e2 = Entity::from_raw(2);
-        let e3 = Entity::from_raw(3);
+        let e1 = Entity::new(1, 0);
+        let e2 = Entity::new(2, 0);
+        let e3 = Entity::new(3, 0);
 
         let aabb1 = Aabb::from_center_half_extents(Vec3::new(0.0, 0.0, 0.0).into(), Vec3::splat(1.0).into());
         let aabb2 = Aabb::from_center_half_extents(Vec3::new(1.0, 0.0, 0.0).into(), Vec3::splat(1.0).into());

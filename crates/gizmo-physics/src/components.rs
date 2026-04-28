@@ -489,7 +489,8 @@ impl Collider {
     pub fn compute_aabb(&self, position: Vec3, rotation: Quat) -> gizmo_math::Aabb {
         match &self.shape {
             ColliderShape::Sphere(s) => {
-                gizmo_math::Aabb::from_sphere(position.into(), s.radius)
+                let radius_vec = Vec3::splat(s.radius);
+                gizmo_math::Aabb::from_center_half_extents(position.into(), radius_vec.into())
             }
             ColliderShape::Box(b) => {
                 // Rotate the half extents to get world-space AABB
