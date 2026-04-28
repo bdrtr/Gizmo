@@ -4,6 +4,7 @@ pub mod components;
 pub mod fracture;
 pub mod integrator;
 pub mod narrowphase;
+pub mod raycast;
 pub mod solver;
 pub mod shape;
 pub mod world;
@@ -14,6 +15,7 @@ pub use collision::{
 };
 pub use integrator::Integrator;
 pub use narrowphase::{Gjk, NarrowPhase};
+pub use raycast::{Ray, Raycast, RaycastHit};
 pub use solver::ConstraintSolver;
 pub use world::PhysicsWorld;
 pub use components::{

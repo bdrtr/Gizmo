@@ -4,6 +4,7 @@ use crate::{
     components::{Collider, RigidBody, Transform, Velocity},
     integrator::Integrator,
     narrowphase::NarrowPhase,
+    raycast::{Ray, Raycast, RaycastHit},
     solver::ConstraintSolver,
 };
 use gizmo_core::entity::Entity;
@@ -228,6 +229,74 @@ impl PhysicsWorld {
         dt: f32,
     ) {
         Integrator::apply_force(rb, vel, force, dt);
+    }
+
+    /// Perform a raycast against all bodies
+    pub fn raycast(
+        &self,
+        ray: &Ray,
+        bodies: &[(Entity, RigidBody, Transform, Velocity, Collider)],
+        max_distance: f32,
+    ) -> Option<RaycastHit> {
+        let mut closest_hit: Option<RaycastHit> = None;
+        let mut closest_distance = max_distance;
+
+        for (entity, _rb, transform, _vel, collider) in bodies {
+            // First check AABB for early rejection
+            let aabb = collider.compute_aabb(transform.position, transform.rotation);
+            if Raycast::ray_aabb(ray, &aabb).is_none() {
+                continue;
+            }
+
+            // Detailed shape test
+            if let Some((distance, normal)) = Raycast::ray_shape(ray, &collider.shape, transform) {
+                if distance < closest_distance {
+                    closest_distance = distance;
+                    closest_hit = Some(RaycastHit {
+                        entity: *entity,
+                        point: ray.point_at(distance),
+                        normal,
+                        distance,
+                    });
+                }
+            }
+        }
+
+        closest_hit
+    }
+
+    /// Perform a raycast and return all hits
+    pub fn raycast_all(
+        &self,
+        ray: &Ray,
+        bodies: &[(Entity, RigidBody, Transform, Velocity, Collider)],
+        max_distance: f32,
+    ) -> Vec<RaycastHit> {
+        let mut hits = Vec::new();
+
+        for (entity, _rb, transform, _vel, collider) in bodies {
+            // First check AABB
+            let aabb = collider.compute_aabb(transform.position, transform.rotation);
+            if Raycast::ray_aabb(ray, &aabb).is_none() {
+                continue;
+            }
+
+            // Detailed shape test
+            if let Some((distance, normal)) = Raycast::ray_shape(ray, &collider.shape, transform) {
+                if distance <= max_distance {
+                    hits.push(RaycastHit {
+                        entity: *entity,
+                        point: ray.point_at(distance),
+                        normal,
+                        distance,
+                    });
+                }
+            }
+        }
+
+        // Sort by distance
+        hits.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+        hits
     }
 }
 
