@@ -44,6 +44,15 @@ struct StaticCollider {
     data2: vec4<f32>,
 }
 
+struct BoxContacts {
+    count: u32,
+    _pad: vec3<u32>,
+    neighbors: array<u32, 8>,
+    normals: array<vec4<f32>, 8>,
+    accum_impulse: array<vec4<f32>, 8>,
+    is_active: array<u32, 8>,
+}
+
 @group(0) @binding(0) var<uniform> params: SimParams;
 @group(0) @binding(1) var<storage, read_write> boxes: array<BoxItem>;
 @group(0) @binding(2) var<storage, read_write> grid_heads: array<atomic<i32>>; // Size: GRID_SIZE
@@ -51,6 +60,7 @@ struct StaticCollider {
 @group(0) @binding(4) var<storage, read> colliders: array<StaticCollider>;
 @group(0) @binding(5) var<storage, read_write> awake_flags: array<atomic<u32>>;
 @group(0) @binding(6) var<storage, read_write> joints: array<Joint>;
+@group(0) @binding(7) var<storage, read_write> box_contacts: array<BoxContacts>;
 
 const GRID_SIZE: u32 = 262144u; // 2^18
 const CELL_SIZE: f32 = 2.0;
@@ -187,45 +197,27 @@ fn build_grid(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
 
-// Pass 3 (Race-condition safe version)
+// Pass 3: Narrowphase (Run Once)
 @compute @workgroup_size(256)
-fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn narrowphase(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
     if (idx >= params.num_boxes) { return; }
 
     var me = boxes[idx];
-    if (me.state == 1u) { return; } // Uyuyan objeler çarpışma testi başlatmaz
+    if (me.state == 1u) { return; }
+
+    let old_count = min(box_contacts[idx].count, 8u);
+    for (var i = 0u; i < old_count; i++) {
+        box_contacts[idx].is_active[i] = 0u;
+    }
 
     let grid_p = vec3<i32>(floor(me.position / CELL_SIZE));
-    let restitution = 0.4;
-    let friction = 0.5;
     
-    var acc_vel_correction = vec3<f32>(0.0);
-    var acc_ang_vel_correction = vec3<f32>(0.0);
-    var acc_pos_correction = vec3<f32>(0.0);
-    var num_contacts = 0.0;
-    
-    // ═══ Baumgarte Sequential Impulse parametreleri ═══
-    let BAUMGARTE_BETA: f32 = 0.2;    // Pozisyon düzeltme oranı (0.1 - 0.3 arası)
-    let SLOP: f32 = 0.005;             // Penetrasyon toleransı (jitter önleme)
-    let SI_RELAXATION: f32 = 0.65;     // SI relaxation (Jacobi yakınsama için)
-    
-    // OBB Axes for me
     var axesA = array<vec3<f32>, 3>(
         rotate_vector(vec3<f32>(1.0, 0.0, 0.0), me.rotation),
         rotate_vector(vec3<f32>(0.0, 1.0, 0.0), me.rotation),
         rotate_vector(vec3<f32>(0.0, 0.0, 1.0), me.rotation)
     );
-    
-    // inertia approx (1/6 * m * size^2) — local-space diagonal
-    let sA = me.half_extents * 2.0;
-    let invInertiaA = vec3<f32>(
-        12.0 / (me.mass * (sA.y * sA.y + sA.z * sA.z)),
-        12.0 / (me.mass * (sA.x * sA.x + sA.z * sA.z)),
-        12.0 / (me.mass * (sA.x * sA.x + sA.y * sA.y))
-    );
-    let rotA = me.rotation;
-
     let v_dt = me.velocity * params.dt;
     let rad_x = max(1i, i32(ceil((abs(v_dt.x) + me.half_extents.x) / CELL_SIZE)));
     let rad_y = max(1i, i32(ceil((abs(v_dt.y) + me.half_extents.y) / CELL_SIZE)));
@@ -235,7 +227,6 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cy = min(2i, rad_y);
     let cz = min(2i, rad_z);
     
-    // Check neighbor cells
     for (var x = -cx; x <= cx; x++) {
     for (var y = -cy; y <= cy; y++) {
     for (var z = -cz; z <= cz; z++) {
@@ -248,10 +239,9 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (n_idx != idx) {
                 let other = boxes[n_idx];
                 
-                // Broadphase (Swept AABB check)
+                // Broadphase
                 let rA = length(me.half_extents);
                 let rB = length(other.half_extents);
-                
                 let minA = min(me.position, me.position + v_dt) - vec3<f32>(rA);
                 let maxA = max(me.position, me.position + v_dt) + vec3<f32>(rA);
                 let future_other = other.position + other.velocity * params.dt;
@@ -271,7 +261,6 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     rotate_vector(vec3<f32>(0.0, 0.0, 1.0), other.rotation)
                 );
                 
-                // SAT (15 axes)
                 var axes_to_test = array<vec3<f32>, 15>();
                 axes_to_test[0] = axesA[0]; axes_to_test[1] = axesA[1]; axes_to_test[2] = axesA[2];
                 axes_to_test[3] = axesB[0]; axes_to_test[4] = axesB[1]; axes_to_test[5] = axesB[2];
@@ -304,19 +293,15 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 
                 if (is_intersecting || (is_swept_intersecting && global_t_first <= 1.0 && global_t_first >= 0.0)) {
                     if (other.state == 1u) {
-                        // Cascade wake-up: uyanan nesne komşularını da uyandırır
                         atomicStore(&awake_flags[n_idx], 1u);
                     }
-                    
                     var active_normal = hit_normal;
                     var penetration = min_overlap;
-                    var toi = 0.0;
                     if (!is_intersecting) {
                         active_normal = swept_hit_normal;
-                        toi = global_t_first;
-                        penetration = 0.001; // Swept temas — minimal penetrasyon
+                        penetration = 0.001;
                     }
-                    
+                    let toi = select(0.0, global_t_first, !is_intersecting);
                     let me_pos_toi = me.position + me.velocity * params.dt * toi;
                     let other_pos_toi = other.position + other.velocity * params.dt * toi;
                     let distVec = other_pos_toi - me_pos_toi;
@@ -324,95 +309,180 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     if (dot(active_normal, distVec) < 0.0) {
                         active_normal = -active_normal;
                     }
-                    
-                    // ═══ Baumgarte Position Stabilization ═══
-                    // Doğrudan pozisyon itme yerine, bias velocity ile çözüm
-                    let bias_vel = (BAUMGARTE_BETA / params.dt) * max(penetration - SLOP, 0.0);
-                    
-                    // Pozisyon düzeltmesi (sadece derin penetrasyon için — güvenlik ağı)
-                    if (is_intersecting && penetration > 0.05) {
-                        let total_mass = me.mass + other.mass;
-                        let m_ratio_me = other.mass / total_mass;
-                        acc_pos_correction += active_normal * (-penetration * m_ratio_me * 0.3);
-                    }
-                    
-                    num_contacts += 1.0;
-                    
-                    let contactPoint = me_pos_toi + active_normal * (length(distVec) * 0.5);
-                    let r1 = contactPoint - me.position; 
-                    let r2 = contactPoint - other.position;
-                    
-                    let sB = other.half_extents * 2.0;
-                    let invInertiaB = vec3<f32>(
-                        12.0 / (other.mass * (sB.y * sB.y + sB.z * sB.z)),
-                        12.0 / (other.mass * (sB.x * sB.x + sB.z * sB.z)),
-                        12.0 / (other.mass * (sB.x * sB.x + sB.y * sB.y))
-                    );
-                    let rotB = other.rotation;
 
-                    let v1 = me.velocity + cross(me.angular_velocity, r1);
-                    let v2 = other.velocity + cross(other.angular_velocity, r2);
-                    let rel_vel = v1 - v2;
-                    let n_b2a = -active_normal;
-                    
-                    let vel_along_normal = dot(rel_vel, n_b2a);
-                    
-                    // ═══ Sequential Impulse: Normal + Baumgarte Bias ═══
-                    // Ayrılma hızı >= 0 olmalı + bias ile pozisyon düzeltme
-                    if (vel_along_normal < bias_vel) {
-                            
-                            let invMassA = 1.0 / me.mass;
-                            let invMassB = 1.0 / other.mass;
-                            
-                            let crossA = cross(r1, n_b2a);
-                            let crossB = cross(r2, n_b2a);
-                            
-                            let ptA = apply_inv_inertia(crossA, invInertiaA, rotA);
-                            let ptB = apply_inv_inertia(crossB, invInertiaB, rotB);
-                            
-                            let K = invMassA + invMassB + dot(crossA, ptA) + dot(crossB, ptB);
-                            
-                            // SI: Normal impulse with Baumgarte bias
-                            let j_normal = max(-(1.0 + restitution) * vel_along_normal - bias_vel, 0.0) / K;
-                            let impulse = j_normal * n_b2a;
-                            
-                            // ═══ Friction Cone Clamping ═══
-                            var tangent = rel_vel - n_b2a * vel_along_normal;
-                            let tang_len = length(tangent);
-                            if (tang_len > 0.001) {
-                                tangent = tangent / tang_len;
-                                let crossA_t = cross(r1, tangent);
-                                let crossB_t = cross(r2, tangent);
-                                let ptA_t = apply_inv_inertia(crossA_t, invInertiaA, rotA);
-                                let ptB_t = apply_inv_inertia(crossB_t, invInertiaB, rotB);
-                                let K_t = invMassA + invMassB + dot(crossA_t, ptA_t) + dot(crossB_t, ptB_t);
-                                let jt = -dot(rel_vel, tangent) / K_t;
-                                
-                                // Coulomb friction cone: |jt| ≤ μ * j_normal
-                                let max_friction = friction * j_normal;
-                                let clamped_jt = clamp(jt, -max_friction, max_friction);
-                                let friction_impulse = tangent * clamped_jt;
-                                
-                                acc_vel_correction += (impulse + friction_impulse) * invMassA;
-                                acc_ang_vel_correction += apply_inv_inertia(cross(r1, impulse + friction_impulse), invInertiaA, rotA);
-                            } else {
-                                acc_vel_correction += impulse * invMassA;
-                                acc_ang_vel_correction += apply_inv_inertia(cross(r1, impulse), invInertiaA, rotA);
+                    // Persistent Manifold Update
+                    var found = false;
+                    for (var c = 0u; c < old_count; c++) {
+                        if (box_contacts[idx].neighbors[c] == n_idx) {
+                            box_contacts[idx].is_active[c] = 1u;
+                            box_contacts[idx].normals[c] = vec4<f32>(active_normal, penetration);
+                            found = true;
+                            break;
+                        }
+                    }
+
+                    if (!found) {
+                        var slot = 8u;
+                        for (var c = 0u; c < 8u; c++) {
+                            if (c >= old_count || box_contacts[idx].is_active[c] == 0u) {
+                                slot = c;
+                                break;
+                            }
+                        }
+                        if (slot < 8u) {
+                            box_contacts[idx].neighbors[slot] = n_idx;
+                            box_contacts[idx].normals[slot] = vec4<f32>(active_normal, penetration);
+                            box_contacts[idx].accum_impulse[slot] = vec4<f32>(0.0);
+                            box_contacts[idx].is_active[slot] = 1u;
+                            if (slot >= old_count) {
+                                box_contacts[idx].count = slot + 1u;
                             }
                         }
                     }
                 }
+            }
             curr_n = linked_nodes[curr_n];
         }
     }}}
+}
+
+// Pass 3.5: Solver Loop (Iterative Impulse with Warm Starting)
+@compute @workgroup_size(256)
+fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    if (idx >= params.num_boxes) { return; }
+
+    var me = boxes[idx];
+    if (me.state == 1u) { return; }
+
+    let num_c = min(box_contacts[idx].count, 8u);
+    if (num_c == 0u) { return; }
+
+    let restitution = 0.4;
+    let friction = 0.5;
     
-    // SI Jacobi relaxation ile düzeltmeleri uygula
-    if (num_contacts > 0.0) {
-        me.velocity += acc_vel_correction * SI_RELAXATION;
-        me.angular_velocity += acc_ang_vel_correction * SI_RELAXATION;
-        if (length(acc_pos_correction) > 0.0001) {
-            me.position += (acc_pos_correction / num_contacts);
+    var acc_vel_correction = vec3<f32>(0.0);
+    var acc_ang_vel_correction = vec3<f32>(0.0);
+    var acc_pos_correction = vec3<f32>(0.0);
+    
+    let BAUMGARTE_BETA: f32 = 0.2;
+    let SLOP: f32 = 0.005;
+    let SI_RELAXATION: f32 = 0.65;
+    
+    let sA = me.half_extents * 2.0;
+    let invInertiaA = vec3<f32>(
+        12.0 / (me.mass * (sA.y * sA.y + sA.z * sA.z)),
+        12.0 / (me.mass * (sA.x * sA.x + sA.z * sA.z)),
+        12.0 / (me.mass * (sA.x * sA.x + sA.y * sA.y))
+    );
+    let rotA = me.rotation;
+
+    for (var i = 0u; i < num_c; i++) {
+        if (box_contacts[idx].is_active[i] == 0u) { continue; }
+
+        let n_idx = box_contacts[idx].neighbors[i];
+        let nrm_pen = box_contacts[idx].normals[i];
+        let active_normal = nrm_pen.xyz;
+        let penetration = nrm_pen.w;
+
+        let other = boxes[n_idx];
+
+        let bias_vel = (BAUMGARTE_BETA / params.dt) * max(penetration - SLOP, 0.0);
+        if (penetration > 0.05) {
+            let total_mass = me.mass + other.mass;
+            let m_ratio_me = other.mass / total_mass;
+            acc_pos_correction += active_normal * (-penetration * m_ratio_me * 0.3);
         }
+
+        let contactPoint = me.position + active_normal * (length(other.position - me.position) * 0.5);
+        let r1 = contactPoint - me.position; 
+        let r2 = contactPoint - other.position;
+        
+        let sB = other.half_extents * 2.0;
+        let invInertiaB = vec3<f32>(
+            12.0 / (other.mass * (sB.y * sB.y + sB.z * sB.z)),
+            12.0 / (other.mass * (sB.x * sB.x + sB.z * sB.z)),
+            12.0 / (other.mass * (sB.x * sB.x + sB.y * sB.y))
+        );
+        let rotB = other.rotation;
+
+        let v1 = me.velocity + cross(me.angular_velocity, r1);
+        let v2 = other.velocity + cross(other.angular_velocity, r2);
+        let rel_vel = v1 - v2;
+        let n_b2a = -active_normal;
+        
+        let vel_along_normal = dot(rel_vel, n_b2a);
+        
+        // Persistent Impulse (Warm Start)
+        var old_accum = box_contacts[idx].accum_impulse[i];
+        
+        let invMassA = 1.0 / me.mass;
+        let invMassB = 1.0 / other.mass;
+        let crossA = cross(r1, n_b2a);
+        let crossB = cross(r2, n_b2a);
+        let ptA = apply_inv_inertia(crossA, invInertiaA, rotA);
+        let ptB = apply_inv_inertia(crossB, invInertiaB, rotB);
+        let K = invMassA + invMassB + dot(crossA, ptA) + dot(crossB, ptB);
+        
+        // Calculate new normal impulse
+        let j_normal = -(1.0 + restitution) * vel_along_normal - bias_vel;
+        let unprojected_new_accum = old_accum.x + (j_normal / K);
+        let new_accum_n = max(unprojected_new_accum, 0.0); // Clamp to positive
+        let applied_j_n = new_accum_n - old_accum.x; // Delta impulse
+        
+        old_accum.x = new_accum_n; // Save back
+        let impulse = applied_j_n * n_b2a;
+        
+        // Friction with Warm Start
+        var tangent = rel_vel - n_b2a * vel_along_normal;
+        let tang_len = length(tangent);
+        if (tang_len > 0.001) {
+            tangent = tangent / tang_len;
+            let crossA_t = cross(r1, tangent);
+            let crossB_t = cross(r2, tangent);
+            let ptA_t = apply_inv_inertia(crossA_t, invInertiaA, rotA);
+            let ptB_t = apply_inv_inertia(crossB_t, invInertiaB, rotB);
+            let K_t = invMassA + invMassB + dot(crossA_t, ptA_t) + dot(crossB_t, ptB_t);
+            
+            let jt = -dot(rel_vel, tangent);
+            let unprojected_jt_accum = old_accum.yzw + (tangent * (jt / K_t));
+            let max_fric = friction * new_accum_n;
+            
+            // Clamp tangent vector
+            let current_fric_len = length(unprojected_jt_accum);
+            var new_accum_t = unprojected_jt_accum;
+            if (current_fric_len > max_fric) {
+                new_accum_t = unprojected_jt_accum * (max_fric / current_fric_len);
+            }
+            
+            let applied_j_t = new_accum_t - old_accum.yzw;
+            old_accum.y = new_accum_t.x;
+            old_accum.z = new_accum_t.y;
+            old_accum.w = new_accum_t.z;
+            
+            acc_vel_correction += (impulse + applied_j_t) * invMassA;
+            acc_ang_vel_correction += apply_inv_inertia(cross(r1, impulse + applied_j_t), invInertiaA, rotA);
+        } else {
+            acc_vel_correction += impulse * invMassA;
+            acc_ang_vel_correction += apply_inv_inertia(cross(r1, impulse), invInertiaA, rotA);
+        }
+        
+        // Save the accumulated impulse for next iteration/frame
+        box_contacts[idx].accum_impulse[i] = old_accum;
+    }
+    
+    me.velocity += acc_vel_correction * SI_RELAXATION;
+    me.angular_velocity += acc_ang_vel_correction * SI_RELAXATION;
+    
+    var active_count = 0.0;
+    for (var i = 0u; i < num_c; i++) {
+        if (box_contacts[idx].is_active[i] == 1u) {
+            active_count += 1.0;
+        }
+    }
+    
+    if (active_count > 0.0 && length(acc_pos_correction) > 0.0001) {
+        me.position += (acc_pos_correction / active_count);
     }
     boxes[idx] = me;
 }

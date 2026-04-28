@@ -12,6 +12,7 @@ pub struct GpuPhysicsSystem {
     pub params_buffer: wgpu::Buffer,
     pub grid_heads_buffer: wgpu::Buffer,
     pub linked_nodes_buffer: wgpu::Buffer,
+    pub box_contacts_buffer: wgpu::Buffer,
     pub colliders_buffer: wgpu::Buffer,
     pub awake_flags_buffer: wgpu::Buffer,
     pub joints_buffer: wgpu::Buffer,
@@ -224,6 +225,14 @@ impl GpuPhysicsSystem {
             mapped_at_creation: false,
         });
 
+        // 336 bytes per box (4 count, 12 pad, 32 neighbors, 128 normals, 128 accum_impulse, 32 is_active)
+        let box_contacts_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("GPU Physics Box Contacts Cache"),
+            size: (max_boxes as wgpu::BufferAddress) * 336,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         let pipelines = create_physics_pipelines(
             device,
             global_bind_group_layout,
@@ -236,6 +245,7 @@ impl GpuPhysicsSystem {
             &colliders_buffer,
             &awake_flags_buffer,
             &joints_buffer,
+            &box_contacts_buffer,
             &culled_boxes_buffer,
             &indirect_buffer,
         );
@@ -247,6 +257,7 @@ impl GpuPhysicsSystem {
             params_buffer,
             grid_heads_buffer,
             linked_nodes_buffer,
+            box_contacts_buffer,
             colliders_buffer,
             awake_flags_buffer,
             joints_buffer,
@@ -501,16 +512,19 @@ impl GpuPhysicsSystem {
         cpass.set_pipeline(&self.pipelines.pipeline_build);
         cpass.dispatch_workgroups(self.max_boxes.div_ceil(256), 1, 1);
 
-        // Faz 2: Çarpışma çözümünü N kez tekrarla (SI iterasyon)
-        // Her iterasyonda aynı grid üzerinden çarpışmalar tekrar çözülür
-        // Bu, Jacobi-tarzı yakınsama sağlar — iterasyon arttıkça daha stabil yığınlar
+        // Faz 2: Narrowphase (Çarpışma Tespiti ve Contact Caching)
+        cpass.set_pipeline(&self.pipelines.pipeline_narrowphase);
+        cpass.dispatch_workgroups(self.max_boxes.div_ceil(256), 1, 1);
+
+        // Faz 3: Çarpışma çözümünü N kez tekrarla (SI iterasyon)
+        // Artık grid üzerinden değil, doğrudan contact cache üzerinden hesaplama yapıyor!
         let si_iterations = 6;
         for _ in 0..si_iterations {
             cpass.set_pipeline(&self.pipelines.pipeline_solve);
             cpass.dispatch_workgroups(self.max_boxes.div_ceil(256), 1, 1);
         }
 
-        // Faz 3: Hız ve pozisyon entegrasyonu (tek seferde)
+        // Faz 4: Hız ve pozisyon entegrasyonu (tek seferde)
         cpass.set_pipeline(&self.pipelines.pipeline_integrate);
         cpass.dispatch_workgroups(self.max_boxes.div_ceil(256), 1, 1);
 
