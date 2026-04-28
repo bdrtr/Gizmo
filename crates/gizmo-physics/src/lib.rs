@@ -14,7 +14,6 @@ pub use components::{
     BodyType, BoxShape, Breakable, CapsuleShape, Collider, ColliderShape, CollisionLayer,
     PhysicsMaterial, PlaneShape, RigidBody, SphereShape, Transform, Velocity,
 };
-pub use shape::{Collider as ShapeCollider, ColliderShape as ShapeColliderShape};
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct GpuPhysicsLink {
