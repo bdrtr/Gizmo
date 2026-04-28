@@ -316,7 +316,7 @@ impl RigidBody {
             ColliderShape::Capsule(c) => {
                 self.calculate_capsule_inertia(c.radius, c.half_height);
             }
-            ColliderShape::Plane { .. } => {
+            ColliderShape::Plane(_) => {
                 self.local_inertia = Vec3::splat(f32::INFINITY);
             }
         }
