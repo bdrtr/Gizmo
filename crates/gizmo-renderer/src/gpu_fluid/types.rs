@@ -1,3 +1,7 @@
+// ═══════════════════════════════════════════════════════════════════════
+//  AAA Fluid GPU Types — Rust ↔ WGSL mirrored structs
+// ═══════════════════════════════════════════════════════════════════════
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct FluidParticle {
@@ -7,6 +11,9 @@ pub struct FluidParticle {
     pub lambda: f32,
     pub predicted_position: [f32; 3],
     pub phase: u32,
+    // AAA: Vorticity field (curl of velocity) for Vorticity Confinement
+    pub vorticity: [f32; 3],
+    pub _pad_vort: f32,
 }
 
 #[repr(C)]
@@ -61,8 +68,18 @@ pub struct FluidParams {
 
     pub num_colliders: u32,
     pub cohesion: f32,
-    pub pad2: f32,
-    pub pad3: f32,
+    pub time: f32,
+    // AAA: Vorticity confinement strength (epsilon)
+    pub vorticity_strength: f32,
+
+    // AAA: Surface tension coefficient (gamma)
+    pub surface_tension: f32,
+    // AAA: Laplacian viscosity coefficient (mu)
+    pub viscosity_laplacian: f32,
+    // AAA: XSPH velocity smoothing factor (c)
+    pub xsph_factor: f32,
+    // AAA: Number of pressure solver iterations
+    pub solver_iterations: u32,
 }
 
 pub const MAX_FLUID_COLLIDERS: usize = 64;

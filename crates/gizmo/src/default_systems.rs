@@ -145,6 +145,7 @@ pub fn default_render_pass(
         physics.request_readback(encoder);
 
         physics.compute_pass(encoder);
+        physics.debug_compute_pass(encoder);
         physics.cull_pass(encoder, &renderer.scene.global_bind_group);
     }
 
@@ -203,6 +204,7 @@ pub fn default_render_pass(
         // Draw GPU Physics Spheres!
         if let Some(physics) = &renderer.gpu_physics {
             physics.render_pass(&mut render_pass, &renderer.scene.global_bind_group);
+            physics.debug_render_pass(&mut render_pass, &renderer.scene.global_bind_group);
         }
 
         // Draw SPH fluid

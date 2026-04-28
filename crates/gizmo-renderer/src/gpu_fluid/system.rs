@@ -68,6 +68,8 @@ impl GpuFluidSystem {
                 lambda: 0.0,
                 predicted_position: [x, y, z],
                 phase: 0xFFFFFFFF, // Marked as uninitialized
+                vorticity: [0.0, 0.0, 0.0],
+                _pad_vort: 0.0,
             });
         }
 
@@ -163,9 +165,14 @@ impl GpuFluidSystem {
             mouse_dir: [0.0; 3],
             mouse_radius: 5.0,
             num_colliders: 0,
-            cohesion: 0.005,
-            pad2: 0.0,
-            pad3: 0.0,
+            cohesion: 0.008,
+            time: 0.0,
+            // AAA Physics Parameters
+            vorticity_strength: 0.35,      // Vorticity Confinement epsilon
+            surface_tension: 0.5,          // Akinci surface tension gamma
+            viscosity_laplacian: 0.005,    // Laplacian viscosity mu
+            xsph_factor: 0.05,            // XSPH smoothing factor
+            solver_iterations: 6,          // PBF solver iterations
         };
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Fluid Params Buffer"),
@@ -474,7 +481,13 @@ impl GpuFluidSystem {
             num_colliders: u32,
             cohesion: f32,
             time: f32,
-            pad3: f32,
+            // AAA: Vorticity confinement strength
+            vorticity_strength: f32,
+            // AAA: Surface tension, Laplacian viscosity, XSPH, solver iterations
+            surface_tension: f32,
+            viscosity_laplacian: f32,
+            xsph_factor: f32,
+            solver_iterations: u32,
         }
 
         let dyn_params = DynamicFluidParams {
@@ -483,9 +496,13 @@ impl GpuFluidSystem {
             mouse_dir,
             mouse_radius: 10.0, // Large mouse influence
             num_colliders,
-            cohesion: 0.005, // Cohesion coefficient (surface tension)
+            cohesion: 0.008,         // Cohesion coefficient (surface tension molecular)
             time,
-            pad3: 0.0,
+            vorticity_strength: 0.35,  // Vorticity Confinement epsilon
+            surface_tension: 0.5,      // Akinci surface tension gamma
+            viscosity_laplacian: 0.005, // Laplacian viscosity mu
+            xsph_factor: 0.05,         // XSPH smoothing factor
+            solver_iterations: 6,       // PBF solver iterations per frame
         };
 
         queue.write_buffer(&self.params_buffer, 80, bytemuck::cast_slice(&[dyn_params]));
@@ -574,8 +591,8 @@ impl GpuFluidSystem {
             }
         }
 
-        // 3. PBF SOLVER ITERATIONS
-        for _ in 0..4 {
+        // 3. PBF SOLVER ITERATIONS (AAA: increased from 4 to 6 for better convergence)
+        for _ in 0..6 {
             {
                 let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("Fluid Calc Lambda"),
@@ -596,7 +613,18 @@ impl GpuFluidSystem {
             }
         }
 
-        // 4. PBF UPDATE VELOCITY
+        // 4. AAA: VORTICITY CONFINEMENT — ω = ∇ × v (curl of velocity)
+        {
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Fluid Compute Vorticity"),
+                timestamp_writes: None,
+            });
+            cpass.set_bind_group(0, &self.pipelines.compute_bind_group, &[0]);
+            cpass.set_pipeline(&self.pipelines.pipeline_compute_vorticity);
+            cpass.dispatch_workgroups(workgroups_parts, 1, 1);
+        }
+
+        // 5. AAA: UPDATE VELOCITY — Vorticity Confinement + Surface Tension + Viscosity
         {
             let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Fluid Update Velocity Pass"),
@@ -604,6 +632,17 @@ impl GpuFluidSystem {
             });
             cpass.set_bind_group(0, &self.pipelines.compute_bind_group, &[0]);
             cpass.set_pipeline(&self.pipelines.pipeline_update_velocity);
+            cpass.dispatch_workgroups(workgroups_parts, 1, 1);
+        }
+
+        // 6. AAA: CLASSIFY PARTICLES — Foam / Spray / Droplet detection
+        {
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Fluid Classify Particles"),
+                timestamp_writes: None,
+            });
+            cpass.set_bind_group(0, &self.pipelines.compute_bind_group, &[0]);
+            cpass.set_pipeline(&self.pipelines.pipeline_classify);
             cpass.dispatch_workgroups(workgroups_parts, 1, 1);
         }
     }
@@ -749,6 +788,35 @@ impl GpuFluidSystem {
             rpass.set_bind_group(0, global_scene_bind_group, &[]);
             rpass.set_bind_group(1, &self.ssfr_composite_bg, &[]);
             rpass.draw(0..3, 0..1); // Fullscreen triangle
+        }
+
+        // 5. AAA: Foam/Spray/Droplet Render Pass
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("SSFR Foam/Spray"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load, // Preserve composite result
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: scene_depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_pipeline(&self.pipelines.pipeline_foam);
+            rpass.set_bind_group(0, global_scene_bind_group, &[]);
+            rpass.set_bind_group(1, &self.ssfr_particle_bg, &[]);
+            rpass.draw(0..4, 0..active_particles); // Only foam/spray survive in vertex shader
         }
     }
 }

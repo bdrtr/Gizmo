@@ -94,6 +94,37 @@ fn fbm(p: vec2<f32>) -> f32 {
     return v;
 }
 
+// ── Voronoi Caustics (Underwater Light Refraction) ──
+fn hash22(p: vec2<f32>) -> vec2<f32> {
+    let n = sin(dot(p, vec2<f32>(41.0, 289.0)));
+    return fract(vec2<f32>(262144.0, 32768.0) * n) * 0.8 + 0.1;
+}
+
+fn voronoi(p: vec2<f32>, time: f32) -> f32 {
+    let ip = floor(p);
+    let fp = fract(p);
+    var min_d = 1.0;
+    for (var y = -1; y <= 1; y = y + 1) {
+        for (var x = -1; x <= 1; x = x + 1) {
+            let n = vec2<f32>(f32(x), f32(y));
+            var rp = hash22(ip + n);
+            // Animate cell centers
+            rp = 0.5 + 0.5 * sin(time * 0.8 + 6.2831 * rp);
+            let d = length(n + rp - fp);
+            min_d = min(min_d, d);
+        }
+    }
+    return min_d;
+}
+
+fn caustic_pattern(uv: vec2<f32>, time: f32) -> f32 {
+    let scale = 10.0;
+    let c1 = voronoi(uv * scale + vec2<f32>(time * 0.3, time * 0.1), time);
+    let c2 = voronoi(uv * scale * 1.4 + vec2<f32>(-time * 0.2, time * 0.15), time * 1.3);
+    // Light concentrates where Voronoi edges overlap
+    return pow(1.0 - c1, 4.0) * pow(1.0 - c2, 4.0) * 8.0;
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let depth = textureSample(t_depth, s_depth, in.uv).x;
@@ -128,13 +159,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     
     // Multiply background with our volume absorption color
     // Add some self-illumination (ambient boost) so the fluid is visible even against dark backgrounds
-    let refracted_color = bg_color * fluid_color + fluid_color * 0.4;
+    var refracted_color = bg_color * fluid_color + fluid_color * 0.4;
+    
+    // ── Underwater Caustics ──
+    // Project animated Voronoi caustic pattern onto refracted background
+    let time = scene.cascade_params.z;
+    let caustic_uv = distorted_uv + N.xy * 0.02; // Slightly offset by surface normal
+    let caustic = caustic_pattern(caustic_uv, time);
+    let caustic_color = vec3<f32>(0.5, 0.7, 1.0) * caustic * transmittance;
+    refracted_color += caustic_color * (1.0 - clamp(thickness * 5.0, 0.0, 0.8));
     
     // Diffuse Lighting
     let diff = max(dot(N, L), 0.0);
     
     // Specular Highlight (Blinn-Phong) broken up by noise
-    let time = scene.cascade_params.z;
     let wave_uv = in.uv * 15.0 + N.xy * 2.0 + vec2<f32>(time * 0.3, time * 0.2);
     let surface_noise = fbm(wave_uv);
     

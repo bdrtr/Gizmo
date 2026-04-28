@@ -18,7 +18,23 @@ struct SimParams {
     damping: f32,
     num_boxes: u32,
     num_colliders: u32,
-    _pad2: vec2<u32>,
+    num_joints: u32,
+    _pad2: u32,
+}
+
+// ═══ Joint / Constraint Tipleri ═══
+// 0=Ball, 1=Hinge, 2=Fixed, 3=Spring, 4=Slider
+struct Joint {
+    body_a: u32,
+    body_b: u32,
+    joint_type: u32,
+    flags: u32,
+    anchor_a: vec3<f32>,
+    compliance: f32,
+    anchor_b: vec3<f32>,
+    damping_coeff: f32,
+    axis: vec3<f32>,
+    max_force: f32,
 }
 
 struct StaticCollider {
@@ -34,6 +50,7 @@ struct StaticCollider {
 @group(0) @binding(3) var<storage, read_write> linked_nodes: array<i32>; // Size: num_boxes
 @group(0) @binding(4) var<storage, read> colliders: array<StaticCollider>;
 @group(0) @binding(5) var<storage, read_write> awake_flags: array<atomic<u32>>;
+@group(0) @binding(6) var<storage, read_write> joints: array<Joint>;
 
 const GRID_SIZE: u32 = 262144u; // 2^18
 const CELL_SIZE: f32 = 2.0;
@@ -183,10 +200,15 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let restitution = 0.4;
     let friction = 0.5;
     
-    var acc_pos_correction = vec3<f32>(0.0);
     var acc_vel_correction = vec3<f32>(0.0);
     var acc_ang_vel_correction = vec3<f32>(0.0);
+    var acc_pos_correction = vec3<f32>(0.0);
     var num_contacts = 0.0;
+    
+    // ═══ Baumgarte Sequential Impulse parametreleri ═══
+    let BAUMGARTE_BETA: f32 = 0.2;    // Pozisyon düzeltme oranı (0.1 - 0.3 arası)
+    let SLOP: f32 = 0.005;             // Penetrasyon toleransı (jitter önleme)
+    let SI_RELAXATION: f32 = 0.65;     // SI relaxation (Jacobi yakınsama için)
     
     // OBB Axes for me
     var axesA = array<vec3<f32>, 3>(
@@ -282,15 +304,17 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 
                 if (is_intersecting || (is_swept_intersecting && global_t_first <= 1.0 && global_t_first >= 0.0)) {
                     if (other.state == 1u) {
+                        // Cascade wake-up: uyanan nesne komşularını da uyandırır
                         atomicStore(&awake_flags[n_idx], 1u);
                     }
                     
                     var active_normal = hit_normal;
+                    var penetration = min_overlap;
                     var toi = 0.0;
                     if (!is_intersecting) {
                         active_normal = swept_hit_normal;
                         toi = global_t_first;
-                        min_overlap = 0.0;
+                        penetration = 0.001; // Swept temas — minimal penetrasyon
                     }
                     
                     let me_pos_toi = me.position + me.velocity * params.dt * toi;
@@ -301,10 +325,15 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         active_normal = -active_normal;
                     }
                     
-                    if (is_intersecting && min_overlap > 0.0001) {
+                    // ═══ Baumgarte Position Stabilization ═══
+                    // Doğrudan pozisyon itme yerine, bias velocity ile çözüm
+                    let bias_vel = (BAUMGARTE_BETA / params.dt) * max(penetration - SLOP, 0.0);
+                    
+                    // Pozisyon düzeltmesi (sadece derin penetrasyon için — güvenlik ağı)
+                    if (is_intersecting && penetration > 0.05) {
                         let total_mass = me.mass + other.mass;
                         let m_ratio_me = other.mass / total_mass;
-                        acc_pos_correction += active_normal * (-min_overlap * m_ratio_me * 0.5);
+                        acc_pos_correction += active_normal * (-penetration * m_ratio_me * 0.3);
                     }
                     
                     num_contacts += 1.0;
@@ -327,7 +356,10 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let n_b2a = -active_normal;
                     
                     let vel_along_normal = dot(rel_vel, n_b2a);
-                    if (vel_along_normal < 0.0) {
+                    
+                    // ═══ Sequential Impulse: Normal + Baumgarte Bias ═══
+                    // Ayrılma hızı >= 0 olmalı + bias ile pozisyon düzeltme
+                    if (vel_along_normal < bias_vel) {
                             
                             let invMassA = 1.0 / me.mass;
                             let invMassB = 1.0 / other.mass;
@@ -338,12 +370,13 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
                             let ptA = apply_inv_inertia(crossA, invInertiaA, rotA);
                             let ptB = apply_inv_inertia(crossB, invInertiaB, rotB);
                             
-                            let denom = invMassA + invMassB + dot(crossA, ptA) + dot(crossB, ptB);
+                            let K = invMassA + invMassB + dot(crossA, ptA) + dot(crossB, ptB);
                             
-                            let j = -(1.0 + restitution) * vel_along_normal / denom;
-                            let impulse = j * n_b2a;
+                            // SI: Normal impulse with Baumgarte bias
+                            let j_normal = max(-(1.0 + restitution) * vel_along_normal - bias_vel, 0.0) / K;
+                            let impulse = j_normal * n_b2a;
                             
-                            // Friction
+                            // ═══ Friction Cone Clamping ═══
                             var tangent = rel_vel - n_b2a * vel_along_normal;
                             let tang_len = length(tangent);
                             if (tang_len > 0.001) {
@@ -352,15 +385,13 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
                                 let crossB_t = cross(r2, tangent);
                                 let ptA_t = apply_inv_inertia(crossA_t, invInertiaA, rotA);
                                 let ptB_t = apply_inv_inertia(crossB_t, invInertiaB, rotB);
-                                let denom_t = invMassA + invMassB + dot(crossA_t, ptA_t) + dot(crossB_t, ptB_t);
-                                let jt = -dot(rel_vel, tangent) / denom_t;
+                                let K_t = invMassA + invMassB + dot(crossA_t, ptA_t) + dot(crossB_t, ptB_t);
+                                let jt = -dot(rel_vel, tangent) / K_t;
                                 
-                                var friction_impulse = tangent;
-                                if (abs(jt) < j * friction) {
-                                    friction_impulse *= jt;
-                                } else {
-                                    friction_impulse *= -j * friction * sign(dot(rel_vel, tangent));
-                                }
+                                // Coulomb friction cone: |jt| ≤ μ * j_normal
+                                let max_friction = friction * j_normal;
+                                let clamped_jt = clamp(jt, -max_friction, max_friction);
+                                let friction_impulse = tangent * clamped_jt;
                                 
                                 acc_vel_correction += (impulse + friction_impulse) * invMassA;
                                 acc_ang_vel_correction += apply_inv_inertia(cross(r1, impulse + friction_impulse), invInertiaA, rotA);
@@ -375,12 +406,13 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }}}
     
-    // Apply corrections: position Jacobi-averaged, velocity/angular accumulated directly
+    // SI Jacobi relaxation ile düzeltmeleri uygula
     if (num_contacts > 0.0) {
-        let relaxation = 0.8; // Jacobi relaxation parameter (position only)
-        me.position += (acc_pos_correction / num_contacts) * relaxation;
-        me.velocity += acc_vel_correction;
-        me.angular_velocity += acc_ang_vel_correction;
+        me.velocity += acc_vel_correction * SI_RELAXATION;
+        me.angular_velocity += acc_ang_vel_correction * SI_RELAXATION;
+        if (length(acc_pos_correction) > 0.0001) {
+            me.position += (acc_pos_correction / num_contacts);
+        }
     }
     boxes[idx] = me;
 }
@@ -393,10 +425,28 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var box_struct = boxes[idx];
     
-    // Wake Up Tetikleyicisi
+    // Wake Up Tetikleyicisi — cascade wake-up dahil
     if (atomicExchange(&awake_flags[idx], 0u) == 1u) {
         box_struct.state = 0u;
         box_struct.sleep_counter = 0u;
+        
+        // Cascade: bu nesne uyandığında, aynı hücredeki uyuyan komşularını da uyandır
+        let wake_hash = hash_pos(box_struct.position);
+        var wake_curr = atomicLoad(&grid_heads[wake_hash]);
+        while (wake_curr != -1) {
+            let wake_idx = u32(wake_curr);
+            if (wake_idx != idx && boxes[wake_idx].state == 1u) {
+                let dist_sq = dot(
+                    box_struct.position - boxes[wake_idx].position,
+                    box_struct.position - boxes[wake_idx].position
+                );
+                // Sadece yakın komşuları uyandır (2 × CELL_SIZE mesafe)
+                if (dist_sq < CELL_SIZE * CELL_SIZE * 4.0) {
+                    atomicStore(&awake_flags[wake_idx], 1u);
+                }
+            }
+            wake_curr = linked_nodes[wake_curr];
+        }
     }
     
     if (box_struct.state == 1u) {
@@ -618,11 +668,34 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
         box_struct.position.z = -bounds;
         box_struct.velocity.z *= -0.8;
     }
-    // Uykuya Geçiş Kontrolü — düşük eşik + uzun bekleme süresi ile oscillation önlenir
-    let SLEEP_THRESHOLD: f32 = 0.01;
-    if (length(box_struct.velocity) + length(box_struct.angular_velocity) < SLEEP_THRESHOLD) {
-        box_struct.sleep_counter++;
-        if (box_struct.sleep_counter > 90u) { // ~1.5 saniye @ 60fps
+    // ═══ Gelişmiş Uyku Sistemi (Energy-Based Island Sleeping) ═══
+    //
+    // Kinetik enerji tabanlı eşik: E = 0.5 * m * v² + 0.5 * I * ω²
+    // Basit hız eşiği yerine enerji eşiği kullanılır → kütle farklılıklarına duyarsız
+    //
+    let linear_energy = 0.5 * box_struct.mass * dot(box_struct.velocity, box_struct.velocity);
+    let angular_speed_sq = dot(box_struct.angular_velocity, box_struct.angular_velocity);
+    // Basitleştirilmiş rotasyonel enerji (ortalama inertia yaklaşımı)
+    let avg_inertia = box_struct.mass * (sA.x * sA.x + sA.y * sA.y + sA.z * sA.z) / 12.0;
+    let angular_energy = 0.5 * avg_inertia * angular_speed_sq;
+    let total_energy = linear_energy + angular_energy;
+
+    let SLEEP_ENERGY_THRESHOLD: f32 = 0.0005;  // Çok düşük enerji eşiği
+    let SLEEP_FRAMES: u32 = 120u;              // 2 saniye @ 60fps
+    let SETTLING_FRAMES: u32 = 60u;            // Uyumadan önce 1s yavaşlatma
+
+    if (total_energy < SLEEP_ENERGY_THRESHOLD) {
+        box_struct.sleep_counter += 1u;
+
+        // Settling fazı: uykuya geçmeden önce hızları kademeli azalt (jitter önleme)
+        if (box_struct.sleep_counter > SETTLING_FRAMES) {
+            let settle_factor = 0.9;  // Her frame %10 sönümleme
+            box_struct.velocity *= settle_factor;
+            box_struct.angular_velocity *= settle_factor;
+        }
+
+        // Tam uyku
+        if (box_struct.sleep_counter > SLEEP_FRAMES) {
             box_struct.state = 1u;
             box_struct.velocity = vec3<f32>(0.0);
             box_struct.angular_velocity = vec3<f32>(0.0);
@@ -633,4 +706,256 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     boxes[idx] = box_struct;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Pass 5: Joint / Constraint Solver
+//
+//  Body-centric: her thread bir gövde işler, tüm joint'leri tarar.
+//  Race condition yok çünkü her thread sadece kendi gövdesini yazar.
+//  Baumgarte bias ile pozisyon düzeltme, XPBD compliance ile yumuşak
+//  constraint desteği.
+// ═══════════════════════════════════════════════════════════════════════
+const JOINT_BETA: f32 = 0.3;  // Joint pozisyon düzeltme oranı (daha agresif)
+
+fn compute_inv_inertia_diag(body: BoxItem) -> vec3<f32> {
+    let s = body.half_extents * 2.0;
+    return vec3<f32>(
+        12.0 / (body.mass * (s.y * s.y + s.z * s.z)),
+        12.0 / (body.mass * (s.x * s.x + s.z * s.z)),
+        12.0 / (body.mass * (s.x * s.x + s.y * s.y))
+    );
+}
+
+// Tek eksen boyunca pozisyonel constraint çözücü
+fn solve_positional_axis(
+    n: vec3<f32>,
+    err: f32,
+    r_a: vec3<f32>,
+    r_b: vec3<f32>,
+    body_a: BoxItem,
+    body_b: BoxItem,
+    inv_inertia_a: vec3<f32>,
+    inv_inertia_b: vec3<f32>,
+    compliance: f32,
+    damping_c: f32,
+    is_body_a: bool,
+) -> vec4<f32> { // xyz = velocity correction, w = angular correction magnitude
+    let inv_mass_a = 1.0 / body_a.mass;
+    let inv_mass_b = 1.0 / body_b.mass;
+    
+    let cross_a = cross(r_a, n);
+    let cross_b = cross(r_b, n);
+    let pt_a = apply_inv_inertia(cross_a, inv_inertia_a, body_a.rotation);
+    let pt_b = apply_inv_inertia(cross_b, inv_inertia_b, body_b.rotation);
+    
+    let K = inv_mass_a + inv_mass_b + dot(cross_a, pt_a) + dot(cross_b, pt_b);
+    
+    // XPBD compliance: α̃ = α / (dt²)
+    let alpha_tilde = compliance / (params.dt * params.dt);
+    let effective_mass = 1.0 / (K + alpha_tilde);
+    
+    // Baumgarte bias + damping
+    let bias = (JOINT_BETA / params.dt) * err;
+    
+    let v_a = body_a.velocity + cross(body_a.angular_velocity, r_a);
+    let v_b = body_b.velocity + cross(body_b.angular_velocity, r_b);
+    let v_rel = dot(v_a - v_b, n);
+    
+    let lambda = -(v_rel + bias + damping_c * v_rel) * effective_mass;
+    
+    let impulse = n * lambda;
+    
+    if (is_body_a) {
+        return vec4<f32>(
+            impulse * inv_mass_a,
+            dot(apply_inv_inertia(cross(r_a, impulse), inv_inertia_a, body_a.rotation), n)
+        );
+    } else {
+        return vec4<f32>(
+            -impulse * inv_mass_b,
+            dot(-apply_inv_inertia(cross(r_b, impulse), inv_inertia_b, body_b.rotation), n)
+        );
+    }
+}
+
+@compute @workgroup_size(256)
+fn solve_joints(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let body_idx = global_id.x;
+    if (body_idx >= params.num_boxes) { return; }
+    if (params.num_joints == 0u) { return; }
+    
+    var body = boxes[body_idx];
+    if (body.state == 1u) { return; } // Uyuyan gövde
+    
+    var acc_vel = vec3<f32>(0.0);
+    var acc_ang = vec3<f32>(0.0);
+    var joint_count = 0.0;
+    
+    let inv_inertia_self = compute_inv_inertia_diag(body);
+    
+    for (var j = 0u; j < params.num_joints; j++) {
+        let joint = joints[j];
+        if ((joint.flags & 1u) == 0u) { continue; } // Inactive
+        
+        let is_a = (joint.body_a == body_idx);
+        let is_b = (joint.body_b == body_idx);
+        if (!is_a && !is_b) { continue; }
+        
+        // Diğer gövdeyi al
+        var other_idx = joint.body_b;
+        if (is_b) { other_idx = joint.body_a; }
+        
+        let other = boxes[other_idx];
+        let inv_inertia_other = compute_inv_inertia_diag(other);
+        
+        // Uyuyan diğer gövdeyi uyandır
+        if (other.state == 1u) {
+            atomicStore(&awake_flags[other_idx], 1u);
+        }
+        
+        // Dünya-uzayı bağlantı noktaları
+        let r_a = rotate_vector(joint.anchor_a, boxes[joint.body_a].rotation);
+        let r_b = rotate_vector(joint.anchor_b, boxes[joint.body_b].rotation);
+        let w_a = boxes[joint.body_a].position + r_a;
+        let w_b = boxes[joint.body_b].position + r_b;
+        
+        // Pozisyon hatası
+        let delta = w_a - w_b;
+        let err = length(delta);
+        
+        // ─── Joint Tiplerine Göre Çözüm ───
+        
+        if (joint.joint_type == 0u || joint.joint_type == 2u || joint.joint_type == 3u) {
+            // BALL (0), FIXED (2), SPRING (3) — Pozisyonel constraint
+            if (err > 0.0001) {
+                let n = delta / err;
+                let bias = (JOINT_BETA / params.dt) * err;
+                
+                let inv_mass_self = 1.0 / body.mass;
+                let inv_mass_other = 1.0 / other.mass;
+                
+                let r_self = select(r_b, r_a, is_a);
+                let r_other = select(r_a, r_b, is_a);
+                let inv_i_self = select(inv_inertia_other, inv_inertia_self, is_a);
+                let inv_i_other = select(inv_inertia_self, inv_inertia_other, is_a);
+                let rot_self = select(other.rotation, body.rotation, is_a);
+                let rot_other = select(body.rotation, other.rotation, is_a);
+                
+                let cross_s = cross(r_self, n);
+                let cross_o = cross(r_other, n);
+                let pt_s = apply_inv_inertia(cross_s, inv_i_self, rot_self);
+                let pt_o = apply_inv_inertia(cross_o, inv_i_other, rot_other);
+                
+                let K = inv_mass_self + inv_mass_other + dot(cross_s, pt_s) + dot(cross_o, pt_o);
+                
+                // XPBD compliance
+                let alpha_tilde = joint.compliance / (params.dt * params.dt);
+                
+                let v_self = body.velocity + cross(body.angular_velocity, r_self);
+                let v_other = other.velocity + cross(other.angular_velocity, r_other);
+                let v_rel_sign = select(-1.0, 1.0, is_a);
+                let v_rel = dot(v_self - v_other, n) * v_rel_sign;
+                
+                let lambda = -(v_rel + bias * v_rel_sign + joint.damping_coeff * v_rel) / (K + alpha_tilde);
+                let impulse_sign = select(-1.0, 1.0, is_a);
+                let impulse = n * lambda * impulse_sign;
+                
+                acc_vel += impulse * inv_mass_self;
+                acc_ang += apply_inv_inertia(cross(r_self, impulse), inv_i_self, rot_self);
+                joint_count += 1.0;
+            }
+            
+            // FIXED joint: Açısal constraint ekle (tüm rotasyon kısıtlı)
+            if (joint.joint_type == 2u) {
+                // Gövdeler arası göreceli dönme hatası
+                let q_a = boxes[joint.body_a].rotation;
+                let q_b = boxes[joint.body_b].rotation;
+                let q_err = quat_mul(q_a, quat_conjugate(q_b));
+                // Hata quaternion'dan açısal hata vektörü: 2 * vec(q_err) (küçük açılar için)
+                let ang_err = q_err.xyz * 2.0 * select(-1.0, 1.0, q_err.w >= 0.0);
+                
+                let ang_bias = (JOINT_BETA / params.dt) * ang_err;
+                let omega_rel = body.angular_velocity - other.angular_velocity;
+                let omega_sign = select(-1.0, 1.0, is_a);
+                
+                let avg_inv_i = (inv_inertia_self + inv_inertia_other) * 0.5;
+                let correction = -(omega_rel * omega_sign + ang_bias * omega_sign) * avg_inv_i * 0.3;
+                acc_ang += correction;
+            }
+        }
+        
+        if (joint.joint_type == 1u) {
+            // HINGE — Ball constraint + 2-axis angular lock
+            // Pozisyonel kısım (Ball gibi)
+            if (err > 0.0001) {
+                let n = delta / err;
+                let bias = (JOINT_BETA / params.dt) * err;
+                let inv_mass_self = 1.0 / body.mass;
+                let inv_mass_other = 1.0 / other.mass;
+                let r_self = select(r_b, r_a, is_a);
+                let K = inv_mass_self + inv_mass_other;
+                let v_rel_sign = select(-1.0, 1.0, is_a);
+                let lambda = -(bias * v_rel_sign) / K;
+                let impulse = n * lambda * v_rel_sign;
+                acc_vel += impulse * inv_mass_self;
+                joint_count += 1.0;
+            }
+            
+            // Açısal kısım: Hinge ekseni dışındaki dönmeyi kısıtla
+            let hinge_axis_world = rotate_vector(joint.axis, boxes[joint.body_a].rotation);
+            let omega_rel = body.angular_velocity - other.angular_velocity;
+            let omega_sign = select(-1.0, 1.0, is_a);
+            
+            // Hinge eksenine dik bileşenleri kısıtla
+            let omega_along = dot(omega_rel, hinge_axis_world) * hinge_axis_world;
+            let omega_perp = omega_rel - omega_along;
+            
+            acc_ang -= omega_perp * 0.5 * omega_sign;
+        }
+        
+        if (joint.joint_type == 4u) {
+            // SLIDER — Eksen boyunca serbest, diğer yönler kısıtlı
+            let slide_axis_world = rotate_vector(joint.axis, boxes[joint.body_a].rotation);
+            
+            // Eksen dışı pozisyon bileşenini kısıtla
+            let along = dot(delta, slide_axis_world) * slide_axis_world;
+            let perp = delta - along;
+            let perp_err = length(perp);
+            
+            if (perp_err > 0.0001) {
+                let n = perp / perp_err;
+                let bias = (JOINT_BETA / params.dt) * perp_err;
+                let inv_mass_self = 1.0 / body.mass;
+                let K = inv_mass_self + 1.0 / other.mass;
+                let sign = select(-1.0, 1.0, is_a);
+                let lambda = -(bias * sign) / K;
+                acc_vel += n * lambda * sign * inv_mass_self;
+                joint_count += 1.0;
+            }
+            
+            // Tüm dönmeyi kısıtla
+            let omega_rel = body.angular_velocity - other.angular_velocity;
+            let omega_sign = select(-1.0, 1.0, is_a);
+            acc_ang -= omega_rel * 0.4 * omega_sign;
+        }
+        
+        // Kırılma kontrolü
+        if ((joint.flags & 2u) != 0u && joint.max_force > 0.0) {
+            let force_mag = length(acc_vel) * body.mass / params.dt;
+            if (force_mag > joint.max_force) {
+                // Joint'i deaktive et
+                joints[j].flags = 0u;
+                acc_vel = vec3<f32>(0.0);
+                acc_ang = vec3<f32>(0.0);
+            }
+        }
+    }
+    
+    // Düzeltmeleri uygula
+    if (joint_count > 0.0) {
+        body.velocity += acc_vel * 0.7;  // Relaxation
+        body.angular_velocity += acc_ang * 0.7;
+        boxes[body_idx] = body;
+    }
 }
