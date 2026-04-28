@@ -6,6 +6,7 @@ pub mod integrator;
 pub mod narrowphase;
 pub mod solver;
 pub mod shape;
+pub mod world;
 
 pub use broadphase::{Aabb, SpatialHash};
 pub use collision::{
@@ -14,6 +15,7 @@ pub use collision::{
 pub use integrator::Integrator;
 pub use narrowphase::{Gjk, NarrowPhase};
 pub use solver::ConstraintSolver;
+pub use world::PhysicsWorld;
 pub use components::{
     BodyType, BoxShape, Breakable, CapsuleShape, Collider, ColliderShape, CollisionLayer,
     PhysicsMaterial, PlaneShape, RigidBody, SphereShape, Transform, Velocity,
