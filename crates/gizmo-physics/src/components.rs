@@ -453,6 +453,54 @@ impl Default for Collider {
 }
 
 impl Collider {
+    /// Calculate AABB for this collider at given transform
+    pub fn compute_aabb(&self, position: Vec3, rotation: Quat) -> crate::broadphase::Aabb {
+        match &self.shape {
+            ColliderShape::Sphere(s) => {
+                crate::broadphase::Aabb::from_sphere(position, s.radius)
+            }
+            ColliderShape::Box(b) => {
+                // Rotate the half extents to get world-space AABB
+                let corners = [
+                    Vec3::new(b.half_extents.x, b.half_extents.y, b.half_extents.z),
+                    Vec3::new(-b.half_extents.x, b.half_extents.y, b.half_extents.z),
+                    Vec3::new(b.half_extents.x, -b.half_extents.y, b.half_extents.z),
+                    Vec3::new(b.half_extents.x, b.half_extents.y, -b.half_extents.z),
+                    Vec3::new(-b.half_extents.x, -b.half_extents.y, b.half_extents.z),
+                    Vec3::new(-b.half_extents.x, b.half_extents.y, -b.half_extents.z),
+                    Vec3::new(b.half_extents.x, -b.half_extents.y, -b.half_extents.z),
+                    Vec3::new(-b.half_extents.x, -b.half_extents.y, -b.half_extents.z),
+                ];
+
+                let mut min = Vec3::splat(f32::INFINITY);
+                let mut max = Vec3::splat(f32::NEG_INFINITY);
+
+                for corner in &corners {
+                    let rotated = rotation * (*corner);
+                    let world_pos = position + rotated;
+                    min = min.min(world_pos);
+                    max = max.max(world_pos);
+                }
+
+                crate::broadphase::Aabb::new(min, max)
+            }
+            ColliderShape::Capsule(c) => {
+                // Capsule AABB is sphere radius + half height along Y axis
+                let half_height_vec = rotation * Vec3::new(0.0, c.half_height, 0.0);
+                let extent = Vec3::splat(c.radius) + half_height_vec.abs();
+                crate::broadphase::Aabb::from_center_half_extents(position, extent)
+            }
+            ColliderShape::Plane(p) => {
+                // Infinite plane - use a very large AABB
+                let large = 10000.0;
+                crate::broadphase::Aabb::new(
+                    position - Vec3::splat(large),
+                    position + Vec3::splat(large),
+                )
+            }
+        }
+    }
+
     pub fn sphere(radius: f32) -> Self {
         Self {
             shape: ColliderShape::Sphere(SphereShape { radius }),
