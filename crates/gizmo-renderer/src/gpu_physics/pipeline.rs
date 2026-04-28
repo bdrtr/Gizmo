@@ -6,6 +6,7 @@ pub struct PhysicsPipelines {
     pub compute_bind_group: wgpu::BindGroup,
     pub pipeline_clear: wgpu::ComputePipeline,
     pub pipeline_build: wgpu::ComputePipeline,
+    pub pipeline_narrowphase: wgpu::ComputePipeline,
     pub pipeline_solve: wgpu::ComputePipeline,
     pub pipeline_integrate: wgpu::ComputePipeline,
     pub pipeline_solve_joints: wgpu::ComputePipeline,
@@ -29,6 +30,7 @@ pub fn create_physics_pipelines(
     colliders_buffer: &wgpu::Buffer,
     awake_flags_buffer: &wgpu::Buffer,
     joints_buffer: &wgpu::Buffer,
+    box_contacts_buffer: &wgpu::Buffer,
     culled_boxes_buffer: &wgpu::Buffer,
     indirect_buffer: &wgpu::Buffer,
 ) -> PhysicsPipelines {
@@ -105,6 +107,16 @@ pub fn create_physics_pipelines(
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
             label: Some("physics_compute_layout"),
         });
@@ -140,6 +152,10 @@ pub fn create_physics_pipelines(
                 binding: 6,
                 resource: joints_buffer.as_entire_binding(),
             },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: box_contacts_buffer.as_entire_binding(),
+            },
         ],
         label: Some("physics_compute_bind_group"),
     });
@@ -167,6 +183,13 @@ pub fn create_physics_pipelines(
         layout: Some(&compute_pipeline_layout),
         module: &compute_shader,
         entry_point: "build_grid",
+        compilation_options: Default::default(),
+    });
+    let pipeline_narrowphase = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Physics Narrowphase"),
+        layout: Some(&compute_pipeline_layout),
+        module: &compute_shader,
+        entry_point: "narrowphase",
         compilation_options: Default::default(),
     });
     let pipeline_solve = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -332,6 +355,7 @@ pub fn create_physics_pipelines(
         compute_bind_group,
         pipeline_clear,
         pipeline_build,
+        pipeline_narrowphase,
         pipeline_solve,
         pipeline_integrate,
         pipeline_solve_joints,
