@@ -151,10 +151,10 @@ mod tests {
     #[test]
     fn test_gravity_integration() {
         let integrator = Integrator::default();
-        let rb = RigidBody::default();
+        let mut rb = RigidBody::default();
         let mut vel = Velocity::default();
 
-        integrator.integrate_velocities(&rb, &mut vel, 1.0);
+        integrator.integrate_velocities(&mut rb, &mut vel, 1.0);
 
         // After 1 second, velocity should be gravity
         assert!((vel.linear.y - integrator.gravity.y).abs() < 0.01);
@@ -176,13 +176,13 @@ mod tests {
     #[test]
     fn test_damping() {
         let integrator = Integrator::default();
-        let rb = RigidBody {
+        let mut rb = RigidBody {
             linear_damping: 0.1,
             ..Default::default()
         };
         let mut vel = Velocity::new(Vec3::new(10.0, 0.0, 0.0));
 
-        integrator.integrate_velocities(&rb, &mut vel, 1.0);
+        integrator.integrate_velocities(&mut rb, &mut vel, 1.0);
 
         // Velocity should be reduced by damping
         assert!(vel.linear.x < 10.0);

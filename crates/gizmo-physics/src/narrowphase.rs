@@ -264,6 +264,8 @@ impl Gjk {
             penetration,
             local_point_a: contact_point - pos_a,
             local_point_b: contact_point - pos_b,
+            normal_impulse: 0.0,
+            tangent_impulse: Vec3::ZERO,
         })
     }
 
@@ -389,6 +391,8 @@ impl NarrowPhase {
                 penetration,
                 local_point_a: normal * radius_a,
                 local_point_b: -normal * radius_b,
+                normal_impulse: 0.0,
+                tangent_impulse: Vec3::ZERO,
             })
         } else {
             None
@@ -414,6 +418,8 @@ impl NarrowPhase {
                 penetration,
                 local_point_a: -plane_normal * sphere_radius,
                 local_point_b: Vec3::ZERO,
+                normal_impulse: 0.0,
+                tangent_impulse: Vec3::ZERO,
             })
         } else {
             None

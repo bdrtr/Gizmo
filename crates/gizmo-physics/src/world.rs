@@ -67,7 +67,7 @@ impl PhysicsWorld {
         self.spatial_hash.clear();
         for (entity, _, transform, _, collider) in bodies.iter() {
             let aabb = collider.compute_aabb(transform.position, transform.rotation);
-            self.spatial_hash.insert(*entity, &aabb);
+            self.spatial_hash.insert(*entity, aabb);
         }
 
         let potential_pairs = self.spatial_hash.query_pairs();
@@ -315,7 +315,7 @@ mod tests {
     fn test_physics_step() {
         let mut world = PhysicsWorld::new();
 
-        let entity = Entity::from_raw(1);
+        let entity = Entity::new(1, 0);
         let rb = RigidBody::default();
         let mut transform = Transform::new(Vec3::new(0.0, 10.0, 0.0));
         let mut vel = Velocity::default();
