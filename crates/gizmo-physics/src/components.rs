@@ -112,6 +112,7 @@ pub struct RigidBody {
     pub lock_rotation_x: bool,
     pub lock_rotation_y: bool,
     pub lock_rotation_z: bool,
+    pub sleep_counter: u32, // Frames below sleep threshold
 }
 
 impl Default for RigidBody {
@@ -130,6 +131,7 @@ impl Default for RigidBody {
             lock_rotation_x: false,
             lock_rotation_y: false,
             lock_rotation_z: false,
+            sleep_counter: 0,
         }
     }
 }
@@ -150,6 +152,7 @@ impl RigidBody {
             lock_rotation_x: false,
             lock_rotation_y: false,
             lock_rotation_z: false,
+            sleep_counter: 0,
         }
     }
 
@@ -168,6 +171,7 @@ impl RigidBody {
             lock_rotation_x: true,
             lock_rotation_y: true,
             lock_rotation_z: true,
+            sleep_counter: 0,
         }
     }
 
@@ -186,11 +190,39 @@ impl RigidBody {
             lock_rotation_x: false,
             lock_rotation_y: false,
             lock_rotation_z: false,
+            sleep_counter: 0,
         }
     }
 
     pub fn wake_up(&mut self) {
         self.is_sleeping = false;
+        self.sleep_counter = 0;
+    }
+    
+    pub fn can_sleep(&self, velocity: &Velocity) -> bool {
+        if !self.is_dynamic() {
+            return true;
+        }
+        
+        const SLEEP_LINEAR_THRESHOLD: f32 = 0.05;
+        const SLEEP_ANGULAR_THRESHOLD: f32 = 0.05;
+        
+        velocity.linear.length_squared() < SLEEP_LINEAR_THRESHOLD * SLEEP_LINEAR_THRESHOLD
+            && velocity.angular.length_squared() < SLEEP_ANGULAR_THRESHOLD * SLEEP_ANGULAR_THRESHOLD
+    }
+    
+    pub fn update_sleep_state(&mut self, velocity: &Velocity) {
+        const SLEEP_FRAMES_REQUIRED: u32 = 60; // ~1 second at 60fps
+        
+        if self.can_sleep(velocity) {
+            self.sleep_counter += 1;
+            if self.sleep_counter >= SLEEP_FRAMES_REQUIRED {
+                self.is_sleeping = true;
+            }
+        } else {
+            self.sleep_counter = 0;
+            self.is_sleeping = false;
+        }
     }
 
     #[inline]
@@ -454,10 +486,10 @@ impl Default for Collider {
 
 impl Collider {
     /// Calculate AABB for this collider at given transform
-    pub fn compute_aabb(&self, position: Vec3, rotation: Quat) -> crate::broadphase::Aabb {
+    pub fn compute_aabb(&self, position: Vec3, rotation: Quat) -> gizmo_math::Aabb {
         match &self.shape {
             ColliderShape::Sphere(s) => {
-                crate::broadphase::Aabb::from_sphere(position, s.radius)
+                gizmo_math::Aabb::from_sphere(position.into(), s.radius)
             }
             ColliderShape::Box(b) => {
                 // Rotate the half extents to get world-space AABB
@@ -482,20 +514,20 @@ impl Collider {
                     max = max.max(world_pos);
                 }
 
-                crate::broadphase::Aabb::new(min, max)
+                gizmo_math::Aabb::new(min.into(), max.into())
             }
             ColliderShape::Capsule(c) => {
                 // Capsule AABB is sphere radius + half height along Y axis
                 let half_height_vec = rotation * Vec3::new(0.0, c.half_height, 0.0);
                 let extent = Vec3::splat(c.radius) + half_height_vec.abs();
-                crate::broadphase::Aabb::from_center_half_extents(position, extent)
+                gizmo_math::Aabb::from_center_half_extents(position.into(), extent.into())
             }
-            ColliderShape::Plane(p) => {
+            ColliderShape::Plane(_) => {
                 // Infinite plane - use a very large AABB
                 let large = 10000.0;
-                crate::broadphase::Aabb::new(
-                    position - Vec3::splat(large),
-                    position + Vec3::splat(large),
+                gizmo_math::Aabb::new(
+                    (position - Vec3::splat(large)).into(),
+                    (position + Vec3::splat(large)).into(),
                 )
             }
         }

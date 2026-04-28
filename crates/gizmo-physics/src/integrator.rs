@@ -22,11 +22,11 @@ impl Integrator {
     /// Apply forces and integrate velocities (Semi-implicit Euler)
     pub fn integrate_velocities(
         &self,
-        rb: &RigidBody,
+        rb: &mut RigidBody,
         vel: &mut Velocity,
         dt: f32,
     ) {
-        if !rb.is_dynamic() {
+        if !rb.is_dynamic() || rb.is_sleeping {
             return;
         }
 
@@ -39,18 +39,8 @@ impl Integrator {
         vel.linear *= 1.0 - rb.linear_damping.min(1.0);
         vel.angular *= 1.0 - rb.angular_damping.min(1.0);
 
-        // Sleep threshold
-        let linear_speed_sq = vel.linear.length_squared();
-        let angular_speed_sq = vel.angular.length_squared();
-        
-        const SLEEP_LINEAR_THRESHOLD: f32 = 0.01;
-        const SLEEP_ANGULAR_THRESHOLD: f32 = 0.01;
-
-        if linear_speed_sq < SLEEP_LINEAR_THRESHOLD * SLEEP_LINEAR_THRESHOLD
-            && angular_speed_sq < SLEEP_ANGULAR_THRESHOLD * SLEEP_ANGULAR_THRESHOLD
-        {
-            // Could mark for sleeping here
-        }
+        // Update sleep state
+        rb.update_sleep_state(vel);
     }
 
     /// Integrate positions from velocities
@@ -61,7 +51,7 @@ impl Integrator {
         vel: &Velocity,
         dt: f32,
     ) {
-        if rb.is_static() {
+        if rb.is_static() || rb.is_sleeping {
             return;
         }
 
@@ -81,7 +71,7 @@ impl Integrator {
     /// Full integration step (velocity + position)
     pub fn integrate(
         &self,
-        rb: &RigidBody,
+        rb: &mut RigidBody,
         transform: &mut Transform,
         vel: &mut Velocity,
         dt: f32,
