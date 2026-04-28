@@ -121,6 +121,128 @@ impl Default for Time {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+//  PhysicsTime — Sabit zaman adımlı fizik zamanlayıcı
+//
+//  Fizik motoru sabit dt'de çalışır (varsayılan 1/60s = 16.67ms).
+//  Render frame'leri değişken hızda çalışırken, fizik her zaman aynı
+//  dt ile güncellenir → determinizm + kararlılık.
+//
+//  Kullanım:
+//    Frame başında `accumulate(render_dt)` çağrılır.
+//    `should_step()` true döndüğü sürece fizik adımları çalıştırılır.
+//    `consume_step()` ile accumulator azaltılır.
+//    `alpha()` ile render interpolasyonu yapılır.
+// ═══════════════════════════════════════════════════════════════════════
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct PhysicsTime {
+    /// Sabit fizik zaman adımı (saniye). Varsayılan: 1/60.
+    fixed_dt: f32,
+    /// Birikmiş süre — henüz fizik adımı olarak harcanmamış zaman.
+    accumulator: f32,
+    /// Maksimum birikim limiti (spiral of death koruması).
+    max_accumulator: f32,
+    /// Toplam fizik adım sayısı.
+    step_count: u64,
+    /// Toplam fizik süresi (f64 hassasiyetinde).
+    physics_elapsed: f64,
+    /// İnterpolasyon katsayısı: 0.0..1.0 arası.
+    /// Render sırasında `lerp(prev_state, curr_state, alpha)` için kullanılır.
+    alpha: f32,
+}
+
+impl PhysicsTime {
+    /// Yeni PhysicsTime oluşturur. `hz` = fizik güncellenme hızı (örn: 60, 120, 240).
+    pub fn new(hz: u32) -> Self {
+        let fixed_dt = 1.0 / hz as f32;
+        Self {
+            fixed_dt,
+            accumulator: 0.0,
+            max_accumulator: fixed_dt * 8.0, // En fazla 8 fizik adımı birikebilir
+            step_count: 0,
+            physics_elapsed: 0.0,
+            alpha: 0.0,
+        }
+    }
+
+    /// Render frame dt'sini biriktiriciye ekler.
+    /// Her frame başında bir kez çağrılır.
+    pub fn accumulate(&mut self, render_dt: f32) {
+        self.accumulator += render_dt;
+        // Spiral of death koruması
+        if self.accumulator > self.max_accumulator {
+            self.accumulator = self.max_accumulator;
+        }
+    }
+
+    /// Bir fizik adımı için yeterli süre birikmiş mi?
+    #[inline]
+    pub fn should_step(&self) -> bool {
+        self.accumulator >= self.fixed_dt
+    }
+
+    /// Bir fizik adımını "tüketir" — accumulator'dan fixed_dt düşer.
+    /// Her fizik step'inden sonra çağrılır.
+    pub fn consume_step(&mut self) {
+        self.accumulator -= self.fixed_dt;
+        self.step_count += 1;
+        self.physics_elapsed += self.fixed_dt as f64;
+    }
+
+    /// İnterpolasyon alpha'sını hesaplar.
+    /// Tüm fizik adımları bittikten sonra, render'dan önce çağrılır.
+    pub fn compute_alpha(&mut self) {
+        self.alpha = self.accumulator / self.fixed_dt;
+    }
+
+    // ──── Getter'lar ────
+
+    /// Sabit fizik dt'si (saniye).
+    #[inline]
+    pub fn fixed_dt(&self) -> f32 {
+        self.fixed_dt
+    }
+
+    /// İnterpolasyon katsayısı (0.0 .. 1.0).
+    /// `render_pos = lerp(prev_physics_pos, curr_physics_pos, alpha)`
+    #[inline]
+    pub fn alpha(&self) -> f32 {
+        self.alpha
+    }
+
+    /// Toplam fizik adım sayısı.
+    #[inline]
+    pub fn step_count(&self) -> u64 {
+        self.step_count
+    }
+
+    /// Toplam fizik süresi (f64 hassasiyetinde).
+    #[inline]
+    pub fn physics_elapsed(&self) -> f64 {
+        self.physics_elapsed
+    }
+
+    /// Birikmiş süre (debug amaçlı).
+    #[inline]
+    pub fn accumulator(&self) -> f32 {
+        self.accumulator
+    }
+
+    // ──── Setter'lar ────
+
+    /// Fizik hızını değiştirir (Hz). Dikkat: birikmiş süre sıfırlanmaz.
+    pub fn set_hz(&mut self, hz: u32) {
+        self.fixed_dt = 1.0 / hz.max(1) as f32;
+        self.max_accumulator = self.fixed_dt * 8.0;
+    }
+}
+
+impl Default for PhysicsTime {
+    fn default() -> Self {
+        Self::new(60) // 60 Hz fizik
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,5 +338,84 @@ mod tests {
         let cloned = time;
         assert_eq!(cloned.frame(), time.frame());
         assert!((cloned.elapsed() - time.elapsed()).abs() < 0.001);
+    }
+
+    // ─── PhysicsTime Testleri ───
+
+    #[test]
+    fn test_physics_time_basic_step() {
+        let mut pt = PhysicsTime::new(60);
+        assert!(!pt.should_step()); // Henüz birikim yok
+
+        pt.accumulate(1.0 / 60.0); // Tam bir fizik adımı
+        assert!(pt.should_step());
+
+        pt.consume_step();
+        assert!(!pt.should_step());
+        assert_eq!(pt.step_count(), 1);
+    }
+
+    #[test]
+    fn test_physics_time_multiple_steps() {
+        let mut pt = PhysicsTime::new(60);
+        let fixed_dt = pt.fixed_dt();
+        // 3.5 adıma yetecek birikim (FP hassasiyeti için margin)
+        pt.accumulate(fixed_dt * 3.5);
+
+        let mut steps = 0;
+        while pt.should_step() {
+            pt.consume_step();
+            steps += 1;
+        }
+        assert_eq!(steps, 3);
+        assert_eq!(pt.step_count(), 3);
+    }
+
+    #[test]
+    fn test_physics_time_spiral_of_death() {
+        let mut pt = PhysicsTime::new(60);
+        // 1 saniyelik spike — max 8 adım birikebilir
+        pt.accumulate(1.0);
+
+        let mut steps = 0;
+        while pt.should_step() {
+            pt.consume_step();
+            steps += 1;
+        }
+        assert!(steps <= 8, "Spiral koruması: max 8 adım, bulundu: {}", steps);
+    }
+
+    #[test]
+    fn test_physics_time_alpha() {
+        let mut pt = PhysicsTime::new(60);
+        let fixed_dt = 1.0 / 60.0;
+
+        // 1.5 fizik adımı birikim
+        pt.accumulate(fixed_dt * 1.5);
+        pt.consume_step(); // 1 adım tüket
+        pt.compute_alpha();
+
+        // Kalan 0.5 adım → alpha ≈ 0.5
+        assert!((pt.alpha() - 0.5).abs() < 0.01, "Alpha ≈ 0.5: {}", pt.alpha());
+    }
+
+    #[test]
+    fn test_physics_time_elapsed() {
+        let mut pt = PhysicsTime::new(60);
+        for _ in 0..60 {
+            pt.accumulate(1.0 / 60.0);
+            while pt.should_step() {
+                pt.consume_step();
+            }
+        }
+        // 60 adım × 1/60 = 1.0s
+        assert!((pt.physics_elapsed() - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_physics_time_set_hz() {
+        let mut pt = PhysicsTime::new(60);
+        pt.set_hz(120);
+        assert!((pt.fixed_dt() - 1.0 / 120.0).abs() < 1e-6);
     }
 }

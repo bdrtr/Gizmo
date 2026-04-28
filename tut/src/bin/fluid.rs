@@ -116,6 +116,9 @@ fn main() {
             state.frames += 1;
             if state.fps_timer >= 1.0 {
                 state.fps = state.frames as f32 / state.fps_timer;
+                let avg_ms = state.fps_timer / state.frames as f32 * 1000.0;
+                let status = if state.fps >= 60.0 { "🟢" } else if state.fps >= 30.0 { "🟡" } else { "🔴" };
+                println!("{} FPS: {:.1}  |  Frame: {:.2}ms", status, state.fps, avg_ms);
                 state.frames = 0;
                 state.fps_timer = 0.0;
             }

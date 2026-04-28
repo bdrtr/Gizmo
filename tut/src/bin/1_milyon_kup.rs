@@ -151,6 +151,11 @@ fn run(cube_count: u32) {
                 });
         })
         .set_render(|world, _state, encoder, view, renderer, _light_time| {
+            if let Some(physics) = &mut renderer.gpu_physics {
+                if !physics.debug_enabled {
+                    physics.enable_debug(&renderer.device, 0);
+                }
+            }
             gizmo::default_systems::default_render_pass(world, encoder, view, renderer);
         })
         .run();

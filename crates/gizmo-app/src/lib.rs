@@ -500,9 +500,54 @@ impl<State: 'static> App<State> {
                                 }
                             }
 
-                            // ECS Sistemlerini Çalıştır
-                            self.schedule.run(&mut self.world, dt);
+                            // ═══ Fixed Timestep Fizik Döngüsü ═══
+                            // PhysicsTime resource'u yoksa oluştur
+                            if self.world.get_resource::<gizmo_core::time::PhysicsTime>().is_none() {
+                                self.world.insert_resource(gizmo_core::time::PhysicsTime::default());
+                            }
+                            {
+                                let mut phys_time = self
+                                    .world
+                                    .get_resource_mut::<gizmo_core::time::PhysicsTime>()
+                                    .unwrap();
+                                phys_time.accumulate(dt);
+                            }
 
+                            // Sabit dt'de fizik adımları — frame rate'ten bağımsız
+                            loop {
+                                let should = self
+                                    .world
+                                    .get_resource::<gizmo_core::time::PhysicsTime>()
+                                    .map(|pt| pt.should_step())
+                                    .unwrap_or(false);
+                                if !should { break; }
+
+                                let fixed_dt = self
+                                    .world
+                                    .get_resource::<gizmo_core::time::PhysicsTime>()
+                                    .map(|pt| pt.fixed_dt())
+                                    .unwrap_or(1.0 / 60.0);
+
+                                // ECS fizik sistemlerini sabit dt ile çalıştır
+                                self.schedule.run(&mut self.world, fixed_dt);
+
+                                let mut phys_time = self
+                                    .world
+                                    .get_resource_mut::<gizmo_core::time::PhysicsTime>()
+                                    .unwrap();
+                                phys_time.consume_step();
+                            }
+
+                            // İnterpolasyon alpha'sını hesapla (render için)
+                            {
+                                let mut phys_time = self
+                                    .world
+                                    .get_resource_mut::<gizmo_core::time::PhysicsTime>()
+                                    .unwrap();
+                                phys_time.compute_alpha();
+                            }
+
+                            // Kullanıcı update hook'u (render dt ile — kamera, UI, vb.)
                             if let Some(update_hk) = self.update_fn.as_mut() {
                                 update_hk(&mut self.world, &mut state, dt, &self.input);
                             }

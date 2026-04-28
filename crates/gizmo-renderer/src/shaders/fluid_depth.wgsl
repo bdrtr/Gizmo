@@ -24,6 +24,8 @@ struct FluidParticle {
     lambda: f32,
     predicted_position: vec3<f32>,
     phase: u32,
+    vorticity: vec3<f32>,
+    _pad_vort: f32,
 }
 @group(1) @binding(1) var<storage, read> fluid_particles: array<FluidParticle>;
 
@@ -51,6 +53,17 @@ fn vs_main(
     let offset = quad_pos[vertex_index];
     
     let particle = fluid_particles[instance_index];
+    
+    // Skip foam/spray particles — they are rendered in a separate pass
+    if (particle.phase == 1u || particle.phase == 2u) {
+        var skip_out: VertexOutput;
+        skip_out.clip_position = vec4<f32>(0.0, 0.0, 2.0, 1.0);
+        skip_out.view_pos = vec3<f32>(0.0);
+        skip_out.sphere_center_view = vec3<f32>(0.0);
+        skip_out.radius = 0.0;
+        return skip_out;
+    }
+    
     let radius = 0.12; // Increased from 0.08 so spheres overlap and merge smoothly into a continuous surface
     
     let world_pos = particle.position;

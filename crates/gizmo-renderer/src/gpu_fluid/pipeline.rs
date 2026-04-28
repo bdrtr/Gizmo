@@ -9,12 +9,18 @@ pub struct FluidPipelines {
     pub pipeline_predict: wgpu::ComputePipeline,
     pub pipeline_calc_lambda: wgpu::ComputePipeline,
     pub pipeline_apply_delta_p: wgpu::ComputePipeline,
+    // AAA: Vorticity Confinement — computes curl of velocity field
+    pub pipeline_compute_vorticity: wgpu::ComputePipeline,
     pub pipeline_update_velocity: wgpu::ComputePipeline,
+    // AAA: Foam/Spray classification
+    pub pipeline_classify: wgpu::ComputePipeline,
 
     pub pipeline_depth: wgpu::RenderPipeline,
     pub pipeline_thickness: wgpu::RenderPipeline,
     pub pipeline_blur: wgpu::ComputePipeline,
     pub pipeline_composite: wgpu::RenderPipeline,
+    // AAA: Foam/Spray/Droplet rendering
+    pub pipeline_foam: wgpu::RenderPipeline,
 
     pub particle_render_bg_layout: wgpu::BindGroupLayout,
     pub blur_bind_group_layout: wgpu::BindGroupLayout,
@@ -201,12 +207,30 @@ pub fn create_fluid_pipelines(
         entry_point: "apply_delta_p",
         compilation_options: Default::default(),
     });
+    // AAA: Vorticity Confinement pipeline (computes ω = ∇ × v)
+    let pipeline_compute_vorticity =
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Fluid Compute Vorticity"),
+            layout: Some(&pipeline_layout),
+            module: &compute_shader,
+            entry_point: "compute_vorticity",
+            compilation_options: Default::default(),
+        });
     let pipeline_update_velocity =
         device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Fluid Update Velocity"),
             layout: Some(&pipeline_layout),
             module: &compute_shader,
             entry_point: "update_velocity",
+            compilation_options: Default::default(),
+        });
+    // AAA: Foam/Spray classification pipeline
+    let pipeline_classify =
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Fluid Classify Particles"),
+            layout: Some(&pipeline_layout),
+            module: &compute_shader,
+            entry_point: "classify_particles",
             compilation_options: Default::default(),
         });
 
@@ -459,6 +483,53 @@ pub fn create_fluid_pipelines(
         multiview: None,
     });
 
+    // AAA: Foam/Spray render pipeline
+    let foam_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Foam Shader"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/fluid_foam.wgsl").into()),
+    });
+
+    let pipeline_foam = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("SSFR Foam/Spray"),
+        layout: Some(&ssfr_render_layout),
+        vertex: wgpu::VertexState {
+            module: &foam_shader,
+            entry_point: "vs_main",
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &foam_shader,
+            entry_point: "fs_main",
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: output_format,
+                blend: Some(wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::SrcAlpha,
+                        dst_factor: wgpu::BlendFactor::One, // Additive
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent::OVER,
+                }),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: false,
+            depth_compare: wgpu::CompareFunction::Less,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+    });
+
     FluidPipelines {
         compute_bind_group_layout,
         compute_bind_group,
@@ -469,11 +540,14 @@ pub fn create_fluid_pipelines(
         pipeline_predict,
         pipeline_calc_lambda,
         pipeline_apply_delta_p,
+        pipeline_compute_vorticity,
         pipeline_update_velocity,
+        pipeline_classify,
         pipeline_depth,
         pipeline_thickness,
         pipeline_blur,
         pipeline_composite,
+        pipeline_foam,
         particle_render_bg_layout,
         blur_bind_group_layout,
         composite_bind_group_layout,

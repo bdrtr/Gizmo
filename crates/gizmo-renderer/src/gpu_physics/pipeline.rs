@@ -8,6 +8,7 @@ pub struct PhysicsPipelines {
     pub pipeline_build: wgpu::ComputePipeline,
     pub pipeline_solve: wgpu::ComputePipeline,
     pub pipeline_integrate: wgpu::ComputePipeline,
+    pub pipeline_solve_joints: wgpu::ComputePipeline,
 
     pub render_pipeline: wgpu::RenderPipeline,
 
@@ -27,6 +28,7 @@ pub fn create_physics_pipelines(
     linked_nodes_buffer: &wgpu::Buffer,
     colliders_buffer: &wgpu::Buffer,
     awake_flags_buffer: &wgpu::Buffer,
+    joints_buffer: &wgpu::Buffer,
     culled_boxes_buffer: &wgpu::Buffer,
     indirect_buffer: &wgpu::Buffer,
 ) -> PhysicsPipelines {
@@ -93,6 +95,16 @@ pub fn create_physics_pipelines(
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
             label: Some("physics_compute_layout"),
         });
@@ -123,6 +135,10 @@ pub fn create_physics_pipelines(
             wgpu::BindGroupEntry {
                 binding: 5,
                 resource: awake_flags_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: joints_buffer.as_entire_binding(),
             },
         ],
         label: Some("physics_compute_bind_group"),
@@ -165,6 +181,13 @@ pub fn create_physics_pipelines(
         layout: Some(&compute_pipeline_layout),
         module: &compute_shader,
         entry_point: "integrate",
+        compilation_options: Default::default(),
+    });
+    let pipeline_solve_joints = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Physics Solve Joints"),
+        layout: Some(&compute_pipeline_layout),
+        module: &compute_shader,
+        entry_point: "solve_joints",
         compilation_options: Default::default(),
     });
 
@@ -311,6 +334,7 @@ pub fn create_physics_pipelines(
         pipeline_build,
         pipeline_solve,
         pipeline_integrate,
+        pipeline_solve_joints,
         render_pipeline,
         culling_bind_group_layout,
         culling_bind_group,

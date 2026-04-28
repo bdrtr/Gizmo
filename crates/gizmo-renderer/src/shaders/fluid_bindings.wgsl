@@ -1,3 +1,7 @@
+// ═══════════════════════════════════════════════════════════════════════
+//  AAA Fluid GPU Bindings — Navier-Stokes / PBF / Vorticity Confinement
+// ═══════════════════════════════════════════════════════════════════════
+
 struct FluidParticle {
     position: vec3<f32>,
     density: f32,
@@ -5,6 +9,10 @@ struct FluidParticle {
     lambda: f32,
     predicted_position: vec3<f32>,
     phase: u32,
+    // AAA: Vorticity field for curl computation (Vorticity Confinement)
+    vorticity: vec3<f32>,
+    // AAA: Padding to maintain 16-byte alignment
+    _pad_vort: f32,
 }
 
 struct FluidCollider {
@@ -43,7 +51,17 @@ struct FluidParams {
     num_colliders: u32,
     cohesion: f32,
     time: f32,
-    pad3: f32,
+    // AAA: Vorticity confinement strength (epsilon)
+    vorticity_strength: f32,
+
+    // AAA: Surface tension coefficient (gamma)
+    surface_tension: f32,
+    // AAA: Laplacian viscosity coefficient (mu)
+    viscosity_laplacian: f32,
+    // AAA: XSPH velocity smoothing factor (c)
+    xsph_factor: f32,
+    // AAA: Number of pressure solver iterations
+    solver_iterations: u32,
 }
 
 struct ParticleHash {
