@@ -1,9 +1,14 @@
+pub mod collision;
 pub mod components;
 pub mod fracture;
 pub mod shape;
 
-pub use components::{Breakable, RigidBody, Transform, Velocity};
-pub use shape::{Collider, ColliderShape};
+pub use collision::{CollisionEvent, CollisionEventType, ContactManifold, ContactPoint, TriggerEvent};
+pub use components::{
+    BodyType, BoxShape, Breakable, CapsuleShape, Collider, ColliderShape, CollisionLayer,
+    PhysicsMaterial, PlaneShape, RigidBody, SphereShape, Transform, Velocity,
+};
+pub use shape::{Collider as ShapeCollider, ColliderShape as ShapeColliderShape};
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct GpuPhysicsLink {
