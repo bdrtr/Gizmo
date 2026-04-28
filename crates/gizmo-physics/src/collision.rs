@@ -9,6 +9,8 @@ pub struct ContactPoint {
     pub penetration: f32,    // Penetration depth
     pub local_point_a: Vec3, // Contact point in body A's local space
     pub local_point_b: Vec3, // Contact point in body B's local space
+    pub normal_impulse: f32, // Accumulated normal impulse for warm starting
+    pub tangent_impulse: Vec3, // Accumulated tangent impulse for warm starting
 }
 
 /// Contact manifold - collection of contact points between two bodies
@@ -19,6 +21,7 @@ pub struct ContactManifold {
     pub contacts: Vec<ContactPoint>,
     pub friction: f32,
     pub restitution: f32,
+    pub lifetime: u32, // Frames this manifold has existed
 }
 
 impl ContactManifold {
@@ -29,10 +32,23 @@ impl ContactManifold {
             contacts: Vec::new(),
             friction: 0.5,
             restitution: 0.5,
+            lifetime: 0,
         }
     }
 
     pub fn add_contact(&mut self, contact: ContactPoint) {
+        const CONTACT_DISTANCE_THRESHOLD: f32 = 0.02;
+        
+        // Try to match with existing contact for warm starting
+        for existing in &mut self.contacts {
+            let dist = (existing.point - contact.point).length_squared();
+            if dist < CONTACT_DISTANCE_THRESHOLD * CONTACT_DISTANCE_THRESHOLD {
+                // Update existing contact
+                *existing = contact;
+                return;
+            }
+        }
+        
         // Limit to 4 contact points (common in physics engines)
         if self.contacts.len() < 4 {
             self.contacts.push(contact);
@@ -53,6 +69,14 @@ impl ContactManifold {
 
     pub fn clear(&mut self) {
         self.contacts.clear();
+    }
+    
+    pub fn refresh(&mut self) {
+        self.lifetime += 1;
+    }
+    
+    pub fn is_stale(&self, max_lifetime: u32) -> bool {
+        self.lifetime > max_lifetime
     }
 }
 

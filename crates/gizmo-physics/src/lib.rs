@@ -9,7 +9,8 @@ pub mod solver;
 pub mod shape;
 pub mod world;
 
-pub use broadphase::{Aabb, SpatialHash};
+pub use broadphase::SpatialHash;
+pub use gizmo_math::Aabb;
 pub use collision::{
     CollisionEvent, CollisionEventType, ContactManifold, ContactPoint, TriggerEvent,
 };
