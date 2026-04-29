@@ -29,6 +29,7 @@ pub mod async_assets;
 pub mod components;
 pub mod csm;
 pub mod deferred;
+pub mod decal;
 pub mod debug_renderer;
 pub mod frustum_cull;
 pub mod game_ui;
@@ -44,6 +45,7 @@ pub mod renderer;
 pub mod ssao;
 pub mod ssr;
 pub mod taa;
+pub mod volumetric;
 
 pub use frustum_cull::{visible_in_frustum, Frustum};
 
@@ -73,6 +75,7 @@ pub use gpu_types::{
     InstanceRaw, LightData, PostProcessUniforms, SceneUniforms, ShadowVsUniform, Vertex,
 };
 pub use deferred::DeferredState;
+pub use decal::DecalState;
 pub use gpu_cull::{DrawIndirectArgs, GpuCullState, MeshBoundsRaw};
 pub use ssao::{SsaoParams, SsaoState};
 pub use taa::TaaState;

@@ -50,6 +50,29 @@ fn select_cascade(view_depth: f32) -> u32 {
     return 3u;
 }
 
+// Procedural Physical Sky for IBL
+fn get_sky_color(dir: vec3<f32>, sun_dir: vec3<f32>, roughness: f32) -> vec3<f32> {
+    let zenith = max(dir.y, 0.0);
+    // Base sky gradient
+    let sky_color = mix(vec3<f32>(0.5, 0.65, 1.0), vec3<f32>(0.05, 0.2, 0.6), zenith);
+    let sun_dot = max(dot(dir, sun_dir), 0.0);
+    
+    // Sun glow widens based on surface roughness to fake pre-filtered environment map
+    let sun_power = mix(2048.0, 16.0, roughness);
+    let sun_glow = pow(sun_dot, sun_power) * vec3<f32>(15.0, 12.0, 8.0) * mix(1.0, 0.2, roughness);
+    
+    // Warm horizon glow towards the sun
+    let horizon_glow = pow(1.0 - zenith, 4.0) * vec3<f32>(1.0, 0.6, 0.3) * max(dot(dir, sun_dir) * 0.5 + 0.5, 0.0);
+    
+    // Ground approximation (dark earth colors)
+    let ground_color = vec3<f32>(0.05, 0.05, 0.05);
+    if (dir.y < 0.0) {
+        return mix(ground_color, horizon_glow * 0.2, pow(1.0 + dir.y, 4.0));
+    }
+    
+    return sky_color * 0.8 + sun_glow + horizon_glow;
+}
+
 @fragment
 fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let uv = frag_coord.xy;
@@ -73,17 +96,24 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let view_dir      = normalize(scene.camera_pos.xyz - world_pos);
     let f0            = mix(vec3<f32>(0.04), albedo, metallic);
 
-    // --- Hemispherical ambient ---
-    let sky_ambient    = vec3<f32>(0.8, 0.5, 0.4) * 0.7;
-    let ground_ambient = vec3<f32>(0.15, 0.1, 0.15);
-    let hemi_mix       = N.y * 0.5 + 0.5;
-    let ambient        = albedo * mix(ground_ambient, sky_ambient, hemi_mix);
-
-    // --- Fake IBL specular ---
-    let R           = reflect(-view_dir, N);
-    let reflect_mix = clamp(R.y * 0.5 + 0.5, 0.0, 1.0);
-    let fake_env    = mix(ground_ambient, vec3<f32>(1.0, 0.6, 0.4), reflect_mix);
-    let fake_ibl    = f0 * fake_env * ((1.0 - min_roughness) * (1.0 - min_roughness) * 2.0);
+    // --- Physically Based IBL (Procedural) ---
+    let sun_dir = normalize(-scene.sun_direction.xyz);
+    let NdV = max(dot(N, view_dir), 0.001);
+    
+    // 1. Diffuse IBL (Irradiance)
+    // We sample the sky at the normal vector with max roughness.
+    let irradiance = get_sky_color(N, sun_dir, 1.0) * 0.4;
+    let ambient = albedo * irradiance * (1.0 - metallic);
+    
+    // 2. Specular IBL (Pre-filtered Environment Map)
+    // We sample the sky at the reflection vector. The reflection vector is pulled towards normal for rough surfaces.
+    let R = reflect(-view_dir, N);
+    let R_rough = normalize(mix(R, N, roughness)); 
+    let specular_env = get_sky_color(R_rough, sun_dir, roughness);
+    
+    // 3. Environment BRDF (Schlick approximation for IBL)
+    let env_brdf = f0 + (max(vec3<f32>(1.0 - roughness), f0) - f0) * pow(1.0 - NdV, 5.0);
+    let specular_ibl = specular_env * env_brdf;
 
     // --- CSM Shadow ---
     var shadow_visibility = 1.0;
@@ -159,7 +189,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         total_specular += f0 * spec * (1.0 - min_roughness) * light.color.rgb * atten * intensity;
     }
 
-    var final_color = ambient + total_diffuse + total_specular + fake_ibl;
+    var final_color = ambient + total_diffuse + total_specular + specular_ibl;
 
     // ACES tone mapping
     let a = 2.51; let b = 0.03; let c = 2.43; let d = 0.59; let e = 0.14;

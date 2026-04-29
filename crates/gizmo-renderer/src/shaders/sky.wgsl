@@ -81,8 +81,8 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     // Skybox'ı kameranın etrafında sabit tutmak ve derinliğini en arkaya atmak için:
     // Fakat gizmo engine main loop'ta zaten kameraya takılır.
     out.clip_position = scene.view_proj * world_pos;
-    // clip_position'da Z'yi .w yaparız böylece Z/W = 1 olur (En uzağa çizilir).
-    out.clip_position.z = out.clip_position.w; 
+    // Derinlik testini kesin geçmesi için NDC z = 0.99999 yapıyoruz
+    out.clip_position.z = out.clip_position.w * 0.99999;
     
     out.world_pos = world_pos.xyz;
     out.inst_albedo = inst.albedo_color;
@@ -118,8 +118,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     
     // 3. Güneş Efekti (Sun Halo)
     // Güneş yönü pozitif ışık kaynağına doğru olan yöndür (Veya tersidir).
-    let sun_dir = normalize(scene.sun_direction.xyz);
-    let sun_dot = max(dot(view_dir, sun_dir), 0.0);
+    // Güneş konumu: Işık yönünün tersi (ışık aşağı iniyorsa güneş yukarıdadır)
+    let sun_pos_dir = normalize(-scene.sun_direction.xyz);
+    let sun_dot = max(dot(view_dir, sun_pos_dir), 0.0);
     
     // Büyük ve yumuşak bir ışık halesi (Rayleigh Scattering simülasyonu)
     let sun_halo = pow(sun_dot, 6.0) * 0.4;

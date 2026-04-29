@@ -331,8 +331,6 @@ impl<State: 'static> App<State> {
                                 }
                             });
 
-                            // İşlemlerin bitiminde frame-özel input girdilerini temizle
-                            self.input.begin_frame();
 
                             // --- Scene View RTT (Render To Texture) YÖNETİMİ ---
                             if self
@@ -745,6 +743,9 @@ impl<State: 'static> App<State> {
 
                             renderer.queue.submit(std::iter::once(encoder.finish()));
                             output.present();
+                            
+                            // İşlemlerin bitiminde frame-özel input girdilerini (fare delta vs.) temizle
+                            self.input.begin_frame();
                         }
                     }
                     Event::AboutToWait => {
