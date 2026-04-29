@@ -30,7 +30,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
         light,
         gizmo::renderer::components::DirectionalLight::new(Vec3::new(1.0, 0.95, 0.9), 1.5, gizmo::renderer::components::LightRole::Sun),
     );
-    world.add_component(light, Collider::new_aabb(0.5, 0.5, 0.5));
+    world.add_component(light, Collider::box_collider(gizmo::math::Vec3::new(0.5, 0.5, 0.5)));
 
     // Light Icon (Kesişen prizmalar ile yıldız/güneş imgesi)
     let icon1 = world.spawn();
@@ -160,7 +160,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
         ),
     );
     world.add_component(cube1, gizmo::renderer::components::MeshRenderer::new());
-    world.add_component(cube1, Collider::new_aabb(1.0, 1.0, 1.0)); // Visual mesh is 2x2x2 (from -1 to +1)
+    world.add_component(cube1, Collider::box_collider(gizmo::math::Vec3::new(1.0, 1.0, 1.0))); // Visual mesh is 2x2x2 (from -1 to +1)
 
     // Fizik sistemleri
 

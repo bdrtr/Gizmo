@@ -58,7 +58,7 @@ impl ContactManifold {
                 .contacts
                 .iter()
                 .enumerate()
-                .min_by(|(_, a), (_, b)| a.penetration.partial_cmp(&b.penetration).unwrap())
+                .min_by(|(_, a), (_, b)| a.penetration.total_cmp(&b.penetration))
             {
                 if contact.penetration > self.contacts[idx].penetration {
                     self.contacts[idx] = contact;

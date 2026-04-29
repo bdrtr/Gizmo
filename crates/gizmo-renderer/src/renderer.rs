@@ -31,6 +31,21 @@ pub struct Renderer<'a> {
     // === GPU SIVI SİSTEMİ ===
     pub gpu_fluid: Option<crate::gpu_fluid::GpuFluidSystem>,
 
+    // === DEFERRED RENDERING — G-Buffer + Lighting pass ===
+    pub deferred: Option<crate::deferred::DeferredState>,
+
+    // === GPU-DRIVEN MESH CULLING — Compute frustum cull + indirect draw ===
+    pub gpu_cull: Option<crate::gpu_cull::GpuCullState>,
+
+    // === SSAO — Screen-Space Ambient Occlusion ===
+    pub ssao: Option<crate::ssao::SsaoState>,
+
+    // === SSR — Screen-Space Reflections ===
+    pub ssr: Option<crate::ssr::SsrState>,
+
+    // === TAA — Temporal Anti-Aliasing (ping-pong history + Halton jitter) ===
+    pub taa: Option<crate::taa::TaaState>,
+
     // === GIZMO HATA AYIKLAMA (Debug Lines) ===
     pub debug_renderer: Option<crate::debug_renderer::GizmoRendererSystem>,
 }
@@ -160,6 +175,7 @@ impl<'a> Renderer<'a> {
             wgpu::TextureFormat::Depth32Float,
         ));
 
+
         let scene_state = SceneState {
             render_pipeline: scene.render_pipeline,
             render_double_sided_pipeline: scene.render_double_sided_pipeline,
@@ -187,6 +203,39 @@ impl<'a> Renderer<'a> {
             instance_buffer: scene.instance_buffer,
             instance_bind_group: scene.instance_bind_group,
             instance_capacity: scene.instance_capacity,
+        };
+
+        let deferred = Some(crate::deferred::DeferredState::new(
+            &device,
+            &scene_state,
+            size.width,
+            size.height,
+        ));
+
+        let gpu_cull = Some(crate::gpu_cull::GpuCullState::new(
+            &device,
+            &scene_state,
+            scene_state.instance_capacity as u32,
+        ));
+
+        let ssao = deferred.as_ref().map(|def| {
+            crate::ssao::SsaoState::new(&device, &queue, &scene_state, def, size.width, size.height)
+        });
+
+        let ssr = deferred.as_ref().map(|def| {
+            crate::ssr::SsrState::new(&device, &scene_state, def, &post_res.hdr_texture_view, size.width, size.height)
+        });
+
+        let taa = if let Some(ref def) = deferred {
+            Some(crate::taa::TaaState::new(
+                &device,
+                &post_res.hdr_texture_view,
+                &def.world_position_view,
+                size.width,
+                size.height,
+            ))
+        } else {
+            None
         };
 
         let post_state = PostProcessState {
@@ -221,6 +270,11 @@ impl<'a> Renderer<'a> {
             depth_texture_view,
             scene: scene_state,
             post: post_state,
+            deferred,
+            gpu_cull,
+            ssao,
+            ssr,
+            taa,
             gpu_particles,
             gpu_physics,
             gpu_fluid,
@@ -246,6 +300,10 @@ impl<'a> Renderer<'a> {
 
             self.depth_texture_view =
                 Self::create_depth_texture(&self.device, new_size.width, new_size.height);
+
+            if let Some(ref mut def) = self.deferred {
+                def.resize(&self.device, new_size.width, new_size.height);
+            }
 
             let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
                 address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -281,6 +339,17 @@ impl<'a> Renderer<'a> {
             self.post.blur_params_buffer = buf;
             self.post.blur_h_bind_group = h_bg;
             self.post.blur_v_bind_group = v_bg;
+
+            // TAA history textures + bind groups (needs fresh hdr_view + position_view)
+            if let (Some(ref mut taa), Some(ref def)) = (&mut self.taa, &self.deferred) {
+                taa.resize(
+                    &self.device,
+                    &self.post.hdr_texture_view,
+                    &def.world_position_view,
+                    new_size.width,
+                    new_size.height,
+                );
+            }
         }
     }
 

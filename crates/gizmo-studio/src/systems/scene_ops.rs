@@ -19,7 +19,7 @@ pub fn handle_scene_operations(
                 }
                 "Collider" => world.add_component(
                     ent,
-                    gizmo::physics::Collider::aabb(gizmo::math::Vec3::new(1.0, 1.0, 1.0)),
+                    gizmo::physics::Collider::box_collider(gizmo::math::Vec3::new(1.0, 1.0, 1.0)),
                 ),
                 "Camera" => world.add_component(
                     ent,
@@ -178,7 +178,7 @@ pub fn handle_scene_operations(
                     );
                     world.add_component(
                         e,
-                        gizmo::physics::Collider::aabb(gizmo::math::Vec3::new(1.0, 1.0, 1.0)),
+                        gizmo::physics::Collider::box_collider(gizmo::math::Vec3::new(1.0, 1.0, 1.0)),
                     );
                     editor_state.log_info("Yeni küp oluşturuldu.");
                 }

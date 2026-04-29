@@ -11,3 +11,8 @@ winit = { workspace = true }
 [[bin]]
 name = "gpu_demo"
 path = "src/gpu_demo.rs"
+
+[[bin]]
+name = "fluid_rigid"
+path = "src/bin/fluid_rigid.rs"
+

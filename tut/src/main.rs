@@ -172,7 +172,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
     );
     world.add_component(ground, MeshRenderer::new());
     world.add_component(ground, RigidBody::new_static());
-    world.add_component(ground, Collider::new_aabb(100.0, 0.05, 100.0));
+    world.add_component(ground, Collider::box_collider(Vec3::new(100.0, 0.05, 100.0)));
 
     // Güneş ışığı
     let sun = world.spawn();
@@ -238,7 +238,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
         world.add_component(entity, rb);
         world.add_component(entity, Velocity::new(Vec3::ZERO));
 
-        world.add_component(entity, Collider::new_aabb(HX, HY, HZ));
+        world.add_component(entity, Collider::box_collider(Vec3::new(HX, HY, HZ)));
         world.add_component(entity, EntityName(format!("Domino_{}", i)));
 
         game.domino_ids.push(entity.id());
@@ -276,7 +276,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
     ball_rb.calculate_sphere_inertia(BALL_RADIUS);
     world.add_component(ball, ball_rb);
     world.add_component(ball, Velocity::new(Vec3::ZERO));
-    world.add_component(ball, Collider::new_sphere(BALL_RADIUS));
+    world.add_component(ball, Collider::sphere(BALL_RADIUS));
     world.add_component(ball, EntityName("İtme Topu".into()));
 
     game.ball_id = ball.id();

@@ -215,8 +215,8 @@ impl GpuPhysicsSystem {
             mapped_at_creation: false,
         });
 
-        // Joint buffer — max 4096 joints
-        let max_joints = 4096u32;
+        // Joint buffer — max 16384 joints
+        let max_joints = 16384u32;
         let joints_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("GPU Physics Joints Buffer"),
             size: (max_joints as wgpu::BufferAddress)

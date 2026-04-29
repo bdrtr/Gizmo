@@ -36,9 +36,11 @@ pub struct SortParams {
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct FluidCollider {
     pub position: [f32; 3],
-    pub radius: f32,
+    pub radius: f32, // Used if shape_type == 0
     pub velocity: [f32; 3],
-    pub padding: f32,
+    pub shape_type: u32, // 0=Sphere, 1=AABB
+    pub half_extents: [f32; 3], // Used if shape_type == 1
+    pub _pad: f32,
 }
 
 #[repr(C)]
@@ -82,4 +84,4 @@ pub struct FluidParams {
     pub solver_iterations: u32,
 }
 
-pub const MAX_FLUID_COLLIDERS: usize = 64;
+pub const MAX_FLUID_COLLIDERS: usize = 256;

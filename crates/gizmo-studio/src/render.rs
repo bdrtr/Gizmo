@@ -355,7 +355,7 @@ pub fn render_studio(
                                 );
                                 world.add_component(
                                     ent,
-                                    gizmo::physics::Collider::aabb(gizmo::math::Vec3::new(
+                                    gizmo::physics::Collider::box_collider(gizmo::math::Vec3::new(
                                         p_width / 2.0,
                                         p_max_h / 2.0,
                                         p_depth / 2.0,

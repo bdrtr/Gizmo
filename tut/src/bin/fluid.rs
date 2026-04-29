@@ -352,7 +352,9 @@ fn fluid_only_render_pass(
                             interactor.velocity.y,
                             interactor.velocity.z,
                         ],
-                        padding: 0.0,
+                        shape_type: 0,
+                        half_extents: [0.0; 3],
+                        _pad: 0.0,
                     });
                 }
             }

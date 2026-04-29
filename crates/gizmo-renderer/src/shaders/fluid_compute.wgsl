@@ -70,18 +70,42 @@ fn predict(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
     
-    // Collider interaction
+    // Collider interaction (Phase 7.1 Fluid-Rigid Coupling)
     for (var c = 0u; c < params.num_colliders; c = c + 1u) {
         let col = colliders[c];
-        let r_col = pi.position - col.position;
-        let d_col = length(r_col);
-        if (d_col > 0.0 && d_col < col.radius * 1.5) {
-            // Penalty force to push fluid away from collider
-            let penetration = col.radius * 1.5 - d_col;
-            let normal = r_col / d_col;
-            total_force += normal * penetration * 5000.0 * params.mass;
-            // Transfer collider velocity to fluid (coupling)
-            pi.velocity += col.velocity * 0.1;
+        if (col.shape_type == 0u) { // Sphere
+            let r_col = pi.position - col.position;
+            let d_col = length(r_col);
+            let check_r = col.radius + params.smoothing_radius * 0.5;
+            if (d_col > 0.0 && d_col < check_r) {
+                let penetration = check_r - d_col;
+                let normal = r_col / d_col;
+                total_force += normal * penetration * 5000.0 * params.mass;
+                pi.velocity += col.velocity * 0.1;
+            }
+        } else if (col.shape_type == 1u) { // AABB (Box)
+            let min_b = col.position - col.half_extents;
+            let max_b = col.position + col.half_extents;
+            let clamped = clamp(pi.position, min_b, max_b);
+            let diff = pi.position - clamped;
+            let d_col = length(diff);
+            
+            let is_inside = (pi.position.x >= min_b.x && pi.position.x <= max_b.x &&
+                             pi.position.y >= min_b.y && pi.position.y <= max_b.y &&
+                             pi.position.z >= min_b.z && pi.position.z <= max_b.z);
+            
+            if (is_inside) {
+                // İçerdeyse rastgele dışarı fırlat veya yukarı fırlat
+                let center_dir = normalize(pi.position - col.position + vec3<f32>(0.001, 0.01, 0.0));
+                total_force += center_dir * 8000.0 * params.mass;
+                pi.velocity += col.velocity * 0.5;
+            } else if (d_col > 0.0 && d_col < params.smoothing_radius * 0.5) {
+                // Yüzeye yakın
+                let penetration = params.smoothing_radius * 0.5 - d_col;
+                let normal = diff / d_col;
+                total_force += normal * penetration * 8000.0 * params.mass;
+                pi.velocity += col.velocity * 0.2;
+            }
         }
     }
     

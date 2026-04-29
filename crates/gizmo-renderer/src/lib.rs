@@ -23,13 +23,16 @@
 //! Implementation: [`frustum_cull`] re-exports [`Frustum`] and helpers from `gizmo-math`.
 
 pub mod animation;
+pub mod animation_state_machine;
 pub mod asset;
 pub mod async_assets;
 pub mod components;
 pub mod csm;
+pub mod deferred;
 pub mod debug_renderer;
 pub mod frustum_cull;
 pub mod game_ui;
+pub mod gpu_cull;
 pub mod gpu_fluid;
 pub mod gpu_particles;
 pub mod gpu_physics;
@@ -38,12 +41,18 @@ pub mod hot_reload;
 pub mod pipeline;
 pub mod post_process;
 pub mod renderer;
+pub mod ssao;
+pub mod ssr;
+pub mod taa;
 
 pub use frustum_cull::{visible_in_frustum, Frustum};
 
 pub use animation::{AnimationClip, Keyframe, SkeletonHierarchy, SkeletonJoint, Track};
+pub use animation_state_machine::{
+    ActiveBlend, AnimationState, AnimationStateMachine, AnimationTransition,
+};
 pub mod animation_system;
-pub use animation_system::animation_update_system;
+pub use animation_system::{animation_state_machine_update_system, animation_update_system};
 pub use asset::{
     decode_obj_vertices_for_async, decode_rgba_image_file, AssetManager, GltfNodeData,
 };
@@ -63,6 +72,10 @@ pub use game_ui::{Anchor, UiCanvas, UiElement, UiKind};
 pub use gpu_types::{
     InstanceRaw, LightData, PostProcessUniforms, SceneUniforms, ShadowVsUniform, Vertex,
 };
+pub use deferred::DeferredState;
+pub use gpu_cull::{DrawIndirectArgs, GpuCullState, MeshBoundsRaw};
+pub use ssao::{SsaoParams, SsaoState};
+pub use taa::TaaState;
 pub use hot_reload::AssetWatcher;
 pub use pipeline::SceneState;
 pub use post_process::PostProcessState;

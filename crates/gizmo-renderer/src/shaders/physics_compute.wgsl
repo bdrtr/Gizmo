@@ -370,11 +370,14 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let SI_RELAXATION: f32 = 0.65;
     
     let sA = me.half_extents * 2.0;
-    let invInertiaA = vec3<f32>(
-        12.0 / (me.mass * (sA.y * sA.y + sA.z * sA.z)),
-        12.0 / (me.mass * (sA.x * sA.x + sA.z * sA.z)),
-        12.0 / (me.mass * (sA.x * sA.x + sA.y * sA.y))
-    );
+    var invInertiaA = vec3<f32>(0.0);
+    if (me.mass > 0.0) {
+        invInertiaA = vec3<f32>(
+            12.0 / (me.mass * (sA.y * sA.y + sA.z * sA.z)),
+            12.0 / (me.mass * (sA.x * sA.x + sA.z * sA.z)),
+            12.0 / (me.mass * (sA.x * sA.x + sA.y * sA.y))
+        );
+    }
     let rotA = me.rotation;
 
     for (var i = 0u; i < num_c; i++) {
@@ -399,11 +402,14 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let r2 = contactPoint - other.position;
         
         let sB = other.half_extents * 2.0;
-        let invInertiaB = vec3<f32>(
-            12.0 / (other.mass * (sB.y * sB.y + sB.z * sB.z)),
-            12.0 / (other.mass * (sB.x * sB.x + sB.z * sB.z)),
-            12.0 / (other.mass * (sB.x * sB.x + sB.y * sB.y))
-        );
+        var invInertiaB = vec3<f32>(0.0);
+        if (other.mass > 0.0) {
+            invInertiaB = vec3<f32>(
+                12.0 / (other.mass * (sB.y * sB.y + sB.z * sB.z)),
+                12.0 / (other.mass * (sB.x * sB.x + sB.z * sB.z)),
+                12.0 / (other.mass * (sB.x * sB.x + sB.y * sB.y))
+            );
+        }
         let rotB = other.rotation;
 
         let v1 = me.velocity + cross(me.angular_velocity, r1);
@@ -416,8 +422,8 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Persistent Impulse (Warm Start)
         var old_accum = box_contacts[idx].accum_impulse[i];
         
-        let invMassA = 1.0 / me.mass;
-        let invMassB = 1.0 / other.mass;
+        let invMassA = select(1.0 / me.mass, 0.0, me.mass <= 0.00001);
+        let invMassB = select(1.0 / other.mass, 0.0, other.mass <= 0.00001);
         let crossA = cross(r1, n_b2a);
         let crossB = cross(r2, n_b2a);
         let ptA = apply_inv_inertia(crossA, invInertiaA, rotA);
@@ -542,12 +548,15 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let friction = 0.5;
     
     let sA = box_struct.half_extents * 2.0;
-    let invInertia = vec3<f32>(
-        12.0 / (box_struct.mass * (sA.y * sA.y + sA.z * sA.z)),
-        12.0 / (box_struct.mass * (sA.x * sA.x + sA.z * sA.z)),
-        12.0 / (box_struct.mass * (sA.x * sA.x + sA.y * sA.y))
-    );
-    let invMass = 1.0 / box_struct.mass;
+    var invInertia = vec3<f32>(0.0);
+    if (box_struct.mass > 0.00001) {
+        invInertia = vec3<f32>(
+            12.0 / (box_struct.mass * (sA.y * sA.y + sA.z * sA.z)),
+            12.0 / (box_struct.mass * (sA.x * sA.x + sA.z * sA.z)),
+            12.0 / (box_struct.mass * (sA.x * sA.x + sA.y * sA.y))
+        );
+    }
+    let invMass = select(1.0 / box_struct.mass, 0.0, box_struct.mass <= 0.00001);
     let rot = box_struct.rotation;
 
     // Check against all static colliders
@@ -789,6 +798,7 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
 const JOINT_BETA: f32 = 0.3;  // Joint pozisyon düzeltme oranı (daha agresif)
 
 fn compute_inv_inertia_diag(body: BoxItem) -> vec3<f32> {
+    if (body.mass <= 0.00001) { return vec3<f32>(0.0); }
     let s = body.half_extents * 2.0;
     return vec3<f32>(
         12.0 / (body.mass * (s.y * s.y + s.z * s.z)),
@@ -811,8 +821,8 @@ fn solve_positional_axis(
     damping_c: f32,
     is_body_a: bool,
 ) -> vec4<f32> { // xyz = velocity correction, w = angular correction magnitude
-    let inv_mass_a = 1.0 / body_a.mass;
-    let inv_mass_b = 1.0 / body_b.mass;
+    let inv_mass_a = select(1.0 / body_a.mass, 0.0, body_a.mass <= 0.00001);
+    let inv_mass_b = select(1.0 / body_b.mass, 0.0, body_b.mass <= 0.00001);
     
     let cross_a = cross(r_a, n);
     let cross_b = cross(r_b, n);
@@ -902,8 +912,8 @@ fn solve_joints(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let n = delta / err;
                 let bias = (JOINT_BETA / params.dt) * err;
                 
-                let inv_mass_self = 1.0 / body.mass;
-                let inv_mass_other = 1.0 / other.mass;
+                let inv_mass_self = select(1.0 / body.mass, 0.0, body.mass <= 0.00001);
+                let inv_mass_other = select(1.0 / other.mass, 0.0, other.mass <= 0.00001);
                 
                 let r_self = select(r_b, r_a, is_a);
                 let r_other = select(r_a, r_b, is_a);
@@ -961,8 +971,8 @@ fn solve_joints(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (err > 0.0001) {
                 let n = delta / err;
                 let bias = (JOINT_BETA / params.dt) * err;
-                let inv_mass_self = 1.0 / body.mass;
-                let inv_mass_other = 1.0 / other.mass;
+                let inv_mass_self = select(1.0 / body.mass, 0.0, body.mass <= 0.00001);
+                let inv_mass_other = select(1.0 / other.mass, 0.0, other.mass <= 0.00001);
                 let r_self = select(r_b, r_a, is_a);
                 let K = inv_mass_self + inv_mass_other;
                 let v_rel_sign = select(-1.0, 1.0, is_a);

@@ -13,6 +13,8 @@ pub struct DrawItem {
     vertex_count: u32,
     bind_group: std::sync::Arc<wgpu::BindGroup>,
     unlit: bool,
+    world_center: [f32; 3],
+    radius: f32,
 }
 
 /// Bevy'nin DefaultPlugins davranisini taklit eden, sadece modelleri
@@ -58,10 +60,37 @@ pub fn default_render_pass(
         }
     }
 
-    let view_proj = proj * view_mat;
-    let frustum = crate::renderer::Frustum::from_matrix(&view_proj);
+    // Save unjittered projection before applying TAA offset (needed for reprojection next frame).
+    let unjittered_proj = proj;
 
-    let id = Mat4::IDENTITY.to_cols_array_2d();
+    // ── TAA Halton jitter: subpixel offset applied via z-column of projection ──
+    if let Some(ref taa) = renderer.taa {
+        let jp = crate::renderer::taa::TaaState::get_jitter(taa.frame_index);
+        // Convert pixel jitter [−0.5, 0.5] to NDC offset (2 / viewport_size per axis)
+        let jx = jp[0] * 2.0 / renderer.size.width  as f32;
+        let jy = jp[1] * 2.0 / renderer.size.height as f32;
+        // Adding jitter to NDC.x requires: new_clip.x = clip.x - jx*vz
+        // ↔ subtract jx from proj.z_axis.x (the M[0][2] element, row0·col2)
+        proj.z_axis.x -= jx;
+        proj.z_axis.y -= jy;
+    }
+
+    let view_proj            = proj            * view_mat;  // jittered — used for SceneUniforms
+    let unjittered_view_proj = unjittered_proj * view_mat;  // clean    — stored in TaaState for next frame
+
+    let cascade_splits = [10.0f32, 50.0, 200.0, 2000.0];
+    let cascade_vp = crate::renderer::directional_cascade_view_projs(
+        cam_pos,
+        cam_forward,
+        aspect,
+        std::f32::consts::FRAC_PI_4,
+        0.1,
+        &cascade_splits,
+        Vec3::new(0.0, -1.0, 0.0),
+        crate::renderer::SHADOW_MAP_RES,
+    );
+    let light_view_projs: [[[f32; 4]; 4]; 4] = cascade_vp.map(|m| m.to_cols_array_2d());
+
     let scene_uniform_data = crate::renderer::gpu_types::SceneUniforms {
         view_proj: view_proj.to_cols_array_2d(),
         camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
@@ -73,8 +102,8 @@ pub fn default_render_pass(
             direction: [0.0, -1.0, 0.0, 0.0],
             params: [0.0; 4],
         }; 10],
-        light_view_proj: [id; 4],
-        cascade_splits: [10.0, 50.0, 200.0, 2000.0],
+        light_view_proj: light_view_projs,
+        cascade_splits,
         camera_forward: [cam_forward.x, cam_forward.y, cam_forward.z, 0.0],
         cascade_params: [0.1, 1.0 / crate::renderer::SHADOW_MAP_RES as f32, 0.0, 0.0],
         num_lights: 0,
@@ -90,6 +119,25 @@ pub fn default_render_pass(
         0,
         bytemuck::cast_slice(&[scene_uniform_data]),
     );
+    for i in 0..crate::renderer::CASCADE_COUNT {
+        renderer.queue.write_buffer(
+            &renderer.scene.shadow_cascade_uniform_buffers[i],
+            0,
+            bytemuck::bytes_of(&crate::renderer::gpu_types::ShadowVsUniform {
+                light_view_proj: light_view_projs[i],
+            }),
+        );
+    }
+
+    // Upload TAA params (prev_vp from last frame, current jitter, blend alpha)
+    if let Some(ref mut taa) = renderer.taa {
+        let jp = crate::renderer::taa::TaaState::get_jitter(taa.frame_index);
+        let jx = jp[0] * 2.0 / renderer.size.width  as f32;
+        let jy = jp[1] * 2.0 / renderer.size.height as f32;
+        let alpha = if taa.frame_index == 0 { 1.0f32 } else { 0.1f32 };
+        taa.update_params(&renderer.queue, [jx, jy], alpha);
+        taa.store_prev_vp(unjittered_view_proj.to_cols_array_2d());
+    }
 
     let renderers = world.borrow::<MeshRenderer>();
     let mut instances = Vec::new();
@@ -102,9 +150,21 @@ pub fn default_render_pass(
 
             let center_mat = Mat4::from_translation(mesh.center_offset);
             let model = trans.local_matrix * center_mat;
-            if !crate::renderer::visible_in_frustum(&frustum, &model, mesh.bounds) {
-                continue;
-            }
+
+            // Compute world-space bounding sphere for GPU frustum cull pass
+            let local_cx = (mesh.bounds.min.x + mesh.bounds.max.x) * 0.5;
+            let local_cy = (mesh.bounds.min.y + mesh.bounds.max.y) * 0.5;
+            let local_cz = (mesh.bounds.min.z + mesh.bounds.max.z) * 0.5;
+            let world_c = model.transform_point3(Vec3::new(local_cx, local_cy, local_cz));
+            let hx = (mesh.bounds.max.x - mesh.bounds.min.x) * 0.5;
+            let hy = (mesh.bounds.max.y - mesh.bounds.min.y) * 0.5;
+            let hz = (mesh.bounds.max.z - mesh.bounds.min.z) * 0.5;
+            let local_r = (hx * hx + hy * hy + hz * hz).sqrt();
+            let sx = model.x_axis.truncate().length();
+            let sy = model.y_axis.truncate().length();
+            let sz = model.z_axis.truncate().length();
+            let world_r = local_r * sx.max(sy).max(sz);
+
             let instance_data = crate::renderer::gpu_types::InstanceRaw {
                 model: model.to_cols_array_2d(),
                 albedo_color: [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
@@ -122,7 +182,10 @@ pub fn default_render_pass(
                 vbuf: mesh.vbuf.clone(),
                 vertex_count: mesh.vertex_count,
                 bind_group: mat.bind_group.clone(),
-                unlit: mat.material_type == crate::renderer::components::MaterialType::Unlit || mat.material_type == crate::renderer::components::MaterialType::Skybox,
+                unlit: mat.material_type == crate::renderer::components::MaterialType::Unlit
+                    || mat.material_type == crate::renderer::components::MaterialType::Skybox,
+                world_center: [world_c.x, world_c.y, world_c.z],
+                radius: world_r,
             });
         }
     }
@@ -140,6 +203,28 @@ pub fn default_render_pass(
         );
     }
 
+    // GPU cull prepare: upload per-instance bounding spheres and initial draw args (instance_count=0)
+    if let Some(ref cull) = renderer.gpu_cull {
+        let bounds_data: Vec<crate::renderer::MeshBoundsRaw> = draw_items
+            .iter()
+            .map(|item| crate::renderer::MeshBoundsRaw {
+                world_center: item.world_center,
+                radius: item.radius,
+            })
+            .collect();
+        let draw_args_data: Vec<crate::renderer::DrawIndirectArgs> = draw_items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| crate::renderer::DrawIndirectArgs {
+                vertex_count: item.vertex_count,
+                instance_count: 0, // GPU cull pass sets this to 1 if visible
+                first_vertex: 0,
+                first_instance: i as u32,
+            })
+            .collect();
+        cull.prepare(&renderer.queue, &bounds_data, &draw_args_data);
+    }
+
     if let Some(physics) = &renderer.gpu_physics {
         // Her frame başında sıradaki state'i çekmek için WGPU CommandEncoder'a asenkron mapping iste.
         physics.request_readback(encoder);
@@ -154,22 +239,103 @@ pub fn default_render_pass(
         fluid.compute_pass(encoder, &renderer.queue, true, fluid.num_particles);
     }
 
+    // GPU mesh frustum culling — writes instance_count into indirect_buffer
+    if let Some(ref cull) = renderer.gpu_cull {
+        cull.cull_pass(encoder, &renderer.scene.global_bind_group, draw_items.len() as u32);
+    }
+
+    // Resize deferred G-buffers if window changed; resize SSAO + TAA to match
+    if let Some(ref mut def) = renderer.deferred {
+        def.resize(&renderer.device, renderer.size.width, renderer.size.height);
+    }
     {
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Default Engine Render Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &renderer.post.hdr_texture_view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.1,
-                        g: 0.1,
-                        b: 0.15,
-                        a: 1.0,
-                    }),
+        let w = renderer.size.width;
+        let h = renderer.size.height;
+        if let (Some(ssao), Some(def)) = (&mut renderer.ssao, &renderer.deferred) {
+            if ssao.width != w || ssao.height != h {
+                ssao.resize(&renderer.device, def, w, h);
+            }
+        }
+        if let (Some(ssr), Some(def)) = (&mut renderer.ssr, &renderer.deferred) {
+            if ssr.width != w || ssr.height != h {
+                ssr.resize(&renderer.device, def, &renderer.post.hdr_texture_view, w, h);
+            }
+        }
+    }
+    {
+        let w = renderer.size.width;
+        let h = renderer.size.height;
+        if let (Some(taa), Some(def)) = (&mut renderer.taa, &renderer.deferred) {
+            if taa.width != w || taa.height != h {
+                taa.resize(
+                    &renderer.device,
+                    &renderer.post.hdr_texture_view,
+                    &def.world_position_view,
+                    w, h,
+                );
+            }
+        }
+    }
+
+    // CSM shadow passes — one depth-only pass per cascade.
+    for i in 0..crate::renderer::CASCADE_COUNT {
+        let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Shadow Pass"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &renderer.scene.shadow_cascade_layer_views[i],
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
                     store: wgpu::StoreOp::Store,
-                },
-            })],
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        shadow_pass.set_pipeline(&renderer.scene.shadow_pipeline);
+        shadow_pass.set_bind_group(0, &renderer.scene.shadow_pass_bind_groups[i], &[]);
+        shadow_pass.set_bind_group(1, &renderer.scene.dummy_skeleton_bind_group, &[]);
+        shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
+        for (j, item) in draw_items.iter().enumerate() {
+            if item.unlit {
+                continue;
+            }
+            shadow_pass.set_vertex_buffer(0, item.vbuf.slice(..));
+            shadow_pass.draw(0..item.vertex_count, (j as u32)..((j as u32) + 1));
+        }
+    }
+
+    // ── G-buffer pass (PBR geometry → albedo / normal / world-position) ─────
+    if let Some(ref def) = renderer.deferred {
+        let mut gbuf_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("G-Buffer Pass"),
+            color_attachments: &[
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &def.albedo_metallic_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &def.normal_roughness_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &def.world_position_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
+            ],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: &renderer.depth_texture_view,
                 depth_ops: Some(wgpu::Operations {
@@ -181,9 +347,139 @@ pub fn default_render_pass(
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        // TODO: Shadow map pass eksik, render_pass öncesinde directional shadow mapping calistirilmali!
+        gbuf_pass.set_pipeline(&def.gbuffer_pipeline);
+        gbuf_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+        gbuf_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+        gbuf_pass.set_bind_group(3, &renderer.scene.dummy_skeleton_bind_group, &[]);
+        gbuf_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+        for (i, item) in draw_items.iter().enumerate() {
+            if item.unlit {
+                continue;
+            }
+            gbuf_pass.set_bind_group(1, &item.bind_group, &[]);
+            gbuf_pass.set_vertex_buffer(0, item.vbuf.slice(..));
+            if let Some(ref cull) = renderer.gpu_cull {
+                gbuf_pass.draw_indirect(
+                    &cull.indirect_buffer,
+                    crate::renderer::GpuCullState::indirect_offset(i),
+                );
+            } else {
+                gbuf_pass.draw(0..item.vertex_count, (i as u32)..((i as u32) + 1));
+            }
+        }
+    }
 
-        // Draw loop disina sabit BindGroupLayout lari aliyoruz (Performans optimizasyonu)
+    // ── Deferred lighting pass (G-buffers → HDR) ──────────────────────────
+    if let Some(ref def) = renderer.deferred {
+        let mut light_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Deferred Lighting Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &renderer.post.hdr_texture_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        light_pass.set_pipeline(&def.lighting_pipeline);
+        light_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+        light_pass.set_bind_group(1, &renderer.scene.shadow_bind_group, &[]);
+        light_pass.set_bind_group(2, &def.gbuffer_bind_group, &[]);
+        light_pass.draw(0..3, 0..1);
+    }
+
+    // ── SSAO: hemisphere sampling → raw AO texture ────────────────────────────
+    if let Some(ref ssao) = renderer.ssao {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("SSAO Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &ssao.ao_view,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::WHITE), store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(&ssao.ssao_pipeline);
+        pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+        pass.set_bind_group(1, &ssao.ssao_gbuf_bind_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    // ── SSAO blur: 5×5 box filter → blurred AO texture ───────────────────────
+    if let Some(ref ssao) = renderer.ssao {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("SSAO Blur Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &ssao.ao_blurred_view,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::WHITE), store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(&ssao.blur_pipeline);
+        pass.set_bind_group(0, &ssao.blur_bind_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    // ── SSAO apply: multiply AO into HDR (multiply blend) ─────────────────────
+    if let Some(ref ssao) = renderer.ssao {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("SSAO Apply Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &renderer.post.hdr_texture_view,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(&ssao.apply_pipeline);
+        pass.set_bind_group(0, &ssao.apply_bind_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    // ── Forward pass (unlit / skybox / GPU subsystems; PBR skipped if deferred) ──
+    {
+        let hdr_load = if renderer.deferred.is_some() {
+            wgpu::LoadOp::Load
+        } else {
+            wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.1, b: 0.15, a: 1.0 })
+        };
+        let depth_load = if renderer.deferred.is_some() {
+            wgpu::LoadOp::Load
+        } else {
+            wgpu::LoadOp::Clear(1.0)
+        };
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Default Engine Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &renderer.post.hdr_texture_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: hdr_load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &renderer.depth_texture_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: depth_load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
         render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
         render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
         render_pass.set_bind_group(3, &renderer.scene.dummy_skeleton_bind_group, &[]);
@@ -192,13 +488,22 @@ pub fn default_render_pass(
         for (i, item) in draw_items.iter().enumerate() {
             let pipeline = if item.unlit {
                 &renderer.scene.unlit_pipeline
-            } else {
+            } else if renderer.deferred.is_none() {
                 &renderer.scene.render_pipeline
+            } else {
+                continue; // PBR already rendered in deferred G-buffer + lighting pass
             };
             render_pass.set_pipeline(pipeline);
             render_pass.set_bind_group(1, &item.bind_group, &[]);
             render_pass.set_vertex_buffer(0, item.vbuf.slice(..));
-            render_pass.draw(0..item.vertex_count, (i as u32)..((i as u32) + 1));
+            if let Some(ref cull) = renderer.gpu_cull {
+                render_pass.draw_indirect(
+                    &cull.indirect_buffer,
+                    crate::renderer::GpuCullState::indirect_offset(i),
+                );
+            } else {
+                render_pass.draw(0..item.vertex_count, (i as u32)..((i as u32) + 1));
+            }
         }
 
         // Draw GPU Physics Spheres!
@@ -229,6 +534,96 @@ pub fn default_render_pass(
         gizmos.clear();
     }
 
+    // ── SSR: Screen Space Reflections ───────────────────────────────────────────
+    if let Some(ref ssr) = renderer.ssr {
+        // Pass 1: SSR Raymarch
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("SSR Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &ssr.ssr_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&ssr.ssr_pipeline);
+            pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+            pass.set_bind_group(1, &ssr.ssr_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        // Pass 2: SSR Apply (Additive blend into HDR texture)
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("SSR Apply Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &renderer.post.hdr_texture_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&ssr.apply_pipeline);
+            pass.set_bind_group(0, &ssr.apply_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+    }
+
+    // ── TAA resolve: blend jittered HDR with clamped history ─────────────────
+    if let Some(ref taa) = renderer.taa {
+        let (resolve_bg, output_view) = taa.current_resolve_inputs_output();
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("TAA Resolve Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view:           output_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load:  wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(&taa.resolve_pipeline);
+        pass.set_bind_group(0, resolve_bg, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    // ── TAA blit: copy stabilized history output back into HDR texture ───────
+    if let Some(ref taa) = renderer.taa {
+        let blit_bg = taa.current_blit_bg();
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("TAA Blit Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view:           &renderer.post.hdr_texture_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load:  wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(&taa.blit_pipeline);
+        pass.set_bind_group(0, &taa.empty_bg, &[]);
+        pass.set_bind_group(1, blit_bg, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    // Advance TAA ping-pong and frame counter
+    if let Some(ref mut taa) = renderer.taa {
+        taa.advance_frame();
+    }
+
     renderer.run_post_processing(encoder, view);
 }
 
@@ -248,13 +643,13 @@ pub fn physics_debug_system(world: &crate::core::World) {
                 // Biz burada tahmini (veya objenin etrafındaki) bir kutu çizdirebiliriz.
                 // GizmoMotor collider şeklini tam çizdirsin diye:
                 match &col.shape {
-                    gizmo_physics::shape::ColliderShape::Aabb(a) => {
-                        let h = a.half_extents;
+                    gizmo_physics::ColliderShape::Box(b) => {
+                        let h = b.half_extents;
                         let min = trans.position - h;
                         let max = trans.position + h;
                         gizmos.draw_box(min, max, color);
                     }
-                    gizmo_physics::shape::ColliderShape::Sphere(s) => {
+                    gizmo_physics::ColliderShape::Sphere(s) => {
                         let r = s.radius;
                         let min = trans.position - Vec3::new(r, r, r);
                         let max = trans.position + Vec3::new(r, r, r);
@@ -300,7 +695,7 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
             .unwrap_or(0);
 
         for (e, rb, trans, col, vel) in unlinked_entities {
-            if rb.mass == 0.0 || rb.is_sleeping {
+            if matches!(col.shape, ColliderShape::Plane(_)) {
                 // Statik engel — ayrı slot sayacı kullan
                 let slot =
                     NEXT_STATIC_COLLIDER_SLOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -312,22 +707,22 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
 
                 let gpu_col = gizmo_renderer::gpu_physics::GpuCollider {
                     shape_type: match col.shape {
-                        ColliderShape::Plane { .. } => 1,
+                        ColliderShape::Plane(_) => 1,
                         _ => 0, // Varsayılan Box (AABB)
                     },
                     _pad1: [0; 3],
                     data1: match &col.shape {
-                        ColliderShape::Plane { normal, .. } => [normal.x, normal.y, normal.z, 0.0],
-                        ColliderShape::Aabb(aabb) => {
-                            let min = trans.position - aabb.half_extents;
+                        ColliderShape::Plane(p) => [p.normal.x, p.normal.y, p.normal.z, 0.0],
+                        ColliderShape::Box(b) => {
+                            let min = trans.position - b.half_extents;
                             [min.x, min.y, min.z, 0.0]
                         }
                         _ => [0.0; 4],
                     },
                     data2: match &col.shape {
-                        ColliderShape::Plane { constant, .. } => [*constant, 0.0, 0.0, 0.0],
-                        ColliderShape::Aabb(aabb) => {
-                            let max = trans.position + aabb.half_extents;
+                        ColliderShape::Plane(p) => [p.distance, 0.0, 0.0, 0.0],
+                        ColliderShape::Box(b) => {
+                            let max = trans.position + b.half_extents;
                             [max.x, max.y, max.z, 0.0]
                         }
                         _ => [0.0; 4],
@@ -340,8 +735,8 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
                 next_dynamic_id += 1;
 
                 let extents = match &col.shape {
-                    ColliderShape::Aabb(s) => {
-                        [s.half_extents.x, s.half_extents.y, s.half_extents.z]
+                    ColliderShape::Box(b) => {
+                        [b.half_extents.x, b.half_extents.y, b.half_extents.z]
                     }
                     _ => [0.5, 0.5, 0.5],
                 };
@@ -358,7 +753,7 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
                         trans.rotation.w,
                     ],
                     angular_velocity: [vel.angular.x, vel.angular.y, vel.angular.z],
-                    sleep_counter: 0,
+                    sleep_counter: if rb.is_sleeping { 60 } else { 0 },
                     color: [0.3, 0.8, 1.0, 1.0],
                     half_extents: extents,
                     _pad: 0,
@@ -399,5 +794,70 @@ pub fn gpu_physics_readback_system(world: &mut crate::core::World, renderer: &Re
                 }
             }
         }
+    }
+}
+
+/// Phase 7.1: Fluid-Rigid Coupling
+/// Senkronize eder: GpuPhysicsLink sahibi objeleri FluidCollider buffer'ına yazar.
+pub fn gpu_fluid_coupling_system(world: &crate::core::World, renderer: &mut Renderer) {
+    use gizmo_renderer::gpu_fluid::types::FluidCollider;
+    use gizmo_renderer::gpu_fluid::types::MAX_FLUID_COLLIDERS;
+
+    if let Some(fluid) = &mut renderer.gpu_fluid {
+        let mut colliders = vec![FluidCollider {
+            position: [0.0; 3],
+            radius: 0.0,
+            velocity: [0.0; 3],
+            shape_type: 0,
+            half_extents: [0.0; 3],
+            _pad: 0.0,
+        }; MAX_FLUID_COLLIDERS];
+        
+        let mut count = 0;
+
+        if let Some(q) = world.query::<(&Transform, &crate::physics::Velocity, &Collider)>() {
+            for (_, (trans, vel, col)) in q.iter() {
+                if count >= MAX_FLUID_COLLIDERS {
+                    break;
+                }
+                
+                // Sadece belli y altındaki veya dinamik olanları eklemek isteyebiliriz, ama şimdilik hepsini ekleyelim
+                let mut shape_type = 0;
+                let mut radius = 0.0;
+                let mut half_extents = [0.0; 3];
+
+                match &col.shape {
+                    ColliderShape::Sphere(s) => {
+                        shape_type = 0;
+                        radius = s.radius;
+                    }
+                    ColliderShape::Box(b) => {
+                        shape_type = 1;
+                        half_extents = [b.half_extents.x, b.half_extents.y, b.half_extents.z];
+                    }
+                    _ => continue, // Sadece Sphere ve Box destekliyoruz
+                }
+
+                colliders[count] = FluidCollider {
+                    position: [trans.position.x, trans.position.y, trans.position.z],
+                    radius,
+                    velocity: [vel.linear.x, vel.linear.y, vel.linear.z],
+                    shape_type,
+                    half_extents,
+                    _pad: 0.0,
+                };
+                count += 1;
+            }
+        }
+        
+        // GPU'ya yaz
+        renderer.queue.write_buffer(
+            &fluid.colliders_buffer,
+            0,
+            bytemuck::cast_slice(&colliders),
+        );
+        
+        // Fluid Params num_colliders güncelle
+        fluid.update_colliders_count(&renderer.queue, count as u32);
     }
 }

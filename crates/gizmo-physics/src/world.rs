@@ -64,9 +64,18 @@ impl PhysicsWorld {
         }
 
         // 2. Broadphase - build spatial hash and find potential collision pairs
+        // CCD: expand AABB of fast-moving bodies by their predicted displacement so
+        // the broad phase can still find pairs before interpenetration occurs.
         self.spatial_hash.clear();
-        for (entity, _, transform, _, collider) in bodies.iter() {
+        for (entity, rb, transform, vel, collider) in bodies.iter() {
             let aabb = collider.compute_aabb(transform.position, transform.rotation);
+            let aabb = if rb.ccd_enabled && rb.is_dynamic() && !rb.is_sleeping {
+                let next_pos = transform.position + vel.linear * dt;
+                let next_aabb = collider.compute_aabb(next_pos, transform.rotation);
+                aabb.merge(next_aabb)
+            } else {
+                aabb
+            };
             self.spatial_hash.insert(*entity, aabb);
         }
 
@@ -175,7 +184,7 @@ impl PhysicsWorld {
                 }
             }
 
-            self.solver.solve_contacts(&manifolds, &mut bodies_a, &mut bodies_b, dt);
+            self.solver.solve_contacts(&mut manifolds, &mut bodies_a, &mut bodies_b, dt);
 
             // Write back velocities
             for (i, manifold) in manifolds.iter().enumerate() {
@@ -295,7 +304,7 @@ impl PhysicsWorld {
         }
 
         // Sort by distance
-        hits.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+        hits.sort_by(|a, b| a.distance.total_cmp(&b.distance));
         hits
     }
 }

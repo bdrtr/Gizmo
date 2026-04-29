@@ -321,16 +321,19 @@ impl SceneData {
         }
 
         // Tüm Children bileşenlerini ilgili parent'lara ekle
-        for (p_id, c_list) in children_map {
+        for (p_id, mut c_list) in children_map {
             if let Some(&p_ent) = entity_structs.get(&p_id) {
-                // Not: Eğer önceden spawn edilmiş bir root_parent ise entity_structs'ta olmayacaktır.
-                // Bu durumda onu ayrıca ele alıp, children pushlamamız gerek! (Şimdilik scene için geçerli basit yoldayız)
                 world.add_component(p_ent, Children(c_list));
-            } else if let Some(root_p_id) = root_parent {
-                if root_p_id == p_id {
-                    // Mevcut parent'ı sonradan alıp ekleyeceğiz
-                    // Burada küçük bir hack ile halledilebilir ama şimdilik bırakıyoruz.
-                }
+            } else if let Some(p_ent) = world.get_entity(p_id) {
+                // External parent (e.g. root_parent passed in) — merge with existing children.
+                let existing: Vec<u32> = world
+                    .borrow::<Children>()
+                    .get(p_id)
+                    .map(|c| c.0.clone())
+                    .unwrap_or_default();
+                let mut merged = existing;
+                merged.append(&mut c_list);
+                world.add_component(p_ent, Children(merged));
             }
         }
 
@@ -427,16 +430,15 @@ impl SceneData {
         let new_root_id = id_map.get(&prefab.root_id).copied();
 
         if let (Some(new_r), Some(p_id)) = (new_root_id, parent_entity) {
-            // Root entity'i existing parent'a (daha önce Children var mı yok mu bakarak) ekle!
-            let mut children_list = Vec::new();
-            if let Some(existing_children) = world.borrow::<Children>().get(p_id) {
-                children_list = existing_children.0.clone();
+            if let Some(p_ent) = world.get_entity(p_id) {
+                let mut children_list = world
+                    .borrow::<Children>()
+                    .get(p_id)
+                    .map(|c| c.0.clone())
+                    .unwrap_or_default();
+                children_list.push(new_r);
+                world.add_component(p_ent, Children(children_list));
             }
-            children_list.push(new_r);
-            world.add_component(
-                gizmo_core::entity::Entity::new(p_id, 0),
-                Children(children_list),
-            ); // Not strict generation safe but reasonable fallback
         }
 
         println!("✅ Prefab yüklendi ← {}", file_path);
