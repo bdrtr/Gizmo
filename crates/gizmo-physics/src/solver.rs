@@ -166,10 +166,10 @@ impl ConstraintSolver {
     fn apply_friction(
         &self,
         rb_a: &RigidBody,
-        transform_a: &Transform,
+        _transform_a: &Transform,
         vel_a: &mut Velocity,
         rb_b: &RigidBody,
-        transform_b: &Transform,
+        _transform_b: &Transform,
         vel_b: &mut Velocity,
         r_a: Vec3,
         r_b: Vec3,

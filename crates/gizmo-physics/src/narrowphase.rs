@@ -210,7 +210,7 @@ impl Gjk {
 
         for _ in 0..EPA_MAX_ITERATIONS {
             // Find closest face
-            let (closest_face_idx, normal, distance) = Self::find_closest_face(&simplex, &faces)?;
+            let (_closest_face_idx, normal, distance) = Self::find_closest_face(&simplex, &faces)?;
 
             if distance < EPA_TOLERANCE {
                 break;

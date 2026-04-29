@@ -490,7 +490,7 @@ impl Collider {
         match &self.shape {
             ColliderShape::Sphere(s) => {
                 let radius_vec = Vec3::splat(s.radius);
-                gizmo_math::Aabb::from_center_half_extents(position.into(), radius_vec.into())
+                gizmo_math::Aabb::from_center_half_extents(position, radius_vec)
             }
             ColliderShape::Box(b) => {
                 // Rotate the half extents to get world-space AABB
@@ -515,20 +515,20 @@ impl Collider {
                     max = max.max(world_pos);
                 }
 
-                gizmo_math::Aabb::new(min.into(), max.into())
+                gizmo_math::Aabb::new(min, max)
             }
             ColliderShape::Capsule(c) => {
                 // Capsule AABB is sphere radius + half height along Y axis
                 let half_height_vec = rotation * Vec3::new(0.0, c.half_height, 0.0);
                 let extent = Vec3::splat(c.radius) + half_height_vec.abs();
-                gizmo_math::Aabb::from_center_half_extents(position.into(), extent.into())
+                gizmo_math::Aabb::from_center_half_extents(position, extent)
             }
             ColliderShape::Plane(_) => {
                 // Infinite plane - use a very large AABB
                 let large = 10000.0;
                 gizmo_math::Aabb::new(
-                    (position - Vec3::splat(large)).into(),
-                    (position + Vec3::splat(large)).into(),
+                    position - Vec3::splat(large),
+                    position + Vec3::splat(large),
                 )
             }
         }

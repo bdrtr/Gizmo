@@ -1,5 +1,5 @@
 use crate::{
-    broadphase::{Aabb, SpatialHash},
+    broadphase::SpatialHash,
     collision::{CollisionEvent, CollisionEventType, ContactManifold, TriggerEvent},
     components::{Collider, RigidBody, Transform, Velocity},
     integrator::Integrator,
@@ -8,6 +8,7 @@ use crate::{
     solver::ConstraintSolver,
 };
 use gizmo_core::entity::Entity;
+use gizmo_math::Aabb;
 use std::collections::HashMap;
 
 /// Main physics world that manages all physics simulation
@@ -81,7 +82,7 @@ impl PhysicsWorld {
             let body_a = bodies.iter().find(|(e, _, _, _, _)| *e == entity_a);
             let body_b = bodies.iter().find(|(e, _, _, _, _)| *e == entity_b);
 
-            if let (Some((_, rb_a, transform_a, _, collider_a)), Some((_, rb_b, transform_b, _, collider_b))) =
+            if let (Some((_, _rb_a, transform_a, _, collider_a)), Some((_, _rb_b, transform_b, _, collider_b))) =
                 (body_a, body_b)
             {
                 // Check collision layers
@@ -317,8 +318,8 @@ mod tests {
 
         let entity = Entity::new(1, 0);
         let rb = RigidBody::default();
-        let mut transform = Transform::new(Vec3::new(0.0, 10.0, 0.0));
-        let mut vel = Velocity::default();
+        let transform = Transform::new(Vec3::new(0.0, 10.0, 0.0));
+        let vel = Velocity::default();
         let collider = Collider::sphere(1.0);
 
         let mut bodies = vec![(entity, rb, transform, vel, collider)];

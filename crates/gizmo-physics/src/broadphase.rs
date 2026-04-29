@@ -107,7 +107,7 @@ impl SpatialHash {
     }
 
     /// Query entities near a point
-    pub fn query_point(&self, point: Vec3, radius: f32) -> Vec<Entity> {
+    pub fn query_point(&self, point: Vec3, _radius: f32) -> Vec<Entity> {
         let cell = GridCell::from_position(point, self.cell_size);
         let mut entities = Vec::new();
 
@@ -147,9 +147,9 @@ mod tests {
         let e2 = Entity::new(2, 0);
         let e3 = Entity::new(3, 0);
 
-        let aabb1 = Aabb::from_center_half_extents(Vec3::new(0.0, 0.0, 0.0).into(), Vec3::splat(1.0).into());
-        let aabb2 = Aabb::from_center_half_extents(Vec3::new(1.0, 0.0, 0.0).into(), Vec3::splat(1.0).into());
-        let aabb3 = Aabb::from_center_half_extents(Vec3::new(100.0, 0.0, 0.0).into(), Vec3::splat(1.0).into());
+        let aabb1 = Aabb::from_center_half_extents(Vec3::new(0.0, 0.0, 0.0), Vec3::splat(1.0));
+        let aabb2 = Aabb::from_center_half_extents(Vec3::new(1.0, 0.0, 0.0), Vec3::splat(1.0));
+        let aabb3 = Aabb::from_center_half_extents(Vec3::new(100.0, 0.0, 0.0), Vec3::splat(1.0));
 
         hash.insert(e1, aabb1);
         hash.insert(e2, aabb2);
