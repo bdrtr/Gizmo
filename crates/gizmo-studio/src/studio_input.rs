@@ -120,7 +120,7 @@ fn perform_raycast(
             }
 
             if let Some(t) = transforms.get(id) {
-                let extents = col.shape.bounding_box_half_extents(t.rotation);
+                let extents = col.compute_aabb(t.position, t.rotation).half_extents();
                 let scaled_half = Vec3::new(
                     extents.x * t.scale.x,
                     extents.y * t.scale.y,
@@ -191,7 +191,7 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
 
                 let mut base_extents = Vec3::ONE;
                 if let Some(c) = &selected_col {
-                    base_extents = c.shape.bounding_box_half_extents(selected_rot) * selected_scale;
+                    base_extents = c.compute_aabb(selected_pos, selected_rot).half_extents() * selected_scale;
                 }
 
                 hb.scale = base_extents * 1.05; // Çerçeveyi tam objenin collision AABB bounds'una sığdır
