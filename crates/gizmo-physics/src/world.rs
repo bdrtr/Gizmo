@@ -8,7 +8,6 @@ use crate::{
     solver::ConstraintSolver,
 };
 use gizmo_core::entity::Entity;
-use gizmo_math::Aabb;
 use std::collections::HashMap;
 
 /// Main physics world that manages all physics simulation
@@ -304,7 +303,7 @@ impl PhysicsWorld {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gizmo_math::{Quat, Vec3};
+    use gizmo_math::Vec3;
 
     #[test]
     fn test_physics_world_creation() {
