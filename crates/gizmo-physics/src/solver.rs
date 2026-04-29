@@ -232,7 +232,6 @@ impl ConstraintSolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gizmo_math::Quat;
 
     #[test]
     fn test_solver_creation() {
