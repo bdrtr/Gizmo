@@ -177,47 +177,34 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
 
     if any_selected {
         // Obje seçiliyse Highlight Box pozisyonunu ve boyutunu güncelle
-        {
-            let mut trans = world.borrow_mut::<Transform>();
-            if let Some(hb) = trans.get_mut(
-                state
-                    .selection
-                    .highlight_box
-                    .unwrap_or(gizmo::prelude::Entity::new(0, 0))
-                    .id(),
-            ) {
-                hb.position = selected_pos;
-                hb.rotation = selected_rot;
+        if let Some(highlight_box) = state.selection.highlight_box {
+            {
+                let mut trans = world.borrow_mut::<Transform>();
+                if let Some(hb) = trans.get_mut(highlight_box.id()) {
+                    hb.position = selected_pos;
+                    hb.rotation = selected_rot;
 
-                let mut base_extents = Vec3::ONE;
-                if let Some(c) = &selected_col {
-                    base_extents = (c.compute_aabb(selected_pos, selected_rot).half_extents() * gizmo::math::Vec3A::from(selected_scale)).into();
+                    let mut base_extents = Vec3::ONE;
+                    if let Some(c) = &selected_col {
+                        // AABB'yi origin'de hesapla, sonra scale uygula
+                        base_extents = (c.compute_aabb(Vec3::ZERO, gizmo::math::Quat::IDENTITY).half_extents() * gizmo::math::Vec3A::from(selected_scale)).into();
+                    }
+
+                    hb.scale = base_extents * 1.05; // Çerçeveyi tam objenin collision AABB bounds'una sığdır
                 }
+            }
 
-                hb.scale = base_extents * 1.05; // Çerçeveyi tam objenin collision AABB bounds'una sığdır
+            // ECS üzerinden görünür yap
+            if let Some(entity_hb) = world.get_entity(highlight_box.id()) {
+                world.remove_component::<gizmo::core::component::IsHidden>(entity_hb);
             }
         }
-
-        // ECS üzerinden görünür yap
-        if let Some(entity_hb) = world.get_entity(
-            state
-                .selection
-                .highlight_box
-                .unwrap_or(gizmo::prelude::Entity::new(0, 0))
-                .id(),
-        ) {
-            world.remove_component::<gizmo::core::component::IsHidden>(entity_hb);
-        }
     } else {
-        // Hiçbir şey seçili değilse 't.position = -10000' hack'i yerine ECS üzerinden render'ı atla
-        if let Some(entity_hb) = world.get_entity(
-            state
-                .selection
-                .highlight_box
-                .unwrap_or(gizmo::prelude::Entity::new(0, 0))
-                .id(),
-        ) {
-            world.add_component(entity_hb, gizmo::core::component::IsHidden);
+        // Hiçbir şey seçili değilse ECS üzerinden render'ı atla
+        if let Some(highlight_box) = state.selection.highlight_box {
+            if let Some(entity_hb) = world.get_entity(highlight_box.id()) {
+                world.add_component(entity_hb, gizmo::core::component::IsHidden);
+            }
         }
     }
 }
