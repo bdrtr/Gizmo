@@ -21,7 +21,9 @@ struct DrawArgs {
 
 struct CullParams {
     num_instances: u32,
-    _pad:          vec3<u32>,
+    _pad1: u32,
+    _pad2: u32,
+    _pad3: u32,
 };
 
 @group(0) @binding(0) var<uniform>             scene:     SceneUniforms;

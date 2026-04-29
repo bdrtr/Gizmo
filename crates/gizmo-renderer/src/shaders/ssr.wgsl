@@ -29,7 +29,7 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
 
 @fragment
 fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
-    let iuv = vec2<i32>(i32(frag_coord.x), i32(frag_coord.y));
+    let iuv = vec2<i32>(i32(frag_coord.x) * 2, i32(frag_coord.y) * 2);
     let tex_dim = vec2<f32>(textureDimensions(t_hdr));
 
     let normal_roughness = textureLoad(t_normal_roughness, iuv, 0);
@@ -53,8 +53,8 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let fade_roughness = 1.0 - smoothstep(0.1, 0.5, normal_roughness.w);
 
     // Ray marching params
-    let step_size = 0.5;
-    let max_steps = 40;
+    let step_size = 1.0;
+    let max_steps = 20;
     var current_pos = world_pos + R * 0.1; // offset slightly
     
     for (var i = 0; i < max_steps; i++) {

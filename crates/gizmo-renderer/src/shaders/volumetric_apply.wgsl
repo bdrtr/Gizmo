@@ -1,6 +1,6 @@
-// SSR apply pass
-@group(0) @binding(0) var t_ssr:  texture_2d<f32>;
-@group(0) @binding(1) var s_nearest:  sampler;
+// Volumetric Lighting Apply Pass
+@group(0) @binding(0) var t_vol:  texture_2d<f32>;
+@group(0) @binding(1) var s_linear:  sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -19,6 +19,6 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let ssr_color = textureSample(t_ssr, s_nearest, in.uv).rgb;
-    return vec4(ssr_color, 1.0);
+    let vol_color = textureSample(t_vol, s_linear, in.uv).rgb;
+    return vec4(vol_color, 1.0);
 }

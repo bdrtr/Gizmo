@@ -8,7 +8,7 @@ struct SceneUniforms {
 };
 
 struct SsaoKernel {
-    samples: array<vec4<f32>, 32>,
+    samples: array<vec4<f32>, 16>,
 };
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
@@ -28,7 +28,7 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
 
 @fragment
 fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
-    let iuv = vec2<i32>(i32(frag_coord.x), i32(frag_coord.y));
+    let iuv = vec2<i32>(i32(frag_coord.x) * 2, i32(frag_coord.y) * 2);
 
     let pos_samp = textureLoad(t_position, iuv, 0);
     if (pos_samp.w < 0.5) { return vec4(1.0); } // sky / unlit → fully lit
@@ -39,7 +39,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let dims = vec2<f32>(textureDimensions(t_position));
 
     // Tile the 4×4 noise texture across the screen for random hemisphere rotation
-    let noise_uv  = frag_coord.xy / 4.0;
+    let noise_uv  = (frag_coord.xy * 2.0) / 4.0;
     let rnd_vec   = normalize(textureSample(t_noise, s_noise, noise_uv).xyz * 2.0 - 1.0);
 
     // Gram-Schmidt: build TBN aligned with the world-space surface normal
@@ -51,7 +51,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let bias   = 0.015; // prevent self-occlusion
 
     var occlusion = 0.0;
-    for (var i = 0u; i < 32u; i++) {
+    for (var i = 0u; i < 16u; i++) {
         // Transform kernel sample from tangent space to world space
         let w_samp = world_pos + TBN * kernel.samples[i].xyz * radius;
 
@@ -78,6 +78,6 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         }
     }
 
-    let ao = 1.0 - (occlusion / 32.0);
+    let ao = 1.0 - (occlusion / 16.0);
     return vec4(ao, ao, ao, 1.0);
 }

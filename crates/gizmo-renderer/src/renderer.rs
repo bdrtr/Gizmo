@@ -43,6 +43,12 @@ pub struct Renderer<'a> {
     // === SSR — Screen-Space Reflections ===
     pub ssr: Option<crate::ssr::SsrState>,
 
+    // === Volumetric Lighting (God Rays) ===
+    pub volumetric: Option<crate::volumetric::VolumetricState>,
+
+    // === DEFERRED DECALS ===
+    pub decal: Option<crate::decal::DecalState>,
+
     // === TAA — Temporal Anti-Aliasing (ping-pong history + Halton jitter) ===
     pub taa: Option<crate::taa::TaaState>,
 
@@ -226,6 +232,14 @@ impl<'a> Renderer<'a> {
             crate::ssr::SsrState::new(&device, &scene_state, def, &post_res.hdr_texture_view, size.width, size.height)
         });
 
+        let volumetric = deferred.as_ref().map(|def| {
+            crate::volumetric::VolumetricState::new(&device, &scene_state, def, size.width, size.height)
+        });
+
+        let decal = deferred.as_ref().map(|def| {
+            crate::decal::DecalState::new(&device, &scene_state, def)
+        });
+
         let taa = if let Some(ref def) = deferred {
             Some(crate::taa::TaaState::new(
                 &device,
@@ -274,6 +288,8 @@ impl<'a> Renderer<'a> {
             gpu_cull,
             ssao,
             ssr,
+            volumetric,
+            decal,
             taa,
             gpu_particles,
             gpu_physics,
@@ -303,6 +319,9 @@ impl<'a> Renderer<'a> {
 
             if let Some(ref mut def) = self.deferred {
                 def.resize(&self.device, new_size.width, new_size.height);
+                if let Some(ref mut decal) = self.decal {
+                    decal.resize(&self.device, def);
+                }
             }
 
             let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {

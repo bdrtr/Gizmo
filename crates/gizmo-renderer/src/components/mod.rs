@@ -5,6 +5,7 @@ pub mod material;
 pub mod mesh;
 pub mod misc;
 pub mod sprite;
+pub mod decal;
 
 pub use animation::*;
 pub use camera::*;
@@ -13,6 +14,7 @@ pub use material::*;
 pub use mesh::*;
 pub use misc::*;
 pub use sprite::*;
+pub use decal::*;
 
 gizmo_core::impl_component!(
     Mesh,
@@ -32,6 +34,7 @@ gizmo_core::impl_component!(
     LodLevel,
     ParticleEmitter,
     EditorRenderTarget,
-    GameRenderTarget
+    GameRenderTarget,
+    Decal
 );
 gizmo_core::impl_component!(FluidParticle, FluidHandle, FluidPhase, FluidInteractor);

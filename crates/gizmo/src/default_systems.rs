@@ -13,6 +13,7 @@ pub struct DrawItem {
     vertex_count: u32,
     bind_group: std::sync::Arc<wgpu::BindGroup>,
     unlit: bool,
+    is_skybox: bool,
     world_center: [f32; 3],
     radius: f32,
 }
@@ -78,6 +79,19 @@ pub fn default_render_pass(
     let view_proj            = proj            * view_mat;  // jittered — used for SceneUniforms
     let unjittered_view_proj = unjittered_proj * view_mat;  // clean    — stored in TaaState for next frame
 
+    // Güneş Işığını Bul
+    let mut sun_dir = gizmo_math::Vec3::new(0.0, -1.0, 0.0);
+    let mut sun_col = gizmo_math::Vec4::new(1.0, 1.0, 1.0, 1.0);
+    if let Some(q) = world.query::<(&crate::renderer::components::DirectionalLight, &crate::physics::Transform)>() {
+        for (_id, (light, transform)) in q.iter() {
+            if light.role == crate::renderer::components::LightRole::Sun {
+                sun_dir = transform.rotation.mul_vec3(gizmo_math::Vec3::new(0.0, 0.0, -1.0)).normalize();
+                sun_col = gizmo_math::Vec4::new(light.color.x, light.color.y, light.color.z, light.intensity);
+                break;
+            }
+        }
+    }
+
     let cascade_splits = [10.0f32, 50.0, 200.0, 2000.0];
     let cascade_vp = crate::renderer::directional_cascade_view_projs(
         cam_pos,
@@ -86,7 +100,7 @@ pub fn default_render_pass(
         std::f32::consts::FRAC_PI_4,
         0.1,
         &cascade_splits,
-        Vec3::new(0.0, -1.0, 0.0),
+        sun_dir,
         crate::renderer::SHADOW_MAP_RES,
     );
     let light_view_projs: [[[f32; 4]; 4]; 4] = cascade_vp.map(|m| m.to_cols_array_2d());
@@ -94,8 +108,8 @@ pub fn default_render_pass(
     let scene_uniform_data = crate::renderer::gpu_types::SceneUniforms {
         view_proj: view_proj.to_cols_array_2d(),
         camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
-        sun_direction: [0.0, -1.0, 0.0, 1.0],
-        sun_color: [1.0, 1.0, 1.0, 1.0],
+        sun_direction: [sun_dir.x, sun_dir.y, sun_dir.z, 1.0],
+        sun_color: [sun_col.x, sun_col.y, sun_col.z, sun_col.w],
         lights: [crate::renderer::gpu_types::LightData {
             position: [0.0; 4],
             color: [0.0; 4],
@@ -184,6 +198,7 @@ pub fn default_render_pass(
                 bind_group: mat.bind_group.clone(),
                 unlit: mat.material_type == crate::renderer::components::MaterialType::Unlit
                     || mat.material_type == crate::renderer::components::MaterialType::Skybox,
+                is_skybox: mat.material_type == crate::renderer::components::MaterialType::Skybox,
                 world_center: [world_c.x, world_c.y, world_c.z],
                 radius: world_r,
             });
@@ -259,6 +274,11 @@ pub fn default_render_pass(
         if let (Some(ssr), Some(def)) = (&mut renderer.ssr, &renderer.deferred) {
             if ssr.width != w || ssr.height != h {
                 ssr.resize(&renderer.device, def, &renderer.post.hdr_texture_view, w, h);
+            }
+        }
+        if let (Some(volumetric), Some(def)) = (&mut renderer.volumetric, &renderer.deferred) {
+            if volumetric.width != w || volumetric.height != h {
+                volumetric.resize(&renderer.device, def, w, h);
             }
         }
     }
@@ -365,6 +385,69 @@ pub fn default_render_pass(
                 );
             } else {
                 gbuf_pass.draw(0..item.vertex_count, (i as u32)..((i as u32) + 1));
+            }
+        }
+    }
+
+    // ── Decal Pass (Blend into G-buffer) ──────────────────────────
+    let mut decal_draws = Vec::new();
+    if let Some(ref decal_state) = renderer.decal {
+        let decals = world.borrow::<crate::renderer::components::Decal>();
+        let transforms = world.borrow::<crate::physics::Transform>();
+        let mut uniform_data = Vec::new();
+        
+        for (id, decal) in decals.iter() {
+            if let Some(trans) = transforms.get(id) {
+                let model = trans.local_matrix;
+                let inv_model = model.inverse();
+                
+                uniform_data.push(crate::renderer::decal::DecalUniforms {
+                    inv_model: inv_model.to_cols_array(),
+                    model: model.to_cols_array(),
+                    albedo_color: [decal.color.x, decal.color.y, decal.color.z, decal.color.w],
+                    _pad: [0.0; 28],
+                });
+                
+                decal_draws.push(decal.bind_group.clone());
+                if uniform_data.len() >= 1024 { break; } // Max 1024 decals limit
+            }
+        }
+        
+        if !uniform_data.is_empty() {
+            renderer.queue.write_buffer(
+                &decal_state.uniform_buffer,
+                0,
+                bytemuck::cast_slice(&uniform_data),
+            );
+        }
+    }
+
+    if !decal_draws.is_empty() {
+        if let (Some(ref decal_state), Some(ref def)) = (&renderer.decal, &renderer.deferred) {
+            let mut decal_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Decal Pass"),
+                color_attachments: &[
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &def.albedo_metallic_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                    }),
+                ],
+                depth_stencil_attachment: None, // No depth testing needed
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            
+            decal_pass.set_pipeline(&decal_state.pipeline);
+            decal_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+            decal_pass.set_bind_group(1, &decal_state.world_pos_bg, &[]);
+            decal_pass.set_vertex_buffer(0, decal_state.vertex_buffer.slice(..));
+            
+            for (i, bind_group) in decal_draws.iter().enumerate() {
+                let offset = (i * 256) as u32;
+                decal_pass.set_bind_group(2, bind_group, &[]);
+                decal_pass.set_bind_group(3, &decal_state.decal_uniform_bg, &[offset]);
+                decal_pass.draw(0..36, 0..1);
             }
         }
     }
@@ -486,7 +569,9 @@ pub fn default_render_pass(
         render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
 
         for (i, item) in draw_items.iter().enumerate() {
-            let pipeline = if item.unlit {
+            let pipeline = if item.is_skybox {
+                &renderer.scene.sky_pipeline
+            } else if item.unlit {
                 &renderer.scene.unlit_pipeline
             } else if renderer.deferred.is_none() {
                 &renderer.scene.render_pipeline
@@ -570,6 +655,47 @@ pub fn default_render_pass(
             });
             pass.set_pipeline(&ssr.apply_pipeline);
             pass.set_bind_group(0, &ssr.apply_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+    }
+
+    // ── Volumetric Lighting (God Rays) ──────────────────────────────────────────
+    if let Some(ref vol) = renderer.volumetric {
+        // Pass 1: Volumetric Raymarch
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Volumetric Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &vol.volumetric_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&vol.volumetric_pipeline);
+            pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+            pass.set_bind_group(1, &renderer.scene.shadow_bind_group, &[]);
+            pass.set_bind_group(2, &vol.volumetric_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        // Pass 2: Volumetric Apply (Additive blend into HDR texture)
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Volumetric Apply Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &renderer.post.hdr_texture_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&vol.apply_pipeline);
+            pass.set_bind_group(0, &vol.apply_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
     }

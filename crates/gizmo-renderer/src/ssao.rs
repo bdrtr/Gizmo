@@ -3,7 +3,7 @@ use wgpu::util::DeviceExt;
 use crate::deferred::DeferredState;
 use crate::pipeline::{load_shader, SceneState};
 
-const KERNEL_SIZE: usize = 32;
+const KERNEL_SIZE: usize = 16;
 const NOISE_SIZE:  u32   = 4;
 
 // ── CPU data types ────────────────────────────────────────────────────────────
@@ -90,8 +90,8 @@ impl SsaoState {
         let gbuf_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter:     wgpu::FilterMode::Nearest,
-            min_filter:     wgpu::FilterMode::Nearest,
+            mag_filter:     wgpu::FilterMode::Linear,
+            min_filter:     wgpu::FilterMode::Linear,
             ..Default::default()
         });
 
@@ -101,8 +101,10 @@ impl SsaoState {
             usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let (ao_texture, ao_view)               = mk_ao_tex(device, width, height);
-        let (ao_blurred_texture, ao_blurred_view) = mk_ao_tex(device, width, height);
+        let half_w = (width / 2).max(1);
+        let half_h = (height / 2).max(1);
+        let (ao_texture, ao_view)               = mk_ao_tex(device, half_w, half_h);
+        let (ao_blurred_texture, ao_blurred_view) = mk_ao_tex(device, half_w, half_h);
 
         // ── Bind group layouts ──────────────────────────────────────────────
         let ssao_gbuf_bgl = mk_ssao_gbuf_bgl(device);
@@ -145,8 +147,10 @@ impl SsaoState {
         width:    u32,
         height:   u32,
     ) {
-        let (ao_texture, ao_view)               = mk_ao_tex(device, width, height);
-        let (ao_blurred_texture, ao_blurred_view) = mk_ao_tex(device, width, height);
+        let half_w = (width / 2).max(1);
+        let half_h = (height / 2).max(1);
+        let (ao_texture, ao_view)               = mk_ao_tex(device, half_w, half_h);
+        let (ao_blurred_texture, ao_blurred_view) = mk_ao_tex(device, half_w, half_h);
 
         self.ssao_gbuf_bind_group = mk_ssao_gbuf_bg(
             device, &self.ssao_gbuf_bgl,
@@ -302,7 +306,7 @@ fn mk_ssao_gbuf_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             tex_entry(0),          // t_normal
             tex_entry(1),          // t_position
             filterable_tex(2),     // t_noise (filterable for repeat sampler)
-            sampler_entry(3, wgpu::SamplerBindingType::NonFiltering),
+            sampler_entry(3, wgpu::SamplerBindingType::Filtering),
             sampler_entry(4, wgpu::SamplerBindingType::Filtering),
             uniform_entry(5, std::mem::size_of::<SsaoKernel>() as u64),
         ],
@@ -326,7 +330,7 @@ fn mk_blur_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
                 visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
         ],
@@ -343,14 +347,14 @@ fn mk_apply_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 ty: wgpu::BindingType::Texture {
                     multisampled: false,
                     view_dimension: wgpu::TextureViewDimension::D2,
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
                 },
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
                 visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {

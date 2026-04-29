@@ -204,4 +204,32 @@ impl super::AssetManager {
         self.texture_cache.insert(path.to_string(), bg.clone());
         bg
     }
+
+    pub fn create_checkerboard_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layout: &wgpu::BindGroupLayout,
+    ) -> Arc<wgpu::BindGroup> {
+        let path = "__checkerboard_texture__";
+        if let Some(cached) = self.texture_cache.get(path) {
+            return cached.clone();
+        }
+
+        let size = 256u32;
+        let mut pixels = vec![0u8; (size * size * 4) as usize];
+        for y in 0..size {
+            for x in 0..size {
+                let is_white = ((x / 32) + (y / 32)) % 2 == 0;
+                let color = if is_white { 200u8 } else { 50u8 };
+                let idx = ((y * size + x) * 4) as usize;
+                pixels[idx] = color;     // R
+                pixels[idx + 1] = color; // G
+                pixels[idx + 2] = color; // B
+                pixels[idx + 3] = 255;   // A
+            }
+        }
+
+        self.install_decoded_material_texture(device, queue, layout, path, &pixels, size, size).unwrap()
+    }
 }
