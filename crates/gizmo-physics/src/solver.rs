@@ -2,11 +2,11 @@ use crate::collision::ContactManifold;
 use crate::components::{RigidBody, Transform, Velocity};
 use gizmo_math::{Mat3, Vec3};
 
-/// Physics constraint solver using Sequential Impulse method
 pub struct ConstraintSolver {
     pub iterations: usize,
-    pub baumgarte: f32, // Position correction factor
-    pub slop: f32,      // Allowed penetration before correction
+    pub baumgarte: f32,
+    pub slop: f32,
+    pub warm_start_factor: f32,
 }
 
 impl Default for ConstraintSolver {
@@ -15,61 +15,172 @@ impl Default for ConstraintSolver {
             iterations: 10,
             baumgarte: 0.2,
             slop: 0.01,
+            warm_start_factor: 0.8,
         }
     }
 }
 
 impl ConstraintSolver {
     pub fn new(iterations: usize) -> Self {
-        Self {
-            iterations,
-            ..Default::default()
-        }
+        Self { iterations, ..Default::default() }
     }
 
-    /// Solve all contact constraints
+    /// Solve all contact constraints.
+    /// `bodies_a[i]` and `bodies_b[i]` must correspond to `manifolds[i].entity_a/b`.
+    /// Manifolds are updated with accumulated impulses for warm starting next frame.
     pub fn solve_contacts(
         &self,
-        manifolds: &[ContactManifold],
+        manifolds: &mut [ContactManifold],
         bodies_a: &mut [(RigidBody, Transform, Velocity)],
         bodies_b: &mut [(RigidBody, Transform, Velocity)],
         dt: f32,
     ) {
-        if manifolds.is_empty() {
-            return;
+        if manifolds.is_empty() { return; }
+
+        // ── Warm starting ────────────────────────────────────────────────────
+        // Apply a fraction of last frame's accumulated impulses to speed up convergence.
+        for mid in 0..manifolds.len() {
+            if mid >= bodies_a.len() || mid >= bodies_b.len() { continue; }
+
+            let inv_m_a = bodies_a[mid].0.inv_mass();
+            let inv_m_b = bodies_b[mid].0.inv_mass();
+            let inv_i_a = bodies_a[mid].0.inv_world_inertia_tensor(bodies_a[mid].1.rotation);
+            let inv_i_b = bodies_b[mid].0.inv_world_inertia_tensor(bodies_b[mid].1.rotation);
+            let dyn_a   = bodies_a[mid].0.is_dynamic();
+            let dyn_b   = bodies_b[mid].0.is_dynamic();
+
+            for contact in &manifolds[mid].contacts {
+                let r_a = contact.point - bodies_a[mid].1.position;
+                let r_b = contact.point - bodies_b[mid].1.position;
+
+                let wn = contact.normal * (contact.normal_impulse * self.warm_start_factor);
+                let wt = contact.tangent_impulse * self.warm_start_factor;
+
+                if dyn_a {
+                    bodies_a[mid].2.linear  -= wn * inv_m_a;
+                    bodies_a[mid].2.angular -= inv_i_a * r_a.cross(wn);
+                    bodies_a[mid].2.linear  -= wt * inv_m_a;
+                    bodies_a[mid].2.angular -= inv_i_a * r_a.cross(wt);
+                }
+                if dyn_b {
+                    bodies_b[mid].2.linear  += wn * inv_m_b;
+                    bodies_b[mid].2.angular += inv_i_b * r_b.cross(wn);
+                    bodies_b[mid].2.linear  += wt * inv_m_b;
+                    bodies_b[mid].2.angular += inv_i_b * r_b.cross(wt);
+                }
+            }
         }
 
-        // Warm starting could be added here for better convergence
-
-        // Iteratively solve constraints
+        // ── Iterative solving with accumulated-impulse clamping ───────────────
         for _ in 0..self.iterations {
-            for (manifold_idx, manifold) in manifolds.iter().enumerate() {
-                let (rb_a, transform_a, vel_a) = &mut bodies_a[manifold_idx];
-                let (rb_b, transform_b, vel_b) = &mut bodies_b[manifold_idx];
+            for mid in 0..manifolds.len() {
+                if mid >= bodies_a.len() || mid >= bodies_b.len() { continue; }
 
-                for contact in &manifold.contacts {
-                    self.solve_contact_constraint(
-                        rb_a,
-                        transform_a,
-                        vel_a,
-                        rb_b,
-                        transform_b,
-                        vel_b,
-                        contact.point,
-                        contact.normal,
-                        contact.penetration,
-                        manifold.friction,
-                        manifold.restitution,
-                        dt,
-                    );
+                let friction    = manifolds[mid].friction;
+                let restitution = manifolds[mid].restitution;
+
+                for cid in 0..manifolds[mid].contacts.len() {
+                    // ── read phase ────────────────────────────────────────────
+                    let contact_point = manifolds[mid].contacts[cid].point;
+                    let normal        = manifolds[mid].contacts[cid].normal;
+                    let penetration   = manifolds[mid].contacts[cid].penetration;
+                    let acc_normal    = manifolds[mid].contacts[cid].normal_impulse;
+                    let acc_tangent   = manifolds[mid].contacts[cid].tangent_impulse;
+
+                    let r_a = contact_point - bodies_a[mid].1.position;
+                    let r_b = contact_point - bodies_b[mid].1.position;
+
+                    let inv_m_a = bodies_a[mid].0.inv_mass();
+                    let inv_m_b = bodies_b[mid].0.inv_mass();
+                    let inv_i_a = bodies_a[mid].0.inv_world_inertia_tensor(bodies_a[mid].1.rotation);
+                    let inv_i_b = bodies_b[mid].0.inv_world_inertia_tensor(bodies_b[mid].1.rotation);
+                    let dyn_a   = bodies_a[mid].0.is_dynamic();
+                    let dyn_b   = bodies_b[mid].0.is_dynamic();
+
+                    if !dyn_a && !dyn_b { continue; }
+
+                    let va = bodies_a[mid].2.linear + bodies_a[mid].2.angular.cross(r_a);
+                    let vb = bodies_b[mid].2.linear + bodies_b[mid].2.angular.cross(r_b);
+                    let rel_vel  = vb - va;
+                    let vel_norm = rel_vel.dot(normal);
+
+                    // ── normal impulse ────────────────────────────────────────
+                    let r_a_x_n = r_a.cross(normal);
+                    let r_b_x_n = r_b.cross(normal);
+                    let ang_a   = (inv_i_a * r_a_x_n).cross(r_a);
+                    let ang_b   = (inv_i_b * r_b_x_n).cross(r_b);
+                    let k_n = inv_m_a + inv_m_b + ang_a.dot(normal) + ang_b.dot(normal);
+
+                    if k_n < 1e-6 { continue; }
+
+                    let bias     = (self.baumgarte / dt) * (penetration - self.slop).max(0.0);
+                    let e        = restitution;
+                    let delta_n  = (-(1.0 + e) * vel_norm + bias) / k_n;
+
+                    // Accumulated-impulse clamping (normal must be ≥ 0)
+                    let new_acc_n  = (acc_normal + delta_n).max(0.0);
+                    let actual_n   = new_acc_n - acc_normal;
+                    manifolds[mid].contacts[cid].normal_impulse = new_acc_n;
+
+                    let imp_n = normal * actual_n;
+
+                    if dyn_a {
+                        bodies_a[mid].2.linear  -= imp_n * inv_m_a;
+                        bodies_a[mid].2.angular -= inv_i_a * r_a.cross(imp_n);
+                    }
+                    if dyn_b {
+                        bodies_b[mid].2.linear  += imp_n * inv_m_b;
+                        bodies_b[mid].2.angular += inv_i_b * r_b.cross(imp_n);
+                    }
+
+                    // ── friction impulse ──────────────────────────────────────
+                    // Recompute velocities after normal impulse
+                    let va2 = bodies_a[mid].2.linear + bodies_a[mid].2.angular.cross(r_a);
+                    let vb2 = bodies_b[mid].2.linear + bodies_b[mid].2.angular.cross(r_b);
+                    let rel2 = vb2 - va2;
+
+                    let tang_vel = rel2 - normal * rel2.dot(normal);
+                    let tang_mag = tang_vel.length();
+                    if tang_mag < 1e-6 { continue; }
+
+                    let tangent = tang_vel / tang_mag;
+
+                    let r_a_x_t = r_a.cross(tangent);
+                    let r_b_x_t = r_b.cross(tangent);
+                    let ang_at  = (inv_i_a * r_a_x_t).cross(r_a);
+                    let ang_bt  = (inv_i_b * r_b_x_t).cross(r_b);
+                    let k_t = inv_m_a + inv_m_b + ang_at.dot(tangent) + ang_bt.dot(tangent);
+
+                    if k_t < 1e-6 { continue; }
+
+                    let delta_t = -tang_mag / k_t;
+
+                    // Coulomb cone: |λ_t| ≤ μ * λ_n
+                    let max_tang = friction * new_acc_n.abs();
+                    let new_acc_t_along = (acc_tangent.dot(tangent) + delta_t)
+                        .clamp(-max_tang, max_tang);
+                    let actual_t_along  = new_acc_t_along - acc_tangent.dot(tangent);
+                    manifolds[mid].contacts[cid].tangent_impulse =
+                        tangent * new_acc_t_along;
+
+                    let imp_t = tangent * actual_t_along;
+
+                    if dyn_a {
+                        bodies_a[mid].2.linear  -= imp_t * inv_m_a;
+                        bodies_a[mid].2.angular -= inv_i_a * r_a.cross(imp_t);
+                    }
+                    if dyn_b {
+                        bodies_b[mid].2.linear  += imp_t * inv_m_b;
+                        bodies_b[mid].2.angular += inv_i_b * r_b.cross(imp_t);
+                    }
                 }
             }
         }
     }
 
-    /// Solve a single contact constraint
+    /// Kept for backwards compatibility / standalone use.
     #[allow(clippy::too_many_arguments)]
-    fn solve_contact_constraint(
+    pub fn solve_contact_constraint(
         &self,
         rb_a: &mut RigidBody,
         transform_a: &Transform,
@@ -84,133 +195,75 @@ impl ConstraintSolver {
         restitution: f32,
         dt: f32,
     ) {
-        // Skip if both bodies are static or kinematic
-        if !rb_a.is_dynamic() && !rb_b.is_dynamic() {
-            return;
-        }
+        if !rb_a.is_dynamic() && !rb_b.is_dynamic() { return; }
 
         let r_a = contact_point - transform_a.position;
         let r_b = contact_point - transform_b.position;
 
-        // Calculate relative velocity at contact point
-        let vel_a_at_contact = vel_a.linear + vel_a.angular.cross(r_a);
-        let vel_b_at_contact = vel_b.linear + vel_b.angular.cross(r_b);
-        let relative_vel = vel_b_at_contact - vel_a_at_contact;
+        let va = vel_a.linear + vel_a.angular.cross(r_a);
+        let vb = vel_b.linear + vel_b.angular.cross(r_b);
+        let rel_vel  = vb - va;
+        let vel_norm = rel_vel.dot(normal);
 
-        let vel_along_normal = relative_vel.dot(normal);
+        if vel_norm > 0.0 { return; }
 
-        // Don't resolve if velocities are separating
-        if vel_along_normal > 0.0 {
-            return;
-        }
+        let inv_m_a = rb_a.inv_mass();
+        let inv_m_b = rb_b.inv_mass();
+        let inv_i_a = rb_a.inv_world_inertia_tensor(transform_a.rotation);
+        let inv_i_b = rb_b.inv_world_inertia_tensor(transform_b.rotation);
 
-        // Calculate impulse magnitude
-        let inv_mass_a = rb_a.inv_mass();
-        let inv_mass_b = rb_b.inv_mass();
+        let ang_a = (inv_i_a * r_a.cross(normal)).cross(r_a);
+        let ang_b = (inv_i_b * r_b.cross(normal)).cross(r_b);
+        let k = inv_m_a + inv_m_b + ang_a.dot(normal) + ang_b.dot(normal);
+        if k < 1e-6 { return; }
 
-        let inv_inertia_a = rb_a.inv_world_inertia_tensor(transform_a.rotation);
-        let inv_inertia_b = rb_b.inv_world_inertia_tensor(transform_b.rotation);
-
-        let r_a_cross_n = r_a.cross(normal);
-        let r_b_cross_n = r_b.cross(normal);
-
-        let angular_factor_a = (inv_inertia_a * r_a_cross_n).cross(r_a);
-        let angular_factor_b = (inv_inertia_b * r_b_cross_n).cross(r_b);
-
-        let inv_mass_sum = inv_mass_a + inv_mass_b + angular_factor_a.dot(normal) + angular_factor_b.dot(normal);
-
-        if inv_mass_sum < 1e-6 {
-            return;
-        }
-
-        // Apply restitution (bounciness)
-        let e = restitution;
-        let numerator = -(1.0 + e) * vel_along_normal;
-
-        // Add position correction (Baumgarte stabilization)
         let bias = (self.baumgarte / dt) * (penetration - self.slop).max(0.0);
-        let j = (numerator + bias) / inv_mass_sum;
+        let j    = (-(1.0 + restitution) * vel_norm + bias) / k;
+        let j    = j.max(0.0);
 
-        // Apply normal impulse
         let impulse = normal * j;
 
         if rb_a.is_dynamic() {
-            vel_a.linear -= impulse * inv_mass_a;
-            vel_a.angular -= inv_inertia_a * r_a.cross(impulse);
+            vel_a.linear  -= impulse * inv_m_a;
+            vel_a.angular -= inv_i_a * r_a.cross(impulse);
         }
-
         if rb_b.is_dynamic() {
-            vel_b.linear += impulse * inv_mass_b;
-            vel_b.angular += inv_inertia_b * r_b.cross(impulse);
+            vel_b.linear  += impulse * inv_m_b;
+            vel_b.angular += inv_i_b * r_b.cross(impulse);
         }
 
-        // Friction
-        self.apply_friction(
-            rb_a,
-            transform_a,
-            vel_a,
-            rb_b,
-            transform_b,
-            vel_b,
-            r_a,
-            r_b,
-            normal,
-            friction,
-            j,
-            &inv_inertia_a,
-            &inv_inertia_b,
-        );
+        self.apply_friction(rb_a, vel_a, rb_b, vel_b, r_a, r_b, normal, friction, j, &inv_i_a, &inv_i_b);
     }
 
     #[allow(clippy::too_many_arguments)]
     fn apply_friction(
         &self,
-        rb_a: &RigidBody,
-        _transform_a: &Transform,
-        vel_a: &mut Velocity,
-        rb_b: &RigidBody,
-        _transform_b: &Transform,
-        vel_b: &mut Velocity,
-        r_a: Vec3,
-        r_b: Vec3,
-        normal: Vec3,
-        friction: f32,
-        normal_impulse: f32,
-        inv_inertia_a: &Mat3,
-        inv_inertia_b: &Mat3,
+        rb_a: &RigidBody, vel_a: &mut Velocity,
+        rb_b: &RigidBody, vel_b: &mut Velocity,
+        r_a: Vec3, r_b: Vec3,
+        normal: Vec3, friction: f32, normal_impulse: f32,
+        inv_i_a: &Mat3, inv_i_b: &Mat3,
     ) {
-        // Calculate tangent velocity
-        let vel_a_at_contact = vel_a.linear + vel_a.angular.cross(r_a);
-        let vel_b_at_contact = vel_b.linear + vel_b.angular.cross(r_b);
-        let relative_vel = vel_b_at_contact - vel_a_at_contact;
+        let va  = vel_a.linear + vel_a.angular.cross(r_a);
+        let vb  = vel_b.linear + vel_b.angular.cross(r_b);
+        let rel = vb - va;
 
-        let tangent_vel = relative_vel - normal * relative_vel.dot(normal);
-        let tangent_vel_mag = tangent_vel.length();
+        let tang_vel = rel - normal * rel.dot(normal);
+        let tang_mag = tang_vel.length();
+        if tang_mag < 1e-6 { return; }
 
-        if tangent_vel_mag < 1e-6 {
-            return;
-        }
+        let tangent = tang_vel / tang_mag;
 
-        let tangent = tangent_vel / tangent_vel_mag;
+        let inv_m_a = rb_a.inv_mass();
+        let inv_m_b = rb_b.inv_mass();
 
-        let inv_mass_a = rb_a.inv_mass();
-        let inv_mass_b = rb_b.inv_mass();
+        let ang_a = (*inv_i_a * r_a.cross(tangent)).cross(r_a);
+        let ang_b = (*inv_i_b * r_b.cross(tangent)).cross(r_b);
+        let k = inv_m_a + inv_m_b + ang_a.dot(tangent) + ang_b.dot(tangent);
+        if k < 1e-6 { return; }
 
-        let r_a_cross_t = r_a.cross(tangent);
-        let r_b_cross_t = r_b.cross(tangent);
+        let jt = -tang_mag / k;
 
-        let angular_factor_a = (*inv_inertia_a * r_a_cross_t).cross(r_a);
-        let angular_factor_b = (*inv_inertia_b * r_b_cross_t).cross(r_b);
-
-        let inv_mass_sum = inv_mass_a + inv_mass_b + angular_factor_a.dot(tangent) + angular_factor_b.dot(tangent);
-
-        if inv_mass_sum < 1e-6 {
-            return;
-        }
-
-        let jt = -tangent_vel_mag / inv_mass_sum;
-
-        // Coulomb friction
         let friction_impulse = if jt.abs() < friction * normal_impulse.abs() {
             tangent * jt
         } else {
@@ -218,13 +271,12 @@ impl ConstraintSolver {
         };
 
         if rb_a.is_dynamic() {
-            vel_a.linear -= friction_impulse * inv_mass_a;
-            vel_a.angular -= *inv_inertia_a * r_a.cross(friction_impulse);
+            vel_a.linear  -= friction_impulse * inv_m_a;
+            vel_a.angular -= *inv_i_a * r_a.cross(friction_impulse);
         }
-
         if rb_b.is_dynamic() {
-            vel_b.linear += friction_impulse * inv_mass_b;
-            vel_b.angular += *inv_inertia_b * r_b.cross(friction_impulse);
+            vel_b.linear  += friction_impulse * inv_m_b;
+            vel_b.angular += *inv_i_b * r_b.cross(friction_impulse);
         }
     }
 }
@@ -243,32 +295,48 @@ mod tests {
     fn test_collision_response() {
         let mut rb_a = RigidBody::default();
         let mut rb_b = RigidBody::default();
-
         let transform_a = Transform::new(Vec3::new(0.0, 0.0, 0.0));
         let transform_b = Transform::new(Vec3::new(0.0, 2.0, 0.0));
-
         let mut vel_a = Velocity::new(Vec3::new(0.0, 1.0, 0.0));
         let mut vel_b = Velocity::new(Vec3::new(0.0, -1.0, 0.0));
 
         let solver = ConstraintSolver::default();
-
         solver.solve_contact_constraint(
-            &mut rb_a,
-            &transform_a,
-            &mut vel_a,
-            &mut rb_b,
-            &transform_b,
-            &mut vel_b,
+            &mut rb_a, &transform_a, &mut vel_a,
+            &mut rb_b, &transform_b, &mut vel_b,
             Vec3::new(0.0, 1.0, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
-            0.1,
-            0.5,
-            0.5,
-            0.016,
+            0.1, 0.5, 0.5, 0.016,
         );
 
-        // After collision, velocities should change
         assert!(vel_a.linear.y < 1.0);
         assert!(vel_b.linear.y > -1.0);
+    }
+
+    #[test]
+    fn test_normal_impulse_non_negative() {
+        // Bodies approaching: normal impulse should push them apart, never pull.
+        let mut rb_a = RigidBody::default();
+        let mut rb_b = RigidBody::default();
+        let transform_a = Transform::new(Vec3::ZERO);
+        let transform_b = Transform::new(Vec3::new(0.0, 1.0, 0.0));
+        let mut vel_a = Velocity::new(Vec3::new(0.0, 5.0, 0.0));
+        let mut vel_b = Velocity::new(Vec3::new(0.0, -5.0, 0.0));
+
+        let before_a = vel_a.linear;
+        let before_b = vel_b.linear;
+
+        let solver = ConstraintSolver::default();
+        solver.solve_contact_constraint(
+            &mut rb_a, &transform_a, &mut vel_a,
+            &mut rb_b, &transform_b, &mut vel_b,
+            Vec3::new(0.0, 0.5, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            0.05, 0.3, 0.0, 0.016,
+        );
+
+        // A should slow down (positive Y reduced), B should slow down (negative Y increased)
+        assert!(vel_a.linear.y < before_a.y);
+        assert!(vel_b.linear.y > before_b.y);
     }
 }

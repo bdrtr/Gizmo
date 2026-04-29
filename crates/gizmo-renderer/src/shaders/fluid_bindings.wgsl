@@ -19,7 +19,9 @@ struct FluidCollider {
     position: vec3<f32>,
     radius: f32,
     velocity: vec3<f32>,
-    padding: f32,
+    shape_type: u32,
+    half_extents: vec3<f32>,
+    _pad: f32,
 }
 
 struct FluidParams {

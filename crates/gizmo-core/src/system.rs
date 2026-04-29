@@ -555,30 +555,50 @@ impl Schedule {
             );
         }
 
-        // --- 2. DAG Batching --- //
+        // Reverse adjacency: predecessors[i] = all systems that must finish before i.
+        let mut predecessors = vec![Vec::<usize>::new(); count];
+        for from in 0..count {
+            for &to in &adj[from] {
+                predecessors[to].push(from);
+            }
+        }
+
+        // --- 2. DAG Batching (optimal greedy) --- //
+        // For each system in topological order:
+        //   1. earliest_batch = max(batch_of_predecessor) + 1  (respect explicit ordering)
+        //   2. scan backwards from latest batch to earliest_batch for a compatible slot
+        //   3. if found → add there; otherwise open a new batch
+        // This maximises parallelism while preserving all dependency and access constraints.
         let mut dummy_configs: Vec<Option<SystemConfig>> = configs.into_iter().map(Some).collect();
         let mut batches: Vec<SystemBatch> = Vec::new();
+        let mut system_batch = vec![0usize; count];
 
         for &idx in &sorted_indices {
             let config = dummy_configs[idx].take().unwrap();
-            let mut placed = false;
 
-            if let Some(current_batch) = batches.last_mut() {
-                if current_batch.is_compatible(&*config.system, &config.added_info) {
-                    placed = true;
-                }
-            }
+            let earliest = predecessors[idx]
+                .iter()
+                .map(|&pred| system_batch[pred] + 1)
+                .max()
+                .unwrap_or(0);
 
-            if placed {
-                batches
-                    .last_mut()
-                    .unwrap()
-                    .add_system(config.system, config.added_info);
+            // Scan backwards from the latest existing batch to `earliest`.
+            let placed = (earliest..batches.len())
+                .rev()
+                .find(|&bidx| batches[bidx].is_compatible(&*config.system, &config.added_info));
+
+            let batch_idx = if let Some(bidx) = placed {
+                batches[bidx].add_system(config.system, config.added_info);
+                bidx
             } else {
+                let new_idx = batches.len();
                 let mut new_batch = SystemBatch::new();
                 new_batch.add_system(config.system, config.added_info);
                 batches.push(new_batch);
-            }
+                new_idx
+            };
+
+            system_batch[idx] = batch_idx;
         }
 
         self.batches = batches;
@@ -598,11 +618,12 @@ impl Schedule {
                 system.run(world, dt);
             });
 
-            // Her batch bitiminde CommandQueue (eklenen entity'leri) çalıştır
-            let queue_opt = world
+            // Flush deferred entity mutations between batches.
+            let queue_clone = world
                 .get_resource::<crate::commands::CommandQueue>()
+                .filter(|q| !q.is_empty())
                 .map(|q| (*q).clone());
-            if let Some(queue) = queue_opt {
+            if let Some(queue) = queue_clone {
                 queue.apply(world);
             }
         }

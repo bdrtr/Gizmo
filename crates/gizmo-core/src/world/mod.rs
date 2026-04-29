@@ -122,7 +122,7 @@ impl World {
 
     pub fn spawn(&mut self) -> Entity {
         let entity = {
-            let entities = self.get_resource::<Entities>().unwrap();
+            let entities = self.get_resource::<Entities>().expect("Entities resource not initialized");
             entities.reserve_entity()
         };
 
@@ -152,8 +152,8 @@ impl World {
     // Eski A3 bridge ve rebuild metodları silindi (Archetype artık authoritative).
 
     pub fn get_entity(&self, id: u32) -> Option<Entity> {
-        let entities = self.get_resource::<Entities>().unwrap();
-        let state = entities.state.lock().unwrap();
+        let entities = self.get_resource::<Entities>().expect("Entities resource not initialized");
+        let state = entities.state.lock().expect("Entities mutex poisoned");
         if (id as usize) < state.generations.len() && !state.free_set.contains(&id) {
             return Some(Entity::new(id, state.generations[id as usize]));
         }
@@ -180,7 +180,7 @@ impl World {
         let mut new_eids = Vec::with_capacity(count);
 
         {
-            let entities_res = self.get_resource::<Entities>().unwrap();
+            let entities_res = self.get_resource::<Entities>().expect("Entities resource not initialized");
             for _ in 0..count {
                 let e = entities_res.reserve_entity();
                 new_eids.push(e.id());
@@ -267,7 +267,7 @@ impl World {
             }
 
             {
-                let entities = self.get_resource::<Entities>().unwrap();
+                let entities = self.get_resource::<Entities>().expect("Entities resource not initialized");
                 entities.free(e);
             }
 
@@ -296,8 +296,8 @@ impl World {
         self.entities_to_despawn.shrink_to_fit();
         self.entity_locations.shrink_to_fit();
 
-        let entities = self.get_resource::<Entities>().unwrap();
-        let mut state = entities.state.lock().unwrap();
+        let entities = self.get_resource::<Entities>().expect("Entities resource not initialized");
+        let mut state = entities.state.lock().expect("Entities mutex poisoned");
         state.generations.shrink_to_fit();
         state.free_ids.shrink_to_fit();
         state.free_set.shrink_to_fit();
@@ -312,8 +312,8 @@ impl World {
     /// Yaşayan (despawn olmamış) tüm Entity'leri döndüren iterator.
     /// Uyarı: İterasyon boyunca Entities mutex kilidi tutulur!
     pub fn iter_alive_entities(&self) -> Vec<Entity> {
-        let entities = self.get_resource::<Entities>().unwrap();
-        let state = entities.state.lock().unwrap();
+        let entities = self.get_resource::<Entities>().expect("Entities resource not initialized");
+        let state = entities.state.lock().expect("Entities mutex poisoned");
         let mut alive = Vec::new();
         for id in 0..state.next_entity_id {
             if !state.free_set.contains(&id) {
@@ -325,7 +325,7 @@ impl World {
 
     #[inline]
     pub fn is_alive(&self, entity: Entity) -> bool {
-        self.get_resource::<Entities>().unwrap().is_alive(entity)
+        self.get_resource::<Entities>().expect("Entities resource not initialized").is_alive(entity)
     }
 
     /// Sisteme component ekleme — Veriyi archetype sütununa taşır.
@@ -339,17 +339,22 @@ impl World {
         let type_id = TypeId::of::<T>();
 
         // 1. Hedef archetype'ı belirle
-        let target_arch_id = self
+        let target_arch_id = match self
             .archetype_index
             .get_add_component_target(eid, type_id, &self.component_infos)
-            .unwrap();
+        {
+            Some(id) => id,
+            None => return,
+        };
         let old_loc = self.entity_locations[eid as usize];
 
         if old_loc.archetype_id == target_arch_id as u32 {
             // Zaten bu archetype'ta (aynı tip tekrar eklenmiş olabilir) — sadece üzerine yaz
             {
                 let arch = &self.archetype_index.archetypes[target_arch_id];
-                let mut col = arch.get_column_mut(type_id).unwrap();
+                let mut col = arch
+                    .get_column_mut(type_id)
+                    .expect("component column missing in current archetype");
                 unsafe {
                     let ptr = col.get_ptr(old_loc.row as usize) as *mut T;
                     *ptr = component;
@@ -555,8 +560,8 @@ impl World {
     /// Toplam yaşayan entity sayısı
     #[inline]
     pub fn entity_count(&self) -> u32 {
-        let entities = self.get_resource::<Entities>().unwrap();
-        let state = entities.state.lock().unwrap();
+        let entities = self.get_resource::<Entities>().expect("Entities resource not initialized");
+        let state = entities.state.lock().expect("Entities mutex poisoned");
         state
             .next_entity_id
             .saturating_sub(state.free_ids.len() as u32)
@@ -629,8 +634,8 @@ impl World {
             .entry(type_id)
             .or_insert_with(|| RwLock::new(Box::new(T::default())));
 
-        let storage = self.resources.get(&type_id).unwrap();
-        let guard = storage.write().unwrap();
+        let storage = self.resources.get(&type_id).expect("resource just inserted");
+        let guard = storage.write().expect("resource write lock poisoned");
         ResourceWriteGuard {
             guard,
             _marker: PhantomData,

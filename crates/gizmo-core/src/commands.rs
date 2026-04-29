@@ -27,6 +27,10 @@ impl CommandQueue {
         self.queue.push(Box::new(command));
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+
     pub fn apply(&self, world: &mut World) {
         while let Some(command) = self.queue.pop() {
             command(world);

@@ -174,7 +174,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Cradl
     );
     world.add_component(ground, MeshRenderer::new());
     world.add_component(ground, RigidBody::new_static());
-    world.add_component(ground, Collider::new_aabb(100.0, 0.05, 100.0));
+    world.add_component(ground, Collider::box_collider(Vec3::new(100.0, 0.05, 100.0)));
 
     let sun = world.spawn();
     world.add_component(
@@ -274,7 +274,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Cradl
         rb.calculate_sphere_inertia(BALL_RADIUS);
         world.add_component(ball, rb);
         world.add_component(ball, Velocity::new(Vec3::ZERO));
-        world.add_component(ball, Collider::new_sphere(BALL_RADIUS));
+        world.add_component(ball, Collider::sphere(BALL_RADIUS));
         world.add_component(ball, EntityName(format!("Ball_{}", i)));
 
         game.ball_ids.push(ball.id());

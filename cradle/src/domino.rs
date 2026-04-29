@@ -146,11 +146,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
     world.add_component(ground, RigidBody::new_static());
     world.add_component(
         ground,
-        Collider {
-            shape: ColliderShape::Aabb(Aabb {
-                half_extents: Vec3::new(100.0, 0.5, 120.0),
-            }),
-        },
+        Collider::box_collider(Vec3::new(100.0, 0.5, 120.0)),
     );
 
     // Işık
@@ -195,11 +191,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
         world.add_component(domino, rb);
         world.add_component(
             domino,
-            Collider {
-                shape: ColliderShape::Aabb(Aabb {
-                    half_extents: Vec3::new(dx, dy, dz),
-                }),
-            },
+            Collider::box_collider(Vec3::new(dx, dy, dz)),
         );
         world.add_component(domino, Velocity::new(Vec3::ZERO));
     }
@@ -226,9 +218,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
     world.add_component(heavy_ball, ball_rb);
     world.add_component(
         heavy_ball,
-        Collider {
-            shape: ColliderShape::Sphere(Sphere { radius: 0.5 }),
-        },
+        Collider::sphere(0.5),
     );
     world.add_component(heavy_ball, Velocity::new(Vec3::new(0.0, 0.0, 25.0)));
 

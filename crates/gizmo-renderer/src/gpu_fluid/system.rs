@@ -186,7 +186,9 @@ impl GpuFluidSystem {
                 position: [0.0; 3],
                 radius: 0.0,
                 velocity: [0.0; 3],
-                padding: 0.0
+                shape_type: 0,
+                half_extents: [0.0; 3],
+                _pad: 0.0,
             };
             MAX_FLUID_COLLIDERS
         ];
@@ -449,6 +451,19 @@ impl GpuFluidSystem {
             opaque_bg_texture,
             opaque_bg_texture_view,
         }
+    }
+
+    pub fn update_colliders_count(&self, queue: &wgpu::Queue, count: u32) {
+        // num_colliders offset is 108:
+        // params layout:
+        // dt(0), gravity(4), rest_density(8), gas_constant(12), viscosity(16), mass(20), smoothing_radius(24), num_particles(28)
+        // grid_size_x(32), grid_size_y(36), grid_size_z(40), cell_size(44)
+        // bounds_min(48,52,56), padding1(60)
+        // bounds_max(64,68,72), padding2(76)
+        // mouse_pos(80,84,88), mouse_active(92)
+        // mouse_dir(96,100,104), mouse_radius(108)
+        // num_colliders(112)
+        queue.write_buffer(&self.params_buffer, 112, bytemuck::cast_slice(&[count]));
     }
 
     pub fn update_parameters(

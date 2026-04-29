@@ -1,5 +1,9 @@
 use std::sync::Arc;
 
+pub use crate::animation_state_machine::{
+    ActiveBlend, AnimationState, AnimationStateMachine, AnimationTransition,
+};
+
 #[derive(Clone)]
 pub struct Skeleton {
     pub bind_group: Arc<wgpu::BindGroup>,

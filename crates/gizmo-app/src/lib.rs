@@ -480,6 +480,151 @@ impl<State: 'static> App<State> {
                                 }
                             }
 
+                            // --- EDITOR SCENE REQUESTS ---
+                            // 1. Poll the file-dialog channel and promote result to save/load request.
+                            let maybe_dialog_result = {
+                                let mut st =
+                                    self.world.get_resource_mut::<gizmo_editor::EditorState>();
+                                if let Some(ref mut ed) = st {
+                                    if let Some(rx_mutex) = ed.pending_dialog_rx.take() {
+                                        match rx_mutex.into_inner() {
+                                            Ok(rx) => match rx.try_recv() {
+                                                Ok((is_save, Some(path))) => {
+                                                    Some((is_save, Some(path)))
+                                                }
+                                                Ok((_, None)) => None, // dialog dismissed
+                                                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                                                    // still waiting — put it back
+                                                    ed.pending_dialog_rx =
+                                                        Some(std::sync::Mutex::new(rx));
+                                                    None
+                                                }
+                                                Err(_) => None,
+                                            },
+                                            Err(_) => None,
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            };
+                            if let Some((is_save, Some(path))) = maybe_dialog_result {
+                                if let Some(mut ed) =
+                                    self.world.get_resource_mut::<gizmo_editor::EditorState>()
+                                {
+                                    ed.scene_path = path.clone();
+                                    if is_save {
+                                        ed.scene.save_request = Some(path);
+                                    } else {
+                                        ed.scene.load_request = Some(path);
+                                    }
+                                }
+                            }
+
+                            // 2. Extract requests before borrowing world mutably.
+                            let (save_req, load_req, clear_req) = {
+                                if let Some(mut ed) =
+                                    self.world.get_resource_mut::<gizmo_editor::EditorState>()
+                                {
+                                    (
+                                        ed.scene.save_request.take(),
+                                        ed.scene.load_request.take(),
+                                        std::mem::replace(&mut ed.scene.clear_request, false),
+                                    )
+                                } else {
+                                    (None, None, false)
+                                }
+                            };
+
+                            // 3. Save
+                            if let Some(ref path) = save_req {
+                                let registry = gizmo_scene::registry::SceneRegistry::default();
+                                match gizmo_scene::scene::SceneData::save(
+                                    &self.world,
+                                    path,
+                                    &registry,
+                                ) {
+                                    Ok(()) => {
+                                        if let Some(mut ed) = self
+                                            .world
+                                            .get_resource_mut::<gizmo_editor::EditorState>()
+                                        {
+                                            ed.has_unsaved_changes = false;
+                                            ed.status_message =
+                                                format!("Kaydedildi: {}", path);
+                                        }
+                                    }
+                                    Err(e) => eprintln!("[App] Sahne kayıt hatası: {}", e),
+                                }
+                            }
+
+                            // 4. Clear + Load
+                            if clear_req || load_req.is_some() {
+                                let editor_entities: std::collections::HashSet<u32> = {
+                                    let names =
+                                        self.world.borrow::<gizmo_core::EntityName>();
+                                    names
+                                        .iter()
+                                        .filter_map(|(id, _)| {
+                                            names.get(id).and_then(|n| {
+                                                if n.0.starts_with("Editor ")
+                                                    || n.0 == "Highlight Box"
+                                                {
+                                                    Some(id)
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                        })
+                                        .collect()
+                                };
+                                let to_despawn: Vec<_> = self
+                                    .world
+                                    .iter_alive_entities()
+                                    .into_iter()
+                                    .filter(|e| !editor_entities.contains(&e.id()))
+                                    .collect();
+                                for e in to_despawn {
+                                    self.world.despawn(e);
+                                }
+                            }
+                            if let Some(ref path) = load_req {
+                                if let Some(mut asset_manager) = self
+                                    .world
+                                    .remove_resource::<gizmo_renderer::asset::AssetManager>()
+                                {
+                                    let dummy_rgba = [255u8, 255, 255, 255];
+                                    let dummy_bg =
+                                        renderer.create_texture(&dummy_rgba, 1, 1);
+                                    let registry =
+                                        gizmo_scene::registry::SceneRegistry::default();
+                                    let ok = gizmo_scene::scene::SceneData::load_into(
+                                        path,
+                                        &mut self.world,
+                                        &renderer.device,
+                                        &renderer.queue,
+                                        &renderer.scene.texture_bind_group_layout,
+                                        &mut asset_manager,
+                                        Arc::new(dummy_bg),
+                                        &registry,
+                                    );
+                                    self.world.insert_resource(asset_manager);
+                                    if let Some(mut ed) = self
+                                        .world
+                                        .get_resource_mut::<gizmo_editor::EditorState>()
+                                    {
+                                        ed.status_message = if ok {
+                                            format!("Yüklendi: {}", path)
+                                        } else {
+                                            format!("Sahne yüklenemedi: {}", path)
+                                        };
+                                        ed.has_unsaved_changes = false;
+                                    }
+                                }
+                            }
+
                             // ECS Sistemlerini Çalıştırmadan önce DI için Core Resource'ları Güncelle
                             self.world.insert_resource(self.input.clone());
                             {

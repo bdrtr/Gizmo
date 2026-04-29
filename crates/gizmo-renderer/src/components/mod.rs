@@ -19,6 +19,7 @@ gizmo_core::impl_component!(
     Material,
     Skeleton,
     AnimationPlayer,
+    AnimationStateMachine,
     MeshRenderer,
     Camera,
     Sprite,
