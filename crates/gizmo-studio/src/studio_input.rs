@@ -191,7 +191,7 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
 
                 let mut base_extents = Vec3::ONE;
                 if let Some(c) = &selected_col {
-                    base_extents = c.compute_aabb(selected_pos, selected_rot).half_extents() * selected_scale;
+                    base_extents = (c.compute_aabb(selected_pos, selected_rot).half_extents() * gizmo::math::Vec3A::from(selected_scale)).into();
                 }
 
                 hb.scale = base_extents * 1.05; // Çerçeveyi tam objenin collision AABB bounds'una sığdır
