@@ -38,7 +38,7 @@ pub struct Raycast;
 impl Raycast {
     /// Test ray against AABB
     pub fn ray_aabb(ray: &Ray, aabb: &Aabb) -> Option<f32> {
-        let mut tmin = 0.0;
+        let mut tmin: f32 = 0.0;
         let mut tmax = f32::INFINITY;
 
         for i in 0..3 {
