@@ -1,5 +1,5 @@
-use crate::broadphase::Aabb;
-use crate::components::{BoxShape, CapsuleShape, ColliderShape, SphereShape, Transform};
+use crate::components::{ColliderShape, Transform};
+use gizmo_math::Aabb;
 use gizmo_core::entity::Entity;
 use gizmo_math::Vec3;
 

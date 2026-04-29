@@ -283,21 +283,21 @@ impl JointSolver {
                     continue;
                 }
 
-                match &mut joint.data {
-                    JointData::Fixed => {
+                match joint.joint_type {
+                    JointType::Fixed => {
                         self.solve_fixed_joint(joint, bodies, idx_a, idx_b, dt);
                     }
-                    JointData::Hinge(data) => {
-                        self.solve_hinge_joint(joint, data, bodies, idx_a, idx_b, dt);
+                    JointType::Hinge => {
+                        self.solve_hinge_joint(joint, bodies, idx_a, idx_b, dt);
                     }
-                    JointData::BallSocket(data) => {
-                        self.solve_ball_socket_joint(joint, data, bodies, idx_a, idx_b, dt);
+                    JointType::BallSocket => {
+                        self.solve_ball_socket_joint(joint, bodies, idx_a, idx_b, dt);
                     }
-                    JointData::Slider(data) => {
-                        self.solve_slider_joint(joint, data, bodies, idx_a, idx_b, dt);
+                    JointType::Slider => {
+                        self.solve_slider_joint(joint, bodies, idx_a, idx_b, dt);
                     }
-                    JointData::Spring(data) => {
-                        self.solve_spring_joint(joint, data, bodies, idx_a, idx_b, dt);
+                    JointType::Spring => {
+                        self.solve_spring_joint(joint, bodies, idx_a, idx_b, dt);
                     }
                 }
             }
@@ -389,7 +389,6 @@ impl JointSolver {
     fn solve_hinge_joint(
         &self,
         joint: &mut Joint,
-        data: &mut HingeJointData,
         bodies: &mut [(RigidBody, Transform, Velocity)],
         idx_a: usize,
         idx_b: usize,
@@ -398,27 +397,27 @@ impl JointSolver {
         // First solve position constraint (like fixed joint)
         self.solve_fixed_joint(joint, bodies, idx_a, idx_b, dt);
 
-        // Extract data before mutable borrows
-        let axis_world = bodies[idx_a].1.rotation * data.axis;
-        let ref_a = bodies[idx_a].1.rotation * Vec3::X;
-        let ref_b = bodies[idx_b].1.rotation * Vec3::X;
+        // Extract hinge data
+        if let JointData::Hinge(ref mut data) = joint.data {
+            let axis_world = bodies[idx_a].1.rotation * data.axis;
+            let ref_a = bodies[idx_a].1.rotation * Vec3::X;
+            let ref_b = bodies[idx_b].1.rotation * Vec3::X;
 
-        let projected_a = (ref_a - axis_world * ref_a.dot(axis_world)).normalize();
-        let projected_b = (ref_b - axis_world * ref_b.dot(axis_world)).normalize();
-        
-        data.current_angle = projected_a.dot(projected_b).acos();
-        if projected_a.cross(projected_b).dot(axis_world) < 0.0 {
-            data.current_angle = -data.current_angle;
+            let projected_a = (ref_a - axis_world * ref_a.dot(axis_world)).normalize();
+            let projected_b = (ref_b - axis_world * ref_b.dot(axis_world)).normalize();
+            
+            data.current_angle = projected_a.dot(projected_b).acos();
+            if projected_a.cross(projected_b).dot(axis_world) < 0.0 {
+                data.current_angle = -data.current_angle;
+            }
         }
 
-        // Apply angle limits (simplified - just position constraint for now)
         // TODO: Implement full angle limits and motor
     }
 
     fn solve_ball_socket_joint(
         &self,
         joint: &mut Joint,
-        _data: &BallSocketJointData,
         bodies: &mut [(RigidBody, Transform, Velocity)],
         idx_a: usize,
         idx_b: usize,
@@ -432,26 +431,29 @@ impl JointSolver {
 
     fn solve_slider_joint(
         &self,
-        _joint: &mut Joint,
-        _data: &mut SliderJointData,
-        _bodies: &mut [(RigidBody, Transform, Velocity)],
-        _idx_a: usize,
-        _idx_b: usize,
-        _dt: f32,
+        joint: &mut Joint,
+        bodies: &mut [(RigidBody, Transform, Velocity)],
+        idx_a: usize,
+        idx_b: usize,
+        dt: f32,
     ) {
-        // TODO: Implement slider joint solver
+        // For now, just solve as fixed joint
+        self.solve_fixed_joint(joint, bodies, idx_a, idx_b, dt);
+        // TODO: Implement slider joint solver properly
     }
 
     fn solve_spring_joint(
         &self,
-        _joint: &Joint,
-        _data: &SpringJointData,
-        _bodies: &mut [(RigidBody, Transform, Velocity)],
-        _idx_a: usize,
-        _idx_b: usize,
-        _dt: f32,
+        joint: &Joint,
+        bodies: &mut [(RigidBody, Transform, Velocity)],
+        idx_a: usize,
+        idx_b: usize,
+        dt: f32,
     ) {
-        // TODO: Implement spring joint solver
+        // Clone joint to avoid borrow issues
+        let mut joint_copy = joint.clone();
+        self.solve_fixed_joint(&mut joint_copy, bodies, idx_a, idx_b, dt);
+        // TODO: Implement spring joint solver properly
     }
 }
 
