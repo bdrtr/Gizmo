@@ -31,6 +31,8 @@ struct ShowcaseDemo {
     last_push_time: f32,
     request_force_push: bool,
     request_force_pull: bool,
+    request_grab: bool,
+    grabbed_object_id: std::cell::Cell<Option<usize>>,
     particle_spawn_rate: usize,
     particle_color_r: f32,
     particle_color_g: f32,
@@ -73,6 +75,8 @@ impl ShowcaseDemo {
             last_push_time: 0.0,
             request_force_push: false,
             request_force_pull: false,
+            request_grab: false,
+            grabbed_object_id: std::cell::Cell::new(None),
             particle_spawn_rate: 100,
             particle_color_r: 1.0,
             particle_color_g: 0.4,
@@ -473,6 +477,13 @@ fn main() {
                 state.request_force_pull = false;
             }
 
+            // Gravity Gun / Kavrama Mekaniği (E Tuşu)
+            if input.is_key_pressed(KeyCode::KeyE as u32) {
+                state.request_grab = true;
+            } else {
+                state.request_grab = false;
+            }
+
             let mut cams = world.borrow_mut::<Camera>();
             if let Some(c) = cams.get_mut(state.cam_id) {
                 c.yaw = state.cam_yaw;
@@ -535,6 +546,46 @@ fn main() {
                     ui.label(gizmo::egui::RichText::new("Fizik Motoru (GPU Physics)").strong());
                     ui.add(gizmo::egui::Slider::new(&mut state.gravity_y, -20.0..=20.0).text("Yerçekimi (Y)"));
                 });
+
+            // Ekranın ortasına crosshair (Hedef Göstergesi) çiz
+            let screen_rect = ctx.screen_rect();
+            let center = screen_rect.center();
+            
+            let painter = ctx.layer_painter(gizmo::egui::LayerId::new(
+                gizmo::egui::Order::Foreground,
+                gizmo::egui::Id::new("crosshair"),
+            ));
+            
+            let stroke = gizmo::egui::Stroke::new(1.5, gizmo::egui::Color32::from_rgba_unmultiplied(255, 255, 255, 200));
+            
+            // Merkez nokta
+            painter.circle_filled(center, 2.0, gizmo::egui::Color32::from_rgba_unmultiplied(255, 255, 255, 220));
+            painter.circle_stroke(center, 2.5, gizmo::egui::Stroke::new(1.0, gizmo::egui::Color32::BLACK));
+            
+            // Artı işaretleri
+            let size = 8.0;
+            let gap = 4.0;
+            
+            // Sol
+            painter.line_segment([
+                gizmo::egui::pos2(center.x - size - gap, center.y),
+                gizmo::egui::pos2(center.x - gap, center.y),
+            ], stroke);
+            // Sağ
+            painter.line_segment([
+                gizmo::egui::pos2(center.x + gap, center.y),
+                gizmo::egui::pos2(center.x + size + gap, center.y),
+            ], stroke);
+            // Üst
+            painter.line_segment([
+                gizmo::egui::pos2(center.x, center.y - size - gap),
+                gizmo::egui::pos2(center.x, center.y - gap),
+            ], stroke);
+            // Alt
+            painter.line_segment([
+                gizmo::egui::pos2(center.x, center.y + gap),
+                gizmo::egui::pos2(center.x, center.y + size + gap),
+            ], stroke);
         })
         .set_render(|world, state, encoder, view, renderer, _light_time| {
             // Post Processing Parametrelerini Güncelle
@@ -646,6 +697,79 @@ fn main() {
                         }
                     }
                 }
+
+                // Kavrama (Grabbing / Gravity Gun) Uygula
+                let mut new_grabbed_id = state.grabbed_object_id.get();
+                
+                if state.request_grab {
+                    let fx = state.cam_yaw.cos() * state.cam_pitch.cos();
+                    let fy = state.cam_pitch.sin();
+                    let fz = state.cam_yaw.sin() * state.cam_pitch.cos();
+                    let fwd = Vec3::new(fx, fy, fz).normalize();
+                    let target_pos = state.cam_pos + fwd * 4.0; // Tutulan obje kameranın önünde duracak
+
+                    if let Some(gpu_data) = physics.poll_readback_data(&renderer.device) {
+                        
+                        // Henüz bir şey tutulmuyorsa, nişangahtaki (çok dar bir koni) en yakın objeyi bul
+                        if state.grabbed_object_id.get().is_none() {
+                            let mut closest_idx = None;
+                            let mut min_dist = 25.0; // Maksimum tutma mesafesi (25 metre)
+                            
+                            for (idx, box_data) in gpu_data.iter().enumerate() {
+                                let pos = Vec3::new(box_data.position[0], box_data.position[1], box_data.position[2]);
+                                let to_obj_dir = pos - state.cam_pos;
+                                let dist = to_obj_dir.length();
+                                
+                                if dist > 0.1 && dist < min_dist {
+                                    // Çok dar bir açı, sadece crosshair'in tam üzerinde olanlar (0.98 çok keskin bir açıdır)
+                                    if to_obj_dir.normalize().dot(fwd) > 0.98 {
+                                        min_dist = dist;
+                                        closest_idx = Some(idx);
+                                    }
+                                }
+                            }
+                            new_grabbed_id = closest_idx;
+                        }
+
+                        // Eğer elimizde bir obje varsa, onu target_pos'a kilitle
+                        if let Some(idx) = new_grabbed_id {
+                            if idx < gpu_data.len() {
+                                let mut box_data = gpu_data[idx].clone();
+                                let pos = Vec3::new(box_data.position[0], box_data.position[1], box_data.position[2]);
+                                
+                                let dir_to_target = target_pos - pos;
+                                let dist = dir_to_target.length();
+                                
+                                // Çok uzaktaysa (duvar arkasına sıkıştıysa vs) bağlantıyı kopar
+                                if dist > 15.0 {
+                                    new_grabbed_id = None;
+                                } else {
+                                    // Hedefe sıkıca çek
+                                    box_data.velocity[0] = dir_to_target.x * 12.0;
+                                    box_data.velocity[1] = dir_to_target.y * 12.0 + 9.81; // Yerçekimini kesinlikle nötrle
+                                    box_data.velocity[2] = dir_to_target.z * 12.0;
+                                    
+                                    // Dönmesini sönümleyerek elde stabil tut
+                                    box_data.angular_velocity[0] *= 0.8;
+                                    box_data.angular_velocity[1] *= 0.8;
+                                    box_data.angular_velocity[2] *= 0.8;
+                                    
+                                    box_data.sleep_counter = 0;
+                                    box_data.state = 0; // Uyandır
+                                    
+                                    physics.update_box(&renderer.queue, idx as u32, &box_data);
+                                }
+                            } else {
+                                new_grabbed_id = None;
+                            }
+                        }
+                    }
+                } else {
+                    // E tuşu bırakıldığında objeyi düşür
+                    new_grabbed_id = None;
+                }
+                
+                state.grabbed_object_id.set(new_grabbed_id);
             }
             gizmo::default_systems::gpu_physics_submit_system(world, renderer);
             gizmo::default_systems::gpu_physics_readback_system(world, renderer);
