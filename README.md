@@ -43,6 +43,11 @@ Sahneyi gerçek zamanlı denetlemek için oyuna gömülü (In-Game) çalışan U
 * Pozisyon, rotasyon ve özellikleri anlık olarak değiştirebileceğiniz Inspector.
 * Sürükle-bırak destekli "Prefab" sistemi ve sahne yönetim hiyerarşisi.
 
+### 🏗️ Aşırı Modüler Kod Mimarisi
+Motorun iç yapısı tamamen decoupled (bağımsız) modüllere ayrılmıştır. 
+* Şişmiş (bloated) kod dosyaları yerine `transform.rs`, `collider.rs`, `rigid_body.rs` gibi tek sorumluluk prensibiyle (Single Responsibility Principle) ayrılmış bileşenler.
+* Render (`systems/render.rs`), Fizik (`systems/physics.rs`) ve Sıvı Simülasyonu (`systems/fluid.rs`) tamamen ayrı sistemler olarak birbirinden izole şekilde çalışır. Motor kodlarını okumak, değiştirmek ve modifiye etmek son derece kolaydır.
+
 ## 📊 Endüstri Standartları Teknik Değerlendirmesi
 Gizmo Engine'in güncel mimarisi, modern AAA teknolojilerine (Unreal, Unity, Bevy/Flecs) kıyasla değerlendirildiğinde motorun gücü ve geliştirilme yol haritası (roadmap) şu şekildedir:
 
@@ -56,10 +61,12 @@ Gizmo Engine'in güncel mimarisi, modern AAA teknolojilerine (Unreal, Unity, Bev
     * **System Dependency Graph:** Bileşen okuma/yazma gereksinimlerine göre sistemleri (`System`) otomatik paralelleştiren Yönlü Döngüsüz Grafik (DAG) zamanlayıcısı.
     * **İlişkisel Archetype Hiyerarşisi:** Archetype dizilimlerinin Parent-Child hafıza kaydırmalarına entegre edilmesi.
 * **Fizik Motoru (4.0 / 5):** GJK/EPA dar fazı (narrow-phase), Broad-phase algoritması ve Gauss-Seidel Sıralı İmpuls (Sequential Impulse) mekaniği doğrudan PhysX standardıdır. Rayon ile O(1) Graph-Coloring CPU Threading desteği, XPBD Yumuşak Cisim (Kumaş/Jöle), Articulated Body (Featherstone) ve SPH Sıvı Mekaniği (Fluids) entegredir.
+  * **Tamamlanan Lüks Fizik Özellikleri:**
+    * **FEM (Finite Element Method) Tabanlı Yumuşak Cisimler:** Tetrahedral ağlarla örülü ve tam gerçekçi deformasyon/araba göçmesi simülasyonu (BeamNG stili). Gerçek zamanlı Neo-Hookean stres tensörü hesaplamaları.
+    * **GJK/EPA & Conservative Advancement:** Kusursuz dar-alan (narrow-phase) hesaplamaları ve Continuous Collision Detection (CCD) altyapısı.
   * **AAA Vizyonu (Gelecekte Eksik Kalanlar):**
     * **Tam Kapsamlı GPU Fizik Simülasyonu:** Milyonlarca objenin tamamen ekran kartında (Compute Shader) tünelleme sorunu çözülerek işlendiği mimariler.
     * **İleri Düzey Parçalanma (Voronoi Fracturing):** Gerçek zamanlı formüllü bina kırılmaları ve dinamik Convex Hull üretimi.
-    * **FEM tabanlı Yumuşak Cisim:** Tetrahredral ağlarla örülü ve tam gerçekçi araba göçmesi (BeamNG stili).
     * **Exact TOI (Gelişmiş CCD):** "Conservative Advancement" adı verilen, çarpışma yaşanacak salisenin tam bulunup simüle edilmesi.
     * **Araç Tekerlek Dinamikleri (Pacejka):** Kayma ve tutunma açısı grafikleri (Magic Formula / Brush Model).
     * **Mutlak Belirlenimcilik (Cross-Platform Determinism):** Multiplayer ağlar için tam lock-step garantili Float matematiği veya Fixed-Point entegrasyonu.
@@ -88,7 +95,7 @@ Motorun çekirdek yapısı sıfırdan geliştirilirken karşılaşılan kernel v
 Sistemin becerilerini test etmek, geniş bir haritada aracı sürmek ve devasa fizik simülasyonunu görmek için:
 
 ```bash
-cargo run --release --bin demo
+cargo run --release --bin showcase
 ```
 
 > **Önemli Not:** Sistem on binlerce objenin fizik ve kaba eleme (Broad-Phase) hesaplamasını tek saniyede çözmek üzerine optimize edildiği için `--release` profili haricinde derlenmesi performans düşüklüğüne (Darboğaz) yol açacaktır! Mutlaka release build kullanın.

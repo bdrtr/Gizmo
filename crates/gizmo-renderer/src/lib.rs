@@ -18,7 +18,7 @@
 //! `visible_in_frustum` transforms it by the instance model matrix and tests against the six planes.
 //! This pairs with batched `draw(vertex_range, instance_start..instance_end)` so culled instances
 //! are never written to the instance buffer. The `demo`, `gizmo-studio`, and
-//! `gizmo::default_systems::default_render_pass` pipelines already apply this pattern.
+//! `gizmo::systems::default_render_pass` pipelines already apply this pattern.
 //!
 //! Implementation: [`frustum_cull`] re-exports [`Frustum`] and helpers from `gizmo-math`.
 

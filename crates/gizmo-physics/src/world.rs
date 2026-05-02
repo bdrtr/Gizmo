@@ -597,7 +597,7 @@ mod tests {
 
         // Simulate for 1 second
         for _ in 0..60 {
-            world.step(&mut bodies, 1.0 / 60.0);
+            world.step(&mut bodies, &mut [], 1.0 / 60.0);
         }
 
         // Object should have fallen due to gravity
