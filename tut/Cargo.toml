@@ -2,11 +2,14 @@
 name = "tut"
 version.workspace = true
 edition.workspace = true
+default-run = "test_sandbox"
 
 [dependencies]
 gizmo = { path = "../crates/gizmo", features = ["audio", "scripting", "scene"] }
 pollster = "0.3"
+rand = "0.8"
 winit = { workspace = true }
+bytemuck = "1.14"
 
 [[bin]]
 name = "gpu_demo"

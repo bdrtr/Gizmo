@@ -30,6 +30,7 @@ pub fn build_post_process_resources(
     surface_format: wgpu::TextureFormat,
     width: u32,
     height: u32,
+    depth_view: &wgpu::TextureView,
 ) -> PostProcessState {
     let post_shader = {
         let source = std::fs::read_to_string("demo/assets/shaders/post_process.wgsl")
@@ -98,6 +99,16 @@ pub fn build_post_process_resources(
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Depth,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -109,6 +120,10 @@ pub fn build_post_process_resources(
             exposure: 1.0,
             chromatic_aberration: 0.0,
             vignette_intensity: 0.0,
+            film_grain_intensity: 0.0,
+            dof_focus_dist: 10.0,
+            dof_focus_range: 20.0,
+            dof_blur_size: 4.0,
             _padding: [0.0; 3],
         }]),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -165,6 +180,7 @@ pub fn build_post_process_resources(
         &post_sampler,
         width,
         height,
+        depth_view,
     );
 
     let (blur_params_buffer, blur_h_bind_group, blur_v_bind_group) =
@@ -345,6 +361,7 @@ pub fn create_post_textures(
     sampler: &wgpu::Sampler,
     width: u32,
     height: u32,
+    depth_view: &wgpu::TextureView,
 ) -> (
     wgpu::Texture,
     wgpu::TextureView,
@@ -399,11 +416,15 @@ pub fn create_post_textures(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::TextureView(&bb_v),
+                resource: wgpu::BindingResource::TextureView(&be_v),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(depth_view),
             },
         ],
         label: Some("composite_bloom_bind_group"),
@@ -534,7 +555,7 @@ pub fn run_post_processing(
         });
         pass.set_pipeline(&renderer.post.composite_pipeline);
         pass.set_bind_group(0, &renderer.post.hdr_bind_group, &[]);
-        pass.set_bind_group(1, &renderer.post.bloom_extract_bind_group, &[]);
+        pass.set_bind_group(1, &renderer.post.composite_bloom_bind_group, &[]);
         pass.set_bind_group(2, &renderer.post.post_params_bind_group, &[]);
         pass.draw(0..3, 0..1);
     }

@@ -156,8 +156,10 @@ fn main() {
             if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
                 gizmos.draw_box(Vec3::new(-2.0, 0.0, -2.0), Vec3::new(2.0, 10.0, 2.0), [0.2, 0.6, 1.0, 0.5]);
             }
+            
+            gizmo::default_systems::physics_debug_system(world);
         })
-        .set_render(|world, state, encoder, view, renderer, _light_time| {
+        .set_render(|world, _state, encoder, view, renderer, _light_time| {
             // 1. Fizik Gönderimi (Broadphase, Narrowphase)
             gizmo::default_systems::gpu_physics_submit_system(world, renderer);
             

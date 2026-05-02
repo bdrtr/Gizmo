@@ -695,6 +695,9 @@ impl<State: 'static> App<State> {
                                 update_hk(&mut self.world, &mut state, dt, &self.input);
                             }
 
+                            // Update sonrası olası ertelenmiş komutları (CommandQueue) hemen işle
+                            self.world.apply_commands();
+
                             // Olayları Güncelle (Çift-buffer temizliği)
                             for updater in &mut self.event_updaters {
                                 updater(&mut self.world);

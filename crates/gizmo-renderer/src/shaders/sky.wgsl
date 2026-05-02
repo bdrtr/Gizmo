@@ -96,9 +96,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let view_dir = normalize(in.world_pos - scene.camera_pos.xyz);
     
     // 2. Çok Şık Atmosferik Gradyan (Zenith ve Horizon)
-    let zenith_color = vec3<f32>(0.08, 0.25, 0.6); // Koyu lacivert/mavi tepe noktası
-    let horizon_color = vec3<f32>(0.5, 0.7, 0.9) * in.inst_albedo.rgb; // Daha açık ufuk rengi
-    let ground_color = vec3<f32>(0.2, 0.2, 0.2); // Zemin rengi
+    // Gökyüzü rengini güneşin rengiyle harmanla (Gün doğumu, öğle, gece efektleri için)
+    let zenith_color = vec3<f32>(0.08, 0.25, 0.6) * scene.sun_color.rgb * scene.sun_color.w; // Koyu lacivert/mavi tepe noktası
+    let horizon_color = vec3<f32>(0.5, 0.7, 0.9) * scene.sun_color.rgb * scene.sun_color.w; // Daha açık ufuk rengi
+    let ground_color = vec3<f32>(0.2, 0.2, 0.2) * scene.sun_color.rgb * scene.sun_color.w; // Zemin rengi
     
     // Y eksenindeki durum (yukarı/aşağı)
     let y = view_dir.y; // -1 (Aşağı) ile 1 (Yukarı)

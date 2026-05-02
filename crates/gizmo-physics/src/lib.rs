@@ -8,10 +8,17 @@ pub mod narrowphase;
 pub mod raycast;
 pub mod solver;
 pub mod shape;
+pub mod soft_body; // <--- ADDED FEM SOFT BODY
 pub mod world;
+pub mod system;
+pub mod gpu_compute;
+pub mod bvh;
+pub mod vehicle;
+pub mod character;
 
 pub use broadphase::SpatialHash;
 pub use gizmo_math::Aabb;
+pub use soft_body::*; // <--- ADDED FEM SOFT BODY
 pub use collision::{
     CollisionEvent, CollisionEventType, ContactManifold, ContactPoint, TriggerEvent,
 };
@@ -24,9 +31,12 @@ pub use narrowphase::{Gjk, NarrowPhase};
 pub use raycast::{Ray, Raycast, RaycastHit};
 pub use solver::ConstraintSolver;
 pub use world::PhysicsWorld;
+pub use system::{physics_step_system, physics_fracture_system, physics_explosion_system};
+pub use gpu_compute::*;
 pub use components::{
-    BodyType, BoxShape, Breakable, CapsuleShape, Collider, ColliderShape, CollisionLayer,
-    PhysicsMaterial, PlaneShape, RigidBody, SphereShape, Transform, Velocity,
+    BodyType, BoxShape, Breakable, CapsuleShape, CharacterController, Collider, ColliderShape, CollisionLayer,
+    ConvexHullShape, PhysicsMaterial, PlaneShape, RigidBody, SphereShape, Transform, TriMeshShape,
+    Velocity, Explosion
 };
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]

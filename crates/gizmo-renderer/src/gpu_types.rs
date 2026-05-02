@@ -11,6 +11,19 @@ pub struct Vertex {
     pub joint_weights: [f32; 4],
 }
 
+impl Default for Vertex {
+    fn default() -> Self {
+        Self {
+            position: [0.0; 3],
+            color: [1.0; 3],
+            normal: [0.0, 1.0, 0.0],
+            tex_coords: [0.0; 2],
+            joint_indices: [0; 4],
+            joint_weights: [0.0; 4],
+        }
+    }
+}
+
 impl Vertex {
     pub fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
         wgpu::VertexBufferLayout {
@@ -70,6 +83,10 @@ pub struct PostProcessUniforms {
     pub exposure: f32,
     pub chromatic_aberration: f32,
     pub vignette_intensity: f32,
+    pub film_grain_intensity: f32,
+    pub dof_focus_dist: f32,
+    pub dof_focus_range: f32,
+    pub dof_blur_size: f32,
     pub _padding: [f32; 3],
 }
 

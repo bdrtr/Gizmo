@@ -635,3 +635,180 @@ impl Default for Schedule {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    // --- Mock Bileşen ve Kaynaklar ---
+    struct CompA;
+    struct CompB;
+    struct ResA;
+
+    // Testlerin çalışma sırasını takip etmek için kullanacağımız log
+    #[derive(Clone)]
+    struct RunLog {
+        log: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl RunLog {
+        fn new() -> Self {
+            Self {
+                log: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+        fn push(&self, msg: &'static str) {
+            self.log.lock().unwrap().push(msg);
+        }
+        fn get(&self) -> Vec<&'static str> {
+            self.log.lock().unwrap().clone()
+        }
+    }
+
+    // Basit bir test sistemi oluşturucu
+    fn create_system(name: &'static str, log: RunLog) -> impl FnMut() + Send + Sync + 'static {
+        move || {
+            log.push(name);
+        }
+    }
+
+    #[test]
+    fn test_schedule_access_info_compatibility() {
+        let mut info1 = AccessInfo::new();
+        info1.component_reads.push(TypeId::of::<CompA>());
+        
+        let mut info2 = AccessInfo::new();
+        info2.component_reads.push(TypeId::of::<CompA>());
+
+        // İki sistem de sadece OKUYOR, birbiriyle uyumlu (parallel çalışabilir)
+        assert!(info1.is_compatible_with(&info2));
+
+        let mut info3 = AccessInfo::new();
+        info3.component_writes.push(TypeId::of::<CompA>());
+
+        // Biri okuyor diğeri YAZIYOR, uyumsuz (farklı batch'lerde olmalı)
+        assert!(!info1.is_compatible_with(&info3));
+        
+        // İkisi de YAZIYOR, uyumsuz
+        let mut info4 = AccessInfo::new();
+        info4.component_writes.push(TypeId::of::<CompA>());
+        assert!(!info3.is_compatible_with(&info4));
+    }
+
+    #[test]
+    fn test_schedule_dag_batching_independent() {
+        let mut schedule = Schedule::new();
+        let log = RunLog::new();
+
+        // 3 bağımsız sistem, read/write çakışması yok. Tek bir batch içinde çalışmalı.
+        schedule.add_di_system(create_system("sys1", log.clone()));
+        schedule.add_di_system(create_system("sys2", log.clone()));
+        schedule.add_di_system(create_system("sys3", log.clone()));
+
+        schedule.build();
+
+        // Hepsi aynı anda paralel çalışabileceği için 1 adet batch oluşmalı
+        assert_eq!(schedule.batches.len(), 1);
+        assert_eq!(schedule.batches[0].systems.len(), 3);
+    }
+
+    #[test]
+    fn test_schedule_dag_batching_with_conflicts() {
+        let mut schedule = Schedule::new();
+        let log = RunLog::new();
+
+        // sys1: CompA yazıyor
+        schedule.add_di_system(
+            create_system("sys1", log.clone()).writes::<CompA>()
+        );
+        // sys2: CompA okuyor (sys1 ile çakışır, ayrı batch'e gitmeli)
+        schedule.add_di_system(
+            create_system("sys2", log.clone()).reads::<CompA>()
+        );
+        // sys3: CompB yazıyor (hiçbiriyle çakışmaz, sys1 ile aynı batch'e girebilir)
+        schedule.add_di_system(
+            create_system("sys3", log.clone()).writes::<CompB>()
+        );
+        // sys4: CompA yazıyor (sys1 ve sys2 ile çakışır, en sona kalmalı)
+        schedule.add_di_system(
+            create_system("sys4", log.clone()).writes::<CompA>()
+        );
+
+        schedule.build();
+
+        // Beklenen Batch'ler (Greedy Backward Scan):
+        // Batch 0: sys1 (writes CompA)
+        // Batch 1: sys2 (reads CompA), sys3 (writes CompB)
+        // Batch 2: sys4 (writes CompA)
+        assert_eq!(schedule.batches.len(), 3);
+        assert_eq!(schedule.batches[0].systems.len(), 1);
+        assert_eq!(schedule.batches[1].systems.len(), 2);
+        assert_eq!(schedule.batches[2].systems.len(), 1);
+    }
+
+    #[test]
+    fn test_schedule_explicit_ordering_before_after() {
+        let mut schedule = Schedule::new();
+        let log = RunLog::new();
+
+        // sys1 "after" sys2 olarak işaretlendi
+        schedule.add_di_system(
+            create_system("sys1", log.clone())
+                .label("System1")
+                .after("System2")
+        );
+        
+        schedule.add_di_system(
+            create_system("sys2", log.clone())
+                .label("System2")
+        );
+
+        // sys3 "before" sys2 olarak işaretlendi
+        schedule.add_di_system(
+            create_system("sys3", log.clone())
+                .label("System3")
+                .before("System2")
+        );
+
+        schedule.build();
+
+        // Bağımsız olsalar bile (okuma/yazma çakışması olmasa dahi) explicit order yüzünden:
+        // Sıralama: sys3 -> sys2 -> sys1 olmalı ve farklı batch'lerde olmalılar
+        assert_eq!(schedule.batches.len(), 3);
+
+        let mut world = World::new();
+        schedule.run(&mut world, 0.1);
+
+        let result = log.get();
+        assert_eq!(result, vec!["sys3", "sys2", "sys1"]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cyclic dependency detected!")]
+    fn test_schedule_cyclic_dependency_panics() {
+        let mut schedule = Schedule::new();
+        let log = RunLog::new();
+
+        schedule.add_di_system(
+            create_system("sysA", log.clone())
+                .label("A")
+                .before("B")
+        );
+        
+        schedule.add_di_system(
+            create_system("sysB", log.clone())
+                .label("B")
+                .before("C")
+        );
+
+        schedule.add_di_system(
+            create_system("sysC", log.clone())
+                .label("C")
+                .before("A") // Cycle: A -> B -> C -> A
+        );
+
+        // Bu çağrı panic atmalı
+        schedule.build();
+    }
+}

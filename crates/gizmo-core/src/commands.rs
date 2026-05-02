@@ -124,3 +124,139 @@ impl<'a, 'w> EntityCommands<'a, 'w> {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::system::Schedule;
+    use crate::query::Query;
+    use crate::world::World;
+
+    #[derive(Clone, PartialEq, Debug)]
+    struct ComponentA(i32);
+    impl Component for ComponentA {}
+
+    #[derive(Clone, PartialEq, Debug)]
+    struct ComponentB(f32);
+    impl Component for ComponentB {}
+
+    #[test]
+    fn test_command_queue_push_and_apply() {
+        let mut world = World::new();
+        let queue = CommandQueue::new();
+
+        queue.push(|w| {
+            let e = w.spawn();
+            w.add_component(e, ComponentA(42));
+        });
+
+        // Apply öncesi entity yok
+        assert_eq!(world.entity_count(), 0);
+
+        queue.apply(&mut world);
+
+        // Apply sonrası 1 entity var ve componenti eklenmiş
+        assert_eq!(world.entity_count(), 1);
+
+        let mut count = 0;
+        if let Some(q) = world.query::<&ComponentA>() {
+            for (_, c) in q.iter() {
+                assert_eq!(c.0, 42);
+                count += 1;
+            }
+        }
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_commands_system_spawn_and_insert() {
+        let mut world = World::new();
+        let mut schedule = Schedule::new();
+
+        schedule.add_di_system::<(Commands<'static>,), _>(|mut commands: Commands| {
+            commands.spawn().insert(ComponentA(100)).insert(ComponentB(3.14));
+        });
+
+        schedule.run(&mut world, 0.1);
+
+        let mut count = 0;
+        if let Some(q) = world.query::<(&ComponentA, &ComponentB)>() {
+            for (_, (ca, cb)) in q.iter() {
+                assert_eq!(ca.0, 100);
+                assert_eq!(cb.0, 3.14);
+                count += 1;
+            }
+        }
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_commands_system_despawn() {
+        let mut world = World::new();
+        
+        let e1 = world.spawn();
+        world.add_component(e1, ComponentA(10));
+
+        let e2 = world.spawn();
+        world.add_component(e2, ComponentA(20));
+
+        let mut schedule = Schedule::new();
+        
+        // Use a standard (&World, f32) system to access query and manually fetch Commands
+        schedule.add_system(|world: &World, dt: f32| {
+            let mut commands = Commands::fetch(world, dt).unwrap();
+            if let Some(q) = world.query::<&ComponentA>() {
+                for (id, c) in q.iter() {
+                    if c.0 == 10 {
+                        commands.entity(Entity::new(id, 0)).despawn();
+                    }
+                }
+            }
+        });
+
+        schedule.run(&mut world, 0.1);
+
+        assert_eq!(world.entity_count(), 1);
+        if let Some(q) = world.query::<&ComponentA>() {
+            for (_, c) in q.iter() {
+                assert_eq!(c.0, 20);
+            }
+        }
+    }
+
+    #[test]
+    fn test_commands_system_remove_component() {
+        let mut world = World::new();
+        
+        let e = world.spawn();
+        world.add_component(e, ComponentA(1));
+        world.add_component(e, ComponentB(2.0));
+
+        let mut schedule = Schedule::new();
+        
+        schedule.add_system(|world: &World, dt: f32| {
+            let mut commands = Commands::fetch(world, dt).unwrap();
+            if let Some(q) = world.query::<&ComponentA>() {
+                for (id, _) in q.iter() {
+                    commands.entity(Entity::new(id, 0)).remove::<ComponentA>();
+                }
+            }
+        });
+
+        schedule.run(&mut world, 0.1);
+
+        assert_eq!(world.entity_count(), 1);
+        
+        let mut has_a = false;
+        if let Some(q) = world.query::<&ComponentA>() {
+            has_a = q.iter().count() > 0;
+        }
+        assert!(!has_a, "ComponentA still exists!");
+
+        let mut has_b = false;
+        if let Some(q) = world.query::<&ComponentB>() {
+            has_b = q.iter().count() > 0;
+        }
+        assert!(has_b, "ComponentB was unexpectedly removed!");
+    }
+}

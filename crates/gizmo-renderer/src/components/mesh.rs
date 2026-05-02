@@ -11,6 +11,7 @@ pub struct Mesh {
     pub center_offset: Vec3,
     pub source: String,
     pub bounds: gizmo_math::Aabb,
+    pub cpu_vertices: Arc<Vec<Vec3>>,
 }
 
 impl Mesh {
@@ -33,12 +34,14 @@ impl Mesh {
             vbuf.size() as usize
         );
         let bounds = gizmo_math::Aabb::from_points(vertices.iter().map(|v| v.position));
+        let cpu_vertices = Arc::new(vertices.iter().map(|v| Vec3::from(v.position)).collect());
         Self {
             vbuf,
             vertex_count,
             center_offset,
             source,
             bounds,
+            cpu_vertices,
         }
     }
 
@@ -51,6 +54,7 @@ impl Mesh {
             center_offset: Vec3::ZERO,
             source,
             bounds: gizmo_math::Aabb::empty(),
+            cpu_vertices: Arc::new(Vec::new()),
         }
     }
 }

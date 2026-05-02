@@ -37,7 +37,7 @@ pub struct SsaoState {
     pub ao_blurred_view:    wgpu::TextureView,
 
     // Noise + kernel resources (static — never resized)
-    noise_texture: wgpu::Texture,
+    _noise_texture: wgpu::Texture,
     noise_view:    wgpu::TextureView,
     noise_sampler: wgpu::Sampler,
     gbuf_sampler:  wgpu::Sampler,
@@ -129,7 +129,7 @@ impl SsaoState {
         Self {
             ao_texture, ao_view,
             ao_blurred_texture, ao_blurred_view,
-            noise_texture, noise_view,
+            _noise_texture: noise_texture, noise_view,
             noise_sampler, gbuf_sampler,
             kernel_buffer, params_buffer,
             ssao_pipeline, ssao_gbuf_bgl, ssao_gbuf_bind_group,

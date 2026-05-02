@@ -94,7 +94,8 @@ impl Integrator {
 
         vel.linear += impulse * rb.inv_mass();
 
-        let r = point - transform.position;
+        let global_com = transform.position + transform.rotation.mul_vec3(rb.center_of_mass);
+        let r = point - global_com;
         let torque_impulse = r.cross(impulse);
         let inv_inertia = rb.inv_world_inertia_tensor(transform.rotation);
         vel.angular += inv_inertia * torque_impulse;

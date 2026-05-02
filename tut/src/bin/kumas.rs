@@ -231,7 +231,7 @@ fn main() {
                         }
                         
                         println!("{} Joint başarıyla GPU'ya yüklendi! XPBD aktif.", physics.joint_count);
-                        physics.update_params(&renderer.queue, 1.0 / 60.0);
+                        physics.update_params(&renderer.queue, 1.0 / 60.0, [0.0, -9.81, 0.0]);
                     }
                 }
             }

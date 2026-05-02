@@ -207,7 +207,7 @@ fn main() {
             // --- 500 GPU Physics Küpü (Lavın İçinden Dökülen Taşlar) ---
             use rand::Rng;
             let mut rng = rand::thread_rng();
-            for i in 0..500 {
+            for _i in 0..500 {
                 let box_ent = world.spawn();
                 let px = rng.gen_range(-5.0..5.0);
                 let py = rng.gen_range(10.0..30.0);
@@ -293,13 +293,13 @@ fn main() {
             let sun_angle = (hour - 6.0) / 12.0 * std::f32::consts::PI; // 06:00 = 0, 12:00 = PI/2, 18:00 = PI
             let is_day = hour >= 6.0 && hour <= 18.0;
 
-            if let Some(mut trans) = world.borrow_mut::<Transform>().get_mut(state.sun_id) {
+            if let Some(trans) = world.borrow_mut::<Transform>().get_mut(state.sun_id) {
                 // Güneşin dönüşünü ayarla
                 trans.rotation = Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), -sun_angle);
                 trans.update_local_matrix();
             }
 
-            if let Some(mut light) = world.borrow_mut::<DirectionalLight>().get_mut(state.sun_id) {
+            if let Some(light) = world.borrow_mut::<DirectionalLight>().get_mut(state.sun_id) {
                 if !is_day {
                     // Gece: Ay ışığı (mavi/karanlık)
                     light.color = Vec3::new(0.1, 0.2, 0.4);
@@ -335,17 +335,17 @@ fn main() {
             let orbit_radius = 5.0;
             let speed = 2.0;
 
-            if let Some(mut trans) = world.borrow_mut::<Transform>().get_mut(state.light_1_id) {
+            if let Some(trans) = world.borrow_mut::<Transform>().get_mut(state.light_1_id) {
                 let angle = state.time * speed;
                 trans.position = pillar_pos + Vec3::new(angle.cos() * orbit_radius, (angle * 2.0).sin() * 2.0, angle.sin() * orbit_radius);
                 trans.update_local_matrix();
             }
-            if let Some(mut trans) = world.borrow_mut::<Transform>().get_mut(state.light_2_id) {
+            if let Some(trans) = world.borrow_mut::<Transform>().get_mut(state.light_2_id) {
                 let angle = state.time * speed + 2.094; // 120 derece ofset
                 trans.position = pillar_pos + Vec3::new(angle.cos() * orbit_radius, (angle * 2.0).sin() * 2.0, angle.sin() * orbit_radius);
                 trans.update_local_matrix();
             }
-            if let Some(mut trans) = world.borrow_mut::<Transform>().get_mut(state.light_3_id) {
+            if let Some(trans) = world.borrow_mut::<Transform>().get_mut(state.light_3_id) {
                 let angle = state.time * speed + 4.188; // 240 derece ofset
                 trans.position = pillar_pos + Vec3::new(angle.cos() * orbit_radius, (angle * 2.0).sin() * 2.0, angle.sin() * orbit_radius);
                 trans.update_local_matrix();

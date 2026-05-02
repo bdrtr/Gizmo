@@ -143,6 +143,7 @@ impl<'a> Renderer<'a> {
             surface_format,
             config.width,
             config.height,
+            &depth_texture_view,
         );
 
         // GPU particle buffer boyutu — ihtiyaca göre ayarlanabilir
@@ -164,16 +165,9 @@ impl<'a> Renderer<'a> {
             wgpu::TextureFormat::Depth32Float,
         ));
 
-        let gpu_fluid = Some(crate::gpu_fluid::GpuFluidSystem::new(
-            &device,
-            &queue,
-            25_000, // Tankı dolduracak kadar SPH parçacığı
-            &scene.global_bind_group_layout,
-            wgpu::TextureFormat::Rgba16Float,
-            size.width,
-            size.height,
-        ));
-
+        // Disable GPU fluid simulation to remove the falling water
+        let gpu_fluid = None;
+        
         let debug_renderer = Some(crate::debug_renderer::GizmoRendererSystem::new(
             &device,
             &scene.global_bind_group_layout,
@@ -339,6 +333,7 @@ impl<'a> Renderer<'a> {
                     &sampler,
                     new_size.width,
                     new_size.height,
+                    &self.depth_texture_view,
                 );
             self.post.hdr_texture = hdr_t;
             self.post.hdr_texture_view = hdr_tv;

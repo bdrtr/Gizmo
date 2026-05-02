@@ -65,6 +65,15 @@ impl World {
         // Apply topological memory alignment for caching locality
         self.sort_archetype_hierarchy();
     }
+
+    /// Ertelenmiş komut kuyruğunu (CommandQueue) işler.
+    /// Entity ekleme/çıkarma işlemleri bu sayede kilitlenme (deadlock) yaşamadan batch halinde uygulanır.
+    pub fn apply_commands(&mut self) {
+        let queue_opt = self.get_resource::<crate::commands::CommandQueue>().map(|q| (*q).clone());
+        if let Some(queue) = queue_opt {
+            queue.apply(self);
+        }
+    }
 }
 
 impl Default for World {
@@ -747,5 +756,100 @@ impl World {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::component::Children;
+
+    #[derive(Clone, PartialEq, Debug)]
+    struct Transform(f32);
+    impl crate::component::Component for Transform {}
+
+    #[test]
+    fn test_sort_archetype_hierarchy() {
+        let mut world = World::new();
+
+        // 5 entity oluşturalım: e0, e1, e2, e3, e4
+        let e0 = world.spawn();
+        let e1 = world.spawn();
+        let e2 = world.spawn();
+        let e3 = world.spawn();
+        let e4 = world.spawn();
+
+        // Hepsi aynı bileşenlere sahip olsun (aynı archetype'a girmeleri için)
+        // Sırasıyla Transform ekliyoruz:
+        world.add_component(e0, Transform(0.0));
+        world.add_component(e1, Transform(1.0));
+        world.add_component(e2, Transform(2.0));
+        world.add_component(e3, Transform(3.0));
+        world.add_component(e4, Transform(4.0));
+
+        // Hiyerarşi kuralım: e0'ın çocukları e3 ve e4 olsun.
+        // Başlangıçta e0(0), e1(1), e2(2), e3(3), e4(4) sırasıyla dizilidir.
+        world.add_component(e0, Children(vec![e3.id(), e4.id()]));
+        
+        // Sadece e0'da Children olunca farklı archetype'a geçer (Archetype değişimi).
+        // Bu yüzden hepsine Children eklemeliyiz ki AYNI archetype'da kalsınlar.
+        world.add_component(e1, Children(vec![]));
+        world.add_component(e2, Children(vec![]));
+        world.add_component(e3, Children(vec![]));
+        world.add_component(e4, Children(vec![]));
+
+        // Şu an hepsi (Transform, Children) archetype'ında.
+        // Beklenen indeksler: e0, e1, e2, e3, e4.
+        
+        // Hiyerarşi kaydırmasını çalıştır!
+        world.sort_archetype_hierarchy();
+
+        // Kontrol edelim. e0'dan hemen sonra e3 ve e4 gelmeli.
+        let loc0 = world.entity_location(e0.id());
+        let loc3 = world.entity_location(e3.id());
+        let loc4 = world.entity_location(e4.id());
+
+        assert_eq!(loc0.row + 1, loc3.row, "e3 (child), e0 (parent)'dan hemen sonra gelmeli");
+        assert_eq!(loc0.row + 2, loc4.row, "e4 (child), e3'ten hemen sonra gelmeli");
+        
+        // Diğerleri (e1 ve e2) kaydırılmış olmalı.
+        let loc1 = world.entity_location(e1.id());
+        let loc2 = world.entity_location(e2.id());
+        assert!(loc1.row > loc4.row || loc2.row > loc4.row, "Bağımsız entityler sona itilmeli");
+    }
+
+    #[test]
+    fn test_sort_archetype_hierarchy_deep() {
+        let mut world = World::new();
+
+        let e0 = world.spawn();
+        let e1 = world.spawn();
+        let e2 = world.spawn();
+        let e3 = world.spawn();
+
+        world.add_component(e0, Transform(0.0));
+        world.add_component(e1, Transform(1.0));
+        world.add_component(e2, Transform(2.0));
+        world.add_component(e3, Transform(3.0));
+
+        // e0 -> e1 -> e2 -> e3 zinciri
+        world.add_component(e0, Children(vec![e1.id()]));
+        world.add_component(e1, Children(vec![e2.id()]));
+        world.add_component(e2, Children(vec![e3.id()]));
+        world.add_component(e3, Children(vec![]));
+
+        world.sort_archetype_hierarchy();
+
+        let l0 = world.entity_location(e0.id());
+        let l1 = world.entity_location(e1.id());
+        let l2 = world.entity_location(e2.id());
+        let l3 = world.entity_location(e3.id());
+
+        assert_eq!(l0.row + 1, l1.row);
+        // Not: Algoritma şu an sadece doğrudan çocukları hemen arkasına koyar.
+        // e1 işlendiğinde e2 onun arkasına geçer, e2 işlendiğinde e3 onun arkasına geçer.
+        // Sonuçta e0, e1, e2, e3 dizilimi kendiliğinden oluşur (visited mantığı).
+        assert_eq!(l1.row + 1, l2.row);
+        assert_eq!(l2.row + 1, l3.row);
     }
 }

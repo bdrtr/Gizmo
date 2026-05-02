@@ -50,8 +50,10 @@ impl ConstraintSolver {
             let dyn_b   = bodies_b[mid].0.is_dynamic();
 
             for contact in &manifolds[mid].contacts {
-                let r_a = contact.point - bodies_a[mid].1.position;
-                let r_b = contact.point - bodies_b[mid].1.position;
+                let global_com_a = bodies_a[mid].1.position + bodies_a[mid].1.rotation.mul_vec3(bodies_a[mid].0.center_of_mass);
+                let global_com_b = bodies_b[mid].1.position + bodies_b[mid].1.rotation.mul_vec3(bodies_b[mid].0.center_of_mass);
+                let r_a = contact.point - global_com_a;
+                let r_b = contact.point - global_com_b;
 
                 let wn = contact.normal * (contact.normal_impulse * self.warm_start_factor);
                 let wt = contact.tangent_impulse * self.warm_start_factor;
@@ -87,8 +89,10 @@ impl ConstraintSolver {
                     let acc_normal    = manifolds[mid].contacts[cid].normal_impulse;
                     let acc_tangent   = manifolds[mid].contacts[cid].tangent_impulse;
 
-                    let r_a = contact_point - bodies_a[mid].1.position;
-                    let r_b = contact_point - bodies_b[mid].1.position;
+                    let global_com_a = bodies_a[mid].1.position + bodies_a[mid].1.rotation.mul_vec3(bodies_a[mid].0.center_of_mass);
+                    let global_com_b = bodies_b[mid].1.position + bodies_b[mid].1.rotation.mul_vec3(bodies_b[mid].0.center_of_mass);
+                    let r_a = contact_point - global_com_a;
+                    let r_b = contact_point - global_com_b;
 
                     let inv_m_a = bodies_a[mid].0.inv_mass();
                     let inv_m_b = bodies_b[mid].0.inv_mass();
@@ -114,7 +118,10 @@ impl ConstraintSolver {
                     if k_n < 1e-6 { continue; }
 
                     let bias     = (self.baumgarte / dt) * (penetration - self.slop).max(0.0);
-                    let e        = restitution;
+                    
+                    // Resting contact threshold (prevent infinite micro-bounces)
+                    let e = if vel_norm < -1.0 { restitution } else { 0.0 };
+                    
                     let delta_n  = (-(1.0 + e) * vel_norm + bias) / k_n;
 
                     // Accumulated-impulse clamping (normal must be ≥ 0)
@@ -155,10 +162,16 @@ impl ConstraintSolver {
 
                     let delta_t = -tang_mag / k_t;
 
-                    // Coulomb cone: |λ_t| ≤ μ * λ_n
-                    let max_tang = friction * new_acc_n.abs();
-                    let new_acc_t_along = (acc_tangent.dot(tangent) + delta_t)
-                        .clamp(-max_tang, max_tang);
+                    let max_static_tang = manifolds[mid].static_friction * new_acc_n.abs();
+                    let max_dynamic_tang = friction * new_acc_n.abs();
+                    
+                    let mut new_acc_t_along = acc_tangent.dot(tangent) + delta_t;
+                    
+                    // If it exceeds the static friction cone, it slips (dynamic friction)
+                    if new_acc_t_along.abs() > max_static_tang {
+                        new_acc_t_along = new_acc_t_along.clamp(-max_dynamic_tang, max_dynamic_tang);
+                    }
+                    
                     let actual_t_along  = new_acc_t_along - acc_tangent.dot(tangent);
                     manifolds[mid].contacts[cid].tangent_impulse =
                         tangent * new_acc_t_along;

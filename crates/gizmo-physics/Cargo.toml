@@ -11,6 +11,9 @@ gizmo-math = { path = "../gizmo-math" }
 wide = "1.2.0"
 arrayvec = "0.7.6"
 rand = "0.10.1"
+wgpu = "0.20"
+bytemuck = { version = "1.14", features = ["derive"] }
+pollster = "0.3"
 
 [dev-dependencies]
 serde_json = "1.0"

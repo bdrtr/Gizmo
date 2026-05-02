@@ -444,13 +444,13 @@ impl GpuPhysicsSystem {
     }
 
     /// Simülasyon parametrelerini güncelle (dt, num_joints, vb.)
-    pub fn update_params(&self, queue: &wgpu::Queue, dt: f32) {
+    pub fn update_params(&self, queue: &wgpu::Queue, dt: f32, gravity: [f32; 3]) {
         let params = PhysicsSimParams {
             dt,
             _pad0: [0; 3],
             _pad1: [0.0; 3],
             _pad1b: 0,
-            gravity: [0.0, -9.81, 0.0],
+            gravity,
             damping: 0.99,
             num_boxes: self.max_boxes,
             num_colliders: 100, // max static colliders

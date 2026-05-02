@@ -131,4 +131,16 @@ impl GpuParticleSystem {
         let workgroups = self.max_particles.div_ceil(64);
         cpass.dispatch_workgroups(workgroups, 1, 1);
     }
+
+    pub fn render_pass<'a>(
+        &'a self,
+        rpass: &mut wgpu::RenderPass<'a>,
+        global_bind_group: &'a wgpu::BindGroup,
+    ) {
+        rpass.set_pipeline(&self.pipelines.render_pipeline);
+        rpass.set_bind_group(0, global_bind_group, &[]);
+        rpass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
+        rpass.set_vertex_buffer(1, self.particles_buffer.slice(..));
+        rpass.draw(0..4, 0..self.max_particles);
+    }
 }
