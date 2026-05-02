@@ -60,7 +60,7 @@ fn vs_main(
     }
     
     let world_pos = particle.position;
-    let radius = 0.08; 
+    let radius = 0.20;
     let to_camera = normalize(scene.camera_pos.xyz - world_pos);
     var up = vec3<f32>(0.0, 1.0, 0.0);
     if (abs(to_camera.y) > 0.999) {

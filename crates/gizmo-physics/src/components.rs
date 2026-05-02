@@ -113,6 +113,7 @@ pub struct RigidBody {
     pub lock_rotation_y: bool,
     pub lock_rotation_z: bool,
     pub sleep_counter: u32, // Frames below sleep threshold
+    pub center_of_mass: Vec3,
 }
 
 impl Default for RigidBody {
@@ -132,6 +133,7 @@ impl Default for RigidBody {
             lock_rotation_y: false,
             lock_rotation_z: false,
             sleep_counter: 0,
+            center_of_mass: Vec3::ZERO,
         }
     }
 }
@@ -153,6 +155,7 @@ impl RigidBody {
             lock_rotation_y: false,
             lock_rotation_z: false,
             sleep_counter: 0,
+            center_of_mass: Vec3::ZERO,
         }
     }
 
@@ -172,6 +175,7 @@ impl RigidBody {
             lock_rotation_y: true,
             lock_rotation_z: true,
             sleep_counter: 0,
+            center_of_mass: Vec3::ZERO,
         }
     }
 
@@ -191,6 +195,7 @@ impl RigidBody {
             lock_rotation_y: false,
             lock_rotation_z: false,
             sleep_counter: 0,
+            center_of_mass: Vec3::ZERO,
         }
     }
 
@@ -351,6 +356,52 @@ impl RigidBody {
             ColliderShape::Plane(_) => {
                 self.local_inertia = Vec3::splat(f32::INFINITY);
             }
+            ColliderShape::TriMesh(_) | ColliderShape::ConvexHull(_) => {
+                // Approximate with a generic box of size 1x1x1
+                self.calculate_box_inertia(1.0, 1.0, 1.0);
+            }
+            ColliderShape::Compound(shapes) => {
+                let mut total_vol = 0.0;
+                let mut vols = Vec::with_capacity(shapes.len());
+                for (_, sub_shape) in shapes {
+                    let temp_col = Collider { shape: *sub_shape.clone(), ..Default::default() };
+                    let v = temp_col.volume();
+                    vols.push(v);
+                    total_vol += v;
+                }
+                
+                if total_vol > 0.0 {
+                    let mut com = Vec3::ZERO;
+                    for (i, (local_t, _)) in shapes.iter().enumerate() {
+                        let mass_i = (vols[i] / total_vol) * self.mass;
+                        com += local_t.position * mass_i;
+                    }
+                    if self.mass > 0.0 {
+                        self.center_of_mass = com / self.mass;
+                    }
+
+                    // Compute inertia tensor using Parallel Axis Theorem
+                    let mut inertia = Vec3::ZERO;
+                    for (i, (local_t, sub_shape)) in shapes.iter().enumerate() {
+                        let mass_i = (vols[i] / total_vol) * self.mass;
+                        
+                        let mut temp_rb = RigidBody { mass: mass_i, ..Default::default() };
+                        let temp_col = Collider { shape: *sub_shape.clone(), ..Default::default() };
+                        temp_rb.update_inertia_from_collider(&temp_col);
+                        
+                        let d = local_t.position - self.center_of_mass;
+                        let d_sq = d.length_squared();
+                        
+                        // Parallel axis theorem for diagonal elements
+                        inertia.x += temp_rb.local_inertia.x + mass_i * (d_sq - d.x * d.x);
+                        inertia.y += temp_rb.local_inertia.y + mass_i * (d_sq - d.y * d.y);
+                        inertia.z += temp_rb.local_inertia.z + mass_i * (d_sq - d.z * d.z);
+                    }
+                    self.local_inertia = inertia;
+                } else {
+                    self.calculate_box_inertia(1.0, 1.0, 1.0);
+                }
+            }
         }
     }
 }
@@ -387,6 +438,37 @@ impl Default for PhysicsMaterial {
             dynamic_friction: 0.5,
             restitution: 0.5,
             density: 1.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CharacterController {
+    pub speed: f32,
+    pub jump_speed: f32,
+    pub gravity: f32,
+    pub max_slope_angle: f32, // in radians
+    pub step_height: f32,
+    pub is_grounded: bool,
+    pub velocity: Vec3, // Internal velocity for jumping/falling
+    pub target_velocity: Vec3, // Desired movement from input
+    pub height: f32,
+    pub radius: f32,
+}
+
+impl Default for CharacterController {
+    fn default() -> Self {
+        Self {
+            speed: 5.0,
+            jump_speed: 5.0,
+            gravity: 9.81,
+            max_slope_angle: 45.0_f32.to_radians(),
+            step_height: 0.3,
+            is_grounded: false,
+            velocity: Vec3::ZERO,
+            target_velocity: Vec3::ZERO,
+            height: 2.0,
+            radius: 0.5,
         }
     }
 }
@@ -465,7 +547,7 @@ impl CollisionLayer {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Collider {
     pub shape: ColliderShape,
     pub is_trigger: bool,
@@ -531,6 +613,52 @@ impl Collider {
                     position + Vec3::splat(large),
                 )
             }
+            ColliderShape::TriMesh(tm) => {
+                let mut min = Vec3::splat(f32::INFINITY);
+                let mut max = Vec3::splat(f32::NEG_INFINITY);
+                for v in &tm.vertices {
+                    let world_pos = position + rotation * (*v);
+                    min = min.min(world_pos);
+                    max = max.max(world_pos);
+                }
+                gizmo_math::Aabb::new(min, max)
+            }
+            ColliderShape::ConvexHull(ch) => {
+                let mut min = Vec3::splat(f32::INFINITY);
+                let mut max = Vec3::splat(f32::NEG_INFINITY);
+                for v in &ch.vertices {
+                    let world_pos = position + rotation * (*v);
+                    min = min.min(world_pos);
+                    max = max.max(world_pos);
+                }
+                gizmo_math::Aabb::new(min, max)
+            }
+            ColliderShape::Compound(shapes) => {
+                let mut min = Vec3::splat(f32::INFINITY);
+                let mut max = Vec3::splat(f32::NEG_INFINITY);
+                for (local_t, sub_shape) in shapes {
+                    let world_pos = position + rotation.mul_vec3(local_t.position);
+                    let world_rot = rotation * local_t.rotation;
+                    
+                    // Recursive bounding box is tricky because we only have `compute_aabb` on `Collider`
+                    // We can just construct a temporary Collider to calculate it:
+                    let temp_col = Collider {
+                        shape: *sub_shape.clone(),
+                        ..Default::default()
+                    };
+                    let sub_aabb = temp_col.compute_aabb(world_pos, world_rot);
+                    min = min.min(sub_aabb.min.into());
+                    max = max.max(sub_aabb.max.into());
+                }
+                gizmo_math::Aabb::new(min, max)
+            }
+        }
+    }
+
+    pub fn plane(normal: Vec3, distance: f32) -> Self {
+        Self {
+            shape: ColliderShape::Plane(PlaneShape { normal, distance }),
+            ..Default::default()
         }
     }
 
@@ -572,14 +700,45 @@ impl Collider {
         self.collision_layer = layer;
         self
     }
+
+    pub fn volume(&self) -> f32 {
+        match &self.shape {
+            ColliderShape::Sphere(s) => (4.0 / 3.0) * std::f32::consts::PI * s.radius.powi(3),
+            ColliderShape::Box(b) => 8.0 * b.half_extents.x * b.half_extents.y * b.half_extents.z,
+            ColliderShape::Capsule(c) => {
+                let cylinder_vol = std::f32::consts::PI * c.radius.powi(2) * (c.half_height * 2.0);
+                let sphere_vol = (4.0 / 3.0) * std::f32::consts::PI * c.radius.powi(3);
+                cylinder_vol + sphere_vol
+            }
+            ColliderShape::Plane(_) => f32::INFINITY,
+            ColliderShape::TriMesh(_) => 10.0, // Approximate volume
+            ColliderShape::ConvexHull(_) => 10.0,
+            ColliderShape::Compound(_) => 10.0, // Approximate
+        }
+    }
+
+    pub fn extents_y(&self) -> f32 {
+        match &self.shape {
+            ColliderShape::Sphere(s) => s.radius,
+            ColliderShape::Box(b) => b.half_extents.y,
+            ColliderShape::Capsule(c) => c.half_height + c.radius,
+            ColliderShape::Plane(_) => 0.0,
+            ColliderShape::TriMesh(_) => 0.0, // Simplified
+            ColliderShape::ConvexHull(_) => 0.0, // Simplified
+            ColliderShape::Compound(_) => 0.0, // Simplified
+        }
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ColliderShape {
     Sphere(SphereShape),
     Box(BoxShape),
     Capsule(CapsuleShape),
     Plane(PlaneShape),
+    TriMesh(TriMeshShape),
+    ConvexHull(ConvexHullShape),
+    Compound(Vec<(Transform, Box<ColliderShape>)>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -604,12 +763,43 @@ pub struct PlaneShape {
     pub distance: f32,
 }
 
-gizmo_core::impl_component!(
-    Transform,
-    Velocity,
-    RigidBody,
-    Breakable,
-    Collider,
-    PhysicsMaterial,
-    CollisionLayer
-);
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TriMeshShape {
+    pub vertices: Vec<Vec3>,
+    pub indices: Vec<u32>,
+    #[serde(skip)]
+    pub bvh: crate::bvh::BvhTree,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConvexHullShape {
+    pub vertices: Vec<Vec3>,
+}
+
+gizmo_core::impl_component!(Collider);
+gizmo_core::impl_component!(RigidBody);
+gizmo_core::impl_component!(Velocity);
+gizmo_core::impl_component!(Transform);
+gizmo_core::impl_component!(Breakable);
+gizmo_core::impl_component!(PhysicsMaterial);
+gizmo_core::impl_component!(CollisionLayer);
+gizmo_core::impl_component!(CharacterController);
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Explosion {
+    pub radius: f32,
+    pub force: f32,
+    pub is_active: bool,
+}
+
+impl Default for Explosion {
+    fn default() -> Self {
+        Self {
+            radius: 5.0,
+            force: 1000.0,
+            is_active: true,
+        }
+    }
+}
+
+gizmo_core::impl_component!(Explosion);

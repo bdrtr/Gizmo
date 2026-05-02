@@ -44,7 +44,7 @@ pub struct TaaState {
     blit_bgl:               wgpu::BindGroupLayout,
     blit_bg_a:              wgpu::BindGroup, // reads A (used when parity=true, A is output)
     blit_bg_b:              wgpu::BindGroup, // reads B (used when parity=false, B is output)
-    empty_bgl:              wgpu::BindGroupLayout,
+    _empty_bgl:              wgpu::BindGroupLayout,
     pub empty_bg:           wgpu::BindGroup,
 
     pub width:  u32,
@@ -131,7 +131,7 @@ impl TaaState {
             resolve_bg_read_a, resolve_bg_read_b,
             blit_pipeline, blit_bgl,
             blit_bg_a, blit_bg_b,
-            empty_bgl, empty_bg,
+            _empty_bgl: empty_bgl, empty_bg,
             width, height,
         }
     }

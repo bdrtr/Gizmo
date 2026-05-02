@@ -1,7 +1,7 @@
 // ============================================================
 // Yelbegen Engine — Post-Processing Shader
 // Bloom (Bright Extract + Gaussian Blur) ve ACES Tone Mapping + Sinematikler
-// ============================================================
+
 
 struct FullscreenVertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -27,6 +27,10 @@ struct PostProcessParams {
     exposure: f32,
     chromatic_aberration: f32,
     vignette_intensity: f32,
+    film_grain_intensity: f32,
+    dof_focus_dist: f32,
+    dof_focus_range: f32,
+    dof_blur_size: f32,
     _padding0: f32,
     _padding1: f32,
     _padding2: f32,
@@ -89,6 +93,7 @@ fn fs_blur(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 // ============================
 @group(1) @binding(0) var t_bloom: texture_2d<f32>;
 @group(1) @binding(1) var s_bloom: sampler;
+@group(1) @binding(2) var t_depth: texture_depth_2d;
 
 fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
     let a = 2.51;
@@ -110,9 +115,45 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let b = textureSample(t_source, s_source, in.uv - vec2<f32>(ca_offset, 0.0)).b;
     let hdr_color = vec3<f32>(r, g, b);
 
-    // 2. Bloom Addition
+    // 2. Depth of Field (DoF)
+    let depth_val = textureSampleLevel(t_depth, s_bloom, in.uv, 0.0);
+    // Linearize depth (assuming perspective projection, near=0.1, far=1000.0)
+    let n = 0.1;
+    let f = 1000.0;
+    let linear_depth = (2.0 * n) / (f + n - depth_val * (f - n));
+    let view_dist = linear_depth * f;
+    
+    let coc = clamp(abs(view_dist - params.dof_focus_dist) / params.dof_focus_range, 0.0, 1.0);
+    
+    var dof_color = hdr_color;
+    if (coc > 0.01 && params.dof_blur_size > 0.0) {
+        var blurred = vec3<f32>(0.0);
+        var total_weight = 0.0;
+        let radius = coc * params.dof_blur_size;
+        
+        // Simple Poisson-like disk samples
+        
+        let aspect = vec2<f32>(1.0, 1.0); // Aspect correction might be needed for perfect circles
+        let step_size = vec2<f32>(1.0 / 1920.0, 1.0 / 1080.0) * radius;
+        
+        // Unrolled Poisson disk
+        blurred += textureSampleLevel(t_source, s_source, in.uv + vec2<f32>( 0.000,  1.000) * step_size, 0.0).rgb;
+        blurred += textureSampleLevel(t_source, s_source, in.uv + vec2<f32>( 0.866,  0.500) * step_size, 0.0).rgb;
+        blurred += textureSampleLevel(t_source, s_source, in.uv + vec2<f32>( 0.866, -0.500) * step_size, 0.0).rgb;
+        blurred += textureSampleLevel(t_source, s_source, in.uv + vec2<f32>( 0.000, -1.000) * step_size, 0.0).rgb;
+        blurred += textureSampleLevel(t_source, s_source, in.uv + vec2<f32>(-0.866, -0.500) * step_size, 0.0).rgb;
+        blurred += textureSampleLevel(t_source, s_source, in.uv + vec2<f32>(-0.866,  0.500) * step_size, 0.0).rgb;
+        blurred += textureSampleLevel(t_source, s_source, in.uv + vec2<f32>( 0.433,  0.750) * step_size, 0.0).rgb;
+        blurred += textureSampleLevel(t_source, s_source, in.uv + vec2<f32>(-0.433, -0.750) * step_size, 0.0).rgb;
+        
+        total_weight = 8.0;
+        blurred = blurred / total_weight;
+        dof_color = mix(hdr_color, blurred, coc);
+    }
+
+    // 3. Bloom Addition
     let bloom_color = textureSample(t_bloom, s_bloom, in.uv).rgb;
-    let combined = (hdr_color + bloom_color * params.bloom_intensity) * params.exposure;
+    let combined = (dof_color + bloom_color * params.bloom_intensity) * params.exposure;
     
     // 3. ACES Tone Mapping
     let mapped = aces_tonemap(combined);
@@ -124,6 +165,10 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // 5. Vignette
     let vignette = smoothstep(1.5, 0.3, center_dist * (1.0 + params.vignette_intensity));
     final_color *= vignette;
+    
+    // 6. Film Grain
+    let noise = fract(sin(dot(in.uv, vec2<f32>(12.9898, 78.233))) * 43758.5453) - 0.5;
+    final_color += final_color * noise * params.film_grain_intensity;
     
     return vec4<f32>(final_color, 1.0);
 }

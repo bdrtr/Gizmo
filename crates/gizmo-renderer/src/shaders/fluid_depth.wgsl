@@ -64,7 +64,7 @@ fn vs_main(
         return skip_out;
     }
     
-    let radius = 0.12; // Increased from 0.08 so spheres overlap and merge smoothly into a continuous surface
+    let radius = 0.20; // Increased from 0.08 so spheres overlap and merge smoothly into a continuous surface
     
     let world_pos = particle.position;
     // Wait, Gizmo-engine view matrix isn't directly exposed in SceneUniforms, it's combined into view_proj.

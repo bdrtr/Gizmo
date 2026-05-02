@@ -105,22 +105,53 @@ pub fn default_render_pass(
     );
     let light_view_projs: [[[f32; 4]; 4]; 4] = cascade_vp.map(|m| m.to_cols_array_2d());
 
+    // Dinamik Işıkları Bul
+    let mut lights_data = [crate::renderer::gpu_types::LightData {
+        position: [0.0; 4],
+        color: [0.0; 4],
+        direction: [0.0, -1.0, 0.0, 0.0],
+        params: [0.0; 4],
+    }; 10];
+    let mut num_lights = 0;
+
+    if let Some(q) = world.query::<(&crate::renderer::components::PointLight, &crate::physics::Transform)>() {
+        for (_id, (light, transform)) in q.iter() {
+            if num_lights >= 10 { break; }
+            lights_data[num_lights as usize] = crate::renderer::gpu_types::LightData {
+                position: [transform.position.x, transform.position.y, transform.position.z, light.intensity],
+                color: [light.color.x, light.color.y, light.color.z, light.radius],
+                direction: [0.0, -1.0, 0.0, 0.0],
+                params: [0.0, 0.0, 0.0, 0.0], // y = 0 means PointLight
+            };
+            num_lights += 1;
+        }
+    }
+
+    if let Some(q) = world.query::<(&crate::renderer::components::SpotLight, &crate::physics::Transform)>() {
+        for (_id, (light, transform)) in q.iter() {
+            if num_lights >= 10 { break; }
+            let dir = transform.rotation.mul_vec3(gizmo_math::Vec3::new(0.0, 0.0, -1.0)).normalize();
+            lights_data[num_lights as usize] = crate::renderer::gpu_types::LightData {
+                position: [transform.position.x, transform.position.y, transform.position.z, light.intensity],
+                color: [light.color.x, light.color.y, light.color.z, light.radius],
+                direction: [dir.x, dir.y, dir.z, light.inner_angle],
+                params: [light.outer_angle, 1.0, 0.0, 0.0], // y = 1 means SpotLight
+            };
+            num_lights += 1;
+        }
+    }
+
     let scene_uniform_data = crate::renderer::gpu_types::SceneUniforms {
         view_proj: view_proj.to_cols_array_2d(),
         camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
         sun_direction: [sun_dir.x, sun_dir.y, sun_dir.z, 1.0],
         sun_color: [sun_col.x, sun_col.y, sun_col.z, sun_col.w],
-        lights: [crate::renderer::gpu_types::LightData {
-            position: [0.0; 4],
-            color: [0.0; 4],
-            direction: [0.0, -1.0, 0.0, 0.0],
-            params: [0.0; 4],
-        }; 10],
+        lights: lights_data,
         light_view_proj: light_view_projs,
         cascade_splits,
         camera_forward: [cam_forward.x, cam_forward.y, cam_forward.z, 0.0],
         cascade_params: [0.1, 1.0 / crate::renderer::SHADOW_MAP_RES as f32, 0.0, 0.0],
-        num_lights: 0,
+        num_lights,
         // WGSL padding: vec3<u32> alignment 16 gerektirir
         _pre_align_pad: [0; 3],
         _align_pad: [0; 3],
@@ -252,6 +283,13 @@ pub fn default_render_pass(
     // Gpu Fluid Processing
     if let Some(fluid) = &renderer.gpu_fluid {
         fluid.compute_pass(encoder, &renderer.queue, true, fluid.num_particles);
+    }
+
+    // Gpu Particles Processing
+    if let Some(particles) = &renderer.gpu_particles {
+        let dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.time_scale() * 0.016).unwrap_or(0.016);
+        particles.update_params(&renderer.queue, dt); // Scale based on time_scale
+        particles.compute_pass(encoder);
     }
 
     // GPU mesh frustum culling — writes instance_count into indirect_buffer
@@ -602,6 +640,11 @@ pub fn default_render_pass(
             fluid.render_pass(&mut render_pass, &renderer.scene.global_bind_group);
         }
 
+        // Draw GPU Particles
+        if let Some(particles) = &renderer.gpu_particles {
+            particles.render_pass(&mut render_pass, &renderer.scene.global_bind_group);
+        }
+
         if let Some(gizmos) = world.get_resource::<crate::renderer::Gizmos>() {
             if let Some(debug_renderer) = &mut renderer.debug_renderer {
                 debug_renderer.update(&renderer.queue, &gizmos);
@@ -612,6 +655,17 @@ pub fn default_render_pass(
                 );
             }
         }
+    }
+
+    if let Some(fluid) = &renderer.gpu_fluid {
+        fluid.render_ssfr(
+            encoder,
+            &renderer.post.hdr_texture,
+            &renderer.post.hdr_texture_view,
+            &renderer.depth_texture_view,
+            &renderer.scene.global_bind_group,
+            fluid.num_particles,
+        );
     }
 
     // Auto-clear gizmos for the next frame
@@ -763,17 +817,25 @@ pub fn physics_debug_system(world: &crate::core::World) {
 
         if let Some(q) = world.query::<(&crate::physics::Transform, &gizmo_physics::Collider)>() {
             for (_, (trans, col)) in q.iter() {
-                // Not: tam bir döndürme (rotation) desteği istenirse draw_obb şeklinde
-                // daha gelişmiş bir gizmo methodu eklenebilir. Şimdilik AABB (Eksen Hizalı) çiziyoruz.
-                // Col.bounds aslında aabb_min ve aabb_max'ını barındırıyorsa ona göre de alınabilir.
-                // Biz burada tahmini (veya objenin etrafındaki) bir kutu çizdirebiliriz.
-                // GizmoMotor collider şeklini tam çizdirsin diye:
+                // To support proper rotation, we should draw the 8 corners of the box.
                 match &col.shape {
                     gizmo_physics::ColliderShape::Box(b) => {
                         let h = b.half_extents;
-                        let min = trans.position - h;
-                        let max = trans.position + h;
-                        gizmos.draw_box(min, max, color);
+                        let p0 = trans.local_matrix.transform_point3(Vec3::new(-h.x, -h.y, -h.z));
+                        let p1 = trans.local_matrix.transform_point3(Vec3::new( h.x, -h.y, -h.z));
+                        let p2 = trans.local_matrix.transform_point3(Vec3::new( h.x,  h.y, -h.z));
+                        let p3 = trans.local_matrix.transform_point3(Vec3::new(-h.x,  h.y, -h.z));
+                        let p4 = trans.local_matrix.transform_point3(Vec3::new(-h.x, -h.y,  h.z));
+                        let p5 = trans.local_matrix.transform_point3(Vec3::new( h.x, -h.y,  h.z));
+                        let p6 = trans.local_matrix.transform_point3(Vec3::new( h.x,  h.y,  h.z));
+                        let p7 = trans.local_matrix.transform_point3(Vec3::new(-h.x,  h.y,  h.z));
+                        
+                        gizmos.draw_line(p0, p1, color); gizmos.draw_line(p1, p2, color);
+                        gizmos.draw_line(p2, p3, color); gizmos.draw_line(p3, p0, color);
+                        gizmos.draw_line(p4, p5, color); gizmos.draw_line(p5, p6, color);
+                        gizmos.draw_line(p6, p7, color); gizmos.draw_line(p7, p4, color);
+                        gizmos.draw_line(p0, p4, color); gizmos.draw_line(p1, p5, color);
+                        gizmos.draw_line(p2, p6, color); gizmos.draw_line(p3, p7, color);
                     }
                     gizmo_physics::ColliderShape::Sphere(s) => {
                         let r = s.radius;
@@ -782,11 +844,30 @@ pub fn physics_debug_system(world: &crate::core::World) {
                         gizmos.draw_box(min, max, color);
                     }
                     _ => {
-                        // Kapsül, Konveks, Mesh vs için genel bir min-max kutusu uyduralım
                         let min = trans.position - Vec3::new(1.0, 1.0, 1.0);
                         let max = trans.position + Vec3::new(1.0, 1.0, 1.0);
                         gizmos.draw_box(min, max, color);
                     }
+                }
+            }
+        }
+        
+        let soft_color = [1.0, 0.4, 0.8, 1.0]; // Pinkish for soft body
+        if let Some(q) = world.query::<&gizmo_physics::soft_body::SoftBodyMesh>() {
+            for (_, sm) in q.iter() {
+                for elem in &sm.elements {
+                    let p0 = sm.nodes[elem.node_indices[0] as usize].position;
+                    let p1 = sm.nodes[elem.node_indices[1] as usize].position;
+                    let p2 = sm.nodes[elem.node_indices[2] as usize].position;
+                    let p3 = sm.nodes[elem.node_indices[3] as usize].position;
+                    
+                    // 6 edges of a tetrahedron
+                    gizmos.draw_line(p0, p1, soft_color);
+                    gizmos.draw_line(p0, p2, soft_color);
+                    gizmos.draw_line(p0, p3, soft_color);
+                    gizmos.draw_line(p1, p2, soft_color);
+                    gizmos.draw_line(p1, p3, soft_color);
+                    gizmos.draw_line(p2, p3, soft_color);
                 }
             }
         }
@@ -948,7 +1029,7 @@ pub fn gpu_fluid_coupling_system(world: &crate::core::World, renderer: &mut Rend
                 }
                 
                 // Sadece belli y altındaki veya dinamik olanları eklemek isteyebiliriz, ama şimdilik hepsini ekleyelim
-                let mut shape_type = 0;
+                let shape_type;
                 let mut radius = 0.0;
                 let mut half_extents = [0.0; 3];
 
@@ -986,4 +1067,75 @@ pub fn gpu_fluid_coupling_system(world: &crate::core::World, renderer: &mut Rend
         // Fluid Params num_colliders güncelle
         fluid.update_colliders_count(&renderer.queue, count as u32);
     }
+}
+
+/// Gelişmiş CPU Fizik motoru entegrasyonu (Menteşeler, Raycast, Joint sistemleri)
+/// gizmo-physics içerisindeki PhysicsWorld çalıştırılır ve ECS içerisindeki
+/// RigidBody, Transform, Velocity ve Collider verileri senkronize edilir.
+pub fn cpu_physics_step_system(world: &mut crate::core::World, dt: f32) {
+    if world.get_resource::<gizmo_physics::world::PhysicsWorld>().is_none() {
+        return; // Physics plugin is not active.
+    }
+
+    // World üzerinden sahipliği geçici olarak al
+    let mut phys_world = world
+        .remove_resource::<gizmo_physics::world::PhysicsWorld>()
+        .unwrap();
+
+    let mut bodies = Vec::new();
+    if let Some(q) = world.query::<(
+        &crate::physics::RigidBody,
+        &crate::physics::Transform,
+        &crate::physics::Velocity,
+        &crate::physics::Collider,
+    )>() {
+        for (e, (rb, transform, vel, col)) in q.iter() {
+            bodies.push((gizmo_core::entity::Entity::new(e, 0), *rb, *transform, *vel, col.clone()));
+        }
+    }
+
+    let mut soft_bodies = Vec::new();
+    if let Some(q) = world.query::<(
+        &gizmo_physics::soft_body::SoftBodyMesh,
+        &crate::physics::Transform,
+    )>() {
+        for (e, (sm, transform)) in q.iter() {
+            soft_bodies.push((gizmo_core::entity::Entity::new(e, 0), sm.clone(), *transform));
+        }
+    }
+
+    // Fizik adımını çalıştır
+    phys_world.step(&mut bodies, &mut soft_bodies, dt);
+
+    // Güncellenmiş değerleri geri ECS'e yaz
+    if let Some(q) = world.query::<(
+        gizmo_core::prelude::Mut<crate::physics::Transform>,
+        gizmo_core::prelude::Mut<crate::physics::Velocity>,
+        gizmo_core::prelude::Mut<crate::physics::RigidBody>,
+    )>() {
+        for (e, rb, trans, vel, _) in bodies {
+            if let Some((mut t, mut v, mut r)) = q.get(e.id()) {
+                *t = trans;
+                t.update_local_matrix(); // Görselin güncellenmesi için matrisin yenilenmesi ŞART!
+                *v = vel;
+                *r = rb;
+            }
+        }
+    }
+    
+    if let Some(q) = world.query::<(
+        gizmo_core::prelude::Mut<crate::physics::Transform>,
+        gizmo_core::prelude::Mut<gizmo_physics::soft_body::SoftBodyMesh>,
+    )>() {
+        for (e, sm, trans) in soft_bodies {
+            if let Some((mut t, mut s)) = q.get(e.id()) {
+                *t = trans;
+                t.update_local_matrix();
+                *s = sm;
+            }
+        }
+    }
+
+    // Kaynağı geri koy
+    world.insert_resource(phys_world);
 }

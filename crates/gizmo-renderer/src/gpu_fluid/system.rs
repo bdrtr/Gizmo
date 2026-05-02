@@ -44,21 +44,22 @@ impl GpuFluidSystem {
         height: u32,
     ) -> Self {
         let n = num_particles as usize;
-        let side = (n as f32).cbrt().ceil() as usize;
+        // Okyanus için geniş ve sığ bir spawn alanı (10x10 metre)
+        let spacing = 0.077_f32;
+        let nx = ((10.0 - 0.2) / spacing).floor() as usize; // 10 metrelik havuz (-5..5), biraz pay bırakıyoruz
+        let nz = ((10.0 - 0.2) / spacing).floor() as usize;
 
         let mut initial_particles = Vec::with_capacity(n);
         for i in 0..n {
-            let xi = (i % side) as f32;
-            let yi = ((i / side) % side) as f32;
-            let zi = (i / (side * side)) as f32;
+            let xi = (i % nx) as f32;
+            let zi = ((i / nx) % nz) as f32;
+            let yi = (i / (nx * nz)) as f32;
 
-            // Ideal spacing for mass=0.457 and rest_density=1000.0 is ~0.077m
-            let spacing = 0.077_f32;
-            let offset_x = -(side as f32) * spacing / 2.0;
-            let offset_z = -(side as f32) * spacing / 2.0;
+            let offset_x = -4.9; // Havuzun sol köşesinden başla
+            let offset_z = -4.9;
 
             let x = offset_x + xi * spacing;
-            let y = 4.0 + yi * spacing; // Suları daha yukardan bırak
+            let y = 0.1 + yi * spacing; // Suları dipten başlat
             let z = offset_z + zi * spacing;
 
             initial_particles.push(FluidParticle {
@@ -79,10 +80,10 @@ impl GpuFluidSystem {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Domain küçük olsun — grid makul boyutta kalsın
-        let bounds_min = [-2.0, 0.0, -2.0];
-        let bounds_max = [2.0, 10.0, 2.0];
-        let cell_size = 0.1_f32;
+        // Domain'i büyütelim, Ocean simülasyonu için daha geniş bir alan
+        let bounds_min = [-5.0, 0.0, -5.0];
+        let bounds_max = [5.0, 10.0, 5.0];
+        let cell_size = 0.1_f32; // DİKKAT: Bunu değiştirmek SPH Kernel formüllerini bozuyordu, 0.1'de kalmalı!
 
         let grid_size_x = f32::ceil((bounds_max[0] - bounds_min[0]) / cell_size) as u32 + 1;
         let grid_size_y = f32::ceil((bounds_max[1] - bounds_min[1]) / cell_size) as u32 + 1;

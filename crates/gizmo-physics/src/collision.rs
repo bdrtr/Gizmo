@@ -20,6 +20,7 @@ pub struct ContactManifold {
     pub entity_b: Entity,
     pub contacts: Vec<ContactPoint>,
     pub friction: f32,
+    pub static_friction: f32,
     pub restitution: f32,
     pub lifetime: u32, // Frames this manifold has existed
 }
@@ -31,6 +32,7 @@ impl ContactManifold {
             entity_b,
             contacts: Vec::new(),
             friction: 0.5,
+            static_friction: 0.5,
             restitution: 0.5,
             lifetime: 0,
         }

@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 pub struct SpatialHash {
     cell_size: f32,
     grid: HashMap<GridCell, Vec<Entity>>,
+    global_entities: Vec<Entity>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -70,15 +71,30 @@ impl SpatialHash {
         Self {
             cell_size,
             grid: HashMap::new(),
+            global_entities: Vec::new(),
         }
     }
 
     pub fn clear(&mut self) {
         self.grid.clear();
+        self.global_entities.clear();
     }
 
     /// Insert an entity with its AABB into the spatial hash
     pub fn insert(&mut self, entity: Entity, aabb: Aabb) {
+        let min_cell = GridCell::from_position(aabb.min.into(), self.cell_size);
+        let max_cell = GridCell::from_position(aabb.max.into(), self.cell_size);
+
+        let dx = (max_cell.x - min_cell.x).abs();
+        let dy = (max_cell.y - min_cell.y).abs();
+        let dz = (max_cell.z - min_cell.z).abs();
+
+        if dx > 100 || dy > 100 || dz > 100 {
+            // Very large AABB, put in global entities to avoid OOM
+            self.global_entities.push(entity);
+            return;
+        }
+
         let cells = aabb.overlapping_cells(self.cell_size);
         for cell in cells {
             self.grid.entry(cell).or_insert_with(Vec::new).push(entity);
@@ -86,8 +102,7 @@ impl SpatialHash {
     }
 
     /// Query potential collision pairs
-    /// Returns a set of entity pairs that might be colliding
-    pub fn query_pairs(&self) -> HashSet<(Entity, Entity)> {
+    pub fn query_pairs(&self) -> Vec<(Entity, Entity)> {
         let mut pairs = HashSet::new();
 
         for entities in self.grid.values() {
@@ -103,7 +118,23 @@ impl SpatialHash {
             }
         }
 
-        pairs
+        if !self.global_entities.is_empty() {
+            let mut all_entities: HashSet<Entity> = self.grid.values().flatten().copied().collect();
+            all_entities.extend(self.global_entities.iter().copied());
+
+            for &global_ent in &self.global_entities {
+                for &other_ent in &all_entities {
+                    if global_ent != other_ent {
+                        let pair = if global_ent.id() < other_ent.id() { (global_ent, other_ent) } else { (other_ent, global_ent) };
+                        pairs.insert(pair);
+                    }
+                }
+            }
+        }
+
+        let mut sorted_pairs: Vec<_> = pairs.into_iter().collect();
+        sorted_pairs.sort_by(|a, b| a.0.id().cmp(&b.0.id()).then(a.1.id().cmp(&b.1.id())));
+        sorted_pairs
     }
 
     /// Query entities near a point
