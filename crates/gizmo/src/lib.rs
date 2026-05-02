@@ -1,5 +1,5 @@
 pub mod color;
-pub mod default_systems;
+pub mod systems;
 pub mod prelude;
 pub mod spawner;
 

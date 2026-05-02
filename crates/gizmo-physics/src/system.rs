@@ -15,68 +15,79 @@ pub fn physics_step_system(world: &World, dt: f32) {
         Err(_) => return, // No physics world, do nothing
     };
 
-    // 2. Query Rigid Bodies
-    let mut rigid_bodies = Vec::new();
-    let query_opt = Query::<(Mut<RigidBody>, Mut<Transform>, Mut<Velocity>)>::new(world);
-    
-    // Create borrow storages to read Collider and Children randomly
-    let col_storage = world.borrow::<Collider>();
-    let children_storage = world.borrow::<gizmo_core::component::Children>();
-    let trans_storage = world.borrow::<Transform>();
+    // 2. Gather Compound Shapes (Read Locks Only)
+    let mut compound_shapes_map = std::collections::HashMap::new();
+    {
+        let col_storage = world.borrow::<Collider>();
+        let children_storage = world.borrow::<gizmo_core::component::Children>();
+        let trans_storage = world.borrow::<Transform>();
+        let rb_storage = world.borrow::<RigidBody>();
 
-    if let Some(query) = &query_opt {
-        for (id, (rb, transform, vel)) in query.iter() {
-            // Traverse hierarchy to gather all colliders into a Compound shape
-            let mut compound_shapes = Vec::new();
-            
-            // Check self
-            if let Some(c) = col_storage.get(id) {
-                compound_shapes.push((crate::components::Transform::default(), Box::new(c.shape.clone())));
-            }
+        for (id, _rb) in rb_storage.iter() {
+            if let Some(transform) = trans_storage.get(id) {
+                let mut compound_shapes = Vec::new();
+                
+                // Check self
+                if let Some(c) = col_storage.get(id) {
+                    compound_shapes.push((crate::components::Transform::default(), Box::new(c.shape.clone())));
+                }
 
-            // Check children recursively
-            let mut stack = vec![id];
-            while let Some(curr_id) = stack.pop() {
-                if let Some(children) = children_storage.get(curr_id) {
-                    for &child_id in &children.0 {
-                        stack.push(child_id);
-                        if let Some(child_trans) = trans_storage.get(child_id) {
-                            if let Some(child_col) = col_storage.get(child_id) {
-                                // Compute local transform relative to the root
-                                let inv_rot = transform.rotation.inverse();
-                                let local_pos = inv_rot.mul_vec3(child_trans.position - transform.position);
-                                let local_rot = inv_rot * child_trans.rotation;
-                                
-                                let local_t = crate::components::Transform::new(local_pos).with_rotation(local_rot);
-                                compound_shapes.push((local_t, Box::new(child_col.shape.clone())));
+                // Check children recursively
+                let mut stack = vec![id];
+                while let Some(curr_id) = stack.pop() {
+                    if let Some(children) = children_storage.get(curr_id) {
+                        for &child_id in &children.0 {
+                            stack.push(child_id);
+                            if let Some(child_trans) = trans_storage.get(child_id) {
+                                if let Some(child_col) = col_storage.get(child_id) {
+                                    // Compute local transform relative to the root
+                                    let inv_rot = transform.rotation.inverse();
+                                    let local_pos = inv_rot.mul_vec3(child_trans.position - transform.position);
+                                    let local_rot = inv_rot * child_trans.rotation;
+                                    
+                                    let local_t = crate::components::Transform::new(local_pos).with_rotation(local_rot);
+                                    compound_shapes.push((local_t, Box::new(child_col.shape.clone())));
+                                }
                             }
                         }
                     }
                 }
+
+                // Create a single Collider for this RigidBody
+                let final_collider = if compound_shapes.is_empty() {
+                    Collider::default() // Should technically not be simulated
+                } else if compound_shapes.len() == 1 {
+                    // Single collider, avoid nesting in Compound
+                    let (_t, s) = compound_shapes.remove(0);
+                    let mut c = Collider::default();
+                    c.shape = *s;
+                    c
+                } else {
+                    let mut c = Collider::default();
+                    c.shape = crate::components::ColliderShape::Compound(compound_shapes);
+                    c
+                };
+                
+                compound_shapes_map.insert(id, final_collider);
             }
+        }
+    } // Read locks are dropped here!
 
-            // Create a single Collider for this RigidBody
-            let final_collider = if compound_shapes.is_empty() {
-                Collider::default() // Should technically not be simulated
-            } else if compound_shapes.len() == 1 {
-                // Single collider, avoid nesting in Compound
-                let (_t, s) = compound_shapes.remove(0);
-                let mut c = Collider::default();
-                c.shape = *s;
-                c
-            } else {
-                let mut c = Collider::default();
-                c.shape = crate::components::ColliderShape::Compound(compound_shapes);
-                c
-            };
-
-            rigid_bodies.push((
-                Entity::new(id, 0),
-                rb.clone(),
-                transform.clone(),
-                vel.clone(),
-                final_collider,
-            ));
+    // 3. Query Rigid Bodies (Write Locks)
+    let mut rigid_bodies = Vec::new();
+    let query_opt = Query::<(Mut<RigidBody>, Mut<Transform>, Mut<Velocity>)>::new(world);
+    
+    if let Some(query) = &query_opt {
+        for (id, (rb, transform, vel)) in query.iter() {
+            if let Some(final_collider) = compound_shapes_map.remove(&id) {
+                rigid_bodies.push((
+                    Entity::new(id, 0),
+                    rb.clone(),
+                    transform.clone(),
+                    vel.clone(),
+                    final_collider,
+                ));
+            }
         }
     }
 

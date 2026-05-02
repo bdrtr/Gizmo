@@ -382,7 +382,7 @@ fn update(world: &mut World, state: &mut TestSandboxState, dt: f32, input: &gizm
     let mut physics_dt = dt.min(0.1); // Cap maximum physics delta time to avoid tunneling
     while physics_dt > 0.0 {
         let step = physics_dt.min(0.016);
-        gizmo::default_systems::cpu_physics_step_system(world, step);
+        gizmo::systems::cpu_physics_step_system(world, step);
         physics_dt -= step;
     }
     
@@ -520,7 +520,7 @@ fn render(
         }
     }
 
-    gizmo::default_systems::default_render_pass(world, encoder, view, renderer);
+    gizmo::systems::default_render_pass(world, encoder, view, renderer);
 }
 
 fn main() {

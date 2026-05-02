@@ -157,14 +157,14 @@ fn main() {
                 gizmos.draw_box(Vec3::new(-2.0, 0.0, -2.0), Vec3::new(2.0, 10.0, 2.0), [0.2, 0.6, 1.0, 0.5]);
             }
             
-            gizmo::default_systems::physics_debug_system(world);
+            gizmo::systems::physics_debug_system(world);
         })
         .set_render(|world, _state, encoder, view, renderer, _light_time| {
             // 1. Fizik Gönderimi (Broadphase, Narrowphase)
-            gizmo::default_systems::gpu_physics_submit_system(world, renderer);
+            gizmo::systems::gpu_physics_submit_system(world, renderer);
             
             // 2. Fluid-Rigid Coupling Senkronizasyonu (Fizikten gelenleri FluidCollider'a yazar)
-            gizmo::default_systems::gpu_fluid_coupling_system(world, renderer);
+            gizmo::systems::gpu_fluid_coupling_system(world, renderer);
 
             // 3. Fluid Parametrelerini güncelle
             // (update_parameters bizim kendi FluidCollider array'imizi ezmesin diye bos liste veriyoruz)
@@ -178,7 +178,7 @@ fn main() {
             // Veya gizmo_renderer içindeki num_colliders'ı okuyup yazarız.
             // En temizi update_parameters cagrisini modify etmek.
             
-            gizmo::default_systems::default_render_pass(world, encoder, view, renderer);
+            gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
         .run();
 }

@@ -771,8 +771,8 @@ fn main() {
                 
                 state.grabbed_object_id.set(new_grabbed_id);
             }
-            gizmo::default_systems::gpu_physics_submit_system(world, renderer);
-            gizmo::default_systems::gpu_physics_readback_system(world, renderer);
+            gizmo::systems::gpu_physics_submit_system(world, renderer);
+            gizmo::systems::gpu_physics_readback_system(world, renderer);
             
             // SPH Sıvı Simülasyonu
             if let Some(fluid) = &mut renderer.gpu_fluid {
@@ -786,7 +786,7 @@ fn main() {
                     fluid.num_particles
                 );
             }
-            gizmo::default_systems::gpu_fluid_coupling_system(world, renderer);
+            gizmo::systems::gpu_fluid_coupling_system(world, renderer);
             
             // --- GPU Particle Spawner (Ateş / Sihir Şelalesi) ---
             if let Some(particles) = &renderer.gpu_particles {
@@ -815,7 +815,7 @@ fn main() {
                 particles.spawn_particles(&renderer.queue, &new_particles);
             }
 
-            gizmo::default_systems::default_render_pass(world, encoder, view, renderer);
+            gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
         .run();
 }

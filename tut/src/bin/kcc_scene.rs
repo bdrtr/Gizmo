@@ -13,12 +13,20 @@ struct KccState {
 }
 
 fn setup(world: &mut World, renderer: &Renderer) -> KccState {
+    println!("SETUP: Starting");
     let mut asset_manager = AssetManager::new();
-    let _phys_world = PhysicsWorld::new();
+    let phys_world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
+    world.insert_resource(phys_world);
     
     // --- SKYBOX ---
+    println!("SETUP: Skybox");
     let skybox_mesh = AssetManager::create_inverted_cube(&renderer.device);
-    let sky_tex = asset_manager.load_material_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout, "assets/sky.jpg").unwrap();
+    let sky_path = if std::path::Path::new("tut/assets/sky.jpg").exists() {
+        "tut/assets/sky.jpg"
+    } else {
+        "assets/sky.jpg"
+    };
+    let sky_tex = asset_manager.load_material_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout, sky_path).expect("Failed to load skybox texture");
     let sky_mat = Material::new(sky_tex).with_skybox();
     
     let sky_ent = world.spawn();
@@ -28,6 +36,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> KccState {
     world.add_component(sky_ent, MeshRenderer::new());
     
     // --- GROUND ---
+    println!("SETUP: Ground");
     let ground_mesh = AssetManager::create_cube(&renderer.device);
     let ground_tex = asset_manager.create_checkerboard_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
     let ground_mat = Material::new(ground_tex.clone()).with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.8, 0.1);
@@ -39,8 +48,10 @@ fn setup(world: &mut World, renderer: &Renderer) -> KccState {
     world.add_component(ground, MeshRenderer::new());
     world.add_component(ground, Collider::box_collider(Vec3::new(100.0, 1.0, 100.0)));
     world.add_component(ground, RigidBody::new_static());
+    world.add_component(ground, Velocity::default());
 
     // --- STAIRS (To test step_height) ---
+    println!("SETUP: Stairs");
     for i in 0..5 {
         let step = world.spawn();
         let step_h = 0.2 * (i as f32 + 1.0);
@@ -51,6 +62,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> KccState {
         world.add_component(step, MeshRenderer::new());
         world.add_component(step, Collider::box_collider(Vec3::new(1.0, step_h, 4.0)));
         world.add_component(step, RigidBody::new_static());
+        world.add_component(step, Velocity::default());
     }
 
     // --- SLOPE (To test max_slope_angle) ---
@@ -63,6 +75,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> KccState {
     world.add_component(slope, MeshRenderer::new());
     world.add_component(slope, Collider::box_collider(Vec3::new(5.0, 0.5, 10.0)));
     world.add_component(slope, RigidBody::new_static());
+    world.add_component(slope, Velocity::default());
 
     let steep_slope = world.spawn();
     let mut steep_trans = Transform::new(Vec3::new(10.0, 2.0, 10.0)).with_scale(Vec3::new(5.0, 0.5, 10.0));
@@ -73,8 +86,10 @@ fn setup(world: &mut World, renderer: &Renderer) -> KccState {
     world.add_component(steep_slope, MeshRenderer::new());
     world.add_component(steep_slope, Collider::box_collider(Vec3::new(5.0, 0.5, 10.0)));
     world.add_component(steep_slope, RigidBody::new_static());
+    world.add_component(steep_slope, Velocity::default());
 
     // --- CHARACTER CONTROLLER ---
+    println!("SETUP: Character");
     let char_ent = world.spawn();
     let char_mesh = AssetManager::create_sphere(&renderer.device, 0.5, 16, 16);
     let char_mat = Material::new(ground_tex.clone()).with_pbr(Vec4::new(0.1, 0.8, 0.2, 1.0), 0.5, 0.5);
@@ -121,6 +136,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> KccState {
         Vec3::new(1.0, 0.95, 0.9), 4.0, gizmo::renderer::components::LightRole::Sun
     ));
 
+    println!("SETUP: Done");
     KccState {
         character_entity: char_ent,
         camera_yaw: 0.0,
@@ -137,9 +153,12 @@ fn update(world: &mut World, state: &mut KccState, _dt: f32, input: &gizmo::core
         state.camera_pitch = state.camera_pitch.clamp(-PI / 2.0 + 0.1, PI / 2.0 - 0.1);
     }
     
-    let cam_rot = Quat::from_euler(gizmo::math::EulerRot::YXZ, state.camera_yaw, state.camera_pitch, 0.0);
-    let forward = cam_rot * Vec3::new(0.0, 0.0, -1.0);
-    let right = cam_rot * Vec3::new(1.0, 0.0, 0.0);
+    let fx = state.camera_yaw.cos() * state.camera_pitch.cos();
+    let fy = state.camera_pitch.sin();
+    let fz = state.camera_yaw.sin() * state.camera_pitch.cos();
+    let forward = Vec3::new(fx, fy, fz).normalize_or_zero();
+    
+    let right = Vec3::new(-state.camera_yaw.sin(), 0.0, state.camera_yaw.cos()).normalize_or_zero();
     
     let mut move_forward = forward;
     move_forward.y = 0.0;
@@ -148,6 +167,11 @@ fn update(world: &mut World, state: &mut KccState, _dt: f32, input: &gizmo::core
     let mut move_right = right;
     move_right.y = 0.0;
     move_right = move_right.normalize_or_zero();
+    
+    // We can also calculate a quaternion for the character to visually rotate them
+    // The engine's Camera points to +X at yaw=0, so to align a character mesh we would
+    // typically need a specific rotation. For now we use the yaw directly.
+    let cam_rot = Quat::from_rotation_y(-state.camera_yaw);
 
     // --- CHARACTER CONTROL ---
     let mut char_pos = Vec3::ZERO;
@@ -168,11 +192,22 @@ fn update(world: &mut World, state: &mut KccState, _dt: f32, input: &gizmo::core
         }
     }
     
-    if let Some(trans) = world.borrow::<Transform>().get(state.character_entity.id()) {
-        char_pos = trans.position;
+    // --- PHYSICS STEP ---
+    let mut physics_dt = _dt.min(0.1);
+    while physics_dt > 0.0 {
+        let step = physics_dt.min(0.016);
+        gizmo::physics::system::physics_step_system(world, step);
+        physics_dt -= step;
     }
     
-    let cam_pos = char_pos - forward * 8.0 + Vec3::new(0.0, 2.0, 0.0);
+    // Update character rotation to match camera yaw
+    if let Some(trans) = world.borrow_mut::<Transform>().get_mut(state.character_entity.id()) {
+        char_pos = trans.position;
+        trans.rotation = Quat::from_rotation_y(state.camera_yaw);
+    }
+    
+    // Camera is now placed at the character's head level, acting like an FPS camera
+    let cam_pos = char_pos + Vec3::new(0.0, 0.8, 0.0);
     
     if let Some(mut q) = world.query::<(gizmo::core::query::Mut<Transform>, gizmo::core::query::Mut<Camera>)>() {
         for (_, (mut trans, mut cam)) in q.iter_mut() {
@@ -193,7 +228,7 @@ fn render(
     _light_time: f32,
 ) {
     renderer.gpu_physics = None;
-    gizmo::default_systems::default_render_pass(world, encoder, view, renderer);
+    gizmo::systems::default_render_pass(world, encoder, view, renderer);
 }
 
 fn main() {

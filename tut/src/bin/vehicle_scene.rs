@@ -194,7 +194,7 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &gizmo::c
     }
 
     // CPU Physics (VehicleController içeride çalışıp kuvvetleri uygulayacak)
-    gizmo::default_systems::cpu_physics_step_system(world, dt);
+    gizmo::systems::cpu_physics_step_system(world, dt);
 
     // Kasa durumunu oku
     let mut car_pos = Vec3::ZERO;
@@ -268,7 +268,7 @@ fn render(
     _light_time: f32,
 ) {
     renderer.gpu_physics = None;
-    gizmo::default_systems::default_render_pass(world, encoder, view, renderer);
+    gizmo::systems::default_render_pass(world, encoder, view, renderer);
 }
 
 fn main() {

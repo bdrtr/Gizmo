@@ -236,7 +236,7 @@ fn main() {
                 }
             }
 
-            gizmo::default_systems::default_render_pass(world, encoder, view, renderer);
+            gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
         .run();
 }

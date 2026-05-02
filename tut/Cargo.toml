@@ -11,9 +11,6 @@ rand = "0.8"
 winit = { workspace = true }
 bytemuck = "1.14"
 
-[[bin]]
-name = "gpu_demo"
-path = "src/gpu_demo.rs"
 
 [[bin]]
 name = "fluid_rigid"

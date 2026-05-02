@@ -341,7 +341,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
     }
 
     // CPU Physics Adımı (Gizmo ECS entegrasyonu)
-    gizmo::default_systems::cpu_physics_step_system(world, dt);
+    gizmo::systems::cpu_physics_step_system(world, dt);
 }
 
 fn render(
@@ -438,7 +438,7 @@ fn render(
     renderer.gpu_physics = None;
 
     // CPU objelerini render et
-    gizmo::default_systems::default_render_pass(world, encoder, view, renderer);
+    gizmo::systems::default_render_pass(world, encoder, view, renderer);
 }
 
 fn main() {

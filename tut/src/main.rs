@@ -142,7 +142,7 @@ fn main() {
                 });
         })
         .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            gizmo::default_systems::default_render_pass(world, encoder, view, renderer);
+            gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
         .run();
 }

@@ -5,6 +5,7 @@ pub mod fracture;
 pub mod integrator;
 pub mod joints;
 pub mod narrowphase;
+pub mod gjk;
 pub mod raycast;
 pub mod solver;
 pub mod shape;
@@ -27,7 +28,8 @@ pub use joints::{
     Joint, JointData, JointSolver, JointType, HingeJointData, BallSocketJointData,
     SliderJointData, SpringJointData,
 };
-pub use narrowphase::{Gjk, NarrowPhase};
+pub use narrowphase::NarrowPhase;
+pub use gjk::Gjk;
 pub use raycast::{Ray, Raycast, RaycastHit};
 pub use solver::ConstraintSolver;
 pub use world::PhysicsWorld;

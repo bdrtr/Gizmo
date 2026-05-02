@@ -393,7 +393,7 @@ fn render(
     }
     
     // 2. Render all standard entities (Skybox, Ground Plane)
-    gizmo::default_systems::default_render_pass(world, encoder, view, renderer);
+    gizmo::systems::default_render_pass(world, encoder, view, renderer);
 
     // 3. Prepare depth for FEM pass
     let depth_view = &renderer.depth_texture_view;

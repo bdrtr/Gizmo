@@ -156,7 +156,7 @@ fn run(cube_count: u32) {
                     physics.enable_debug(&renderer.device, 0);
                 }
             }
-            gizmo::default_systems::default_render_pass(world, encoder, view, renderer);
+            gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
         .run();
 }
