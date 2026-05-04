@@ -1,0 +1,536 @@
+use gizmo::prelude::*;
+use gizmo::physics::components::{Collider, RigidBody, Transform, Velocity};
+use gizmo::physics::world::PhysicsWorld;
+use gizmo::renderer::asset::AssetManager;
+use gizmo::renderer::components::{Camera, Material, MeshRenderer, PointLight};
+
+struct DemoState {
+    car_entity: gizmo::core::Entity,
+    wheel_entities: [gizmo::core::Entity; 4],
+    camera_offset: Vec3,
+    post_process: gizmo::renderer::gpu_types::PostProcessUniforms,
+    pending_particles: std::cell::RefCell<Vec<gizmo::renderer::gpu_particles::GpuParticle>>,
+}
+
+fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
+    // --- Geliştirici Konsolu (CVar) Kayıtları ---
+    if let Some(mut registry) = world.get_resource_mut::<gizmo::core::cvar::CVarRegistry>() {
+        registry.register("physics_gravity_y", "World Gravity Y-Axis", gizmo::core::cvar::CVarValue::Float(-9.8));
+        registry.register("car_torque", "Vehicle Engine Air Torque", gizmo::core::cvar::CVarValue::Float(1500.0));
+    }
+
+    let mut asset_manager = AssetManager::new();
+
+    // Textures
+    let ground_tex = asset_manager.load_material_texture(
+        &renderer.device,
+        &renderer.queue,
+        &renderer.scene.texture_bind_group_layout,
+        "tut/assets/textures/dirt_grass.jpg"
+    ).unwrap_or_else(|_| asset_manager.create_checkerboard_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout));
+
+    let car_tex = asset_manager.load_material_texture(
+        &renderer.device,
+        &renderer.queue,
+        &renderer.scene.texture_bind_group_layout,
+        "tut/assets/textures/rusty_metal.jpg"
+    ).unwrap_or_else(|_| asset_manager.create_checkerboard_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout));
+    
+    let tire_tex = asset_manager.load_material_texture(
+        &renderer.device,
+        &renderer.queue,
+        &renderer.scene.texture_bind_group_layout,
+        "tut/assets/textures/tire_tread.jpg"
+    ).unwrap_or_else(|_| asset_manager.create_checkerboard_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout));
+    
+    let white_tex = asset_manager.create_white_texture(
+        &renderer.device,
+        &renderer.queue,
+        &renderer.scene.texture_bind_group_layout,
+    );
+
+    let cube_mesh = AssetManager::create_cube(&renderer.device);
+    let cylinder_mesh = AssetManager::create_sphere(&renderer.device, 1.0, 16, 16); 
+
+    // Camera
+    let camera_ent = world.spawn();
+    world.add_component(
+        camera_ent,
+        Transform::new(Vec3::new(0.0, 5.0, 25.0)),
+    );
+    world.add_component(
+        camera_ent,
+        Camera::new(
+            std::f32::consts::FRAC_PI_4,
+            0.1,
+            1000.0,
+            -std::f32::consts::FRAC_PI_2, // Look at -Z
+            0.0,
+            true,
+        ),
+    );
+    world.add_component(camera_ent, gizmo::core::EntityName("Main Camera".into()));
+
+    // Skybox
+    let skybox = world.spawn();
+    let sky_mesh = AssetManager::create_sphere(&renderer.device, 500.0, 32, 32);
+    world.add_component(skybox, Transform::new(Vec3::new(0.0, 0.0, 0.0)));
+    world.add_component(skybox, sky_mesh);
+    world.add_component(
+        skybox,
+        Material::new(white_tex.clone())
+            .with_unlit(Vec4::new(0.6, 0.8, 1.0, 1.0))
+            .with_skybox(),
+    );
+    world.add_component(skybox, MeshRenderer::new());
+
+    // Light
+    let light = world.spawn();
+    world.add_component(light, Transform::new(Vec3::new(0.0, 50.0, 0.0)));
+    // Increased intensity slightly to make the bloom pop more
+    world.add_component(light, PointLight::new(Vec3::new(1.0, 0.9, 0.8), 5000.0, 150.0));
+
+    let phys_world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -20.0, 0.0));
+
+    // --- HILL TERRAIN ---
+    let mut x_pos = -20.0;
+    let mut y_pos = 0.0;
+    
+    // Starting platform - Make it a long straight track for building speed!
+    let ground = world.spawn();
+    world.add_component(ground, Transform::new(Vec3::new(60.0, y_pos - 2.0, 0.0)).with_scale(Vec3::new(80.0, 2.0, 5.0)));
+    world.add_component(ground, cube_mesh.clone());
+    world.add_component(ground, Material::new(ground_tex.clone()).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.8, 0.1));
+    world.add_component(ground, MeshRenderer::new());
+    world.add_component(ground, Collider::box_collider(Vec3::new(80.0, 2.0, 5.0)));
+    world.add_component(ground, RigidBody::new_static());
+    world.add_component(ground, Velocity::default());
+    
+    x_pos += 140.0;
+
+    // --- DESTRUCTIBLE BOX PYRAMID ---
+    let box_mat = Material::new(white_tex.clone())
+        .with_pbr(Vec4::new(0.9, 0.4, 0.1, 1.0), 0.7, 0.1); // Orange/Red boxes
+
+    let pyramid_base = 8; // 36 massive boxes!
+    let box_size = 2.0; // Make them huge so the chassis hits them directly (prevent driving over them)
+    let gap = 0.05; 
+    let start_x = 50.0; 
+    let start_y = 1.0 + gap; // Top of the ground is 0.0, half extent is 1.0
+
+    for row in 0..pyramid_base {
+        let items_in_row = pyramid_base - row;
+        for i in 0..items_in_row {
+            let bx = world.spawn();
+            let x = start_x + (i as f32 * (box_size + gap)) + (row as f32 * (box_size + gap) * 0.5);
+            let y = start_y + (row as f32 * (box_size + gap));
+            
+            world.add_component(bx, Transform::new(Vec3::new(x, y, 0.0)).with_scale(Vec3::splat(box_size * 0.5)));
+            world.add_component(bx, cube_mesh.clone());
+            world.add_component(bx, box_mat.clone());
+            world.add_component(bx, MeshRenderer::new());
+            
+            let col = Collider::box_collider(Vec3::splat(box_size * 0.5));
+            let mut rb = RigidBody::new(30.0, 0.0, 0.8, true); // 30kg, 0 bounce, high friction
+            rb.linear_damping = 1.5; // High air resistance so they don't fly to infinity
+            rb.angular_damping = 1.5;
+            rb.update_inertia_from_collider(&col);
+            rb.ccd_enabled = false; // Disable CCD on boxes to prevent constraint explosion when squished
+            
+            // 2.5D Constraints: Lock Z translation and X/Y rotations to keep them strictly on the 2D plane
+            rb.lock_translation_z = true; 
+            rb.lock_rotation_x = true;
+            rb.lock_rotation_y = true;
+            
+            world.add_component(bx, col);
+            world.add_component(bx, rb);
+            world.add_component(bx, Velocity::default());
+        }
+    }
+
+    for _ in 0..50 {
+        let width = 6.0 + rand::random::<f32>() * 6.0;
+        let angle = (rand::random::<f32>() - 0.3) * 0.8; 
+        
+        let step_x = width * angle.cos();
+        let step_y = width * angle.sin();
+        
+        let hill = world.spawn();
+        let transform = Transform::new(Vec3::new(x_pos + step_x, y_pos + step_y - 2.0, 0.0))
+            .with_rotation(Quat::from_rotation_z(angle))
+            .with_scale(Vec3::new(width, 2.0, 5.0));
+            
+        world.add_component(hill, transform);
+        world.add_component(hill, cube_mesh.clone());
+        world.add_component(hill, Material::new(ground_tex.clone()).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.9, 0.8));
+        world.add_component(hill, MeshRenderer::new());
+        world.add_component(hill, Collider::box_collider(Vec3::new(width, 2.0, 5.0)));
+        world.add_component(hill, RigidBody::new_static());
+        world.add_component(hill, Velocity::default());
+        
+        x_pos += step_x * 2.0;
+        y_pos += step_y * 2.0;
+    }
+
+    // --- CAR (Using Raycast Vehicle Controller for Ultimate Stability) ---
+    let car_start_pos = Vec3::new(-10.0, 3.0, 0.0);
+    let car_w = 1.8;
+    let car_h = 1.2;
+    let car_l = 4.0;
+    
+    // Chassis
+    let chassis = world.spawn();
+    // Rotate -90 degrees around Y so the car faces +X (Right)
+    let start_rot = Quat::from_axis_angle(Vec3::Y, -std::f32::consts::FRAC_PI_2);
+    let car_half_extents = Vec3::new(car_w * 0.5, car_h * 0.5, car_l * 0.5);
+    world.add_component(chassis, Transform::new(car_start_pos).with_rotation(start_rot).with_scale(car_half_extents));
+    world.add_component(chassis, cube_mesh.clone());
+    world.add_component(chassis, Material::new(car_tex.clone()).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.3, 0.1));
+    world.add_component(chassis, MeshRenderer::new());
+    
+    let car_col = Collider::box_collider(car_half_extents);
+    let mut chassis_rb = RigidBody::new(1500.0, 0.1, 0.5, true);
+    chassis_rb.update_inertia_from_collider(&car_col);
+    chassis_rb.ccd_enabled = true; // Prevent high speed tunneling
+    
+    // 2.5D CONSTRAINTS
+    chassis_rb.lock_translation_z = true;
+    chassis_rb.lock_rotation_x = true;
+    chassis_rb.lock_rotation_y = true;
+    
+    world.add_component(chassis, car_col);
+    world.add_component(chassis, chassis_rb);
+    world.add_component(chassis, Velocity::default());
+
+    // Visual Wheels
+    let wheel_radius = 0.4;
+    let wheel_mat = Material::new(tire_tex.clone()).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.8, 0.0);
+    let mut wheel_entities = [chassis; 4];
+    let wheel_local_pos = [
+        Vec3::new(-1.0, -0.6, -1.5),  // Rear Left
+        Vec3::new(1.0, -0.6, -1.5),   // Rear Right
+        Vec3::new(-1.0, -0.6, 1.5),   // Front Left
+        Vec3::new(1.0, -0.6, 1.5),    // Front Right
+    ];
+
+    for i in 0..4 {
+        let w = world.spawn();
+        world.add_component(w, Transform::new(car_start_pos + wheel_local_pos[i]).with_scale(Vec3::splat(wheel_radius)));
+        world.add_component(w, cylinder_mesh.clone());
+        world.add_component(w, wheel_mat.clone());
+        world.add_component(w, MeshRenderer::new());
+        // NO COLLIDERS or RIGIDBODIES FOR WHEELS! The VehicleController handles it perfectly.
+        wheel_entities[i] = w;
+    }
+
+    // Vehicle Controller Setup
+    let mut vehicle = gizmo::physics::vehicle::VehicleController::new();
+    
+    // Decrease max rpm so it feels like a truck/jeep
+    vehicle.tuning.max_rpm = 4000.0;
+    vehicle.tuning.max_engine_torque = 15000.0; 
+    vehicle.tuning.gear_ratios = vec![-3.0, 0.0, 4.0, 2.5, 1.8]; // Low gear ratios for climbing
+
+    for i in 0..4 {
+        let axle_type = if i < 2 { gizmo::physics::vehicle::Axle::Rear } else { gizmo::physics::vehicle::Axle::Front };
+        let is_left = i % 2 == 0;
+        
+        // Custom pacejka for arcade climbing
+        let mut pacejka = gizmo::physics::vehicle::PacejkaParams::default();
+        pacejka.d = 2.0; // High friction peak
+
+        vehicle.add_wheel(gizmo::physics::vehicle::Wheel {
+            attachment_local_pos: wheel_local_pos[i],
+            radius: wheel_radius,
+            axle_type,
+            is_left,
+            suspension_rest_length: 0.6,
+            suspension_max_travel: 0.5,
+            suspension_stiffness: 75000.0, // Increased to support 1500kg chassis
+            suspension_damping: 8000.0,
+            pacejka_long: pacejka.clone(),
+            pacejka_lat: pacejka.clone(),
+            ..Default::default()
+        });
+    }
+    world.add_component(chassis, vehicle);
+
+    world.insert_resource(phys_world);
+    world.insert_resource(asset_manager);
+
+    DemoState {
+        car_entity: chassis,
+        wheel_entities,
+        camera_offset: Vec3::new(0.0, 5.0, 30.0),
+        post_process: gizmo::renderer::gpu_types::PostProcessUniforms {
+            bloom_intensity: 1.5,     // Make bloom prominent by default
+            bloom_threshold: 0.85,
+            exposure: 1.2,
+            chromatic_aberration: 0.005,
+            vignette_intensity: 0.4,
+            film_grain_intensity: 0.02,
+            dof_focus_dist: 30.0,
+            dof_focus_range: 20.0,
+            dof_blur_size: 1.0,
+            _padding: [0.0; 3],
+        },
+        pending_particles: std::cell::RefCell::new(Vec::new()),
+    }
+}
+
+fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core::input::Input) {
+    let mut is_console_open = false;
+    if let Some(console_state) = world.get_resource::<gizmo::core::cvar::DevConsoleState>() {
+        is_console_open = console_state.is_open;
+    }
+
+    let mut throttle = 0.0;
+    let mut brake = 0.0;
+    let mut air_torque = 0.0;
+
+    if !is_console_open {
+        if input.is_key_pressed(KeyCode::KeyW as u32) || input.is_key_pressed(KeyCode::KeyD as u32) || input.is_key_pressed(KeyCode::ArrowUp as u32) || input.is_key_pressed(KeyCode::ArrowRight as u32) {
+            throttle = 1.0;
+            air_torque = 1500.0; // Lean back (+Z rotation is nose up when facing right)
+        } else if input.is_key_pressed(KeyCode::KeyS as u32) || input.is_key_pressed(KeyCode::KeyA as u32) || input.is_key_pressed(KeyCode::ArrowDown as u32) || input.is_key_pressed(KeyCode::ArrowLeft as u32) {
+            brake = 1.0;
+            air_torque = -1500.0; // Lean forward (-Z rotation is nose down when facing right)
+        }
+    }
+
+    // --- CVAR (Developer Console) UYGULAMASI ---
+    if let Some(registry) = world.get_resource::<gizmo::core::cvar::CVarRegistry>() {
+        // Yerçekimini canlı güncelle
+        if let Some(gizmo::core::cvar::CVarValue::Float(g)) = registry.get("physics_gravity_y") {
+            if let Ok(mut phys) = world.try_get_resource_mut::<gizmo::physics::world::PhysicsWorld>() {
+                phys.integrator.gravity = Vec3::new(0.0, *g, 0.0);
+            }
+        }
+        
+        // Tork gücünü canlı güncelle
+        if let Some(gizmo::core::cvar::CVarValue::Float(t)) = registry.get("car_torque") {
+            if throttle > 0.0 { air_torque = *t; }
+            else if brake > 0.0 { air_torque = -*t; }
+        }
+    }
+
+    // --- PHYSICS DEBUG CONTROLS ---
+    if !is_console_open {
+        if let Ok(mut phys_world) = world.try_get_resource_mut::<gizmo::physics::world::PhysicsWorld>() {
+            // P: Pause toggle
+            if input.is_key_just_pressed(KeyCode::KeyP as u32) {
+                phys_world.is_paused = !phys_world.is_paused;
+                tracing::warn!("Physics Paused: {}", phys_world.is_paused);
+            }
+            
+            // O: Step once (when paused)
+            if input.is_key_pressed(KeyCode::KeyO as u32) {
+                phys_world.step_once = true;
+                tracing::warn!("Physics Step Triggered");
+            }
+            
+            // R: Rewind time! (Hold to continuously rewind)
+            if input.is_key_pressed(KeyCode::KeyR as u32) {
+                phys_world.rewind_requested = true;
+            }
+        }
+    }
+
+    // Air Control and Inputs
+    if let Some(q_v) = world.query::<gizmo::core::query::Mut<gizmo::physics::vehicle::VehicleController>>() {
+        if let Some(mut vehicle) = q_v.get(state.car_entity.id()) {
+            let is_reverse = brake > 0.0 && vehicle.current_speed_kmh < 1.0;
+            vehicle.set_reverse(is_reverse);
+
+            if vehicle.reverse_input {
+                // In reverse, the S key (brake) acts as the gas pedal
+                vehicle.throttle_input = brake;
+                vehicle.brake_input = throttle; // W key becomes the brake when reversing
+            } else {
+                vehicle.throttle_input = throttle;
+                vehicle.brake_input = brake;
+            }
+            
+            if throttle > 0.0 || brake > 0.0 {
+                if let Some(q_rb) = world.query::<gizmo::core::query::Mut<RigidBody>>() {
+                    if let Some(mut rb) = q_rb.get(state.car_entity.id()) {
+                        rb.wake_up();
+                    }
+                }
+            }
+            
+            // Check if grounded to apply air control
+            let is_grounded = vehicle.wheels.iter().any(|w| w.is_grounded);
+            if !is_grounded && air_torque != 0.0 {
+                if let Some(q_rb) = world.query::<gizmo::core::query::Mut<Velocity>>() {
+                    if let Some(mut vel) = q_rb.get(state.car_entity.id()) {
+                        // Directly applying torque scaled by dt
+                        vel.angular.z += air_torque * dt * 0.005;
+                    }
+                }
+            }
+        }
+    }
+
+    // Step physics
+    gizmo::systems::cpu_physics_step_system(world, dt);
+
+    // Sync Visual Wheels and Spawns Particles
+    let mut car_pos = Vec3::ZERO;
+    let mut car_rot = Quat::IDENTITY;
+    if let Some(q) = world.query::<&Transform>() {
+        if let Some(t) = q.get(state.car_entity.id()) {
+            car_pos = t.position;
+            car_rot = t.rotation;
+        }
+    }
+
+    if let Some(q_v) = world.query::<&gizmo::physics::vehicle::VehicleController>() {
+        if let Some(vehicle) = q_v.get(state.car_entity.id()) {
+            let speed = vehicle.current_speed_kmh;
+            let mut pending = state.pending_particles.borrow_mut();
+
+            if let Some(q_t) = world.query::<gizmo::core::query::Mut<Transform>>() {
+                for i in 0..4 {
+                    if let Some(mut wt) = q_t.get(state.wheel_entities[i].id()) {
+                        let wheel = &vehicle.wheels[i];
+                        let anchor_world = car_pos + car_rot.mul_vec3(wheel.attachment_local_pos);
+                        let up = car_rot.mul_vec3(Vec3::new(0.0, 1.0, 0.0));
+                        wt.set_position(anchor_world - up * wheel.suspension_length);
+                        
+                        let align_rot = Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2);
+                        let spin_rot = Quat::from_rotation_x(wheel.rotation_angle);
+                        wt.set_rotation(car_rot * spin_rot * align_rot);
+
+                        // Dust particles ONLY for grounded wheels (much smaller, localized)
+                        if wheel.is_grounded && (speed > 5.0 || (speed < 5.0 && (throttle > 0.0 || brake > 0.0))) {
+                            let pos_bottom = wt.position - Vec3::new(0.0, wheel.radius * 0.9, 0.0);
+                            for _ in 0..2 {
+                                let vx = (rand::random::<f32>() - 0.5) * 1.5; // less horizontal spread
+                                let vy = rand::random::<f32>() * 1.5 + 0.5; // gentle lift
+                                let vz = (rand::random::<f32>() - 0.5) * 1.5;
+                                
+                                pending.push(gizmo::renderer::gpu_particles::GpuParticle {
+                                    position: [pos_bottom.x, pos_bottom.y, pos_bottom.z],
+                                    life: 0.4 + rand::random::<f32>() * 0.3, // Shorter life
+                                    velocity: [vx, vy, vz],
+                                    max_life: 0.8,
+                                    color: [0.55, 0.45, 0.35, 0.5], // Brownish dust
+                                    size_start: 0.2 + rand::random::<f32>() * 0.2, // Very small
+                                    size_end: 0.8 + rand::random::<f32>() * 0.4, // Small dissipation
+                                    _padding: [0.0; 2],
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Camera follow
+    if let Some(mut q) = world.query::<(gizmo::core::query::Mut<Transform>, &Camera)>() {
+        for (_, (mut cam_trans, _)) in q.iter_mut() {
+            let desired_pos = car_pos + state.camera_offset;
+            cam_trans.position = cam_trans.position.lerp(desired_pos, dt * 5.0);
+            cam_trans.update_local_matrix();
+        }
+    }
+}
+
+fn render(
+    world: &mut World,
+    state: &DemoState,
+    encoder: &mut gizmo::wgpu::CommandEncoder,
+    view: &gizmo::wgpu::TextureView,
+    renderer: &mut Renderer,
+    _light_time: f32,
+) {
+    renderer.gpu_physics = None;
+    renderer.update_post_process(&renderer.queue, state.post_process);
+    
+    let mut pending = state.pending_particles.borrow_mut();
+    if !pending.is_empty() {
+        if let Some(gpu_particles) = &renderer.gpu_particles {
+            gpu_particles.spawn_particles(&renderer.queue, &pending);
+        }
+        pending.clear();
+    }
+    
+    gizmo::systems::default_render_pass(world, encoder, view, renderer);
+}
+
+fn ui_debug_panel(world: &mut World, state: &mut DemoState, ctx: &gizmo::egui::Context) {
+    gizmo::egui::Window::new("🛠 Gizmo Debugger")
+        .default_pos([10.0, 10.0])
+        .show(ctx, |ui| {
+            // --- METRICS ---
+            ui.heading("Performance");
+            if let Ok(time) = world.try_get_resource::<gizmo::core::time::Time>() {
+                ui.label(format!("FPS: {:.0}", time.fps()));
+                ui.label(format!("Frame Time: {:.2} ms", time.raw_dt() * 1000.0));
+            }
+            ui.separator();
+            
+            // --- PHYSICS ---
+            if let Ok(mut phys) = world.try_get_resource_mut::<gizmo::physics::world::PhysicsWorld>() {
+                ui.heading("Physics Engine");
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut phys.is_paused, "Pause (P)");
+                    if ui.button("Step (O)").clicked() {
+                        phys.step_once = true;
+                    }
+                    if ui.button("Rewind (R)").clicked() {
+                        phys.rewind_requested = true;
+                    }
+                });
+                ui.label(format!("Active Rigidbodies: {}", phys.rigid_bodies.len()));
+                ui.label(format!("History Buffer: {} / {}", phys.history.len(), phys.max_history_frames));
+            }
+            
+            ui.separator();
+            ui.label("Use W/A/S/D to drive");
+            
+            ui.separator();
+            ui.heading("Görsel Kalite / Post-Process");
+            ui.add(gizmo::egui::Slider::new(&mut state.post_process.bloom_intensity, 0.0..=5.0).text("Bloom Yoğunluğu"));
+            ui.add(gizmo::egui::Slider::new(&mut state.post_process.bloom_threshold, 0.0..=2.0).text("Bloom Eşiği"));
+            ui.add(gizmo::egui::Slider::new(&mut state.post_process.exposure, 0.1..=5.0).text("Exposure (Pozlama)"));
+            ui.add(gizmo::egui::Slider::new(&mut state.post_process.chromatic_aberration, 0.0..=0.05).text("Kromatik Sapma"));
+            ui.add(gizmo::egui::Slider::new(&mut state.post_process.vignette_intensity, 0.0..=1.0).text("Vignette"));
+            ui.add(gizmo::egui::Slider::new(&mut state.post_process.film_grain_intensity, 0.0..=0.5).text("Film Greni"));
+            
+            ui.label("Depth of Field (Alan Derinliği)");
+            ui.add(gizmo::egui::Slider::new(&mut state.post_process.dof_focus_dist, 0.0..=100.0).text("Odak Uzaklığı"));
+            ui.add(gizmo::egui::Slider::new(&mut state.post_process.dof_focus_range, 0.0..=50.0).text("Odak Derinliği"));
+            ui.add(gizmo::egui::Slider::new(&mut state.post_process.dof_blur_size, 0.0..=5.0).text("Bulanıklık Miktarı"));
+        });
+}
+
+fn main() {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::Layer;
+    tracing::subscriber::set_global_default(
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer().with_filter(tracing_subscriber::filter::LevelFilter::INFO))
+            .with(tracing_tracy::TracyLayer::default())
+    ).expect("Set global default subscriber failed");
+    let mut app = App::<DemoState>::new("Gizmo Engine - Hill Climb Racing 2D", 1280, 720)
+        .set_setup(setup)
+        .set_update(update)
+        .set_render(render)
+        .set_ui(ui_debug_panel);
+
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--record") {
+        println!("== OYUN KAYDI BASLADI ==");
+        app = app.start_recording();
+    } else if let Some(idx) = args.iter().position(|arg| arg == "--playback") {
+        if idx + 1 < args.len() {
+            println!("== OYUN KAYDI OYNATILIYOR: {} ==", args[idx + 1]);
+            app = app.start_playback(&args[idx + 1]);
+        }
+    }
+
+    app.run();
+}

@@ -69,7 +69,7 @@ impl<'a> ObjectBuilder<'a> {
         self.rigid_body = Some(RigidBody::new(mass, restitution, friction, true)); 
         self 
     }
-    pub fn velocity(mut self, v: Vec3) -> Self { self.velocity = Some(Velocity { linear: v, angular: Vec3::ZERO }); self }
+    pub fn velocity(mut self, v: Vec3) -> Self { self.velocity = Some(Velocity { linear: v, angular: Vec3::ZERO, ..Default::default() }); self }
     pub fn destructible(mut self) -> Self { self.destructible = true; self }
 
     pub fn spawn(self) -> gizmo::core::Entity {

@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 pub struct Velocity {
     pub linear: Vec3,
     pub angular: Vec3,
+    pub last_linear: Vec3,
+    pub force: Vec3,
 }
 
 impl Velocity {
@@ -12,6 +14,8 @@ impl Velocity {
         Self {
             linear,
             angular: Vec3::ZERO,
+            last_linear: linear,
+            force: Vec3::ZERO,
         }
     }
 }

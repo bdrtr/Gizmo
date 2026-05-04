@@ -33,12 +33,13 @@ fn setup(world: &mut World, renderer: &Renderer) -> VehicleState {
     let ground_mat = Material::new(ground_tex.clone()).with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.8, 0.1);
     
     let ground = world.spawn();
-    world.add_component(ground, Transform::new(Vec3::new(0.0, -1.0, 0.0)).with_scale(Vec3::new(200.0, 1.0, 200.0)));
+    world.add_component(ground, Transform::new(Vec3::new(0.0, -1.0, 0.0)).with_scale(Vec3::new(2000.0, 1.0, 2000.0)));
     world.add_component(ground, ground_mesh.clone());
     world.add_component(ground, ground_mat.clone());
     world.add_component(ground, MeshRenderer::new());
-    world.add_component(ground, Collider::box_collider(Vec3::new(200.0, 1.0, 200.0)));
+    world.add_component(ground, Collider::box_collider(Vec3::new(2000.0, 1.0, 2000.0)));
     world.add_component(ground, RigidBody::new(0.0, 0.1, 0.8, false));
+    world.add_component(ground, Velocity::default());
 
     // --- ATLAMA RAMPASI (JUMP RAMP) ---
     let ramp = world.spawn();
@@ -50,6 +51,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> VehicleState {
     world.add_component(ramp, MeshRenderer::new());
     world.add_component(ramp, Collider::box_collider(Vec3::new(8.0, 0.5, 15.0)));
     world.add_component(ramp, RigidBody::new(0.0, 0.1, 0.8, false));
+    world.add_component(ramp, Velocity::default());
 
     // --- FİZİKSEL ARAÇ (RAYCAST VEHICLE) ---
     let car_ent = world.spawn();
@@ -62,9 +64,12 @@ fn setup(world: &mut World, renderer: &Renderer) -> VehicleState {
     let car_mat = Material::new(ground_tex.clone()).with_pbr(Vec4::new(0.9, 0.1, 0.1, 1.0), 0.3, 0.5); // Kırmızı spor araba rengi
     world.add_component(car_ent, car_mat);
     world.add_component(car_ent, MeshRenderer::new());
-    world.add_component(car_ent, Collider::box_collider(Vec3::new(car_w, car_h, car_l)));
-    // Araç kütlesi yüksek olmalı ki süspansiyonları esnetsin
-    world.add_component(car_ent, RigidBody::new(800.0, 0.1, 0.5, true)); 
+    let car_col = Collider::box_collider(Vec3::new(car_w, car_h, car_l));
+    let mut car_rb = RigidBody::new(800.0, 0.1, 0.5, true);
+    car_rb.update_inertia_from_collider(&car_col);
+
+    world.add_component(car_ent, car_col);
+    world.add_component(car_ent, car_rb); 
     world.add_component(car_ent, Velocity::default());
 
     // Tekerlek pozisyonları (Görsel Tekerlekler)
@@ -94,13 +99,17 @@ fn setup(world: &mut World, renderer: &Renderer) -> VehicleState {
     // YENİ ECS ARAÇ DENETLEYİCİSİNİ EKLİYORUZ
     let mut vehicle = gizmo::physics::vehicle::VehicleController::new();
     for i in 0..4 {
+        let axle_type = if i < 2 { gizmo::physics::vehicle::Axle::Front } else { gizmo::physics::vehicle::Axle::Rear };
+        let is_left = i % 2 == 0; // 0, 2 are Left; 1, 3 are Right
+
         vehicle.add_wheel(gizmo::physics::vehicle::Wheel {
             attachment_local_pos: wheel_local_pos[i],
             radius: wheel_radius,
+            axle_type,
+            is_left,
             suspension_rest_length: 0.6,
             suspension_stiffness: 30000.0,
             suspension_damping: 2500.0,
-            friction_slip: 10.5,
             ..Default::default()
         });
     }
@@ -115,8 +124,12 @@ fn setup(world: &mut World, renderer: &Renderer) -> VehicleState {
             let b_mat = Material::new(ground_tex.clone()).with_pbr(Vec4::new(0.8, 0.6, 0.2, 1.0), 0.8, 0.0);
             world.add_component(b, b_mat);
             world.add_component(b, MeshRenderer::new());
-            world.add_component(b, Collider::box_collider(Vec3::splat(0.5)));
-            world.add_component(b, RigidBody::new(20.0, 0.1, 0.8, true));
+            let b_col = Collider::box_collider(Vec3::splat(0.5));
+            let mut b_rb = RigidBody::new(20.0, 0.1, 0.8, true);
+            b_rb.update_inertia_from_collider(&b_col);
+            
+            world.add_component(b, b_col);
+            world.add_component(b, b_rb);
             world.add_component(b, Velocity::default());
         }
     }
@@ -169,27 +182,20 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &gizmo::c
     state.time += dt;
 
     // --- ARAÇ GİRDİLERİ ---
-    let mut engine_force = 0.0;
-    let mut steering_angle = 0.0;
-    let mut brake_force = 0.0;
-
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyI as u32) { engine_force = 8000.0; } // İleri (I)
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyK as u32) { brake_force = 5000.0; } // Fren/Geri (K)
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyJ as u32) { steering_angle = 0.5; }  // Sol (J)
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyL as u32) { steering_angle = -0.5; } // Sağ (L)
+    let throttle  = if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyI as u32) { 1.0_f32 } else { 0.0 };
+    let reverse   = input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyK as u32);
+    let brake     = if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::Space as u32) { 1.0_f32 } else { 0.0 };
+    let steering  = if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyJ as u32) { 1.0_f32 }
+                    else if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyL as u32) { -1.0 }
+                    else { 0.0 };
 
     // ECS VehicleController'a girdileri aktar
     if let Some(q_v) = world.query::<gizmo::core::query::Mut<gizmo::physics::vehicle::VehicleController>>() {
         if let Some(mut vehicle) = q_v.get(state.car_entity.id()) {
-            for (i, wheel) in vehicle.wheels.iter_mut().enumerate() {
-                let is_front = i < 2;
-                if is_front {
-                    wheel.steering_angle = steering_angle;
-                } else {
-                    wheel.engine_force = engine_force;
-                }
-                wheel.brake_force = brake_force;
-            }
+            vehicle.throttle_input = throttle;
+            vehicle.brake_input    = brake;
+            vehicle.steering_input = steering;
+            vehicle.set_reverse(reverse);
         }
     }
 
@@ -256,6 +262,16 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &gizmo::c
         }
     }
 
+    // Debug (R tuşuna basınca anlık fizik durumu konsola basar)
+    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyR as u32) {
+        if let Some(q_v) = world.query::<gizmo::core::query::Mut<gizmo::physics::vehicle::VehicleController>>() {
+            if let Some(v) = q_v.get(state.car_entity.id()) {
+                println!("[Vehicle] Speed: {:.1} km/h | RPM: {:.0} | Gear: {} | Thr: {:.2} | Rev: {}",
+                    v.current_speed_kmh, v.engine_rpm, v.current_gear, v.throttle_input, v.reverse_input);
+            }
+        }
+    }
+
     // -------------------------
 }
 
@@ -271,10 +287,49 @@ fn render(
     gizmo::systems::default_render_pass(world, encoder, view, renderer);
 }
 
+fn ui(world: &mut World, state: &mut VehicleState, ctx: &gizmo::egui::Context) {
+    let mut speed_kmh = 0.0;
+    let mut rpm = 0.0;
+    let mut gear = 0;
+    let mut grounded_wheels = 0;
+    let mut throttle = 0.0;
+    let mut brake = 0.0;
+    let mut hz = 120.0; 
+    let mut ms_per_phase = 0.0;
+    
+    if let Some(phys_world) = world.get_resource::<gizmo::physics::world::PhysicsWorld>() {
+        ms_per_phase = phys_world.metrics.solver_ms;
+    }
+    
+    if let Some(q_v) = world.query::<gizmo::core::query::Mut<gizmo::physics::vehicle::VehicleController>>() {
+        if let Some(v) = q_v.get(state.car_entity.id()) {
+            speed_kmh = v.current_speed_kmh;
+            rpm = v.engine_rpm;
+            gear = v.current_gear;
+            grounded_wheels = v.wheels.iter().filter(|w| w.is_grounded).count();
+            throttle = v.throttle_input;
+            brake = v.brake_input;
+        }
+    }
+    
+    gizmo::egui::Window::new("Fizik HUD (Phase 6.3)").show(ctx, |ui| {
+        ui.label(format!("Hız: {:.1} km/h", speed_kmh));
+        ui.label(format!("Motor RPM: {:.0}", rpm));
+        ui.label(format!("Vites: {}", gear));
+        ui.label(format!("Grounded Tekerlek: {}/4", grounded_wheels));
+        ui.label(format!("Gaz (Throttle): {:.2}", throttle));
+        ui.label(format!("Fren (Brake): {:.2}", brake));
+        ui.separator();
+        ui.label(format!("Fizik Güncelleme: {:.0} Hz", hz));
+        ui.label(format!("Solver Süresi: {:.2} ms", ms_per_phase));
+    });
+}
+
 fn main() {
     App::<VehicleState>::new("Gizmo Engine - Raycast Vehicle Sandbox", 1280, 720)
         .set_setup(setup)
         .set_update(update)
         .set_render(render)
+        .set_ui(ui)
         .run();
 }

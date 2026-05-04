@@ -202,16 +202,17 @@ impl GpuCompute {
         let tx1 = tx.clone();
         let tx2 = tx.clone();
         
-        slice_x.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
-        slice_y.map_async(wgpu::MapMode::Read, move |v| tx1.send(v).unwrap());
-        slice_z.map_async(wgpu::MapMode::Read, move |v| tx2.send(v).unwrap());
+        slice_x.map_async(wgpu::MapMode::Read, move |v| { let _ = tx.send(v); });
+        slice_y.map_async(wgpu::MapMode::Read, move |v| { let _ = tx1.send(v); });
+        slice_z.map_async(wgpu::MapMode::Read, move |v| { let _ = tx2.send(v); });
         
         // Wait for GPU
         self.device.poll(wgpu::Maintain::Wait);
         
-        rx.recv().unwrap().unwrap();
-        rx.recv().unwrap().unwrap();
-        rx.recv().unwrap().unwrap();
+        // Check for receiving errors, and early return if mapped buffer reading failed
+        if let (Ok(Ok(_)), Ok(Ok(_)), Ok(Ok(_))) = (rx.recv(), rx.recv(), rx.recv()) {} else {
+            return;
+        }
 
         let mapped_x = slice_x.get_mapped_range();
         let data_x: &[i32] = bytemuck::cast_slice(&mapped_x);

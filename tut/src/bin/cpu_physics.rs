@@ -75,12 +75,15 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     // --- CPU PHYSICS SETUP ---
     let mut phys_world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
     
-    // SPH Sıvı Havuzu için Kaldırma Kuvveti Alanı (FluidZone)
     phys_world.fluid_zones.push(gizmo::physics::world::FluidZone {
-        bounds_min: Vec3::new(-2.0, 0.0, -2.0),
-        bounds_max: Vec3::new(2.0, 2.0, 2.0),
-        density: 1200.0, // Suyun özkütlesinden biraz fazla, objeleri yukarı itsin
-        drag: 5.0,       // Su sürtünmesi
+        shape: gizmo::physics::world::ZoneShape::Box {
+            min: Vec3::new(-2.0, 0.0, -2.0),
+            max: Vec3::new(2.0, 2.0, 2.0),
+        },
+        density: 1200.0,
+        viscosity: 1.0,
+        linear_drag: 5.0,
+        quadratic_drag: 1.0,
     });
 
     // Menteşeli Kapı veya Sarkaç (Pendulum)
@@ -283,14 +286,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
     if input.is_mouse_button_pressed(gizmo::core::input::mouse::LEFT) {
         if let Some(phys) = world.get_resource::<PhysicsWorld>() {
             let ray = gizmo::physics::raycast::Ray::new(cam_pos, cam_forward);
-            let mut bodies = Vec::new();
-            if let Some(q) = world.query::<(&RigidBody, &Transform, &Velocity, &Collider)>() {
-                for (e, (rb, transform, vel, col)) in q.iter() {
-                    bodies.push((Entity::new(e, 0), *rb, *transform, *vel, col.clone()));
-                }
-            }
             
-            if let Some(hit) = phys.raycast(&ray, &bodies, 50.0) {
+            if let Some(hit) = phys.raycast(&ray, 50.0) {
                 if let Some(q) = world.query::<(gizmo::core::query::Mut<Velocity>, &RigidBody)>() {
                     if let Some((mut vel, rb)) = q.get(hit.entity.id()) {
                         if rb.is_dynamic() {

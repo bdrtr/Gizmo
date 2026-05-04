@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use serde::{Deserialize, Serialize};
 
 /// Ergonomik input soyutlama katmanı.
 ///
@@ -10,7 +11,7 @@ use std::collections::HashSet;
 /// let (dx, dy) = input.mouse_delta(); /* fare hareketi */
 /// let scroll = input.mouse_scroll(); /* tekerlek */
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Input {
     // Tuş durumları
     keys_pressed: HashSet<u32>,       // Şu an basılı tuşlar
@@ -558,5 +559,33 @@ mod tests {
             actions.bindings.get("Jump").unwrap()[0],
             InputBinding::Key(42)
         ));
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct FrameRecord {
+    pub dt: f32,
+    pub input: Input,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct PlaybackData {
+    pub frames: Vec<FrameRecord>,
+}
+
+impl PlaybackData {
+    pub fn save(&self, path: &str) -> Result<(), String> {
+        let string_data = ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())
+            .map_err(|e| format!("Serilestirme hatasi: {}", e))?;
+        std::fs::write(path, string_data)
+            .map_err(|e| format!("Dosya yazma hatasi: {}", e))?;
+        Ok(())
+    }
+
+    pub fn load(path: &str) -> Result<Self, String> {
+        let string_data = std::fs::read_to_string(path)
+            .map_err(|e| format!("Dosya okuma hatasi: {}", e))?;
+        ron::from_str(&string_data)
+            .map_err(|e| format!("Deserilestirme hatasi: {}", e))
     }
 }

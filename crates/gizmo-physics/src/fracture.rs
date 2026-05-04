@@ -208,3 +208,183 @@ fn intersect_planes(p1: &MathPlane, p2: &MathPlane, p3: &MathPlane) -> Option<Ve
 
     Some(res * inv_det)
 }
+
+/// Helper function to create physics chunks from a fracturing event.
+/// Returns a list of (RigidBody, Transform, Collider, ProceduralChunk) for the ECS to spawn.
+pub fn generate_fracture_chunks(
+    original_transform: &crate::components::Transform,
+    original_body: &crate::components::RigidBody,
+    original_velocity: &crate::components::Velocity,
+    extents: Vec3,
+    num_pieces: u32,
+    impact_point: Vec3,
+    impact_force: f32,
+) -> Vec<(crate::components::RigidBody, crate::components::Transform, crate::components::Collider, crate::components::Velocity, ProceduralChunk)> {
+    let chunks = voronoi_shatter(extents, num_pieces, rand::random::<u64>());
+    
+    let mut results = Vec::with_capacity(chunks.len());
+    let total_volume: f32 = chunks.iter().map(|c| c.volume).sum();
+    let original_mass = original_body.mass;
+
+    for chunk in chunks {
+        // Calculate fraction of mass
+        let mass = if total_volume > 0.0 {
+            original_mass * (chunk.volume / total_volume)
+        } else {
+            0.1
+        };
+
+        // Create new rigid body
+        let mut rb = crate::components::RigidBody::new(
+            mass,
+            original_body.restitution,
+            original_body.friction,
+            original_body.use_gravity
+        );
+        rb.center_of_mass = chunk.center_of_mass;
+        
+        // Inherit exact same velocity + explosion force away from impact point
+        let mut vel = *original_velocity;
+        
+        // Calculate explosion force direction
+        let world_chunk_center = original_transform.position + original_transform.rotation * chunk.center_of_mass;
+        let dir = world_chunk_center - impact_point;
+        if dir.length_squared() > 0.001 {
+            let explosion_dir = dir.normalize();
+            // Force drops off with distance (simplified)
+            let force = impact_force * 0.1 / (dir.length() + 1.0);
+            vel.linear += explosion_dir * (force / mass);
+            
+            // Add some random spin
+            vel.angular += Vec3::new(
+                rand::random::<f32>() - 0.5,
+                rand::random::<f32>() - 0.5,
+                rand::random::<f32>() - 0.5
+            ) * (force / mass) * 0.5;
+        }
+
+        // Create convex hull collider
+        let collider = crate::components::Collider {
+            shape: crate::components::ColliderShape::ConvexHull(crate::components::ConvexHullShape {
+                vertices: chunk.vertices.clone(),
+            }),
+            is_trigger: false,
+            material: crate::components::PhysicsMaterial::default(),
+            collision_layer: crate::components::CollisionLayer::default(),
+        };
+        
+        rb.update_inertia_from_collider(&collider);
+
+        let transform = crate::components::Transform {
+            position: original_transform.position, // The vertices in the chunk are local to the original center
+            rotation: original_transform.rotation,
+            scale: original_transform.scale,
+            ..*original_transform
+        };
+
+        results.push((rb, transform, collider, vel, chunk));
+    }
+
+    results
+}
+
+/// Stores pre-fractured chunks to avoid expensive runtime calculations (Pre-fracture Caching).
+/// Ideal for AAA games where destruction must not drop frames.
+#[derive(Default)]
+pub struct PreFracturedCache {
+    /// Maps an Entity ID to its pre-calculated fracture data
+    pub cache: std::collections::HashMap<gizmo_core::entity::Entity, Vec<ProceduralChunk>>,
+}
+
+impl PreFracturedCache {
+    pub fn new() -> Self {
+        Self {
+            cache: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Pre-calculates fracture chunks for an entity and stores them in the cache.
+    /// This should be called during a loading screen.
+    pub fn pre_fracture(
+        &mut self,
+        entity: gizmo_core::entity::Entity,
+        extents: Vec3,
+        num_pieces: u32,
+        seed: u64,
+    ) {
+        let chunks = voronoi_shatter(extents, num_pieces, seed);
+        self.cache.insert(entity, chunks);
+    }
+
+    /// Spawns the chunks from the cache if available, taking only O(N) time to clone instead of O(N^3).
+    /// If not in cache, optionally falls back to runtime calculation.
+    pub fn get_fracture_chunks(
+        &self,
+        entity: gizmo_core::entity::Entity,
+        original_transform: &crate::components::Transform,
+        original_body: &crate::components::RigidBody,
+        original_velocity: &crate::components::Velocity,
+        impact_point: Vec3,
+        impact_force: f32,
+    ) -> Option<Vec<(crate::components::RigidBody, crate::components::Transform, crate::components::Collider, crate::components::Velocity, ProceduralChunk)>> {
+        let chunks = self.cache.get(&entity)?;
+
+        let mut results = Vec::with_capacity(chunks.len());
+        let total_volume: f32 = chunks.iter().map(|c| c.volume).sum();
+        let original_mass = original_body.mass;
+
+        for chunk in chunks {
+            let mass = if total_volume > 0.0 {
+                original_mass * (chunk.volume / total_volume)
+            } else {
+                0.1
+            };
+
+            let mut rb = crate::components::RigidBody::new(
+                mass,
+                original_body.restitution,
+                original_body.friction,
+                original_body.use_gravity
+            );
+            rb.center_of_mass = chunk.center_of_mass;
+            
+            let mut vel = *original_velocity;
+            let world_chunk_center = original_transform.position + original_transform.rotation * chunk.center_of_mass;
+            let dir = world_chunk_center - impact_point;
+            if dir.length_squared() > 0.001 {
+                let explosion_dir = dir.normalize();
+                let force = impact_force * 0.1 / (dir.length() + 1.0);
+                vel.linear += explosion_dir * (force / mass);
+                
+                // Deterministic spin based on chunk properties (since cache is pre-calculated)
+                vel.angular += Vec3::new(
+                    (chunk.center_of_mass.x * 12.345).fract() - 0.5,
+                    (chunk.center_of_mass.y * 67.890).fract() - 0.5,
+                    (chunk.center_of_mass.z * 42.123).fract() - 0.5
+                ) * (force / mass) * 0.5;
+            }
+
+            let collider = crate::components::Collider {
+                shape: crate::components::ColliderShape::ConvexHull(crate::components::ConvexHullShape {
+                    vertices: chunk.vertices.clone(),
+                }),
+                is_trigger: false,
+                material: crate::components::PhysicsMaterial::default(),
+                collision_layer: crate::components::CollisionLayer::default(),
+            };
+            
+            rb.update_inertia_from_collider(&collider);
+
+            let transform = crate::components::Transform {
+                position: original_transform.position,
+                rotation: original_transform.rotation,
+                scale: original_transform.scale,
+                ..*original_transform
+            };
+
+            results.push((rb, transform, collider, vel, chunk.clone()));
+        }
+
+        Some(results)
+    }
+}

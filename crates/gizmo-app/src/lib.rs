@@ -1,3 +1,5 @@
+pub mod dev_console;
+
 use gizmo_core::system::Schedule;
 use gizmo_core::world::World;
 use gizmo_editor::gui::EditorContext;
@@ -8,6 +10,50 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
+use std::sync::atomic::{AtomicPtr, Ordering};
+
+static WORLD_PTR: AtomicPtr<gizmo_core::world::World> = AtomicPtr::new(std::ptr::null_mut());
+
+pub fn setup_panic_hook() {
+    std::panic::set_hook(Box::new(|panic_info| {
+        let payload = panic_info.payload();
+        let message = if let Some(s) = payload.downcast_ref::<&str>() {
+            *s
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.as_str()
+        } else {
+            "Bilinmeyen hata"
+        };
+
+        let location = if let Some(loc) = panic_info.location() {
+            format!("{}:{}", loc.file(), loc.line())
+        } else {
+            "Bilinmeyen konum".to_string()
+        };
+
+        let error_msg = format!("Gizmo Engine Coktu!\n\nKonum: {}\nHata: {}\n\nOlay Yeri Inceleme Raporu 'gizmo_crash_report.json' olarak kaydedildi.", location, message);
+
+        println!("{}", error_msg);
+        
+        let backtrace = backtrace::Backtrace::new();
+        println!("--- BACKTRACE ---\n{:?}", backtrace);
+
+        unsafe {
+            let ptr = WORLD_PTR.load(Ordering::Acquire);
+            if !ptr.is_null() {
+                let world = &*ptr;
+                let registry = gizmo_scene::registry::SceneRegistry::default();
+                let _ = gizmo_scene::scene::SceneData::save(world, "gizmo_crash_report.json", &registry);
+            }
+        }
+
+        rfd::MessageDialog::new()
+            .set_title("Gizmo Engine Fatal Error")
+            .set_description(&error_msg)
+            .set_level(rfd::MessageLevel::Error)
+            .show();
+    }));
+}
 
 pub struct App<State: 'static = ()> {
     pub world: World,
@@ -36,6 +82,11 @@ pub struct App<State: 'static = ()> {
     event_updaters: Vec<Box<dyn FnMut(&mut World)>>,
     initial_scene: Option<String>,
     window_icon: Option<&'static [u8]>,
+    pub record_mode: bool,
+    pub playback_file: Option<String>,
+    record_data: Option<gizmo_core::input::PlaybackData>,
+    playback_data: Option<gizmo_core::input::PlaybackData>,
+    playback_frame_index: usize,
 }
 
 impl<State: 'static> App<State> {
@@ -54,7 +105,23 @@ impl<State: 'static> App<State> {
             event_updaters: Vec::new(),
             initial_scene: None,
             window_icon: None,
+            record_mode: false,
+            playback_file: None,
+            record_data: None,
+            playback_data: None,
+            playback_frame_index: 0,
         }
+    }
+
+    pub fn start_recording(mut self) -> Self {
+        self.record_mode = true;
+        self.record_data = Some(gizmo_core::input::PlaybackData { frames: Vec::new() });
+        self
+    }
+
+    pub fn start_playback(mut self, path: &str) -> Self {
+        self.playback_file = Some(path.to_string());
+        self
     }
 
     /// Sisteme yeni bir Olay (Event) türü kaydeder.
@@ -133,6 +200,21 @@ impl<State: 'static> App<State> {
     }
 
     pub fn run(mut self) {
+        setup_panic_hook();
+        WORLD_PTR.store(&mut self.world as *mut _, Ordering::Release);
+
+        if let Some(ref path) = self.playback_file {
+            match gizmo_core::input::PlaybackData::load(path) {
+                Ok(data) => {
+                    self.playback_data = Some(data);
+                    println!("Playback loaded from: {}", path);
+                }
+                Err(e) => {
+                    eprintln!("Failed to load playback data: {}", e);
+                }
+            }
+        }
+        
         let event_loop = EventLoop::new().expect("Event Loop başlatılamadı");
         let mut builder = WindowBuilder::new()
             .with_title(&self.window_title)
@@ -154,6 +236,10 @@ impl<State: 'static> App<State> {
         let window = Arc::new(builder.build(&event_loop).expect("Pencere oluşturulamadı!"));
 
         let mut renderer = pollster::block_on(Renderer::new(window.clone()));
+
+        // Initialize Core Dev Console Systems BEFORE setup so setup can register cvars
+        self.world.insert_resource(gizmo_core::cvar::CVarRegistry::new());
+        self.world.insert_resource(gizmo_core::cvar::DevConsoleState::default());
 
         let mut state = if let Some(setup) = self.setup_fn.take() {
             setup(&mut self.world, &renderer)
@@ -185,6 +271,7 @@ impl<State: 'static> App<State> {
                 eprintln!("[App::run] AssetManager bulunamadı, sahne yüklenemiyor!");
             }
         }
+
 
         let mut editor = EditorContext::new(&renderer.device, renderer.config.format, &window, 1);
 
@@ -221,7 +308,13 @@ impl<State: 'static> App<State> {
                         window_id,
                     } if window_id == window.id() => {
                         match event {
-                            WindowEvent::CloseRequested => current_window.exit(),
+                            WindowEvent::CloseRequested => {
+                                if let Some(record) = &self.record_data {
+                                    let _ = record.save("gizmo_record.ron");
+                                    println!("Kayit basariyla 'gizmo_record.ron' dosyasina kaydedildi.");
+                                }
+                                current_window.exit();
+                            }
                             WindowEvent::Resized(physical_size) => {
                                 renderer.resize(*physical_size);
                                 let mut win_info = self
@@ -322,6 +415,27 @@ impl<State: 'static> App<State> {
                             let mut dt = now.duration_since(last_frame_time).as_secs_f32();
                             dt = dt.min(0.05); // Güvenlik çemberi: Frame takılırsa 50ms'den fazla zıplamayacak, yerçekiminden düşme engellenecek.
                             last_frame_time = now;
+                            
+                            // Playback / Record mantigi
+                            if let Some(playback) = &self.playback_data {
+                                if self.playback_frame_index < playback.frames.len() {
+                                    let frame = &playback.frames[self.playback_frame_index];
+                                    dt = frame.dt;
+                                    self.input = frame.input.clone();
+                                    self.playback_frame_index += 1;
+                                } else {
+                                    println!("Playback bitti. Uygulama kapaniyor...");
+                                    current_window.exit();
+                                }
+                            } else if self.record_mode {
+                                if let Some(record) = &mut self.record_data {
+                                    record.frames.push(gizmo_core::input::FrameRecord {
+                                        dt,
+                                        input: self.input.clone(),
+                                    });
+                                }
+                            }
+
                             light_time += dt;
 
                             // Update
@@ -329,6 +443,9 @@ impl<State: 'static> App<State> {
                                 if let Some(ui_hk) = self.ui_fn.as_mut() {
                                     ui_hk(&mut self.world, &mut state, ctx);
                                 }
+                                
+                                // Render Global Dev Console on top of everything
+                                dev_console::ui_dev_console(&mut self.world, ctx, &self.input);
                             });
 
 
@@ -697,6 +814,21 @@ impl<State: 'static> App<State> {
 
                             // Update sonrası olası ertelenmiş komutları (CommandQueue) hemen işle
                             self.world.apply_commands();
+
+                            // --- DYNAMIC FRACTURE & PARTICLE INTEGRATION ---
+                            if let Some(physics_world) = self.world.get_resource::<gizmo_physics::world::PhysicsWorld>() {
+                                if !physics_world.fracture_events.is_empty() {
+                                    if let Some(gpu_particles) = &renderer.gpu_particles {
+                                        for event in &physics_world.fracture_events {
+                                            let center = [event.impact_point.x, event.impact_point.y, event.impact_point.z];
+                                            let dust_color = [0.6, 0.55, 0.5, 0.8]; // Dust color
+                                            let force = (event.impact_force * 0.01).clamp(2.0, 15.0);
+                                            let particle_count = (event.impact_force * 0.1).clamp(50.0, 500.0) as u32;
+                                            gpu_particles.spawn_explosion(&renderer.queue, center, particle_count, dust_color, force);
+                                        }
+                                    }
+                                }
+                            }
 
                             // Olayları Güncelle (Çift-buffer temizliği)
                             for updater in &mut self.event_updaters {

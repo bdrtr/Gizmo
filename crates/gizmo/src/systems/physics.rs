@@ -64,6 +64,48 @@ pub fn physics_debug_system(world: &crate::core::World) {
                 }
             }
         }
+
+        // --- Phase 6.1: Süspansiyon Raycast Çizgisi + Kuvvet Okları ---
+        if let Some(q) = world.query::<(&crate::physics::Transform, &gizmo_physics::vehicle::VehicleController)>() {
+            for (_, (trans, vehicle)) in q.iter() {
+                for wheel in &vehicle.wheels {
+                    let attach_world = trans.position + trans.rotation.mul_vec3(wheel.attachment_local_pos);
+                    let ray_dir = trans.rotation.mul_vec3(wheel.direction_local).normalize();
+                    let ray_end = attach_world + ray_dir * (wheel.suspension_rest_length + wheel.suspension_max_travel + wheel.radius);
+                    
+                    // Draw raycast maximum extent (Yellow line)
+                    gizmos.draw_line(attach_world, ray_end, [1.0, 1.0, 0.0, 1.0]); 
+                    
+                    if wheel.is_grounded {
+                        if let Some(hit) = &wheel.ground_hit {
+                            // Kuvvet oku (Mavi) - sadece uzunluğu normalize edip görselleştirmek için / 10000 kullanıyoruz
+                            let force_dir = -ray_dir;
+                            let force_len = (wheel.suspension_force / 10000.0).clamp(0.1, 2.0); 
+                            let arrow_end = hit.point + force_dir * force_len;
+                            gizmos.draw_line(hit.point, arrow_end, [0.0, 0.0, 1.0, 1.0]);
+                            
+                            // Mevcut süspansiyon uzunluğu + tekerlek merkezi çizgisi (Turuncu)
+                            let wheel_center = attach_world + ray_dir * wheel.suspension_length;
+                            gizmos.draw_line(wheel_center, hit.point, [1.0, 0.5, 0.0, 1.0]); 
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- Phase 6.2: Temas Normalleri ve Penetrasyon Derinliği ---
+        if let Some(phys_world) = world.get_resource::<gizmo_physics::world::PhysicsWorld>() {
+            for event in phys_world.collision_events() {
+                for contact in &event.contact_points {
+                    let p1 = contact.point;
+                    let p2 = contact.point + contact.normal * 0.5; // Normal arrow
+                    gizmos.draw_line(p1, p2, [1.0, 0.0, 0.0, 1.0]); // Red normal
+                    
+                    let p_pen = contact.point - contact.normal * contact.penetration;
+                    gizmos.draw_line(p1, p_pen, [1.0, 0.0, 1.0, 1.0]); // Magenta penetration depth
+                }
+            }
+        }
     }
 }
 
@@ -200,70 +242,6 @@ pub fn gpu_physics_readback_system(world: &mut crate::core::World, renderer: &Re
 /// Phase 7.1: Fluid-Rigid Coupling
 /// Senkronize eder: GpuPhysicsLink sahibi objeleri FluidCollider buffer'ına yazar.
 
-pub fn cpu_physics_step_system(world: &mut crate::core::World, dt: f32) {
-    if world.get_resource::<gizmo_physics::world::PhysicsWorld>().is_none() {
-        return; // Physics plugin is not active.
-    }
-
-    // World üzerinden sahipliği geçici olarak al
-    let mut phys_world = world
-        .remove_resource::<gizmo_physics::world::PhysicsWorld>()
-        .unwrap();
-
-    let mut bodies = Vec::new();
-    if let Some(q) = world.query::<(
-        &crate::physics::RigidBody,
-        &crate::physics::Transform,
-        &crate::physics::Velocity,
-        &crate::physics::Collider,
-    )>() {
-        for (e, (rb, transform, vel, col)) in q.iter() {
-            bodies.push((gizmo_core::entity::Entity::new(e, 0), *rb, *transform, *vel, col.clone()));
-        }
-    }
-
-    let mut soft_bodies = Vec::new();
-    if let Some(q) = world.query::<(
-        &gizmo_physics::soft_body::SoftBodyMesh,
-        &crate::physics::Transform,
-    )>() {
-        for (e, (sm, transform)) in q.iter() {
-            soft_bodies.push((gizmo_core::entity::Entity::new(e, 0), sm.clone(), *transform));
-        }
-    }
-
-    // Fizik adımını çalıştır
-    phys_world.step(&mut bodies, &mut soft_bodies, dt);
-
-    // Güncellenmiş değerleri geri ECS'e yaz
-    if let Some(q) = world.query::<(
-        gizmo_core::prelude::Mut<crate::physics::Transform>,
-        gizmo_core::prelude::Mut<crate::physics::Velocity>,
-        gizmo_core::prelude::Mut<crate::physics::RigidBody>,
-    )>() {
-        for (e, rb, trans, vel, _) in bodies {
-            if let Some((mut t, mut v, mut r)) = q.get(e.id()) {
-                *t = trans;
-                t.update_local_matrix(); // Görselin güncellenmesi için matrisin yenilenmesi ŞART!
-                *v = vel;
-                *r = rb;
-            }
-        }
-    }
-    
-    if let Some(q) = world.query::<(
-        gizmo_core::prelude::Mut<crate::physics::Transform>,
-        gizmo_core::prelude::Mut<gizmo_physics::soft_body::SoftBodyMesh>,
-    )>() {
-        for (e, sm, trans) in soft_bodies {
-            if let Some((mut t, mut s)) = q.get(e.id()) {
-                *t = trans;
-                t.update_local_matrix();
-                *s = sm;
-            }
-        }
-    }
-
-    // Kaynağı geri koy
-    world.insert_resource(phys_world);
+pub fn cpu_physics_step_system(world: &crate::core::World, dt: f32) {
+    gizmo_physics::system::physics_step_system(world, dt);
 }

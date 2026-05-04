@@ -143,4 +143,34 @@ impl GpuParticleSystem {
         rpass.set_vertex_buffer(1, self.particles_buffer.slice(..));
         rpass.draw(0..4, 0..self.max_particles);
     }
+
+    /// Helper method to spawn an explosion of particles (e.g. dust or debris from a fracture).
+    pub fn spawn_explosion(&self, queue: &wgpu::Queue, center: [f32; 3], count: u32, base_color: [f32; 4], force: f32) {
+        let mut new_particles = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            let u: f32 = rand::random();
+            let v: f32 = rand::random();
+            let theta = u * 2.0 * std::f32::consts::PI;
+            let phi = (2.0 * v - 1.0).acos();
+            let r = force * (0.5 + 0.5 * rand::random::<f32>());
+
+            let vx = r * phi.sin() * theta.cos();
+            let vy = r * phi.sin() * theta.sin() + force * 0.5; // Upward bias
+            let vz = r * phi.cos();
+
+            let life = 0.5 + rand::random::<f32>() * 1.5;
+
+            new_particles.push(GpuParticle {
+                position: center,
+                life,
+                velocity: [vx, vy, vz],
+                max_life: life,
+                color: base_color,
+                size_start: 0.1 + rand::random::<f32>() * 0.2,
+                size_end: 0.0,
+                _padding: [0.0; 2],
+            });
+        }
+        self.spawn_particles(queue, &new_particles);
+    }
 }

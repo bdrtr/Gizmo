@@ -106,3 +106,10 @@ pub struct TriggerEvent {
     pub other_entity: Entity,
     pub event_type: CollisionEventType,
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct FractureEvent {
+    pub entity: gizmo_core::entity::Entity,
+    pub impact_point: gizmo_math::Vec3,
+    pub impact_force: f32,
+}
