@@ -38,7 +38,7 @@ struct Parameters {
 @group(0) @binding(4) var<storage, read_write> forces_y: array<atomic<i32>>;
 @group(0) @binding(5) var<storage, read_write> forces_z: array<atomic<i32>>;
 
-const FIXED_POINT_MULTIPLIER: f32 = 100000.0;
+const FIXED_POINT_MULTIPLIER: f32 = 10000.0;
 
 fn atomic_add_force(index: u32, force: vec3<f32>) {
     let fx = i32(force.x * FIXED_POINT_MULTIPLIER);
@@ -79,16 +79,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let f_col1 = ds_col0 * inv1.x + ds_col1 * inv1.y + ds_col2 * inv1.z;
     let f_col2 = ds_col0 * inv2.x + ds_col1 * inv2.y + ds_col2 * inv2.z;
 
-    // Cauchy-Green deformation tensor (C = F^T * F)
-    let c00 = dot(f_col0, f_col0);
-    let c11 = dot(f_col1, f_col1);
-    let c22 = dot(f_col2, f_col2);
-    let ic = c00 + c11 + c22; // Trace(C)
-    
     // Determinant of F (J)
-    let j = f_col0.x * (f_col1.y * f_col2.z - f_col2.y * f_col1.z)
-          - f_col1.x * (f_col0.y * f_col2.z - f_col2.y * f_col0.z)
-          + f_col2.x * (f_col0.y * f_col1.z - f_col1.y * f_col0.z);
+    let cof0 = cross(f_col1, f_col2);
+    let cof1 = cross(f_col2, f_col0);
+    let cof2 = cross(f_col0, f_col1);
+    
+    let j = dot(f_col0, cof0);
           
     if (j < 0.05) {
         return;
@@ -98,21 +94,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // P = mu * (F - F^-T) + lambda * log(J) * F^-T
     
     // Need cofactor matrix of F for F^-T
-    let cof0 = vec3<f32>(
-        f_col1.y * f_col2.z - f_col2.y * f_col1.z,
-        f_col2.x * f_col1.z - f_col1.x * f_col2.z,
-        f_col1.x * f_col2.y - f_col2.x * f_col1.y
-    );
-    let cof1 = vec3<f32>(
-        f_col2.y * f_col0.z - f_col0.y * f_col2.z,
-        f_col0.x * f_col2.z - f_col2.x * f_col0.z,
-        f_col2.x * f_col0.y - f_col0.x * f_col2.y
-    );
-    let cof2 = vec3<f32>(
-        f_col0.y * f_col1.z - f_col1.y * f_col0.z,
-        f_col1.x * f_col0.z - f_col0.x * f_col1.z,
-        f_col0.x * f_col1.y - f_col1.x * f_col0.y
-    );
+    // We already computed cof0, cof1, cof2 using cross products above!
     
     let f_inv_t_col0 = cof0 / j;
     let f_inv_t_col1 = cof1 / j;

@@ -294,7 +294,7 @@ fn ui(world: &mut World, state: &mut VehicleState, ctx: &gizmo::egui::Context) {
     let mut grounded_wheels = 0;
     let mut throttle = 0.0;
     let mut brake = 0.0;
-    let mut hz = 120.0; 
+    let hz = 120.0; 
     let mut ms_per_phase = 0.0;
     
     if let Some(phys_world) = world.get_resource::<gizmo::physics::world::PhysicsWorld>() {

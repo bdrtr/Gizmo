@@ -102,8 +102,6 @@ fn setup(world: &mut World, renderer: &Renderer) -> KccState {
     let mut kcc = CharacterController::default();
     kcc.speed = 8.0;
     kcc.jump_speed = 6.0;
-    kcc.height = 2.0;
-    kcc.radius = 0.5;
     kcc.step_height = 0.3;
     
     world.add_component(char_ent, kcc);
@@ -186,9 +184,8 @@ fn update(world: &mut World, state: &mut KccState, _dt: f32, input: &gizmo::core
         move_dir = move_dir.normalize_or_zero();
         kcc.target_velocity = move_dir * kcc.speed;
         
-        if input.is_key_pressed(KeyCode::Space as u32) && kcc.is_grounded {
-            kcc.velocity.y = kcc.jump_speed;
-            kcc.is_grounded = false;
+        if input.is_key_pressed(KeyCode::Space as u32) {
+            kcc.jump_buffer_timer = kcc.jump_buffer_time;
         }
     }
     

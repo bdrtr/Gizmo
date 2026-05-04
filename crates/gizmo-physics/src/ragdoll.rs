@@ -1,4 +1,5 @@
 use gizmo_math::Vec3;
+
 use crate::joints::JointType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,7 +33,7 @@ pub struct RagdollBoneDef {
 
 pub struct RagdollBuilder {
     bones: Vec<RagdollBoneDef>,
-    _root_pos: Vec3,
+    root_pos: Vec3,
 }
 
 impl Default for RagdollBuilder {
@@ -45,7 +46,7 @@ impl RagdollBuilder {
     pub fn new(root_pos: Vec3) -> Self {
         Self {
             bones: Vec::new(),
-            _root_pos: root_pos,
+            root_pos,
         }
     }
 
@@ -88,11 +89,11 @@ impl RagdollBuilder {
             radius: 0.12,
             length: 0.1,
             mass: 5.0,
-            joint_type: JointType::Hinge,
+            joint_type: JointType::BallSocket,
             local_anchor_parent: Vec3::new(0.0, 0.2, 0.0),
             local_anchor_child: Vec3::new(0.0, -0.1, 0.0),
-            joint_axis: Vec3::new(1.0, 0.0, 0.0),
-            limits: Some((-0.5, 0.5)),
+            joint_axis: Vec3::Y,
+            limits: None, // Head should have more freedom than just 1 axis
         })
         // Left Arm
         .add_bone(RagdollBoneDef {
@@ -119,9 +120,101 @@ impl RagdollBuilder {
             local_anchor_parent: Vec3::new(0.0, -0.15, 0.0),
             local_anchor_child: Vec3::new(0.0, 0.125, 0.0),
             joint_axis: Vec3::new(1.0, 0.0, 0.0),
-            limits: Some((0.0, 2.0)), // Elbow can only bend one way
+            limits: Some((0.0, std::f32::consts::PI * 0.8)), // Elbow can only bend one way
+        })
+        // Right Arm
+        .add_bone(RagdollBoneDef {
+            bone_type: RagdollBoneType::RightUpperArm,
+            parent_type: Some(RagdollBoneType::Torso),
+            local_pos: Vec3::new(0.3, 0.2, 0.0),
+            radius: 0.08,
+            length: 0.3,
+            mass: 3.0,
+            joint_type: JointType::BallSocket,
+            local_anchor_parent: Vec3::new(0.2, 0.2, 0.0),
+            local_anchor_child: Vec3::new(0.0, 0.15, 0.0),
+            joint_axis: Vec3::Y,
+            limits: None,
+        })
+        .add_bone(RagdollBoneDef {
+            bone_type: RagdollBoneType::RightLowerArm,
+            parent_type: Some(RagdollBoneType::RightUpperArm),
+            local_pos: Vec3::new(0.0, -0.3, 0.0),
+            radius: 0.06,
+            length: 0.25,
+            mass: 2.0,
+            joint_type: JointType::Hinge,
+            local_anchor_parent: Vec3::new(0.0, -0.15, 0.0),
+            local_anchor_child: Vec3::new(0.0, 0.125, 0.0),
+            joint_axis: Vec3::new(1.0, 0.0, 0.0),
+            limits: Some((0.0, std::f32::consts::PI * 0.8)),
+        })
+        // Left Leg
+        .add_bone(RagdollBoneDef {
+            bone_type: RagdollBoneType::LeftUpperLeg,
+            parent_type: Some(RagdollBoneType::Pelvis),
+            local_pos: Vec3::new(-0.15, -0.25, 0.0),
+            radius: 0.1,
+            length: 0.4,
+            mass: 6.0,
+            joint_type: JointType::BallSocket,
+            local_anchor_parent: Vec3::new(-0.15, -0.1, 0.0),
+            local_anchor_child: Vec3::new(0.0, 0.2, 0.0),
+            joint_axis: Vec3::Y,
+            limits: None,
+        })
+        .add_bone(RagdollBoneDef {
+            bone_type: RagdollBoneType::LeftLowerLeg,
+            parent_type: Some(RagdollBoneType::LeftUpperLeg),
+            local_pos: Vec3::new(0.0, -0.4, 0.0),
+            radius: 0.08,
+            length: 0.35,
+            mass: 4.0,
+            joint_type: JointType::Hinge,
+            local_anchor_parent: Vec3::new(0.0, -0.2, 0.0),
+            local_anchor_child: Vec3::new(0.0, 0.175, 0.0),
+            joint_axis: Vec3::new(1.0, 0.0, 0.0),
+            limits: Some((-std::f32::consts::PI * 0.8, 0.0)), // Knee bends backward
+        })
+        // Right Leg
+        .add_bone(RagdollBoneDef {
+            bone_type: RagdollBoneType::RightUpperLeg,
+            parent_type: Some(RagdollBoneType::Pelvis),
+            local_pos: Vec3::new(0.15, -0.25, 0.0),
+            radius: 0.1,
+            length: 0.4,
+            mass: 6.0,
+            joint_type: JointType::BallSocket,
+            local_anchor_parent: Vec3::new(0.15, -0.1, 0.0),
+            local_anchor_child: Vec3::new(0.0, 0.2, 0.0),
+            joint_axis: Vec3::Y,
+            limits: None,
+        })
+        .add_bone(RagdollBoneDef {
+            bone_type: RagdollBoneType::RightLowerLeg,
+            parent_type: Some(RagdollBoneType::RightUpperLeg),
+            local_pos: Vec3::new(0.0, -0.4, 0.0),
+            radius: 0.08,
+            length: 0.35,
+            mass: 4.0,
+            joint_type: JointType::Hinge,
+            local_anchor_parent: Vec3::new(0.0, -0.2, 0.0),
+            local_anchor_child: Vec3::new(0.0, 0.175, 0.0),
+            joint_axis: Vec3::new(1.0, 0.0, 0.0),
+            limits: Some((-std::f32::consts::PI * 0.8, 0.0)),
         });
         
         self
+    }
+
+    /// Consumes the builder, computes initial world positions for root bones,
+    /// and returns the list of bone definitions to be spawned.
+    pub fn build(mut self) -> Vec<RagdollBoneDef> {
+        for bone in &mut self.bones {
+            if bone.parent_type.is_none() {
+                bone.local_pos += self.root_pos;
+            }
+        }
+        self.bones
     }
 }

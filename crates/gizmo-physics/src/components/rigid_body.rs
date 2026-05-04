@@ -63,25 +63,11 @@ impl Default for RigidBody {
 impl RigidBody {
     pub fn new(mass: f32, restitution: f32, friction: f32, use_gravity: bool) -> Self {
         Self {
-            body_type: BodyType::Dynamic,
             mass,
             restitution,
             friction,
-            linear_damping: 0.01,
-            angular_damping: 0.05,
             use_gravity,
-            is_sleeping: false,
-            ccd_enabled: false,
-            local_inertia: Vec3::splat(1.0),
-            lock_rotation_x: false,
-            lock_rotation_y: false,
-            lock_rotation_z: false,
-            lock_translation_x: false,
-            lock_translation_y: false,
-            lock_translation_z: false,
-            sleep_counter: 0,
-            center_of_mass: Vec3::ZERO,
-            fracture_threshold: None,
+            ..Default::default()
         }
     }
 
@@ -95,7 +81,6 @@ impl RigidBody {
             angular_damping: 0.0,
             use_gravity: false,
             is_sleeping: true,
-            ccd_enabled: false,
             local_inertia: Vec3::ZERO,
             lock_rotation_x: true,
             lock_rotation_y: true,
@@ -103,9 +88,7 @@ impl RigidBody {
             lock_translation_x: true,
             lock_translation_y: true,
             lock_translation_z: true,
-            sleep_counter: 0,
-            center_of_mass: Vec3::ZERO,
-            fracture_threshold: None,
+            ..Default::default()
         }
     }
 
@@ -118,18 +101,9 @@ impl RigidBody {
             linear_damping: 0.0,
             angular_damping: 0.0,
             use_gravity: false,
-            is_sleeping: false,
             ccd_enabled: true,
             local_inertia: Vec3::ZERO,
-            lock_rotation_x: false,
-            lock_rotation_y: false,
-            lock_rotation_z: false,
-            lock_translation_x: false,
-            lock_translation_y: false,
-            lock_translation_z: false,
-            sleep_counter: 0,
-            center_of_mass: Vec3::ZERO,
-            fracture_threshold: None,
+            ..Default::default()
         }
     }
 
@@ -269,30 +243,19 @@ impl RigidBody {
     pub fn calculate_capsule_inertia(&mut self, r: f32, half_h: f32) {
         let m = self.mass;
         let h = half_h * 2.0;
-        // Silindir + iki yarım küre yaklaşımı
-        let i_axial = m * (3.0 * r * r + h * h) / 12.0 + m * r * r / 2.0;
-        let i_radial = m * r * r * 2.0 / 5.0;
-        self.local_inertia = Vec3::new(i_axial, i_radial, i_axial);
-    }
-
-    pub fn update_inertia_from_shape(&mut self, shape: &crate::shape::ColliderShape) {
-        match shape {
-            crate::shape::ColliderShape::Aabb(aabb) => {
-                let w = aabb.half_extents.x * 2.0;
-                let h = aabb.half_extents.y * 2.0;
-                let d = aabb.half_extents.z * 2.0;
-                self.calculate_box_inertia(w, h, d);
-            }
-            crate::shape::ColliderShape::Sphere(s) => {
-                self.calculate_sphere_inertia(s.radius);
-            }
-            crate::shape::ColliderShape::Capsule(c) => {
-                self.calculate_capsule_inertia(c.radius, c.half_height);
-            }
-            crate::shape::ColliderShape::Plane { .. } => {
-                self.local_inertia = Vec3::splat(f32::INFINITY);
-            }
-        }
+        let vol_cyl = std::f32::consts::PI * r * r * h;
+        let vol_sph = 4.0 / 3.0 * std::f32::consts::PI * r * r * r;
+        let total_vol = vol_cyl + vol_sph;
+        
+        let m_cyl = if total_vol > 0.0 { m * vol_cyl / total_vol } else { 0.0 };
+        let m_sph = if total_vol > 0.0 { m * vol_sph / total_vol } else { 0.0 };
+        
+        let i_y = m_cyl * (r * r) / 2.0 + m_sph * 2.0 * (r * r) / 5.0;
+        let i_cyl_xz = m_cyl * (3.0 * r * r + h * h) / 12.0;
+        let i_sph_xz = m_sph * (0.4 * r * r + half_h * half_h + 0.75 * r * half_h + 0.140625 * r * r);
+        let i_xz = i_cyl_xz + i_sph_xz;
+        
+        self.local_inertia = Vec3::new(i_xz, i_y, i_xz);
     }
 
     pub fn update_inertia_from_collider(&mut self, collider: &Collider) {
@@ -313,14 +276,13 @@ impl RigidBody {
                 self.local_inertia = Vec3::splat(f32::INFINITY);
             }
             ColliderShape::TriMesh(_) | ColliderShape::ConvexHull(_) => {
-                // Approximate with a generic box of size 1x1x1
                 self.calculate_box_inertia(1.0, 1.0, 1.0);
             }
             ColliderShape::Compound(shapes) => {
                 let mut total_vol = 0.0;
                 let mut vols = Vec::with_capacity(shapes.len());
                 for (_, sub_shape) in shapes {
-                    let temp_col = Collider { shape: *sub_shape.clone(), ..Default::default() };
+                    let temp_col = Collider { shape: (**sub_shape).clone(), ..Default::default() };
                     let v = temp_col.volume();
                     vols.push(v);
                     total_vol += v;
@@ -336,19 +298,17 @@ impl RigidBody {
                         self.center_of_mass = com / self.mass;
                     }
 
-                    // Compute inertia tensor using Parallel Axis Theorem
                     let mut inertia = Vec3::ZERO;
                     for (i, (local_t, sub_shape)) in shapes.iter().enumerate() {
                         let mass_i = (vols[i] / total_vol) * self.mass;
                         
                         let mut temp_rb = RigidBody { mass: mass_i, ..Default::default() };
-                        let temp_col = Collider { shape: *sub_shape.clone(), ..Default::default() };
+                        let temp_col = Collider { shape: (**sub_shape).clone(), ..Default::default() };
                         temp_rb.update_inertia_from_collider(&temp_col);
                         
                         let d = local_t.position - self.center_of_mass;
                         let d_sq = d.length_squared();
                         
-                        // Parallel axis theorem for diagonal elements
                         inertia.x += temp_rb.local_inertia.x + mass_i * (d_sq - d.x * d.x);
                         inertia.y += temp_rb.local_inertia.y + mass_i * (d_sq - d.y * d.y);
                         inertia.z += temp_rb.local_inertia.z + mass_i * (d_sq - d.z * d.z);

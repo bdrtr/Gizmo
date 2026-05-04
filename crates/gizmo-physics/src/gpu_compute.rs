@@ -1,9 +1,28 @@
 use std::sync::Arc;
 
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct GpuPhysicsLink {
+    pub id: u32,
+}
+gizmo_core::impl_component!(GpuPhysicsLink);
+
 pub struct GpuCompute {
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
     pub compute_pipeline: wgpu::ComputePipeline,
+    
+    pub nodes_buffer: Option<wgpu::Buffer>,
+    pub elements_buffer: Option<wgpu::Buffer>,
+    pub params_buffer: Option<wgpu::Buffer>,
+    pub forces_x_buffer: Option<wgpu::Buffer>,
+    pub forces_y_buffer: Option<wgpu::Buffer>,
+    pub forces_z_buffer: Option<wgpu::Buffer>,
+    pub staging_forces_x: Option<wgpu::Buffer>,
+    pub staging_forces_y: Option<wgpu::Buffer>,
+    pub staging_forces_z: Option<wgpu::Buffer>,
+    
+    pub node_capacity: usize,
+    pub element_capacity: usize,
 }
 
 impl GpuCompute {
@@ -43,12 +62,28 @@ impl GpuCompute {
             device: Arc::new(device),
             queue: Arc::new(queue),
             compute_pipeline,
+            nodes_buffer: None,
+            elements_buffer: None,
+            params_buffer: None,
+            forces_x_buffer: None,
+            forces_y_buffer: None,
+            forces_z_buffer: None,
+            staging_forces_x: None,
+            staging_forces_y: None,
+            staging_forces_z: None,
+            node_capacity: 0,
+            element_capacity: 0,
         })
     }
 
-    pub fn step_soft_bodies(&self, soft_bodies: &mut [(gizmo_core::entity::Entity, crate::soft_body::SoftBodyMesh, crate::components::Transform)], rigid_colliders: &[(gizmo_core::entity::Entity, crate::components::Transform, crate::components::Collider)], dt: f32, gravity: gizmo_math::Vec3) {
+    pub fn step_soft_bodies(&mut self, soft_bodies: &mut [(gizmo_core::entity::Entity, crate::soft_body::SoftBodyMesh, crate::components::Transform)], rigid_colliders: &[(gizmo_core::entity::Entity, crate::components::Transform, crate::components::Collider)], dt: f32, gravity: gizmo_math::Vec3) {
         if soft_bodies.is_empty() {
             return;
+        }
+
+        #[cfg(debug_assertions)]
+        if soft_bodies.iter().any(|(_, sb, _)| sb.mu != soft_bodies[0].1.mu) {
+            eprintln!("Warning: Mixed soft body materials not supported on GPU path");
         }
 
         // --- GPU PATHWAY ---
@@ -89,7 +124,8 @@ impl GpuCompute {
                 });
             }
             
-            current_node_offset += sb.nodes.len() as u32;
+            current_node_offset = current_node_offset.checked_add(sb.nodes.len() as u32)
+                .expect("Soft body node offset overflow. Too many nodes!");
         }
         
         let params = GpuParameters {
@@ -102,55 +138,107 @@ impl GpuCompute {
         };
         
         // 2. Create GPU Buffers
-        use wgpu::util::DeviceExt;
+        let node_count = gpu_nodes.len();
+        let element_count = gpu_elements.len();
         
-        let nodes_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Nodes Buffer"),
-            contents: bytemuck::cast_slice(&gpu_nodes),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        });
+        if self.node_capacity < node_count || self.nodes_buffer.is_none() {
+            let capacity = node_count.max(self.node_capacity * 2).max(1024);
+            self.node_capacity = capacity;
+            
+            self.nodes_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Nodes Buffer"),
+                size: (capacity * std::mem::size_of::<GpuSoftBodyNode>()) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            
+            self.forces_x_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Forces X Buffer"),
+                size: (capacity * 4) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            
+            self.forces_y_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Forces Y Buffer"),
+                size: (capacity * 4) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            
+            self.forces_z_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Forces Z Buffer"),
+                size: (capacity * 4) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            
+            self.staging_forces_x = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Staging Forces X"),
+                size: (capacity * 4) as u64,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            
+            self.staging_forces_y = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Staging Forces Y"),
+                size: (capacity * 4) as u64,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            
+            self.staging_forces_z = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Staging Forces Z"),
+                size: (capacity * 4) as u64,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        
+        if self.element_capacity < element_count || self.elements_buffer.is_none() {
+            let capacity = element_count.max(self.element_capacity * 2).max(1024);
+            self.element_capacity = capacity;
+            
+            self.elements_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Elements Buffer"),
+                size: (capacity * std::mem::size_of::<GpuTetrahedron>()) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        
+        if self.params_buffer.is_none() {
+            self.params_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Params Buffer"),
+                size: std::mem::size_of::<GpuParameters>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        
+        // Write data to persistent buffers
+        self.queue.write_buffer(self.nodes_buffer.as_ref().unwrap(), 0, bytemuck::cast_slice(&gpu_nodes));
+        self.queue.write_buffer(self.elements_buffer.as_ref().unwrap(), 0, bytemuck::cast_slice(&gpu_elements));
+        self.queue.write_buffer(self.params_buffer.as_ref().unwrap(), 0, bytemuck::cast_slice(&[params]));
+        
+        // Clear forces buffers
+        let zero_forces = vec![0u8; node_count * 4];
+        self.queue.write_buffer(self.forces_x_buffer.as_ref().unwrap(), 0, &zero_forces);
+        self.queue.write_buffer(self.forces_y_buffer.as_ref().unwrap(), 0, &zero_forces);
+        self.queue.write_buffer(self.forces_z_buffer.as_ref().unwrap(), 0, &zero_forces);
 
-        let elements_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Elements Buffer"),
-            contents: bytemuck::cast_slice(&gpu_elements),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-
-        let params_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Params Buffer"),
-            contents: bytemuck::cast_slice(&[params]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-
-        let zero_forces: Vec<i32> = vec![0; gpu_nodes.len()];
-        let forces_x_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Forces X Buffer"),
-            contents: bytemuck::cast_slice(&zero_forces),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        });
-        let forces_y_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Forces Y Buffer"),
-            contents: bytemuck::cast_slice(&zero_forces),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        });
-        let forces_z_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Forces Z Buffer"),
-            contents: bytemuck::cast_slice(&zero_forces),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        });
-
-        // 3. Create Bind Group
+        // 3. Bind Group
         let bind_group_layout = self.compute_pipeline.get_bind_group_layout(0);
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Soft Body Bind Group"),
+            label: Some("Soft Body Compute Bind Group"),
             layout: &bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: nodes_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: elements_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: forces_x_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: forces_y_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 5, resource: forces_z_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 0, resource: self.nodes_buffer.as_ref().unwrap().as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: self.elements_buffer.as_ref().unwrap().as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: self.params_buffer.as_ref().unwrap().as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: self.forces_x_buffer.as_ref().unwrap().as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: self.forces_y_buffer.as_ref().unwrap().as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: self.forces_z_buffer.as_ref().unwrap().as_entire_binding() },
             ],
         });
 
@@ -167,36 +255,21 @@ impl GpuCompute {
             cpass.dispatch_workgroups(workgroups, 1, 1);
         }
 
-        // Copy forces to a staging buffer
-        let staging_forces_x = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Staging Forces X"),
-            size: (gpu_nodes.len() * 4) as u64,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let staging_forces_y = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Staging Forces Y"),
-            size: (gpu_nodes.len() * 4) as u64,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let staging_forces_z = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Staging Forces Z"),
-            size: (gpu_nodes.len() * 4) as u64,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        encoder.copy_buffer_to_buffer(&forces_x_buffer, 0, &staging_forces_x, 0, (gpu_nodes.len() * 4) as u64);
-        encoder.copy_buffer_to_buffer(&forces_y_buffer, 0, &staging_forces_y, 0, (gpu_nodes.len() * 4) as u64);
-        encoder.copy_buffer_to_buffer(&forces_z_buffer, 0, &staging_forces_z, 0, (gpu_nodes.len() * 4) as u64);
+        // Copy forces to staging buffer
+        encoder.copy_buffer_to_buffer(self.forces_x_buffer.as_ref().unwrap(), 0, self.staging_forces_x.as_ref().unwrap(), 0, (node_count * 4) as u64);
+        encoder.copy_buffer_to_buffer(self.forces_y_buffer.as_ref().unwrap(), 0, self.staging_forces_y.as_ref().unwrap(), 0, (node_count * 4) as u64);
+        encoder.copy_buffer_to_buffer(self.forces_z_buffer.as_ref().unwrap(), 0, self.staging_forces_z.as_ref().unwrap(), 0, (node_count * 4) as u64);
 
         self.queue.submit(Some(encoder.finish()));
 
         // 5. Read back the mapped buffers
-        let slice_x = staging_forces_x.slice(..);
-        let slice_y = staging_forces_y.slice(..);
-        let slice_z = staging_forces_z.slice(..);
+        let staging_x = self.staging_forces_x.as_ref().unwrap();
+        let staging_y = self.staging_forces_y.as_ref().unwrap();
+        let staging_z = self.staging_forces_z.as_ref().unwrap();
+
+        let slice_x = staging_x.slice(0..(node_count * 4) as u64);
+        let slice_y = staging_y.slice(0..(node_count * 4) as u64);
+        let slice_z = staging_z.slice(0..(node_count * 4) as u64);
 
         let (tx, rx) = std::sync::mpsc::channel();
         let tx1 = tx.clone();
@@ -206,8 +279,11 @@ impl GpuCompute {
         slice_y.map_async(wgpu::MapMode::Read, move |v| { let _ = tx1.send(v); });
         slice_z.map_async(wgpu::MapMode::Read, move |v| { let _ = tx2.send(v); });
         
-        // Wait for GPU
-        self.device.poll(wgpu::Maintain::Wait);
+        // Wait for GPU using separate thread to allow concurrent polling while main thread waits on channel
+        let device_clone = self.device.clone();
+        std::thread::spawn(move || {
+            device_clone.poll(wgpu::Maintain::Wait);
+        });
         
         // Check for receiving errors, and early return if mapped buffer reading failed
         if let (Ok(Ok(_)), Ok(Ok(_)), Ok(Ok(_))) = (rx.recv(), rx.recv(), rx.recv()) {} else {
@@ -222,14 +298,14 @@ impl GpuCompute {
         let data_z: &[i32] = bytemuck::cast_slice(&mapped_z);
 
         // 6. Apply forces back to the CPU models!
-        const FIXED_POINT_MULTIPLIER: f32 = 100000.0;
+        const FIXED_POINT_MULTIPLIER: f32 = 10000.0;
         
         for (sb_idx, (_, sb, _)) in soft_bodies.iter_mut().enumerate() {
             let offset = node_offsets[sb_idx] as usize;
             for (i, node) in sb.nodes.iter_mut().enumerate() {
                 if node.is_fixed { continue; }
                 
-                let global_idx = offset + i;
+                let global_idx = offset as usize + i;
                 let force = gizmo_math::Vec3::new(
                     data_x[global_idx] as f32 / FIXED_POINT_MULTIPLIER,
                     data_y[global_idx] as f32 / FIXED_POINT_MULTIPLIER,
@@ -239,43 +315,25 @@ impl GpuCompute {
                 let acceleration = force * (if node.mass > 0.0 { 1.0 / node.mass } else { 0.0 }) + gravity;
                 node.velocity += acceleration * dt;
                 
-                // Add damping
-                node.velocity *= params.damping;
+                // Add damping dt independent
+                node.velocity *= (1.0 - params.damping * dt).max(0.0);
                 
                 let next_pos = node.position + node.velocity * dt;
-                let mut collided = false;
+                let (new_pos, new_vel, collided) = crate::soft_body::resolve_node_collision(node.position, node.velocity, dt, rigid_colliders);
                 
-                // Extremely simple collision handling against rigid bodies
-                let ray = crate::raycast::Ray::new(node.position, node.velocity.normalize_or_zero());
-                let dist = node.velocity.length() * dt;
-                
-                if dist > 1e-5 {
-                    for (_, col_trans, col) in rigid_colliders {
-                        if let Some((d, n)) = crate::raycast::Raycast::ray_shape(&ray, &col.shape, col_trans) {
-                            if d <= dist + 0.1 { // small radius
-                                // Resolve collision
-                                let bounce = 0.5;
-                                let friction = 0.8;
-                                
-                                let vn = node.velocity.dot(n);
-                                if vn < 0.0 {
-                                    let vt = node.velocity - n * vn;
-                                    node.velocity = vt * (1.0 - friction) - n * (vn * bounce);
-                                }
-                                
-                                node.position += ray.direction * (d - 0.1).max(0.0);
-                                collided = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-                
-                if !collided {
+                if collided {
+                    node.position = new_pos;
+                    node.velocity = new_vel;
+                } else {
                     node.position = next_pos;
                 }
             }
         }
+        
+        // Unmap buffers so they can be written to next frame
+        staging_x.unmap();
+        staging_y.unmap();
+        staging_z.unmap();
     }
 }
 

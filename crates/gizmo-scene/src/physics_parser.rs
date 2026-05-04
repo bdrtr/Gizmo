@@ -21,7 +21,7 @@ pub fn create_collider_from_mesh(mesh: &Mesh, use_convex_hull: bool) -> Collider
             indices.push(i as u32);
         }
         
-        let bvh = gizmo_physics::bvh::BvhTree::build(&vertices, &mut indices);
+        let bvh = gizmo_physics::bvh::BvhTree::build(&vertices, &mut indices).unwrap_or_default();
         
         ColliderShape::TriMesh(TriMeshShape {
             vertices,

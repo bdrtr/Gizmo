@@ -30,11 +30,11 @@ impl PacejkaParams {
         d * inner.sin()
     }
 
-    /// Kombine slip weighting fonksiyonu G(σ_other)
+    /// Kombine slip weighting fonksiyonu (Lorentzian falloff)
     /// σ_other = dikey yöndeki normalize kayma miktarı
-    fn weighting(&self, sigma_other: f32) -> f32 {
+    fn weighting_lorentzian(&self, sigma_other: f32) -> f32 {
         let k = self.b * sigma_other;
-        1.0 / (1.0 + k * k).sqrt() // Simplified Dugoff scaling
+        1.0 / (1.0 + k * k).sqrt() // Lorentzian scaling
     }
 }
 
@@ -54,8 +54,8 @@ pub fn pacejka_combined(
     let fy_pure = lat.calculate_force(slip_angle,  normal_load);
 
     // Kombine weighting: her eksen diğerini kısmen bastırır
-    let gx = long.weighting(slip_angle);
-    let gy = lat.weighting(slip_ratio);
+    let gx = long.weighting_lorentzian(slip_angle);
+    let gy = lat.weighting_lorentzian(slip_ratio);
 
     let fx = fx_pure * gx;
     let fy = fy_pure * gy;
@@ -352,7 +352,7 @@ pub fn update_vehicle(
     // Zemin etkisi: alçak araçlarda downforce artar
     let height_above_ground = vehicle.wheels.iter()
         .filter(|w| w.is_grounded)
-        .map(|w| w.suspension_length)
+        .filter_map(|w| w.ground_hit.as_ref().map(|hit| hit.distance - 0.5)) // 0.5 is ray_origin_offset
         .fold(f32::MAX, f32::min);
     let ge_factor = if height_above_ground < a.ground_effect_height {
         a.ground_effect_multiplier
@@ -360,12 +360,12 @@ pub fn update_vehicle(
 
     let drag_dir  = if spd > 0.1 { -v_com / spd } else { Vec3::ZERO };
     let drag_force = drag_dir * (a.drag_coefficient * a.frontal_area * q);
-    let lift_force = -up * (a.lift_coefficient.abs() * a.frontal_area * q * ge_factor);
+    let lift_force = up * (a.lift_coefficient * a.frontal_area * q * ge_factor);
 
     // Aero kuvvetini basınç merkezinden uygula (tork üretir)
     let cop_world = vehicle_transform.position
         + vehicle_transform.rotation.mul_vec3(a.center_of_pressure);
-    let com = vehicle_transform.position - up * 0.3;
+    let com = vehicle_transform.position + vehicle_transform.rotation.mul_vec3(vehicle_rb.center_of_mass);
     apply_force_at_point(vehicle_rb, vehicle_vel, com, vehicle_transform.rotation,
         drag_force + lift_force, cop_world, dt);
 
@@ -558,7 +558,7 @@ pub fn update_vehicle(
 
                 // Lastik kuvvetini temas noktasından uygula
                 let tire_force = wheel_forward * final_long + wheel_right * final_lat;
-                let contact_pt = attach_world + ray_dir * hit.distance;
+                let contact_pt = hit.point;
                 apply_force_at_point(vehicle_rb, vehicle_vel, com, vehicle_transform.rotation, tire_force, contact_pt, dt);
 
                 // 6.3 Tekerlek angular_velocity entegrasyonu (Semi-implicit Euler)
@@ -595,8 +595,17 @@ pub fn update_vehicle(
                 -wheel.angular_velocity.signum()
             } else { 0.0 };
 
-            let net_torque = wheel.drive_torque + wheel.brake_torque * brake_dir;
+            let effective_brake = wheel.brake_torque * brake_dir;
+            let net_torque = wheel.drive_torque + effective_brake;
             wheel.angular_velocity += (net_torque / wheel_inertia) * dt;
+            
+            // Fren kilitleme: abs >= tekerlek hızı değilse sıfırla
+            let max_brake_decel = wheel.brake_torque / wheel_inertia * dt;
+            if vehicle.brake_input > 0.01 {
+                if wheel.angular_velocity.abs() < max_brake_decel {
+                    wheel.angular_velocity = 0.0;
+                }
+            }
         }
 
         // dt-doğru sönümleme: (1 - coeff * dt) ≈ exp(-coeff * dt)
@@ -684,7 +693,8 @@ mod tests {
         
         // 2. Durum: Sadece İleri Kayma (Burnout/Frenleme)
         let (fx2, fy2) = pacejka_combined(&long, &lat, 0.15, 0.0, normal_load);
-        assert!(fx2 > 2000.0, "Expected strong longitudinal force during 15% slip");
+        let expected_fx2 = long.calculate_force(0.15, normal_load);
+        assert!((fx2 - expected_fx2).abs() < 1e-4, "Expected combined force to match pure force when no lateral slip is present");
         assert!(fy2.abs() < 1e-4, "Expected zero lateral force when purely accelerating straight");
         
         // 3. Durum: Kombine Kayma (Virajda Gazlama - Friction Circle Test)

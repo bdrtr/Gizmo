@@ -23,7 +23,7 @@ impl Gjk {
             sa - sb
         };
 
-        Self::gjk_algorithm(support)
+        Self::gjk_with_simplex(support).is_some()
     }
 
     /// Get contact information using GJK + EPA
@@ -42,18 +42,10 @@ impl Gjk {
         };
 
         if let Some(simplex) = Self::gjk_with_simplex(support) {
-            Self::epa(simplex, support, pos_a, pos_b)
+            Self::epa(simplex, shape_a, pos_a, rot_a, shape_b, pos_b, rot_b)
         } else {
             None
         }
-    }
-
-    /// Core GJK algorithm
-    fn gjk_algorithm<F>(support: F) -> bool
-    where
-        F: Fn(Vec3) -> Vec3,
-    {
-        Self::gjk_with_simplex(support).is_some()
     }
 
     /// GJK that returns the final simplex for EPA
@@ -70,6 +62,7 @@ impl Gjk {
 
         const MAX_ITERATIONS: usize = 32;
         for _ in 0..MAX_ITERATIONS {
+            direction = direction.try_normalize().unwrap_or(Vec3::X);
             let a = support(direction);
 
             if a.dot(direction) < 0.0 {
@@ -107,11 +100,12 @@ impl Gjk {
         let mut closest_point = p;
 
         for _ in 0..EPA_MAX_ITERATIONS {
+            direction = direction.try_normalize().unwrap_or(Vec3::X);
             let a = support(direction);
             
             // The distance projected along the direction
             // If it doesn't pass the origin, origin is definitely outside
-            let d = a.dot(direction) / direction.length();
+            let d = a.dot(direction);
             if d < 0.0 {
                 return Some((closest_point.length(), closest_point.normalize()));
             }
@@ -198,7 +192,7 @@ impl Gjk {
             }
         }
 
-        Some(t) // Reached max iterations, assume collision at t
+        None // Converge edemedik, CCD miss kabul et
     }
 
     /// Fast Speculative Contact for CCD
@@ -296,15 +290,14 @@ impl Gjk {
 
         if abc.cross(ac).dot(ao) > 0.0 {
             if ac.dot(ao) > 0.0 {
-                simplex.remove(1);
+                *simplex = vec![c, a];
                 let mut cross = ac.cross(ao);
                 if cross.length_squared() < 1e-6 {
                     cross = if ac.x.abs() > ac.y.abs() { Vec3::new(ac.y, -ac.x, 0.0) } else { Vec3::new(0.0, ac.z, -ac.y) };
                 }
                 *direction = cross.cross(ac);
             } else {
-                simplex.remove(0);
-                simplex.remove(0);
+                *simplex = vec![b, a];
                 let mut cross = ab.cross(ao);
                 if cross.length_squared() < 1e-6 {
                     cross = if ab.x.abs() > ab.y.abs() { Vec3::new(ab.y, -ab.x, 0.0) } else { Vec3::new(0.0, ab.z, -ab.y) };
@@ -312,8 +305,7 @@ impl Gjk {
                 *direction = cross.cross(ab);
             }
         } else if ab.cross(abc).dot(ao) > 0.0 {
-            simplex.remove(0);
-            simplex.remove(0);
+            *simplex = vec![b, a];
             let mut cross = ab.cross(ao);
             if cross.length_squared() < 1e-6 {
                 cross = if ab.x.abs() > ab.y.abs() { Vec3::new(ab.y, -ab.x, 0.0) } else { Vec3::new(0.0, ab.z, -ab.y) };
@@ -367,15 +359,21 @@ impl Gjk {
     }
 
     /// EPA (Expanding Polytope Algorithm) for contact information
-    fn epa<F>(
+    fn epa(
         mut simplex: Vec<Vec3>,
-        support: F,
+        shape_a: &ColliderShape,
         pos_a: Vec3,
+        rot_a: gizmo_math::Quat,
+        shape_b: &ColliderShape,
         pos_b: Vec3,
+        rot_b: gizmo_math::Quat,
     ) -> Option<ContactPoint>
-    where
-        F: Fn(Vec3) -> Vec3,
     {
+        let support = |dir: Vec3| {
+            let sa = Self::support_point(shape_a, pos_a, rot_a, dir);
+            let sb = Self::support_point(shape_b, pos_b, rot_b, -dir);
+            sa - sb
+        };
         let mut faces = Vec::new();
         let mut edges = Vec::new();
 
@@ -392,10 +390,6 @@ impl Gjk {
         for _ in 0..EPA_MAX_ITERATIONS {
             // Find closest face
             let (_closest_face_idx, normal, distance) = Self::find_closest_face(&simplex, &faces)?;
-
-            if distance < EPA_TOLERANCE {
-                break;
-            }
 
             // Get support point in normal direction
             let support_point = support(normal);
@@ -436,8 +430,12 @@ impl Gjk {
 
         // Get final contact information
         let (_, normal, penetration) = Self::find_closest_face(&simplex, &faces)?;
+        
+        // dbg!(penetration, normal);
 
-        let contact_point = pos_a + normal * (penetration * 0.5);
+        let pt_a = Self::support_point(shape_a, pos_a, rot_a, -normal);
+        let pt_b = Self::support_point(shape_b, pos_b, rot_b, -normal);
+        let contact_point = (pt_a + pt_b) * 0.5;
 
         Some(ContactPoint {
             point: contact_point,
@@ -460,7 +458,7 @@ impl Gjk {
 
         for (i, &(a, b, c)) in faces.iter().enumerate() {
             let normal = Self::compute_face_normal(simplex, a, b, c);
-            let distance = normal.dot(simplex[a]).abs();
+            let distance = normal.dot(simplex[a]);
 
             if distance < min_distance {
                 min_distance = distance;
@@ -479,7 +477,12 @@ impl Gjk {
     fn compute_face_normal(simplex: &[Vec3], a: usize, b: usize, c: usize) -> Vec3 {
         let ab = simplex[b] - simplex[a];
         let ac = simplex[c] - simplex[a];
-        ab.cross(ac).normalize()
+        let normal_raw = ab.cross(ac);
+        if normal_raw.dot(simplex[a]) < 0.0 {
+            -normal_raw.try_normalize().unwrap_or(Vec3::X)
+        } else {
+            normal_raw.try_normalize().unwrap_or(Vec3::X)
+        }
     }
 
     fn add_edge(edges: &mut Vec<(usize, usize)>, a: usize, b: usize) {
@@ -505,7 +508,10 @@ impl Gjk {
             ColliderShape::Sphere(s) => Self::sphere_support(s, local_dir),
             ColliderShape::Box(b) => Self::box_support(b, local_dir),
             ColliderShape::Capsule(c) => Self::capsule_support(c, local_dir),
-            ColliderShape::Plane(_) => Vec3::ZERO, // Planes handled separately
+            ColliderShape::Plane(_) => {
+                debug_assert!(false, "Plane shapes must use separate collision detection");
+                Vec3::ZERO // Planes handled separately
+            }
             ColliderShape::TriMesh(tm) => {
                 let mut best_dot = f32::NEG_INFINITY;
                 let mut best_pt = Vec3::ZERO;
@@ -550,7 +556,7 @@ impl Gjk {
                         }
                     }
                 } else {
-                    for v in &tm.vertices {
+                    for v in tm.vertices.iter() {
                         let d = v.dot(local_dir);
                         if d > best_dot {
                             best_dot = d;
@@ -563,7 +569,7 @@ impl Gjk {
             ColliderShape::ConvexHull(ch) => {
                 let mut best_dot = f32::NEG_INFINITY;
                 let mut best_pt = Vec3::ZERO;
-                for v in &ch.vertices {
+                for v in ch.vertices.iter() {
                     let d = v.dot(local_dir);
                     if d > best_dot {
                         best_dot = d;
@@ -573,7 +579,7 @@ impl Gjk {
                 best_pt
             }
             crate::components::ColliderShape::Compound(_) => {
-                // Approximate fallback since Compound shapes shouldn't be used directly with GJK support
+                debug_assert!(false, "Compound shapes must use separate collision detection");
                 Vec3::ZERO
             }
         };
@@ -582,7 +588,7 @@ impl Gjk {
     }
 
     fn sphere_support(sphere: &SphereShape, dir: Vec3) -> Vec3 {
-        dir.normalize() * sphere.radius
+        dir.try_normalize().unwrap_or(Vec3::X) * sphere.radius
     }
 
     fn box_support(box_shape: &BoxShape, dir: Vec3) -> Vec3 {
@@ -606,7 +612,7 @@ impl Gjk {
     }
 
     fn capsule_support(capsule: &CapsuleShape, dir: Vec3) -> Vec3 {
-        let dir_normalized = dir.normalize();
+        let dir_normalized = dir.try_normalize().unwrap_or(Vec3::X);
         let sphere_center = if dir_normalized.y > 0.0 {
             Vec3::new(0.0, capsule.half_height, 0.0)
         } else {
@@ -616,3 +622,48 @@ impl Gjk {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gizmo_math::{Vec3, Quat};
+
+    #[test]
+    fn test_sphere_vs_sphere_collision() {
+        let shape = ColliderShape::Sphere(SphereShape { radius: 1.0 });
+        
+        // Intersecting
+        assert!(Gjk::test_collision(&shape, Vec3::ZERO, Quat::IDENTITY, &shape, Vec3::new(1.5, 0.0, 0.0), Quat::IDENTITY));
+        
+        // Not Intersecting
+        assert!(!Gjk::test_collision(&shape, Vec3::ZERO, Quat::IDENTITY, &shape, Vec3::new(2.5, 0.0, 0.0), Quat::IDENTITY));
+    }
+
+    #[test]
+    fn test_box_vs_box_collision() {
+        let shape = ColliderShape::Box(BoxShape { half_extents: Vec3::new(1.0, 1.0, 1.0) });
+        
+        // Intersecting
+        assert!(Gjk::test_collision(&shape, Vec3::ZERO, Quat::IDENTITY, &shape, Vec3::new(1.5, 0.0, 0.0), Quat::IDENTITY));
+        
+        // Not Intersecting
+        assert!(!Gjk::test_collision(&shape, Vec3::ZERO, Quat::IDENTITY, &shape, Vec3::new(2.5, 0.0, 0.0), Quat::IDENTITY));
+    }
+
+    #[test]
+    fn test_epa_contact_generation() {
+        let shape_a = ColliderShape::Box(BoxShape { half_extents: Vec3::new(1.0, 1.0, 1.0) });
+        let shape_b = ColliderShape::Box(BoxShape { half_extents: Vec3::new(1.0, 1.0, 1.0) });
+        
+        // Penetrating by 0.5
+        let contact = Gjk::get_contact(&shape_a, Vec3::ZERO, Quat::IDENTITY, &shape_b, Vec3::new(1.5, 0.0, 0.0), Quat::IDENTITY);
+        
+        assert!(contact.is_some(), "EPA failed to generate contact");
+        let contact = contact.unwrap();
+        
+        println!("Test got contact: {:?}", contact);
+        
+        // Penetration should be 0.5 (1.0 + 1.0 - 1.5)
+        assert!((contact.penetration - 0.5).abs() < 0.001, "Penetration depth is wrong: {}", contact.penetration);
+        assert!((contact.normal.x.abs() - 1.0).abs() < 0.001, "Normal is wrong: {:?}", contact.normal);
+    }
+}

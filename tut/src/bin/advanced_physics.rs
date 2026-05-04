@@ -1,7 +1,7 @@
 use gizmo::prelude::*;
 use gizmo::physics::components::{Collider, RigidBody, Transform, Velocity, Breakable, Explosion};
 use gizmo::physics::world::PhysicsWorld;
-use gizmo::physics::ragdoll::{RagdollBuilder, RagdollBoneDef, RagdollBoneType};
+use gizmo::physics::ragdoll::RagdollBuilder;
 use gizmo::physics::joints::Joint;
 use gizmo::physics::rope::Rope;
 use gizmo::renderer::asset::AssetManager;
@@ -122,7 +122,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
                 max_frames: 10,
             });
             // Make it breakable with high threshold to survive stacking
-            world.add_component(brick, Breakable { threshold: 400.0, max_pieces: 4, is_broken: false });
+            world.add_component(brick, Breakable { threshold: 400.0, max_pieces: 4, ..Default::default() });
         }
     }
 
@@ -168,7 +168,8 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         20,
         0.5,
         1.0,
-        true
+        true,
+        false
     );
 
     // Create visual spheres for rope nodes
@@ -254,9 +255,10 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
             let exp_ent = world.spawn();
             world.add_component(exp_ent, Transform::new(pos));
             world.add_component(exp_ent, Explosion {
-                radius: 5.0,
+                force_radius: 5.0,
                 force: 5000.0,
                 is_active: true,
+                ..Default::default()
             });
         }
     }
@@ -272,23 +274,9 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
     // 1. Compute and update vectors (v, a, f) and draw them
     if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
         if let Some(mut q) = world.query::<(gizmo::core::query::Mut<Velocity>, &Transform, &RigidBody)>() {
-            for (_, (mut vel, trans, rb)) in q.iter_mut() {
-                // Calculate acceleration: a = (v_current - v_last) / dt
-                let acceleration = (vel.linear - vel.last_linear) / dt.max(0.0001);
-                
-                // Force = mass * acceleration (Approximation for external forces)
-                vel.force = acceleration * rb.mass;
-                
+            for (_, (vel, trans, _rb)) in q.iter_mut() {
                 // Draw Velocity (Green)
                 gizmos.draw_line(trans.position, trans.position + vel.linear * 0.1, [0.0, 1.0, 0.0, 1.0]);
-                
-                // Draw Acceleration (Yellow)
-                gizmos.draw_line(trans.position, trans.position + acceleration * 0.01, [1.0, 1.0, 0.0, 1.0]);
-                
-                // Draw Force (Red)
-                gizmos.draw_line(trans.position, trans.position + vel.force * 0.005, [1.0, 0.0, 0.0, 1.0]);
-
-                vel.last_linear = vel.linear;
             }
         }
         

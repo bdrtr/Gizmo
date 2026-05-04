@@ -10,6 +10,7 @@ struct DemoState {
     camera_offset: Vec3,
     post_process: gizmo::renderer::gpu_types::PostProcessUniforms,
     pending_particles: std::cell::RefCell<Vec<gizmo::renderer::gpu_particles::GpuParticle>>,
+    show_car: bool,
 }
 
 fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
@@ -94,7 +95,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
 
     // --- HILL TERRAIN ---
     let mut x_pos = -20.0;
-    let mut y_pos = 0.0;
+    let y_pos = 0.0;
     
     // Starting platform - Make it a long straight track for building speed!
     let ground = world.spawn();
@@ -148,16 +149,34 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         }
     }
 
-    for _ in 0..50 {
-        let width = 6.0 + rand::random::<f32>() * 6.0;
-        let angle = (rand::random::<f32>() - 0.3) * 0.8; 
+    let num_segments = 250;
+    let mut prev_pos = Vec3::new(x_pos, y_pos, 0.0);
+    
+    for i in 1..=num_segments {
+        let t = i as f32;
+        let x = x_pos + t * 4.0;
         
-        let step_x = width * angle.cos();
-        let step_y = width * angle.sin();
+        // Procedural hills: mix of sine waves
+        let local_x = t * 4.0; 
+        let y = (local_x * 0.05).sin() * 5.0 
+          + (local_x * 0.1).sin() * 2.0 
+          + (local_x * 0.02).sin() * 15.0;
+
+        let next_pos = Vec3::new(x, y, 0.0);
+        let diff = next_pos - prev_pos;
+        let length = diff.length();
+        let angle = diff.y.atan2(diff.x);
+        let center = prev_pos + diff * 0.5;
         
         let hill = world.spawn();
-        let transform = Transform::new(Vec3::new(x_pos + step_x, y_pos + step_y - 2.0, 0.0))
-            .with_rotation(Quat::from_rotation_z(angle))
+        
+        // Make sure it looks seamless by slightly overlapping length
+        let width = length * 0.5 + 0.1; 
+        let rotation = Quat::from_rotation_z(angle);
+        let local_down = rotation.mul_vec3(Vec3::new(0.0, -2.0, 0.0));
+        
+        let transform = Transform::new(center + local_down)
+            .with_rotation(rotation)
             .with_scale(Vec3::new(width, 2.0, 5.0));
             
         world.add_component(hill, transform);
@@ -168,8 +187,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         world.add_component(hill, RigidBody::new_static());
         world.add_component(hill, Velocity::default());
         
-        x_pos += step_x * 2.0;
-        y_pos += step_y * 2.0;
+        prev_pos = next_pos;
     }
 
     // --- CAR (Using Raycast Vehicle Controller for Ultimate Stability) ---
@@ -275,6 +293,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
             _padding: [0.0; 3],
         },
         pending_particles: std::cell::RefCell::new(Vec::new()),
+        show_car: true,
     }
 }
 
@@ -428,11 +447,26 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
         }
     }
 
+    let mut car_vel = Vec3::ZERO;
+    if let Some(q) = world.query::<&Velocity>() {
+        if let Some(v) = q.get(state.car_entity.id()) {
+            car_vel = v.linear;
+        }
+    }
+
     // Camera follow
     if let Some(mut q) = world.query::<(gizmo::core::query::Mut<Transform>, &Camera)>() {
         for (_, (mut cam_trans, _)) in q.iter_mut() {
-            let desired_pos = car_pos + state.camera_offset;
-            cam_trans.position = cam_trans.position.lerp(desired_pos, dt * 5.0);
+            let speed = car_vel.length();
+            let look_ahead = if speed > 1.0 { (car_vel / speed) * (speed * 0.3).min(15.0) } else { Vec3::ZERO };
+            let zoom_out = (speed * 0.2).min(15.0);
+            
+            let mut dynamic_offset = state.camera_offset;
+            dynamic_offset.z += zoom_out;
+            dynamic_offset.y += zoom_out * 0.2;
+            
+            let desired_pos = car_pos + look_ahead + dynamic_offset;
+            cam_trans.position = cam_trans.position.lerp(desired_pos, dt * 3.0);
             cam_trans.update_local_matrix();
         }
     }
@@ -490,6 +524,24 @@ fn ui_debug_panel(world: &mut World, state: &mut DemoState, ctx: &gizmo::egui::C
             
             ui.separator();
             ui.label("Use W/A/S/D to drive");
+            
+            ui.separator();
+            ui.heading("Araba Görünürlüğü");
+            let mut show_car = state.show_car;
+            if ui.checkbox(&mut show_car, "Arabayı Göster").changed() {
+                state.show_car = show_car;
+                if show_car {
+                    world.add_component(state.car_entity, MeshRenderer::new());
+                    for w in &state.wheel_entities {
+                        world.add_component(*w, MeshRenderer::new());
+                    }
+                } else {
+                    world.remove_component::<MeshRenderer>(state.car_entity);
+                    for w in &state.wheel_entities {
+                        world.remove_component::<MeshRenderer>(*w);
+                    }
+                }
+            }
             
             ui.separator();
             ui.heading("Görsel Kalite / Post-Process");

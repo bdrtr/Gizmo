@@ -1,6 +1,5 @@
-use gizmo_core::Entity;
 use gizmo_core::World;
-use gizmo_math::{Quat, Vec3};
+use gizmo_math::Vec3;
 use gizmo_physics::components::{Collider, RigidBody, Transform, Velocity};
 use gizmo_physics::system::physics_step_system;
 use gizmo_physics::world::PhysicsWorld;

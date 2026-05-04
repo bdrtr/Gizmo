@@ -28,6 +28,7 @@ impl Rope {
         segment_length: f32,
         node_mass: f32,
         fix_start: bool,
+        fix_end: bool,
     ) -> Self {
         let mut nodes = Vec::with_capacity(num_segments + 1);
         let inv_mass = if node_mass > 0.0 { 1.0 / node_mass } else { 0.0 };
@@ -36,7 +37,7 @@ impl Rope {
 
         for i in 0..=num_segments {
             let pos = start_pos + dir_norm * (i as f32 * segment_length);
-            let is_fixed = if i == 0 && fix_start { true } else { false };
+            let is_fixed = (i == 0 && fix_start) || (i == num_segments && fix_end);
             nodes.push(RopeNode {
                 position: pos,
                 prev_position: pos,
@@ -70,11 +71,15 @@ impl Rope {
             node.prev_position = node.position;
             
             // Add gravity and damping
-            let new_vel = (velocity + gravity * dt) * self.damping;
+            let new_vel = (velocity + gravity * dt) * self.damping.powf(dt);
             node.position += new_vel * dt;
         }
 
-        // 2. Position Based Dynamics constraint solving
+        // 2. Position Based Dynamics constraint solving (XPBD)
+        // Compliance = inverse stiffness; clamp stiffness to [0, 1] to avoid negative alpha
+        let compliance = (1.0 - self.stiffness.min(1.0)).max(0.0);
+        let alpha = compliance / (dt * dt);
+        
         for _ in 0..self.iterations {
             for i in 0..(self.nodes.len() - 1) {
                 let n1 = self.nodes[i];
@@ -95,7 +100,7 @@ impl Rope {
                 }
 
                 let err = current_len - self.link_length;
-                let correction_mag = err * self.stiffness / w_sum;
+                let correction_mag = err / (w_sum + alpha); // XPBD compliance
                 let correction = dir.normalize() * correction_mag;
 
                 if !n1.is_fixed {
@@ -104,6 +109,14 @@ impl Rope {
                 if !n2.is_fixed {
                     self.nodes[i + 1].position -= correction * w2;
                 }
+            }
+        }
+
+        // 3. Simple ground collision
+        for node in &mut self.nodes {
+            if node.position.y < 0.0 {
+                node.position.y = 0.0;
+                node.prev_position.y = node.position.y; // zero vertical velocity
             }
         }
     }

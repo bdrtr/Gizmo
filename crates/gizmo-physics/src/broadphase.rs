@@ -13,35 +13,7 @@ use std::collections::HashMap;
 // AABB Yardımcıları
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn aabb_union(a: &Aabb, b: &Aabb) -> Aabb {
-    Aabb {
-        min: Vec3::new(
-            a.min.x.min(b.min.x),
-            a.min.y.min(b.min.y),
-            a.min.z.min(b.min.z),
-        ).into(),
-        max: Vec3::new(
-            a.max.x.max(b.max.x),
-            a.max.y.max(b.max.y),
-            a.max.z.max(b.max.z),
-        ).into(),
-    }
-}
-
-fn aabb_surface_area(aabb: &Aabb) -> f32 {
-    let d = Vec3::new(
-        aabb.max.x - aabb.min.x,
-        aabb.max.y - aabb.min.y,
-        aabb.max.z - aabb.min.z,
-    );
-    2.0 * (d.x * d.y + d.y * d.z + d.z * d.x)
-}
-
-fn aabb_overlaps(a: &Aabb, b: &Aabb) -> bool {
-    a.min.x <= b.max.x && a.max.x >= b.min.x &&
-    a.min.y <= b.max.y && a.max.y >= b.min.y &&
-    a.min.z <= b.max.z && a.max.z >= b.min.z
-}
+// Helper functions removed, using native Aabb methods.
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
@@ -96,7 +68,7 @@ pub fn aabb_overlaps_simd4(target: &Aabb, others: [&Aabb; 4]) -> u8 {
 pub fn aabb_overlaps_simd4(target: &Aabb, others: [&Aabb; 4]) -> u8 {
     let mut mask = 0;
     for i in 0..4 {
-        if aabb_overlaps(target, others[i]) {
+        if target.intersects(*others[i]) {
             mask |= 1 << i;
         }
     }
@@ -211,9 +183,9 @@ impl DynamicAabbTree {
         // Eğer zaten varsa, AABB hâlâ fat AABB içindeyse hiçbir şey yapma
         if let Some(&node_idx) = self.entity_map.get(&entity.id()) {
             let fat = &self.nodes[node_idx].aabb;
-            if aabb_overlaps(&aabb, fat)
-                && aabb.min.x >= fat.min.x && aabb.min.y >= fat.min.y && aabb.min.z >= fat.min.z
-                && aabb.max.x <= fat.max.x && aabb.max.y <= fat.max.y && aabb.max.z <= fat.max.z
+            if aabb.intersects(*fat)
+                && aabb.min.cmpge(fat.min).all()
+                && aabb.max.cmple(fat.max).all()
             {
                 self.tight_aabbs.insert(entity.id(), aabb);
                 return; // Hâlâ fat içinde, rebuild gerekmez
@@ -257,7 +229,7 @@ impl DynamicAabbTree {
         let old_parent = self.nodes[sibling].parent;
         let new_parent = self.alloc_node();
         self.nodes[new_parent].parent = old_parent;
-        self.nodes[new_parent].aabb   = aabb_union(&leaf_aabb, &self.nodes[sibling].aabb);
+        self.nodes[new_parent].aabb   = leaf_aabb.merge(self.nodes[sibling].aabb);
         self.nodes[new_parent].height = self.nodes[sibling].height + 1;
 
         if old_parent != NULL {
@@ -282,7 +254,7 @@ impl DynamicAabbTree {
             let left  = self.nodes[index].left;
             let right = self.nodes[index].right;
             self.nodes[index].height = 1 + self.nodes[left].height.max(self.nodes[right].height);
-            self.nodes[index].aabb   = aabb_union(&self.nodes[left].aabb, &self.nodes[right].aabb);
+            self.nodes[index].aabb   = self.nodes[left].aabb.merge(self.nodes[right].aabb);
             index = self.balance(index);
             index = self.nodes[index].parent;
         }
@@ -317,7 +289,7 @@ impl DynamicAabbTree {
                 let left  = self.nodes[index].left;
                 let right = self.nodes[index].right;
                 self.nodes[index].height = 1 + self.nodes[left].height.max(self.nodes[right].height);
-                self.nodes[index].aabb   = aabb_union(&self.nodes[left].aabb, &self.nodes[right].aabb);
+                self.nodes[index].aabb   = self.nodes[left].aabb.merge(self.nodes[right].aabb);
                 index = self.balance(index);
                 index = self.nodes[index].parent;
             }
@@ -332,15 +304,15 @@ impl DynamicAabbTree {
 
     fn find_best_sibling(&self, leaf_aabb: &Aabb) -> usize {
         let mut best        = self.root;
-        let mut best_cost   = aabb_surface_area(&aabb_union(leaf_aabb, &self.nodes[self.root].aabb));
-        let leaf_sa         = aabb_surface_area(leaf_aabb);
+        let mut best_cost   = leaf_aabb.merge(self.nodes[self.root].aabb).surface_area();
+        let leaf_sa         = leaf_aabb.surface_area();
 
         let mut stack = Vec::with_capacity(32);
         stack.push((self.root, 0.0f32));
 
         while let Some((idx, inherited_cost)) = stack.pop() {
             if idx == NULL { continue; }
-            let combined_sa = aabb_surface_area(&aabb_union(leaf_aabb, &self.nodes[idx].aabb));
+            let combined_sa = leaf_aabb.merge(self.nodes[idx].aabb).surface_area();
             let direct_cost = combined_sa + inherited_cost;
 
             if direct_cost < best_cost {
@@ -349,7 +321,7 @@ impl DynamicAabbTree {
             }
 
             if !self.nodes[idx].is_leaf() {
-                let child_inherited = (combined_sa - aabb_surface_area(&self.nodes[idx].aabb)) + inherited_cost;
+                let child_inherited = (combined_sa - self.nodes[idx].aabb.surface_area()) + inherited_cost;
                 let lower_bound     = leaf_sa + child_inherited;
                 if lower_bound < best_cost {
                     stack.push((self.nodes[idx].left,  child_inherited));
@@ -395,16 +367,16 @@ impl DynamicAabbTree {
                 self.nodes[c].right = f;
                 self.nodes[a].right = g;
                 self.nodes[g].parent = a;
-                self.nodes[a].aabb   = aabb_union(&self.nodes[b].aabb, &self.nodes[g].aabb);
-                self.nodes[c].aabb   = aabb_union(&self.nodes[a].aabb, &self.nodes[f].aabb);
+                self.nodes[a].aabb   = self.nodes[b].aabb.merge(self.nodes[g].aabb);
+                self.nodes[c].aabb   = self.nodes[a].aabb.merge(self.nodes[f].aabb);
                 self.nodes[a].height = 1 + self.nodes[b].height.max(self.nodes[g].height);
                 self.nodes[c].height = 1 + self.nodes[a].height.max(self.nodes[f].height);
             } else {
                 self.nodes[c].right = g;
                 self.nodes[a].right = f;
                 self.nodes[f].parent = a;
-                self.nodes[a].aabb   = aabb_union(&self.nodes[b].aabb, &self.nodes[f].aabb);
-                self.nodes[c].aabb   = aabb_union(&self.nodes[a].aabb, &self.nodes[g].aabb);
+                self.nodes[a].aabb   = self.nodes[b].aabb.merge(self.nodes[f].aabb);
+                self.nodes[c].aabb   = self.nodes[a].aabb.merge(self.nodes[g].aabb);
                 self.nodes[a].height = 1 + self.nodes[b].height.max(self.nodes[f].height);
                 self.nodes[c].height = 1 + self.nodes[a].height.max(self.nodes[g].height);
             }
@@ -434,16 +406,16 @@ impl DynamicAabbTree {
                 self.nodes[b].right = d;
                 self.nodes[a].left  = e;
                 self.nodes[e].parent = a;
-                self.nodes[a].aabb   = aabb_union(&self.nodes[c].aabb, &self.nodes[e].aabb);
-                self.nodes[b].aabb   = aabb_union(&self.nodes[a].aabb, &self.nodes[d].aabb);
+                self.nodes[a].aabb   = self.nodes[c].aabb.merge(self.nodes[e].aabb);
+                self.nodes[b].aabb   = self.nodes[a].aabb.merge(self.nodes[d].aabb);
                 self.nodes[a].height = 1 + self.nodes[c].height.max(self.nodes[e].height);
                 self.nodes[b].height = 1 + self.nodes[a].height.max(self.nodes[d].height);
             } else {
                 self.nodes[b].right = e;
                 self.nodes[a].left  = d;
                 self.nodes[d].parent = a;
-                self.nodes[a].aabb   = aabb_union(&self.nodes[c].aabb, &self.nodes[d].aabb);
-                self.nodes[b].aabb   = aabb_union(&self.nodes[a].aabb, &self.nodes[e].aabb);
+                self.nodes[a].aabb   = self.nodes[c].aabb.merge(self.nodes[d].aabb);
+                self.nodes[b].aabb   = self.nodes[a].aabb.merge(self.nodes[e].aabb);
                 self.nodes[a].height = 1 + self.nodes[c].height.max(self.nodes[d].height);
                 self.nodes[b].height = 1 + self.nodes[a].height.max(self.nodes[e].height);
             }
@@ -459,37 +431,49 @@ impl DynamicAabbTree {
     pub fn query_pairs(&self) -> Vec<(Entity, Entity)> {
         let mut pairs = Vec::new();
         if self.root == NULL { return pairs; }
-        self.query_pairs_recursive(self.root, self.root, &mut pairs);
-        pairs.sort_unstable_by(|a, b| a.0.id().cmp(&b.0.id()).then(a.1.id().cmp(&b.1.id())));
-        pairs.dedup();
+        
+        let mut single_stack = Vec::with_capacity(64);
+        single_stack.push(self.root);
+        
+        let mut pair_stack = Vec::with_capacity(128);
+        
+        while let Some(node_idx) = single_stack.pop() {
+            let node = &self.nodes[node_idx];
+            if !node.is_leaf() {
+                single_stack.push(node.left);
+                single_stack.push(node.right);
+                pair_stack.push((node.left, node.right));
+            }
+        }
+        
+        while let Some((a_idx, b_idx)) = pair_stack.pop() {
+            if a_idx == NULL || b_idx == NULL { continue; }
+            let a_node = &self.nodes[a_idx];
+            let b_node = &self.nodes[b_idx];
+            
+            if !a_node.aabb.intersects(b_node.aabb) { continue; }
+            
+            if a_node.is_leaf() && b_node.is_leaf() {
+                if let (Some(ea), Some(eb)) = (a_node.entity, b_node.entity) {
+                    let pair = if ea.id() < eb.id() { (ea, eb) } else { (eb, ea) };
+                    pairs.push(pair);
+                }
+                continue;
+            }
+            
+            if b_node.is_leaf() || (!a_node.is_leaf() && a_node.aabb.surface_area() >= b_node.aabb.surface_area()) {
+                pair_stack.push((a_node.left, b_idx));
+                pair_stack.push((a_node.right, b_idx));
+            } else {
+                pair_stack.push((a_idx, b_node.left));
+                pair_stack.push((a_idx, b_node.right));
+            }
+        }
+        
         pairs
     }
 
-    fn query_pairs_recursive(&self, a: usize, b: usize, pairs: &mut Vec<(Entity, Entity)>) {
-        if a == NULL || b == NULL { return; }
-        if !aabb_overlaps(&self.nodes[a].aabb, &self.nodes[b].aabb) { return; }
-
-        if self.nodes[a].is_leaf() && self.nodes[b].is_leaf() {
-            if a == b { return; }
-            if let (Some(ea), Some(eb)) = (self.nodes[a].entity, self.nodes[b].entity) {
-                let pair = if ea.id() < eb.id() { (ea, eb) } else { (eb, ea) };
-                pairs.push(pair);
-            }
-            return;
-        }
-
-        if self.nodes[b].is_leaf() || (!self.nodes[a].is_leaf() &&
-            aabb_surface_area(&self.nodes[a].aabb) >= aabb_surface_area(&self.nodes[b].aabb))
-        {
-            self.query_pairs_recursive(self.nodes[a].left,  b, pairs);
-            self.query_pairs_recursive(self.nodes[a].right, b, pairs);
-        } else {
-            self.query_pairs_recursive(a, self.nodes[b].left,  pairs);
-            self.query_pairs_recursive(a, self.nodes[b].right, pairs);
-        }
-    }
-
-    /// Bir AABB ile kesişen tüm entity'leri döndür (SIMD optimizasyonlu)
+    /// Bir AABB ile kesişen tüm entity'leri döndür
     pub fn query_aabb(&self, aabb: &Aabb) -> Vec<Entity> {
         let mut result = Vec::new();
         if self.root == NULL { return result; }
@@ -497,48 +481,13 @@ impl DynamicAabbTree {
         let mut stack = Vec::with_capacity(64);
         stack.push(self.root);
         
-        // Chunk processing buffer for SIMD
-        let mut chunk = [NULL; 4];
-        let mut chunk_len = 0;
-
         while let Some(idx) = stack.pop() {
-            chunk[chunk_len] = idx;
-            chunk_len += 1;
-
-            if chunk_len == 4 {
-                // Test 4 AABBs simultaneously using SIMD
-                let others = [
-                    &self.nodes[chunk[0]].aabb,
-                    &self.nodes[chunk[1]].aabb,
-                    &self.nodes[chunk[2]].aabb,
-                    &self.nodes[chunk[3]].aabb,
-                ];
-                let mask = aabb_overlaps_simd4(aabb, others);
-                
-                for i in 0..4 {
-                    if (mask & (1 << i)) != 0 {
-                        let node_idx = chunk[i];
-                        if self.nodes[node_idx].is_leaf() {
-                            if let Some(e) = self.nodes[node_idx].entity { result.push(e); }
-                        } else {
-                            stack.push(self.nodes[node_idx].left);
-                            stack.push(self.nodes[node_idx].right);
-                        }
-                    }
-                }
-                chunk_len = 0;
-            }
-        }
-        
-        // Process remaining nodes in the chunk
-        for i in 0..chunk_len {
-            let node_idx = chunk[i];
-            if aabb_overlaps(&self.nodes[node_idx].aabb, aabb) {
-                if self.nodes[node_idx].is_leaf() {
-                    if let Some(e) = self.nodes[node_idx].entity { result.push(e); }
+            if self.nodes[idx].aabb.intersects(*aabb) {
+                if self.nodes[idx].is_leaf() {
+                    if let Some(e) = self.nodes[idx].entity { result.push(e); }
                 } else {
-                    stack.push(self.nodes[node_idx].left);
-                    stack.push(self.nodes[node_idx].right);
+                    stack.push(self.nodes[idx].left);
+                    stack.push(self.nodes[idx].right);
                 }
             }
         }
@@ -552,8 +501,7 @@ impl DynamicAabbTree {
         if self.root == NULL { return result; }
         let mut stack = vec![self.root];
         while let Some(idx) = stack.pop() {
-            if let Some(t) = ray_aabb(origin, dir, &self.nodes[idx].aabb) {
-                if t > max_t { continue; }
+            if let Some(t) = ray_aabb(origin, dir, &self.nodes[idx].aabb, max_t) {
                 if self.nodes[idx].is_leaf() {
                     if let Some(e) = self.nodes[idx].entity { result.push((e, t)); }
                 } else {
@@ -569,9 +517,9 @@ impl DynamicAabbTree {
     pub fn entity_count(&self) -> usize { self.entity_map.len() }
 }
 
-fn ray_aabb(origin: Vec3, dir: Vec3, aabb: &Aabb) -> Option<f32> {
+fn ray_aabb(origin: Vec3, dir: Vec3, aabb: &Aabb, max_t: f32) -> Option<f32> {
     let mut tmin = 0.0f32;
-    let mut tmax = f32::INFINITY;
+    let mut tmax = max_t;
     for i in 0..3 {
         let (o, d, mn, mx) = match i {
             0 => (origin.x, dir.x, aabb.min.x, aabb.max.x),
@@ -627,6 +575,14 @@ impl SpatialHash {
         self.tree.insert(entity, aabb);
     }
 
+    pub fn update(&mut self, entity: Entity, aabb: Aabb) {
+        self.tree.insert(entity, aabb);
+    }
+
+    pub fn remove(&mut self, entity: Entity) {
+        self.tree.remove(entity);
+    }
+
     pub fn query_pairs(&self) -> Vec<(Entity, Entity)> {
         self.tree.query_pairs()
     }
@@ -635,12 +591,16 @@ impl SpatialHash {
         self.tree.query_aabb(&aabb)
     }
 
-    pub fn query_point(&self, point: Vec3, _radius: f32) -> Vec<Entity> {
+    pub fn query_point(&self, point: Vec3, radius: f32) -> Vec<Entity> {
         let tiny = Aabb {
-            min: Vec3::new(point.x - 0.01, point.y - 0.01, point.z - 0.01).into(),
-            max: Vec3::new(point.x + 0.01, point.y + 0.01, point.z + 0.01).into(),
+            min: Vec3::new(point.x - radius, point.y - radius, point.z - radius).into(),
+            max: Vec3::new(point.x + radius, point.y + radius, point.z + radius).into(),
         };
         self.tree.query_aabb(&tiny)
+    }
+
+    pub fn query_ray(&self, origin: Vec3, dir: Vec3, max_t: f32) -> Vec<(Entity, f32)> {
+        self.tree.query_ray(origin, dir, max_t)
     }
 }
 

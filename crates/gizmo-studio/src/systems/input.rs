@@ -127,7 +127,8 @@ pub fn handle_input_and_scene_view(
                         }
 
                         if let Some(t) = transforms.get(id) {
-                            let extents = col.shape.bounding_box_half_extents(t.rotation);
+                            let aabb = col.compute_aabb(gizmo::math::Vec3::ZERO, t.rotation);
+                            let extents = (aabb.max - aabb.min) * 0.5;
                             let scaled_half = gizmo::math::Vec3::new(
                                 extents.x * t.scale.x,
                                 extents.y * t.scale.y,

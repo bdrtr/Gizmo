@@ -64,15 +64,45 @@ pub struct SoftBodyMesh {
     /// Shear Modulus (mu) - derived
     pub mu: f32,
     
-    /// Yield Stress - Force threshold where temporary elastic deformation becomes permanent plastic deformation
-    pub yield_stress: f32,
-    
     /// Damping factor to prevent infinite oscillation
     pub damping: f32,
 }
 
+pub fn resolve_node_collision(
+    mut position: Vec3,
+    mut velocity: Vec3,
+    dt: f32,
+    rigid_colliders: &[(gizmo_core::entity::Entity, crate::components::Transform, crate::components::Collider)]
+) -> (Vec3, Vec3, bool) {
+    let mut collided = false;
+    let ray = crate::raycast::Ray::new(position, velocity.normalize_or_zero());
+    let dist = velocity.length() * dt;
+    
+    if dist > 1e-5 {
+        for (_, col_trans, col) in rigid_colliders {
+            if let Some((d, n)) = crate::raycast::Raycast::ray_shape(&ray, &col.shape, col_trans) {
+                if d <= dist + 0.1 {
+                    let bounce = 0.5;
+                    let friction = 0.8;
+                    
+                    let vn = velocity.dot(n);
+                    if vn < 0.0 {
+                        let vt = velocity - n * vn;
+                        velocity = vt * (1.0 - friction) - n * (vn * bounce);
+                    }
+                    
+                    position += ray.direction * (d - 0.1).max(0.0);
+                    collided = true;
+                }
+            }
+        }
+    }
+    
+    (position, velocity, collided)
+}
+
 impl SoftBodyMesh {
-    pub fn new(youngs_modulus: f32, poissons_ratio: f32, yield_stress: f32) -> Self {
+    pub fn new(youngs_modulus: f32, poissons_ratio: f32) -> Self {
         // Calculate Lame Parameters
         let mu = youngs_modulus / (2.0 * (1.0 + poissons_ratio));
         let lambda = (youngs_modulus * poissons_ratio) / ((1.0 + poissons_ratio) * (1.0 - 2.0 * poissons_ratio));
@@ -84,7 +114,6 @@ impl SoftBodyMesh {
             poissons_ratio,
             lambda,
             mu,
-            yield_stress,
             damping: 0.99,
         }
     }
@@ -118,15 +147,14 @@ impl SoftBodyMesh {
     /// Advances the FEM simulation by one timestep using a Neo-Hookean hyperelastic model.
     pub fn step(&mut self, dt: f32, gravity: Vec3, rigid_colliders: &[(gizmo_core::entity::Entity, crate::components::Transform, crate::components::Collider)]) {
         let num_nodes = self.nodes.len();
-        let mut forces = vec![gravity; num_nodes]; // Initialize with gravity force per unit mass?
-        // Actually, gravity is an acceleration. Let's initialize forces to gravity * mass
-        for (i, node) in self.nodes.iter().enumerate() {
-            forces[i] = gravity * node.mass;
-        }
+        let mut forces: Vec<Vec3> = self.nodes.iter().map(|n| gravity * n.mass).collect();
 
         // 1. Calculate and accumulate internal elastic forces from all tetrahedra in PARALLEL
         use rayon::prelude::*;
         
+        let positions: Vec<Vec3> = self.nodes.iter().map(|n| n.position).collect();
+        const MIN_JACOBIAN: f32 = 0.1;
+
         let elastic_forces = self.elements.par_iter().fold(
             || vec![Vec3::ZERO; num_nodes],
             |mut acc_forces, elem| {
@@ -135,16 +163,16 @@ impl SoftBodyMesh {
                 let i2 = elem.node_indices[2] as usize;
                 let i3 = elem.node_indices[3] as usize;
 
-                let x0 = self.nodes[i0].position;
-                let x1 = self.nodes[i1].position;
-                let x2 = self.nodes[i2].position;
-                let x3 = self.nodes[i3].position;
+                let x0 = positions[i0];
+                let x1 = positions[i1];
+                let x2 = positions[i2];
+                let x3 = positions[i3];
 
                 let ds = Mat3::from_cols(x1 - x0, x2 - x0, x3 - x0);
                 let f = ds * elem.inv_rest_matrix;
                 let j = f.determinant();
 
-                if j < 0.05 {
+                if j < MIN_JACOBIAN {
                     return acc_forces;
                 }
 
@@ -154,15 +182,15 @@ impl SoftBodyMesh {
                 let p = f_inv_t.clone() * (-self.mu) + f * self.mu + f_inv_t * (self.lambda * ln_j);
                 let h = p * elem.inv_rest_matrix.transpose() * elem.rest_volume;
 
-                let f1 = h.col(0);
-                let f2 = h.col(1);
-                let f3 = h.col(2);
+                let f1 = -h.col(0);
+                let f2 = -h.col(1);
+                let f3 = -h.col(2);
                 let f0 = -(f1 + f2 + f3);
 
-                acc_forces[i0] -= f0;
-                acc_forces[i1] -= f1;
-                acc_forces[i2] -= f2;
-                acc_forces[i3] -= f3;
+                acc_forces[i0] += f0;
+                acc_forces[i1] += f1;
+                acc_forces[i2] += f2;
+                acc_forces[i3] += f3;
                 
                 acc_forces
             }
@@ -190,39 +218,17 @@ impl SoftBodyMesh {
             let acceleration = forces[i] / node.mass;
             node.velocity += acceleration * dt;
             
-            // Apply damping
-            node.velocity *= self.damping;
+            // Apply damping normalized by dt
+            node.velocity *= self.damping.powf(dt);
 
             let next_pos = node.position + node.velocity * dt;
-            let mut collided = false;
             
-            // Extremely simple collision handling against rigid bodies
-            let ray = crate::raycast::Ray::new(node.position, node.velocity.normalize_or_zero());
-            let dist = node.velocity.length() * dt;
+            let (new_pos, new_vel, collided) = resolve_node_collision(node.position, node.velocity, dt, rigid_colliders);
             
-            if dist > 1e-5 {
-                for (_, col_trans, col) in rigid_colliders {
-                    if let Some((d, n)) = crate::raycast::Raycast::ray_shape(&ray, &col.shape, col_trans) {
-                        if d <= dist + 0.1 { // small radius
-                            // Resolve collision
-                            let bounce = 0.5;
-                            let friction = 0.8;
-                            
-                            let vn = node.velocity.dot(n);
-                            if vn < 0.0 {
-                                let vt = node.velocity - n * vn;
-                                node.velocity = vt * (1.0 - friction) - n * (vn * bounce);
-                            }
-                            
-                            node.position += ray.direction * (d - 0.1).max(0.0);
-                            collided = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            
-            if !collided {
+            if collided {
+                node.position = new_pos;
+                node.velocity = new_vel;
+            } else {
                 node.position = next_pos;
             }
         }

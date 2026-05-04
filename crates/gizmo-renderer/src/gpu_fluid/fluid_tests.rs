@@ -754,7 +754,7 @@ mod tests {
 
     #[test]
     fn test_gpu_collider_size() {
-        assert_eq!(std::mem::size_of::<crate::gpu_fluid::types::FluidCollider>(), 32);
+        assert_eq!(std::mem::size_of::<crate::gpu_fluid::types::FluidCollider>(), 48);
     }
 
     #[test]

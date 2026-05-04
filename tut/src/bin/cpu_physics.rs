@@ -1,5 +1,4 @@
 use gizmo::prelude::*;
-use gizmo::core::entity::Entity;
 use gizmo::physics::components::{Collider, RigidBody, Transform, Velocity};
 use gizmo::physics::world::PhysicsWorld;
 use gizmo::physics::joints::Joint;
