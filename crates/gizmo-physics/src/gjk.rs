@@ -201,6 +201,53 @@ impl Gjk {
         Some(t) // Reached max iterations, assume collision at t
     }
 
+    /// Fast Speculative Contact for CCD
+    pub fn speculative_contact(
+        shape_a: &ColliderShape,
+        pos_a: Vec3,
+        rot_a: gizmo_math::Quat,
+        vel_a: Vec3,
+        shape_b: &ColliderShape,
+        pos_b: Vec3,
+        rot_b: gizmo_math::Quat,
+        vel_b: Vec3,
+        dt: f32,
+    ) -> Option<ContactPoint> {
+        let support = |dir: Vec3| {
+            let sa = Self::support_point(shape_a, pos_a, rot_a, dir);
+            let sb = Self::support_point(shape_b, pos_b, rot_b, -dir);
+            sa - sb
+        };
+
+        if let Some((dist, normal)) = Self::distance(support) {
+            if dist <= 0.0 { return None; } // Already intersecting, handled by normal narrowphase
+
+            let rel_vel = vel_b - vel_a;
+            // Normal points from B to A (sa - sb). So rel_vel.dot(normal) gives the closing velocity.
+            // Wait, if sa - sb is the minkowski difference, the closest point on it to origin
+            // defines the vector from origin to boundary. The normal is the direction.
+            // Let's verify direction. Gjk::distance returns normal_from_b_to_a.
+            // Closing velocity: how fast B is moving towards A along the normal.
+            let closing_vel = rel_vel.dot(normal);
+            
+            // If they are moving towards each other fast enough to cover the distance in one frame
+            if closing_vel > 0.0 && dist < closing_vel * dt {
+                // Generate a speculative contact with negative penetration!
+                let contact_point = pos_a - normal * (dist * 0.5); // Approximate contact point
+                return Some(ContactPoint {
+                    point: contact_point,
+                    normal,
+                    penetration: -dist, // Negative penetration indicates speculative
+                    local_point_a: contact_point - pos_a,
+                    local_point_b: contact_point - pos_b,
+                    normal_impulse: 0.0,
+                    tangent_impulse: Vec3::ZERO,
+                });
+            }
+        }
+        None
+    }
+
     /// Handle simplex evolution in GJK
     fn handle_simplex(simplex: &mut Vec<Vec3>, direction: &mut Vec3) -> bool {
         match simplex.len() {
@@ -446,7 +493,7 @@ impl Gjk {
     }
 
     /// Get support point for a shape in a given direction
-    fn support_point(
+    pub fn support_point(
         shape: &ColliderShape,
         pos: Vec3,
         rot: gizmo_math::Quat,

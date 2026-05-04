@@ -60,6 +60,35 @@ impl BvhTree {
         node.aabb = aabb;
     }
 
+    fn aabb_surface_area(aabb: &Aabb) -> f32 {
+        if aabb.min.x > aabb.max.x {
+            return 0.0;
+        }
+        let ext = Vec3::new(
+            aabb.max.x - aabb.min.x,
+            aabb.max.y - aabb.min.y,
+            aabb.max.z - aabb.min.z,
+        );
+        2.0 * (ext.x * ext.y + ext.y * ext.z + ext.z * ext.x)
+    }
+
+    fn aabb_union(a: &Aabb, b: &Aabb) -> Aabb {
+        if a.min.x > a.max.x { return *b; }
+        if b.min.x > b.max.x { return *a; }
+        Aabb {
+            min: Vec3A::from(Vec3::new(
+                a.min.x.min(b.min.x),
+                a.min.y.min(b.min.y),
+                a.min.z.min(b.min.z),
+            )),
+            max: Vec3A::from(Vec3::new(
+                a.max.x.max(b.max.x),
+                a.max.y.max(b.max.y),
+                a.max.z.max(b.max.z),
+            )),
+        }
+    }
+
     fn subdivide(&mut self, node_idx: usize, vertices: &[Vec3], indices: &mut [u32]) {
         let first_tri_index;
         let tri_count;
@@ -76,17 +105,89 @@ impl BvhTree {
             return;
         }
 
-        // Find longest axis of the AABB
-        let extent = aabb.size();
-        let axis = if extent.x > extent.y && extent.x > extent.z {
-            0
-        } else if extent.y > extent.z {
-            1
-        } else {
-            2
-        };
+        let mut best_axis = -1;
+        let mut best_split_pos = 0.0;
+        let mut best_cost = f32::MAX;
+        
+        const BINS: usize = 8;
+        
+        let start = (first_tri_index * 3) as usize;
+        let end = start + (tri_count * 3) as usize;
+        
+        let current_cost = (tri_count as f32) * Self::aabb_surface_area(&aabb);
 
-        let split_pos = aabb.center()[axis];
+        for axis in 0..3 {
+            let mut bin_count = [0; BINS];
+            let mut bin_bounds = [Aabb::empty(); BINS];
+            
+            // Find min/max centroid on this axis
+            let mut min_centroid = f32::MAX;
+            let mut max_centroid = f32::MIN;
+            
+            for i in (start..end).step_by(3) {
+                let v0 = vertices[indices[i] as usize];
+                let v1 = vertices[indices[i + 1] as usize];
+                let v2 = vertices[indices[i + 2] as usize];
+                let centroid = (v0[axis] + v1[axis] + v2[axis]) / 3.0;
+                min_centroid = min_centroid.min(centroid);
+                max_centroid = max_centroid.max(centroid);
+            }
+            
+            if min_centroid == max_centroid {
+                continue;
+            }
+            
+            let scale = BINS as f32 / (max_centroid - min_centroid);
+            
+            for i in (start..end).step_by(3) {
+                let v0 = vertices[indices[i] as usize];
+                let v1 = vertices[indices[i + 1] as usize];
+                let v2 = vertices[indices[i + 2] as usize];
+                
+                let centroid = (v0[axis] + v1[axis] + v2[axis]) / 3.0;
+                let mut bin_idx = ((centroid - min_centroid) * scale) as usize;
+                if bin_idx == BINS { bin_idx = BINS - 1; }
+                
+                bin_count[bin_idx] += 1;
+                bin_bounds[bin_idx].extend(Vec3A::from(v0));
+                bin_bounds[bin_idx].extend(Vec3A::from(v1));
+                bin_bounds[bin_idx].extend(Vec3A::from(v2));
+            }
+            
+            // Evaluate split costs
+            let mut left_area = [0.0; BINS - 1];
+            let mut left_count = [0; BINS - 1];
+            
+            let mut left_box = Aabb::empty();
+            let mut left_sum = 0;
+            for i in 0..BINS - 1 {
+                left_sum += bin_count[i];
+                left_count[i] = left_sum;
+                left_box = Self::aabb_union(&left_box, &bin_bounds[i]);
+                left_area[i] = Self::aabb_surface_area(&left_box);
+            }
+            
+            let mut right_box = Aabb::empty();
+            let mut right_sum = 0;
+            for i in (1..BINS).rev() {
+                right_sum += bin_count[i];
+                right_box = Self::aabb_union(&right_box, &bin_bounds[i]);
+                let right_area = Self::aabb_surface_area(&right_box);
+                
+                let cost = left_count[i - 1] as f32 * left_area[i - 1] + right_sum as f32 * right_area;
+                if cost < best_cost {
+                    best_cost = cost;
+                    best_axis = axis as i32;
+                    best_split_pos = min_centroid + (i as f32) * (max_centroid - min_centroid) / (BINS as f32);
+                }
+            }
+        }
+        
+        if best_axis == -1 || best_cost >= current_cost {
+            return;
+        }
+
+        let best_axis = best_axis as usize;
         
         let mut i = first_tri_index as usize;
         let mut j = (first_tri_index + tri_count - 1) as usize;
@@ -96,9 +197,9 @@ impl BvhTree {
             let v0 = vertices[indices[i_idx] as usize];
             let v1 = vertices[indices[i_idx + 1] as usize];
             let v2 = vertices[indices[i_idx + 2] as usize];
-            let centroid = (v0 + v1 + v2) / 3.0;
+            let centroid = (v0[best_axis] + v1[best_axis] + v2[best_axis]) / 3.0;
             
-            if centroid[axis] < split_pos {
+            if centroid < best_split_pos {
                 i += 1;
             } else {
                 // swap triangle i and j

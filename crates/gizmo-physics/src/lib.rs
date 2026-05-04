@@ -5,6 +5,7 @@ pub mod fracture;
 pub mod integrator;
 pub mod joints;
 pub mod narrowphase;
+pub mod island;
 pub mod gjk;
 pub mod raycast;
 pub mod solver;
@@ -16,6 +17,14 @@ pub mod gpu_compute;
 pub mod bvh;
 pub mod vehicle;
 pub mod character;
+pub mod quickhull;
+pub mod cloth;
+pub mod rope;
+pub mod ragdoll;
+pub mod destruction;
+pub mod error;
+
+pub use error::GizmoError;
 
 pub use broadphase::SpatialHash;
 pub use gizmo_math::Aabb;

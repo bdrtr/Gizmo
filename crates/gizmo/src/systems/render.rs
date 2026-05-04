@@ -16,13 +16,29 @@ pub struct DrawItem {
     bind_group: std::sync::Arc<wgpu::BindGroup>,
     unlit: bool,
     is_skybox: bool,
-    world_center: [f32; 3],
-    radius: f32,
+    first_instance: u32,
+    instance_count: u32,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct BatchKey {
+    vbuf_id: usize,
+    mat_id: usize,
+}
+
+struct BatchData {
+    vbuf: std::sync::Arc<wgpu::Buffer>,
+    bind_group: std::sync::Arc<wgpu::BindGroup>,
+    vertex_count: u32,
+    unlit: bool,
+    is_skybox: bool,
+    instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
 }
 
 /// Bevy'nin DefaultPlugins davranisini taklit eden, sadece modelleri
 /// isiklandirip hizlica ekrana basmaya yarayan kutudan cikmis Render Motoru.
 /// Yeni acilan `tut` gibi bos projelerde yuzlerce satir kod yazmamak icin kullanilir.
+#[tracing::instrument(skip_all, name = "render_system")]
 pub fn default_render_pass(
     world: &mut World,
     encoder: &mut wgpu::CommandEncoder,
@@ -187,8 +203,9 @@ pub fn default_render_pass(
     }
 
     let renderers = world.borrow::<MeshRenderer>();
-    let mut instances = Vec::new();
-    let mut draw_items = Vec::new();
+    let mut batches: std::collections::HashMap<BatchKey, BatchData> = std::collections::HashMap::new();
+    let frustum = crate::math::Frustum::from_matrix(&unjittered_view_proj);
+    
     if let Some(mut q) = world.query::<(&Mesh, &Transform, &Material)>() {
         for (e, (mesh, trans, mat)) in q.iter_mut() {
             if renderers.get(e).is_none() {
@@ -198,7 +215,7 @@ pub fn default_render_pass(
             let center_mat = Mat4::from_translation(mesh.center_offset);
             let model = trans.local_matrix * center_mat;
 
-            // Compute world-space bounding sphere for GPU frustum cull pass
+            // CPU Frustum Culling
             let local_cx = (mesh.bounds.min.x + mesh.bounds.max.x) * 0.5;
             let local_cy = (mesh.bounds.min.y + mesh.bounds.max.y) * 0.5;
             let local_cz = (mesh.bounds.min.z + mesh.bounds.max.z) * 0.5;
@@ -212,6 +229,10 @@ pub fn default_render_pass(
             let sz = model.z_axis.truncate().length();
             let world_r = local_r * sx.max(sy).max(sz);
 
+            if !frustum.intersects_sphere(world_c, world_r) {
+                continue;
+            }
+
             let instance_data = crate::renderer::gpu_types::InstanceRaw {
                 model: model.to_cols_array_2d(),
                 albedo_color: [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
@@ -224,18 +245,41 @@ pub fn default_render_pass(
                 },
                 _padding: 0.0,
             };
-            instances.push(instance_data);
-            draw_items.push(DrawItem {
+            
+            let key = BatchKey {
+                vbuf_id: std::sync::Arc::as_ptr(&mesh.vbuf) as usize,
+                mat_id: std::sync::Arc::as_ptr(&mat.bind_group) as usize,
+            };
+
+            let batch = batches.entry(key).or_insert_with(|| BatchData {
                 vbuf: mesh.vbuf.clone(),
-                vertex_count: mesh.vertex_count,
                 bind_group: mat.bind_group.clone(),
+                vertex_count: mesh.vertex_count,
                 unlit: mat.material_type == crate::renderer::components::MaterialType::Unlit
                     || mat.material_type == crate::renderer::components::MaterialType::Skybox,
                 is_skybox: mat.material_type == crate::renderer::components::MaterialType::Skybox,
-                world_center: [world_c.x, world_c.y, world_c.z],
-                radius: world_r,
+                instances: Vec::new(),
             });
+            batch.instances.push(instance_data);
         }
+    }
+    
+    let mut instances = Vec::new();
+    let mut draw_items = Vec::new();
+    for (_, batch) in batches {
+        let first_instance = instances.len() as u32;
+        let instance_count = batch.instances.len() as u32;
+        instances.extend(batch.instances);
+        
+        draw_items.push(DrawItem {
+            vbuf: batch.vbuf,
+            vertex_count: batch.vertex_count,
+            bind_group: batch.bind_group,
+            unlit: batch.unlit,
+            is_skybox: batch.is_skybox,
+            first_instance,
+            instance_count,
+        });
     }
 
     // Instance limiti kontrolü (Taşmaları önlemek için capaciteyi zorla)
@@ -251,27 +295,7 @@ pub fn default_render_pass(
         );
     }
 
-    // GPU cull prepare: upload per-instance bounding spheres and initial draw args (instance_count=0)
-    if let Some(ref cull) = renderer.gpu_cull {
-        let bounds_data: Vec<crate::renderer::MeshBoundsRaw> = draw_items
-            .iter()
-            .map(|item| crate::renderer::MeshBoundsRaw {
-                world_center: item.world_center,
-                radius: item.radius,
-            })
-            .collect();
-        let draw_args_data: Vec<crate::renderer::DrawIndirectArgs> = draw_items
-            .iter()
-            .enumerate()
-            .map(|(i, item)| crate::renderer::DrawIndirectArgs {
-                vertex_count: item.vertex_count,
-                instance_count: 0, // GPU cull pass sets this to 1 if visible
-                first_vertex: 0,
-                first_instance: i as u32,
-            })
-            .collect();
-        cull.prepare(&renderer.queue, &bounds_data, &draw_args_data);
-    }
+    // CPU Batched Instancing replaces GPU cull for draw_items
 
     if let Some(physics) = &renderer.gpu_physics {
         // Her frame başında sıradaki state'i çekmek için WGPU CommandEncoder'a asenkron mapping iste.
@@ -294,10 +318,7 @@ pub fn default_render_pass(
         particles.compute_pass(encoder);
     }
 
-    // GPU mesh frustum culling — writes instance_count into indirect_buffer
-    if let Some(ref cull) = renderer.gpu_cull {
-        cull.cull_pass(encoder, &renderer.scene.global_bind_group, draw_items.len() as u32);
-    }
+    // GPU cull pass removed since we use CPU instancing
 
     // Resize deferred G-buffers if window changed; resize SSAO + TAA to match
     if let Some(ref mut def) = renderer.deferred {
@@ -357,12 +378,12 @@ pub fn default_render_pass(
         shadow_pass.set_bind_group(0, &renderer.scene.shadow_pass_bind_groups[i], &[]);
         shadow_pass.set_bind_group(1, &renderer.scene.dummy_skeleton_bind_group, &[]);
         shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
-        for (j, item) in draw_items.iter().enumerate() {
+        for item in &draw_items {
             if item.unlit {
                 continue;
             }
             shadow_pass.set_vertex_buffer(0, item.vbuf.slice(..));
-            shadow_pass.draw(0..item.vertex_count, (j as u32)..((j as u32) + 1));
+            shadow_pass.draw(0..item.vertex_count, item.first_instance..(item.first_instance + item.instance_count));
         }
     }
 
@@ -412,20 +433,13 @@ pub fn default_render_pass(
         gbuf_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
         gbuf_pass.set_bind_group(3, &renderer.scene.dummy_skeleton_bind_group, &[]);
         gbuf_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
-        for (i, item) in draw_items.iter().enumerate() {
+        for item in &draw_items {
             if item.unlit {
                 continue;
             }
             gbuf_pass.set_bind_group(1, &item.bind_group, &[]);
             gbuf_pass.set_vertex_buffer(0, item.vbuf.slice(..));
-            if let Some(ref cull) = renderer.gpu_cull {
-                gbuf_pass.draw_indirect(
-                    &cull.indirect_buffer,
-                    crate::renderer::GpuCullState::indirect_offset(i),
-                );
-            } else {
-                gbuf_pass.draw(0..item.vertex_count, (i as u32)..((i as u32) + 1));
-            }
+            gbuf_pass.draw(0..item.vertex_count, item.first_instance..(item.first_instance + item.instance_count));
         }
     }
 
@@ -608,7 +622,7 @@ pub fn default_render_pass(
         render_pass.set_bind_group(3, &renderer.scene.dummy_skeleton_bind_group, &[]);
         render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
 
-        for (i, item) in draw_items.iter().enumerate() {
+        for item in &draw_items {
             let pipeline = if item.is_skybox {
                 &renderer.scene.sky_pipeline
             } else if item.unlit {
@@ -621,14 +635,7 @@ pub fn default_render_pass(
             render_pass.set_pipeline(pipeline);
             render_pass.set_bind_group(1, &item.bind_group, &[]);
             render_pass.set_vertex_buffer(0, item.vbuf.slice(..));
-            if let Some(ref cull) = renderer.gpu_cull {
-                render_pass.draw_indirect(
-                    &cull.indirect_buffer,
-                    crate::renderer::GpuCullState::indirect_offset(i),
-                );
-            } else {
-                render_pass.draw(0..item.vertex_count, (i as u32)..((i as u32) + 1));
-            }
+            render_pass.draw(0..item.vertex_count, item.first_instance..(item.first_instance + item.instance_count));
         }
 
         // Draw GPU Physics Spheres!

@@ -26,8 +26,12 @@ pub struct RigidBody {
     pub lock_rotation_x: bool,
     pub lock_rotation_y: bool,
     pub lock_rotation_z: bool,
+    pub lock_translation_x: bool,
+    pub lock_translation_y: bool,
+    pub lock_translation_z: bool,
     pub sleep_counter: u32, // Frames below sleep threshold
     pub center_of_mass: Vec3,
+    pub fracture_threshold: Option<f32>, // Impulse threshold for fracturing
 }
 
 impl Default for RigidBody {
@@ -46,8 +50,12 @@ impl Default for RigidBody {
             lock_rotation_x: false,
             lock_rotation_y: false,
             lock_rotation_z: false,
+            lock_translation_x: false,
+            lock_translation_y: false,
+            lock_translation_z: false,
             sleep_counter: 0,
             center_of_mass: Vec3::ZERO,
+            fracture_threshold: None,
         }
     }
 }
@@ -68,8 +76,12 @@ impl RigidBody {
             lock_rotation_x: false,
             lock_rotation_y: false,
             lock_rotation_z: false,
+            lock_translation_x: false,
+            lock_translation_y: false,
+            lock_translation_z: false,
             sleep_counter: 0,
             center_of_mass: Vec3::ZERO,
+            fracture_threshold: None,
         }
     }
 
@@ -88,8 +100,12 @@ impl RigidBody {
             lock_rotation_x: true,
             lock_rotation_y: true,
             lock_rotation_z: true,
+            lock_translation_x: true,
+            lock_translation_y: true,
+            lock_translation_z: true,
             sleep_counter: 0,
             center_of_mass: Vec3::ZERO,
+            fracture_threshold: None,
         }
     }
 
@@ -108,9 +124,18 @@ impl RigidBody {
             lock_rotation_x: false,
             lock_rotation_y: false,
             lock_rotation_z: false,
+            lock_translation_x: false,
+            lock_translation_y: false,
+            lock_translation_z: false,
             sleep_counter: 0,
             center_of_mass: Vec3::ZERO,
+            fracture_threshold: None,
         }
+    }
+
+    pub fn with_fracture_threshold(mut self, threshold: f32) -> Self {
+        self.fracture_threshold = Some(threshold);
+        self
     }
 
     pub fn wake_up(&mut self) {
@@ -160,6 +185,16 @@ impl RigidBody {
     }
 
     #[inline]
+    pub fn enforce_locks(&self, vel: &mut Velocity) {
+        if self.lock_translation_x { vel.linear.x = 0.0; }
+        if self.lock_translation_y { vel.linear.y = 0.0; }
+        if self.lock_translation_z { vel.linear.z = 0.0; }
+        if self.lock_rotation_x { vel.angular.x = 0.0; }
+        if self.lock_rotation_y { vel.angular.y = 0.0; }
+        if self.lock_rotation_z { vel.angular.z = 0.0; }
+    }
+
+    #[inline]
     pub fn inv_mass(&self) -> f32 {
         if self.mass == 0.0 || !self.is_dynamic() {
             0.0
@@ -174,21 +209,9 @@ impl RigidBody {
             Vec3::ZERO
         } else {
             Vec3::new(
-                if self.local_inertia.x == 0.0 || self.lock_rotation_x {
-                    0.0
-                } else {
-                    1.0 / self.local_inertia.x
-                },
-                if self.local_inertia.y == 0.0 || self.lock_rotation_y {
-                    0.0
-                } else {
-                    1.0 / self.local_inertia.y
-                },
-                if self.local_inertia.z == 0.0 || self.lock_rotation_z {
-                    0.0
-                } else {
-                    1.0 / self.local_inertia.z
-                },
+                if self.local_inertia.x == 0.0 { 0.0 } else { 1.0 / self.local_inertia.x },
+                if self.local_inertia.y == 0.0 { 0.0 } else { 1.0 / self.local_inertia.y },
+                if self.local_inertia.z == 0.0 { 0.0 } else { 1.0 / self.local_inertia.z },
             )
         }
     }
@@ -207,7 +230,26 @@ impl RigidBody {
         }
         let rot_mat = Mat3::from_quat(rotation);
         let inv_local = Mat3::from_diagonal(self.inv_local_inertia());
-        rot_mat * inv_local * rot_mat.transpose()
+        let mut inv_world = rot_mat * inv_local * rot_mat.transpose();
+        
+        // Zero out locked world axes
+        if self.lock_rotation_x {
+            inv_world.x_axis = Vec3::ZERO;
+            inv_world.y_axis.x = 0.0;
+            inv_world.z_axis.x = 0.0;
+        }
+        if self.lock_rotation_y {
+            inv_world.y_axis = Vec3::ZERO;
+            inv_world.x_axis.y = 0.0;
+            inv_world.z_axis.y = 0.0;
+        }
+        if self.lock_rotation_z {
+            inv_world.z_axis = Vec3::ZERO;
+            inv_world.x_axis.z = 0.0;
+            inv_world.y_axis.z = 0.0;
+        }
+        
+        inv_world
     }
 
     pub fn calculate_box_inertia(&mut self, w: f32, h: f32, d: f32) {

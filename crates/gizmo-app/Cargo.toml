@@ -9,6 +9,7 @@ description.workspace = true
 gizmo-core = { path = "../gizmo-core" }
 gizmo-renderer = { path = "../gizmo-renderer" }
 gizmo-math = { path = "../gizmo-math" }
+gizmo-physics = { path = "../gizmo-physics" }
 winit = "0.29"
 wgpu = "0.20"
 pollster = "0.3"
@@ -17,4 +18,6 @@ gizmo-editor = { path = "../gizmo-editor" }
 gizmo-audio = { path = "../gizmo-audio" }
 gizmo-scene = { path = "../gizmo-scene" }
 image = "0.25"
+rfd = "0.17.2"
+backtrace = "0.3.76"
 

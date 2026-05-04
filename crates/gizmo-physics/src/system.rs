@@ -8,11 +8,15 @@ use gizmo_core::entity::Entity;
 /// Exclusive system that updates the entire physics simulation.
 /// It reads all rigid and soft bodies from the ECS, steps the physics world,
 /// and writes the transformed positions and velocities back to the ECS.
+#[tracing::instrument(skip_all, name = "physics_step_system")]
 pub fn physics_step_system(world: &World, dt: f32) {
     // 1. Acquire PhysicsWorld Resource
     let mut physics_world = match world.try_get_resource_mut::<PhysicsWorld>() {
         Ok(res) => res,
-        Err(_) => return, // No physics world, do nothing
+        Err(e) => {
+            println!("[Physics] FAILED TO GET PhysicsWorld Resource: {:?}", e);
+            return;
+        }
     };
 
     // 2. Gather Compound Shapes (Read Locks Only)
@@ -89,6 +93,8 @@ pub fn physics_step_system(world: &World, dt: f32) {
                 ));
             }
         }
+    } else {
+        println!("[Physics] FAILED TO BORROW RigidBody/Transform/Velocity Mutably!");
     }
 
     // 3. Query Soft Bodies
@@ -110,38 +116,60 @@ pub fn physics_step_system(world: &World, dt: f32) {
         .map(|(ent, _, trans, _, col)| (*ent, trans.clone(), col.clone()))
         .collect();
 
-    let vehicle_query_opt = Query::<Mut<crate::vehicle::VehicleController>>::new(world);
-    if let Some(vehicle_query) = &vehicle_query_opt {
-        for (id, mut vehicle) in vehicle_query.iter() {
-            if let Some((ent, rb, trans, vel, _col)) = rigid_bodies.iter_mut().find(|(e, ..)| e.id() == id) {
-                crate::vehicle::update_vehicle(*ent, &mut vehicle, rb, trans, vel, &all_colliders, dt);
+    let is_paused = physics_world.is_paused && !physics_world.step_once && !physics_world.rewind_requested;
+
+    if !is_paused {
+        let vehicle_query_opt = Query::<Mut<crate::vehicle::VehicleController>>::new(world);
+        if let Some(vehicle_query) = &vehicle_query_opt {
+            for (id, mut vehicle) in vehicle_query.iter() {
+                if let Some((ent, rb, trans, vel, _col)) = rigid_bodies.iter_mut().find(|(e, ..)| e.id() == id) {
+                    crate::vehicle::update_vehicle(*ent, &mut vehicle, rb, trans, vel, &all_colliders, dt);
+                }
             }
         }
-    }
 
-    // 3.6. Update Character Controllers
-    let kcc_query_opt = Query::<Mut<crate::components::CharacterController>>::new(world);
-    if let Some(kcc_query) = &kcc_query_opt {
-        for (id, mut kcc) in kcc_query.iter() {
-            if let Some((ent, _rb, trans, vel, _col)) = rigid_bodies.iter_mut().find(|(e, ..)| e.id() == id) {
-                crate::character::update_character(*ent, &mut kcc, trans, vel, &all_colliders, dt);
-            } else if let Some(mut trans) = world.borrow_mut::<Transform>().get_mut(id) {
-                // KCC can also just be attached to a non-rigidbody entity
-                let mut dummy_vel = Velocity::default();
-                crate::character::update_character(Entity::new(id, 0), &mut kcc, &mut trans, &mut dummy_vel, &all_colliders, dt);
+        // 3.6. Update Character Controllers
+        let kcc_query_opt = Query::<Mut<crate::components::CharacterController>>::new(world);
+        if let Some(kcc_query) = &kcc_query_opt {
+            for (id, mut kcc) in kcc_query.iter() {
+                if let Some((ent, _rb, trans, vel, _col)) = rigid_bodies.iter_mut().find(|(e, ..)| e.id() == id) {
+                    crate::character::update_character(*ent, &mut kcc, trans, vel, &all_colliders, dt);
+                } else if let Some(mut trans) = world.borrow_mut::<Transform>().get_mut(id) {
+                    // KCC can also just be attached to a non-rigidbody entity
+                    let mut dummy_vel = Velocity::default();
+                    crate::character::update_character(Entity::new(id, 0), &mut kcc, &mut trans, &mut dummy_vel, &all_colliders, dt);
+                }
             }
         }
     }
 
     // 4. Step Simulation
-    physics_world.step(&mut rigid_bodies, &mut soft_bodies, dt);
+    physics_world.clear_bodies();
+    for (entity, rb, trans, vel, col) in &rigid_bodies {
+        physics_world.add_body(*entity, rb.clone(), trans.clone(), vel.clone(), col.clone());
+    }
+
+    physics_world.step(&mut soft_bodies, dt).expect("Gizmo Physics Engine encountered a critical numerical error (NaN, Infinity, or Overflow) and halted!");
+
+    // Sync back to rigid_bodies so vehicles/ECS writeback works
+    for i in 0..physics_world.entities.len() {
+        let entity_id = physics_world.entities[i].id();
+        if let Some((_, _, trans, vel, _)) = rigid_bodies.iter_mut().find(|(e, ..)| e.id() == entity_id) {
+            *trans = physics_world.transforms[i];
+            *vel = physics_world.velocities[i];
+        }
+    }
 
     // 5. Write back to ECS (Rigid Bodies)
-    if let Some(query) = &query_opt {
+    if let Some(_query) = &query_opt {
+        let mut trans_storage = world.borrow_mut::<Transform>();
+        let mut vel_storage = world.borrow_mut::<Velocity>();
         for (entity, _rb, transform, vel, _collider) in rigid_bodies {
-            if let Some((_, mut t, mut v)) = query.get(entity.id()) {
-                *t = transform;
-                *v = vel;
+            if let Some(ecs_trans) = trans_storage.get_mut(entity.id()) {
+                *ecs_trans = transform;
+            }
+            if let Some(ecs_vel) = vel_storage.get_mut(entity.id()) {
+                *ecs_vel = vel;
             }
         }
     }

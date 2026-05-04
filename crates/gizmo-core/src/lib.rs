@@ -2,6 +2,7 @@
 pub mod archetype;
 pub mod commands;
 pub mod component;
+pub mod cvar;
 pub mod entity;
 pub mod event;
 pub mod input;
@@ -18,6 +19,7 @@ pub mod world;
 pub use archetype::{Archetype, ComponentInfo, EntityLocation};
 pub use commands::{CommandQueue, Commands, EntityCommands};
 pub use component::{Component, EntityName, IsHidden, PrefabRequest};
+pub use cvar::{CVarRegistry, CVarValue, DevConsoleState};
 pub use entity::Entity;
 pub use event::Events;
 pub use input::{ActionMap, Input, InputBinding};

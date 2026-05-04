@@ -604,6 +604,7 @@ impl Schedule {
         self.batches = batches;
     }
 
+    #[tracing::instrument(skip_all, name = "ecs_update")]
     pub fn run(&mut self, world: &mut World, dt: f32) {
         use rayon::prelude::*;
 
