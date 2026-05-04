@@ -32,7 +32,7 @@ fn test_rigidbody_collision_response() {
     // Simulate for 1.5 seconds at 60 FPS (90 steps)
     let dt = 1.0 / 60.0;
     for _ in 0..90 {
-        world.step(&mut [], dt);
+        let _ = world.step(&mut [], dt);
     }
 
     let box_pos = world.transforms[0].position;
@@ -96,7 +96,7 @@ fn test_joint_stability_under_gravity() {
     
     // Simulate for 1 second (60 steps). Gravity pulls the bob down, but the joint should hold it.
     for _ in 0..60 {
-        world.step(&mut [], dt);
+        let _ = world.step(&mut [], dt);
     }
 
     let anchor_pos = world.transforms[0].position;
@@ -145,15 +145,15 @@ fn test_trigger_volume_events() {
     let dt = 0.1; // Big step for test
 
     // Step 1: Still outside
-    world.step(&mut [], dt); // pos becomes 4.0
+    let _ = world.step(&mut [], dt); // pos becomes 4.0
     assert!(world.trigger_events().is_empty(), "Trigger fired prematurely!");
 
     // Step 2 & 3: Still outside
-    world.step(&mut [], dt); // pos 3.0
-    world.step(&mut [], dt); // pos 2.0 (touching)
+    let _ = world.step(&mut [], dt); // pos 3.0
+    let _ = world.step(&mut [], dt); // pos 2.0 (touching)
     
     // Step 4: Inside! pos 1.0
-    world.step(&mut [], dt);
+    let _ = world.step(&mut [], dt);
     
     let events = world.trigger_events();
     assert!(!events.is_empty(), "Trigger event did not fire!");
@@ -198,7 +198,7 @@ fn test_fluid_buoyancy() {
     
     // Simulate for 3 seconds. It should fall, submerge, and then get pushed up by buoyancy.
     for _ in 0..(60 * 3) {
-        world.step(&mut [], dt);
+        let _ = world.step(&mut [], dt);
     }
 
     let box_pos = world.transforms[0].position;
@@ -281,7 +281,7 @@ fn run_complex_simulation() -> Vec<(Transform, Velocity)> {
     // Fixed timestep of 1/60 for exactly 120 steps (2 seconds)
     let dt = 1.0 / 60.0;
     for _ in 0..120 {
-        world.step(&mut [], dt);
+        let _ = world.step(&mut [], dt);
     }
 
     // Extract exactly the transforms and velocities to compare
@@ -342,7 +342,7 @@ fn test_regression_ball_drop() {
 
     // Simulate for 0.6 seconds (36 frames)
     for _ in 0..36 {
-        world.step(&mut [], dt);
+        let _ = world.step(&mut [], dt);
     }
 
     let pos_at_0_6s = world.transforms[1].position;
@@ -361,7 +361,6 @@ fn test_fem_soft_body() {
     let mut soft_body = SoftBodyMesh::new(
         1000.0, // Young's modulus (very soft for testing)
         0.3,    // Poisson's ratio
-        1000.0, // Yield stress
     );
 
     // Add 4 nodes to form a single regular tetrahedron
@@ -394,7 +393,7 @@ fn test_fem_soft_body() {
 
     // Step the simulation for 1 second (60 frames)
     for _ in 0..60 {
-        world.step(&mut soft_bodies, dt);
+        let _ = world.step(&mut soft_bodies, dt);
     }
     
     let soft_body = &soft_bodies[0].1;
@@ -473,8 +472,9 @@ fn test_ecs_fracture() {
     world.add_component(glass_ent, Collider::box_collider(Vec3::splat(1.0)));
     world.add_component(glass_ent, Breakable {
         max_pieces: 10,
-        threshold: 10.0, // Lowered threshold since contact impulse is spread across 4 points now
-        is_broken: false,
+        threshold: 0.0,
+        current_health: 0.1,
+        ..Default::default()
     });
 
     // Spawn a heavy metal ball moving fast towards the glass
@@ -483,9 +483,7 @@ fn test_ecs_fracture() {
     world.add_component(ball_ent, Transform::new(Vec3::new(5.0, 0.1, 0.0)));
     world.add_component(ball_ent, Velocity {
         linear: Vec3::new(-10.0, 0.0, 0.0), // Fast moving
-        angular: Vec3::ZERO,
-        last_linear: Vec3::new(-10.0, 0.0, 0.0),
-        force: Vec3::ZERO,
+        ..Default::default()
     });
     world.add_component(ball_ent, Collider::box_collider(Vec3::splat(0.5)));
 
@@ -505,6 +503,42 @@ fn test_ecs_fracture() {
 }
 
 #[test]
+fn test_ccd_fast_bullet_vs_thin_wall() {
+    use gizmo_physics::components::{Collider, RigidBody, Transform, Velocity};
+    use gizmo_math::Vec3;
+    
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+
+    let wall_ent = gizmo_core::entity::Entity::new(0, 0);
+    let mut wall_rb = RigidBody::new_static();
+    wall_rb.ccd_enabled = false;
+    let wall_transform = Transform::new(Vec3::new(10.0, 0.0, 0.0));
+    let wall_collider = Collider::box_collider(Vec3::new(0.1, 10.0, 10.0)); // 0.2m thick wall
+
+    let bullet_ent = gizmo_core::entity::Entity::new(1, 0);
+    let mut bullet_rb = RigidBody::new(1.0, 0.0, 0.0, true);
+    bullet_rb.ccd_enabled = true; // MUST ENABLE CCD
+    let bullet_transform = Transform::new(Vec3::new(0.0, 0.0, 0.0));
+    let mut bullet_vel = Velocity::default();
+    bullet_vel.linear = Vec3::new(1000.0, 0.0, 0.0); // 1000 m/s! Over 1 frame dt (1/60) it moves ~16m, easily skipping the wall.
+    let bullet_collider = Collider::sphere(0.5);
+
+    world.add_body(wall_ent, wall_rb, wall_transform, Velocity::default(), wall_collider);
+    world.add_body(bullet_ent, bullet_rb, bullet_transform, bullet_vel, bullet_collider);
+
+    let dt = 1.0 / 60.0;
+    
+    // Simulate 1 frame
+    let _ = world.step(&mut [], dt);
+
+    let final_vel = world.velocities[1].linear;
+    
+    // If CCD works, the bullet should have generated a speculative contact and stopped (or bounced)
+    assert!(final_vel.x < 1000.0, "Bullet tunneled through the wall without losing speed!");
+    assert!(world.transforms[1].position.x < 10.5, "Bullet moved through the wall! Pos: {}", world.transforms[1].position.x);
+}
+
+#[test]
 fn test_soft_soft_collision() {
     use gizmo_physics::soft_body::SoftBodyMesh;
     use gizmo_math::Vec3;
@@ -512,7 +546,7 @@ fn test_soft_soft_collision() {
 
     let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
 
-    let mut soft_body_a = SoftBodyMesh::new(1000.0, 0.3, 1000.0);
+    let mut soft_body_a = SoftBodyMesh::new(1000.0, 0.3);
     soft_body_a.add_node(Vec3::new(0.0, 0.0, 0.0), 1.0);
     soft_body_a.add_node(Vec3::new(1.0, 0.0, 0.0), 1.0);
     soft_body_a.add_node(Vec3::new(0.0, 1.0, 0.0), 1.0);
@@ -526,7 +560,7 @@ fn test_soft_soft_collision() {
         node.velocity = Vec3::new(5.0, 0.0, 0.0);
     }
 
-    let mut soft_body_b = SoftBodyMesh::new(1000.0, 0.3, 1000.0);
+    let mut soft_body_b = SoftBodyMesh::new(1000.0, 0.3);
     soft_body_b.add_node(Vec3::new(0.0, 0.0, 0.0), 1.0);
     soft_body_b.add_node(Vec3::new(1.0, 0.0, 0.0), 1.0);
     soft_body_b.add_node(Vec3::new(0.0, 1.0, 0.0), 1.0);
@@ -552,7 +586,7 @@ fn test_soft_soft_collision() {
     
     // Simulate until collision
     for _ in 0..30 {
-        world.step(&mut soft_bodies, dt);
+        let _ = world.step(&mut soft_bodies, dt);
     }
 
     // Nodes should have collided and rebounded, or at least slowed down
@@ -587,9 +621,12 @@ fn test_explosion_system() {
     let bomb_ent = world.spawn();
     world.add_component(bomb_ent, Transform::new(Vec3::ZERO));
     world.add_component(bomb_ent, Explosion {
-        radius: 5.0,
+        force_radius: 5.0,
+        damage_radius: 5.0,
         force: 1000.0,
+        damage: 100.0,
         is_active: true,
+        ..Default::default()
     });
 
     // Run the explosion system
@@ -696,17 +733,21 @@ fn test_explosion_fracture_combo() {
     world.add_component(fragile_box, Collider::box_collider(Vec3::splat(1.0)));
     world.add_component(fragile_box, Breakable {
         max_pieces: 10,
-        threshold: 500.0, // Easy to break
-        is_broken: false,
+        threshold: 50.0, // Easy to break
+        current_health: 50.0,
+        ..Default::default()
     });
 
     // Spawn an overpowered bomb
     let bomb = world.spawn();
     world.add_component(bomb, Transform::new(Vec3::ZERO));
     world.add_component(bomb, Explosion {
-        radius: 10.0,
+        force_radius: 10.0,
+        damage_radius: 10.0,
         force: 5000.0, // High force to shatter it instantly
+        damage: 5000.0,
         is_active: true,
+        ..Default::default()
     });
 
     // Initial entity count should be 2

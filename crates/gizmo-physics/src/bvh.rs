@@ -11,7 +11,7 @@ pub struct BvhNode {
 
 impl BvhNode {
     pub fn is_leaf(&self) -> bool {
-        self.tri_count > 0
+        self.left_child == -1
     }
 }
 
@@ -27,25 +27,35 @@ impl Default for BvhTree {
 }
 
 impl BvhTree {
-    pub fn build(vertices: &[Vec3], indices: &mut [u32]) -> Self {
+    pub fn build(vertices: &[Vec3], indices: &mut [u32]) -> Result<Self, crate::error::GizmoError> {
         if indices.is_empty() {
-            return Self::default();
+            return Ok(Self::default());
         }
 
+        // Validate indices to prevent out of bounds panics
+        for &idx in indices.iter() {
+            if idx as usize >= vertices.len() {
+                return Err(crate::error::GizmoError::BvhBuildFailed);
+            }
+        }
+
+        let tri_count = (indices.len() / 3) as u32;
         let mut nodes = Vec::new();
+        nodes.reserve((tri_count * 2) as usize);
+        
         // Root node
         nodes.push(BvhNode {
             aabb: Aabb::empty(),
             left_child: -1,
             right_child: -1,
             first_tri_index: 0,
-            tri_count: (indices.len() / 3) as u32,
+            tri_count,
         });
         
         let mut tree = Self { nodes };
         tree.update_node_bounds(0, vertices, indices);
-        tree.subdivide(0, vertices, indices);
-        tree
+        tree.subdivide(0, vertices, indices, 0);
+        Ok(tree)
     }
 
     fn update_node_bounds(&mut self, node_idx: usize, vertices: &[Vec3], indices: &[u32]) {
@@ -60,36 +70,9 @@ impl BvhTree {
         node.aabb = aabb;
     }
 
-    fn aabb_surface_area(aabb: &Aabb) -> f32 {
-        if aabb.min.x > aabb.max.x {
-            return 0.0;
-        }
-        let ext = Vec3::new(
-            aabb.max.x - aabb.min.x,
-            aabb.max.y - aabb.min.y,
-            aabb.max.z - aabb.min.z,
-        );
-        2.0 * (ext.x * ext.y + ext.y * ext.z + ext.z * ext.x)
-    }
+    // Helper functions removed, using native Aabb methods.
 
-    fn aabb_union(a: &Aabb, b: &Aabb) -> Aabb {
-        if a.min.x > a.max.x { return *b; }
-        if b.min.x > b.max.x { return *a; }
-        Aabb {
-            min: Vec3A::from(Vec3::new(
-                a.min.x.min(b.min.x),
-                a.min.y.min(b.min.y),
-                a.min.z.min(b.min.z),
-            )),
-            max: Vec3A::from(Vec3::new(
-                a.max.x.max(b.max.x),
-                a.max.y.max(b.max.y),
-                a.max.z.max(b.max.z),
-            )),
-        }
-    }
-
-    fn subdivide(&mut self, node_idx: usize, vertices: &[Vec3], indices: &mut [u32]) {
+    fn subdivide(&mut self, node_idx: usize, vertices: &[Vec3], indices: &mut [u32], depth: u32) {
         let first_tri_index;
         let tri_count;
         let aabb;
@@ -100,8 +83,8 @@ impl BvhTree {
             aabb = node.aabb;
         }
         
-        // Stop subdividing if we have very few triangles
-        if tri_count <= 2 {
+        // Stop subdividing if we have very few triangles or reached max depth
+        if tri_count <= 2 || depth > 64 {
             return;
         }
 
@@ -114,7 +97,10 @@ impl BvhTree {
         let start = (first_tri_index * 3) as usize;
         let end = start + (tri_count * 3) as usize;
         
-        let current_cost = (tri_count as f32) * Self::aabb_surface_area(&aabb);
+        let parent_area = aabb.surface_area();
+        const C_TRAV: f32 = 1.0;
+        const C_ISECT: f32 = 1.0;
+        let current_cost = (tri_count as f32) * parent_area * C_ISECT;
 
         for axis in 0..3 {
             let mut bin_count = [0; BINS];
@@ -163,18 +149,18 @@ impl BvhTree {
             for i in 0..BINS - 1 {
                 left_sum += bin_count[i];
                 left_count[i] = left_sum;
-                left_box = Self::aabb_union(&left_box, &bin_bounds[i]);
-                left_area[i] = Self::aabb_surface_area(&left_box);
+                left_box = left_box.merge(bin_bounds[i]);
+                left_area[i] = left_box.surface_area();
             }
             
             let mut right_box = Aabb::empty();
             let mut right_sum = 0;
             for i in (1..BINS).rev() {
                 right_sum += bin_count[i];
-                right_box = Self::aabb_union(&right_box, &bin_bounds[i]);
-                let right_area = Self::aabb_surface_area(&right_box);
+                right_box = right_box.merge(bin_bounds[i]);
+                let right_area = right_box.surface_area();
                 
-                let cost = left_count[i - 1] as f32 * left_area[i - 1] + right_sum as f32 * right_area;
+                let cost = C_TRAV * parent_area + (left_count[i - 1] as f32 * left_area[i - 1] + right_sum as f32 * right_area) * C_ISECT;
                 if cost < best_cost {
                     best_cost = cost;
                     best_axis = axis as i32;
@@ -243,7 +229,7 @@ impl BvhTree {
         self.update_node_bounds(left_child_idx, vertices, indices);
         self.update_node_bounds(right_child_idx, vertices, indices);
         
-        self.subdivide(left_child_idx, vertices, indices);
-        self.subdivide(right_child_idx, vertices, indices);
+        self.subdivide(left_child_idx, vertices, indices, depth + 1);
+        self.subdivide(right_child_idx, vertices, indices, depth + 1);
     }
 }

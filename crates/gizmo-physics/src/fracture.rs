@@ -30,6 +30,26 @@ impl MathPlane {
     }
 }
 
+/// Compute the approximate volume of a convex polyhedron defined by its vertices
+/// using signed tetrahedron decomposition relative to the centroid.
+fn compute_convex_volume(vertices: &[Vec3], indices: &[u32]) -> f32 {
+    if indices.len() < 3 {
+        return 0.001;
+    }
+    // Use the centroid as the reference point
+    let centroid = vertices.iter().copied().fold(Vec3::ZERO, |a, b| a + b)
+        / vertices.len().max(1) as f32;
+    let mut vol = 0.0f32;
+    // Sum signed tetrahedron volumes for each triangle face
+    for tri in indices.chunks_exact(3) {
+        let a = vertices[tri[0] as usize] - centroid;
+        let b = vertices[tri[1] as usize] - centroid;
+        let c = vertices[tri[2] as usize] - centroid;
+        vol += a.dot(b.cross(c));
+    }
+    (vol / 6.0).abs().max(0.001)
+}
+
 pub fn voronoi_shatter(extents: Vec3, num_pieces: u32, seed: u64) -> Vec<ProceduralChunk> {
     let mut rng = StdRng::seed_from_u64(seed);
 
@@ -144,9 +164,28 @@ pub fn voronoi_shatter(extents: Vec3, num_pieces: u32, seed: u64) -> Vec<Procedu
                 let face_center = face_verts.iter().copied().fold(Vec3::ZERO, |a, b| a + b)
                     / face_verts.len() as f32;
 
-                // create local basis
+                // create local basis — guard against degenerate ref_v
                 let n = plane.normal;
-                let ref_v = (face_verts[0] - face_center).normalize();
+                let mut ref_v = Vec3::ZERO;
+                for fv in &face_verts {
+                    let candidate = *fv - face_center;
+                    if candidate.length_squared() > 1e-8 {
+                        ref_v = candidate.normalize();
+                        break;
+                    }
+                }
+                // If all vertices coincide with face_center (degenerate), skip face
+                if ref_v.length_squared() < 0.5 { continue; }
+                // Ensure ref_v is not parallel to normal
+                let cross_test = n.cross(ref_v);
+                if cross_test.length_squared() < 1e-8 {
+                    // Pick an arbitrary perpendicular
+                    ref_v = if n.x.abs() > 0.9 {
+                        Vec3::new(0.0, 1.0, 0.0)
+                    } else {
+                        Vec3::new(1.0, 0.0, 0.0)
+                    };
+                }
                 let tangent = n.cross(ref_v).normalize();
                 let bitangent = n.cross(tangent).normalize();
 
@@ -182,12 +221,13 @@ pub fn voronoi_shatter(extents: Vec3, num_pieces: u32, seed: u64) -> Vec<Procedu
             continue;
         }
 
+        let volume = compute_convex_volume(&out_vertices, &out_indices);
         chunks.push(ProceduralChunk {
             vertices: out_vertices,
             normals: out_normals,
             indices: out_indices,
             center_of_mass: center,
-            volume: 1.0, // Could be exact by adding signed tetrahedron volumes
+            volume,
         });
     }
 
@@ -266,7 +306,7 @@ pub fn generate_fracture_chunks(
         // Create convex hull collider
         let collider = crate::components::Collider {
             shape: crate::components::ColliderShape::ConvexHull(crate::components::ConvexHullShape {
-                vertices: chunk.vertices.clone(),
+                vertices: std::sync::Arc::new(chunk.vertices.clone()),
             }),
             is_trigger: false,
             material: crate::components::PhysicsMaterial::default(),
@@ -366,7 +406,7 @@ impl PreFracturedCache {
 
             let collider = crate::components::Collider {
                 shape: crate::components::ColliderShape::ConvexHull(crate::components::ConvexHullShape {
-                    vertices: chunk.vertices.clone(),
+                    vertices: std::sync::Arc::new(chunk.vertices.clone()),
                 }),
                 is_trigger: false,
                 material: crate::components::PhysicsMaterial::default(),

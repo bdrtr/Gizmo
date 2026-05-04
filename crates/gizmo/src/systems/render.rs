@@ -10,6 +10,7 @@ use wgpu;
 use super::physics::*;
 
 
+#[derive(Clone)]
 pub struct DrawItem {
     vbuf: std::sync::Arc<wgpu::Buffer>,
     vertex_count: u32,
@@ -202,99 +203,134 @@ pub fn default_render_pass(
         taa.store_prev_vp(unjittered_view_proj.to_cols_array_2d());
     }
 
+#[derive(Default)]
+pub struct RenderCache {
+    pub batches: std::collections::HashMap<BatchKey, BatchData>,
+    pub instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
+    pub draw_items: Vec<DrawItem>,
+}
+
+// ... inside default_render_pass ...
+    // ... before line 205 ...
     let renderers = world.borrow::<MeshRenderer>();
-    let mut batches: std::collections::HashMap<BatchKey, BatchData> = std::collections::HashMap::new();
+    
+    // Get or create RenderCache
     let frustum = crate::math::Frustum::from_matrix(&unjittered_view_proj);
     
-    if let Some(mut q) = world.query::<(&Mesh, &Transform, &Material)>() {
-        for (e, (mesh, trans, mat)) in q.iter_mut() {
-            if renderers.get(e).is_none() {
-                continue;
-            }
-
-            let center_mat = Mat4::from_translation(mesh.center_offset);
-            let model = trans.local_matrix * center_mat;
-
-            // CPU Frustum Culling
-            let local_cx = (mesh.bounds.min.x + mesh.bounds.max.x) * 0.5;
-            let local_cy = (mesh.bounds.min.y + mesh.bounds.max.y) * 0.5;
-            let local_cz = (mesh.bounds.min.z + mesh.bounds.max.z) * 0.5;
-            let world_c = model.transform_point3(Vec3::new(local_cx, local_cy, local_cz));
-            let hx = (mesh.bounds.max.x - mesh.bounds.min.x) * 0.5;
-            let hy = (mesh.bounds.max.y - mesh.bounds.min.y) * 0.5;
-            let hz = (mesh.bounds.max.z - mesh.bounds.min.z) * 0.5;
-            let local_r = (hx * hx + hy * hy + hz * hz).sqrt();
-            let sx = model.x_axis.truncate().length();
-            let sy = model.y_axis.truncate().length();
-            let sz = model.z_axis.truncate().length();
-            let world_r = local_r * sx.max(sy).max(sz);
-
-            if !frustum.intersects_sphere(world_c, world_r) {
-                continue;
-            }
-
-            let instance_data = crate::renderer::gpu_types::InstanceRaw {
-                model: model.to_cols_array_2d(),
-                albedo_color: [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
-                roughness: mat.roughness,
-                metallic: mat.metallic,
-                unlit: match mat.material_type {
-                    crate::renderer::components::MaterialType::Skybox => 2.0,
-                    crate::renderer::components::MaterialType::Unlit => 1.0,
-                    _ => 0.0,
-                },
-                _padding: 0.0,
-            };
-            
-            let key = BatchKey {
-                vbuf_id: std::sync::Arc::as_ptr(&mesh.vbuf) as usize,
-                mat_id: std::sync::Arc::as_ptr(&mat.bind_group) as usize,
-            };
-
-            let batch = batches.entry(key).or_insert_with(|| BatchData {
-                vbuf: mesh.vbuf.clone(),
-                bind_group: mat.bind_group.clone(),
-                vertex_count: mesh.vertex_count,
-                unlit: mat.material_type == crate::renderer::components::MaterialType::Unlit
-                    || mat.material_type == crate::renderer::components::MaterialType::Skybox,
-                is_skybox: mat.material_type == crate::renderer::components::MaterialType::Skybox,
-                instances: Vec::new(),
-            });
-            batch.instances.push(instance_data);
-        }
+    thread_local! {
+        static RENDER_CACHE: std::cell::RefCell<RenderCache> = std::cell::RefCell::new(RenderCache::default());
     }
-    
-    let mut instances = Vec::new();
-    let mut draw_items = Vec::new();
-    for (_, batch) in batches {
-        let first_instance = instances.len() as u32;
-        let instance_count = batch.instances.len() as u32;
-        instances.extend(batch.instances);
+
+    let draw_items = RENDER_CACHE.with(|rc| {
+        let mut cache = rc.borrow_mut();
         
-        draw_items.push(DrawItem {
-            vbuf: batch.vbuf,
-            vertex_count: batch.vertex_count,
-            bind_group: batch.bind_group,
-            unlit: batch.unlit,
-            is_skybox: batch.is_skybox,
-            first_instance,
-            instance_count,
-        });
-    }
+        // Clear instances but keep allocations
+        for batch in cache.batches.values_mut() {
+            batch.instances.clear();
+        }
+        cache.instances.clear();
+        cache.draw_items.clear();
 
-    // Instance limiti kontrolü (Taşmaları önlemek için capaciteyi zorla)
-    // TODO: Eğer needed > capacity ise çalışma zamanı pipeline re-allocation yapılmalı.
-    let max_instances = renderer.scene.instance_capacity as usize;
-    let instances: Vec<_> = instances.into_iter().take(max_instances).collect();
+        if let Some(mut q) = world.query::<(&Mesh, &Transform, &Material)>() {
+            for (e, (mesh, trans, mat)) in q.iter_mut() {
+                if renderers.get(e).is_none() {
+                    continue;
+                }
 
-    if !instances.is_empty() {
-        renderer.queue.write_buffer(
-            &renderer.scene.instance_buffer,
-            0,
-            bytemuck::cast_slice(&instances),
-        );
-    }
+                let center_mat = Mat4::from_translation(mesh.center_offset);
+                let model = trans.local_matrix * center_mat;
 
+                // CPU Frustum Culling
+                let local_cx = (mesh.bounds.min.x + mesh.bounds.max.x) * 0.5;
+                let local_cy = (mesh.bounds.min.y + mesh.bounds.max.y) * 0.5;
+                let local_cz = (mesh.bounds.min.z + mesh.bounds.max.z) * 0.5;
+                let world_c = model.transform_point3(Vec3::new(local_cx, local_cy, local_cz));
+                let hx = (mesh.bounds.max.x - mesh.bounds.min.x) * 0.5;
+                let hy = (mesh.bounds.max.y - mesh.bounds.min.y) * 0.5;
+                let hz = (mesh.bounds.max.z - mesh.bounds.min.z) * 0.5;
+                let local_r = (hx * hx + hy * hy + hz * hz).sqrt();
+                let sx = model.x_axis.truncate().length();
+                let sy = model.y_axis.truncate().length();
+                let sz = model.z_axis.truncate().length();
+                let world_r = local_r * sx.max(sy).max(sz);
+
+                if !frustum.intersects_sphere(world_c, world_r) {
+                    continue;
+                }
+
+                let instance_data = crate::renderer::gpu_types::InstanceRaw {
+                    model: model.to_cols_array_2d(),
+                    albedo_color: [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
+                    roughness: mat.roughness,
+                    metallic: mat.metallic,
+                    unlit: match mat.material_type {
+                        crate::renderer::components::MaterialType::Skybox => 2.0,
+                        crate::renderer::components::MaterialType::Unlit => 1.0,
+                        _ => 0.0,
+                    },
+                    _padding: 0.0,
+                };
+                
+                let key = BatchKey {
+                    vbuf_id: std::sync::Arc::as_ptr(&mesh.vbuf) as usize,
+                    mat_id: std::sync::Arc::as_ptr(&mat.bind_group) as usize,
+                };
+
+                let batch = cache.batches.entry(key).or_insert_with(|| BatchData {
+                    vbuf: mesh.vbuf.clone(),
+                    bind_group: mat.bind_group.clone(),
+                    vertex_count: mesh.vertex_count,
+                    unlit: mat.material_type == crate::renderer::components::MaterialType::Unlit
+                        || mat.material_type == crate::renderer::components::MaterialType::Skybox,
+                    is_skybox: mat.material_type == crate::renderer::components::MaterialType::Skybox,
+                    instances: Vec::new(),
+                });
+                batch.instances.push(instance_data);
+            }
+        }
+        
+        let mut local_instances = std::mem::take(&mut cache.instances);
+        let mut local_draw_items = std::mem::take(&mut cache.draw_items);
+
+        for (_, batch) in cache.batches.iter() {
+            if batch.instances.is_empty() { continue; }
+            let first_instance = local_instances.len() as u32;
+            let instance_count = batch.instances.len() as u32;
+            local_instances.extend(&batch.instances);
+            
+            local_draw_items.push(DrawItem {
+                vbuf: batch.vbuf.clone(),
+                vertex_count: batch.vertex_count,
+                bind_group: batch.bind_group.clone(),
+                unlit: batch.unlit,
+                is_skybox: batch.is_skybox,
+                first_instance,
+                instance_count,
+            });
+        }
+        
+        cache.instances = local_instances;
+        cache.draw_items = local_draw_items;
+
+        // Instance limiti kontrolü (Taşmaları önlemek için capaciteyi zorla)
+        let max_instances = renderer.scene.instance_capacity as usize;
+        let instances_slice = if cache.instances.len() > max_instances {
+            &cache.instances[..max_instances]
+        } else {
+            &cache.instances
+        };
+
+        if !instances_slice.is_empty() {
+            renderer.queue.write_buffer(
+                &renderer.scene.instance_buffer,
+                0,
+                bytemuck::cast_slice(instances_slice),
+            );
+        }
+        
+        // Pass draw_items to rendering logic by cloning the small struct (Arc clones are cheap)
+        cache.draw_items.clone()
+    });
     // CPU Batched Instancing replaces GPU cull for draw_items
 
     if let Some(physics) = &renderer.gpu_physics {

@@ -306,7 +306,7 @@ fn draw_collider_section(
             egui::CollapsingHeader::new("🛡️ Collider")
                 .default_open(true)
                 .show(ui, |ui| match &mut collider.shape {
-                    gizmo_physics::shape::ColliderShape::Aabb(aabb) => {
+                    gizmo_physics::shape::ColliderShape::Box(aabb) => {
                         ui.label("Mod: Kutu (AABB)");
                         ui.horizontal(|ui| {
                             ui.label("Extents:");

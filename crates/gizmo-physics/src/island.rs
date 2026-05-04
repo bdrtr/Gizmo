@@ -1,7 +1,7 @@
 /// Island-Based Parallel Solver
 ///
 /// Fizik dünyasını bağlı bileşenlere (island) ayırır.
-/// Birbirinden bağımsız island'lar Rayon ile paralel çözülür.
+/// Birbirinden bağımsız island'lar PhysicsWorld tarafında Rayon ile paralel çözülür.
 /// Hareketsiz island'lar sleeping'e alınarak tamamen atlanır.
 use crate::collision::ContactManifold;
 use gizmo_core::entity::Entity;
@@ -42,11 +42,12 @@ impl IslandManager {
         let mut parent: Vec<usize> = (0..n).collect();
         let mut rank:   Vec<u8>    = vec![0; n];
 
-        fn find(parent: &mut Vec<usize>, i: usize) -> usize {
-            if parent[i] != i {
-                parent[i] = find(parent, parent[i]); // Path compression
+        fn find(parent: &mut Vec<usize>, mut i: usize) -> usize {
+            while parent[i] != i {
+                parent[i] = parent[parent[i]]; // Path splitting / compression
+                i = parent[i];
             }
-            parent[i]
+            i
         }
 
         fn union(parent: &mut Vec<usize>, rank: &mut Vec<u8>, a: usize, b: usize) {
@@ -99,17 +100,26 @@ impl IslandManager {
         let mut manifold_opts: Vec<Option<ContactManifold>> =
             manifolds.into_iter().map(Some).collect();
 
-        islands.iter().map(|island| {
-            island.manifold_indices.iter()
-                .filter_map(|&i| manifold_opts[i].take())
-                .collect()
-        }).collect()
+        islands
+            .iter()
+            .map(|island| {
+                let mut indices = island.manifold_indices.clone();
+                indices.sort_unstable(); // Deterministik çözüm sırası için sort
+                indices
+                    .into_iter()
+                    .filter_map(|i| manifold_opts[i].take())
+                    .collect()
+            })
+            .collect()
     }
 
     /// Island'ın uyuma uygun olup olmadığını kontrol et.
     /// Tüm temas noktalarındaki impuls toplamı eşiğin altındaysa → uyku
     pub fn should_sleep(manifolds: &[ContactManifold], impulse_threshold: f32) -> bool {
+        if manifolds.is_empty() { return false; }
+        
         manifolds.iter().all(|m| {
+            m.lifetime > 3 && // En az birkaç frame aktif olmalı (warm-up)
             m.contacts.iter().all(|c| {
                 c.normal_impulse.abs() < impulse_threshold
                     && c.tangent_impulse.length() < impulse_threshold
@@ -136,9 +146,16 @@ pub struct PhysicsMetrics {
 
 impl PhysicsMetrics {
     pub fn print_hud(&self) {
-        println!(
-            "[Physics] Islands:{} Sleep:{} Contacts:{} Bodies:{} | \
-             Broad:{:.2}ms Narrow:{:.2}ms Solver:{:.2}ms Integrate:{:.2}ms",
+        tracing::debug!(
+            island_count = self.island_count,
+            sleeping_count = self.sleeping_count,
+            contact_count = self.contact_count,
+            body_count = self.body_count,
+            broadphase_ms = self.broadphase_ms,
+            narrowphase_ms = self.narrowphase_ms,
+            solver_ms = self.solver_ms,
+            integration_ms = self.integration_ms,
+            "[Physics Metrics] Islands:{} Sleep:{} Contacts:{} Bodies:{} | Broad:{:.2}ms Narrow:{:.2}ms Solver:{:.2}ms Integrate:{:.2}ms",
             self.island_count, self.sleeping_count, self.contact_count, self.body_count,
             self.broadphase_ms, self.narrowphase_ms, self.solver_ms, self.integration_ms,
         );
@@ -199,10 +216,12 @@ mod tests {
     #[test]
     fn test_sleeping_detection() {
         let mut m = make_manifold(1, 2);
+        m.lifetime = 4;
         m.contacts[0].normal_impulse = 0.001; // Çok düşük
         assert!(IslandManager::should_sleep(&[m], 0.01));
 
         let mut m2 = make_manifold(1, 2);
+        m2.lifetime = 4;
         m2.contacts[0].normal_impulse = 100.0; // Yüksek aktivite
         assert!(!IslandManager::should_sleep(&[m2], 0.01));
     }

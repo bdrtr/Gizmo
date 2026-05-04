@@ -12,8 +12,7 @@ use crate::color::Color;
 use gizmo_core::{Entity, EntityName, World};
 use gizmo_math::{Quat, Vec3};
 use gizmo_physics::{
-    components::{RigidBody, Velocity},
-    shape::Collider,
+    components::{Collider, RigidBody, Velocity},
     Transform,
 };
 use gizmo_renderer::{
@@ -300,8 +299,8 @@ impl<'a> Commands<'a> {
         } else {
             RigidBody::new_static()
         };
-        let col = Collider::new_aabb(half_extents.x, half_extents.y, half_extents.z);
-        rb.update_inertia_from_shape(&col.shape);
+        let col = Collider::box_collider(half_extents);
+        rb.update_inertia_from_collider(&col);
         self.world.add_component(id, rb);
         if mass > 0.0 {
             self.world.add_component(id, Velocity::new(Vec3::ZERO));
@@ -334,8 +333,8 @@ impl<'a> Commands<'a> {
         } else {
             RigidBody::new_static()
         };
-        let col = Collider::new_sphere(radius);
-        rb.update_inertia_from_shape(&col.shape);
+        let col = Collider::sphere(radius);
+        rb.update_inertia_from_collider(&col);
         self.world.add_component(id, rb);
         if mass > 0.0 {
             self.world.add_component(id, Velocity::new(Vec3::ZERO));
@@ -363,8 +362,7 @@ impl<'a> Commands<'a> {
         let mat = Material::new(bg).with_pbr(color.to_vec4(), 0.9, 0.0);
         let id = spawn_mesh_entity(self.world, pos, mesh, mat);
         self.world.add_component(id, RigidBody::new_static());
-        self.world
-            .add_component(id, Collider::new_aabb(size / 2.0, 0.05, size / 2.0));
+        self.world.add_component(id, Collider::box_collider(Vec3::new(size / 2.0, 0.05, size / 2.0)));
         EntityBuilder {
             commands: self,
             entity: id,

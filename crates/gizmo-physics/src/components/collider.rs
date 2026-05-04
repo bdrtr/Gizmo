@@ -56,9 +56,10 @@ impl Collider {
                 gizmo_math::Aabb::new(min, max)
             }
             ColliderShape::Capsule(c) => {
-                // Capsule AABB is sphere radius + half height along Y axis
-                let half_height_vec = rotation * Vec3::new(0.0, c.half_height, 0.0);
-                let extent = Vec3::splat(c.radius) + half_height_vec.abs();
+                let axis = rotation * Vec3::Y;
+                let half_height_vec = axis * c.half_height;
+                let radius_vec = Vec3::splat(c.radius);
+                let extent = half_height_vec.abs() + radius_vec;
                 gizmo_math::Aabb::from_center_half_extents(position, extent)
             }
             ColliderShape::Plane(_) => {
@@ -72,7 +73,7 @@ impl Collider {
             ColliderShape::TriMesh(tm) => {
                 let mut min = Vec3::splat(f32::INFINITY);
                 let mut max = Vec3::splat(f32::NEG_INFINITY);
-                for v in &tm.vertices {
+                for v in tm.vertices.iter() {
                     let world_pos = position + rotation * (*v);
                     min = min.min(world_pos);
                     max = max.max(world_pos);
@@ -82,7 +83,7 @@ impl Collider {
             ColliderShape::ConvexHull(ch) => {
                 let mut min = Vec3::splat(f32::INFINITY);
                 let mut max = Vec3::splat(f32::NEG_INFINITY);
-                for v in &ch.vertices {
+                for v in ch.vertices.iter() {
                     let world_pos = position + rotation * (*v);
                     min = min.min(world_pos);
                     max = max.max(world_pos);
@@ -96,10 +97,8 @@ impl Collider {
                     let world_pos = position + rotation.mul_vec3(local_t.position);
                     let world_rot = rotation * local_t.rotation;
                     
-                    // Recursive bounding box is tricky because we only have `compute_aabb` on `Collider`
-                    // We can just construct a temporary Collider to calculate it:
                     let temp_col = Collider {
-                        shape: *sub_shape.clone(),
+                        shape: (**sub_shape).clone(),
                         ..Default::default()
                     };
                     let sub_aabb = temp_col.compute_aabb(world_pos, world_rot);
@@ -152,6 +151,23 @@ impl Collider {
         self
     }
 
+    // Backwards compatibility wrappers
+    pub fn aabb(half_extents: Vec3) -> Self {
+        Self::box_collider(half_extents)
+    }
+
+    pub fn new_sphere(radius: f32) -> Self {
+        Self::sphere(radius)
+    }
+
+    pub fn new_aabb(x: f32, y: f32, z: f32) -> Self {
+        Self::box_collider(Vec3::new(x, y, z))
+    }
+
+    pub fn new_capsule(radius: f32, half_height: f32) -> Self {
+        Self::capsule(radius, half_height)
+    }
+
     pub fn with_layer(mut self, layer: CollisionLayer) -> Self {
         self.collision_layer = layer;
         self
@@ -166,10 +182,12 @@ impl Collider {
                 let sphere_vol = (4.0 / 3.0) * std::f32::consts::PI * c.radius.powi(3);
                 cylinder_vol + sphere_vol
             }
-            ColliderShape::Plane(_) => f32::INFINITY,
-            ColliderShape::TriMesh(_) => 10.0, // Approximate volume
-            ColliderShape::ConvexHull(_) => 10.0,
-            ColliderShape::Compound(_) => 10.0, // Approximate
+            ColliderShape::Plane(_) => f32::MAX, // Safe value instead of INFINITY for inertia calculations
+            ColliderShape::TriMesh(_) | ColliderShape::ConvexHull(_) | ColliderShape::Compound(_) => {
+                let aabb = self.compute_aabb(Vec3::ZERO, Quat::IDENTITY);
+                let e = aabb.max - aabb.min;
+                e.x * e.y * e.z * 0.5 // Approximate volume from AABB
+            }
         }
     }
 
@@ -179,9 +197,10 @@ impl Collider {
             ColliderShape::Box(b) => b.half_extents.y,
             ColliderShape::Capsule(c) => c.half_height + c.radius,
             ColliderShape::Plane(_) => 0.0,
-            ColliderShape::TriMesh(_) => 0.0, // Simplified
-            ColliderShape::ConvexHull(_) => 0.0, // Simplified
-            ColliderShape::Compound(_) => 0.0, // Simplified
+            ColliderShape::TriMesh(_) | ColliderShape::ConvexHull(_) | ColliderShape::Compound(_) => {
+                let aabb = self.compute_aabb(Vec3::ZERO, Quat::IDENTITY);
+                (aabb.max.y - aabb.min.y) * 0.5
+            }
         }
     }
 }
@@ -220,17 +239,65 @@ pub struct PlaneShape {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(into = "TriMeshShapeData", from = "TriMeshShapeData")]
 pub struct TriMeshShape {
-    pub vertices: Vec<Vec3>,
-    pub indices: Vec<u32>,
+    pub vertices: std::sync::Arc<Vec<Vec3>>,
+    pub indices: std::sync::Arc<Vec<u32>>,
     #[serde(skip)]
-    pub bvh: crate::bvh::BvhTree,
+    pub bvh: std::sync::Arc<crate::bvh::BvhTree>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ConvexHullShape {
-    pub vertices: Vec<Vec3>,
+struct TriMeshShapeData {
+    vertices: Vec<Vec3>,
+    indices: Vec<u32>,
 }
 
+impl From<TriMeshShapeData> for TriMeshShape {
+    fn from(mut data: TriMeshShapeData) -> Self {
+        let bvh = crate::bvh::BvhTree::build(&data.vertices, &mut data.indices).unwrap_or_default();
+        Self {
+            vertices: std::sync::Arc::new(data.vertices),
+            indices: std::sync::Arc::new(data.indices),
+            bvh: std::sync::Arc::new(bvh),
+        }
+    }
+}
+
+impl From<TriMeshShape> for TriMeshShapeData {
+    fn from(shape: TriMeshShape) -> Self {
+        Self {
+            vertices: (*shape.vertices).clone(),
+            indices: (*shape.indices).clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(into = "ConvexHullShapeData", from = "ConvexHullShapeData")]
+pub struct ConvexHullShape {
+    pub vertices: std::sync::Arc<Vec<Vec3>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct ConvexHullShapeData {
+    vertices: Vec<Vec3>,
+}
+
+impl From<ConvexHullShapeData> for ConvexHullShape {
+    fn from(data: ConvexHullShapeData) -> Self {
+        Self {
+            vertices: std::sync::Arc::new(data.vertices),
+        }
+    }
+}
+
+impl From<ConvexHullShape> for ConvexHullShapeData {
+    fn from(shape: ConvexHullShape) -> Self {
+        Self {
+            vertices: (*shape.vertices).clone(),
+        }
+    }
+}
 
 gizmo_core::impl_component!(Collider);

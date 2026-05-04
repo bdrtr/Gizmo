@@ -92,7 +92,7 @@ pub struct PhysicsWorld {
     #[serde(skip)]
     pub gpu_compute: Option<crate::gpu_compute::GpuCompute>,
     #[serde(skip)]
-    contact_cache: HashMap<(Entity, Entity), bool>,
+    contact_cache: HashMap<(Entity, Entity), (bool, Option<ContactManifold>)>,
     
     pub accumulator: f32,
     pub render_alpha: f32,
@@ -181,6 +181,16 @@ impl PhysicsWorld {
 
     pub fn add_body(&mut self, entity: Entity, rb: RigidBody, t: Transform, v: Velocity, c: Collider) {
         let idx = self.entities.len();
+        
+        let mut aabb = c.compute_aabb(t.position, t.rotation);
+        if rb.ccd_enabled {
+            let movement = v.linear * (1.0 / 60.0); // Fatten by max expected delta movement
+            let min_mov = aabb.min.min((gizmo_math::Vec3::from(aabb.min) + movement).into());
+            let max_mov = aabb.max.max((gizmo_math::Vec3::from(aabb.max) + movement).into());
+            aabb = gizmo_math::Aabb::new(min_mov, max_mov);
+        }
+        self.spatial_hash.insert(entity, aabb);
+
         self.entities.push(entity);
         self.rigid_bodies.push(rb);
         self.transforms.push(t);
@@ -196,6 +206,75 @@ impl PhysicsWorld {
         self.velocities.clear();
         self.colliders.clear();
         self.entity_index_map.clear();
+        self.spatial_hash.clear_mut();
+    }
+
+    pub fn sync_bodies<'a>(&mut self, incoming_bodies: impl Iterator<Item = &'a (Entity, RigidBody, Transform, Velocity, Collider)>) {
+        let mut active_ids = std::collections::HashSet::new();
+
+        for (entity, rb, trans, vel, col) in incoming_bodies {
+            let e_id = entity.id();
+            active_ids.insert(e_id);
+
+            if let Some(&idx) = self.entity_index_map.get(&e_id) {
+                // Update existing body without dropping/allocating mappings
+                self.rigid_bodies[idx] = rb.clone();
+                self.transforms[idx] = trans.clone();
+                self.velocities[idx] = vel.clone();
+                
+                // TODO: Wrap large shapes in Arc to make this clone virtually free
+                self.colliders[idx] = col.clone();
+                
+                // Update spatial hash (Fatten for CCD if enabled)
+                let mut aabb = col.compute_aabb(trans.position, trans.rotation);
+                if rb.ccd_enabled {
+                    let movement = vel.linear * (1.0 / 60.0);
+                    let min_mov = aabb.min.min((gizmo_math::Vec3::from(aabb.min) + movement).into());
+                    let max_mov = aabb.max.max((gizmo_math::Vec3::from(aabb.max) + movement).into());
+                    aabb = gizmo_math::Aabb::new(min_mov, max_mov);
+                }
+                self.spatial_hash.update(*entity, aabb);
+            } else {
+                // Add new body
+                self.add_body(*entity, rb.clone(), trans.clone(), vel.clone(), col.clone());
+            }
+        }
+
+        // Cleanup removed entities
+        let mut i = 0;
+        while i < self.entities.len() {
+            if !active_ids.contains(&self.entities[i].id()) {
+                self.remove_body_at(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    pub fn remove_body_at(&mut self, idx: usize) {
+        let last_idx = self.entities.len() - 1;
+        let entity = self.entities[idx];
+        
+        self.spatial_hash.remove(entity);
+        self.entity_index_map.remove(&entity.id());
+
+        if idx != last_idx {
+            let last_entity = self.entities[last_idx];
+            
+            self.entities.swap(idx, last_idx);
+            self.rigid_bodies.swap(idx, last_idx);
+            self.transforms.swap(idx, last_idx);
+            self.velocities.swap(idx, last_idx);
+            self.colliders.swap(idx, last_idx);
+            
+            self.entity_index_map.insert(last_entity.id(), idx);
+        }
+
+        self.entities.pop();
+        self.rigid_bodies.pop();
+        self.transforms.pop();
+        self.velocities.pop();
+        self.colliders.pop();
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -230,27 +309,13 @@ impl PhysicsWorld {
         }
 
         // --- STEP ONCE (DEBUG) ---
-        if self.step_once {
+        let frame_dt = if self.step_once {
             self.step_once = false;
-            // Olayları temizle
-            self.collision_events.clear();
-            self.trigger_events.clear();
-            self.fracture_events.clear();
-            
-            // Sabit 2 fizik adımı at (Örn: 2/120 = 1/60 sn, tam bir oyun karesi)
-            self.step_internal(soft_bodies, FIXED_DT)?;
-            self.step_internal(soft_bodies, FIXED_DT)?;
-            
-            // Tarihçeye kaydet
-            self.history.push_back(PhysicsStateSnapshot {
-                transforms: self.transforms.clone(),
-                velocities: self.velocities.clone(),
-            });
-            if self.history.len() > self.max_history_frames {
-                self.history.pop_front();
-            }
-            return Ok(());
-        }
+            self.accumulator = 0.0; // Reset accumulator so we step exactly once
+            FIXED_DT
+        } else {
+            dt.min(0.25) // Maksimum 250ms — death-spiral koruması
+        };
 
         // Olayları her render frame'de temizle
         self.collision_events.clear();
@@ -258,7 +323,7 @@ impl PhysicsWorld {
         self.fracture_events.clear();
 
         // Birikimci: render dt'yi sub-step'lere böl
-        self.accumulator += dt.min(0.25); // Maksimum 250ms — death-spiral koruması
+        self.accumulator += frame_dt;
 
         let mut steps = 0u32;
         while self.accumulator >= FIXED_DT && steps < MAX_SUBSTEPS {
@@ -296,7 +361,6 @@ impl PhysicsWorld {
         let default_gravity = self.integrator.gravity;
         let gravity_fields = &self.gravity_fields;
         let fluid_zones = &self.fluid_zones;
-        let integrator = &self.integrator;
         let has_error = std::sync::atomic::AtomicBool::new(false);
         let watchlist = &self.watchlist;
         
@@ -354,7 +418,8 @@ impl PhysicsWorld {
             }
 
             // 1. Integrate velocities (apply forces, gravity, damping)
-            if let Err(e) = integrator.integrate_velocities(entity, rb, vel, dt, active_gravity) {
+            let local_integrator = crate::integrator::Integrator { gravity: active_gravity };
+            if let Err(e) = local_integrator.integrate_velocities(entity, rb, vel, dt) {
                 tracing::error!("Physics integration error: {:?}. Throwing error upwards.", e);
                 has_error.store(true, std::sync::atomic::Ordering::Relaxed);
                 return Err(e);
@@ -385,7 +450,7 @@ impl PhysicsWorld {
             rigid_colliders.push((self.entities[i], self.transforms[i], self.colliders[i].clone()));
         }
         
-        if let Some(gpu) = &self.gpu_compute {
+        if let Some(gpu) = &mut self.gpu_compute {
             gpu.step_soft_bodies(soft_bodies, &rigid_colliders, dt, gravity);
         } else {
             soft_bodies.par_iter_mut().for_each(|(_, sb, _)| {
@@ -393,10 +458,10 @@ impl PhysicsWorld {
             });
         }
 
-        // 2. Broadphase - build spatial hash and find potential collision pairs
-        // CCD: expand AABB of fast-moving bodies by their predicted displacement so
-        // the broad phase can still find pairs before interpenetration occurs.
+        // 2. Broadphase - update spatial hash and find potential collision pairs
+        // Clear the spatial hash for the current sub-step
         self.spatial_hash.clear_mut();
+        
         // BVH insert: sequential (&mut self gerektirir — BVH query'si O(log N) olduğu için toplamda hâlâ çok hızlı)
         for i in 0..self.entities.len() {
             let entity = self.entities[i];
@@ -478,7 +543,10 @@ impl PhysicsWorld {
                             &collider_b.shape, transform_b.position, transform_b.rotation, vel_b.linear,
                             dt
                         ) {
+                            println!("Found speculative contact! Penetration: {}, Normal: {:?}", speculative_contact.penetration, speculative_contact.normal);
                             contacts.push(speculative_contact);
+                        } else {
+                            println!("Speculative contact returned None");
                         }
                     }
                 }
@@ -548,10 +616,11 @@ impl PhysicsWorld {
             
             let contacts = contact_opt;
             let pair = (entity_a, entity_b);
-            current_contacts.insert(pair, true);
 
             // Handle triggers
             if is_trigger_a || is_trigger_b {
+                current_contacts.insert(pair, (true, None));
+                
                 let event_type = if self.contact_cache.contains_key(&pair) {
                     CollisionEventType::Persisting
                 } else {
@@ -563,13 +632,21 @@ impl PhysicsWorld {
                     event_type,
                 });
             } else {
-                // Solid collision manifold — 4'e kadar temas noktası
-                let mut manifold = ContactManifold::new(entity_a, entity_b);
+                // Get old manifold to preserve impulses for warm starting
+                let mut manifold = if let Some(Some((_, Some(old_manifold)))) = self.contact_cache.get(&pair).map(|o| Some(o)) {
+                    let mut m = old_manifold.clone();
+                    m.contacts.clear(); // Clear points, but we will preserve impulses inside add_contact
+                    m
+                } else {
+                    ContactManifold::new(entity_a, entity_b)
+                };
+
                 manifold.friction        = (mat_a.dynamic_friction * mat_b.dynamic_friction).sqrt();
                 manifold.static_friction = (mat_a.static_friction  * mat_b.static_friction).sqrt();
                 manifold.restitution     = mat_a.restitution.max(mat_b.restitution);
 
                 for contact in &contacts { manifold.add_contact(*contact); }
+                current_contacts.insert(pair, (false, Some(manifold.clone())));
                 manifolds.push(manifold);
 
                 let event_type = if self.contact_cache.contains_key(&pair) {
@@ -581,20 +658,28 @@ impl PhysicsWorld {
                     entity_a,
                     entity_b,
                     event_type,
-                    contact_points: contacts,
+                    contact_points: contacts.into_iter().take(4).collect(),
                 });
             }
         }
 
         // Detect ended collisions
-        for (pair, _) in self.contact_cache.iter() {
+        for (pair, (is_trigger, _)) in self.contact_cache.iter() {
             if !current_contacts.contains_key(pair) {
-                self.collision_events.push(CollisionEvent {
-                    entity_a: pair.0,
-                    entity_b: pair.1,
-                    event_type: CollisionEventType::Ended,
-                    contact_points: Vec::new(),
-                });
+                if *is_trigger {
+                    self.trigger_events.push(TriggerEvent {
+                        trigger_entity: pair.0,
+                        other_entity: pair.1,
+                        event_type: CollisionEventType::Ended,
+                    });
+                } else {
+                    self.collision_events.push(CollisionEvent {
+                        entity_a: pair.0,
+                        entity_b: pair.1,
+                        event_type: CollisionEventType::Ended,
+                        contact_points: arrayvec::ArrayVec::new(),
+                    });
+                }
             }
         }
 
@@ -625,7 +710,10 @@ impl PhysicsWorld {
                     rigid_trans.position,
                     rigid_trans.rotation,
                 ) {
-                    let normal = contact.normal;
+                    // NarrowPhase::test_collision returns normal pointing from shape_a (node)
+                    // to shape_b (rigid). For correct impulse, we need the normal pointing
+                    // from rigid toward node (separating direction for node).
+                    let normal = -contact.normal;
                     let penetration = contact.penetration;
                     
                     let inv_m_node = 1.0 / node.mass;
@@ -636,22 +724,27 @@ impl PhysicsWorld {
                     let v_node = node.velocity;
                     let v_rb = rigid_vel.linear + rigid_vel.angular.cross(r_rb);
                     
-                    let rel_vel = v_rb - v_node;
+                    // rel_vel: velocity of node relative to rigid body
+                    let rel_vel = v_node - v_rb;
                     let vel_norm = rel_vel.dot(normal);
                     
+                    // vel_norm < 0 means node is approaching rigid along the normal
                     if vel_norm < 0.0 {
                         let j = -(1.0 + 0.2) * vel_norm / total_inv_m;
                         let impulse = normal * j;
                         
-                        node.velocity -= impulse * inv_m_node;
+                        // Push node away from rigid
+                        node.velocity += impulse * inv_m_node;
                         if rigid_rb.is_dynamic() {
-                            rigid_vel.linear += impulse * inv_m_rb;
+                            // Push rigid away from node
+                            rigid_vel.linear -= impulse * inv_m_rb;
                             changed = true;
                         }
                     }
                     
+                    // Positional correction: push node out along normal
                     let pos_correction = normal * (penetration * 0.5);
-                    node.position -= pos_correction * (inv_m_node / total_inv_m);
+                    node.position += pos_correction * (inv_m_node / total_inv_m);
                 }
             }
             if changed {
@@ -698,18 +791,20 @@ impl PhysicsWorld {
                         // Spring-damper penalty force
                         let force_mag = penetration * penalty_stiffness - vel_along_normal * penalty_damping;
                         if force_mag > 0.0 {
-                            let impulse = normal * (force_mag * dt);
                             let inv_m_a = if node_a.mass > 0.0 && !node_a.is_fixed { 1.0 / node_a.mass } else { 0.0 };
                             let inv_m_b = if node_b.mass > 0.0 && !node_b.is_fixed { 1.0 / node_b.mass } else { 0.0 };
-                            let sum_inv_m = inv_m_a + inv_m_b;
-                            
-                            node_a.velocity += impulse * (inv_m_a / sum_inv_m);
-                            node_b.velocity -= impulse * (inv_m_b / sum_inv_m);
-                            
-                            // Position correction
-                            let pos_corr = normal * (penetration * 0.5);
-                            node_a.position += pos_corr;
-                            node_b.position -= pos_corr;
+                            let total_inv_m = inv_m_a + inv_m_b;
+                            if total_inv_m > 1e-8 {
+                                // Standard impulse: equal and opposite, scaled by each body's inv_mass
+                                let impulse = normal * (force_mag * dt);
+                                node_a.velocity += impulse * inv_m_a;
+                                node_b.velocity -= impulse * inv_m_b;
+                                
+                                // Position correction weighted by mass ratio
+                                let pos_corr = normal * (penetration * 0.5);
+                                node_a.position += pos_corr * (inv_m_a / total_inv_m);
+                                node_b.position -= pos_corr * (inv_m_b / total_inv_m);
+                            }
                         }
                     }
                 }
@@ -775,17 +870,32 @@ impl PhysicsWorld {
                         }
                     }
 
-                    // Copy the global velocities to a local array so solver can accumulate properly
-                    let mut local_velocities = velocities.to_vec();
-
-                    solver.solve_contacts(&mut island_manifolds, rigid_bodies, transforms, &mut local_velocities, entity_map, dt);
-
-                    let mut velocity_updates = Vec::with_capacity(island_indices.len());
-                    for &idx in &island_indices {
-                        if rigid_bodies[idx].is_dynamic() {
-                            velocity_updates.push((entities_arr[idx], local_velocities[idx]));
-                        }
+                    // Thread-local velocity cache to prevent extreme allocations per island
+                    thread_local! {
+                        static VEL_CACHE: std::cell::RefCell<Vec<Velocity>> = std::cell::RefCell::new(Vec::new());
                     }
+                    
+                    let mut velocity_updates = Vec::with_capacity(island_indices.len());
+                    
+                    VEL_CACHE.with(|cache| {
+                        let mut local_velocities = cache.borrow_mut();
+                        if local_velocities.len() < velocities.len() {
+                            local_velocities.resize(velocities.len(), Velocity::default());
+                        }
+                        
+                        // Copy only active indices
+                        for &idx in &island_indices {
+                            local_velocities[idx] = velocities[idx];
+                        }
+                        
+                        solver.solve_contacts(&mut island_manifolds, rigid_bodies, transforms, &mut local_velocities, entity_map, dt);
+                        
+                        for &idx in &island_indices {
+                            if rigid_bodies[idx].is_dynamic() {
+                                velocity_updates.push((entities_arr[idx], local_velocities[idx]));
+                            }
+                        }
+                    });
 
                     let mut local_fractures = Vec::new();
                     for manifold in island_manifolds.iter() {
@@ -853,7 +963,7 @@ impl PhysicsWorld {
                         (e.entity_a == manifold.entity_a && e.entity_b == manifold.entity_b) ||
                         (e.entity_a == manifold.entity_b && e.entity_b == manifold.entity_a)
                     }) {
-                        event.contact_points = manifold.contacts;
+                        event.contact_points = manifold.contacts.into_iter().take(4).collect();
                     }
                 }
             }
@@ -873,6 +983,7 @@ impl PhysicsWorld {
 
         // 5. Integrate positions (Parallel)
         let pos_error = std::sync::atomic::AtomicBool::new(false);
+        let pos_integrator = &self.integrator;
         self.entities.par_iter()
             .zip(self.rigid_bodies.par_iter_mut())
             .zip(self.transforms.par_iter_mut())
@@ -883,7 +994,7 @@ impl PhysicsWorld {
                 }
                 
                 rb.enforce_locks(vel);
-                if let Err(e) = self.integrator.integrate_positions(entity, rb, transform, vel, dt) {
+                if let Err(e) = pos_integrator.integrate_positions(entity, rb, transform, vel, dt) {
                     tracing::error!("Physics position integration error: {:?}. Throwing error upwards.", e);
                     pos_error.store(true, std::sync::atomic::Ordering::Relaxed);
                     return Err(e);
@@ -962,26 +1073,24 @@ impl PhysicsWorld {
         let mut closest_hit: Option<RaycastHit> = None;
         let mut closest_distance = max_distance;
 
-        for i in 0..self.entities.len() {
-            let entity = self.entities[i];
-            let transform = &self.transforms[i];
-            let collider = &self.colliders[i];
-            // First check AABB for early rejection
-            let aabb = collider.compute_aabb(transform.position, transform.rotation);
-            if Raycast::ray_aabb(ray, &aabb).is_none() {
-                continue;
-            }
+        let potential_hits = self.spatial_hash.query_ray(ray.origin, ray.direction, max_distance);
 
-            // Detailed shape test
-            if let Some((distance, normal)) = Raycast::ray_shape(ray, &collider.shape, transform) {
-                if distance < closest_distance {
-                    closest_distance = distance;
-                    closest_hit = Some(RaycastHit {
-                        entity,
-                        point: ray.point_at(distance),
-                        normal,
-                        distance,
-                    });
+        for (entity, _aabb_t) in potential_hits {
+            if let Some(&i) = self.entity_index_map.get(&entity.id()) {
+                let transform = &self.transforms[i];
+                let collider = &self.colliders[i];
+
+                // Detailed shape test
+                if let Some((distance, normal)) = Raycast::ray_shape(ray, &collider.shape, transform) {
+                    if distance < closest_distance {
+                        closest_distance = distance;
+                        closest_hit = Some(RaycastHit {
+                            entity,
+                            point: ray.point_at(distance),
+                            normal,
+                            distance,
+                        });
+                    }
                 }
             }
         }
@@ -997,19 +1106,15 @@ impl PhysicsWorld {
     ) -> Vec<RaycastHit> {
         let mut hits = Vec::new();
 
-        for i in 0..self.entities.len() {
-            let entity = self.entities[i];
-            let transform = &self.transforms[i];
-            let collider = &self.colliders[i];
-            // First check AABB
-            let aabb = collider.compute_aabb(transform.position, transform.rotation);
-            if Raycast::ray_aabb(ray, &aabb).is_none() {
-                continue;
-            }
+        let potential_hits = self.spatial_hash.query_ray(ray.origin, ray.direction, max_distance);
 
-            // Detailed shape test
-            if let Some((distance, normal)) = Raycast::ray_shape(ray, &collider.shape, transform) {
-                if distance <= max_distance {
+        for (entity, _aabb_t) in potential_hits {
+            if let Some(&i) = self.entity_index_map.get(&entity.id()) {
+                let transform = &self.transforms[i];
+                let collider = &self.colliders[i];
+
+                // Detailed shape test
+                if let Some((distance, normal)) = Raycast::ray_shape(ray, &collider.shape, transform) {
                     hits.push(RaycastHit {
                         entity,
                         point: ray.point_at(distance),
@@ -1064,7 +1169,11 @@ impl PhysicsWorld {
                 
                 // Rotational Kinetic Energy: 1/2 * I * w^2
                 // Approximation using scalar local inertia for speed
-                let ke_angular = 0.5 * rb.local_inertia.x * vel.angular.length_squared();
+                let ke_angular = 0.5 * (
+            rb.local_inertia.x * vel.angular.x * vel.angular.x +
+            rb.local_inertia.y * vel.angular.y * vel.angular.y +
+            rb.local_inertia.z * vel.angular.z * vel.angular.z
+        );
                 
                 // Potential Energy: m * g * h
                 let pe = if rb.use_gravity {
@@ -1106,7 +1215,7 @@ mod tests {
 
         // Simulate for 1 second
         for _ in 0..60 {
-            world.step(&mut [], 1.0 / 60.0);
+            let _ = world.step(&mut [], 1.0 / 60.0);
         }
 
         // Object should have fallen due to gravity

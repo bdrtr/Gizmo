@@ -79,9 +79,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
 
     // 3. Query Rigid Bodies (Write Locks)
     let mut rigid_bodies = Vec::new();
-    let query_opt = Query::<(Mut<RigidBody>, Mut<Transform>, Mut<Velocity>)>::new(world);
-    
-    if let Some(query) = &query_opt {
+    if let Some(query) = Query::<(Mut<RigidBody>, Mut<Transform>, Mut<Velocity>)>::new(world) {
         for (id, (rb, transform, vel)) in query.iter() {
             if let Some(final_collider) = compound_shapes_map.remove(&id) {
                 rigid_bodies.push((
@@ -97,10 +95,9 @@ pub fn physics_step_system(world: &World, dt: f32) {
         println!("[Physics] FAILED TO BORROW RigidBody/Transform/Velocity Mutably!");
     }
 
-    // 3. Query Soft Bodies
+    // 3.5. Query Soft Bodies
     let mut soft_bodies = Vec::new();
-    let soft_query_opt = Query::<(Mut<SoftBodyMesh>, Mut<Transform>)>::new(world);
-    if let Some(soft_query) = &soft_query_opt {
+    if let Some(soft_query) = Query::<(Mut<SoftBodyMesh>, Mut<Transform>)>::new(world) {
         for (id, (soft_mesh, transform)) in soft_query.iter() {
             soft_bodies.push((
                 Entity::new(id, 0),
@@ -131,55 +128,57 @@ pub fn physics_step_system(world: &World, dt: f32) {
         // 3.6. Update Character Controllers
         let kcc_query_opt = Query::<Mut<crate::components::CharacterController>>::new(world);
         if let Some(kcc_query) = &kcc_query_opt {
+            let mut vel_storage = world.borrow_mut::<Velocity>();
+            let col_storage = world.borrow::<Collider>();
+            
             for (id, mut kcc) in kcc_query.iter() {
-                if let Some((ent, _rb, trans, vel, _col)) = rigid_bodies.iter_mut().find(|(e, ..)| e.id() == id) {
-                    crate::character::update_character(*ent, &mut kcc, trans, vel, &all_colliders, dt);
+                if let Some((ent, _rb, trans, vel, col)) = rigid_bodies.iter_mut().find(|(e, ..)| e.id() == id) {
+                    crate::character::update_character(*ent, &mut kcc, trans, vel, col, &all_colliders, dt);
                 } else if let Some(mut trans) = world.borrow_mut::<Transform>().get_mut(id) {
-                    // KCC can also just be attached to a non-rigidbody entity
-                    let mut dummy_vel = Velocity::default();
-                    crate::character::update_character(Entity::new(id, 0), &mut kcc, &mut trans, &mut dummy_vel, &all_colliders, dt);
+                    if let (Some(mut vel), Some(col)) = (vel_storage.get_mut(id), col_storage.get(id)) {
+                        crate::character::update_character(Entity::new(id, 0), &mut kcc, &mut trans, &mut vel, col, &all_colliders, dt);
+                    }
                 }
             }
         }
     }
 
     // 4. Step Simulation
-    physics_world.clear_bodies();
-    for (entity, rb, trans, vel, col) in &rigid_bodies {
-        physics_world.add_body(*entity, rb.clone(), trans.clone(), vel.clone(), col.clone());
-    }
+    physics_world.sync_bodies(rigid_bodies.iter());
 
     physics_world.step(&mut soft_bodies, dt).expect("Gizmo Physics Engine encountered a critical numerical error (NaN, Infinity, or Overflow) and halted!");
 
     // Sync back to rigid_bodies so vehicles/ECS writeback works
     for i in 0..physics_world.entities.len() {
         let entity_id = physics_world.entities[i].id();
-        if let Some((_, _, trans, vel, _)) = rigid_bodies.iter_mut().find(|(e, ..)| e.id() == entity_id) {
+        if let Some((_, rb, trans, vel, _)) = rigid_bodies.iter_mut().find(|(e, ..)| e.id() == entity_id) {
+            *rb = physics_world.rigid_bodies[i];
             *trans = physics_world.transforms[i];
             *vel = physics_world.velocities[i];
         }
     }
 
     // 5. Write back to ECS (Rigid Bodies)
-    if let Some(_query) = &query_opt {
-        let mut trans_storage = world.borrow_mut::<Transform>();
-        let mut vel_storage = world.borrow_mut::<Velocity>();
-        for (entity, _rb, transform, vel, _collider) in rigid_bodies {
-            if let Some(ecs_trans) = trans_storage.get_mut(entity.id()) {
-                *ecs_trans = transform;
-            }
-            if let Some(ecs_vel) = vel_storage.get_mut(entity.id()) {
-                *ecs_vel = vel;
+    if !rigid_bodies.is_empty() {
+        if let Some(query) = Query::<(Mut<RigidBody>, Mut<Transform>, Mut<Velocity>)>::new(world) {
+            for (entity, rb, transform, vel, _collider) in rigid_bodies {
+                if let Some((mut ecs_rb, mut ecs_trans, mut ecs_vel)) = query.get(entity.id()) {
+                    *ecs_rb = rb;
+                    *ecs_trans = transform;
+                    *ecs_vel = vel;
+                }
             }
         }
     }
 
     // 6. Write back to ECS (Soft Bodies)
-    if let Some(soft_query) = &soft_query_opt {
-        for (entity, soft_mesh, transform) in soft_bodies {
-            if let Some((mut sm, mut t)) = soft_query.get(entity.id()) {
-                *sm = soft_mesh;
-                *t = transform;
+    if !soft_bodies.is_empty() {
+        if let Some(soft_query) = Query::<(Mut<SoftBodyMesh>, Mut<Transform>)>::new(world) {
+            for (entity, soft_mesh, transform) in soft_bodies {
+                if let Some((mut sm, mut t)) = soft_query.get(entity.id()) {
+                    *sm = soft_mesh;
+                    *t = transform;
+                }
             }
         }
     }
@@ -194,6 +193,10 @@ pub fn physics_step_system(world: &World, dt: f32) {
         for event in &physics_world.collision_events {
             collision_queue.send(event.clone());
         }
+    }
+    
+    if physics_world.step_once {
+        physics_world.step_once = false;
     }
 }
 
@@ -213,10 +216,9 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
         Err(_) => return,
     };
 
-    // Keep track of which entities we shattered so we don't shatter them multiple times per frame
     let mut shattered = std::collections::HashSet::new();
 
-    let query_opt = Query::<(&Breakable, &Transform, &Collider, &Velocity)>::new(world);
+    let query_opt = Query::<(gizmo_core::query::Mut<Breakable>, &Transform, &Collider, &Velocity)>::new(world);
     let query = match query_opt {
         Some(q) => q,
         None => return,
@@ -224,32 +226,48 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
 
     for event in &physics_world.collision_events {
         let mut max_impulse = 0.0;
+        let mut impact_normal = gizmo_math::Vec3::ZERO;
+        let mut impact_point = gizmo_math::Vec3::ZERO;
+        
         for contact in &event.contact_points {
             if contact.normal_impulse > max_impulse {
                 max_impulse = contact.normal_impulse;
+                impact_normal = contact.normal;
+                impact_point = contact.point;
             }
         }
 
+        if max_impulse <= 0.0 { continue; }
+
         // Check Entity A
         if !shattered.contains(&event.entity_a.id()) {
-            if let Some((breakable, transform, collider, vel)) = query.get(event.entity_a.id()) {
+            if let Some((mut breakable, transform, collider, vel)) = query.get(event.entity_a.id()) {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
-                    shattered.insert(event.entity_a.id());
-                    shatter_entity(&mut commands, event.entity_a, breakable, transform, collider, vel);
+                    breakable.current_health -= max_impulse;
+                    if breakable.current_health <= 0.0 {
+                        breakable.is_broken = true;
+                        shattered.insert(event.entity_a.id());
+                        shatter_entity(&mut commands, event.entity_a, &breakable, transform, collider, vel, -impact_normal, impact_point);
+                    }
                 }
             }
         }
 
         // Check Entity B
         if !shattered.contains(&event.entity_b.id()) {
-            if let Some((breakable, transform, collider, vel)) = query.get(event.entity_b.id()) {
+            if let Some((mut breakable, transform, collider, vel)) = query.get(event.entity_b.id()) {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
-                    shattered.insert(event.entity_b.id());
-                    shatter_entity(&mut commands, event.entity_b, breakable, transform, collider, vel);
+                    breakable.current_health -= max_impulse;
+                    if breakable.current_health <= 0.0 {
+                        breakable.is_broken = true;
+                        shattered.insert(event.entity_b.id());
+                        shatter_entity(&mut commands, event.entity_b, &breakable, transform, collider, vel, impact_normal, impact_point);
+                    }
                 }
             }
         }
     }
+    drop(query);
 }
 
 fn shatter_entity(
@@ -259,6 +277,8 @@ fn shatter_entity(
     transform: &Transform,
     collider: &Collider,
     vel: &Velocity,
+    impact_direction: gizmo_math::Vec3,
+    _impact_point: gizmo_math::Vec3,
 ) {
     use crate::fracture::voronoi_shatter;
 
@@ -279,7 +299,7 @@ fn shatter_entity(
         // Create new convex hull colliders or approximated boxes for the chunks.
         // For simplicity, we approximate each chunk with a small sphere or box based on its volume.
         // A full implementation would use ConvexHull shapes.
-        let radius = (chunk.volume * 0.1).powf(0.33).max(0.1); 
+        let radius = (chunk.volume * 0.1).powf(1.0 / 3.0).max(0.1); 
         
         // Offset chunk center by parent's transform
         let world_offset = transform.rotation * chunk.center_of_mass;
@@ -288,7 +308,8 @@ fn shatter_entity(
 
         // Give chunks a slight explosive velocity outwards from the center of mass
         let mut new_vel = *vel;
-        new_vel.linear += chunk.center_of_mass.normalize_or_zero() * 5.0; // Explosion effect
+        let outward = chunk.center_of_mass.normalize_or_zero();
+        new_vel.linear += outward * 2.0 + impact_direction * 5.0; // Explosion effect
 
         let chunk_collider = Collider::sphere(radius).with_material(collider.material);
         let mut rb = RigidBody::new(chunk.volume * collider.material.density, 0.0, 0.0, true);
@@ -305,7 +326,7 @@ fn shatter_entity(
 /// System that checks for Explosion components and applies outward forces
 /// to all rigid bodies and soft body nodes within the radius.
 pub fn physics_explosion_system(world: &World, dt: f32) {
-    use crate::components::Explosion;
+    use crate::components::{Explosion, ExplosionFalloff};
     use gizmo_core::commands::Commands;
     use gizmo_core::system::SystemParam;
     
@@ -320,7 +341,8 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     if let Some(exp_query) = &explosion_query_opt {
         for (ent_id, (explosion, transform)) in exp_query.iter() {
             if explosion.is_active {
-                active_explosions.push((Entity::new(ent_id, 0), explosion.clone(), transform.position));
+                // Apply offset to transform position
+                active_explosions.push((Entity::new(ent_id, 0), explosion.clone(), transform.position + explosion.offset));
             }
         }
     }
@@ -331,24 +353,46 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
 
     let mut shattered = std::collections::HashSet::new();
 
+    // Helper closure to calculate falloff intensity
+    let calculate_intensity = |dist: f32, radius: f32, falloff: ExplosionFalloff| -> f32 {
+        if dist >= radius {
+            return 0.0;
+        }
+        match falloff {
+            ExplosionFalloff::None => 1.0,
+            ExplosionFalloff::Linear => 1.0 - (dist / radius),
+            ExplosionFalloff::Quadratic => {
+                let ratio = 1.0 - (dist / radius);
+                ratio * ratio
+            }
+        }
+    };
+
     // Check for Breakables that should shatter
-    let breakable_query_opt = Query::<(&crate::components::Breakable, &Transform, &Collider, &Velocity)>::new(world);
+    let breakable_query_opt = Query::<(gizmo_core::query::Mut<crate::components::Breakable>, &Transform, &Collider, &Velocity)>::new(world);
     if let Some(breakable_query) = &breakable_query_opt {
         for (_exp_entity, explosion, exp_pos) in &active_explosions {
-            for (id, (breakable, transform, collider, vel)) in breakable_query.iter() {
+            for (id, (mut breakable, transform, collider, vel)) in breakable_query.iter() {
                 if breakable.is_broken || shattered.contains(&id) { continue; }
                 
                 let diff = transform.position - *exp_pos;
                 let dist_sq = diff.length_squared();
                 
-                if dist_sq < explosion.radius * explosion.radius && dist_sq > 0.001 {
+                if dist_sq < explosion.force_radius * explosion.force_radius && dist_sq > 0.001 {
                     let dist = dist_sq.sqrt();
-                    let intensity = 1.0 - (dist / explosion.radius);
+                    let intensity = calculate_intensity(dist, explosion.force_radius, explosion.falloff);
                     let impulse_mag = explosion.force * intensity;
                     
                     if impulse_mag > breakable.threshold {
-                        shattered.insert(id);
-                        shatter_entity(&mut commands, Entity::new(id, 0), breakable, transform, collider, vel);
+                        breakable.current_health -= explosion.damage * intensity;
+                        if breakable.current_health <= 0.0 {
+                            breakable.is_broken = true;
+                            shattered.insert(id);
+                            let dir = diff / dist;
+                            let mut exp_vel = vel.clone();
+                            exp_vel.linear += dir * impulse_mag * 0.1; // Estimate mass
+                            shatter_entity(&mut commands, Entity::new(id, 0), &breakable, transform, collider, &exp_vel, dir, transform.position);
+                        }
                     }
                 }
             }
@@ -365,12 +409,11 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
                 let diff = transform.position - *exp_pos;
                 let dist_sq = diff.length_squared();
                 
-                if dist_sq < explosion.radius * explosion.radius && dist_sq > 0.001 {
+                if dist_sq < explosion.force_radius * explosion.force_radius && dist_sq > 0.001 {
                     let dist = dist_sq.sqrt();
                     let dir = diff / dist;
                     
-                    // Force drops off linearly with distance
-                    let intensity = 1.0 - (dist / explosion.radius);
+                    let intensity = calculate_intensity(dist, explosion.force_radius, explosion.falloff);
                     let impulse_mag = explosion.force * intensity;
                     
                     // Apply instantaneous velocity change
@@ -391,11 +434,11 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
                     let diff = node.position - *exp_pos;
                     let dist_sq = diff.length_squared();
                     
-                    if dist_sq < explosion.radius * explosion.radius && dist_sq > 0.001 {
+                    if dist_sq < explosion.force_radius * explosion.force_radius && dist_sq > 0.001 {
                         let dist = dist_sq.sqrt();
                         let dir = diff / dist;
                         
-                        let intensity = 1.0 - (dist / explosion.radius);
+                        let intensity = calculate_intensity(dist, explosion.force_radius, explosion.falloff);
                         let impulse_mag = explosion.force * intensity;
                         
                         let inv_m = if node.mass > 0.0 { 1.0 / node.mass } else { 0.0 };
@@ -407,6 +450,7 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     }
     
     // Despawn the explosions so they don't trigger again
+    // Note: If game logic needs to read explosion damage, it must run BEFORE the physics_explosion_system in the schedule!
     for (exp_entity, _, _) in active_explosions {
         commands.entity(exp_entity).despawn();
     }

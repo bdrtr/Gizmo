@@ -92,18 +92,17 @@ impl Raycast {
     /// Test ray against sphere
     pub fn ray_sphere(ray: &Ray, center: Vec3, radius: f32) -> Option<(f32, Vec3)> {
         let oc = ray.origin - center;
-        let a = ray.direction.dot(ray.direction);
-        let b = 2.0 * oc.dot(ray.direction);
+        let b = oc.dot(ray.direction);
         let c = oc.dot(oc) - radius * radius;
-        let discriminant = b * b - 4.0 * a * c;
+        let discriminant = b * b - c;
 
         if discriminant < 0.0 {
             return None;
         }
 
         let sqrt_d = discriminant.sqrt();
-        let t1 = (-b - sqrt_d) / (2.0 * a);
-        let t2 = (-b + sqrt_d) / (2.0 * a);
+        let t1 = -b - sqrt_d;
+        let t2 = -b + sqrt_d;
 
         let t = if t1 > 0.0 {
             t1
@@ -141,24 +140,17 @@ impl Raycast {
 
             // Calculate normal in local space
             let mut normal = Vec3::ZERO;
-            let mut min_dist = f32::INFINITY;
 
-            // Check each face
+            let epsilon = 1e-4;
             for i in 0..3 {
-                let pos_dist = (half_extents[i] - local_hit[i]).abs();
-                let neg_dist = (half_extents[i] + local_hit[i]).abs();
-
-                if pos_dist < min_dist {
-                    min_dist = pos_dist;
-                    normal = Vec3::ZERO;
-                    normal[i] = 1.0;
+                if (local_hit[i] - half_extents[i]).abs() < epsilon { 
+                    normal[i] = 1.0; 
                 }
-                if neg_dist < min_dist {
-                    min_dist = neg_dist;
-                    normal = Vec3::ZERO;
-                    normal[i] = -1.0;
+                if (local_hit[i] + half_extents[i]).abs() < epsilon { 
+                    normal[i] = -1.0; 
                 }
             }
+            normal = normal.try_normalize().unwrap_or(Vec3::Y);
 
             // Transform normal back to world space
             let world_normal = rotation * normal;
@@ -198,21 +190,19 @@ impl Raycast {
         let k1 = baba * oc.dot(local_dir) - baoc * bard;
         let k0 = baba * oc.dot(oc) - baoc * baoc - radius * radius * baba;
 
-        let h = k1 * k1 - k2 * k0;
-        if h < 0.0 {
-            return None;
-        }
-
-        let t = (-k1 - h.sqrt()) / k2;
-
-        // Check if hit is within cylinder height
-        let y = baoc + t * bard;
-
-        if y > 0.0 && y < baba {
-            let hit_point = local_origin + local_dir * t;
-            let normal = (hit_point - (p1 + ba * (y / baba))).normalize();
-            let world_normal = rotation * normal;
-            return Some((t, world_normal));
+        if k2.abs() >= 1e-8 {
+            let h = k1 * k1 - k2 * k0;
+            if h >= 0.0 {
+                let t = (-k1 - h.sqrt()) / k2;
+                // Check if hit is within cylinder height
+                let y = baoc + t * bard;
+                if y > 0.0 && y < baba {
+                    let hit_point = local_origin + local_dir * t;
+                    let normal = (hit_point - (p1 + ba * (y / baba))).normalize();
+                    let world_normal = rotation * normal;
+                    return Some((t, world_normal));
+                }
+            }
         }
 
         // Check sphere caps
@@ -268,7 +258,8 @@ impl Raycast {
                 if denom.abs() > 1e-6 {
                     let t = (p.distance - ray.origin.dot(p.normal)) / denom;
                     if t >= 0.0 {
-                        Some((t, p.normal))
+                        let normal = if denom < 0.0 { p.normal } else { -p.normal };
+                        Some((t, normal))
                     } else {
                         None
                     }
@@ -320,6 +311,9 @@ impl Raycast {
                                 if t > 0.0 && t < best_t {
                                     best_t = t;
                                     best_normal = e1.cross(e2).normalize();
+                                    if best_normal.dot(local_dir) > 0.0 {
+                                        best_normal = -best_normal;
+                                    }
                                 }
                             }
                         } else {
@@ -349,6 +343,9 @@ impl Raycast {
                         if t > 0.0 && t < best_t {
                             best_t = t;
                             best_normal = e1.cross(e2).normalize();
+                            if best_normal.dot(local_dir) > 0.0 {
+                                best_normal = -best_normal;
+                            }
                         }
                     }
                 }
@@ -360,12 +357,18 @@ impl Raycast {
                 }
             }
             ColliderShape::ConvexHull(ch) => {
-                // Fallback to bounding sphere approximation for now
-                let mut max_sq = 0.0f32;
-                for v in &ch.vertices {
-                    max_sq = max_sq.max(v.length_squared());
+                let mut min = Vec3::splat(f32::MAX);
+                let mut max = Vec3::splat(f32::MIN);
+                for v in ch.vertices.iter() {
+                    min.x = min.x.min(v.x); min.y = min.y.min(v.y); min.z = min.z.min(v.z);
+                    max.x = max.x.max(v.x); max.y = max.y.max(v.y); max.z = max.z.max(v.z);
                 }
-                Self::ray_sphere(ray, transform.position, max_sq.sqrt())
+                let center = (min + max) * 0.5;
+                let half_extents = (max - min) * 0.5;
+                
+                // Adjust transform to local space of the original transform
+                let world_center = transform.position + transform.rotation * center;
+                Self::ray_box(ray, world_center, transform.rotation, half_extents)
             }
             ColliderShape::Compound(shapes) => {
                 let mut closest_dist = f32::MAX;
@@ -428,5 +431,54 @@ mod tests {
 
         let result = Raycast::ray_sphere(&ray, center, radius);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_ray_box() {
+        let ray = Ray::new(Vec3::new(0.0, 0.0, -5.0), Vec3::new(0.0, 0.0, 1.0));
+        let center = Vec3::ZERO;
+        let result = Raycast::ray_box(&ray, center, gizmo_math::Quat::IDENTITY, Vec3::splat(1.0));
+        assert!(result.is_some());
+        let (t, normal) = result.unwrap();
+        assert!((t - 4.0).abs() < 0.01);
+        assert!((normal.z - -1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_ray_capsule() {
+        let ray = Ray::new(Vec3::new(0.0, 0.0, -5.0), Vec3::new(0.0, 0.0, 1.0));
+        let center = Vec3::ZERO;
+        let result = Raycast::ray_capsule(&ray, center, gizmo_math::Quat::IDENTITY, 1.0, 1.0);
+        assert!(result.is_some());
+        let (t, normal) = result.unwrap();
+        assert!((t - 4.0).abs() < 0.01);
+        assert!((normal.z - -1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_ray_capsule_parallel() {
+        let ray = Ray::new(Vec3::new(0.0, 10.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
+        let center = Vec3::ZERO;
+        // The ray is parallel to the Y axis (the capsule's internal axis).
+        // It hits the top sphere cap. The height is half_height = 1.0. 
+        // The top sphere cap is centered at Y=1.0 with radius 1.0. Hit should be at Y=2.0.
+        let result = Raycast::ray_capsule(&ray, center, gizmo_math::Quat::IDENTITY, 1.0, 1.0);
+        assert!(result.is_some());
+        let (t, normal) = result.unwrap();
+        assert!((t - 8.0).abs() < 0.01); // 10.0 - 2.0 = 8.0
+        assert!((normal.y - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_ray_plane_backface() {
+        // Plane is at Z=0, pointing towards +Z.
+        let plane = crate::components::PlaneShape { normal: Vec3::Z, distance: 0.0 };
+        let shape = ColliderShape::Plane(plane);
+        
+        // Ray from -5 looking towards +Z
+        let ray = Ray::new(Vec3::new(0.0, 0.0, -5.0), Vec3::new(0.0, 0.0, 1.0));
+        let result = Raycast::ray_shape(&ray, &shape, &Transform::new(Vec3::ZERO));
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().1, -Vec3::Z); // Should be flipped since ray hits the backface
     }
 }

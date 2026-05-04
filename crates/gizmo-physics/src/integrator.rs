@@ -26,26 +26,27 @@ impl Integrator {
         rb: &mut RigidBody,
         vel: &mut Velocity,
         dt: f32,
-        gravity: Vec3,
     ) -> Result<(), crate::error::GizmoError> {
         if !rb.is_dynamic() || rb.is_sleeping {
             return Ok(());
         }
 
+        // NaN Check before any mathematical operations
+        if vel.linear.x.is_nan() || vel.linear.y.is_nan() || vel.linear.z.is_nan() ||
+           vel.angular.x.is_nan() || vel.angular.y.is_nan() || vel.angular.z.is_nan() ||
+           rb.linear_damping.is_nan() || rb.angular_damping.is_nan() {
+            return Err(crate::error::GizmoError::NaNVelocity(entity));
+        }
+
         // Apply gravity
         if rb.use_gravity {
-            vel.linear += gravity * dt;
+            vel.linear += self.gravity * dt;
         }
 
         let lin_decay = (-rb.linear_damping  * dt).exp();
         let ang_decay = (-rb.angular_damping * dt).exp();
         vel.linear  *= lin_decay;
         vel.angular *= ang_decay;
-
-        if vel.linear.x.is_nan() || vel.linear.y.is_nan() || vel.linear.z.is_nan() ||
-           vel.angular.x.is_nan() || vel.angular.y.is_nan() || vel.angular.z.is_nan() {
-            return Err(crate::error::GizmoError::NaNVelocity(entity));
-        }
         
         // Mathematical Sanity Check (Only runs in debug mode)
         debug_assert!(vel.linear.x.is_finite() && vel.linear.y.is_finite() && vel.linear.z.is_finite(), "Linear velocity hit infinity!");
@@ -57,7 +58,7 @@ impl Integrator {
         rb.enforce_locks(vel);
         
         if old_lin != vel.linear || old_ang != vel.angular {
-            tracing::debug!("2.5D (or axis lock) kısıtlaması uygulandı: Entity {:?}", entity);
+            tracing::trace!("2.5D (or axis lock) kısıtlaması uygulandı: Entity {:?}", entity);
         }
 
         // Update sleep state
@@ -85,16 +86,16 @@ impl Integrator {
         transform.position += masked_vel.linear * dt;
 
         if transform.position.x.is_nan() || transform.position.y.is_nan() || transform.position.z.is_nan() {
-            return Err(crate::error::GizmoError::NaNVelocity(entity));
+            return Err(crate::error::GizmoError::NaNPosition(entity));
         }
 
         // Update rotation using quaternion integration
         if masked_vel.angular.length_squared() > 1e-8 {
-            let angular_vel_quat = Quat::from_scaled_axis(masked_vel.angular * dt * 0.5);
+            let angular_vel_quat = Quat::from_scaled_axis(masked_vel.angular * dt);
             transform.rotation = (transform.rotation * angular_vel_quat).normalize();
             
             if transform.rotation.x.is_nan() || transform.rotation.y.is_nan() || transform.rotation.z.is_nan() || transform.rotation.w.is_nan() {
-                return Err(crate::error::GizmoError::NaNVelocity(entity));
+                return Err(crate::error::GizmoError::NaNPosition(entity));
             }
         }
 
@@ -116,7 +117,7 @@ impl Integrator {
         vel: &mut Velocity,
         dt: f32,
     ) -> Result<(), crate::error::GizmoError> {
-        self.integrate_velocities(entity, rb, vel, dt, self.gravity)?;
+        self.integrate_velocities(entity, rb, vel, dt)?;
         self.integrate_positions(entity, rb, transform, vel, dt)?;
         Ok(())
     }
@@ -198,11 +199,10 @@ mod tests {
         let mut vel = Velocity::default();
         let entity = gizmo_core::entity::Entity::new(0, 0);
 
-        integrator.integrate_velocities(entity, &mut rb, &mut vel, 1.0, integrator.gravity).unwrap();
+        integrator.integrate_velocities(entity, &mut rb, &mut vel, 1.0).unwrap();
 
-        // After 1 second, velocity should be approximately gravity
-        // Note: damping will reduce it slightly
-        let expected_vel = integrator.gravity.y * (1.0 - rb.linear_damping);
+        // After 1 second, velocity should be approximately gravity * exp(-damping * dt)
+        let expected_vel = integrator.gravity.y * (-rb.linear_damping * 1.0_f32).exp();
         assert!((vel.linear.y - expected_vel).abs() < 0.1);
     }
 
@@ -230,7 +230,7 @@ mod tests {
         let mut vel = Velocity::new(Vec3::new(10.0, 0.0, 0.0));
         let entity = gizmo_core::entity::Entity::new(0, 0);
 
-        integrator.integrate_velocities(entity, &mut rb, &mut vel, 1.0, integrator.gravity).unwrap();
+        integrator.integrate_velocities(entity, &mut rb, &mut vel, 1.0).unwrap();
 
         // Velocity should be reduced by damping
         assert!(vel.linear.x < 10.0);
@@ -266,7 +266,7 @@ mod tests {
         let entity = gizmo_core::entity::Entity::new(0, 0);
 
         // Run velocity integration
-        integrator.integrate_velocities(entity, &mut rb, &mut vel, 1.0, Vec3::ZERO).unwrap();
+        integrator.integrate_velocities(entity, &mut rb, &mut vel, 1.0).unwrap();
 
         // Linear X and Y should remain (slightly damped), Z should be aggressively set to 0.0
         assert!(vel.linear.x > 0.0);

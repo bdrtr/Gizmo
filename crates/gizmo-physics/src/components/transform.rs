@@ -1,17 +1,34 @@
 use gizmo_math::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
-fn default_mat4() -> Mat4 {
-    Mat4::IDENTITY
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TransformData {
+    pub position: Vec3,
+    pub rotation: Quat,
+    pub scale: Vec3,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(from = "TransformData")]
 pub struct Transform {
     pub position: Vec3,
     pub rotation: Quat,
     pub scale: Vec3,
-    #[serde(skip, default = "default_mat4")]
+    #[serde(skip)]
     pub local_matrix: Mat4,
+}
+
+impl From<TransformData> for Transform {
+    fn from(data: TransformData) -> Self {
+        let mut t = Self {
+            position: data.position,
+            rotation: data.rotation,
+            scale: data.scale,
+            local_matrix: Mat4::IDENTITY,
+        };
+        t.update_local_matrix();
+        t
+    }
 }
 
 impl Default for Transform {
@@ -30,6 +47,12 @@ impl Transform {
         };
         t.update_local_matrix();
         t
+    }
+
+    pub fn with_position(mut self, position: Vec3) -> Self {
+        self.position = position;
+        self.update_local_matrix();
+        self
     }
 
     pub fn with_scale(mut self, scale: Vec3) -> Self {
@@ -64,10 +87,12 @@ impl Transform {
             Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position);
     }
 
-    pub fn model_matrix(&self) -> Mat4 {
-        self.local_matrix
+    pub fn world_matrix(&self, parent: Option<&Transform>) -> Mat4 {
+        match parent {
+            Some(p) => p.world_matrix(None) * self.local_matrix,
+            None => self.local_matrix,
+        }
     }
 }
-
 
 gizmo_core::impl_component!(Transform);

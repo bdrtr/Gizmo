@@ -119,7 +119,7 @@ impl NarrowPhase {
             }).max_by(|a, b| a.penetration.total_cmp(&b.penetration));
         }
 
-        match (shape_a, shape_b) {
+        let contact = match (shape_a, shape_b) {
             (ColliderShape::Sphere(sa), ColliderShape::Sphere(sb)) =>
                 Self::sphere_sphere(pos_a, sa.radius, pos_b, sb.radius),
 
@@ -147,7 +147,15 @@ impl NarrowPhase {
                     .max_by(|a, b| a.penetration.total_cmp(&b.penetration)),
 
             _ => Gjk::get_contact(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b),
+        };
+
+        // Initialize local_point_a and local_point_b for warm starting
+        if let Some(mut c) = contact {
+            c.local_point_a = c.point - pos_a;
+            c.local_point_b = c.point - pos_b;
+            return Some(c);
         }
+        None
     }
 
     /// Tüm temas noktalarını üret (manifold için) — Box-Box/Box-Plane'de 4 nokta
@@ -170,9 +178,18 @@ impl NarrowPhase {
             }).collect();
         }
 
-        match (shape_a, shape_b) {
+        let mut contacts = match (shape_a, shape_b) {
             (ColliderShape::Sphere(sa), ColliderShape::Sphere(sb)) =>
                 Self::sphere_sphere(pos_a, sa.radius, pos_b, sb.radius).into_iter().collect(),
+
+            (ColliderShape::Sphere(s), ColliderShape::Plane(p)) =>
+                Self::sphere_plane(pos_a, s.radius, p.normal, p.distance)
+                    .map(|mut c| { c.normal = -c.normal; c })
+                    .into_iter().collect(),
+
+            (ColliderShape::Plane(p), ColliderShape::Sphere(s)) =>
+                Self::sphere_plane(pos_b, s.radius, p.normal, p.distance)
+                    .into_iter().collect(),
 
             (ColliderShape::Box(b), ColliderShape::Plane(p)) => {
                 let mut contacts = Self::box_plane(pos_a, rot_a, b.half_extents, p.normal, p.distance);
@@ -188,7 +205,15 @@ impl NarrowPhase {
 
             _ => Self::test_collision(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b)
                     .into_iter().collect(),
+        };
+
+        // Initialize local points for warm starting
+        for c in &mut contacts {
+            c.local_point_a = c.point - pos_a;
+            c.local_point_b = c.point - pos_b;
         }
+
+        contacts
     }
 }
 
@@ -229,24 +254,23 @@ fn box_corners(pos: Vec3, rot: Quat, h: Vec3) -> [Vec3; 8] {
     signs.map(|s| pos + rot.mul_vec3(Vec3::new(s.x * h.x, s.y * h.y, s.z * h.z)))
 }
 
-/// Sutherland-Hodgman 3D clip: `poly` noktalarını `plane_n · x = plane_d` düzlemine göre kırp
-#[allow(dead_code)]
-fn clip_poly_by_plane(poly: &[Vec3], plane_n: Vec3, plane_d: f32) -> Vec<Vec3> {
-    if poly.is_empty() { return vec![]; }
-    let mut out = Vec::with_capacity(poly.len() + 1);
-    let n = poly.len();
-    for i in 0..n {
-        let cur  = poly[i];
-        let next = poly[(i + 1) % n];
-        let dc = cur.dot(plane_n)  - plane_d;
-        let dn = next.dot(plane_n) - plane_d;
-        if dc >= 0.0 { out.push(cur); }
-        if (dc >= 0.0) != (dn >= 0.0) {
-            let t = dc / (dc - dn);
-            out.push(cur + (next - cur) * t);
+fn select_4_contacts(mut contacts: Vec<ContactPoint>) -> Vec<ContactPoint> {
+    if contacts.len() <= 4 { return contacts; }
+    contacts.sort_unstable_by(|a, b| b.penetration.total_cmp(&a.penetration));
+    let mut result = vec![contacts.remove(0)]; // en derin
+    for _ in 0..3 {
+        if let Some((idx, _)) = contacts.iter().enumerate()
+            .max_by(|(_, a), (_, b)| {
+                let da = result.iter().map(|r| (r.point - a.point).length_squared())
+                    .fold(f32::INFINITY, f32::min);
+                let db = result.iter().map(|r| (r.point - b.point).length_squared())
+                    .fold(f32::INFINITY, f32::min);
+                da.partial_cmp(&db).unwrap()
+            }) {
+            result.push(contacts.remove(idx));
         }
     }
-    out
+    result
 }
 
 /// Referans kutu yüzüne karşı incident kutunun tüm 8 köşesini test eder.
@@ -279,7 +303,7 @@ fn clip_box_box(
     // Incident kutunun tüm 8 köşesi
     let corners = box_corners(inc_pos, inc_rot, inc_h);
 
-    let mut contacts: Vec<ContactPoint> = corners.iter().filter_map(|&p| {
+    let contacts: Vec<ContactPoint> = corners.iter().filter_map(|&p| {
         // 1. Köşe referans yüzünün gerisinde mi? (penetrasyon var mı?)
         let signed_dist = p.dot(face_n_dir) - ref_face_d;
         if signed_dist > 0.0 { return None; }  // yüzün önünde
@@ -299,10 +323,8 @@ fn clip_box_box(
         Some(mk_contact(contact_pt, normal, depth))
     }).collect();
 
-    // En derin 4 noktayı seç (solver için optimal)
-    contacts.sort_unstable_by(|a, b| b.penetration.total_cmp(&a.penetration));
-    contacts.truncate(4);
-    contacts
+    // En derin 4 noktayı maximum coverage ile seç (solver stabilizasyonu için)
+    select_4_contacts(contacts)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -328,7 +350,6 @@ fn mk_contact(point: Vec3, normal: Vec3, penetration: f32) -> ContactPoint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gizmo_core::entity::Entity;
 
     #[test]
     fn test_sphere_sphere_hit() {
