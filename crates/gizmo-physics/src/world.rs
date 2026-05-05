@@ -51,8 +51,8 @@ pub struct FluidZone {
     pub quadratic_drag: f32, // fallback quadratic drag
 }
 
-/// Sabit iç fizik frekansı (Hz)
-const PHYSICS_HZ: f32 = 120.0;
+/// Sabit iç fizik frekansı (Hz) - 240Hz (Sub-stepping ile mükemmel çarpışma tespiti)
+const PHYSICS_HZ: f32 = 240.0;
 const FIXED_DT:   f32 = 1.0 / PHYSICS_HZ;
 /// Sub-step başına maksimum adım sayısı — spiral'i önler
 const MAX_SUBSTEPS: u32 = 8;
@@ -543,10 +543,7 @@ impl PhysicsWorld {
                             &collider_b.shape, transform_b.position, transform_b.rotation, vel_b.linear,
                             dt
                         ) {
-                            println!("Found speculative contact! Penetration: {}, Normal: {:?}", speculative_contact.penetration, speculative_contact.normal);
                             contacts.push(speculative_contact);
-                        } else {
-                            println!("Speculative contact returned None");
                         }
                     }
                 }
@@ -632,20 +629,27 @@ impl PhysicsWorld {
                     event_type,
                 });
             } else {
-                // Get old manifold to preserve impulses for warm starting
-                let mut manifold = if let Some(Some((_, Some(old_manifold)))) = self.contact_cache.get(&pair).map(|o| Some(o)) {
-                    let mut m = old_manifold.clone();
-                    m.contacts.clear(); // Clear points, but we will preserve impulses inside add_contact
-                    m
-                } else {
-                    ContactManifold::new(entity_a, entity_b)
-                };
-
+                let mut manifold = ContactManifold::new(entity_a, entity_b);
                 manifold.friction        = (mat_a.dynamic_friction * mat_b.dynamic_friction).sqrt();
                 manifold.static_friction = (mat_a.static_friction  * mat_b.static_friction).sqrt();
                 manifold.restitution     = mat_a.restitution.max(mat_b.restitution);
 
-                for contact in &contacts { manifold.add_contact(*contact); }
+                if let Some(Some((_, Some(old_manifold)))) = self.contact_cache.get(&pair).map(|o| Some(o)) {
+                    manifold.lifetime = old_manifold.lifetime + 1;
+                    for mut contact in contacts.iter().copied() {
+                        for old in &old_manifold.contacts {
+                            if (old.point - contact.point).length_squared() < 0.02 * 0.02 {
+                                contact.normal_impulse = old.normal_impulse;
+                                contact.tangent_impulse = old.tangent_impulse;
+                                break;
+                            }
+                        }
+                        manifold.contacts.push(contact);
+                    }
+                } else {
+                    for contact in contacts.iter().copied() { manifold.contacts.push(contact); }
+                }
+
                 current_contacts.insert(pair, (false, Some(manifold.clone())));
                 manifolds.push(manifold);
 
@@ -666,6 +670,19 @@ impl PhysicsWorld {
         // Detect ended collisions
         for (pair, (is_trigger, _)) in self.contact_cache.iter() {
             if !current_contacts.contains_key(pair) {
+                // Herhangi bir temas bittiğinde, destek (support) kaybolmuş olabilir.
+                // Uçan/havada kalan kutular olmaması için her iki nesneyi de ZORLA uyandır.
+                if let Some(&idx_a) = entity_map.get(&pair.0.id()) {
+                    if self.rigid_bodies[idx_a].is_dynamic() {
+                        self.rigid_bodies[idx_a].wake_up();
+                    }
+                }
+                if let Some(&idx_b) = entity_map.get(&pair.1.id()) {
+                    if self.rigid_bodies[idx_b].is_dynamic() {
+                        self.rigid_bodies[idx_b].wake_up();
+                    }
+                }
+
                 if *is_trigger {
                     self.trigger_events.push(TriggerEvent {
                         trigger_entity: pair.0,

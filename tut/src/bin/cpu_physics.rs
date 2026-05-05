@@ -85,13 +85,15 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         quadratic_drag: 1.0,
     });
 
+    phys_world.enable_gpu_compute();
+
     // Menteşeli Kapı veya Sarkaç (Pendulum)
     let ceiling = world.spawn();
     world.add_component(ceiling, Transform::new(Vec3::new(0.0, 15.0, -10.0)).with_scale(Vec3::new(2.0, 0.5, 2.0)));
     world.add_component(ceiling, cube_mesh.clone());
     world.add_component(ceiling, Material::new(box_tex.clone()).with_pbr(Vec4::splat(1.0), 0.5, 0.0));
     world.add_component(ceiling, MeshRenderer::new());
-    world.add_component(ceiling, Collider::box_collider(Vec3::new(1.0, 0.25, 1.0)));
+    world.add_component(ceiling, Collider::box_collider(Vec3::new(2.0, 0.5, 2.0)));
     world.add_component(ceiling, RigidBody::new_static());
     world.add_component(ceiling, Velocity::default());
 
@@ -101,7 +103,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     world.add_component(pendulum, cube_mesh.clone());
     world.add_component(pendulum, Material::new(box_tex.clone()).with_pbr(Vec4::new(1.0, 0.0, 0.0, 1.0), 0.5, 0.5));
     world.add_component(pendulum, MeshRenderer::new());
-    world.add_component(pendulum, Collider::box_collider(Vec3::new(0.5, 2.5, 0.5)));
+    world.add_component(pendulum, Collider::box_collider(Vec3::new(1.0, 5.0, 1.0)));
     world.add_component(pendulum, RigidBody::new(10.0, 0.2, 0.5, true));
     world.add_component(pendulum, Velocity::default());
 
@@ -127,7 +129,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     world.add_component(prev_ent, cube_mesh.clone());
     world.add_component(prev_ent, Material::new(box_tex.clone()).with_pbr(Vec4::splat(1.0), 0.5, 0.0));
     world.add_component(prev_ent, MeshRenderer::new());
-    world.add_component(prev_ent, Collider::box_collider(Vec3::new(0.5, 0.5, 0.5)));
+    world.add_component(prev_ent, Collider::box_collider(Vec3::new(1.0, 1.0, 1.0)));
     world.add_component(prev_ent, RigidBody::new_static());
     world.add_component(prev_ent, Velocity::default());
 
@@ -136,11 +138,11 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         // Dümdüz aşağı sırala, kopmasınlar
         let link_pos = chain_start - Vec3::new(0.0, i as f32 * 1.0, 0.0);
         let link_ent = world.spawn();
-        world.add_component(link_ent, Transform::new(link_pos).with_scale(Vec3::new(0.5, 1.0, 0.5)));
+        world.add_component(link_ent, Transform::new(link_pos).with_scale(Vec3::new(1.0, 1.0, 1.0)));
         world.add_component(link_ent, cube_mesh.clone());
         world.add_component(link_ent, Material::new(box_tex.clone()).with_pbr(Vec4::new(0.0, 1.0, 0.0, 1.0), 0.5, 0.5));
         world.add_component(link_ent, MeshRenderer::new());
-        world.add_component(link_ent, Collider::box_collider(Vec3::new(0.25, 0.5, 0.25)));
+        world.add_component(link_ent, Collider::box_collider(Vec3::new(1.0, 1.0, 1.0)));
         world.add_component(link_ent, RigidBody::new(2.0, 0.1, 0.5, true));
         world.add_component(link_ent, Velocity::default());
 
@@ -204,14 +206,71 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         world.add_component(box_ent, cube_mesh.clone());
         world.add_component(box_ent, Material::new(box_tex.clone()).with_pbr(Vec4::splat(1.0), 0.5, 0.0));
         world.add_component(box_ent, MeshRenderer::new());
-        world.add_component(box_ent, Collider::box_collider(Vec3::new(0.5, 0.5, 0.5)));
+        world.add_component(box_ent, Collider::box_collider(Vec3::new(1.0, 1.0, 1.0)));
         // Yoğunluk suya göre ayarlandı, mass = 500.0 (ahşap yoğunluğu) ile suda gerçekçi yüzecek
         world.add_component(box_ent, RigidBody::new(500.0, 0.3, 0.8, true));
         world.add_component(box_ent, Velocity::default());
     }
 
+    // --- GPU SOFT BODY (JELLO) ---
+    let jello_ent = world.spawn();
+    world.add_component(jello_ent, Transform::new(Vec3::new(0.0, 15.0, 0.0)));
+    world.add_component(jello_ent, gizmo::core::EntityName("Jello Cube".into()));
+    
+    // Create a 3x3x3 Soft Body Grid
+    let mut soft_body = gizmo::physics::soft_body::SoftBodyMesh::new(1000.0, 0.3); // Prevent v=0.5 singularity
+    soft_body.damping = 5.0; // Higher damping for stability
+    let grid_size = 3;
+    let spacing = 0.8;
+    let offset = (grid_size as f32 - 1.0) * spacing / 2.0;
+
+    // Add Nodes
+    for x in 0..grid_size {
+        for y in 0..grid_size {
+            for z in 0..grid_size {
+                let pos = Vec3::new(
+                    x as f32 * spacing - offset,
+                    y as f32 * spacing - offset + 15.0, // Start high
+                    z as f32 * spacing - offset,
+                );
+                soft_body.add_node(pos, 2.0); // 2kg per node
+            }
+        }
+    }
+
+    // Function to get 1D index
+    let idx = |x, y, z| -> u32 {
+        (x * grid_size * grid_size + y * grid_size + z) as u32
+    };
+
+    // Add Tetrahedrons (Elements) - Connect adjacent nodes to form voxels
+    for x in 0..grid_size - 1 {
+        for y in 0..grid_size - 1 {
+            for z in 0..grid_size - 1 {
+                let i0 = idx(x, y, z);
+                let i1 = idx(x + 1, y, z);
+                let i2 = idx(x, y + 1, z);
+                let i3 = idx(x, y, z + 1);
+                let i4 = idx(x + 1, y + 1, z);
+                let i5 = idx(x + 1, y, z + 1);
+                let i6 = idx(x, y + 1, z + 1);
+                let i7 = idx(x + 1, y + 1, z + 1);
+
+                // Split voxel into 5 tetrahedrons
+                soft_body.add_element(i0, i1, i2, i3);
+                soft_body.add_element(i1, i4, i2, i7);
+                soft_body.add_element(i1, i3, i5, i7);
+                soft_body.add_element(i2, i3, i6, i7);
+                soft_body.add_element(i1, i2, i3, i7);
+            }
+        }
+    }
+    
+    world.add_component(jello_ent, soft_body);
+
     world.insert_resource(phys_world);
     world.insert_resource(asset_manager);
+    world.insert_resource(gizmo::renderer::Gizmos::default());
 
     DemoState {
         camera_speed: 15.0,
@@ -300,7 +359,9 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
 
     // CPU Physics Adımı (Gizmo ECS entegrasyonu)
     gizmo::systems::cpu_physics_step_system(world, dt);
-
+    
+    // Debug draw
+    gizmo::systems::physics_debug_system(world);
 }
 
 fn render(

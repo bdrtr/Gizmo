@@ -535,7 +535,7 @@ fn test_ccd_fast_bullet_vs_thin_wall() {
     
     // If CCD works, the bullet should have generated a speculative contact and stopped (or bounced)
     assert!(final_vel.x < 1000.0, "Bullet tunneled through the wall without losing speed!");
-    assert!(world.transforms[1].position.x < 10.5, "Bullet moved through the wall! Pos: {}", world.transforms[1].position.x);
+    assert!(world.transforms[1].position.x < 10.5, "Bullet moved through the wall!");
 }
 
 #[test]

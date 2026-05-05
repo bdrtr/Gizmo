@@ -141,6 +141,17 @@ impl Collider {
         }
     }
 
+    pub fn convex_hull(points: &[Vec3]) -> Self {
+        let hull = crate::quickhull::compute_convex_hull(points);
+        Self {
+            shape: ColliderShape::ConvexHull(ConvexHullShape {
+                vertices: std::sync::Arc::new(hull.vertices),
+                faces: std::sync::Arc::new(hull.faces),
+            }),
+            ..Default::default()
+        }
+    }
+
     pub fn with_trigger(mut self, is_trigger: bool) -> Self {
         self.is_trigger = is_trigger;
         self
@@ -277,17 +288,20 @@ impl From<TriMeshShape> for TriMeshShapeData {
 #[serde(into = "ConvexHullShapeData", from = "ConvexHullShapeData")]
 pub struct ConvexHullShape {
     pub vertices: std::sync::Arc<Vec<Vec3>>,
+    pub faces: std::sync::Arc<Vec<[u32; 3]>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct ConvexHullShapeData {
-    vertices: Vec<Vec3>,
+    points: Vec<Vec3>, // These are raw points, we rebuild the hull on load
 }
 
 impl From<ConvexHullShapeData> for ConvexHullShape {
     fn from(data: ConvexHullShapeData) -> Self {
+        let hull = crate::quickhull::compute_convex_hull(&data.points);
         Self {
-            vertices: std::sync::Arc::new(data.vertices),
+            vertices: std::sync::Arc::new(hull.vertices),
+            faces: std::sync::Arc::new(hull.faces),
         }
     }
 }
@@ -295,7 +309,7 @@ impl From<ConvexHullShapeData> for ConvexHullShape {
 impl From<ConvexHullShape> for ConvexHullShapeData {
     fn from(shape: ConvexHullShape) -> Self {
         Self {
-            vertices: (*shape.vertices).clone(),
+            points: (*shape.vertices).clone(),
         }
     }
 }

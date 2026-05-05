@@ -176,12 +176,13 @@ pub fn physics_step_system(world: &World, dt: f32) {
         if let Some(soft_query) = Query::<(Mut<SoftBodyMesh>, Mut<Transform>)>::new(world) {
             for (entity, soft_mesh, transform) in soft_bodies {
                 if let Some((mut sm, mut t)) = soft_query.get(entity.id()) {
-                    *sm = soft_mesh;
+                    sm.nodes.clone_from(&soft_mesh.nodes);
                     *t = transform;
                 }
             }
         }
     }
+
     // 7. Dispatch Events
     if let Ok(mut trigger_queue) = world.try_get_resource_mut::<gizmo_core::event::Events<crate::collision::TriggerEvent>>() {
         for event in &physics_world.trigger_events {

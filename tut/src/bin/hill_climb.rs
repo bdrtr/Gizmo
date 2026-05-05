@@ -193,6 +193,41 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
 
     // --- CAR (Using Raycast Vehicle Controller for Ultimate Stability) ---
     let car_start_pos = Vec3::new(-10.0, 3.0, 0.0);
+    
+    // --- PROCEDURAL CONVEX HULL ROCKS ---
+    use rand::{Rng, SeedableRng};
+    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+    for i in 1..=20 {
+        // Generate random points for the rock
+        let mut points = Vec::new();
+        let num_points = rng.gen_range(8..20);
+        let rock_radius = rng.gen_range(0.5..1.5);
+        for _ in 0..num_points {
+            points.push(Vec3::new(
+                rng.gen_range(-rock_radius..rock_radius),
+                rng.gen_range(-rock_radius..rock_radius),
+                rng.gen_range(-rock_radius..rock_radius),
+            ));
+        }
+
+        // Generate position along the hill path
+        let x = car_start_pos.x + 20.0 + (i as f32) * 40.0;
+        let local_x = x * 0.25;
+        let mut y = (local_x * 0.05).sin() * 5.0 
+          + (local_x * 0.1).sin() * 2.0 
+          + (local_x * 0.02).sin() * 15.0;
+        
+        y += rock_radius * 1.5; // Place above ground
+
+        let rock = world.spawn();
+        world.add_component(rock, Transform::new(Vec3::new(x, y, 0.0)));
+        // Not adding mesh because gizmo_physics debug lines will draw the convex hull!
+        // We will just let physics debug rendering draw it in pink!
+        world.add_component(rock, Collider::convex_hull(&points));
+        world.add_component(rock, RigidBody::new(100.0, 0.3, 0.8, true));
+        world.add_component(rock, Velocity::default());
+    }
+
     let car_w = 1.8;
     let car_h = 1.2;
     let car_l = 4.0;
@@ -302,7 +337,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         },
         pending_particles: std::cell::RefCell::new(Vec::new()),
         show_car: true,
-        show_physics_debug: false,
+        show_physics_debug: true,
     }
 }
 
@@ -570,6 +605,51 @@ fn ui_debug_panel(world: &mut World, state: &mut DemoState, ctx: &gizmo::egui::C
             ui.add(gizmo::egui::Slider::new(&mut state.post_process.dof_focus_dist, 0.0..=100.0).text("Odak Uzaklığı"));
             ui.add(gizmo::egui::Slider::new(&mut state.post_process.dof_focus_range, 0.0..=50.0).text("Odak Derinliği"));
             ui.add(gizmo::egui::Slider::new(&mut state.post_process.dof_blur_size, 0.0..=5.0).text("Bulanıklık Miktarı"));
+        });
+
+    gizmo::egui::Window::new("Araç Dinamikleri (Vehicle Tuning)")
+        .default_pos([10.0, 450.0])
+        .show(ctx, |ui| {
+            let mut vehicles = world.borrow_mut::<gizmo::physics::vehicle::VehicleController>();
+            if let Some(vehicle) = vehicles.get_mut(state.car_entity.id()) {
+                ui.heading("Motor & Şanzıman");
+                    ui.add(gizmo::egui::Slider::new(&mut vehicle.tuning.max_engine_torque, 1000.0..=100000.0).text("Max Motor Torku"));
+                    ui.add(gizmo::egui::Slider::new(&mut vehicle.tuning.max_rpm, 1000.0..=12000.0).text("Max RPM"));
+                    
+                    ui.separator();
+                    ui.heading("Süspansiyon");
+                    // Update all wheels
+                    let mut stiffness = vehicle.wheels[0].suspension_stiffness;
+                    let mut damping = vehicle.wheels[0].suspension_damping;
+                    let mut rest_length = vehicle.wheels[0].suspension_rest_length;
+                    
+                    if ui.add(gizmo::egui::Slider::new(&mut stiffness, 10000.0..=100000.0).text("Yay Sertliği (Stiffness)")).changed() {
+                        for w in vehicle.wheels.iter_mut() { w.suspension_stiffness = stiffness; }
+                    }
+                    if ui.add(gizmo::egui::Slider::new(&mut damping, 1000.0..=20000.0).text("Amortisör (Damping)")).changed() {
+                        for w in vehicle.wheels.iter_mut() { w.suspension_damping = damping; }
+                    }
+                    if ui.add(gizmo::egui::Slider::new(&mut rest_length, 0.2..=2.0).text("Yerden Yükseklik (Rest Len)")).changed() {
+                        for w in vehicle.wheels.iter_mut() { w.suspension_rest_length = rest_length; }
+                    }
+                }
+
+            ui.separator();
+            ui.heading("Şasi & Ağırlık");
+            let mut com_y = 0.0;
+            let mut mass = 1500.0;
+            let mut bodies = world.borrow_mut::<gizmo::physics::RigidBody>();
+            if let Some(rb) = bodies.get_mut(state.car_entity.id()) {
+                com_y = rb.center_of_mass.y;
+                    mass = rb.mass;
+                    
+                    if ui.add(gizmo::egui::Slider::new(&mut com_y, -2.0..=1.0).text("Ağırlık Merkezi (Y)")).changed() {
+                        rb.center_of_mass.y = com_y;
+                    }
+                    if ui.add(gizmo::egui::Slider::new(&mut mass, 500.0..=5000.0).text("Araç Kütlesi (KG)")).changed() {
+                        rb.mass = mass;
+                    }
+                }
         });
 }
 

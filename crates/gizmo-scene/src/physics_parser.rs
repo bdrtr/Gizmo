@@ -11,9 +11,7 @@ pub fn create_collider_from_mesh(mesh: &Mesh, use_convex_hull: bool) -> Collider
     if use_convex_hull {
         // İleride QuickHull algoritması ile gerçek bir Convex Hull oluşturulabilir.
         // Şimdilik sadece vertex dizisini aktarıyoruz (gizmo-physics NarrowPhase stub olarak SAT implementasyonunu bekler)
-        ColliderShape::ConvexHull(ConvexHullShape {
-            vertices,
-        })
+        gizmo_physics::components::Collider::convex_hull(&vertices).shape
     } else {
         // TriMesh (Tüm vertex ve indexler)
         let mut indices = Vec::with_capacity(vertices.len());
@@ -24,9 +22,9 @@ pub fn create_collider_from_mesh(mesh: &Mesh, use_convex_hull: bool) -> Collider
         let bvh = gizmo_physics::bvh::BvhTree::build(&vertices, &mut indices).unwrap_or_default();
         
         ColliderShape::TriMesh(TriMeshShape {
-            vertices,
-            indices,
-            bvh,
+            vertices: std::sync::Arc::new(vertices),
+            indices: std::sync::Arc::new(indices),
+            bvh: std::sync::Arc::new(bvh),
         })
     }
 }

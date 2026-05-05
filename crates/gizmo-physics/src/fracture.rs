@@ -304,9 +304,11 @@ pub fn generate_fracture_chunks(
         }
 
         // Create convex hull collider
+        let hull = crate::quickhull::compute_convex_hull(&chunk.vertices);
         let collider = crate::components::Collider {
             shape: crate::components::ColliderShape::ConvexHull(crate::components::ConvexHullShape {
-                vertices: std::sync::Arc::new(chunk.vertices.clone()),
+                vertices: std::sync::Arc::new(hull.vertices),
+                faces: std::sync::Arc::new(hull.faces),
             }),
             is_trigger: false,
             material: crate::components::PhysicsMaterial::default(),
@@ -404,9 +406,11 @@ impl PreFracturedCache {
                 ) * (force / mass) * 0.5;
             }
 
+            let hull = crate::quickhull::compute_convex_hull(&chunk.vertices);
             let collider = crate::components::Collider {
                 shape: crate::components::ColliderShape::ConvexHull(crate::components::ConvexHullShape {
-                    vertices: std::sync::Arc::new(chunk.vertices.clone()),
+                    vertices: std::sync::Arc::new(hull.vertices),
+                    faces: std::sync::Arc::new(hull.faces),
                 }),
                 is_trigger: false,
                 material: crate::components::PhysicsMaterial::default(),
