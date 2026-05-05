@@ -151,7 +151,7 @@ impl GizmoRendererSystem {
         desc.depth_stencil = Some(wgpu::DepthStencilState {
             format: depth_format,
             depth_write_enabled: false,
-            depth_compare: wgpu::CompareFunction::Always,
+            depth_compare: wgpu::CompareFunction::LessEqual,
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         });

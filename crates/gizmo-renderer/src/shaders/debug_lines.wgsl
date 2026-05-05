@@ -38,6 +38,9 @@ struct VertexOutput {
 fn vs_main(model: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.clip_position = global.view_proj * vec4<f32>(model.position, 1.0);
+    // Pull the depth closer to the camera to avoid Z-fighting and render over meshes
+    // without relying on CompareFunction::Always which crashes some GPU drivers.
+    out.clip_position.z -= 0.005 * out.clip_position.w;
     out.color = model.color;
     return out;
 }
