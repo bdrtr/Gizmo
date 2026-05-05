@@ -11,6 +11,7 @@ struct DemoState {
     post_process: gizmo::renderer::gpu_types::PostProcessUniforms,
     pending_particles: std::cell::RefCell<Vec<gizmo::renderer::gpu_particles::GpuParticle>>,
     show_car: bool,
+    show_physics_debug: bool,
 }
 
 fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
@@ -133,12 +134,12 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
             
             let col = Collider::box_collider(Vec3::splat(box_size * 0.5));
             let mut rb = RigidBody::new(30.0, 0.0, 0.8, true); // 30kg, 0 bounce, high friction
-            rb.linear_damping = 1.5; // High air resistance so they don't fly to infinity
-            rb.angular_damping = 1.5;
+            rb.linear_damping = 2.0; // High air resistance so they don't fly to infinity
+            rb.angular_damping = 2.0;
             rb.update_inertia_from_collider(&col);
-            rb.ccd_enabled = false; // Disable CCD on boxes to prevent constraint explosion when squished
+            rb.ccd_enabled = false; // 240Hz'de tünelleme olmaz, CCD hatasını önlemek için kapattık
             
-            // 2.5D Constraints: Lock Z translation and X/Y rotations to keep them strictly on the 2D plane
+            // 2.5D Constraints: Z ekseninde hareketi kısıtla
             rb.lock_translation_z = true; 
             rb.lock_rotation_x = true;
             rb.lock_rotation_y = true;
@@ -209,12 +210,18 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     let car_col = Collider::box_collider(car_half_extents);
     let mut chassis_rb = RigidBody::new(1500.0, 0.1, 0.5, true);
     chassis_rb.update_inertia_from_collider(&car_col);
-    chassis_rb.ccd_enabled = true; // Prevent high speed tunneling
+    chassis_rb.center_of_mass = Vec3::new(0.0, -0.4, 0.0); // Ağırlık merkezini yere yaklaştır (ters takla atmasın)
+    chassis_rb.ccd_enabled = false; 
     
     // 2.5D CONSTRAINTS
+    // Fizik motorundaki kilitler (locks) DÜNYA (WORLD) eksenlerine uygulanır!
+    // World X = Devrilme (Roll) -> KİLİTLE
+    // World Y = Sağa/Sola dönme (Yaw) -> KİLİTLE
+    // World Z = Burnu kaldırıp/indirme (Pitch) -> İZİN VER! (False)
     chassis_rb.lock_translation_z = true;
-    chassis_rb.lock_rotation_x = true;
+    chassis_rb.lock_rotation_x = true; 
     chassis_rb.lock_rotation_y = true;
+    chassis_rb.lock_rotation_z = false;
     
     world.add_component(chassis, car_col);
     world.add_component(chassis, chassis_rb);
@@ -244,10 +251,10 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     // Vehicle Controller Setup
     let mut vehicle = gizmo::physics::vehicle::VehicleController::new();
     
-    // Decrease max rpm so it feels like a truck/jeep
-    vehicle.tuning.max_rpm = 4000.0;
-    vehicle.tuning.max_engine_torque = 15000.0; 
-    vehicle.tuning.gear_ratios = vec![-3.0, 0.0, 4.0, 2.5, 1.8]; // Low gear ratios for climbing
+    // Canavar kamyon torku (ters takla atmaması için biraz dengelendi)
+    vehicle.tuning.max_rpm = 6000.0;
+    vehicle.tuning.max_engine_torque = 45000.0; 
+    vehicle.tuning.gear_ratios = vec![-4.0, 0.0, 4.0, 2.5, 1.8]; // Low gear ratios for climbing
 
     for i in 0..4 {
         let axle_type = if i < 2 { gizmo::physics::vehicle::Axle::Rear } else { gizmo::physics::vehicle::Axle::Front };
@@ -255,17 +262,17 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         
         // Custom pacejka for arcade climbing
         let mut pacejka = gizmo::physics::vehicle::PacejkaParams::default();
-        pacejka.d = 2.0; // High friction peak
+        pacejka.d = 4.0; // Devasa sürtünme (tutunma) gücü
 
         vehicle.add_wheel(gizmo::physics::vehicle::Wheel {
             attachment_local_pos: wheel_local_pos[i],
             radius: wheel_radius,
             axle_type,
             is_left,
-            suspension_rest_length: 0.6,
-            suspension_max_travel: 0.5,
-            suspension_stiffness: 75000.0, // Increased to support 1500kg chassis
-            suspension_damping: 8000.0,
+            suspension_rest_length: 0.8,   // Aracın yerden yüksekliği arttı
+            suspension_max_travel: 0.7,    // Amortisör hareket mesafesi (esneme) arttı
+            suspension_stiffness: 35000.0, // Daha yumuşak yaylar (1500kg aracı yumuşak taşır)
+            suspension_damping: 4500.0,    // Daha az sönümleme, arazide sekmeye izin verir
             pacejka_long: pacejka.clone(),
             pacejka_lat: pacejka.clone(),
             ..Default::default()
@@ -294,6 +301,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         },
         pending_particles: std::cell::RefCell::new(Vec::new()),
         show_car: true,
+        show_physics_debug: true,
     }
 }
 
@@ -393,6 +401,10 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
 
     // Step physics
     gizmo::systems::cpu_physics_step_system(world, dt);
+
+    if state.show_physics_debug {
+        gizmo::systems::physics::physics_debug_system(world);
+    }
 
     // Sync Visual Wheels and Spawns Particles
     let mut car_pos = Vec3::ZERO;
@@ -509,6 +521,7 @@ fn ui_debug_panel(world: &mut World, state: &mut DemoState, ctx: &gizmo::egui::C
             // --- PHYSICS ---
             if let Ok(mut phys) = world.try_get_resource_mut::<gizmo::physics::world::PhysicsWorld>() {
                 ui.heading("Physics Engine");
+                ui.checkbox(&mut state.show_physics_debug, "Gizmo Debug Draw (Görsel Çarpışma)");
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut phys.is_paused, "Pause (P)");
                     if ui.button("Step (O)").clicked() {
