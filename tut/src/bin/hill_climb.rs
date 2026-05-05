@@ -282,6 +282,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
 
     world.insert_resource(phys_world);
     world.insert_resource(asset_manager);
+    world.insert_resource(gizmo::renderer::Gizmos::default());
 
     DemoState {
         car_entity: chassis,
