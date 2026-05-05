@@ -4,7 +4,6 @@ use wgpu::util::DeviceExt;
 
 pub struct DecalState {
     pub pipeline: wgpu::RenderPipeline,
-    pub decal_tex_bgl: wgpu::BindGroupLayout,
     pub decal_uniform_bgl: wgpu::BindGroupLayout,
     pub decal_uniform_bg: wgpu::BindGroup,
     pub world_pos_bgl: wgpu::BindGroupLayout,
@@ -28,27 +27,7 @@ impl DecalState {
     pub fn new(device: &wgpu::Device, scene: &SceneState, deferred: &DeferredState) -> Self {
         let shader = load_shader(device, "crates/gizmo-renderer/src/shaders/decal.wgsl", include_str!("shaders/decal.wgsl"), "decal");
 
-        let decal_tex_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Decal Tex BGL"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
+
 
         let decal_uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Decal Uniform BGL"),
@@ -98,7 +77,7 @@ impl DecalState {
             bind_group_layouts: &[
                 &scene.global_bind_group_layout, // 0
                 &world_pos_bgl,                  // 1
-                &decal_tex_bgl,                  // 2
+                &scene.texture_bind_group_layout, // 2
                 &decal_uniform_bgl,              // 3
             ],
             push_constant_ranges: &[],
@@ -198,7 +177,6 @@ impl DecalState {
 
         Self {
             pipeline,
-            decal_tex_bgl,
             decal_uniform_bgl,
             decal_uniform_bg,
             world_pos_bgl,
