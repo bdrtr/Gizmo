@@ -609,9 +609,19 @@ fn ui_debug_panel(world: &mut World, state: &mut DemoState, ctx: &gizmo::egui::C
         .show(ctx, |ui| {
             let mut vehicles = world.borrow_mut::<gizmo::physics::vehicle::VehicleController>();
             if let Some(vehicle) = vehicles.get_mut(state.car_entity.id()) {
-                ui.heading("Motor & Şanzıman");
+                    ui.heading("Telemetri (Canlı Veri)");
+                    ui.label(format!("Hız: {:.1} km/h", vehicle.current_speed_kmh.abs()));
+                    ui.label(format!("Motor Devri: {:.0} RPM", vehicle.engine_rpm));
+                    let gear_str = if vehicle.reverse_input { "R".to_string() } else if vehicle.current_gear <= 1 { "N".to_string() } else { format!("{}", vehicle.current_gear - 1) };
+                    ui.label(format!("Vites: {}", gear_str));
+                    
+                    ui.separator();
+                    ui.heading("Motor & Şanzıman");
                     ui.add(gizmo::egui::Slider::new(&mut vehicle.tuning.max_engine_torque, 1000.0..=100000.0).text("Max Motor Torku"));
                     ui.add(gizmo::egui::Slider::new(&mut vehicle.tuning.max_rpm, 1000.0..=12000.0).text("Max RPM"));
+                    ui.checkbox(&mut vehicle.auto_shift, "Otomatik Vites");
+                    ui.add(gizmo::egui::Slider::new(&mut vehicle.tuning.upshift_rpm, 3000.0..=12000.0).text("Vites Yükseltme (RPM)"));
+                    ui.add(gizmo::egui::Slider::new(&mut vehicle.tuning.downshift_rpm, 1000.0..=8000.0).text("Vites Düşürme (RPM)"));
                     
                     ui.separator();
                     ui.heading("Süspansiyon");
