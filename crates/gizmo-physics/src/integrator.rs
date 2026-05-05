@@ -92,7 +92,7 @@ impl Integrator {
         // Update rotation using quaternion integration
         if masked_vel.angular.length_squared() > 1e-8 {
             let angular_vel_quat = Quat::from_scaled_axis(masked_vel.angular * dt);
-            transform.rotation = (transform.rotation * angular_vel_quat).normalize();
+            transform.rotation = (angular_vel_quat * transform.rotation).normalize();
             
             if transform.rotation.x.is_nan() || transform.rotation.y.is_nan() || transform.rotation.z.is_nan() || transform.rotation.w.is_nan() {
                 return Err(crate::error::GizmoError::NaNPosition(entity));

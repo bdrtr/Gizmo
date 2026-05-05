@@ -25,6 +25,8 @@ pub struct ConstraintSolver {
     pub warm_start_factor: f32,
     /// Bu hızın altındaki çarpışmalarda restitution sıfır yapılır (dinlenme teması)
     pub restitution_velocity_threshold: f32,
+    /// Maksimum pozisyon düzeltme miktarı (metre/step) - Patlamaları önler
+    pub max_linear_correction: f32,
 }
 
 impl Default for ConstraintSolver {
@@ -35,6 +37,7 @@ impl Default for ConstraintSolver {
             slop:       0.005,       // 5mm slop (önceki 10mm azaltıldı)
             warm_start_factor: 0.85,
             restitution_velocity_threshold: 1.0, // 1 m/s altında bounce yok
+            max_linear_correction: 0.02, // 240Hz'de adım başı max 2cm düzeltme (Sıfır patlama)
         }
     }
 }
@@ -165,7 +168,8 @@ impl ConstraintSolver {
                         // Maksimum kapanma hızını (gap / dt) limitleriz.
                         penetration * inv_dt
                     } else {
-                        self.baumgarte * inv_dt * (penetration - self.slop).max(0.0)
+                        let correction = (penetration - self.slop).max(0.0).min(self.max_linear_correction);
+                        self.baumgarte * inv_dt * correction
                     };
 
                     // Restitution: sadece yüksek hızlı çarpışmalarda

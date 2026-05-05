@@ -33,6 +33,18 @@ pub fn physics_debug_system(world: &crate::core::World) {
                     let max = trans.position + Vec3::new(r, r, r);
                     gizmos.draw_box(min, max, color);
                 }
+                gizmo_physics::ColliderShape::ConvexHull(ch) => {
+                    let r = trans.rotation;
+                    let p = trans.position;
+                    for face in ch.faces.iter() {
+                        let p0 = p + r.mul_vec3(ch.vertices[face[0] as usize]);
+                        let p1 = p + r.mul_vec3(ch.vertices[face[1] as usize]);
+                        let p2 = p + r.mul_vec3(ch.vertices[face[2] as usize]);
+                        gizmos.draw_line(p0, p1, color);
+                        gizmos.draw_line(p1, p2, color);
+                        gizmos.draw_line(p2, p0, color);
+                    }
+                }
                 _ => {
                     let min = trans.position - Vec3::new(1.0, 1.0, 1.0);
                     let max = trans.position + Vec3::new(1.0, 1.0, 1.0);
@@ -121,6 +133,7 @@ pub fn physics_debug_system(world: &crate::core::World) {
                 }
             }
         }
+        tracing::info!("physics_debug_system: gizmos lines count = {}", gizmos.lines.len());
     }
 }
 

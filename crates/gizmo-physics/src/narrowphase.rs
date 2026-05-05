@@ -86,8 +86,6 @@ impl NarrowPhase {
 
         let normal = if best_flip { -best_ax } else { best_ax };
 
-        // Referans yüzünü A'dan mı yoksa B'den mi al?
-        // A yüzünün normali `normal`'e en yakın ise A referans yüz
         let (ref_pos, ref_rot, ref_h, inc_pos, inc_rot, inc_h) =
             if is_face_axis(normal, &ax) {
                 (pos_a, rot_a, ha, pos_b, rot_b, hb)
@@ -95,7 +93,29 @@ impl NarrowPhase {
                 (pos_b, rot_b, hb, pos_a, rot_a, ha)
             };
 
-        clip_box_box(normal, min_pen, ref_pos, ref_rot, ref_h, inc_pos, inc_rot, inc_h)
+        let mut contacts = clip_box_box(normal, min_pen, ref_pos, ref_rot, ref_h, inc_pos, inc_rot, inc_h);
+        
+        // Sutherland-Hodgman clipping flaw: If the incident face is much larger than the reference face,
+        // all its corners might fall outside the reference bounds, resulting in 0 contacts.
+        // Swapping reference and incident fixes this.
+        if contacts.is_empty() {
+            contacts = clip_box_box(-normal, min_pen, inc_pos, inc_rot, inc_h, ref_pos, ref_rot, ref_h);
+            for c in &mut contacts {
+                c.normal = -c.normal; // Restore original normal direction (from A to B)
+            }
+        }
+        
+        // Ultimate fallback to GJK if clipping completely fails
+        if contacts.is_empty() {
+            if let Some(c) = Gjk::get_contact(
+                &ColliderShape::Box(crate::components::BoxShape { half_extents: ha.into() }), pos_a, rot_a,
+                &ColliderShape::Box(crate::components::BoxShape { half_extents: hb.into() }), pos_b, rot_b
+            ) {
+                contacts.push(c);
+            }
+        }
+
+        contacts
     }
 
     // ─── Ana Dispatcher ───────────────────────────────────────────────────────

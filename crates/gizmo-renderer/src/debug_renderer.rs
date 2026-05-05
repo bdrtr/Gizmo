@@ -11,6 +11,17 @@ impl Gizmos {
     }
 
     pub fn draw_line(&mut self, start: Vec3, end: Vec3, color: [f32; 4]) {
+        // Prevent GPU driver crashes from NaN/Infinity vertices
+        if !start.x.is_finite() || !start.y.is_finite() || !start.z.is_finite() ||
+           !end.x.is_finite() || !end.y.is_finite() || !end.z.is_finite() {
+            return;
+        }
+        
+        // Prevent zero-length lines which crash some Vulkan/Mesa drivers
+        if start.distance_squared(end) < 1e-8 {
+            return;
+        }
+        
         self.lines.push(GizmoVertex {
             position: start.to_array(),
             color,
@@ -151,7 +162,7 @@ impl GizmoRendererSystem {
         desc.depth_stencil = Some(wgpu::DepthStencilState {
             format: depth_format,
             depth_write_enabled: false,
-            depth_compare: wgpu::CompareFunction::LessEqual,
+            depth_compare: wgpu::CompareFunction::Always,
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         });

@@ -29,6 +29,10 @@ struct Parameters {
     damping: f32,
     gravity: vec3<f32>,
     num_elements: u32,
+    num_nodes: u32,
+    pad0: f32,
+    pad1: f32,
+    pad2: f32,
 }
 
 @group(0) @binding(0) var<storage, read_write> nodes: array<SoftBodyNode>;
@@ -127,4 +131,53 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     atomic_add_force(elem.i3, f3);
 }
 
-// Another compute shader pass would run over nodes to integrate positions using the accumulated forces!
+@compute @workgroup_size(64)
+fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let node_idx = global_id.x;
+    if (node_idx >= params.num_nodes) {
+        return;
+    }
+
+    var node = nodes[node_idx];
+    if (node.is_fixed != 0u) {
+        // Clear forces anyway
+        atomicStore(&forces_x[node_idx], 0);
+        atomicStore(&forces_y[node_idx], 0);
+        atomicStore(&forces_z[node_idx], 0);
+        return;
+    }
+
+    // Dummy read to force compiler to keep binding 1 (elements) in the implicit layout
+    let _dummy = elements[0].rest_volume;
+
+    let fx = f32(atomicLoad(&forces_x[node_idx])) / FIXED_POINT_MULTIPLIER;
+    let fy = f32(atomicLoad(&forces_y[node_idx])) / FIXED_POINT_MULTIPLIER;
+    let fz = f32(atomicLoad(&forces_z[node_idx])) / FIXED_POINT_MULTIPLIER;
+    let force = vec3<f32>(fx, fy, fz);
+
+    let inv_mass = select(0.0, 1.0 / node.mass, node.mass > 0.0);
+    let acceleration = force * inv_mass + params.gravity;
+
+    node.velocity += acceleration * params.dt;
+    node.velocity *= max(1.0 - params.damping * params.dt, 0.0);
+    
+    // Simple ground collision at Y=0.1
+    let next_pos = node.position + node.velocity * params.dt;
+    if (next_pos.y < 0.1) {
+        node.position.y = 0.1;
+        node.position.x = next_pos.x;
+        node.position.z = next_pos.z;
+        node.velocity.y *= -0.1; // Bounce
+        node.velocity.x *= 0.8;  // Friction
+        node.velocity.z *= 0.8;
+    } else {
+        node.position = next_pos;
+    }
+
+    nodes[node_idx] = node;
+    
+    // Clear forces for next sub-step
+    atomicStore(&forces_x[node_idx], 0);
+    atomicStore(&forces_y[node_idx], 0);
+    atomicStore(&forces_z[node_idx], 0);
+}

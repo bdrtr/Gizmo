@@ -67,6 +67,7 @@ pub struct SoftBodyMesh {
     /// Damping factor to prevent infinite oscillation
     pub damping: f32,
 }
+gizmo_core::impl_component!(SoftBodyMesh);
 
 pub fn resolve_node_collision(
     mut position: Vec3,
