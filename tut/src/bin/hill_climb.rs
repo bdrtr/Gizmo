@@ -12,6 +12,7 @@ struct DemoState {
     pending_particles: std::cell::RefCell<Vec<gizmo::renderer::gpu_particles::GpuParticle>>,
     show_car: bool,
     show_physics_debug: bool,
+    update_wheel_radius: Option<f32>,
 }
 
 fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
@@ -335,6 +336,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         pending_particles: std::cell::RefCell::new(Vec::new()),
         show_car: true,
         show_physics_debug: true,
+        update_wheel_radius: None,
     }
 }
 
@@ -466,6 +468,10 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
                         let spin_rot = Quat::from_rotation_x(wheel.rotation_angle);
                         wt.set_rotation(car_rot * spin_rot * align_rot);
 
+                        if let Some(new_radius) = state.update_wheel_radius {
+                            wt.set_scale(Vec3::splat(new_radius));
+                        }
+
                         // Dust particles ONLY for grounded wheels (much smaller, localized)
                         if wheel.is_grounded && (speed > 5.0 || (speed < 5.0 && (throttle > 0.0 || brake > 0.0))) {
                             let pos_bottom = wt.position - Vec3::new(0.0, wheel.radius * 0.9, 0.0);
@@ -515,6 +521,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
             cam_trans.update_local_matrix();
         }
     }
+
+    state.update_wheel_radius = None;
 }
 
 fn render(
@@ -623,13 +631,19 @@ fn ui_debug_panel(world: &mut World, state: &mut DemoState, ctx: &gizmo::egui::C
                     ui.add(gizmo::egui::Slider::new(&mut vehicle.tuning.upshift_rpm, 3000.0..=12000.0).text("Vites Yükseltme (RPM)"));
                     ui.add(gizmo::egui::Slider::new(&mut vehicle.tuning.downshift_rpm, 1000.0..=8000.0).text("Vites Düşürme (RPM)"));
                     
-                    ui.separator();
-                    ui.heading("Süspansiyon");
+                    ui.heading("Süspansiyon & Tekerlekler");
                     // Update all wheels
                     let mut stiffness = vehicle.wheels[0].suspension_stiffness;
                     let mut damping = vehicle.wheels[0].suspension_damping;
                     let mut rest_length = vehicle.wheels[0].suspension_rest_length;
+                    let current_radius = vehicle.wheels[0].radius;
+                    let mut current_diameter_inches = current_radius * 2.0 / 0.0254;
                     
+                    if ui.add(gizmo::egui::Slider::new(&mut current_diameter_inches, 14.0..=40.0).text("Tekerlek Çapı (İnç)")).changed() {
+                        let new_radius = current_diameter_inches * 0.0254 / 2.0;
+                        for w in vehicle.wheels.iter_mut() { w.radius = new_radius; }
+                        state.update_wheel_radius = Some(new_radius);
+                    }
                     if ui.add(gizmo::egui::Slider::new(&mut stiffness, 10000.0..=100000.0).text("Yay Sertliği (Stiffness)")).changed() {
                         for w in vehicle.wheels.iter_mut() { w.suspension_stiffness = stiffness; }
                     }
