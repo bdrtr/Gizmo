@@ -188,6 +188,15 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                 });
 
                 ui.separator();
+                
+                // === AI TOOLS ===
+                if ui.button(egui::RichText::new("🤖 NavMesh Kur").color(egui::Color32::from_rgb(100, 200, 255)))
+                   .on_hover_text("Fiziksel dünyadaki statik objelere göre Yapay Zeka navigasyon ızgarasını (NavMesh) yeniden oluşturur.")
+                   .clicked() {
+                    state.scene.rebuild_navmesh_request = true;
+                }
+
+                ui.separator();
 
                 // === AYARLAR ===
                 let settings_color = if state.is_tab_open(&crate::editor_state::EditorTab::Settings)

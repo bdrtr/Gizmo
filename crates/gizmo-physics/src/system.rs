@@ -143,10 +143,29 @@ pub fn physics_step_system(world: &World, dt: f32) {
         }
     }
 
+    // 3.7. Extract Fluid Simulations
+    let mut fluid_sims = Vec::new();
+    let fluid_query_opt = Query::<(Mut<crate::components::FluidSimulation>, Mut<Transform>)>::new(world);
+    if let Some(fluid_query) = &fluid_query_opt {
+        for (id, (fluid, transform)) in fluid_query.iter() {
+            fluid_sims.push((Entity::new(id, 0), fluid.clone(), transform.clone()));
+        }
+    }
+
     // 4. Step Simulation
     physics_world.sync_bodies(rigid_bodies.iter());
 
-    physics_world.step(&mut soft_bodies, dt).expect("Gizmo Physics Engine encountered a critical numerical error (NaN, Infinity, or Overflow) and halted!");
+    physics_world.step(&mut soft_bodies, &mut fluid_sims, dt).expect("Gizmo Physics Engine encountered a critical numerical error (NaN, Infinity, or Overflow) and halted!");
+
+    // Sync back fluids
+    if let Some(fluid_query) = &fluid_query_opt {
+        for (id, (mut fluid, mut transform)) in fluid_query.iter() {
+            if let Some((_, f, t)) = fluid_sims.iter().find(|(e, _, _)| e.id() == id) {
+                *fluid = f.clone();
+                *transform = t.clone();
+            }
+        }
+    }
 
     // Sync back to rigid_bodies so vehicles/ECS writeback works
     for i in 0..physics_world.entities.len() {

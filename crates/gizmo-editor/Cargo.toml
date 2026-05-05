@@ -14,6 +14,7 @@ gizmo-math = { path = "../gizmo-math" }
 gizmo-physics = { path = "../gizmo-physics" }
 gizmo-renderer = { path = "../gizmo-renderer" }
 gizmo-audio = { path = "../gizmo-audio" }
+gizmo-ai = { path = "../gizmo-ai" }
 egui_dock = { version = "0.13", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"

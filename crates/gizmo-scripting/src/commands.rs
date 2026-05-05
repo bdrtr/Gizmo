@@ -95,6 +95,11 @@ pub enum ScriptCommand {
 
     // Component
     SetEntityName(u32, String),
+
+    // AI
+    AddNavAgent(u32),
+    SetAiTarget(u32, Vec3),
+    ClearAiTarget(u32),
 }
 
 /// Thread-local komut kuyruğu (Lua callback'leri içinden erişilebilir)

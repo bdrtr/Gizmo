@@ -80,6 +80,18 @@ pub fn handle_scene_operations(
         }
     }
 
+    if editor_state.scene.rebuild_navmesh_request {
+        editor_state.scene.rebuild_navmesh_request = false;
+        
+        // Tetiklendiğinde gizmo-ai içindeki grid'in needs_rebuild bayrağını true yaparız
+        if let Some(mut grid) = world.get_resource_mut::<gizmo::ai::pathfinding::NavGrid>() {
+            grid.needs_rebuild = true;
+            editor_state.log_info("🤖 NavMesh yeniden oluşturulması talep edildi...");
+        } else {
+            editor_state.log_warning("NavGrid bulunamadı! AI aktif mi?");
+        }
+    }
+
     if !editor_state.despawn_requests.is_empty() {
         let mut history_backup = Vec::new();
         let despawn_reqs: Vec<gizmo::prelude::Entity> =

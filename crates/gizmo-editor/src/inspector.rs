@@ -4,9 +4,10 @@ use crate::editor_state::EditorState;
 use egui;
 use gizmo_core::{EntityName, World};
 use gizmo_math::{Vec3, Vec4};
-use gizmo_physics::components::{RigidBody, Transform, Velocity};
+use gizmo_physics::components::{RigidBody, Transform, Velocity, FluidSimulation};
 use gizmo_physics::shape::Collider;
 use gizmo_renderer::components::{Camera, Material, ParticleEmitter, PointLight};
+use gizmo_ai::components::NavAgent;
 
 /// Inspector sekmesini çizer
 pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
@@ -79,6 +80,8 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 
             draw_terrain_section(ui, world, entity_id, state);
             draw_script_section(ui, world, entity_id, state);
+            draw_fluid_section(ui, world, entity_id, state);
+            draw_ai_section(ui, world, entity_id, state);
 
             ui.separator();
 
@@ -649,6 +652,118 @@ fn draw_terrain_section(
             if changed {
                 state.generate_terrain_requests.push(entity_id);
             }
+            ui.separator();
+        }
+    }
+}
+
+fn draw_fluid_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    _state: &mut EditorState,
+) {
+    let mut fluids = world.borrow_mut::<FluidSimulation>();
+    {
+        if let Some(fluid) = fluids.get_mut(entity_id.id()) {
+            egui::CollapsingHeader::new("🌊 SPH Fluid Simulation (GPU)")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.label(format!("Parçacık Sayısı: {}", fluid.particles.len()));
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("Hedef Yoğunluk:");
+                        ui.add(egui::DragValue::new(&mut fluid.target_density).speed(1.0).range(100.0..=2000.0));
+                    });
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("Basınç Çarpanı:");
+                        ui.add(egui::DragValue::new(&mut fluid.pressure_multiplier).speed(1.0).range(1.0..=1000.0));
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("Viskozite:");
+                        ui.add(egui::DragValue::new(&mut fluid.viscosity).speed(0.01).range(0.001..=1.0));
+                    });
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("Parçacık Yarıçapı:");
+                        ui.add(egui::DragValue::new(&mut fluid.particle_radius).speed(0.01).range(0.01..=1.0));
+                    });
+                    
+                    if ui.button("🌊 1000 Parçacık Ekle").clicked() {
+                        let count_per_axis = 10;
+                        let spacing = 0.5;
+                        for i in 0..count_per_axis {
+                            for j in 0..count_per_axis {
+                                for k in 0..count_per_axis {
+                                    let x = fluid.bounds_min.x + (i as f32) * spacing;
+                                    let y = fluid.bounds_min.y + (j as f32) * spacing;
+                                    let z = fluid.bounds_min.z + (k as f32) * spacing;
+                                    
+                                    fluid.particles.push(gizmo_physics::gpu_fluid::FluidParticle {
+                                        position: [x, y, z],
+                                        density: 0.0,
+                                        velocity: [0.0, 0.0, 0.0],
+                                        pressure: 0.0,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    
+                    if ui.button("🗑️ Tüm Parçacıkları Temizle").clicked() {
+                        fluid.particles.clear();
+                    }
+                });
+            ui.separator();
+        }
+    }
+}
+
+fn draw_ai_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    _state: &mut EditorState,
+) {
+    let mut agents = world.borrow_mut::<NavAgent>();
+    {
+        if let Some(agent) = agents.get_mut(entity_id.id()) {
+            egui::CollapsingHeader::new("🤖 AI NavAgent")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Maks Hız:");
+                        ui.add(egui::DragValue::new(&mut agent.max_speed).speed(0.1).range(0.1..=100.0));
+                    });
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("Steering (Dönüş) Gücü:");
+                        ui.add(egui::DragValue::new(&mut agent.steering_force).speed(0.1).range(0.1..=100.0));
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("Varış Yarıçapı:");
+                        ui.add(egui::DragValue::new(&mut agent.arrival_radius).speed(0.1).range(0.1..=10.0));
+                    });
+                    
+                    let state_str = match agent.state {
+                        gizmo_ai::components::NavAgentState::Idle => "Bekliyor",
+                        gizmo_ai::components::NavAgentState::Moving => "Hareket Ediyor",
+                        gizmo_ai::components::NavAgentState::Reached => "Ulaştı",
+                        gizmo_ai::components::NavAgentState::Stuck => "Sıkıştı",
+                    };
+                    ui.label(format!("Durum: {}", state_str));
+                    
+                    if let Some(target) = agent.target {
+                        ui.label(format!("Hedef: {:.1}, {:.1}, {:.1}", target.x, target.y, target.z));
+                    } else {
+                        ui.label("Hedef: Yok");
+                    }
+                    
+                    ui.label(format!("Rota Uzunluğu: {}", agent.path_len()));
+                });
             ui.separator();
         }
     }

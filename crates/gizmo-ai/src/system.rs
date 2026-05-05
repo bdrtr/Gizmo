@@ -18,7 +18,20 @@ use gizmo_physics::components::{Transform, Velocity};
 /// Ancak bu fonksiyon çalışırken başka bir sistem aynı anda `NavAgent` veya
 /// `Velocity` için `borrow_mut` yaparsa `try_borrow_mut` başarısız olur.
 /// Bu nedenle AI sistemi fizik adım döngüsü **içinde** çağrılmalıdır (main.rs),
-/// dışardan paralel çağrılmamalıdır.
+/// NavMesh Yeniden Oluşturma Sistemi
+/// Fizik dünyasındaki statik objeleri NavGrid'e geçirir
+pub fn ai_navmesh_rebuild_system(world: &World, _dt: f32) {
+    let grid_opt = world.get_resource_mut::<NavGrid>();
+    let physics_opt = world.get_resource::<gizmo_physics::world::PhysicsWorld>();
+    
+    if let (Some(mut grid), Some(physics_world)) = (grid_opt, physics_opt) {
+        if grid.needs_rebuild {
+            grid.update_from_physics_world(&physics_world);
+            println!("[AI] NavMesh dinamik olarak PhysicsWorld üzerinden güncellendi! Toplam engel: {}", grid.obstacles.len());
+        }
+    }
+}
+
 pub fn ai_navigation_system(world: &World, dt: f32) {
     let grid = match world.get_resource::<NavGrid>() {
         Some(g) => g,

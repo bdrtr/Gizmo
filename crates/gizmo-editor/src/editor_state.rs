@@ -119,6 +119,7 @@ pub struct SceneState {
     pub save_request: Option<String>,
     pub load_request: Option<String>,
     pub clear_request: bool,
+    pub rebuild_navmesh_request: bool,
     pub load_confirm_dialog: Option<String>,
     pub gizmo_original_transforms:
         std::collections::HashMap<gizmo_core::entity::Entity, gizmo_physics::components::Transform>,
@@ -129,6 +130,7 @@ impl Default for SceneState {
             save_request: None,
             load_request: None,
             clear_request: false,
+            rebuild_navmesh_request: false,
             load_confirm_dialog: None,
             gizmo_original_transforms: std::collections::HashMap::new(),
         }

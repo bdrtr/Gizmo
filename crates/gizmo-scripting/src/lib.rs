@@ -18,6 +18,7 @@
 //! - `audio` — 2D/3D ses çalma
 //! - `time` — Delta time, elapsed, FPS
 
+pub mod api_ai;
 pub mod api_audio;
 pub mod api_entity;
 pub mod api_input;
