@@ -93,4 +93,19 @@ pub fn handle_simulation(
     } else {
         state.physics_accumulator = 0.0;
     }
+    
+    // --- NAVMESH DEBUG GIZMOS ---
+    if editor_state.open {
+        if let Some(grid) = world.get_resource::<gizmo::ai::pathfinding::NavGrid>() {
+            if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
+                for &cell in &grid.obstacles {
+                    let center = grid.grid_to_world(cell);
+                    let half_size = gizmo::math::Vec3::new(grid.cell_size * 0.5, grid.cell_size * 0.5, grid.cell_size * 0.5);
+                    let min = center - half_size;
+                    let max = center + half_size;
+                    gizmos.draw_box(min, max, [1.0, 0.0, 0.0, 0.5]); // Red boxes for obstacles
+                }
+            }
+        }
+    }
 }

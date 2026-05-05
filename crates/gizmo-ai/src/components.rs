@@ -78,6 +78,17 @@ impl NavAgent {
     pub fn path_index(&self) -> usize {
         self.current_path_index
     }
+    
+    pub fn set_target(&mut self, target: Vec3) {
+        self.target = Some(target);
+        self.recalc.timer = 0.0; // Zorla yeniden hesaplat
+    }
+}
+
+impl Default for NavAgent {
+    fn default() -> Self {
+        Self::new(5.0, 10.0, 0.5)
+    }
 }
 
 gizmo_core::impl_component!(NavAgent);

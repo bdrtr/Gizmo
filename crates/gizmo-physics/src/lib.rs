@@ -3,15 +3,16 @@ pub mod bvh; // Move near broadphase
 pub mod collision;
 pub mod components;
 pub mod error;
-pub mod fracture;
-pub mod destruction;
-pub mod gjk;
 pub mod gpu_compute;
+pub mod gpu_fluid;
 pub mod integrator;
 pub mod island;
 pub mod joints;
 pub mod narrowphase;
 pub mod quickhull;
+pub mod fracture;
+pub mod destruction;
+pub mod gjk;
 pub mod raycast;
 pub mod shape;
 pub mod solver;
@@ -51,6 +52,6 @@ pub use system::{physics_step_system, physics_fracture_system, physics_explosion
 pub use components::{
     BodyType, BoxShape, Breakable, CapsuleShape, CharacterController, Collider, ColliderShape, CollisionLayer,
     ConvexHullShape, PhysicsMaterial, PlaneShape, RigidBody, SphereShape, Transform, TriMeshShape,
-    Velocity, Explosion
+    Velocity, Explosion, FluidSimulation
 };
 

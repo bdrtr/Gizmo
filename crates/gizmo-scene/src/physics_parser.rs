@@ -1,4 +1,4 @@
-use gizmo_physics::components::{ColliderShape, TriMeshShape, ConvexHullShape};
+use gizmo_physics::components::{ColliderShape, TriMeshShape};
 use gizmo_renderer::components::Mesh;
 // use gizmo_math::Vec3;
 

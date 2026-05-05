@@ -92,6 +92,8 @@ pub struct PhysicsWorld {
     #[serde(skip)]
     pub gpu_compute: Option<crate::gpu_compute::GpuCompute>,
     #[serde(skip)]
+    pub gpu_fluid_compute: Option<crate::gpu_fluid::GpuFluidCompute>,
+    #[serde(skip)]
     contact_cache: HashMap<(Entity, Entity), (bool, Option<ContactManifold>)>,
     
     pub accumulator: f32,
@@ -140,10 +142,11 @@ impl PhysicsWorld {
             fracture_events: Vec::new(),
             fracture_cache: crate::fracture::PreFracturedCache::new(),
             joints: Vec::new(),
-            joint_solver: crate::joints::JointSolver::new(10),
+            joint_solver: crate::joints::JointSolver::default(),
             gravity_fields: Vec::new(),
             fluid_zones: Vec::new(),
             gpu_compute: None,
+            gpu_fluid_compute: None,
             contact_cache: HashMap::new(),
             accumulator: 0.0,
             render_alpha: 1.0,
@@ -222,7 +225,7 @@ impl PhysicsWorld {
                 self.transforms[idx] = trans.clone();
                 self.velocities[idx] = vel.clone();
                 
-                // TODO: Wrap large shapes in Arc to make this clone virtually free
+                // Shapes use Arc internally, so clone is cheap
                 self.colliders[idx] = col.clone();
                 
                 // Update spatial hash (Fatten for CCD if enabled)
@@ -284,6 +287,7 @@ impl PhysicsWorld {
     pub fn step(
         &mut self,
         soft_bodies: &mut [(Entity, SoftBodyMesh, Transform)],
+        fluid_sims: &mut [(Entity, crate::components::FluidSimulation, Transform)],
         dt: f32,
     ) -> Result<(), crate::error::GizmoError> {
         if self.rewind_requested {
@@ -327,7 +331,7 @@ impl PhysicsWorld {
 
         let mut steps = 0u32;
         while self.accumulator >= FIXED_DT && steps < MAX_SUBSTEPS {
-            self.step_internal(soft_bodies, FIXED_DT)?;
+            self.step_internal(soft_bodies, fluid_sims, FIXED_DT)?;
             self.accumulator -= FIXED_DT;
             steps += 1;
         }
@@ -351,6 +355,7 @@ impl PhysicsWorld {
     fn step_internal(
         &mut self,
         soft_bodies: &mut [(Entity, SoftBodyMesh, Transform)],
+        fluid_sims: &mut [(Entity, crate::components::FluidSimulation, Transform)],
         dt: f32,
     ) -> Result<(), crate::error::GizmoError> {
 
@@ -456,6 +461,13 @@ impl PhysicsWorld {
             soft_bodies.par_iter_mut().for_each(|(_, sb, _)| {
                 sb.step(dt, gravity, &rigid_colliders);
             });
+        }
+
+        // 1.6 Step Fluid Simulations
+        if let Some(gpu_fluid) = &mut self.gpu_fluid_compute {
+            for (_, fluid_sim, _) in fluid_sims.iter_mut() {
+                gpu_fluid.step_fluid(&mut fluid_sim.particles, dt, gravity.into());
+            }
         }
 
         // 2. Broadphase - update spatial hash and find potential collision pairs

@@ -20,6 +20,7 @@ pub struct NavGrid {
     pub width: i32,
     pub height: i32,
     pub obstacles: HashSet<GridPos>,
+    pub needs_rebuild: bool,
 }
 
 impl NavGrid {
@@ -29,6 +30,7 @@ impl NavGrid {
             width,
             height,
             obstacles: HashSet::new(),
+            needs_rebuild: true,
         }
     }
 
@@ -90,6 +92,63 @@ impl NavGrid {
             }
         }
         neighbors
+    }
+
+    /// Fizik dünyasındaki statik nesneleri tarayıp navigasyon engel ızgarasını (NavMesh) günceller
+    pub fn update_from_physics_world(&mut self, physics: &gizmo_physics::world::PhysicsWorld) {
+        let cell_size = self.cell_size;
+        
+        let world_to_grid_fn = |pos: Vec3| -> GridPos {
+            GridPos {
+                x: (pos.x / cell_size).floor() as i32,
+                y: (pos.y / cell_size).floor() as i32,
+                z: (pos.z / cell_size).floor() as i32,
+            }
+        };
+
+        let chunk_size = (physics.entities.len() / 8).max(1);
+        
+        self.obstacles = std::thread::scope(|s| {
+            let mut handles = Vec::new();
+            
+            let mut start = 0;
+            while start < physics.entities.len() {
+                let end = (start + chunk_size).min(physics.entities.len());
+                handles.push(s.spawn(move || {
+                    let mut local_obs = HashSet::new();
+                    for i in start..end {
+                        let rb = &physics.rigid_bodies[i];
+                        if rb.body_type == gizmo_physics::components::BodyType::Dynamic {
+                            continue;
+                        }
+                        let transform = &physics.transforms[i];
+                        let collider = &physics.colliders[i];
+                        
+                        let aabb = collider.compute_aabb(transform.position, transform.rotation);
+                        let min_grid = world_to_grid_fn(aabb.min.into());
+                        let max_grid = world_to_grid_fn(aabb.max.into());
+                        
+                        for x in min_grid.x..=max_grid.x {
+                            for y in min_grid.y..=max_grid.y {
+                                for z in min_grid.z..=max_grid.z {
+                                    local_obs.insert(GridPos::new(x, y, z));
+                                }
+                            }
+                        }
+                    }
+                    local_obs
+                }));
+                start = end;
+            }
+            
+            let mut combined = HashSet::new();
+            for handle in handles {
+                combined.extend(handle.join().unwrap());
+            }
+            combined
+        });
+        
+        self.needs_rebuild = false;
     }
 }
 

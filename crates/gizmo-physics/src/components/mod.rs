@@ -7,6 +7,7 @@ pub mod character;
 pub mod collision_layer;
 pub mod collider;
 pub mod explosion;
+pub mod fluid;
 
 pub use transform::*;
 pub use velocity::*;
@@ -17,3 +18,4 @@ pub use character::*;
 pub use collision_layer::*;
 pub use collider::*;
 pub use explosion::*;
+pub use fluid::*;

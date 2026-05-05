@@ -8,5 +8,6 @@ mlua = { version = "0.9", features = ["lua54", "vendored", "send"] }
 gizmo-core = { path = "../gizmo-core" }
 gizmo-math = { path = "../gizmo-math" }
 gizmo-physics = { path = "../gizmo-physics" }
+gizmo-ai = { path = "../gizmo-ai" }
 notify = "8.2.0"
 serde = { version = "1.0.228", features = ["derive"] }

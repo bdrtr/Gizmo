@@ -225,6 +225,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
         cube: debug_cube,
         white_tex: white_tex.clone(),
     });
+    world.insert_resource(gizmo::renderer::Gizmos::default());
 
     // --- SCRIPT ENGINE & ASSET WATCHER BİRLEŞİMİ ---
     if let Ok(engine) = gizmo::scripting::ScriptEngine::new() {

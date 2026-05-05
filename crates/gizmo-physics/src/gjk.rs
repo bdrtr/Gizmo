@@ -184,7 +184,7 @@ impl Gjk {
         rot_b: gizmo_math::Quat,
         vel_b: Vec3,
         max_t: f32,
-    ) -> Option<f32> {
+    ) -> Option<(f32, Vec3)> {
         let mut t = 0.0;
         let rel_vel = vel_a - vel_b;
         
@@ -203,7 +203,7 @@ impl Gjk {
             if let Some((dist, normal)) = Self::distance(support) {
                 // If they are intersecting or extremely close, we found the TOI
                 if dist < 0.001 {
-                    return Some(t);
+                    return Some((t, normal));
                 }
 
                 // Project relative velocity onto the shortest distance normal
@@ -235,7 +235,7 @@ impl Gjk {
         None // Converge edemedik, CCD miss kabul et
     }
 
-    /// Fast Speculative Contact for CCD
+    /// Exact CCD Sweep Test using Conservative Advancement
     pub fn speculative_contact(
         shape_a: &ColliderShape,
         pos_a: Vec3,
@@ -247,27 +247,28 @@ impl Gjk {
         vel_b: Vec3,
         dt: f32,
     ) -> Option<ContactPoint> {
-        let support = |dir: Vec3| {
-            let sa = Self::support_point(shape_a, pos_a, rot_a, dir);
-            let sb = Self::support_point(shape_b, pos_b, rot_b, -dir);
-            sa - sb
-        };
-
-        if let Some((dist, normal)) = Self::distance(support) {
-            if dist <= 0.0 { return None; } // Already intersecting
-
+        if let Some((t, normal)) = Self::conservative_advancement(
+            shape_a, pos_a, rot_a, vel_a,
+            shape_b, pos_b, rot_b, vel_b,
+            dt,
+        ) {
             let rel_vel = vel_b - vel_a;
-            let normal_a_to_b = -normal; // Gjk::distance returns vector from B to A. We need A to B.
+            let normal_a_to_b = -normal; // Normal points from B to A, we want A to B
             
-            // Closing velocity: how fast B is moving towards A.
-            let closing_vel = rel_vel.dot(normal); // Same as -rel_vel.dot(normal_a_to_b)
-            
-            if closing_vel > 0.0 && dist < closing_vel * dt {
-                let contact_point = pos_a + normal_a_to_b * (dist * 0.5); 
+            // Closing velocity
+            let closing_vel = rel_vel.dot(normal);
+            if closing_vel > 0.0 {
+                // The distance they would have covered if they didn't stop at time t
+                let dist_to_cover = closing_vel * t;
+                
+                // Contact point is approximated at the time of impact
+                let hit_pos_a = pos_a + vel_a * t;
+                let contact_point = hit_pos_a + normal_a_to_b * 0.01; // approximate
+                
                 return Some(ContactPoint {
                     point: contact_point,
                     normal: normal_a_to_b,
-                    penetration: -dist,
+                    penetration: -dist_to_cover, // Negative penetration for speculative constraint
                     local_point_a: contact_point - pos_a,
                     local_point_b: contact_point - pos_b,
                     normal_impulse: 0.0,

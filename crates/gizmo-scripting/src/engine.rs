@@ -5,6 +5,7 @@ use mlua::RegistryKey;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::api_ai;
 use crate::api_audio;
 use crate::api_entity;
 use crate::api_input;
@@ -178,6 +179,7 @@ impl ScriptEngine {
         api_audio::register_audio_api(&lua, command_queue.clone())?;
         api_time::register_time_api(&lua)?;
         api_vehicle::register_vehicle_api(&lua, command_queue.clone())?;
+        api_ai::register_ai_api(&lua, command_queue.clone())?;
 
         Ok(Self {
             lua,
@@ -424,6 +426,27 @@ impl ScriptEngine {
                     let mut names = world.borrow_mut::<gizmo_core::EntityName>();
                     if let Some(n) = names.get_mut(id) {
                         n.0 = name;
+                    }
+                }
+                ScriptCommand::AddNavAgent(id) => {
+                    let entity = world
+                        .iter_alive_entities()
+                        .into_iter()
+                        .find(|e| e.id() == id);
+                    if let Some(e) = entity {
+                        world.add_component(e, gizmo_ai::components::NavAgent::default());
+                    }
+                }
+                ScriptCommand::SetAiTarget(id, target) => {
+                    let mut agents = world.borrow_mut::<gizmo_ai::components::NavAgent>();
+                    if let Some(agent) = agents.get_mut(id) {
+                        agent.set_target(target);
+                    }
+                }
+                ScriptCommand::ClearAiTarget(id) => {
+                    let mut agents = world.borrow_mut::<gizmo_ai::components::NavAgent>();
+                    if let Some(agent) = agents.get_mut(id) {
+                        agent.clear_path();
                     }
                 }
                 ScriptCommand::SaveScene(_)
