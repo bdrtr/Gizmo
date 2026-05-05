@@ -4,6 +4,11 @@ use gizmo::physics::world::PhysicsWorld;
 use gizmo::renderer::asset::AssetManager;
 use gizmo::renderer::components::{Camera, Material, MeshRenderer, PointLight};
 
+struct PendingDecal {
+    position: Vec3,
+    rotation: Quat,
+}
+
 struct DemoState {
     car_entity: gizmo::core::Entity,
     wheel_entities: [gizmo::core::Entity; 4],
@@ -14,6 +19,10 @@ struct DemoState {
     show_car: bool,
     show_physics_debug: bool,
     update_wheel_radius: Option<f32>,
+    tire_track_bg: std::sync::Arc<wgpu::BindGroup>,
+    decals: Vec<gizmo::core::Entity>,
+    decal_index: usize,
+    pending_decals: std::cell::RefCell<Vec<PendingDecal>>,
 }
 
 fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
@@ -326,6 +335,12 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     world.add_component(chassis, vehicle);
 
     world.insert_resource(phys_world);
+    let tire_track_bg = if let Some(d) = &renderer.decal {
+        asset_manager.load_material_texture(&renderer.device, &renderer.queue, &d.decal_tex_bgl, "tut/assets/tire.png").unwrap_or_else(|_| tire_tex.clone())
+    } else {
+        tire_tex.clone()
+    };
+
     world.insert_resource(asset_manager);
     world.insert_resource(gizmo::renderer::Gizmos::default());
 
@@ -350,6 +365,10 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         show_car: true,
         show_physics_debug: true,
         update_wheel_radius: None,
+        tire_track_bg,
+        decals: Vec::new(),
+        decal_index: 0,
+        pending_decals: std::cell::RefCell::new(Vec::new()),
     }
 }
 
@@ -515,6 +534,14 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
                                     _padding: [0.0; 2],
                                 });
                             }
+                            
+                            // If slipping heavily or braking hard, spawn a tire track
+                            if brake > 0.0 || (throttle > 0.0 && speed < 10.0) {
+                                state.pending_decals.borrow_mut().push(PendingDecal {
+                                    position: pos_bottom,
+                                    rotation: Quat::from_rotation_y(car_rot.to_euler(EulerRot::YXZ).0),
+                                });
+                            }
                     }
                 }
             }
@@ -542,6 +569,33 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
             let desired_pos = car_pos + look_ahead + dynamic_offset;
             cam_trans.position = cam_trans.position.lerp(desired_pos, dt * 3.0);
             cam_trans.update_local_matrix();
+        }
+    }
+
+    let pending_decals = state.pending_decals.replace(Vec::new());
+    if !pending_decals.is_empty() {
+        for pd in pending_decals {
+            if state.decals.len() < 400 {
+                let decal = world.spawn();
+                world.add_component(decal, Transform::new(pd.position)
+                    .with_scale(Vec3::new(1.0, 2.0, 1.0)) // Height must be enough to hit the ground
+                    .with_rotation(pd.rotation)
+                );
+                world.add_component(decal, gizmo::renderer::components::Decal::new(
+                    state.tire_track_bg.clone(),
+                    Vec4::new(0.05, 0.05, 0.05, 0.9),
+                ));
+                state.decals.push(decal);
+            } else {
+                let decal = state.decals[state.decal_index];
+                if let Some(mut q_t) = world.query::<gizmo::core::query::Mut<Transform>>() {
+                    if let Some(mut dt) = q_t.get(decal.id()) {
+                        dt.position = pd.position;
+                        dt.rotation = pd.rotation;
+                    }
+                }
+                state.decal_index = (state.decal_index + 1) % 400;
+            }
         }
     }
 
