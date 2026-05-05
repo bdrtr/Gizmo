@@ -301,7 +301,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         },
         pending_particles: std::cell::RefCell::new(Vec::new()),
         show_car: true,
-        show_physics_debug: true,
+        show_physics_debug: false,
     }
 }
 
