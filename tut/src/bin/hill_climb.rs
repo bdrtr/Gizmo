@@ -23,6 +23,8 @@ struct DemoState {
     decals: Vec<gizmo::core::Entity>,
     decal_index: usize,
     pending_decals: std::cell::RefCell<Vec<PendingDecal>>,
+    engine_audio_id: Option<u64>,
+    audio_manager: Option<gizmo::prelude::AudioManager>,
 }
 
 fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
@@ -337,6 +339,17 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     world.insert_resource(phys_world);
     let tire_track_bg = tire_tex.clone();
 
+    let mut engine_audio_id = None;
+    let mut am = gizmo::prelude::AudioManager::new();
+    if let Some(audio_manager) = &mut am {
+        let _ = audio_manager.load_sound("engine", "tut/assets/audio/engine.wav");
+        let _ = audio_manager.load_sound("crash", "tut/assets/audio/crash.wav");
+        engine_audio_id = audio_manager.play_looped("engine");
+        if let Some(id) = engine_audio_id {
+            audio_manager.set_volume(id, 0.2); // Idle volume
+        }
+    }
+
     world.insert_resource(asset_manager);
     world.insert_resource(gizmo::renderer::Gizmos::default());
 
@@ -346,7 +359,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         suspension_entities,
         camera_offset: Vec3::new(0.0, 5.0, 30.0),
         post_process: gizmo::renderer::gpu_types::PostProcessUniforms {
-            bloom_intensity: 1.5,     // Make bloom prominent by default
+            bloom_intensity: 1.5,
             bloom_threshold: 0.85,
             exposure: 1.2,
             chromatic_aberration: 0.005,
@@ -365,6 +378,8 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         decals: Vec::new(),
         decal_index: 0,
         pending_decals: std::cell::RefCell::new(Vec::new()),
+        engine_audio_id,
+        audio_manager: am,
     }
 }
 
@@ -591,6 +606,36 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
                     }
                 }
                 state.decal_index = (state.decal_index + 1) % 400;
+            }
+        }
+    }
+
+    // Audio Update
+    if let Some(audio_manager) = &mut state.audio_manager {
+        audio_manager.update();
+
+        // Engine Pitch
+        if let Some(id) = state.engine_audio_id {
+            let speed = car_vel.length();
+            let base_pitch = 0.5; // Idle
+            let target_pitch = base_pitch + (speed * 0.05) + (throttle * 0.4).max(brake * 0.4);
+            audio_manager.set_pitch(id, target_pitch);
+            
+            let volume = 0.1 + (throttle * 0.3).max(brake * 0.3) + (speed * 0.01).min(0.2);
+            audio_manager.set_volume(id, volume);
+        }
+
+        // Crash sounds
+        if let Ok(phys_world) = world.try_get_resource::<PhysicsWorld>() {
+            for event in phys_world.collision_events() {
+                // If collision is strong enough
+                let max_impulse = event.contact_points.iter().map(|c| c.normal_impulse).fold(0.0_f32, f32::max);
+                if max_impulse > 1000.0 { // arbitrary threshold
+                    if let Some(id) = audio_manager.play("crash") {
+                        let vol = (max_impulse / 10000.0).clamp(0.1, 1.0);
+                        audio_manager.set_volume(id, vol);
+                    }
+                }
             }
         }
     }
