@@ -5,43 +5,58 @@ use crate::renderer::Renderer;
 
 pub fn physics_debug_system(world: &crate::core::World) {
     if let Some(mut gizmos) = world.get_resource_mut::<crate::renderer::Gizmos>() {
-        // Renk: Parlak Yeşil (R, G, B, A)
-        let color = [0.1, 0.9, 0.1, 1.0];
-
-        if let Some(q) = world.query::<(&crate::physics::Transform, &gizmo_physics::Collider)>() {
-            for (_, (trans, col)) in q.iter() {
-                // To support proper rotation, we should draw the 8 corners of the box.
-                match &col.shape {
-                    gizmo_physics::ColliderShape::Box(b) => {
-                        let h = b.half_extents;
-                        let p0 = trans.local_matrix.transform_point3(Vec3::new(-h.x, -h.y, -h.z));
-                        let p1 = trans.local_matrix.transform_point3(Vec3::new( h.x, -h.y, -h.z));
-                        let p2 = trans.local_matrix.transform_point3(Vec3::new( h.x,  h.y, -h.z));
-                        let p3 = trans.local_matrix.transform_point3(Vec3::new(-h.x,  h.y, -h.z));
-                        let p4 = trans.local_matrix.transform_point3(Vec3::new(-h.x, -h.y,  h.z));
-                        let p5 = trans.local_matrix.transform_point3(Vec3::new( h.x, -h.y,  h.z));
-                        let p6 = trans.local_matrix.transform_point3(Vec3::new( h.x,  h.y,  h.z));
-                        let p7 = trans.local_matrix.transform_point3(Vec3::new(-h.x,  h.y,  h.z));
-                        
-                        gizmos.draw_line(p0, p1, color); gizmos.draw_line(p1, p2, color);
-                        gizmos.draw_line(p2, p3, color); gizmos.draw_line(p3, p0, color);
-                        gizmos.draw_line(p4, p5, color); gizmos.draw_line(p5, p6, color);
-                        gizmos.draw_line(p6, p7, color); gizmos.draw_line(p7, p4, color);
-                        gizmos.draw_line(p0, p4, color); gizmos.draw_line(p1, p5, color);
-                        gizmos.draw_line(p2, p6, color); gizmos.draw_line(p3, p7, color);
-                    }
-                    gizmo_physics::ColliderShape::Sphere(s) => {
-                        let r = s.radius;
-                        let min = trans.position - Vec3::new(r, r, r);
-                        let max = trans.position + Vec3::new(r, r, r);
-                        gizmos.draw_box(min, max, color);
-                    }
-                    _ => {
-                        let min = trans.position - Vec3::new(1.0, 1.0, 1.0);
-                        let max = trans.position + Vec3::new(1.0, 1.0, 1.0);
-                        gizmos.draw_box(min, max, color);
-                    }
+        let draw_collider = |trans: &Transform, col: &Collider, color: [f32; 4], gizmos: &mut crate::renderer::Gizmos| {
+            match &col.shape {
+                gizmo_physics::ColliderShape::Box(b) => {
+                    let h = b.half_extents;
+                    let r = trans.rotation;
+                    let p = trans.position;
+                    let p0 = p + r.mul_vec3(Vec3::new(-h.x, -h.y, -h.z));
+                    let p1 = p + r.mul_vec3(Vec3::new( h.x, -h.y, -h.z));
+                    let p2 = p + r.mul_vec3(Vec3::new( h.x,  h.y, -h.z));
+                    let p3 = p + r.mul_vec3(Vec3::new(-h.x,  h.y, -h.z));
+                    let p4 = p + r.mul_vec3(Vec3::new(-h.x, -h.y,  h.z));
+                    let p5 = p + r.mul_vec3(Vec3::new( h.x, -h.y,  h.z));
+                    let p6 = p + r.mul_vec3(Vec3::new( h.x,  h.y,  h.z));
+                    let p7 = p + r.mul_vec3(Vec3::new(-h.x,  h.y,  h.z));
+                    
+                    gizmos.draw_line(p0, p1, color); gizmos.draw_line(p1, p2, color);
+                    gizmos.draw_line(p2, p3, color); gizmos.draw_line(p3, p0, color);
+                    gizmos.draw_line(p4, p5, color); gizmos.draw_line(p5, p6, color);
+                    gizmos.draw_line(p6, p7, color); gizmos.draw_line(p7, p4, color);
+                    gizmos.draw_line(p0, p4, color); gizmos.draw_line(p1, p5, color);
+                    gizmos.draw_line(p2, p6, color); gizmos.draw_line(p3, p7, color);
                 }
+                gizmo_physics::ColliderShape::Sphere(s) => {
+                    let r = s.radius;
+                    let min = trans.position - Vec3::new(r, r, r);
+                    let max = trans.position + Vec3::new(r, r, r);
+                    gizmos.draw_box(min, max, color);
+                }
+                _ => {
+                    let min = trans.position - Vec3::new(1.0, 1.0, 1.0);
+                    let max = trans.position + Vec3::new(1.0, 1.0, 1.0);
+                    gizmos.draw_box(min, max, color);
+                }
+            }
+        };
+
+        if let Some(q) = world.query::<(&crate::physics::Transform, &gizmo_physics::Collider, &gizmo_physics::RigidBody)>() {
+            for (_, (trans, col, rb)) in q.iter() {
+                let color = if rb.is_static() {
+                    [0.5, 0.5, 0.5, 1.0]
+                } else if rb.is_sleeping {
+                    [0.9, 0.1, 0.1, 1.0]
+                } else {
+                    [0.1, 0.9, 0.1, 1.0]
+                };
+                draw_collider(trans, col, color, &mut gizmos);
+            }
+        }
+
+        if let Some(q) = world.query::<(&crate::physics::Transform, &gizmo_physics::Collider, crate::core::query::Without<gizmo_physics::RigidBody>)>() {
+            for (_, (trans, col, _)) in q.iter() {
+                draw_collider(trans, col, [0.5, 0.5, 0.5, 1.0], &mut gizmos);
             }
         }
         
