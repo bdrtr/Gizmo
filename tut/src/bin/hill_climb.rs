@@ -335,11 +335,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     world.add_component(chassis, vehicle);
 
     world.insert_resource(phys_world);
-    let tire_track_bg = if let Some(d) = &renderer.decal {
-        asset_manager.load_material_texture(&renderer.device, &renderer.queue, &d.decal_tex_bgl, "tut/assets/tire.png").unwrap_or_else(|_| tire_tex.clone())
-    } else {
-        tire_tex.clone()
-    };
+    let tire_track_bg = tire_tex.clone();
 
     world.insert_resource(asset_manager);
     world.insert_resource(gizmo::renderer::Gizmos::default());
