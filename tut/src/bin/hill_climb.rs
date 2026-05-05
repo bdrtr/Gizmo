@@ -7,6 +7,7 @@ use gizmo::renderer::components::{Camera, Material, MeshRenderer, PointLight};
 struct DemoState {
     car_entity: gizmo::core::Entity,
     wheel_entities: [gizmo::core::Entity; 4],
+    suspension_entities: [gizmo::core::Entity; 4],
     camera_offset: Vec3,
     post_process: gizmo::renderer::gpu_types::PostProcessUniforms,
     pending_particles: std::cell::RefCell<Vec<gizmo::renderer::gpu_particles::GpuParticle>>,
@@ -281,6 +282,17 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         wheel_entities[i] = w;
     }
 
+    let mut suspension_entities = [chassis; 4];
+    let strut_mat = Material::new(tire_tex.clone()).with_pbr(Vec4::new(0.9, 0.2, 0.2, 1.0), 0.5, 0.8);
+    for i in 0..4 {
+        let s = world.spawn();
+        world.add_component(s, Transform::new(car_start_pos).with_scale(Vec3::new(0.1, 0.5, 0.1)));
+        world.add_component(s, cylinder_mesh.clone());
+        world.add_component(s, strut_mat.clone());
+        world.add_component(s, MeshRenderer::new());
+        suspension_entities[i] = s;
+    }
+
     // Vehicle Controller Setup
     let mut vehicle = gizmo::physics::vehicle::VehicleController::new();
     
@@ -320,6 +332,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     DemoState {
         car_entity: chassis,
         wheel_entities,
+        suspension_entities,
         camera_offset: Vec3::new(0.0, 5.0, 30.0),
         post_process: gizmo::renderer::gpu_types::PostProcessUniforms {
             bloom_intensity: 1.5,     // Make bloom prominent by default
@@ -458,11 +471,13 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
 
             if let Some(q_t) = world.query::<gizmo::core::query::Mut<Transform>>() {
                 for i in 0..4 {
+                    let wheel = &vehicle.wheels[i];
+                    let anchor_world = car_pos + car_rot.mul_vec3(wheel.attachment_local_pos);
+                    let up = car_rot.mul_vec3(Vec3::new(0.0, 1.0, 0.0));
+                    let wheel_world_pos = anchor_world - up * wheel.suspension_length;
+
                     if let Some(mut wt) = q_t.get(state.wheel_entities[i].id()) {
-                        let wheel = &vehicle.wheels[i];
-                        let anchor_world = car_pos + car_rot.mul_vec3(wheel.attachment_local_pos);
-                        let up = car_rot.mul_vec3(Vec3::new(0.0, 1.0, 0.0));
-                        wt.set_position(anchor_world - up * wheel.suspension_length);
+                        wt.set_position(wheel_world_pos);
                         
                         let align_rot = Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2);
                         let spin_rot = Quat::from_rotation_x(wheel.rotation_angle);
@@ -471,10 +486,19 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
                         if let Some(new_radius) = state.update_wheel_radius {
                             wt.set_scale(Vec3::splat(new_radius));
                         }
+                    }
 
-                        // Dust particles ONLY for grounded wheels (much smaller, localized)
-                        if wheel.is_grounded && (speed > 5.0 || (speed < 5.0 && (throttle > 0.0 || brake > 0.0))) {
-                            let pos_bottom = wt.position - Vec3::new(0.0, wheel.radius * 0.9, 0.0);
+                    if let Some(mut st) = q_t.get(state.suspension_entities[i].id()) {
+                        st.set_position((anchor_world + wheel_world_pos) * 0.5);
+                        let mut scale = st.scale;
+                        scale.y = wheel.suspension_length * 0.5;
+                        st.set_scale(scale);
+                        st.set_rotation(car_rot); // Keep strut upright
+                    }
+
+                    // Dust particles ONLY for grounded wheels
+                    if wheel.is_grounded && (speed > 5.0 || (speed < 5.0 && (throttle > 0.0 || brake > 0.0))) {
+                        let pos_bottom = wheel_world_pos - Vec3::new(0.0, wheel.radius * 0.9, 0.0);
                             for _ in 0..2 {
                                 let vx = (rand::random::<f32>() - 0.5) * 1.5; // less horizontal spread
                                 let vy = rand::random::<f32>() * 1.5 + 0.5; // gentle lift
@@ -491,7 +515,6 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
                                     _padding: [0.0; 2],
                                 });
                             }
-                        }
                     }
                 }
             }
