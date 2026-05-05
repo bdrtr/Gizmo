@@ -522,11 +522,18 @@ impl Gjk {
     }
 
     fn add_edge(edges: &mut Vec<(usize, usize)>, a: usize, b: usize) {
-        // Remove edge if it already exists (it's shared), otherwise add it
         let reverse = (b, a);
+        let forward = (a, b);
+        
+        // Remove edge if it already exists in reverse orientation (shared edge)
         if let Some(pos) = edges.iter().position(|&e| e == reverse) {
             edges.swap_remove(pos);
-        } else {
+        } 
+        // Also check if it exists in forward orientation (invalid geometry, but prevents explosions)
+        else if let Some(pos) = edges.iter().position(|&e| e == forward) {
+            edges.swap_remove(pos);
+        } 
+        else {
             edges.push((a, b));
         }
     }
