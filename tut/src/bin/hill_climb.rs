@@ -114,40 +114,37 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     let box_mat = Material::new(white_tex.clone())
         .with_pbr(Vec4::new(0.9, 0.4, 0.1, 1.0), 0.7, 0.1); // Orange/Red boxes
 
-    let pyramid_base = 8; // 36 massive boxes!
-    let box_size = 2.0; // Make them huge so the chassis hits them directly (prevent driving over them)
+    let box_size = 2.0; 
     let gap = 0.05; 
     let start_x = 50.0; 
     let start_y = 1.0 + gap; // Top of the ground is 0.0, half extent is 1.0
 
-    for row in 0..pyramid_base {
-        let items_in_row = pyramid_base - row;
-        for i in 0..items_in_row {
-            let bx = world.spawn();
-            let x = start_x + (i as f32 * (box_size + gap)) + (row as f32 * (box_size + gap) * 0.5);
-            let y = start_y + (row as f32 * (box_size + gap));
-            
-            world.add_component(bx, Transform::new(Vec3::new(x, y, 0.0)).with_scale(Vec3::splat(box_size * 0.5)));
-            world.add_component(bx, cube_mesh.clone());
-            world.add_component(bx, box_mat.clone());
-            world.add_component(bx, MeshRenderer::new());
-            
-            let col = Collider::box_collider(Vec3::splat(box_size * 0.5));
-            let mut rb = RigidBody::new(30.0, 0.0, 0.8, true); // 30kg, 0 bounce, high friction
-            rb.linear_damping = 2.0; // High air resistance so they don't fly to infinity
-            rb.angular_damping = 2.0;
-            rb.update_inertia_from_collider(&col);
-            rb.ccd_enabled = false; // 240Hz'de tünelleme olmaz, CCD hatasını önlemek için kapattık
-            
-            // 2.5D Constraints: Z ekseninde hareketi kısıtla
-            rb.lock_translation_z = true; 
-            rb.lock_rotation_x = true;
-            rb.lock_rotation_y = true;
-            
-            world.add_component(bx, col);
-            world.add_component(bx, rb);
-            world.add_component(bx, Velocity::default());
-        }
+    // Just spawn 3 boxes stacked on top of each other
+    for i in 0..3 {
+        let bx = world.spawn();
+        let x = start_x;
+        let y = start_y + (i as f32 * (box_size + gap));
+        
+        world.add_component(bx, Transform::new(Vec3::new(x, y, 0.0)).with_scale(Vec3::splat(box_size * 0.5)));
+        world.add_component(bx, cube_mesh.clone());
+        world.add_component(bx, box_mat.clone());
+        world.add_component(bx, MeshRenderer::new());
+        
+        let col = Collider::box_collider(Vec3::splat(box_size * 0.5));
+        let mut rb = RigidBody::new(30.0, 0.0, 0.8, true); // 30kg, 0 bounce, high friction
+        rb.linear_damping = 2.0; // High air resistance so they don't fly to infinity
+        rb.angular_damping = 2.0;
+        rb.update_inertia_from_collider(&col);
+        rb.ccd_enabled = false; 
+        
+        // 2.5D Constraints: Z ekseninde hareketi kısıtla
+        rb.lock_translation_z = true; 
+        rb.lock_rotation_x = true;
+        rb.lock_rotation_y = true;
+        
+        world.add_component(bx, col);
+        world.add_component(bx, rb);
+        world.add_component(bx, Velocity::default());
     }
 
     let num_segments = 250;
@@ -197,7 +194,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     // --- PROCEDURAL CONVEX HULL ROCKS ---
     use rand::{Rng, SeedableRng};
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-    for i in 1..=20 {
+    for i in 1..=3 {
         // Generate random points for the rock
         let mut points = Vec::new();
         let num_points = rng.gen_range(8..20);
@@ -210,14 +207,14 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
             ));
         }
 
-        // Generate position along the hill path
-        let x = car_start_pos.x + 20.0 + (i as f32) * 40.0;
+        // Generate position slightly in front of the car
+        let x = car_start_pos.x + 20.0;
         let local_x = x * 0.25;
         let mut y = (local_x * 0.05).sin() * 5.0 
           + (local_x * 0.1).sin() * 2.0 
           + (local_x * 0.02).sin() * 15.0;
         
-        y += rock_radius * 1.5; // Place above ground
+        y += rock_radius * 1.5 + (i as f32) * (rock_radius * 2.2); // Stack them
 
         let rock = world.spawn();
         world.add_component(rock, Transform::new(Vec3::new(x, y, 0.0)));
