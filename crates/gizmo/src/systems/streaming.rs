@@ -23,20 +23,25 @@ pub fn texture_streaming_system(
     };
 
     let transforms = world.borrow::<Transform>();
-    let materials = world.borrow_mut::<Material>();
+    let mut materials = world.borrow_mut::<Material>();
     let hidden = world.borrow::<gizmo_core::component::IsHidden>();
 
     // VRAM kilitlenmesini engellemek için her frame max yükleme limiti (Agresif Streaming)
     let mut requests_this_frame = 0;
     const MAX_REQUESTS_PER_FRAME: usize = 3;
 
-    // Tüm materyalleri döngüye al
+    let mut entities = Vec::new();
     for (e, _) in materials.iter() {
+        entities.push(e);
+    }
+
+    // Tüm materyalleri döngüye al
+    for e in entities {
         if hidden.contains(e) {
             continue; // Gizli objeler stream edilmez
         }
 
-        let mut mat = if let Some(m) = materials.get_mut(e) {
+        let mat = if let Some(m) = materials.get_mut(e) {
             m
         } else {
             continue;
