@@ -21,6 +21,7 @@ pub struct ScriptEngine {
     loaded_scripts: HashMap<String, (String, RegistryKey)>,
     command_queue: Arc<CommandQueue>,
     elapsed_time: f32,
+    pub log_queue: Arc<std::sync::Mutex<Vec<(String, String)>>>, // (Level, Message)
 }
 
 unsafe impl Send for ScriptEngine {}
@@ -72,6 +73,7 @@ impl ScriptEngine {
     pub fn new() -> Result<Self, LuaError> {
         let lua = Lua::new();
         let command_queue = Arc::new(CommandQueue::new());
+        let log_queue = Arc::new(std::sync::Mutex::new(Vec::new()));
 
         // === SANDBOX: Tehlikeli modülleri kapat ===
         lua.globals().set("os", LuaNil)?;
@@ -85,20 +87,38 @@ impl ScriptEngine {
         lua.globals().set("load", LuaNil)?;
 
         // === TEMEL PRINT FONKSİYONU ===
+        let lq_clone1 = log_queue.clone();
         lua.globals().set(
             "print_engine",
-            lua.create_function(|_, msg: String| {
-                println!("[Lua] {}", msg);
+            lua.create_function(move |_, msg: String| {
+                if let Ok(mut q) = lq_clone1.lock() {
+                    q.push(("info".to_string(), msg));
+                }
                 Ok(())
             })?,
         )?;
 
         // Orijinal print'i de engine çıktısına yönlendir
+        let lq_clone2 = log_queue.clone();
         lua.globals().set(
             "print",
-            lua.create_function(|_, values: LuaMultiValue| {
-                let parts: Vec<String> = values.iter().map(|v| format!("{:?}", v)).collect();
-                println!("[Lua] {}", parts.join("\t"));
+            lua.create_function(move |_, values: LuaMultiValue| {
+                let parts: Vec<String> = values.iter().map(|v| {
+                    if let mlua::Value::String(s) = v {
+                        s.to_str().unwrap_or("").to_string()
+                    } else if let mlua::Value::Number(n) = v {
+                        n.to_string()
+                    } else if let mlua::Value::Integer(i) = v {
+                        i.to_string()
+                    } else if let mlua::Value::Boolean(b) = v {
+                        b.to_string()
+                    } else {
+                        format!("{:?}", v)
+                    }
+                }).collect();
+                if let Ok(mut q) = lq_clone2.lock() {
+                    q.push(("info".to_string(), parts.join("\t")));
+                }
                 Ok(())
             })?,
         )?;
@@ -186,6 +206,7 @@ impl ScriptEngine {
             loaded_scripts: HashMap::new(),
             command_queue,
             elapsed_time: 0.0,
+            log_queue,
         })
     }
 
@@ -402,10 +423,13 @@ impl ScriptEngine {
                     world.add_component(entity, gizmo_core::EntityName::new(&name));
                     world
                         .add_component(entity, gizmo_physics::components::Transform::new(position));
-                    println!(
-                        "[Lua] Entity spawn: '{}' at ({:.1}, {:.1}, {:.1})",
+                    let msg = format!(
+                        "Entity spawn: '{}' at ({:.1}, {:.1}, {:.1})",
                         name, position.x, position.y, position.z
                     );
+                    if let Ok(mut q) = self.log_queue.lock() {
+                        q.push(("info".to_string(), msg));
+                    }
                 }
                 ScriptCommand::SpawnPrefab {
                     name,
@@ -420,7 +444,9 @@ impl ScriptEngine {
                 }
                 ScriptCommand::DestroyEntity(id) => {
                     world.despawn_by_id(id);
-                    println!("[Lua] Entity destroyed: {}", id);
+                    if let Ok(mut q) = self.log_queue.lock() {
+                        q.push(("info".to_string(), format!("Entity destroyed: {}", id)));
+                    }
                 }
                 ScriptCommand::SetEntityName(id, name) => {
                     let mut names = world.borrow_mut::<gizmo_core::EntityName>();

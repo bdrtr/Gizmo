@@ -77,6 +77,17 @@ pub fn handle_simulation(
                 }
             }
 
+            // Pump logs to editor console
+            if let Ok(mut logs) = engine.log_queue.lock() {
+                for (level, msg) in logs.drain(..) {
+                    match level.as_str() {
+                        "error" => editor_state.log_error(&format!("[Lua] {}", msg)),
+                        "warn" => editor_state.log_warning(&format!("[Lua] {}", msg)),
+                        _ => editor_state.log_info(&format!("[Lua] {}", msg)),
+                    }
+                }
+            }
+
             world.insert_resource(engine);
         }
 

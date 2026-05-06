@@ -20,16 +20,28 @@ pub struct GpuTetrahedron {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GpuFemCollider {
+    pub shape_type: u32,
+    pub radius: f32,
+    pub _pad0: u32,
+    pub _pad1: u32,
+    pub position: [f32; 4],
+    pub normal: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuFemParams {
     pub properties: [f32; 4], // dt, mu, lambda, damping
     pub gravity: [f32; 4],    // gx, gy, gz, _pad
-    pub counts: [u32; 4],     // num_nodes, num_elements, yield_stress (f32 cast to u32 temporarily or just unused), _pad
+    pub counts: [u32; 4],     // num_nodes, num_elements, num_colliders, _pad
 }
 
 pub struct GpuFemSystem {
     pub nodes_buffer: wgpu::Buffer,
     pub elements_buffer: wgpu::Buffer,
     pub params_buffer: wgpu::Buffer,
+    pub colliders_buffer: wgpu::Buffer,
 
     pub compute_bind_group: wgpu::BindGroup,
     pub pipeline_clear: wgpu::ComputePipeline,
@@ -45,6 +57,7 @@ impl GpuFemSystem {
         device: &wgpu::Device,
         nodes: &[GpuSoftBodyNode],
         elements: &[GpuTetrahedron],
+        colliders: &[GpuFemCollider],
         params: &GpuFemParams,
     ) -> Self {
         let nodes_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -63,6 +76,15 @@ impl GpuFemSystem {
             label: Some("FEM Params Buffer"),
             contents: bytemuck::cast_slice(&[*params]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // Ensure we always have at least a dummy collider to satisfy binding rules
+        let dummy_collider = [GpuFemCollider { shape_type: 0, radius: 0.0, _pad0: 0, _pad1: 0, position: [0.0; 4], normal: [0.0, 1.0, 0.0, 0.0] }];
+        let colliders_data = if colliders.is_empty() { &dummy_collider[..] } else { colliders };
+        let colliders_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("FEM Colliders Buffer"),
+            contents: bytemuck::cast_slice(colliders_data),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
         let compute_bind_group_layout =
@@ -98,6 +120,16 @@ impl GpuFemSystem {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
                 label: Some("fem_compute_layout"),
             });
@@ -116,6 +148,10 @@ impl GpuFemSystem {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: elements_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: colliders_buffer.as_entire_binding(),
                 },
             ],
             label: Some("fem_compute_bind_group"),
@@ -160,6 +196,7 @@ impl GpuFemSystem {
             nodes_buffer,
             elements_buffer,
             params_buffer,
+            colliders_buffer,
             compute_bind_group,
             pipeline_clear,
             pipeline_stress,

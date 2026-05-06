@@ -222,6 +222,7 @@ pub struct EditorState {
     pub do_raycast: bool,
     pub mouse_ndc: Option<gizmo_math::Vec2>,
     pub gizmo_local_space: bool,
+    pub shading_mode: u32,
 
     pub history: crate::history::History,
 
@@ -311,6 +312,7 @@ impl EditorState {
             do_raycast: false,
             mouse_ndc: None,
             gizmo_local_space: false,
+            shading_mode: 0,
 
             history: crate::history::History::new(prefs.max_history),
 

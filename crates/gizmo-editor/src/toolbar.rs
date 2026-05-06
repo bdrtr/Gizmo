@@ -148,6 +148,25 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
 
                 ui.separator();
 
+                // === SHADING MODE ===
+                egui::ComboBox::from_id_source("shading_mode")
+                    .selected_text(match state.shading_mode {
+                        0 => "💡 Lit",
+                        1 => "🎨 Normals",
+                        2 => "⚪ Albedo",
+                        3 => "🕸️ Wireframe",
+                        _ => "Bilinmeyen",
+                    })
+                    .width(100.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut state.shading_mode, 0, "💡 Lit");
+                        ui.selectable_value(&mut state.shading_mode, 1, "🎨 Normals");
+                        ui.selectable_value(&mut state.shading_mode, 2, "⚪ Albedo");
+                        ui.selectable_value(&mut state.shading_mode, 3, "🕸️ Wireframe");
+                    });
+
+                ui.separator();
+
                 // === GIZMO UZAYI (LOCAL/GLOBAL) ===
                 let space_text = if state.gizmo_local_space {
                     "📦 Local"

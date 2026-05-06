@@ -91,8 +91,6 @@ pub struct PhysicsWorld {
     #[serde(skip)]
     pub gpu_compute: Option<crate::gpu_compute::GpuCompute>,
     #[serde(skip)]
-    pub gpu_fluid_compute: Option<crate::gpu_fluid::GpuFluidCompute>,
-    #[serde(skip)]
     pub(crate) contact_cache: HashMap<(Entity, Entity), (bool, Option<ContactManifold>)>,
     
     pub accumulator: f32,
@@ -145,7 +143,7 @@ impl PhysicsWorld {
             gravity_fields: Vec::new(),
             fluid_zones: Vec::new(),
             gpu_compute: None,
-            gpu_fluid_compute: None,
+
             contact_cache: HashMap::new(),
             accumulator: 0.0,
             render_alpha: 1.0,

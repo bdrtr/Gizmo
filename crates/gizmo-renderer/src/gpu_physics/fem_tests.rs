@@ -82,7 +82,7 @@ mod tests {
                 counts: [1, 0, 0, 0],
             };
 
-            let fem_system = GpuFemSystem::new(&device, &nodes, &elements, &params);
+            let fem_system = GpuFemSystem::new(&device, &nodes, &elements, &[], &params);
             
             // Dispatch clear forces compute pass ONLY
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -143,7 +143,7 @@ mod tests {
                 counts: [2, 0, 0, 0],
             };
 
-            let fem_system = GpuFemSystem::new(&device, &nodes, &elements, &params);
+            let fem_system = GpuFemSystem::new(&device, &nodes, &elements, &[], &params);
             
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
             {
@@ -216,7 +216,7 @@ mod tests {
                 counts: [4, 1, 0, 0],
             };
 
-            let fem_system = GpuFemSystem::new(&device, &nodes, &elements, &params);
+            let fem_system = GpuFemSystem::new(&device, &nodes, &elements, &[], &params);
             
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
             {
