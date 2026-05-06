@@ -325,16 +325,17 @@ pub fn execute_render_pipeline(
                 // --- LOD (Level of Detail) SEÇİMİ ---
                 // Eğer entity'de LodGroup varsa, kameraya mesafeye göre düşük/yüksek detay mesh seç
                 let lods = &lod_groups;
-                let active_mesh = if true {
-                    if let Some(lod) = lods.get(e) {
-                        let world_pos = Vec3::new(model.w_axis.x, model.w_axis.y, model.w_axis.z);
-                        let dist = cam_pos.distance(world_pos);
-                        lod.select_mesh(dist).unwrap_or(mesh)
-                    } else {
-                        mesh
-                    }
+                let active_mesh_opt = if let Some(lod) = lods.get(e) {
+                    let world_pos = Vec3::new(model.w_axis.x, model.w_axis.y, model.w_axis.z);
+                    let dist = cam_pos.distance(world_pos);
+                    lod.select_mesh(dist)
                 } else {
-                    mesh
+                    Some(mesh)
+                };
+
+                let active_mesh = match active_mesh_opt {
+                    Some(m) => m,
+                    None => continue, // CULL edildi!
                 };
 
                 let instance_data = InstanceRaw {

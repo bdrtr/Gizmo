@@ -36,14 +36,14 @@ pub fn texture_streaming_system(
             continue; // Gizli objeler stream edilmez
         }
 
-        let mat = if let Some(m) = materials.get(e) {
+        let mut mat = if let Some(m) = materials.get_mut(e) {
             m
         } else {
             continue;
         };
 
         // Eğer texture tanımlıysa uzaklık kontrolü yap
-        if let Some(texture_path) = &mat.texture_source {
+        if let Some(texture_path) = mat.texture_source.clone() {
             if let Some(t) = transforms.get(e) {
                 let dist_sq = cam_pos.distance_squared(t.position);
                 
@@ -53,6 +53,7 @@ pub fn texture_streaming_system(
                 if is_close && requests_this_frame < MAX_REQUESTS_PER_FRAME {
                     // Yükleme işlemini asenkron arka plan thread'ine (I/O) gönder
                     async_loader.request_texture_reload(texture_path.clone(), e);
+                    mat.texture_source = None; // DİKKAT: Tekrar istek atılmasını engelle!
                     requests_this_frame += 1;
                 }
             }
