@@ -1,9 +1,8 @@
 use crate::{
     broadphase::SpatialHash,
-    collision::{CollisionEvent, CollisionEventType, ContactManifold, TriggerEvent},
+    collision::{CollisionEvent, ContactManifold, TriggerEvent},
     components::{Collider, RigidBody, Transform, Velocity},
     integrator::Integrator,
-    narrowphase::NarrowPhase,
     raycast::{Ray, Raycast, RaycastHit},
     solver::ConstraintSolver,
     soft_body::SoftBodyMesh,

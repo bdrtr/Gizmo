@@ -5,7 +5,9 @@
 
 pub mod registry;
 pub mod scene;
+pub mod snapshot;
 pub mod physics_parser;
 
 pub use registry::SceneRegistry;
 pub use scene::{EntityData, MaterialData, SceneData};
+pub use snapshot::SceneSnapshot;

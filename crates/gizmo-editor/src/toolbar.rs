@@ -199,6 +199,20 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                 ui.separator();
 
                 // === AYARLAR ===
+                let profiler_color = if state.is_tab_open(&crate::editor_state::EditorTab::Profiler)
+                {
+                    egui::Color32::from_rgb(255, 200, 50)
+                } else {
+                    egui::Color32::GRAY
+                };
+                if ui
+                    .button(egui::RichText::new("⚡ Profiler").color(profiler_color))
+                    .on_hover_text("Performans profiler panelini aç/kapat")
+                    .clicked()
+                {
+                    state.toggle_tab(crate::editor_state::EditorTab::Profiler);
+                }
+
                 let settings_color = if state.is_tab_open(&crate::editor_state::EditorTab::Settings)
                 {
                     egui::Color32::from_rgb(100, 200, 255)
