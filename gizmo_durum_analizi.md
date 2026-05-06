@@ -241,7 +241,7 @@
 | ~~12~~ | ~~**Networking Overhaul**~~ ✅ | Tamamlandı — Reliable UDP, snapshot interpolation, client prediction eklendi. |
 | ~~13~~ | ~~**LOD + Virtual Texture Streaming**~~ ✅ | Tamamlandı — `LodGroup` ile mesh swapping, `texture_streaming_system` ile asenkron Doku Akışı eklendi. |
 | ~~14~~ | ~~**İlişkisel Archetype**~~ ✅ | Tamamlandı — `world.sort_archetype_hierarchy()` ile memory locality sağlandı. |
-| 15 | **Fixed-Point Math (Opsiyonel)** — Cross-platform tam bit-exact determinism | eSports / turnuva seviyesi netcode |
+| ~~15~~ | ~~**Fixed-Point Math (Opsiyonel)**~~ ✅ | Tamamlandı — `Fp32` ve `FpVec3` yapıları, bit-exact sqrt/sin/cos ile entegre edildi. |
 
 ---
 
