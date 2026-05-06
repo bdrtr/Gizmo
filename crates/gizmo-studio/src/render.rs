@@ -59,20 +59,106 @@ pub fn render_studio(
     );
 
     if play_start {
+        // 1. In-memory snapshot al (hızlı yol — fizik state dahil)
+        let mut protected_ids = std::collections::HashSet::new();
+        protected_ids.insert(state.editor_camera);
+        protected_ids.insert(highlight_box_id);
+        {
+            let names = world.borrow::<gizmo::core::component::EntityName>();
+            for e in world.iter_alive_entities() {
+                if let Some(name) = names.get(e.id()) {
+                    if name.0.starts_with("Editor ") || name.0 == "Highlight Box" {
+                        protected_ids.insert(e.id());
+                    }
+                }
+            }
+        }
+        let snapshot = gizmo::scene::SceneSnapshot::capture(
+            world,
+            &gizmo::scene::SceneRegistry::default(),
+            &protected_ids,
+        );
+
+        // 2. Disk yedeği de al (GPU kaynakları — Mesh, Material — için)
         let _ = gizmo::scene::SceneData::save(
             world,
             &play_backup_path,
             &gizmo::scene::SceneRegistry::default(),
         );
+
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-            ed.log_info("▶ Play: Sahne yedeği alındı ve simülasyon başladı.");
+            let entity_count = snapshot.entity_count();
+            ed.play_snapshot = Some(snapshot);
+            ed.log_info(&format!(
+                "▶ Play: {} entity in-memory snapshot alındı, simülasyon başladı.",
+                entity_count
+            ));
         }
     }
 
     if play_stop {
-        load_req = Some(play_backup_path.clone());
-        if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-            ed.log_info("Sahne yedeğe geri dönüldü.");
+        // In-memory snapshot varsa onu kullan, yoksa disk yedeğine düş
+        let snapshot_opt = {
+            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+                ed.play_snapshot.take()
+            } else {
+                None
+            }
+        };
+
+        if let Some(snapshot) = snapshot_opt {
+            // Hızlı yol: In-memory restore (fizik bileşenleri dahil)
+            let mut protected_ids = std::collections::HashSet::new();
+            protected_ids.insert(state.editor_camera);
+            protected_ids.insert(highlight_box_id);
+            {
+                let names = world.borrow::<gizmo::core::component::EntityName>();
+                for e in world.iter_alive_entities() {
+                    if let Some(name) = names.get(e.id()) {
+                        if name.0.starts_with("Editor ") || name.0 == "Highlight Box" {
+                            protected_ids.insert(e.id());
+                        }
+                    }
+                }
+            }
+
+            let result = snapshot.restore(
+                world,
+                &gizmo::scene::SceneRegistry::default(),
+                &protected_ids,
+            );
+
+            // GPU kaynaklarını (Mesh/Material) disk yedeğinden yükle
+            if std::path::Path::new(&play_backup_path).exists() {
+                if let Some(mut asset_manager) =
+                    world.remove_resource::<gizmo::renderer::asset::AssetManager>()
+                {
+                    let dummy_rgba = [255, 255, 255, 255];
+                    let dummy_bg = renderer.create_texture(&dummy_rgba, 1, 1);
+                    gizmo::scene::SceneData::load_into(
+                        &play_backup_path,
+                        world,
+                        &renderer.device,
+                        &renderer.queue,
+                        &renderer.scene.texture_bind_group_layout,
+                        &mut asset_manager,
+                        std::sync::Arc::new(dummy_bg),
+                        &gizmo::scene::SceneRegistry::default(),
+                    );
+                    world.insert_resource(asset_manager);
+                }
+            }
+
+            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+                ed.clear_selection();
+                ed.log_info(&format!("⏹ Stop: {}", result));
+            }
+        } else {
+            // Fallback: Disk yedeğinden yükle
+            load_req = Some(play_backup_path.clone());
+            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+                ed.log_info("⏹ Stop: Disk yedeğinden geri dönüldü (fallback).");
+            }
         }
     }
 

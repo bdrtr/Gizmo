@@ -17,6 +17,7 @@ pub mod hierarchy;
 pub mod history;
 pub mod inspector;
 pub mod prefs;
+pub mod profiler_panel;
 pub mod scene_view;
 pub mod toolbar;
 pub mod windows;
@@ -46,6 +47,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             EditorTab::BuildConsole => "Build".into(),
             EditorTab::Settings => "Ayarlar".into(),
             EditorTab::ScriptEditor => "Script Editor".into(),
+            EditorTab::Profiler => "⚡ Profiler".into(),
         }
     }
 
@@ -60,6 +62,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             EditorTab::BuildConsole => windows::ui_build_console(ui, self.state),
             EditorTab::Settings => windows::ui_settings_window(ui, self.state),
             EditorTab::ScriptEditor => windows::ui_script_editor(ui, self.state),
+            EditorTab::Profiler => profiler_panel::ui_profiler(ui, self.world, self.state),
         }
     }
 }

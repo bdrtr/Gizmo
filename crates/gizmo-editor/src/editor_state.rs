@@ -13,6 +13,7 @@ pub enum EditorTab {
     BuildConsole,
     Settings,
     ScriptEditor,
+    Profiler,
 }
 
 /// Gizmo aracı modu
@@ -290,6 +291,10 @@ pub struct EditorState {
 
     pub pending_dialog_rx:
         Option<std::sync::Mutex<std::sync::mpsc::Receiver<(bool, Option<String>)>>>,
+
+    /// Play/Stop modu için in-memory sahne yedeği.
+    /// Play'e basıldığında `Some(snapshot)`, Stop'ta `None` olur.
+    pub play_snapshot: Option<gizmo_scene::SceneSnapshot>,
 }
 
 impl EditorState {
@@ -362,6 +367,8 @@ impl EditorState {
             debug_spawned_entities: Vec::new(),
 
             pending_dialog_rx: None,
+
+            play_snapshot: None,
         }
     }
 

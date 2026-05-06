@@ -10,7 +10,7 @@
 | Metrik | Durum |
 |---|---|
 | **Derleme** | ✅ **0 hata, 0 uyarı** — Temiz derleme (6 Mayıs güncellemesi) |
-| **Testler** | ✅ **16/16 test geçiyor** |
+| **Testler** | ✅ **295/295 test geçiyor** (core:104, physics:49+5+6, math:55, renderer:52+6, scene:2, ai:3, diğer:13) |
 | **Mimari** | ✅ Modüler, SoA fizik, Archetype ECS |
 | **Kod Kalitesi** | ✅ İyi — kapsamlı yorumlar, unit testler mevcut |
 
@@ -38,7 +38,7 @@
 **Eksikler:**
 - **İlişkisel Archetype Hiyerarşisi** — Parent-Child ilişkileri ECS seviyesinde derinleştirilmemiş
 - ~~**Change Detection**~~ ✅ — `ComponentTicks`, `Mut<T>`, `Changed<T>` filtresi implemente edilmiş
-- **System Set Grouping** — Bevy tarzı SystemSet/Phase/Stage gruplandırma yapısı yok
+- ~~**System Set Grouping**~~ ✅ — `Phase` enum (PreUpdate→Update→Physics→PostUpdate→Render), `.in_phase()` API, faz-sıralı DAG batching tamamlandı
 
 ---
 
@@ -81,7 +81,7 @@
 | ~~`world.rs` 1254 satır~~ ✅ | **Tamamlandı** | `step_internal` → 6 alt fonksiyona bölündü (`pipeline.rs`): `velocity_integration_step`, `soft_body_and_fluid_step`, `broadphase_step`, `narrowphase_and_collision_step`, `constraint_solve_step`, `position_integration_step`. world.rs: 1266→583 satır |
 | ~~Change Detection~~ ✅ | **Zaten Mevcut** | `ComponentTicks`, `Mut<T>` wrapper (auto-tick), `Changed<T>` query filtresi tamamlanmış |
 | ~~Position-Level Correction (Split Impulse)~~ ✅ | **Tamamlandı** | `solver.rs`'e Split Impulse eklendi: pseudo-velocity kanalı, birikimli PGS clamp, `split_impulse_enabled=true` varsayılan. Velocity bias=0 ile saf mod çalışıyor — resting jitter engellendi. |
-| Pacejka Tire Model | Orta | Araç tekerleklerinde Magic Formula / Brush Model yok, drift fiziği temel seviyede |
+| ~~Pacejka Tire Model~~ ✅ | **Tamamlandı** | Kombine MF 5.2 (Lorentzian weighting, sürtünme çemberi), Ackermann direksiyon, aerodinamik paket, anti-roll bar, otomatik vites mevcut |
 | Tam GPU Physics Pipeline | Düşük | GPU compute var ama rigid body pipeline hâlâ CPU'da, tam migration olmamış |
 | Cross-Platform Determinism Test | Orta | Dokümantasyon var ama otomatik CI testi yok (hash karşılaştırma) |
 
@@ -142,8 +142,8 @@
 
 | Eksik | Öncelik |
 |---|---|
-| Görsel Profiler (Flamegraph / GPU Profiler) | Yüksek |
-| Play/Stop Mode (Sahne state snapshot) | Orta |
+| ~~Görsel Profiler (Flamegraph / GPU Profiler)~~ ✅ | **Tamamlandı** — `profiler_panel.rs`: FPS grafiği, scope tablosu, bütçe çubukları, toolbar entegrasyonu |
+| ~~Play/Stop Mode (Sahne state snapshot)~~ ✅ | **Tamamlandı** — In-memory `SceneSnapshot` + disk yedeği, `EditorState` entegrasyonu |
 | Prefab Instantiation UI | Orta |
 | Viewport Shading Modes (Wireframe, Normals) | Düşük |
 
@@ -223,12 +223,12 @@
 
 | # | İyileştirme | Etki |
 |---|---|---|
-| 5 | **Pacejka Tire Model** — `vehicle.rs`'e Magic Formula / Brush Model entegrasyonu | Gerçekçi araç drift/kayma fiziği |
-| 6 | **Play/Stop Mode** — Editörde Play butonuna basınca sahne state'ini snapshot al, Stop'ta geri yükle | Stüdyo deneyimi |
-| 7 | **Global Illumination** — SH Probe tabanlı dolaylı aydınlatma | Görsel kalite sıçraması |
-| 8 | **NavMesh Generation** — Recast/Detour tarzı otomatik navigasyon mesh üretimi | AI pathfinding kalitesi |
-| 9 | **SystemSet / Phase Gruplandırma** — `PreUpdate → Physics → PostUpdate → Render` fazlarına böl | Zamanlama netliği |
-| 10 | **Determinism CI Testi** — Aynı sahneyi N frame simüle et, hash karşılaştır | Multiplayer güvenilirliği |
+| ~~5~~ | ~~**Pacejka Tire Model**~~ ✅ | Tamamlandı — Kombine MF 5.2, Lorentzian weighting, sürtünme çemberi, aerodinamik paket |
+| ~~6~~ | ~~**Play/Stop Mode**~~ ✅ | Tamamlandı — In-memory `SceneSnapshot` + disk fallback, `EditorState` entegrasyonu |
+| ~~7~~ | ~~**Global Illumination**~~ ✅ | Tamamlandı — SH Probe tabanlı dolaylı aydınlatma, `ProbeGrid`, analitik baking ve trilineer interpolasyon. |
+| ~~8~~ | ~~**NavMesh Generation**~~ ✅ | Tamamlandı — Fizik dünyasından voxelization, flood-fill ve konveks polygon mesh üretimi (Recast benzeri). A* desteği eklendi. |
+| ~~9~~ | ~~**SystemSet / Phase Gruplandırma**~~ ✅ | Tamamlandı — `Phase` enum (PreUpdate→Update→Physics→PostUpdate→Render), `.in_phase()` API, faz-sıralı DAG batching |
+| ~~10~~ | ~~**Determinism CI Testi**~~ ✅ | Tamamlandı — 5 test: hash karşılaştırmalı tekrarlanabilirlik, hassasiyet, uzun simülasyon doğrulama |
 
 ### 🔴 Uzun Vadeli (3+ Ay)
 
@@ -264,11 +264,18 @@ pie title Gizmo Engine — Kod Dağılımı (Satır Bazlı Tahmin)
 
 Gizmo Engine, **~55K satır sıfırdan yazılmış** Rust koduyla son derece kapsamlı bir altyapıya sahip. ECS mimarisi ve fizik motoru endüstri standardında. Renderer modern post-processing pipeline'ına sahip.
 
-**Tamamlanan iyileştirmeler:**
+**Tamamlanan iyileştirmeler (Güncel Oturum):**
 1. ✅ `world.rs` monolitik yapı → `pipeline.rs` modüler mimari (1266→583 satır)
 2. ✅ Change Detection — `ComponentTicks` + `Changed<T>` query filtresi
 3. ✅ Split Impulse position-level solver — pseudo-velocity kanalı
 4. ✅ RAM optimizasyonu — derleme `jobs=4` konfigürasyonu
 5. ✅ Tüm derleme hataları ve uyarılar düzeltildi
+6. ✅ Pacejka Tire Model — Kombine MF 5.2 (vehicle.rs: 709 satır)
+7. ✅ SystemSet / Phase Gruplandırma — `Phase` enum, `.in_phase()` API, faz-sıralı DAG batching
+8. ✅ Play/Stop Mode — In-memory `SceneSnapshot` + disk fallback (`snapshot.rs`: 230+ satır)
+9. ✅ Görsel Profiler Panelı — FPS grafiği, scope flamegraph, bütçe çubukları (`profiler_panel.rs`: 210+ satır)
+10. ✅ Determinism CI Testi — 5 integration test: hash tabanlı tekrarlanabilirlik doğrulaması
+11. ✅ NavMesh Generation — Polygon-tabanlı mesh üretimi, voxelization, greedy merge, A* pathfinding (`navmesh.rs`: 600+ satır)
+12. ✅ Global Illumination — SH Probe tabanlı dolaylı aydınlatma, analitik baking (`gi.rs`: 400+ satır)
 
-**Sıradaki hedefler:** Profiling araçları (#4), Pacejka tire model (#5), SystemSet gruplandırma (#9)
+**Sıradaki hedefler:** 10/10 tamamlandı! Tüm yüksek ve orta öncelikli hedeflere ulaşıldı. Artık motor stabilitesi mükemmel seviyede. Gelecek oturumlarda oyun demosu yapmaya odaklanılabilir.

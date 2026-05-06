@@ -308,6 +308,7 @@ pub struct SystemConfig {
     pub(crate) before: Vec<&'static str>,
     pub(crate) after: Vec<&'static str>,
     pub(crate) added_info: AccessInfo,
+    pub(crate) phase: Phase,
 }
 
 impl SystemConfig {
@@ -318,6 +319,7 @@ impl SystemConfig {
             before: Vec::new(),
             after: Vec::new(),
             added_info: AccessInfo::new(),
+            phase: Phase::default(),
         }
     }
 
@@ -354,6 +356,10 @@ impl SystemConfig {
     }
     pub fn exclusive(mut self) -> Self {
         self.added_info.is_exclusive = true;
+        self
+    }
+    pub fn in_phase(mut self, phase: Phase) -> Self {
+        self.phase = phase;
         self
     }
 }
@@ -409,6 +415,12 @@ pub trait IntoSystemConfig<Params> {
         Self: Sized,
     {
         self.into_config().exclusive()
+    }
+    fn in_phase(self, phase: Phase) -> SystemConfig
+    where
+        Self: Sized,
+    {
+        self.into_config().in_phase(phase)
     }
 }
 
@@ -490,53 +502,64 @@ impl SystemBatch {
 
 pub struct Schedule {
     unbuilt_configs: Vec<SystemConfig>,
-    batches: Vec<SystemBatch>,
+    /// Her faz için ayrı batch listesi. Fazlar sıralı çalışır, faz içi batch'ler paralel.
+    phase_batches: Vec<(Phase, Vec<SystemBatch>)>,
+    /// Geriye dönük uyumluluk: faz kullanılmadığında eski düz batch listesi.
+    legacy_batches: Vec<SystemBatch>,
+    uses_phases: bool,
 }
 
 impl Schedule {
     pub fn new() -> Self {
         Self {
             unbuilt_configs: Vec::new(),
-            batches: Vec::new(),
+            phase_batches: Vec::new(),
+            legacy_batches: Vec::new(),
+            uses_phases: false,
         }
     }
 
     pub fn add_di_system<Params, S: IntoSystemConfig<Params>>(&mut self, system: S) {
         self.unbuilt_configs.push(system.into_config());
-        self.batches.clear();
+        self.invalidate();
     }
 
     pub fn add_system<S: System + 'static>(&mut self, system: S) {
         self.unbuilt_configs
             .push(SystemConfig::new(Box::new(system)));
-        self.batches.clear();
+        self.invalidate();
     }
 
     pub fn add_system_boxed(&mut self, system: Box<dyn System>) {
         self.unbuilt_configs.push(SystemConfig::new(system));
-        self.batches.clear();
+        self.invalidate();
+    }
+
+    fn invalidate(&mut self) {
+        self.phase_batches.clear();
+        self.legacy_batches.clear();
+    }
+
+    fn is_built(&self) -> bool {
+        !self.phase_batches.is_empty() || !self.legacy_batches.is_empty()
     }
 
     pub fn validate(&mut self) {
         self.build();
     }
 
-    fn build(&mut self) {
-        if !self.batches.is_empty() {
-            return;
-        }
-
-        let configs = std::mem::take(&mut self.unbuilt_configs);
+    /// Tek bir faz grubuna ait config'leri DAG-batch'le.
+    fn build_batches_for(configs: Vec<SystemConfig>) -> Vec<SystemBatch> {
         let count = configs.len();
         if count == 0 {
-            return;
+            return Vec::new();
         }
 
         let mut edge_set: HashSet<(usize, usize)> = HashSet::new();
         let mut adj = vec![Vec::new(); count];
         let mut in_degree = vec![0usize; count];
 
-        let mut add_edge = |from: usize, to: usize| {
+        let add_edge = |from: usize, to: usize, edge_set: &mut HashSet<(usize, usize)>, adj: &mut Vec<Vec<usize>>, in_degree: &mut Vec<usize>| {
             if edge_set.insert((from, to)) {
                 adj[from].push(to);
                 in_degree[to] += 1;
@@ -548,7 +571,7 @@ impl Schedule {
                 let mut found = false;
                 for j in 0..count {
                     if i != j && configs[j].labels.contains(before_label) {
-                        add_edge(i, j);
+                        add_edge(i, j, &mut edge_set, &mut adj, &mut in_degree);
                         found = true;
                     }
                 }
@@ -565,7 +588,7 @@ impl Schedule {
                 let mut found = false;
                 for j in 0..count {
                     if i != j && configs[j].labels.contains(after_label) {
-                        add_edge(j, i);
+                        add_edge(j, i, &mut edge_set, &mut adj, &mut in_degree);
                         found = true;
                     }
                 }
@@ -606,7 +629,7 @@ impl Schedule {
             );
         }
 
-        // Reverse adjacency: predecessors[i] = all systems that must finish before i.
+        // Reverse adjacency
         let mut predecessors = vec![Vec::<usize>::new(); count];
         for from in 0..count {
             for &to in &adj[from] {
@@ -614,12 +637,7 @@ impl Schedule {
             }
         }
 
-        // --- 2. DAG Batching (optimal greedy) --- //
-        // For each system in topological order:
-        //   1. earliest_batch = max(batch_of_predecessor) + 1  (respect explicit ordering)
-        //   2. scan backwards from latest batch to earliest_batch for a compatible slot
-        //   3. if found → add there; otherwise open a new batch
-        // This maximises parallelism while preserving all dependency and access constraints.
+        // DAG Batching (optimal greedy)
         let mut dummy_configs: Vec<Option<SystemConfig>> = configs.into_iter().map(Some).collect();
         let mut batches: Vec<SystemBatch> = Vec::new();
         let mut system_batch = vec![0usize; count];
@@ -633,7 +651,6 @@ impl Schedule {
                 .max()
                 .unwrap_or(0);
 
-            // Scan backwards from the latest existing batch to `earliest`.
             let placed = (earliest..batches.len())
                 .rev()
                 .find(|&bidx| batches[bidx].is_compatible(&*config.system, &config.added_info));
@@ -652,20 +669,48 @@ impl Schedule {
             system_batch[idx] = batch_idx;
         }
 
-        self.batches = batches;
+        batches
     }
 
-    #[tracing::instrument(skip_all, name = "ecs_update")]
-    pub fn run(&mut self, world: &mut World, dt: f32) {
-        use rayon::prelude::*;
-
-        if self.batches.is_empty() && !self.unbuilt_configs.is_empty() {
-            self.build();
+    fn build(&mut self) {
+        if self.is_built() {
+            return;
         }
 
-        for batch in &mut self.batches {
-            // Paralel çalıştırıyoruz! Bütün sistemler sadece "&World" alır.
-            // Resource / Column tabanlı kilitler içeride yönetilir.
+        let configs = std::mem::take(&mut self.unbuilt_configs);
+        if configs.is_empty() {
+            return;
+        }
+
+        // Herhangi bir config varsayılan olmayan Phase kullanıyor mu?
+        let has_explicit_phase = configs.iter().any(|c| c.phase != Phase::Update);
+        self.uses_phases = has_explicit_phase;
+
+        if has_explicit_phase {
+            // Fazlara göre grupla
+            let mut phase_groups: std::collections::BTreeMap<Phase, Vec<SystemConfig>> =
+                std::collections::BTreeMap::new();
+            for config in configs {
+                phase_groups.entry(config.phase).or_default().push(config);
+            }
+            // Her faz grubu için bağımsız DAG batch oluştur
+            for (phase, group) in phase_groups {
+                let batches = Self::build_batches_for(group);
+                if !batches.is_empty() {
+                    self.phase_batches.push((phase, batches));
+                }
+            }
+        } else {
+            // Geriye uyumlu: tek düz batch listesi
+            self.legacy_batches = Self::build_batches_for(configs);
+        }
+    }
+
+    /// Batch listesini çalıştırır (faz-içi veya legacy).
+    fn run_batches(batches: &mut [SystemBatch], world: &mut World, dt: f32) {
+        use rayon::prelude::*;
+
+        for batch in batches.iter_mut() {
             batch.systems.par_iter_mut().for_each(|system| {
                 system.run(world, dt);
             });
@@ -679,10 +724,38 @@ impl Schedule {
                 queue.apply(world);
             }
         }
+    }
+
+    #[tracing::instrument(skip_all, name = "ecs_update")]
+    pub fn run(&mut self, world: &mut World, dt: f32) {
+        if !self.is_built() && !self.unbuilt_configs.is_empty() {
+            self.build();
+        }
+
+        if self.uses_phases {
+            // Fazları sırasıyla çalıştır: PreUpdate → Update → Physics → PostUpdate → Render
+            for (_phase, batches) in &mut self.phase_batches {
+                let _span = tracing::info_span!("phase", name = _phase.name()).entered();
+                Self::run_batches(batches, world, dt);
+            }
+        } else {
+            // Legacy mod: düz batch listesi
+            Self::run_batches(&mut self.legacy_batches, world, dt);
+        }
 
         // Frame profiling verisini kaydet (ring buffer'a yaz)
         if let Some(mut profiler) = world.get_resource_mut::<crate::profiler::FrameProfiler>() {
             profiler.end_frame();
+        }
+    }
+
+    /// Toplam batch sayısı (debug / test amaçlı)
+    #[cfg(test)]
+    fn total_batch_count(&self) -> usize {
+        if self.uses_phases {
+            self.phase_batches.iter().map(|(_, b)| b.len()).sum()
+        } else {
+            self.legacy_batches.len()
         }
     }
 }
@@ -766,8 +839,8 @@ mod tests {
         schedule.build();
 
         // Hepsi aynı anda paralel çalışabileceği için 1 adet batch oluşmalı
-        assert_eq!(schedule.batches.len(), 1);
-        assert_eq!(schedule.batches[0].systems.len(), 3);
+        assert_eq!(schedule.legacy_batches.len(), 1);
+        assert_eq!(schedule.legacy_batches[0].systems.len(), 3);
     }
 
     #[test]
@@ -798,10 +871,10 @@ mod tests {
         // Batch 0: sys1 (writes CompA)
         // Batch 1: sys2 (reads CompA), sys3 (writes CompB)
         // Batch 2: sys4 (writes CompA)
-        assert_eq!(schedule.batches.len(), 3);
-        assert_eq!(schedule.batches[0].systems.len(), 1);
-        assert_eq!(schedule.batches[1].systems.len(), 2);
-        assert_eq!(schedule.batches[2].systems.len(), 1);
+        assert_eq!(schedule.legacy_batches.len(), 3);
+        assert_eq!(schedule.legacy_batches[0].systems.len(), 1);
+        assert_eq!(schedule.legacy_batches[1].systems.len(), 2);
+        assert_eq!(schedule.legacy_batches[2].systems.len(), 1);
     }
 
     #[test]
@@ -832,7 +905,7 @@ mod tests {
 
         // Bağımsız olsalar bile (okuma/yazma çakışması olmasa dahi) explicit order yüzünden:
         // Sıralama: sys3 -> sys2 -> sys1 olmalı ve farklı batch'lerde olmalılar
-        assert_eq!(schedule.batches.len(), 3);
+        assert_eq!(schedule.legacy_batches.len(), 3);
 
         let mut world = World::new();
         schedule.run(&mut world, 0.1);
@@ -867,5 +940,78 @@ mod tests {
 
         // Bu çağrı panic atmalı
         schedule.build();
+    }
+
+    #[test]
+    fn test_schedule_phase_ordering() {
+        let mut schedule = Schedule::new();
+        let log = RunLog::new();
+
+        // 3 sistem farklı fazlara atanmış — veri çakışması yok ama
+        // faz sıralaması garanti edilmeli: PreUpdate → Physics → Render
+        schedule.add_di_system(
+            create_system("render_sys", log.clone()).in_phase(Phase::Render)
+        );
+        schedule.add_di_system(
+            create_system("physics_sys", log.clone()).in_phase(Phase::Physics)
+        );
+        schedule.add_di_system(
+            create_system("pre_update_sys", log.clone()).in_phase(Phase::PreUpdate)
+        );
+
+        schedule.build();
+
+        // Phase modunda olmalı
+        assert!(schedule.uses_phases);
+        // 3 faz grubu oluşmalı
+        assert_eq!(schedule.phase_batches.len(), 3);
+        // Sıralama: PreUpdate(0) < Physics(2) < Render(4)
+        assert_eq!(schedule.phase_batches[0].0, Phase::PreUpdate);
+        assert_eq!(schedule.phase_batches[1].0, Phase::Physics);
+        assert_eq!(schedule.phase_batches[2].0, Phase::Render);
+
+        let mut world = World::new();
+        schedule.run(&mut world, 0.016);
+
+        // Çalışma sırası deterministik olmalı
+        let result = log.get();
+        assert_eq!(result, vec!["pre_update_sys", "physics_sys", "render_sys"]);
+    }
+
+    #[test]
+    fn test_schedule_phase_with_intra_phase_batching() {
+        let mut schedule = Schedule::new();
+        let log = RunLog::new();
+
+        // Physics fazında 2 çakışan sistem + 1 bağımsız sistem
+        schedule.add_di_system(
+            create_system("phys1", log.clone())
+                .in_phase(Phase::Physics)
+                .writes::<CompA>()
+        );
+        schedule.add_di_system(
+            create_system("phys2", log.clone())
+                .in_phase(Phase::Physics)
+                .reads::<CompA>()
+        );
+        // Update fazında 1 bağımsız sistem
+        schedule.add_di_system(
+            create_system("update_sys", log.clone())
+                .in_phase(Phase::Update)
+        );
+
+        schedule.build();
+
+        assert!(schedule.uses_phases);
+        // 2 faz grubu: Update ve Physics
+        assert_eq!(schedule.phase_batches.len(), 2);
+        assert_eq!(schedule.phase_batches[0].0, Phase::Update);
+        assert_eq!(schedule.phase_batches[1].0, Phase::Physics);
+
+        // Physics fazı 2 batch'e ayrılmalı (writes/reads çakışması)
+        assert_eq!(schedule.phase_batches[1].1.len(), 2);
+
+        // Toplam batch sayısı: Update(1) + Physics(2) = 3
+        assert_eq!(schedule.total_batch_count(), 3);
     }
 }
