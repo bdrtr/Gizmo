@@ -4,7 +4,7 @@ use gizmo::physics::world::PhysicsWorld;
 use gizmo::renderer::asset::AssetManager;
 use gizmo::renderer::components::{Camera, Material, MeshRenderer, LodGroup, LodLevel};
 use gizmo::renderer::async_assets::AsyncAssetLoader;
-use gizmo::audio::{AudioManager, AudioSource};
+use gizmo::audio::AudioSource;
 use gizmo::ai::components::NavAgent;
 use std::f32::consts::PI;
 use gizmo::winit::keyboard::KeyCode;
@@ -66,8 +66,8 @@ fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
 
     let mut rng = rand::thread_rng();
     for _ in 0..300 { // 1000'den 300'e çektik (Aşırı CPU Frustum/LOD yükünü hafifletmek için)
-        let x = rng.gen_range(-80.0..80.0);
-        let z = rng.gen_range(-80.0..80.0);
+        let x: f32 = rng.gen_range(-80.0..80.0);
+        let z: f32 = rng.gen_range(-80.0..80.0);
         
         // Oyuncunun ve AI'nin spawn olduğu noktaya (0,0 civarı) ağaç dikme!
         if x.abs() < 20.0 && z.abs() < 20.0 {
