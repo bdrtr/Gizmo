@@ -55,6 +55,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
     world.add_component(ground, MeshRenderer::new());
     world.add_component(ground, Collider::box_collider(Vec3::new(500.0, 1.0, 500.0)));
     world.add_component(ground, RigidBody::new_static());
+    world.add_component(ground, Velocity::default());
 
     // --- ORMAN (LOD TESTİ) ---
     println!("LOD TESTİ: Orman oluşturuluyor...");
@@ -69,10 +70,12 @@ fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
         
         let tree = world.spawn();
         world.add_component(tree, Transform::new(Vec3::new(x, 0.0, z)).with_scale(Vec3::new(2.0, 5.0, 2.0)));
+        world.add_component(tree, low_res_tree.clone());
         world.add_component(tree, tree_mat.clone());
         world.add_component(tree, MeshRenderer::new());
         world.add_component(tree, Collider::capsule(2.0, 5.0));
         world.add_component(tree, RigidBody::new_static());
+        world.add_component(tree, Velocity::default());
 
         // LOD (Level of Detail) Swapping System Entegrasyonu
         let lod_group = LodGroup::new(vec![
@@ -96,6 +99,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
         world.add_component(npc, MeshRenderer::new());
         world.add_component(npc, Collider::capsule(0.5, 0.5));
         world.add_component(npc, RigidBody::new_kinematic());
+        world.add_component(npc, Velocity::default());
         world.add_component(npc, CharacterController::default());
         world.add_component(npc, NavAgent::default()); // AI sistemi tarafından yürütülecek
         
