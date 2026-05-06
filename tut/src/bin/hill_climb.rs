@@ -599,7 +599,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
                 state.decals.push(decal);
             } else {
                 let decal = state.decals[state.decal_index];
-                if let Some(mut q_t) = world.query::<gizmo::core::query::Mut<Transform>>() {
+                if let Some(q_t) = world.query::<gizmo::core::query::Mut<Transform>>() {
                     if let Some(mut dt) = q_t.get(decal.id()) {
                         dt.position = pd.position;
                         dt.rotation = pd.rotation;
@@ -775,12 +775,10 @@ fn ui_debug_panel(world: &mut World, state: &mut DemoState, ctx: &gizmo::egui::C
 
             ui.separator();
             ui.heading("Şasi & Ağırlık");
-            let mut com_y = 0.0;
-            let mut mass = 1500.0;
             let mut bodies = world.borrow_mut::<gizmo::physics::RigidBody>();
             if let Some(rb) = bodies.get_mut(state.car_entity.id()) {
-                com_y = rb.center_of_mass.y;
-                    mass = rb.mass;
+                let mut com_y = rb.center_of_mass.y;
+                    let mut mass = rb.mass;
                     
                     if ui.add(gizmo::egui::Slider::new(&mut com_y, -2.0..=1.0).text("Ağırlık Merkezi (Y)")).changed() {
                         rb.center_of_mass.y = com_y;

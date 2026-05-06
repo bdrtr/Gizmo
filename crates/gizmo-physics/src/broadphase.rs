@@ -430,7 +430,9 @@ impl DynamicAabbTree {
     /// Tüm olası çarpışma çiftlerini döndür (yaprak-yaprak çiftleri, AABB overlap)
     pub fn query_pairs(&self) -> Vec<(Entity, Entity)> {
         let mut pairs = Vec::new();
-        if self.root == NULL { return pairs; }
+        if self.root == NULL { 
+            return pairs; 
+        }
         
         let mut single_stack = Vec::with_capacity(64);
         single_stack.push(self.root);
@@ -446,12 +448,17 @@ impl DynamicAabbTree {
             }
         }
         
+
         while let Some((a_idx, b_idx)) = pair_stack.pop() {
             if a_idx == NULL || b_idx == NULL { continue; }
             let a_node = &self.nodes[a_idx];
             let b_node = &self.nodes[b_idx];
             
-            if !a_node.aabb.intersects(b_node.aabb) { continue; }
+            let overlap = a_node.aabb.intersects(b_node.aabb);
+
+            if !overlap { 
+                continue; 
+            }
             
             if a_node.is_leaf() && b_node.is_leaf() {
                 if let (Some(ea), Some(eb)) = (a_node.entity, b_node.entity) {

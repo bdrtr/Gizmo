@@ -1,0 +1,10 @@
+# RAM Taşması Önleme — 13GB RAM'de 16 çekirdekli CPU ile derleme
+# Her rustc süreci ~1-2GB RAM tüketir. 16 paralel iş = 16-32GB gerekir.
+# 4 iş ile sınırlayarak ~4-8GB'ye düşürüyoruz.
+
+[build]
+jobs = 4
+
+# Linker RAM kullanımını azalt
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "codegen-units=4", "-C", "lto=off"]

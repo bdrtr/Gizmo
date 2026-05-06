@@ -243,11 +243,11 @@ fn main() {
             game.tex = Some(tex);
 
             // Decal (Çıkartma) Testi
-            if let Some(decal_state) = renderer.decal.as_ref() {
+            if let Some(_decal_state) = renderer.decal.as_ref() {
                 let decal_tex = asset_manager.create_checkerboard_texture(
                     &renderer.device,
                     &renderer.queue,
-                    &decal_state.decal_tex_bgl,
+                    &renderer.scene.texture_bind_group_layout,
                 );
 
                 let decal_entity = world.spawn();

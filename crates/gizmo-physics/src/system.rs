@@ -10,6 +10,11 @@ use gizmo_core::entity::Entity;
 /// and writes the transformed positions and velocities back to the ECS.
 #[tracing::instrument(skip_all, name = "physics_step_system")]
 pub fn physics_step_system(world: &World, dt: f32) {
+    // Record profiler scope (if FrameProfiler resource is available)
+    if let Ok(mut profiler) = world.try_get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+        profiler.begin_scope("physics_total");
+    }
+
     // 1. Acquire PhysicsWorld Resource
     let mut physics_world = match world.try_get_resource_mut::<PhysicsWorld>() {
         Ok(res) => res,
@@ -218,6 +223,12 @@ pub fn physics_step_system(world: &World, dt: f32) {
     if physics_world.step_once {
         physics_world.step_once = false;
     }
+
+    // Close profiler scope
+    drop(physics_world); // PhysicsWorld lock'unu bırak
+    if let Ok(mut profiler) = world.try_get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+        profiler.end_scope("physics_total");
+    }
 }
 
 /// System that processes collision events and breaks objects that exceed their threshold.
@@ -252,6 +263,35 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
         for contact in &event.contact_points {
             if contact.normal_impulse > max_impulse {
                 max_impulse = contact.normal_impulse;
+                impact_normal = contact.normal;
+                impact_point = contact.point;
+            }
+        }
+
+        // Fallback: estimate impact from relative velocity when solver impulse is unavailable
+        if max_impulse <= 0.0 && !event.contact_points.is_empty() {
+            // Look up velocities of both entities to estimate impact force
+            let vel_a = physics_world.entity_index_map.get(&event.entity_a.id())
+                .map(|&idx| physics_world.velocities[idx].linear)
+                .unwrap_or(gizmo_math::Vec3::ZERO);
+            let vel_b = physics_world.entity_index_map.get(&event.entity_b.id())
+                .map(|&idx| physics_world.velocities[idx].linear)
+                .unwrap_or(gizmo_math::Vec3::ZERO);
+            let mass_a = physics_world.entity_index_map.get(&event.entity_a.id())
+                .map(|&idx| physics_world.rigid_bodies[idx].mass)
+                .unwrap_or(1.0);
+            let mass_b = physics_world.entity_index_map.get(&event.entity_b.id())
+                .map(|&idx| physics_world.rigid_bodies[idx].mass)
+                .unwrap_or(1.0);
+            
+            let rel_speed = (vel_b - vel_a).length();
+            let reduced_mass = if mass_a > 0.0 && mass_b > 0.0 {
+                (mass_a * mass_b) / (mass_a + mass_b)
+            } else {
+                mass_a.max(mass_b)
+            };
+            max_impulse = rel_speed * reduced_mass;
+            if let Some(contact) = event.contact_points.first() {
                 impact_normal = contact.normal;
                 impact_point = contact.point;
             }

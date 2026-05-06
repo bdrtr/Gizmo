@@ -1,0 +1,58 @@
+warning: variable does not need to be mutable
+   --> crates/gizmo-physics/src/gjk.rs:102:13
+    |
+102 |         let mut p = support(direction);
+    |             ----^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `gizmo-physics` (lib) generated 1 warning (run `cargo fix --lib -p gizmo-physics` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/integration_tests.rs (target/debug/deps/integration_tests-f5da46236e2b90ae)
+
+running 1 test
+BVH inserted entity: Entity(0) at node 0, root now: 0
+BVH inserted entity: Entity(1) at node 1, root now: 2
+BVH inserted entity: Entity(0) at node 0, root now: 0
+BVH inserted entity: Entity(1) at node 1, root now: 2
+BVH internal pairs to check: 1
+  Checking overlap: Node 0 vs Node 1, overlap=true
+    Node 0 AABB: Aabb { min: Vec3A(9.799999, -10.1, -10.1), max: Vec3A(10.200001, 10.1, 10.1) }
+    Node 1 AABB: Aabb { min: Vec3A(-0.6, -0.6, -0.6), max: Vec3A(17.265974, 0.6, 0.6) }
+BVH Found Overlap: Entity(0) and Entity(1)
+BVH inserted entity: Entity(0) at node 0, root now: 0
+BVH inserted entity: Entity(1) at node 1, root now: 2
+BVH internal pairs to check: 1
+  Checking overlap: Node 0 vs Node 1, overlap=true
+    Node 0 AABB: Aabb { min: Vec3A(9.799999, -10.1, -10.1), max: Vec3A(10.200001, 10.1, 10.1) }
+    Node 1 AABB: Aabb { min: Vec3A(3.5664935, -0.6, -0.6), max: Vec3A(21.431772, 0.6, 0.6) }
+BVH Found Overlap: Entity(0) and Entity(1)
+BVH inserted entity: Entity(0) at node 0, root now: 0
+BVH inserted entity: Entity(1) at node 1, root now: 2
+BVH internal pairs to check: 1
+  Checking overlap: Node 0 vs Node 1, overlap=true
+    Node 0 AABB: Aabb { min: Vec3A(9.799999, -10.1, -10.1), max: Vec3A(10.200001, 10.1, 10.1) }
+    Node 1 AABB: Aabb { min: Vec3A(7.7328134, -0.6, -0.6), max: Vec3A(25.597397, 0.6, 0.6) }
+BVH Found Overlap: Entity(0) and Entity(1)
+BVH inserted entity: Entity(0) at node 0, root now: 0
+BVH inserted entity: Entity(1) at node 1, root now: 2
+BVH internal pairs to check: 1
+  Checking overlap: Node 0 vs Node 1, overlap=false
+    Node 0 AABB: Aabb { min: Vec3A(9.799999, -10.1, -10.1), max: Vec3A(10.200001, 10.1, 10.1) }
+    Node 1 AABB: Aabb { min: Vec3A(11.898958, -0.6, -0.6), max: Vec3A(29.762848, 0.6, 0.6) }
+
+thread 'test_ccd_fast_bullet_vs_thin_wall' (1391601) panicked at crates/gizmo-physics/tests/integration_tests.rs:539:5:
+Bullet moved through the wall!
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test test_ccd_fast_bullet_vs_thin_wall ... FAILED
+
+failures:
+
+failures:
+    test_ccd_fast_bullet_vs_thin_wall
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p gizmo-physics --test integration_tests`

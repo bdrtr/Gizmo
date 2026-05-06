@@ -118,8 +118,11 @@ impl RigidBody {
     }
     
     pub fn can_sleep(&self, velocity: &Velocity) -> bool {
+        if self.is_kinematic() {
+            return false; // Kinematic bodies never sleep — user controls their motion
+        }
         if !self.is_dynamic() {
-            return true;
+            return true; // Static bodies are always "asleep"
         }
         
         const SLEEP_LINEAR_THRESHOLD: f32 = 0.05;
