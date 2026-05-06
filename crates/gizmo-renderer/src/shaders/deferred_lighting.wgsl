@@ -19,7 +19,9 @@ struct SceneUniforms {
     camera_forward:  vec4<f32>,
     cascade_params:  vec4<f32>,
     num_lights: u32,
-    _pad: vec3<u32>,
+    _pad1: vec3<u32>,
+    _pad2: vec3<u32>,
+    shading_mode: u32,
 };
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
@@ -197,6 +199,21 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         (final_color * (a * final_color + b)) / (final_color * (c * final_color + d) + e),
         vec3<f32>(0.0), vec3<f32>(1.0)
     );
+
+    // Shading Mode overrides
+    if (scene.shading_mode == 1u) {
+        // Normals
+        return vec4<f32>(N * 0.5 + 0.5, 1.0);
+    } else if (scene.shading_mode == 2u) {
+        // Albedo
+        return vec4<f32>(albedo, 1.0);
+    } else if (scene.shading_mode == 3u) {
+        // Wireframe (Mock based on world pos)
+        let grid = fract(world_pos * 4.0);
+        let line = min(grid.x, min(grid.y, grid.z));
+        let wire = 1.0 - smoothstep(0.0, 0.05, line);
+        return vec4<f32>(mix(albedo * 0.2, vec3<f32>(1.0), wire), 1.0);
+    }
 
     return vec4<f32>(final_color, 1.0);
 }

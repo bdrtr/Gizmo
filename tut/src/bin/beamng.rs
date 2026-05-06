@@ -240,10 +240,19 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
     let params = GpuFemParams {
         properties: [0.0005, 10000.0, 10000.0, 0.999], // dt, mu, lambda, damping
         gravity: [0.0, -9.81, 0.0, 0.0],
-        counts: [nodes.len() as u32, elements.len() as u32, 0, 0],
+        counts: [nodes.len() as u32, elements.len() as u32, 1, 0],
     };
 
-    let fem_system = GpuFemSystem::new(&renderer.device, &nodes, &elements, &params);
+    let ground_collider = gizmo::renderer::gpu_physics::fem::GpuFemCollider {
+        shape_type: 0, // Plane
+        radius: 0.0,
+        _pad0: 0,
+        _pad1: 0,
+        position: [0.0, 0.0, 0.0, 0.0],
+        normal: [0.0, 1.0, 0.0, 0.0],
+    };
+
+    let fem_system = GpuFemSystem::new(&renderer.device, &nodes, &elements, &[ground_collider], &params);
 
     // Render Pipeline for FEM
     let render_shader = renderer.device.create_shader_module(wgpu::ShaderModuleDescriptor {

@@ -165,9 +165,15 @@ impl<'a> Renderer<'a> {
             wgpu::TextureFormat::Depth32Float,
         ));
 
-        // Disable GPU fluid simulation to remove the falling water
-        let gpu_fluid = None;
-        
+        let gpu_fluid = Some(crate::gpu_fluid::GpuFluidSystem::new(
+            &device,
+            &queue,
+            100_000,
+            &scene.global_bind_group_layout,
+            post_res.hdr_texture.format(),
+            config.width,
+            config.height,
+        ));        
         let debug_renderer = Some(crate::debug_renderer::GizmoRendererSystem::new(
             &device,
             &scene.global_bind_group_layout,

@@ -297,7 +297,7 @@ fn fluid_only_render_pass(
         _align_pad: [0; 3],
         _post_align_pad: 0,
         _pad_scene: [0; 3],
-        _end_pad: 0,
+        shading_mode: 0,
     };
     renderer.queue.write_buffer(
         &renderer.scene.global_uniform_buffer,

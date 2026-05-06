@@ -26,9 +26,19 @@ struct FEMParams {
     counts: vec4<u32>, // num_nodes, num_elements, _, _
 }
 
+struct GpuCollider {
+    shape_type: u32, // 0=Plane, 1=Sphere
+    radius: f32,
+    _pad0: u32,
+    _pad1: u32,
+    position: vec4<f32>,
+    normal: vec4<f32>,
+}
+
 @group(0) @binding(0) var<uniform> params: FEMParams;
 @group(0) @binding(1) var<storage, read_write> nodes: array<SoftBodyNode>;
 @group(0) @binding(2) var<storage, read> elements: array<Tetrahedron>;
+@group(0) @binding(3) var<storage, read> colliders: array<GpuCollider>;
 
 
 
@@ -165,22 +175,61 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let accel = total_force / mass;
     velocity += accel * dt;
     
-    // Global Damping (Energy loss)
+    // Default Global Damping (Energy loss)
     velocity *= params.properties.w;
-    
-    // Ground Collision (Simple Y=0 plane for test)
-    let future_pos = position + velocity * dt;
-    if (future_pos.y < 0.0) {
-        velocity.y *= -0.5; // Bounce / Friction
-        position = vec3<f32>(future_pos.x, 0.0, future_pos.z); // <- BUG FIXED!
+    var future_pos = position + velocity * dt;
 
+    // Advanced GPU-Side Collision Detection
+    let num_colliders = params.counts.z;
+    for (var i = 0u; i < num_colliders; i = i + 1u) {
+        let col = colliders[i];
         
-        // Simple XZ friction
-        velocity.x *= 0.9;
-        velocity.z *= 0.9;
-    } else {
-        position = future_pos;
+        if (col.shape_type == 0u) {
+            // Plane Collision
+            // col.position.xyz is a point on the plane
+            // col.normal.xyz is the plane normal
+            let plane_normal = col.normal.xyz;
+            let to_node = future_pos - col.position.xyz;
+            let dist = dot(to_node, plane_normal);
+            
+            if (dist < 0.0) {
+                // Resolve interpenetration
+                future_pos = future_pos - plane_normal * dist;
+                
+                // Reflect velocity
+                let v_dot_n = dot(velocity, plane_normal);
+                if (v_dot_n < 0.0) {
+                    let normal_vel = plane_normal * v_dot_n;
+                    let tangent_vel = velocity - normal_vel;
+                    
+                    // Bounce (-0.2 restitution) and Friction (0.8)
+                    velocity = tangent_vel * 0.8 - normal_vel * 0.2;
+                }
+            }
+        } else if (col.shape_type == 1u) {
+            // Sphere Collision
+            let diff = future_pos - col.position.xyz;
+            let dist_sq = dot(diff, diff);
+            let r = col.radius;
+            
+            if (dist_sq < r * r && dist_sq > 0.0001) {
+                let dist = sqrt(dist_sq);
+                let normal = diff / dist;
+                let penetration = r - dist;
+                
+                future_pos = future_pos + normal * penetration;
+                
+                let v_dot_n = dot(velocity, normal);
+                if (v_dot_n < 0.0) {
+                    let normal_vel = normal * v_dot_n;
+                    let tangent_vel = velocity - normal_vel;
+                    velocity = tangent_vel * 0.9 - normal_vel * 0.5;
+                }
+            }
+        }
     }
+    
+    position = future_pos;
     
     nodes[idx].velocity_fixed = vec4<f32>(velocity.x, velocity.y, velocity.z, f32(is_fixed));
     nodes[idx].position_mass = vec4<f32>(position.x, position.y, position.z, mass);

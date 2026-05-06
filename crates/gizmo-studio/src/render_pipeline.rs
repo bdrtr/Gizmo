@@ -75,7 +75,9 @@ pub fn execute_render_pipeline(
         1.0
     };
 
+    let mut ed_shading_mode = 0;
     if let Some(ed_state) = world.get_resource::<gizmo::editor::EditorState>() {
+        ed_shading_mode = ed_state.shading_mode;
         if let Some(rect) = ed_state.scene_view_rect {
             if rect.height() > 0.0 {
                 aspect = rect.width() / rect.height();
@@ -242,7 +244,7 @@ pub fn execute_render_pipeline(
         _align_pad: [0; 3],
         _post_align_pad: 0,
         _pad_scene: [0; 3],
-        _end_pad: 0,
+        shading_mode: ed_shading_mode,
     };
     renderer.queue.write_buffer(
         &renderer.scene.global_uniform_buffer,

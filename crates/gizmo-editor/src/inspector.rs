@@ -669,8 +669,7 @@ fn draw_fluid_section(
             egui::CollapsingHeader::new("🌊 SPH Fluid Simulation (GPU)")
                 .default_open(true)
                 .show(ui, |ui| {
-                    ui.label(format!("Parçacık Sayısı: {}", fluid.particles.len()));
-                    
+                    ui.label("GPU SPH Engine Aktif (ECS Üzerinden Yönetilir)");
                     ui.horizontal(|ui| {
                         ui.label("Hedef Yoğunluk:");
                         ui.add(egui::DragValue::new(&mut fluid.target_density).speed(1.0).range(100.0..=2000.0));
@@ -691,30 +690,7 @@ fn draw_fluid_section(
                         ui.add(egui::DragValue::new(&mut fluid.particle_radius).speed(0.01).range(0.01..=1.0));
                     });
                     
-                    if ui.button("🌊 1000 Parçacık Ekle").clicked() {
-                        let count_per_axis = 10;
-                        let spacing = 0.5;
-                        for i in 0..count_per_axis {
-                            for j in 0..count_per_axis {
-                                for k in 0..count_per_axis {
-                                    let x = fluid.bounds_min.x + (i as f32) * spacing;
-                                    let y = fluid.bounds_min.y + (j as f32) * spacing;
-                                    let z = fluid.bounds_min.z + (k as f32) * spacing;
-                                    
-                                    fluid.particles.push(gizmo_physics::gpu_fluid::FluidParticle {
-                                        position: [x, y, z],
-                                        density: 0.0,
-                                        velocity: [0.0, 0.0, 0.0],
-                                        pressure: 0.0,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    
-                    if ui.button("🗑️ Tüm Parçacıkları Temizle").clicked() {
-                        fluid.particles.clear();
-                    }
+
                 });
             ui.separator();
         }

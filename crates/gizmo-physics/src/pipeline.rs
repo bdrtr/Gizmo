@@ -111,7 +111,7 @@ impl PhysicsWorld {
     pub(crate) fn soft_body_and_fluid_step(
         &mut self,
         soft_bodies: &mut [(Entity, SoftBodyMesh, Transform)],
-        fluid_sims: &mut [(Entity, crate::components::FluidSimulation, Transform)],
+        _fluid_sims: &mut [(Entity, crate::components::FluidSimulation, Transform)],
         dt: f32,
     ) {
             // 1.5 Step Soft Bodies
@@ -130,11 +130,6 @@ impl PhysicsWorld {
             }
     
             // 1.6 Step Fluid Simulations
-            if let Some(gpu_fluid) = &mut self.gpu_fluid_compute {
-                for (_, fluid_sim, _) in fluid_sims.iter_mut() {
-                    gpu_fluid.step_fluid(&mut fluid_sim.particles, dt, gravity.into());
-                }
-            }
     
     }
 

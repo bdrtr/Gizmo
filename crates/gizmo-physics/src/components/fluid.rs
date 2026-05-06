@@ -1,9 +1,7 @@
-use crate::gpu_fluid::FluidParticle;
 use gizmo_math::Vec3;
 
 #[derive(Debug, Clone)]
 pub struct FluidSimulation {
-    pub particles: Vec<FluidParticle>,
     pub target_density: f32,
     pub pressure_multiplier: f32,
     pub viscosity: f32,
@@ -15,7 +13,6 @@ pub struct FluidSimulation {
 impl Default for FluidSimulation {
     fn default() -> Self {
         Self {
-            particles: Vec::new(),
             target_density: 1000.0,
             pressure_multiplier: 100.0,
             viscosity: 0.01,

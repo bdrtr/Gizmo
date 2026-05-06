@@ -4,7 +4,7 @@ pub mod collision;
 pub mod components;
 pub mod error;
 pub mod gpu_compute;
-pub mod gpu_fluid;
+
 pub mod integrator;
 pub mod island;
 pub mod joints;

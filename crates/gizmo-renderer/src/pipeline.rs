@@ -110,7 +110,7 @@ fn build_global_uniforms(device: &wgpu::Device) -> wgpu::Buffer {
         _align_pad: [0; 3],
         _post_align_pad: 0,
         _pad_scene: [0; 3],
-        _end_pad: 0,
+        shading_mode: 0,
     };
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Global Uniform Buffer"),
