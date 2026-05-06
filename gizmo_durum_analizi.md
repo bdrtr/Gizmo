@@ -238,9 +238,9 @@
 | # | İyileştirme | Etki |
 |---|---|---|
 | 11 | ~~**Tam GPU Rigid Body Pipeline**~~ — Oynanış fizikleri CPU'da kalacak (AAA mimari standardı). | Milyon nesne simülasyonu GPU Debris olarak yapılacak |
-| 12 | **Networking Overhaul** — Reliable UDP, snapshot interpolation, client-side prediction | Multiplayer desteği |
-| 13 | **LOD + Virtual Texture Streaming** | Büyük açık dünya |
-| 14 | **İlişkisel Archetype** — Parent-Child hafıza locality optimizasyonu | ECS premium performansı |
+| ~~12~~ | ~~**Networking Overhaul**~~ ✅ | Tamamlandı — Reliable UDP, snapshot interpolation, client prediction eklendi. |
+| ~~13~~ | ~~**LOD + Virtual Texture Streaming**~~ ✅ | Tamamlandı — `LodGroup` ile mesh swapping, `texture_streaming_system` ile asenkron Doku Akışı eklendi. |
+| ~~14~~ | ~~**İlişkisel Archetype**~~ ✅ | Tamamlandı — `world.sort_archetype_hierarchy()` ile memory locality sağlandı. |
 | 15 | **Fixed-Point Math (Opsiyonel)** — Cross-platform tam bit-exact determinism | eSports / turnuva seviyesi netcode |
 
 ---
