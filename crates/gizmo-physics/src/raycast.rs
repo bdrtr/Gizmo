@@ -113,7 +113,7 @@ impl Raycast {
         };
 
         let hit_point = ray.point_at(t);
-        let normal = (hit_point - center).normalize();
+        let normal = (hit_point - center).try_normalize().unwrap_or(Vec3::Y);
 
         Some((t, normal))
     }
@@ -198,7 +198,7 @@ impl Raycast {
                 let y = baoc + t * bard;
                 if y > 0.0 && y < baba {
                     let hit_point = local_origin + local_dir * t;
-                    let normal = (hit_point - (p1 + ba * (y / baba))).normalize();
+                    let normal = (hit_point - (p1 + ba * (y / baba))).try_normalize().unwrap_or(Vec3::Y);
                     let world_normal = rotation * normal;
                     return Some((t, world_normal));
                 }
@@ -221,7 +221,7 @@ impl Raycast {
                 if t > 0.0 && t < best_t {
                     best_t = t;
                     let hit = local_origin + local_dir * t;
-                    best_normal = (hit - cap_center).normalize();
+                    best_normal = (hit - cap_center).try_normalize().unwrap_or(Vec3::Y);
                 }
             }
         }
@@ -310,7 +310,7 @@ impl Raycast {
                                 let t = f * e2.dot(q);
                                 if t > 0.0 && t < best_t {
                                     best_t = t;
-                                    best_normal = e1.cross(e2).normalize();
+                                    best_normal = e1.cross(e2).try_normalize().unwrap_or(Vec3::Y);
                                     if best_normal.dot(local_dir) > 0.0 {
                                         best_normal = -best_normal;
                                     }
@@ -342,7 +342,7 @@ impl Raycast {
                         let t = f * e2.dot(q);
                         if t > 0.0 && t < best_t {
                             best_t = t;
-                            best_normal = e1.cross(e2).normalize();
+                            best_normal = e1.cross(e2).try_normalize().unwrap_or(Vec3::Y);
                             if best_normal.dot(local_dir) > 0.0 {
                                 best_normal = -best_normal;
                             }

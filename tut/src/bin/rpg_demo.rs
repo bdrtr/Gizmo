@@ -69,6 +69,11 @@ fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
         let x = rng.gen_range(-80.0..80.0);
         let z = rng.gen_range(-80.0..80.0);
         
+        // Oyuncunun ve AI'nin spawn olduğu noktaya (0,0 civarı) ağaç dikme!
+        if x.abs() < 20.0 && z.abs() < 20.0 {
+            continue;
+        }
+
         let tree = world.spawn();
         world.add_component(tree, Transform::new(Vec3::new(x, 0.0, z)).with_scale(Vec3::new(2.0, 5.0, 2.0)));
         world.add_component(tree, low_res_tree.clone());
