@@ -57,7 +57,8 @@ impl LodGroup {
                 return Some(&level.mesh);
             }
         }
-        self.levels.last().map(|l| &l.mesh)
+        // Eğer uzaklık en uzak LOD sınırını bile geçiyorsa CULL et (None dön).
+        None
     }
 }
 
