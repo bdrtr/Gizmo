@@ -49,11 +49,12 @@ fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
         .with_texture_source("assets/textures/grass_high_res.png".to_string());
     
     let ground = world.spawn();
-    world.add_component(ground, Transform::new(Vec3::new(0.0, -1.0, 0.0)).with_scale(Vec3::new(500.0, 1.0, 500.0)));
+    // Yüzeyi 100x100 yapıyoruz ki UV'ler çok sünüp su/deniz gibi görünmesin!
+    world.add_component(ground, Transform::new(Vec3::new(0.0, -1.0, 0.0)).with_scale(Vec3::new(100.0, 1.0, 100.0)));
     world.add_component(ground, ground_mesh.clone());
     world.add_component(ground, ground_mat.clone());
     world.add_component(ground, MeshRenderer::new());
-    world.add_component(ground, Collider::box_collider(Vec3::new(500.0, 1.0, 500.0)));
+    world.add_component(ground, Collider::box_collider(Vec3::new(100.0, 1.0, 100.0)));
     world.add_component(ground, RigidBody::new_static());
     world.add_component(ground, Velocity::default());
 
@@ -64,9 +65,9 @@ fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
     let tree_mat = Material::new(ground_tex.clone()).with_pbr(Vec4::new(0.1, 0.8, 0.1, 1.0), 0.8, 0.0);
 
     let mut rng = rand::thread_rng();
-    for _ in 0..1000 {
-        let x = rng.gen_range(-200.0..200.0);
-        let z = rng.gen_range(-200.0..200.0);
+    for _ in 0..300 { // 1000'den 300'e çektik (Aşırı CPU Frustum/LOD yükünü hafifletmek için)
+        let x = rng.gen_range(-80.0..80.0);
+        let z = rng.gen_range(-80.0..80.0);
         
         let tree = world.spawn();
         world.add_component(tree, Transform::new(Vec3::new(x, 0.0, z)).with_scale(Vec3::new(2.0, 5.0, 2.0)));
@@ -191,7 +192,8 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
     }
     
     // --- FİZİK MOTORU VE ASENKRON DOKU AKIŞI (STREAMING) ADIMI ---
-    let mut physics_dt = dt.min(0.1);
+    // Ölüm sarmalını önlemek için fizikte max 2 adıma izin veriyoruz
+    let mut physics_dt = dt.min(0.032);
     while physics_dt > 0.0 {
         let step = physics_dt.min(0.016);
         gizmo::physics::system::physics_step_system(world, step);
