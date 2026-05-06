@@ -220,8 +220,8 @@ impl NarrowPhase {
             (ColliderShape::Plane(p), ColliderShape::Box(b)) =>
                 Self::box_plane(pos_b, rot_b, b.half_extents, p.normal, p.distance),
 
-            (ColliderShape::Box(ba), ColliderShape::Box(bb)) =>
-                Self::box_box(pos_a, rot_a, ba.half_extents, pos_b, rot_b, bb.half_extents),
+            (ColliderShape::Box(_), ColliderShape::Box(_)) =>
+                Self::test_collision(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b).into_iter().collect(),
 
             _ => Self::test_collision(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b)
                     .into_iter().collect(),

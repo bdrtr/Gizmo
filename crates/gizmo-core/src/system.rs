@@ -52,6 +52,57 @@ impl AccessInfo {
 }
 
 // ==============================================================
+// PHASE (SYSTEM SET GROUPING)
+// ==============================================================
+
+/// Fizik motoru tarzı faz sıralaması.
+/// Sistemler bir faza atanır ve fazlar sabit sırada çalışır:
+/// `PreUpdate → Update → Physics → PostUpdate → Render`
+///
+/// Aynı faz içindeki sistemler DAG batching ile paralel çalıştırılır.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Phase {
+    /// Input polling, zaman güncellemesi, olay temizliği
+    PreUpdate  = 0,
+    /// Oyun mantığı, AI, scripting
+    Update     = 1,
+    /// Fizik simülasyonu (fixed timestep ile)
+    Physics    = 2,
+    /// Transform propagation, cleanup
+    PostUpdate = 3,
+    /// Rendering hazırlığı
+    Render     = 4,
+}
+
+impl Phase {
+    /// Tüm fazları sıralı olarak döndürür.
+    pub const ALL: [Phase; 5] = [
+        Phase::PreUpdate,
+        Phase::Update,
+        Phase::Physics,
+        Phase::PostUpdate,
+        Phase::Render,
+    ];
+
+    /// Faz adını döndürür (tracing span'ları için).
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Phase::PreUpdate  => "pre_update",
+            Phase::Update     => "update",
+            Phase::Physics    => "physics",
+            Phase::PostUpdate => "post_update",
+            Phase::Render     => "render",
+        }
+    }
+}
+
+impl Default for Phase {
+    fn default() -> Self {
+        Phase::Update
+    }
+}
+
+// ==============================================================
 // SYSTEM TRAIT
 // ==============================================================
 
@@ -627,6 +678,11 @@ impl Schedule {
             if let Some(queue) = queue_clone {
                 queue.apply(world);
             }
+        }
+
+        // Frame profiling verisini kaydet (ring buffer'a yaz)
+        if let Some(mut profiler) = world.get_resource_mut::<crate::profiler::FrameProfiler>() {
+            profiler.end_frame();
         }
     }
 }

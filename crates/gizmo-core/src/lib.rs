@@ -7,6 +7,7 @@ pub mod entity;
 pub mod event;
 pub mod input;
 pub mod logger;
+pub mod profiler;
 pub mod query;
 pub mod registry;
 pub mod storage;
@@ -28,6 +29,7 @@ pub use registry::ComponentRegistry;
 pub use storage::{StorageView, StorageViewMut};
 pub use system::{IntoSystem, Res, ResMut, Schedule, System, SystemParam};
 pub use time::{Time, PhysicsTime};
+pub use profiler::FrameProfiler;
 pub use window::WindowInfo;
 pub use world::World;
 
@@ -36,8 +38,9 @@ pub use world::World;
 pub mod prelude {
     pub use super::input::mouse;
     pub use super::{
-        ActionMap, Changed, CommandQueue, Commands, Component, Entity, EntityName, Events, Input,
-        InputBinding, IntoSystem, IsHidden, Mut, PhysicsTime, PrefabRequest, Query, Res, ResMut,
-        Schedule, StorageView, StorageViewMut, System, SystemParam, Time, WindowInfo, World,
+        ActionMap, Changed, CommandQueue, Commands, Component, Entity, EntityName, Events,
+        FrameProfiler, Input, InputBinding, IntoSystem, IsHidden, Mut, PhysicsTime, PrefabRequest,
+        Query, Res, ResMut, Schedule, StorageView, StorageViewMut, System, SystemParam, Time,
+        WindowInfo, World,
     };
 }

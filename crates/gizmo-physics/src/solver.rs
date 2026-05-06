@@ -18,6 +18,7 @@ pub struct ConstraintSolver {
     /// PGS iterasyon sayısı (daha fazla = daha stabil, daha yavaş)
     pub iterations: usize,
     /// Baumgarte stabilizasyon faktörü (0.1..0.3 arası ideal)
+    /// Split Impulse kapalıyken fallback olarak kullanılır.
     pub baumgarte: f32,
     /// Penetrasyon toleransı — bu kadar penetrasyon normal kabul edilir
     pub slop: f32,
@@ -27,17 +28,25 @@ pub struct ConstraintSolver {
     pub restitution_velocity_threshold: f32,
     /// Maksimum pozisyon düzeltme miktarı (metre/step) - Patlamaları önler
     pub max_linear_correction: f32,
+    /// Split Impulse (Pseudo-Velocity) — pozisyon düzeltmesini ayrı bir
+    /// pseudo-velocity kanalında yapar, velocity'yi kirletmez.
+    /// Stacking stabilitesi ve resting contact jitter'ını önler.
+    pub split_impulse_enabled: bool,
+    /// Split Impulse penetrasyon düzeltme oranı (0.1..0.4 arası ideal)
+    pub split_impulse_erp: f32,
 }
 
 impl Default for ConstraintSolver {
     fn default() -> Self {
         Self {
-            iterations: 20,          // Önceki 10'dan artırıldı
-            baumgarte:  0.15,        // Daha yumuşak stabilizasyon
-            slop:       0.005,       // 5mm slop (önceki 10mm azaltıldı)
+            iterations: 20,
+            baumgarte:  0.15,
+            slop:       0.005,
             warm_start_factor: 0.85,
-            restitution_velocity_threshold: 1.0, // 1 m/s altında bounce yok
-            max_linear_correction: 0.02, // 240Hz'de adım başı max 2cm düzeltme (Sıfır patlama)
+            restitution_velocity_threshold: 1.0,
+            max_linear_correction: 0.02,
+            split_impulse_enabled: true,
+            split_impulse_erp: 0.1,
         }
     }
 }
@@ -61,6 +70,11 @@ impl ConstraintSolver {
         dt: f32,
     ) {
         if manifolds.is_empty() { return; }
+
+        // ── Split Impulse: pseudo-velocity buffers ────────────────────────
+        // Pozisyon düzeltmesi asıl velocity'den ayrılır, böylece resting
+        // contact'larda jitter engellenir ve stacking stabilitesi artar.
+        let mut pseudo_vel: Vec<(Vec3, Vec3)> = vec![(Vec3::ZERO, Vec3::ZERO); velocities.len()];
 
         // ── Warm-starting ────────────────────────────────────────────────────
         for mid in 0..manifolds.len() {
@@ -162,12 +176,18 @@ impl ConstraintSolver {
 
                     if k_n < 1e-8 { continue; }
 
-                    // Baumgarte pozisyon düzeltmesi (bias) veya Speculative Contact hedef hızı
+                    // Pozisyon düzeltme stratejisi:
+                    // Split Impulse: bias=0 (pozisyon düzeltmesi ayrı pseudo-velocity kanalında)
+                    // Fallback: Baumgarte bias velocity'ye karıştırılır
                     let bias = if penetration < 0.0 {
-                        // Speculative Contact: Obje boşlukta ama çok hızlı.
-                        // Maksimum kapanma hızını (gap / dt) limitleriz.
+                        // Speculative contact: nesne henüz teması yapmadı
                         penetration * inv_dt
+                    } else if self.split_impulse_enabled {
+                        // Split Impulse: pozisyon düzeltme tamamen pseudo-velocity pass'te
+                        // Velocity kanalı temiz kalır → resting jitter yok
+                        0.0
                     } else {
+                        // Fallback Baumgarte
                         let correction = (penetration - self.slop).max(0.0).min(self.max_linear_correction);
                         self.baumgarte * inv_dt * correction
                     };
@@ -256,6 +276,98 @@ impl ConstraintSolver {
                         velocities[idx_b].angular += inv_i_b * r_b.cross(imp_t);
                     }
                 }
+            }
+        }
+
+        // ── Split Impulse: Pozisyon Düzeltme Pass ────────────────────────────
+        // Asıl velocity'den bağımsız olarak pseudo-velocity hesaplar.
+        // Bu pass penetrasyon düzeltmesini velocity kanalından ayırır.
+        // Birikimli pseudo-impulse takibi ile over-correction engellenir.
+        if self.split_impulse_enabled {
+            // Per-contact birikimli pseudo-impulse (PGS clamping için)
+            let mut acc_pseudo: Vec<Vec<f32>> = manifolds.iter()
+                .map(|m| vec![0.0f32; m.contacts.len()])
+                .collect();
+
+            let pos_iterations = (self.iterations / 2).max(4);
+            for _ in 0..pos_iterations {
+                for mid in 0..manifolds.len() {
+                    let entity_a_id = manifolds[mid].entity_a.id();
+                    let entity_b_id = manifolds[mid].entity_b.id();
+
+                    let idx_a = match entity_index_map.get(&entity_a_id) {
+                        Some(&i) => i,
+                        None => continue,
+                    };
+                    let idx_b = match entity_index_map.get(&entity_b_id) {
+                        Some(&i) => i,
+                        None => continue,
+                    };
+
+                    let inv_m_a = rigid_bodies[idx_a].inv_mass();
+                    let inv_m_b = rigid_bodies[idx_b].inv_mass();
+                    let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
+                    let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
+                    let dyn_a   = rigid_bodies[idx_a].is_dynamic();
+                    let dyn_b   = rigid_bodies[idx_b].is_dynamic();
+
+                    if !dyn_a && !dyn_b { continue; }
+
+                    let com_a = transforms[idx_a].position + transforms[idx_a].rotation.mul_vec3(rigid_bodies[idx_a].center_of_mass);
+                    let com_b = transforms[idx_b].position + transforms[idx_b].rotation.mul_vec3(rigid_bodies[idx_b].center_of_mass);
+
+                    for cid in 0..manifolds[mid].contacts.len() {
+                        let contact_pt  = manifolds[mid].contacts[cid].point;
+                        let normal      = manifolds[mid].contacts[cid].normal;
+                        let penetration = manifolds[mid].contacts[cid].penetration;
+
+                        let correction = (penetration - self.slop).max(0.0).min(self.max_linear_correction);
+                        if correction < 1e-6 { continue; }
+
+                        let r_a = contact_pt - com_a;
+                        let r_b = contact_pt - com_b;
+
+                        let r_a_x_n = r_a.cross(normal);
+                        let r_b_x_n = r_b.cross(normal);
+                        let k_n = inv_m_a + inv_m_b
+                            + (inv_i_a * r_a_x_n).dot(r_a_x_n)
+                            + (inv_i_b * r_b_x_n).dot(r_b_x_n);
+                        if k_n < 1e-8 { continue; }
+
+                        // Pseudo-velocity relative to contact normal
+                        let pv_a = pseudo_vel[idx_a].0 + pseudo_vel[idx_a].1.cross(r_a);
+                        let pv_b = pseudo_vel[idx_b].0 + pseudo_vel[idx_b].1.cross(r_b);
+                        let pv_rel = pv_b.dot(normal) - pv_a.dot(normal);
+
+                        let bias = self.split_impulse_erp * inv_dt * correction;
+                        // Velocity solver ile aynı konvansiyon: delta = (-pv_rel + bias) / k
+                        // pv_rel > 0 → nesneler zaten ayrılıyor → düzeltme azalır
+                        // pv_rel ≈ bias → yakınsadı → delta ≈ 0
+                        let delta_p = (-pv_rel + bias) / k_n;
+
+                        // Birikimli clamp: toplam pseudo-impulse ≥ 0 (çekme yok)
+                        let old_acc = acc_pseudo[mid][cid];
+                        let new_acc = (old_acc + delta_p).max(0.0);
+                        let actual_delta = new_acc - old_acc;
+                        acc_pseudo[mid][cid] = new_acc;
+
+                        let imp_p = normal * actual_delta;
+                        if dyn_a {
+                            pseudo_vel[idx_a].0 -= imp_p * inv_m_a;
+                            pseudo_vel[idx_a].1 -= inv_i_a * r_a.cross(imp_p);
+                        }
+                        if dyn_b {
+                            pseudo_vel[idx_b].0 += imp_p * inv_m_b;
+                            pseudo_vel[idx_b].1 += inv_i_b * r_b.cross(imp_p);
+                        }
+                    }
+                }
+            }
+
+            // Pseudo-velocity'yi gerçek velocity'ye ekle (sadece pozisyon düzeltme bileşeni)
+            for i in 0..velocities.len() {
+                velocities[i].linear  += pseudo_vel[i].0;
+                velocities[i].angular += pseudo_vel[i].1;
             }
         }
     }

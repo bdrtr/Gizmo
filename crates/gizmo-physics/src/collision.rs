@@ -2,7 +2,7 @@ use gizmo_core::entity::Entity;
 use gizmo_math::Vec3;
 
 /// Contact point between two colliding bodies
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 pub struct ContactPoint {
     pub point: Vec3,         // World-space contact point
     pub normal: Vec3,        // Contact normal (from A to B)

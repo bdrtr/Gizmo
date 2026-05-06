@@ -18,6 +18,7 @@ pub mod shape;
 pub mod solver;
 pub mod system;
 pub mod world;
+pub(crate) mod pipeline;
 
 // Additional features (implemented but optional)
 pub mod character;

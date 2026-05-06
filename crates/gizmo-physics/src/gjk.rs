@@ -35,17 +35,34 @@ impl Gjk {
         pos_b: Vec3,
         rot_b: gizmo_math::Quat,
     ) -> Option<ContactPoint> {
+        if pos_a.x.abs() < 10.0 && pos_b.x.abs() < 10.0 {
+        }
         let support = |dir: Vec3| {
             let sa = Self::support_point(shape_a, pos_a, rot_a, dir);
             let sb = Self::support_point(shape_b, pos_b, rot_b, -dir);
             sa - sb
         };
 
-        if let Some(simplex) = Self::gjk_with_simplex(support) {
-            Self::epa(simplex, shape_a, pos_a, rot_a, shape_b, pos_b, rot_b)
+        let res = if let Some(simplex) = Self::gjk_with_simplex(support) {
+            if let Some(contact) = Self::epa(simplex, shape_a, pos_a, rot_a, shape_b, pos_b, rot_b) {
+                Some(contact)
+            } else {
+                // EPA failed (likely degenerate simplex), but we KNOW they intersect!
+                // Return a basic contact point for triggers and solver fallback
+                Some(ContactPoint {
+                    point: (pos_a + pos_b) * 0.5,
+                    normal: (pos_b - pos_a).try_normalize().unwrap_or(Vec3::Y),
+                    penetration: 0.01,
+                    ..Default::default()
+                })
+            }
         } else {
             None
+        };
+        
+        if pos_a.x.abs() < 10.0 && pos_b.x.abs() < 10.0 {
         }
+        res
     }
 
     /// GJK that returns the final simplex for EPA
@@ -86,88 +103,139 @@ impl Gjk {
         F: Fn(Vec3) -> Vec3,
     {
         let mut simplex = Vec::with_capacity(4);
-        let mut direction = Vec3::new(1.0, 0.0, 0.0);
+        let mut direction = Vec3::X;
         
         let p = support(direction);
-        if p.length_squared() < 1e-6 {
-            return Some((0.0, Vec3::ZERO));
-        }
-        
         simplex.push(p);
-        direction = -p;
-
-        let mut min_dist = f32::MAX;
+        
         let mut closest_point = p;
+        let mut min_dist_sq = p.length_squared();
 
-        for _ in 0..EPA_MAX_ITERATIONS {
-            direction = direction.try_normalize().unwrap_or(Vec3::X);
-            let a = support(direction);
+        for _ in 0..32 {
+            if min_dist_sq < 1e-8 {
+                return Some((0.0, Vec3::X)); // Intersecting, use fallback normal
+            }
+
+            direction = -closest_point;
+            let a = support(direction.normalize());
             
-            // The distance projected along the direction
-            // If it doesn't pass the origin, origin is definitely outside
-            let d = a.dot(direction);
-            if d < 0.0 {
-                return Some((closest_point.length(), closest_point.normalize()));
+            // Convergence check: how much closer can we get in this direction?
+            let current_dist = min_dist_sq.sqrt();
+            let lower_bound = -a.dot(direction) / current_dist;
+            if current_dist - lower_bound < 0.0001 {
+                break;
             }
 
             simplex.push(a);
-
-            if Self::handle_simplex(&mut simplex, &mut direction) {
-                return Some((0.0, Vec3::ZERO)); // Intersecting
-            }
-            
-            // Find the closest point on the new simplex to the origin
-            let current_closest = Self::closest_point_on_simplex(&simplex);
-            let current_dist = current_closest.length();
-            
-            if current_dist < min_dist {
-                min_dist = current_dist;
-                closest_point = current_closest;
-                // Update direction to point to origin from closest point
-                if current_dist > 1e-6 {
-                    direction = -closest_point;
-                }
-            } else {
-                // If we didn't get closer, we converged
-                let normal = if closest_point.length_squared() > 1e-8 { closest_point.normalize() } else { Vec3::X };
-                return Some((min_dist, normal));
-            }
+            closest_point = Self::closest_point_on_simplex(&mut simplex);
+            min_dist_sq = closest_point.length_squared();
         }
         
-        let normal = if closest_point.length_squared() > 1e-8 { closest_point.normalize() } else { Vec3::X };
-        Some((min_dist, normal))
+        let dist = min_dist_sq.sqrt();
+        let normal = if dist > 1e-6 { closest_point / dist } else { Vec3::X };
+        Some((dist, normal))
     }
 
-    fn closest_point_on_simplex(simplex: &[Vec3]) -> Vec3 {
+    fn closest_point_on_simplex(simplex: &mut Vec<Vec3>) -> Vec3 {
         match simplex.len() {
             1 => simplex[0],
             2 => {
-                let a = simplex[1];
                 let b = simplex[0];
+                let a = simplex[1];
                 let ab = b - a;
-                let t = (-a).dot(ab) / ab.length_squared().max(1e-8);
-                let t = t.clamp(0.0, 1.0);
-                a + ab * t
+                let ao = -a;
+                let t = ao.dot(ab) / ab.length_squared().max(1e-8);
+                if t <= 0.0 {
+                    simplex.remove(0); // Keep A
+                    a
+                } else if t >= 1.0 {
+                    simplex.remove(1); // Keep B
+                    b
+                } else {
+                    a + ab * t
+                }
             },
             3 => {
-                let a = simplex[2];
-                let b = simplex[1];
                 let c = simplex[0];
+                let b = simplex[1];
+                let a = simplex[2];
+                
                 let ab = b - a;
                 let ac = c - a;
-                let normal = ab.cross(ac);
-                
-                // Project origin onto plane
-                let t = (-a).dot(normal) / normal.length_squared().max(1e-8);
-                let proj = normal * t;
-                
-                // For simplicity, return the projection. Technically we should check if it's inside the triangle.
-                // Since handle_simplex already filters out non-voronoi regions, this is an acceptable approximation for distance.
-                a + proj
+                let ap = -a;
+
+                // Check vertex regions
+                let d1 = ab.dot(ap);
+                let d2 = ac.dot(ap);
+                if d1 <= 0.0 && d2 <= 0.0 {
+                    *simplex = vec![a];
+                    return a;
+                }
+
+                let bp = -b;
+                let d3 = ab.dot(bp);
+                let d4 = ac.dot(bp);
+                if d3 >= 0.0 && d4 <= d3 {
+                    *simplex = vec![b];
+                    return b;
+                }
+
+                let cp = -c;
+                let d5 = ab.dot(cp);
+                let d6 = ac.dot(cp);
+                if d6 >= 0.0 && d5 <= d6 {
+                    *simplex = vec![c];
+                    return c;
+                }
+
+                // Check edge regions
+                let vc = d1 * d4 - d3 * d2;
+                if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+                    let v = d1 / (d1 - d3);
+                    *simplex = vec![b, a];
+                    return a + ab * v;
+                }
+
+                let vb = d5 * d2 - d1 * d6;
+                if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+                    let w = d2 / (d2 - d6);
+                    *simplex = vec![c, a];
+                    return a + ac * w;
+                }
+
+                let va = d3 * d6 - d5 * d4;
+                if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+                    let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+                    *simplex = vec![c, b];
+                    return b + (c - b) * w;
+                }
+
+                // Inside face region
+                let denom = 1.0 / (va + vb + vc);
+                let v = vb * denom;
+                let w = vc * denom;
+                a + ab * v + ac * w
             },
             4 => {
-                // If it's a tetrahedron and we haven't exited, origin is inside
-                Vec3::ZERO
+                // If we have 4 points, we're likely intersecting or about to be.
+                // For simplicity in distance calculation, we check if origin is inside.
+                // If not, we find the closest face and reduce to triangle case.
+                let d = simplex[0];
+                let c = simplex[1];
+                let b = simplex[2];
+                let a = simplex[3];
+                
+                let abc = (b - a).cross(c - a);
+                let acd = (c - a).cross(d - a);
+                let adb = (d - a).cross(b - a);
+                let bdc = (c - b).cross(d - b);
+                
+                if abc.dot(-a) > 0.0 { *simplex = vec![c, b, a]; return Self::closest_point_on_simplex(simplex); }
+                if acd.dot(-a) > 0.0 { *simplex = vec![d, c, a]; return Self::closest_point_on_simplex(simplex); }
+                if adb.dot(-a) > 0.0 { *simplex = vec![b, d, a]; return Self::closest_point_on_simplex(simplex); }
+                if bdc.dot(-b) > 0.0 { *simplex = vec![d, c, b]; return Self::closest_point_on_simplex(simplex); }
+                
+                Vec3::ZERO // Inside
             },
             _ => Vec3::ZERO,
         }
@@ -201,6 +269,7 @@ impl Gjk {
             };
 
             if let Some((dist, normal)) = Self::distance(support) {
+                
                 // If they are intersecting or extremely close, we found the TOI
                 if dist < 0.001 {
                     return Some((t, normal));
@@ -253,22 +322,22 @@ impl Gjk {
             dt,
         ) {
             let rel_vel = vel_b - vel_a;
-            let normal_a_to_b = -normal; // Normal points from B to A, we want A to B
+            let normal_a_to_b = -normal; // CA normal is B to A
             
-            // Closing velocity
-            let closing_vel = rel_vel.dot(normal);
-            if closing_vel > 0.0 {
-                // The distance they would have covered if they didn't stop at time t
-                let dist_to_cover = closing_vel * t;
+            // Closing velocity (positive if approaching)
+            let closing_speed = rel_vel.dot(normal); // rel_vel is B-A, normal is B to A
+            if closing_speed > 0.0 {
+                // Gap at t=0
+                let gap = closing_speed * t;
                 
-                // Contact point is approximated at the time of impact
                 let hit_pos_a = pos_a + vel_a * t;
-                let contact_point = hit_pos_a + normal_a_to_b * 0.01; // approximate
+                let hit_pos_b = pos_b + vel_b * t;
+                let contact_point = (hit_pos_a + hit_pos_b) * 0.5;
                 
                 return Some(ContactPoint {
                     point: contact_point,
                     normal: normal_a_to_b,
-                    penetration: -dist_to_cover, // Negative penetration for speculative constraint
+                    penetration: -gap, // Negative penetration for speculative constraint
                     local_point_a: contact_point - pos_a,
                     local_point_b: contact_point - pos_b,
                     normal_impulse: 0.0,
@@ -704,7 +773,6 @@ mod tests {
         assert!(contact.is_some(), "EPA failed to generate contact");
         let contact = contact.unwrap();
         
-        println!("Test got contact: {:?}", contact);
         
         // Penetration should be 0.5 (1.0 + 1.0 - 1.5)
         assert!((contact.penetration - 0.5).abs() < 0.001, "Penetration depth is wrong: {}", contact.penetration);
