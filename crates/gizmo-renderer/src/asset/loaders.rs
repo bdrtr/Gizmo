@@ -21,6 +21,7 @@ impl super::AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
         let mesh = Mesh::new(
+            device,
             Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
@@ -568,6 +569,7 @@ impl super::AssetManager {
 
                 let mesh_source = format!("gltf_mesh_{}_{:?}_p{}", file_name, node.name(), prim_i);
                 let mesh_comp = Mesh::new(
+                    device,
                     Arc::new(vbuf),
                     &all_vertices,
                     Vec3::ZERO,

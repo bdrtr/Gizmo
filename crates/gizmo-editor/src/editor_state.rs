@@ -296,6 +296,12 @@ pub struct EditorState {
     /// Play/Stop modu için in-memory sahne yedeği.
     /// Play'e basıldığında `Some(snapshot)`, Stop'ta `None` olur.
     pub play_snapshot: Option<gizmo_scene::SceneSnapshot>,
+
+    pub pending_json_updates: Vec<(
+        gizmo_core::entity::Entity,
+        fn(&mut gizmo_core::World, gizmo_core::entity::Entity, serde_json::Value) -> Result<(), String>,
+        serde_json::Value,
+    )>,
 }
 
 impl EditorState {
@@ -371,6 +377,8 @@ impl EditorState {
             pending_dialog_rx: None,
 
             play_snapshot: None,
+
+            pending_json_updates: Vec::new(),
         }
     }
 

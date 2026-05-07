@@ -14,6 +14,9 @@ pub struct DeferredState {
     // Geometry pass (writes to 3 MRTs)
     pub gbuffer_pipeline: wgpu::RenderPipeline,
 
+    // Z-Prepass (Depth only)
+    pub z_prepass_pipeline: wgpu::RenderPipeline,
+
     // Lighting pass (fullscreen triangle → HDR texture)
     pub lighting_pipeline: wgpu::RenderPipeline,
 
@@ -46,6 +49,7 @@ impl DeferredState {
             &gbuf_sampler,
         );
 
+        let z_prepass_pipeline = Self::create_z_prepass_pipeline(device, scene);
         let gbuffer_pipeline = Self::create_gbuffer_pipeline(device, scene);
         let lighting_pipeline = Self::create_lighting_pipeline(
             device,
@@ -57,7 +61,7 @@ impl DeferredState {
             albedo_metallic_tex, albedo_metallic_view,
             normal_roughness_tex, normal_roughness_view,
             world_position_tex, world_position_view,
-            gbuffer_pipeline, lighting_pipeline,
+            gbuffer_pipeline, z_prepass_pipeline, lighting_pipeline,
             gbuffer_bind_group_layout, gbuffer_bind_group,
             gbuf_sampler,
             width, height,
@@ -259,6 +263,53 @@ impl DeferredState {
                     }),
                 ],
             }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        })
+    }
+
+    fn create_z_prepass_pipeline(device: &wgpu::Device, scene: &SceneState) -> wgpu::RenderPipeline {
+        let shader = load_shader(
+            device,
+            "demo/assets/shaders/gbuffer.wgsl",
+            include_str!("shaders/gbuffer.wgsl"),
+            "Z-Prepass Shader",
+        );
+
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Z-Prepass Pipeline Layout"),
+            bind_group_layouts: &[
+                &scene.global_bind_group_layout,   // 0: SceneUniforms
+                &scene.texture_bind_group_layout,  // 1: albedo texture (unused but required by shader layout)
+                &scene.shadow_bind_group_layout,   // 2: shadow
+                &scene.skeleton_bind_group_layout, // 3: skeleton
+                &scene.instance_bind_group_layout, // 4: instances
+            ],
+            push_constant_ranges: &[],
+        });
+
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Z-Prepass Pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                compilation_options: Default::default(),
+                buffers: &[Vertex::desc()],
+            },
+            fragment: None, // NO COLOR TARGETS!
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 cull_mode: Some(wgpu::Face::Back),

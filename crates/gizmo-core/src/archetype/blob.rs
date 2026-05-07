@@ -130,6 +130,40 @@ impl BlobVec {
         self.len += count;
     }
 
+    /// Bir component'i bulunduğu indeksten alıp N kere çoğaltarak arkaya ekler.
+    /// Realloc sırasında src pointer'ının dangling olmasını engeller.
+    pub unsafe fn push_cloned_batch_from_row(
+        &mut self,
+        row: usize,
+        count: usize,
+        clone_fn: Option<unsafe fn(*const u8, *mut u8, usize)>,
+    ) {
+        if count == 0 {
+            return;
+        }
+        if self.item_layout.size() == 0 {
+            self.len += count;
+            return;
+        }
+        self.reserve(count);
+        // Reserve sonrasi pointer guncellenir:
+        let src = self.get_unchecked(row);
+        let dst_start = self.data.as_ptr().add(self.len * self.item_layout.size());
+
+        if let Some(c_fn) = clone_fn {
+            c_fn(src, dst_start, count);
+        } else {
+            // fallback
+            let size = self.item_layout.size();
+            let mut current_dst = dst_start;
+            for _ in 0..count {
+                ptr::copy_nonoverlapping(src, current_dst, size);
+                current_dst = current_dst.add(size);
+            }
+        }
+        self.len += count;
+    }
+
     /// İki satırın ham bellek içeriğini takas eder (Swap).
     /// Hiyerarşi gibi önbellek-dostu (cache-friendly) bellek kaydırmaları için oldukça etkilidir.
     ///

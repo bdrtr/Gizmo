@@ -231,9 +231,15 @@ pub struct RenderCache {
         cache.instances.clear();
         cache.draw_items.clear();
 
+        let pooled_storage = world.borrow::<gizmo_core::pool::Pooled>();
         if let Some(mut q) = world.query::<(&Mesh, &Transform, &Material)>() {
             for (e, (mesh, trans, mat)) in q.iter_mut() {
                 if renderers.get(e).is_none() {
+                    continue;
+                }
+                
+                // Pooled (havuzda pasif) nesneleri render etme
+                if pooled_storage.get(e).is_some() {
                     continue;
                 }
 
@@ -258,6 +264,25 @@ pub struct RenderCache {
                     continue;
                 }
 
+                // Auto-LOD (Level of Detail) Seçimi
+                let dist_to_cam = (world_c - cam_pos).length();
+                let use_lod1 = if !mesh.lod_vbufs.is_empty() {
+                    dist_to_cam > world_r * 15.0 // Nesne boyutuna göre uzaklaştıkça LOD1'e geç (örneğin 2m çapında bir nesne 30m uzaktayken geç)
+                } else {
+                    false
+                };
+
+                let active_vbuf = if use_lod1 {
+                    mesh.lod_vbufs[0].clone()
+                } else {
+                    mesh.vbuf.clone()
+                };
+                let active_vertex_count = if use_lod1 {
+                    mesh.lod_vertex_counts[0]
+                } else {
+                    mesh.vertex_count
+                };
+
                 let instance_data = crate::renderer::gpu_types::InstanceRaw {
                     model: model.to_cols_array_2d(),
                     albedo_color: [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
@@ -272,14 +297,14 @@ pub struct RenderCache {
                 };
                 
                 let key = BatchKey {
-                    vbuf_id: std::sync::Arc::as_ptr(&mesh.vbuf) as usize,
+                    vbuf_id: std::sync::Arc::as_ptr(&active_vbuf) as usize,
                     mat_id: std::sync::Arc::as_ptr(&mat.bind_group) as usize,
                 };
 
                 let batch = cache.batches.entry(key).or_insert_with(|| BatchData {
-                    vbuf: mesh.vbuf.clone(),
+                    vbuf: active_vbuf.clone(),
                     bind_group: mat.bind_group.clone(),
-                    vertex_count: mesh.vertex_count,
+                    vertex_count: active_vertex_count,
                     unlit: mat.material_type == crate::renderer::components::MaterialType::Unlit
                         || mat.material_type == crate::renderer::components::MaterialType::Skybox,
                     is_skybox: mat.material_type == crate::renderer::components::MaterialType::Skybox,
@@ -342,16 +367,26 @@ pub struct RenderCache {
         physics.cull_pass(encoder, &renderer.scene.global_bind_group);
     }
 
+    // Compute LOD (Level of Detail) Scaling
+    let fluid_pos = Vec3::new(0.0, 5.0, 0.0);
+    let dist_to_fluid = (cam_pos - fluid_pos).length();
+    let fluid_lod = if dist_to_fluid < 40.0 { 1.0 } else if dist_to_fluid < 80.0 { 0.5 } else if dist_to_fluid < 150.0 { 0.1 } else { 0.0 };
+
+    let dist_to_origin = cam_pos.length();
+    let particle_lod = if dist_to_origin < 50.0 { 1.0 } else if dist_to_origin < 100.0 { 0.5 } else if dist_to_origin < 200.0 { 0.1 } else { 0.0 };
+
     // Gpu Fluid Processing
     if let Some(fluid) = &renderer.gpu_fluid {
-        fluid.compute_pass(encoder, &renderer.queue, true, fluid.num_particles);
+        let active_fluid = (fluid.num_particles as f32 * fluid_lod) as u32;
+        fluid.compute_pass(encoder, &renderer.queue, true, active_fluid);
     }
 
     // Gpu Particles Processing
     if let Some(particles) = &renderer.gpu_particles {
+        let active_parts = (particles.max_particles as f32 * particle_lod) as u32;
         let dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.time_scale() * 0.016).unwrap_or(0.016);
         particles.update_params(&renderer.queue, dt); // Scale based on time_scale
-        particles.compute_pass(encoder);
+        particles.compute_pass(encoder, active_parts);
     }
 
     // GPU cull pass removed since we use CPU instancing
@@ -423,6 +458,37 @@ pub struct RenderCache {
         }
     }
 
+    // ── Z-Prepass (Depth Only) ────────────────────────────────────────────────
+    if let Some(ref def) = renderer.deferred {
+        let mut z_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Z-Prepass"),
+            color_attachments: &[], // No color targets
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &renderer.depth_texture_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        z_pass.set_pipeline(&def.z_prepass_pipeline);
+        z_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+        z_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+        z_pass.set_bind_group(3, &renderer.scene.dummy_skeleton_bind_group, &[]);
+        z_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+        for item in &draw_items {
+            if item.unlit || item.is_skybox {
+                continue;
+            }
+            z_pass.set_bind_group(1, &item.bind_group, &[]);
+            z_pass.set_vertex_buffer(0, item.vbuf.slice(..));
+            z_pass.draw(0..item.vertex_count, item.first_instance..(item.first_instance + item.instance_count));
+        }
+    }
+
     // ── G-buffer pass (PBR geometry → albedo / normal / world-position) ─────
     if let Some(ref def) = renderer.deferred {
         let mut gbuf_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -456,7 +522,7 @@ pub struct RenderCache {
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: &renderer.depth_texture_view,
                 depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
+                    load: wgpu::LoadOp::Load, // Z-Prepass populated this!
                     store: wgpu::StoreOp::Store,
                 }),
                 stencil_ops: None,
@@ -687,7 +753,8 @@ pub struct RenderCache {
 
         // Draw GPU Particles
         if let Some(particles) = &renderer.gpu_particles {
-            particles.render_pass(&mut render_pass, &renderer.scene.global_bind_group);
+            let active_parts = (particles.max_particles as f32 * particle_lod) as u32;
+            particles.render_pass(&mut render_pass, &renderer.scene.global_bind_group, active_parts);
         }
 
         if let Some(gizmos) = world.get_resource::<crate::renderer::Gizmos>() {
@@ -703,13 +770,14 @@ pub struct RenderCache {
     }
 
     if let Some(fluid) = &renderer.gpu_fluid {
+        let active_fluid = (fluid.num_particles as f32 * fluid_lod) as u32;
         fluid.render_ssfr(
             encoder,
             &renderer.post.hdr_texture,
             &renderer.post.hdr_texture_view,
             &renderer.depth_texture_view,
             &renderer.scene.global_bind_group,
-            fluid.num_particles,
+            active_fluid,
         );
     }
 
@@ -754,6 +822,64 @@ pub struct RenderCache {
             });
             pass.set_pipeline(&ssr.apply_pipeline);
             pass.set_bind_group(0, &ssr.apply_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+    }
+
+    // ── SSGI: Screen Space Global Illumination ────────────────────────────────
+    if let Some(ref ssgi) = renderer.ssgi {
+        // Pass 1: SSGI Raymarch
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("SSGI Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &ssgi.ssgi_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&ssgi.ssgi_pipeline);
+            pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+            pass.set_bind_group(1, &ssgi.ssgi_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        // Pass 2: SSGI Blur
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("SSGI Blur Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &ssgi.ssgi_blurred_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&ssgi.blur_pipeline);
+            pass.set_bind_group(0, &ssgi.blur_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        // Pass 3: SSGI Apply (Additive blend into HDR texture)
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("SSGI Apply Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &renderer.post.hdr_texture_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&ssgi.apply_pipeline);
+            pass.set_bind_group(0, &ssgi.apply_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
     }
@@ -850,5 +976,32 @@ pub struct RenderCache {
     }
 
     renderer.run_post_processing(encoder, view);
+}
+
+// ============================================================
+//  RenderContext Kolaylık Metodu
+//  `ctx.default_render(world)` ile varsayılan pipeline çalışır.
+// ============================================================
+
+/// `RenderContext` üzerine eklenen kolaylık metodları.
+/// `use gizmo::prelude::*;` ile otomatik olarak dahil edilir.
+pub trait RenderContextExt {
+    /// Motorun varsayılan render pipeline'ını çalıştırır.
+    /// Deferred rendering, gölgeler, SSAO, SSR, TAA ve post-processing dahildir.
+    ///
+    /// ```ignore
+    /// fn render(world: &mut World, _state: &GameState, ctx: &mut RenderContext) {
+    ///     ctx.disable_gpu_compute();
+    ///     ctx.default_render(world);
+    /// }
+    /// ```
+    fn default_render(&mut self, world: &mut crate::core::World);
+}
+
+impl<'a, 'r> RenderContextExt for crate::renderer::RenderContext<'a, 'r> {
+    fn default_render(&mut self, world: &mut crate::core::World) {
+        let (encoder, view, renderer) = self.parts_mut();
+        default_render_pass(world, encoder, view, renderer);
+    }
 }
 

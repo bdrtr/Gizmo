@@ -3,7 +3,7 @@ pub mod dev_console;
 use gizmo_core::system::Schedule;
 use gizmo_core::world::World;
 use gizmo_editor::gui::EditorContext;
-use gizmo_renderer::renderer::Renderer;
+use gizmo_renderer::renderer::{Renderer, RenderContext};
 use std::sync::Arc;
 use winit::{
     event::{Event, WindowEvent},
@@ -75,6 +75,15 @@ pub struct App<State: 'static = ()> {
             ),
         >,
     >, // light_time
+    simple_render_fn: Option<
+        Box<
+            dyn for<'a, 'r> FnMut(
+                &mut World,
+                &State,
+                &mut RenderContext<'a, 'r>,
+            ),
+        >,
+    >,
     input_fn: Option<Box<dyn FnMut(&mut World, &mut State, &winit::event::Event<()>) -> bool>>, // Input handler
     ui_fn: Option<Box<dyn FnMut(&mut World, &mut State, &egui::Context)>>, // Editor UI handler
     pub input: gizmo_core::input::Input,
@@ -99,6 +108,7 @@ impl<State: 'static> App<State> {
             setup_fn: None,
             update_fn: None,
             render_fn: None,
+            simple_render_fn: None,
             input_fn: None,
             ui_fn: None,
             input: gizmo_core::input::Input::new(),
@@ -170,6 +180,29 @@ impl<State: 'static> App<State> {
             ) + 'static,
     {
         self.render_fn = Some(Box::new(f));
+        self
+    }
+
+    /// Basitleştirilmiş render callback'i — wgpu detaylarını `RenderContext`
+    /// arkasına gizler. `set_render` yerine kullanılır.
+    ///
+    /// ```ignore
+    /// fn render(world: &mut World, _state: &GameState, ctx: &mut RenderContext) {
+    ///     ctx.disable_gpu_compute();
+    ///     ctx.default_render(world);
+    /// }
+    ///
+    /// App::new("Oyun", 1280, 720)
+    ///     .set_setup(setup)
+    ///     .set_update(update)
+    ///     .set_simple_render(render)
+    ///     .run();
+    /// ```
+    pub fn set_simple_render<F>(mut self, f: F) -> Self
+    where
+        F: for<'a, 'r> FnMut(&mut World, &State, &mut RenderContext<'a, 'r>) + 'static,
+    {
+        self.simple_render_fn = Some(Box::new(f));
         self
     }
 
@@ -438,16 +471,7 @@ impl<State: 'static> App<State> {
 
                             light_time += dt;
 
-                            // Update
-                            let full_output = editor.run(&window, |ctx| {
-                                if let Some(ui_hk) = self.ui_fn.as_mut() {
-                                    ui_hk(&mut self.world, &mut state, ctx);
-                                }
-                                
-                                // Render Global Dev Console on top of everything
-                                dev_console::ui_dev_console(&mut self.world, ctx, &self.input);
-                            });
-
+                            // Update (Önceki gereksiz editor.run buradan silindi, Draw kısmında yapılıyor)
 
                             // --- Scene View RTT (Render To Texture) YÖNETİMİ ---
                             if self
@@ -774,6 +798,8 @@ impl<State: 'static> App<State> {
                             }
 
                             // Sabit dt'de fizik adımları — frame rate'ten bağımsız
+                            let t_physics = std::time::Instant::now();
+                            let mut physics_steps = 0;
                             loop {
                                 let should = self
                                     .world
@@ -796,6 +822,11 @@ impl<State: 'static> App<State> {
                                     .get_resource_mut::<gizmo_core::time::PhysicsTime>()
                                     .unwrap();
                                 phys_time.consume_step();
+                                physics_steps += 1;
+                            }
+                            let phys_dur = t_physics.elapsed().as_secs_f32() * 1000.0;
+                            if phys_dur > 5.0 {
+                                println!("Physics ({} steps) took: {:.2}ms", physics_steps, phys_dur);
                             }
 
                             // İnterpolasyon alpha'sını hesapla (render için)
@@ -836,6 +867,19 @@ impl<State: 'static> App<State> {
                             }
 
                             // --- DRAW KISMI ---
+                            // Render öncesi tüm Transform matrix'lerini güncelle
+                            if let Some(mut q) = self.world.query::<gizmo_core::query::Mut<gizmo_physics::Transform>>() {
+                                for (_, mut trans) in q.iter_mut() {
+                                    trans.update_local_matrix();
+                                }
+                            }
+                            let full_output = editor.run(&window, |ctx| {
+                                if let Some(ui_hk) = self.ui_fn.as_mut() {
+                                    ui_hk(&mut self.world, &mut state, ctx);
+                                }
+                                dev_console::ui_dev_console(&mut self.world, ctx, &self.input);
+                            });
+
                             let output = match renderer.surface.get_current_texture() {
                                 Ok(texture) => texture,
                                 Err(wgpu::SurfaceError::Outdated) => return,
@@ -845,41 +889,24 @@ impl<State: 'static> App<State> {
                                 }
                             };
 
-                            let view = output
-                                .texture
-                                .create_view(&wgpu::TextureViewDescriptor::default());
+                            let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
                             let mut encoder = renderer.device.create_command_encoder(
-                                &wgpu::CommandEncoderDescriptor {
-                                    label: Some("Render Encoder"),
-                                },
+                                &wgpu::CommandEncoderDescriptor { label: Some("Render Encoder") },
                             );
 
-                            // Kullaniciya CommandEncoder verip cizdiriyoruz!
                             if let Some(render_hk) = self.render_fn.as_mut() {
-                                render_hk(
-                                    &mut self.world,
-                                    &state,
-                                    &mut encoder,
-                                    &view,
-                                    &mut renderer,
-                                    light_time,
-                                );
+                                render_hk(&mut self.world, &state, &mut encoder, &view, &mut renderer, light_time);
+                            } else if let Some(simple_hk) = self.simple_render_fn.as_mut() {
+                                let mut ctx = RenderContext::new(&mut encoder, &view, &mut renderer, light_time);
+                                simple_hk(&mut self.world, &state, &mut ctx);
                             }
 
-                            editor.render(
-                                &window,
-                                &renderer.device,
-                                &renderer.queue,
-                                &mut encoder,
-                                &view,
-                                full_output,
-                            );
+                            editor.render(&window, &renderer.device, &renderer.queue, &mut encoder, &view, full_output);
 
                             renderer.queue.submit(std::iter::once(encoder.finish()));
                             output.present();
                             
-                            // İşlemlerin bitiminde frame-özel input girdilerini (fare delta vs.) temizle
                             self.input.begin_frame();
                         }
                     }

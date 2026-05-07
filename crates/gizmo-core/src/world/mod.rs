@@ -139,6 +139,23 @@ impl World {
         entity
     }
 
+    /// Bir `Bundle`'ı tek seferde spawn eder — entity oluşturur ve tüm
+    /// bileşenleri ekler.
+    ///
+    /// ```ignore
+    /// let player = world.spawn_bundle(MeshBundle {
+    ///     mesh: renderer.create_cube(),
+    ///     material: Material::pbr(Color::BLUE, 0.5, 0.0),
+    ///     name: "Oyuncu",
+    ///     ..default()
+    /// });
+    /// ```
+    pub fn spawn_bundle<B: crate::component::Bundle>(&mut self, bundle: B) -> Entity {
+        let entity = self.spawn();
+        bundle.apply(self, entity);
+        entity
+    }
+
     pub fn flush_spawn(&mut self, entity: Entity) {
         // Yeni entity'yi boş archetype'a kaydet
         self.archetype_index.on_spawn(entity.id());
@@ -437,6 +454,31 @@ impl World {
         }
     }
 
+    /// Entity üzerindeki tüm bileşenlerin TypeId'lerini döndürür.
+    pub fn get_entity_component_types(&self, entity: Entity) -> Vec<TypeId> {
+        if !self.is_alive(entity) {
+            return Vec::new();
+        }
+        if let Some(&loc) = self.entity_locations.get(entity.id() as usize) {
+            if loc.is_valid() {
+                let arch = &self.archetype_index.archetypes[loc.archetype_id as usize];
+                return arch.component_types();
+            }
+        }
+        Vec::new()
+    }
+
+    /// Raw Component Pointer alma (Reflection/Editor için)
+    pub fn get_component_ptr(&self, entity: Entity, type_id: TypeId) -> Option<*const u8> {
+        let loc = self.entity_locations.get(entity.id() as usize).copied()?;
+        if !loc.is_valid() {
+            return None;
+        }
+        let arch = &self.archetype_index.archetypes[loc.archetype_id as usize];
+        let col = arch.get_column(type_id)?;
+        Some(unsafe { col.get_ptr(loc.row as usize) })
+    }
+
     /// Sistemden component silme
     pub fn remove_component<T: Component>(&mut self, entity: Entity) {
         if !self.is_alive(entity) {
@@ -555,6 +597,57 @@ impl World {
         crate::query::Query::new_cached(self)
     }
 
+    /// Tek bir entity üzerinde `Query` çalıştırıp anında sonuç almanızı sağlar.
+    ///
+    /// # Örnek
+    /// ```ignore
+    /// if let Some((mut t, mut v)) = world.query_entity_mut::<(Mut<Transform>, Mut<Velocity>)>(id) {
+    ///     t.position += v.linear * dt;
+    /// }
+    /// ```
+    pub fn query_entity_mut<'w, Q: crate::query::WorldQuery<'w>>(
+        &'w mut self,
+        entity_id: u32,
+    ) -> Option<Q::Item<'w>> {
+        let loc = self.entity_location(entity_id);
+        if !loc.is_valid() {
+            return None;
+        }
+        let arch = &self.archetype_index.archetypes[loc.archetype_id as usize];
+        if !Q::matches_archetype(arch) {
+            return None;
+        }
+        unsafe {
+            let fetch = Q::fetch_raw(arch, self.tick)?;
+            if !Q::filter_row(fetch, loc.row as usize, self.tick) {
+                return None;
+            }
+            Some(Q::get_item(fetch, loc.row as usize))
+        }
+    }
+
+    /// Tek bir entity üzerinde read-only `Query` çalıştırıp anında sonuç almanızı sağlar.
+    pub fn query_entity<'w, Q: crate::query::WorldQuery<'w>>(
+        &'w self,
+        entity_id: u32,
+    ) -> Option<Q::Item<'w>> {
+        let loc = self.entity_location(entity_id);
+        if !loc.is_valid() {
+            return None;
+        }
+        let arch = &self.archetype_index.archetypes[loc.archetype_id as usize];
+        if !Q::matches_archetype(arch) {
+            return None;
+        }
+        unsafe {
+            let fetch = Q::fetch_raw(arch, self.tick)?;
+            if !Q::filter_row(fetch, loc.row as usize, self.tick) {
+                return None;
+            }
+            Some(Q::get_item(fetch, loc.row as usize))
+        }
+    }
+
     /// Entity'nin archetype konumunu döndürür — O(1) lookup.
     #[inline]
     pub fn entity_location(&self, entity_id: u32) -> EntityLocation {
@@ -660,6 +753,50 @@ impl World {
             Ok(boxed_t) => Some(*boxed_t),
             Err(_) => None,
         }
+    }
+
+    /// Bir resource'u geçici olarak world'den çıkarıp closure'a geçirir ve sonra geri koyar.
+    /// Bu, resource'un içindeyken `&mut World` kullanmanız gerektiğinde borrow checker'ı 
+    /// mutlu etmenin en temiz yoludur (Bevy'deki `resource_scope` benzeri).
+    ///
+    /// # Örnek
+    /// ```ignore
+    /// world.resource_scope::<PoolManager, ()>(|world, pool| {
+    ///     pool.instantiate(world, "enemy");
+    /// });
+    /// ```
+    pub fn resource_scope<T: Send + Sync + 'static, U, F>(&mut self, f: F) -> Option<U>
+    where
+        F: FnOnce(&mut World, &mut T) -> U,
+    {
+        let resource = self.remove_resource::<T>()?;
+
+        // Panic güvenliği: Closure panic yaparsa bile resource geri yerleştirilir.
+        // Drop guard, stack unwind sırasında resource'u tekrar world'e koyar.
+        struct Guard<'a, T: Send + Sync + 'static> {
+            world: *mut World,
+            resource: Option<T>,
+            _marker: std::marker::PhantomData<&'a mut World>,
+        }
+        impl<'a, T: Send + Sync + 'static> Drop for Guard<'a, T> {
+            fn drop(&mut self) {
+                if let Some(resource) = self.resource.take() {
+                    // SAFETY: self.world is valid for the lifetime of the Guard.
+                    unsafe { &mut *self.world }.insert_resource(resource);
+                }
+            }
+        }
+
+        let mut guard = Guard::<T> {
+            world: self as *mut World,
+            resource: Some(resource),
+            _marker: std::marker::PhantomData,
+        };
+
+        let result = f(self, guard.resource.as_mut().unwrap());
+
+        // Normal dönüş: guard.drop() resource'u geri koyacak.
+        Some(result)
     }
 
     /// Belirli bir Archetype içindeki iki satırı güvenli bir şekilde takaslar ve entity lokasyonlarını günceller.

@@ -121,14 +121,15 @@ impl GpuParticleSystem {
         }
     }
 
-    pub fn compute_pass(&self, encoder: &mut wgpu::CommandEncoder) {
+    pub fn compute_pass(&self, encoder: &mut wgpu::CommandEncoder, active_particles: u32) {
+        if active_particles == 0 { return; }
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Particle Compute Pass"),
             timestamp_writes: None,
         });
         cpass.set_pipeline(&self.pipelines.compute_pipeline);
         cpass.set_bind_group(0, &self.pipelines.compute_bind_group, &[]);
-        let workgroups = self.max_particles.div_ceil(64);
+        let workgroups = active_particles.div_ceil(64);
         cpass.dispatch_workgroups(workgroups, 1, 1);
     }
 
@@ -136,12 +137,14 @@ impl GpuParticleSystem {
         &'a self,
         rpass: &mut wgpu::RenderPass<'a>,
         global_bind_group: &'a wgpu::BindGroup,
+        active_particles: u32,
     ) {
+        if active_particles == 0 { return; }
         rpass.set_pipeline(&self.pipelines.render_pipeline);
         rpass.set_bind_group(0, global_bind_group, &[]);
         rpass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
         rpass.set_vertex_buffer(1, self.particles_buffer.slice(..));
-        rpass.draw(0..4, 0..self.max_particles);
+        rpass.draw(0..4, 0..active_particles);
     }
 
     /// Helper method to spawn an explosion of particles (e.g. dust or debris from a fracture).

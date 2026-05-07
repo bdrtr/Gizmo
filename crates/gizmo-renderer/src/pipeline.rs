@@ -11,6 +11,7 @@ pub struct SceneState {
     pub sky_pipeline: wgpu::RenderPipeline,
     pub water_pipeline: wgpu::RenderPipeline,
     pub shadow_pipeline: wgpu::RenderPipeline,
+    pub wireframe_pipeline: wgpu::RenderPipeline,
     pub transparent_pipeline: wgpu::RenderPipeline,
     pub grid_pipeline: wgpu::RenderPipeline,
     pub global_uniform_buffer: wgpu::Buffer,
@@ -310,6 +311,7 @@ fn build_layouts(device: &wgpu::Device) -> Layouts {
 struct CorePipelines {
     render: wgpu::RenderPipeline,
     render_double_sided: wgpu::RenderPipeline,
+    wireframe: wgpu::RenderPipeline,
     unlit: wgpu::RenderPipeline,
     sky: wgpu::RenderPipeline,
     water: wgpu::RenderPipeline,
@@ -374,7 +376,8 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
                        label: &str,
                        depth_write: bool,
                        cull: Option<wgpu::Face>,
-                       blend: Option<wgpu::BlendState>| {
+                       blend: Option<wgpu::BlendState>,
+                       polygon_mode: wgpu::PolygonMode| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(&render_pipeline_layout),
@@ -400,7 +403,7 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
                 front_face: wgpu::FrontFace::Ccw,
                 cull_mode: cull,
                 unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
+                polygon_mode,
                 conservative: false,
             },
             depth_stencil: Some(wgpu::DepthStencilState {
@@ -426,6 +429,7 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
             true,
             Some(wgpu::Face::Back),
             Some(wgpu::BlendState::ALPHA_BLENDING),
+            wgpu::PolygonMode::Fill,
         ),
         render_double_sided: create_main(
             &shader,
@@ -433,6 +437,15 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
             true,
             None,
             Some(wgpu::BlendState::ALPHA_BLENDING),
+            wgpu::PolygonMode::Fill,
+        ),
+        wireframe: create_main(
+            &shader,
+            "Wireframe Pipeline",
+            true,
+            None,
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+            wgpu::PolygonMode::Line,
         ),
         transparent: create_main(
             &shader,
@@ -440,6 +453,7 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
             false,
             None,
             Some(wgpu::BlendState::ALPHA_BLENDING),
+            wgpu::PolygonMode::Fill,
         ),
         unlit: create_main(
             &unlit_shader,
@@ -447,6 +461,7 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
             true,
             None,
             Some(wgpu::BlendState::ALPHA_BLENDING),
+            wgpu::PolygonMode::Fill,
         ),
         sky: create_main(
             &sky_shader,
@@ -454,6 +469,7 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
             false,
             Some(wgpu::Face::Back),
             Some(wgpu::BlendState::ALPHA_BLENDING),
+            wgpu::PolygonMode::Fill,
         ),
         water: create_main(
             &water_shader,
@@ -461,6 +477,7 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
             true,
             Some(wgpu::Face::Back),
             Some(wgpu::BlendState::ALPHA_BLENDING),
+            wgpu::PolygonMode::Fill,
         ),
         grid: create_main(
             &grid_shader,
@@ -468,6 +485,7 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
             false,
             None,
             Some(wgpu::BlendState::ALPHA_BLENDING),
+            wgpu::PolygonMode::Fill,
         ),
     }
 }
@@ -624,6 +642,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     SceneState {
         render_pipeline: core_pipelines.render,
         render_double_sided_pipeline: core_pipelines.render_double_sided,
+        wireframe_pipeline: core_pipelines.wireframe,
         unlit_pipeline: core_pipelines.unlit,
         sky_pipeline: core_pipelines.sky,
         water_pipeline: core_pipelines.water,
@@ -675,6 +694,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
 
     renderer.scene.render_pipeline = core_pipelines.render;
     renderer.scene.render_double_sided_pipeline = core_pipelines.render_double_sided;
+    renderer.scene.wireframe_pipeline = core_pipelines.wireframe;
     renderer.scene.unlit_pipeline = core_pipelines.unlit;
     renderer.scene.sky_pipeline = core_pipelines.sky;
     renderer.scene.water_pipeline = core_pipelines.water;

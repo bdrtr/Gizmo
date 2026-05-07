@@ -540,7 +540,7 @@ pub fn execute_render_pipeline(
                 }
             }
 
-            gpu_particles.compute_pass(encoder);
+            gpu_particles.compute_pass(encoder, gpu_particles.active_particles);
         }
 
         if let Some(physics) = &renderer.gpu_physics {

@@ -31,8 +31,13 @@ pub fn physics_step_system(world: &World, dt: f32) {
         let children_storage = world.borrow::<gizmo_core::component::Children>();
         let trans_storage = world.borrow::<Transform>();
         let rb_storage = world.borrow::<RigidBody>();
+        let pooled_storage = world.borrow::<gizmo_core::pool::Pooled>();
 
         for (id, _rb) in rb_storage.iter() {
+            // Pooled (havuzda pasif) nesneleri simüle etme
+            if pooled_storage.get(id).is_some() {
+                continue;
+            }
             if let Some(transform) = trans_storage.get(id) {
                 let mut compound_shapes = Vec::new();
                 
@@ -84,8 +89,8 @@ pub fn physics_step_system(world: &World, dt: f32) {
 
     // 3. Query Rigid Bodies (Write Locks)
     let mut rigid_bodies = Vec::new();
-    if let Some(query) = Query::<(Mut<RigidBody>, Mut<Transform>, Mut<Velocity>)>::new(world) {
-        for (id, (rb, transform, vel)) in query.iter() {
+    if let Some(query) = Query::<(Mut<RigidBody>, Mut<Transform>, Mut<Velocity>, gizmo_core::query::Without<gizmo_core::pool::Pooled>)>::new(world) {
+        for (id, (rb, transform, vel, _)) in query.iter() {
             if let Some(final_collider) = compound_shapes_map.remove(&id) {
                 rigid_bodies.push((
                     Entity::new(id, 0),
@@ -102,8 +107,8 @@ pub fn physics_step_system(world: &World, dt: f32) {
 
     // 3.5. Query Soft Bodies
     let mut soft_bodies = Vec::new();
-    if let Some(soft_query) = Query::<(Mut<SoftBodyMesh>, Mut<Transform>)>::new(world) {
-        for (id, (soft_mesh, transform)) in soft_query.iter() {
+    if let Some(soft_query) = Query::<(Mut<SoftBodyMesh>, Mut<Transform>, gizmo_core::query::Without<gizmo_core::pool::Pooled>)>::new(world) {
+        for (id, (soft_mesh, transform, _)) in soft_query.iter() {
             soft_bodies.push((
                 Entity::new(id, 0),
                 soft_mesh.clone(),
@@ -121,9 +126,9 @@ pub fn physics_step_system(world: &World, dt: f32) {
     let is_paused = physics_world.is_paused && !physics_world.step_once && !physics_world.rewind_requested;
 
     if !is_paused {
-        let vehicle_query_opt = Query::<Mut<crate::vehicle::VehicleController>>::new(world);
+        let vehicle_query_opt = Query::<(Mut<crate::vehicle::VehicleController>, gizmo_core::query::Without<gizmo_core::pool::Pooled>)>::new(world);
         if let Some(vehicle_query) = &vehicle_query_opt {
-            for (id, mut vehicle) in vehicle_query.iter() {
+            for (id, (mut vehicle, _)) in vehicle_query.iter() {
                 if let Some((ent, rb, trans, vel, _col)) = rigid_bodies.iter_mut().find(|(e, ..)| e.id() == id) {
                     crate::vehicle::update_vehicle(*ent, &mut vehicle, rb, trans, vel, &all_colliders, dt);
                 }
@@ -131,12 +136,12 @@ pub fn physics_step_system(world: &World, dt: f32) {
         }
 
         // 3.6. Update Character Controllers
-        let kcc_query_opt = Query::<Mut<crate::components::CharacterController>>::new(world);
+        let kcc_query_opt = Query::<(Mut<crate::components::CharacterController>, gizmo_core::query::Without<gizmo_core::pool::Pooled>)>::new(world);
         if let Some(kcc_query) = &kcc_query_opt {
             let mut vel_storage = world.borrow_mut::<Velocity>();
             let col_storage = world.borrow::<Collider>();
             
-            for (id, mut kcc) in kcc_query.iter() {
+            for (id, (mut kcc, _)) in kcc_query.iter() {
                 if let Some((ent, _rb, trans, vel, col)) = rigid_bodies.iter_mut().find(|(e, ..)| e.id() == id) {
                     crate::character::update_character(*ent, &mut kcc, trans, vel, col, &all_colliders, dt);
                 } else if let Some(mut trans) = world.borrow_mut::<Transform>().get_mut(id) {
@@ -150,9 +155,9 @@ pub fn physics_step_system(world: &World, dt: f32) {
 
     // 3.7. Extract Fluid Simulations
     let mut fluid_sims = Vec::new();
-    let fluid_query_opt = Query::<(Mut<crate::components::FluidSimulation>, Mut<Transform>)>::new(world);
+    let fluid_query_opt = Query::<(Mut<crate::components::FluidSimulation>, Mut<Transform>, gizmo_core::query::Without<gizmo_core::pool::Pooled>)>::new(world);
     if let Some(fluid_query) = &fluid_query_opt {
-        for (id, (fluid, transform)) in fluid_query.iter() {
+        for (id, (fluid, transform, _)) in fluid_query.iter() {
             fluid_sims.push((Entity::new(id, 0), fluid.clone(), transform.clone()));
         }
     }
@@ -164,7 +169,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
 
     // Sync back fluids
     if let Some(fluid_query) = &fluid_query_opt {
-        for (id, (mut fluid, mut transform)) in fluid_query.iter() {
+        for (id, (mut fluid, mut transform, _)) in fluid_query.iter() {
             if let Some((_, f, t)) = fluid_sims.iter().find(|(e, _, _)| e.id() == id) {
                 *fluid = f.clone();
                 *transform = t.clone();
@@ -184,9 +189,9 @@ pub fn physics_step_system(world: &World, dt: f32) {
 
     // 5. Write back to ECS (Rigid Bodies)
     if !rigid_bodies.is_empty() {
-        if let Some(query) = Query::<(Mut<RigidBody>, Mut<Transform>, Mut<Velocity>)>::new(world) {
+        if let Some(query) = Query::<(Mut<RigidBody>, Mut<Transform>, Mut<Velocity>, gizmo_core::query::Without<gizmo_core::pool::Pooled>)>::new(world) {
             for (entity, rb, transform, vel, _collider) in rigid_bodies {
-                if let Some((mut ecs_rb, mut ecs_trans, mut ecs_vel)) = query.get(entity.id()) {
+                if let Some((mut ecs_rb, mut ecs_trans, mut ecs_vel, _)) = query.get(entity.id()) {
                     *ecs_rb = rb;
                     *ecs_trans = transform;
                     *ecs_vel = vel;
@@ -197,9 +202,9 @@ pub fn physics_step_system(world: &World, dt: f32) {
 
     // 6. Write back to ECS (Soft Bodies)
     if !soft_bodies.is_empty() {
-        if let Some(soft_query) = Query::<(Mut<SoftBodyMesh>, Mut<Transform>)>::new(world) {
+        if let Some(soft_query) = Query::<(Mut<SoftBodyMesh>, Mut<Transform>, gizmo_core::query::Without<gizmo_core::pool::Pooled>)>::new(world) {
             for (entity, soft_mesh, transform) in soft_bodies {
-                if let Some((mut sm, mut t)) = soft_query.get(entity.id()) {
+                if let Some((mut sm, mut t, _)) = soft_query.get(entity.id()) {
                     sm.nodes.clone_from(&soft_mesh.nodes);
                     *t = transform;
                 }
@@ -249,7 +254,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
 
     let mut shattered = std::collections::HashSet::new();
 
-    let query_opt = Query::<(gizmo_core::query::Mut<Breakable>, &Transform, &Collider, &Velocity)>::new(world);
+    let query_opt = Query::<(gizmo_core::query::Mut<Breakable>, &Transform, &Collider, &Velocity, gizmo_core::query::Without<gizmo_core::pool::Pooled>)>::new(world);
     let query = match query_opt {
         Some(q) => q,
         None => return,
@@ -301,7 +306,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
 
         // Check Entity A
         if !shattered.contains(&event.entity_a.id()) {
-            if let Some((mut breakable, transform, collider, vel)) = query.get(event.entity_a.id()) {
+            if let Some((mut breakable, transform, collider, vel, _)) = query.get(event.entity_a.id()) {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
                     breakable.current_health -= max_impulse;
                     if breakable.current_health <= 0.0 {
@@ -315,7 +320,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
 
         // Check Entity B
         if !shattered.contains(&event.entity_b.id()) {
-            if let Some((mut breakable, transform, collider, vel)) = query.get(event.entity_b.id()) {
+            if let Some((mut breakable, transform, collider, vel, _)) = query.get(event.entity_b.id()) {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
                     breakable.current_health -= max_impulse;
                     if breakable.current_health <= 0.0 {
@@ -395,11 +400,11 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
         Err(_) => return,
     };
     
-    let explosion_query_opt = Query::<(&Explosion, &Transform)>::new(world);
+    let explosion_query_opt = Query::<(&Explosion, &Transform, gizmo_core::query::Without<gizmo_core::pool::Pooled>)>::new(world);
     let mut active_explosions = Vec::new();
     
     if let Some(exp_query) = &explosion_query_opt {
-        for (ent_id, (explosion, transform)) in exp_query.iter() {
+        for (ent_id, (explosion, transform, _)) in exp_query.iter() {
             if explosion.is_active {
                 // Apply offset to transform position
                 active_explosions.push((Entity::new(ent_id, 0), explosion.clone(), transform.position + explosion.offset));
@@ -429,10 +434,10 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     };
 
     // Check for Breakables that should shatter
-    let breakable_query_opt = Query::<(gizmo_core::query::Mut<crate::components::Breakable>, &Transform, &Collider, &Velocity)>::new(world);
+    let breakable_query_opt = Query::<(gizmo_core::query::Mut<crate::components::Breakable>, &Transform, &Collider, &Velocity, gizmo_core::query::Without<gizmo_core::pool::Pooled>)>::new(world);
     if let Some(breakable_query) = &breakable_query_opt {
         for (_exp_entity, explosion, exp_pos) in &active_explosions {
-            for (id, (mut breakable, transform, collider, vel)) in breakable_query.iter() {
+            for (id, (mut breakable, transform, collider, vel, _)) in breakable_query.iter() {
                 if breakable.is_broken || shattered.contains(&id) { continue; }
                 
                 let diff = transform.position - *exp_pos;
@@ -460,10 +465,10 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     }
 
     // Apply to Rigid Bodies
-    let rb_query_opt = Query::<(Mut<RigidBody>, &Transform, Mut<Velocity>)>::new(world);
+    let rb_query_opt = Query::<(Mut<RigidBody>, &Transform, Mut<Velocity>, gizmo_core::query::Without<gizmo_core::pool::Pooled>)>::new(world);
     if let Some(rb_query) = &rb_query_opt {
         for (_exp_entity, explosion, exp_pos) in &active_explosions {
-            for (id, (rb, transform, mut vel)) in rb_query.iter() {
+            for (id, (rb, transform, mut vel, _)) in rb_query.iter() {
                 if !rb.is_dynamic() || shattered.contains(&id) { continue; }
                 
                 let diff = transform.position - *exp_pos;
@@ -484,10 +489,10 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     }
 
     // Apply to Soft Bodies
-    let sb_query_opt = Query::<Mut<crate::soft_body::SoftBodyMesh>>::new(world);
+    let sb_query_opt = Query::<(Mut<crate::soft_body::SoftBodyMesh>, gizmo_core::query::Without<gizmo_core::pool::Pooled>)>::new(world);
     if let Some(sb_query) = &sb_query_opt {
         for (_exp_entity, explosion, exp_pos) in &active_explosions {
-            for (_id, mut sb) in sb_query.iter() {
+            for (_id, (mut sb, _)) in sb_query.iter() {
                 for node in sb.nodes.iter_mut() {
                     if node.is_fixed { continue; }
                     

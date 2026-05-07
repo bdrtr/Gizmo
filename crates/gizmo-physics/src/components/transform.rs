@@ -82,6 +82,34 @@ impl Transform {
         self.update_local_matrix();
     }
 
+    /// X ekseni etrafında döndürür (radyan).
+    #[inline]
+    pub fn rotate_x(&mut self, angle: f32) {
+        self.rotation *= Quat::from_rotation_x(angle);
+        self.update_local_matrix();
+    }
+
+    /// Y ekseni etrafında döndürür (radyan).
+    #[inline]
+    pub fn rotate_y(&mut self, angle: f32) {
+        self.rotation *= Quat::from_rotation_y(angle);
+        self.update_local_matrix();
+    }
+
+    /// Z ekseni etrafında döndürür (radyan).
+    #[inline]
+    pub fn rotate_z(&mut self, angle: f32) {
+        self.rotation *= Quat::from_rotation_z(angle);
+        self.update_local_matrix();
+    }
+
+    /// Mevcut pozisyona bir delta ekler.
+    #[inline]
+    pub fn translate(&mut self, delta: Vec3) {
+        self.position += delta;
+        self.update_local_matrix();
+    }
+
     pub fn update_local_matrix(&mut self) {
         self.local_matrix =
             Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position);

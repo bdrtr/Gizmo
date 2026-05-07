@@ -10,7 +10,7 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
     let mut pan_delta = None;
     let mut orbit_delta = None;
     let mut scroll_delta = None;
-    if let Some(mut editor_state) = world.remove_resource::<EditorState>() {
+    world.resource_scope(|world, editor_state: &mut EditorState| {
         look_delta = editor_state.camera.look_delta;
         pan_delta = editor_state.camera.pan_delta;
         orbit_delta = editor_state.camera.orbit_delta;
@@ -22,18 +22,17 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
             .unwrap_or_default();
         crate::systems::input::handle_input_and_scene_view(
             world,
-            &mut editor_state,
+            editor_state,
             state,
             dt,
             input,
             &win_info,
         );
-        crate::systems::build::handle_build_requests(&mut editor_state);
-        crate::systems::shortcuts::handle_editor_shortcuts(world, &mut editor_state, state, input);
-        crate::systems::simulation::handle_simulation(world, &mut editor_state, state, dt, input);
-        crate::systems::scene_ops::handle_scene_operations(world, &mut editor_state, state);
-        world.insert_resource(editor_state);
-    }
+        crate::systems::build::handle_build_requests(editor_state);
+        crate::systems::shortcuts::handle_editor_shortcuts(world, editor_state, state, input);
+        crate::systems::simulation::handle_simulation(world, editor_state, state, dt, input);
+        crate::systems::scene_ops::handle_scene_operations(world, editor_state, state);
+    });
 
     // Resolve all Transform hierarchy
 

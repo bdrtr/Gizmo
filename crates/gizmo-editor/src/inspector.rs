@@ -82,6 +82,7 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
             draw_script_section(ui, world, entity_id, state);
             draw_fluid_section(ui, world, entity_id, state);
             draw_ai_section(ui, world, entity_id, state);
+            draw_reflection_section(ui, world, entity_id, state);
 
             ui.separator();
 
@@ -746,6 +747,122 @@ fn draw_ai_section(
 }
 
 // === YARDIMCI FONKSİYONLAR ===
+
+fn draw_json_value(ui: &mut egui::Ui, name: &str, value: &mut serde_json::Value) -> bool {
+    let mut changed = false;
+    match value {
+        serde_json::Value::Number(num) => {
+            if let Some(f) = num.as_f64() {
+                let mut v = f;
+                ui.horizontal(|ui| {
+                    ui.label(name);
+                    if ui.add(egui::DragValue::new(&mut v).speed(0.1)).changed() {
+                        if let Some(n) = serde_json::Number::from_f64(v) {
+                            *num = n;
+                            changed = true;
+                        }
+                    }
+                });
+            } else if let Some(i) = num.as_i64() {
+                let mut v = i;
+                ui.horizontal(|ui| {
+                    ui.label(name);
+                    if ui.add(egui::DragValue::new(&mut v)).changed() {
+                        *num = serde_json::Number::from(v);
+                        changed = true;
+                    }
+                });
+            }
+        }
+        serde_json::Value::Bool(b) => {
+            ui.horizontal(|ui| {
+                if ui.checkbox(b, name).changed() {
+                    changed = true;
+                }
+            });
+        }
+        serde_json::Value::String(s) => {
+            ui.horizontal(|ui| {
+                ui.label(name);
+                if ui.text_edit_singleline(s).changed() {
+                    changed = true;
+                }
+            });
+        }
+        serde_json::Value::Object(map) => {
+            ui.vertical(|ui| {
+                ui.label(name);
+                ui.indent(name, |ui| {
+                    for (k, v) in map.iter_mut() {
+                        if draw_json_value(ui, k, v) {
+                            changed = true;
+                        }
+                    }
+                });
+            });
+        }
+        serde_json::Value::Array(arr) => {
+            ui.vertical(|ui| {
+                ui.label(format!("{} (Dizi)", name));
+                ui.indent(name, |ui| {
+                    for (i, v) in arr.iter_mut().enumerate() {
+                        if draw_json_value(ui, &format!("[{}]", i), v) {
+                            changed = true;
+                        }
+                    }
+                });
+            });
+        }
+        _ => {
+            ui.label(format!("{}: <Desteklenmeyen tip>", name));
+        }
+    }
+    changed
+}
+
+fn draw_reflection_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    state: &mut EditorState,
+) {
+    let skip_names = [
+        "EntityName", "Transform", "Velocity", "RigidBody", "Collider",
+        "Camera", "PointLight", "Material", "ParticleEmitter", "Terrain",
+        "Script", "FluidSimulation", "NavAgent"
+    ];
+
+    if let Some(registry) = world.get_resource::<gizmo_core::ComponentRegistry>() {
+        let types = world.get_entity_component_types(entity_id);
+        
+        for tid in types {
+            if let Some(reg) = registry.get_registration(tid) {
+                if skip_names.contains(&reg.name.as_str()) {
+                    continue;
+                }
+
+                if let (Some(get_json), Some(set_json)) = (reg.get_json_fn, reg.set_json_fn) {
+                    if let Some(ptr) = world.get_component_ptr(entity_id, tid) {
+                        if let Ok(mut val) = get_json(ptr) {
+                            let mut changed = false;
+                            egui::CollapsingHeader::new(format!("🧩 {}", reg.name))
+                                .default_open(true)
+                                .show(ui, |ui| {
+                                    if draw_json_value(ui, &reg.name, &mut val) {
+                                        changed = true;
+                                    }
+                                });
+                            ui.separator();
+                            if changed {
+                                state.pending_json_updates.push((entity_id, set_json, val));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 fn quat_to_euler_deg(q: gizmo_math::Quat) -> (f32, f32, f32) {
     let (x, y, z) = q.to_euler(gizmo_math::EulerRot::XYZ);
