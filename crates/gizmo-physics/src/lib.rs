@@ -3,6 +3,7 @@ pub mod bvh; // Move near broadphase
 pub mod collision;
 pub mod components;
 pub mod error;
+#[cfg(feature = "gpu_physics")]
 pub mod gpu_compute;
 
 pub mod integrator;
@@ -33,7 +34,10 @@ pub use error::GizmoError;
 pub use broadphase::SpatialHash;
 pub use gizmo_math::Aabb;
 pub use soft_body::{SoftBodyMesh, SoftBodyNode, Tetrahedron};
+
+#[cfg(feature = "gpu_physics")]
 pub use gpu_compute::{GpuCompute, GpuSoftBodyNode, GpuParameters, GpuPhysicsLink};
+
 pub use island::{Island, IslandManager, PhysicsMetrics};
 pub use fracture::{voronoi_shatter, generate_fracture_chunks, PreFracturedCache};
 pub use collision::{

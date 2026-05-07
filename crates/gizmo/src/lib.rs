@@ -3,6 +3,7 @@ pub mod color;
 pub mod systems;
 pub mod prelude;
 pub mod spawner;
+pub mod plugins;
 
 // === Motor Alt Sistemleri ===
 pub use gizmo_ai as ai;

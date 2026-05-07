@@ -27,6 +27,8 @@ pub use crate::math::{EulerRot, Mat4, Quat, Ray, Vec2, Vec3, Vec4};
 // === Sadelik API (Bevy tarzı) ===
 pub use crate::color::Color;
 pub use crate::spawner::{Commands as SpawnCommands, InputExt, WorldExt};
+pub use crate::app::{App, Plugin};
+pub use crate::plugins::*;
 
 // Temel Makrolar
 pub use crate::gizmo_log;
@@ -49,7 +51,7 @@ pub use crate::systems::render::default_render_pass;
 pub use crate::systems::render::RenderContextExt;
 
 // === Uygulama Çerçevesi ===
-pub use crate::app::App;
+
 
 // === Windowing & Input ===
 pub use crate::core::input::Input;

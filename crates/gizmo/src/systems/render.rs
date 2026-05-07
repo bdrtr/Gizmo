@@ -998,7 +998,7 @@ pub trait RenderContextExt {
     fn default_render(&mut self, world: &mut crate::core::World);
 }
 
-impl<'a, 'r> RenderContextExt for crate::renderer::RenderContext<'a, 'r> {
+impl<'a> RenderContextExt for crate::renderer::RenderContext<'a> {
     fn default_render(&mut self, world: &mut crate::core::World) {
         let (encoder, view, renderer) = self.parts_mut();
         default_render_pass(world, encoder, view, renderer);

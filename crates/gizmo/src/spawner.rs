@@ -25,7 +25,7 @@ use gizmo_renderer::{
 
 pub struct Commands<'a> {
     pub world: &'a mut World,
-    pub renderer: &'a Renderer<'a>,
+    pub renderer: &'a Renderer,
     pub asset_manager: Option<AssetManager>,
 }
 
@@ -38,7 +38,7 @@ impl<'a> Drop for Commands<'a> {
 }
 
 impl<'a> Commands<'a> {
-    pub fn new(world: &'a mut World, renderer: &'a Renderer<'a>) -> Self {
+    pub fn new(world: &'a mut World, renderer: &'a Renderer) -> Self {
         let am = world
             .remove_resource::<AssetManager>()
             .unwrap_or_else(AssetManager::new);

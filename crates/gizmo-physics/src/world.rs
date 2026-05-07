@@ -89,6 +89,7 @@ pub struct PhysicsWorld {
     pub fluid_zones: Vec<FluidZone>,
     
     #[serde(skip)]
+    #[cfg(feature = "gpu_physics")]
     pub gpu_compute: Option<crate::gpu_compute::GpuCompute>,
     #[serde(skip)]
     pub(crate) contact_cache: HashMap<(Entity, Entity), (bool, Option<ContactManifold>)>,
@@ -142,8 +143,8 @@ impl PhysicsWorld {
             joint_solver: crate::joints::JointSolver::default(),
             gravity_fields: Vec::new(),
             fluid_zones: Vec::new(),
+            #[cfg(feature = "gpu_physics")]
             gpu_compute: None,
-
             contact_cache: HashMap::new(),
             accumulator: 0.0,
             render_alpha: 1.0,
@@ -168,6 +169,7 @@ impl PhysicsWorld {
         self
     }
 
+    #[cfg(feature = "gpu_physics")]
     pub fn enable_gpu_compute(&mut self) {
         self.gpu_compute = pollster::block_on(crate::gpu_compute::GpuCompute::new());
     }

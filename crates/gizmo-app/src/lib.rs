@@ -3,7 +3,8 @@ pub mod dev_console;
 use gizmo_core::system::Schedule;
 use gizmo_core::world::World;
 use gizmo_editor::gui::EditorContext;
-use gizmo_renderer::renderer::{Renderer, RenderContext};
+use gizmo_renderer::renderer::Renderer;
+use gizmo_renderer::RenderContext;
 use std::sync::Arc;
 use winit::{
     event::{Event, WindowEvent},
@@ -55,13 +56,17 @@ pub fn setup_panic_hook() {
     }));
 }
 
+pub trait Plugin<State: 'static = ()> {
+    fn build(&self, app: &mut App<State>);
+}
+
 pub struct App<State: 'static = ()> {
     pub world: World,
     pub schedule: Schedule,
     window_title: String,
     window_size: (u32, u32),
 
-    setup_fn: Option<Box<dyn FnOnce(&mut World, &Renderer) -> State>>,
+    setup_fn: Option<Box<dyn FnOnce(&mut World, &Renderer) -> State + 'static>>,
     update_fn: Option<Box<dyn FnMut(&mut World, &mut State, f32, &gizmo_core::input::Input)>>, // dt, input
     render_fn: Option<
         Box<
@@ -77,10 +82,10 @@ pub struct App<State: 'static = ()> {
     >, // light_time
     simple_render_fn: Option<
         Box<
-            dyn for<'a, 'r> FnMut(
+            dyn for<'a> FnMut(
                 &mut World,
                 &State,
-                &mut RenderContext<'a, 'r>,
+                &mut RenderContext<'a>,
             ),
         >,
     >,
@@ -96,6 +101,7 @@ pub struct App<State: 'static = ()> {
     record_data: Option<gizmo_core::input::PlaybackData>,
     playback_data: Option<gizmo_core::input::PlaybackData>,
     playback_frame_index: usize,
+    runner: Option<Box<dyn FnOnce(App<State>)>>,
 }
 
 impl<State: 'static> App<State> {
@@ -120,7 +126,23 @@ impl<State: 'static> App<State> {
             record_data: None,
             playback_data: None,
             playback_frame_index: 0,
+            runner: None,
         }
+    }
+
+    pub fn set_runner<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(App<State>) + 'static,
+    {
+        self.runner = Some(Box::new(f));
+        self
+    }
+
+    pub fn set_runner_mut<F>(&mut self, f: F)
+    where
+        F: FnOnce(App<State>) + 'static,
+    {
+        self.runner = Some(Box::new(f));
     }
 
     pub fn start_recording(mut self) -> Self {
@@ -149,6 +171,11 @@ impl<State: 'static> App<State> {
 
     pub fn with_icon(mut self, icon_bytes: &'static [u8]) -> Self {
         self.window_icon = Some(icon_bytes);
+        self
+    }
+
+    pub fn add_plugin<P: Plugin<State>>(mut self, plugin: P) -> Self {
+        plugin.build(&mut self);
         self
     }
 
@@ -183,24 +210,10 @@ impl<State: 'static> App<State> {
         self
     }
 
-    /// Basitleştirilmiş render callback'i — wgpu detaylarını `RenderContext`
-    /// arkasına gizler. `set_render` yerine kullanılır.
-    ///
-    /// ```ignore
-    /// fn render(world: &mut World, _state: &GameState, ctx: &mut RenderContext) {
-    ///     ctx.disable_gpu_compute();
-    ///     ctx.default_render(world);
-    /// }
-    ///
-    /// App::new("Oyun", 1280, 720)
-    ///     .set_setup(setup)
-    ///     .set_update(update)
-    ///     .set_simple_render(render)
-    ///     .run();
-    /// ```
+    /// Yeni, basit Render fonksiyonunu (RenderContext) ekler
     pub fn set_simple_render<F>(mut self, f: F) -> Self
     where
-        F: for<'a, 'r> FnMut(&mut World, &State, &mut RenderContext<'a, 'r>) + 'static,
+        F: for<'a> FnMut(&mut World, &State, &mut RenderContext<'a>) + 'static,
     {
         self.simple_render_fn = Some(Box::new(f));
         self
@@ -233,6 +246,14 @@ impl<State: 'static> App<State> {
     }
 
     pub fn run(mut self) {
+        if let Some(runner) = self.runner.take() {
+            runner(self);
+            return;
+        }
+        self.run_default();
+    }
+
+    fn run_default(mut self) {
         setup_panic_hook();
         WORLD_PTR.store(&mut self.world as *mut _, Ordering::Release);
 
@@ -267,15 +288,23 @@ impl<State: 'static> App<State> {
         }
 
         let window = Arc::new(builder.build(&event_loop).expect("Pencere oluşturulamadı!"));
-
-        let mut renderer = pollster::block_on(Renderer::new(window.clone()));
-
         // Initialize Core Dev Console Systems BEFORE setup so setup can register cvars
         self.world.insert_resource(gizmo_core::cvar::CVarRegistry::new());
-        self.world.insert_resource(gizmo_core::cvar::DevConsoleState::default());
+        // Window Resource oluştur ve World'e ekle
+        self.world.insert_resource(gizmo_core::window::WindowInfo {
+            width: self.window_size.0 as f32,
+            height: self.window_size.1 as f32,
+        });
+
+        // Renderer Resource oluştur ve World'e ekle
+        let renderer = pollster::block_on(Renderer::new(window.clone()));
+        self.world.insert_resource(renderer);
 
         let mut state = if let Some(setup) = self.setup_fn.take() {
-            setup(&mut self.world, &renderer)
+            let r = self.world.remove_resource::<Renderer>().unwrap();
+            let state = setup(&mut self.world, &r);
+            self.world.insert_resource(r);
+            state
         } else {
             panic!("setup() fonksiyonu atanmadi! Lütfen set_setup çağırın veya State yapılandırmanızı kontrol edin.");
         };
@@ -286,27 +315,33 @@ impl<State: 'static> App<State> {
                 .remove_resource::<gizmo_renderer::asset::AssetManager>()
             {
                 let dummy_rgba = [255, 255, 255, 255];
-                let dummy_bg = renderer.create_texture(&dummy_rgba, 1, 1);
+                let mut r = self.world.remove_resource::<Renderer>().unwrap();
+                let dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
 
-                gizmo_scene::scene::SceneData::load_into(
-                    &scene_path,
-                    &mut self.world,
-                    &renderer.device,
-                    &renderer.queue,
-                    &renderer.scene.texture_bind_group_layout,
-                    &mut asset_manager,
-                    Arc::new(dummy_bg),
-                    &gizmo_scene::registry::SceneRegistry::default(),
-                );
+                {
+                    gizmo_scene::scene::SceneData::load_into(
+                        &scene_path,
+                        &mut self.world,
+                        &r.device,
+                        &r.queue,
+                        &r.scene.texture_bind_group_layout,
+                        &mut asset_manager,
+                        Arc::new(dummy_bg),
+                        &gizmo_scene::registry::SceneRegistry::default(),
+                    );
+                }
 
+                self.world.insert_resource(r);
                 self.world.insert_resource(asset_manager);
             } else {
                 eprintln!("[App::run] AssetManager bulunamadı, sahne yüklenemiyor!");
             }
         }
 
-
-        let mut editor = EditorContext::new(&renderer.device, renderer.config.format, &window, 1);
+        let mut editor = {
+            let r = self.world.get_resource::<Renderer>().unwrap();
+            EditorContext::new(&r.device, r.config.format, &window, 1)
+        };
 
         let mut last_frame_time = std::time::Instant::now();
         let mut light_time = 0.0;
@@ -349,7 +384,10 @@ impl<State: 'static> App<State> {
                                 current_window.exit();
                             }
                             WindowEvent::Resized(physical_size) => {
-                                renderer.resize(*physical_size);
+                                {
+                                    let mut r = self.world.get_resource_mut::<Renderer>().unwrap();
+                                    r.resize(*physical_size);
+                                }
                                 let mut win_info = self
                                     .world
                                     .get_resource_mut_or_default::<gizmo_core::window::WindowInfo>(
@@ -471,7 +509,16 @@ impl<State: 'static> App<State> {
 
                             light_time += dt;
 
-                            // Update (Önceki gereksiz editor.run buradan silindi, Draw kısmında yapılıyor)
+                            // Update
+                            let full_output = editor.run(&window, |ctx| {
+                                if let Some(ui_hk) = self.ui_fn.as_mut() {
+                                    ui_hk(&mut self.world, &mut state, ctx);
+                                }
+                                
+                                // Render Global Dev Console on top of everything
+                                dev_console::ui_dev_console(&mut self.world, ctx, &self.input);
+                            });
+
 
                             // --- Scene View RTT (Render To Texture) YÖNETİMİ ---
                             if self
@@ -483,22 +530,26 @@ impl<State: 'static> App<State> {
                                     .world
                                     .get_resource_mut::<gizmo_editor::EditorState>()
                                     .unwrap();
+                                let (rw, rh) = {
+                                    let r = self.world.get_resource::<Renderer>().unwrap();
+                                    (r.size.width, r.size.height)
+                                };
                                 let scene_w = ed_state_ref
                                     .scene_view_size
                                     .map(|s| s.x as u32)
-                                    .unwrap_or(renderer.size.width);
+                                    .unwrap_or(rw);
                                 let scene_h = ed_state_ref
                                     .scene_view_size
                                     .map(|s| s.y as u32)
-                                    .unwrap_or(renderer.size.height);
+                                    .unwrap_or(rh);
                                 let game_w = ed_state_ref
                                     .game_view_size
                                     .map(|s| s.x as u32)
-                                    .unwrap_or(renderer.size.width);
+                                    .unwrap_or(rw);
                                 let game_h = ed_state_ref
                                     .game_view_size
                                     .map(|s| s.y as u32)
-                                    .unwrap_or(renderer.size.height);
+                                    .unwrap_or(rh);
 
                                 let mut new_scene_target = None;
                                 let mut new_game_target = None;
@@ -520,32 +571,36 @@ impl<State: 'static> App<State> {
                                     if let Some(old_id) = ed_state_ref.scene_texture_id {
                                         editor.renderer.free_texture(&old_id);
                                     }
-                                    let texture =
-                                        renderer.device.create_texture(&wgpu::TextureDescriptor {
-                                            label: Some("Editor RTT"),
-                                            size: wgpu::Extent3d {
-                                                width: scene_w,
-                                                height: scene_h,
-                                                depth_or_array_layers: 1,
-                                            },
-                                            mip_level_count: 1,
-                                            sample_count: 1,
-                                            dimension: wgpu::TextureDimension::D2,
-                                            format: renderer.config.format,
-                                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                                                | wgpu::TextureUsages::TEXTURE_BINDING,
-                                            view_formats: &[],
-                                        });
-                                    let view = texture
-                                        .create_view(&wgpu::TextureViewDescriptor::default());
-                                    ed_state_ref.scene_texture_id =
-                                        Some(editor.renderer.register_native_texture(
-                                            &renderer.device,
+                                    let mut tex_id = None;
+                                    {
+                                        let r = self.world.get_resource::<Renderer>().unwrap();
+                                        let texture =
+                                            r.device.create_texture(&wgpu::TextureDescriptor {
+                                                label: Some("Editor RTT"),
+                                                size: wgpu::Extent3d {
+                                                    width: scene_w,
+                                                    height: scene_h,
+                                                    depth_or_array_layers: 1,
+                                                },
+                                                mip_level_count: 1,
+                                                sample_count: 1,
+                                                dimension: wgpu::TextureDimension::D2,
+                                                format: r.config.format,
+                                                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                                                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                                                view_formats: &[],
+                                            });
+                                        let view = texture
+                                            .create_view(&wgpu::TextureViewDescriptor::default());
+                                        tex_id = Some(editor.renderer.register_native_texture(
+                                            &r.device,
                                             &view,
                                             wgpu::FilterMode::Linear,
                                         ));
-                                    new_scene_target =
-                                        Some((std::sync::Arc::new(view), scene_w, scene_h));
+                                        new_scene_target =
+                                            Some((std::sync::Arc::new(view), scene_w, scene_h));
+                                    }
+                                    ed_state_ref.scene_texture_id = tex_id;
                                 }
 
                                 // Game View RTT
@@ -565,32 +620,36 @@ impl<State: 'static> App<State> {
                                     if let Some(old_id) = ed_state_ref.game_texture_id {
                                         editor.renderer.free_texture(&old_id);
                                     }
-                                    let texture =
-                                        renderer.device.create_texture(&wgpu::TextureDescriptor {
-                                            label: Some("Game RTT"),
-                                            size: wgpu::Extent3d {
-                                                width: game_w,
-                                                height: game_h,
-                                                depth_or_array_layers: 1,
-                                            },
-                                            mip_level_count: 1,
-                                            sample_count: 1,
-                                            dimension: wgpu::TextureDimension::D2,
-                                            format: renderer.config.format,
-                                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                                                | wgpu::TextureUsages::TEXTURE_BINDING,
-                                            view_formats: &[],
-                                        });
-                                    let view = texture
-                                        .create_view(&wgpu::TextureViewDescriptor::default());
-                                    ed_state_ref.game_texture_id =
-                                        Some(editor.renderer.register_native_texture(
-                                            &renderer.device,
+                                    let mut tex_id = None;
+                                    {
+                                        let r = self.world.get_resource::<Renderer>().unwrap();
+                                        let texture =
+                                            r.device.create_texture(&wgpu::TextureDescriptor {
+                                                label: Some("Game RTT"),
+                                                size: wgpu::Extent3d {
+                                                    width: game_w,
+                                                    height: game_h,
+                                                    depth_or_array_layers: 1,
+                                                },
+                                                mip_level_count: 1,
+                                                sample_count: 1,
+                                                dimension: wgpu::TextureDimension::D2,
+                                                format: r.config.format,
+                                                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                                                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                                                view_formats: &[],
+                                            });
+                                        let view = texture
+                                            .create_view(&wgpu::TextureViewDescriptor::default());
+                                        tex_id = Some(editor.renderer.register_native_texture(
+                                            &r.device,
                                             &view,
                                             wgpu::FilterMode::Linear,
                                         ));
-                                    new_game_target =
-                                        Some((std::sync::Arc::new(view), game_w, game_h));
+                                        new_game_target =
+                                            Some((std::sync::Arc::new(view), game_w, game_h));
+                                    }
+                                    ed_state_ref.game_texture_id = tex_id;
                                 }
 
                                 drop(ed_state_ref);
@@ -734,21 +793,22 @@ impl<State: 'static> App<State> {
                                     .world
                                     .remove_resource::<gizmo_renderer::asset::AssetManager>()
                                 {
+                                    let mut r = self.world.remove_resource::<Renderer>().unwrap();
                                     let dummy_rgba = [255u8, 255, 255, 255];
-                                    let dummy_bg =
-                                        renderer.create_texture(&dummy_rgba, 1, 1);
+                                    let dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
                                     let registry =
                                         gizmo_scene::registry::SceneRegistry::default();
                                     let ok = gizmo_scene::scene::SceneData::load_into(
                                         path,
                                         &mut self.world,
-                                        &renderer.device,
-                                        &renderer.queue,
-                                        &renderer.scene.texture_bind_group_layout,
+                                        &r.device,
+                                        &r.queue,
+                                        &r.scene.texture_bind_group_layout,
                                         &mut asset_manager,
                                         Arc::new(dummy_bg),
                                         &registry,
                                     );
+                                    self.world.insert_resource(r);
                                     self.world.insert_resource(asset_manager);
                                     if let Some(mut ed) = self
                                         .world
@@ -798,8 +858,6 @@ impl<State: 'static> App<State> {
                             }
 
                             // Sabit dt'de fizik adımları — frame rate'ten bağımsız
-                            let t_physics = std::time::Instant::now();
-                            let mut physics_steps = 0;
                             loop {
                                 let should = self
                                     .world
@@ -822,11 +880,6 @@ impl<State: 'static> App<State> {
                                     .get_resource_mut::<gizmo_core::time::PhysicsTime>()
                                     .unwrap();
                                 phys_time.consume_step();
-                                physics_steps += 1;
-                            }
-                            let phys_dur = t_physics.elapsed().as_secs_f32() * 1000.0;
-                            if phys_dur > 5.0 {
-                                println!("Physics ({} steps) took: {:.2}ms", physics_steps, phys_dur);
                             }
 
                             // İnterpolasyon alpha'sını hesapla (render için)
@@ -849,6 +902,7 @@ impl<State: 'static> App<State> {
                             // --- DYNAMIC FRACTURE & PARTICLE INTEGRATION ---
                             if let Some(physics_world) = self.world.get_resource::<gizmo_physics::world::PhysicsWorld>() {
                                 if !physics_world.fracture_events.is_empty() {
+                                    let renderer = self.world.get_resource::<Renderer>().unwrap();
                                     if let Some(gpu_particles) = &renderer.gpu_particles {
                                         for event in &physics_world.fracture_events {
                                             let center = [event.impact_point.x, event.impact_point.y, event.impact_point.z];
@@ -867,46 +921,61 @@ impl<State: 'static> App<State> {
                             }
 
                             // --- DRAW KISMI ---
-                            // Render öncesi tüm Transform matrix'lerini güncelle
-                            if let Some(mut q) = self.world.query::<gizmo_core::query::Mut<gizmo_physics::Transform>>() {
-                                for (_, mut trans) in q.iter_mut() {
-                                    trans.update_local_matrix();
-                                }
-                            }
-                            let full_output = editor.run(&window, |ctx| {
-                                if let Some(ui_hk) = self.ui_fn.as_mut() {
-                                    ui_hk(&mut self.world, &mut state, ctx);
-                                }
-                                dev_console::ui_dev_console(&mut self.world, ctx, &self.input);
-                            });
-
+                            let mut renderer = self.world.remove_resource::<Renderer>().unwrap();
+                            
                             let output = match renderer.surface.get_current_texture() {
                                 Ok(texture) => texture,
-                                Err(wgpu::SurfaceError::Outdated) => return,
+                                Err(wgpu::SurfaceError::Outdated) => {
+                                    self.world.insert_resource(renderer);
+                                    return;
+                                }
                                 Err(e) => {
                                     eprintln!("Surface hatasi: {:?}", e);
+                                    self.world.insert_resource(renderer);
                                     return;
                                 }
                             };
 
-                            let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+                            let view = output
+                                .texture
+                                .create_view(&wgpu::TextureViewDescriptor::default());
 
                             let mut encoder = renderer.device.create_command_encoder(
-                                &wgpu::CommandEncoderDescriptor { label: Some("Render Encoder") },
+                                &wgpu::CommandEncoderDescriptor {
+                                    label: Some("Render Encoder"),
+                                },
                             );
 
+                            // Kullaniciya CommandEncoder verip cizdiriyoruz!
                             if let Some(render_hk) = self.render_fn.as_mut() {
-                                render_hk(&mut self.world, &state, &mut encoder, &view, &mut renderer, light_time);
-                            } else if let Some(simple_hk) = self.simple_render_fn.as_mut() {
+                                render_hk(
+                                    &mut self.world,
+                                    &state,
+                                    &mut encoder,
+                                    &view,
+                                    &mut renderer,
+                                    light_time,
+                                );
+                            } else if let Some(s_render) = self.simple_render_fn.as_mut() {
                                 let mut ctx = RenderContext::new(&mut encoder, &view, &mut renderer, light_time);
-                                simple_hk(&mut self.world, &state, &mut ctx);
+                                s_render(&mut self.world, &state, &mut ctx);
                             }
 
-                            editor.render(&window, &renderer.device, &renderer.queue, &mut encoder, &view, full_output);
+                            editor.render(
+                                &window,
+                                &renderer.device,
+                                &renderer.queue,
+                                &mut encoder,
+                                &view,
+                                full_output,
+                            );
 
                             renderer.queue.submit(std::iter::once(encoder.finish()));
                             output.present();
                             
+                            self.world.insert_resource(renderer);
+                            
+                            // İşlemlerin bitiminde frame-özel input girdilerini (fare delta vs.) temizle
                             self.input.begin_frame();
                         }
                     }
