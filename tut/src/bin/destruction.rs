@@ -229,6 +229,7 @@ fn run() {
                     world.add_component(
                         e,
                         gizmo::renderer::components::Mesh::new(
+                            &renderer.device,
                             std::sync::Arc::new(vbuf),
                             &vertices,
                             Vec3::ZERO,

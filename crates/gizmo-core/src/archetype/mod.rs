@@ -288,8 +288,7 @@ impl Archetype {
 
         for col_cell in &mut self.columns {
             let mut col = col_cell.write().unwrap();
-            let src_ptr = col.get_ptr(row);
-            col.push_cloned_batch(src_ptr, count, tick);
+            col.push_cloned_batch_from_row(row, count, tick);
         }
 
         let mut new_rows = Vec::with_capacity(count);

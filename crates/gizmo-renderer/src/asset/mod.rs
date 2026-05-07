@@ -289,6 +289,7 @@ impl AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
         Mesh::new(
+            device,
             Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,

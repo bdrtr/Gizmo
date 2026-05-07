@@ -1,3 +1,4 @@
+pub mod bundles;
 pub mod color;
 pub mod systems;
 pub mod prelude;

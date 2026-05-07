@@ -8,13 +8,22 @@ use gizmo::audio::AudioSource;
 use gizmo::ai::components::NavAgent;
 use std::f32::consts::PI;
 use gizmo::winit::keyboard::KeyCode;
-use rand::Rng;
 
 struct RpgState {
     character_entity: gizmo::core::Entity,
     camera_yaw: f32,
     camera_pitch: f32,
+    asset_watcher: std::sync::Mutex<Option<gizmo::renderer::AssetWatcher>>,
 }
+
+struct ChunkAssets {
+    high_res_tree: gizmo::renderer::components::Mesh,
+    low_res_tree: gizmo::renderer::components::Mesh,
+    tree_mat: gizmo::renderer::components::Material,
+    ground_mesh: gizmo::renderer::components::Mesh,
+    ground_mat: gizmo::renderer::components::Material,
+}
+
 
 fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
     println!("⚔️ GIZMO ENGINE RPG TEST BAŞLIYOR ⚔️");
@@ -48,49 +57,24 @@ fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
         .with_pbr(Vec4::new(0.4, 0.6, 0.3, 1.0), 0.9, 0.0)
         .with_texture_source("assets/textures/grass_high_res.png".to_string());
     
-    let ground = world.spawn();
-    // Yüzeyi 100x100 yapıyoruz ki UV'ler çok sünüp su/deniz gibi görünmesin!
-    world.add_component(ground, Transform::new(Vec3::new(0.0, -1.0, 0.0)).with_scale(Vec3::new(100.0, 1.0, 100.0)));
-    world.add_component(ground, ground_mesh.clone());
-    world.add_component(ground, ground_mat.clone());
-    world.add_component(ground, MeshRenderer::new());
-    world.add_component(ground, Collider::box_collider(Vec3::new(100.0, 1.0, 100.0)));
-    world.add_component(ground, RigidBody::new_static());
-    world.add_component(ground, Velocity::default());
-
-    // --- ORMAN (LOD TESTİ) ---
-    println!("LOD TESTİ: Orman oluşturuluyor...");
+    // --- AÇIK DÜNYA CHUNK ASSETLERİ ---
+    println!("LOD TESTİ: Orman Assetleri hazırlanıyor...");
     let high_res_tree = AssetManager::create_sphere(&renderer.device, 1.0, 32, 32);
     let low_res_tree = AssetManager::create_sphere(&renderer.device, 1.0, 8, 8);
     let tree_mat = Material::new(ground_tex.clone()).with_pbr(Vec4::new(0.1, 0.8, 0.1, 1.0), 0.8, 0.0);
 
-    let mut rng = rand::thread_rng();
-    for _ in 0..300 { // 1000'den 300'e çektik (Aşırı CPU Frustum/LOD yükünü hafifletmek için)
-        let x: f32 = rng.gen_range(-80.0..80.0);
-        let z: f32 = rng.gen_range(-80.0..80.0);
-        
-        // Oyuncunun ve AI'nin spawn olduğu noktaya (0,0 civarı) ağaç dikme!
-        if x.abs() < 20.0 && z.abs() < 20.0 {
-            continue;
-        }
-
-        let tree = world.spawn();
-        world.add_component(tree, Transform::new(Vec3::new(x, 0.0, z)).with_scale(Vec3::new(2.0, 5.0, 2.0)));
-        world.add_component(tree, low_res_tree.clone());
-        world.add_component(tree, tree_mat.clone());
-        world.add_component(tree, MeshRenderer::new());
-        world.add_component(tree, Collider::capsule(2.0, 5.0));
-        world.add_component(tree, RigidBody::new_static());
-        world.add_component(tree, Velocity::default());
-
-        // LOD (Level of Detail) Swapping System Entegrasyonu
-        let lod_group = LodGroup::new(vec![
-            LodLevel::new(high_res_tree.clone(), 30.0), // 30 metreye kadar Yüksek Kalite
-            LodLevel::new(low_res_tree.clone(), 150.0), // 150 metreye kadar Düşük Kalite (Proxy)
-            // 150 metreden sonrası görünmez olacak (Culling)
-        ]);
-        world.add_component(tree, lod_group);
-    }
+    world.insert_resource(ChunkAssets {
+        high_res_tree,
+        low_res_tree,
+        tree_mat,
+        ground_mesh: ground_mesh.clone(),
+        ground_mat: ground_mat.clone(),
+    });
+    
+    let empty_prefab = world.spawn();
+    let mut pool_manager = gizmo::core::PoolManager::new();
+    pool_manager.register_pool("chunk_obj", empty_prefab);
+    world.insert_resource(pool_manager);
 
     // --- YAPAY ZEKA NPCLER ---
     println!("YAPAY ZEKA: Köylüler spawn oluyor...");
@@ -153,14 +137,40 @@ fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
     ));
 
     println!("✅ SETUP: Tamamlandı!");
+    let watcher = gizmo::renderer::AssetWatcher::new(&["assets/shaders", "assets/textures", "assets/models"]);
     RpgState {
         character_entity: char_ent,
         camera_yaw: 0.0,
         camera_pitch: -PI / 8.0,
+        asset_watcher: std::sync::Mutex::new(watcher),
     }
 }
 
 fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core::input::Input) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Mutex;
+
+    static FRAME_COUNT: AtomicU32 = AtomicU32::new(0);
+    static REAL_TIME_ACCUM: Mutex<f32> = Mutex::new(0.0);
+    static LAST_T: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+    let now = std::time::Instant::now();
+    if let Ok(mut last) = LAST_T.lock() {
+        if let Some(prev) = *last {
+            let real_dt = now.duration_since(prev).as_secs_f32();
+            if let Ok(mut accum) = REAL_TIME_ACCUM.lock() {
+                *accum += real_dt;
+                let count = FRAME_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                if *accum >= 1.0 {
+                    println!("REAL FPS: {} (real avg dt: {:.2}ms) | Entities: {}", count, (*accum / count as f32) * 1000.0, world.iter_alive_entities().len());
+                    FRAME_COUNT.store(0, Ordering::Relaxed);
+                    *accum = 0.0;
+                }
+            }
+        }
+        *last = Some(now);
+    }
+
     // --- KAMERA KONTROLLERİ ---
     if input.is_mouse_button_pressed(1) {
         let delta = input.mouse_delta();
@@ -211,7 +221,91 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
             char_pos = trans.position;
         }
     }
-    gizmo::systems::texture_streaming_system(world, char_pos);
+    // Texture Streaming Sistemi (Lod Level'e göre uzaklaştıkça memory'den silinebilir veya eklenebilir)    // Açık Dünya (Open World) Chunk Sistemini çalıştır
+    gizmo::systems::open_world_chunk_system(world, char_pos, 
+        // --- LOAD CHUNK ---
+        |w, coord| {
+            let assets = {
+                let res = w.get_resource::<ChunkAssets>().unwrap();
+                (res.high_res_tree.clone(), res.low_res_tree.clone(), res.tree_mat.clone(), res.ground_mesh.clone(), res.ground_mat.clone())
+            };
+
+            use rand::{SeedableRng, Rng};
+            use rand::rngs::StdRng;
+            let seed = (coord.0 as u64).wrapping_mul(31).wrapping_add(coord.1 as u64);
+            let mut rng = StdRng::seed_from_u64(seed);
+
+            let chunk_center = gizmo::systems::chunk_system::ChunkManager::chunk_to_world_pos(coord);
+            
+            // --- YARDIMCI FONKSİYON: Havuzdan Obje Al ---
+            let get_pooled_entity = |w: &mut World| -> gizmo::core::Entity {
+                w.resource_scope(|w, pool: &mut gizmo::core::PoolManager| {
+                    pool.instantiate(w, "chunk_obj").unwrap()
+                }).unwrap()
+            };
+
+            // --- CHUNK ZEMİNİ ---
+            let ground = get_pooled_entity(w);
+            let ground_id = ground.to_bits();
+            let ground_scale = Vec3::new(50.0, 1.0, 50.0);
+            w.add_component(ground, Transform::new(Vec3::new(chunk_center.x, -1.0, chunk_center.z)).with_scale(ground_scale));
+            w.add_component(ground, assets.3.clone()); // ground_mesh
+            w.add_component(ground, assets.4.clone()); // ground_mat
+            w.add_component(ground, MeshRenderer::new());
+            
+            // Otomatik Bounding Box hesaplama
+            let ground_he = assets.3.bounds.half_extents();
+            let scaled_he = Vec3::new(ground_he.x * ground_scale.x, ground_he.y * ground_scale.y, ground_he.z * ground_scale.z);
+            w.add_component(ground, Collider::box_collider(scaled_he)); 
+            
+            w.add_component(ground, RigidBody::new_static());
+            w.add_component(ground, Velocity::default());
+            w.get_resource_mut::<gizmo::systems::chunk_system::ChunkManager>().unwrap().register_entity(coord, ground_id);
+
+            // Her chunk'a 5 ağaç dikelim
+            for _ in 0..5 {
+                let x = chunk_center.x + rng.gen_range(-40.0..40.0);
+                let z = chunk_center.z + rng.gen_range(-40.0..40.0);
+
+                if coord.0 == 0 && coord.1 == 0 && x.abs() < 20.0 && z.abs() < 20.0 {
+                    continue;
+                }
+
+                let tree = get_pooled_entity(w);
+                let tree_id = tree.to_bits();
+                let tree_scale = Vec3::new(2.0, 5.0, 2.0);
+                w.add_component(tree, Transform::new(Vec3::new(x, 0.0, z)).with_scale(tree_scale));
+                w.add_component(tree, assets.1.clone()); // Low res base
+                w.add_component(tree, assets.2.clone()); // Mat
+                w.add_component(tree, MeshRenderer::new());
+                
+                // Ağacın otomatik capsule boyutu hesaplaması
+                let tree_he = assets.1.bounds.half_extents();
+                let radius = tree_he.x.max(tree_he.z) * tree_scale.x;
+                let half_height = tree_he.y * tree_scale.y;
+                w.add_component(tree, Collider::capsule(radius, half_height));
+                
+                w.add_component(tree, RigidBody::new_static());
+                w.add_component(tree, Velocity::default());
+                w.get_resource_mut::<gizmo::systems::chunk_system::ChunkManager>().unwrap().register_entity(coord, tree_id);
+
+                let lod_group = LodGroup::new(vec![
+                    LodLevel::new(assets.0.clone(), 30.0), 
+                    LodLevel::new(assets.1.clone(), 150.0), 
+                ]);
+                w.add_component(tree, lod_group);
+            }
+        },
+        // --- UNLOAD CHUNK (Object Pooling) ---
+        |w, _coord, entities| {
+            w.resource_scope(|w, pool: &mut gizmo::core::PoolManager| {
+                for entity_bits in &entities {
+                    let e = gizmo::core::Entity::from_bits(*entity_bits);
+                    pool.destroy(w, "chunk_obj", e);
+                }
+            });
+        }
+    );
     
     if let Some(trans) = world.borrow_mut::<Transform>().get_mut(state.character_entity.id()) {
         trans.rotation = Quat::from_rotation_y(state.camera_yaw);
@@ -231,14 +325,39 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
 
 fn render(
     world: &mut World,
-    _state: &RpgState,
+    state: &RpgState,
     encoder: &mut gizmo::wgpu::CommandEncoder,
     view: &gizmo::wgpu::TextureView,
     renderer: &mut Renderer,
     _light_time: f32,
 ) {
+    if let Ok(mut watcher_guard) = state.asset_watcher.lock() {
+        if let Some(watcher) = watcher_guard.as_mut() {
+            let changed_files = watcher.poll_changes();
+            if !changed_files.is_empty() {
+                let mut rebuild_shaders = false;
+                for path in changed_files {
+                    let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+                    if ext == "wgsl" {
+                        rebuild_shaders = true;
+                    }
+                }
+                if rebuild_shaders {
+                    println!("♻️ Hot-Reload: Shaderlar yeniden derleniyor...");
+                    renderer.rebuild_shaders();
+                    println!("✅ Hot-Reload: Shader derleme tamamlandı.");
+                }
+            }
+        }
+    }
+
+    // Gökyüzünden düşen su damlalarını kapatıyoruz (performans için)
+    renderer.gpu_fluid = None;
+    renderer.gpu_particles = None;
     renderer.gpu_physics = None;
-    gizmo::systems::default_render_pass(world, encoder, view, renderer);
+    
+    // Default render pass (Kamera, Işıklar, Model, Skybox, SSGI, SSR, Bloom vs. her şeyi yapar)
+    gizmo::systems::render::default_render_pass(world, encoder, view, renderer);
 }
 
 fn main() {

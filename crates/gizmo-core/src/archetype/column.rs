@@ -121,6 +121,14 @@ impl Column {
             .resize(self.ticks.len() + count, ComponentTicks::new(tick));
     }
 
+    /// Bir component'i bulunduğu satırdan kopyalar (realloc safety).
+    #[inline]
+    pub unsafe fn push_cloned_batch_from_row(&mut self, row: usize, count: usize, tick: u32) {
+        self.data.push_cloned_batch_from_row(row, count, self.clone_fn);
+        self.ticks
+            .resize(self.ticks.len() + count, ComponentTicks::new(tick));
+    }
+
     /// Belirtilen satırı swap-remove ile çıkarır ve düşürür.
     ///
     /// # Safety

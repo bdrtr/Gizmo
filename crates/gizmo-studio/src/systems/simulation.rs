@@ -46,7 +46,7 @@ pub fn handle_simulation(
     // --- OYUN / SİMÜLASYON DÖNGÜSÜ ---
     if editor_state.is_playing() {
         // SCRIPT ENGINE UPDATE: Sadece "Play" modundayken oyun mantığını işlet
-        if let Some(mut engine) = world.remove_resource::<gizmo::scripting::ScriptEngine>() {
+        world.resource_scope(|world, engine: &mut gizmo::scripting::ScriptEngine| {
             if let Err(e) = engine.update(world, input, dt) {
                 editor_state.log_error(&format!("Script Error: {}", e));
             }
@@ -87,9 +87,7 @@ pub fn handle_simulation(
                     }
                 }
             }
-
-            world.insert_resource(engine);
-        }
+        });
 
         state.physics_accumulator += dt;
         let fixed_dt = 1.0 / 60.0;
@@ -98,6 +96,7 @@ pub fn handle_simulation(
 
         let mut steps = 0;
         while state.physics_accumulator >= fixed_dt && steps < 16 {
+            gizmo::physics::system::physics_step_system(world, fixed_dt);
             state.physics_accumulator -= fixed_dt;
             steps += 1;
         }

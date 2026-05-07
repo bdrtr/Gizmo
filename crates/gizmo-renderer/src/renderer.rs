@@ -8,6 +8,78 @@ pub use crate::gpu_types::{
 pub use crate::pipeline::SceneState;
 pub use crate::post_process::PostProcessState;
 
+// ============================================================
+//  RenderContext — wgpu detaylarını kullanıcıdan gizler
+// ============================================================
+
+/// Kullanıcı kodunun doğrudan `wgpu::CommandEncoder` veya `wgpu::TextureView`
+/// görmesine gerek kalmadan render işlemi yapmasını sağlayan bağlam nesnesi.
+///
+/// ```ignore
+/// fn render(world: &mut World, _state: &GameState, ctx: &mut RenderContext) {
+///     ctx.disable_gpu_compute();           // GPU Compute kapalı
+///     ctx.default_render(world);           // Varsayılan render pipeline
+/// }
+/// ```
+pub struct RenderContext<'a, 'r> {
+    pub(crate) encoder: &'a mut wgpu::CommandEncoder,
+    pub(crate) view: &'a wgpu::TextureView,
+    pub(crate) renderer: &'a mut Renderer<'r>,
+    pub(crate) light_time: f32,
+}
+
+impl<'a, 'r> RenderContext<'a, 'r> {
+    /// Yeni bir RenderContext oluşturur (motor tarafından dahili olarak çağrılır).
+    pub fn new(
+        encoder: &'a mut wgpu::CommandEncoder,
+        view: &'a wgpu::TextureView,
+        renderer: &'a mut Renderer<'r>,
+        light_time: f32,
+    ) -> Self {
+        Self { encoder, view, renderer, light_time }
+    }
+
+    /// GPU Compute alt sistemlerini devre dışı bırakır (fluid, particles, physics).
+    /// Basit sahnelerde gereksiz GPU iş yükünü sıfırlar.
+    pub fn disable_gpu_compute(&mut self) {
+        self.renderer.gpu_fluid = None;
+        self.renderer.gpu_particles = None;
+        self.renderer.gpu_physics = None;
+    }
+
+    /// Mevcut sahne ışık zamanını döndürür (saniye).
+    pub fn light_time(&self) -> f32 {
+        self.light_time
+    }
+
+    /// Renderer'a doğrudan erişim (ileri düzey kullanım).
+    pub fn renderer(&self) -> &Renderer<'r> {
+        self.renderer
+    }
+
+    /// Renderer'a mutable erişim (ileri düzey kullanım).
+    pub fn renderer_mut(&mut self) -> &mut Renderer<'r> {
+        self.renderer
+    }
+
+    /// İleri düzey kullanım: ham wgpu encoder'a erişim.
+    pub fn encoder(&mut self) -> &mut wgpu::CommandEncoder {
+        self.encoder
+    }
+
+    /// İleri düzey kullanım: çıkış texture view'ına erişim.
+    pub fn output_view(&self) -> &wgpu::TextureView {
+        self.view
+    }
+
+    /// Dahili bileşenlere eşzamanlı erişim — `default_render_pass` gibi
+    /// fonksiyonlara geçirmek için kullanılır.
+    pub fn parts_mut(&mut self) -> (&mut wgpu::CommandEncoder, &wgpu::TextureView, &mut Renderer<'r>) {
+        (self.encoder, self.view, self.renderer)
+    }
+}
+
+
 pub struct Renderer<'a> {
     // === TEMEL WGPU KAYNAKLARI ===
     pub surface: Surface<'a>,
@@ -43,6 +115,9 @@ pub struct Renderer<'a> {
     // === SSR — Screen-Space Reflections ===
     pub ssr: Option<crate::ssr::SsrState>,
 
+    // === SSGI — Screen-Space Global Illumination ===
+    pub ssgi: Option<crate::ssgi::SsgiState>,
+
     // === Volumetric Lighting (God Rays) ===
     pub volumetric: Option<crate::volumetric::VolumetricState>,
 
@@ -54,6 +129,9 @@ pub struct Renderer<'a> {
 
     // === GIZMO HATA AYIKLAMA (Debug Lines) ===
     pub debug_renderer: Option<crate::debug_renderer::GizmoRendererSystem>,
+
+    // === DAHİLİ ASSET YÖNETİCİSİ (Kolaylık metodları için cache) ===
+    asset_manager: std::cell::RefCell<crate::asset::AssetManager>,
 }
 
 impl<'a> Renderer<'a> {
@@ -93,7 +171,7 @@ impl<'a> Renderer<'a> {
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    required_features: wgpu::Features::empty(),
+                    required_features: wgpu::Features::POLYGON_MODE_LINE | wgpu::Features::TEXTURE_COMPRESSION_BC,
                     required_limits: wgpu::Limits {
                         max_bind_groups: 6,
                         max_storage_buffers_per_shader_stage: 8,
@@ -121,14 +199,7 @@ impl<'a> Renderer<'a> {
             width: size.width,
             height: size.height,
             // VSync tercihi: Mailbox (uncapped FPS) varsa kullan, yoksa Fifo (VSync)
-            present_mode: if surface_caps
-                .present_modes
-                .contains(&wgpu::PresentMode::Mailbox)
-            {
-                wgpu::PresentMode::Mailbox
-            } else {
-                wgpu::PresentMode::Fifo
-            },
+            present_mode: wgpu::PresentMode::AutoNoVsync,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -185,6 +256,7 @@ impl<'a> Renderer<'a> {
         let scene_state = SceneState {
             render_pipeline: scene.render_pipeline,
             render_double_sided_pipeline: scene.render_double_sided_pipeline,
+            wireframe_pipeline: scene.wireframe_pipeline,
             unlit_pipeline: scene.unlit_pipeline,
             sky_pipeline: scene.sky_pipeline,
             water_pipeline: scene.water_pipeline,
@@ -230,6 +302,10 @@ impl<'a> Renderer<'a> {
 
         let ssr = deferred.as_ref().map(|def| {
             crate::ssr::SsrState::new(&device, &scene_state, def, &post_res.hdr_texture_view, size.width, size.height)
+        });
+
+        let ssgi = deferred.as_ref().map(|def| {
+            crate::ssgi::SsgiState::new(&device, &scene_state, def, &post_res.hdr_texture_view, size.width, size.height)
         });
 
         let volumetric = deferred.as_ref().map(|def| {
@@ -288,6 +364,7 @@ impl<'a> Renderer<'a> {
             gpu_cull,
             ssao,
             ssr,
+            ssgi,
             volumetric,
             decal,
             taa,
@@ -295,6 +372,7 @@ impl<'a> Renderer<'a> {
             gpu_physics,
             gpu_fluid,
             debug_renderer,
+            asset_manager: std::cell::RefCell::new(crate::asset::AssetManager::new()),
         }
     }
 
@@ -370,7 +448,58 @@ impl<'a> Renderer<'a> {
                     new_size.height,
                 );
             }
+            if let (Some(ref mut ssgi), Some(ref def)) = (&mut self.ssgi, &self.deferred) {
+                ssgi.resize(
+                    &self.device,
+                    def,
+                    &self.post.hdr_texture_view,
+                    new_size.width,
+                    new_size.height,
+                );
+            }
         }
+    }
+
+    // ==========================================================
+    //  Kolaylık Metodları — Asset Oluşturma
+    //  Kullanıcı `AssetManager` oluşturmak zorunda kalmadan
+    //  doğrudan `renderer.create_cube()` gibi çağırabilir.
+    // ==========================================================
+
+    /// Küp mesh oluşturur.
+    pub fn create_cube(&self) -> crate::components::Mesh {
+        crate::asset::AssetManager::create_cube(&self.device)
+    }
+
+    /// Küre mesh oluşturur.
+    pub fn create_sphere(&self, radius: f32, stacks: u32, slices: u32) -> crate::components::Mesh {
+        crate::asset::AssetManager::create_sphere(&self.device, radius, stacks, slices)
+    }
+
+    /// Düzlem mesh oluşturur.
+    pub fn create_plane(&self, size: f32) -> crate::components::Mesh {
+        crate::asset::AssetManager::create_plane(&self.device, size)
+    }
+
+    /// Dama dokusu (checkerboard) oluşturur — test materyalleri için idealdir.
+    /// Cache'lenir: aynı doku tekrar oluşturulmaz.
+    pub fn create_checkerboard_texture(&self) -> Arc<wgpu::BindGroup> {
+        self.asset_manager.borrow_mut()
+            .create_checkerboard_texture(&self.device, &self.queue, &self.scene.texture_bind_group_layout)
+    }
+
+    /// Düz beyaz doku — varsayılan materyal için.
+    /// Cache'lenir: aynı doku tekrar oluşturulmaz.
+    pub fn create_white_texture(&self) -> Arc<wgpu::BindGroup> {
+        self.asset_manager.borrow_mut()
+            .create_white_texture(&self.device, &self.queue, &self.scene.texture_bind_group_layout)
+    }
+
+    /// Diskten doku yükler (BC7 pipeline dahil).
+    /// Cache'lenir: aynı dosya yolu tekrar yüklenmez.
+    pub fn load_texture(&self, path: &str) -> Result<Arc<wgpu::BindGroup>, String> {
+        self.asset_manager.borrow_mut()
+            .load_material_texture(&self.device, &self.queue, &self.scene.texture_bind_group_layout, path)
     }
 
     pub fn run_post_processing(

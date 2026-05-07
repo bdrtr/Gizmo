@@ -213,6 +213,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
     });
     
     let ground_mesh = gizmo::renderer::components::Mesh::new(
+        &renderer.device,
         std::sync::Arc::new(ground_vbuf),
         &ground_vertices,
         Vec3::ZERO,

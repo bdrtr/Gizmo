@@ -55,3 +55,50 @@ impl std::fmt::Display for EntityName {
 }
 
 impl_component!(Parent, Children, EntityName, IsHidden, PrefabRequest);
+
+// ============================================================
+//  Bundle Trait — Birden fazla component'i tek seferde ekleme
+// ============================================================
+
+/// Bevy tarzı Bundle desteği.
+/// Bir struct bu trait'i implemente ederse, `world.spawn_bundle(...)` ile
+/// tüm bileşenler tek seferde eklenebilir.
+///
+/// ```ignore
+/// world.spawn_bundle(CameraBundle {
+///     position: Vec3::new(0.0, 3.0, 10.0),
+///     fov: 60.0_f32.to_radians(),
+///     ..default()
+/// });
+/// ```
+pub trait Bundle {
+    /// Bundle içindeki tüm bileşenleri verilen entity'ye ekler.
+    fn apply(self, world: &mut crate::world::World, entity: crate::entity::Entity);
+}
+
+/// Herhangi bir Bundle'a çalışma zamanında veya derleme zamanında dinamik olarak 
+/// ekstra component eklemeyi sağlayan zincirlenebilir wrapper.
+pub struct DynamicBundle<B: Bundle, C: Component> {
+    pub bundle: B,
+    pub component: C,
+}
+
+impl<B: Bundle, C: Component> Bundle for DynamicBundle<B, C> {
+    fn apply(self, world: &mut crate::world::World, entity: crate::entity::Entity) {
+        self.bundle.apply(world, entity);
+        world.add_component(entity, self.component);
+    }
+}
+
+/// Tüm Bundle tipleri için otomatik `.with(Component)` zincirleme desteği.
+pub trait BundleExt: Bundle + Sized {
+    /// Bu bundle'ın üzerine ek bir bileşen daha ekler.
+    fn with<C: Component>(self, component: C) -> DynamicBundle<Self, C> {
+        DynamicBundle {
+            bundle: self,
+            component,
+        }
+    }
+}
+
+impl<T: Bundle> BundleExt for T {}

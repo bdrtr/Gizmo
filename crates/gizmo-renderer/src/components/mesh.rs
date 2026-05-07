@@ -1,5 +1,6 @@
 use gizmo_math::Vec3;
 use std::sync::Arc;
+use wgpu::util::DeviceExt;
 
 #[derive(Clone)]
 pub struct Mesh {
@@ -12,6 +13,8 @@ pub struct Mesh {
     pub source: String,
     pub bounds: gizmo_math::Aabb,
     pub cpu_vertices: Arc<Vec<Vec3>>,
+    pub lod_vbufs: Vec<Arc<wgpu::Buffer>>,
+    pub lod_vertex_counts: Vec<u32>,
 }
 
 impl Mesh {
@@ -19,6 +22,7 @@ impl Mesh {
     /// `vertices` dizisi üzerinden otomatik olarak `vertex_count` ve `bounds` hesaplanır.
     /// Hata durumlarında boş bir mesh oluşturmak için `Mesh::empty()` kullanılmalıdır.
     pub fn new(
+        device: &wgpu::Device,
         vbuf: Arc<wgpu::Buffer>,
         vertices: &[crate::gpu_types::Vertex],
         center_offset: Vec3,
@@ -35,6 +39,54 @@ impl Mesh {
         );
         let bounds = gizmo_math::Aabb::from_points(vertices.iter().map(|v| v.position));
         let cpu_vertices = Arc::new(vertices.iter().map(|v| Vec3::from(v.position)).collect());
+        
+        let mut lod_vbufs = Vec::new();
+        let mut lod_vertex_counts = Vec::new();
+
+        // 1. Un-indexed vertex array üzerinden index array oluştur (meshopt için gereklidir)
+        if vertex_count > 300 {
+            let (unique_count, indices) = meshopt::generate_vertex_remap(vertices, None);
+
+            let mut unique_vertices = vec![crate::gpu_types::Vertex::default(); unique_count];
+            for (i, &new_idx) in indices.iter().enumerate() {
+                unique_vertices[new_idx as usize] = vertices[i].clone();
+            }
+            
+            let adapter = meshopt::VertexDataAdapter::new(
+                bytemuck::cast_slice(&unique_vertices),
+                std::mem::size_of::<crate::gpu_types::Vertex>(),
+                0
+            ).unwrap();
+            
+            let target_count = (indices.len() as f32 * 0.5) as usize; // %50 decimation
+            let lod1_indices = meshopt::simplify(
+                &indices,
+                &adapter,
+                target_count,
+                0.1, // %10 error tolerance
+                meshopt::SimplifyOptions::empty(),
+                None
+            );
+            
+            // Eğer başarıyla decimation yapıldıysa ve gerçekten vertex sayısı düştüyse GPU'ya at
+            if !lod1_indices.is_empty() && lod1_indices.len() < indices.len() {
+                // Flat vertex array'e geri döndür (Gizmo renderer flat bekliyor)
+                let mut lod_flat = Vec::with_capacity(lod1_indices.len());
+                for &idx in &lod1_indices {
+                    lod_flat.push(unique_vertices[idx as usize].clone());
+                }
+                
+                let lod_vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("LOD1 VBuf: {}", source)),
+                    contents: bytemuck::cast_slice(&lod_flat),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+                
+                lod_vbufs.push(Arc::new(lod_vbuf));
+                lod_vertex_counts.push(lod_flat.len() as u32);
+            }
+        }
+
         Self {
             vbuf,
             vertex_count,
@@ -42,6 +94,8 @@ impl Mesh {
             source,
             bounds,
             cpu_vertices,
+            lod_vbufs,
+            lod_vertex_counts,
         }
     }
 
@@ -55,6 +109,8 @@ impl Mesh {
             source,
             bounds: gizmo_math::Aabb::empty(),
             cpu_vertices: Arc::new(Vec::new()),
+            lod_vbufs: Vec::new(),
+            lod_vertex_counts: Vec::new(),
         }
     }
 }

@@ -128,7 +128,7 @@ impl super::AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(
+        Mesh::new(device, 
             Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
@@ -258,7 +258,7 @@ impl super::AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(
+        Mesh::new(device, 
             Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
@@ -333,7 +333,7 @@ impl super::AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(
+        Mesh::new(device, 
             Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
@@ -408,7 +408,7 @@ impl super::AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(
+        Mesh::new(device, 
             Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
@@ -446,7 +446,7 @@ impl super::AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(
+        Mesh::new(device, 
             Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
@@ -520,7 +520,7 @@ impl super::AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(
+        Mesh::new(device, 
             Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
@@ -665,7 +665,7 @@ impl super::AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(
+        Mesh::new(device, 
             Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
@@ -784,7 +784,7 @@ impl super::AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        let mesh = Mesh::new(
+        let mesh = Mesh::new(device, 
             Arc::new(vbuf),
             &final_vertices,
             Vec3::ZERO,

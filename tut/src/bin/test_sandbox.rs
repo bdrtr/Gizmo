@@ -142,6 +142,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> TestSandboxState {
     });
     
     let ground_mesh = gizmo::renderer::components::Mesh::new(
+        &renderer.device,
         std::sync::Arc::new(vbuf),
         &ground_vertices,
         Vec3::ZERO,
@@ -492,6 +493,7 @@ fn render(
                 usage: gizmo::wgpu::BufferUsages::VERTEX,
             });
             let chunk_mesh = gizmo::renderer::components::Mesh::new(
+                &renderer.device,
                 std::sync::Arc::new(vbuf),
                 &vertices,
                 Vec3::ZERO,

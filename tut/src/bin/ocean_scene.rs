@@ -405,6 +405,7 @@ fn render(
                 });
                 
                 let mesh = gizmo::renderer::components::Mesh::new(
+                    &renderer.device,
                     std::sync::Arc::new(vbuf),
                     &gpu_vertices,
                     Vec3::ZERO,

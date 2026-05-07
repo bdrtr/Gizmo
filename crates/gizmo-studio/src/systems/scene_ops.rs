@@ -8,6 +8,14 @@ pub fn handle_scene_operations(
     editor_state: &mut EditorState,
     _state: &mut StudioState,
 ) {
+    // --- REFLECTION (JSON) GÜNCELLEMELERİ ---
+    let pending_json: Vec<_> = editor_state.pending_json_updates.drain(..).collect();
+    for (entity, set_json, val) in pending_json {
+        if let Err(e) = set_json(world, entity, val) {
+            editor_state.log_error(&format!("Reflection deserialization hatası: {}", e));
+        }
+    }
+
     // --- DİNAMİK COMPONENT EKLEME İŞLEMİ ---
     if let Some((ent_id, comp_name)) = editor_state.add_component_request.take() {
         if let Some(ent) = world.get_entity(ent_id.id()) {

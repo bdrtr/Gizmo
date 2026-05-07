@@ -21,6 +21,8 @@ pub struct TypeRegistration {
     pub serialize_fn: Option<fn(*const u8) -> Result<String, String>>,
     pub deserialize_fn:
         Option<fn(&mut crate::world::World, crate::entity::Entity, &str) -> Result<(), String>>,
+    pub get_json_fn: Option<fn(*const u8) -> Result<serde_json::Value, String>>,
+    pub set_json_fn: Option<fn(&mut crate::world::World, crate::entity::Entity, serde_json::Value) -> Result<(), String>>,
 }
 
 /// Component tiplerini isme göre sorgulama ve yönetim kaydı.
@@ -78,6 +80,8 @@ impl ComponentRegistry {
                 name: name.to_string(),
                 serialize_fn: None,
                 deserialize_fn: None,
+                get_json_fn: None,
+                set_json_fn: None,
             },
         );
     }
@@ -124,6 +128,21 @@ impl ComponentRegistry {
             Ok(())
         };
 
+        let get_json_fn: fn(*const u8) -> Result<serde_json::Value, String> = |ptr| {
+            let component = unsafe { &*(ptr as *const T) };
+            serde_json::to_value(component).map_err(|e| e.to_string())
+        };
+
+        let set_json_fn: fn(
+            &mut crate::world::World,
+            crate::entity::Entity,
+            serde_json::Value,
+        ) -> Result<(), String> = |world, entity, val| {
+            let component: T = serde_json::from_value(val).map_err(|e| e.to_string())?;
+            world.add_component(entity, component);
+            Ok(())
+        };
+
         self.type_to_reg.insert(
             type_id,
             TypeRegistration {
@@ -131,6 +150,8 @@ impl ComponentRegistry {
                 name: name.to_string(),
                 serialize_fn: Some(serialize_fn),
                 deserialize_fn: Some(deserialize_fn),
+                get_json_fn: Some(get_json_fn),
+                set_json_fn: Some(set_json_fn),
             },
         );
     }
