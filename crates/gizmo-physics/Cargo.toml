@@ -3,6 +3,10 @@ name = "gizmo-physics"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+gpu_physics = ["wgpu", "bytemuck", "pollster"]
+
 [dependencies]
 rayon = "1.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -11,9 +15,9 @@ gizmo-math = { path = "../gizmo-math" }
 wide = "1.2.0"
 arrayvec = "0.7.6"
 rand = "0.10.1"
-wgpu = "0.20"
-bytemuck = { version = "1.14", features = ["derive"] }
-pollster = "0.3"
+wgpu = { version = "0.20", optional = true }
+bytemuck = { version = "1.14", features = ["derive"], optional = true }
+pollster = { version = "0.3", optional = true }
 dashmap = "5.5"
 crossbeam-queue = "0.3"
 tracing = "0.1.44"

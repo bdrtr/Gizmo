@@ -21,19 +21,19 @@ pub use crate::post_process::PostProcessState;
 ///     ctx.default_render(world);           // Varsayılan render pipeline
 /// }
 /// ```
-pub struct RenderContext<'a, 'r> {
+pub struct RenderContext<'a> {
     pub(crate) encoder: &'a mut wgpu::CommandEncoder,
     pub(crate) view: &'a wgpu::TextureView,
-    pub(crate) renderer: &'a mut Renderer<'r>,
+    pub(crate) renderer: &'a mut Renderer,
     pub(crate) light_time: f32,
 }
 
-impl<'a, 'r> RenderContext<'a, 'r> {
+impl<'a> RenderContext<'a> {
     /// Yeni bir RenderContext oluşturur (motor tarafından dahili olarak çağrılır).
     pub fn new(
         encoder: &'a mut wgpu::CommandEncoder,
         view: &'a wgpu::TextureView,
-        renderer: &'a mut Renderer<'r>,
+        renderer: &'a mut Renderer,
         light_time: f32,
     ) -> Self {
         Self { encoder, view, renderer, light_time }
@@ -53,12 +53,12 @@ impl<'a, 'r> RenderContext<'a, 'r> {
     }
 
     /// Renderer'a doğrudan erişim (ileri düzey kullanım).
-    pub fn renderer(&self) -> &Renderer<'r> {
+    pub fn renderer(&self) -> &Renderer {
         self.renderer
     }
 
     /// Renderer'a mutable erişim (ileri düzey kullanım).
-    pub fn renderer_mut(&mut self) -> &mut Renderer<'r> {
+    pub fn renderer_mut(&mut self) -> &mut Renderer {
         self.renderer
     }
 
@@ -74,15 +74,15 @@ impl<'a, 'r> RenderContext<'a, 'r> {
 
     /// Dahili bileşenlere eşzamanlı erişim — `default_render_pass` gibi
     /// fonksiyonlara geçirmek için kullanılır.
-    pub fn parts_mut(&mut self) -> (&mut wgpu::CommandEncoder, &wgpu::TextureView, &mut Renderer<'r>) {
+    pub fn parts_mut(&mut self) -> (&mut wgpu::CommandEncoder, &wgpu::TextureView, &mut Renderer) {
         (self.encoder, self.view, self.renderer)
     }
 }
 
 
-pub struct Renderer<'a> {
+pub struct Renderer {
     // === TEMEL WGPU KAYNAKLARI ===
-    pub surface: Surface<'a>,
+    pub surface: Surface<'static>,
     pub device: Device,
     pub queue: Queue,
     pub config: SurfaceConfiguration,
@@ -131,10 +131,10 @@ pub struct Renderer<'a> {
     pub debug_renderer: Option<crate::debug_renderer::GizmoRendererSystem>,
 
     // === DAHİLİ ASSET YÖNETİCİSİ (Kolaylık metodları için cache) ===
-    asset_manager: std::cell::RefCell<crate::asset::AssetManager>,
+    asset_manager: std::sync::RwLock<crate::asset::AssetManager>,
 }
 
-impl<'a> Renderer<'a> {
+impl Renderer {
     pub fn load_shader(
         device: &wgpu::Device,
         file_path: &str,
@@ -372,7 +372,7 @@ impl<'a> Renderer<'a> {
             gpu_physics,
             gpu_fluid,
             debug_renderer,
-            asset_manager: std::cell::RefCell::new(crate::asset::AssetManager::new()),
+            asset_manager: std::sync::RwLock::new(crate::asset::AssetManager::new()),
         }
     }
 
@@ -484,21 +484,21 @@ impl<'a> Renderer<'a> {
     /// Dama dokusu (checkerboard) oluşturur — test materyalleri için idealdir.
     /// Cache'lenir: aynı doku tekrar oluşturulmaz.
     pub fn create_checkerboard_texture(&self) -> Arc<wgpu::BindGroup> {
-        self.asset_manager.borrow_mut()
+        self.asset_manager.write().unwrap()
             .create_checkerboard_texture(&self.device, &self.queue, &self.scene.texture_bind_group_layout)
     }
 
     /// Düz beyaz doku — varsayılan materyal için.
     /// Cache'lenir: aynı doku tekrar oluşturulmaz.
     pub fn create_white_texture(&self) -> Arc<wgpu::BindGroup> {
-        self.asset_manager.borrow_mut()
+        self.asset_manager.write().unwrap()
             .create_white_texture(&self.device, &self.queue, &self.scene.texture_bind_group_layout)
     }
 
     /// Diskten doku yükler (BC7 pipeline dahil).
     /// Cache'lenir: aynı dosya yolu tekrar yüklenmez.
     pub fn load_texture(&self, path: &str) -> Result<Arc<wgpu::BindGroup>, String> {
-        self.asset_manager.borrow_mut()
+        self.asset_manager.write().unwrap()
             .load_material_texture(&self.device, &self.queue, &self.scene.texture_bind_group_layout, path)
     }
 

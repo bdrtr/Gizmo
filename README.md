@@ -43,10 +43,12 @@ Sahneyi gerçek zamanlı denetlemek için oyuna gömülü (In-Game) çalışan U
 * Pozisyon, rotasyon ve özellikleri anlık olarak değiştirebileceğiniz Inspector.
 * Sürükle-bırak destekli "Prefab" sistemi ve sahne yönetim hiyerarşisi.
 
-### 🏗️ Aşırı Modüler Kod Mimarisi
-Motorun iç yapısı tamamen decoupled (bağımsız) modüllere ayrılmıştır. 
-* Şişmiş (bloated) kod dosyaları yerine `transform.rs`, `collider.rs`, `rigid_body.rs` gibi tek sorumluluk prensibiyle (Single Responsibility Principle) ayrılmış bileşenler.
-* Render (`systems/render.rs`), Fizik (`systems/physics.rs`) ve Sıvı Simülasyonu (`systems/fluid.rs`) tamamen ayrı sistemler olarak birbirinden izole şekilde çalışır. Motor kodlarını okumak, değiştirmek ve modifiye etmek son derece kolaydır.
+### 🏗️ Modüler Cargo Workspace Mimarisi ve Plugin Sistemi
+Motorun iç yapısı **tamamen izole (decoupled) Cargo Workspace** kütüphanelerine ayrılmıştır. Motoru oluşturan temel bileşenler ayrı `crate`'ler halinde paketlenmiştir:
+* **`gizmo-core`**: ECS, Entity tanımları ve matematiksel temeller.
+* **`gizmo-physics`**: **Sıfır bağımlılıklı** (Render-Agnostic) saf fizik motoru. Kendi oyununuzda (örn. Bevy veya Macroquad ile) sadece bu modülü kullanarak Gizmo'nun fizik becerilerinden faydalanabilirsiniz. (Soft-Body GPU hızlandırması `gpu_physics` feature'ı arkasına opsiyonel olarak gizlenmiştir).
+* **`gizmo-renderer`**: Wgpu tabanlı, ECS'den tamamen bağımsız çalışabilen salt çizim motoru.
+* **`gizmo-app`**: Plugin tabanlı, "Tak-Çıkar" mantığıyla çalışan uygulama döngüsü. İstemediğiniz sistemleri (Render veya Ses gibi) plugin listesinden çıkararak motoru Headless bir sunucu formunda saniyeler içinde çalıştırabilirsiniz!
 
 ## 📊 Endüstri Standartları Teknik Değerlendirmesi
 Gizmo Engine'in güncel mimarisi, modern AAA teknolojilerine (Unreal, Unity, Bevy/Flecs) kıyasla değerlendirildiğinde motorun gücü ve geliştirilme yol haritası (roadmap) şu şekildedir:

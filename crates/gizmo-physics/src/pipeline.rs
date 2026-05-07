@@ -121,9 +121,18 @@ impl PhysicsWorld {
                 rigid_colliders.push((self.entities[i], self.transforms[i], self.colliders[i].clone()));
             }
             
-            if let Some(gpu) = &mut self.gpu_compute {
-                gpu.step_soft_bodies(soft_bodies, &rigid_colliders, dt, gravity);
-            } else {
+            #[cfg(feature = "gpu_physics")]
+            {
+                if let Some(gpu) = &mut self.gpu_compute {
+                    gpu.step_soft_bodies(soft_bodies, &rigid_colliders, dt, gravity);
+                } else {
+                    soft_bodies.par_iter_mut().for_each(|(_, sb, _)| {
+                        sb.step(dt, gravity, &rigid_colliders);
+                    });
+                }
+            }
+            #[cfg(not(feature = "gpu_physics"))]
+            {
                 soft_bodies.par_iter_mut().for_each(|(_, sb, _)| {
                     sb.step(dt, gravity, &rigid_colliders);
                 });

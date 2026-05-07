@@ -15,7 +15,7 @@ gizmo-core = { path = "../gizmo-core" }
 gizmo-math = { path = "../gizmo-math" }
 gizmo-renderer = { path = "../gizmo-renderer" }
 gizmo-window = { path = "../gizmo-window" }
-gizmo-physics = { path = "../gizmo-physics" }
+gizmo-physics = { path = "../gizmo-physics", features = ["gpu_physics"] }
 gizmo-app = { path = "../gizmo-app" }
 gizmo-ai = { path = "../gizmo-ai" }
 gizmo-audio = { path = "../gizmo-audio", optional = true }
