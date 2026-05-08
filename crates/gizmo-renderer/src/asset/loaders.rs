@@ -283,6 +283,7 @@ impl super::AssetManager {
 
             for channel in anim.channels() {
                 let target_node = channel.target().node().index();
+                let target_node_name = channel.target().node().name().map(|s| s.to_string());
                 let reader = channel.reader(|b| Some(&buffers[b.index()]));
 
                 if let Some(inputs) = reader.read_inputs() {
@@ -310,6 +311,7 @@ impl super::AssetManager {
                                 }
                                 transl.push(Track {
                                     target_node,
+                                    target_node_name: target_node_name.clone(),
                                     interpolation: interp_mode,
                                     keyframes: kfs,
                                 });
@@ -324,6 +326,7 @@ impl super::AssetManager {
                                 }
                                 rot.push(Track {
                                     target_node,
+                                    target_node_name: target_node_name.clone(),
                                     interpolation: interp_mode,
                                     keyframes: kfs,
                                 });
@@ -338,6 +341,7 @@ impl super::AssetManager {
                                 }
                                 scl.push(Track {
                                     target_node,
+                                    target_node_name: target_node_name.clone(),
                                     interpolation: interp_mode,
                                     keyframes: kfs,
                                 });
@@ -429,8 +433,57 @@ impl super::AssetManager {
                 });
             }
 
-            skeletons.push(SkeletonHierarchy { joints });
+            // Kök kemiklerin Armature (joint olmayan ata düğümler) transform'unu hesapla.
+            // inverse_bind_matrix bu ata transform'unu içerir, calculate_global_matrices
+            // bunu kök kemiklere uygulayarak joint_matrices'in bind-pose'da Identity vermesini sağlar.
+            let mut root_transform = gizmo_math::Mat4::IDENTITY;
+            if let Some(first_joint) = skin.joints().next() {
+                let mut current_node_idx = first_joint.index();
+                let mut ancestor_transforms = Vec::new();
+                while let Some(&parent_idx) = node_parents.get(&current_node_idx) {
+                    if node_to_bone.contains_key(&parent_idx) {
+                        break; // Ata da bir kemik — durmalıyız
+                    }
+                    let parent_node = document.nodes().nth(parent_idx).unwrap();
+                    let (t, r, s) = parent_node.transform().decomposed();
+                    let loc_t = gizmo_math::Mat4::from_translation(Vec3::new(t[0], t[1], t[2]));
+                    let loc_r = gizmo_math::Mat4::from_quat(Quat::from_array(r));
+                    let loc_s = gizmo_math::Mat4::from_scale(Vec3::new(s[0], s[1], s[2]));
+                    ancestor_transforms.push(loc_t * loc_r * loc_s);
+                    current_node_idx = parent_idx;
+                }
+                for mat in ancestor_transforms.into_iter().rev() {
+                    root_transform = root_transform * mat;
+                }
+            }
+
+            skeletons.push(SkeletonHierarchy { joints, root_transform });
         }
+
+        // ── Z-Up Otomatik Algılama ve Düzeltme ──
+        // FBX kaynaklı GLTF dosyaları genellikle Z-up koordinat sisteminde gelir.
+        // GLTF spec Y-up bekler. Sahne AABB'sini analiz ederek Z-up modelleri tespit edip
+        // kök düğümlere -90° X rotasyonu uyguluyoruz.
+        let mut scene_aabb = gizmo_math::Aabb::empty();
+        fn collect_aabb(node: &GltfNodeData, aabb: &mut gizmo_math::Aabb) {
+            for (mesh, _) in &node.primitives {
+                aabb.extend(mesh.bounds.min);
+                aabb.extend(mesh.bounds.max);
+            }
+            for child in &node.children {
+                collect_aabb(child, aabb);
+            }
+        }
+        for root_node in &roots {
+            collect_aabb(root_node, &mut scene_aabb);
+        }
+
+        let _y_extent = (scene_aabb.max.y - scene_aabb.min.y).abs();
+        let _z_extent = (scene_aabb.max.z - scene_aabb.min.z).abs();
+        
+        // Z-up otomatik algılama ve düzeltme iptal edildi. 
+        // Çünkü algılama heuristiği (z > y * 1.5) bazı Z-up modellerde (Örn: Jin) çalışmıyor.
+        // Bunun yerine main.rs tarafında (spawn_fighter vb.) bilinçli olarak rotasyon uygulanması daha güvenli.
 
         Ok(GltfSceneAsset {
             roots,

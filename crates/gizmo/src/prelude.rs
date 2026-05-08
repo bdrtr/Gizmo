@@ -6,8 +6,10 @@
 // === ECS Temelleri ===
 pub use crate::core::{
     component::{Children, Parent},
-    Bundle, BundleExt, Component, Entity, EntityName, Events, Schedule, Time, WindowInfo, World,
-    PoolManager, Pooled,
+    Bundle, BundleExt, Component, Entity, EntityName, Events, EventReader, EventWriter, Schedule, Time, WindowInfo, World,
+    PoolManager, Pooled, State, in_state, Res, ResMut,
+    system::IntoSystemConfig,
+    asset::{Handle, Assets},
 };
 
 // === Hazır Bundle'lar ===
@@ -26,6 +28,7 @@ pub use crate::math::{EulerRot, Mat4, Quat, Ray, Vec2, Vec3, Vec4};
 
 // === Sadelik API (Bevy tarzı) ===
 pub use crate::color::Color;
+pub use crate::asset_server::AssetServer;
 pub use crate::spawner::{Commands as SpawnCommands, InputExt, WorldExt};
 pub use crate::app::{App, Plugin};
 pub use crate::plugins::*;
@@ -34,7 +37,7 @@ pub use crate::plugins::*;
 pub use crate::gizmo_log;
 
 // === Fizik ===
-pub use crate::physics::{Collider, ColliderShape, RigidBody, Transform, Velocity};
+pub use crate::physics::{Collider, ColliderShape, RigidBody, Transform, GlobalTransform, Velocity};
 pub use gizmo_physics::shape::{Aabb, Sphere};
 
 // === Renderer Bileşenleri ===

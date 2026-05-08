@@ -583,7 +583,7 @@ impl World {
     // ERGONOMİK SORGULAR (QUERY API)
     // ==========================================================
 
-    pub fn query<'w, Q: crate::query::WorldQuery<'w>>(
+    pub fn query<'w, Q: crate::query::WorldQuery>(
         &'w self,
     ) -> Option<crate::query::Query<'w, Q>> {
         crate::query::Query::new(self)
@@ -591,7 +591,7 @@ impl World {
 
     /// Cache'li query — archetype indeks cache'ini kullanır.
     /// &mut self gerektirdiği için sadece World sahibiyken çağrılabilir.
-    pub fn query_cached<'w, Q: crate::query::WorldQuery<'w>>(
+    pub fn query_cached<'w, Q: crate::query::WorldQuery>(
         &'w mut self,
     ) -> Option<crate::query::Query<'w, Q>> {
         crate::query::Query::new_cached(self)
@@ -605,7 +605,7 @@ impl World {
     ///     t.position += v.linear * dt;
     /// }
     /// ```
-    pub fn query_entity_mut<'w, Q: crate::query::WorldQuery<'w>>(
+    pub fn query_entity_mut<'w, Q: crate::query::WorldQuery>(
         &'w mut self,
         entity_id: u32,
     ) -> Option<Q::Item<'w>> {
@@ -627,7 +627,7 @@ impl World {
     }
 
     /// Tek bir entity üzerinde read-only `Query` çalıştırıp anında sonuç almanızı sağlar.
-    pub fn query_entity<'w, Q: crate::query::WorldQuery<'w>>(
+    pub fn query_entity<'w, Q: crate::query::WorldQuery>(
         &'w self,
         entity_id: u32,
     ) -> Option<Q::Item<'w>> {

@@ -34,7 +34,7 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
                 }
             };
 
-            player.current_time = player.current_time.max(0.0) + dt;
+            player.current_time = player.current_time.max(0.0) + dt * player.speed;
             if player.current_time > anim.duration {
                 if player.loop_anim && anim.duration > 0.0 {
                     player.current_time %= anim.duration;
@@ -43,8 +43,38 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
                 }
             }
 
-            let poses = evaluate_clip(anim, player.current_time, &skeleton.local_poses);
-            skeleton.local_poses = poses;
+            let poses = evaluate_clip(anim, player.current_time, &skeleton.local_poses, &skeleton.hierarchy);
+            
+            if let Some(prev_idx) = player.prev_animation {
+                if player.blend_time < player.blend_duration {
+                    player.blend_time += dt;
+                    player.prev_time += dt;
+                    
+                    let mut prev_time_clamped = player.prev_time;
+                    if let Some(prev_anim) = animations.get(prev_idx) {
+                        if prev_time_clamped > prev_anim.duration {
+                            if player.loop_anim && prev_anim.duration > 0.0 {
+                                prev_time_clamped %= prev_anim.duration;
+                            } else {
+                                prev_time_clamped = prev_anim.duration;
+                            }
+                        }
+                        
+                        let prev_poses = evaluate_clip(prev_anim, prev_time_clamped, &skeleton.local_poses, &skeleton.hierarchy);
+                        let alpha = (player.blend_time / player.blend_duration).clamp(0.0, 1.0);
+                        let blended = blend_poses(&prev_poses, &poses, alpha);
+                        skeleton.local_poses = blended;
+                    } else {
+                        skeleton.local_poses = poses;
+                    }
+                } else {
+                    player.prev_animation = None;
+                    skeleton.local_poses = poses;
+                }
+            } else {
+                skeleton.local_poses = poses;
+            }
+
             upload_skin_matrices(skeleton, queue);
         }
     }
@@ -165,8 +195,8 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
                 Some(c) => c,
                 None => continue,
             };
-            let poses_a = evaluate_clip(clip_a, blend.from_time, &local_poses_base);
-            let poses_b = evaluate_clip(clip_b, blend.to_time,   &local_poses_base);
+            let poses_a = evaluate_clip(clip_a, blend.from_time, &local_poses_base, &skeleton.hierarchy);
+            let poses_b = evaluate_clip(clip_b, blend.to_time,   &local_poses_base, &skeleton.hierarchy);
             blend_poses(&poses_a, &poses_b, blend.alpha())
         } else {
             let clip_idx = match machine.current_clip_index() {
@@ -177,7 +207,7 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
                 Some(c) => c,
                 None => continue,
             };
-            evaluate_clip(clip, machine.current_time, &local_poses_base)
+            evaluate_clip(clip, machine.current_time, &local_poses_base, &skeleton.hierarchy)
         };
 
         skeleton.local_poses = poses;
@@ -192,35 +222,60 @@ fn evaluate_clip(
     clip: &crate::animation::AnimationClip,
     time: f32,
     base_poses: &[Mat4],
+    hierarchy: &crate::animation::SkeletonHierarchy,
 ) -> Vec<Mat4> {
     let mut poses = base_poses.to_vec();
     let mut changes: std::collections::HashMap<usize, (Option<Vec3>, Option<Quat>, Option<Vec3>)> =
         std::collections::HashMap::new();
 
+    let get_joint_idx = |target_node: usize, target_node_name: &Option<String>| -> Option<usize> {
+        if let Some(name) = target_node_name {
+            if let Some(idx) = hierarchy.joints.iter().position(|j| &j.name == name) {
+                return Some(idx);
+            }
+        }
+        if target_node_name.is_none() {
+            if target_node < poses.len() {
+                return Some(target_node);
+            }
+        }
+        None
+    };
+
     for track in &clip.translations {
-        if let Some(v) = track.get_interpolated(time, |a: Vec3, b: Vec3, t| a.lerp(b, t)) {
-            changes.entry(track.target_node).or_default().0 = Some(v);
+        if let Some(_joint_idx) = get_joint_idx(track.target_node, &track.target_node_name) {
+            if let Some(_v) = track.get_interpolated(time, |a: Vec3, b: Vec3, t| a.lerp(b, t)) {
+                // TUM TRANSLATION'LARI YOK SAY!
+                // Retargeting sirasinda Hips (Root) translation'u bile yanlis olcekliyse
+                // karakteri yere gomer (Gordugumuz sorun tam olarak bu).
+                // Dövüş oyununda pozisyon zaten Transform ile yonetiliyor, 
+                // iskelet animasyonundan sadece rotasyon (durus) almamiz yeterli!
+            }
         }
     }
     for track in &clip.rotations {
-        if let Some(v) = track.get_interpolated(time, |a: Quat, b: Quat, t| a.slerp(b, t)) {
-            changes.entry(track.target_node).or_default().1 = Some(v.normalize());
+        if let Some(joint_idx) = get_joint_idx(track.target_node, &track.target_node_name) {
+            if let Some(v) = track.get_interpolated(time, |a: Quat, b: Quat, t| a.slerp(b, t)) {
+                changes.entry(joint_idx).or_default().1 = Some(v.normalize());
+            }
         }
     }
     for track in &clip.scales {
-        if let Some(v) = track.get_interpolated(time, |a: Vec3, b: Vec3, t| a.lerp(b, t)) {
-            changes.entry(track.target_node).or_default().2 = Some(v);
+        if let Some(joint_idx) = get_joint_idx(track.target_node, &track.target_node_name) {
+            if let Some(_v) = track.get_interpolated(time, |a: Vec3, b: Vec3, t| a.lerp(b, t)) {
+                // SCALE IZLERINI TAMAMEN YOK SAYIYORUZ! 
+                // Cunku farkli GLTF ciktilari 0.01 veya 100.0 scale degerleri verip karakteri ezer.
+                // changes.entry(joint_idx).or_default().2 = Some(v);
+            }
         }
     }
 
-    for (node_idx, (t_opt, r_opt, s_opt)) in changes {
-        if let Some(joint_idx) = find_joint_for_node(base_poses, node_idx) {
-            let (mut pos, mut rot, mut scale) = decompose_mat4(poses[joint_idx]);
-            if let Some(v) = t_opt { pos   = v; }
-            if let Some(v) = r_opt { rot   = v; }
-            if let Some(v) = s_opt { scale = v; }
-            poses[joint_idx] = Mat4::from_scale_rotation_translation(scale, rot, pos);
-        }
+    for (joint_idx, (t_opt, r_opt, s_opt)) in changes {
+        let (mut pos, mut rot, mut scale) = decompose_mat4(poses[joint_idx]);
+        if let Some(v) = t_opt { pos   = v; }
+        if let Some(v) = r_opt { rot   = v; }
+        if let Some(v) = s_opt { scale = v; }
+        poses[joint_idx] = Mat4::from_scale_rotation_translation(scale, rot, pos);
     }
     poses
 }
@@ -254,12 +309,7 @@ fn upload_skin_matrices(skeleton: &Skeleton, queue: &wgpu::Queue) {
     queue.write_buffer(&skeleton.buffer, 0, bytemuck::cast_slice(&joint_matrices));
 }
 
-// The system doesn't have access to the SkeletonHierarchy joint→node mapping here,
-// so we use the joint's positional index as a proxy for node_index.
-// Real production code would pass the hierarchy; this matches the existing system's behavior.
-fn find_joint_for_node(_base_poses: &[Mat4], node_index: usize) -> Option<usize> {
-    Some(node_index)
-}
+// find_joint_for_node artik kullanilmiyor
 
 fn decompose_mat4(m: Mat4) -> (Vec3, Quat, Vec3) {
     let t = Vec3::new(m.w_axis.x, m.w_axis.y, m.w_axis.z);

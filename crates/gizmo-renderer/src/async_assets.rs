@@ -14,7 +14,7 @@ pub struct TextureReloadCompletion {
     pub rgba: Vec<u8>,
     pub width: u32,
     pub height: u32,
-    pub entity_ids: Vec<u32>,
+    pub entity_ids: Vec<usize>,
 }
 
 #[derive(Debug)]
@@ -22,6 +22,7 @@ pub struct ObjLoadCompletion {
     pub path: String,
     pub vertices: Vec<crate::gpu_types::Vertex>,
     pub aabb: gizmo_math::Aabb,
+    pub handle_ids: Vec<usize>,
 }
 
 /// Successful GLTF parse on the worker; GPU upload via [`AssetManager::load_gltf_from_import`](crate::asset::AssetManager::load_gltf_from_import).
@@ -80,7 +81,8 @@ struct LoaderShared {
     job_tx: SyncSender<Job>,
     result_rx: Receiver<WorkerMsg>,
     /// Original request path (as passed to `request_texture_reload`) → entities
-    texture_waiters: HashMap<String, Vec<u32>>,
+    texture_waiters: HashMap<String, Vec<usize>>,
+    obj_waiters: HashMap<String, Vec<usize>>,
     texture_inflight: HashSet<String>,
     obj_inflight: HashSet<String>,
     gltf_inflight: HashSet<String>,
@@ -134,6 +136,7 @@ impl AsyncAssetLoader {
                 job_tx,
                 result_rx,
                 texture_waiters: HashMap::new(),
+                obj_waiters: HashMap::new(),
                 texture_inflight: HashSet::new(),
                 obj_inflight: HashSet::new(),
                 gltf_inflight: HashSet::new(),
@@ -144,25 +147,27 @@ impl AsyncAssetLoader {
 
     /// Queue a texture file decode; when done, [`drain_completed`] yields a row with `entity_ids`.
     /// Duplicate `request_path` while in-flight only adds more waiters (one disk read).
-    pub fn request_texture_reload(&self, request_path: String, entity_id: u32) {
+    pub fn request_texture_reload(&self, request_path: String, handle_id: usize) {
         let mut g = self.shared.lock().expect("async asset mutex");
         g.texture_waiters
             .entry(request_path.clone())
             .or_default()
-            .push(entity_id);
+            .push(handle_id);
         if g.texture_inflight.insert(request_path.clone()) {
             let _ = g.job_tx.send(Job::Texture { request_path });
         }
     }
 
-    /// Decode OBJ on the worker; complete with [`AssetManager::install_obj_mesh`](crate::asset::AssetManager::install_obj_mesh).
-    pub fn request_obj_load(&self, path: String) -> bool {
+    /// Queue an OBJ load (returns `ObjLoadCompletion` eventually).
+    pub fn request_obj_load(&self, path: String, handle_id: usize) {
         let mut g = self.shared.lock().expect("async asset mutex");
-        if g.obj_inflight.contains(&path) {
-            return false;
+        g.obj_waiters
+            .entry(path.clone())
+            .or_default()
+            .push(handle_id);
+        if g.obj_inflight.insert(path.clone()) {
+            let _ = g.job_tx.send(Job::Obj { path });
         }
-        g.obj_inflight.insert(path.clone());
-        g.job_tx.send(Job::Obj { path }).is_ok()
     }
 
     /// Run `gltf::import` off the main thread; upload with `AssetManager::load_gltf_from_import`.
@@ -216,12 +221,17 @@ impl AsyncAssetLoader {
                 }
                 WorkerMsg::Obj { path, result } => {
                     g.obj_inflight.remove(&path);
+                    let handle_ids = g.obj_waiters.remove(&path).unwrap_or_default();
+                    if handle_ids.is_empty() {
+                        continue;
+                    }
                     match result {
                         Ok((vertices, aabb)) => {
                             out.objs.push(ObjLoadCompletion {
                                 path,
                                 vertices,
                                 aabb,
+                                handle_ids,
                             });
                         }
                         Err(e) => {

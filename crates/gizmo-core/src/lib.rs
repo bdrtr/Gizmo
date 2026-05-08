@@ -1,5 +1,6 @@
 // ──── Modüller (alfabetik) ────
 pub mod archetype;
+pub mod asset;
 pub mod commands;
 pub mod component;
 pub mod cvar;
@@ -23,26 +24,28 @@ pub use commands::{CommandQueue, Commands, EntityCommands};
 pub use component::{Bundle, BundleExt, Component, EntityName, IsHidden, PrefabRequest};
 pub use cvar::{CVarRegistry, CVarValue, DevConsoleState};
 pub use entity::Entity;
-pub use event::Events;
+pub use event::{Events, EventReader, EventWriter};
 pub use input::{ActionMap, Input, InputBinding};
 pub use query::{Changed, FetchComponent, Mut, Or, Query, With, Without, WorldQuery};
 pub use registry::ComponentRegistry;
 pub use storage::{StorageView, StorageViewMut};
-pub use system::{IntoSystem, IntoSystemConfig, Phase, Res, ResMut, Schedule, System, SystemParam};
+pub use system::{IntoSystem, IntoSystemConfig, SystemConfig, Phase, Res, ResMut, Schedule, System, SystemParam};
 pub use time::{Time, PhysicsTime};
 pub use profiler::FrameProfiler;
 pub use window::WindowInfo;
 pub use world::World;
 pub use pool::{PoolManager, Pooled};
+pub use state::{State, in_state};
 
 // ──── Prelude ────
 /// Tek bir `use gizmo_core::prelude::*;` ile tüm temel tiplere erişim.
 pub mod prelude {
     pub use super::input::mouse;
     pub use super::{
-        ActionMap, Bundle, Changed, CommandQueue, Commands, Component, Entity, EntityName, Events,
-        FrameProfiler, Input, InputBinding, IntoSystem, IntoSystemConfig, IsHidden, Mut,
+        ActionMap, Bundle, Changed, CommandQueue, Commands, Component, Entity, EntityName, Events, EventReader, EventWriter,
+        FrameProfiler, Input, InputBinding, IntoSystem, IntoSystemConfig, SystemConfig, IsHidden, Mut,
         Phase, PhysicsTime, PoolManager, Pooled, PrefabRequest, Query, Res, ResMut, Schedule, StorageView,
         StorageViewMut, System, SystemParam, Time, WindowInfo, World,
     };
 }
+pub mod state;

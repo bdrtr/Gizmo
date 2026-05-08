@@ -57,7 +57,7 @@ pub fn texture_streaming_system(
                 
                 if is_close && requests_this_frame < MAX_REQUESTS_PER_FRAME {
                     // Yükleme işlemini asenkron arka plan thread'ine (I/O) gönder
-                    async_loader.request_texture_reload(texture_path.clone(), e);
+                    async_loader.request_texture_reload(texture_path.clone(), e as usize);
                     mat.texture_source = None; // DİKKAT: Tekrar istek atılmasını engelle!
                     requests_this_frame += 1;
                 }

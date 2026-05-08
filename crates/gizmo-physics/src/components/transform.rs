@@ -124,3 +124,23 @@ impl Transform {
 }
 
 gizmo_core::impl_component!(Transform);
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct GlobalTransform {
+    #[serde(skip)]
+    pub matrix: Mat4,
+}
+
+impl Default for GlobalTransform {
+    fn default() -> Self {
+        Self { matrix: Mat4::IDENTITY }
+    }
+}
+
+impl GlobalTransform {
+    pub fn compute_matrix(&self) -> Mat4 {
+        self.matrix
+    }
+}
+
+gizmo_core::impl_component!(GlobalTransform);

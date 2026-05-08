@@ -60,6 +60,15 @@ pub trait Plugin<State: 'static = ()> {
     fn build(&self, app: &mut App<State>);
 }
 
+pub struct AssetPlugin;
+
+impl<State: 'static> Plugin<State> for AssetPlugin {
+    fn build(&self, app: &mut App<State>) {
+        app.world.insert_resource(gizmo_core::asset::Assets::<gizmo_renderer::components::Mesh>::new());
+        app.world.insert_resource(gizmo_core::asset::Assets::<gizmo_renderer::components::Material>::new());
+    }
+}
+
 pub struct App<State: 'static = ()> {
     pub world: World,
     pub schedule: Schedule,
@@ -106,7 +115,7 @@ pub struct App<State: 'static = ()> {
 
 impl<State: 'static> App<State> {
     pub fn new(title: &str, width: u32, height: u32) -> Self {
-        Self {
+        let mut app = Self {
             world: World::new(),
             schedule: Schedule::new(),
             window_title: title.to_string(),
@@ -127,7 +136,9 @@ impl<State: 'static> App<State> {
             playback_data: None,
             playback_frame_index: 0,
             runner: None,
-        }
+        };
+        app = app.add_plugin(AssetPlugin);
+        app
     }
 
     pub fn set_runner<F>(mut self, f: F) -> Self
@@ -235,8 +246,8 @@ impl<State: 'static> App<State> {
         self
     }
 
-    pub fn add_system(mut self, system: fn(&World, f32)) -> Self {
-        self.schedule.add_system(system);
+    pub fn add_system<Params, S: gizmo_core::system::IntoSystemConfig<Params>>(mut self, system: S) -> Self {
+        self.schedule.add_di_system(system);
         self
     }
 
@@ -315,7 +326,7 @@ impl<State: 'static> App<State> {
                 .remove_resource::<gizmo_renderer::asset::AssetManager>()
             {
                 let dummy_rgba = [255, 255, 255, 255];
-                let mut r = self.world.remove_resource::<Renderer>().unwrap();
+                let r = self.world.remove_resource::<Renderer>().unwrap();
                 let dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
 
                 {
@@ -381,7 +392,8 @@ impl<State: 'static> App<State> {
                                     let _ = record.save("gizmo_record.ron");
                                     println!("Kayit basariyla 'gizmo_record.ron' dosyasina kaydedildi.");
                                 }
-                                current_window.exit();
+                                // TLS'teki GPU kaynaklarını temizlemekle uğraşmak yerine direkt çık
+                                std::process::exit(0);
                             }
                             WindowEvent::Resized(physical_size) => {
                                 {
@@ -793,7 +805,7 @@ impl<State: 'static> App<State> {
                                     .world
                                     .remove_resource::<gizmo_renderer::asset::AssetManager>()
                                 {
-                                    let mut r = self.world.remove_resource::<Renderer>().unwrap();
+                                    let r = self.world.remove_resource::<Renderer>().unwrap();
                                     let dummy_rgba = [255u8, 255, 255, 255];
                                     let dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
                                     let registry =

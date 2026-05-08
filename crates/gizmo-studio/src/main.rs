@@ -18,14 +18,14 @@ pub use studio_input::*;
 fn main() {
     let mut app = App::<StudioState>::new("Gizmo Studio", 1600, 900)
         .with_icon(include_bytes!("../../../media/logo.png"))
-        .add_event::<crate::state::ShaderReloadEvent>()
-        .add_system(gizmo::systems::physics::cpu_physics_step_system)
-        .add_system(gizmo::ai::system::ai_navmesh_rebuild_system)
-        .add_system(gizmo::ai::system::ai_navigation_system);
+        .add_event::<crate::state::ShaderReloadEvent>();
 
     app = app.set_setup(|world, renderer| setup::setup_studio_scene(world, renderer));
 
     app = app.set_update(|world, state, dt, input| {
+        gizmo::systems::physics::cpu_physics_step_system(world, dt);
+        gizmo::ai::system::ai_navmesh_rebuild_system(world, dt);
+        gizmo::ai::system::ai_navigation_system(world, dt);
         update::update_studio(world, state, dt, input);
     });
 

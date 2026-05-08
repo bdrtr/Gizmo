@@ -56,7 +56,7 @@ pub use world::PhysicsWorld;
 pub use system::{physics_step_system, physics_fracture_system, physics_explosion_system};
 pub use components::{
     BodyType, BoxShape, Breakable, CapsuleShape, CharacterController, Collider, ColliderShape, CollisionLayer,
-    ConvexHullShape, PhysicsMaterial, PlaneShape, RigidBody, SphereShape, Transform, TriMeshShape,
+    ConvexHullShape, PhysicsMaterial, PlaneShape, RigidBody, SphereShape, Transform, GlobalTransform, TriMeshShape,
     Velocity, Explosion, FluidSimulation
 };
 
