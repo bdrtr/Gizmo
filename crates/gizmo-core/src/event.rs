@@ -1,3 +1,6 @@
+use crate::system::{Res, ResMut, SystemParam, SystemParamFetchError, AccessInfo};
+use crate::world::World;
+
 /// Gizmo ECS Event System — Double-buffered olay kuyruğu.
 ///
 /// Her frame'de `update()` çağrıldığında, önceki frame'in eventleri atılır ve
@@ -91,6 +94,73 @@ impl<T> Events<T> {
 impl<T> Default for Events<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ==============================================================
+// EventReader
+// ==============================================================
+
+pub struct EventReader<'w, T: 'static> {
+    events: Res<'w, Events<T>>,
+}
+
+impl<'w, T: 'static> EventReader<'w, T> {
+    /// Olayları okumak için iterator döndürür (önceki frame'in eventleri).
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.events.iter()
+    }
+    
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+    
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+}
+
+impl<T: 'static> SystemParam for EventReader<'static, T> {
+    type Item<'w> = EventReader<'w, T>;
+    fn fetch<'w>(world: &'w World, _dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError> {
+        let events = Res::<Events<T>>::fetch(world, _dt)?;
+        Ok(EventReader { events })
+    }
+    fn get_access_info(info: &mut AccessInfo) {
+        Res::<'static, Events<T>>::get_access_info(info);
+    }
+}
+
+// ==============================================================
+// EventWriter
+// ==============================================================
+
+pub struct EventWriter<'w, T: 'static> {
+    events: ResMut<'w, Events<T>>,
+}
+
+impl<'w, T: 'static> EventWriter<'w, T> {
+    /// Yeni bir olay fırlatır (mevcut frame'in buffer'ına yazar).
+    pub fn send(&mut self, event: T) {
+        self.events.send(event);
+    }
+    
+    /// Birden fazla olay fırlatır.
+    pub fn send_batch(&mut self, events: impl IntoIterator<Item = T>) {
+        for event in events {
+            self.events.send(event);
+        }
+    }
+}
+
+impl<T: 'static> SystemParam for EventWriter<'static, T> {
+    type Item<'w> = EventWriter<'w, T>;
+    fn fetch<'w>(world: &'w World, _dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError> {
+        let events = ResMut::<Events<T>>::fetch(world, _dt)?;
+        Ok(EventWriter { events })
+    }
+    fn get_access_info(info: &mut AccessInfo) {
+        ResMut::<'static, Events<T>>::get_access_info(info);
     }
 }
 

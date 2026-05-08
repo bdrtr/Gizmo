@@ -16,6 +16,7 @@ pub enum InterpolationMode {
 #[derive(Clone, Debug)]
 pub struct Track<T> {
     pub target_node: usize,
+    pub target_node_name: Option<String>,
     pub interpolation: InterpolationMode,
     pub keyframes: Vec<Keyframe<T>>,
 }
@@ -80,6 +81,11 @@ pub struct SkeletonJoint {
 #[derive(Clone, Debug)]
 pub struct SkeletonHierarchy {
     pub joints: Vec<SkeletonJoint>,
+    /// Armature (iskelet kök düğümü) transform'u.
+    /// GLTF'te kemikler genellikle bir "Armature" düğümünün çocuklarıdır.
+    /// inverse_bind_matrix bu Armature transform'unu içerir, bu yüzden
+    /// global matris hesaplarken kök kemiklere bu transform'u uygulamalıyız.
+    pub root_transform: Mat4,
 }
 
 impl SkeletonHierarchy {
@@ -104,7 +110,8 @@ impl SkeletonHierarchy {
             let global_mat = if let Some(parent_idx) = self.joints[node].parent_index {
                 globals[parent_idx].unwrap() * local_mat
             } else {
-                local_mat
+                // Kök kemikler için Armature transform'unu uygula
+                self.root_transform * local_mat
             };
             globals[node] = Some(global_mat);
 

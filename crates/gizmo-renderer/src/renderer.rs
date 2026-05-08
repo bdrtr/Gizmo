@@ -502,6 +502,53 @@ impl Renderer {
             .load_material_texture(&self.device, &self.queue, &self.scene.texture_bind_group_layout, path)
     }
 
+    /// Diskten bir GLTF (veya GLB) modelini senkron olarak yükler.
+    pub fn load_gltf(&self, path: &str) -> Result<crate::asset::loaders::GltfSceneAsset, String> {
+        let white_tex = self.create_white_texture();
+        self.asset_manager.write().unwrap()
+            .load_gltf_scene(&self.device, &self.queue, &self.scene.texture_bind_group_layout, white_tex, path)
+    }
+
+    pub fn create_skeleton(&self, hierarchy: std::sync::Arc<crate::animation::SkeletonHierarchy>) -> crate::components::Skeleton {
+        use wgpu::util::DeviceExt;
+
+        // İlk local_poses'u her kemiğin orijinal local_bind_transform'undan al.
+        let local_poses: Vec<gizmo_math::Mat4> = hierarchy
+            .joints
+            .iter()
+            .map(|j| j.local_bind_transform)
+            .collect();
+
+        // Global matrislerden doğru joint_matrices hesapla (bind-pose)
+        let global_matrices = hierarchy.calculate_global_matrices(&local_poses);
+        let mut joint_matrices = vec![gizmo_math::Mat4::IDENTITY; 64];
+        for (i, joint) in hierarchy.joints.iter().enumerate() {
+            if i < 64 {
+                joint_matrices[i] = global_matrices[i] * joint.inverse_bind_matrix;
+            }
+        }
+
+
+        let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Skeleton Joint Buffer"),
+            contents: bytemuck::cast_slice(&joint_matrices),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Skeleton Bind Group"),
+            layout: &self.scene.skeleton_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }
+            ]
+        });
+
+        crate::components::Skeleton::new(std::sync::Arc::new(bind_group), std::sync::Arc::new(buffer), hierarchy, local_poses)
+    }
+
     pub fn run_post_processing(
         &self,
         encoder: &mut wgpu::CommandEncoder,

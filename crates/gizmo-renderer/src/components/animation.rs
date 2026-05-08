@@ -38,7 +38,13 @@ pub struct AnimationPlayer {
     pub current_time: f32,
     pub active_animation: usize,
     pub loop_anim: bool,
+    pub speed: f32,
     pub animations: Arc<[crate::animation::AnimationClip]>,
+    // Blending support
+    pub blend_time: f32,
+    pub blend_duration: f32,
+    pub prev_animation: Option<usize>,
+    pub prev_time: f32,
 }
 
 impl Default for AnimationPlayer {
@@ -47,7 +53,12 @@ impl Default for AnimationPlayer {
             current_time: 0.0,
             active_animation: 0,
             loop_anim: true,
+            speed: 1.0,
             animations: Arc::new([]),
+            blend_time: 0.0,
+            blend_duration: 0.0,
+            prev_animation: None,
+            prev_time: 0.0,
         }
     }
 }

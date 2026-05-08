@@ -24,3 +24,17 @@ impl<State: 'static> Plugin<State> for PhysicsPlugin {
         // Not: İleride `physics_step_system` buraya bir sistem (Schedule) olarak eklenebilir.
     }
 }
+
+/// Transform (hiyerarşi ve senkronizasyon) sistemlerini başlatan eklenti.
+pub struct TransformPlugin;
+
+impl<State: 'static> Plugin<State> for TransformPlugin {
+    fn build(&self, app: &mut App<State>) {
+        // PostUpdate (veya Update sonu) gibi bir faz eklenebilir, şimdilik direkt ekleniyor.
+        app.schedule.add_di_system(gizmo_core::system::SystemConfig::new(Box::new(crate::systems::transform::TransformSyncSystem))
+            .label("transform_sync"));
+        app.schedule.add_di_system(gizmo_core::system::SystemConfig::new(Box::new(crate::systems::transform::TransformPropagateSystem))
+            .label("transform_propagate")
+            .after("transform_sync"));
+    }
+}

@@ -462,6 +462,7 @@ impl<'a> Commands<'a> {
                 trans.update_local_matrix();
 
                 self.world.add_component(root, trans);
+                self.world.add_component(root, gizmo_physics::GlobalTransform::default());
                 self.world
                     .add_component(root, EntityName(format!("GLTF: {}", path)));
                 self.world
@@ -481,10 +482,12 @@ impl<'a> Commands<'a> {
                     self.world.add_component(
                         root,
                         gizmo_renderer::components::AnimationPlayer {
-                            current_time: 0.0,
                             active_animation: 0,
+                            current_time: 0.0,
                             loop_anim: true,
+                            speed: 1.0,
                             animations: std::sync::Arc::from(asset.animations.clone().into_boxed_slice()),
+                            ..Default::default()
                         },
                     );
                 }
@@ -599,11 +602,13 @@ fn spawn_gltf_node_flat(
     .with_rotation(rot)
     .with_scale(Vec3::new(node.scale[0], node.scale[1], node.scale[2]));
     world.add_component(entity, t);
+    world.add_component(entity, gizmo_physics::GlobalTransform::default());
 
     let mut newly_added_prims = Vec::new();
     for (_pi, (mesh, mat_opt)) in node.primitives.iter().enumerate() {
         let prim = world.spawn();
         world.add_component(prim, Transform::new(Vec3::ZERO));
+        world.add_component(prim, gizmo_physics::GlobalTransform::default());
         world.add_component(prim, Parent(entity.id()));
         world.add_component(prim, Children(Vec::new()));
 

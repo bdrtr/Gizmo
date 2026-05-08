@@ -121,6 +121,7 @@ use crate::world::{ResourceReadGuard, ResourceWriteGuard};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SystemParamFetchError {
     Resource(crate::world::ResourceFetchError),
+    QueryError,
 }
 
 impl From<crate::world::ResourceFetchError> for SystemParamFetchError {
@@ -193,6 +194,28 @@ impl SystemParam for f32 {
     fn get_access_info(_info: &mut AccessInfo) {}
 }
 
+impl<Q: crate::query::WorldQuery + 'static> SystemParam for crate::query::Query<'static, Q> {
+    type Item<'w> = crate::query::Query<'w, Q>;
+    fn fetch<'w>(world: &'w World, _dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError> {
+        if let Some(query) = world.query::<Q>() {
+            Ok(query)
+        } else {
+            Err(SystemParamFetchError::QueryError)
+        }
+    }
+    fn get_access_info(info: &mut AccessInfo) {
+        let mut types = Vec::new();
+        Q::check_aliasing(&mut types);
+        for (tid, is_mut) in types {
+            if is_mut {
+                info.component_writes.push(tid);
+            } else {
+                info.component_reads.push(tid);
+            }
+        }
+    }
+}
+
 // ==============================================================
 // INTO SYSTEM — FONKSİYONLARDAN SİSTEME DÖNÜŞÜM (MAKRO İLE)
 // ==============================================================
@@ -226,7 +249,7 @@ macro_rules! impl_into_system {
         #[allow(non_snake_case)]
         impl<F, $($P),+> IntoSystem<($($P,)+)> for F
         where
-            F: FnMut($($P::Item<'_>),+) + Send + Sync + 'static,
+            F: FnMut($($P::Item<'_>),+) + FnMut($($P),+) + Send + Sync + 'static,
             $($P: SystemParam + 'static,)+
         {
             fn into_system(self) -> Box<dyn System> {
@@ -237,7 +260,7 @@ macro_rules! impl_into_system {
 
                 impl<F, $($P),+> System for MultiParamSystem<F, $($P),+>
                 where
-                    F: FnMut($($P::Item<'_>),+) + Send + Sync + 'static,
+                    F: FnMut($($P::Item<'_>),+) + FnMut($($P),+) + Send + Sync + 'static,
                     $($P: SystemParam + 'static,)+
                 {
                     fn run(&mut self, world: &World, dt: f32) {
@@ -281,6 +304,10 @@ impl_into_system!(P1, P2, P3, P4, P5);
 impl_into_system!(P1, P2, P3, P4, P5, P6);
 impl_into_system!(P1, P2, P3, P4, P5, P6, P7);
 impl_into_system!(P1, P2, P3, P4, P5, P6, P7, P8);
+impl_into_system!(P1, P2, P3, P4, P5, P6, P7, P8, P9);
+impl_into_system!(P1, P2, P3, P4, P5, P6, P7, P8, P9, P10);
+impl_into_system!(P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11);
+impl_into_system!(P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12);
 
 // Func returning &World and using f32 but acts as an Exclusive Barrier!
 impl<F> System for F
@@ -295,6 +322,26 @@ where
         let mut info = AccessInfo::new();
         info.is_exclusive = true;
         info
+    }
+}
+
+// ==============================================================
+// RUN CONDITIONS
+// ==============================================================
+
+pub struct ConditionalSystem {
+    inner: Box<dyn System>,
+    condition: Box<dyn FnMut(&World) -> bool + Send + Sync>,
+}
+
+impl System for ConditionalSystem {
+    fn run(&mut self, world: &World, dt: f32) {
+        if (self.condition)(world) {
+            self.inner.run(world, dt);
+        }
+    }
+    fn access_info(&self) -> AccessInfo {
+        self.inner.access_info()
     }
 }
 
@@ -362,6 +409,17 @@ impl SystemConfig {
         self.phase = phase;
         self
     }
+
+    pub fn run_if<F>(mut self, condition: F) -> Self
+    where
+        F: FnMut(&World) -> bool + Send + Sync + 'static,
+    {
+        self.system = Box::new(ConditionalSystem {
+            inner: self.system,
+            condition: Box::new(condition),
+        });
+        self
+    }
 }
 
 pub trait IntoSystemConfig<Params> {
@@ -421,6 +479,13 @@ pub trait IntoSystemConfig<Params> {
         Self: Sized,
     {
         self.into_config().in_phase(phase)
+    }
+    fn run_if<F>(self, condition: F) -> SystemConfig
+    where
+        F: FnMut(&World) -> bool + Send + Sync + 'static,
+        Self: Sized,
+    {
+        self.into_config().run_if(condition)
     }
 }
 

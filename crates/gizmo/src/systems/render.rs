@@ -1,6 +1,5 @@
 use crate::core::World;
 use crate::math::{Mat4, Vec3};
-use crate::physics::Transform;
 use crate::renderer::{
     components::{Camera, Material, Mesh, MeshRenderer},
     Renderer,
@@ -9,6 +8,25 @@ use bytemuck;
 use wgpu;
 use super::physics::*;
 
+#[derive(Default)]
+pub struct RenderCache {
+    pub batches: std::collections::HashMap<BatchKey, BatchData>,
+    pub instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
+    pub draw_items: Vec<DrawItem>,
+}
+
+thread_local! {
+    static RENDER_CACHE: std::cell::RefCell<RenderCache> = std::cell::RefCell::new(RenderCache::default());
+}
+
+pub fn clear_render_cache() {
+    RENDER_CACHE.with(|rc| {
+        let mut cache = rc.borrow_mut();
+        cache.batches.clear();
+        cache.instances.clear();
+        cache.draw_items.clear();
+    });
+}
 
 #[derive(Clone)]
 pub struct DrawItem {
@@ -17,6 +35,7 @@ pub struct DrawItem {
     bind_group: std::sync::Arc<wgpu::BindGroup>,
     unlit: bool,
     is_skybox: bool,
+    skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     first_instance: u32,
     instance_count: u32,
 }
@@ -25,6 +44,7 @@ pub struct DrawItem {
 struct BatchKey {
     vbuf_id: usize,
     mat_id: usize,
+    skeleton_id: Option<usize>,
 }
 
 struct BatchData {
@@ -33,6 +53,7 @@ struct BatchData {
     vertex_count: u32,
     unlit: bool,
     is_skybox: bool,
+    skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
 }
 
@@ -65,17 +86,18 @@ pub fn default_render_pass(
 
     // KAMERALARI BUL VE MATRIX YARAT
     let cameras = world.borrow::<Camera>();
-    let transforms = world.borrow::<Transform>();
+    let transforms = world.borrow::<crate::physics::GlobalTransform>();
     {
         // TODO: Aktif kamera için `ActiveCamera` tarzı bir marker bileşeni kullanılmalı.
         // ECS array sırası stabil değildir. Şimdilik geçici çözüm olarak ilki alınıyor.
         if let Some((active_cam, _)) = cameras.iter().next() {
             if let (Some(cam), Some(trans)) = (cameras.get(active_cam), transforms.get(active_cam))
             {
+                let (_, rot, pos) = trans.matrix.to_scale_rotation_translation();
                 proj = cam.get_projection(aspect);
-                view_mat = cam.get_view(trans.position);
-                cam_pos = trans.position;
-                cam_forward = trans.rotation * Vec3::new(0.0, 0.0, -1.0);
+                view_mat = cam.get_view(pos);
+                cam_pos = pos;
+                cam_forward = rot * Vec3::new(0.0, 0.0, -1.0);
             }
         }
     }
@@ -101,10 +123,11 @@ pub fn default_render_pass(
     // Güneş Işığını Bul
     let mut sun_dir = gizmo_math::Vec3::new(0.0, -1.0, 0.0);
     let mut sun_col = gizmo_math::Vec4::new(1.0, 1.0, 1.0, 1.0);
-    if let Some(q) = world.query::<(&crate::renderer::components::DirectionalLight, &crate::physics::Transform)>() {
+    if let Some(q) = world.query::<(&crate::renderer::components::DirectionalLight, &crate::physics::GlobalTransform)>() {
         for (_id, (light, transform)) in q.iter() {
             if light.role == crate::renderer::components::LightRole::Sun {
-                sun_dir = transform.rotation.mul_vec3(gizmo_math::Vec3::new(0.0, 0.0, -1.0)).normalize();
+                let (_, rot, _) = transform.matrix.to_scale_rotation_translation();
+                sun_dir = rot.mul_vec3(gizmo_math::Vec3::new(0.0, 0.0, -1.0)).normalize();
                 sun_col = gizmo_math::Vec4::new(light.color.x, light.color.y, light.color.z, light.intensity);
                 break;
             }
@@ -133,11 +156,12 @@ pub fn default_render_pass(
     }; 10];
     let mut num_lights = 0;
 
-    if let Some(q) = world.query::<(&crate::renderer::components::PointLight, &crate::physics::Transform)>() {
+    if let Some(q) = world.query::<(&crate::renderer::components::PointLight, &crate::physics::GlobalTransform)>() {
         for (_id, (light, transform)) in q.iter() {
             if num_lights >= 10 { break; }
+            let (_, _, pos) = transform.matrix.to_scale_rotation_translation();
             lights_data[num_lights as usize] = crate::renderer::gpu_types::LightData {
-                position: [transform.position.x, transform.position.y, transform.position.z, light.intensity],
+                position: [pos.x, pos.y, pos.z, light.intensity],
                 color: [light.color.x, light.color.y, light.color.z, light.radius],
                 direction: [0.0, -1.0, 0.0, 0.0],
                 params: [0.0, 0.0, 0.0, 0.0], // y = 0 means PointLight
@@ -146,12 +170,13 @@ pub fn default_render_pass(
         }
     }
 
-    if let Some(q) = world.query::<(&crate::renderer::components::SpotLight, &crate::physics::Transform)>() {
+    if let Some(q) = world.query::<(&crate::renderer::components::SpotLight, &crate::physics::GlobalTransform)>() {
         for (_id, (light, transform)) in q.iter() {
             if num_lights >= 10 { break; }
-            let dir = transform.rotation.mul_vec3(gizmo_math::Vec3::new(0.0, 0.0, -1.0)).normalize();
+            let (_, rot, pos) = transform.matrix.to_scale_rotation_translation();
+            let dir = rot.mul_vec3(gizmo_math::Vec3::new(0.0, 0.0, -1.0)).normalize();
             lights_data[num_lights as usize] = crate::renderer::gpu_types::LightData {
-                position: [transform.position.x, transform.position.y, transform.position.z, light.intensity],
+                position: [pos.x, pos.y, pos.z, light.intensity],
                 color: [light.color.x, light.color.y, light.color.z, light.radius],
                 direction: [dir.x, dir.y, dir.z, light.inner_angle],
                 params: [light.outer_angle, 1.0, 0.0, 0.0], // y = 1 means SpotLight
@@ -203,12 +228,6 @@ pub fn default_render_pass(
         taa.store_prev_vp(unjittered_view_proj.to_cols_array_2d());
     }
 
-#[derive(Default)]
-pub struct RenderCache {
-    pub batches: std::collections::HashMap<BatchKey, BatchData>,
-    pub instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
-    pub draw_items: Vec<DrawItem>,
-}
 
 // ... inside default_render_pass ...
     // ... before line 205 ...
@@ -217,10 +236,6 @@ pub struct RenderCache {
     // Get or create RenderCache
     let frustum = crate::math::Frustum::from_matrix(&unjittered_view_proj);
     
-    thread_local! {
-        static RENDER_CACHE: std::cell::RefCell<RenderCache> = std::cell::RefCell::new(RenderCache::default());
-    }
-
     let draw_items = RENDER_CACHE.with(|rc| {
         let mut cache = rc.borrow_mut();
         
@@ -232,28 +247,29 @@ pub struct RenderCache {
         cache.draw_items.clear();
 
         let pooled_storage = world.borrow::<gizmo_core::pool::Pooled>();
-        if let Some(mut q) = world.query::<(&Mesh, &Transform, &Material)>() {
-            for (e, (mesh, trans, mat)) in q.iter_mut() {
-                if renderers.get(e).is_none() {
+        
+        macro_rules! process_mesh {
+            ($e:expr, $mesh:expr, $trans:expr, $mat:expr, $skeleton:expr) => {
+                if renderers.get($e).is_none() {
                     continue;
                 }
                 
                 // Pooled (havuzda pasif) nesneleri render etme
-                if pooled_storage.get(e).is_some() {
+                if pooled_storage.get($e).is_some() {
                     continue;
                 }
 
-                let center_mat = Mat4::from_translation(mesh.center_offset);
-                let model = trans.local_matrix * center_mat;
+                let center_mat = Mat4::from_translation($mesh.center_offset);
+                let model = $trans.matrix * center_mat;
 
                 // CPU Frustum Culling
-                let local_cx = (mesh.bounds.min.x + mesh.bounds.max.x) * 0.5;
-                let local_cy = (mesh.bounds.min.y + mesh.bounds.max.y) * 0.5;
-                let local_cz = (mesh.bounds.min.z + mesh.bounds.max.z) * 0.5;
+                let local_cx = ($mesh.bounds.min.x + $mesh.bounds.max.x) * 0.5;
+                let local_cy = ($mesh.bounds.min.y + $mesh.bounds.max.y) * 0.5;
+                let local_cz = ($mesh.bounds.min.z + $mesh.bounds.max.z) * 0.5;
                 let world_c = model.transform_point3(Vec3::new(local_cx, local_cy, local_cz));
-                let hx = (mesh.bounds.max.x - mesh.bounds.min.x) * 0.5;
-                let hy = (mesh.bounds.max.y - mesh.bounds.min.y) * 0.5;
-                let hz = (mesh.bounds.max.z - mesh.bounds.min.z) * 0.5;
+                let hx = ($mesh.bounds.max.x - $mesh.bounds.min.x) * 0.5;
+                let hy = ($mesh.bounds.max.y - $mesh.bounds.min.y) * 0.5;
+                let hz = ($mesh.bounds.max.z - $mesh.bounds.min.z) * 0.5;
                 let local_r = (hx * hx + hy * hy + hz * hz).sqrt();
                 let sx = model.x_axis.truncate().length();
                 let sy = model.y_axis.truncate().length();
@@ -266,56 +282,80 @@ pub struct RenderCache {
 
                 // Auto-LOD (Level of Detail) Seçimi
                 let dist_to_cam = (world_c - cam_pos).length();
-                let use_lod1 = if !mesh.lod_vbufs.is_empty() {
+                let use_lod1 = if !$mesh.lod_vbufs.is_empty() {
                     dist_to_cam > world_r * 15.0 // Nesne boyutuna göre uzaklaştıkça LOD1'e geç (örneğin 2m çapında bir nesne 30m uzaktayken geç)
                 } else {
                     false
                 };
 
                 let active_vbuf = if use_lod1 {
-                    mesh.lod_vbufs[0].clone()
+                    $mesh.lod_vbufs[0].clone()
                 } else {
-                    mesh.vbuf.clone()
+                    $mesh.vbuf.clone()
                 };
                 let active_vertex_count = if use_lod1 {
-                    mesh.lod_vertex_counts[0]
+                    $mesh.lod_vertex_counts[0]
                 } else {
-                    mesh.vertex_count
+                    $mesh.vertex_count
                 };
 
                 let instance_data = crate::renderer::gpu_types::InstanceRaw {
                     model: model.to_cols_array_2d(),
-                    albedo_color: [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
-                    roughness: mat.roughness,
-                    metallic: mat.metallic,
-                    unlit: match mat.material_type {
+                    albedo_color: [$mat.albedo.x, $mat.albedo.y, $mat.albedo.z, $mat.albedo.w],
+                    roughness: $mat.roughness,
+                    metallic: $mat.metallic,
+                    unlit: match $mat.material_type {
                         crate::renderer::components::MaterialType::Skybox => 2.0,
                         crate::renderer::components::MaterialType::Unlit => 1.0,
                         _ => 0.0,
                     },
                     _padding: 0.0,
                 };
+                let skel_bg = $skeleton.map(|s: &crate::renderer::components::Skeleton| s.bind_group.clone());
                 
                 let key = BatchKey {
                     vbuf_id: std::sync::Arc::as_ptr(&active_vbuf) as usize,
-                    mat_id: std::sync::Arc::as_ptr(&mat.bind_group) as usize,
+                    mat_id: std::sync::Arc::as_ptr(&$mat.bind_group) as usize,
+                    skeleton_id: skel_bg.as_ref().map(|bg| std::sync::Arc::as_ptr(bg) as usize),
                 };
 
                 let batch = cache.batches.entry(key).or_insert_with(|| BatchData {
                     vbuf: active_vbuf.clone(),
-                    bind_group: mat.bind_group.clone(),
+                    bind_group: $mat.bind_group.clone(),
                     vertex_count: active_vertex_count,
-                    unlit: mat.material_type == crate::renderer::components::MaterialType::Unlit
-                        || mat.material_type == crate::renderer::components::MaterialType::Skybox,
-                    is_skybox: mat.material_type == crate::renderer::components::MaterialType::Skybox,
+                    unlit: $mat.material_type == crate::renderer::components::MaterialType::Unlit
+                        || $mat.material_type == crate::renderer::components::MaterialType::Skybox,
+                    is_skybox: $mat.material_type == crate::renderer::components::MaterialType::Skybox,
+                    skeleton_bind_group: skel_bg,
                     instances: Vec::new(),
                 });
                 batch.instances.push(instance_data);
+            };
+        }
+
+        let skeletons = world.borrow::<crate::renderer::components::Skeleton>();
+
+        if let Some(mut q) = world.query::<(&Mesh, &crate::physics::GlobalTransform, &Material)>() {
+            for (e, (mesh, trans, mat)) in q.iter_mut() {
+                process_mesh!(e, mesh, trans, mat, skeletons.get(e));
             }
         }
         
-        let mut local_instances = std::mem::take(&mut cache.instances);
-        let mut local_draw_items = std::mem::take(&mut cache.draw_items);
+        let meshes = world.try_get_resource::<gizmo_core::asset::Assets<Mesh>>().ok();
+        let materials = world.try_get_resource::<gizmo_core::asset::Assets<Material>>().ok();
+        
+        if let (Some(meshes), Some(materials)) = (meshes, materials) {
+            if let Some(mut q) = world.query::<(&gizmo_core::asset::Handle<Mesh>, &crate::physics::GlobalTransform, &gizmo_core::asset::Handle<Material>)>() {
+                for (e, (h_mesh, trans, h_mat)) in q.iter_mut() {
+                    if let (Some(mesh), Some(mat)) = (meshes.get(h_mesh), materials.get(h_mat)) {
+                        process_mesh!(e, mesh, trans, mat, skeletons.get(e));
+                    }
+                }
+            }
+        }
+        
+        let mut local_instances: Vec<crate::renderer::gpu_types::InstanceRaw> = std::mem::take(&mut cache.instances);
+        let mut local_draw_items: Vec<DrawItem> = std::mem::take(&mut cache.draw_items);
 
         for (_, batch) in cache.batches.iter() {
             if batch.instances.is_empty() { continue; }
@@ -329,6 +369,7 @@ pub struct RenderCache {
                 bind_group: batch.bind_group.clone(),
                 unlit: batch.unlit,
                 is_skybox: batch.is_skybox,
+                skeleton_bind_group: batch.skeleton_bind_group.clone(),
                 first_instance,
                 instance_count,
             });
@@ -447,12 +488,13 @@ pub struct RenderCache {
         });
         shadow_pass.set_pipeline(&renderer.scene.shadow_pipeline);
         shadow_pass.set_bind_group(0, &renderer.scene.shadow_pass_bind_groups[i], &[]);
-        shadow_pass.set_bind_group(1, &renderer.scene.dummy_skeleton_bind_group, &[]);
         shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
         for item in &draw_items {
             if item.unlit {
                 continue;
             }
+            let skel_bg = item.skeleton_bind_group.as_ref().unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
+            shadow_pass.set_bind_group(1, skel_bg, &[]);
             shadow_pass.set_vertex_buffer(0, item.vbuf.slice(..));
             shadow_pass.draw(0..item.vertex_count, item.first_instance..(item.first_instance + item.instance_count));
         }
@@ -477,12 +519,13 @@ pub struct RenderCache {
         z_pass.set_pipeline(&def.z_prepass_pipeline);
         z_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
         z_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-        z_pass.set_bind_group(3, &renderer.scene.dummy_skeleton_bind_group, &[]);
         z_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
         for item in &draw_items {
             if item.unlit || item.is_skybox {
                 continue;
             }
+            let skel_bg = item.skeleton_bind_group.as_ref().unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
+            z_pass.set_bind_group(3, skel_bg, &[]);
             z_pass.set_bind_group(1, &item.bind_group, &[]);
             z_pass.set_vertex_buffer(0, item.vbuf.slice(..));
             z_pass.draw(0..item.vertex_count, item.first_instance..(item.first_instance + item.instance_count));
@@ -533,12 +576,13 @@ pub struct RenderCache {
         gbuf_pass.set_pipeline(&def.gbuffer_pipeline);
         gbuf_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
         gbuf_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-        gbuf_pass.set_bind_group(3, &renderer.scene.dummy_skeleton_bind_group, &[]);
         gbuf_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
         for item in &draw_items {
             if item.unlit {
                 continue;
             }
+            let skel_bg = item.skeleton_bind_group.as_ref().unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
+            gbuf_pass.set_bind_group(3, skel_bg, &[]);
             gbuf_pass.set_bind_group(1, &item.bind_group, &[]);
             gbuf_pass.set_vertex_buffer(0, item.vbuf.slice(..));
             gbuf_pass.draw(0..item.vertex_count, item.first_instance..(item.first_instance + item.instance_count));
@@ -721,7 +765,6 @@ pub struct RenderCache {
         });
         render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
         render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-        render_pass.set_bind_group(3, &renderer.scene.dummy_skeleton_bind_group, &[]);
         render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
 
         for item in &draw_items {
@@ -735,7 +778,9 @@ pub struct RenderCache {
                 continue; // PBR already rendered in deferred G-buffer + lighting pass
             };
             render_pass.set_pipeline(pipeline);
+            let skel_bg = item.skeleton_bind_group.as_ref().unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
             render_pass.set_bind_group(1, &item.bind_group, &[]);
+            render_pass.set_bind_group(3, skel_bg, &[]);
             render_pass.set_vertex_buffer(0, item.vbuf.slice(..));
             render_pass.draw(0..item.vertex_count, item.first_instance..(item.first_instance + item.instance_count));
         }

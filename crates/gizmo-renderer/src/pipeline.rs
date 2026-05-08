@@ -597,9 +597,15 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         })
     });
 
+    let dummy_identity: [[f32; 4]; 4] = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
     let dummy_skeleton_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Dummy Skeleton Buffer"),
-        contents: bytemuck::cast_slice(&[[[0.0f32; 4]; 4]; 64]),
+        contents: bytemuck::cast_slice(&[dummy_identity; 64]),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
     let dummy_skeleton_bind_group =

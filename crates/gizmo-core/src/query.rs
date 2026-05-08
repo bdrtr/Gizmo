@@ -7,62 +7,42 @@ use std::marker::PhantomData;
 // FETCH COMPONENT TRAIT
 // =========================================================================
 
-pub trait FetchComponent<'w> {
+pub trait FetchComponent {
     type Component: 'static;
-    type Fetch: Copy; // Raw pointers are Copy
-    type Item<'a>
-    where
-        'w: 'a;
-    type Slice<'a>
-    where
-        'w: 'a;
+    type Fetch<'w>: Copy; // Raw pointers are Copy
+    type Item<'w>;
+    type Slice<'w>;
 
     const IS_MUT: bool;
 
     /// Bir archetype bazında ham pointer fetch hazırlar.
-    unsafe fn fetch_raw(arch: &Archetype, system_tick: u32) -> Option<Self::Fetch>;
+    unsafe fn fetch_raw<'w>(arch: &Archetype, system_tick: u32) -> Option<Self::Fetch<'w>>;
 
     /// Ham pointer'dan veriyi getirir.
-    unsafe fn get_item<'a>(fetch: Self::Fetch, row: usize) -> Self::Item<'a>
-    where
-        'w: 'a;
+    unsafe fn get_item<'w>(fetch: Self::Fetch<'w>, row: usize) -> Self::Item<'w>;
 
     /// Chunk olarak ardışık belleği Slice şeklinde getirir (SIMD).
-    unsafe fn get_slice<'a>(fetch: Self::Fetch, len: usize) -> Self::Slice<'a>
-    where
-        'w: 'a;
+    unsafe fn get_slice<'w>(fetch: Self::Fetch<'w>, len: usize) -> Self::Slice<'w>;
 }
 
-impl<'w, T: 'static> FetchComponent<'w> for &'w T {
+impl<T: 'static> FetchComponent for &T {
     type Component = T;
-    type Fetch = *const u8;
-    type Item<'a>
-        = &'a T
-    where
-        'w: 'a;
-    type Slice<'a>
-        = &'a [T]
-    where
-        'w: 'a;
+    type Fetch<'w> = *const u8;
+    type Item<'w> = &'w T;
+    type Slice<'w> = &'w [T];
     const IS_MUT: bool = false;
 
-    unsafe fn fetch_raw(arch: &Archetype, _system_tick: u32) -> Option<Self::Fetch> {
+    unsafe fn fetch_raw<'w>(arch: &Archetype, _system_tick: u32) -> Option<Self::Fetch<'w>> {
         let col = arch.get_column(TypeId::of::<T>())?;
         Some(col.data_ptr())
     }
 
-    unsafe fn get_item<'a>(fetch: Self::Fetch, row: usize) -> Self::Item<'a>
-    where
-        'w: 'a,
-    {
+    unsafe fn get_item<'w>(fetch: Self::Fetch<'w>, row: usize) -> Self::Item<'w> {
         let ptr = fetch.add(row * std::mem::size_of::<T>()) as *const T;
         &*ptr
     }
 
-    unsafe fn get_slice<'a>(fetch: Self::Fetch, len: usize) -> Self::Slice<'a>
-    where
-        'w: 'a,
-    {
+    unsafe fn get_slice<'w>(fetch: Self::Fetch<'w>, len: usize) -> Self::Slice<'w> {
         std::slice::from_raw_parts(fetch as *const T, len)
     }
 }
@@ -89,28 +69,19 @@ impl<T> std::ops::DerefMut for Mut<'_, T> {
     }
 }
 
-impl<'w, T: 'static> FetchComponent<'w> for Mut<'w, T> {
+impl<T: 'static> FetchComponent for Mut<'_, T> {
     type Component = T;
-    type Fetch = (*mut u8, *mut crate::archetype::ComponentTicks, u32);
-    type Item<'a>
-        = Mut<'a, T>
-    where
-        'w: 'a;
-    type Slice<'a>
-        = &'a mut [T]
-    where
-        'w: 'a;
+    type Fetch<'w> = (*mut u8, *mut crate::archetype::ComponentTicks, u32);
+    type Item<'w> = Mut<'w, T>;
+    type Slice<'w> = &'w mut [T];
     const IS_MUT: bool = true;
 
-    unsafe fn fetch_raw(arch: &Archetype, system_tick: u32) -> Option<Self::Fetch> {
+    unsafe fn fetch_raw<'w>(arch: &Archetype, system_tick: u32) -> Option<Self::Fetch<'w>> {
         let mut col = arch.get_column_mut(TypeId::of::<T>())?;
         Some((col.data_ptr_mut(), col.ticks_ptr_mut(), system_tick))
     }
 
-    unsafe fn get_item<'a>(fetch: Self::Fetch, row: usize) -> Self::Item<'a>
-    where
-        'w: 'a,
-    {
+    unsafe fn get_item<'w>(fetch: Self::Fetch<'w>, row: usize) -> Self::Item<'w> {
         let (data_ptr, ticks_ptr, system_tick) = fetch;
         let ptr = data_ptr.add(row * std::mem::size_of::<T>()) as *mut T;
         Mut {
@@ -120,10 +91,7 @@ impl<'w, T: 'static> FetchComponent<'w> for Mut<'w, T> {
         }
     }
 
-    unsafe fn get_slice<'a>(fetch: Self::Fetch, len: usize) -> Self::Slice<'a>
-    where
-        'w: 'a,
-    {
+    unsafe fn get_slice<'w>(fetch: Self::Fetch<'w>, len: usize) -> Self::Slice<'w> {
         let (data_ptr, ticks_ptr, system_tick) = fetch;
 
         let ticks = std::slice::from_raw_parts_mut(ticks_ptr, len);
@@ -139,42 +107,34 @@ impl<'w, T: 'static> FetchComponent<'w> for Mut<'w, T> {
 // WORLD QUERY TRAIT
 // =========================================================================
 
-pub trait WorldQuery<'w> {
+pub trait WorldQuery {
     type StaticType: 'static;
-    type Fetch: Copy;
-    type Item<'a>
-    where
-        'w: 'a;
-    type Slice<'a>
-    where
-        'w: 'a;
+    type Fetch<'w>: Copy;
+    type Item<'w>;
+    type Slice<'w>;
 
-    unsafe fn fetch_raw(arch: &Archetype, system_tick: u32) -> Option<Self::Fetch>;
+    unsafe fn fetch_raw<'w>(arch: &Archetype, system_tick: u32) -> Option<Self::Fetch<'w>>;
     fn check_aliasing(types: &mut Vec<(TypeId, bool)>);
     fn matches_archetype(arch: &Archetype) -> bool;
 
-    unsafe fn get_item<'a>(fetch: Self::Fetch, row: usize) -> Self::Item<'a>
-    where
-        'w: 'a;
+    unsafe fn get_item<'w>(fetch: Self::Fetch<'w>, row: usize) -> Self::Item<'w>;
 
-    unsafe fn filter_row(fetch: Self::Fetch, row: usize, system_tick: u32) -> bool;
+    unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, row: usize, system_tick: u32) -> bool;
 
-    unsafe fn get_slice<'a>(fetch: Self::Fetch, len: usize) -> Self::Slice<'a>
-    where
-        'w: 'a;
+    unsafe fn get_slice<'w>(fetch: Self::Fetch<'w>, len: usize) -> Self::Slice<'w>;
 }
 
 // =========================================================================
 // QUERY STRUCT
 // =========================================================================
 
-pub struct Query<'w, Q: WorldQuery<'w>> {
+pub struct Query<'w, Q: WorldQuery + ?Sized> {
     world: &'w World,
     matching_archetypes: Vec<usize>,
     _marker: PhantomData<Q>,
 }
 
-impl<'w, Q: WorldQuery<'w>> Query<'w, Q> {
+impl<'w, Q: WorldQuery> Query<'w, Q> {
     pub fn new(world: &'w World) -> Option<Self> {
         let mut used_types = Vec::new();
         Q::check_aliasing(&mut used_types);
@@ -210,6 +170,7 @@ impl<'w, Q: WorldQuery<'w>> Query<'w, Q> {
             current_row: 0,
             current_fetch: None,
             _marker: PhantomData,
+            _marker_w: PhantomData,
         }
     }
 
@@ -310,16 +271,17 @@ impl<'w, Q: WorldQuery<'w>> Query<'w, Q> {
 // QUERY ITERATOR
 // =========================================================================
 
-pub struct QueryIter<'a, 'w, Q: WorldQuery<'w>> {
+pub struct QueryIter<'a, 'w, Q: WorldQuery> {
     world: &'a World,
     archetype_indices: &'a [usize],
     current_arch_idx: usize,
     current_row: usize,
-    current_fetch: Option<Q::Fetch>,
+    current_fetch: Option<Q::Fetch<'a>>,
     _marker: PhantomData<Q>,
+    _marker_w: PhantomData<&'w ()>,
 }
 
-impl<'a, 'w, Q: WorldQuery<'w>> Iterator for QueryIter<'a, 'w, Q>
+impl<'a, 'w, Q: WorldQuery> Iterator for QueryIter<'a, 'w, Q>
 where
     'w: 'a,
 {
@@ -373,14 +335,14 @@ where
 // QUERY CHUNKS ITERATOR
 // =========================================================================
 
-pub struct QueryChunksIter<'a, 'w, Q: WorldQuery<'w>> {
+pub struct QueryChunksIter<'a, 'w, Q: WorldQuery> {
     world: &'a World,
     archetype_indices: &'a [usize],
     current_arch_idx: usize,
     _marker: PhantomData<&'w Q>,
 }
 
-impl<'a, 'w, Q: WorldQuery<'w>> Iterator for QueryChunksIter<'a, 'w, Q>
+impl<'a, 'w, Q: WorldQuery> Iterator for QueryChunksIter<'a, 'w, Q>
 where
     'w: 'a,
 {
@@ -443,19 +405,13 @@ fn check(tid: TypeId, is_mut: bool, types: &mut Vec<(TypeId, bool)>) {
     types.push((tid, is_mut));
 }
 
-impl<'w, T0: FetchComponent<'w>> WorldQuery<'w> for T0 {
+impl<T0: FetchComponent> WorldQuery for T0 {
     type StaticType = T0::Component;
-    type Fetch = T0::Fetch;
-    type Item<'a>
-        = T0::Item<'a>
-    where
-        'w: 'a;
-    type Slice<'a>
-        = T0::Slice<'a>
-    where
-        'w: 'a;
+    type Fetch<'w> = T0::Fetch<'w>;
+    type Item<'w> = T0::Item<'w>;
+    type Slice<'w> = T0::Slice<'w>;
 
-    unsafe fn fetch_raw(arch: &Archetype, tick: u32) -> Option<Self::Fetch> {
+    unsafe fn fetch_raw<'w>(arch: &Archetype, tick: u32) -> Option<Self::Fetch<'w>> {
         T0::fetch_raw(arch, tick)
     }
     fn check_aliasing(types: &mut Vec<(TypeId, bool)>) {
@@ -465,40 +421,28 @@ impl<'w, T0: FetchComponent<'w>> WorldQuery<'w> for T0 {
         arch.has_component(TypeId::of::<T0::Component>())
     }
 
-    unsafe fn get_item<'a>(fetch: Self::Fetch, row: usize) -> Self::Item<'a>
-    where
-        'w: 'a,
-    {
+    unsafe fn get_item<'w>(fetch: Self::Fetch<'w>, row: usize) -> Self::Item<'w> {
         T0::get_item(fetch, row)
     }
 
-    unsafe fn filter_row(_fetch: Self::Fetch, _row: usize, _tick: u32) -> bool {
+    unsafe fn filter_row<'w>(_fetch: Self::Fetch<'w>, _row: usize, _tick: u32) -> bool {
         true
     }
 
-    unsafe fn get_slice<'a>(fetch: Self::Fetch, len: usize) -> Self::Slice<'a>
-    where
-        'w: 'a,
-    {
+    unsafe fn get_slice<'w>(fetch: Self::Fetch<'w>, len: usize) -> Self::Slice<'w> {
         T0::get_slice(fetch, len)
     }
 }
 
 pub struct Changed<T>(PhantomData<T>);
 
-impl<'w, T: 'static> WorldQuery<'w> for Changed<T> {
+impl<T: 'static> WorldQuery for Changed<T> {
     type StaticType = Changed<T>;
-    type Fetch = *const crate::archetype::ComponentTicks;
-    type Item<'a>
-        = ()
-    where
-        'w: 'a;
-    type Slice<'a>
-        = ()
-    where
-        'w: 'a;
+    type Fetch<'w> = *const crate::archetype::ComponentTicks;
+    type Item<'w> = ();
+    type Slice<'w> = ();
 
-    unsafe fn fetch_raw(arch: &Archetype, _tick: u32) -> Option<Self::Fetch> {
+    unsafe fn fetch_raw<'w>(arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
         let col = arch.get_column(TypeId::of::<T>())?;
         Some(col.ticks_ptr())
     }
@@ -509,22 +453,16 @@ impl<'w, T: 'static> WorldQuery<'w> for Changed<T> {
         arch.has_component(TypeId::of::<T>())
     }
 
-    unsafe fn filter_row(fetch: Self::Fetch, row: usize, tick: u32) -> bool {
+    unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, row: usize, tick: u32) -> bool {
         let ticks = &*fetch.add(row);
         ticks.changed == tick
     }
 
-    unsafe fn get_item<'a>(_fetch: Self::Fetch, _row: usize) -> Self::Item<'a>
-    where
-        'w: 'a,
-    {
+    unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize) -> Self::Item<'w> {
         ()
     }
 
-    unsafe fn get_slice<'a>(_fetch: Self::Fetch, _len: usize) -> Self::Slice<'a>
-    where
-        'w: 'a,
-    {
+    unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {
         ()
     }
 }
@@ -532,13 +470,13 @@ impl<'w, T: 'static> WorldQuery<'w> for Changed<T> {
 macro_rules! impl_query_tuple {
     ($($t:ident),*) => {
         #[allow(non_snake_case)]
-        impl<'w, $($t: WorldQuery<'w>),*> WorldQuery<'w> for ($($t,)*) {
+        impl<$($t: WorldQuery),*> WorldQuery for ($($t,)*) {
             type StaticType = ($($t::StaticType,)*);
-            type Fetch = ($($t::Fetch,)*);
-            type Item<'a> = ($($t::Item<'a>,)*) where 'w: 'a;
-            type Slice<'a> = ($($t::Slice<'a>,)*) where 'w: 'a;
+            type Fetch<'w> = ($($t::Fetch<'w>,)*);
+            type Item<'w> = ($($t::Item<'w>,)*);
+            type Slice<'w> = ($($t::Slice<'w>,)*);
 
-            unsafe fn fetch_raw(arch: &Archetype, tick: u32) -> Option<Self::Fetch> {
+            unsafe fn fetch_raw<'w>(arch: &Archetype, tick: u32) -> Option<Self::Fetch<'w>> {
                 Some(($($t::fetch_raw(arch, tick)?,)*))
             }
             fn check_aliasing(types: &mut Vec<(TypeId, bool)>) {
@@ -547,21 +485,15 @@ macro_rules! impl_query_tuple {
             fn matches_archetype(arch: &Archetype) -> bool {
                 $($t::matches_archetype(arch) &&)* true
             }
-            unsafe fn get_item<'a>(fetch: Self::Fetch, row: usize) -> Self::Item<'a>
-            where
-                'w: 'a
-            {
+            unsafe fn get_item<'w>(fetch: Self::Fetch<'w>, row: usize) -> Self::Item<'w> {
                 let ($($t,)*) = fetch;
                 ($($t::get_item($t, row),)*)
             }
-            unsafe fn filter_row(fetch: Self::Fetch, row: usize, tick: u32) -> bool {
+            unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, row: usize, tick: u32) -> bool {
                 let ($($t,)*) = fetch;
                 $($t::filter_row($t, row, tick) &&)* true
             }
-            unsafe fn get_slice<'a>(fetch: Self::Fetch, len: usize) -> Self::Slice<'a>
-            where
-                'w: 'a
-            {
+            unsafe fn get_slice<'w>(fetch: Self::Fetch<'w>, len: usize) -> Self::Slice<'w> {
                 let ($($t,)*) = fetch;
                 ($($t::get_slice($t, len),)*)
             }
@@ -587,19 +519,13 @@ impl_query_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11);
 
 pub struct With<T>(PhantomData<T>);
 
-impl<'w, T: 'static> WorldQuery<'w> for With<T> {
+impl<T: 'static> WorldQuery for With<T> {
     type StaticType = With<T>;
-    type Fetch = ();
-    type Item<'a>
-        = ()
-    where
-        'w: 'a;
-    type Slice<'a>
-        = ()
-    where
-        'w: 'a;
+    type Fetch<'w> = ();
+    type Item<'w> = ();
+    type Slice<'w> = ();
 
-    unsafe fn fetch_raw(_arch: &Archetype, _tick: u32) -> Option<Self::Fetch> {
+    unsafe fn fetch_raw<'w>(_arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
         Some(())
     }
 
@@ -609,38 +535,26 @@ impl<'w, T: 'static> WorldQuery<'w> for With<T> {
         arch.has_component(TypeId::of::<T>())
     }
 
-    unsafe fn filter_row(_fetch: Self::Fetch, _row: usize, _tick: u32) -> bool {
+    unsafe fn filter_row<'w>(_fetch: Self::Fetch<'w>, _row: usize, _tick: u32) -> bool {
         true
     }
-    unsafe fn get_item<'a>(_fetch: Self::Fetch, _row: usize) -> Self::Item<'a>
-    where
-        'w: 'a,
-    {
+    unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize) -> Self::Item<'w> {
         ()
     }
-    unsafe fn get_slice<'a>(_fetch: Self::Fetch, _len: usize) -> Self::Slice<'a>
-    where
-        'w: 'a,
-    {
+    unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {
         ()
     }
 }
 
 pub struct Without<T>(PhantomData<T>);
 
-impl<'w, T: 'static> WorldQuery<'w> for Without<T> {
+impl<T: 'static> WorldQuery for Without<T> {
     type StaticType = Without<T>;
-    type Fetch = ();
-    type Item<'a>
-        = ()
-    where
-        'w: 'a;
-    type Slice<'a>
-        = ()
-    where
-        'w: 'a;
+    type Fetch<'w> = ();
+    type Item<'w> = ();
+    type Slice<'w> = ();
 
-    unsafe fn fetch_raw(_arch: &Archetype, _tick: u32) -> Option<Self::Fetch> {
+    unsafe fn fetch_raw<'w>(_arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
         Some(())
     }
 
@@ -650,38 +564,26 @@ impl<'w, T: 'static> WorldQuery<'w> for Without<T> {
         !arch.has_component(TypeId::of::<T>())
     }
 
-    unsafe fn filter_row(_fetch: Self::Fetch, _row: usize, _tick: u32) -> bool {
+    unsafe fn filter_row<'w>(_fetch: Self::Fetch<'w>, _row: usize, _tick: u32) -> bool {
         true
     }
-    unsafe fn get_item<'a>(_fetch: Self::Fetch, _row: usize) -> Self::Item<'a>
-    where
-        'w: 'a,
-    {
+    unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize) -> Self::Item<'w> {
         ()
     }
-    unsafe fn get_slice<'a>(_fetch: Self::Fetch, _len: usize) -> Self::Slice<'a>
-    where
-        'w: 'a,
-    {
+    unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {
         ()
     }
 }
 
 pub struct Or<T1, T2>(PhantomData<(T1, T2)>);
 
-impl<'w, T1: WorldQuery<'w>, T2: WorldQuery<'w>> WorldQuery<'w> for Or<T1, T2> {
+impl<T1: WorldQuery, T2: WorldQuery> WorldQuery for Or<T1, T2> {
     type StaticType = Or<T1::StaticType, T2::StaticType>;
-    type Fetch = ();
-    type Item<'a>
-        = ()
-    where
-        'w: 'a;
-    type Slice<'a>
-        = ()
-    where
-        'w: 'a;
+    type Fetch<'w> = ();
+    type Item<'w> = ();
+    type Slice<'w> = ();
 
-    unsafe fn fetch_raw(_arch: &Archetype, _tick: u32) -> Option<Self::Fetch> {
+    unsafe fn fetch_raw<'w>(_arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
         Some(())
     }
 
@@ -691,19 +593,13 @@ impl<'w, T1: WorldQuery<'w>, T2: WorldQuery<'w>> WorldQuery<'w> for Or<T1, T2> {
         T1::matches_archetype(arch) || T2::matches_archetype(arch)
     }
 
-    unsafe fn filter_row(_fetch: Self::Fetch, _row: usize, _tick: u32) -> bool {
+    unsafe fn filter_row<'w>(_fetch: Self::Fetch<'w>, _row: usize, _tick: u32) -> bool {
         true
     }
-    unsafe fn get_item<'a>(_fetch: Self::Fetch, _row: usize) -> Self::Item<'a>
-    where
-        'w: 'a,
-    {
+    unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize) -> Self::Item<'w> {
         ()
     }
-    unsafe fn get_slice<'a>(_fetch: Self::Fetch, _len: usize) -> Self::Slice<'a>
-    where
-        'w: 'a,
-    {
+    unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {
         ()
     }
 }

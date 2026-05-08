@@ -129,7 +129,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 &&
             shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 && light_ndc.z <= 1.0) {
             let slope  = 1.0 - max(dot(N, normalize(-scene.sun_direction.xyz)), 0.0);
-            let bias   = max(0.005 * slope, 0.001);
+            let bias   = max(0.02 * slope, 0.005); // Artırılmış bias (Shadow Acne'yi önlemek için)
             let texel  = scene.cascade_params.y;
             var pcf    = 0.0;
             for (var x = -1; x <= 1; x++) {
