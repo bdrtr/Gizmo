@@ -4,7 +4,7 @@ mod tests {
     use wgpu::util::DeviceExt;
 
     // Helper to setup a headless wgpu device
-    async fn setup_headless_gpu() -> (wgpu::Device, wgpu::Queue) {
+    async fn setup_headless_gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
@@ -14,9 +14,9 @@ mod tests {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
-        }).await.expect("Failed to find wgpu adapter for tests");
+        }).await?;
 
-        adapter.request_device(&wgpu::DeviceDescriptor::default(), None).await.expect("Failed to create wgpu device for tests")
+        adapter.request_device(&wgpu::DeviceDescriptor::default(), None).await.ok()
     }
 
     // Helper to read back a buffer
@@ -59,7 +59,10 @@ mod tests {
     #[test]
     fn test_fem_compute_clear_forces() {
         pollster::block_on(async {
-            let (device, queue) = setup_headless_gpu().await;
+            let Some((device, queue)) = setup_headless_gpu().await else {
+                println!("Skipping GPU test: no wgpu adapter found");
+                return;
+            };
 
             // Create 1 dummy node with 10.0 mass
             let nodes = vec![GpuSoftBodyNode {
@@ -112,7 +115,10 @@ mod tests {
     #[test]
     fn test_fem_compute_integration_and_collision() {
         pollster::block_on(async {
-            let (device, queue) = setup_headless_gpu().await;
+            let Some((device, queue)) = setup_headless_gpu().await else {
+                println!("Skipping GPU test: no wgpu adapter found");
+                return;
+            };
 
             // Düşen bir obje (Y=2.0) ve zemine geçmiş bir obje (Y=-1.0)
             let nodes = vec![
@@ -188,7 +194,10 @@ mod tests {
     #[test]
     fn test_fem_compute_stress() {
         pollster::block_on(async {
-            let (device, queue) = setup_headless_gpu().await;
+            let Some((device, queue)) = setup_headless_gpu().await else {
+                println!("Skipping GPU test: no wgpu adapter found");
+                return;
+            };
 
             // 1 Tetrahedron. Rest pozisyonunda bir küpün köşesi gibi (dik üçgen piramit).
             // P0 = (0,0,0), P1 = (1,0,0), P2 = (0,1,0), P3 = (0,0,1)
