@@ -22,6 +22,9 @@ jobs:
       with:
         components: clippy, rustfmt
         
+    - name: Install Linux Dependencies
+      run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+        
     - name: Cache Cargo Registry & Target
       uses: actions/cache@v4
       with:
