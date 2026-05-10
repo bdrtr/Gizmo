@@ -253,7 +253,7 @@ fn mk_ao_tex(device: &wgpu::Device, w: u32, h: u32) -> (wgpu::Texture, wgpu::Tex
         mip_level_count:     1,
         sample_count:        1,
         dimension:           wgpu::TextureDimension::D2,
-        format:              wgpu::TextureFormat::Rgba8Unorm,
+        format:              wgpu::TextureFormat::Rgba16Float,
         usage:               wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats:        &[],
     });
@@ -457,7 +457,7 @@ fn mk_ssao_pipeline(
             module: &shader, entry_point: "fs_main",
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8Unorm,
+                format: wgpu::TextureFormat::Rgba16Float,
                 blend: None,
                 write_mask: wgpu::ColorWrites::ALL,
             })],
@@ -488,7 +488,7 @@ fn mk_blur_pipeline(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> wgpu:
             module: &shader, entry_point: "fs_main",
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8Unorm,
+                format: wgpu::TextureFormat::Rgba16Float,
                 blend: None,
                 write_mask: wgpu::ColorWrites::ALL,
             })],

@@ -10,7 +10,7 @@ use super::physics::*;
 
 #[derive(Default)]
 pub struct RenderCache {
-    pub batches: std::collections::HashMap<BatchKey, BatchData>,
+    pub(crate) batches: std::collections::HashMap<BatchKey, BatchData>,
     pub instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
     pub draw_items: Vec<DrawItem>,
 }
@@ -41,13 +41,13 @@ pub struct DrawItem {
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
-struct BatchKey {
+pub(crate) struct BatchKey {
     vbuf_id: usize,
     mat_id: usize,
     skeleton_id: Option<usize>,
 }
 
-struct BatchData {
+pub(crate) struct BatchData {
     vbuf: std::sync::Arc<wgpu::Buffer>,
     bind_group: std::sync::Arc<wgpu::BindGroup>,
     vertex_count: u32,

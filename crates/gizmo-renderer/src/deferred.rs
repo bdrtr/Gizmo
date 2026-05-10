@@ -126,7 +126,7 @@ impl DeferredState {
             (t, v)
         };
 
-        let (a, av) = mk("gbuf_albedo_metallic",  wgpu::TextureFormat::Rgba8Unorm);
+        let (a, av) = mk("gbuf_albedo_metallic",  wgpu::TextureFormat::Rgba16Float);
         let (n, nv) = mk("gbuf_normal_roughness", wgpu::TextureFormat::Rgba16Float);
         let (p, pv) = mk("gbuf_world_position",   wgpu::TextureFormat::Rgba32Float);
 
@@ -245,7 +245,7 @@ impl DeferredState {
                 targets: &[
                     // RT0: albedo_metallic  Rgba8Unorm
                     Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        format: wgpu::TextureFormat::Rgba16Float,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     }),

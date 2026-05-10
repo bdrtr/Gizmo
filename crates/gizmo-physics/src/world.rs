@@ -208,7 +208,7 @@ impl PhysicsWorld {
         self.velocities.clear();
         self.colliders.clear();
         self.entity_index_map.clear();
-        self.spatial_hash.clear_mut();
+        self.spatial_hash.clear();
     }
 
     pub fn sync_bodies<'a>(&mut self, incoming_bodies: impl Iterator<Item = &'a (Entity, RigidBody, Transform, Velocity, Collider)>) {

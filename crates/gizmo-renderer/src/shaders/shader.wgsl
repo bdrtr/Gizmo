@@ -50,7 +50,7 @@ var t_diffuse: texture_2d<f32>;
 var s_diffuse: sampler;
 
 struct SkeletonData {
-    joints: array<mat4x4<f32>, 64>, // Maksimum 64 kemik destegi
+    joints: array<mat4x4<f32>, 128>, // Maksimum 128 kemik destegi
 };
 @group(3) @binding(0)
 var<uniform> skeleton: SkeletonData;
@@ -156,55 +156,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     var raw_normal = in.normal;
     if (length(raw_normal) < 0.001) {
-        // Hatalı (sıfır) normalleri olan modeller için NaN hatasını engelle!
         raw_normal = vec3<f32>(0.0, 1.0, 0.0);
     }
     let N = normalize(raw_normal);
     
-    // Temel Yüzey Rengi (Albedo Rengi * Texture Rengi)
     let base_color = in.inst_albedo.rgb * tex_color.rgb;
     let metallic = clamp(in.inst_pbr.y, 0.0, 1.0);
 
-    // Eger bu obje 'unlit' (isik yemeyen gokyuzu vs.) ise isiklari es gec ve duz renk bas!
-    if (in.inst_pbr.z > 1.5) {
-        let view_dir = normalize(in.world_position - scene.camera_pos.xyz);
-        let sky_y = view_dir.y;
-        
-        let sky_color = vec3<f32>(0.08, 0.28, 0.58); // Koyu Mavi
-        let horizon_color = vec3<f32>(0.65, 0.75, 0.85); // Ufuk rengi (Puslu Acik Mavi)
-        let ground_color = vec3<f32>(0.15, 0.15, 0.18); // Kara toprak
-
-        var final_bg: vec3<f32>;
-        if (sky_y > 0.0) {
-            final_bg = mix(horizon_color, sky_color, sky_y);
-        } else {
-            final_bg = mix(horizon_color, ground_color, -sky_y);
-        }
-        return vec4<f32>(final_bg, 1.0);
-    } else if (in.inst_pbr.z > 0.5) {
-        return vec4<f32>(base_color, in.inst_albedo.a * tex_color.a);
-    }
-    
-    let min_roughness = max(in.inst_pbr.x, 0.05);
-    let shininess = 2.0 / (min_roughness * min_roughness) - 2.0;
-    let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
-    let f0 = mix(vec3<f32>(0.04), base_color, metallic);
-    
-    // --- Golden Hour (Gün Batımı) Hemispheric (Yarı-küresel) Ortam Işığı ---
-    let sky_ambient = vec3<f32>(0.8, 0.5, 0.4) * 0.7; // Gün batımı gökyüzünden yansıyan kızıl ışık
-    let ground_ambient = vec3<f32>(0.15, 0.1, 0.15); // Yerden seken morumsu gölge 
-    let hemi_mix = N.y * 0.5 + 0.5;
-    let ambient = base_color * mix(ground_ambient, sky_ambient, hemi_mix);
-    
-    // --- Fake IBL (Image Based Lighting) Yansıması ---
-    let R = reflect(-view_dir, N);
-    let reflect_mix = clamp(R.y * 0.5 + 0.5, 0.0, 1.0);
-    // Yansımaları gökyüzü rengine (gün batımına) uydur
-    let fake_env_color = mix(ground_ambient, vec3<f32>(1.0, 0.6, 0.4), reflect_mix);
-    
-    let fake_ibl_specular = f0 * fake_env_color * ((1.0 - min_roughness) * (1.0 - min_roughness) * 2.0);
-
-    // --- CSM Gölge (PCF, doğrudan güneş açıkken) ---
+    // --- CSM Gölge (PCF) --- 
+    // textureSampleCompare uniform control flow gerektirir, non-uniform branch'tan önce hesapla
     var shadow_visibility = 1.0;
     if (scene.sun_direction.w > 0.5) {
         let view_depth = dot(in.world_position - scene.camera_pos.xyz, scene.camera_forward.xyz);
@@ -236,86 +196,102 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             shadow_visibility = pcf_visibility / 9.0;
         }
     }
+
+    // Eger bu obje 'unlit' ise isiklari es gec
+    if (in.inst_pbr.z > 1.5) {
+        let view_dir = normalize(in.world_position - scene.camera_pos.xyz);
+        let sky_y = view_dir.y;
+        
+        let sky_color = vec3<f32>(0.08, 0.28, 0.58);
+        let horizon_color = vec3<f32>(0.65, 0.75, 0.85);
+        let ground_color = vec3<f32>(0.15, 0.15, 0.18);
+
+        var final_bg: vec3<f32>;
+        if (sky_y > 0.0) {
+            final_bg = mix(horizon_color, sky_color, sky_y);
+        } else {
+            final_bg = mix(horizon_color, ground_color, -sky_y);
+        }
+        return vec4<f32>(final_bg, 1.0);
+    } else if (in.inst_pbr.z > 0.5) {
+        return vec4<f32>(base_color, in.inst_albedo.a * tex_color.a);
+    }
     
+    let min_roughness = max(in.inst_pbr.x, 0.05);
+    let shininess = 2.0 / (min_roughness * min_roughness) - 2.0;
+    let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
+    let f0 = mix(vec3<f32>(0.04), base_color, metallic);
+    
+    let sky_ambient = vec3<f32>(0.8, 0.5, 0.4) * 0.7;
+    let ground_ambient = vec3<f32>(0.15, 0.1, 0.15);
+    let hemi_mix = N.y * 0.5 + 0.5;
+    let ambient = base_color * mix(ground_ambient, sky_ambient, hemi_mix);
+    
+    let R = reflect(-view_dir, N);
+    let reflect_mix = clamp(R.y * 0.5 + 0.5, 0.0, 1.0);
+    let fake_env_color = mix(ground_ambient, vec3<f32>(1.0, 0.6, 0.4), reflect_mix);
+    let fake_ibl_specular = f0 * fake_env_color * ((1.0 - min_roughness) * (1.0 - min_roughness) * 2.0);
+
     var total_diffuse = vec3<f32>(0.0);
     var total_specular = vec3<f32>(0.0);
 
-    // --- 1. Directional Light (Güneş) ---
     if (scene.sun_direction.w > 0.5) { 
         let L = normalize(-scene.sun_direction.xyz);
         let diff = max(dot(N, L), 0.0);
-        
         let reflect_dir = reflect(-L, N);
         let spec = pow(max(dot(view_dir, reflect_dir), 0.0), shininess);
-        
         let intensity = scene.sun_color.w;
         let sun_color = scene.sun_color.rgb;
-
         total_diffuse += base_color * (1.0 - metallic) * diff * sun_color * intensity * shadow_visibility;
         total_specular += f0 * spec * (1.0 - min_roughness) * sun_color * intensity * shadow_visibility;
     }
 
-    // --- 2. Dynamic Lights (Point / Spot / Directional) ---
     for (var i = 0u; i < scene.num_lights; i++) {
         let light = scene.lights[i];
         let light_type = u32(light.params.y);
         let intensity = light.position.w;
-        
         var L: vec3<f32>;
         var attenuation: f32 = 1.0;
-
         if (light_type == 2u) {
-            // --- Directional Light ---
             L = normalize(-light.direction.xyz);
             attenuation = 1.0;
         } else {
-            // --- Point & Spot: distance-based attenuation ---
             let to_light = light.position.xyz - in.world_position;
             let distance = length(to_light);
             let radius = max(light.color.a, 0.001);
             L = normalize(to_light);
-            // Smooth inverse-square falloff with radius cutoff
             let d_over_r = distance / radius;
             attenuation = clamp(1.0 - d_over_r * d_over_r * d_over_r * d_over_r, 0.0, 1.0);
             attenuation = (attenuation * attenuation) / (distance * distance + 1.0);
-
             if (light_type == 1u) {
-                // --- Spot cone attenuation ---
                 let spot_dir = normalize(light.direction.xyz);
                 let cos_angle = dot(-L, spot_dir);
                 let inner_cos = light.direction.w;
                 let outer_cos = light.params.x;
                 let epsilon = max(inner_cos - outer_cos, 0.001);
                 let spot_factor = clamp((cos_angle - outer_cos) / epsilon, 0.0, 1.0);
-                attenuation *= spot_factor * spot_factor; // Smooth edge
+                attenuation *= spot_factor * spot_factor;
             }
         }
-
         let diff = max(dot(N, L), 0.0);
         let reflect_dir = reflect(-L, N);
         let spec = pow(max(dot(view_dir, reflect_dir), 0.0), shininess);
-
         total_diffuse += base_color * (1.0 - metallic) * diff * light.color.rgb * attenuation * intensity;
         total_specular += f0 * spec * (1.0 - min_roughness) * light.color.rgb * attenuation * intensity;
     }
     
-    // Parçaları topla
     var v_color = in.color;
     if (length(v_color) < 0.0001) {
         v_color = vec3<f32>(1.0, 1.0, 1.0);
     }
     var final_color = v_color * (ambient + total_diffuse + total_specular + fake_ibl_specular);
     
-    // --- ACES Tone Mapping (Filmik Renk Düzenlemesi) ---
-    // Patlayan aşırı beyaz/parlak renkleri yumuşatarak sinematik ve gerçekçi bir filtre atar
     let a = 2.51;
     let b = 0.03;
     let c = 2.43;
     let d = 0.59;
     let e = 0.14;
     final_color = clamp((final_color * (a * final_color + b)) / (final_color * (c * final_color + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
-    // Srgb gamma düzeltmesi (WGPU textureView formatı sRGB olduğu için donanım zaten uyguluyor, yoruma alındı)
-    // final_color = pow(final_color, vec3<f32>(1.0 / 2.2));
     
     return vec4<f32>(final_color, in.inst_albedo.a * tex_color.a);
 }

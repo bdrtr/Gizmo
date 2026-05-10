@@ -32,7 +32,7 @@ var s_diffuse: sampler;
 @group(2) @binding(1) var s_shadow: sampler_comparison;
 
 struct SkeletonData {
-    joints: array<mat4x4<f32>, 64>,
+    joints: array<mat4x4<f32>, 128>,
 };
 @group(3) @binding(0)
 var<uniform> skeleton: SkeletonData;

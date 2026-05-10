@@ -16,44 +16,51 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 static WORLD_PTR: AtomicPtr<gizmo_core::world::World> = AtomicPtr::new(std::ptr::null_mut());
 
 pub fn setup_panic_hook() {
-    std::panic::set_hook(Box::new(|panic_info| {
-        let payload = panic_info.payload();
-        let message = if let Some(s) = payload.downcast_ref::<&str>() {
-            *s
-        } else if let Some(s) = payload.downcast_ref::<String>() {
-            s.as_str()
-        } else {
-            "Bilinmeyen hata"
-        };
+    #[cfg(target_arch = "wasm32")]
+    {
+        console_error_panic_hook::set_once();
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::panic::set_hook(Box::new(|panic_info| {
+            let payload = panic_info.payload();
+            let message = if let Some(s) = payload.downcast_ref::<&str>() {
+                *s
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.as_str()
+            } else {
+                "Bilinmeyen hata"
+            };
 
-        let location = if let Some(loc) = panic_info.location() {
-            format!("{}:{}", loc.file(), loc.line())
-        } else {
-            "Bilinmeyen konum".to_string()
-        };
+            let location = if let Some(loc) = panic_info.location() {
+                format!("{}:{}", loc.file(), loc.line())
+            } else {
+                "Bilinmeyen konum".to_string()
+            };
 
-        let error_msg = format!("Gizmo Engine Coktu!\n\nKonum: {}\nHata: {}\n\nOlay Yeri Inceleme Raporu 'gizmo_crash_report.json' olarak kaydedildi.", location, message);
+            let error_msg = format!("Gizmo Engine Coktu!\n\nKonum: {}\nHata: {}\n\nOlay Yeri Inceleme Raporu 'gizmo_crash_report.json' olarak kaydedildi.", location, message);
 
-        println!("{}", error_msg);
-        
-        let backtrace = backtrace::Backtrace::new();
-        println!("--- BACKTRACE ---\n{:?}", backtrace);
+            println!("{}", error_msg);
 
-        unsafe {
-            let ptr = WORLD_PTR.load(Ordering::Acquire);
-            if !ptr.is_null() {
-                let world = &*ptr;
-                let registry = gizmo_scene::registry::SceneRegistry::default();
-                let _ = gizmo_scene::scene::SceneData::save(world, "gizmo_crash_report.json", &registry);
+            let backtrace = backtrace::Backtrace::new();
+            println!("--- BACKTRACE ---\n{:?}", backtrace);
+
+            unsafe {
+                let ptr = WORLD_PTR.load(Ordering::Acquire);
+                if !ptr.is_null() {
+                    let world = &*ptr;
+                    let registry = gizmo_scene::registry::SceneRegistry::default();
+                    let _ = gizmo_scene::scene::SceneData::save(world, "gizmo_crash_report.json", &registry);
+                }
             }
-        }
 
-        rfd::MessageDialog::new()
-            .set_title("Gizmo Engine Fatal Error")
-            .set_description(&error_msg)
-            .set_level(rfd::MessageLevel::Error)
-            .show();
-    }));
+            rfd::MessageDialog::new()
+                .set_title("Gizmo Engine Fatal Error")
+                .set_description(&error_msg)
+                .set_level(rfd::MessageLevel::Error)
+                .show();
+        }));
+    }
 }
 
 pub trait Plugin<State: 'static = ()> {
@@ -111,6 +118,7 @@ pub struct App<State: 'static = ()> {
     playback_data: Option<gizmo_core::input::PlaybackData>,
     playback_frame_index: usize,
     runner: Option<Box<dyn FnOnce(App<State>)>>,
+    embedded_assets: std::collections::HashMap<String, std::borrow::Cow<'static, [u8]>>,
 }
 
 impl<State: 'static> App<State> {
@@ -136,6 +144,7 @@ impl<State: 'static> App<State> {
             playback_data: None,
             playback_frame_index: 0,
             runner: None,
+            embedded_assets: std::collections::HashMap::new(),
         };
         app = app.add_plugin(AssetPlugin);
         app
@@ -187,6 +196,11 @@ impl<State: 'static> App<State> {
 
     pub fn add_plugin<P: Plugin<State>>(mut self, plugin: P) -> Self {
         plugin.build(&mut self);
+        self
+    }
+
+    pub fn add_embedded_asset(mut self, path: &str, data: std::borrow::Cow<'static, [u8]>) -> Self {
+        self.embedded_assets.insert(path.to_string(), data);
         self
     }
 
@@ -288,6 +302,30 @@ impl<State: 'static> App<State> {
                 self.window_size.1,
             ));
 
+        #[cfg(target_arch = "wasm32")]
+        {
+            use wasm_bindgen::JsCast;
+            use winit::platform::web::WindowBuilderExtWebSys;
+            // Canvas'ı body'ye ekle ve boyutu ayarla
+            let canvas = web_sys::window()
+                .and_then(|win| win.document())
+                .and_then(|doc| {
+                    let canvas = doc.create_element("canvas").ok()?;
+                    let canvas: web_sys::HtmlCanvasElement = canvas.dyn_into().ok()?;
+                    canvas.set_width(1280);
+                    canvas.set_height(720);
+                    canvas.style().set_property("width", "100%").ok()?;
+                    canvas.style().set_property("height", "100%").ok()?;
+                    doc.body()?.append_child(&canvas).ok()?;
+                    Some(canvas)
+                });
+            if let Some(canvas) = canvas {
+                builder = builder.with_canvas(Some(canvas));
+            } else {
+                builder = builder.with_append(true);
+            }
+        }
+
         if let Some(icon_bytes) = self.window_icon {
             if let Ok(image) = image::load_from_memory(icon_bytes) {
                 let rgba = image.into_rgba8();
@@ -299,6 +337,18 @@ impl<State: 'static> App<State> {
         }
 
         let window = Arc::new(builder.build(&event_loop).expect("Pencere oluşturulamadı!"));
+        
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            pollster::block_on(self.run_internal(event_loop, window));
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            wasm_bindgen_futures::spawn_local(self.run_internal(event_loop, window));
+        }
+    }
+
+    async fn run_internal(mut self, event_loop: EventLoop<()>, window: Arc<winit::window::Window>) {
         // Initialize Core Dev Console Systems BEFORE setup so setup can register cvars
         self.world.insert_resource(gizmo_core::cvar::CVarRegistry::new());
         // Window Resource oluştur ve World'e ekle
@@ -308,7 +358,8 @@ impl<State: 'static> App<State> {
         });
 
         // Renderer Resource oluştur ve World'e ekle
-        let renderer = pollster::block_on(Renderer::new(window.clone()));
+        let renderer = Renderer::new(window.clone()).await;
+        renderer.asset_manager.write().unwrap().embedded_assets = std::mem::take(&mut self.embedded_assets);
         self.world.insert_resource(renderer);
 
         let mut state = if let Some(setup) = self.setup_fn.take() {
@@ -354,7 +405,10 @@ impl<State: 'static> App<State> {
             EditorContext::new(&r.device, r.config.format, &window, 1)
         };
 
+        #[cfg(not(target_arch = "wasm32"))]
         let mut last_frame_time = std::time::Instant::now();
+        #[cfg(target_arch = "wasm32")]
+        let mut last_frame_time = web_time::Instant::now();
         let mut light_time = 0.0;
 
         event_loop
@@ -393,7 +447,10 @@ impl<State: 'static> App<State> {
                                     println!("Kayit basariyla 'gizmo_record.ron' dosyasina kaydedildi.");
                                 }
                                 // TLS'teki GPU kaynaklarını temizlemekle uğraşmak yerine direkt çık
+                                #[cfg(not(target_arch = "wasm32"))]
                                 std::process::exit(0);
+                                #[cfg(target_arch = "wasm32")]
+                                current_window.exit();
                             }
                             WindowEvent::Resized(physical_size) => {
                                 {
@@ -494,7 +551,10 @@ impl<State: 'static> App<State> {
                             _ => {}
                         }
                         if let WindowEvent::RedrawRequested = event {
+                            #[cfg(not(target_arch = "wasm32"))]
                             let now = std::time::Instant::now();
+                            #[cfg(target_arch = "wasm32")]
+                            let now = web_time::Instant::now();
                             let mut dt = now.duration_since(last_frame_time).as_secs_f32();
                             dt = dt.min(0.05); // Güvenlik çemberi: Frame takılırsa 50ms'den fazla zıplamayacak, yerçekiminden düşme engellenecek.
                             last_frame_time = now;
@@ -583,7 +643,7 @@ impl<State: 'static> App<State> {
                                     if let Some(old_id) = ed_state_ref.scene_texture_id {
                                         editor.renderer.free_texture(&old_id);
                                     }
-                                    let mut tex_id = None;
+                                    let tex_id;
                                     {
                                         let r = self.world.get_resource::<Renderer>().unwrap();
                                         let texture =
@@ -632,7 +692,7 @@ impl<State: 'static> App<State> {
                                     if let Some(old_id) = ed_state_ref.game_texture_id {
                                         editor.renderer.free_texture(&old_id);
                                     }
-                                    let mut tex_id = None;
+                                    let tex_id;
                                     {
                                         let r = self.world.get_resource::<Renderer>().unwrap();
                                         let texture =

@@ -91,7 +91,7 @@ struct LoaderShared {
 /// Thread-safe loader; safe to store as an ECS resource (`Send` + `Sync`).
 pub struct AsyncAssetLoader {
     shared: Arc<Mutex<LoaderShared>>,
-    _worker: thread::JoinHandle<()>,
+    _worker: Option<thread::JoinHandle<()>>,
 }
 
 impl AsyncAssetLoader {
@@ -101,7 +101,8 @@ impl AsyncAssetLoader {
 
         let worker_job_rx = job_rx;
         let worker_result_tx = result_tx.clone();
-        let _worker = thread::Builder::new()
+        #[cfg(not(target_arch = "wasm32"))]
+        let _worker = Some(thread::Builder::new()
             .name("gizmo-async-assets".into())
             .spawn(move || {
                 for job in worker_job_rx {
@@ -129,7 +130,10 @@ impl AsyncAssetLoader {
                     }
                 }
             })
-            .expect("spawn async asset worker");
+            .expect("spawn async asset worker"));
+
+        #[cfg(target_arch = "wasm32")]
+        let _worker = None;
 
         Self {
             shared: Arc::new(Mutex::new(LoaderShared {

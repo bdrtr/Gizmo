@@ -80,6 +80,80 @@ pub fn load_shader(
     })
 }
 
+/// WASM-only: Shader'daki bind group indekslerini yeniden eşle (shadow kaldırılıyor).
+/// Native:  group(0)=global, group(1)=texture, group(2)=shadow, group(3)=skeleton, group(4)=instance
+/// WASM:    group(0)=global, group(1)=texture, group(2)=skeleton, group(3)=instance  (shadow yok)
+#[cfg(target_arch = "wasm32")]
+pub fn load_shader_web(
+    device: &wgpu::Device,
+    fallback_src: &str,
+    label: &str,
+) -> wgpu::ShaderModule {
+    let mut source = fallback_src.to_string();
+
+    // 1) Shadow binding tanımlarını kaldır
+    //    @group(2) @binding(0)\nvar t_shadow: ... ve @group(2) @binding(1)\nvar s_shadow: ...
+    let mut cleaned_lines: Vec<String> = Vec::new();
+    let lines: Vec<&str> = source.lines().collect();
+    let mut skip_next = false;
+    for (i, line) in lines.iter().enumerate() {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        let trimmed = line.trim();
+        // Shadow binding annotation + next line (var t_shadow / var s_shadow)
+        if trimmed.starts_with("@group(2)") && trimmed.contains("@binding") {
+            // Check if next line is shadow-related
+            if i + 1 < lines.len() {
+                let next = lines[i + 1].trim();
+                if next.starts_with("var t_shadow") || next.starts_with("var s_shadow") {
+                    skip_next = true;
+                    continue;
+                }
+            }
+        }
+        cleaned_lines.push(line.to_string());
+    }
+    source = cleaned_lines.join("\n");
+
+    // 2) textureSampleCompare bloğunu shadow_visibility = 1.0 ile değiştir
+    // Shader'daki "var shadow_visibility = 1.0;" sonrası gelen if (scene.sun_direction.w > 0.5) bloğunu kaldıracağız.
+    // Dövüş oyununda gölgeyi komple kapattığımız için bu blok WASM'da tamamen gereksiz yere GPU'yu yoruyor.
+    if source.contains("textureSampleCompare") {
+        let shadow_block_start = "    if (scene.sun_direction.w > 0.5) {";
+        if let Some(start_pos) = source.find(shadow_block_start) {
+            let after_start = &source[start_pos..];
+            let mut depth = 0i32;
+            let mut end_offset = 0;
+            for (j, ch) in after_start.char_indices() {
+                if ch == '{' { depth += 1; }
+                if ch == '}' {
+                    depth -= 1;
+                    if depth == 0 {
+                        end_offset = j + 1;
+                        break;
+                    }
+                }
+            }
+            if end_offset > 0 {
+                // Bloğu tamamen sil (zaten yukarıda var shadow_visibility = 1.0 tanımlı)
+                source.replace_range(start_pos..(start_pos + end_offset), "");
+            }
+        }
+    }
+
+    // 3) Bind group indekslerini yeniden eşle: 3→2, 4→3 (shadow kaldırıldı)
+    source = source.replace("@group(4)", "@group(##INST##)");
+    source = source.replace("@group(3)", "@group(2)");
+    source = source.replace("@group(##INST##)", "@group(3)");
+
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(label),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    })
+}
+
 // ------------------------------------------------------------------
 // BİLDİRİM / OLUŞTURUCU METOTLAR (BUILDERS)
 // ------------------------------------------------------------------
@@ -329,48 +403,56 @@ struct LayoutRefs<'a> {
 }
 
 fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipelines {
+    // WASM: max 4 bind groups (Chrome WebGPU), shadow kaldırıldı
+    // Native: 5 bind groups (shadow dahil)
+    #[cfg(not(target_arch = "wasm32"))]
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Render Pipeline Layout"),
         bind_group_layouts: &[
-            layouts.global,
-            layouts.texture,
-            layouts.shadow,
-            layouts.skeleton,
-            layouts.instance,
+            layouts.global,   // 0
+            layouts.texture,  // 1
+            layouts.shadow,   // 2
+            layouts.skeleton, // 3
+            layouts.instance, // 4
+        ],
+        push_constant_ranges: &[],
+    });
+    #[cfg(target_arch = "wasm32")]
+    let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Render Pipeline Layout"),
+        bind_group_layouts: &[
+            layouts.global,   // 0
+            layouts.texture,  // 1
+            layouts.skeleton, // 2
+            layouts.instance, // 3
         ],
         push_constant_ranges: &[],
     });
 
-    let shader = load_shader(
-        device,
-        "demo/assets/shaders/shader.wgsl",
-        include_str!("shaders/shader.wgsl"),
-        "Shader",
-    );
-    let unlit_shader = load_shader(
-        device,
-        "demo/assets/shaders/unlit.wgsl",
-        include_str!("shaders/unlit.wgsl"),
-        "Unlit Shader",
-    );
-    let water_shader = load_shader(
-        device,
-        "demo/assets/shaders/water.wgsl",
-        include_str!("shaders/water.wgsl"),
-        "Water Shader",
-    );
-    let sky_shader = load_shader(
-        device,
-        "demo/assets/shaders/sky.wgsl",
-        include_str!("shaders/sky.wgsl"),
-        "Sky Shader",
-    );
-    let grid_shader = load_shader(
-        device,
-        "demo/assets/shaders/grid.wgsl",
-        include_str!("shaders/grid.wgsl"),
-        "Grid Shader",
-    );
+    #[cfg(not(target_arch = "wasm32"))]
+    let shader = load_shader(device, "demo/assets/shaders/shader.wgsl", include_str!("shaders/shader.wgsl"), "Shader");
+    #[cfg(target_arch = "wasm32")]
+    let shader = load_shader_web(device, include_str!("shaders/shader.wgsl"), "Shader");
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let unlit_shader = load_shader(device, "demo/assets/shaders/unlit.wgsl", include_str!("shaders/unlit.wgsl"), "Unlit Shader");
+    #[cfg(target_arch = "wasm32")]
+    let unlit_shader = load_shader_web(device, include_str!("shaders/unlit.wgsl"), "Unlit Shader");
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let water_shader = load_shader(device, "demo/assets/shaders/water.wgsl", include_str!("shaders/water.wgsl"), "Water Shader");
+    #[cfg(target_arch = "wasm32")]
+    let water_shader = load_shader_web(device, include_str!("shaders/water.wgsl"), "Water Shader");
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let sky_shader = load_shader(device, "demo/assets/shaders/sky.wgsl", include_str!("shaders/sky.wgsl"), "Sky Shader");
+    #[cfg(target_arch = "wasm32")]
+    let sky_shader = load_shader_web(device, include_str!("shaders/sky.wgsl"), "Sky Shader");
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let grid_shader = load_shader(device, "demo/assets/shaders/grid.wgsl", include_str!("shaders/grid.wgsl"), "Grid Shader");
+    #[cfg(target_arch = "wasm32")]
+    let grid_shader = load_shader_web(device, include_str!("shaders/grid.wgsl"), "Grid Shader");
 
     let create_main = |sm: &wgpu::ShaderModule,
                        label: &str,
@@ -445,7 +527,8 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
             true,
             None,
             Some(wgpu::BlendState::ALPHA_BLENDING),
-            wgpu::PolygonMode::Line,
+            // WebGPU/WebGL2 PolygonMode::Line desteklemiyor
+            if cfg!(target_arch = "wasm32") { wgpu::PolygonMode::Fill } else { wgpu::PolygonMode::Line },
         ),
         transparent: create_main(
             &shader,
@@ -516,7 +599,7 @@ fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs) -> wgpu::R
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
             front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Front),
+            cull_mode: Some(wgpu::Face::Back),
             polygon_mode: wgpu::PolygonMode::Fill,
             ..Default::default()
         },
@@ -605,7 +688,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     ];
     let dummy_skeleton_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Dummy Skeleton Buffer"),
-        contents: bytemuck::cast_slice(&[dummy_identity; 64]),
+        contents: bytemuck::cast_slice(&[dummy_identity; 128]),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
     let dummy_skeleton_bind_group =

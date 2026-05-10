@@ -4,24 +4,32 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-wgpu = "0.20"
+wgpu = { version = "0.20", features = ["fragile-send-sync-non-atomic-wasm", "webgl"] }
+log = "0.4"
 pollster = "0.3"
 winit = { workspace = true }
 bytemuck = { version = "1.14", features = ["derive"] }
 gizmo-math = { path = "../gizmo-math" }
 gizmo-core = { path = "../gizmo-core" }
 tobj = "4.0.3"
-image = "0.25"
+image = { version = "0.25", features = ["webp"] }
 serde = { version = "1.0.228", features = ["derive"] }
-gltf = "1.4.1"
+gltf = { version = "1.4.1", features = ["import", "extensions"] }
 notify = "6"
 rand = "0.9.0"
 uuid = { version = "1.23.0", features = ["v4", "serde"] }
 ron = "0.12.1"
 tracing = "0.1.44"
-image_dds = "0.7.2"
-ddsfile = "0.6.0"
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 meshopt = "0.6.2"
+
 
 [dev-dependencies]
 pollster = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+reqwest = "0.11"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+getrandom = { version = "0.3", features = ["wasm_js"] }
+uuid = { version = "1.23.0", features = ["v4", "serde", "js"] }

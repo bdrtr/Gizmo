@@ -32,6 +32,8 @@ pub struct RigidBody {
     pub sleep_counter: u32, // Frames below sleep threshold
     pub center_of_mass: Vec3,
     pub fracture_threshold: Option<f32>, // Impulse threshold for fracturing
+    pub force_accumulator: Vec3,
+    pub torque_accumulator: Vec3,
 }
 
 impl Default for RigidBody {
@@ -56,6 +58,8 @@ impl Default for RigidBody {
             sleep_counter: 0,
             center_of_mass: Vec3::ZERO,
             fracture_threshold: None,
+            force_accumulator: Vec3::ZERO,
+            torque_accumulator: Vec3::ZERO,
         }
     }
 }
@@ -193,6 +197,11 @@ impl RigidBody {
         }
     }
 
+    /// Get inverse world-space inertia tensor
+    pub fn inv_world_inertia_tensor_identity(&self) -> Mat3 {
+        Mat3::from_diagonal(self.inv_local_inertia())
+    }
+
     /// Get world-space inertia tensor from local inertia and rotation
     pub fn world_inertia_tensor(&self, rotation: Quat) -> Mat3 {
         let rot_mat = Mat3::from_quat(rotation);
@@ -227,6 +236,11 @@ impl RigidBody {
         }
         
         inv_world
+    }
+
+    pub fn clear_forces(&mut self) {
+        self.force_accumulator = Vec3::ZERO;
+        self.torque_accumulator = Vec3::ZERO;
     }
 
     pub fn calculate_box_inertia(&mut self, w: f32, h: f32, d: f32) {

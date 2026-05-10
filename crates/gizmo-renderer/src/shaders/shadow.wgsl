@@ -7,7 +7,7 @@ struct ShadowVsUniform {
 var<uniform> shadow_vs: ShadowVsUniform;
 
 struct SkeletonData {
-    joints: array<mat4x4<f32>, 64>,
+    joints: array<mat4x4<f32>, 128>,
 };
 @group(1) @binding(0)
 var<uniform> skeleton: SkeletonData;

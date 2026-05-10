@@ -25,7 +25,7 @@ struct SceneUniforms {
 };
 
 struct SkeletonData {
-    joints: array<mat4x4<f32>, 64>,
+    joints: array<mat4x4<f32>, 128>,
 };
 
 struct InstanceData {
@@ -117,7 +117,7 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
 
     let tex_color   = textureSample(t_diffuse, s_diffuse, in.tex_coords);
     let final_alpha = in.inst_albedo.a * tex_color.a;
-    if (final_alpha < 0.5) { discard; }
+    // if (final_alpha < 0.5) { discard; }
 
     var raw_normal = in.normal;
     if (length(raw_normal) < 0.001) { raw_normal = vec3<f32>(0.0, 1.0, 0.0); }

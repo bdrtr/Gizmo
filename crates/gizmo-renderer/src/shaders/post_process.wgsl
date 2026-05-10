@@ -116,7 +116,9 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let hdr_color = vec3<f32>(r, g, b);
 
     // 2. Depth of Field (DoF)
-    let depth_val = textureSampleLevel(t_depth, s_bloom, in.uv, 0.0);
+    let depth_dims = textureDimensions(t_depth, 0);
+    let depth_uv = vec2<i32>(i32(in.uv.x * f32(depth_dims.x)), i32(in.uv.y * f32(depth_dims.y)));
+    let depth_val = textureLoad(t_depth, depth_uv, 0);
     // Linearize depth (assuming perspective projection, near=0.1, far=1000.0)
     let n = 0.1;
     let f = 1000.0;

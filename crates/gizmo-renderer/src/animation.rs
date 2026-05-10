@@ -76,6 +76,9 @@ pub struct SkeletonJoint {
     pub inverse_bind_matrix: Mat4,
     pub parent_index: Option<usize>,
     pub local_bind_transform: Mat4,
+    pub bind_translation: Vec3,
+    pub bind_rotation: Quat,
+    pub bind_scale: Vec3,
 }
 
 #[derive(Clone, Debug)]
