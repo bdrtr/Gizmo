@@ -3,6 +3,11 @@ name = "gizmo-renderer"
 version.workspace = true
 edition.workspace = true
 
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
 [dependencies]
 wgpu = { version = "0.20", features = ["fragile-send-sync-non-atomic-wasm", "webgl"] }
 log = "0.4"

@@ -3,6 +3,11 @@ name = "gizmo-physics"
 version.workspace = true
 edition.workspace = true
 
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
 [features]
 default = []
 gpu_physics = ["wgpu", "bytemuck", "pollster"]
