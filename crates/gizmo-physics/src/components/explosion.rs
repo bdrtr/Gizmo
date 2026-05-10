@@ -1,17 +1,12 @@
-use serde::{Deserialize, Serialize};
 use gizmo_math::Vec3;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub enum ExplosionFalloff {
-    None,       // Sabit kuvvet
-    Linear,     // 1 - (dist / radius)
-    Quadratic,  // (1 - dist/radius)^2
-}
-
-impl Default for ExplosionFalloff {
-    fn default() -> Self {
-        Self::Linear
-    }
+    None, // Sabit kuvvet
+    #[default]
+    Linear, // 1 - (dist / radius)
+    Quadratic, // (1 - dist/radius)^2
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

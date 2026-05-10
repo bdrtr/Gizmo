@@ -1,8 +1,8 @@
 use gizmo_math::{Mat3, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
-use super::{Collider, ColliderShape};
 use super::Velocity;
+use super::{Collider, ColliderShape};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum BodyType {
@@ -120,7 +120,7 @@ impl RigidBody {
         self.is_sleeping = false;
         self.sleep_counter = 0;
     }
-    
+
     pub fn can_sleep(&self, velocity: &Velocity) -> bool {
         if self.is_kinematic() {
             return false; // Kinematic bodies never sleep — user controls their motion
@@ -128,17 +128,17 @@ impl RigidBody {
         if !self.is_dynamic() {
             return true; // Static bodies are always "asleep"
         }
-        
+
         const SLEEP_LINEAR_THRESHOLD: f32 = 0.05;
         const SLEEP_ANGULAR_THRESHOLD: f32 = 0.05;
-        
+
         velocity.linear.length_squared() < SLEEP_LINEAR_THRESHOLD * SLEEP_LINEAR_THRESHOLD
             && velocity.angular.length_squared() < SLEEP_ANGULAR_THRESHOLD * SLEEP_ANGULAR_THRESHOLD
     }
-    
+
     pub fn update_sleep_state(&mut self, velocity: &Velocity) {
         const SLEEP_FRAMES_REQUIRED: u32 = 60; // ~1 second at 60fps
-        
+
         if self.can_sleep(velocity) {
             self.sleep_counter += 1;
             if self.sleep_counter >= SLEEP_FRAMES_REQUIRED {
@@ -167,12 +167,24 @@ impl RigidBody {
 
     #[inline]
     pub fn enforce_locks(&self, vel: &mut Velocity) {
-        if self.lock_translation_x { vel.linear.x = 0.0; }
-        if self.lock_translation_y { vel.linear.y = 0.0; }
-        if self.lock_translation_z { vel.linear.z = 0.0; }
-        if self.lock_rotation_x { vel.angular.x = 0.0; }
-        if self.lock_rotation_y { vel.angular.y = 0.0; }
-        if self.lock_rotation_z { vel.angular.z = 0.0; }
+        if self.lock_translation_x {
+            vel.linear.x = 0.0;
+        }
+        if self.lock_translation_y {
+            vel.linear.y = 0.0;
+        }
+        if self.lock_translation_z {
+            vel.linear.z = 0.0;
+        }
+        if self.lock_rotation_x {
+            vel.angular.x = 0.0;
+        }
+        if self.lock_rotation_y {
+            vel.angular.y = 0.0;
+        }
+        if self.lock_rotation_z {
+            vel.angular.z = 0.0;
+        }
     }
 
     #[inline]
@@ -190,9 +202,21 @@ impl RigidBody {
             Vec3::ZERO
         } else {
             Vec3::new(
-                if self.local_inertia.x == 0.0 { 0.0 } else { 1.0 / self.local_inertia.x },
-                if self.local_inertia.y == 0.0 { 0.0 } else { 1.0 / self.local_inertia.y },
-                if self.local_inertia.z == 0.0 { 0.0 } else { 1.0 / self.local_inertia.z },
+                if self.local_inertia.x == 0.0 {
+                    0.0
+                } else {
+                    1.0 / self.local_inertia.x
+                },
+                if self.local_inertia.y == 0.0 {
+                    0.0
+                } else {
+                    1.0 / self.local_inertia.y
+                },
+                if self.local_inertia.z == 0.0 {
+                    0.0
+                } else {
+                    1.0 / self.local_inertia.z
+                },
             )
         }
     }
@@ -217,7 +241,7 @@ impl RigidBody {
         let rot_mat = Mat3::from_quat(rotation);
         let inv_local = Mat3::from_diagonal(self.inv_local_inertia());
         let mut inv_world = rot_mat * inv_local * rot_mat.transpose();
-        
+
         // Zero out locked world axes
         if self.lock_rotation_x {
             inv_world.x_axis = Vec3::ZERO;
@@ -234,7 +258,7 @@ impl RigidBody {
             inv_world.x_axis.z = 0.0;
             inv_world.y_axis.z = 0.0;
         }
-        
+
         inv_world
     }
 
@@ -263,15 +287,24 @@ impl RigidBody {
         let vol_cyl = std::f32::consts::PI * r * r * h;
         let vol_sph = 4.0 / 3.0 * std::f32::consts::PI * r * r * r;
         let total_vol = vol_cyl + vol_sph;
-        
-        let m_cyl = if total_vol > 0.0 { m * vol_cyl / total_vol } else { 0.0 };
-        let m_sph = if total_vol > 0.0 { m * vol_sph / total_vol } else { 0.0 };
-        
+
+        let m_cyl = if total_vol > 0.0 {
+            m * vol_cyl / total_vol
+        } else {
+            0.0
+        };
+        let m_sph = if total_vol > 0.0 {
+            m * vol_sph / total_vol
+        } else {
+            0.0
+        };
+
         let i_y = m_cyl * (r * r) / 2.0 + m_sph * 2.0 * (r * r) / 5.0;
         let i_cyl_xz = m_cyl * (3.0 * r * r + h * h) / 12.0;
-        let i_sph_xz = m_sph * (0.4 * r * r + half_h * half_h + 0.75 * r * half_h + 0.140625 * r * r);
+        let i_sph_xz =
+            m_sph * (0.4 * r * r + half_h * half_h + 0.75 * r * half_h + 0.140625 * r * r);
         let i_xz = i_cyl_xz + i_sph_xz;
-        
+
         self.local_inertia = Vec3::new(i_xz, i_y, i_xz);
     }
 
@@ -299,12 +332,15 @@ impl RigidBody {
                 let mut total_vol = 0.0;
                 let mut vols = Vec::with_capacity(shapes.len());
                 for (_, sub_shape) in shapes {
-                    let temp_col = Collider { shape: (**sub_shape).clone(), ..Default::default() };
+                    let temp_col = Collider {
+                        shape: (**sub_shape).clone(),
+                        ..Default::default()
+                    };
                     let v = temp_col.volume();
                     vols.push(v);
                     total_vol += v;
                 }
-                
+
                 if total_vol > 0.0 {
                     let mut com = Vec3::ZERO;
                     for (i, (local_t, _)) in shapes.iter().enumerate() {
@@ -318,14 +354,20 @@ impl RigidBody {
                     let mut inertia = Vec3::ZERO;
                     for (i, (local_t, sub_shape)) in shapes.iter().enumerate() {
                         let mass_i = (vols[i] / total_vol) * self.mass;
-                        
-                        let mut temp_rb = RigidBody { mass: mass_i, ..Default::default() };
-                        let temp_col = Collider { shape: (**sub_shape).clone(), ..Default::default() };
+
+                        let mut temp_rb = RigidBody {
+                            mass: mass_i,
+                            ..Default::default()
+                        };
+                        let temp_col = Collider {
+                            shape: (**sub_shape).clone(),
+                            ..Default::default()
+                        };
                         temp_rb.update_inertia_from_collider(&temp_col);
-                        
+
                         let d = local_t.position - self.center_of_mass;
                         let d_sq = d.length_squared();
-                        
+
                         inertia.x += temp_rb.local_inertia.x + mass_i * (d_sq - d.x * d.x);
                         inertia.y += temp_rb.local_inertia.y + mass_i * (d_sq - d.y * d.y);
                         inertia.z += temp_rb.local_inertia.z + mass_i * (d_sq - d.z * d.z);
@@ -338,6 +380,5 @@ impl RigidBody {
         }
     }
 }
-
 
 gizmo_core::impl_component!(RigidBody);

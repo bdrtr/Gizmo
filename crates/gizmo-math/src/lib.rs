@@ -12,19 +12,19 @@
 //! hesaplamaları için boyut optimize edilmiş `Aabb`, `Frustum`, `Ray` yapıları barındırır.
 
 pub mod aabb;
+pub mod fixed;
 pub mod frustum;
 pub mod ray;
 pub mod spatial;
-pub mod fixed;
 
 // Geriye dönük uyumluluk veya ekstra yardımcı metodlar için pub modüller kalsın
 // ama custom tipleri glam ile değiştiriyoruz.
 pub use glam::{EulerRot, Mat3, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 
 pub use aabb::Aabb;
+pub use fixed::{Fp32, FpVec3};
 pub use frustum::{Frustum, Intersection, Plane};
 pub use ray::Ray;
-pub use fixed::{Fp32, FpVec3};
 
 #[cfg(test)]
 mod tests {

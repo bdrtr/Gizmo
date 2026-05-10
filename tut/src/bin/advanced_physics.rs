@@ -1,9 +1,9 @@
-use gizmo::prelude::*;
-use gizmo::physics::components::{Collider, RigidBody, Transform, Velocity, Breakable, Explosion};
-use gizmo::physics::world::PhysicsWorld;
-use gizmo::physics::ragdoll::RagdollBuilder;
+use gizmo::physics::components::{Breakable, Collider, Explosion, RigidBody, Transform, Velocity};
 use gizmo::physics::joints::Joint;
+use gizmo::physics::ragdoll::RagdollBuilder;
 use gizmo::physics::rope::Rope;
+use gizmo::physics::world::PhysicsWorld;
+use gizmo::prelude::*;
 use gizmo::renderer::asset::AssetManager;
 use gizmo::renderer::components::{Camera, Material, MeshRenderer, PointLight};
 
@@ -85,7 +85,10 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     // Light
     let light = world.spawn();
     world.add_component(light, Transform::new(Vec3::new(0.0, 20.0, 0.0)));
-    world.add_component(light, PointLight::new(Vec3::new(1.0, 1.0, 1.0), 500.0, 50.0));
+    world.add_component(
+        light,
+        PointLight::new(Vec3::new(1.0, 1.0, 1.0), 500.0, 50.0),
+    );
 
     // Ground
     let ground = world.spawn();
@@ -109,20 +112,36 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
             let brick = world.spawn();
             // Ground top is at y=0.1. Brick half-height is 0.5. So start at y=0.6. Add a tiny gap (1.02) to prevent micro-collisions.
             let pos = Vec3::new(-5.0 + (x as f32) * 1.02, 0.6 + (y as f32) * 1.02, -5.0);
-            world.add_component(brick, Transform::new(pos).with_scale(Vec3::new(0.5, 0.5, 0.5)));
+            world.add_component(
+                brick,
+                Transform::new(pos).with_scale(Vec3::new(0.5, 0.5, 0.5)),
+            );
             world.add_component(brick, cube_mesh.clone());
-            world.add_component(brick, Material::new(box_tex.clone()).with_pbr(Vec4::new(0.3, 0.6, 1.0, 0.5), 0.2, 0.0));
+            world.add_component(
+                brick,
+                Material::new(box_tex.clone()).with_pbr(Vec4::new(0.3, 0.6, 1.0, 0.5), 0.2, 0.0),
+            );
             world.add_component(brick, MeshRenderer::new());
             world.add_component(brick, Collider::box_collider(Vec3::new(0.5, 0.5, 0.5)));
             world.add_component(brick, RigidBody::new(10.0, 0.1, 0.5, true));
             world.add_component(brick, Velocity::default());
             // Add GhostTrail for debugging
-            world.add_component(brick, GhostTrail {
-                history: std::collections::VecDeque::new(),
-                max_frames: 10,
-            });
+            world.add_component(
+                brick,
+                GhostTrail {
+                    history: std::collections::VecDeque::new(),
+                    max_frames: 10,
+                },
+            );
             // Make it breakable with high threshold to survive stacking
-            world.add_component(brick, Breakable { threshold: 400.0, max_pieces: 4, ..Default::default() });
+            world.add_component(
+                brick,
+                Breakable {
+                    threshold: 400.0,
+                    max_pieces: 4,
+                    ..Default::default()
+                },
+            );
         }
     }
 
@@ -130,20 +149,34 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     let ragdoll_root = Vec3::new(5.0, 8.0, -5.0);
     let mut builder = RagdollBuilder::new(ragdoll_root);
     builder.create_humanoid();
-    
+
     // Normally you'd spawn entities dynamically using the builder, but since the builder just creates defs,
     // we'll manually create some connected limbs for demo
-    
+
     let mut prev_ent = None;
     for i in 0..4 {
         let limb = world.spawn();
         let pos = Vec3::new(5.0, 8.0 - (i as f32) * 1.2, 0.0);
-        world.add_component(limb, Transform::new(pos).with_scale(Vec3::new(0.2, 0.5, 0.2)));
+        world.add_component(
+            limb,
+            Transform::new(pos).with_scale(Vec3::new(0.2, 0.5, 0.2)),
+        );
         world.add_component(limb, cube_mesh.clone());
-        world.add_component(limb, Material::new(box_tex.clone()).with_pbr(Vec4::new(0.8, 0.2, 0.2, 1.0), 0.5, 0.5));
+        world.add_component(
+            limb,
+            Material::new(box_tex.clone()).with_pbr(Vec4::new(0.8, 0.2, 0.2, 1.0), 0.5, 0.5),
+        );
         world.add_component(limb, MeshRenderer::new());
         // Put limbs on layer 1 and ignore layer 1 collisions to prevent self-collision explosion
-        world.add_component(limb, Collider::box_collider(Vec3::new(0.2, 0.5, 0.2)).with_layer(gizmo::physics::components::CollisionLayer { layer: 1, mask: !(1 << 1) }));
+        world.add_component(
+            limb,
+            Collider::box_collider(Vec3::new(0.2, 0.5, 0.2)).with_layer(
+                gizmo::physics::components::CollisionLayer {
+                    layer: 1,
+                    mask: !(1 << 1),
+                },
+            ),
+        );
         // Lower restitution to prevent chaotic bouncing and joint solver explosions
         world.add_component(limb, RigidBody::new(5.0, 0.5, 0.1, true));
         world.add_component(limb, Velocity::default());
@@ -153,13 +186,13 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
                 parent,
                 limb,
                 Vec3::new(0.0, -0.6, 0.0),
-                Vec3::new(0.0, 0.6, 0.0)
-            ).with_break_force(f32::MAX, f32::MAX);
+                Vec3::new(0.0, 0.6, 0.0),
+            )
+            .with_break_force(f32::MAX, f32::MAX);
             phys_world.joints.push(fixed);
         }
         prev_ent = Some(limb);
     }
-
 
     // --- 3. ROPE DEMO ---
     let rope = Rope::new(
@@ -169,15 +202,21 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         0.5,
         1.0,
         true,
-        false
+        false,
     );
 
     // Create visual spheres for rope nodes
     for _ in 0..rope.nodes.len() {
         let node_ent = world.spawn();
-        world.add_component(node_ent, Transform::new(Vec3::ZERO).with_scale(Vec3::splat(0.2)));
+        world.add_component(
+            node_ent,
+            Transform::new(Vec3::ZERO).with_scale(Vec3::splat(0.2)),
+        );
         world.add_component(node_ent, sphere_mesh.clone());
-        world.add_component(node_ent, Material::new(box_tex.clone()).with_pbr(Vec4::new(1.0, 0.8, 0.1, 1.0), 0.5, 0.5));
+        world.add_component(
+            node_ent,
+            Material::new(box_tex.clone()).with_pbr(Vec4::new(1.0, 0.8, 0.1, 1.0), 0.5, 0.5),
+        );
         world.add_component(node_ent, MeshRenderer::new());
         world.add_component(node_ent, gizmo::core::EntityName("RopeNode".into()));
     }
@@ -192,7 +231,11 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         camera_pos: Vec3::new(0.0, 5.0, 15.0),
         rope: Some(rope),
         sphere_mesh: sphere_mesh.clone(),
-        chunk_material: Material::new(box_tex.clone()).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.5, 0.5),
+        chunk_material: Material::new(box_tex.clone()).with_pbr(
+            Vec4::new(0.5, 0.5, 0.5, 1.0),
+            0.5,
+            0.5,
+        ),
     }
 }
 
@@ -200,11 +243,14 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
     let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
     let mut cam_pos = Vec3::ZERO;
 
-    if let Some(mut q) = world.query::<(gizmo::core::query::Mut<Transform>, gizmo::core::query::Mut<Camera>)>() {
+    if let Some(mut q) = world.query::<(
+        gizmo::core::query::Mut<Transform>,
+        gizmo::core::query::Mut<Camera>,
+    )>() {
         for (_, (mut transform, mut camera)) in q.iter_mut() {
             let sensitivity = 0.002;
             let (dx, dy) = input.mouse_delta();
-            
+
             if input.is_mouse_button_pressed(gizmo::core::input::mouse::RIGHT) {
                 state.camera_yaw -= dx * sensitivity;
                 state.camera_pitch -= dy * sensitivity;
@@ -222,20 +268,36 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
             let pitch_rot = Quat::from_rotation_x(state.camera_pitch);
             transform.rotation = yaw_rot * pitch_rot;
 
-            let speed = state.camera_speed * dt * if input.is_key_pressed(KeyCode::ShiftLeft as u32) { 3.0 } else { 1.0 };
+            let speed = state.camera_speed
+                * dt
+                * if input.is_key_pressed(KeyCode::ShiftLeft as u32) {
+                    3.0
+                } else {
+                    1.0
+                };
 
-            if input.is_key_pressed(KeyCode::KeyW as u32) { state.camera_pos += forward * speed; }
-            if input.is_key_pressed(KeyCode::KeyS as u32) { state.camera_pos -= forward * speed; }
-            if input.is_key_pressed(KeyCode::KeyA as u32) { state.camera_pos -= right * speed; }
-            if input.is_key_pressed(KeyCode::KeyD as u32) { state.camera_pos += right * speed; }
-            if input.is_key_pressed(KeyCode::Space as u32) { state.camera_pos += up * speed; }
+            if input.is_key_pressed(KeyCode::KeyW as u32) {
+                state.camera_pos += forward * speed;
+            }
+            if input.is_key_pressed(KeyCode::KeyS as u32) {
+                state.camera_pos -= forward * speed;
+            }
+            if input.is_key_pressed(KeyCode::KeyA as u32) {
+                state.camera_pos -= right * speed;
+            }
+            if input.is_key_pressed(KeyCode::KeyD as u32) {
+                state.camera_pos += right * speed;
+            }
+            if input.is_key_pressed(KeyCode::Space as u32) {
+                state.camera_pos += up * speed;
+            }
 
             transform.position = state.camera_pos;
             transform.update_local_matrix();
-            
+
             camera.yaw = state.camera_yaw;
             camera.pitch = state.camera_pitch;
-            
+
             cam_forward = forward;
             cam_pos = transform.position;
         }
@@ -250,16 +312,19 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
                 hit_pos = Some(hit.point);
             }
         }
-        
+
         if let Some(pos) = hit_pos {
             let exp_ent = world.spawn();
             world.add_component(exp_ent, Transform::new(pos));
-            world.add_component(exp_ent, Explosion {
-                force_radius: 5.0,
-                force: 5000.0,
-                is_active: true,
-                ..Default::default()
-            });
+            world.add_component(
+                exp_ent,
+                Explosion {
+                    force_radius: 5.0,
+                    force: 5000.0,
+                    is_active: true,
+                    ..Default::default()
+                },
+            );
         }
     }
     // Break joints on X key
@@ -273,47 +338,74 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
 
     // 1. Compute and update vectors (v, a, f) and draw them
     if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
-        if let Some(mut q) = world.query::<(gizmo::core::query::Mut<Velocity>, &Transform, &RigidBody)>() {
+        if let Some(mut q) =
+            world.query::<(gizmo::core::query::Mut<Velocity>, &Transform, &RigidBody)>()
+        {
             for (_, (vel, trans, _rb)) in q.iter_mut() {
                 // Draw Velocity (Green)
-                gizmos.draw_line(trans.position, trans.position + vel.linear * 0.1, [0.0, 1.0, 0.0, 1.0]);
+                gizmos.draw_line(
+                    trans.position,
+                    trans.position + vel.linear * 0.1,
+                    [0.0, 1.0, 0.0, 1.0],
+                );
             }
         }
-        
+
         // 2. Draw Ghosting (İz Bırakma)
-        if let Some(mut q) = world.query::<(gizmo::core::query::Mut<GhostTrail>, &Transform, &Collider)>() {
+        if let Some(mut q) =
+            world.query::<(gizmo::core::query::Mut<GhostTrail>, &Transform, &Collider)>()
+        {
             for (_, (mut ghost, trans, col)) in q.iter_mut() {
                 // Store current frame
                 ghost.history.push_front(*trans);
                 if ghost.history.len() > ghost.max_frames {
                     ghost.history.pop_back();
                 }
-                
+
                 // Draw ghosts
                 for (i, g_trans) in ghost.history.iter().enumerate() {
                     let alpha = 1.0 - (i as f32 / ghost.max_frames as f32);
                     let color = [1.0, 1.0, 1.0, alpha * 0.5]; // Semi-transparent white
-                    
-                    match &col.shape {
-                        gizmo::physics::components::ColliderShape::Box(b) => {
-                            let h = b.half_extents;
-                            let p0 = g_trans.local_matrix.transform_point3(Vec3::new(-h.x, -h.y, -h.z));
-                            let p1 = g_trans.local_matrix.transform_point3(Vec3::new( h.x, -h.y, -h.z));
-                            let p2 = g_trans.local_matrix.transform_point3(Vec3::new( h.x,  h.y, -h.z));
-                            let p3 = g_trans.local_matrix.transform_point3(Vec3::new(-h.x,  h.y, -h.z));
-                            let p4 = g_trans.local_matrix.transform_point3(Vec3::new(-h.x, -h.y,  h.z));
-                            let p5 = g_trans.local_matrix.transform_point3(Vec3::new( h.x, -h.y,  h.z));
-                            let p6 = g_trans.local_matrix.transform_point3(Vec3::new( h.x,  h.y,  h.z));
-                            let p7 = g_trans.local_matrix.transform_point3(Vec3::new(-h.x,  h.y,  h.z));
-                            
-                            gizmos.draw_line(p0, p1, color); gizmos.draw_line(p1, p2, color);
-                            gizmos.draw_line(p2, p3, color); gizmos.draw_line(p3, p0, color);
-                            gizmos.draw_line(p4, p5, color); gizmos.draw_line(p5, p6, color);
-                            gizmos.draw_line(p6, p7, color); gizmos.draw_line(p7, p4, color);
-                            gizmos.draw_line(p0, p4, color); gizmos.draw_line(p1, p5, color);
-                            gizmos.draw_line(p2, p6, color); gizmos.draw_line(p3, p7, color);
-                        }
-                        _ => {}
+
+                    if let gizmo::physics::components::ColliderShape::Box(b) = &col.shape {
+                        let h = b.half_extents;
+                        let p0 = g_trans
+                            .local_matrix
+                            .transform_point3(Vec3::new(-h.x, -h.y, -h.z));
+                        let p1 = g_trans
+                            .local_matrix
+                            .transform_point3(Vec3::new(h.x, -h.y, -h.z));
+                        let p2 = g_trans
+                            .local_matrix
+                            .transform_point3(Vec3::new(h.x, h.y, -h.z));
+                        let p3 = g_trans
+                            .local_matrix
+                            .transform_point3(Vec3::new(-h.x, h.y, -h.z));
+                        let p4 = g_trans
+                            .local_matrix
+                            .transform_point3(Vec3::new(-h.x, -h.y, h.z));
+                        let p5 = g_trans
+                            .local_matrix
+                            .transform_point3(Vec3::new(h.x, -h.y, h.z));
+                        let p6 = g_trans
+                            .local_matrix
+                            .transform_point3(Vec3::new(h.x, h.y, h.z));
+                        let p7 = g_trans
+                            .local_matrix
+                            .transform_point3(Vec3::new(-h.x, h.y, h.z));
+
+                        gizmos.draw_line(p0, p1, color);
+                        gizmos.draw_line(p1, p2, color);
+                        gizmos.draw_line(p2, p3, color);
+                        gizmos.draw_line(p3, p0, color);
+                        gizmos.draw_line(p4, p5, color);
+                        gizmos.draw_line(p5, p6, color);
+                        gizmos.draw_line(p6, p7, color);
+                        gizmos.draw_line(p7, p4, color);
+                        gizmos.draw_line(p0, p4, color);
+                        gizmos.draw_line(p1, p5, color);
+                        gizmos.draw_line(p2, p6, color);
+                        gizmos.draw_line(p3, p7, color);
                     }
                 }
             }
@@ -346,15 +438,15 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
     // Rope Update
     if let Some(ref mut rope) = state.rope {
         rope.step(dt, Vec3::new(0.0, -9.81, 0.0));
-        
+
         let mut node_idx = 0;
-        if let Some(mut q) = world.query::<(gizmo::core::query::Mut<Transform>, &gizmo::core::EntityName)>() {
+        if let Some(mut q) =
+            world.query::<(gizmo::core::query::Mut<Transform>, &gizmo::core::EntityName)>()
+        {
             for (_, (mut trans, name)) in q.iter_mut() {
-                if name.0 == "RopeNode" {
-                    if node_idx < rope.nodes.len() {
-                        trans.position = rope.nodes[node_idx].position;
-                        node_idx += 1;
-                    }
+                if name.0 == "RopeNode" && node_idx < rope.nodes.len() {
+                    trans.position = rope.nodes[node_idx].position;
+                    node_idx += 1;
                 }
             }
         }

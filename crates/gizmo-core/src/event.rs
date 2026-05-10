@@ -1,4 +1,4 @@
-use crate::system::{Res, ResMut, SystemParam, SystemParamFetchError, AccessInfo};
+use crate::system::{AccessInfo, Res, ResMut, SystemParam, SystemParamFetchError};
 use crate::world::World;
 
 /// Gizmo ECS Event System — Double-buffered olay kuyruğu.
@@ -110,11 +110,11 @@ impl<'w, T: 'static> EventReader<'w, T> {
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.events.iter()
     }
-    
+
     pub fn len(&self) -> usize {
         self.events.len()
     }
-    
+
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
     }
@@ -144,7 +144,7 @@ impl<'w, T: 'static> EventWriter<'w, T> {
     pub fn send(&mut self, event: T) {
         self.events.send(event);
     }
-    
+
     /// Birden fazla olay fırlatır.
     pub fn send_batch(&mut self, events: impl IntoIterator<Item = T>) {
         for event in events {

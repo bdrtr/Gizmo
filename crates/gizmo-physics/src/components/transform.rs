@@ -133,7 +133,9 @@ pub struct GlobalTransform {
 
 impl Default for GlobalTransform {
     fn default() -> Self {
-        Self { matrix: Mat4::IDENTITY }
+        Self {
+            matrix: Mat4::IDENTITY,
+        }
     }
 }
 

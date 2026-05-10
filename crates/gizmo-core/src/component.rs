@@ -76,7 +76,7 @@ pub trait Bundle {
     fn apply(self, world: &mut crate::world::World, entity: crate::entity::Entity);
 }
 
-/// Herhangi bir Bundle'a çalışma zamanında veya derleme zamanında dinamik olarak 
+/// Herhangi bir Bundle'a çalışma zamanında veya derleme zamanında dinamik olarak
 /// ekstra component eklemeyi sağlayan zincirlenebilir wrapper.
 pub struct DynamicBundle<B: Bundle, C: Component> {
     pub bundle: B,

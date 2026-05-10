@@ -69,7 +69,9 @@ impl World {
     /// Ertelenmiş komut kuyruğunu (CommandQueue) işler.
     /// Entity ekleme/çıkarma işlemleri bu sayede kilitlenme (deadlock) yaşamadan batch halinde uygulanır.
     pub fn apply_commands(&mut self) {
-        let queue_opt = self.get_resource::<crate::commands::CommandQueue>().map(|q| (*q).clone());
+        let queue_opt = self
+            .get_resource::<crate::commands::CommandQueue>()
+            .map(|q| (*q).clone());
         if let Some(queue) = queue_opt {
             queue.apply(self);
         }
@@ -131,7 +133,9 @@ impl World {
 
     pub fn spawn(&mut self) -> Entity {
         let entity = {
-            let entities = self.get_resource::<Entities>().expect("Entities resource not initialized");
+            let entities = self
+                .get_resource::<Entities>()
+                .expect("Entities resource not initialized");
             entities.reserve_entity()
         };
 
@@ -178,7 +182,9 @@ impl World {
     // Eski A3 bridge ve rebuild metodları silindi (Archetype artık authoritative).
 
     pub fn get_entity(&self, id: u32) -> Option<Entity> {
-        let entities = self.get_resource::<Entities>().expect("Entities resource not initialized");
+        let entities = self
+            .get_resource::<Entities>()
+            .expect("Entities resource not initialized");
         let state = entities.state.lock().expect("Entities mutex poisoned");
         if (id as usize) < state.generations.len() && !state.free_set.contains(&id) {
             return Some(Entity::new(id, state.generations[id as usize]));
@@ -206,7 +212,9 @@ impl World {
         let mut new_eids = Vec::with_capacity(count);
 
         {
-            let entities_res = self.get_resource::<Entities>().expect("Entities resource not initialized");
+            let entities_res = self
+                .get_resource::<Entities>()
+                .expect("Entities resource not initialized");
             for _ in 0..count {
                 let e = entities_res.reserve_entity();
                 new_eids.push(e.id());
@@ -293,7 +301,9 @@ impl World {
             }
 
             {
-                let entities = self.get_resource::<Entities>().expect("Entities resource not initialized");
+                let entities = self
+                    .get_resource::<Entities>()
+                    .expect("Entities resource not initialized");
                 entities.free(e);
             }
 
@@ -322,7 +332,9 @@ impl World {
         self.entities_to_despawn.shrink_to_fit();
         self.entity_locations.shrink_to_fit();
 
-        let entities = self.get_resource::<Entities>().expect("Entities resource not initialized");
+        let entities = self
+            .get_resource::<Entities>()
+            .expect("Entities resource not initialized");
         let mut state = entities.state.lock().expect("Entities mutex poisoned");
         state.generations.shrink_to_fit();
         state.free_ids.shrink_to_fit();
@@ -338,7 +350,9 @@ impl World {
     /// Yaşayan (despawn olmamış) tüm Entity'leri döndüren iterator.
     /// Uyarı: İterasyon boyunca Entities mutex kilidi tutulur!
     pub fn iter_alive_entities(&self) -> Vec<Entity> {
-        let entities = self.get_resource::<Entities>().expect("Entities resource not initialized");
+        let entities = self
+            .get_resource::<Entities>()
+            .expect("Entities resource not initialized");
         let state = entities.state.lock().expect("Entities mutex poisoned");
         let mut alive = Vec::new();
         for id in 0..state.next_entity_id {
@@ -351,7 +365,9 @@ impl World {
 
     #[inline]
     pub fn is_alive(&self, entity: Entity) -> bool {
-        self.get_resource::<Entities>().expect("Entities resource not initialized").is_alive(entity)
+        self.get_resource::<Entities>()
+            .expect("Entities resource not initialized")
+            .is_alive(entity)
     }
 
     /// Sisteme component ekleme — Veriyi archetype sütununa taşır.
@@ -365,13 +381,14 @@ impl World {
         let type_id = TypeId::of::<T>();
 
         // 1. Hedef archetype'ı belirle
-        let target_arch_id = match self
-            .archetype_index
-            .get_add_component_target(eid, type_id, &self.component_infos)
-        {
-            Some(id) => id,
-            None => return,
-        };
+        let target_arch_id =
+            match self
+                .archetype_index
+                .get_add_component_target(eid, type_id, &self.component_infos)
+            {
+                Some(id) => id,
+                None => return,
+            };
         let old_loc = self.entity_locations[eid as usize];
 
         if old_loc.archetype_id == target_arch_id as u32 {
@@ -583,9 +600,7 @@ impl World {
     // ERGONOMİK SORGULAR (QUERY API)
     // ==========================================================
 
-    pub fn query<'w, Q: crate::query::WorldQuery>(
-        &'w self,
-    ) -> Option<crate::query::Query<'w, Q>> {
+    pub fn query<'w, Q: crate::query::WorldQuery>(&'w self) -> Option<crate::query::Query<'w, Q>> {
         crate::query::Query::new(self)
     }
 
@@ -662,7 +677,9 @@ impl World {
     /// Toplam yaşayan entity sayısı
     #[inline]
     pub fn entity_count(&self) -> u32 {
-        let entities = self.get_resource::<Entities>().expect("Entities resource not initialized");
+        let entities = self
+            .get_resource::<Entities>()
+            .expect("Entities resource not initialized");
         let state = entities.state.lock().expect("Entities mutex poisoned");
         state
             .next_entity_id
@@ -736,7 +753,10 @@ impl World {
             .entry(type_id)
             .or_insert_with(|| RwLock::new(Box::new(T::default())));
 
-        let storage = self.resources.get(&type_id).expect("resource just inserted");
+        let storage = self
+            .resources
+            .get(&type_id)
+            .expect("resource just inserted");
         let guard = storage.write().expect("resource write lock poisoned");
         ResourceWriteGuard {
             guard,
@@ -756,7 +776,7 @@ impl World {
     }
 
     /// Bir resource'u geçici olarak world'den çıkarıp closure'a geçirir ve sonra geri koyar.
-    /// Bu, resource'un içindeyken `&mut World` kullanmanız gerektiğinde borrow checker'ı 
+    /// Bu, resource'un içindeyken `&mut World` kullanmanız gerektiğinde borrow checker'ı
     /// mutlu etmenin en temiz yoludur (Bevy'deki `resource_scope` benzeri).
     ///
     /// # Örnek
@@ -856,15 +876,11 @@ impl World {
                             self.tick,
                         )
                     };
-                    if let Some(f) = fetch {
-                        Some(unsafe {
-                            <&crate::component::Children as crate::query::FetchComponent>::get_item(
-                                f, row,
-                            )
-                        })
-                    } else {
-                        None
-                    }
+                    fetch.map(|f| unsafe {
+                        <&crate::component::Children as crate::query::FetchComponent>::get_item(
+                            f, row,
+                        )
+                    })
                 };
 
                 let children_list = match children_opt {
@@ -927,7 +943,7 @@ mod tests {
         // Hiyerarşi kuralım: e0'ın çocukları e3 ve e4 olsun.
         // Başlangıçta e0(0), e1(1), e2(2), e3(3), e4(4) sırasıyla dizilidir.
         world.add_component(e0, Children(vec![e3.id(), e4.id()]));
-        
+
         // Sadece e0'da Children olunca farklı archetype'a geçer (Archetype değişimi).
         // Bu yüzden hepsine Children eklemeliyiz ki AYNI archetype'da kalsınlar.
         world.add_component(e1, Children(vec![]));
@@ -937,7 +953,7 @@ mod tests {
 
         // Şu an hepsi (Transform, Children) archetype'ında.
         // Beklenen indeksler: e0, e1, e2, e3, e4.
-        
+
         // Hiyerarşi kaydırmasını çalıştır!
         world.sort_archetype_hierarchy();
 
@@ -946,13 +962,24 @@ mod tests {
         let loc3 = world.entity_location(e3.id());
         let loc4 = world.entity_location(e4.id());
 
-        assert_eq!(loc0.row + 1, loc3.row, "e3 (child), e0 (parent)'dan hemen sonra gelmeli");
-        assert_eq!(loc0.row + 2, loc4.row, "e4 (child), e3'ten hemen sonra gelmeli");
-        
+        assert_eq!(
+            loc0.row + 1,
+            loc3.row,
+            "e3 (child), e0 (parent)'dan hemen sonra gelmeli"
+        );
+        assert_eq!(
+            loc0.row + 2,
+            loc4.row,
+            "e4 (child), e3'ten hemen sonra gelmeli"
+        );
+
         // Diğerleri (e1 ve e2) kaydırılmış olmalı.
         let loc1 = world.entity_location(e1.id());
         let loc2 = world.entity_location(e2.id());
-        assert!(loc1.row > loc4.row || loc2.row > loc4.row, "Bağımsız entityler sona itilmeli");
+        assert!(
+            loc1.row > loc4.row || loc2.row > loc4.row,
+            "Bağımsız entityler sona itilmeli"
+        );
     }
 
     #[test]

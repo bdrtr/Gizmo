@@ -146,11 +146,11 @@ pub fn build_post_process_resources(
     let post_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Post Process Params Buffer"),
         contents: bytemuck::cast_slice(&[PostProcessUniforms {
-            bloom_intensity: 0.8, // Daha belirgin ve hacimli parlama
-            bloom_threshold: 0.85, // Daha çok highlight yakalamak için eşik düşürüldü
+            bloom_intensity: 0.8,       // Daha belirgin ve hacimli parlama
+            bloom_threshold: 0.85,      // Daha çok highlight yakalamak için eşik düşürüldü
             exposure: 1.15, // ACES Tone mapping'in renkleri daha canlı sunması için pozlama artırıldı
             chromatic_aberration: 0.0, // Dövüş oyununda rahatsız edici ghosting yapmaması için kapatıldı
-            vignette_intensity: 0.25, // Köşelerde dramatik kararma (Vignette)
+            vignette_intensity: 0.25,  // Köşelerde dramatik kararma (Vignette)
             film_grain_intensity: 0.03, // Film greni (Realistic noise)
             dof_focus_dist: 15.0,
             dof_focus_range: 25.0,

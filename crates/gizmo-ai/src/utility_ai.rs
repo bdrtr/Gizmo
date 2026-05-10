@@ -1,7 +1,7 @@
 //! Utility AI Sistemi
 //!
-//! AAA kalitesinde esnek karar verme sistemi. Ajanın durumunu analiz eder ve 
-//! çeşitli eylemlerin faydasını (utility) matematiksel eğriler (curves) ile hesaplayarak 
+//! AAA kalitesinde esnek karar verme sistemi. Ajanın durumunu analiz eder ve
+//! çeşitli eylemlerin faydasını (utility) matematiksel eğriler (curves) ile hesaplayarak
 //! en yüksek skora sahip eylemi seçer.
 
 use std::sync::Arc;
@@ -60,7 +60,11 @@ pub struct UtilityConsideration<T> {
 
 impl<T> UtilityConsideration<T> {
     pub fn new(scorer: ContextScorer<T>, curve: Box<dyn UtilityCurve>, weight: f32) -> Self {
-        Self { scorer, curve, weight }
+        Self {
+            scorer,
+            curve,
+            weight,
+        }
     }
 
     pub fn score(&self, context: &T) -> f32 {
@@ -105,7 +109,7 @@ impl<T> UtilityAction<T> {
             if score <= 0.0 {
                 return 0.0; // Veto (Eylem kesinlikle yapılamaz)
             }
-            
+
             // "Make up" compensation — Çok fazla consideration olan eylemlerin skorunun düşmesini engeller
             let modification = (1.0 - score) * comp_factor;
             final_score *= score + (modification * score);
@@ -118,6 +122,12 @@ impl<T> UtilityAction<T> {
 /// Ajanın eylemleri seçmesini yöneten ana karar verici
 pub struct UtilityBrain<T> {
     pub actions: Vec<UtilityAction<T>>,
+}
+
+impl<T> Default for UtilityBrain<T> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<T> UtilityBrain<T> {

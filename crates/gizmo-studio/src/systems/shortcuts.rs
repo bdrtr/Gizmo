@@ -44,37 +44,36 @@ pub fn handle_editor_shortcuts(
     }
 
     // Kısayol: F (Seçili Objeye Odaklan) (Yine Ctrl'den bağımsız tetiklenmeli)
-    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyF as u32) {
-        if !editor_state.selection.entities.is_empty() {
-            let transforms = world.borrow::<Transform>();
-            {
-                let mut center_pos = gizmo::math::Vec3::ZERO;
-                let mut count = 0.0;
-                for &target_id in editor_state.selection.entities.iter() {
-                    if let Some(target) = transforms.get(target_id.id()) {
-                        center_pos += target.position;
-                        count += 1.0;
-                    }
+    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyF as u32)
+        && !editor_state.selection.entities.is_empty()
+    {
+        let transforms = world.borrow::<Transform>();
+        {
+            let mut center_pos = gizmo::math::Vec3::ZERO;
+            let mut count = 0.0;
+            for &target_id in editor_state.selection.entities.iter() {
+                if let Some(target) = transforms.get(target_id.id()) {
+                    center_pos += target.position;
+                    count += 1.0;
                 }
+            }
 
-                if count > 0.0 {
-                    let target_pos = center_pos / count;
-                    drop(transforms); // Ödünç almayı bırak
+            if count > 0.0 {
+                let target_pos = center_pos / count;
+                drop(transforms); // Ödünç almayı bırak
 
-                    let mut t_mut = world.borrow_mut::<Transform>();
-                    let mut cam_mut = world.borrow_mut::<gizmo::renderer::components::Camera>();
-                    {
-                        if let (Some(cam_t), Some(cam)) = (
-                            t_mut.get_mut(state.editor_camera),
-                            cam_mut.get_mut(state.editor_camera),
-                        ) {
-                            // Hedef odak mesafesi dinamik. Şimdilik 10.0 varsayılan.
-                            editor_state.prefs.camera_focus_distance = 10.0;
-                            let offset =
-                                cam.get_front() * -editor_state.prefs.camera_focus_distance;
-                            cam_t.position = target_pos + offset;
-                            cam_t.update_local_matrix();
-                        }
+                let mut t_mut = world.borrow_mut::<Transform>();
+                let mut cam_mut = world.borrow_mut::<gizmo::renderer::components::Camera>();
+                {
+                    if let (Some(cam_t), Some(cam)) = (
+                        t_mut.get_mut(state.editor_camera),
+                        cam_mut.get_mut(state.editor_camera),
+                    ) {
+                        // Hedef odak mesafesi dinamik. Şimdilik 10.0 varsayılan.
+                        editor_state.prefs.camera_focus_distance = 10.0;
+                        let offset = cam.get_front() * -editor_state.prefs.camera_focus_distance;
+                        cam_t.position = target_pos + offset;
+                        cam_t.update_local_matrix();
                     }
                 }
             }

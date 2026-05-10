@@ -100,10 +100,10 @@ impl ContactManifold {
         for existing in &mut self.contacts {
             if (existing.point - contact.point).length_squared() < MERGE_RADIUS_SQ {
                 // Update geometry but preserve accumulated impulses.
-                let saved_normal  = existing.normal_impulse;
+                let saved_normal = existing.normal_impulse;
                 let saved_tangent = existing.tangent_impulse;
                 *existing = contact;
-                existing.normal_impulse  = saved_normal;
+                existing.normal_impulse = saved_normal;
                 existing.tangent_impulse = saved_tangent;
                 return;
             }
@@ -169,19 +169,22 @@ fn select_4_contacts(pool: &[ContactPoint; 5]) -> [ContactPoint; 4] {
         .unwrap();
 
     // Step 3 — farthest from the line p0–p1.
-    let p1  = pool[i1].point;
+    let p1 = pool[i1].point;
     let seg = (p1 - p0).normalize_or_zero();
     let i2 = (0..5)
         .filter(|&i| i != i0 && i != i1)
         .max_by(|&a, &b| {
-            dist_sq_to_line(pool[a].point, p0, seg)
-                .total_cmp(&dist_sq_to_line(pool[b].point, p0, seg))
+            dist_sq_to_line(pool[a].point, p0, seg).total_cmp(&dist_sq_to_line(
+                pool[b].point,
+                p0,
+                seg,
+            ))
         })
         .unwrap();
 
     // Step 4 — the remaining point that maximises the signed area of the
     // quadrilateral (i.e. keeps the hull as convex as possible).
-    let p2  = pool[i2].point;
+    let p2 = pool[i2].point;
     let normal_approx = (p1 - p0).cross(p2 - p0); // rough face normal
     let i3 = (0..5)
         .filter(|&i| i != i0 && i != i1 && i != i2)
@@ -273,7 +276,7 @@ mod tests {
     #[test]
     fn manifold_normalises_entity_order() {
         let e_high = make_entity(10);
-        let e_low  = make_entity(5);
+        let e_low = make_entity(5);
         let m = ContactManifold::new(e_high, e_low);
         assert_eq!(m.entity_a.id(), 5);
         assert_eq!(m.entity_b.id(), 10);
@@ -295,7 +298,7 @@ mod tests {
         let mut m = ContactManifold::new(make_entity(1), make_entity(2));
 
         let mut first = pt(1.0, 0.0, 0.1);
-        first.normal_impulse  = 5.0;
+        first.normal_impulse = 5.0;
         first.tangent_impulse = Vec3::new(1.0, 0.0, 0.0);
         m.add_contact(first);
 
@@ -304,12 +307,19 @@ mod tests {
         m.add_contact(updated);
 
         assert_eq!(m.contacts.len(), 1, "near-duplicate should merge, not add");
-        assert_eq!(m.contacts[0].normal_impulse, 5.0,
-                   "accumulated normal impulse must be preserved");
-        assert_eq!(m.contacts[0].tangent_impulse, Vec3::new(1.0, 0.0, 0.0),
-                   "accumulated tangent impulse must be preserved");
-        assert!((m.contacts[0].penetration - 0.2).abs() < 1e-6,
-                "geometry (penetration) must be updated");
+        assert_eq!(
+            m.contacts[0].normal_impulse, 5.0,
+            "accumulated normal impulse must be preserved"
+        );
+        assert_eq!(
+            m.contacts[0].tangent_impulse,
+            Vec3::new(1.0, 0.0, 0.0),
+            "accumulated tangent impulse must be preserved"
+        );
+        assert!(
+            (m.contacts[0].penetration - 0.2).abs() < 1e-6,
+            "geometry (penetration) must be updated"
+        );
     }
 
     // ── Contact capacity & area maximisation ──────────────────────────────
@@ -318,10 +328,10 @@ mod tests {
     fn contact_limit_enforced_at_4() {
         let mut m = ContactManifold::new(make_entity(1), make_entity(2));
         // 4 well-separated, equal-depth contacts.
-        m.add_contact(pt(  0.0,  0.0, 1.0));
-        m.add_contact(pt( 10.0,  0.0, 1.0));
-        m.add_contact(pt(  0.0, 10.0, 1.0));
-        m.add_contact(pt( 10.0, 10.0, 1.0));
+        m.add_contact(pt(0.0, 0.0, 1.0));
+        m.add_contact(pt(10.0, 0.0, 1.0));
+        m.add_contact(pt(0.0, 10.0, 1.0));
+        m.add_contact(pt(10.0, 10.0, 1.0));
         assert_eq!(m.contacts.len(), 4);
 
         // 5th point — shallow, near point #0; should be the one dropped.
@@ -330,7 +340,9 @@ mod tests {
 
         // The shallow interloper should not survive.
         assert!(
-            !m.contacts.iter().any(|c| (c.penetration - 0.1).abs() < 1e-6),
+            !m.contacts
+                .iter()
+                .any(|c| (c.penetration - 0.1).abs() < 1e-6),
             "shallowest near-duplicate contact should be dropped"
         );
     }
@@ -347,7 +359,9 @@ mod tests {
         m.add_contact(pt(0.5, 0.5, 99.0));
 
         assert!(
-            m.contacts.iter().any(|c| (c.penetration - 99.0).abs() < 1e-6),
+            m.contacts
+                .iter()
+                .any(|c| (c.penetration - 99.0).abs() < 1e-6),
             "deepest contact must always be retained"
         );
     }
@@ -383,11 +397,11 @@ mod tests {
         // Arrange 5 points: 4 at corners of a 10×10 square (depth 1.0)
         // and one very deep point at the centre.
         let pool = [
-            pt(  0.0,   0.0, 1.0),
-            pt( 10.0,   0.0, 1.0),
-            pt(  0.0,  10.0, 1.0),
-            pt( 10.0,  10.0, 1.0),
-            pt(  5.0,   5.0, 5.0), // deepest, at centre
+            pt(0.0, 0.0, 1.0),
+            pt(10.0, 0.0, 1.0),
+            pt(0.0, 10.0, 1.0),
+            pt(10.0, 10.0, 1.0),
+            pt(5.0, 5.0, 5.0), // deepest, at centre
         ];
         let result = select_4_contacts(&pool);
 

@@ -3,9 +3,9 @@ use gizmo_math::Vec3;
 use gizmo_physics::{
     components::{Collider, RigidBody, Transform, Velocity},
     joints::Joint,
-    world::{PhysicsWorld, FluidZone},
     raycast::Ray,
     soft_body::SoftBodyMesh,
+    world::{FluidZone, PhysicsWorld},
 };
 
 #[test]
@@ -27,7 +27,13 @@ fn test_rigidbody_collision_response() {
     let ground_collider = Collider::plane(Vec3::new(0.0, 1.0, 0.0), 0.0);
 
     world.add_body(box_ent, box_rb, box_transform, box_vel, box_collider);
-    world.add_body(ground_ent, ground_rb, ground_transform, ground_vel, ground_collider);
+    world.add_body(
+        ground_ent,
+        ground_rb,
+        ground_transform,
+        ground_vel,
+        ground_collider,
+    );
 
     // Simulate for 1.5 seconds at 60 FPS (90 steps)
     let dt = 1.0 / 60.0;
@@ -54,9 +60,12 @@ fn test_rigidbody_collision_response() {
 
     // Check collision events
     let events = world.collision_events();
-    // At rest, it will be persisting or ended/started depending on micro-bounces, 
+    // At rest, it will be persisting or ended/started depending on micro-bounces,
     // but we should definitely have had collision events during the drop.
-    assert!(!events.is_empty() || world.collision_events().len() == 0, "Wait, events are cleared each frame");
+    assert!(
+        !events.is_empty() || world.collision_events().is_empty(),
+        "Wait, events are cleared each frame"
+    );
 }
 
 #[test]
@@ -78,7 +87,13 @@ fn test_joint_stability_under_gravity() {
     let bob_vel = Velocity::default();
     let bob_collider = Collider::sphere(0.5);
 
-    world.add_body(anchor_ent, anchor_rb, anchor_transform, anchor_vel, anchor_collider);
+    world.add_body(
+        anchor_ent,
+        anchor_rb,
+        anchor_transform,
+        anchor_vel,
+        anchor_collider,
+    );
     world.add_body(bob_ent, bob_rb, bob_transform, bob_vel, bob_collider);
 
     // Create a hinge joint connecting them with an offset
@@ -93,7 +108,7 @@ fn test_joint_stability_under_gravity() {
     world.joints.push(joint);
 
     let dt = 1.0 / 60.0;
-    
+
     // Simulate for 1 second (60 steps). Gravity pulls the bob down, but the joint should hold it.
     for _ in 0..60 {
         let _ = world.step(&mut [], &mut [], dt);
@@ -135,33 +150,48 @@ fn test_trigger_volume_events() {
     let mover_ent = Entity::new(2, 0);
     let mover_rb = RigidBody::new_kinematic();
     let mover_transform = Transform::new(Vec3::new(5.0, 0.0, 0.0)); // Starts outside (X=5, trigger reach is X=2)
-    // Moving left at 10 m/s
+                                                                    // Moving left at 10 m/s
     let mover_vel = Velocity::new(Vec3::new(-10.0, 0.0, 0.0));
     let mover_collider = Collider::sphere(0.5);
 
-    world.add_body(trigger_ent, trigger_rb, trigger_transform, trigger_vel, trigger_collider);
-    world.add_body(mover_ent, mover_rb, mover_transform, mover_vel, mover_collider);
+    world.add_body(
+        trigger_ent,
+        trigger_rb,
+        trigger_transform,
+        trigger_vel,
+        trigger_collider,
+    );
+    world.add_body(
+        mover_ent,
+        mover_rb,
+        mover_transform,
+        mover_vel,
+        mover_collider,
+    );
 
     let dt = 0.1; // Big step for test
 
     // Step 1: Still outside
     world.step(&mut [], &mut [], dt).unwrap(); // pos becomes 4.0
-    assert!(world.trigger_events().is_empty(), "Trigger fired prematurely!");
+    assert!(
+        world.trigger_events().is_empty(),
+        "Trigger fired prematurely!"
+    );
 
     // Step 2 & 3: Still outside
     world.step(&mut [], &mut [], dt).unwrap(); // pos 3.0
     world.step(&mut [], &mut [], dt).unwrap(); // pos 2.0 (touching)
-    
+
     // Step 4: Inside! pos 1.0
     world.step(&mut [], &mut [], dt).unwrap();
-    
+
     let events = world.trigger_events();
     assert!(!events.is_empty(), "Trigger event did not fire!");
-    
+
     let event = &events[0];
     assert_eq!(event.trigger_entity, trigger_ent);
     assert_eq!(event.other_entity, mover_ent);
-    
+
     // Check that physical collision did NOT happen (velocity wasn't blocked)
     let mover_vel_after = world.velocities[1].linear;
     assert_eq!(mover_vel_after.x, -10.0, "Trigger blocked the movement!");
@@ -173,9 +203,9 @@ fn test_fluid_buoyancy() {
 
     // Add a fluid zone (e.g. water) from y=-10 to y=0
     world.fluid_zones.push(FluidZone {
-        shape: gizmo_physics::world::ZoneShape::Box { 
-            min: Vec3::new(-10.0, -10.0, -10.0), 
-            max: Vec3::new(10.0, 0.0, 10.0) 
+        shape: gizmo_physics::world::ZoneShape::Box {
+            min: Vec3::new(-10.0, -10.0, -10.0),
+            max: Vec3::new(10.0, 0.0, 10.0),
         },
         density: 1.5,
         viscosity: 0.0,
@@ -186,7 +216,7 @@ fn test_fluid_buoyancy() {
     let ent = Entity::new(1, 0);
     // Box with volume 1.0 (extents 0.5 -> 1x1x1), mass 1.0 -> density 1.0
     // It should float since fluid density (1.5) > box density (1.0)
-    let rb = RigidBody::new(1.0, 0.0, 0.5, true); 
+    let rb = RigidBody::new(1.0, 0.0, 0.5, true);
     // Start above water
     let transform = Transform::new(Vec3::new(0.0, 2.0, 0.0));
     let vel = Velocity::default();
@@ -195,14 +225,14 @@ fn test_fluid_buoyancy() {
     world.add_body(ent, rb, transform, vel, collider);
 
     let dt = 1.0 / 60.0;
-    
+
     // Simulate for 3 seconds. It should fall, submerge, and then get pushed up by buoyancy.
     for _ in 0..(60 * 3) {
         let _ = world.step(&mut [], &mut [], dt);
     }
 
     let box_pos = world.transforms[0].position;
-    
+
     // Box should be resting somewhere around the surface of the water (y=0)
     assert!(
         box_pos.y > -1.0 && box_pos.y < 1.0,
@@ -236,10 +266,10 @@ fn test_raycast_query() {
     let ray = Ray::new(Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0));
 
     let hit = world.raycast(&ray, 100.0);
-    
+
     assert!(hit.is_some(), "Raycast missed!");
     let hit = hit.unwrap();
-    
+
     // Should hit Box 1 first, distance around 4.0 (center 5.0 minus 1.0 half-extent)
     assert_eq!(hit.entity, ent1, "Raycast hit the wrong entity!");
     assert!(
@@ -258,7 +288,13 @@ fn run_complex_simulation() -> Vec<(Transform, Velocity)> {
     let ground_transform = Transform::new(Vec3::ZERO);
     let ground_vel = Velocity::default();
     let ground_collider = Collider::plane(Vec3::new(0.0, 1.0, 0.0), 0.0);
-    world.add_body(ground_ent, ground_rb, ground_transform, ground_vel, ground_collider);
+    world.add_body(
+        ground_ent,
+        ground_rb,
+        ground_transform,
+        ground_vel,
+        ground_collider,
+    );
 
     // Add a stack of boxes
     for i in 0..5 {
@@ -276,7 +312,13 @@ fn run_complex_simulation() -> Vec<(Transform, Velocity)> {
     let sphere_transform = Transform::new(Vec3::new(-10.0, 3.0, 0.0));
     let sphere_vel = Velocity::new(Vec3::new(20.0, 0.0, 0.0)); // Fast horizontal speed
     let sphere_collider = Collider::sphere(1.0);
-    world.add_body(sphere_ent, sphere_rb, sphere_transform, sphere_vel, sphere_collider);
+    world.add_body(
+        sphere_ent,
+        sphere_rb,
+        sphere_transform,
+        sphere_vel,
+        sphere_collider,
+    );
 
     // Fixed timestep of 1/60 for exactly 120 steps (2 seconds)
     let dt = 1.0 / 60.0;
@@ -285,7 +327,12 @@ fn run_complex_simulation() -> Vec<(Transform, Velocity)> {
     }
 
     // Extract exactly the transforms and velocities to compare
-    world.transforms.iter().cloned().zip(world.velocities.iter().cloned()).collect()
+    world
+        .transforms
+        .iter()
+        .cloned()
+        .zip(world.velocities.iter().cloned())
+        .collect()
 }
 
 #[test]
@@ -335,7 +382,13 @@ fn test_regression_ball_drop() {
     let ball_vel = Velocity::default();
     let ball_collider = Collider::sphere(0.5);
 
-    world.add_body(ground_ent, ground_rb, ground_transform, ground_vel, ground_collider);
+    world.add_body(
+        ground_ent,
+        ground_rb,
+        ground_transform,
+        ground_vel,
+        ground_collider,
+    );
     world.add_body(ball_ent, ball_rb, ball_transform, ball_vel, ball_collider);
 
     let dt = 1.0 / 60.0;
@@ -351,9 +404,17 @@ fn test_regression_ball_drop() {
     // We will hardcode these values after running the test once
     // New SI Solver with warm starting + SAT + Sleep creates slightly different outcomes.
     // Snapshot updated: 2026-05-06 (240Hz sub-stepping, Baumgarte 0.15, 20 iterations)
-    assert!((pos_at_0_6s.y - 3.1911688).abs() < 0.05, "Regression snapshot for position mismatch: actual={}", pos_at_0_6s.y);
+    assert!(
+        (pos_at_0_6s.y - 3.1911688).abs() < 0.05,
+        "Regression snapshot for position mismatch: actual={}",
+        pos_at_0_6s.y
+    );
     // Velocity should be negative (falling) but not extreme
-    assert!(vel_at_0_6s.y < -3.0 && vel_at_0_6s.y > -7.0, "Regression snapshot for velocity mismatch: actual={}", vel_at_0_6s.y);
+    assert!(
+        vel_at_0_6s.y < -3.0 && vel_at_0_6s.y > -7.0,
+        "Regression snapshot for velocity mismatch: actual={}",
+        vel_at_0_6s.y
+    );
 }
 
 #[test]
@@ -378,7 +439,7 @@ fn test_fem_soft_body() {
 
     let dt = 1.0 / 60.0;
     let gravity = Vec3::new(0.0, -10.0, 0.0);
-    
+
     let soft_ent = Entity::new(100, 0);
     let mut soft_bodies = vec![(soft_ent, soft_body, Transform::new(Vec3::ZERO))];
 
@@ -388,18 +449,24 @@ fn test_fem_soft_body() {
     let floor_transform = Transform::new(Vec3::ZERO);
     let floor_vel = Velocity::default();
     let floor_collider = Collider::plane(Vec3::new(0.0, 1.0, 0.0), 0.0);
-    
+
     let mut world = PhysicsWorld::new().with_gravity(gravity);
-    world.add_body(floor_ent, floor_rb, floor_transform, floor_vel, floor_collider);
+    world.add_body(
+        floor_ent,
+        floor_rb,
+        floor_transform,
+        floor_vel,
+        floor_collider,
+    );
 
     // Step the simulation for 1 second (60 frames)
     for _ in 0..60 {
         let _ = world.step(&mut soft_bodies, &mut [], dt);
     }
-    
+
     let soft_body = &soft_bodies[0].1;
 
-    // The top node started at y=1.0. With gravity it should fall, but the floor at y=0 
+    // The top node started at y=1.0. With gravity it should fall, but the floor at y=0
     // should stop the nodes from falling to -4.0. The body will squish and bounce.
     let top_node = soft_body.nodes[n0 as usize];
     assert!(
@@ -412,8 +479,8 @@ fn test_fem_soft_body() {
 #[test]
 fn test_ecs_physics_system() {
     use gizmo_core::world::World;
+    use gizmo_physics::components::{Collider, RigidBody, Transform, Velocity};
     use gizmo_physics::system::physics_step_system;
-    use gizmo_physics::components::{RigidBody, Transform, Velocity, Collider};
 
     let mut world = World::new();
 
@@ -442,7 +509,11 @@ fn test_ecs_physics_system() {
     let mut found = false;
     for (id, vel) in query.iter() {
         if id == ent.id() {
-            assert!(vel.linear.y < 0.0, "Velocity should be negative due to gravity, got {}", vel.linear.y);
+            assert!(
+                vel.linear.y < 0.0,
+                "Velocity should be negative due to gravity, got {}",
+                vel.linear.y
+            );
             found = true;
         }
     }
@@ -452,8 +523,8 @@ fn test_ecs_physics_system() {
 #[test]
 fn test_ecs_fracture() {
     use gizmo_core::world::World;
-    use gizmo_physics::system::{physics_step_system, physics_fracture_system};
-    use gizmo_physics::components::{RigidBody, Transform, Velocity, Collider, Breakable};
+    use gizmo_physics::components::{Breakable, Collider, RigidBody, Transform, Velocity};
+    use gizmo_physics::system::{physics_fracture_system, physics_step_system};
 
     let mut world = World::new();
 
@@ -471,25 +542,31 @@ fn test_ecs_fracture() {
     world.add_component(glass_ent, Transform::new(Vec3::new(0.0, 0.0, 0.0)));
     world.add_component(glass_ent, Velocity::default());
     world.add_component(glass_ent, Collider::box_collider(Vec3::splat(1.0)));
-    world.add_component(glass_ent, Breakable {
-        max_pieces: 10,
-        threshold: 0.0,
-        current_health: 0.1,
-        ..Default::default()
-    });
+    world.add_component(
+        glass_ent,
+        Breakable {
+            max_pieces: 10,
+            threshold: 0.0,
+            current_health: 0.1,
+            ..Default::default()
+        },
+    );
 
     // Spawn a heavy metal ball moving fast towards the glass
     let ball_ent = world.spawn();
     world.add_component(ball_ent, RigidBody::new(100.0, 0.0, 0.0, true));
     world.add_component(ball_ent, Transform::new(Vec3::new(5.0, 0.1, 0.0)));
-    world.add_component(ball_ent, Velocity {
-        linear: Vec3::new(-10.0, 0.0, 0.0), // Fast moving
-        ..Default::default()
-    });
+    world.add_component(
+        ball_ent,
+        Velocity {
+            linear: Vec3::new(-10.0, 0.0, 0.0), // Fast moving
+            ..Default::default()
+        },
+    );
     world.add_component(ball_ent, Collider::box_collider(Vec3::splat(0.5)));
 
     let dt = 1.0 / 60.0;
-    
+
     // Step until collision happens (approx 30 frames)
     for _ in 0..40 {
         physics_step_system(&world, dt);
@@ -499,15 +576,22 @@ fn test_ecs_fracture() {
 
     // Check that the glass box is gone and chunks are created!
     // The world should now have the ball + 10 chunks = 11 entities (or around 11 depending on voronoi result)
-    assert!(!world.is_alive(glass_ent), "Glass entity should have been despawned/fractured");
-    assert!(world.entity_count() > 2, "World should contain chunks! Entity count: {}", world.entity_count());
+    assert!(
+        !world.is_alive(glass_ent),
+        "Glass entity should have been despawned/fractured"
+    );
+    assert!(
+        world.entity_count() > 2,
+        "World should contain chunks! Entity count: {}",
+        world.entity_count()
+    );
 }
 
 #[test]
 fn test_ccd_fast_bullet_vs_thin_wall() {
-    use gizmo_physics::components::{Collider, RigidBody, Transform, Velocity};
     use gizmo_math::Vec3;
-    
+    use gizmo_physics::components::{Collider, RigidBody, Transform, Velocity};
+
     let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
 
     let wall_ent = gizmo_core::entity::Entity::new(0, 0);
@@ -524,26 +608,44 @@ fn test_ccd_fast_bullet_vs_thin_wall() {
     bullet_vel.linear = Vec3::new(1000.0, 0.0, 0.0); // 1000 m/s! Over 1 frame dt (1/60) it moves ~16m, easily skipping the wall.
     let bullet_collider = Collider::sphere(0.5);
 
-    world.add_body(wall_ent, wall_rb, wall_transform, Velocity::default(), wall_collider);
-    world.add_body(bullet_ent, bullet_rb, bullet_transform, bullet_vel, bullet_collider);
+    world.add_body(
+        wall_ent,
+        wall_rb,
+        wall_transform,
+        Velocity::default(),
+        wall_collider,
+    );
+    world.add_body(
+        bullet_ent,
+        bullet_rb,
+        bullet_transform,
+        bullet_vel,
+        bullet_collider,
+    );
 
     let dt = 1.0 / 60.0;
-    
+
     // Simulate 1 frame
     let _ = world.step(&mut [], &mut [], dt);
 
     let final_vel = world.velocities[1].linear;
-    
+
     // If CCD works, the bullet should have generated a speculative contact and stopped (or bounced)
-    assert!(final_vel.x < 1000.0, "Bullet tunneled through the wall without losing speed!");
-    assert!(world.transforms[1].position.x < 10.5, "Bullet moved through the wall!");
+    assert!(
+        final_vel.x < 1000.0,
+        "Bullet tunneled through the wall without losing speed!"
+    );
+    assert!(
+        world.transforms[1].position.x < 10.5,
+        "Bullet moved through the wall!"
+    );
 }
 
 #[test]
 fn test_soft_soft_collision() {
-    use gizmo_physics::soft_body::SoftBodyMesh;
     use gizmo_math::Vec3;
     use gizmo_physics::components::Transform;
+    use gizmo_physics::soft_body::SoftBodyMesh;
 
     let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
 
@@ -553,7 +655,7 @@ fn test_soft_soft_collision() {
     soft_body_a.add_node(Vec3::new(0.0, 1.0, 0.0), 1.0);
     soft_body_a.add_node(Vec3::new(0.0, 0.0, 1.0), 1.0);
     soft_body_a.add_element(0, 1, 2, 3);
-    
+
     // Move it to (-1, 0, 0)
     for node in &mut soft_body_a.nodes {
         node.position.x -= 1.0;
@@ -567,7 +669,7 @@ fn test_soft_soft_collision() {
     soft_body_b.add_node(Vec3::new(0.0, 1.0, 0.0), 1.0);
     soft_body_b.add_node(Vec3::new(0.0, 0.0, 1.0), 1.0);
     soft_body_b.add_element(0, 1, 2, 3);
-    
+
     // Move it to (1, 0, 0)
     for node in &mut soft_body_b.nodes {
         node.position.x += 1.0;
@@ -584,26 +686,46 @@ fn test_soft_soft_collision() {
     ];
 
     let dt = 1.0 / 60.0;
-    
+
     // Simulate until collision
     for _ in 0..30 {
         let _ = world.step(&mut soft_bodies, &mut [], dt);
     }
 
     // Nodes should have collided and rebounded, or at least slowed down
-    let avg_vel_a_x: f32 = soft_bodies[0].1.nodes.iter().map(|n| n.velocity.x).sum::<f32>() / soft_bodies[0].1.nodes.len() as f32;
-    let avg_vel_b_x: f32 = soft_bodies[1].1.nodes.iter().map(|n| n.velocity.x).sum::<f32>() / soft_bodies[1].1.nodes.len() as f32;
+    let avg_vel_a_x: f32 = soft_bodies[0]
+        .1
+        .nodes
+        .iter()
+        .map(|n| n.velocity.x)
+        .sum::<f32>()
+        / soft_bodies[0].1.nodes.len() as f32;
+    let avg_vel_b_x: f32 = soft_bodies[1]
+        .1
+        .nodes
+        .iter()
+        .map(|n| n.velocity.x)
+        .sum::<f32>()
+        / soft_bodies[1].1.nodes.len() as f32;
 
     // A was moving at 5.0, B at -5.0. They should have decelerated or reversed.
-    assert!(avg_vel_a_x < 4.0, "Soft body A did not decelerate! avg_vel_a_x: {}", avg_vel_a_x);
-    assert!(avg_vel_b_x > -4.0, "Soft body B did not decelerate! avg_vel_b_x: {}", avg_vel_b_x);
+    assert!(
+        avg_vel_a_x < 4.0,
+        "Soft body A did not decelerate! avg_vel_a_x: {}",
+        avg_vel_a_x
+    );
+    assert!(
+        avg_vel_b_x > -4.0,
+        "Soft body B did not decelerate! avg_vel_b_x: {}",
+        avg_vel_b_x
+    );
 }
 
 #[test]
 fn test_explosion_system() {
-    use gizmo_physics::components::{Explosion, RigidBody, Transform, Velocity};
-    use gizmo_math::Vec3;
     use gizmo_core::world::World;
+    use gizmo_math::Vec3;
+    use gizmo_physics::components::{Explosion, RigidBody, Transform, Velocity};
     use gizmo_physics::system::physics_explosion_system;
 
     let mut world = World::new();
@@ -611,31 +733,37 @@ fn test_explosion_system() {
     world.register_component_type::<Transform>();
     world.register_component_type::<Velocity>();
     world.register_component_type::<Explosion>();
-    
+
     // Spawn a box near the bomb
     let box_ent = world.spawn();
     world.add_component(box_ent, Transform::new(Vec3::new(2.0, 0.0, 0.0)));
     world.add_component(box_ent, RigidBody::new(10.0, 0.0, 0.0, true)); // 10kg dynamic
     world.add_component(box_ent, Velocity::default());
-        
+
     // Spawn a bomb at the origin
     let bomb_ent = world.spawn();
     world.add_component(bomb_ent, Transform::new(Vec3::ZERO));
-    world.add_component(bomb_ent, Explosion {
-        force_radius: 5.0,
-        damage_radius: 5.0,
-        force: 1000.0,
-        damage: 100.0,
-        is_active: true,
-        ..Default::default()
-    });
+    world.add_component(
+        bomb_ent,
+        Explosion {
+            force_radius: 5.0,
+            damage_radius: 5.0,
+            force: 1000.0,
+            damage: 100.0,
+            is_active: true,
+            ..Default::default()
+        },
+    );
 
     // Run the explosion system
     physics_explosion_system(&world, 0.016);
     world.apply_commands(); // Apply the despawn command
 
     // The bomb should be gone
-    assert!(!world.is_alive(bomb_ent), "Bomb should despawn after exploding");
+    assert!(
+        !world.is_alive(bomb_ent),
+        "Bomb should despawn after exploding"
+    );
 
     // The box should have been pushed away (towards +X)
     let query = world.query::<gizmo_core::query::Mut<Velocity>>().unwrap();
@@ -646,15 +774,23 @@ fn test_explosion_system() {
         }
     }
 
-    assert!(box_velocity.x > 0.0, "Box should have positive X velocity from explosion, got {:?}", box_velocity);
-    assert!(box_velocity.length() > 10.0, "Box should have significant speed, got {:?}", box_velocity);
+    assert!(
+        box_velocity.x > 0.0,
+        "Box should have positive X velocity from explosion, got {:?}",
+        box_velocity
+    );
+    assert!(
+        box_velocity.length() > 10.0,
+        "Box should have significant speed, got {:?}",
+        box_velocity
+    );
 }
 
 #[test]
 fn test_friction() {
-    use gizmo_physics::components::{Collider, RigidBody, Transform, Velocity, PhysicsMaterial};
-    use gizmo_math::Vec3;
     use gizmo_core::world::World;
+    use gizmo_math::Vec3;
+    use gizmo_physics::components::{Collider, PhysicsMaterial, RigidBody, Transform, Velocity};
     use gizmo_physics::system::physics_step_system;
     use gizmo_physics::world::PhysicsWorld;
 
@@ -675,7 +811,10 @@ fn test_friction() {
     let ground = world.spawn();
     world.add_component(ground, Transform::new(Vec3::new(0.0, -1.0, 0.0)));
     world.add_component(ground, RigidBody::new(0.0, 0.0, 0.0, false));
-    world.add_component(ground, Collider::box_collider(Vec3::new(10.0, 1.0, 10.0)).with_material(ground_mat));
+    world.add_component(
+        ground,
+        Collider::box_collider(Vec3::new(10.0, 1.0, 10.0)).with_material(ground_mat),
+    );
 
     let mut box_mat = PhysicsMaterial::default();
     box_mat.static_friction = 0.5;
@@ -685,12 +824,15 @@ fn test_friction() {
     let sliding_box = world.spawn();
     world.add_component(sliding_box, Transform::new(Vec3::new(0.0, 1.0, 0.0))); // Touches ground (y=0 is top of ground, box is at 1.0 with half_extents=1.0)
     world.add_component(sliding_box, RigidBody::new(1.0, 0.0, 0.0, true));
-    
+
     // Give it initial horizontal velocity
     let mut vel = Velocity::default();
     vel.linear = Vec3::new(5.0, 0.0, 0.0);
     world.add_component(sliding_box, vel);
-    world.add_component(sliding_box, Collider::box_collider(Vec3::splat(1.0)).with_material(box_mat));
+    world.add_component(
+        sliding_box,
+        Collider::box_collider(Vec3::splat(1.0)).with_material(box_mat),
+    );
 
     // Simulate for 60 frames (1 second)
     for _ in 0..60 {
@@ -705,17 +847,27 @@ fn test_friction() {
         }
     }
 
-    // 5.0 -> 4.95 is the current drag + friction application since sleeping/materials 
+    // 5.0 -> 4.95 is the current drag + friction application since sleeping/materials
     // might have different weighting. We just check that it strictly slowed down.
-    assert!(final_vel.x < 4.99, "Friction should have slowed down the box! Final vel: {}", final_vel.x);
-    assert!(final_vel.x > 0.0, "Box shouldn't go backwards! Final vel: {}", final_vel.x);
+    assert!(
+        final_vel.x < 4.99,
+        "Friction should have slowed down the box! Final vel: {}",
+        final_vel.x
+    );
+    assert!(
+        final_vel.x > 0.0,
+        "Box shouldn't go backwards! Final vel: {}",
+        final_vel.x
+    );
 }
 
 #[test]
 fn test_explosion_fracture_combo() {
-    use gizmo_physics::components::{Breakable, Collider, RigidBody, Transform, Velocity, Explosion};
-    use gizmo_math::Vec3;
     use gizmo_core::world::World;
+    use gizmo_math::Vec3;
+    use gizmo_physics::components::{
+        Breakable, Collider, Explosion, RigidBody, Transform, Velocity,
+    };
     use gizmo_physics::system::physics_explosion_system;
 
     let mut world = World::new();
@@ -732,24 +884,30 @@ fn test_explosion_fracture_combo() {
     world.add_component(fragile_box, RigidBody::new(10.0, 0.0, 0.0, true));
     world.add_component(fragile_box, Velocity::default());
     world.add_component(fragile_box, Collider::box_collider(Vec3::splat(1.0)));
-    world.add_component(fragile_box, Breakable {
-        max_pieces: 10,
-        threshold: 50.0, // Easy to break
-        current_health: 50.0,
-        ..Default::default()
-    });
+    world.add_component(
+        fragile_box,
+        Breakable {
+            max_pieces: 10,
+            threshold: 50.0, // Easy to break
+            current_health: 50.0,
+            ..Default::default()
+        },
+    );
 
     // Spawn an overpowered bomb
     let bomb = world.spawn();
     world.add_component(bomb, Transform::new(Vec3::ZERO));
-    world.add_component(bomb, Explosion {
-        force_radius: 10.0,
-        damage_radius: 10.0,
-        force: 5000.0, // High force to shatter it instantly
-        damage: 5000.0,
-        is_active: true,
-        ..Default::default()
-    });
+    world.add_component(
+        bomb,
+        Explosion {
+            force_radius: 10.0,
+            damage_radius: 10.0,
+            force: 5000.0, // High force to shatter it instantly
+            damage: 5000.0,
+            is_active: true,
+            ..Default::default()
+        },
+    );
 
     // Initial entity count should be 2
     assert_eq!(world.entity_count(), 2);
@@ -760,8 +918,15 @@ fn test_explosion_fracture_combo() {
 
     // The bomb and the original box should be despawned (shattered)
     assert!(!world.is_alive(bomb), "Bomb should be despawned");
-    assert!(!world.is_alive(fragile_box), "Fragile box should be despawned due to shatter");
+    assert!(
+        !world.is_alive(fragile_box),
+        "Fragile box should be despawned due to shatter"
+    );
 
     // There should be multiple chunks spawned! (At least 3 chunks from voronoi)
-    assert!(world.entity_count() >= 3, "Shards should have been spawned! Count: {}", world.entity_count());
+    assert!(
+        world.entity_count() >= 3,
+        "Shards should have been spawned! Count: {}",
+        world.entity_count()
+    );
 }

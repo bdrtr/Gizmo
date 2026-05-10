@@ -1,10 +1,10 @@
+pub mod asset_server;
 pub mod bundles;
 pub mod color;
-pub mod systems;
+pub mod plugins;
 pub mod prelude;
 pub mod spawner;
-pub mod plugins;
-pub mod asset_server;
+pub mod systems;
 
 // === Motor Alt Sistemleri ===
 pub use gizmo_ai as ai;

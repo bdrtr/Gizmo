@@ -20,9 +20,18 @@ pub struct Particle {
 
 impl Particle {
     pub fn new(id: u32, position: Vec3, mass: f32) -> Self {
-        Self { position, velocity: Vec3::ZERO, density: 0.0, pressure: 0.0, mass, id }
+        Self {
+            position,
+            velocity: Vec3::ZERO,
+            density: 0.0,
+            pressure: 0.0,
+            mass,
+            id,
+        }
     }
-    pub fn kinetic_energy(&self) -> f32 { 0.5 * self.mass * self.velocity.length_squared() }
+    pub fn kinetic_energy(&self) -> f32 {
+        0.5 * self.mass * self.velocity.length_squared()
+    }
 }
 
 // ─── FluidConfig ───
@@ -39,8 +48,12 @@ pub struct FluidConfig {
 impl Default for FluidConfig {
     fn default() -> Self {
         Self {
-            rest_density: 1000.0, viscosity: 0.001, surface_tension: 0.0728,
-            smoothing_radius: 0.1, cfl_number: 0.4, max_substeps: 8,
+            rest_density: 1000.0,
+            viscosity: 0.001,
+            surface_tension: 0.0728,
+            smoothing_radius: 0.1,
+            cfl_number: 0.4,
+            max_substeps: 8,
         }
     }
 }
@@ -54,20 +67,26 @@ pub fn w_poly6(r_sq: f32, h: f32) -> f32 {
     if r_sq >= 0.0 && r_sq <= h_sq {
         let diff = h_sq - r_sq;
         (315.0 / (64.0 * PI * h.powi(9))) * diff.powi(3)
-    } else { 0.0 }
+    } else {
+        0.0
+    }
 }
 
 pub fn grad_w_spiky(r: Vec3, r_len: f32, h: f32) -> Vec3 {
     if r_len > 0.0 && r_len <= h {
         let diff = h - r_len;
         (r / r_len) * (-45.0 / (PI * h.powi(6))) * diff * diff
-    } else { Vec3::ZERO }
+    } else {
+        Vec3::ZERO
+    }
 }
 
 pub fn laplacian_w_viscosity(r_len: f32, h: f32) -> f32 {
     if r_len > 0.0 && r_len <= h {
         (45.0 / (PI * h.powi(6))) * (h - r_len)
-    } else { 0.0 }
+    } else {
+        0.0
+    }
 }
 
 pub fn w_cohesion(r_len: f32, h: f32) -> f32 {
@@ -80,7 +99,9 @@ pub fn w_cohesion(r_len: f32, h: f32) -> f32 {
         } else {
             coeff * (h - r_len).powi(3) * r_len.powi(3)
         }
-    } else { 0.0 }
+    } else {
+        0.0
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -94,21 +115,28 @@ pub struct FluidSystem {
 
 impl FluidSystem {
     pub fn init(cfg: FluidConfig) -> Self {
-        Self { particles: Vec::new(), config: cfg }
+        Self {
+            particles: Vec::new(),
+            config: cfg,
+        }
     }
 
     pub fn add_particles(&mut self, ps: &[Particle]) {
         self.particles.extend_from_slice(ps);
     }
 
-    pub fn particles(&self) -> &[Particle] { &self.particles }
+    pub fn particles(&self) -> &[Particle] {
+        &self.particles
+    }
 
     /// Brute-force komşu arama (test referansı)
     pub fn get_neighbors(&self, i: usize) -> Vec<usize> {
         let pi = &self.particles[i];
         let h_sq = self.config.smoothing_radius * self.config.smoothing_radius;
         (0..self.particles.len())
-            .filter(|&j| j != i && (pi.position - self.particles[j].position).length_squared() < h_sq)
+            .filter(|&j| {
+                j != i && (pi.position - self.particles[j].position).length_squared() < h_sq
+            })
             .collect()
     }
 
@@ -173,10 +201,14 @@ impl FluidSystem {
 
     /// CFL adaptif dt: dt ≤ CFL * h / v_max
     pub fn compute_adaptive_dt(&self, requested_dt: f32) -> f32 {
-        let v_max = self.particles.iter()
+        let v_max = self
+            .particles
+            .iter()
             .map(|p| p.velocity.length())
             .fold(0.0_f32, f32::max);
-        if v_max < 1e-6 { return requested_dt; }
+        if v_max < 1e-6 {
+            return requested_dt;
+        }
         let dt_cfl = self.config.cfl_number * self.config.smoothing_radius / v_max;
         dt_cfl.min(requested_dt)
     }
@@ -291,7 +323,13 @@ mod tests {
     fn test_poly6_monotonically_decreasing() {
         let h = 0.1;
         let (w1, w2, w3) = (w_poly6(0.001, h), w_poly6(0.005, h), w_poly6(0.009, h));
-        assert!(w1 > w2 && w2 > w3, "Monoton azalmalı: {} > {} > {}", w1, w2, w3);
+        assert!(
+            w1 > w2 && w2 > w3,
+            "Monoton azalmalı: {} > {} > {}",
+            w1,
+            w2,
+            w3
+        );
     }
 
     #[test]
@@ -300,13 +338,21 @@ mod tests {
         let n = 80;
         let dv = (2.0 * h / n as f32).powi(3);
         let mut integral = 0.0_f64;
-        for iz in 0..n { for iy in 0..n { for ix in 0..n {
-            let x = -h + (ix as f32 + 0.5) * 2.0 * h / n as f32;
-            let y = -h + (iy as f32 + 0.5) * 2.0 * h / n as f32;
-            let z = -h + (iz as f32 + 0.5) * 2.0 * h / n as f32;
-            integral += w_poly6(x*x + y*y + z*z, h) as f64 * dv as f64;
-        }}}
-        assert!((integral - 1.0).abs() < 0.05, "Poly6 integral ≈ 1.0: {:.4}", integral);
+        for iz in 0..n {
+            for iy in 0..n {
+                for ix in 0..n {
+                    let x = -h + (ix as f32 + 0.5) * 2.0 * h / n as f32;
+                    let y = -h + (iy as f32 + 0.5) * 2.0 * h / n as f32;
+                    let z = -h + (iz as f32 + 0.5) * 2.0 * h / n as f32;
+                    integral += w_poly6(x * x + y * y + z * z, h) as f64 * dv as f64;
+                }
+            }
+        }
+        assert!(
+            (integral - 1.0).abs() < 0.05,
+            "Poly6 integral ≈ 1.0: {:.4}",
+            integral
+        );
     }
 
     #[test]
@@ -425,8 +471,11 @@ mod tests {
         }
         let f1 = sys.compute_pressure_force(1);
         // Sağdaki parçacık ortadakinden sağa itilmeli (pozitif x)
-        assert!(f1.x > 0.0 || f1.length() > 0.0,
-            "Basınç kuvveti itici olmalı: {:?}", f1);
+        assert!(
+            f1.x > 0.0 || f1.length() > 0.0,
+            "Basınç kuvveti itici olmalı: {:?}",
+            f1
+        );
     }
 
     #[test]
@@ -450,14 +499,23 @@ mod tests {
         sys.particles[0].velocity = Vec3::new(10.0, 0.0, 0.0);
         let dt = sys.compute_adaptive_dt(1.0 / 60.0);
         let expected = 0.4 * 0.1 / 10.0; // 0.004
-        assert!((dt - expected).abs() < 1e-6, "CFL dt: {}, beklenen: {}", dt, expected);
+        assert!(
+            (dt - expected).abs() < 1e-6,
+            "CFL dt: {}, beklenen: {}",
+            dt,
+            expected
+        );
     }
 
     #[test]
     fn test_cfl_no_motion() {
         let sys = make_system(5);
         let dt = sys.compute_adaptive_dt(1.0 / 60.0);
-        assert!((dt - 1.0 / 60.0).abs() < 1e-6, "Hareket yoksa tam dt: {}", dt);
+        assert!(
+            (dt - 1.0 / 60.0).abs() < 1e-6,
+            "Hareket yoksa tam dt: {}",
+            dt
+        );
     }
 
     // ─── CFL_LimitsTimestep (C++ karşılığı) ───
@@ -476,18 +534,17 @@ mod tests {
         assert!(
             safe_dt < requested_dt,
             "CFL koşulu büyük hızda dt'yi kısmalı: safe_dt={}, requested={}",
-            safe_dt, requested_dt
+            safe_dt,
+            requested_dt
         );
-        assert!(
-            safe_dt > 0.0,
-            "dt her zaman pozitif olmalı: {}",
-            safe_dt
-        );
+        assert!(safe_dt > 0.0, "dt her zaman pozitif olmalı: {}", safe_dt);
 
         let expected = 0.4 * 0.1 / 1000.0; // 0.00004
         assert!(
             (safe_dt - expected).abs() < 1e-8,
-            "CFL dt = {}, beklenen ≈ {}", safe_dt, expected
+            "CFL dt = {}, beklenen ≈ {}",
+            safe_dt,
+            expected
         );
     }
 
@@ -505,7 +562,8 @@ mod tests {
         assert!(
             (total_mass_before - total_mass_after).abs() < 1e-6,
             "60 adım sonra kütle değişmemeli: önce={}, sonra={}",
-            total_mass_before, total_mass_after
+            total_mass_before,
+            total_mass_after
         );
     }
 
@@ -521,13 +579,19 @@ mod tests {
         sys.step(0.1);
         let y1 = sys.particles()[0].position.y;
 
-        assert!(y1 < y0, "Parçacık yerçekimi ile aşağı düşmeli: y0={}, y1={}", y0, y1);
+        assert!(
+            y1 < y0,
+            "Parçacık yerçekimi ile aşağı düşmeli: y0={}, y1={}",
+            y0,
+            y1
+        );
         // Symplectic Euler: v += g*dt, pos += v*dt → Δy ≈ g*dt² = 9.81*0.01
         let expected_fall = 9.81 * 0.1 * 0.1;
         assert!(
             (y0 - y1 - expected_fall).abs() < 0.02,
             "Serbest düşüş Δy ≈ {}: gerçek Δy = {}",
-            expected_fall, y0 - y1
+            expected_fall,
+            y0 - y1
         );
     }
 
@@ -542,13 +606,15 @@ mod tests {
 
         let avg_density: f32 = (0..sys.particles().len())
             .map(|i| sys.compute_density(i))
-            .sum::<f32>() / sys.particles().len() as f32;
+            .sum::<f32>()
+            / sys.particles().len() as f32;
 
         // ±%90 tolerans (CPU brute-force, düşük kütle parçacıklar, sınır yok)
         // Not: GPU simülasyonda sınır koşulları olduğu için daha yakınsak olur
         assert!(
             avg_density > 0.0,
-            "Ortalama yoğunluk pozitif olmalı: {}", avg_density
+            "Ortalama yoğunluk pozitif olmalı: {}",
+            avg_density
         );
     }
 
@@ -608,7 +674,8 @@ mod tests {
         assert!(
             vel_diff_after < vel_diff_before,
             "Viskozite hız farkını azaltmalı: önce={}, sonra={}",
-            vel_diff_before, vel_diff_after
+            vel_diff_before,
+            vel_diff_after
         );
     }
 
@@ -637,9 +704,9 @@ mod tests {
         let mut sys = FluidSystem::init(FluidConfig::default());
         // h = 0.1
         sys.add_particles(&[
-            Particle::new(0, Vec3::new(0.0, 0.0, 0.0), 0.01),  // p1
+            Particle::new(0, Vec3::new(0.0, 0.0, 0.0), 0.01), // p1
             Particle::new(1, Vec3::new(0.08, 0.0, 0.0), 0.01), // p2: h içinde
-            Particle::new(2, Vec3::new(0.5, 0.0, 0.0), 0.01),  // p3: h dışında
+            Particle::new(2, Vec3::new(0.5, 0.0, 0.0), 0.01), // p3: h dışında
         ]);
 
         let neighbors = sys.get_neighbors(0); // p1'in komşuları
@@ -689,7 +756,8 @@ mod tests {
         assert!(
             dist_after < dist_before,
             "Karşılıklı hızlar damlaları yaklaştırmalı: önce={}, sonra={}",
-            dist_before, dist_after
+            dist_before,
+            dist_after
         );
     }
 
@@ -707,7 +775,10 @@ mod tests {
     fn test_step_gravity() {
         let mut sys = make_system(1);
         sys.step(1.0 / 60.0);
-        assert!(sys.particles()[0].velocity.y < 0.0, "Yerçekimi aşağı çekmeli");
+        assert!(
+            sys.particles()[0].velocity.y < 0.0,
+            "Yerçekimi aşağı çekmeli"
+        );
     }
 
     #[test]
@@ -721,7 +792,8 @@ mod tests {
         assert!(
             final_ke < 1000.0,
             "Enerji patlaması olmamalı: {} → {}",
-            initial_ke, final_ke
+            initial_ke,
+            final_ke
         );
     }
 
@@ -754,11 +826,17 @@ mod tests {
 
     #[test]
     fn test_gpu_collider_size() {
-        assert_eq!(std::mem::size_of::<crate::gpu_fluid::types::FluidCollider>(), 48);
+        assert_eq!(
+            std::mem::size_of::<crate::gpu_fluid::types::FluidCollider>(),
+            48
+        );
     }
 
     #[test]
     fn test_gpu_particle_hash_size() {
-        assert_eq!(std::mem::size_of::<crate::gpu_fluid::types::ParticleHash>(), 8);
+        assert_eq!(
+            std::mem::size_of::<crate::gpu_fluid::types::ParticleHash>(),
+            8
+        );
     }
 }

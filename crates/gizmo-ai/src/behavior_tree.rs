@@ -23,7 +23,10 @@ pub struct Sequence {
 
 impl Sequence {
     pub fn new(children: Vec<Box<dyn BtNode>>) -> Self {
-        Self { children, current_idx: 0 }
+        Self {
+            children,
+            current_idx: 0,
+        }
     }
 }
 
@@ -58,7 +61,10 @@ pub struct Selector {
 
 impl Selector {
     pub fn new(children: Vec<Box<dyn BtNode>>) -> Self {
-        Self { children, current_idx: 0 }
+        Self {
+            children,
+            current_idx: 0,
+        }
     }
 }
 

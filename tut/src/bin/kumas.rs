@@ -43,11 +43,19 @@ fn main() {
             let cam_entity = world.spawn();
             world.add_component(
                 cam_entity,
-                Transform::new(game.cam_pos).with_rotation(pitch_yaw_quat(game.cam_pitch, game.cam_yaw)),
+                Transform::new(game.cam_pos)
+                    .with_rotation(pitch_yaw_quat(game.cam_pitch, game.cam_yaw)),
             );
             world.add_component(
                 cam_entity,
-                Camera::new(std::f32::consts::FRAC_PI_3, 0.1, 500.0, game.cam_yaw, game.cam_pitch, true),
+                Camera::new(
+                    std::f32::consts::FRAC_PI_3,
+                    0.1,
+                    500.0,
+                    game.cam_yaw,
+                    game.cam_pitch,
+                    true,
+                ),
             );
             game.cam_id = cam_entity.id();
 
@@ -55,12 +63,17 @@ fn main() {
             let sun = world.spawn();
             world.add_component(
                 sun,
-                Transform::new(Vec3::new(100.0, 100.0, 100.0))
-                    .with_rotation(Quat::from_axis_angle(Vec3::new(1.0, 0.0, 1.0).normalize(), -1.0)),
+                Transform::new(Vec3::new(100.0, 100.0, 100.0)).with_rotation(
+                    Quat::from_axis_angle(Vec3::new(1.0, 0.0, 1.0).normalize(), -1.0),
+                ),
             );
             world.add_component(
                 sun,
-                DirectionalLight::new(Vec3::new(1.0, 1.0, 0.95), 3.0, gizmo::renderer::components::LightRole::Sun),
+                DirectionalLight::new(
+                    Vec3::new(1.0, 1.0, 0.95),
+                    3.0,
+                    gizmo::renderer::components::LightRole::Sun,
+                ),
             );
 
             // Kumaş Ayarları
@@ -81,8 +94,9 @@ fn main() {
                     );
 
                     let entity = world.spawn();
-                    let is_pinned = z == 0 && (x == 0 || x == grid_size_x / 2 || x == grid_size_x - 1);
-                    
+                    let is_pinned =
+                        z == 0 && (x == 0 || x == grid_size_x / 2 || x == grid_size_x - 1);
+
                     world.add_component(entity, Transform::new(pos));
                     world.add_component(
                         entity,
@@ -90,7 +104,7 @@ fn main() {
                     );
                     world.add_component(entity, Velocity::default());
                     world.add_component(entity, Collider::box_collider(Vec3::splat(spacing * 0.4)));
-                    
+
                     nodes.push(entity.id());
                 }
             }
@@ -100,10 +114,10 @@ fn main() {
             // GpuBox array indekslerine eşleniyor (GpuPhysicsLink).
             // Şu anda joint'leri başlangıçta direkt GPU'ya gönderemeyiz çünkü
             // GpuPhysicsLink id'leri ancak ilk render pass sonrası belli oluyor!
-            
+
             // Bu yüzden "joint" constraintlerini oluşturmayı bir "Startup System" içine
             // veya 1 frame sonra çalışacak bir flag içine koymalıyız.
-            
+
             game
         })
         .set_update(|world, state, dt, input| {
@@ -119,14 +133,28 @@ fn main() {
 
             // Kamera Hareketi
             let mut speed = state.cam_speed;
-            if input.is_key_pressed(KeyCode::ShiftLeft as u32) { speed *= 3.0; }
+            if input.is_key_pressed(KeyCode::ShiftLeft as u32) {
+                speed *= 3.0;
+            }
             let mut cam_move = Vec3::ZERO;
-            if input.is_key_pressed(KeyCode::KeyW as u32) { cam_move.z -= 1.0; }
-            if input.is_key_pressed(KeyCode::KeyS as u32) { cam_move.z += 1.0; }
-            if input.is_key_pressed(KeyCode::KeyA as u32) { cam_move.x -= 1.0; }
-            if input.is_key_pressed(KeyCode::KeyD as u32) { cam_move.x += 1.0; }
-            if input.is_key_pressed(KeyCode::KeyQ as u32) { cam_move.y -= 1.0; }
-            if input.is_key_pressed(KeyCode::KeyE as u32) { cam_move.y += 1.0; }
+            if input.is_key_pressed(KeyCode::KeyW as u32) {
+                cam_move.z -= 1.0;
+            }
+            if input.is_key_pressed(KeyCode::KeyS as u32) {
+                cam_move.z += 1.0;
+            }
+            if input.is_key_pressed(KeyCode::KeyA as u32) {
+                cam_move.x -= 1.0;
+            }
+            if input.is_key_pressed(KeyCode::KeyD as u32) {
+                cam_move.x += 1.0;
+            }
+            if input.is_key_pressed(KeyCode::KeyQ as u32) {
+                cam_move.y -= 1.0;
+            }
+            if input.is_key_pressed(KeyCode::KeyE as u32) {
+                cam_move.y += 1.0;
+            }
 
             if cam_move.length_squared() > 0.0 {
                 cam_move = cam_move.normalize() * speed * dt;
@@ -145,12 +173,15 @@ fn main() {
                 let grid_z = 40;
                 let mut node_gpu_ids = vec![0; grid_x * grid_z];
                 let mut can_load = false;
-                
-                if let Some(mut q) = world.query::<(&gizmo::physics::GpuPhysicsLink, &Transform)>() {
+
+                if let Some(mut q) = world.query::<(&gizmo::physics::GpuPhysicsLink, &Transform)>()
+                {
                     for (_e, (link, trans)) in q.iter_mut() {
                         if (trans.position.y - 40.0).abs() < 1.0 {
-                            let x = ((trans.position.x + (grid_x as f32 / 2.0)) / 1.0).round() as i32;
-                            let z = ((trans.position.z + (grid_z as f32 / 2.0)) / 1.0).round() as i32;
+                            let x =
+                                ((trans.position.x + (grid_x as f32 / 2.0)) / 1.0).round() as i32;
+                            let z =
+                                ((trans.position.z + (grid_z as f32 / 2.0)) / 1.0).round() as i32;
                             if x >= 0 && x < grid_x as i32 && z >= 0 && z < grid_z as i32 {
                                 node_gpu_ids[(z * grid_x as i32 + x) as usize] = link.id;
                                 can_load = true;
@@ -160,7 +191,7 @@ fn main() {
                 }
 
                 if can_load {
-                    // GPU Physics var mı kontrol edemiyoruz update'te, 
+                    // GPU Physics var mı kontrol edemiyoruz update'te,
                     // Ama jointleri bir listeye ekleyip render pass'da submit edebiliriz.
                     // Ya da state.joints_loaded = true yaparız, işi render'a bırakırız!
                     state.joints_loaded = true;
@@ -187,12 +218,16 @@ fn main() {
                         let grid_x = 40;
                         let grid_z = 40;
                         let mut node_gpu_ids = vec![0; grid_x * grid_z];
-                        
-                        if let Some(mut q) = world.query::<(&gizmo::physics::GpuPhysicsLink, &Transform)>() {
+
+                        if let Some(mut q) =
+                            world.query::<(&gizmo::physics::GpuPhysicsLink, &Transform)>()
+                        {
                             for (_e, (link, trans)) in q.iter_mut() {
                                 if (trans.position.y - 40.0).abs() < 1.0 {
-                                    let x = ((trans.position.x + (grid_x as f32 / 2.0)) / 1.0).round() as i32;
-                                    let z = ((trans.position.z + (grid_z as f32 / 2.0)) / 1.0).round() as i32;
+                                    let x = ((trans.position.x + (grid_x as f32 / 2.0)) / 1.0)
+                                        .round() as i32;
+                                    let z = ((trans.position.z + (grid_z as f32 / 2.0)) / 1.0)
+                                        .round() as i32;
                                     if x >= 0 && x < grid_x as i32 && z >= 0 && z < grid_z as i32 {
                                         node_gpu_ids[(z * grid_x as i32 + x) as usize] = link.id;
                                     }
@@ -202,35 +237,78 @@ fn main() {
 
                         let stiffness = 300.0;
                         let damping = 0.5;
-                        
+
                         for z in 0..grid_z {
                             for x in 0..grid_x {
                                 let idx = z * grid_x + x;
                                 let id_a = node_gpu_ids[idx];
-                                
+
                                 // Structural
                                 if x < grid_x - 1 {
                                     let id_b = node_gpu_ids[idx + 1];
-                                    physics.add_joint(&renderer.queue, GpuJoint::spring(id_a, id_b, [0.5, 0.0, 0.0], [-0.5, 0.0, 0.0], stiffness, damping));
+                                    physics.add_joint(
+                                        &renderer.queue,
+                                        GpuJoint::spring(
+                                            id_a,
+                                            id_b,
+                                            [0.5, 0.0, 0.0],
+                                            [-0.5, 0.0, 0.0],
+                                            stiffness,
+                                            damping,
+                                        ),
+                                    );
                                 }
                                 if z < grid_z - 1 {
                                     let id_b = node_gpu_ids[idx + grid_x];
-                                    physics.add_joint(&renderer.queue, GpuJoint::spring(id_a, id_b, [0.0, 0.0, 0.5], [0.0, 0.0, -0.5], stiffness, damping));
+                                    physics.add_joint(
+                                        &renderer.queue,
+                                        GpuJoint::spring(
+                                            id_a,
+                                            id_b,
+                                            [0.0, 0.0, 0.5],
+                                            [0.0, 0.0, -0.5],
+                                            stiffness,
+                                            damping,
+                                        ),
+                                    );
                                 }
-                                
+
                                 // Shear
                                 if x < grid_x - 1 && z < grid_z - 1 {
                                     let id_b = node_gpu_ids[idx + grid_x + 1];
-                                    physics.add_joint(&renderer.queue, GpuJoint::spring(id_a, id_b, [0.5, 0.0, 0.5], [-0.5, 0.0, -0.5], stiffness * 0.5, damping));
-                                    
+                                    physics.add_joint(
+                                        &renderer.queue,
+                                        GpuJoint::spring(
+                                            id_a,
+                                            id_b,
+                                            [0.5, 0.0, 0.5],
+                                            [-0.5, 0.0, -0.5],
+                                            stiffness * 0.5,
+                                            damping,
+                                        ),
+                                    );
+
                                     let id_c = node_gpu_ids[idx + grid_x];
                                     let id_d = node_gpu_ids[idx + 1];
-                                    physics.add_joint(&renderer.queue, GpuJoint::spring(id_c, id_d, [0.5, 0.0, -0.5], [-0.5, 0.0, 0.5], stiffness * 0.5, damping));
+                                    physics.add_joint(
+                                        &renderer.queue,
+                                        GpuJoint::spring(
+                                            id_c,
+                                            id_d,
+                                            [0.5, 0.0, -0.5],
+                                            [-0.5, 0.0, 0.5],
+                                            stiffness * 0.5,
+                                            damping,
+                                        ),
+                                    );
                                 }
                             }
                         }
-                        
-                        println!("{} Joint başarıyla GPU'ya yüklendi! XPBD aktif.", physics.joint_count);
+
+                        println!(
+                            "{} Joint başarıyla GPU'ya yüklendi! XPBD aktif.",
+                            physics.joint_count
+                        );
                         physics.update_params(&renderer.queue, 1.0 / 60.0, [0.0, -9.81, 0.0]);
                     }
                 }

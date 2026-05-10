@@ -60,18 +60,19 @@ impl AccessInfo {
 /// `PreUpdate → Update → Physics → PostUpdate → Render`
 ///
 /// Aynı faz içindeki sistemler DAG batching ile paralel çalıştırılır.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum Phase {
     /// Input polling, zaman güncellemesi, olay temizliği
-    PreUpdate  = 0,
+    PreUpdate = 0,
     /// Oyun mantığı, AI, scripting
-    Update     = 1,
+    #[default]
+    Update = 1,
     /// Fizik simülasyonu (fixed timestep ile)
-    Physics    = 2,
+    Physics = 2,
     /// Transform propagation, cleanup
     PostUpdate = 3,
     /// Rendering hazırlığı
-    Render     = 4,
+    Render = 4,
 }
 
 impl Phase {
@@ -87,18 +88,12 @@ impl Phase {
     /// Faz adını döndürür (tracing span'ları için).
     pub const fn name(&self) -> &'static str {
         match self {
-            Phase::PreUpdate  => "pre_update",
-            Phase::Update     => "update",
-            Phase::Physics    => "physics",
+            Phase::PreUpdate => "pre_update",
+            Phase::Update => "update",
+            Phase::Physics => "physics",
             Phase::PostUpdate => "post_update",
-            Phase::Render     => "render",
+            Phase::Render => "render",
         }
-    }
-}
-
-impl Default for Phase {
-    fn default() -> Self {
-        Phase::Update
     }
 }
 
@@ -510,6 +505,12 @@ pub struct SystemBatch {
     pub access_info: AccessInfo,
 }
 
+impl Default for SystemBatch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SystemBatch {
     pub fn new() -> Self {
         Self {
@@ -624,7 +625,11 @@ impl Schedule {
         let mut adj = vec![Vec::new(); count];
         let mut in_degree = vec![0usize; count];
 
-        let add_edge = |from: usize, to: usize, edge_set: &mut HashSet<(usize, usize)>, adj: &mut Vec<Vec<usize>>, in_degree: &mut Vec<usize>| {
+        let add_edge = |from: usize,
+                        to: usize,
+                        edge_set: &mut HashSet<(usize, usize)>,
+                        adj: &mut Vec<Vec<usize>>,
+                        in_degree: &mut Vec<usize>| {
             if edge_set.insert((from, to)) {
                 adj[from].push(to);
                 in_degree[to] += 1;
@@ -872,7 +877,7 @@ mod tests {
     fn test_schedule_access_info_compatibility() {
         let mut info1 = AccessInfo::new();
         info1.component_reads.push(TypeId::of::<CompA>());
-        
+
         let mut info2 = AccessInfo::new();
         info2.component_reads.push(TypeId::of::<CompA>());
 
@@ -884,7 +889,7 @@ mod tests {
 
         // Biri okuyor diğeri YAZIYOR, uyumsuz (farklı batch'lerde olmalı)
         assert!(!info1.is_compatible_with(&info3));
-        
+
         // İkisi de YAZIYOR, uyumsuz
         let mut info4 = AccessInfo::new();
         info4.component_writes.push(TypeId::of::<CompA>());
@@ -914,21 +919,13 @@ mod tests {
         let log = RunLog::new();
 
         // sys1: CompA yazıyor
-        schedule.add_di_system(
-            create_system("sys1", log.clone()).writes::<CompA>()
-        );
+        schedule.add_di_system(create_system("sys1", log.clone()).writes::<CompA>());
         // sys2: CompA okuyor (sys1 ile çakışır, ayrı batch'e gitmeli)
-        schedule.add_di_system(
-            create_system("sys2", log.clone()).reads::<CompA>()
-        );
+        schedule.add_di_system(create_system("sys2", log.clone()).reads::<CompA>());
         // sys3: CompB yazıyor (hiçbiriyle çakışmaz, sys1 ile aynı batch'e girebilir)
-        schedule.add_di_system(
-            create_system("sys3", log.clone()).writes::<CompB>()
-        );
+        schedule.add_di_system(create_system("sys3", log.clone()).writes::<CompB>());
         // sys4: CompA yazıyor (sys1 ve sys2 ile çakışır, en sona kalmalı)
-        schedule.add_di_system(
-            create_system("sys4", log.clone()).writes::<CompA>()
-        );
+        schedule.add_di_system(create_system("sys4", log.clone()).writes::<CompA>());
 
         schedule.build();
 
@@ -951,19 +948,16 @@ mod tests {
         schedule.add_di_system(
             create_system("sys1", log.clone())
                 .label("System1")
-                .after("System2")
+                .after("System2"),
         );
-        
-        schedule.add_di_system(
-            create_system("sys2", log.clone())
-                .label("System2")
-        );
+
+        schedule.add_di_system(create_system("sys2", log.clone()).label("System2"));
 
         // sys3 "before" sys2 olarak işaretlendi
         schedule.add_di_system(
             create_system("sys3", log.clone())
                 .label("System3")
-                .before("System2")
+                .before("System2"),
         );
 
         schedule.build();
@@ -985,22 +979,12 @@ mod tests {
         let mut schedule = Schedule::new();
         let log = RunLog::new();
 
-        schedule.add_di_system(
-            create_system("sysA", log.clone())
-                .label("A")
-                .before("B")
-        );
-        
-        schedule.add_di_system(
-            create_system("sysB", log.clone())
-                .label("B")
-                .before("C")
-        );
+        schedule.add_di_system(create_system("sysA", log.clone()).label("A").before("B"));
+
+        schedule.add_di_system(create_system("sysB", log.clone()).label("B").before("C"));
 
         schedule.add_di_system(
-            create_system("sysC", log.clone())
-                .label("C")
-                .before("A") // Cycle: A -> B -> C -> A
+            create_system("sysC", log.clone()).label("C").before("A"), // Cycle: A -> B -> C -> A
         );
 
         // Bu çağrı panic atmalı
@@ -1014,15 +998,10 @@ mod tests {
 
         // 3 sistem farklı fazlara atanmış — veri çakışması yok ama
         // faz sıralaması garanti edilmeli: PreUpdate → Physics → Render
-        schedule.add_di_system(
-            create_system("render_sys", log.clone()).in_phase(Phase::Render)
-        );
-        schedule.add_di_system(
-            create_system("physics_sys", log.clone()).in_phase(Phase::Physics)
-        );
-        schedule.add_di_system(
-            create_system("pre_update_sys", log.clone()).in_phase(Phase::PreUpdate)
-        );
+        schedule.add_di_system(create_system("render_sys", log.clone()).in_phase(Phase::Render));
+        schedule.add_di_system(create_system("physics_sys", log.clone()).in_phase(Phase::Physics));
+        schedule
+            .add_di_system(create_system("pre_update_sys", log.clone()).in_phase(Phase::PreUpdate));
 
         schedule.build();
 
@@ -1052,18 +1031,15 @@ mod tests {
         schedule.add_di_system(
             create_system("phys1", log.clone())
                 .in_phase(Phase::Physics)
-                .writes::<CompA>()
+                .writes::<CompA>(),
         );
         schedule.add_di_system(
             create_system("phys2", log.clone())
                 .in_phase(Phase::Physics)
-                .reads::<CompA>()
+                .reads::<CompA>(),
         );
         // Update fazında 1 bağımsız sistem
-        schedule.add_di_system(
-            create_system("update_sys", log.clone())
-                .in_phase(Phase::Update)
-        );
+        schedule.add_di_system(create_system("update_sys", log.clone()).in_phase(Phase::Update));
 
         schedule.build();
 

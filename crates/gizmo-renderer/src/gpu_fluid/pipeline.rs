@@ -225,14 +225,13 @@ pub fn create_fluid_pipelines(
             compilation_options: Default::default(),
         });
     // AAA: Foam/Spray classification pipeline
-    let pipeline_classify =
-        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Fluid Classify Particles"),
-            layout: Some(&pipeline_layout),
-            module: &compute_shader,
-            entry_point: "classify_particles",
-            compilation_options: Default::default(),
-        });
+    let pipeline_classify = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Fluid Classify Particles"),
+        layout: Some(&pipeline_layout),
+        module: &compute_shader,
+        entry_point: "classify_particles",
+        compilation_options: Default::default(),
+    });
 
     // SSFR Layouts
     let particle_render_bg_layout =

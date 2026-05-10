@@ -285,16 +285,25 @@ impl GpuPhysicsSystem {
             debug_line_buffer: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Debug Line Buffer"),
                 size: 32768 * 2 * std::mem::size_of::<DebugVertex>() as wgpu::BufferAddress,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::VERTEX
+                    | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
             debug_line_count_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Debug Line Count"),
                 contents: bytemuck::cast_slice(&[0u32, 1u32, 0u32, 0u32]), // IndirectDrawArgs: vertex_count, instance_count, first_vertex, first_instance
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::INDIRECT
+                    | wgpu::BufferUsages::COPY_DST,
             }),
             debug_params_buffer: {
-                let dp = DebugParams { num_boxes: max_boxes, num_joints: 0, show_wireframes: 0, _pad: 0 };
+                let dp = DebugParams {
+                    num_boxes: max_boxes,
+                    num_joints: 0,
+                    show_wireframes: 0,
+                    _pad: 0,
+                };
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Debug Params"),
                     contents: bytemuck::cast_slice(&[dp]),
@@ -313,22 +322,69 @@ impl GpuPhysicsSystem {
             debug_compute_pipeline: {
                 let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("Physics Debug Compute Shader"),
-                    source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/physics_debug.wgsl").into()),
+                    source: wgpu::ShaderSource::Wgsl(
+                        include_str!("../shaders/physics_debug.wgsl").into(),
+                    ),
                 });
                 let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("Debug Compute Layout"),
-                    bind_group_layouts: &[
-                        &device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    bind_group_layouts: &[&device.create_bind_group_layout(
+                        &wgpu::BindGroupLayoutDescriptor {
                             entries: &[
-                                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                                wgpu::BindGroupLayoutEntry {
+                                    binding: 0,
+                                    visibility: wgpu::ShaderStages::COMPUTE,
+                                    ty: wgpu::BindingType::Buffer {
+                                        ty: wgpu::BufferBindingType::Uniform,
+                                        has_dynamic_offset: false,
+                                        min_binding_size: None,
+                                    },
+                                    count: None,
+                                },
+                                wgpu::BindGroupLayoutEntry {
+                                    binding: 1,
+                                    visibility: wgpu::ShaderStages::COMPUTE,
+                                    ty: wgpu::BindingType::Buffer {
+                                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                        has_dynamic_offset: false,
+                                        min_binding_size: None,
+                                    },
+                                    count: None,
+                                },
+                                wgpu::BindGroupLayoutEntry {
+                                    binding: 2,
+                                    visibility: wgpu::ShaderStages::COMPUTE,
+                                    ty: wgpu::BindingType::Buffer {
+                                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                        has_dynamic_offset: false,
+                                        min_binding_size: None,
+                                    },
+                                    count: None,
+                                },
+                                wgpu::BindGroupLayoutEntry {
+                                    binding: 3,
+                                    visibility: wgpu::ShaderStages::COMPUTE,
+                                    ty: wgpu::BindingType::Buffer {
+                                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                        has_dynamic_offset: false,
+                                        min_binding_size: None,
+                                    },
+                                    count: None,
+                                },
+                                wgpu::BindGroupLayoutEntry {
+                                    binding: 4,
+                                    visibility: wgpu::ShaderStages::COMPUTE,
+                                    ty: wgpu::BindingType::Buffer {
+                                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                        has_dynamic_offset: false,
+                                        min_binding_size: None,
+                                    },
+                                    count: None,
+                                },
                             ],
                             label: Some("debug_compute_layout_inner"),
-                        }),
-                    ],
+                        },
+                    )],
                     push_constant_ranges: &[],
                 });
                 device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -342,7 +398,9 @@ impl GpuPhysicsSystem {
             debug_render_pipeline: {
                 let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("Physics Debug Shader"),
-                    source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/physics_debug.wgsl").into()),
+                    source: wgpu::ShaderSource::Wgsl(
+                        include_str!("../shaders/physics_debug.wgsl").into(),
+                    ),
                 });
                 let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("Debug Render Layout"),
@@ -417,13 +475,9 @@ impl GpuPhysicsSystem {
             return None;
         }
         let idx = self.joint_count;
-        let offset = (idx as wgpu::BufferAddress)
-            * std::mem::size_of::<GpuJoint>() as wgpu::BufferAddress;
-        queue.write_buffer(
-            &self.joints_buffer,
-            offset,
-            bytemuck::cast_slice(&[joint]),
-        );
+        let offset =
+            (idx as wgpu::BufferAddress) * std::mem::size_of::<GpuJoint>() as wgpu::BufferAddress;
+        queue.write_buffer(&self.joints_buffer, offset, bytemuck::cast_slice(&[joint]));
         self.joint_count += 1;
         Some(idx)
     }
@@ -435,11 +489,7 @@ impl GpuPhysicsSystem {
             empty.flags = 0; // inactive
             let offset = (index as wgpu::BufferAddress)
                 * std::mem::size_of::<GpuJoint>() as wgpu::BufferAddress;
-            queue.write_buffer(
-                &self.joints_buffer,
-                offset,
-                bytemuck::cast_slice(&[empty]),
-            );
+            queue.write_buffer(&self.joints_buffer, offset, bytemuck::cast_slice(&[empty]));
         }
     }
 
@@ -457,22 +507,63 @@ impl GpuPhysicsSystem {
             num_joints: self.joint_count,
             _pad2: 0,
         };
-        queue.write_buffer(
-            &self.params_buffer,
-            0,
-            bytemuck::cast_slice(&[params]),
-        );
+        queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
     }
 
     /// Debug görselleştirmeyi etkinleştir. Bind group'u gerçek buffer referanslarıyla oluşturur.
     pub fn enable_debug(&mut self, device: &wgpu::Device, _show_flags: u32) {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
-                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
             label: Some("debug_compute_layout"),
         });
@@ -480,11 +571,26 @@ impl GpuPhysicsSystem {
         self.debug_compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.debug_params_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: self.boxes_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: self.joints_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: self.debug_line_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: self.debug_line_count_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.debug_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.boxes_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.joints_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.debug_line_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.debug_line_count_buffer.as_entire_binding(),
+                },
             ],
             label: Some("debug_compute_bind_group"),
         });
@@ -584,7 +690,13 @@ impl GpuPhysicsSystem {
         cpass.set_pipeline(&self.debug_compute_pipeline);
         cpass.set_bind_group(0, &self.debug_compute_bind_group, &[]);
         // Dispatch enough workgroups for all boxes
-        cpass.dispatch_workgroups(self.max_boxes.div_ceil(256).max(self.max_joints.div_ceil(256)), 1, 1);
+        cpass.dispatch_workgroups(
+            self.max_boxes
+                .div_ceil(256)
+                .max(self.max_joints.div_ceil(256)),
+            1,
+            1,
+        );
     }
 
     pub fn debug_render_pass<'a>(

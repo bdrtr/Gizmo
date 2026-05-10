@@ -1,5 +1,5 @@
-use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 /// Ergonomik input soyutlama katmanı.
 ///
@@ -577,15 +577,13 @@ impl PlaybackData {
     pub fn save(&self, path: &str) -> Result<(), String> {
         let string_data = ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())
             .map_err(|e| format!("Serilestirme hatasi: {}", e))?;
-        std::fs::write(path, string_data)
-            .map_err(|e| format!("Dosya yazma hatasi: {}", e))?;
+        std::fs::write(path, string_data).map_err(|e| format!("Dosya yazma hatasi: {}", e))?;
         Ok(())
     }
 
     pub fn load(path: &str) -> Result<Self, String> {
-        let string_data = std::fs::read_to_string(path)
-            .map_err(|e| format!("Dosya okuma hatasi: {}", e))?;
-        ron::from_str(&string_data)
-            .map_err(|e| format!("Deserilestirme hatasi: {}", e))
+        let string_data =
+            std::fs::read_to_string(path).map_err(|e| format!("Dosya okuma hatasi: {}", e))?;
+        ron::from_str(&string_data).map_err(|e| format!("Deserilestirme hatasi: {}", e))
     }
 }

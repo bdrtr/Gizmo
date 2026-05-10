@@ -382,7 +382,8 @@ pub fn execute_render_pipeline(
                         bind_group: mat.bind_group.clone(),
                         skeleton_bg: skel_bg,
                         instances: vec_pool.pop().unwrap_or_else(|| Vec::with_capacity(32)),
-                        is_skybox: mat.material_type == gizmo::renderer::components::MaterialType::Skybox,
+                        is_skybox: mat.material_type
+                            == gizmo::renderer::components::MaterialType::Skybox,
                         is_grid: mat.material_type
                             == gizmo::renderer::components::MaterialType::Grid,
                     });
@@ -501,7 +502,8 @@ pub fn execute_render_pipeline(
                             let spawn_interval = 1.0 / emitter.spawn_rate;
                             let mut spawned_this_frame = 0;
 
-                            while emitter.get_accumulator() >= spawn_interval && spawned_this_frame < 100
+                            while emitter.get_accumulator() >= spawn_interval
+                                && spawned_this_frame < 100
                             {
                                 emitter.consume_time(spawn_interval);
                                 spawned_this_frame += 1;

@@ -102,35 +102,37 @@ impl AsyncAssetLoader {
         let worker_job_rx = job_rx;
         let worker_result_tx = result_tx.clone();
         #[cfg(not(target_arch = "wasm32"))]
-        let _worker = Some(thread::Builder::new()
-            .name("gizmo-async-assets".into())
-            .spawn(move || {
-                for job in worker_job_rx {
-                    match job {
-                        Job::Texture { request_path } => {
-                            let cache_key = std::path::Path::new(&request_path)
-                                .canonicalize()
-                                .map(|p| p.to_string_lossy().into_owned())
-                                .unwrap_or_else(|_| request_path.clone());
-                            let result = decode_rgba_image_file(&request_path);
-                            let _ = worker_result_tx.send(WorkerMsg::Texture {
-                                request_path,
-                                cache_key,
-                                result,
-                            });
-                        }
-                        Job::Obj { path } => {
-                            let result = decode_obj_vertices_for_async(&path);
-                            let _ = worker_result_tx.send(WorkerMsg::Obj { path, result });
-                        }
-                        Job::Gltf { path } => {
-                            let result = gltf::import(&path).map_err(|e| e.to_string());
-                            let _ = worker_result_tx.send(WorkerMsg::Gltf { path, result });
+        let _worker = Some(
+            thread::Builder::new()
+                .name("gizmo-async-assets".into())
+                .spawn(move || {
+                    for job in worker_job_rx {
+                        match job {
+                            Job::Texture { request_path } => {
+                                let cache_key = std::path::Path::new(&request_path)
+                                    .canonicalize()
+                                    .map(|p| p.to_string_lossy().into_owned())
+                                    .unwrap_or_else(|_| request_path.clone());
+                                let result = decode_rgba_image_file(&request_path);
+                                let _ = worker_result_tx.send(WorkerMsg::Texture {
+                                    request_path,
+                                    cache_key,
+                                    result,
+                                });
+                            }
+                            Job::Obj { path } => {
+                                let result = decode_obj_vertices_for_async(&path);
+                                let _ = worker_result_tx.send(WorkerMsg::Obj { path, result });
+                            }
+                            Job::Gltf { path } => {
+                                let result = gltf::import(&path).map_err(|e| e.to_string());
+                                let _ = worker_result_tx.send(WorkerMsg::Gltf { path, result });
+                            }
                         }
                     }
-                }
-            })
-            .expect("spawn async asset worker"));
+                })
+                .expect("spawn async asset worker"),
+        );
 
         #[cfg(target_arch = "wasm32")]
         let _worker = None;

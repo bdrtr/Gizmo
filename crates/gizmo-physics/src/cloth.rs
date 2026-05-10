@@ -37,7 +37,11 @@ impl Cloth {
                     position,
                     prev_position: position,
                     mass: mass_per_node,
-                    inv_mass: if mass_per_node > 0.0 { 1.0 / mass_per_node } else { 0.0 },
+                    inv_mass: if mass_per_node > 0.0 {
+                        1.0 / mass_per_node
+                    } else {
+                        0.0
+                    },
                 });
 
                 let idx = y * width + x;
@@ -124,14 +128,18 @@ impl Cloth {
         let sub_dt2 = sub_dt * sub_dt;
 
         for _ in 0..sub_steps {
-            for c in &mut self.constraints { c.lambda = 0.0; }
+            for c in &mut self.constraints {
+                c.lambda = 0.0;
+            }
 
             // Predict
             for node in &mut self.nodes {
-                if node.inv_mass == 0.0 { continue; }
+                if node.inv_mass == 0.0 {
+                    continue;
+                }
                 let velocity = (node.position - node.prev_position) / sub_dt;
                 node.prev_position = node.position;
-                
+
                 // Add gravity and damping (frame-rate independent)
                 let damping = 0.99f32;
                 let next_vel = velocity * damping.powf(sub_dt) + gravity * sub_dt;
@@ -145,13 +153,17 @@ impl Cloth {
                     let b = &self.nodes[constraint.node_b];
                     (a.position, b.position, a.inv_mass, b.inv_mass)
                 };
-                
+
                 let w_sum = inv_m_a + inv_m_b;
-                if w_sum == 0.0 { continue; }
+                if w_sum == 0.0 {
+                    continue;
+                }
 
                 let diff = pos_a - pos_b;
                 let dist = diff.length();
-                if dist < 1e-6 { continue; }
+                if dist < 1e-6 {
+                    continue;
+                }
 
                 let n = diff / dist;
                 let c = dist - constraint.rest_length;
@@ -159,7 +171,7 @@ impl Cloth {
 
                 let delta_lambda = (-c - alpha * constraint.lambda) / (w_sum + alpha);
                 constraint.lambda += delta_lambda;
-                
+
                 let p = n * delta_lambda;
 
                 self.nodes[constraint.node_a].position += p * inv_m_a;
@@ -168,10 +180,12 @@ impl Cloth {
 
             // Floor Collision
             for node in &mut self.nodes {
-                if node.inv_mass == 0.0 { continue; }
+                if node.inv_mass == 0.0 {
+                    continue;
+                }
                 if node.position.y < self.thickness {
                     node.position.y = self.thickness;
-                    
+
                     // Simple friction: damp horizontal velocity when touching ground
                     let mut vel = (node.position - node.prev_position) / sub_dt;
                     vel.x *= 1.0 - self.friction;

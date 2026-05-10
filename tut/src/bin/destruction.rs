@@ -91,7 +91,11 @@ fn run() {
             );
             world.add_component(
                 sun,
-                DirectionalLight::new(Vec3::new(1.0, 1.0, 0.95), 3.0, gizmo::renderer::components::LightRole::Sun),
+                DirectionalLight::new(
+                    Vec3::new(1.0, 1.0, 0.95),
+                    3.0,
+                    gizmo::renderer::components::LightRole::Sun,
+                ),
             );
 
             // Ana Bina (Kırılacak Olan)

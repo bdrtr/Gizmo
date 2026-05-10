@@ -75,7 +75,11 @@ fn main() {
             );
             world.add_component(
                 sun,
-                DirectionalLight::new(Vec3::new(1.0, 0.95, 0.9), 3.5, gizmo::renderer::components::LightRole::Sun),
+                DirectionalLight::new(
+                    Vec3::new(1.0, 0.95, 0.9),
+                    3.5,
+                    gizmo::renderer::components::LightRole::Sun,
+                ),
             );
 
             // Gizmo debug hattı ile cam sınırlarını çiz
@@ -117,8 +121,17 @@ fn main() {
             if state.fps_timer >= 1.0 {
                 state.fps = state.frames as f32 / state.fps_timer;
                 let avg_ms = state.fps_timer / state.frames as f32 * 1000.0;
-                let status = if state.fps >= 60.0 { "🟢" } else if state.fps >= 30.0 { "🟡" } else { "🔴" };
-                println!("{} FPS: {:.1}  |  Frame: {:.2}ms", status, state.fps, avg_ms);
+                let status = if state.fps >= 60.0 {
+                    "🟢"
+                } else if state.fps >= 30.0 {
+                    "🟡"
+                } else {
+                    "🔴"
+                };
+                println!(
+                    "{} FPS: {:.1}  |  Frame: {:.2}ms",
+                    status, state.fps, avg_ms
+                );
                 state.frames = 0;
                 state.fps_timer = 0.0;
             }
@@ -178,14 +191,14 @@ fn main() {
 
                 // Fare etkileşimi: Kameranın 3 metre önündeki bir nokta
                 state.mouse_active = input.is_mouse_button_pressed(0); // Left Click
-                
+
                 // Su ekleme efekti: Tıklandığında aktif su miktarını artır
                 if state.mouse_active {
                     state.active_particles = (state.active_particles + 150).min(100_000);
                 }
-                
+
                 state.mouse_dir = forward;
-                
+
                 // Suyun tankın dışına (duvarlara) spawn olup yapışmasını engellemek için sınırla
                 let mut m_pos = state.cam_pos + forward * 3.0;
                 m_pos.x = m_pos.x.clamp(-1.8, 1.8);
@@ -217,9 +230,12 @@ fn main() {
                             .strong(),
                     );
                     ui.label(
-                        gizmo::egui::RichText::new(format!("💧 SPH Fluid — {} Particles", state.active_particles))
-                            .color(gizmo::egui::Color32::from_rgb(100, 180, 255))
-                            .size(16.0),
+                        gizmo::egui::RichText::new(format!(
+                            "💧 SPH Fluid — {} Particles",
+                            state.active_particles
+                        ))
+                        .color(gizmo::egui::Color32::from_rgb(100, 180, 255))
+                        .size(16.0),
                     );
                     ui.label(
                         gizmo::egui::RichText::new("WASD: Hareket | Sağ Tık: Bakış | Shift: Hız")
@@ -291,7 +307,12 @@ fn fluid_only_render_pass(
         light_view_proj: [id; 4],
         cascade_splits: [10.0, 50.0, 200.0, 2000.0],
         camera_forward: [cam_forward.x, cam_forward.y, cam_forward.z, 0.0],
-        cascade_params: [0.1, 1.0 / gizmo::renderer::SHADOW_MAP_RES as f32, state.total_time, 0.0],
+        cascade_params: [
+            0.1,
+            1.0 / gizmo::renderer::SHADOW_MAP_RES as f32,
+            state.total_time,
+            0.0,
+        ],
         num_lights: 0,
         _pre_align_pad: [0; 3],
         _align_pad: [0; 3],

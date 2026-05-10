@@ -38,11 +38,7 @@ fn test_character_gravity_and_grounding() {
         .get(char_entity.id())
         .unwrap()
         .clone();
-    let vel = world
-        .borrow::<Velocity>()
-        .get(char_entity.id())
-        .unwrap()
-        .clone();
+    let vel = *world.borrow::<Velocity>().get(char_entity.id()).unwrap();
     assert!(!cc.is_grounded, "Havada olmalı");
     assert!(
         vel.linear.y < -0.9,
@@ -55,11 +51,7 @@ fn test_character_gravity_and_grounding() {
         physics_step_system(&world, 0.1);
     }
 
-    let t2 = world
-        .borrow::<Transform>()
-        .get(char_entity.id())
-        .unwrap()
-        .clone();
+    let t2 = *world.borrow::<Transform>().get(char_entity.id()).unwrap();
     let cc2 = world
         .borrow::<CharacterController>()
         .get(char_entity.id())
@@ -108,12 +100,8 @@ fn test_character_step_climbing() {
         physics_step_system(&world, 0.1);
     }
 
-    let t = world
-        .borrow::<Transform>()
-        .get(char_entity.id())
-        .unwrap()
-        .clone();
-    
+    let t = *world.borrow::<Transform>().get(char_entity.id()).unwrap();
+
     // Basamağa (X=1.0 sınırında) çıkıp Y=0.2'ye tırmanmalı, dolayısıyla pozisyon Y -> 1.2 civarında olmalı
     assert!(
         t.position.y > 1.1,
@@ -130,7 +118,10 @@ fn test_character_slope_sliding() {
     let slope = world.spawn();
     // 60 derece eğim
     let rot = gizmo_math::Quat::from_rotation_z(std::f32::consts::PI / 3.0);
-    world.add_component(slope, Transform::new(Vec3::new(0.0, 0.0, 0.0)).with_rotation(rot));
+    world.add_component(
+        slope,
+        Transform::new(Vec3::new(0.0, 0.0, 0.0)).with_rotation(rot),
+    );
     world.add_component(slope, RigidBody::new_static());
     world.add_component(slope, Velocity::default());
     world.add_component(slope, Collider::box_collider(Vec3::new(10.0, 1.0, 10.0)));
@@ -138,7 +129,7 @@ fn test_character_slope_sliding() {
     let char_entity = world.spawn();
     // Karakteri eğimli yüzeyin üstüne bırakalım
     world.add_component(char_entity, Transform::new(Vec3::new(0.0, 5.0, 0.0)));
-    
+
     let mut cc = CharacterController::default();
     cc.max_slope_angle = 45.0_f32.to_radians(); // 60 derece eğim var, bu limiti aşıyor
     world.add_component(char_entity, cc);
@@ -155,11 +146,7 @@ fn test_character_slope_sliding() {
         .get(char_entity.id())
         .unwrap()
         .clone();
-    let t_out = world
-        .borrow::<Transform>()
-        .get(char_entity.id())
-        .unwrap()
-        .clone();
+    let t_out = *world.borrow::<Transform>().get(char_entity.id()).unwrap();
 
     // Yükseklik 5'ten az olmalı çünkü aşağı kaydı.
     assert!(

@@ -1,7 +1,7 @@
 //! Snapshot Interpolation (Durum Aradeğerlemesi)
 //!
 //! Diğer oyuncuların ağ üzerinden gelen konum/dönüş verilerini
-//! akıcı bir şekilde ekrana yansıtmak için geçmiş sunucu Snapshot'ları arasında 
+//! akıcı bir şekilde ekrana yansıtmak için geçmiş sunucu Snapshot'ları arasında
 //! interpolasyon (Lerp/Slerp) yapar.
 
 use std::collections::VecDeque;
@@ -47,7 +47,10 @@ impl SnapshotInterpolator {
     }
 
     /// O anki zamana göre enterpole edilmiş Transform verisini döner
-    pub fn get_interpolated_transform(&self, current_client_time: f64) -> Option<([f32; 3], [f32; 4])> {
+    pub fn get_interpolated_transform(
+        &self,
+        current_client_time: f64,
+    ) -> Option<([f32; 3], [f32; 4])> {
         if self.buffer.is_empty() {
             return None;
         }
@@ -56,7 +59,7 @@ impl SnapshotInterpolator {
 
         // Tamponda render_time'ı saran iki Snapshot bul: S1 ve S2
         // S1.time <= render_time <= S2.time
-        
+
         let mut s1_index = None;
         let mut s2_index = None;
 
@@ -91,9 +94,10 @@ impl SnapshotInterpolator {
                     s1.rotation[2] + (s2.rotation[2] - s1.rotation[2]) * t,
                     s1.rotation[3] + (s2.rotation[3] - s1.rotation[3]) * t,
                 ];
-                
+
                 // Normalize Quaternion
-                let len = (rot[0]*rot[0] + rot[1]*rot[1] + rot[2]*rot[2] + rot[3]*rot[3]).sqrt();
+                let len =
+                    (rot[0] * rot[0] + rot[1] * rot[1] + rot[2] * rot[2] + rot[3] * rot[3]).sqrt();
                 if len > 0.0001 {
                     rot[0] /= len;
                     rot[1] /= len;

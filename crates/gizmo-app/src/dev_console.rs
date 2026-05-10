@@ -37,7 +37,7 @@ pub fn ui_dev_console(world: &mut World, ctx: &egui::Context, input: &gizmo_core
 
     window.show(ctx, |ui| {
         ui.add_space(5.0);
-        
+
         // Logların görünümü
         egui::ScrollArea::vertical()
             .max_height(ctx.screen_rect().height() * 0.4) // Ekranın %40'ı kadar kaplar
@@ -54,7 +54,7 @@ pub fn ui_dev_console(world: &mut World, ctx: &egui::Context, input: &gizmo_core
                         }
                     }
                 }
-                
+
                 // Keep some space at the bottom to avoid text cutoff
                 ui.add_space(5.0);
             });
@@ -65,28 +65,31 @@ pub fn ui_dev_console(world: &mut World, ctx: &egui::Context, input: &gizmo_core
 
         if let Some(mut state) = world.get_resource_mut::<DevConsoleState>() {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(">").color(egui::Color32::WHITE).strong());
-                
+                ui.label(
+                    egui::RichText::new(">")
+                        .color(egui::Color32::WHITE)
+                        .strong(),
+                );
+
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut state.input_buffer)
                         .desired_width(ui.available_width())
                         .font(egui::TextStyle::Monospace)
                         .text_color(egui::Color32::WHITE)
-                        .lock_focus(true)
+                        .lock_focus(true),
                 );
 
                 // Focus the text edit automatically when opened
                 response.request_focus();
 
-                // `TextEdit::singleline` Egui'nin içindeki Enter eventini yutabilir. 
+                // `TextEdit::singleline` Egui'nin içindeki Enter eventini yutabilir.
                 // Bu yüzden motorun kendi `input` modülünü kullanarak Enter'a basılıp basılmadığını kontrol ediyoruz.
-                let enter_pressed = input.is_key_just_pressed(winit::keyboard::KeyCode::Enter as u32);
-                
-                if enter_pressed {
-                    if !state.input_buffer.trim().is_empty() {
-                        execute_cmd = Some(state.input_buffer.clone());
-                        state.input_buffer.clear();
-                    }
+                let enter_pressed =
+                    input.is_key_just_pressed(winit::keyboard::KeyCode::Enter as u32);
+
+                if enter_pressed && !state.input_buffer.trim().is_empty() {
+                    execute_cmd = Some(state.input_buffer.clone());
+                    state.input_buffer.clear();
                 }
             });
         }

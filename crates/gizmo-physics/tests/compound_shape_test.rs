@@ -34,9 +34,12 @@ fn test_compound_shape_deadlock_and_collision() {
     // Offset the child by 1 unit up
     world.add_component(child_ent, Transform::new(Vec3::new(0.0, 1.0, 0.0)));
     world.add_component(child_ent, Collider::box_collider(Vec3::new(0.5, 0.5, 0.5)));
-    
+
     // Add parent-child relationship
-    world.add_component(parent_ent, gizmo_core::component::Children(vec![child_ent.id()]));
+    world.add_component(
+        parent_ent,
+        gizmo_core::component::Children(vec![child_ent.id()]),
+    );
     world.add_component(child_ent, gizmo_core::component::Parent(parent_ent.id()));
 
     // Run the physics system multiple times
@@ -47,15 +50,15 @@ fn test_compound_shape_deadlock_and_collision() {
 
     // Check that the parent has fallen and collided with the ground.
     // Base is at 5.0, height is 0.5, so it should fall and land on the ground (Y=0.0).
-    let parent_transform = world.borrow::<Transform>().get(parent_ent.id()).unwrap().clone();
-    
+    let parent_transform = *world.borrow::<Transform>().get(parent_ent.id()).unwrap();
+
     // Since gravity acts on it, it shouldn't just stay at 5.0.
     assert!(
         parent_transform.position.y < 4.9,
         "Parent should have fallen, but is at Y = {}",
         parent_transform.position.y
     );
-    
+
     // It should eventually rest around Y = 0.5 (half height of base box)
     // We didn't simulate enough frames for it to fully rest, but at least we confirmed no deadlock!
 }

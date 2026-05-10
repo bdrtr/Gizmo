@@ -37,8 +37,8 @@ fn compute_convex_volume(vertices: &[Vec3], indices: &[u32]) -> f32 {
         return 0.001;
     }
     // Use the centroid as the reference point
-    let centroid = vertices.iter().copied().fold(Vec3::ZERO, |a, b| a + b)
-        / vertices.len().max(1) as f32;
+    let centroid =
+        vertices.iter().copied().fold(Vec3::ZERO, |a, b| a + b) / vertices.len().max(1) as f32;
     let mut vol = 0.0f32;
     // Sum signed tetrahedron volumes for each triangle face
     for tri in indices.chunks_exact(3) {
@@ -175,7 +175,9 @@ pub fn voronoi_shatter(extents: Vec3, num_pieces: u32, seed: u64) -> Vec<Procedu
                     }
                 }
                 // If all vertices coincide with face_center (degenerate), skip face
-                if ref_v.length_squared() < 0.5 { continue; }
+                if ref_v.length_squared() < 0.5 {
+                    continue;
+                }
                 // Ensure ref_v is not parallel to normal
                 let cross_test = n.cross(ref_v);
                 if cross_test.length_squared() < 1e-8 {
@@ -259,9 +261,15 @@ pub fn generate_fracture_chunks(
     num_pieces: u32,
     impact_point: Vec3,
     impact_force: f32,
-) -> Vec<(crate::components::RigidBody, crate::components::Transform, crate::components::Collider, crate::components::Velocity, ProceduralChunk)> {
+) -> Vec<(
+    crate::components::RigidBody,
+    crate::components::Transform,
+    crate::components::Collider,
+    crate::components::Velocity,
+    ProceduralChunk,
+)> {
     let chunks = voronoi_shatter(extents, num_pieces, rand::random::<u64>());
-    
+
     let mut results = Vec::with_capacity(chunks.len());
     let total_volume: f32 = chunks.iter().map(|c| c.volume).sum();
     let original_mass = original_body.mass;
@@ -279,42 +287,46 @@ pub fn generate_fracture_chunks(
             mass,
             original_body.restitution,
             original_body.friction,
-            original_body.use_gravity
+            original_body.use_gravity,
         );
         rb.center_of_mass = chunk.center_of_mass;
-        
+
         // Inherit exact same velocity + explosion force away from impact point
         let mut vel = *original_velocity;
-        
+
         // Calculate explosion force direction
-        let world_chunk_center = original_transform.position + original_transform.rotation * chunk.center_of_mass;
+        let world_chunk_center =
+            original_transform.position + original_transform.rotation * chunk.center_of_mass;
         let dir = world_chunk_center - impact_point;
         if dir.length_squared() > 0.001 {
             let explosion_dir = dir.normalize();
             // Force drops off with distance (simplified)
             let force = impact_force * 0.1 / (dir.length() + 1.0);
             vel.linear += explosion_dir * (force / mass);
-            
+
             // Add some random spin
             vel.angular += Vec3::new(
                 rand::random::<f32>() - 0.5,
                 rand::random::<f32>() - 0.5,
-                rand::random::<f32>() - 0.5
-            ) * (force / mass) * 0.5;
+                rand::random::<f32>() - 0.5,
+            ) * (force / mass)
+                * 0.5;
         }
 
         // Create convex hull collider
         let hull = crate::quickhull::compute_convex_hull(&chunk.vertices);
         let collider = crate::components::Collider {
-            shape: crate::components::ColliderShape::ConvexHull(crate::components::ConvexHullShape {
-                vertices: std::sync::Arc::new(hull.vertices),
-                faces: std::sync::Arc::new(hull.faces),
-            }),
+            shape: crate::components::ColliderShape::ConvexHull(
+                crate::components::ConvexHullShape {
+                    vertices: std::sync::Arc::new(hull.vertices),
+                    faces: std::sync::Arc::new(hull.faces),
+                },
+            ),
             is_trigger: false,
             material: crate::components::PhysicsMaterial::default(),
             collision_layer: crate::components::CollisionLayer::default(),
         };
-        
+
         rb.update_inertia_from_collider(&collider);
 
         let transform = crate::components::Transform {
@@ -368,7 +380,15 @@ impl PreFracturedCache {
         original_velocity: &crate::components::Velocity,
         impact_point: Vec3,
         impact_force: f32,
-    ) -> Option<Vec<(crate::components::RigidBody, crate::components::Transform, crate::components::Collider, crate::components::Velocity, ProceduralChunk)>> {
+    ) -> Option<
+        Vec<(
+            crate::components::RigidBody,
+            crate::components::Transform,
+            crate::components::Collider,
+            crate::components::Velocity,
+            ProceduralChunk,
+        )>,
+    > {
         let chunks = self.cache.get(&entity)?;
 
         let mut results = Vec::with_capacity(chunks.len());
@@ -386,37 +406,41 @@ impl PreFracturedCache {
                 mass,
                 original_body.restitution,
                 original_body.friction,
-                original_body.use_gravity
+                original_body.use_gravity,
             );
             rb.center_of_mass = chunk.center_of_mass;
-            
+
             let mut vel = *original_velocity;
-            let world_chunk_center = original_transform.position + original_transform.rotation * chunk.center_of_mass;
+            let world_chunk_center =
+                original_transform.position + original_transform.rotation * chunk.center_of_mass;
             let dir = world_chunk_center - impact_point;
             if dir.length_squared() > 0.001 {
                 let explosion_dir = dir.normalize();
                 let force = impact_force * 0.1 / (dir.length() + 1.0);
                 vel.linear += explosion_dir * (force / mass);
-                
+
                 // Deterministic spin based on chunk properties (since cache is pre-calculated)
                 vel.angular += Vec3::new(
                     (chunk.center_of_mass.x * 12.345).fract() - 0.5,
                     (chunk.center_of_mass.y * 67.890).fract() - 0.5,
-                    (chunk.center_of_mass.z * 42.123).fract() - 0.5
-                ) * (force / mass) * 0.5;
+                    (chunk.center_of_mass.z * 42.123).fract() - 0.5,
+                ) * (force / mass)
+                    * 0.5;
             }
 
             let hull = crate::quickhull::compute_convex_hull(&chunk.vertices);
             let collider = crate::components::Collider {
-                shape: crate::components::ColliderShape::ConvexHull(crate::components::ConvexHullShape {
-                    vertices: std::sync::Arc::new(hull.vertices),
-                    faces: std::sync::Arc::new(hull.faces),
-                }),
+                shape: crate::components::ColliderShape::ConvexHull(
+                    crate::components::ConvexHullShape {
+                        vertices: std::sync::Arc::new(hull.vertices),
+                        faces: std::sync::Arc::new(hull.faces),
+                    },
+                ),
                 is_trigger: false,
                 material: crate::components::PhysicsMaterial::default(),
                 collision_layer: crate::components::CollisionLayer::default(),
             };
-            
+
             rb.update_inertia_from_collider(&collider);
 
             let transform = crate::components::Transform {

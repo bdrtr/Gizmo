@@ -1,7 +1,7 @@
 //! GOAP (Goal-Oriented Action Planning) Implementasyonu
 //!
 //! AAA kalitesinde (F.E.A.R benzeri) karar verme mekanizması.
-//! AI ajanlarının mevcut duruma göre hedeflerine ulaşmak için 
+//! AI ajanlarının mevcut duruma göre hedeflerine ulaşmak için
 //! aksiyonları dinamik olarak planlamasını sağlar.
 
 use std::collections::{BinaryHeap, HashMap, HashSet};

@@ -1,55 +1,59 @@
-use std::sync::Arc;
 use crate::animation::AnimationClip;
+use std::sync::Arc;
 
 /// A single state in the animation state machine — names one clip.
 #[derive(Clone, Debug)]
 pub struct AnimationState {
-    pub name:        String,
-    pub clip_index:  usize,
-    pub looped:      bool,
-    pub speed:       f32,
+    pub name: String,
+    pub clip_index: usize,
+    pub looped: bool,
+    pub speed: f32,
 }
 
 /// A directed transition between two named states.
 #[derive(Clone, Debug)]
 pub struct AnimationTransition {
     /// Source state name (`"*"` matches any state).
-    pub from:           String,
+    pub from: String,
     /// Destination state name.
-    pub to:             String,
+    pub to: String,
     /// Cross-fade duration in seconds.
     pub blend_duration: f32,
     /// Optional trigger string that activates this transition.
     /// If `None` the transition fires automatically when the source clip ends
     /// (only meaningful when `has_exit_time` is `true`).
-    pub trigger:        Option<String>,
+    pub trigger: Option<String>,
     /// When `true` the transition may only start once the source clip has
     /// finished at least one full play-through.
-    pub has_exit_time:  bool,
+    pub has_exit_time: bool,
 }
 
 /// Per-entity state tracked while a cross-fade blend is in progress.
 #[derive(Clone, Debug)]
 pub struct ActiveBlend {
-    pub from_clip:    usize,
-    pub to_clip:      usize,
+    pub from_clip: usize,
+    pub to_clip: usize,
     /// Time into the source clip at the moment the blend started.
-    pub from_time:    f32,
+    pub from_time: f32,
     /// Time into the destination clip (advances each frame).
-    pub to_time:      f32,
+    pub to_time: f32,
     /// Seconds elapsed since blend began.
-    pub elapsed:      f32,
-    pub duration:     f32,
-    pub to_state:     String,
-    pub to_looped:    bool,
-    pub to_speed:     f32,
+    pub elapsed: f32,
+    pub duration: f32,
+    pub to_state: String,
+    pub to_looped: bool,
+    pub to_speed: f32,
 }
 
 impl ActiveBlend {
     /// Blend weight: 0.0 = fully source, 1.0 = fully destination.
     #[inline]
     pub fn alpha(&self) -> f32 {
-        if self.duration <= 0.0 { 1.0 } else { (self.elapsed / self.duration).clamp(0.0, 1.0) }
+        if self.duration <= 0.0 {
+            1.0
+        } else {
+            (self.elapsed / self.duration).clamp(0.0, 1.0)
+        }
     }
 }
 
@@ -75,13 +79,13 @@ impl ActiveBlend {
 /// ```
 #[derive(Clone)]
 pub struct AnimationStateMachine {
-    pub clips:           Arc<[AnimationClip]>,
-    pub states:          Vec<AnimationState>,
-    pub transitions:     Vec<AnimationTransition>,
-    pub current_state:   String,
-    pub current_time:    f32,
-    pub active_blend:    Option<ActiveBlend>,
-    pending_triggers:    Vec<String>,
+    pub clips: Arc<[AnimationClip]>,
+    pub states: Vec<AnimationState>,
+    pub transitions: Vec<AnimationTransition>,
+    pub current_state: String,
+    pub current_time: f32,
+    pub active_blend: Option<ActiveBlend>,
+    pending_triggers: Vec<String>,
 }
 
 impl AnimationStateMachine {
@@ -130,11 +134,15 @@ impl AnimationStateMachine {
     }
 
     pub fn current_speed(&self) -> f32 {
-        self.find_state(&self.current_state).map(|s| s.speed).unwrap_or(1.0)
+        self.find_state(&self.current_state)
+            .map(|s| s.speed)
+            .unwrap_or(1.0)
     }
 
     pub fn is_current_looped(&self) -> bool {
-        self.find_state(&self.current_state).map(|s| s.looped).unwrap_or(true)
+        self.find_state(&self.current_state)
+            .map(|s| s.looped)
+            .unwrap_or(true)
     }
 
     /// Find the first matching transition (trigger or exit-time based).
@@ -147,7 +155,9 @@ impl AnimationStateMachine {
         self.transitions.iter().find(|tr| {
             // Source must match current state or wildcard
             let from_matches = tr.from == from || tr.from == "*";
-            if !from_matches { return false; }
+            if !from_matches {
+                return false;
+            }
 
             // Trigger-based transition
             if let Some(ref req) = tr.trigger {
@@ -157,7 +167,11 @@ impl AnimationStateMachine {
                 return false;
             }
             // Auto / exit-time transition
-            if tr.has_exit_time { clip_finished } else { false }
+            if tr.has_exit_time {
+                clip_finished
+            } else {
+                false
+            }
         })
     }
 }

@@ -43,7 +43,9 @@ impl Material {
         self.roughness = roughness.clamp(0.0, 1.0);
         self.metallic = metallic.clamp(0.0, 1.0);
         self.material_type = MaterialType::Pbr;
-        if albedo.w < 1.0 { self.is_transparent = true; }
+        if albedo.w < 1.0 {
+            self.is_transparent = true;
+        }
         self
     }
 
@@ -65,7 +67,9 @@ impl Material {
     pub fn with_unlit(mut self, albedo: gizmo_math::Vec4) -> Self {
         self.albedo = albedo;
         self.material_type = MaterialType::Unlit;
-        if albedo.w < 1.0 { self.is_transparent = true; }
+        if albedo.w < 1.0 {
+            self.is_transparent = true;
+        }
         self
     }
 
@@ -82,7 +86,9 @@ impl Material {
         self.roughness = 0.05;
         self.metallic = 0.0;
         self.material_type = MaterialType::Water;
-        if base_albedo.w < 1.0 { self.is_transparent = true; }
+        if base_albedo.w < 1.0 {
+            self.is_transparent = true;
+        }
         self
     }
 

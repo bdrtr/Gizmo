@@ -9,16 +9,16 @@ pub struct CharacterController {
     pub max_slope_angle: f32, // in radians
     pub slope_slide_speed: f32,
     pub step_height: f32,
-    
+
     #[serde(skip)]
     pub is_grounded: bool,
-    
+
     pub target_velocity: Vec3, // Desired movement from input
-    
+
     pub coyote_time: f32,
     #[serde(skip)]
     pub coyote_timer: f32,
-    
+
     pub jump_buffer_time: f32,
     #[serde(skip)]
     pub jump_buffer_timer: f32,

@@ -382,7 +382,11 @@ mod tests {
             pt.consume_step();
             steps += 1;
         }
-        assert!(steps <= 8, "Spiral koruması: max 8 adım, bulundu: {}", steps);
+        assert!(
+            steps <= 8,
+            "Spiral koruması: max 8 adım, bulundu: {}",
+            steps
+        );
     }
 
     #[test]
@@ -396,7 +400,11 @@ mod tests {
         pt.compute_alpha();
 
         // Kalan 0.5 adım → alpha ≈ 0.5
-        assert!((pt.alpha() - 0.5).abs() < 0.01, "Alpha ≈ 0.5: {}", pt.alpha());
+        assert!(
+            (pt.alpha() - 0.5).abs() < 0.01,
+            "Alpha ≈ 0.5: {}",
+            pt.alpha()
+        );
     }
 
     #[test]

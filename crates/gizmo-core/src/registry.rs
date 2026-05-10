@@ -22,7 +22,13 @@ pub struct TypeRegistration {
     pub deserialize_fn:
         Option<fn(&mut crate::world::World, crate::entity::Entity, &str) -> Result<(), String>>,
     pub get_json_fn: Option<fn(*const u8) -> Result<serde_json::Value, String>>,
-    pub set_json_fn: Option<fn(&mut crate::world::World, crate::entity::Entity, serde_json::Value) -> Result<(), String>>,
+    pub set_json_fn: Option<
+        fn(
+            &mut crate::world::World,
+            crate::entity::Entity,
+            serde_json::Value,
+        ) -> Result<(), String>,
+    >,
 }
 
 /// Component tiplerini isme göre sorgulama ve yönetim kaydı.

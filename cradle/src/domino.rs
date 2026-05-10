@@ -144,10 +144,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
     );
     world.add_component(ground, MeshRenderer::new());
     world.add_component(ground, RigidBody::new_static());
-    world.add_component(
-        ground,
-        Collider::box_collider(Vec3::new(100.0, 0.5, 120.0)),
-    );
+    world.add_component(ground, Collider::box_collider(Vec3::new(100.0, 0.5, 120.0)));
 
     // Işık
     let sun = world.spawn();
@@ -160,7 +157,11 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
     );
     world.add_component(
         sun,
-        DirectionalLight::new(Vec3::new(1.0, 0.97, 0.90), 2.5, gizmo::renderer::components::LightRole::Sun),
+        DirectionalLight::new(
+            Vec3::new(1.0, 0.97, 0.90),
+            2.5,
+            gizmo::renderer::components::LightRole::Sun,
+        ),
     );
 
     let num_dominoes = 100;
@@ -189,10 +190,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
         let mut rb = RigidBody::new(0.5, 0.1, 0.3, true);
         rb.calculate_box_inertia(dx * 2.0, dy * 2.0, dz * 2.0);
         world.add_component(domino, rb);
-        world.add_component(
-            domino,
-            Collider::box_collider(Vec3::new(dx, dy, dz)),
-        );
+        world.add_component(domino, Collider::box_collider(Vec3::new(dx, dy, dz)));
         world.add_component(domino, Velocity::new(Vec3::ZERO));
     }
 
@@ -216,10 +214,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
     ball_rb.local_inertia = Vec3::new(inertia, inertia, inertia);
 
     world.add_component(heavy_ball, ball_rb);
-    world.add_component(
-        heavy_ball,
-        Collider::sphere(0.5),
-    );
+    world.add_component(heavy_ball, Collider::sphere(0.5));
     world.add_component(heavy_ball, Velocity::new(Vec3::new(0.0, 0.0, 25.0)));
 
     world.insert_resource(asset_manager);

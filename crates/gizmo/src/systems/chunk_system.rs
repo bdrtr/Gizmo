@@ -47,18 +47,25 @@ impl ChunkManager {
             (coord.1 as f32) * CHUNK_SIZE + (CHUNK_SIZE / 2.0),
         )
     }
-    
+
     /// Bir Entity oluşturulduğunda onu Chunk sistemine kaydeder
     pub fn register_entity(&mut self, coord: ChunkCoord, entity_id: u64) {
-        self.chunk_entities.entry(coord).or_insert_with(Vec::new).push(entity_id);
+        self.chunk_entities
+            .entry(coord)
+            .or_default()
+            .push(entity_id);
     }
 }
 
 /// Bu sistem her frame çağrılır. Oyuncunun pozisyonunu kontrol eder.
 /// Eğer oyuncu yeni bir Chunk sınırından geçtiyse, eski Chunk'ları silip yenilerini yükler.
 /// `load_callback` fonksiyonu: Yeni yüklenen her Chunk için kullanıcının obje spawn etmesini sağlar.
-pub fn open_world_chunk_system<F, U>(world: &mut World, player_pos: Vec3, mut load_callback: F, mut unload_callback: U)
-where
+pub fn open_world_chunk_system<F, U>(
+    world: &mut World,
+    player_pos: Vec3,
+    mut load_callback: F,
+    mut unload_callback: U,
+) where
     F: FnMut(&mut World, ChunkCoord),
     U: FnMut(&mut World, ChunkCoord, Vec<u64>),
 {
@@ -107,7 +114,7 @@ where
     for chunk in chunks_to_unload {
         let mut manager = world.get_resource_mut::<ChunkManager>().unwrap();
         manager.active_chunks.remove(&chunk);
-        
+
         if let Some(entities) = manager.chunk_entities.remove(&chunk) {
             // Callback çağrılacak
             drop(manager);
@@ -123,7 +130,7 @@ where
             manager.active_chunks.insert(chunk);
         }
         println!("🌍 Yeni Chunk Yüklendi: {:?}", chunk);
-        
+
         // Kullanıcının sağladığı (Örn: rpg_demo.rs içindeki) ağaç oluşturma fonksiyonunu çağırıyoruz
         load_callback(world, chunk);
     }

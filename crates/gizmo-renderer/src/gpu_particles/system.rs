@@ -122,7 +122,9 @@ impl GpuParticleSystem {
     }
 
     pub fn compute_pass(&self, encoder: &mut wgpu::CommandEncoder, active_particles: u32) {
-        if active_particles == 0 { return; }
+        if active_particles == 0 {
+            return;
+        }
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Particle Compute Pass"),
             timestamp_writes: None,
@@ -139,7 +141,9 @@ impl GpuParticleSystem {
         global_bind_group: &'a wgpu::BindGroup,
         active_particles: u32,
     ) {
-        if active_particles == 0 { return; }
+        if active_particles == 0 {
+            return;
+        }
         rpass.set_pipeline(&self.pipelines.render_pipeline);
         rpass.set_bind_group(0, global_bind_group, &[]);
         rpass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
@@ -148,7 +152,14 @@ impl GpuParticleSystem {
     }
 
     /// Helper method to spawn an explosion of particles (e.g. dust or debris from a fracture).
-    pub fn spawn_explosion(&self, queue: &wgpu::Queue, center: [f32; 3], count: u32, base_color: [f32; 4], force: f32) {
+    pub fn spawn_explosion(
+        &self,
+        queue: &wgpu::Queue,
+        center: [f32; 3],
+        count: u32,
+        base_color: [f32; 4],
+        force: f32,
+    ) {
         let mut new_particles = Vec::with_capacity(count as usize);
         for _ in 0..count {
             let u: f32 = rand::random();

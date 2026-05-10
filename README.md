@@ -1,103 +1,122 @@
-# Gizmo Engine
-
 <div align="center">
-  <img src="media/logo.png" alt="Gizmo Engine Logo" width="200" />
+  <img src="media/logo.png" alt="Gizmo Engine Logo" width="250" />
+  <h1>Gizmo Engine</h1>
+  <p><strong>A lightweight, ECS-driven 3D game engine and physics simulator written entirely in Rust.</strong></p>
+
+  [![Crates.io](https://img.shields.io/crates/v/gizmo-engine.svg)](https://crates.io/crates/gizmo-engine)
+  [![Docs.rs](https://img.shields.io/docsrs/gizmo-engine.svg)](https://docs.rs/gizmo-engine)
+  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+  [![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 </div>
 
-Gizmo Engine, Rust programlama dili kullanılarak sıfırdan geliştirilen; yüksek performanslı, veri odaklı (Data-Driven) ve tamamıyla modüler bir **3D Oyun Motoru ve Fizik Simülasyonu** çatısıdır. Gizmo Engine, performansın kritik olduğu geniş ölçekli fizik simülasyonları, modern araç içi dinamikleri ve gelişmiş 3D Rendering işlemleri için özel olarak inşa edilmiştir.
+<br/>
 
-## 🚀 Motorun Yetenekleri (Neler Yapabilir?)
+Gizmo Engine is a high-performance, data-driven, and fully modular game development framework. Designed specifically for large-scale physics simulations, advanced vehicular dynamics, and modern 3D rendering, it provides an industry-standard workflow with zero external physics API dependencies.
 
-Gizmo Engine salt bir görüntüleyici olmanın ötesinde endüstri standardı özellikler sunan tam teşekküllü bir sistemdir. Motorun temel bileşenleri ve öne çıkan kabiliyetleri şunlardır:
+---
 
-### 🧩 Archetype Tabanlı Pürüzsüz ECS (Entity Component System)
-Motorun kalbinde, tüm nesnelerin ve mantıksal sistemlerin veri-odaklı (DOD) olarak ayrıştırıldığı *Archetype* tabanlı, sütun (columnar) yapılı modern bir ECS miramisi yatar. `mimalloc` gibi global bellek tahsis edicilerle ve SIMD-uyumlu ArrayVec yapılarıyla bellek yükü (Allocation Overhead) ve Cache Miss oranları minimuma indirilmiştir. Çoklu sistemler darboğaz yaşamadan on binlerce "entity" güncelleyebilir.
+## ✨ Features
 
-> Not: Gizmo ECS, **SparseSet** değil; entity'ler *component kombinasyonlarına göre* `Archetype` tablolarına ayrılır.
-> Her archetype, entity ID dizisi + her component için ayrı `Column` (SoA/columnar) tutar. Bu sayede query iterasyonları archetype içinde yoğun (dense) bellek üzerinde yapılır.
+- **Archetype-based ECS:** A columnar, data-driven Entity Component System powered by `mimalloc`. Built for maximum cache locality and lock-free concurrency, easily scaling to tens of thousands of entities.
+- **Custom Vectorial Physics Engine:** Built from scratch using purely mathematical vectors. Features include:
+  - Sweep and Prune (SAP) Broad-Phase with Rayon multi-threading.
+  - GJK/EPA Narrow-Phase for accurate collision detection (Convex Hulls, Capsules, Polygons).
+  - FEM (Finite Element Method) Soft-Body Physics for hyper-realistic deformation and stress-tensor calculations.
+  - Sequential Impulse Solvers with advanced Coulomb Friction and Moment of Inertia.
+- **WGPU-Based Rendering:** A robust graphics pipeline supporting Vulkan, Metal, DX12, and **WebAssembly (WASM)**. Features Instanced Rendering, GLTF PBR Materials, Dynamic Shadows (CSM), SSAO, Bloom, and Deferred Shading.
+- **In-Game Editor:** Built-in `egui` tooling with a dynamic scene hierarchy, real-time inspector, and modular prefab architecture.
+- **Spatial Audio:** RAM-cached, 3D spatial audio engine with distance attenuation and Doppler effect support.
 
-### 🌌 Vektörel Gizmo Fizik Motoru
-Üçüncü parti bir fizik API'si (Jolt, Rapier vb.) kullanılmadan **tamamen matematiksel vektör hesabı** ile inşa edilmiş, multi-body yapılar için destek sunan özel fizik çözücüsü:
-* **Sweep and Prune (3D Broad-Phase):** 10.000'den fazla hareket eden nesne arasındaki olası çarpışmaları bulmak için Rayon destekli Çoklu-iş parçacığı (Multi-thread) kaba eleme algoritması.
-* **Narrow-Phase & GJK/EPA:** Karmaşık poligon, küre, kapsül ve Convex Hull geometriler için kusursuz temas ve penetrasyon hesaplamaları. Çarpışma manifoldları (Collision Manifolds) *sıfır-tahsisli* (zero-allocation) `ArrayVec` yapısıyla saniyede binlerce çarpışmayı GC (Garbage Collection) vuruşu yaşamadan çözer.
-* **Angular Jacobian Solver:** Eklemlerde (Ball-Socket, Hinge) açısal ivme ve tork üzerinden sequential impulse (iteratif vuruş) uygulayan pürüzsüz joint mekaniği.
-* **Coulomb Sürtünme & Moment of Inertia:** Gerçekçi statik/dinamik sürtünme modellerine sahip, nesnenin atalet (eylemsizlik) momentini dikkate alan kusursuz fizik iterasyonları.
+## 🚀 Quickstart
 
-### 🏎️ Component Tabanlı Araç (Vehicle) Fiziği
-Araçlara özel Raycast-tabanlı spring-damper süspansiyon sistemi. Anti-roll bar hesaplamaları, drift (yanlama) fizikleri için kayma ve tutunma grafikleri ve bağımsız FWD (Önden Çekiş), RWD (Arkadan İtiş) veya 4WD (Dört Çeker) tork asistanı ile çok esnek bir araç simülasyon dinamiği.
+Gizmo Engine is designed to be highly modular and ergonomic. Here is a minimal "Hello World" example demonstrating how to spawn a rotating 3D cube.
 
-### 🎨 GPU Instancing & PBR Rendering
-Vulkan/WGSL altyapısı sayesinde devasa sahneleri belleğe tek seferde kopyalayıp "Tek Draw Call" ile yüksek ekran yenileme hızında çizen instanced rendering mimarisi.
-* **GLTF PBR Material Desteği:** Albedo, Normal Map, Metallic ve Roughness haritalarını otomatik harmanlayan, real-time ışıklandırmalı modern shader algoritmaları.
-* **Dynamic Shadows & Post-Processing:** Gerçek zamanlı yönlü ışık gölgeleri, Bloom parlaması, HDR ton haritalama (Tone Mapping) ve Vignette gibi atmosferik iyileştirmeler.
-* **Particle System & FX:** Karakterler veya drift dumanları gibi parçacık efektlerini draw-call yaratmadan üreten sistemler.
+```rust
+use gizmo::prelude::*;
 
-### 📐 Özel Matematik ve SIMD Mimarlığı
-Üçüncü parti matematik veya vektör kütüphanesine bağlanmayan sıfırdan yazılmış geometri alt yapısı; Slab ve Möller–Trumbore gibi gelişmiş "Raycasting" kesişim algoritmalarını ve vektörel SIMD-tabanlı AABB/Frustum örtüşme testlerini içerir.
-### 🎧 3D Uzamsal (Spatial) Ses Motoru
-Karakterlerin veya motor seslerinin, ana kameraya veya oyuncuya olan uzaklığına/yakınlığına göre şiddeti azalıp artan, objenin yönüne bağlı panoramik (Örn: Motor solda çalışıyorsa sol kulaklıktan gelmesi) ortam üreten RAM-cache optimizasyonlu sistem. Doppler efekti ve mesafe zayıflatması (Distance Attenuation) desteki.
+fn main() {
+    App::new()
+        .add_plugins(DefaultPlugins)
+        .add_startup_system(setup_scene)
+        .add_system(rotate_cube)
+        .run();
+}
 
-### 🛠️ Gelişmiş Editör ve Workflow
-Sahneyi gerçek zamanlı denetlemek için oyuna gömülü (In-Game) çalışan UI panelleri:
-* Gizli dosyaları ve nesneleri bulabileceğiniz dinamik hierarchy (Entity Ağacı).
-* Pozisyon, rotasyon ve özellikleri anlık olarak değiştirebileceğiniz Inspector.
-* Sürükle-bırak destekli "Prefab" sistemi ve sahne yönetim hiyerarşisi.
+fn setup_scene(
+    mut commands: Commands, 
+    mut meshes: ResMut<Assets<Mesh>>, 
+    mut materials: ResMut<Assets<StandardMaterial>>
+) {
+    // Spawn Camera
+    commands.spawn(Camera3dBundle {
+        transform: Transform::from_xyz(0.0, 5.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
+        ..Default::default()
+    });
 
-### 🏗️ Modüler Cargo Workspace Mimarisi ve Plugin Sistemi
-Motorun iç yapısı **tamamen izole (decoupled) Cargo Workspace** kütüphanelerine ayrılmıştır. Motoru oluşturan temel bileşenler ayrı `crate`'ler halinde paketlenmiştir:
-* **`gizmo-core`**: ECS, Entity tanımları ve matematiksel temeller.
-* **`gizmo-physics`**: **Sıfır bağımlılıklı** (Render-Agnostic) saf fizik motoru. Kendi oyununuzda (örn. Bevy veya Macroquad ile) sadece bu modülü kullanarak Gizmo'nun fizik becerilerinden faydalanabilirsiniz. (Soft-Body GPU hızlandırması `gpu_physics` feature'ı arkasına opsiyonel olarak gizlenmiştir).
-* **`gizmo-renderer`**: Wgpu tabanlı, ECS'den tamamen bağımsız çalışabilen salt çizim motoru.
-* **`gizmo-app`**: Plugin tabanlı, "Tak-Çıkar" mantığıyla çalışan uygulama döngüsü. İstemediğiniz sistemleri (Render veya Ses gibi) plugin listesinden çıkararak motoru Headless bir sunucu formunda saniyeler içinde çalıştırabilirsiniz!
+    // Spawn Light
+    commands.spawn(DirectionalLightBundle {
+        transform: Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4)),
+        ..Default::default()
+    });
 
-## 📊 Endüstri Standartları Teknik Değerlendirmesi
-Gizmo Engine'in güncel mimarisi, modern AAA teknolojilerine (Unreal, Unity, Bevy/Flecs) kıyasla değerlendirildiğinde motorun gücü ve geliştirilme yol haritası (roadmap) şu şekildedir:
+    // Spawn Cube
+    commands.spawn((
+        PbrBundle {
+            mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
+            material: materials.add(Color::rgb(0.8, 0.2, 0.3).into()),
+            transform: Transform::from_xyz(0.0, 0.0, 0.0),
+            ..Default::default()
+        },
+        RotatingComponent,
+    ));
+}
 
-* **ECS ve Bellek Mimarisi (5.0 / 5):** Archetype (Sütun/Columnar) tabanlı veri yapısıyla en güncel endüstri standartlarındadır. Yüksek performanslı Global Allocator (`mimalloc`) kullanımıyla Cache-Locality zirvededir. Lock-free (RwLock) veri okuma/yazma erişimleri kusursuzdur.
-  * **Tamamlanan Lüks ECS Özellikleri:**
-    * **Reactive ECS (Hooks & Observers):** Bileşen eklendiğinde/çıkarıldığında O(1) maliyetli senkron tepki ve olay tetikleyicileri (OnAdd, OnRemove).
-    * **Archetype Compaction:** Aktif oturumlarda bellek dağınıklığını saniyeler içinde onaran yapısal Defrag (sıkıştırma) sistemi.
-    * **Native Reflection & Serialization:** Bileşen adreslerinin (Type-erased) `serde/ron` ile O(1) düzeyinde Scene/Prefab save-load yeteneğine kavuşturulması.
-  * **TODO (Gelecek Vizyonu):**
-    * **Command Buffer:** Multithread sistemler çalışırken veri kilitlenmesi yaşamadan (Deadlock-free) Entity ekleme/silme yapılabilmesi için ertelenmiş komut kuyruğu.
-    * **System Dependency Graph:** Bileşen okuma/yazma gereksinimlerine göre sistemleri (`System`) otomatik paralelleştiren Yönlü Döngüsüz Grafik (DAG) zamanlayıcısı.
-    * **İlişkisel Archetype Hiyerarşisi:** Archetype dizilimlerinin Parent-Child hafıza kaydırmalarına entegre edilmesi.
-* **Fizik Motoru (4.0 / 5):** GJK/EPA dar fazı (narrow-phase), Broad-phase algoritması ve Gauss-Seidel Sıralı İmpuls (Sequential Impulse) mekaniği doğrudan PhysX standardıdır. Rayon ile O(1) Graph-Coloring CPU Threading desteği, XPBD Yumuşak Cisim (Kumaş/Jöle), Articulated Body (Featherstone) ve SPH Sıvı Mekaniği (Fluids) entegredir.
-  * **Tamamlanan Lüks Fizik Özellikleri:**
-    * **FEM (Finite Element Method) Tabanlı Yumuşak Cisimler:** Tetrahedral ağlarla örülü ve tam gerçekçi deformasyon/araba göçmesi simülasyonu (BeamNG stili). Gerçek zamanlı Neo-Hookean stres tensörü hesaplamaları.
-    * **GJK/EPA & Conservative Advancement:** Kusursuz dar-alan (narrow-phase) hesaplamaları ve Continuous Collision Detection (CCD) altyapısı.
-  * **AAA Vizyonu (Gelecekte Eksik Kalanlar):**
-    * **Tam Kapsamlı GPU Fizik Simülasyonu:** Milyonlarca objenin tamamen ekran kartında (Compute Shader) tünelleme sorunu çözülerek işlendiği mimariler.
-    * **İleri Düzey Parçalanma (Voronoi Fracturing):** Gerçek zamanlı formüllü bina kırılmaları ve dinamik Convex Hull üretimi.
-    * **Exact TOI (Gelişmiş CCD):** "Conservative Advancement" adı verilen, çarpışma yaşanacak salisenin tam bulunup simüle edilmesi.
-    * **Araç Tekerlek Dinamikleri (Pacejka):** Kayma ve tutunma açısı grafikleri (Magic Formula / Brush Model).
-    * **Mutlak Belirlenimcilik (Cross-Platform Determinism):** Multiplayer ağlar için tam lock-step garantili Float matematiği veya Fixed-Point entegrasyonu.
-* **Grafik ve Render (3.5 / 5):** Vulkan (`wgpu`) tabanlı yapı; PBR render, Compute Shader parçacıkları (Particles) ve Dinamik gölgeler (CSM) ile başarılıdır. İleri seviye standardizasyon için Mesh Shader tabanlı GPU-Culling ve Temporal uzamsal filtrelemeler hedeflenmektedir.
-* **Editör ve Tooling (3.5 / 5):** `egui` tabanlı anlık editör, docking ve sahne yönetim özelliği esnek bir zemin sunar. Tam teşekküllü bir AAA stüdyo deneyimi için Görsel Profilci (Flamegraphs & GPU Profiler) ve Geri Al (Undo Command Pattern) hedefler arasındadır.
-* **Ses ve Math SIMD (3.5 / 5):** Gerçek zamanlı Doppler özellikli 3D Uzamsal (Spatial) Ses motoru ve SIMD-destekli (Slab, Möller-Trumbore) özel Culling/Raycast matematik çekirdeği ile bağımsızlığını kanıtlar.
+#[derive(Component)]
+struct RotatingComponent;
 
-## 📸 Motordan Görüntüler
+fn rotate_cube(time: Res<Time>, mut query: Query<&mut Transform, With<RotatingComponent>>) {
+    for mut transform in query.iter_mut() {
+        transform.rotate_y(1.0 * time.delta_seconds());
+    }
+}
+```
 
-Motor gücünü test etmek için hazırlanan araç / render senkronizasyon karelerinden bazıları:
+## 📦 Workspace Architecture
 
+Gizmo's decoupled workspace architecture allows you to pick and choose exactly what you need. If you are building a headless server, simply omit the renderer plugin!
 
+- **`gizmo-core`**: The foundational ECS, math, and scheduling architecture.
+- **`gizmo-physics`**: A completely render-agnostic, zero-dependency physics engine. Can be embedded into other engines (e.g., Bevy, Macroquad).
+- **`gizmo-renderer`**: The standalone, WGPU-driven rendering pipeline.
+- **`gizmo-app`**: The plugin-driven app loop and phase executor.
 
-![Gizmo City High-Res Rendering & GPU Particles](media/gizmo_city_demo.jpg)
+## 📸 Showcase
 
-![Volkswagen Test Scene](media/gizmo_engine_showcase.png)
+<p float="left">
+  <img src="media/gizmo_city_demo.jpg" width="48%" />
+  <img src="media/gizmo_engine_showcase.png" width="48%" /> 
+</p>
+<p align="center">
+  <img src="media/demo_racetrack.jpg" width="70%" />
+</p>
 
-![Gizmo Engine Demo](media/demo_racetrack.jpg)
+## 📚 Documentation & Technical Write-ups
 
+Check out our technical logs on debugging complex GPU and Engine Architecture issues:
+- [WGSL Mesa `pow(0.0)` Linux Driver Bug & PBR Crash Analysis](WGSL_MESA_BUG.md)
 
-## 📚 Dokümantasyon & Teknik Loglar
-Motorun çekirdek yapısı sıfırdan geliştirilirken karşılaşılan kernel ve GPU driver düzeyindeki problemleri nasıl teşhis edip, motor seviyesinde nasıl çözdüğümüzü okuyabileceğiniz inceleme logları:
-* [📖 Olay İncelemesi: WGSL Mesa `pow(0.0)` Linux Sürücü Hatası ve PBR Render Çökmesi](WGSL_MESA_BUG.md)
+*(Comprehensive Wiki and deep-dive documentation coming soon!)*
 
-## 🎮 Motoru Derlemek ve Çalıştırmak
-Sistemin becerilerini test etmek, geniş bir haritada aracı sürmek ve devasa fizik simülasyonunu görmek için:
+## 🛠️ Building and Running
+
+To compile the engine and test the showcase map with advanced physics and rendering:
 
 ```bash
 cargo run --release --bin showcase
 ```
 
-> **Önemli Not:** Sistem on binlerce objenin fizik ve kaba eleme (Broad-Phase) hesaplamasını tek saniyede çözmek üzerine optimize edildiği için `--release` profili haricinde derlenmesi performans düşüklüğüne (Darboğaz) yol açacaktır! Mutlaka release build kullanın.
+> **Note:** Due to the extreme scale of the broad-phase and narrow-phase physics computations, compiling without `--release` will cause a severe CPU bottleneck. Always use the release profile for optimal performance.
+
+## 📄 License
+
+Gizmo Engine is free, open source, and dual-licensed under the MIT and Apache 2.0 licenses.

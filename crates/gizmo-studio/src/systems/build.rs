@@ -68,20 +68,16 @@ pub fn handle_build_requests(editor_state: &mut EditorState) {
                     let stderr_thread = std::thread::spawn(move || {
                         use std::io::{BufRead, BufReader};
                         let reader = BufReader::new(stderr);
-                        for line in reader.lines() {
-                            if let Ok(l) = line {
-                                let _ = tx_err.send(l);
-                            }
+                        for l in reader.lines().flatten() {
+                            let _ = tx_err.send(l);
                         }
                     });
 
                     let stdout_thread = std::thread::spawn(move || {
                         use std::io::{BufRead, BufReader};
                         let reader = BufReader::new(stdout);
-                        for line in reader.lines() {
-                            if let Ok(l) = line {
-                                let _ = tx_out.send(l);
-                            }
+                        for l in reader.lines().flatten() {
+                            let _ = tx_out.send(l);
                         }
                     });
 

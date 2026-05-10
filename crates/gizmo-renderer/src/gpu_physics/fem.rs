@@ -63,7 +63,10 @@ impl GpuFemSystem {
         let nodes_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("FEM Nodes Buffer"),
             contents: bytemuck::cast_slice(nodes),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
         });
 
         let elements_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -79,8 +82,19 @@ impl GpuFemSystem {
         });
 
         // Ensure we always have at least a dummy collider to satisfy binding rules
-        let dummy_collider = [GpuFemCollider { shape_type: 0, radius: 0.0, _pad0: 0, _pad1: 0, position: [0.0; 4], normal: [0.0, 1.0, 0.0, 0.0] }];
-        let colliders_data = if colliders.is_empty() { &dummy_collider[..] } else { colliders };
+        let dummy_collider = [GpuFemCollider {
+            shape_type: 0,
+            radius: 0.0,
+            _pad0: 0,
+            _pad1: 0,
+            position: [0.0; 4],
+            normal: [0.0, 1.0, 0.0, 0.0],
+        }];
+        let colliders_data = if colliders.is_empty() {
+            &dummy_collider[..]
+        } else {
+            colliders
+        };
         let colliders_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("FEM Colliders Buffer"),
             contents: bytemuck::cast_slice(colliders_data),

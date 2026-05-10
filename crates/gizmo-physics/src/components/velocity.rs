@@ -27,5 +27,4 @@ impl Default for Velocity {
     }
 }
 
-
 gizmo_core::impl_component!(Velocity);

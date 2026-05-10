@@ -48,28 +48,34 @@ impl PoolManager {
     /// Bir prefab nesnesini kaynak göstererek yeni bir havuz oluşturur.
     /// Prefab otomatik olarak `Pooled` ile işaretlenir, böylece render ve fizik sistemleri onu atlar.
     pub fn register_pool(&mut self, name: &str, prefab_entity: Entity) {
-        self.pools.insert(name.to_string(), ObjectPool::new(prefab_entity.id()));
+        self.pools
+            .insert(name.to_string(), ObjectPool::new(prefab_entity.id()));
     }
 
     /// `register_pool` ile aynı, ama ek olarak prefab entity'yi `Pooled` ile işaretler.
     /// Bu sayede prefab asla render edilmez ve fizik sistemi tarafından simüle edilmez.
     pub fn register_pool_hidden(&mut self, world: &mut World, name: &str, prefab_entity: Entity) {
         world.add_component(prefab_entity, Pooled);
-        self.pools.insert(name.to_string(), ObjectPool::new(prefab_entity.id()));
+        self.pools
+            .insert(name.to_string(), ObjectPool::new(prefab_entity.id()));
     }
 
     /// Bir bundle (MeshBundle vb.) ve zincirlenmiş bileşenleri doğrudan havuza kaydeder.
     /// Bundle anında spawn edilir ve çıkan Entity havuz referansı olarak kullanılır.
-    pub fn register<B: crate::component::Bundle>(&mut self, world: &mut World, name: &str, bundle: B) {
+    pub fn register<B: crate::component::Bundle>(
+        &mut self,
+        world: &mut World,
+        name: &str,
+        bundle: B,
+    ) {
         let prefab = world.spawn_bundle(bundle);
         self.register_pool(name, prefab);
     }
 
-
     /// Havuzdan bir nesne alır. Havuz boşsa prefab'ı klonlayarak yeni bir nesne üretir.
     pub fn instantiate(&mut self, world: &mut World, name: &str) -> Option<Entity> {
         let pool = self.pools.get_mut(name)?;
-        
+
         if let Some(entity) = pool.inactive.pop_front() {
             // Nesne havuzdan çıkarıldı, `Pooled` tag'i siliniyor.
             world.remove_component::<Pooled>(entity);

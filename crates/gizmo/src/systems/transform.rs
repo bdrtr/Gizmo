@@ -5,10 +5,10 @@ impl gizmo_core::system::System for TransformSyncSystem {
         let mut info = gizmo_core::system::AccessInfo::new();
         // Since we borrow components, we can mark it as exclusive to be safe, or specify component access.
         // For simplicity and safety during hierarchy traversal, we'll make it exclusive.
-        info.is_exclusive = true; 
+        info.is_exclusive = true;
         info
     }
-    
+
     fn run(&mut self, world: &gizmo_core::world::World, _dt: f32) {
         let transforms = world.borrow_mut::<crate::physics::Transform>();
         for (_, trans) in transforms.iter_mut() {
@@ -25,7 +25,7 @@ impl gizmo_core::system::System for TransformPropagateSystem {
         info.is_exclusive = true; // Safe fallback for complex queries
         info
     }
-    
+
     fn run(&mut self, world: &gizmo_core::world::World, _dt: f32) {
         let locals = world.borrow::<crate::physics::Transform>();
         let mut globals = world.borrow_mut::<crate::physics::GlobalTransform>();
@@ -39,7 +39,7 @@ impl gizmo_core::system::System for TransformPropagateSystem {
             if parents.get(id).is_none() {
                 if let Some(global) = globals.get_mut(id) {
                     global.matrix = local.local_matrix;
-                    
+
                     // Eğer çocukları varsa kuyruğa ekle
                     if let Some(children) = children_storage.get(id) {
                         for &child_id in &children.0 {

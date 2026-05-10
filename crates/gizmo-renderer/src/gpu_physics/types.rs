@@ -69,16 +69,16 @@ pub struct GpuCollider {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuJoint {
-    pub body_a: u32,          // A gövde indeksi
-    pub body_b: u32,          // B gövde indeksi (u32::MAX = dünya/statik)
-    pub joint_type: u32,      // 0=Ball, 1=Hinge, 2=Fixed, 3=Spring, 4=Slider
-    pub flags: u32,           // bit0=active, bit1=breakable
-    pub anchor_a: [f32; 3],   // A gövdesi lokal-uzay bağlantı noktası
-    pub compliance: f32,      // 0 = sert, >0 = yumuşak (XPBD)
-    pub anchor_b: [f32; 3],   // B gövdesi lokal-uzay bağlantı noktası
-    pub damping: f32,         // Yay sönümleme katsayısı
-    pub axis: [f32; 3],       // Hinge/Slider ekseni (A lokal uzayı)
-    pub max_force: f32,       // Kırılma kuvveti (0 = kırılmaz)
+    pub body_a: u32,        // A gövde indeksi
+    pub body_b: u32,        // B gövde indeksi (u32::MAX = dünya/statik)
+    pub joint_type: u32,    // 0=Ball, 1=Hinge, 2=Fixed, 3=Spring, 4=Slider
+    pub flags: u32,         // bit0=active, bit1=breakable
+    pub anchor_a: [f32; 3], // A gövdesi lokal-uzay bağlantı noktası
+    pub compliance: f32,    // 0 = sert, >0 = yumuşak (XPBD)
+    pub anchor_b: [f32; 3], // B gövdesi lokal-uzay bağlantı noktası
+    pub damping: f32,       // Yay sönümleme katsayısı
+    pub axis: [f32; 3],     // Hinge/Slider ekseni (A lokal uzayı)
+    pub max_force: f32,     // Kırılma kuvveti (0 = kırılmaz)
 }
 
 impl GpuJoint {
@@ -99,7 +99,13 @@ impl GpuJoint {
     }
 
     /// Menteşe — tek eksen etrafında dönüş, diğer tüm hareket kısıtlı.
-    pub fn hinge(body_a: u32, body_b: u32, anchor_a: [f32; 3], anchor_b: [f32; 3], axis: [f32; 3]) -> Self {
+    pub fn hinge(
+        body_a: u32,
+        body_b: u32,
+        anchor_a: [f32; 3],
+        anchor_b: [f32; 3],
+        axis: [f32; 3],
+    ) -> Self {
         Self {
             body_a,
             body_b,
@@ -131,8 +137,19 @@ impl GpuJoint {
     }
 
     /// Yay — yumuşak bağlantı, stiffness ve damping ile.
-    pub fn spring(body_a: u32, body_b: u32, anchor_a: [f32; 3], anchor_b: [f32; 3], stiffness: f32, damping: f32) -> Self {
-        let compliance = if stiffness > 0.0 { 1.0 / stiffness } else { 0.0 };
+    pub fn spring(
+        body_a: u32,
+        body_b: u32,
+        anchor_a: [f32; 3],
+        anchor_b: [f32; 3],
+        stiffness: f32,
+        damping: f32,
+    ) -> Self {
+        let compliance = if stiffness > 0.0 {
+            1.0 / stiffness
+        } else {
+            0.0
+        };
         Self {
             body_a,
             body_b,
@@ -193,7 +210,7 @@ pub struct PhysicsSimParams {
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct DebugVertex {
     pub position: [f32; 3],
-    pub color: u32,  // packed RGBA
+    pub color: u32, // packed RGBA
 }
 
 impl DebugVertex {
@@ -222,6 +239,6 @@ impl DebugVertex {
 pub struct DebugParams {
     pub num_boxes: u32,
     pub num_joints: u32,
-    pub show_wireframes: u32,  // bit0=boxes, bit1=joints, bit2=velocity
+    pub show_wireframes: u32, // bit0=boxes, bit1=joints, bit2=velocity
     pub _pad: u32,
 }

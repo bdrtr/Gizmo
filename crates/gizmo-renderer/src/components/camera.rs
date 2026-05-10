@@ -11,7 +11,14 @@ pub struct Camera {
 }
 
 impl Camera {
-    pub fn new(mut fov: f32, mut near: f32, mut far: f32, mut yaw: f32, mut pitch: f32, primary: bool) -> Self {
+    pub fn new(
+        mut fov: f32,
+        mut near: f32,
+        mut far: f32,
+        mut yaw: f32,
+        mut pitch: f32,
+        primary: bool,
+    ) -> Self {
         fov = fov.max(0.001);
         near = near.max(0.001);
         far = far.max(near + 0.1);
@@ -76,10 +83,7 @@ pub struct Camera2D {
 
 impl Camera2D {
     pub fn new(zoom: f32, primary: bool) -> Self {
-        Self {
-            zoom,
-            primary,
-        }
+        Self { zoom, primary }
     }
 
     pub fn get_projection(&self, width: f32, height: f32) -> gizmo_math::Mat4 {

@@ -1,7 +1,7 @@
-use gizmo::prelude::*;
 use gizmo::physics::components::{Collider, RigidBody, Transform, Velocity};
-use gizmo::physics::world::PhysicsWorld;
 use gizmo::physics::joints::Joint;
+use gizmo::physics::world::PhysicsWorld;
+use gizmo::prelude::*;
 use gizmo::renderer::asset::AssetManager;
 use gizmo::renderer::components::{Camera, Material, MeshRenderer, PointLight};
 use std::f32::consts::PI;
@@ -56,7 +56,10 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     // Işık
     let light = world.spawn();
     world.add_component(light, Transform::new(Vec3::new(0.0, 20.0, 0.0)));
-    world.add_component(light, PointLight::new(Vec3::new(1.0, 1.0, 1.0), 500.0, 50.0));
+    world.add_component(
+        light,
+        PointLight::new(Vec3::new(1.0, 1.0, 1.0), 500.0, 50.0),
+    );
 
     // Yer Düzlemi (Static)
     let ground = world.spawn();
@@ -73,25 +76,33 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
 
     // --- CPU PHYSICS SETUP ---
     let mut phys_world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
-    
-    phys_world.fluid_zones.push(gizmo::physics::world::FluidZone {
-        shape: gizmo::physics::world::ZoneShape::Box {
-            min: Vec3::new(-2.0, 0.0, -2.0),
-            max: Vec3::new(2.0, 2.0, 2.0),
-        },
-        density: 1200.0,
-        viscosity: 1.0,
-        linear_drag: 5.0,
-        quadratic_drag: 1.0,
-    });
+
+    phys_world
+        .fluid_zones
+        .push(gizmo::physics::world::FluidZone {
+            shape: gizmo::physics::world::ZoneShape::Box {
+                min: Vec3::new(-2.0, 0.0, -2.0),
+                max: Vec3::new(2.0, 2.0, 2.0),
+            },
+            density: 1200.0,
+            viscosity: 1.0,
+            linear_drag: 5.0,
+            quadratic_drag: 1.0,
+        });
 
     phys_world.enable_gpu_compute();
 
     // Menteşeli Kapı veya Sarkaç (Pendulum)
     let ceiling = world.spawn();
-    world.add_component(ceiling, Transform::new(Vec3::new(0.0, 15.0, -10.0)).with_scale(Vec3::new(2.0, 0.5, 2.0)));
+    world.add_component(
+        ceiling,
+        Transform::new(Vec3::new(0.0, 15.0, -10.0)).with_scale(Vec3::new(2.0, 0.5, 2.0)),
+    );
     world.add_component(ceiling, cube_mesh.clone());
-    world.add_component(ceiling, Material::new(box_tex.clone()).with_pbr(Vec4::splat(1.0), 0.5, 0.0));
+    world.add_component(
+        ceiling,
+        Material::new(box_tex.clone()).with_pbr(Vec4::splat(1.0), 0.5, 0.0),
+    );
     world.add_component(ceiling, MeshRenderer::new());
     world.add_component(ceiling, Collider::box_collider(Vec3::new(2.0, 0.5, 2.0)));
     world.add_component(ceiling, RigidBody::new_static());
@@ -99,9 +110,15 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
 
     let pendulum = world.spawn();
     // Tam dengede başlasın: Tavan(15.0) - TavanAltı(0.25) - SarkaçÜstü(2.5) = 12.25
-    world.add_component(pendulum, Transform::new(Vec3::new(0.0, 12.25, -10.0)).with_scale(Vec3::new(1.0, 5.0, 1.0)));
+    world.add_component(
+        pendulum,
+        Transform::new(Vec3::new(0.0, 12.25, -10.0)).with_scale(Vec3::new(1.0, 5.0, 1.0)),
+    );
     world.add_component(pendulum, cube_mesh.clone());
-    world.add_component(pendulum, Material::new(box_tex.clone()).with_pbr(Vec4::new(1.0, 0.0, 0.0, 1.0), 0.5, 0.5));
+    world.add_component(
+        pendulum,
+        Material::new(box_tex.clone()).with_pbr(Vec4::new(1.0, 0.0, 0.0, 1.0), 0.5, 0.5),
+    );
     world.add_component(pendulum, MeshRenderer::new());
     world.add_component(pendulum, Collider::box_collider(Vec3::new(1.0, 5.0, 1.0)));
     world.add_component(pendulum, RigidBody::new(10.0, 0.2, 0.5, true));
@@ -111,8 +128,8 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         ceiling,
         pendulum,
         Vec3::new(0.0, -0.25, 0.0), // ceiling local anchor (alt yüzeyi)
-        Vec3::new(0.0, 2.5, 0.0), // pendulum local anchor (üst yüzeyi)
-        Vec3::new(0.0, 0.0, 1.0), // Z ekseni etrafında dönsün
+        Vec3::new(0.0, 2.5, 0.0),   // pendulum local anchor (üst yüzeyi)
+        Vec3::new(0.0, 0.0, 1.0),   // Z ekseni etrafında dönsün
     );
     if let gizmo::physics::joints::JointData::Hinge(ref mut data) = hinge.data {
         data.use_motor = false;
@@ -125,9 +142,15 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     // --- BALL-SOCKET ZİNCİR (CHAIN) ---
     let chain_start = Vec3::new(-5.0, 15.0, -10.0);
     let mut prev_ent = world.spawn();
-    world.add_component(prev_ent, Transform::new(chain_start).with_scale(Vec3::new(1.0, 1.0, 1.0)));
+    world.add_component(
+        prev_ent,
+        Transform::new(chain_start).with_scale(Vec3::new(1.0, 1.0, 1.0)),
+    );
     world.add_component(prev_ent, cube_mesh.clone());
-    world.add_component(prev_ent, Material::new(box_tex.clone()).with_pbr(Vec4::splat(1.0), 0.5, 0.0));
+    world.add_component(
+        prev_ent,
+        Material::new(box_tex.clone()).with_pbr(Vec4::splat(1.0), 0.5, 0.0),
+    );
     world.add_component(prev_ent, MeshRenderer::new());
     world.add_component(prev_ent, Collider::box_collider(Vec3::new(1.0, 1.0, 1.0)));
     world.add_component(prev_ent, RigidBody::new_static());
@@ -138,15 +161,25 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         // Dümdüz aşağı sırala, kopmasınlar
         let link_pos = chain_start - Vec3::new(0.0, i as f32 * 1.0, 0.0);
         let link_ent = world.spawn();
-        world.add_component(link_ent, Transform::new(link_pos).with_scale(Vec3::new(1.0, 1.0, 1.0)));
+        world.add_component(
+            link_ent,
+            Transform::new(link_pos).with_scale(Vec3::new(1.0, 1.0, 1.0)),
+        );
         world.add_component(link_ent, cube_mesh.clone());
-        world.add_component(link_ent, Material::new(box_tex.clone()).with_pbr(Vec4::new(0.0, 1.0, 0.0, 1.0), 0.5, 0.5));
+        world.add_component(
+            link_ent,
+            Material::new(box_tex.clone()).with_pbr(Vec4::new(0.0, 1.0, 0.0, 1.0), 0.5, 0.5),
+        );
         world.add_component(link_ent, MeshRenderer::new());
         world.add_component(link_ent, Collider::box_collider(Vec3::new(1.0, 1.0, 1.0)));
         world.add_component(link_ent, RigidBody::new(2.0, 0.1, 0.5, true));
         world.add_component(link_ent, Velocity::default());
 
-        let local_anchor_a = if i == 1 { Vec3::new(0.0, -0.5, 0.0) } else { Vec3::new(0.0, -0.5, 0.0) };
+        let local_anchor_a = if i == 1 {
+            Vec3::new(0.0, -0.5, 0.0)
+        } else {
+            Vec3::new(0.0, -0.5, 0.0)
+        };
         let local_anchor_b = Vec3::new(0.0, 0.5, 0.0);
 
         let mut ball_joint = Joint::ball_socket(prev_ent, link_ent, local_anchor_a, local_anchor_b);
@@ -160,20 +193,38 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
 
     // --- SLIDER JOINT (KAYAN PLATFORM) ---
     let slider_base = world.spawn();
-    world.add_component(slider_base, Transform::new(Vec3::new(5.0, 5.0, -10.0)).with_scale(Vec3::new(0.5, 0.5, 0.5)));
+    world.add_component(
+        slider_base,
+        Transform::new(Vec3::new(5.0, 5.0, -10.0)).with_scale(Vec3::new(0.5, 0.5, 0.5)),
+    );
     world.add_component(slider_base, cube_mesh.clone());
-    world.add_component(slider_base, Material::new(box_tex.clone()).with_pbr(Vec4::splat(1.0), 0.5, 0.0));
+    world.add_component(
+        slider_base,
+        Material::new(box_tex.clone()).with_pbr(Vec4::splat(1.0), 0.5, 0.0),
+    );
     world.add_component(slider_base, MeshRenderer::new());
-    world.add_component(slider_base, Collider::box_collider(Vec3::new(0.25, 0.25, 0.25)));
+    world.add_component(
+        slider_base,
+        Collider::box_collider(Vec3::new(0.25, 0.25, 0.25)),
+    );
     world.add_component(slider_base, RigidBody::new_static());
     world.add_component(slider_base, Velocity::default());
 
     let slider_plat = world.spawn();
-    world.add_component(slider_plat, Transform::new(Vec3::new(5.0, 5.0, -10.0)).with_scale(Vec3::new(4.0, 0.5, 2.0)));
+    world.add_component(
+        slider_plat,
+        Transform::new(Vec3::new(5.0, 5.0, -10.0)).with_scale(Vec3::new(4.0, 0.5, 2.0)),
+    );
     world.add_component(slider_plat, cube_mesh.clone());
-    world.add_component(slider_plat, Material::new(box_tex.clone()).with_pbr(Vec4::new(0.0, 0.0, 1.0, 1.0), 0.5, 0.5));
+    world.add_component(
+        slider_plat,
+        Material::new(box_tex.clone()).with_pbr(Vec4::new(0.0, 0.0, 1.0, 1.0), 0.5, 0.5),
+    );
     world.add_component(slider_plat, MeshRenderer::new());
-    world.add_component(slider_plat, Collider::box_collider(Vec3::new(2.0, 0.25, 1.0)));
+    world.add_component(
+        slider_plat,
+        Collider::box_collider(Vec3::new(2.0, 0.25, 1.0)),
+    );
     world.add_component(slider_plat, RigidBody::new(20.0, 0.1, 0.5, true));
     world.add_component(slider_plat, Velocity::default());
 
@@ -198,13 +249,17 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     for i in 0..10 {
         let box_ent = world.spawn();
         // X, Z koordinatlarını fluid havuzu (-2..2) içerisine koyalım, Y koordinatını 5.0'dan başlatalım ki ekranda hemen görünsün.
-        let pos = Vec3::new((i as f32 % 3.0) - 1.0, 5.0 + (i as f32) * 1.5, (i as f32 % 2.0) - 0.5);
+        let pos = Vec3::new(
+            (i as f32 % 3.0) - 1.0,
+            5.0 + (i as f32) * 1.5,
+            (i as f32 % 2.0) - 0.5,
+        );
+        world.add_component(box_ent, Transform::new(pos));
+        world.add_component(box_ent, cube_mesh.clone());
         world.add_component(
             box_ent,
-            Transform::new(pos),
+            Material::new(box_tex.clone()).with_pbr(Vec4::splat(1.0), 0.5, 0.0),
         );
-        world.add_component(box_ent, cube_mesh.clone());
-        world.add_component(box_ent, Material::new(box_tex.clone()).with_pbr(Vec4::splat(1.0), 0.5, 0.0));
         world.add_component(box_ent, MeshRenderer::new());
         world.add_component(box_ent, Collider::box_collider(Vec3::new(1.0, 1.0, 1.0)));
         // Yoğunluk suya göre ayarlandı, mass = 500.0 (ahşap yoğunluğu) ile suda gerçekçi yüzecek
@@ -216,7 +271,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     let jello_ent = world.spawn();
     world.add_component(jello_ent, Transform::new(Vec3::new(0.0, 15.0, 0.0)));
     world.add_component(jello_ent, gizmo::core::EntityName("Jello Cube".into()));
-    
+
     // Create a 3x3x3 Soft Body Grid
     let mut soft_body = gizmo::physics::soft_body::SoftBodyMesh::new(1000.0, 0.3); // Prevent v=0.5 singularity
     soft_body.damping = 5.0; // Higher damping for stability
@@ -239,9 +294,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     }
 
     // Function to get 1D index
-    let idx = |x, y, z| -> u32 {
-        (x * grid_size * grid_size + y * grid_size + z) as u32
-    };
+    let idx = |x, y, z| -> u32 { (x * grid_size * grid_size + y * grid_size + z) as u32 };
 
     // Add Tetrahedrons (Elements) - Connect adjacent nodes to form voxels
     for x in 0..grid_size - 1 {
@@ -265,7 +318,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
             }
         }
     }
-    
+
     world.add_component(jello_ent, soft_body);
 
     world.insert_resource(phys_world);
@@ -287,11 +340,14 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
     let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
     let mut cam_pos = Vec3::ZERO;
 
-    if let Some(mut q) = world.query::<(gizmo::core::query::Mut<Transform>, gizmo::core::query::Mut<Camera>)>() {
+    if let Some(mut q) = world.query::<(
+        gizmo::core::query::Mut<Transform>,
+        gizmo::core::query::Mut<Camera>,
+    )>() {
         for (_, (mut transform, mut camera)) in q.iter_mut() {
             let sensitivity = 0.002;
             let (dx, dy) = input.mouse_delta();
-            
+
             // Sadece sağ tık basılıyken kamerayı döndür
             if input.is_mouse_button_pressed(gizmo::core::input::mouse::RIGHT) {
                 state.camera_yaw -= dx * sensitivity;
@@ -311,7 +367,13 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
             let pitch_rot = Quat::from_rotation_x(state.camera_pitch);
             transform.rotation = yaw_rot * pitch_rot;
 
-            let speed = state.camera_speed * dt * if input.is_key_pressed(KeyCode::ShiftLeft as u32) { 3.0 } else { 1.0 };
+            let speed = state.camera_speed
+                * dt
+                * if input.is_key_pressed(KeyCode::ShiftLeft as u32) {
+                    3.0
+                } else {
+                    1.0
+                };
 
             if input.is_key_pressed(KeyCode::KeyW as u32) {
                 state.camera_pos += forward * speed;
@@ -331,10 +393,10 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
 
             transform.position = state.camera_pos;
             transform.update_local_matrix();
-            
+
             camera.yaw = state.camera_yaw;
             camera.pitch = state.camera_pitch;
-            
+
             cam_forward = forward;
             cam_pos = transform.position;
         }
@@ -344,7 +406,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
     if input.is_mouse_button_pressed(gizmo::core::input::mouse::LEFT) {
         if let Some(phys) = world.get_resource::<PhysicsWorld>() {
             let ray = gizmo::physics::raycast::Ray::new(cam_pos, cam_forward);
-            
+
             if let Some(hit) = phys.raycast(&ray, 50.0) {
                 if let Some(q) = world.query::<(gizmo::core::query::Mut<Velocity>, &RigidBody)>() {
                     if let Some((mut vel, rb)) = q.get(hit.entity.id()) {
@@ -359,7 +421,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
 
     // CPU Physics Adımı (Gizmo ECS entegrasyonu)
     gizmo::systems::cpu_physics_step_system(world, dt);
-    
+
     // Debug draw
     gizmo::systems::physics_debug_system(world);
 }

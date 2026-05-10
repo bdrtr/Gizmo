@@ -55,7 +55,10 @@ impl GpuCullState {
 
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("gpu_cull_params"),
-            contents: bytemuck::bytes_of(&CullParams { num_instances: 0, _pad: [0; 3] }),
+            contents: bytemuck::bytes_of(&CullParams {
+                num_instances: 0,
+                _pad: [0; 3],
+            }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -196,7 +199,7 @@ impl GpuCullState {
         cpass.set_pipeline(&self.cull_pipeline);
         cpass.set_bind_group(0, global_bind_group, &[]);
         cpass.set_bind_group(1, &self.bind_group, &[]);
-        cpass.dispatch_workgroups((count + 63) / 64, 1, 1);
+        cpass.dispatch_workgroups(count.div_ceil(64), 1, 1);
     }
 
     /// Byte offset into `indirect_buffer` for draw item `i`.

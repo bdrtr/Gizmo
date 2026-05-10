@@ -1,7 +1,7 @@
 use gizmo_math::{Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
-use super::{PhysicsMaterial, CollisionLayer, Transform};
+use super::{CollisionLayer, PhysicsMaterial, Transform};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Collider {
@@ -65,10 +65,7 @@ impl Collider {
             ColliderShape::Plane(_) => {
                 // Infinite plane - use a very large AABB
                 let large = 10000.0;
-                gizmo_math::Aabb::new(
-                    position - Vec3::splat(large),
-                    position + Vec3::splat(large),
-                )
+                gizmo_math::Aabb::new(position - Vec3::splat(large), position + Vec3::splat(large))
             }
             ColliderShape::TriMesh(tm) => {
                 let mut min = Vec3::splat(f32::INFINITY);
@@ -96,7 +93,7 @@ impl Collider {
                 for (local_t, sub_shape) in shapes {
                     let world_pos = position + rotation.mul_vec3(local_t.position);
                     let world_rot = rotation * local_t.rotation;
-                    
+
                     let temp_col = Collider {
                         shape: (**sub_shape).clone(),
                         ..Default::default()
@@ -194,7 +191,9 @@ impl Collider {
                 cylinder_vol + sphere_vol
             }
             ColliderShape::Plane(_) => f32::MAX, // Safe value instead of INFINITY for inertia calculations
-            ColliderShape::TriMesh(_) | ColliderShape::ConvexHull(_) | ColliderShape::Compound(_) => {
+            ColliderShape::TriMesh(_)
+            | ColliderShape::ConvexHull(_)
+            | ColliderShape::Compound(_) => {
                 let aabb = self.compute_aabb(Vec3::ZERO, Quat::IDENTITY);
                 let e = aabb.max - aabb.min;
                 e.x * e.y * e.z * 0.5 // Approximate volume from AABB
@@ -208,7 +207,9 @@ impl Collider {
             ColliderShape::Box(b) => b.half_extents.y,
             ColliderShape::Capsule(c) => c.half_height + c.radius,
             ColliderShape::Plane(_) => 0.0,
-            ColliderShape::TriMesh(_) | ColliderShape::ConvexHull(_) | ColliderShape::Compound(_) => {
+            ColliderShape::TriMesh(_)
+            | ColliderShape::ConvexHull(_)
+            | ColliderShape::Compound(_) => {
                 let aabb = self.compute_aabb(Vec3::ZERO, Quat::IDENTITY);
                 (aabb.max.y - aabb.min.y) * 0.5
             }

@@ -49,10 +49,10 @@ pub fn decode_obj_vertices_for_async(
     let (models, _) = tobj::load_obj(
         file_path,
         &tobj::LoadOptions {
-            single_index:  true,
-            triangulate:   true,
+            single_index: true,
+            triangulate: true,
             ignore_points: true,
-            ignore_lines:  true,
+            ignore_lines: true,
         },
     )
     .map_err(|e| format!("OBJ load failed ({file_path}): {e}"))?;
@@ -61,14 +61,14 @@ pub fn decode_obj_vertices_for_async(
         return Err(format!("OBJ file contains no models: {file_path}"));
     }
 
-    let mut aabb     = gizmo_math::Aabb::empty();
+    let mut aabb = gizmo_math::Aabb::empty();
     let mut vertices = Vec::new();
 
     for model in &models {
-        let m                = &model.mesh;
-        let has_normals      = !m.normals.is_empty();
-        let has_texcoords    = !m.texcoords.is_empty();
-        let model_start      = vertices.len(); // first vertex of this model
+        let m = &model.mesh;
+        let has_normals = !m.normals.is_empty();
+        let has_texcoords = !m.texcoords.is_empty();
+        let model_start = vertices.len(); // first vertex of this model
 
         for &raw_idx in &m.indices {
             let idx = raw_idx as usize;
@@ -99,7 +99,11 @@ pub fn decode_obj_vertices_for_async(
                         m.normals.len()
                     ));
                 }
-                [m.normals[n_base], m.normals[n_base + 1], m.normals[n_base + 2]]
+                [
+                    m.normals[n_base],
+                    m.normals[n_base + 1],
+                    m.normals[n_base + 2],
+                ]
             } else {
                 [0.0, 1.0, 0.0] // temporary; flat normals computed below
             };
@@ -124,7 +128,7 @@ pub fn decode_obj_vertices_for_async(
                 position,
                 normal,
                 tex_coords,
-                color:         [1.0, 1.0, 1.0],
+                color: [1.0, 1.0, 1.0],
                 joint_indices: [0; 4],
                 joint_weights: [0.0; 4],
             });
@@ -134,7 +138,7 @@ pub fn decode_obj_vertices_for_async(
         // This ensures models WITH normals are never touched.
         if !has_normals {
             let model_verts = &mut vertices[model_start..];
-            let remainder   = compute_flat_normals_inplace(model_verts);
+            let remainder = compute_flat_normals_inplace(model_verts);
             if remainder > 0 {
                 eprintln!(
                     "[AssetManager] WARN: '{file_path}' model '{}' has {remainder} \
@@ -162,7 +166,7 @@ fn compute_flat_normals_inplace(vertices: &mut [Vertex]) -> usize {
         let v1 = Vec3::from(tri[1].position);
         let v2 = Vec3::from(tri[2].position);
 
-        let cross  = (v1 - v0).cross(v2 - v0);
+        let cross = (v1 - v0).cross(v2 - v0);
         let normal = if cross.length_squared() > 1e-10 {
             cross.normalize()
         } else {
@@ -183,13 +187,13 @@ fn compute_flat_normals_inplace(vertices: &mut [Vertex]) -> usize {
 // ============================================================================
 
 pub struct AssetManager {
-    mesh_cache:       std::collections::HashMap<String, Mesh>,
-    texture_cache:    std::collections::HashMap<String, Arc<wgpu::BindGroup>>,
+    mesh_cache: std::collections::HashMap<String, Mesh>,
+    texture_cache: std::collections::HashMap<String, Arc<wgpu::BindGroup>>,
     /// Lazily created magenta octahedron used while async loads are in flight.
     placeholder_mesh: Option<Mesh>,
 
-    pub path_to_uuid:    std::collections::HashMap<String, Uuid>,
-    pub uuid_to_path:    std::collections::HashMap<Uuid, String>,
+    pub path_to_uuid: std::collections::HashMap<String, Uuid>,
+    pub uuid_to_path: std::collections::HashMap<Uuid, String>,
     /// Assets whose bytes are baked into the binary (e.g. via `include_bytes!`).
     pub embedded_assets: std::collections::HashMap<String, std::borrow::Cow<'static, [u8]>>,
 }
@@ -203,12 +207,12 @@ impl Default for AssetManager {
 impl AssetManager {
     pub fn new() -> Self {
         let mut manager = Self {
-            mesh_cache:       std::collections::HashMap::new(),
-            texture_cache:    std::collections::HashMap::new(),
+            mesh_cache: std::collections::HashMap::new(),
+            texture_cache: std::collections::HashMap::new(),
             placeholder_mesh: None,
-            path_to_uuid:     std::collections::HashMap::new(),
-            uuid_to_path:     std::collections::HashMap::new(),
-            embedded_assets:  std::collections::HashMap::new(),
+            path_to_uuid: std::collections::HashMap::new(),
+            uuid_to_path: std::collections::HashMap::new(),
+            embedded_assets: std::collections::HashMap::new(),
         };
         manager.scan_assets_directory(Path::new("assets"));
         manager
@@ -257,11 +261,7 @@ impl AssetManager {
 
     /// Embed a raw asset byte slice under `path` so it can be loaded without
     /// a filesystem read.
-    pub fn embed_asset(
-        &mut self,
-        path: &str,
-        data: impl Into<std::borrow::Cow<'static, [u8]>>,
-    ) {
+    pub fn embed_asset(&mut self, path: &str, data: impl Into<std::borrow::Cow<'static, [u8]>>) {
         self.embedded_assets
             .insert(Self::normalize_path(path), data.into());
     }
@@ -279,9 +279,12 @@ impl AssetManager {
         }
 
         let entries = match std::fs::read_dir(dir) {
-            Ok(e)  => e,
+            Ok(e) => e,
             Err(e) => {
-                eprintln!("[AssetManager] Cannot read directory {}: {e}", dir.display());
+                eprintln!(
+                    "[AssetManager] Cannot read directory {}: {e}",
+                    dir.display()
+                );
                 return;
             }
         };
@@ -299,10 +302,19 @@ impl AssetManager {
                 .map(|ext| {
                     matches!(
                         ext.to_string_lossy().to_lowercase().as_str(),
-                        "obj"  | "gltf" | "glb"  |
-                        "png"  | "jpg"  | "jpeg" | "hdr" |
-                        "wav"  | "mp3"  | "ogg"  |
-                        "ttf"  | "otf"  | "ron"
+                        "obj"
+                            | "gltf"
+                            | "glb"
+                            | "png"
+                            | "jpg"
+                            | "jpeg"
+                            | "hdr"
+                            | "wav"
+                            | "mp3"
+                            | "ogg"
+                            | "ttf"
+                            | "otf"
+                            | "ron"
                     )
                 })
                 .unwrap_or(false);
@@ -312,7 +324,7 @@ impl AssetManager {
             }
 
             let meta_path = PathBuf::from(format!("{}.meta", path.display()));
-            let uuid      = self.read_or_create_meta(&path, &meta_path);
+            let uuid = self.read_or_create_meta(&path, &meta_path);
 
             let normalized = Self::normalize_path(&path.to_string_lossy());
             self.path_to_uuid.insert(normalized.clone(), uuid);
@@ -374,16 +386,22 @@ impl AssetManager {
     fn create_loading_placeholder(device: &wgpu::Device) -> Mesh {
         // Octahedron — recognisable from any angle, low vertex count.
         const POSITIONS: [[f32; 3]; 6] = [
-            [ 1.0, 0.0,  0.0], // +X
-            [-1.0, 0.0,  0.0], // -X
-            [ 0.0, 1.0,  0.0], // +Y
-            [ 0.0,-1.0,  0.0], // -Y
-            [ 0.0, 0.0,  1.0], // +Z
-            [ 0.0, 0.0, -1.0], // -Z
+            [1.0, 0.0, 0.0],  // +X
+            [-1.0, 0.0, 0.0], // -X
+            [0.0, 1.0, 0.0],  // +Y
+            [0.0, -1.0, 0.0], // -Y
+            [0.0, 0.0, 1.0],  // +Z
+            [0.0, 0.0, -1.0], // -Z
         ];
         const TRIANGLES: [[usize; 3]; 8] = [
-            [0, 2, 4], [2, 1, 4], [1, 3, 4], [3, 0, 4],
-            [2, 0, 5], [1, 2, 5], [3, 1, 5], [0, 3, 5],
+            [0, 2, 4],
+            [2, 1, 4],
+            [1, 3, 4],
+            [3, 0, 4],
+            [2, 0, 5],
+            [1, 2, 5],
+            [3, 1, 5],
+            [0, 3, 5],
         ];
         const COLOR: [f32; 3] = [0.95, 0.45, 0.95]; // magenta
 
@@ -392,12 +410,12 @@ impl AssetManager {
         for tri in &TRIANGLES {
             for &i in tri {
                 let pos = POSITIONS[i];
-                let n   = Vec3::new(pos[0], pos[1], pos[2]).normalize();
+                let n = Vec3::new(pos[0], pos[1], pos[2]).normalize();
                 vertices.push(Vertex {
-                    position:      pos,
-                    normal:        [n.x, n.y, n.z],
-                    tex_coords:    [0.0, 0.0],
-                    color:         COLOR,
+                    position: pos,
+                    normal: [n.x, n.y, n.z],
+                    tex_coords: [0.0, 0.0],
+                    color: COLOR,
                     joint_indices: [0; 4],
                     joint_weights: [0.0; 4],
                 });
@@ -405,9 +423,9 @@ impl AssetManager {
         }
 
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label:    Some("Async loading placeholder"),
+            label: Some("Async loading placeholder"),
             contents: bytemuck::cast_slice(&vertices),
-            usage:    wgpu::BufferUsages::VERTEX,
+            usage: wgpu::BufferUsages::VERTEX,
         });
 
         Mesh::new(

@@ -1,10 +1,10 @@
-use gizmo::prelude::*;
 use gizmo::physics::components::{Collider, RigidBody, Transform, Velocity};
 use gizmo::physics::world::PhysicsWorld;
+use gizmo::prelude::*;
 use gizmo::renderer::asset::AssetManager;
 use gizmo::renderer::components::{Camera, Material, MeshRenderer};
-use std::f32::consts::PI;
 use gizmo::wgpu::util::DeviceExt;
+use std::f32::consts::PI;
 
 #[derive(Clone)]
 pub struct Destructible;
@@ -20,7 +20,7 @@ struct TestSandboxState {
     camera_yaw: f32,
     camera_pos: Vec3,
     _sun_entity: gizmo::core::Entity,
-    
+
     sphere_mesh: gizmo::renderer::components::Mesh,
     sphere_mat: gizmo::renderer::components::Material,
 }
@@ -50,13 +50,34 @@ impl<'a> ObjectBuilder<'a> {
         }
     }
 
-    pub fn position(mut self, pos: Vec3) -> Self { self.transform.position = pos; self }
-    pub fn scale(mut self, scale: Vec3) -> Self { self.transform.scale = scale; self }
-    pub fn rotation(mut self, rot: Quat) -> Self { self.transform.rotation = rot; self }
-    pub fn mesh(mut self, m: gizmo::renderer::components::Mesh) -> Self { self.mesh = Some(m); self }
-    pub fn material(mut self, m: gizmo::renderer::components::Material) -> Self { self.material = Some(m); self }
-    pub fn collider(mut self, c: Collider) -> Self { self.collider = Some(c); self }
-    pub fn static_body(mut self) -> Self { self.rigid_body = Some(RigidBody::new_static()); self }
+    pub fn position(mut self, pos: Vec3) -> Self {
+        self.transform.position = pos;
+        self
+    }
+    pub fn scale(mut self, scale: Vec3) -> Self {
+        self.transform.scale = scale;
+        self
+    }
+    pub fn rotation(mut self, rot: Quat) -> Self {
+        self.transform.rotation = rot;
+        self
+    }
+    pub fn mesh(mut self, m: gizmo::renderer::components::Mesh) -> Self {
+        self.mesh = Some(m);
+        self
+    }
+    pub fn material(mut self, m: gizmo::renderer::components::Material) -> Self {
+        self.material = Some(m);
+        self
+    }
+    pub fn collider(mut self, c: Collider) -> Self {
+        self.collider = Some(c);
+        self
+    }
+    pub fn static_body(mut self) -> Self {
+        self.rigid_body = Some(RigidBody::new_static());
+        self
+    }
     pub fn static_body_with_friction(mut self, friction: f32) -> Self {
         let mut rb = RigidBody::new_static();
         rb.friction = friction;
@@ -64,33 +85,58 @@ impl<'a> ObjectBuilder<'a> {
         self.rigid_body = Some(rb);
         self
     }
-    pub fn dynamic_body(mut self, mass: f32) -> Self { self.rigid_body = Some(RigidBody::new(mass, 0.1, 0.5, true)); self }
-    pub fn dynamic_body_with_props(mut self, mass: f32, friction: f32, restitution: f32) -> Self { 
-        self.rigid_body = Some(RigidBody::new(mass, restitution, friction, true)); 
-        self 
+    pub fn dynamic_body(mut self, mass: f32) -> Self {
+        self.rigid_body = Some(RigidBody::new(mass, 0.1, 0.5, true));
+        self
     }
-    pub fn velocity(mut self, v: Vec3) -> Self { self.velocity = Some(Velocity { linear: v, angular: Vec3::ZERO, ..Default::default() }); self }
-    pub fn destructible(mut self) -> Self { self.destructible = true; self }
+    pub fn dynamic_body_with_props(mut self, mass: f32, friction: f32, restitution: f32) -> Self {
+        self.rigid_body = Some(RigidBody::new(mass, restitution, friction, true));
+        self
+    }
+    pub fn velocity(mut self, v: Vec3) -> Self {
+        self.velocity = Some(Velocity {
+            linear: v,
+            angular: Vec3::ZERO,
+            ..Default::default()
+        });
+        self
+    }
+    pub fn destructible(mut self) -> Self {
+        self.destructible = true;
+        self
+    }
 
     pub fn spawn(self) -> gizmo::core::Entity {
         let ent = self.world.spawn();
         self.world.add_component(ent, self.transform);
-        if let Some(m) = self.mesh.clone() { self.world.add_component(ent, m); }
-        if let Some(m) = self.material.clone() { self.world.add_component(ent, m); }
-        if self.mesh.is_some() || self.material.is_some() { self.world.add_component(ent, MeshRenderer::new()); }
-        if let Some(c) = self.collider.clone() { self.world.add_component(ent, c); }
-        if let Some(r) = self.rigid_body { 
+        if let Some(m) = self.mesh.clone() {
+            self.world.add_component(ent, m);
+        }
+        if let Some(m) = self.material.clone() {
+            self.world.add_component(ent, m);
+        }
+        if self.mesh.is_some() || self.material.is_some() {
+            self.world.add_component(ent, MeshRenderer::new());
+        }
+        if let Some(c) = self.collider.clone() {
+            self.world.add_component(ent, c);
+        }
+        if let Some(r) = self.rigid_body {
             let mut r_final = r;
             if let Some(c) = &self.collider {
                 r_final.update_inertia_from_collider(c);
             }
-            self.world.add_component(ent, r_final); 
+            self.world.add_component(ent, r_final);
             if self.velocity.is_none() {
                 self.world.add_component(ent, Velocity::default());
             }
         }
-        if let Some(v) = self.velocity { self.world.add_component(ent, v); }
-        if self.destructible { self.world.add_component(ent, Destructible); }
+        if let Some(v) = self.velocity {
+            self.world.add_component(ent, v);
+        }
+        if self.destructible {
+            self.world.add_component(ent, Destructible);
+        }
         ent
     }
 }
@@ -98,14 +144,24 @@ impl<'a> ObjectBuilder<'a> {
 fn setup(world: &mut World, renderer: &Renderer) -> TestSandboxState {
     let mut asset_manager = AssetManager::new();
     let mut phys_world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
-    
+
     // Gökyüzü (Skybox)
     let skybox_mesh = AssetManager::create_inverted_cube(&renderer.device);
-    let sky_tex = asset_manager.load_material_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout, "tut/assets/sky.jpg").unwrap();
+    let sky_tex = asset_manager
+        .load_material_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+            "tut/assets/sky.jpg",
+        )
+        .unwrap();
     let sky_mat = Material::new(sky_tex).with_skybox();
-    
+
     let sky_ent = world.spawn();
-    world.add_component(sky_ent, Transform::new(Vec3::ZERO).with_scale(Vec3::splat(2000.0)));
+    world.add_component(
+        sky_ent,
+        Transform::new(Vec3::ZERO).with_scale(Vec3::splat(2000.0)),
+    );
     world.add_component(sky_ent, skybox_mesh);
     world.add_component(sky_ent, sky_mat);
     world.add_component(sky_ent, MeshRenderer::new());
@@ -114,15 +170,31 @@ fn setup(world: &mut World, renderer: &Renderer) -> TestSandboxState {
     let mut ground_vertices = Vec::new();
     let r = 500.0;
     let uvs = 300.0;
-    let v0 = gizmo::renderer::gpu_types::Vertex { position: [-r, 0.5, r], tex_coords: [0.0, uvs], ..Default::default() };
-    let v1 = gizmo::renderer::gpu_types::Vertex { position: [r, 0.5, r], tex_coords: [uvs, uvs], ..Default::default() };
-    let v2 = gizmo::renderer::gpu_types::Vertex { position: [r, 0.5, -r], tex_coords: [uvs, 0.0], ..Default::default() };
-    let v3 = gizmo::renderer::gpu_types::Vertex { position: [-r, 0.5, -r], tex_coords: [0.0, 0.0], ..Default::default() };
+    let v0 = gizmo::renderer::gpu_types::Vertex {
+        position: [-r, 0.5, r],
+        tex_coords: [0.0, uvs],
+        ..Default::default()
+    };
+    let v1 = gizmo::renderer::gpu_types::Vertex {
+        position: [r, 0.5, r],
+        tex_coords: [uvs, uvs],
+        ..Default::default()
+    };
+    let v2 = gizmo::renderer::gpu_types::Vertex {
+        position: [r, 0.5, -r],
+        tex_coords: [uvs, 0.0],
+        ..Default::default()
+    };
+    let v3 = gizmo::renderer::gpu_types::Vertex {
+        position: [-r, 0.5, -r],
+        tex_coords: [0.0, 0.0],
+        ..Default::default()
+    };
 
     ground_vertices.push(v0);
     ground_vertices.push(v1);
     ground_vertices.push(v2);
-    
+
     ground_vertices.push(v0);
     ground_vertices.push(v2);
     ground_vertices.push(v3);
@@ -135,12 +207,14 @@ fn setup(world: &mut World, renderer: &Renderer) -> TestSandboxState {
     ground_vertices.push(v3);
     ground_vertices.push(v2);
 
-    let vbuf = renderer.device.create_buffer_init(&gizmo::wgpu::util::BufferInitDescriptor {
-        label: Some("Ground VBuf"),
-        contents: bytemuck::cast_slice(&ground_vertices),
-        usage: gizmo::wgpu::BufferUsages::VERTEX,
-    });
-    
+    let vbuf = renderer
+        .device
+        .create_buffer_init(&gizmo::wgpu::util::BufferInitDescriptor {
+            label: Some("Ground VBuf"),
+            contents: bytemuck::cast_slice(&ground_vertices),
+            usage: gizmo::wgpu::BufferUsages::VERTEX,
+        });
+
     let ground_mesh = gizmo::renderer::components::Mesh::new(
         &renderer.device,
         std::sync::Arc::new(vbuf),
@@ -149,7 +223,20 @@ fn setup(world: &mut World, renderer: &Renderer) -> TestSandboxState {
         "ground_mesh".to_string(),
     );
 
-    let grass_tex = asset_manager.load_material_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout, "assets/grass.jpg").unwrap_or_else(|_| asset_manager.create_checkerboard_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout));
+    let grass_tex = asset_manager
+        .load_material_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+            "assets/grass.jpg",
+        )
+        .unwrap_or_else(|_| {
+            asset_manager.create_checkerboard_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            )
+        });
     let grass_mat = Material::new(grass_tex).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.9, 0.1);
 
     ObjectBuilder::new(world)
@@ -160,23 +247,35 @@ fn setup(world: &mut World, renderer: &Renderer) -> TestSandboxState {
         .spawn();
 
     let cube_mesh = AssetManager::create_cube(&renderer.device);
-    let box_tex = asset_manager.create_checkerboard_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
-    let _cube_mat = Material::new(box_tex.clone()).with_pbr(Vec4::new(0.8, 0.2, 0.2, 1.0), 0.5, 0.0);
+    let box_tex = asset_manager.create_checkerboard_texture(
+        &renderer.device,
+        &renderer.queue,
+        &renderer.scene.texture_bind_group_layout,
+    );
+    let _cube_mat =
+        Material::new(box_tex.clone()).with_pbr(Vec4::new(0.8, 0.2, 0.2, 1.0), 0.5, 0.0);
 
     // Trigger Zone (Görünmez Sensör)
-    let trigger_mat = Material::new(asset_manager.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout))
-        .with_pbr(Vec4::new(0.0, 1.0, 0.0, 0.3), 0.5, 0.0); // Yarı saydam yeşil
-        
+    let trigger_mat = Material::new(asset_manager.create_white_texture(
+        &renderer.device,
+        &renderer.queue,
+        &renderer.scene.texture_bind_group_layout,
+    ))
+    .with_pbr(Vec4::new(0.0, 1.0, 0.0, 0.3), 0.5, 0.0); // Yarı saydam yeşil
+
     let trigger_ent = world.spawn();
-    world.add_component(trigger_ent, Transform::new(Vec3::new(0.0, 1.0, -5.0)).with_scale(Vec3::new(4.0, 2.0, 4.0)));
+    world.add_component(
+        trigger_ent,
+        Transform::new(Vec3::new(0.0, 1.0, -5.0)).with_scale(Vec3::new(4.0, 2.0, 4.0)),
+    );
     world.add_component(trigger_ent, cube_mesh.clone());
     world.add_component(trigger_ent, trigger_mat);
     world.add_component(trigger_ent, MeshRenderer::new());
-    
+
     let mut trigger_col = Collider::box_collider(Vec3::new(4.0, 2.0, 4.0));
     trigger_col.is_trigger = true; // SADECE SENSÖR! Fiziksel çarpışma olmaz
     world.add_component(trigger_ent, trigger_col);
-    
+
     // Rigidbody ekliyoruz ama statik, çünkü sadece duracak
     world.add_component(trigger_ent, RigidBody::new_static());
 
@@ -215,38 +314,39 @@ fn setup(world: &mut World, renderer: &Renderer) -> TestSandboxState {
 
     // Güneş
     let sun_entity = world.spawn();
-    world.add_component(sun_entity, Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_x(-PI / 4.0)));
-    world.add_component(sun_entity, gizmo::renderer::components::DirectionalLight::new(
-        Vec3::new(1.0, 0.95, 0.9), 4.0, gizmo::renderer::components::LightRole::Sun
-    ));
-
-    // Kamera
-    let camera_ent = world.spawn();
     world.add_component(
-        camera_ent,
-        Transform::new(Vec3::new(0.0, 2.0, 5.0)),
+        sun_entity,
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_x(-PI / 4.0)),
     );
     world.add_component(
-        camera_ent,
-        Camera::new(
-            std::f32::consts::FRAC_PI_3,
-            0.1,
-            5000.0,
-            0.0,
-            0.0,
-            true,
+        sun_entity,
+        gizmo::renderer::components::DirectionalLight::new(
+            Vec3::new(1.0, 0.95, 0.9),
+            4.0,
+            gizmo::renderer::components::LightRole::Sun,
         ),
     );
 
+    // Kamera
+    let camera_ent = world.spawn();
+    world.add_component(camera_ent, Transform::new(Vec3::new(0.0, 2.0, 5.0)));
+    world.add_component(
+        camera_ent,
+        Camera::new(std::f32::consts::FRAC_PI_3, 0.1, 5000.0, 0.0, 0.0, true),
+    );
 
     let sphere_mesh = AssetManager::create_sphere(&renderer.device, 0.5, 16, 16);
-    let sphere_mat = Material::new(asset_manager.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout))
-        .with_pbr(Vec4::new(0.1, 0.1, 0.1, 1.0), 0.1, 1.0); // Siyah metalik top
+    let sphere_mat = Material::new(asset_manager.create_white_texture(
+        &renderer.device,
+        &renderer.queue,
+        &renderer.scene.texture_bind_group_layout,
+    ))
+    .with_pbr(Vec4::new(0.1, 0.1, 0.1, 1.0), 0.1, 1.0); // Siyah metalik top
 
     // --- OYUNCAK ARABA (FİZİKSEL) ---
     let car_pos = Vec3::new(-10.0, 3.0, 0.0);
     let car_mat = Material::new(box_tex.clone()).with_pbr(Vec4::new(0.9, 0.7, 0.1, 1.0), 0.3, 0.8); // Altın sarısı kasa
-    
+
     let chassis = ObjectBuilder::new(world)
         .position(car_pos)
         .scale(Vec3::new(2.0, 0.5, 4.0))
@@ -267,7 +367,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> TestSandboxState {
         let wheel = ObjectBuilder::new(world)
             .position(car_pos + *offset)
             .scale(Vec3::splat(0.8)) // Base radius is 0.5, scale 0.8 => 0.4
-            .mesh(sphere_mesh.clone()) 
+            .mesh(sphere_mesh.clone())
             .material(sphere_mat.clone()) // Lastik gibi siyah
             .collider(Collider::sphere(0.4))
             .dynamic_body_with_props(20.0, 1.5, 0.0) // Sürtünme yüksek
@@ -292,7 +392,9 @@ fn setup(world: &mut World, renderer: &Renderer) -> TestSandboxState {
 
     world.insert_resource(phys_world);
     world.insert_resource(asset_manager);
-    world.insert_resource(FractureQueue { entities: Vec::new() });
+    world.insert_resource(FractureQueue {
+        entities: Vec::new(),
+    });
 
     TestSandboxState {
         camera_speed: 15.0,
@@ -305,15 +407,21 @@ fn setup(world: &mut World, renderer: &Renderer) -> TestSandboxState {
     }
 }
 
-fn update(world: &mut World, state: &mut TestSandboxState, dt: f32, input: &gizmo::core::input::Input) {
+fn update(
+    world: &mut World,
+    state: &mut TestSandboxState,
+    dt: f32,
+    input: &gizmo::core::input::Input,
+) {
     // --- KAMERA KONTROLÜ (Noclip FPS) ---
-    if input.is_mouse_button_pressed(1) { // Sağ Tık
+    if input.is_mouse_button_pressed(1) {
+        // Sağ Tık
         let delta = input.mouse_delta();
         state.camera_yaw -= delta.0 * 0.005;
         state.camera_pitch -= delta.1 * 0.005;
         state.camera_pitch = state.camera_pitch.clamp(-PI / 2.0 + 0.1, PI / 2.0 - 0.1);
     }
-    
+
     let fx = state.camera_yaw.cos() * state.camera_pitch.cos();
     let fy = state.camera_pitch.sin();
     let fz = state.camera_yaw.sin() * state.camera_pitch.cos();
@@ -321,21 +429,40 @@ fn update(world: &mut World, state: &mut TestSandboxState, dt: f32, input: &gizm
     let right = forward.cross(Vec3::new(0.0, 1.0, 0.0)).normalize();
     let up = Vec3::new(0.0, 1.0, 0.0);
 
-    let speed = if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ShiftLeft as u32) { state.camera_speed * 3.0 } else { state.camera_speed };
+    let speed = if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ShiftLeft as u32) {
+        state.camera_speed * 3.0
+    } else {
+        state.camera_speed
+    };
 
     let mut cam_move = Vec3::ZERO;
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyW as u32) { cam_move += forward; }
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyS as u32) { cam_move -= forward; }
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyD as u32) { cam_move += right; }
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyA as u32) { cam_move -= right; }
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyE as u32) { cam_move += up; }
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyQ as u32) { cam_move -= up; }
+    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyW as u32) {
+        cam_move += forward;
+    }
+    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyS as u32) {
+        cam_move -= forward;
+    }
+    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyD as u32) {
+        cam_move += right;
+    }
+    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyA as u32) {
+        cam_move -= right;
+    }
+    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyE as u32) {
+        cam_move += up;
+    }
+    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyQ as u32) {
+        cam_move -= up;
+    }
 
     if cam_move.length_squared() > 0.0 {
         state.camera_pos += cam_move.normalize() * speed * dt;
     }
 
-    if let Some(mut q) = world.query::<(gizmo::core::query::Mut<Transform>, gizmo::core::query::Mut<Camera>)>() {
+    if let Some(mut q) = world.query::<(
+        gizmo::core::query::Mut<Transform>,
+        gizmo::core::query::Mut<Camera>,
+    )>() {
         let yaw_rot = Quat::from_rotation_y(-state.camera_yaw + std::f32::consts::FRAC_PI_2);
         let pitch_rot = Quat::from_rotation_x(state.camera_pitch);
         let rot = yaw_rot * pitch_rot;
@@ -360,10 +487,13 @@ fn update(world: &mut World, state: &mut TestSandboxState, dt: f32, input: &gizm
         world.add_component(ball, Collider::sphere(0.5));
         world.add_component(ball, RigidBody::new(50.0, 0.4, 0.8, true));
         // Topa ileriye doğru muazzam bir hız ver (Gülle gibi)
-        world.add_component(ball, Velocity {
-            linear: forward * 60.0,
-            angular: Vec3::ZERO,
-        });
+        world.add_component(
+            ball,
+            Velocity {
+                linear: forward * 60.0,
+                angular: Vec3::ZERO,
+            },
+        );
     }
 
     // Parçalanma Tetikleyicisi (X tuşu)
@@ -386,17 +516,23 @@ fn update(world: &mut World, state: &mut TestSandboxState, dt: f32, input: &gizm
         gizmo::systems::cpu_physics_step_system(world, step);
         physics_dt -= step;
     }
-    
+
     // --- Olayları Dinleme (Trigger Event Mimarisi) ---
-    if let Some(events) = world.get_resource::<gizmo::core::event::Events<gizmo::physics::collision::TriggerEvent>>() {
+    if let Some(events) =
+        world.get_resource::<gizmo::core::event::Events<gizmo::physics::collision::TriggerEvent>>()
+    {
         for event in events.iter() {
             use gizmo::physics::collision::CollisionEventType;
             let trigger_ent = event.trigger_entity;
             let other_ent = event.other_entity;
-            
+
             match event.event_type {
                 CollisionEventType::Started => {
-                    println!("Entity {} GİRDİ -> Sensor {}", other_ent.id(), trigger_ent.id());
+                    println!(
+                        "Entity {} GİRDİ -> Sensor {}",
+                        other_ent.id(),
+                        trigger_ent.id()
+                    );
                     // Sensörün rengini kırmızı yap
                     if let Some(q) = world.query::<gizmo::core::query::Mut<Material>>() {
                         if let Some(mut mat) = q.get(trigger_ent.id()) {
@@ -408,7 +544,11 @@ fn update(world: &mut World, state: &mut TestSandboxState, dt: f32, input: &gizm
                     // İçinde kalmaya devam ediyor
                 }
                 CollisionEventType::Ended => {
-                    println!("Entity {} ÇIKTI -> Sensor {}", other_ent.id(), trigger_ent.id());
+                    println!(
+                        "Entity {} ÇIKTI -> Sensor {}",
+                        other_ent.id(),
+                        trigger_ent.id()
+                    );
                     // Sensörün rengini eski haline (yeşil) çevir
                     if let Some(q) = world.query::<gizmo::core::query::Mut<Material>>() {
                         if let Some(mut mat) = q.get(trigger_ent.id()) {
@@ -430,7 +570,7 @@ fn render(
     _light_time: f32,
 ) {
     renderer.gpu_physics = None;
-    
+
     // Yıkım kuyruğunu işle (Render pass'ten önce GPU bufferlarını yaratmak için)
     let mut to_shatter = Vec::new();
     if let Some(mut queue) = world.get_resource_mut::<FractureQueue>() {
@@ -453,8 +593,13 @@ fn render(
     let mut chunk_mat_opt = None;
     if !to_shatter.is_empty() {
         if let Some(mut asset_manager) = world.get_resource_mut::<AssetManager>() {
-            let box_tex = asset_manager.create_checkerboard_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
-            chunk_mat_opt = Some(Material::new(box_tex).with_pbr(Vec4::new(0.8, 0.4, 0.1, 1.0), 0.6, 0.0));
+            let box_tex = asset_manager.create_checkerboard_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            chunk_mat_opt =
+                Some(Material::new(box_tex).with_pbr(Vec4::new(0.8, 0.4, 0.1, 1.0), 0.6, 0.0));
         }
     }
 
@@ -469,7 +614,7 @@ fn render(
 
         // Voronoi ile parçala
         let chunks = gizmo::physics::fracture::voronoi_shatter(extents, 8, 42);
-        
+
         let chunk_mat = chunk_mat_opt.clone().unwrap();
 
         for chunk in chunks {
@@ -487,11 +632,14 @@ fn render(
                 });
             }
 
-            let vbuf = renderer.device.create_buffer_init(&gizmo::wgpu::util::BufferInitDescriptor {
-                label: Some("Chunk VBuf"),
-                contents: bytemuck::cast_slice(&vertices),
-                usage: gizmo::wgpu::BufferUsages::VERTEX,
-            });
+            let vbuf =
+                renderer
+                    .device
+                    .create_buffer_init(&gizmo::wgpu::util::BufferInitDescriptor {
+                        label: Some("Chunk VBuf"),
+                        contents: bytemuck::cast_slice(&vertices),
+                        usage: gizmo::wgpu::BufferUsages::VERTEX,
+                    });
             let chunk_mesh = gizmo::renderer::components::Mesh::new(
                 &renderer.device,
                 std::sync::Arc::new(vbuf),
@@ -503,22 +651,31 @@ fn render(
             let chunk_ent = world.spawn();
             // Parçanın yeni dünya pozisyonu
             let world_offset = original_rot.mul_vec3(chunk.center_of_mass);
-            world.add_component(chunk_ent, Transform::new(original_pos + world_offset).with_rotation(original_rot));
+            world.add_component(
+                chunk_ent,
+                Transform::new(original_pos + world_offset).with_rotation(original_rot),
+            );
             world.add_component(chunk_ent, chunk_mesh);
             world.add_component(chunk_ent, chunk_mat.clone());
             world.add_component(chunk_ent, MeshRenderer::new());
-            
+
             // Ortalama bir kutu collider atıyoruz
             let r = (chunk.volume * 3.0).powf(0.33); // kaba bir yarıçap
             world.add_component(chunk_ent, Collider::box_collider(Vec3::splat(r * 0.5)));
-            world.add_component(chunk_ent, RigidBody::new(chunk.volume * 50.0, 0.1, 0.8, true));
-            
+            world.add_component(
+                chunk_ent,
+                RigidBody::new(chunk.volume * 50.0, 0.1, 0.8, true),
+            );
+
             // Rastgele bir patlama hızı ekle
             let explosion_dir = (chunk.center_of_mass).normalize_or_zero();
-            world.add_component(chunk_ent, Velocity {
-                linear: original_vel + explosion_dir * 5.0,
-                angular: explosion_dir * 10.0,
-            });
+            world.add_component(
+                chunk_ent,
+                Velocity {
+                    linear: original_vel + explosion_dir * 5.0,
+                    angular: explosion_dir * 10.0,
+                },
+            );
         }
     }
 

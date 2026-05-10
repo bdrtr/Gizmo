@@ -104,7 +104,11 @@ impl SsrState {
     fn mk_ssr_tex(device: &wgpu::Device, w: u32, h: u32) -> (wgpu::Texture, wgpu::TextureView) {
         let t = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("ssr_texture"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -120,7 +124,8 @@ impl SsrState {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("ssr_bgl"),
             entries: &[
-                wgpu::BindGroupLayoutEntry { // t_hdr
+                wgpu::BindGroupLayoutEntry {
+                    // t_hdr
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
@@ -130,7 +135,8 @@ impl SsrState {
                     },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry { // t_normal_roughness
+                wgpu::BindGroupLayoutEntry {
+                    // t_normal_roughness
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
@@ -140,7 +146,8 @@ impl SsrState {
                     },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry { // t_world_position
+                wgpu::BindGroupLayoutEntry {
+                    // t_world_position
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
@@ -150,7 +157,8 @@ impl SsrState {
                     },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry { // s_nearest
+                wgpu::BindGroupLayoutEntry {
+                    // s_nearest
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
@@ -196,10 +204,22 @@ impl SsrState {
             label: Some("ssr_bg"),
             layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(hdr_view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(normal_view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(pos_view) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(hdr_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(normal_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(pos_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
             ],
         })
     }
@@ -214,8 +234,14 @@ impl SsrState {
             label: Some("ssr_apply_bg"),
             layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(ssr_view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(ssr_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
             ],
         })
     }
@@ -225,8 +251,12 @@ impl SsrState {
         scene: &SceneState,
         bgl: &wgpu::BindGroupLayout,
     ) -> wgpu::RenderPipeline {
-        let shader = load_shader(device, "demo/assets/shaders/ssr.wgsl",
-            include_str!("shaders/ssr.wgsl"), "SSR Shader");
+        let shader = load_shader(
+            device,
+            "demo/assets/shaders/ssr.wgsl",
+            include_str!("shaders/ssr.wgsl"),
+            "SSR Shader",
+        );
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ssr_layout"),
             bind_group_layouts: &[&scene.global_bind_group_layout, bgl],
@@ -236,11 +266,14 @@ impl SsrState {
             label: Some("ssr_pipeline"),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
-                module: &shader, entry_point: "vs_main",
-                compilation_options: Default::default(), buffers: &[],
+                module: &shader,
+                entry_point: "vs_main",
+                compilation_options: Default::default(),
+                buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader, entry_point: "fs_main",
+                module: &shader,
+                entry_point: "fs_main",
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba16Float,
@@ -248,16 +281,27 @@ impl SsrState {
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
-            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: None, ..Default::default() },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
         })
     }
 
-    fn mk_apply_pipeline(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> wgpu::RenderPipeline {
-        let shader = load_shader(device, "demo/assets/shaders/ssr_apply.wgsl",
-            include_str!("shaders/ssr_apply.wgsl"), "SSR Apply Shader");
+    fn mk_apply_pipeline(
+        device: &wgpu::Device,
+        bgl: &wgpu::BindGroupLayout,
+    ) -> wgpu::RenderPipeline {
+        let shader = load_shader(
+            device,
+            "demo/assets/shaders/ssr_apply.wgsl",
+            include_str!("shaders/ssr_apply.wgsl"),
+            "SSR Apply Shader",
+        );
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ssr_apply_layout"),
             bind_group_layouts: &[bgl],
@@ -267,11 +311,14 @@ impl SsrState {
             label: Some("ssr_apply_pipeline"),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
-                module: &shader, entry_point: "vs_main",
-                compilation_options: Default::default(), buffers: &[],
+                module: &shader,
+                entry_point: "vs_main",
+                compilation_options: Default::default(),
+                buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader, entry_point: "fs_main",
+                module: &shader,
+                entry_point: "fs_main",
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba16Float,
@@ -287,7 +334,11 @@ impl SsrState {
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
-            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: None, ..Default::default() },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
