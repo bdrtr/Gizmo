@@ -541,7 +541,7 @@ fn draw_script_section(
 ) {
     let mut pending_text = None;
     let mut file_path = String::new();
-    let mut scripts = world.borrow_mut::<gizmo_scripting::engine::Script>();
+    let mut scripts = world.borrow_mut::<gizmo_scripting::Script>();
     {
         if let Some(script) = scripts.get_mut(entity_id.id()) {
             file_path = script.file_path.clone();

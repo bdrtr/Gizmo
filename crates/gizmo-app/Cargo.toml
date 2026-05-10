@@ -11,13 +11,30 @@ gizmo-renderer = { path = "../gizmo-renderer" }
 gizmo-math = { path = "../gizmo-math" }
 gizmo-physics = { path = "../gizmo-physics" }
 winit = "0.29"
-wgpu = "0.20"
+wgpu = { version = "0.20", features = ["fragile-send-sync-non-atomic-wasm", "webgl"] }
 pollster = "0.3"
 egui = "0.28"
 gizmo-editor = { path = "../gizmo-editor" }
 gizmo-audio = { path = "../gizmo-audio" }
 gizmo-scene = { path = "../gizmo-scene" }
 image = "0.25"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = "0.17.2"
 backtrace = "0.3.76"
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+console_error_panic_hook = "0.1"
+console_log = "1.0"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "Document",
+    "Window",
+    "Element",
+    "Node",
+    "HtmlCanvasElement",
+    "CssStyleDeclaration",
+    "HtmlElement",
+] }
+web-time = "0.2"

@@ -6,7 +6,7 @@ use wgpu::util::DeviceExt;
 pub struct AssetServer {
     pub loader: AsyncAssetLoader,
     mesh_paths: std::collections::HashMap<String, Handle<Mesh>>,
-    material_paths: std::collections::HashMap<String, Handle<Material>>,
+    _material_paths: std::collections::HashMap<String, Handle<Material>>,
 }
 
 impl AssetServer {
@@ -14,7 +14,7 @@ impl AssetServer {
         Self {
             loader: AsyncAssetLoader::new(),
             mesh_paths: std::collections::HashMap::new(),
-            material_paths: std::collections::HashMap::new(),
+            _material_paths: std::collections::HashMap::new(),
         }
     }
 

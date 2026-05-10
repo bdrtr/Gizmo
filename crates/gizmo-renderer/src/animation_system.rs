@@ -43,9 +43,9 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
                 }
             }
 
-            let poses = evaluate_clip(anim, player.current_time, &skeleton.local_poses, &skeleton.hierarchy);
+            let poses_trs = evaluate_clip(anim, player.current_time, &skeleton.hierarchy);
             
-            if let Some(prev_idx) = player.prev_animation {
+            let final_trs = if let Some(prev_idx) = player.prev_animation {
                 if player.blend_time < player.blend_duration {
                     player.blend_time += dt;
                     player.prev_time += dt;
@@ -60,20 +60,25 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
                             }
                         }
                         
-                        let prev_poses = evaluate_clip(prev_anim, prev_time_clamped, &skeleton.local_poses, &skeleton.hierarchy);
+                        let prev_poses_trs = evaluate_clip(prev_anim, prev_time_clamped, &skeleton.hierarchy);
                         let alpha = (player.blend_time / player.blend_duration).clamp(0.0, 1.0);
-                        let blended = blend_poses(&prev_poses, &poses, alpha);
-                        skeleton.local_poses = blended;
+                        blend_poses(&prev_poses_trs, &poses_trs, alpha)
                     } else {
-                        skeleton.local_poses = poses;
+                        poses_trs
                     }
                 } else {
                     player.prev_animation = None;
-                    skeleton.local_poses = poses;
+                    poses_trs
                 }
             } else {
-                skeleton.local_poses = poses;
-            }
+                poses_trs
+            };
+
+            let poses = final_trs.into_iter().map(|(t, r, s)| {
+                Mat4::from_scale_rotation_translation(s, r, t)
+            }).collect();
+
+            skeleton.local_poses = poses;
 
             upload_skin_matrices(skeleton, queue);
         }
@@ -185,8 +190,7 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
         }
 
         // --- Compute blended poses ---
-        let local_poses_base = skeleton.local_poses.clone();
-        let poses = if let Some(ref blend) = machine.active_blend {
+        let poses_trs = if let Some(ref blend) = machine.active_blend {
             let clip_a = match machine.clips.get(blend.from_clip) {
                 Some(c) => c,
                 None => continue,
@@ -195,8 +199,8 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
                 Some(c) => c,
                 None => continue,
             };
-            let poses_a = evaluate_clip(clip_a, blend.from_time, &local_poses_base, &skeleton.hierarchy);
-            let poses_b = evaluate_clip(clip_b, blend.to_time,   &local_poses_base, &skeleton.hierarchy);
+            let poses_a = evaluate_clip(clip_a, blend.from_time, &skeleton.hierarchy);
+            let poses_b = evaluate_clip(clip_b, blend.to_time,   &skeleton.hierarchy);
             blend_poses(&poses_a, &poses_b, blend.alpha())
         } else {
             let clip_idx = match machine.current_clip_index() {
@@ -207,8 +211,13 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
                 Some(c) => c,
                 None => continue,
             };
-            evaluate_clip(clip, machine.current_time, &local_poses_base, &skeleton.hierarchy)
+            evaluate_clip(clip, machine.current_time, &skeleton.hierarchy)
         };
+
+        // Convert TRS to Mat4
+        let poses = poses_trs.into_iter().map(|(t, r, s)| {
+            Mat4::from_scale_rotation_translation(s, r, t)
+        }).collect();
 
         skeleton.local_poses = poses;
         upload_skin_matrices(skeleton, queue);
@@ -217,80 +226,88 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-/// Sample all joint local poses from a clip at `time`, falling back to `base_poses` for unkeyed joints.
 fn evaluate_clip(
     clip: &crate::animation::AnimationClip,
     time: f32,
-    base_poses: &[Mat4],
     hierarchy: &crate::animation::SkeletonHierarchy,
-) -> Vec<Mat4> {
-    let mut poses = base_poses.to_vec();
-    let mut changes: std::collections::HashMap<usize, (Option<Vec3>, Option<Quat>, Option<Vec3>)> =
-        std::collections::HashMap::new();
+) -> Vec<(Vec3, Quat, Vec3)> {
+    // Start with all None
+    let mut changes = vec![(None, None, None); hierarchy.joints.len()];
 
     let get_joint_idx = |target_node: usize, target_node_name: &Option<String>| -> Option<usize> {
         if let Some(name) = target_node_name {
+            // Tam eşleşme
             if let Some(idx) = hierarchy.joints.iter().position(|j| &j.name == name) {
+                return Some(idx);
+            }
+            // Gevşek eşleşme (mixamorig: vs mixamorig_ ve /RootNode/ gibi fbx2gltf eklentileri)
+            let clean = |n: &str| {
+                n.replace("/RootNode/", "")
+                 .replace("mixamorig:", "")
+                 .replace("mixamorig_", "")
+                 .to_lowercase()
+            };
+            let clean_name = clean(name);
+            if let Some(idx) = hierarchy.joints.iter().position(|j| clean(&j.name) == clean_name) {
                 return Some(idx);
             }
         }
         if target_node_name.is_none() {
-            if target_node < poses.len() {
+            if target_node < hierarchy.joints.len() {
                 return Some(target_node);
             }
         }
         None
     };
 
+
+
     for track in &clip.translations {
-        if let Some(_joint_idx) = get_joint_idx(track.target_node, &track.target_node_name) {
-            if let Some(_v) = track.get_interpolated(time, |a: Vec3, b: Vec3, t| a.lerp(b, t)) {
-                // TUM TRANSLATION'LARI YOK SAY!
-                // Retargeting sirasinda Hips (Root) translation'u bile yanlis olcekliyse
-                // karakteri yere gomer (Gordugumuz sorun tam olarak bu).
-                // Dövüş oyununda pozisyon zaten Transform ile yonetiliyor, 
-                // iskelet animasyonundan sadece rotasyon (durus) almamiz yeterli!
+        if let Some(joint_idx) = get_joint_idx(track.target_node, &track.target_node_name) {
+            if let Some(v) = track.get_interpolated(time, |a: Vec3, b: Vec3, t| a.lerp(b, t)) {
+                // Sadece Hips (kök) kemiğinin hareketine izin ver, diğerlerini yoksay. Mixamo animasyonlarında root motion buradadır.
+                if track.target_node_name.as_deref() == Some("mixamorig:Hips") || track.target_node == 66 {
+                    changes[joint_idx].0 = Some(v);
+                }
             }
         }
     }
     for track in &clip.rotations {
         if let Some(joint_idx) = get_joint_idx(track.target_node, &track.target_node_name) {
             if let Some(v) = track.get_interpolated(time, |a: Quat, b: Quat, t| a.slerp(b, t)) {
-                changes.entry(joint_idx).or_default().1 = Some(v.normalize());
+                changes[joint_idx].1 = Some(v.normalize());
             }
         }
     }
     for track in &clip.scales {
-        if let Some(joint_idx) = get_joint_idx(track.target_node, &track.target_node_name) {
+        if let Some(_joint_idx) = get_joint_idx(track.target_node, &track.target_node_name) {
             if let Some(_v) = track.get_interpolated(time, |a: Vec3, b: Vec3, t| a.lerp(b, t)) {
-                // SCALE IZLERINI TAMAMEN YOK SAYIYORUZ! 
-                // Cunku farkli GLTF ciktilari 0.01 veya 100.0 scale degerleri verip karakteri ezer.
-                // changes.entry(joint_idx).or_default().2 = Some(v);
+                // SCALE IZLERINI TAMAMEN YOK SAYIYORUZ!
             }
         }
     }
 
-    for (joint_idx, (t_opt, r_opt, s_opt)) in changes {
-        let (mut pos, mut rot, mut scale) = decompose_mat4(poses[joint_idx]);
-        if let Some(v) = t_opt { pos   = v; }
-        if let Some(v) = r_opt { rot   = v; }
-        if let Some(v) = s_opt { scale = v; }
-        poses[joint_idx] = Mat4::from_scale_rotation_translation(scale, rot, pos);
+    let mut result_trs = Vec::with_capacity(hierarchy.joints.len());
+    for (joint_idx, (t_opt, r_opt, s_opt)) in changes.into_iter().enumerate() {
+        let joint = &hierarchy.joints[joint_idx];
+        let pos   = t_opt.unwrap_or(joint.bind_translation);
+        let rot   = r_opt.unwrap_or(joint.bind_rotation);
+        let scale = s_opt.unwrap_or(joint.bind_scale);
+        
+        result_trs.push((pos, rot, scale));
     }
-    poses
+    result_trs
 }
 
 /// Linearly blend two pose arrays. Uses lerp for T/S, slerp for R.
-fn blend_poses(a: &[Mat4], b: &[Mat4], alpha: f32) -> Vec<Mat4> {
+fn blend_poses(a: &[(Vec3, Quat, Vec3)], b: &[(Vec3, Quat, Vec3)], alpha: f32) -> Vec<(Vec3, Quat, Vec3)> {
     a.iter()
         .zip(b.iter())
-        .map(|(ma, mb)| {
-            let (ta, ra, sa) = decompose_mat4(*ma);
-            let (tb, rb, sb) = decompose_mat4(*mb);
-            let t = ta.lerp(tb, alpha);
-            let r = ra.slerp(rb, alpha).normalize();
-            let s = sa.lerp(sb, alpha);
-            Mat4::from_scale_rotation_translation(s, r, t)
+        .map(|((ta, ra, sa), (tb, rb, sb))| {
+            let t = ta.lerp(*tb, alpha);
+            let r = ra.slerp(*rb, alpha).normalize();
+            let s = sa.lerp(*sb, alpha);
+            (t, r, s)
         })
         .collect()
 }
@@ -300,9 +317,9 @@ fn upload_skin_matrices(skeleton: &Skeleton, queue: &wgpu::Queue) {
         .hierarchy
         .calculate_global_matrices(&skeleton.local_poses);
 
-    let mut joint_matrices = vec![Mat4::IDENTITY; 64];
+    let mut joint_matrices = vec![Mat4::IDENTITY; 128];
     for (i, joint) in skeleton.hierarchy.joints.iter().enumerate() {
-        if i < 64 {
+        if i < 128 {
             joint_matrices[i] = global_matrices[i] * joint.inverse_bind_matrix;
         }
     }
@@ -311,6 +328,7 @@ fn upload_skin_matrices(skeleton: &Skeleton, queue: &wgpu::Queue) {
 
 // find_joint_for_node artik kullanilmiyor
 
+#[allow(dead_code)]
 fn decompose_mat4(m: Mat4) -> (Vec3, Quat, Vec3) {
     let t = Vec3::new(m.w_axis.x, m.w_axis.y, m.w_axis.z);
     let sx = Vec3::new(m.x_axis.x, m.x_axis.y, m.x_axis.z).length();

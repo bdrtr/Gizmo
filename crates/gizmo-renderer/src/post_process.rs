@@ -33,8 +33,13 @@ pub fn build_post_process_resources(
     depth_view: &wgpu::TextureView,
 ) -> PostProcessState {
     let post_shader = {
+        #[cfg(not(target_arch = "wasm32"))]
         let source = std::fs::read_to_string("demo/assets/shaders/post_process.wgsl")
             .unwrap_or_else(|_| include_str!("shaders/post_process.wgsl").to_string());
+
+        #[cfg(target_arch = "wasm32")]
+        let source = include_str!("shaders/post_process_wasm.wgsl").to_string();
+
         device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Post-Processing Shader"),
             source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -79,6 +84,9 @@ pub fn build_post_process_resources(
             }],
         });
 
+    // WASM: depth texture'ı composite layout'tan kaldır (textureLoad kullanılıyor, sampler gerekmez)
+    // Native: depth texture sampler ile kalır
+    #[cfg(not(target_arch = "wasm32"))]
     let composite_bloom_bind_group_layout =
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("composite_bloom_bind_group_layout"),
@@ -111,6 +119,29 @@ pub fn build_post_process_resources(
                 },
             ],
         });
+    #[cfg(target_arch = "wasm32")]
+    let composite_bloom_bind_group_layout =
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("composite_bloom_bind_group_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
 
     let post_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Post Process Params Buffer"),
@@ -118,7 +149,7 @@ pub fn build_post_process_resources(
             bloom_intensity: 0.8, // Daha belirgin ve hacimli parlama
             bloom_threshold: 0.85, // Daha çok highlight yakalamak için eşik düşürüldü
             exposure: 1.15, // ACES Tone mapping'in renkleri daha canlı sunması için pozlama artırıldı
-            chromatic_aberration: 0.35, // Sinematik lens hissi için ufak renk sapması
+            chromatic_aberration: 0.0, // Dövüş oyununda rahatsız edici ghosting yapmaması için kapatıldı
             vignette_intensity: 0.25, // Köşelerde dramatik kararma (Vignette)
             film_grain_intensity: 0.03, // Film greni (Realistic noise)
             dof_focus_dist: 15.0,
@@ -411,6 +442,7 @@ pub fn create_post_textures(
     let (_be_t, be_v, be_bg) = make("Bloom Extract Texture");
     let (_bb_t, bb_v, bb_bg) = make("Bloom Blur Texture");
 
+    #[cfg(not(target_arch = "wasm32"))]
     let cb_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: composite_bloom_bgl,
         entries: &[
@@ -425,6 +457,21 @@ pub fn create_post_textures(
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: wgpu::BindingResource::TextureView(depth_view),
+            },
+        ],
+        label: Some("composite_bloom_bind_group"),
+    });
+    #[cfg(target_arch = "wasm32")]
+    let cb_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        layout: composite_bloom_bgl,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&be_v),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
             },
         ],
         label: Some("composite_bloom_bind_group"),
@@ -477,7 +524,8 @@ pub fn run_post_processing(
     encoder: &mut wgpu::CommandEncoder,
     output_view: &wgpu::TextureView,
 ) {
-    // Pass 1: Bright Extract
+    // Pass 1: Bright Extract (WASM'da KAPALI)
+    #[cfg(not(target_arch = "wasm32"))]
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Bloom Extract Pass"),
@@ -498,7 +546,8 @@ pub fn run_post_processing(
         pass.set_bind_group(2, &renderer.post.post_params_bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
-    // Pass 2a: Yatay Blur
+    // Pass 2a: Yatay Blur (WASM'da KAPALI)
+    #[cfg(not(target_arch = "wasm32"))]
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Bloom Blur Horizontal"),
@@ -518,7 +567,8 @@ pub fn run_post_processing(
         pass.set_bind_group(1, &renderer.post.blur_h_bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
-    // Pass 2b: Dikey Blur (ping-pong)
+    // Pass 2b: Dikey Blur (ping-pong) (WASM'da KAPALI)
+    #[cfg(not(target_arch = "wasm32"))]
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Bloom Blur Vertical"),

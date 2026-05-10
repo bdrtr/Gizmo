@@ -28,7 +28,7 @@ var t_diffuse: texture_2d<f32>;
 var s_diffuse: sampler;
 
 struct SkeletonData {
-    joints: array<mat4x4<f32>, 64>, // Maksimum 64 kemik destegi
+    joints: array<mat4x4<f32>, 128>, // Maksimum 64 kemik destegi
 };
 @group(3) @binding(0)
 var<uniform> skeleton: SkeletonData;

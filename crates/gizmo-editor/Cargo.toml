@@ -7,7 +7,7 @@ edition.workspace = true
 winit = { workspace = true }
 wgpu = "0.20"
 egui = "0.28"
-egui-winit = "0.28"
+egui-winit = { version = "0.28", default-features = false, features = ["links"] }
 egui-wgpu = "0.28"
 gizmo-core = { path = "../gizmo-core" }
 gizmo-math = { path = "../gizmo-math" }

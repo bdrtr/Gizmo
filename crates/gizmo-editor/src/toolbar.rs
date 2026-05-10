@@ -39,21 +39,27 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                                 initial_dir = parent.to_path_buf();
                             }
                         }
-                        let res = rfd::FileDialog::new()
-                            .add_filter("Gizmo Scene", &["scene"])
-                            .set_directory(&initial_dir)
-                            .save_file();
-                        let _ = tx.send((
-                            true,
-                            res.map(|p| {
-                                let s = p.to_string_lossy().to_string();
-                                if s.starts_with(r"\\?\") {
-                                    s[4..].to_string()
-                                } else {
-                                    s
-                                }
-                            }),
-                        ));
+                        
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let res = rfd::FileDialog::new()
+                                .add_filter("Gizmo Scene", &["scene"])
+                                .set_directory(&initial_dir)
+                                .save_file();
+                            let _ = tx.send((
+                                true,
+                                res.map(|p: std::path::PathBuf| {
+                                    let s = p.to_string_lossy().to_string();
+                                    if s.starts_with(r"\\?\") {
+                                        s[4..].to_string()
+                                    } else {
+                                        s
+                                    }
+                                }),
+                            ));
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        let _ = tx.send((true, None));
                     });
                 }
 
@@ -71,21 +77,27 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                                 initial_dir = parent.to_path_buf();
                             }
                         }
-                        let res = rfd::FileDialog::new()
-                            .add_filter("Gizmo Scene", &["scene"])
-                            .set_directory(&initial_dir)
-                            .pick_file();
-                        let _ = tx.send((
-                            false,
-                            res.map(|p| {
-                                let s = p.to_string_lossy().to_string();
-                                if s.starts_with(r"\\?\") {
-                                    s[4..].to_string()
-                                } else {
-                                    s
-                                }
-                            }),
-                        ));
+                        
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let res = rfd::FileDialog::new()
+                                .add_filter("Gizmo Scene", &["scene"])
+                                .set_directory(&initial_dir)
+                                .pick_file();
+                            let _ = tx.send((
+                                false,
+                                res.map(|p: std::path::PathBuf| {
+                                    let s = p.to_string_lossy().to_string();
+                                    if s.starts_with(r"\\?\") {
+                                        s[4..].to_string()
+                                    } else {
+                                        s
+                                    }
+                                }),
+                            ));
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        let _ = tx.send((false, None));
                     });
                 }
 

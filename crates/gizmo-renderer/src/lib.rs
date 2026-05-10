@@ -48,8 +48,10 @@ pub mod ssr;
 pub mod ssgi;
 pub mod taa;
 pub mod volumetric;
+pub mod web_profile;
 
 pub use frustum_cull::{visible_in_frustum, Frustum};
+pub use web_profile::{WebProfile, PostProcessLevel, ShadowQuality};
 
 pub use animation::{AnimationClip, Keyframe, SkeletonHierarchy, SkeletonJoint, Track};
 pub use animation_state_machine::{

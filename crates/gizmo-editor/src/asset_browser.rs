@@ -33,9 +33,12 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
                 let (tx, rx) = std::sync::mpsc::channel();
                 state.assets.workspace_rx = Some(std::sync::Mutex::new(rx));
                 std::thread::spawn(move || {
+                    #[cfg(not(target_arch = "wasm32"))]
                     if let Some(folder) = rfd::FileDialog::new().pick_folder() {
                         let _ = tx.send(folder.to_string_lossy().to_string());
                     }
+                    #[cfg(target_arch = "wasm32")]
+                    let _ = tx.send("".to_string());
                 });
             }
         } else {

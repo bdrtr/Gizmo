@@ -131,7 +131,10 @@ pub struct Renderer {
     pub debug_renderer: Option<crate::debug_renderer::GizmoRendererSystem>,
 
     // === DAHİLİ ASSET YÖNETİCİSİ (Kolaylık metodları için cache) ===
-    asset_manager: std::sync::RwLock<crate::asset::AssetManager>,
+    pub asset_manager: std::sync::RwLock<crate::asset::AssetManager>,
+
+    // === WEB PROFİLİ — Platform bazlı GPU kaynak yönetimi ===
+    pub web_profile: crate::web_profile::WebProfile,
 }
 
 impl Renderer {
@@ -150,33 +153,125 @@ impl Renderer {
     }
 
     pub async fn new(window: Arc<Window>) -> Self {
-        let size = window.inner_size();
+        let mut size = window.inner_size();
+        // WASM'da canvas boyutu 0x0 olabilir, en az 1x1 garanti et
+        if size.width == 0 || size.height == 0 {
+            size = winit::dpi::PhysicalSize::new(1280, 720);
+        }
+        
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Web'de 4K/Retina ekranlarda devasa çözünürlükler performansı katleder.
+            // Internal rendering çözünürlüğünü 1280x720'ye (veya aspect ratio'ya göre) caple.
+            if size.width > 640 || size.height > 360 {
+                let aspect = size.width as f32 / size.height as f32;
+                if aspect > 1.0 {
+                    size.width = 640;
+                    size.height = (640.0 / aspect) as u32;
+                } else {
+                    size.height = 360;
+                    size.width = (360.0 * aspect) as u32;
+                }
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        let backends = wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL;
+        #[cfg(not(target_arch = "wasm32"))]
+        let backends = wgpu::Backends::all();
+
+        log::info!("[Renderer] Window size: {}x{}", size.width, size.height);
+        log::info!("[Renderer] Backends: {:?}", backends);
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
+            backends,
             ..Default::default()
         });
+
+        // Enumerate available adapters for diagnostic info
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let adapters = instance.enumerate_adapters(backends);
+            log::info!("[Renderer] {} adapter bulundu", adapters.len());
+            for (i, a) in adapters.iter().enumerate() {
+                let info = a.get_info();
+                log::info!("[Renderer]   Adapter {}: {} ({:?}, {:?})", i, info.name, info.backend, info.device_type);
+            }
+        }
+
         let surface = instance
             .create_surface(window.clone())
-            .expect("Surface error");
+            .expect("Surface oluşturulamadı!");
+        
+        log::info!("[Renderer] Surface oluşturuldu, adapter aranıyor...");
+        
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
+                power_preference: wgpu::PowerPreference::default(),
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             })
-            .await
-            .unwrap();
+            .await;
+        
+        let adapter = match adapter {
+            Some(a) => {
+                let info = a.get_info();
+                log::info!("[Renderer] Adapter bulundu: {} ({:?})", info.name, info.backend);
+                a
+            }
+            None => {
+                log::warn!("[Renderer] Surface uyumlu adapter bulunamadı, surface'siz deneniyor...");
+                // Surface'siz adapter dene
+                match instance
+                    .request_adapter(&wgpu::RequestAdapterOptions {
+                        power_preference: wgpu::PowerPreference::default(),
+                        compatible_surface: None,
+                        force_fallback_adapter: false,
+                    })
+                    .await
+                {
+                    Some(a) => {
+                        let info = a.get_info();
+                        log::info!("[Renderer] Surface'siz adapter bulundu: {} ({:?})", info.name, info.backend);
+                        a
+                    }
+                    None => {
+                        log::error!("[Renderer] Hiçbir adapter bulunamadı! Backends: {:?}", backends);
+                        panic!("GPU adapter bulunamadı! Backends: {:?}, Window size: {}x{}", backends, size.width, size.height);
+                    }
+                }
+            }
+        };
 
+        #[cfg(not(target_arch = "wasm32"))]
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    required_features: wgpu::Features::POLYGON_MODE_LINE | wgpu::Features::TEXTURE_COMPRESSION_BC,
+                    required_features: wgpu::Features::POLYGON_MODE_LINE,
                     required_limits: wgpu::Limits {
                         max_bind_groups: 6,
                         max_storage_buffers_per_shader_stage: 8,
                         max_storage_buffer_binding_size: 256 << 20, // 256 MB buffer limit
                         ..wgpu::Limits::default()
+                    },
+                    label: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        #[cfg(target_arch = "wasm32")]
+        let (device, queue) = adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits {
+                        max_bind_groups: 4,
+                        max_storage_buffers_per_shader_stage: 8,
+                        max_storage_buffer_binding_size: 128 << 20, // 128 MB
+                        ..wgpu::Limits::downlevel_webgl2_defaults()
+                            .using_resolution(adapter.limits())
                     },
                     label: None,
                 },
@@ -218,24 +313,34 @@ impl Renderer {
         );
 
         // GPU particle buffer boyutu — ihtiyaca göre ayarlanabilir
-        let max_particles: u32 = 100_000;
-        let gpu_particles = Some(crate::gpu_particles::GpuParticleSystem::new(
-            &device,
-            max_particles,
-            &scene.global_bind_group_layout,
-            wgpu::TextureFormat::Rgba16Float,
-        ));
+        #[cfg(not(target_arch = "wasm32"))]
+        let gpu_particles = {
+            let max_particles: u32 = 100_000;
+            Some(crate::gpu_particles::GpuParticleSystem::new(
+                &device,
+                max_particles,
+                &scene.global_bind_group_layout,
+                wgpu::TextureFormat::Rgba16Float,
+            ))
+        };
+        #[cfg(target_arch = "wasm32")]
+        let gpu_particles: Option<crate::gpu_particles::GpuParticleSystem> = None;
 
-        // GPU Physics buffer boyutu -- 1 Milyon tam OBB fizik iterasyonu GPU'yu kitler, 50k ile 60+ FPS alalım!
-        let max_physics_spheres: u32 = 50_000;
-        let gpu_physics = Some(crate::gpu_physics::GpuPhysicsSystem::new(
-            &device,
-            max_physics_spheres,
-            &scene.global_bind_group_layout,
-            wgpu::TextureFormat::Rgba16Float,
-            wgpu::TextureFormat::Depth32Float,
-        ));
+        #[cfg(not(target_arch = "wasm32"))]
+        let gpu_physics = {
+            let max_physics_spheres: u32 = 50_000;
+            Some(crate::gpu_physics::GpuPhysicsSystem::new(
+                &device,
+                max_physics_spheres,
+                &scene.global_bind_group_layout,
+                wgpu::TextureFormat::Rgba16Float,
+                wgpu::TextureFormat::Depth32Float,
+            ))
+        };
+        #[cfg(target_arch = "wasm32")]
+        let gpu_physics: Option<crate::gpu_physics::GpuPhysicsSystem> = None;
 
+        #[cfg(not(target_arch = "wasm32"))]
         let gpu_fluid = Some(crate::gpu_fluid::GpuFluidSystem::new(
             &device,
             &queue,
@@ -244,7 +349,9 @@ impl Renderer {
             post_res.hdr_texture.format(),
             config.width,
             config.height,
-        ));        
+        ));
+        #[cfg(target_arch = "wasm32")]
+        let gpu_fluid: Option<crate::gpu_fluid::GpuFluidSystem> = None;        
         let debug_renderer = Some(crate::debug_renderer::GizmoRendererSystem::new(
             &device,
             &scene.global_bind_group_layout,
@@ -283,18 +390,24 @@ impl Renderer {
             instance_capacity: scene.instance_capacity,
         };
 
+        #[cfg(not(target_arch = "wasm32"))]
         let deferred = Some(crate::deferred::DeferredState::new(
             &device,
             &scene_state,
             size.width,
             size.height,
         ));
+        #[cfg(target_arch = "wasm32")]
+        let deferred: Option<crate::deferred::DeferredState> = None;
 
+        #[cfg(not(target_arch = "wasm32"))]
         let gpu_cull = Some(crate::gpu_cull::GpuCullState::new(
             &device,
             &scene_state,
             scene_state.instance_capacity as u32,
         ));
+        #[cfg(target_arch = "wasm32")]
+        let gpu_cull: Option<crate::gpu_cull::GpuCullState> = None;
 
         let ssao = deferred.as_ref().map(|def| {
             crate::ssao::SsaoState::new(&device, &queue, &scene_state, def, size.width, size.height)
@@ -373,6 +486,7 @@ impl Renderer {
             gpu_fluid,
             debug_renderer,
             asset_manager: std::sync::RwLock::new(crate::asset::AssetManager::new()),
+            web_profile: crate::web_profile::WebProfile::auto(),
         }
     }
 
@@ -521,12 +635,13 @@ impl Renderer {
 
         // Global matrislerden doğru joint_matrices hesapla (bind-pose)
         let global_matrices = hierarchy.calculate_global_matrices(&local_poses);
-        let mut joint_matrices = vec![gizmo_math::Mat4::IDENTITY; 64];
+        let mut joint_matrices = vec![gizmo_math::Mat4::IDENTITY; 128];
         for (i, joint) in hierarchy.joints.iter().enumerate() {
-            if i < 64 {
+            if i < 128 {
                 joint_matrices[i] = global_matrices[i] * joint.inverse_bind_matrix;
             }
         }
+
 
 
         let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

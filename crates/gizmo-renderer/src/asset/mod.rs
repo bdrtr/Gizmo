@@ -3,84 +3,119 @@ use crate::renderer::Vertex;
 use gizmo_math::Vec3;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tobj;
 use uuid::Uuid;
 use wgpu::util::DeviceExt;
 
+pub mod loaders;
+pub mod primitives;
+pub mod texture;
+
+pub use loaders::GltfNodeData;
+
+// ============================================================================
+//  Asset metadata
+// ============================================================================
+
+/// Persisted alongside every asset file as `<filename>.meta`.
+///
+/// Stable UUIDs let editor tools and serialised scenes reference assets by
+/// identity rather than by path, surviving renames and moves.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct AssetMeta {
     pub uuid: Uuid,
 }
 
-/// Decode an image file to RGBA8 on a background thread (CPU only).
+// ============================================================================
+//  Free decode helpers (CPU-only, safe to call from worker threads)
+// ============================================================================
+
+/// Decode an image file to RGBA8 on a background thread (no GPU access).
 pub fn decode_rgba_image_file(path: &str) -> Result<(Vec<u8>, u32, u32), String> {
     let img = image::open(path)
-        .map_err(|e| format!("Doku okunamadi ({path}): {e}"))?
+        .map_err(|e| format!("Cannot read texture ({path}): {e}"))?
         .to_rgba8();
     let (w, h) = img.dimensions();
     Ok((img.into_raw(), w, h))
 }
 
-/// OBJ → vertices + AABB without GPU (for [`crate::async_assets::AsyncAssetLoader`]).
+/// Decode an OBJ file to a flat vertex buffer + AABB without touching the GPU.
+///
+/// Intended for use with [`crate::async_assets::AsyncAssetLoader`]: call this
+/// on a worker thread, then hand the result to
+/// [`AssetManager::install_obj_mesh`] on the main thread.
 pub fn decode_obj_vertices_for_async(
     file_path: &str,
 ) -> Result<(Vec<Vertex>, gizmo_math::Aabb), String> {
-    let (models, _materials) = tobj::load_obj(
+    let (models, _) = tobj::load_obj(
         file_path,
         &tobj::LoadOptions {
-            single_index: true,
-            triangulate: true,
+            single_index:  true,
+            triangulate:   true,
             ignore_points: true,
-            ignore_lines: true,
+            ignore_lines:  true,
         },
     )
-    .map_err(|e| format!("OBJ ({file_path}): {e}"))?;
+    .map_err(|e| format!("OBJ load failed ({file_path}): {e}"))?;
 
     if models.is_empty() {
-        return Err(format!("OBJ dosyasinda model yok: {file_path}"));
+        return Err(format!("OBJ file contains no models: {file_path}"));
     }
 
-    let mut aabb = gizmo_math::Aabb::empty();
+    let mut aabb     = gizmo_math::Aabb::empty();
     let mut vertices = Vec::new();
-    let mut has_missing_normals = false;
 
     for model in &models {
-        let m = &model.mesh;
-        if m.normals.is_empty() {
-            has_missing_normals = true;
-        }
+        let m                = &model.mesh;
+        let has_normals      = !m.normals.is_empty();
+        let has_texcoords    = !m.texcoords.is_empty();
+        let model_start      = vertices.len(); // first vertex of this model
 
-        for i in &m.indices {
-            let idx = *i as usize;
+        for &raw_idx in &m.indices {
+            let idx = raw_idx as usize;
 
-            if idx * 3 + 2 >= m.positions.len() {
-                return Err(format!("OBJ dosyasinda gecersiz pozisyon indeksi: {}", idx));
+            // ── Position ─────────────────────────────────────────────────
+            let pos_base = idx * 3;
+            if pos_base + 2 >= m.positions.len() {
+                return Err(format!(
+                    "OBJ ({file_path}): position index {idx} out of range \
+                     (positions.len={})",
+                    m.positions.len()
+                ));
             }
             let position = [
-                m.positions[idx * 3],
-                m.positions[idx * 3 + 1],
-                m.positions[idx * 3 + 2],
+                m.positions[pos_base],
+                m.positions[pos_base + 1],
+                m.positions[pos_base + 2],
             ];
             aabb.extend(Vec3::new(position[0], position[1], position[2]));
 
-            let normal = if !m.normals.is_empty() {
-                if idx * 3 + 2 >= m.normals.len() {
-                    return Err(format!("OBJ dosyasinda gecersiz normal indeksi: {}", idx));
+            // ── Normal (placeholder when absent; recalculated below) ──────
+            let normal = if has_normals {
+                let n_base = idx * 3;
+                if n_base + 2 >= m.normals.len() {
+                    return Err(format!(
+                        "OBJ ({file_path}): normal index {idx} out of range \
+                         (normals.len={})",
+                        m.normals.len()
+                    ));
                 }
-                [
-                    m.normals[idx * 3],
-                    m.normals[idx * 3 + 1],
-                    m.normals[idx * 3 + 2],
-                ]
+                [m.normals[n_base], m.normals[n_base + 1], m.normals[n_base + 2]]
             } else {
-                [0.0, 1.0, 0.0]
+                [0.0, 1.0, 0.0] // temporary; flat normals computed below
             };
 
-            let tex_coords = if !m.texcoords.is_empty() {
-                if idx * 2 + 1 >= m.texcoords.len() {
-                    return Err(format!("OBJ dosyasinda gecersiz UV indeksi: {}", idx));
+            // ── UV ────────────────────────────────────────────────────────
+            let tex_coords = if has_texcoords {
+                let uv_base = idx * 2;
+                if uv_base + 1 >= m.texcoords.len() {
+                    return Err(format!(
+                        "OBJ ({file_path}): texcoord index {idx} out of range \
+                         (texcoords.len={})",
+                        m.texcoords.len()
+                    ));
                 }
-                [m.texcoords[idx * 2], 1.0 - m.texcoords[idx * 2 + 1]]
+                // OBJ UV origin is bottom-left; flip V to match GPU convention.
+                [m.texcoords[uv_base], 1.0 - m.texcoords[uv_base + 1]]
             } else {
                 [0.0, 0.0]
             };
@@ -89,49 +124,74 @@ pub fn decode_obj_vertices_for_async(
                 position,
                 normal,
                 tex_coords,
-                color: [1.0, 1.0, 1.0],
+                color:         [1.0, 1.0, 1.0],
                 joint_indices: [0; 4],
                 joint_weights: [0.0; 4],
             });
         }
-    }
 
-    if has_missing_normals {
-        let mut iter = vertices.chunks_exact_mut(3);
-        for chunk in iter.by_ref() {
-            let p0 = chunk[0].position;
-            let p1 = chunk[1].position;
-            let p2 = chunk[2].position;
-            let v0 = Vec3::new(p0[0], p0[1], p0[2]);
-            let v1 = Vec3::new(p1[0], p1[1], p1[2]);
-            let v2 = Vec3::new(p2[0], p2[1], p2[2]);
-            let norm = (v1 - v0).cross(v2 - v0);
-            let final_norm = if norm.length_squared() > 1e-6 {
-                norm.normalize()
-            } else {
-                Vec3::new(0.0, 1.0, 0.0)
-            };
-            let n_arr = [final_norm.x, final_norm.y, final_norm.z];
-            chunk[0].normal = n_arr;
-            chunk[1].normal = n_arr;
-            chunk[2].normal = n_arr;
-        }
-        if !iter.into_remainder().is_empty() {
-            eprintln!("Uyari: '{}' OBJ dosyasindaki yuzeyler 3gen degil (kalan kopuk vertexler tespit edildi).", file_path);
+        // Compute flat normals per-model, only when the model lacks them.
+        // This ensures models WITH normals are never touched.
+        if !has_normals {
+            let model_verts = &mut vertices[model_start..];
+            let remainder   = compute_flat_normals_inplace(model_verts);
+            if remainder > 0 {
+                eprintln!(
+                    "[AssetManager] WARN: '{file_path}' model '{}' has {remainder} \
+                     trailing vertices that don't form a complete triangle — \
+                     normals for those vertices left as Y-up.",
+                    model.name
+                );
+            }
         }
     }
 
     Ok((vertices, aabb))
 }
 
+/// Compute flat (per-face) normals for a triangle-list vertex buffer in place.
+///
+/// Returns the number of leftover vertices that could not form a complete
+/// triangle (should be 0 for well-formed meshes).
+fn compute_flat_normals_inplace(vertices: &mut [Vertex]) -> usize {
+    let chunks = vertices.chunks_exact_mut(3);
+    let remainder_len = chunks.into_remainder().len(); // borrow ends here
+
+    for tri in vertices.chunks_exact_mut(3) {
+        let v0 = Vec3::from(tri[0].position);
+        let v1 = Vec3::from(tri[1].position);
+        let v2 = Vec3::from(tri[2].position);
+
+        let cross  = (v1 - v0).cross(v2 - v0);
+        let normal = if cross.length_squared() > 1e-10 {
+            cross.normalize()
+        } else {
+            Vec3::Y // degenerate triangle → default up
+        };
+
+        let n = [normal.x, normal.y, normal.z];
+        tri[0].normal = n;
+        tri[1].normal = n;
+        tri[2].normal = n;
+    }
+
+    remainder_len
+}
+
+// ============================================================================
+//  AssetManager
+// ============================================================================
+
 pub struct AssetManager {
-    mesh_cache: std::collections::HashMap<String, Mesh>,
-    pub texture_cache: std::collections::HashMap<String, Arc<wgpu::BindGroup>>,
-    /// Reused for [`Self::loading_placeholder_mesh`] while async mesh loads complete.
+    mesh_cache:       std::collections::HashMap<String, Mesh>,
+    texture_cache:    std::collections::HashMap<String, Arc<wgpu::BindGroup>>,
+    /// Lazily created magenta octahedron used while async loads are in flight.
     placeholder_mesh: Option<Mesh>,
 
-    pub path_to_uuid: std::collections::HashMap<String, Uuid>,
-    pub uuid_to_path: std::collections::HashMap<Uuid, String>,
+    pub path_to_uuid:    std::collections::HashMap<String, Uuid>,
+    pub uuid_to_path:    std::collections::HashMap<Uuid, String>,
+    /// Assets whose bytes are baked into the binary (e.g. via `include_bytes!`).
+    pub embedded_assets: std::collections::HashMap<String, std::borrow::Cow<'static, [u8]>>,
 }
 
 impl Default for AssetManager {
@@ -143,101 +203,165 @@ impl Default for AssetManager {
 impl AssetManager {
     pub fn new() -> Self {
         let mut manager = Self {
-            mesh_cache: std::collections::HashMap::new(),
-            texture_cache: std::collections::HashMap::new(),
+            mesh_cache:       std::collections::HashMap::new(),
+            texture_cache:    std::collections::HashMap::new(),
             placeholder_mesh: None,
-            path_to_uuid: std::collections::HashMap::new(),
-            uuid_to_path: std::collections::HashMap::new(),
+            path_to_uuid:     std::collections::HashMap::new(),
+            uuid_to_path:     std::collections::HashMap::new(),
+            embedded_assets:  std::collections::HashMap::new(),
         };
         manager.scan_assets_directory(Path::new("assets"));
         manager
     }
 
+    // ── Path / UUID helpers ───────────────────────────────────────────────
+
+    /// Normalise a file-system path to forward-slash form for use as a map key.
+    ///
+    /// Uses [`Path`] to avoid platform-specific separator assumptions.
     pub fn normalize_path(path: &str) -> String {
-        path.replace("\\", "/")
+        Path::new(path)
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/")
     }
 
-    /// Tries to resolve a UUID from a raw string path
+    /// Return the UUID registered for `path`, if any.
     pub fn get_uuid(&self, path: &str) -> Option<Uuid> {
-        // Normalize path
-        let normalized = Self::normalize_path(path);
-        self.path_to_uuid.get(&normalized).copied()
+        self.path_to_uuid.get(&Self::normalize_path(path)).copied()
     }
 
-    /// Tries to resolve a string path from a UUID
+    /// Return the filesystem path registered for `uuid`, if any.
     pub fn get_path(&self, uuid: &Uuid) -> Option<String> {
         self.uuid_to_path.get(uuid).cloned()
     }
 
-    /// Tries to parse a UUID string and unwrap the physical file path.
+    /// Resolve a load source to a filesystem path.
+    ///
+    /// If `source` parses as a UUID, the registered path is returned.
+    /// Otherwise `source` is normalised and returned as-is.
     pub fn resolve_path_from_meta_source(&self, source: &str) -> Result<String, String> {
         if let Ok(id) = Uuid::parse_str(source) {
-            self.get_path(&id).ok_or_else(|| format!("Kayip UUID referansi: {}", source))
+            self.get_path(&id)
+                .ok_or_else(|| format!("Missing UUID reference: {source}"))
         } else {
             Ok(Self::normalize_path(source))
         }
     }
 
-    /// Bellekteki bir modeli ID'si ile geri döndürür. (GLTF yüklemelerinde diskte dosya olmadığı için hayati önem taşır)
+    /// Return a cached mesh by its source ID without triggering a load.
     pub fn get_cached_mesh(&self, source_id: &str) -> Option<Mesh> {
         self.mesh_cache.get(source_id).cloned()
     }
 
+    /// Embed a raw asset byte slice under `path` so it can be loaded without
+    /// a filesystem read.
+    pub fn embed_asset(
+        &mut self,
+        path: &str,
+        data: impl Into<std::borrow::Cow<'static, [u8]>>,
+    ) {
+        self.embedded_assets
+            .insert(Self::normalize_path(path), data.into());
+    }
+
+    // ── Asset scanning ────────────────────────────────────────────────────
+
+    /// Recursively scan `dir` for known asset extensions, creating or
+    /// reading `.meta` sidecar files to assign stable UUIDs.
+    ///
+    /// Safe to call multiple times — existing entries are updated, not
+    /// duplicated.
     pub fn scan_assets_directory(&mut self, dir: &Path) {
-        if !dir.exists() || !dir.is_dir() {
+        if !dir.is_dir() {
             return;
         }
 
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    self.scan_assets_directory(&path);
-                } else if path.extension().is_some_and(|ext| {
-                    let e = ext.to_string_lossy().to_lowercase();
-                    matches!(
-                        e.as_str(),
-                        "obj" | "gltf" | "glb" | "png" | "jpg" | "jpeg" | "hdr" | "wav" | "mp3" | "ogg" | "ttf" | "otf" | "ron"
-                    )
-                }) {
-                    // It's an asset file
-                    let meta_path = PathBuf::from(format!("{}.meta", path.display()));
-                    let mut needs_save = false;
-                    let uuid = if meta_path.exists() {
-                        if let Ok(content) = std::fs::read_to_string(&meta_path) {
-                            if let Ok(meta) = ron::from_str::<AssetMeta>(&content) {
-                                meta.uuid
-                            } else {
-                                needs_save = true;
-                                Uuid::new_v4() // fallback if corrupt
-                            }
-                        } else {
-                            needs_save = true;
-                            Uuid::new_v4()
-                        }
-                    } else {
-                        needs_save = true;
-                        Uuid::new_v4()
-                    };
-
-                    if needs_save {
-                        let meta = AssetMeta { uuid };
-                        if let Ok(ron_str) =
-                            ron::ser::to_string_pretty(&meta, ron::ser::PrettyConfig::default())
-                        {
-                            let _ = std::fs::write(&meta_path, ron_str);
-                        }
-                    }
-
-                    let normalized_path = path.to_string_lossy().replace("\\", "/");
-                    self.path_to_uuid.insert(normalized_path.clone(), uuid);
-                    self.uuid_to_path.insert(uuid, normalized_path);
-                }
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e)  => e,
+            Err(e) => {
+                eprintln!("[AssetManager] Cannot read directory {}: {e}", dir.display());
+                return;
             }
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+
+            if path.is_dir() {
+                self.scan_assets_directory(&path);
+                continue;
+            }
+
+            let is_asset = path
+                .extension()
+                .map(|ext| {
+                    matches!(
+                        ext.to_string_lossy().to_lowercase().as_str(),
+                        "obj"  | "gltf" | "glb"  |
+                        "png"  | "jpg"  | "jpeg" | "hdr" |
+                        "wav"  | "mp3"  | "ogg"  |
+                        "ttf"  | "otf"  | "ron"
+                    )
+                })
+                .unwrap_or(false);
+
+            if !is_asset {
+                continue;
+            }
+
+            let meta_path = PathBuf::from(format!("{}.meta", path.display()));
+            let uuid      = self.read_or_create_meta(&path, &meta_path);
+
+            let normalized = Self::normalize_path(&path.to_string_lossy());
+            self.path_to_uuid.insert(normalized.clone(), uuid);
+            self.uuid_to_path.insert(uuid, normalized);
         }
     }
 
-    /// Küçük renkli placeholder (async OBJ/GLTF beklerken kullanılır).
+    /// Read an existing `.meta` file or create a new one, returning the UUID.
+    fn read_or_create_meta(&self, asset_path: &Path, meta_path: &Path) -> Uuid {
+        if meta_path.exists() {
+            match std::fs::read_to_string(meta_path)
+                .map_err(|e| e.to_string())
+                .and_then(|s| ron::from_str::<AssetMeta>(&s).map_err(|e| e.to_string()))
+            {
+                Ok(meta) => return meta.uuid,
+                Err(e) => {
+                    eprintln!(
+                        "[AssetManager] WARN: corrupt .meta for '{}' ({e}). \
+                         Regenerating UUID — existing scene references to this \
+                         asset will break.",
+                        asset_path.display()
+                    );
+                    // Fall through to generate a fresh UUID.
+                }
+            }
+        }
+
+        let uuid = Uuid::new_v4();
+        let meta = AssetMeta { uuid };
+
+        match ron::ser::to_string_pretty(&meta, ron::ser::PrettyConfig::default()) {
+            Ok(ron_str) => {
+                if let Err(e) = std::fs::write(meta_path, ron_str) {
+                    eprintln!(
+                        "[AssetManager] WARN: could not write .meta for '{}': {e}",
+                        asset_path.display()
+                    );
+                }
+            }
+            Err(e) => eprintln!("[AssetManager] WARN: RON serialisation failed: {e}"),
+        }
+
+        uuid
+    }
+
+    // ── Placeholder mesh ──────────────────────────────────────────────────
+
+    /// Return (creating if needed) a small magenta octahedron used as a
+    /// stand-in while an async asset load is in flight.
     pub fn loading_placeholder_mesh(&mut self, device: &wgpu::Device) -> Mesh {
         if let Some(ref m) = self.placeholder_mesh {
             return m.clone();
@@ -248,46 +372,44 @@ impl AssetManager {
     }
 
     fn create_loading_placeholder(device: &wgpu::Device) -> Mesh {
-        // Octahedron — küçük, her açıdan görünür
-        let p = [
-            [1.0f32, 0.0, 0.0],
-            [-1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, -1.0, 0.0],
-            [0.0, 0.0, 1.0],
-            [0.0, 0.0, -1.0],
+        // Octahedron — recognisable from any angle, low vertex count.
+        const POSITIONS: [[f32; 3]; 6] = [
+            [ 1.0, 0.0,  0.0], // +X
+            [-1.0, 0.0,  0.0], // -X
+            [ 0.0, 1.0,  0.0], // +Y
+            [ 0.0,-1.0,  0.0], // -Y
+            [ 0.0, 0.0,  1.0], // +Z
+            [ 0.0, 0.0, -1.0], // -Z
         ];
-        let col = [0.95, 0.45, 0.95];
-        let idx: [[usize; 3]; 8] = [
-            [0, 2, 4],
-            [2, 1, 4],
-            [1, 3, 4],
-            [3, 0, 4],
-            [2, 0, 5],
-            [1, 2, 5],
-            [3, 1, 5],
-            [0, 3, 5],
+        const TRIANGLES: [[usize; 3]; 8] = [
+            [0, 2, 4], [2, 1, 4], [1, 3, 4], [3, 0, 4],
+            [2, 0, 5], [1, 2, 5], [3, 1, 5], [0, 3, 5],
         ];
-        let mut vertices = Vec::with_capacity(24);
-        for tri in idx {
-            for &i in &tri {
-                let pos = p[i];
-                let n = Vec3::new(pos[0], pos[1], pos[2]).normalize();
+        const COLOR: [f32; 3] = [0.95, 0.45, 0.95]; // magenta
+
+        let mut vertices = Vec::with_capacity(TRIANGLES.len() * 3);
+
+        for tri in &TRIANGLES {
+            for &i in tri {
+                let pos = POSITIONS[i];
+                let n   = Vec3::new(pos[0], pos[1], pos[2]).normalize();
                 vertices.push(Vertex {
-                    position: pos,
-                    normal: [n.x, n.y, n.z],
-                    tex_coords: [0.0, 0.0],
-                    color: col,
+                    position:      pos,
+                    normal:        [n.x, n.y, n.z],
+                    tex_coords:    [0.0, 0.0],
+                    color:         COLOR,
                     joint_indices: [0; 4],
                     joint_weights: [0.0; 4],
                 });
             }
         }
+
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Async loading placeholder"),
+            label:    Some("Async loading placeholder"),
             contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
+            usage:    wgpu::BufferUsages::VERTEX,
         });
+
         Mesh::new(
             device,
             Arc::new(vbuf),
@@ -297,9 +419,3 @@ impl AssetManager {
         )
     }
 }
-
-pub mod loaders;
-pub mod primitives;
-pub mod texture;
-
-pub use loaders::GltfNodeData;

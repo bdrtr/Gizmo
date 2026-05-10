@@ -1,358 +1,334 @@
 use super::decode_rgba_image_file;
 use std::sync::Arc;
 
+// ============================================================================
+//  Shared sampler descriptors
+// ============================================================================
+
+/// Standard sampler for real textures: bilinear, repeating.
+/// Mipmap filter is Nearest because we only allocate one mip level —
+/// using Linear here would trigger a wgpu validation warning.
+const SAMPLER_LINEAR_REPEAT: wgpu::SamplerDescriptor<'static> = wgpu::SamplerDescriptor {
+    label:            Some("linear_repeat_sampler"),
+    address_mode_u:   wgpu::AddressMode::Repeat,
+    address_mode_v:   wgpu::AddressMode::Repeat,
+    address_mode_w:   wgpu::AddressMode::Repeat,
+    mag_filter:       wgpu::FilterMode::Linear,
+    min_filter:       wgpu::FilterMode::Linear,
+    mipmap_filter:    wgpu::FilterMode::Nearest, // single mip — must be Nearest
+    lod_min_clamp:    0.0,
+    lod_max_clamp:    0.0,
+    compare:          None,
+    anisotropy_clamp: 1,
+    border_color:     None,
+};
+
+/// Point sampler for 1×1 fallback textures — no filtering needed.
+const SAMPLER_NEAREST_REPEAT: wgpu::SamplerDescriptor<'static> = wgpu::SamplerDescriptor {
+    label:            Some("nearest_repeat_sampler"),
+    address_mode_u:   wgpu::AddressMode::Repeat,
+    address_mode_v:   wgpu::AddressMode::Repeat,
+    address_mode_w:   wgpu::AddressMode::Repeat,
+    mag_filter:       wgpu::FilterMode::Nearest,
+    min_filter:       wgpu::FilterMode::Nearest,
+    mipmap_filter:    wgpu::FilterMode::Nearest,
+    lod_min_clamp:    0.0,
+    lod_max_clamp:    0.0,
+    compare:          None,
+    anisotropy_clamp: 1,
+    border_color:     None,
+};
+
+// ============================================================================
+//  AssetManager — texture methods
+// ============================================================================
+
 impl super::AssetManager {
-    /// Decode edilmiş RGBA8'i GPU'ya yükler ve `texture_cache`'e yazar ([`crate::async_assets::AsyncAssetLoader`] tamamlanınca).
+    // ── Internal helpers ──────────────────────────────────────────────────
+
+    /// Resolve a `path_or_uuid` argument to the string key used in
+    /// `texture_cache`.  Returns `(resolved_fs_path, cache_key)`.
+    ///
+    /// The cache key is the UUID string when one is registered, otherwise
+    /// the normalised filesystem path.  Keeping cache keys stable across
+    /// renames is why UUIDs are preferred.
+    fn resolve_texture_cache_key(
+        &self,
+        path_or_uuid: &str,
+    ) -> Result<(String, String), String> {
+        let resolved = self.resolve_path_from_meta_source(path_or_uuid)?;
+        let cache_key = self
+            .get_uuid(&resolved)
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| resolved.clone());
+        Ok((resolved, cache_key))
+    }
+
+    /// Upload a single RGBA8 pixel buffer to the GPU, cache the bind group,
+    /// and return it.
+    ///
+    /// Called by async loaders after decoding completes on a worker thread,
+    /// and by the procedural texture helpers below.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when:
+    /// * `width` or `height` is zero (wgpu would panic on a zero-sized texture).
+    /// * `rgba.len()` does not equal `width * height * 4`.
     pub fn install_decoded_material_texture(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        layout: &wgpu::BindGroupLayout,
+        device:    &wgpu::Device,
+        queue:     &wgpu::Queue,
+        layout:    &wgpu::BindGroupLayout,
         cache_key: &str,
-        rgba: &[u8],
-        width: u32,
-        height: u32,
+        rgba:      &[u8],
+        width:     u32,
+        height:    u32,
     ) -> Result<Arc<wgpu::BindGroup>, String> {
-        let expected = (width as usize)
-            .saturating_mul(height as usize)
-            .saturating_mul(4);
-        if rgba.len() != expected {
+        // Guard against zero-sized textures — wgpu panics on Extent3d { width:0, .. }.
+        if width == 0 || height == 0 {
             return Err(format!(
-                "RGBA boyut uyumsuz: {} byte, beklenen {} ({}x{}x4)",
-                rgba.len(),
-                expected,
-                width,
-                height
+                "Cannot create texture with zero dimension: {width}×{height} (key={cache_key})"
             ));
         }
 
-        let texture_size = wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        };
+        let expected = (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(4);
+
+        if rgba.len() != expected {
+            return Err(format!(
+                "RGBA size mismatch for '{cache_key}': got {} bytes, expected {expected} \
+                 ({width}×{height}×4)",
+                rgba.len()
+            ));
+        }
+
+        let texture_size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            size: texture_size,
+            size:            texture_size,
             mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            label: Some(cache_key),
-            view_formats: &[],
+            sample_count:    1,
+            dimension:       wgpu::TextureDimension::D2,
+            format:          wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage:           wgpu::TextureUsages::TEXTURE_BINDING
+                           | wgpu::TextureUsages::COPY_DST,
+            label:           Some(cache_key),
+            view_formats:    &[],
         });
+
         queue.write_texture(
             wgpu::ImageCopyTexture {
-                texture: &texture,
+                texture:   &texture,
                 mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
+                origin:    wgpu::Origin3d::ZERO,
+                aspect:    wgpu::TextureAspect::All,
             },
             rgba,
             wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * width),
+                offset:         0,
+                bytes_per_row:  Some(4 * width),
                 rows_per_image: Some(height),
             },
             texture_size,
         );
 
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
-            ..Default::default()
-        });
-
-        let bg = Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(cache_key),
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        }));
-
+        let bg = self.build_bind_group(device, &texture, layout, &SAMPLER_LINEAR_REPEAT, cache_key);
         self.texture_cache.insert(cache_key.to_string(), bg.clone());
         Ok(bg)
     }
 
+    // ── Public load API ───────────────────────────────────────────────────
+
+    /// Load a texture from `path_or_uuid`, uploading it to the GPU on first
+    /// access and returning the cached bind group on subsequent calls.
+    ///
+    /// Supports both filesystem paths and UUID strings registered by the asset
+    /// scanner.  Embedded assets (registered with [`AssetManager::embed_asset`])
+    /// take priority over filesystem reads.
     pub fn load_material_texture(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        layout: &wgpu::BindGroupLayout,
+        device:       &wgpu::Device,
+        queue:        &wgpu::Queue,
+        layout:       &wgpu::BindGroupLayout,
         path_or_uuid: &str,
     ) -> Result<Arc<wgpu::BindGroup>, String> {
-        let resolved_path = self.resolve_path_from_meta_source(path_or_uuid)?;
-        let id_str = if let Some(id) = self.get_uuid(&resolved_path) {
-            id.to_string()
-        } else {
-            resolved_path.clone()
-        };
+        let (resolved_path, cache_key) = self.resolve_texture_cache_key(path_or_uuid)?;
 
-        if let Some(cached) = self.texture_cache.get(&id_str) {
+        if let Some(cached) = self.texture_cache.get(&cache_key) {
             return Ok(cached.clone());
         }
 
-        // --- ASSET PIPELINE: AUTO BC7 COMPRESSION ---
-        let path = std::path::Path::new(&resolved_path);
-        if path.extension().map_or(false, |ext| ext == "png" || ext == "jpg" || ext == "jpeg") {
-            let dds_path = path.with_extension("dds");
-            
-            // Check if DDS doesn't exist or is older than the original image
-            let needs_cooking = if !dds_path.exists() {
-                true
-            } else {
-                let img_time = std::fs::metadata(&path).and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                let dds_time = std::fs::metadata(&dds_path).and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                img_time > dds_time
-            };
-
-            if needs_cooking {
-                println!("🛠 Asset Pipeline: Baking BC7 compressed texture for {:?}", path);
-                if let Ok(img) = image::open(&path) {
-                    let rgba = img.to_rgba8();
-                    // Compress to BC7
-                    if let Ok(dds) = image_dds::dds_from_image(
-                        &rgba,
-                        image_dds::ImageFormat::BC7RgbaUnormSrgb,
-                        image_dds::Quality::Fast,
-                        image_dds::Mipmaps::GeneratedAutomatic,
-                    ) {
-                        if let Ok(mut file) = std::fs::File::create(&dds_path) {
-                            let _ = dds.write(&mut file);
-                        }
-                    }
-                }
-            }
-
-            // Load DDS
-            if dds_path.exists() {
-                if let Ok(mut file) = std::fs::File::open(&dds_path) {
-                    if let Ok(dds) = ddsfile::Dds::read(&mut file) {
-                        let w = dds.get_width();
-                        let h = dds.get_height();
-                        let mip_count = dds.get_num_mipmap_levels();
-                        let texture_size = wgpu::Extent3d {
-                            width: w,
-                            height: h,
-                            depth_or_array_layers: 1,
-                        };
-                        let texture = device.create_texture(&wgpu::TextureDescriptor {
-                            size: texture_size,
-                            mip_level_count: mip_count,
-                            sample_count: 1,
-                            dimension: wgpu::TextureDimension::D2,
-                            format: wgpu::TextureFormat::Bc7RgbaUnormSrgb,
-                            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                            label: Some(&id_str),
-                            view_formats: &[],
-                        });
-
-                        if let Ok(data) = dds.get_data(0) {
-                            let mut offset = 0;
-                            for mip in 0..mip_count {
-                                let mip_w = (w >> mip).max(1);
-                                let mip_h = (h >> mip).max(1);
-                                
-                                let blocks_x = (mip_w + 3) / 4;
-                                let blocks_y = (mip_h + 3) / 4;
-                                let mip_bytes = (blocks_x * blocks_y * 16) as usize;
-                                
-                                if offset + mip_bytes <= data.len() {
-                                    queue.write_texture(
-                                        wgpu::ImageCopyTexture {
-                                            texture: &texture,
-                                            mip_level: mip,
-                                            origin: wgpu::Origin3d::ZERO,
-                                            aspect: wgpu::TextureAspect::All,
-                                        },
-                                        &data[offset..offset + mip_bytes],
-                                        wgpu::ImageDataLayout {
-                                            offset: 0,
-                                            bytes_per_row: Some(blocks_x * 16),
-                                            rows_per_image: Some(blocks_y),
-                                        },
-                                        wgpu::Extent3d {
-                                            width: mip_w,
-                                            height: mip_h,
-                                            depth_or_array_layers: 1,
-                                        },
-                                    );
-                                }
-                                offset += mip_bytes;
-                            }
-                        }
-
-                        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-                            address_mode_u: wgpu::AddressMode::Repeat,
-                            address_mode_v: wgpu::AddressMode::Repeat,
-                            address_mode_w: wgpu::AddressMode::Repeat,
-                            mag_filter: wgpu::FilterMode::Linear,
-                            min_filter: wgpu::FilterMode::Linear,
-                            mipmap_filter: wgpu::FilterMode::Linear,
-                            ..Default::default()
-                        });
-
-                        let bg = Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some(&id_str),
-                            layout,
-                            entries: &[
-                                wgpu::BindGroupEntry {
-                                    binding: 0,
-                                    resource: wgpu::BindingResource::TextureView(&view),
-                                },
-                                wgpu::BindGroupEntry {
-                                    binding: 1,
-                                    resource: wgpu::BindingResource::Sampler(&sampler),
-                                },
-                            ],
-                        }));
-
-                        self.texture_cache.insert(id_str.clone(), bg.clone());
-                        return Ok(bg);
-                    }
-                }
-            }
-        }
-        // --- END ASSET PIPELINE ---
-
-        // Fallback to raw RGBA
-        let (rgba, w, h) = decode_rgba_image_file(&resolved_path)?;
-        self.install_decoded_material_texture(device, queue, layout, &id_str, &rgba, w, h)
+        let (rgba, w, h) = self.decode_texture_rgba(&resolved_path)?;
+        self.install_decoded_material_texture(device, queue, layout, &cache_key, &rgba, w, h)
     }
 
-    /// Cache'i zorla silerek bir dokunun diskten tekrar yüklenmesini ve Bind Group'un güncellenmesini sağlar
+    /// Evict `path_or_uuid` from the texture cache and reload it from disk.
+    ///
+    /// Useful for hot-reload workflows where an asset file changes at runtime.
     pub fn reload_material_texture(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        layout: &wgpu::BindGroupLayout,
+        device:       &wgpu::Device,
+        queue:        &wgpu::Queue,
+        layout:       &wgpu::BindGroupLayout,
         path_or_uuid: &str,
     ) -> Result<Arc<wgpu::BindGroup>, String> {
-        let resolved_path = self.resolve_path_from_meta_source(path_or_uuid)?;
-        let id_str = if let Some(id) = self.get_uuid(&resolved_path) {
-            id.to_string()
-        } else {
-            resolved_path.clone()
-        };
-
-        self.texture_cache.remove(&id_str);
+        // Resolve the key first so we evict the correct entry, then reload.
+        let (_, cache_key) = self.resolve_texture_cache_key(path_or_uuid)?;
+        self.texture_cache.remove(&cache_key);
         self.load_material_texture(device, queue, layout, path_or_uuid)
     }
 
-    /// Dümdüz 1x1 beyaz (katı) bir kaplama üretir. Doku içermeyen materyallerin varsayılan kaplamasıdır.
+    // ── Procedural textures ───────────────────────────────────────────────
+
+    /// Return (creating once) a 1×1 opaque-white texture.
+    ///
+    /// Used as the default albedo map for materials that specify no texture.
     pub fn create_white_texture(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        queue:  &wgpu::Queue,
         layout: &wgpu::BindGroupLayout,
     ) -> Arc<wgpu::BindGroup> {
-        let path = "__white_fallback_texture__";
-        if let Some(cached) = self.texture_cache.get(path) {
+        const KEY: &str = "__white_fallback_texture__";
+
+        if let Some(cached) = self.texture_cache.get(KEY) {
             return cached.clone();
         }
 
-        let texture_size = wgpu::Extent3d {
-            width: 1,
-            height: 1,
-            depth_or_array_layers: 1,
-        };
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            size: texture_size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            label: Some("White Fallback Texture"),
-            view_formats: &[],
-        });
-
-        // Sadece 1 piksel tam beyaz [255, 255, 255, 255]
-        queue.write_texture(
-            wgpu::ImageCopyTexture {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &[255, 255, 255, 255],
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(4),
-                rows_per_image: Some(1),
-            },
-            texture_size,
-        );
-
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
-            ..Default::default()
-        });
-
-        let bg = Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("White Fallback BindGroup"),
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        }));
-
-        self.texture_cache.insert(path.to_string(), bg.clone());
+        let bg = self.upload_solid_1x1(device, queue, layout, [255, 255, 255, 255], KEY);
+        self.texture_cache.insert(KEY.to_string(), bg.clone());
         bg
     }
 
+    /// Return (creating once) a 256×256 grey checkerboard texture.
+    ///
+    /// Used for geometry whose material has no texture assigned — makes UVs
+    /// immediately visible in the editor.
     pub fn create_checkerboard_texture(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        queue:  &wgpu::Queue,
         layout: &wgpu::BindGroupLayout,
     ) -> Arc<wgpu::BindGroup> {
-        let path = "__checkerboard_texture__";
-        if let Some(cached) = self.texture_cache.get(path) {
+        const KEY:  &str = "__checkerboard_texture__";
+        const SIZE: u32  = 256;
+        const CELL: u32  = 32; // pixels per checker square
+
+        if let Some(cached) = self.texture_cache.get(KEY) {
             return cached.clone();
         }
 
-        let size = 256u32;
-        let mut pixels = vec![0u8; (size * size * 4) as usize];
-        for y in 0..size {
-            for x in 0..size {
-                let is_white = ((x / 32) + (y / 32)) % 2 == 0;
-                let color = if is_white { 200u8 } else { 50u8 };
-                let idx = ((y * size + x) * 4) as usize;
-                pixels[idx] = color;     // R
-                pixels[idx + 1] = color; // G
-                pixels[idx + 2] = color; // B
-                pixels[idx + 3] = 255;   // A
+        let mut pixels = vec![0u8; (SIZE * SIZE * 4) as usize];
+        for y in 0..SIZE {
+            for x in 0..SIZE {
+                let light  = ((x / CELL) + (y / CELL)) % 2 == 0;
+                let luma   = if light { 200u8 } else { 50u8 };
+                let base   = ((y * SIZE + x) * 4) as usize;
+                pixels[base]     = luma;
+                pixels[base + 1] = luma;
+                pixels[base + 2] = luma;
+                pixels[base + 3] = 255;
             }
         }
 
-        self.install_decoded_material_texture(device, queue, layout, path, &pixels, size, size).unwrap()
+        // SIZE and pixel count are compile-time constants; this cannot fail.
+        let bg = self
+            .install_decoded_material_texture(device, queue, layout, KEY, &pixels, SIZE, SIZE)
+            .expect("checkerboard texture creation must not fail");
+
+        bg
+    }
+
+    // ── Private GPU helpers ───────────────────────────────────────────────
+
+    /// Decode a texture file to RGBA8, preferring embedded data over disk.
+    fn decode_texture_rgba(&self, resolved_path: &str) -> Result<(Vec<u8>, u32, u32), String> {
+        if let Some(data) = self.embedded_assets.get(resolved_path) {
+            let img = image::load_from_memory(data)
+                .map_err(|e| format!("Embedded texture decode failed ({resolved_path}): {e}"))?
+                .to_rgba8();
+            let (w, h) = img.dimensions();
+            return Ok((img.into_raw(), w, h));
+        }
+
+        decode_rgba_image_file(resolved_path)
+    }
+
+    /// Upload a single RGBA pixel as a 1×1 texture and return its bind group.
+    ///
+    /// Uses the nearest-neighbour sampler — filtering a 1-pixel texture is
+    /// meaningless.
+    fn upload_solid_1x1(
+        &self,
+        device:  &wgpu::Device,
+        queue:   &wgpu::Queue,
+        layout:  &wgpu::BindGroupLayout,
+        pixel:   [u8; 4],
+        label:   &str,
+    ) -> Arc<wgpu::BindGroup> {
+        let size = wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 };
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            size,
+            mip_level_count: 1,
+            sample_count:    1,
+            dimension:       wgpu::TextureDimension::D2,
+            format:          wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage:           wgpu::TextureUsages::TEXTURE_BINDING
+                           | wgpu::TextureUsages::COPY_DST,
+            label:           Some(label),
+            view_formats:    &[],
+        });
+
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture:   &texture,
+                mip_level: 0,
+                origin:    wgpu::Origin3d::ZERO,
+                aspect:    wgpu::TextureAspect::All,
+            },
+            &pixel,
+            wgpu::ImageDataLayout {
+                offset:         0,
+                bytes_per_row:  Some(4),
+                rows_per_image: Some(1),
+            },
+            size,
+        );
+
+        self.build_bind_group(device, &texture, layout, &SAMPLER_NEAREST_REPEAT, label)
+    }
+
+    /// Create a texture view + sampler and assemble a bind group.
+    ///
+    /// Centralises the boilerplate that would otherwise be duplicated in every
+    /// upload path.
+    fn build_bind_group(
+        &self,
+        device:   &wgpu::Device,
+        texture:  &wgpu::Texture,
+        layout:   &wgpu::BindGroupLayout,
+        sampler_desc: &wgpu::SamplerDescriptor,
+        label:    &str,
+    ) -> Arc<wgpu::BindGroup> {
+        let view    = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(sampler_desc);
+
+        Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label:   Some(label),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding:  0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding:  1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        }))
     }
 }
