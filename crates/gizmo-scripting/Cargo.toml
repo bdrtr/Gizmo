@@ -3,6 +3,11 @@ name = "gizmo-scripting"
 version.workspace = true
 edition.workspace = true
 
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
 [dependencies]
 gizmo-core = { path = "../gizmo-core" }
 gizmo-math = { path = "../gizmo-math" }

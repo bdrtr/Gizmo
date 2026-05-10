@@ -3,6 +3,11 @@ name = "gizmo-studio"
 version.workspace = true
 edition.workspace = true
 
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
 [dependencies]
 gizmo = { path = "../gizmo", features = ["editor", "scene", "audio", "scripting"] }
 rand = "0.9.0"
