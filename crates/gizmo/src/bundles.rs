@@ -42,9 +42,15 @@ impl Default for DirectionalLightBundle {
 
 impl Bundle for DirectionalLightBundle {
     fn apply(self, world: &mut World, entity: Entity) {
-        world.add_component(entity, Transform::new(Vec3::ZERO).with_rotation(self.rotation));
+        world.add_component(
+            entity,
+            Transform::new(Vec3::ZERO).with_rotation(self.rotation),
+        );
         world.add_component(entity, crate::physics::GlobalTransform::default());
-        world.add_component(entity, DirectionalLight::new(self.color, self.intensity, self.role));
+        world.add_component(
+            entity,
+            DirectionalLight::new(self.color, self.intensity, self.role),
+        );
     }
 }
 
@@ -75,7 +81,10 @@ impl Bundle for PointLightBundle {
     fn apply(self, world: &mut World, entity: Entity) {
         world.add_component(entity, Transform::new(self.position));
         world.add_component(entity, crate::physics::GlobalTransform::default());
-        world.add_component(entity, PointLight::new(self.color, self.intensity, self.radius));
+        world.add_component(
+            entity,
+            PointLight::new(self.color, self.intensity, self.radius),
+        );
     }
 }
 
@@ -117,7 +126,13 @@ impl Bundle for SpotLightBundle {
         world.add_component(entity, crate::physics::GlobalTransform::default());
         world.add_component(
             entity,
-            SpotLight::new(self.color, self.intensity, self.radius, self.inner_angle, self.outer_angle),
+            SpotLight::new(
+                self.color,
+                self.intensity,
+                self.radius,
+                self.inner_angle,
+                self.outer_angle,
+            ),
         );
     }
 }
@@ -157,7 +172,14 @@ impl Bundle for CameraBundle {
         world.add_component(entity, crate::physics::GlobalTransform::default());
         world.add_component(
             entity,
-            Camera::new(self.fov, self.near, self.far, self.yaw, self.pitch, self.primary),
+            Camera::new(
+                self.fov,
+                self.near,
+                self.far,
+                self.yaw,
+                self.pitch,
+                self.primary,
+            ),
         );
     }
 }
@@ -186,7 +208,10 @@ pub struct MeshBundle {
 
 impl MeshBundle {
     /// Yeni bir MeshBundle oluşturur (mesh ve material zorunlu).
-    pub fn new(mesh: crate::core::asset::Handle<Mesh>, material: crate::core::asset::Handle<Material>) -> Self {
+    pub fn new(
+        mesh: crate::core::asset::Handle<Mesh>,
+        material: crate::core::asset::Handle<Material>,
+    ) -> Self {
         Self {
             position: Vec3::ZERO,
             rotation: Quat::IDENTITY,

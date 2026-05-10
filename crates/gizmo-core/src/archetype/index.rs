@@ -207,7 +207,7 @@ impl ArchetypeIndex {
         let mut removed_count = 0;
 
         while i < self.archetypes.len() {
-            if self.archetypes[i].len() == 0 {
+            if self.archetypes[i].is_empty() {
                 let last_id = (self.archetypes.len() - 1) as u32;
                 let target_id = i as u32;
 

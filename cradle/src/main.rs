@@ -174,7 +174,10 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Cradl
     );
     world.add_component(ground, MeshRenderer::new());
     world.add_component(ground, RigidBody::new_static());
-    world.add_component(ground, Collider::box_collider(Vec3::new(100.0, 0.05, 100.0)));
+    world.add_component(
+        ground,
+        Collider::box_collider(Vec3::new(100.0, 0.05, 100.0)),
+    );
 
     let sun = world.spawn();
     world.add_component(
@@ -186,7 +189,11 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Cradl
     );
     world.add_component(
         sun,
-        DirectionalLight::new(Vec3::new(1.0, 0.97, 0.90), 2.5, gizmo::renderer::components::LightRole::Sun),
+        DirectionalLight::new(
+            Vec3::new(1.0, 0.97, 0.90),
+            2.5,
+            gizmo::renderer::components::LightRole::Sun,
+        ),
     );
 
     // Ana asma direkleri (Ön ve Arka)

@@ -129,7 +129,7 @@ impl<'a, 'w> EntityCommands<'a, 'w> {
 mod tests {
     use super::*;
     use crate::system::Schedule;
-    use crate::query::Query;
+
     use crate::world::World;
 
     #[derive(Clone, PartialEq, Debug)]
@@ -174,7 +174,10 @@ mod tests {
         let mut schedule = Schedule::new();
 
         schedule.add_di_system::<(Commands<'static>,), _>(|mut commands: Commands| {
-            commands.spawn().insert(ComponentA(100)).insert(ComponentB(3.14));
+            commands
+                .spawn()
+                .insert(ComponentA(100))
+                .insert(ComponentB(3.14));
         });
 
         schedule.run(&mut world, 0.1);
@@ -193,7 +196,7 @@ mod tests {
     #[test]
     fn test_commands_system_despawn() {
         let mut world = World::new();
-        
+
         let e1 = world.spawn();
         world.add_component(e1, ComponentA(10));
 
@@ -201,7 +204,7 @@ mod tests {
         world.add_component(e2, ComponentA(20));
 
         let mut schedule = Schedule::new();
-        
+
         // Use a standard (&World, f32) system to access query and manually fetch Commands
         schedule.add_system(|world: &World, dt: f32| {
             let mut commands = Commands::fetch(world, dt).unwrap();
@@ -227,13 +230,13 @@ mod tests {
     #[test]
     fn test_commands_system_remove_component() {
         let mut world = World::new();
-        
+
         let e = world.spawn();
         world.add_component(e, ComponentA(1));
         world.add_component(e, ComponentB(2.0));
 
         let mut schedule = Schedule::new();
-        
+
         schedule.add_system(|world: &World, dt: f32| {
             let mut commands = Commands::fetch(world, dt).unwrap();
             if let Some(q) = world.query::<&ComponentA>() {
@@ -246,7 +249,7 @@ mod tests {
         schedule.run(&mut world, 0.1);
 
         assert_eq!(world.entity_count(), 1);
-        
+
         let mut has_a = false;
         if let Some(q) = world.query::<&ComponentA>() {
             has_a = q.iter().count() > 0;

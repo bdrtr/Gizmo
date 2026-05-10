@@ -1,3 +1,4 @@
 pub use crate::components::collider::{
-    Collider, ColliderShape, SphereShape as Sphere, BoxShape as Aabb, CapsuleShape as Capsule, PlaneShape as Plane,
+    BoxShape as Aabb, CapsuleShape as Capsule, Collider, ColliderShape, PlaneShape as Plane,
+    SphereShape as Sphere,
 };

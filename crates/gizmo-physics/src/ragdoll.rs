@@ -24,7 +24,7 @@ pub struct RagdollBoneDef {
     pub radius: f32,
     pub length: f32,
     pub mass: f32,
-    pub joint_type: JointType, 
+    pub joint_type: JointType,
     pub local_anchor_parent: Vec3,
     pub local_anchor_child: Vec3,
     pub joint_axis: Vec3,
@@ -203,7 +203,7 @@ impl RagdollBuilder {
             joint_axis: Vec3::new(1.0, 0.0, 0.0),
             limits: Some((-std::f32::consts::PI * 0.8, 0.0)),
         });
-        
+
         self
     }
 

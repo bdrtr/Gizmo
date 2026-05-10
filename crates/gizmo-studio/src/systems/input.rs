@@ -58,7 +58,7 @@ pub fn handle_input_and_scene_view(
         }
     }
 
-    studio_input::sync_gizmos(world, &editor_state);
+    studio_input::sync_gizmos(world, editor_state);
 
     // GIZMO DEBUG RENDERER: Spawn and Despawn logic
     // Zamanlayıcısı dolanları sil

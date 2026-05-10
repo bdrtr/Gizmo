@@ -4,7 +4,7 @@ use gizmo_math::Vec3;
 use gizmo_physics::components::{Transform, Velocity};
 
 /// Gelişmiş 3D Uzamsal Ses (Spatial Audio) ve Doppler Etkisi Sistemi
-/// 
+///
 /// Bu sistem her frame çalışır ve:
 /// 1. `AudioSource` bileşenine sahip tüm objelerin 3D pozisyonlarını ses motoruna yollar.
 /// 2. Mesafe tabanlı ses zayıflamasını (Distance Attenuation) uygular.
@@ -20,7 +20,7 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
 
     // Kamerayı (Listener/Dinleyici) bul
     let transforms = world.borrow::<Transform>();
-    
+
     // Aktif kamerayı bulmak için (Sahnede gizmo_scene::Camera bileşenine sahip objeyi arıyoruz)
     let mut listener_pos = Vec3::ZERO;
     let mut listener_vel = Vec3::ZERO;
@@ -31,7 +31,7 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
             if cam.primary {
                 listener_pos = t.position;
                 listener_right = t.rotation.mul_vec3(Vec3::new(1.0, 0.0, 0.0)).normalize();
-                
+
                 // Eğer kameranın bir hızı varsa al
                 if let Some(v) = world.borrow::<Velocity>().get(e) {
                     listener_vel = v.linear;
@@ -64,7 +64,7 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
         } else {
             continue;
         };
-        
+
         let t = if let Some(t) = transforms.get(id) {
             t
         } else {
@@ -74,9 +74,19 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
         // Eğer ses henüz çalmıyorsa ve otomatik başlatılacaksa
         if source._internal_sink_id.is_none() && source.is_3d {
             let sink_id = if source.loop_sound {
-                audio.play_3d_looped(&source.sound_name, [t.position.x, t.position.y, t.position.z], left_ear_arr, right_ear_arr)
+                audio.play_3d_looped(
+                    &source.sound_name,
+                    [t.position.x, t.position.y, t.position.z],
+                    left_ear_arr,
+                    right_ear_arr,
+                )
             } else {
-                audio.play_3d(&source.sound_name, [t.position.x, t.position.y, t.position.z], left_ear_arr, right_ear_arr)
+                audio.play_3d(
+                    &source.sound_name,
+                    [t.position.x, t.position.y, t.position.z],
+                    left_ear_arr,
+                    right_ear_arr,
+                )
             };
             source._internal_sink_id = sink_id;
             if let Some(s) = sources.get_mut(id) {
@@ -114,22 +124,23 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
             };
 
             let speed_of_sound = 343.0; // m/s havada ses hızı
-            
+
             // Dinleyici ile kaynak arasındaki yön vektörü
             let diff = t.position - listener_pos;
             let dist = diff.length();
-            
-            if dist > 0.1 { // Sıfıra bölünmeyi önle
+
+            if dist > 0.1 {
+                // Sıfıra bölünmeyi önle
                 let dir = diff / dist;
-                
+
                 // Göreceli hızları hesapla (Birbirlerine doğru hızlar pozitiftir)
                 let listener_speed_towards_emitter = listener_vel.dot(dir);
                 let emitter_speed_towards_listener = emitter_vel.dot(-dir); // Emitter dinleyiciye gidiyorsa negatif yön
 
                 // Doppler formülü: f' = f * (v + v_r) / (v - v_s)
-                let mut doppler_factor: f32 = (speed_of_sound + listener_speed_towards_emitter) 
-                                       / (speed_of_sound - emitter_speed_towards_listener).max(1.0);
-                
+                let mut doppler_factor: f32 = (speed_of_sound + listener_speed_towards_emitter)
+                    / (speed_of_sound - emitter_speed_towards_listener).max(1.0);
+
                 // Mantık hatalarını önlemek için kelepçele (Aşırı hızlarda pitch bozulmasını engeller)
                 doppler_factor = doppler_factor.clamp(0.5, 2.0);
 

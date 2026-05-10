@@ -60,7 +60,7 @@ impl Integrator {
         // Drain the accumulator so forces are applied exactly once per step.
         let inv_mass = rb.inv_mass();
         if inv_mass > 0.0 {
-            vel.linear  += rb.force_accumulator  * inv_mass * dt;
+            vel.linear += rb.force_accumulator * inv_mass * dt;
             let inv_inertia = rb.inv_world_inertia_tensor_identity(); // body-space shortcut
             vel.angular += inv_inertia * rb.torque_accumulator * dt;
         }
@@ -68,7 +68,7 @@ impl Integrator {
 
         // ── Exponential damping ───────────────────────────────────────────
         // exp(-d*dt) keeps energy decay frame-rate independent.
-        vel.linear  *= (-rb.linear_damping  * dt).exp();
+        vel.linear *= (-rb.linear_damping * dt).exp();
         vel.angular *= (-rb.angular_damping * dt).exp();
 
         // ── Axis locks (e.g. 2.5-D platformer) ───────────────────────────
@@ -207,8 +207,7 @@ impl Integrator {
         let inv_mass = rb.inv_mass();
         vel.linear += impulse * inv_mass;
 
-        let global_com = transform.position
-            + transform.rotation.mul_vec3(rb.center_of_mass);
+        let global_com = transform.position + transform.rotation.mul_vec3(rb.center_of_mass);
         let r = point - global_com;
         let inv_inertia = rb.inv_world_inertia_tensor(transform.rotation);
         vel.angular += inv_inertia * r.cross(impulse);
@@ -293,7 +292,7 @@ mod tests {
     #[test]
     fn position_advances_with_velocity() {
         let integrator = Integrator::default();
-        let rb = RigidBody::default(); // static by default → should still integrate
+        let _rb = RigidBody::default(); // static by default → should still integrate
         let mut transform = Transform::new(Vec3::ZERO);
         let vel = Velocity::new(Vec3::new(1.0, 0.0, 0.0));
         let entity = make_entity(1);
@@ -380,8 +379,8 @@ mod tests {
         let mut rb = RigidBody::default();
         rb.body_type = crate::components::BodyType::Dynamic;
         rb.lock_translation_z = true;
-        rb.lock_rotation_x   = true;
-        rb.lock_rotation_y   = true;
+        rb.lock_rotation_x = true;
+        rb.lock_rotation_y = true;
         rb.wake_up();
 
         let mut vel = Velocity::new(Vec3::new(10.0, 5.0, -100.0));
@@ -396,7 +395,7 @@ mod tests {
         assert!(vel.linear.y != 0.0, "Y velocity must remain");
 
         // Locked axis must be zeroed.
-        assert_eq!(vel.linear.z, 0.0,  "Z translation must be locked");
+        assert_eq!(vel.linear.z, 0.0, "Z translation must be locked");
         assert_eq!(vel.angular.x, 0.0, "X rotation must be locked");
         assert_eq!(vel.angular.y, 0.0, "Y rotation must be locked");
 
@@ -429,6 +428,10 @@ mod tests {
             .integrate_velocities(make_entity(5), &mut rb, &mut vel, 1.0)
             .expect("sleeping body integration must be a no-op");
 
-        assert_eq!(vel.linear, Vec3::ZERO, "sleeping body must not gain velocity");
+        assert_eq!(
+            vel.linear,
+            Vec3::ZERO,
+            "sleeping body must not gain velocity"
+        );
     }
 }

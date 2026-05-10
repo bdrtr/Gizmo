@@ -2,12 +2,12 @@
 
 use crate::editor_state::EditorState;
 use egui;
+use gizmo_ai::components::NavAgent;
 use gizmo_core::{EntityName, World};
 use gizmo_math::{Vec3, Vec4};
-use gizmo_physics::components::{RigidBody, Transform, Velocity, FluidSimulation};
+use gizmo_physics::components::{FluidSimulation, RigidBody, Transform, Velocity};
 use gizmo_physics::shape::Collider;
 use gizmo_renderer::components::{Camera, Material, ParticleEmitter, PointLight};
-use gizmo_ai::components::NavAgent;
 
 /// Inspector sekmesini çizer
 pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
@@ -673,25 +673,39 @@ fn draw_fluid_section(
                     ui.label("GPU SPH Engine Aktif (ECS Üzerinden Yönetilir)");
                     ui.horizontal(|ui| {
                         ui.label("Hedef Yoğunluk:");
-                        ui.add(egui::DragValue::new(&mut fluid.target_density).speed(1.0).range(100.0..=2000.0));
+                        ui.add(
+                            egui::DragValue::new(&mut fluid.target_density)
+                                .speed(1.0)
+                                .range(100.0..=2000.0),
+                        );
                     });
-                    
+
                     ui.horizontal(|ui| {
                         ui.label("Basınç Çarpanı:");
-                        ui.add(egui::DragValue::new(&mut fluid.pressure_multiplier).speed(1.0).range(1.0..=1000.0));
+                        ui.add(
+                            egui::DragValue::new(&mut fluid.pressure_multiplier)
+                                .speed(1.0)
+                                .range(1.0..=1000.0),
+                        );
                     });
 
                     ui.horizontal(|ui| {
                         ui.label("Viskozite:");
-                        ui.add(egui::DragValue::new(&mut fluid.viscosity).speed(0.01).range(0.001..=1.0));
+                        ui.add(
+                            egui::DragValue::new(&mut fluid.viscosity)
+                                .speed(0.01)
+                                .range(0.001..=1.0),
+                        );
                     });
-                    
+
                     ui.horizontal(|ui| {
                         ui.label("Parçacık Yarıçapı:");
-                        ui.add(egui::DragValue::new(&mut fluid.particle_radius).speed(0.01).range(0.01..=1.0));
+                        ui.add(
+                            egui::DragValue::new(&mut fluid.particle_radius)
+                                .speed(0.01)
+                                .range(0.01..=1.0),
+                        );
                     });
-                    
-
                 });
             ui.separator();
         }
@@ -712,19 +726,31 @@ fn draw_ai_section(
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Maks Hız:");
-                        ui.add(egui::DragValue::new(&mut agent.max_speed).speed(0.1).range(0.1..=100.0));
+                        ui.add(
+                            egui::DragValue::new(&mut agent.max_speed)
+                                .speed(0.1)
+                                .range(0.1..=100.0),
+                        );
                     });
-                    
+
                     ui.horizontal(|ui| {
                         ui.label("Steering (Dönüş) Gücü:");
-                        ui.add(egui::DragValue::new(&mut agent.steering_force).speed(0.1).range(0.1..=100.0));
+                        ui.add(
+                            egui::DragValue::new(&mut agent.steering_force)
+                                .speed(0.1)
+                                .range(0.1..=100.0),
+                        );
                     });
 
                     ui.horizontal(|ui| {
                         ui.label("Varış Yarıçapı:");
-                        ui.add(egui::DragValue::new(&mut agent.arrival_radius).speed(0.1).range(0.1..=10.0));
+                        ui.add(
+                            egui::DragValue::new(&mut agent.arrival_radius)
+                                .speed(0.1)
+                                .range(0.1..=10.0),
+                        );
                     });
-                    
+
                     let state_str = match agent.state {
                         gizmo_ai::components::NavAgentState::Idle => "Bekliyor",
                         gizmo_ai::components::NavAgentState::Moving => "Hareket Ediyor",
@@ -732,13 +758,16 @@ fn draw_ai_section(
                         gizmo_ai::components::NavAgentState::Stuck => "Sıkıştı",
                     };
                     ui.label(format!("Durum: {}", state_str));
-                    
+
                     if let Some(target) = agent.target {
-                        ui.label(format!("Hedef: {:.1}, {:.1}, {:.1}", target.x, target.y, target.z));
+                        ui.label(format!(
+                            "Hedef: {:.1}, {:.1}, {:.1}",
+                            target.x, target.y, target.z
+                        ));
                     } else {
                         ui.label("Hedef: Yok");
                     }
-                    
+
                     ui.label(format!("Rota Uzunluğu: {}", agent.path_len()));
                 });
             ui.separator();
@@ -827,14 +856,24 @@ fn draw_reflection_section(
     state: &mut EditorState,
 ) {
     let skip_names = [
-        "EntityName", "Transform", "Velocity", "RigidBody", "Collider",
-        "Camera", "PointLight", "Material", "ParticleEmitter", "Terrain",
-        "Script", "FluidSimulation", "NavAgent"
+        "EntityName",
+        "Transform",
+        "Velocity",
+        "RigidBody",
+        "Collider",
+        "Camera",
+        "PointLight",
+        "Material",
+        "ParticleEmitter",
+        "Terrain",
+        "Script",
+        "FluidSimulation",
+        "NavAgent",
     ];
 
     if let Some(registry) = world.get_resource::<gizmo_core::ComponentRegistry>() {
         let types = world.get_entity_component_types(entity_id);
-        
+
         for tid in types {
             if let Some(reg) = registry.get_registration(tid) {
                 if skip_names.contains(&reg.name.as_str()) {

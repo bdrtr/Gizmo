@@ -44,12 +44,12 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
             }
 
             let poses_trs = evaluate_clip(anim, player.current_time, &skeleton.hierarchy);
-            
+
             let final_trs = if let Some(prev_idx) = player.prev_animation {
                 if player.blend_time < player.blend_duration {
                     player.blend_time += dt;
                     player.prev_time += dt;
-                    
+
                     let mut prev_time_clamped = player.prev_time;
                     if let Some(prev_anim) = animations.get(prev_idx) {
                         if prev_time_clamped > prev_anim.duration {
@@ -59,8 +59,9 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
                                 prev_time_clamped = prev_anim.duration;
                             }
                         }
-                        
-                        let prev_poses_trs = evaluate_clip(prev_anim, prev_time_clamped, &skeleton.hierarchy);
+
+                        let prev_poses_trs =
+                            evaluate_clip(prev_anim, prev_time_clamped, &skeleton.hierarchy);
                         let alpha = (player.blend_time / player.blend_duration).clamp(0.0, 1.0);
                         blend_poses(&prev_poses_trs, &poses_trs, alpha)
                     } else {
@@ -74,9 +75,10 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
                 poses_trs
             };
 
-            let poses = final_trs.into_iter().map(|(t, r, s)| {
-                Mat4::from_scale_rotation_translation(s, r, t)
-            }).collect();
+            let poses = final_trs
+                .into_iter()
+                .map(|(t, r, s)| Mat4::from_scale_rotation_translation(s, r, t))
+                .collect();
 
             skeleton.local_poses = poses;
 
@@ -127,7 +129,11 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
             blend.elapsed += dt;
             blend.to_time += dt * to_speed;
 
-            let to_clip_duration = machine.clips.get(blend.to_clip).map(|c| c.duration).unwrap_or(1.0);
+            let to_clip_duration = machine
+                .clips
+                .get(blend.to_clip)
+                .map(|c| c.duration)
+                .unwrap_or(1.0);
             let to_looped = blend.to_looped;
             if blend.to_time >= to_clip_duration {
                 if to_looped && to_clip_duration > 0.0 {
@@ -148,11 +154,10 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
 
             // Trigger-based first
             'outer: for trigger in &triggers {
-                if let Some(tr) = machine.find_transition(&current_name, Some(trigger), clip_finished) {
-                    chosen_transition = Some((
-                        tr.to.clone(),
-                        tr.blend_duration,
-                    ));
+                if let Some(tr) =
+                    machine.find_transition(&current_name, Some(trigger), clip_finished)
+                {
+                    chosen_transition = Some((tr.to.clone(), tr.blend_duration));
                     break 'outer;
                 }
             }
@@ -169,24 +174,29 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
                     let from_clip = machine.current_clip_index().unwrap_or(0);
                     machine.active_blend = Some(ActiveBlend {
                         from_clip,
-                        to_clip:   to_state.clip_index,
+                        to_clip: to_state.clip_index,
                         from_time: machine.current_time,
-                        to_time:   0.0,
-                        elapsed:   0.0,
-                        duration:  blend_dur,
-                        to_state:  to_state_name,
+                        to_time: 0.0,
+                        elapsed: 0.0,
+                        duration: blend_dur,
+                        to_state: to_state_name,
                         to_looped: to_state.looped,
-                        to_speed:  to_state.speed,
+                        to_speed: to_state.speed,
                     });
                 }
             }
         }
 
         // --- Check blend completion ---
-        if machine.active_blend.as_ref().map(|b| b.alpha() >= 1.0).unwrap_or(false) {
+        if machine
+            .active_blend
+            .as_ref()
+            .map(|b| b.alpha() >= 1.0)
+            .unwrap_or(false)
+        {
             let blend = machine.active_blend.take().unwrap();
             machine.current_state = blend.to_state;
-            machine.current_time  = blend.to_time;
+            machine.current_time = blend.to_time;
         }
 
         // --- Compute blended poses ---
@@ -200,7 +210,7 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
                 None => continue,
             };
             let poses_a = evaluate_clip(clip_a, blend.from_time, &skeleton.hierarchy);
-            let poses_b = evaluate_clip(clip_b, blend.to_time,   &skeleton.hierarchy);
+            let poses_b = evaluate_clip(clip_b, blend.to_time, &skeleton.hierarchy);
             blend_poses(&poses_a, &poses_b, blend.alpha())
         } else {
             let clip_idx = match machine.current_clip_index() {
@@ -215,9 +225,10 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
         };
 
         // Convert TRS to Mat4
-        let poses = poses_trs.into_iter().map(|(t, r, s)| {
-            Mat4::from_scale_rotation_translation(s, r, t)
-        }).collect();
+        let poses = poses_trs
+            .into_iter()
+            .map(|(t, r, s)| Mat4::from_scale_rotation_translation(s, r, t))
+            .collect();
 
         skeleton.local_poses = poses;
         upload_skin_matrices(skeleton, queue);
@@ -243,30 +254,32 @@ fn evaluate_clip(
             // Gevşek eşleşme (mixamorig: vs mixamorig_ ve /RootNode/ gibi fbx2gltf eklentileri)
             let clean = |n: &str| {
                 n.replace("/RootNode/", "")
-                 .replace("mixamorig:", "")
-                 .replace("mixamorig_", "")
-                 .to_lowercase()
+                    .replace("mixamorig:", "")
+                    .replace("mixamorig_", "")
+                    .to_lowercase()
             };
             let clean_name = clean(name);
-            if let Some(idx) = hierarchy.joints.iter().position(|j| clean(&j.name) == clean_name) {
+            if let Some(idx) = hierarchy
+                .joints
+                .iter()
+                .position(|j| clean(&j.name) == clean_name)
+            {
                 return Some(idx);
             }
         }
-        if target_node_name.is_none() {
-            if target_node < hierarchy.joints.len() {
-                return Some(target_node);
-            }
+        if target_node_name.is_none() && target_node < hierarchy.joints.len() {
+            return Some(target_node);
         }
         None
     };
-
-
 
     for track in &clip.translations {
         if let Some(joint_idx) = get_joint_idx(track.target_node, &track.target_node_name) {
             if let Some(v) = track.get_interpolated(time, |a: Vec3, b: Vec3, t| a.lerp(b, t)) {
                 // Sadece Hips (kök) kemiğinin hareketine izin ver, diğerlerini yoksay. Mixamo animasyonlarında root motion buradadır.
-                if track.target_node_name.as_deref() == Some("mixamorig:Hips") || track.target_node == 66 {
+                if track.target_node_name.as_deref() == Some("mixamorig:Hips")
+                    || track.target_node == 66
+                {
                     changes[joint_idx].0 = Some(v);
                 }
             }
@@ -290,17 +303,21 @@ fn evaluate_clip(
     let mut result_trs = Vec::with_capacity(hierarchy.joints.len());
     for (joint_idx, (t_opt, r_opt, s_opt)) in changes.into_iter().enumerate() {
         let joint = &hierarchy.joints[joint_idx];
-        let pos   = t_opt.unwrap_or(joint.bind_translation);
-        let rot   = r_opt.unwrap_or(joint.bind_rotation);
+        let pos = t_opt.unwrap_or(joint.bind_translation);
+        let rot = r_opt.unwrap_or(joint.bind_rotation);
         let scale = s_opt.unwrap_or(joint.bind_scale);
-        
+
         result_trs.push((pos, rot, scale));
     }
     result_trs
 }
 
 /// Linearly blend two pose arrays. Uses lerp for T/S, slerp for R.
-fn blend_poses(a: &[(Vec3, Quat, Vec3)], b: &[(Vec3, Quat, Vec3)], alpha: f32) -> Vec<(Vec3, Quat, Vec3)> {
+fn blend_poses(
+    a: &[(Vec3, Quat, Vec3)],
+    b: &[(Vec3, Quat, Vec3)],
+    alpha: f32,
+) -> Vec<(Vec3, Quat, Vec3)> {
     a.iter()
         .zip(b.iter())
         .map(|((ta, ra, sa), (tb, rb, sb))| {

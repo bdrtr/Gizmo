@@ -39,9 +39,7 @@ impl<'a> Drop for Commands<'a> {
 
 impl<'a> Commands<'a> {
     pub fn new(world: &'a mut World, renderer: &'a Renderer) -> Self {
-        let am = world
-            .remove_resource::<AssetManager>()
-            .unwrap_or_else(AssetManager::new);
+        let am = world.remove_resource::<AssetManager>().unwrap_or_default();
         Self {
             world,
             renderer,
@@ -362,7 +360,10 @@ impl<'a> Commands<'a> {
         let mat = Material::new(bg).with_pbr(color.to_vec4(), 0.9, 0.0);
         let id = spawn_mesh_entity(self.world, pos, mesh, mat);
         self.world.add_component(id, RigidBody::new_static());
-        self.world.add_component(id, Collider::box_collider(Vec3::new(size / 2.0, 0.05, size / 2.0)));
+        self.world.add_component(
+            id,
+            Collider::box_collider(Vec3::new(size / 2.0, 0.05, size / 2.0)),
+        );
         EntityBuilder {
             commands: self,
             entity: id,
@@ -462,7 +463,8 @@ impl<'a> Commands<'a> {
                 trans.update_local_matrix();
 
                 self.world.add_component(root, trans);
-                self.world.add_component(root, gizmo_physics::GlobalTransform::default());
+                self.world
+                    .add_component(root, gizmo_physics::GlobalTransform::default());
                 self.world
                     .add_component(root, EntityName(format!("GLTF: {}", path)));
                 self.world
@@ -486,7 +488,9 @@ impl<'a> Commands<'a> {
                             current_time: 0.0,
                             loop_anim: true,
                             speed: 1.0,
-                            animations: std::sync::Arc::from(asset.animations.clone().into_boxed_slice()),
+                            animations: std::sync::Arc::from(
+                                asset.animations.clone().into_boxed_slice(),
+                            ),
                             ..Default::default()
                         },
                     );
@@ -605,7 +609,7 @@ fn spawn_gltf_node_flat(
     world.add_component(entity, gizmo_physics::GlobalTransform::default());
 
     let mut newly_added_prims = Vec::new();
-    for (_pi, (mesh, mat_opt)) in node.primitives.iter().enumerate() {
+    for (mesh, mat_opt) in node.primitives.iter() {
         let prim = world.spawn();
         world.add_component(prim, Transform::new(Vec3::ZERO));
         world.add_component(prim, gizmo_physics::GlobalTransform::default());
@@ -704,7 +708,7 @@ impl WorldExt for World {
             {
                 for (tid, mut trans) in transforms.iter_mut() {
                     if tid == target_id {
-                        f(&mut *trans);
+                        f(&mut trans);
                         trans.update_local_matrix();
                     }
                 }

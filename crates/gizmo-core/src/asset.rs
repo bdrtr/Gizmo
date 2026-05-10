@@ -1,12 +1,18 @@
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::hash::{Hash, Hasher};
-use std::collections::HashMap;
 
 static NEXT_HANDLE_ID: AtomicUsize = AtomicUsize::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HandleId(pub usize);
+
+impl Default for HandleId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl HandleId {
     pub fn new() -> Self {
@@ -19,19 +25,34 @@ pub struct Handle<T> {
     _marker: PhantomData<T>,
 }
 
+impl<T> Default for Handle<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> Handle<T> {
     pub fn new() -> Self {
-        Self { id: HandleId::new(), _marker: PhantomData }
+        Self {
+            id: HandleId::new(),
+            _marker: PhantomData,
+        }
     }
 
     pub fn weak(id: HandleId) -> Self {
-        Self { id, _marker: PhantomData }
+        Self {
+            id,
+            _marker: PhantomData,
+        }
     }
 }
 
 impl<T> Clone for Handle<T> {
     fn clone(&self) -> Self {
-        Self { id: self.id, _marker: PhantomData }
+        Self {
+            id: self.id,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -64,7 +85,9 @@ pub struct Assets<T> {
 
 impl<T> Default for Assets<T> {
     fn default() -> Self {
-        Self { data: HashMap::new() }
+        Self {
+            data: HashMap::new(),
+        }
     }
 }
 

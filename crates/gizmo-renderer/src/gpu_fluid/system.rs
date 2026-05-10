@@ -169,11 +169,11 @@ impl GpuFluidSystem {
             cohesion: 0.008,
             time: 0.0,
             // AAA Physics Parameters
-            vorticity_strength: 0.35,      // Vorticity Confinement epsilon
-            surface_tension: 0.5,          // Akinci surface tension gamma
-            viscosity_laplacian: 0.005,    // Laplacian viscosity mu
-            xsph_factor: 0.05,            // XSPH smoothing factor
-            solver_iterations: 6,          // PBF solver iterations
+            vorticity_strength: 0.35,   // Vorticity Confinement epsilon
+            surface_tension: 0.5,       // Akinci surface tension gamma
+            viscosity_laplacian: 0.005, // Laplacian viscosity mu
+            xsph_factor: 0.05,          // XSPH smoothing factor
+            solver_iterations: 6,       // PBF solver iterations
         };
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Fluid Params Buffer"),
@@ -512,17 +512,21 @@ impl GpuFluidSystem {
             mouse_dir,
             mouse_radius: 10.0, // Large mouse influence
             num_colliders,
-            cohesion: 0.008,         // Cohesion coefficient (surface tension molecular)
+            cohesion: 0.008, // Cohesion coefficient (surface tension molecular)
             time,
-            vorticity_strength: 0.35,  // Vorticity Confinement epsilon
-            surface_tension: 0.5,      // Akinci surface tension gamma
+            vorticity_strength: 0.35,   // Vorticity Confinement epsilon
+            surface_tension: 0.5,       // Akinci surface tension gamma
             viscosity_laplacian: 0.005, // Laplacian viscosity mu
-            xsph_factor: 0.05,         // XSPH smoothing factor
+            xsph_factor: 0.05,          // XSPH smoothing factor
             solver_iterations: 6,       // PBF solver iterations per frame
         };
 
         queue.write_buffer(&self.params_buffer, 80, bytemuck::cast_slice(&[dyn_params]));
-        queue.write_buffer(&self.params_buffer, 28, bytemuck::cast_slice(&[active_particles]));
+        queue.write_buffer(
+            &self.params_buffer,
+            28,
+            bytemuck::cast_slice(&[active_particles]),
+        );
     }
 
     pub fn compute_pass(
@@ -532,7 +536,9 @@ impl GpuFluidSystem {
         update_grid: bool,
         active_particles: u32,
     ) {
-        if active_particles == 0 { return; }
+        if active_particles == 0 {
+            return;
+        }
         let workgroups_parts = active_particles.div_ceil(64);
 
         // 1. PBF PREDICT PASS
@@ -679,7 +685,9 @@ impl GpuFluidSystem {
         global_scene_bind_group: &wgpu::BindGroup,
         active_particles: u32,
     ) {
-        if active_particles == 0 { return; }
+        if active_particles == 0 {
+            return;
+        }
         // Copy the opaque background before rendering fluid on top
         encoder.copy_texture_to_texture(
             wgpu::ImageCopyTexture {

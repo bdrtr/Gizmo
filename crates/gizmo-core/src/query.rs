@@ -458,13 +458,9 @@ impl<T: 'static> WorldQuery for Changed<T> {
         ticks.changed == tick
     }
 
-    unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize) -> Self::Item<'w> {
-        ()
-    }
+    unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize) -> Self::Item<'w> {}
 
-    unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {
-        ()
-    }
+    unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {}
 }
 
 macro_rules! impl_query_tuple {
@@ -538,12 +534,8 @@ impl<T: 'static> WorldQuery for With<T> {
     unsafe fn filter_row<'w>(_fetch: Self::Fetch<'w>, _row: usize, _tick: u32) -> bool {
         true
     }
-    unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize) -> Self::Item<'w> {
-        ()
-    }
-    unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {
-        ()
-    }
+    unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize) -> Self::Item<'w> {}
+    unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {}
 }
 
 pub struct Without<T>(PhantomData<T>);
@@ -567,12 +559,8 @@ impl<T: 'static> WorldQuery for Without<T> {
     unsafe fn filter_row<'w>(_fetch: Self::Fetch<'w>, _row: usize, _tick: u32) -> bool {
         true
     }
-    unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize) -> Self::Item<'w> {
-        ()
-    }
-    unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {
-        ()
-    }
+    unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize) -> Self::Item<'w> {}
+    unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {}
 }
 
 pub struct Or<T1, T2>(PhantomData<(T1, T2)>);
@@ -596,12 +584,8 @@ impl<T1: WorldQuery, T2: WorldQuery> WorldQuery for Or<T1, T2> {
     unsafe fn filter_row<'w>(_fetch: Self::Fetch<'w>, _row: usize, _tick: u32) -> bool {
         true
     }
-    unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize) -> Self::Item<'w> {
-        ()
-    }
-    unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {
-        ()
-    }
+    unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize) -> Self::Item<'w> {}
+    unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {}
 }
 
 #[cfg(test)]

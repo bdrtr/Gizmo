@@ -473,6 +473,6 @@ impl SceneData {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     // Test removed because EntityData relies dynamically on SceneRegistry serialization
 }

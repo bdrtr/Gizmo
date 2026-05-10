@@ -93,7 +93,9 @@ impl FrameProfiler {
     /// Yeni bir profiling scope başlatır.
     #[inline]
     pub fn begin_scope(&mut self, name: &'static str) {
-        if !self.enabled { return; }
+        if !self.enabled {
+            return;
+        }
         let now_ns = self.epoch.elapsed().as_nanos() as u64;
         self.active_scopes.push((name, now_ns, self.current_depth));
         self.current_depth += 1;
@@ -102,7 +104,9 @@ impl FrameProfiler {
     /// Aktif scope'u kapatır ve zamanlama verisini kaydeder.
     #[inline]
     pub fn end_scope(&mut self, name: &'static str) {
-        if !self.enabled { return; }
+        if !self.enabled {
+            return;
+        }
         let now_ns = self.epoch.elapsed().as_nanos() as u64;
 
         // Son eşleşen scope'u bul (iç içe olabilir)
@@ -120,7 +124,9 @@ impl FrameProfiler {
 
     /// Frame'i bitirir ve mevcut verileri history ring buffer'a yazar.
     pub fn end_frame(&mut self) {
-        if !self.enabled { return; }
+        if !self.enabled {
+            return;
+        }
 
         let total_ms = self.frame_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -158,8 +164,12 @@ impl FrameProfiler {
     /// Son N frame'in toplam süre ortalaması (ms).
     pub fn avg_frame_ms(&self, n: usize) -> f64 {
         let count = n.min(self.history.len());
-        if count == 0 { return 0.0; }
-        let sum: f64 = self.history.iter()
+        if count == 0 {
+            return 0.0;
+        }
+        let sum: f64 = self
+            .history
+            .iter()
             .rev()
             .take(count)
             .map(|p| p.total_ms)
@@ -170,7 +180,9 @@ impl FrameProfiler {
     /// Son N frame boyunca belirli bir scope'un ortalama süresi (ms).
     pub fn avg_scope_ms(&self, name: &str, n: usize) -> f64 {
         let count = n.min(self.history.len());
-        if count == 0 { return 0.0; }
+        if count == 0 {
+            return 0.0;
+        }
         let mut total = 0.0;
         let mut found = 0;
         for profile in self.history.iter().rev().take(count) {
@@ -181,7 +193,11 @@ impl FrameProfiler {
                 }
             }
         }
-        if found == 0 { 0.0 } else { total / found as f64 }
+        if found == 0 {
+            0.0
+        } else {
+            total / found as f64
+        }
     }
 
     /// Tüm history'deki frame profilleri (ring buffer sırasıyla).
@@ -197,7 +213,11 @@ impl FrameProfiler {
     /// Tahmini FPS (son 60 frame ortalaması).
     pub fn estimated_fps(&self) -> f64 {
         let avg = self.avg_frame_ms(60);
-        if avg > 0.0 { 1000.0 / avg } else { 0.0 }
+        if avg > 0.0 {
+            1000.0 / avg
+        } else {
+            0.0
+        }
     }
 }
 
@@ -224,7 +244,10 @@ impl FrameProfiler {
     /// RAII scope guard oluşturur — drop edilince scope otomatik kapanır.
     pub fn scope_guard(&mut self, name: &'static str) -> ProfileGuard<'_> {
         self.begin_scope(name);
-        ProfileGuard { profiler: self, name }
+        ProfileGuard {
+            profiler: self,
+            name,
+        }
     }
 }
 
@@ -235,7 +258,7 @@ mod tests {
     #[test]
     fn test_basic_profiling() {
         let mut profiler = FrameProfiler::new();
-        
+
         profiler.begin_scope("test_scope");
         std::thread::sleep(std::time::Duration::from_millis(1));
         profiler.end_scope("test_scope");
@@ -251,7 +274,7 @@ mod tests {
     #[test]
     fn test_nested_scopes() {
         let mut profiler = FrameProfiler::new();
-        
+
         profiler.begin_scope("outer");
         profiler.begin_scope("inner");
         profiler.end_scope("inner");
@@ -270,8 +293,8 @@ mod tests {
     #[test]
     fn test_ring_buffer() {
         let mut profiler = FrameProfiler::new();
-        
-        for i in 0..350 {
+
+        for _i in 0..350 {
             profiler.begin_scope("frame_scope");
             profiler.end_scope("frame_scope");
             profiler.end_frame();
@@ -285,7 +308,7 @@ mod tests {
     #[test]
     fn test_avg_fps() {
         let mut profiler = FrameProfiler::new();
-        
+
         // Simulate 10 frames
         for _ in 0..10 {
             profiler.end_frame();
@@ -299,7 +322,7 @@ mod tests {
     fn test_disabled_profiler() {
         let mut profiler = FrameProfiler::new();
         profiler.enabled = false;
-        
+
         profiler.begin_scope("disabled_scope");
         profiler.end_scope("disabled_scope");
         profiler.end_frame();

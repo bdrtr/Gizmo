@@ -128,7 +128,8 @@ impl super::AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(device, 
+        Mesh::new(
+            device,
             Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
@@ -258,7 +259,8 @@ impl super::AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(device, 
+        Mesh::new(
+            device,
             Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
@@ -333,7 +335,8 @@ impl super::AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(device, 
+        Mesh::new(
+            device,
             Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
@@ -408,7 +411,8 @@ impl super::AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(device, 
+        Mesh::new(
+            device,
             Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
@@ -446,7 +450,8 @@ impl super::AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(device, 
+        Mesh::new(
+            device,
             Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
@@ -520,7 +525,8 @@ impl super::AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(device, 
+        Mesh::new(
+            device,
             Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
@@ -587,19 +593,35 @@ impl super::AssetManager {
                 ];
 
                 let uv1 = [
-                    if i == 0 { (j as f32 + 0.5) / slices as f32 } else { j as f32 / slices as f32 },
+                    if i == 0 {
+                        (j as f32 + 0.5) / slices as f32
+                    } else {
+                        j as f32 / slices as f32
+                    },
                     i as f32 / stacks as f32,
                 ];
                 let uv2 = [
-                    if i + 1 == stacks { (j as f32 + 0.5) / slices as f32 } else { j as f32 / slices as f32 },
+                    if i + 1 == stacks {
+                        (j as f32 + 0.5) / slices as f32
+                    } else {
+                        j as f32 / slices as f32
+                    },
                     (i + 1) as f32 / stacks as f32,
                 ];
                 let uv3 = [
-                    if i + 1 == stacks { (j as f32 + 0.5) / slices as f32 } else { (j + 1) as f32 / slices as f32 },
+                    if i + 1 == stacks {
+                        (j as f32 + 0.5) / slices as f32
+                    } else {
+                        (j + 1) as f32 / slices as f32
+                    },
                     (i + 1) as f32 / stacks as f32,
                 ];
                 let uv4 = [
-                    if i == 0 { (j as f32 + 0.5) / slices as f32 } else { (j + 1) as f32 / slices as f32 },
+                    if i == 0 {
+                        (j as f32 + 0.5) / slices as f32
+                    } else {
+                        (j + 1) as f32 / slices as f32
+                    },
                     i as f32 / stacks as f32,
                 ];
 
@@ -665,7 +687,8 @@ impl super::AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        Mesh::new(device, 
+        Mesh::new(
+            device,
             Arc::new(vbuf),
             &vertices,
             Vec3::ZERO,
@@ -691,7 +714,10 @@ impl super::AssetManager {
 
         let (img_width, img_height) = img.dimensions();
         if img_width < 2 || img_height < 2 {
-            return Err("Heightmap boyutlari en az 2x2 olmalidir. 1x1 piksel ile arazi olusturulamaz.".to_string());
+            return Err(
+                "Heightmap boyutlari en az 2x2 olmalidir. 1x1 piksel ile arazi olusturulamaz."
+                    .to_string(),
+            );
         }
         // Sınırlama: 512x512'den büyükse performans için uyar ya da downscale et
 
@@ -784,7 +810,8 @@ impl super::AssetManager {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        let mesh = Mesh::new(device, 
+        let mesh = Mesh::new(
+            device,
             Arc::new(vbuf),
             &final_vertices,
             Vec3::ZERO,

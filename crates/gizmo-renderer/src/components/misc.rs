@@ -10,9 +10,18 @@ pub struct Terrain {
 
 impl Terrain {
     pub fn new(heightmap_path: String, width: f32, depth: f32, max_height: f32) -> Self {
-        assert!(width > 0.0, "Kullanım hatası: Terrain width sıfırdan büyük olmalıdır.");
-        assert!(depth > 0.0, "Kullanım hatası: Terrain depth sıfırdan büyük olmalıdır.");
-        assert!(max_height > 0.0, "Kullanım hatası: Terrain max_height sıfırdan büyük olmalıdır.");
+        assert!(
+            width > 0.0,
+            "Kullanım hatası: Terrain width sıfırdan büyük olmalıdır."
+        );
+        assert!(
+            depth > 0.0,
+            "Kullanım hatası: Terrain depth sıfırdan büyük olmalıdır."
+        );
+        assert!(
+            max_height > 0.0,
+            "Kullanım hatası: Terrain max_height sıfırdan büyük olmalıdır."
+        );
         Self {
             heightmap_path,
             width,
@@ -35,7 +44,10 @@ pub struct LodLevel {
 
 impl LodLevel {
     pub fn new(mesh: super::mesh::Mesh, max_distance: f32) -> Self {
-        assert!(max_distance >= 0.0, "Kullanım hatası: LodLevel max_distance negatif olamaz.");
+        assert!(
+            max_distance >= 0.0,
+            "Kullanım hatası: LodLevel max_distance negatif olamaz."
+        );
         Self { mesh, max_distance }
     }
 }
@@ -106,7 +118,10 @@ impl ParticleEmitter {
 
     /// Yeni bir parçacık yayıcı oluşturur ve doğrulama yapar.
     pub fn with_rate(spawn_rate: f32) -> Self {
-        assert!(spawn_rate > 0.0, "Kullanım hatası: ParticleEmitter spawn_rate sıfırdan büyük olmalıdır.");
+        assert!(
+            spawn_rate > 0.0,
+            "Kullanım hatası: ParticleEmitter spawn_rate sıfırdan büyük olmalıdır."
+        );
         Self {
             spawn_rate,
             ..Self::default()

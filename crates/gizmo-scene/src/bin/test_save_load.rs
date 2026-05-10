@@ -56,7 +56,11 @@ fn main() {
     );
     world.add_component(
         light,
-        gizmo_renderer::components::PointLight::new(gizmo_math::Vec3::new(1.0, 1.0, 1.0), 300.0, 10.0),
+        gizmo_renderer::components::PointLight::new(
+            gizmo_math::Vec3::new(1.0, 1.0, 1.0),
+            300.0,
+            10.0,
+        ),
     );
 
     // Save

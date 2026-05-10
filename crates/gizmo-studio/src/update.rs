@@ -18,7 +18,7 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
 
         let win_info = world
             .get_resource::<WindowInfo>()
-            .map(|w| w.clone())
+            .map(|w| *w)
             .unwrap_or_default();
         crate::systems::input::handle_input_and_scene_view(
             world,

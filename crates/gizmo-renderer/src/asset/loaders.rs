@@ -11,22 +11,22 @@ use wgpu::util::DeviceExt;
 // ============================================================================
 
 pub struct GltfNodeData {
-    pub index:       usize,
-    pub name:        Option<String>,
+    pub index: usize,
+    pub name: Option<String>,
     /// Index into [`GltfSceneAsset::skeletons`] if this node drives a skin.
-    pub skin_index:  Option<usize>,
+    pub skin_index: Option<usize>,
     pub translation: [f32; 3],
-    pub rotation:    [f32; 4],
-    pub scale:       [f32; 3],
+    pub rotation: [f32; 4],
+    pub scale: [f32; 3],
     /// (mesh, optional material) per glTF primitive on this node.
-    pub primitives:  Vec<(Mesh, Option<Material>)>,
-    pub children:    Vec<GltfNodeData>,
+    pub primitives: Vec<(Mesh, Option<Material>)>,
+    pub children: Vec<GltfNodeData>,
 }
 
 pub struct GltfSceneAsset {
-    pub roots:      Vec<GltfNodeData>,
+    pub roots: Vec<GltfNodeData>,
     pub animations: Vec<AnimationClip>,
-    pub skeletons:  Vec<SkeletonHierarchy>,
+    pub skeletons: Vec<SkeletonHierarchy>,
 }
 
 // ============================================================================
@@ -48,9 +48,9 @@ impl super::AssetManager {
         _aabb: gizmo_math::Aabb,
     ) -> Mesh {
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label:    Some(&format!("OBJ VBuf: {file_path}")),
+            label: Some(&format!("OBJ VBuf: {file_path}")),
             contents: bytemuck::cast_slice(&vertices),
-            usage:    wgpu::BufferUsages::VERTEX,
+            usage: wgpu::BufferUsages::VERTEX,
         });
         let mesh = Mesh::new(
             device,
@@ -66,7 +66,7 @@ impl super::AssetManager {
     /// Load an OBJ file from disk (or return the cached copy).
     pub fn load_obj(&mut self, device: &wgpu::Device, file_path_or_uuid: &str) -> Mesh {
         let file_path = match self.resolve_path_from_meta_source(file_path_or_uuid) {
-            Ok(p)  => p,
+            Ok(p) => p,
             Err(e) => {
                 eprintln!("[AssetManager] ERROR: {e}");
                 return self.loading_placeholder_mesh(device);
@@ -89,9 +89,9 @@ impl super::AssetManager {
                 eprintln!("[AssetManager] OBJ load failed: {file_path} — {e}");
                 // Return a valid-but-empty mesh so nothing downstream panics.
                 let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label:    Some("Fallback VBuf (not found)"),
+                    label: Some("Fallback VBuf (not found)"),
                     contents: &[],
-                    usage:    wgpu::BufferUsages::VERTEX,
+                    usage: wgpu::BufferUsages::VERTEX,
                 });
                 return Mesh::empty(Arc::new(vbuf), format!("obj:missing_{file_path}"));
             }
@@ -148,24 +148,18 @@ impl super::AssetManager {
     /// upload happens here on the main thread.
     pub fn load_gltf_from_import(
         &mut self,
-        device:                      &wgpu::Device,
-        queue:                       &wgpu::Queue,
-        texture_bind_group_layout:   &wgpu::BindGroupLayout,
-        default_tbind:               Arc<wgpu::BindGroup>,
-        file_path:                   &str,
-        document:                    gltf::Document,
-        buffers:                     Vec<gltf::buffer::Data>,
-        images:                      Vec<gltf::image::Data>,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture_bind_group_layout: &wgpu::BindGroupLayout,
+        default_tbind: Arc<wgpu::BindGroup>,
+        file_path: &str,
+        document: gltf::Document,
+        buffers: Vec<gltf::buffer::Data>,
+        images: Vec<gltf::image::Data>,
     ) -> Result<GltfSceneAsset, String> {
-
         // ── 1. Textures ───────────────────────────────────────────────────
-        let gltf_textures = self.upload_gltf_textures(
-            device,
-            queue,
-            texture_bind_group_layout,
-            file_path,
-            &images,
-        );
+        let gltf_textures =
+            self.upload_gltf_textures(device, queue, texture_bind_group_layout, file_path, &images);
 
         // ── 2. Materials ──────────────────────────────────────────────────
         let gltf_materials = build_gltf_materials(&document, &gltf_textures, &default_tbind);
@@ -175,7 +169,11 @@ impl super::AssetManager {
         for scene in document.scenes() {
             for node in scene.nodes() {
                 roots.push(self.parse_gltf_node(
-                    device, &node, &buffers, &gltf_materials, file_path,
+                    device,
+                    &node,
+                    &buffers,
+                    &gltf_materials,
+                    file_path,
                 ));
             }
         }
@@ -200,18 +198,22 @@ impl super::AssetManager {
 
         let skeletons = parse_skeletons(&document, &buffers, &node_parents, &nodes_by_index);
 
-        Ok(GltfSceneAsset { roots, animations, skeletons })
+        Ok(GltfSceneAsset {
+            roots,
+            animations,
+            skeletons,
+        })
     }
 
     // ── glTF — texture upload ────────────────────────────────────────────────
 
     fn upload_gltf_textures(
         &mut self,
-        device:                    &wgpu::Device,
-        queue:                     &wgpu::Queue,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
         texture_bind_group_layout: &wgpu::BindGroupLayout,
-        file_path:                 &str,
-        images:                    &[gltf::image::Data],
+        file_path: &str,
+        images: &[gltf::image::Data],
     ) -> Vec<(Arc<wgpu::BindGroup>, String)> {
         let mut gltf_textures = Vec::with_capacity(images.len());
 
@@ -221,57 +223,60 @@ impl super::AssetManager {
             // Convert every format to RGBA8 for uniform GPU handling.
             let rgba: Vec<u8> = convert_image_to_rgba8(image, i, file_path);
 
-            let texture_size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+            let texture_size = wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            };
 
             let texture = device.create_texture(&wgpu::TextureDescriptor {
-                size:             texture_size,
-                mip_level_count:  1,
-                sample_count:     1,
-                dimension:        wgpu::TextureDimension::D2,
-                format:           wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage:            wgpu::TextureUsages::TEXTURE_BINDING
-                                | wgpu::TextureUsages::COPY_DST,
-                label:            Some(&format!("{file_path}_tex_{i}")),
-                view_formats:     &[],
+                size: texture_size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                label: Some(&format!("{file_path}_tex_{i}")),
+                view_formats: &[],
             });
 
             queue.write_texture(
                 wgpu::ImageCopyTexture {
-                    texture:   &texture,
+                    texture: &texture,
                     mip_level: 0,
-                    origin:    wgpu::Origin3d::ZERO,
-                    aspect:    wgpu::TextureAspect::All,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
                 },
                 &rgba,
                 wgpu::ImageDataLayout {
-                    offset:         0,
-                    bytes_per_row:  Some(4 * width),
+                    offset: 0,
+                    bytes_per_row: Some(4 * width),
                     rows_per_image: Some(height),
                 },
                 texture_size,
             );
 
-            let view    = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
                 address_mode_u: wgpu::AddressMode::Repeat,
                 address_mode_v: wgpu::AddressMode::Repeat,
                 address_mode_w: wgpu::AddressMode::Repeat,
-                mag_filter:     wgpu::FilterMode::Linear,
-                min_filter:     wgpu::FilterMode::Linear,
-                mipmap_filter:  wgpu::FilterMode::Linear,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::FilterMode::Linear,
                 ..Default::default()
             });
 
             let bg = Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label:   Some(&format!("{file_path}_bg_{i}")),
-                layout:  texture_bind_group_layout,
+                label: Some(&format!("{file_path}_bg_{i}")),
+                layout: texture_bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
-                        binding:  0,
+                        binding: 0,
                         resource: wgpu::BindingResource::TextureView(&view),
                     },
                     wgpu::BindGroupEntry {
-                        binding:  1,
+                        binding: 1,
                         resource: wgpu::BindingResource::Sampler(&sampler),
                     },
                 ],
@@ -289,9 +294,9 @@ impl super::AssetManager {
 
     fn parse_gltf_node(
         &mut self,
-        device:    &wgpu::Device,
-        node:      &gltf::Node,
-        buffers:   &[gltf::buffer::Data],
+        device: &wgpu::Device,
+        node: &gltf::Node,
+        buffers: &[gltf::buffer::Data],
         materials: &[Material],
         file_name: &str,
     ) -> GltfNodeData {
@@ -360,10 +365,10 @@ impl super::AssetManager {
                         .unwrap_or([0.0; 4]);
 
                     Vertex {
-                        position:      pos,
+                        position: pos,
                         normal,
-                        tex_coords:    uv,
-                        color:         [1.0, 1.0, 1.0],
+                        tex_coords: uv,
+                        color: [1.0, 1.0, 1.0],
                         joint_indices: j,
                         joint_weights: w,
                     }
@@ -393,9 +398,9 @@ impl super::AssetManager {
                 }
 
                 let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label:    Some(&format!("GLTF VBuf: {file_name}_prim{prim_i}")),
+                    label: Some(&format!("GLTF VBuf: {file_name}_prim{prim_i}")),
                     contents: bytemuck::cast_slice(&all_vertices),
-                    usage:    wgpu::BufferUsages::VERTEX,
+                    usage: wgpu::BufferUsages::VERTEX,
                 });
 
                 // Use a deterministic cache key that doesn't depend on Debug formatting.
@@ -427,9 +432,9 @@ impl super::AssetManager {
             .collect();
 
         GltfNodeData {
-            index:       node.index(),
-            name:        node.name().map(str::to_owned),
-            skin_index:  node.skin().map(|s| s.index()),
+            index: node.index(),
+            name: node.name().map(str::to_owned),
+            skin_index: node.skin().map(|s| s.index()),
             translation,
             rotation,
             scale,
@@ -505,7 +510,9 @@ fn convert_image_to_rgba8(image: &gltf::image::Data, idx: usize, file_path: &str
             // Opaque black canvas — copy whatever bytes we have.
             let mut out = vec![0u8; expected];
             // Set alpha channel of every pixel to 255 (opaque).
-            for px in 0..pixel_count { out[px * 4 + 3] = 255; }
+            for px in 0..pixel_count {
+                out[px * 4 + 3] = 255;
+            }
             let copy_len = image.pixels.len().min(expected);
             out[..copy_len].copy_from_slice(&image.pixels[..copy_len]);
             out
@@ -548,14 +555,14 @@ fn compute_flat_normals(vertices: &mut [Vertex]) {
 // ============================================================================
 
 fn build_gltf_materials(
-    document:      &gltf::Document,
+    document: &gltf::Document,
     gltf_textures: &[(Arc<wgpu::BindGroup>, String)],
     default_tbind: &Arc<wgpu::BindGroup>,
 ) -> Vec<Material> {
     document
         .materials()
         .map(|material| {
-            let pbr        = material.pbr_metallic_roughness();
+            let pbr = material.pbr_metallic_roughness();
             let base_color = pbr.base_color_factor();
 
             let mut mat = pbr
@@ -576,8 +583,8 @@ fn build_gltf_materials(
                 base_color[3]
             };
 
-            mat.albedo    = gizmo_math::Vec4::new(base_color[0], base_color[1], base_color[2], alpha);
-            mat.metallic  = pbr.metallic_factor();
+            mat.albedo = gizmo_math::Vec4::new(base_color[0], base_color[1], base_color[2], alpha);
+            mat.metallic = pbr.metallic_factor();
             mat.roughness = pbr.roughness_factor();
 
             mat.is_transparent = false;
@@ -594,34 +601,38 @@ fn build_gltf_materials(
 
 fn parse_animations(
     document: &gltf::Document,
-    buffers:  &[gltf::buffer::Data],
+    buffers: &[gltf::buffer::Data],
 ) -> Vec<AnimationClip> {
     document
         .animations()
         .map(|anim| {
             let mut translations = Vec::new();
-            let mut rotations    = Vec::new();
-            let mut scales       = Vec::new();
+            let mut rotations = Vec::new();
+            let mut scales = Vec::new();
 
             for channel in anim.channels() {
-                let target_node      = channel.target().node().index();
+                let target_node = channel.target().node().index();
                 let target_node_name = channel.target().node().name().map(str::to_owned);
-                let reader           = channel.reader(|b| Some(&buffers[b.index()]));
+                let reader = channel.reader(|b| Some(&buffers[b.index()]));
 
                 let times: Vec<f32> = match reader.read_inputs() {
                     Some(it) => it.collect(),
-                    None     => continue,
+                    None => continue,
                 };
 
                 let interp = match channel.sampler().interpolation() {
-                    gltf::animation::Interpolation::Step        => crate::animation::InterpolationMode::Step,
-                    gltf::animation::Interpolation::CubicSpline => crate::animation::InterpolationMode::CubicSpline,
-                    _                                           => crate::animation::InterpolationMode::Linear,
+                    gltf::animation::Interpolation::Step => {
+                        crate::animation::InterpolationMode::Step
+                    }
+                    gltf::animation::Interpolation::CubicSpline => {
+                        crate::animation::InterpolationMode::CubicSpline
+                    }
+                    _ => crate::animation::InterpolationMode::Linear,
                 };
 
                 let outputs = match reader.read_outputs() {
                     Some(o) => o,
-                    None    => continue,
+                    None => continue,
                 };
 
                 match outputs {
@@ -629,7 +640,10 @@ fn parse_animations(
                         let keyframes = times
                             .iter()
                             .zip(tr)
-                            .map(|(&t, v)| Keyframe { time: t, value: Vec3::new(v[0], v[1], v[2]) })
+                            .map(|(&t, v)| Keyframe {
+                                time: t,
+                                value: Vec3::new(v[0], v[1], v[2]),
+                            })
                             .collect();
                         translations.push(Track {
                             target_node,
@@ -643,7 +657,7 @@ fn parse_animations(
                             .iter()
                             .zip(rt.into_f32())
                             .map(|(&t, v)| Keyframe {
-                                time:  t,
+                                time: t,
                                 value: Quat::from_xyzw(v[0], v[1], v[2], v[3]),
                             })
                             .collect();
@@ -658,7 +672,10 @@ fn parse_animations(
                         let keyframes = times
                             .iter()
                             .zip(sc)
-                            .map(|(&t, v)| Keyframe { time: t, value: Vec3::new(v[0], v[1], v[2]) })
+                            .map(|(&t, v)| Keyframe {
+                                time: t,
+                                value: Vec3::new(v[0], v[1], v[2]),
+                            })
                             .collect();
                         scales.push(Track {
                             target_node,
@@ -672,13 +689,22 @@ fn parse_animations(
             }
 
             // Duration = time of the last keyframe across all tracks.
-            let d_tr = translations.iter().filter_map(|t| t.keyframes.last().map(|k| k.time)).fold(0.0f32, f32::max);
-            let d_rot = rotations.iter().filter_map(|t| t.keyframes.last().map(|k| k.time)).fold(0.0f32, f32::max);
-            let d_scl = scales.iter().filter_map(|t| t.keyframes.last().map(|k| k.time)).fold(0.0f32, f32::max);
+            let d_tr = translations
+                .iter()
+                .filter_map(|t| t.keyframes.last().map(|k| k.time))
+                .fold(0.0f32, f32::max);
+            let d_rot = rotations
+                .iter()
+                .filter_map(|t| t.keyframes.last().map(|k| k.time))
+                .fold(0.0f32, f32::max);
+            let d_scl = scales
+                .iter()
+                .filter_map(|t| t.keyframes.last().map(|k| k.time))
+                .fold(0.0f32, f32::max);
             let duration = d_tr.max(d_rot).max(d_scl);
 
             AnimationClip {
-                name:         anim.name().unwrap_or("unnamed").to_string(),
+                name: anim.name().unwrap_or("unnamed").to_string(),
                 duration,
                 translations,
                 rotations,
@@ -693,9 +719,9 @@ fn parse_animations(
 // ============================================================================
 
 fn parse_skeletons(
-    document:      &gltf::Document,
-    buffers:       &[gltf::buffer::Data],
-    node_parents:  &std::collections::HashMap<usize, usize>,
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+    node_parents: &std::collections::HashMap<usize, usize>,
     nodes_by_index: &[gltf::Node],
 ) -> Vec<SkeletonHierarchy> {
     document
@@ -725,8 +751,7 @@ fn parse_skeletons(
                 .joints()
                 .enumerate()
                 .map(|(bone_idx, joint_node)| {
-                    let inverse_bind_matrix =
-                        gizmo_math::Mat4::from_cols_array_2d(&ibm[bone_idx]);
+                    let inverse_bind_matrix = gizmo_math::Mat4::from_cols_array_2d(&ibm[bone_idx]);
 
                     let parent_index = node_parents
                         .get(&joint_node.index())
@@ -734,17 +759,16 @@ fn parse_skeletons(
 
                     let (t, r, s) = joint_node.transform().decomposed();
                     let bind_translation = Vec3::new(t[0], t[1], t[2]);
-                    let bind_rotation    = Quat::from_array(r);
-                    let bind_scale       = Vec3::new(s[0], s[1], s[2]);
+                    let bind_rotation = Quat::from_array(r);
+                    let bind_scale = Vec3::new(s[0], s[1], s[2]);
 
-                    let local_bind_transform =
-                        gizmo_math::Mat4::from_translation(bind_translation)
+                    let local_bind_transform = gizmo_math::Mat4::from_translation(bind_translation)
                         * gizmo_math::Mat4::from_quat(bind_rotation)
                         * gizmo_math::Mat4::from_scale(bind_scale);
 
                     SkeletonJoint {
-                        name:                 joint_node.name().unwrap_or("bone").to_string(),
-                        node_index:           joint_node.index(),
+                        name: joint_node.name().unwrap_or("bone").to_string(),
+                        node_index: joint_node.index(),
                         inverse_bind_matrix,
                         parent_index,
                         local_bind_transform,
@@ -760,11 +784,13 @@ fn parse_skeletons(
             // on this so that joint matrices are identity in the bind pose.
             //
             // We use `nodes_by_index` for O(1) node lookup instead of O(n) `.nth()`.
-            let root_transform = compute_armature_root_transform(
-                &skin, node_parents, &node_to_bone, nodes_by_index,
-            );
+            let root_transform =
+                compute_armature_root_transform(&skin, node_parents, &node_to_bone, nodes_by_index);
 
-            SkeletonHierarchy { joints, root_transform }
+            SkeletonHierarchy {
+                joints,
+                root_transform,
+            }
         })
         .collect()
 }
@@ -772,16 +798,16 @@ fn parse_skeletons(
 /// Walk the parent chain of the first joint upward until we hit a joint or the
 /// root, accumulating the transforms of all non-joint ancestors.
 fn compute_armature_root_transform(
-    skin:           &gltf::Skin,
-    node_parents:   &std::collections::HashMap<usize, usize>,
-    node_to_bone:   &std::collections::HashMap<usize, usize>,
+    skin: &gltf::Skin,
+    node_parents: &std::collections::HashMap<usize, usize>,
+    node_to_bone: &std::collections::HashMap<usize, usize>,
     nodes_by_index: &[gltf::Node],
 ) -> gizmo_math::Mat4 {
     let mut root_transform = gizmo_math::Mat4::IDENTITY;
 
     let first_joint = match skin.joints().next() {
         Some(j) => j,
-        None    => return root_transform,
+        None => return root_transform,
     };
 
     let mut current_idx = first_joint.index();
@@ -807,7 +833,7 @@ fn compute_armature_root_transform(
 
     // Apply transforms from root downward (reverse of collection order).
     for mat in ancestor_transforms.into_iter().rev() {
-        root_transform = root_transform * mat;
+        root_transform *= mat;
     }
 
     root_transform

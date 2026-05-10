@@ -39,7 +39,7 @@ impl Mesh {
         );
         let bounds = gizmo_math::Aabb::from_points(vertices.iter().map(|v| v.position));
         let cpu_vertices = Arc::new(vertices.iter().map(|v| Vec3::from(v.position)).collect());
-        
+
         let mut lod_vbufs = Vec::new();
         let mut lod_vertex_counts = Vec::new();
 
@@ -50,15 +50,16 @@ impl Mesh {
 
             let mut unique_vertices = vec![crate::gpu_types::Vertex::default(); unique_count];
             for (i, &new_idx) in indices.iter().enumerate() {
-                unique_vertices[new_idx as usize] = vertices[i].clone();
+                unique_vertices[new_idx as usize] = vertices[i];
             }
-            
+
             let adapter = meshopt::VertexDataAdapter::new(
                 bytemuck::cast_slice(&unique_vertices),
                 std::mem::size_of::<crate::gpu_types::Vertex>(),
-                0
-            ).unwrap();
-            
+                0,
+            )
+            .unwrap();
+
             let target_count = (indices.len() as f32 * 0.5) as usize; // %50 decimation
             let lod1_indices = meshopt::simplify(
                 &indices,
@@ -66,23 +67,23 @@ impl Mesh {
                 target_count,
                 0.1, // %10 error tolerance
                 meshopt::SimplifyOptions::empty(),
-                None
+                None,
             );
-            
+
             // Eğer başarıyla decimation yapıldıysa ve gerçekten vertex sayısı düştüyse GPU'ya at
             if !lod1_indices.is_empty() && lod1_indices.len() < indices.len() {
                 // Flat vertex array'e geri döndür (Gizmo renderer flat bekliyor)
                 let mut lod_flat = Vec::with_capacity(lod1_indices.len());
                 for &idx in &lod1_indices {
-                    lod_flat.push(unique_vertices[idx as usize].clone());
+                    lod_flat.push(unique_vertices[idx as usize]);
                 }
-                
+
                 let lod_vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some(&format!("LOD1 VBuf: {}", source)),
                     contents: bytemuck::cast_slice(&lod_flat),
                     usage: wgpu::BufferUsages::VERTEX,
                 });
-                
+
                 lod_vbufs.push(Arc::new(lod_vbuf));
                 lod_vertex_counts.push(lod_flat.len() as u32);
             }

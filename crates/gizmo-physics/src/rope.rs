@@ -31,8 +31,12 @@ impl Rope {
         fix_end: bool,
     ) -> Self {
         let mut nodes = Vec::with_capacity(num_segments + 1);
-        let inv_mass = if node_mass > 0.0 { 1.0 / node_mass } else { 0.0 };
-        
+        let inv_mass = if node_mass > 0.0 {
+            1.0 / node_mass
+        } else {
+            0.0
+        };
+
         let dir_norm = direction.normalize_or_zero();
 
         for i in 0..=num_segments {
@@ -69,7 +73,7 @@ impl Rope {
 
             let velocity = (node.position - node.prev_position) / dt;
             node.prev_position = node.position;
-            
+
             // Add gravity and damping
             let new_vel = (velocity + gravity * dt) * self.damping.powf(dt);
             node.position += new_vel * dt;
@@ -79,16 +83,16 @@ impl Rope {
         // Compliance = inverse stiffness; clamp stiffness to [0, 1] to avoid negative alpha
         let compliance = (1.0 - self.stiffness.min(1.0)).max(0.0);
         let alpha = compliance / (dt * dt);
-        
+
         for _ in 0..self.iterations {
             for i in 0..(self.nodes.len() - 1) {
                 let n1 = self.nodes[i];
                 let n2 = self.nodes[i + 1];
-                
+
                 let w1 = n1.inv_mass;
                 let w2 = n2.inv_mass;
                 let w_sum = w1 + w2;
-                
+
                 if w_sum == 0.0 {
                     continue; // Both are fixed
                 }

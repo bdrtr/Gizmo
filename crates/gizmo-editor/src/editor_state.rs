@@ -49,6 +49,7 @@ pub enum EditorMode {
 }
 
 // --- Alt Durum Yapilari ---
+#[derive(Default)]
 pub struct CameraState {
     pub look_delta: Option<gizmo_math::Vec2>,
     pub pan_delta: Option<gizmo_math::Vec2>,
@@ -57,19 +58,6 @@ pub struct CameraState {
     pub view: Option<gizmo_math::Mat4>,
     pub proj: Option<gizmo_math::Mat4>,
     pub bookmarks: [Option<(gizmo_math::Vec3, f32, f32)>; 10],
-}
-impl Default for CameraState {
-    fn default() -> Self {
-        Self {
-            look_delta: None,
-            pan_delta: None,
-            orbit_delta: None,
-            scroll_delta: None,
-            view: None,
-            proj: None,
-            bookmarks: [None; 10],
-        }
-    }
 }
 
 pub struct BuildState {
@@ -116,6 +104,7 @@ impl Default for AssetBrowserState {
     }
 }
 
+#[derive(Default)]
 pub struct SceneState {
     pub save_request: Option<String>,
     pub load_request: Option<String>,
@@ -125,19 +114,8 @@ pub struct SceneState {
     pub gizmo_original_transforms:
         std::collections::HashMap<gizmo_core::entity::Entity, gizmo_physics::components::Transform>,
 }
-impl Default for SceneState {
-    fn default() -> Self {
-        Self {
-            save_request: None,
-            load_request: None,
-            clear_request: false,
-            rebuild_navmesh_request: false,
-            load_confirm_dialog: None,
-            gizmo_original_transforms: std::collections::HashMap::new(),
-        }
-    }
-}
 
+#[derive(Default)]
 pub struct SelectionState {
     pub entities: std::collections::HashSet<gizmo_core::entity::Entity>,
     pub primary: Option<gizmo_core::entity::Entity>,
@@ -146,36 +124,14 @@ pub struct SelectionState {
     pub rubber_band_current: Option<gizmo_math::Vec2>,
     pub rubber_band_request: Option<(gizmo_math::Vec2, gizmo_math::Vec2)>,
 }
-impl Default for SelectionState {
-    fn default() -> Self {
-        Self {
-            entities: std::collections::HashSet::new(),
-            primary: None,
-            highlight_box: None,
-            rubber_band_start: None,
-            rubber_band_current: None,
-            rubber_band_request: None,
-        }
-    }
-}
 
+#[derive(Default)]
 pub struct ScriptEditorState {
     pub open: bool,
     pub active_path: Option<String>,
     pub active_content: Option<String>,
     pub is_dirty: bool,
     pub pending_clear_confirm: bool,
-}
-impl Default for ScriptEditorState {
-    fn default() -> Self {
-        Self {
-            open: false,
-            active_path: None,
-            active_content: None,
-            is_dirty: false,
-            pending_clear_confirm: false,
-        }
-    }
 }
 
 pub struct ConsoleState {
@@ -299,7 +255,11 @@ pub struct EditorState {
 
     pub pending_json_updates: Vec<(
         gizmo_core::entity::Entity,
-        fn(&mut gizmo_core::World, gizmo_core::entity::Entity, serde_json::Value) -> Result<(), String>,
+        fn(
+            &mut gizmo_core::World,
+            gizmo_core::entity::Entity,
+            serde_json::Value,
+        ) -> Result<(), String>,
         serde_json::Value,
     )>,
 }
@@ -343,7 +303,7 @@ impl EditorState {
             selection: SelectionState::default(),
             console: ConsoleState::default(),
             script: ScriptEditorState::default(),
-            prefs: prefs,
+            prefs,
 
             despawn_requests: Vec::new(),
             generate_terrain_requests: Vec::new(),

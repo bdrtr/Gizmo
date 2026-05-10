@@ -4,8 +4,8 @@ use crate::{
     components::{Collider, RigidBody, Transform, Velocity},
     integrator::Integrator,
     raycast::{Ray, Raycast, RaycastHit},
-    solver::ConstraintSolver,
     soft_body::SoftBodyMesh,
+    solver::ConstraintSolver,
 };
 
 use gizmo_core::entity::Entity;
@@ -14,17 +14,26 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum ZoneShape {
-    Box { min: gizmo_math::Vec3, max: gizmo_math::Vec3 },
-    Sphere { center: gizmo_math::Vec3, radius: f32 },
+    Box {
+        min: gizmo_math::Vec3,
+        max: gizmo_math::Vec3,
+    },
+    Sphere {
+        center: gizmo_math::Vec3,
+        radius: f32,
+    },
 }
 
 impl ZoneShape {
     pub fn contains(&self, p: gizmo_math::Vec3) -> bool {
         match self {
             ZoneShape::Box { min, max } => {
-                p.x >= min.x && p.x <= max.x &&
-                p.y >= min.y && p.y <= max.y &&
-                p.z >= min.z && p.z <= max.z
+                p.x >= min.x
+                    && p.x <= max.x
+                    && p.y >= min.y
+                    && p.y <= max.y
+                    && p.z >= min.z
+                    && p.z <= max.z
             }
             ZoneShape::Sphere { center, radius } => {
                 (p - *center).length_squared() <= radius * radius
@@ -52,7 +61,7 @@ pub struct FluidZone {
 
 /// Sabit iç fizik frekansı (Hz) - 240Hz (Sub-stepping ile mükemmel çarpışma tespiti)
 const PHYSICS_HZ: f32 = 240.0;
-const FIXED_DT:   f32 = 1.0 / PHYSICS_HZ;
+const FIXED_DT: f32 = 1.0 / PHYSICS_HZ;
 /// Sub-step başına maksimum adım sayısı — spiral'i önler
 const MAX_SUBSTEPS: u32 = 64; // Increased from 8 to support larger DTs without losing simulation time
 
@@ -84,19 +93,19 @@ pub struct PhysicsWorld {
     pub joints: Vec<crate::joints::Joint>,
     #[serde(skip)]
     pub joint_solver: crate::joints::JointSolver,
-    
+
     pub gravity_fields: Vec<GravityField>,
     pub fluid_zones: Vec<FluidZone>,
-    
+
     #[serde(skip)]
     #[cfg(feature = "gpu_physics")]
     pub gpu_compute: Option<crate::gpu_compute::GpuCompute>,
     #[serde(skip)]
     pub(crate) contact_cache: HashMap<(Entity, Entity), (bool, Option<ContactManifold>)>,
-    
+
     pub accumulator: f32,
     pub render_alpha: f32,
-    
+
     #[serde(skip)]
     pub metrics: crate::island::PhysicsMetrics,
 
@@ -107,7 +116,7 @@ pub struct PhysicsWorld {
     pub velocities: Vec<Velocity>,
     pub colliders: Vec<Collider>,
     pub entity_index_map: HashMap<u32, usize>,
-    
+
     // Timeline and Debugging
     #[serde(skip)]
     pub is_paused: bool,
@@ -118,7 +127,7 @@ pub struct PhysicsWorld {
     #[serde(skip)]
     pub history: std::collections::VecDeque<PhysicsStateSnapshot>,
     pub max_history_frames: usize,
-    
+
     #[serde(skip)]
     pub watchlist: std::collections::HashSet<Entity>,
 }
@@ -181,14 +190,25 @@ impl PhysicsWorld {
 
     // ── SoA Body Management ───────────────────────────────────────────────────
 
-    pub fn add_body(&mut self, entity: Entity, rb: RigidBody, t: Transform, v: Velocity, c: Collider) {
+    pub fn add_body(
+        &mut self,
+        entity: Entity,
+        rb: RigidBody,
+        t: Transform,
+        v: Velocity,
+        c: Collider,
+    ) {
         let idx = self.entities.len();
-        
+
         let mut aabb = c.compute_aabb(t.position, t.rotation);
         if rb.ccd_enabled {
             let movement = v.linear * (1.0 / 60.0); // Fatten by max expected delta movement
-            let min_mov = aabb.min.min((gizmo_math::Vec3::from(aabb.min) + movement).into());
-            let max_mov = aabb.max.max((gizmo_math::Vec3::from(aabb.max) + movement).into());
+            let min_mov = aabb
+                .min
+                .min((gizmo_math::Vec3::from(aabb.min) + movement).into());
+            let max_mov = aabb
+                .max
+                .max((gizmo_math::Vec3::from(aabb.max) + movement).into());
             aabb = gizmo_math::Aabb::new(min_mov, max_mov);
         }
         self.spatial_hash.insert(entity, aabb);
@@ -211,7 +231,10 @@ impl PhysicsWorld {
         self.spatial_hash.clear();
     }
 
-    pub fn sync_bodies<'a>(&mut self, incoming_bodies: impl Iterator<Item = &'a (Entity, RigidBody, Transform, Velocity, Collider)>) {
+    pub fn sync_bodies<'a>(
+        &mut self,
+        incoming_bodies: impl Iterator<Item = &'a (Entity, RigidBody, Transform, Velocity, Collider)>,
+    ) {
         let mut active_ids = std::collections::HashSet::new();
 
         for (entity, rb, trans, vel, col) in incoming_bodies {
@@ -220,25 +243,29 @@ impl PhysicsWorld {
 
             if let Some(&idx) = self.entity_index_map.get(&e_id) {
                 // Update existing body without dropping/allocating mappings
-                self.rigid_bodies[idx] = rb.clone();
-                self.transforms[idx] = trans.clone();
-                self.velocities[idx] = vel.clone();
-                
+                self.rigid_bodies[idx] = *rb;
+                self.transforms[idx] = *trans;
+                self.velocities[idx] = *vel;
+
                 // Shapes use Arc internally, so clone is cheap
                 self.colliders[idx] = col.clone();
-                
+
                 // Update spatial hash (Fatten for CCD if enabled)
                 let mut aabb = col.compute_aabb(trans.position, trans.rotation);
                 if rb.ccd_enabled {
                     let movement = vel.linear * (1.0 / 60.0);
-                    let min_mov = aabb.min.min((gizmo_math::Vec3::from(aabb.min) + movement).into());
-                    let max_mov = aabb.max.max((gizmo_math::Vec3::from(aabb.max) + movement).into());
+                    let min_mov = aabb
+                        .min
+                        .min((gizmo_math::Vec3::from(aabb.min) + movement).into());
+                    let max_mov = aabb
+                        .max
+                        .max((gizmo_math::Vec3::from(aabb.max) + movement).into());
                     aabb = gizmo_math::Aabb::new(min_mov, max_mov);
                 }
                 self.spatial_hash.update(*entity, aabb);
             } else {
                 // Add new body
-                self.add_body(*entity, rb.clone(), trans.clone(), vel.clone(), col.clone());
+                self.add_body(*entity, *rb, *trans, *vel, col.clone());
             }
         }
 
@@ -256,19 +283,19 @@ impl PhysicsWorld {
     pub fn remove_body_at(&mut self, idx: usize) {
         let last_idx = self.entities.len() - 1;
         let entity = self.entities[idx];
-        
+
         self.spatial_hash.remove(entity);
         self.entity_index_map.remove(&entity.id());
 
         if idx != last_idx {
             let last_entity = self.entities[last_idx];
-            
+
             self.entities.swap(idx, last_idx);
             self.rigid_bodies.swap(idx, last_idx);
             self.transforms.swap(idx, last_idx);
             self.velocities.swap(idx, last_idx);
             self.colliders.swap(idx, last_idx);
-            
+
             self.entity_index_map.insert(last_entity.id(), idx);
         }
 
@@ -360,7 +387,11 @@ impl PhysicsWorld {
         dt: f32,
     ) -> Result<(), crate::error::GizmoError> {
         // Energy Conservation Check: Record initial energy (Zero-cost in release mode)
-        let _initial_energy = if cfg!(debug_assertions) { self.calculate_total_energy() } else { 0.0 };
+        let _initial_energy = if cfg!(debug_assertions) {
+            self.calculate_total_energy()
+        } else {
+            0.0
+        };
 
         // 0-1. Yerçekimi, sıvı bölgeleri, hız entegrasyonu
         self.velocity_integration_step(dt)?;
@@ -387,7 +418,6 @@ impl PhysicsWorld {
 
         Ok(())
     }
-
 
     /// Get collision events from last step
     pub fn collision_events(&self) -> &[CollisionEvent] {
@@ -423,15 +453,13 @@ impl PhysicsWorld {
     }
 
     /// Perform a raycast against all bodies
-    pub fn raycast(
-        &self,
-        ray: &Ray,
-        max_distance: f32,
-    ) -> Option<RaycastHit> {
+    pub fn raycast(&self, ray: &Ray, max_distance: f32) -> Option<RaycastHit> {
         let mut closest_hit: Option<RaycastHit> = None;
         let mut closest_distance = max_distance;
 
-        let potential_hits = self.spatial_hash.query_ray(ray.origin, ray.direction, max_distance);
+        let potential_hits = self
+            .spatial_hash
+            .query_ray(ray.origin, ray.direction, max_distance);
 
         for (entity, _aabb_t) in potential_hits {
             if let Some(&i) = self.entity_index_map.get(&entity.id()) {
@@ -439,7 +467,9 @@ impl PhysicsWorld {
                 let collider = &self.colliders[i];
 
                 // Detailed shape test
-                if let Some((distance, normal)) = Raycast::ray_shape(ray, &collider.shape, transform) {
+                if let Some((distance, normal)) =
+                    Raycast::ray_shape(ray, &collider.shape, transform)
+                {
                     if distance < closest_distance {
                         closest_distance = distance;
                         closest_hit = Some(RaycastHit {
@@ -457,14 +487,12 @@ impl PhysicsWorld {
     }
 
     /// Perform a raycast and return all hits
-    pub fn raycast_all(
-        &self,
-        ray: &Ray,
-        max_distance: f32,
-    ) -> Vec<RaycastHit> {
+    pub fn raycast_all(&self, ray: &Ray, max_distance: f32) -> Vec<RaycastHit> {
         let mut hits = Vec::new();
 
-        let potential_hits = self.spatial_hash.query_ray(ray.origin, ray.direction, max_distance);
+        let potential_hits = self
+            .spatial_hash
+            .query_ray(ray.origin, ray.direction, max_distance);
 
         for (entity, _aabb_t) in potential_hits {
             if let Some(&i) = self.entity_index_map.get(&entity.id()) {
@@ -472,7 +500,9 @@ impl PhysicsWorld {
                 let collider = &self.colliders[i];
 
                 // Detailed shape test
-                if let Some((distance, normal)) = Raycast::ray_shape(ray, &collider.shape, transform) {
+                if let Some((distance, normal)) =
+                    Raycast::ray_shape(ray, &collider.shape, transform)
+                {
                     hits.push(RaycastHit {
                         entity,
                         point: ray.point_at(distance),
@@ -496,7 +526,7 @@ impl PhysicsWorld {
             .unwrap()
             .as_secs();
         let filename = format!("physics_snapshot_{}.json", timestamp);
-        
+
         match std::fs::File::create(&filename) {
             Ok(file) => {
                 if let Err(e) = serde_json::to_writer_pretty(file, self) {
@@ -515,31 +545,30 @@ impl PhysicsWorld {
     pub fn calculate_total_energy(&self) -> f32 {
         let default_gravity = self.integrator.gravity;
         let mut total_energy = 0.0;
-        
+
         for i in 0..self.entities.len() {
             let rb = &self.rigid_bodies[i];
             let vel = &self.velocities[i];
             let trans = &self.transforms[i];
-            
+
             if rb.is_dynamic() && !rb.is_sleeping {
                 // Kinetic Energy: 1/2 * m * v^2
                 let ke_linear = 0.5 * rb.mass * vel.linear.length_squared();
-                
+
                 // Rotational Kinetic Energy: 1/2 * I * w^2
                 // Approximation using scalar local inertia for speed
-                let ke_angular = 0.5 * (
-            rb.local_inertia.x * vel.angular.x * vel.angular.x +
-            rb.local_inertia.y * vel.angular.y * vel.angular.y +
-            rb.local_inertia.z * vel.angular.z * vel.angular.z
-        );
-                
+                let ke_angular = 0.5
+                    * (rb.local_inertia.x * vel.angular.x * vel.angular.x
+                        + rb.local_inertia.y * vel.angular.y * vel.angular.y
+                        + rb.local_inertia.z * vel.angular.z * vel.angular.z);
+
                 // Potential Energy: m * g * h
                 let pe = if rb.use_gravity {
                     -rb.mass * default_gravity.dot(trans.position)
                 } else {
                     0.0
                 };
-                
+
                 total_energy += ke_linear + ke_angular + pe;
             }
         }

@@ -120,8 +120,8 @@ pub struct SceneUniforms {
     pub _align_pad: [u32; 3],     // offset 1072-1083 (WGSL _align_pad: vec3<u32>)
     pub _post_align_pad: u32,     // offset 1084-1087 (WGSL implicit padding, next vec3 align 16)
     pub _pad_scene: [u32; 3],     // offset 1088-1099 (WGSL _pad_scene: vec3<u32>)
-    pub shading_mode: u32,        // offset 1100-1103 (WGSL shading_mode: u32) 0=Lit, 1=Normals, 2=Albedo
-                                  // Total: 1104 bytes
+    pub shading_mode: u32, // offset 1100-1103 (WGSL shading_mode: u32) 0=Lit, 1=Normals, 2=Albedo
+                           // Total: 1104 bytes
 }
 
 #[repr(C)]

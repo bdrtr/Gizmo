@@ -1,6 +1,6 @@
 use crate::components::{ColliderShape, Transform};
-use gizmo_math::Aabb;
 use gizmo_core::entity::Entity;
+use gizmo_math::Aabb;
 use gizmo_math::Vec3;
 
 /// Ray for raycasting
@@ -143,11 +143,11 @@ impl Raycast {
 
             let epsilon = 1e-4;
             for i in 0..3 {
-                if (local_hit[i] - half_extents[i]).abs() < epsilon { 
-                    normal[i] = 1.0; 
+                if (local_hit[i] - half_extents[i]).abs() < epsilon {
+                    normal[i] = 1.0;
                 }
-                if (local_hit[i] + half_extents[i]).abs() < epsilon { 
-                    normal[i] = -1.0; 
+                if (local_hit[i] + half_extents[i]).abs() < epsilon {
+                    normal[i] = -1.0;
                 }
             }
             normal = normal.try_normalize().unwrap_or(Vec3::Y);
@@ -198,7 +198,9 @@ impl Raycast {
                 let y = baoc + t * bard;
                 if y > 0.0 && y < baba {
                     let hit_point = local_origin + local_dir * t;
-                    let normal = (hit_point - (p1 + ba * (y / baba))).try_normalize().unwrap_or(Vec3::Y);
+                    let normal = (hit_point - (p1 + ba * (y / baba)))
+                        .try_normalize()
+                        .unwrap_or(Vec3::Y);
                     let world_normal = rotation * normal;
                     return Some((t, world_normal));
                 }
@@ -274,39 +276,45 @@ impl Raycast {
                 let local_origin = inv_rot * (ray.origin - transform.position);
                 let local_dir = inv_rot * ray.direction;
                 let local_ray = Ray::new(local_origin, local_dir);
-                
+
                 if !tm.bvh.nodes.is_empty() {
                     let mut stack = Vec::with_capacity(64);
                     stack.push(0); // root node
-                    
+
                     while let Some(node_idx) = stack.pop() {
                         let node = &tm.bvh.nodes[node_idx];
-                        
+
                         // Check AABB
                         if Self::ray_aabb(&local_ray, &node.aabb).is_none() {
                             continue;
                         }
-                        
+
                         if node.is_leaf() {
                             let start = (node.first_tri_index * 3) as usize;
                             let end = start + (node.tri_count * 3) as usize;
                             for i in (start..end).step_by(3) {
                                 let v0 = tm.vertices[tm.indices[i] as usize];
-                                let v1 = tm.vertices[tm.indices[i+1] as usize];
-                                let v2 = tm.vertices[tm.indices[i+2] as usize];
-                                
+                                let v1 = tm.vertices[tm.indices[i + 1] as usize];
+                                let v2 = tm.vertices[tm.indices[i + 2] as usize];
+
                                 let e1 = v1 - v0;
                                 let e2 = v2 - v0;
                                 let h = local_dir.cross(e2);
                                 let a = e1.dot(h);
-                                if a.abs() < 1e-6 { continue; }
+                                if a.abs() < 1e-6 {
+                                    continue;
+                                }
                                 let f = 1.0 / a;
                                 let s = local_origin - v0;
                                 let u = f * s.dot(h);
-                                if u < 0.0 || u > 1.0 { continue; }
+                                if !(0.0..=1.0).contains(&u) {
+                                    continue;
+                                }
                                 let q = s.cross(e1);
                                 let v = f * local_dir.dot(q);
-                                if v < 0.0 || u + v > 1.0 { continue; }
+                                if v < 0.0 || u + v > 1.0 {
+                                    continue;
+                                }
                                 let t = f * e2.dot(q);
                                 if t > 0.0 && t < best_t {
                                     best_t = t;
@@ -317,8 +325,12 @@ impl Raycast {
                                 }
                             }
                         } else {
-                            if node.left_child >= 0 { stack.push(node.left_child as usize); }
-                            if node.right_child >= 0 { stack.push(node.right_child as usize); }
+                            if node.left_child >= 0 {
+                                stack.push(node.left_child as usize);
+                            }
+                            if node.right_child >= 0 {
+                                stack.push(node.right_child as usize);
+                            }
                         }
                     }
                 } else {
@@ -331,14 +343,20 @@ impl Raycast {
                         let e2 = v2 - v0;
                         let h = local_dir.cross(e2);
                         let a = e1.dot(h);
-                        if a.abs() < 1e-6 { continue; }
+                        if a.abs() < 1e-6 {
+                            continue;
+                        }
                         let f = 1.0 / a;
                         let s = local_origin - v0;
                         let u = f * s.dot(h);
-                        if u < 0.0 || u > 1.0 { continue; }
+                        if !(0.0..=1.0).contains(&u) {
+                            continue;
+                        }
                         let q = s.cross(e1);
                         let v = f * local_dir.dot(q);
-                        if v < 0.0 || u + v > 1.0 { continue; }
+                        if v < 0.0 || u + v > 1.0 {
+                            continue;
+                        }
                         let t = f * e2.dot(q);
                         if t > 0.0 && t < best_t {
                             best_t = t;
@@ -349,7 +367,7 @@ impl Raycast {
                         }
                     }
                 }
-                
+
                 if best_t < f32::INFINITY {
                     Some((best_t, transform.rotation * best_normal))
                 } else {
@@ -360,12 +378,16 @@ impl Raycast {
                 let mut min = Vec3::splat(f32::MAX);
                 let mut max = Vec3::splat(f32::MIN);
                 for v in ch.vertices.iter() {
-                    min.x = min.x.min(v.x); min.y = min.y.min(v.y); min.z = min.z.min(v.z);
-                    max.x = max.x.max(v.x); max.y = max.y.max(v.y); max.z = max.z.max(v.z);
+                    min.x = min.x.min(v.x);
+                    min.y = min.y.min(v.y);
+                    min.z = min.z.min(v.z);
+                    max.x = max.x.max(v.x);
+                    max.y = max.y.max(v.y);
+                    max.z = max.z.max(v.z);
                 }
                 let center = (min + max) * 0.5;
                 let half_extents = (max - min) * 0.5;
-                
+
                 // Adjust transform to local space of the original transform
                 let world_center = transform.position + transform.rotation * center;
                 Self::ray_box(ray, world_center, transform.rotation, half_extents)
@@ -374,9 +396,11 @@ impl Raycast {
                 let mut closest_dist = f32::MAX;
                 let mut closest_normal = Vec3::ZERO;
                 for (local_t, sub_shape) in shapes {
-                    let world_pos = transform.position + transform.rotation.mul_vec3(local_t.position);
+                    let world_pos =
+                        transform.position + transform.rotation.mul_vec3(local_t.position);
                     let world_rot = transform.rotation * local_t.rotation;
-                    let world_t = crate::components::Transform::new(world_pos).with_rotation(world_rot);
+                    let world_t =
+                        crate::components::Transform::new(world_pos).with_rotation(world_rot);
                     if let Some((d, n)) = Self::ray_shape(ray, sub_shape, &world_t) {
                         if d < closest_dist {
                             closest_dist = d;
@@ -460,7 +484,7 @@ mod tests {
         let ray = Ray::new(Vec3::new(0.0, 10.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
         let center = Vec3::ZERO;
         // The ray is parallel to the Y axis (the capsule's internal axis).
-        // It hits the top sphere cap. The height is half_height = 1.0. 
+        // It hits the top sphere cap. The height is half_height = 1.0.
         // The top sphere cap is centered at Y=1.0 with radius 1.0. Hit should be at Y=2.0.
         let result = Raycast::ray_capsule(&ray, center, gizmo_math::Quat::IDENTITY, 1.0, 1.0);
         assert!(result.is_some());
@@ -472,9 +496,12 @@ mod tests {
     #[test]
     fn test_ray_plane_backface() {
         // Plane is at Z=0, pointing towards +Z.
-        let plane = crate::components::PlaneShape { normal: Vec3::Z, distance: 0.0 };
+        let plane = crate::components::PlaneShape {
+            normal: Vec3::Z,
+            distance: 0.0,
+        };
         let shape = ColliderShape::Plane(plane);
-        
+
         // Ray from -5 looking towards +Z
         let ray = Ray::new(Vec3::new(0.0, 0.0, -5.0), Vec3::new(0.0, 0.0, 1.0));
         let result = Raycast::ray_shape(&ray, &shape, &Transform::new(Vec3::ZERO));

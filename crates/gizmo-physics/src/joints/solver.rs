@@ -1,6 +1,6 @@
+use super::data::*;
 use crate::components::{RigidBody, Transform, Velocity};
 use gizmo_math::Vec3;
-use super::data::*;
 
 pub struct JointSolver {
     pub iterations: usize,
@@ -11,7 +11,7 @@ pub struct JointSolver {
 
 impl Default for JointSolver {
     fn default() -> Self {
-        Self { 
+        Self {
             iterations: 10,
             max_correction_speed: 5.0,
             max_angular_speed: 5.0,
@@ -22,25 +22,82 @@ impl Default for JointSolver {
 
 impl JointSolver {
     pub fn new(iterations: usize) -> Self {
-        Self { iterations, ..Default::default() }
+        Self {
+            iterations,
+            ..Default::default()
+        }
     }
 
-    pub fn solve_joints(&self, joints: &mut [Joint], entity_index_map: &std::collections::HashMap<u32, usize>, rigid_bodies: &[RigidBody], transforms: &[Transform], velocities: &mut [Velocity], dt: f32) {
+    pub fn solve_joints(
+        &self,
+        joints: &mut [Joint],
+        entity_index_map: &std::collections::HashMap<u32, usize>,
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        dt: f32,
+    ) {
         for _ in 0..self.iterations {
             for joint in joints.iter_mut() {
-                if joint.is_broken { continue; }
+                if joint.is_broken {
+                    continue;
+                }
 
                 let idx_a = entity_index_map.get(&joint.entity_a.id()).copied();
                 let idx_b = entity_index_map.get(&joint.entity_b.id()).copied();
-                let (Some(idx_a), Some(idx_b)) = (idx_a, idx_b) else { continue; };
-                if idx_a == idx_b { continue; }
+                let (Some(idx_a), Some(idx_b)) = (idx_a, idx_b) else {
+                    continue;
+                };
+                if idx_a == idx_b {
+                    continue;
+                }
 
                 match joint.joint_type() {
-                    "Fixed"    => self.solve_fixed_joint(joint, rigid_bodies, transforms, velocities, idx_a, idx_b, dt),
-                    "Hinge"    => self.solve_hinge_joint(joint, rigid_bodies, transforms, velocities, idx_a, idx_b, dt),
-                    "BallSocket" => self.solve_ball_socket_joint(joint, rigid_bodies, transforms, velocities, idx_a, idx_b, dt),
-                    "Slider"   => self.solve_slider_joint(joint, rigid_bodies, transforms, velocities, idx_a, idx_b, dt),
-                    "Spring"   => self.solve_spring_joint(joint, rigid_bodies, transforms, velocities, idx_a, idx_b, dt),
+                    "Fixed" => self.solve_fixed_joint(
+                        joint,
+                        rigid_bodies,
+                        transforms,
+                        velocities,
+                        idx_a,
+                        idx_b,
+                        dt,
+                    ),
+                    "Hinge" => self.solve_hinge_joint(
+                        joint,
+                        rigid_bodies,
+                        transforms,
+                        velocities,
+                        idx_a,
+                        idx_b,
+                        dt,
+                    ),
+                    "BallSocket" => self.solve_ball_socket_joint(
+                        joint,
+                        rigid_bodies,
+                        transforms,
+                        velocities,
+                        idx_a,
+                        idx_b,
+                        dt,
+                    ),
+                    "Slider" => self.solve_slider_joint(
+                        joint,
+                        rigid_bodies,
+                        transforms,
+                        velocities,
+                        idx_a,
+                        idx_b,
+                        dt,
+                    ),
+                    "Spring" => self.solve_spring_joint(
+                        joint,
+                        rigid_bodies,
+                        transforms,
+                        velocities,
+                        idx_a,
+                        idx_b,
+                        dt,
+                    ),
                     _ => {}
                 }
             }
@@ -63,7 +120,9 @@ impl JointSolver {
     /// `error` is the positional error in radians (positive = bodies need to rotate apart).
     fn apply_angular_constraint(
         &self,
-        rigid_bodies: &[RigidBody], transforms: &[Transform], velocities: &mut [Velocity],
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
         direction: Vec3,
@@ -72,20 +131,25 @@ impl JointSolver {
         lambda_min: f32,
         lambda_max: f32,
     ) -> f32 {
-        if direction.length_squared() < 1e-10 { return 0.0; }
+        if direction.length_squared() < 1e-10 {
+            return 0.0;
+        }
 
         let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
         let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
-        let w_a    = velocities[idx_a].angular;
-        let w_b    = velocities[idx_b].angular;
-        let dyn_a  = rigid_bodies[idx_a].is_dynamic();
-        let dyn_b  = rigid_bodies[idx_b].is_dynamic();
+        let w_a = velocities[idx_a].angular;
+        let w_b = velocities[idx_b].angular;
+        let dyn_a = rigid_bodies[idx_a].is_dynamic();
+        let dyn_b = rigid_bodies[idx_b].is_dynamic();
 
         let k = direction.dot(inv_i_a * direction) + direction.dot(inv_i_b * direction);
-        if k < 1e-10 { return 0.0; }
+        if k < 1e-10 {
+            return 0.0;
+        }
 
         let vel_err = (w_b - w_a).dot(direction);
-        let position_bias = (self.position_bias * error / dt).clamp(-self.max_angular_speed, self.max_angular_speed);
+        let position_bias = (self.position_bias * error / dt)
+            .clamp(-self.max_angular_speed, self.max_angular_speed);
         let lambda = ((-vel_err + position_bias) / k).clamp(lambda_min, lambda_max);
 
         let delta_a = inv_i_a * direction * lambda;
@@ -93,12 +157,20 @@ impl JointSolver {
 
         if idx_a < idx_b {
             let (l, r) = velocities.split_at_mut(idx_b);
-            if dyn_a { l[idx_a].angular -= delta_a; }
-            if dyn_b { r[0].angular     += delta_b; }
+            if dyn_a {
+                l[idx_a].angular -= delta_a;
+            }
+            if dyn_b {
+                r[0].angular += delta_b;
+            }
         } else {
             let (l, r) = velocities.split_at_mut(idx_a);
-            if dyn_b { l[idx_b].angular += delta_b; }
-            if dyn_a { r[0].angular     -= delta_a; }
+            if dyn_b {
+                l[idx_b].angular += delta_b;
+            }
+            if dyn_a {
+                r[0].angular -= delta_a;
+            }
         }
         lambda
     }
@@ -106,7 +178,9 @@ impl JointSolver {
     /// Apply a 1-DOF linear velocity constraint along `direction` at the anchor points.
     fn apply_linear_constraint(
         &self,
-        rigid_bodies: &[RigidBody], transforms: &[Transform], velocities: &mut [Velocity],
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
         direction: Vec3,
@@ -117,10 +191,10 @@ impl JointSolver {
         lambda_min: f32,
         lambda_max: f32,
     ) -> f32 {
-        let inv_m_a  = rigid_bodies[idx_a].inv_mass();
-        let inv_m_b  = rigid_bodies[idx_b].inv_mass();
-        let inv_i_a  = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
-        let inv_i_b  = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
+        let inv_m_a = rigid_bodies[idx_a].inv_mass();
+        let inv_m_b = rigid_bodies[idx_b].inv_mass();
+        let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
+        let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
         let v_a = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
         let v_b = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
         let dyn_a = rigid_bodies[idx_a].is_dynamic();
@@ -129,10 +203,13 @@ impl JointSolver {
         let ang_a = (inv_i_a * r_a.cross(direction)).cross(r_a);
         let ang_b = (inv_i_b * r_b.cross(direction)).cross(r_b);
         let k = inv_m_a + inv_m_b + ang_a.dot(direction) + ang_b.dot(direction);
-        if k < 1e-10 { return 0.0; }
+        if k < 1e-10 {
+            return 0.0;
+        }
 
         let rel_vel = (v_b - v_a).dot(direction);
-        let position_bias = (self.position_bias * error / dt).clamp(-self.max_correction_speed, self.max_correction_speed);
+        let position_bias = (self.position_bias * error / dt)
+            .clamp(-self.max_correction_speed, self.max_correction_speed);
         let lambda = ((-rel_vel + position_bias) / k).clamp(lambda_min, lambda_max);
 
         let impulse = direction * lambda;
@@ -140,21 +217,21 @@ impl JointSolver {
         if idx_a < idx_b {
             let (l, r) = velocities.split_at_mut(idx_b);
             if dyn_a {
-                l[idx_a].linear  -= impulse * inv_m_a;
+                l[idx_a].linear -= impulse * inv_m_a;
                 l[idx_a].angular -= inv_i_a * r_a.cross(impulse);
             }
             if dyn_b {
-                r[0].linear  += impulse * inv_m_b;
+                r[0].linear += impulse * inv_m_b;
                 r[0].angular += inv_i_b * r_b.cross(impulse);
             }
         } else {
             let (l, r) = velocities.split_at_mut(idx_a);
             if dyn_b {
-                l[idx_b].linear  += impulse * inv_m_b;
+                l[idx_b].linear += impulse * inv_m_b;
                 l[idx_b].angular += inv_i_b * r_b.cross(impulse);
             }
             if dyn_a {
-                r[0].linear  -= impulse * inv_m_a;
+                r[0].linear -= impulse * inv_m_a;
                 r[0].angular -= inv_i_a * r_a.cross(impulse);
             }
         }
@@ -166,17 +243,23 @@ impl JointSolver {
     fn solve_fixed_joint(
         &self,
         joint: &mut Joint,
-        rigid_bodies: &[RigidBody], transforms: &[Transform], velocities: &mut [Velocity],
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
         dt: f32,
     ) {
-        let anchor_a = transforms[idx_a].position + transforms[idx_a].rotation * joint.local_anchor_a;
-        let anchor_b = transforms[idx_b].position + transforms[idx_b].rotation * joint.local_anchor_b;
-        let error    = anchor_a - anchor_b; // target = a, current = b, so error = a - b
-        let err_len  = error.length();
+        let anchor_a =
+            transforms[idx_a].position + transforms[idx_a].rotation * joint.local_anchor_a;
+        let anchor_b =
+            transforms[idx_b].position + transforms[idx_b].rotation * joint.local_anchor_b;
+        let error = anchor_a - anchor_b; // target = a, current = b, so error = a - b
+        let err_len = error.length();
 
-        if err_len < 0.0001 { return; }
+        if err_len < 0.0001 {
+            return;
+        }
 
         let r_a = anchor_a - transforms[idx_a].position;
         let r_b = anchor_b - transforms[idx_b].position;
@@ -185,9 +268,54 @@ impl JointSolver {
         let min_impulse = f32::MIN;
 
         let mut impulse_sum = 0.0;
-        impulse_sum += self.apply_linear_constraint(rigid_bodies, transforms, velocities, idx_a, idx_b, Vec3::new(1.0, 0.0, 0.0), r_a, r_b, error.x, dt, min_impulse, max_impulse).abs();
-        impulse_sum += self.apply_linear_constraint(rigid_bodies, transforms, velocities, idx_a, idx_b, Vec3::new(0.0, 1.0, 0.0), r_a, r_b, error.y, dt, min_impulse, max_impulse).abs();
-        impulse_sum += self.apply_linear_constraint(rigid_bodies, transforms, velocities, idx_a, idx_b, Vec3::new(0.0, 0.0, 1.0), r_a, r_b, error.z, dt, min_impulse, max_impulse).abs();
+        impulse_sum += self
+            .apply_linear_constraint(
+                rigid_bodies,
+                transforms,
+                velocities,
+                idx_a,
+                idx_b,
+                Vec3::new(1.0, 0.0, 0.0),
+                r_a,
+                r_b,
+                error.x,
+                dt,
+                min_impulse,
+                max_impulse,
+            )
+            .abs();
+        impulse_sum += self
+            .apply_linear_constraint(
+                rigid_bodies,
+                transforms,
+                velocities,
+                idx_a,
+                idx_b,
+                Vec3::new(0.0, 1.0, 0.0),
+                r_a,
+                r_b,
+                error.y,
+                dt,
+                min_impulse,
+                max_impulse,
+            )
+            .abs();
+        impulse_sum += self
+            .apply_linear_constraint(
+                rigid_bodies,
+                transforms,
+                velocities,
+                idx_a,
+                idx_b,
+                Vec3::new(0.0, 0.0, 1.0),
+                r_a,
+                r_b,
+                error.z,
+                dt,
+                min_impulse,
+                max_impulse,
+            )
+            .abs();
 
         if impulse_sum / dt > joint.break_force {
             joint.is_broken = true;
@@ -197,20 +325,32 @@ impl JointSolver {
     fn solve_hinge_joint(
         &self,
         joint: &mut Joint,
-        rigid_bodies: &[RigidBody], transforms: &[Transform], velocities: &mut [Velocity],
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
         dt: f32,
     ) {
         // 1. Position constraint — keep anchor points together
-        self.solve_fixed_joint(joint, rigid_bodies, transforms, velocities, idx_a, idx_b, dt);
+        self.solve_fixed_joint(
+            joint,
+            rigid_bodies,
+            transforms,
+            velocities,
+            idx_a,
+            idx_b,
+            dt,
+        );
 
-        let JointData::Hinge(ref mut data) = joint.data else { return };
+        let JointData::Hinge(ref mut data) = joint.data else {
+            return;
+        };
 
-        let rot_a    = transforms[idx_a].rotation;
-        let rot_b    = transforms[idx_b].rotation;
-        let axis_a   = rot_a * data.axis;
-        let axis_b   = rot_b * data.axis;
+        let rot_a = transforms[idx_a].rotation;
+        let rot_b = transforms[idx_b].rotation;
+        let axis_a = rot_a * data.axis;
+        let axis_b = rot_b * data.axis;
 
         // 2. Angular constraint — keep hinge axes aligned (2 DOF)
         let ang_err = axis_a.cross(axis_b);
@@ -218,7 +358,20 @@ impl JointSolver {
         let mut total_ang_impulse = 0.0;
         if err_mag > 1e-6 {
             let err_dir = ang_err / err_mag;
-            total_ang_impulse += self.apply_angular_constraint(rigid_bodies, transforms, velocities, idx_a, idx_b, err_dir, -err_mag, dt, f32::NEG_INFINITY, f32::INFINITY).abs();
+            total_ang_impulse += self
+                .apply_angular_constraint(
+                    rigid_bodies,
+                    transforms,
+                    velocities,
+                    idx_a,
+                    idx_b,
+                    err_dir,
+                    -err_mag,
+                    dt,
+                    f32::NEG_INFINITY,
+                    f32::INFINITY,
+                )
+                .abs();
         }
 
         // 3. Track current angle
@@ -230,7 +383,7 @@ impl JointSolver {
 
         let rot_a = transforms[idx_a].rotation;
         let rot_b = transforms[idx_b].rotation;
-        let axis_w  = rot_a * data.axis;
+        let axis_w = rot_a * data.axis;
         let ref_a_w = rot_a * ref_local;
         let ref_b_w = rot_b * ref_local;
 
@@ -238,8 +391,12 @@ impl JointSolver {
         let proj_b = (ref_b_w - axis_w * ref_b_w.dot(axis_w)).normalize_or_zero();
 
         if proj_a.length_squared() > 0.01 && proj_b.length_squared() > 0.01 {
-            let cos_a  = proj_a.dot(proj_b).clamp(-1.0, 1.0);
-            let sign   = if proj_a.cross(proj_b).dot(axis_w) >= 0.0 { 1.0_f32 } else { -1.0 };
+            let cos_a = proj_a.dot(proj_b).clamp(-1.0, 1.0);
+            let sign = if proj_a.cross(proj_b).dot(axis_w) >= 0.0 {
+                1.0_f32
+            } else {
+                -1.0
+            };
             data.current_angle = sign * cos_a.acos();
 
             // 4. Angle limits
@@ -247,20 +404,40 @@ impl JointSolver {
                 if data.current_angle < data.lower_limit {
                     let err = data.lower_limit - data.current_angle;
                     // axis_w points from A to B; positive lambda increases angle
-                    total_ang_impulse += self.apply_angular_constraint(
-                        rigid_bodies, transforms, velocities, idx_a, idx_b, axis_w, err, dt,
-                        0.0, f32::INFINITY,
-                    ).abs();
+                    total_ang_impulse += self
+                        .apply_angular_constraint(
+                            rigid_bodies,
+                            transforms,
+                            velocities,
+                            idx_a,
+                            idx_b,
+                            axis_w,
+                            err,
+                            dt,
+                            0.0,
+                            f32::INFINITY,
+                        )
+                        .abs();
                 } else if data.current_angle > data.upper_limit {
                     let err = data.upper_limit - data.current_angle; // negative
-                    total_ang_impulse += self.apply_angular_constraint(
-                        rigid_bodies, transforms, velocities, idx_a, idx_b, axis_w, err, dt,
-                        f32::NEG_INFINITY, 0.0,
-                    ).abs();
+                    total_ang_impulse += self
+                        .apply_angular_constraint(
+                            rigid_bodies,
+                            transforms,
+                            velocities,
+                            idx_a,
+                            idx_b,
+                            axis_w,
+                            err,
+                            dt,
+                            f32::NEG_INFINITY,
+                            0.0,
+                        )
+                        .abs();
                 }
             }
         }
-        
+
         if total_ang_impulse / dt > joint.break_torque {
             joint.is_broken = true;
             return;
@@ -268,32 +445,40 @@ impl JointSolver {
 
         // 5. Motor — velocity constraint along hinge axis
         if data.use_motor {
-            let axis_w    = transforms[idx_a].rotation * data.axis;
-            let inv_i_a   = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
-            let inv_i_b   = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
-            let w_a       = velocities[idx_a].angular;
-            let w_b       = velocities[idx_b].angular;
-            let dyn_a     = rigid_bodies[idx_a].is_dynamic();
-            let dyn_b     = rigid_bodies[idx_b].is_dynamic();
+            let axis_w = transforms[idx_a].rotation * data.axis;
+            let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
+            let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
+            let w_a = velocities[idx_a].angular;
+            let w_b = velocities[idx_b].angular;
+            let dyn_a = rigid_bodies[idx_a].is_dynamic();
+            let dyn_b = rigid_bodies[idx_b].is_dynamic();
 
             let k = axis_w.dot(inv_i_a * axis_w) + axis_w.dot(inv_i_b * axis_w);
             if k > 1e-10 {
-                let rel_vel      = (w_b - w_a).dot(axis_w);
-                let vel_err      = data.motor_target_velocity - rel_vel;
-                let max_impulse  = data.motor_max_force * dt;
-                let lambda       = (vel_err / k).clamp(-max_impulse, max_impulse);
+                let rel_vel = (w_b - w_a).dot(axis_w);
+                let vel_err = data.motor_target_velocity - rel_vel;
+                let max_impulse = data.motor_max_force * dt;
+                let lambda = (vel_err / k).clamp(-max_impulse, max_impulse);
 
                 let delta_a = inv_i_a * axis_w * lambda;
                 let delta_b = inv_i_b * axis_w * lambda;
 
                 if idx_a < idx_b {
                     let (l, r) = velocities.split_at_mut(idx_b);
-                    if dyn_a { l[idx_a].angular -= delta_a; }
-                    if dyn_b { r[0].angular     += delta_b; }
+                    if dyn_a {
+                        l[idx_a].angular -= delta_a;
+                    }
+                    if dyn_b {
+                        r[0].angular += delta_b;
+                    }
                 } else {
                     let (l, r) = velocities.split_at_mut(idx_a);
-                    if dyn_b { l[idx_b].angular += delta_b; }
-                    if dyn_a { r[0].angular     -= delta_a; }
+                    if dyn_b {
+                        l[idx_b].angular += delta_b;
+                    }
+                    if dyn_a {
+                        r[0].angular -= delta_a;
+                    }
                 }
             }
         }
@@ -302,16 +487,30 @@ impl JointSolver {
     fn solve_ball_socket_joint(
         &self,
         joint: &mut Joint,
-        rigid_bodies: &[RigidBody], transforms: &[Transform], velocities: &mut [Velocity],
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
         dt: f32,
     ) {
         // 1. Position constraint
-        self.solve_fixed_joint(joint, rigid_bodies, transforms, velocities, idx_a, idx_b, dt);
+        self.solve_fixed_joint(
+            joint,
+            rigid_bodies,
+            transforms,
+            velocities,
+            idx_a,
+            idx_b,
+            dt,
+        );
 
-        let JointData::BallSocket(ref mut data) = joint.data else { return };
-        if !data.use_cone_limit { return; }
+        let JointData::BallSocket(ref mut data) = joint.data else {
+            return;
+        };
+        if !data.use_cone_limit {
+            return;
+        }
 
         // 2. Initialise reference rotation on first solve
         let relative_rot = transforms[idx_a].rotation.inverse() * transforms[idx_b].rotation;
@@ -334,7 +533,9 @@ impl JointSolver {
         };
 
         let swing_angle = swing_err_local.length();
-        if swing_angle <= data.cone_limit_angle || swing_angle < 1e-6 { return; }
+        if swing_angle <= data.cone_limit_angle || swing_angle < 1e-6 {
+            return;
+        }
 
         let excess = swing_angle - data.cone_limit_angle;
         let swing_dir_local = swing_err_local / swing_angle;
@@ -343,12 +544,20 @@ impl JointSolver {
         let swing_dir_world = transforms[idx_a].rotation * swing_dir_local;
 
         let mut total_ang_impulse = 0.0;
-        total_ang_impulse += self.apply_angular_constraint(
-            rigid_bodies, transforms, velocities, idx_a, idx_b,
-            swing_dir_world,
-            -excess, dt,
-            f32::NEG_INFINITY, 0.0,
-        ).abs();
+        total_ang_impulse += self
+            .apply_angular_constraint(
+                rigid_bodies,
+                transforms,
+                velocities,
+                idx_a,
+                idx_b,
+                swing_dir_world,
+                -excess,
+                dt,
+                f32::NEG_INFINITY,
+                0.0,
+            )
+            .abs();
         if total_ang_impulse / dt > joint.break_torque {
             joint.is_broken = true;
         }
@@ -357,19 +566,25 @@ impl JointSolver {
     fn solve_slider_joint(
         &self,
         joint: &mut Joint,
-        rigid_bodies: &[RigidBody], transforms: &[Transform], velocities: &mut [Velocity],
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
         dt: f32,
     ) {
-        let JointData::Slider(ref mut data) = joint.data else { return };
+        let JointData::Slider(ref mut data) = joint.data else {
+            return;
+        };
 
-        let anchor_a  = transforms[idx_a].position + transforms[idx_a].rotation * joint.local_anchor_a;
-        let anchor_b  = transforms[idx_b].position + transforms[idx_b].rotation * joint.local_anchor_b;
-        let axis_w    = (transforms[idx_a].rotation * data.axis).normalize();
+        let anchor_a =
+            transforms[idx_a].position + transforms[idx_a].rotation * joint.local_anchor_a;
+        let anchor_b =
+            transforms[idx_b].position + transforms[idx_b].rotation * joint.local_anchor_b;
+        let axis_w = (transforms[idx_a].rotation * data.axis).normalize();
 
-        let delta    = anchor_b - anchor_a;
-        let along    = delta.dot(axis_w);
+        let delta = anchor_b - anchor_a;
+        let along = delta.dot(axis_w);
         let off_axis = anchor_a - (anchor_b - axis_w * along); // error = target - current
 
         data.current_position = along;
@@ -385,18 +600,42 @@ impl JointSolver {
 
         let err1 = off_axis.dot(perp1);
         if err1.abs() > 1e-4 {
-            total_lin_impulse += self.apply_linear_constraint(
-                rigid_bodies, transforms, velocities, idx_a, idx_b, perp1, r_a, r_b,
-                err1, dt, f32::NEG_INFINITY, f32::INFINITY,
-            ).abs();
+            total_lin_impulse += self
+                .apply_linear_constraint(
+                    rigid_bodies,
+                    transforms,
+                    velocities,
+                    idx_a,
+                    idx_b,
+                    perp1,
+                    r_a,
+                    r_b,
+                    err1,
+                    dt,
+                    f32::NEG_INFINITY,
+                    f32::INFINITY,
+                )
+                .abs();
         }
 
         let err2 = off_axis.dot(perp2);
         if err2.abs() > 1e-4 {
-            total_lin_impulse += self.apply_linear_constraint(
-                rigid_bodies, transforms, velocities, idx_a, idx_b, perp2, r_a, r_b,
-                err2, dt, f32::NEG_INFINITY, f32::INFINITY,
-            ).abs();
+            total_lin_impulse += self
+                .apply_linear_constraint(
+                    rigid_bodies,
+                    transforms,
+                    velocities,
+                    idx_a,
+                    idx_b,
+                    perp2,
+                    r_a,
+                    r_b,
+                    err2,
+                    dt,
+                    f32::NEG_INFINITY,
+                    f32::INFINITY,
+                )
+                .abs();
         }
 
         // 2. Angular lock — full 3-DOF rotation constraint using quaternion error
@@ -410,12 +649,22 @@ impl JointSolver {
             };
 
             let err_world = transforms[idx_a].rotation * ang_err_local;
-            let err_mag   = err_world.length();
+            let err_mag = err_world.length();
             if err_mag > 1e-6 {
-                total_ang_impulse += self.apply_angular_constraint(
-                    rigid_bodies, transforms, velocities, idx_a, idx_b,
-                    err_world / err_mag, -err_mag, dt, f32::NEG_INFINITY, f32::INFINITY,
-                ).abs();
+                total_ang_impulse += self
+                    .apply_angular_constraint(
+                        rigid_bodies,
+                        transforms,
+                        velocities,
+                        idx_a,
+                        idx_b,
+                        err_world / err_mag,
+                        -err_mag,
+                        dt,
+                        f32::NEG_INFINITY,
+                        f32::INFINITY,
+                    )
+                    .abs();
             }
         } else {
             data.initial_relative_rotation = Some(relative_rot);
@@ -425,20 +674,45 @@ impl JointSolver {
         if data.use_limits {
             if along < data.lower_limit {
                 let err = data.lower_limit - along;
-                total_lin_impulse += self.apply_linear_constraint(
-                    rigid_bodies, transforms, velocities, idx_a, idx_b, axis_w, r_a, r_b,
-                    err, dt, f32::NEG_INFINITY, 0.0,
-                ).abs();
+                total_lin_impulse += self
+                    .apply_linear_constraint(
+                        rigid_bodies,
+                        transforms,
+                        velocities,
+                        idx_a,
+                        idx_b,
+                        axis_w,
+                        r_a,
+                        r_b,
+                        err,
+                        dt,
+                        f32::NEG_INFINITY,
+                        0.0,
+                    )
+                    .abs();
             } else if along > data.upper_limit {
                 let err = data.upper_limit - along; // negative
-                total_lin_impulse += self.apply_linear_constraint(
-                    rigid_bodies, transforms, velocities, idx_a, idx_b, axis_w, r_a, r_b,
-                    err, dt, 0.0, f32::INFINITY,
-                ).abs();
+                total_lin_impulse += self
+                    .apply_linear_constraint(
+                        rigid_bodies,
+                        transforms,
+                        velocities,
+                        idx_a,
+                        idx_b,
+                        axis_w,
+                        r_a,
+                        r_b,
+                        err,
+                        dt,
+                        0.0,
+                        f32::INFINITY,
+                    )
+                    .abs();
             }
         }
 
-        if total_lin_impulse / dt > joint.break_force || total_ang_impulse / dt > joint.break_torque {
+        if total_lin_impulse / dt > joint.break_force || total_ang_impulse / dt > joint.break_torque
+        {
             joint.is_broken = true;
             return;
         }
@@ -456,34 +730,34 @@ impl JointSolver {
             let inv_m_b = rigid_bodies[idx_b].inv_mass();
             let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
             let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
-            let dyn_a   = rigid_bodies[idx_a].is_dynamic();
-            let dyn_b   = rigid_bodies[idx_b].is_dynamic();
+            let dyn_a = rigid_bodies[idx_a].is_dynamic();
+            let dyn_b = rigid_bodies[idx_b].is_dynamic();
 
             let ang_a = (inv_i_a * r_a.cross(axis_w)).cross(r_a);
             let ang_b = (inv_i_b * r_b.cross(axis_w)).cross(r_b);
             let k = inv_m_a + inv_m_b + ang_a.dot(axis_w) + ang_b.dot(axis_w);
             if k > 1e-10 {
-                let lambda  = (vel_err / k).clamp(-max_impulse, max_impulse);
+                let lambda = (vel_err / k).clamp(-max_impulse, max_impulse);
                 let impulse = axis_w * lambda;
 
                 if idx_a < idx_b {
                     let (l, r) = velocities.split_at_mut(idx_b);
                     if dyn_a {
-                        l[idx_a].linear  -= impulse * inv_m_a;
+                        l[idx_a].linear -= impulse * inv_m_a;
                         l[idx_a].angular -= inv_i_a * r_a.cross(impulse);
                     }
                     if dyn_b {
-                        r[0].linear  += impulse * inv_m_b;
+                        r[0].linear += impulse * inv_m_b;
                         r[0].angular += inv_i_b * r_b.cross(impulse);
                     }
                 } else {
                     let (l, r) = velocities.split_at_mut(idx_a);
                     if dyn_b {
-                        l[idx_b].linear  += impulse * inv_m_b;
+                        l[idx_b].linear += impulse * inv_m_b;
                         l[idx_b].angular += inv_i_b * r_b.cross(impulse);
                     }
                     if dyn_a {
-                        r[0].linear  -= impulse * inv_m_a;
+                        r[0].linear -= impulse * inv_m_a;
                         r[0].angular -= inv_i_a * r_a.cross(impulse);
                     }
                 }
@@ -494,19 +768,27 @@ impl JointSolver {
     fn solve_spring_joint(
         &self,
         joint: &Joint,
-        rigid_bodies: &[RigidBody], transforms: &[Transform], velocities: &mut [Velocity],
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
         dt: f32,
     ) {
-        let JointData::Spring(data) = joint.data else { return };
+        let JointData::Spring(data) = joint.data else {
+            return;
+        };
 
-        let anchor_a = transforms[idx_a].position + transforms[idx_a].rotation * joint.local_anchor_a;
-        let anchor_b = transforms[idx_b].position + transforms[idx_b].rotation * joint.local_anchor_b;
+        let anchor_a =
+            transforms[idx_a].position + transforms[idx_a].rotation * joint.local_anchor_a;
+        let anchor_b =
+            transforms[idx_b].position + transforms[idx_b].rotation * joint.local_anchor_b;
 
-        let diff   = anchor_b - anchor_a;
+        let diff = anchor_b - anchor_a;
         let length = diff.length();
-        if length < 1e-6 { return; }
+        if length < 1e-6 {
+            return;
+        }
 
         let direction = diff / length;
         let r_a = anchor_a - transforms[idx_a].position;
@@ -520,7 +802,7 @@ impl JointSolver {
         let spring_force = data.stiffness * (length - data.rest_length); // Positive if stretched (pulls together)
         let relative_vel = (v_b - v_a).dot(direction); // Positive if B is moving away from A
         let damping_force = data.damping * relative_vel;
-        
+
         // Total force pulling them together
         let pull_force = spring_force + damping_force;
         let pull_impulse = pull_force * dt;
@@ -538,36 +820,38 @@ impl JointSolver {
             pull_impulse
         };
 
-        if clamped_impulse.abs() < 1e-10 { return; }
+        if clamped_impulse.abs() < 1e-10 {
+            return;
+        }
 
         // Apply impulse along direction (A to B)
         // If clamped_impulse > 0, they are pulled together: A moves to B (+), B moves to A (-)
-        let impulse  = direction * clamped_impulse;
-        let inv_m_a  = rigid_bodies[idx_a].inv_mass();
-        let inv_m_b  = rigid_bodies[idx_b].inv_mass();
-        let inv_i_a  = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
-        let inv_i_b  = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
-        let dyn_a    = rigid_bodies[idx_a].is_dynamic();
-        let dyn_b    = rigid_bodies[idx_b].is_dynamic();
+        let impulse = direction * clamped_impulse;
+        let inv_m_a = rigid_bodies[idx_a].inv_mass();
+        let inv_m_b = rigid_bodies[idx_b].inv_mass();
+        let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
+        let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
+        let dyn_a = rigid_bodies[idx_a].is_dynamic();
+        let dyn_b = rigid_bodies[idx_b].is_dynamic();
 
         if idx_a < idx_b {
             let (l, r) = velocities.split_at_mut(idx_b);
             if dyn_a {
-                l[idx_a].linear  += impulse * inv_m_a;
+                l[idx_a].linear += impulse * inv_m_a;
                 l[idx_a].angular += inv_i_a * r_a.cross(impulse);
             }
             if dyn_b {
-                r[0].linear  -= impulse * inv_m_b;
+                r[0].linear -= impulse * inv_m_b;
                 r[0].angular -= inv_i_b * r_b.cross(impulse);
             }
         } else {
             let (l, r) = velocities.split_at_mut(idx_a);
             if dyn_b {
-                l[idx_b].linear  -= impulse * inv_m_b;
+                l[idx_b].linear -= impulse * inv_m_b;
                 l[idx_b].angular -= inv_i_b * r_b.cross(impulse);
             }
             if dyn_a {
-                r[0].linear  += impulse * inv_m_a;
+                r[0].linear += impulse * inv_m_a;
                 r[0].angular += inv_i_a * r_a.cross(impulse);
             }
         }

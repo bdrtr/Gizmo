@@ -1,4 +1,5 @@
-                        use crate::deferred::DeferredState;
+
+use crate::deferred::DeferredState;
 use crate::pipeline::{load_shader, SceneState};
 
 pub struct VolumetricState {
@@ -49,7 +50,8 @@ impl VolumetricState {
             &linear_sampler,
         );
 
-        let apply_bind_group = Self::mk_apply_bg(device, &apply_bgl, &volumetric_view, &linear_sampler);
+        let apply_bind_group =
+            Self::mk_apply_bg(device, &apply_bgl, &volumetric_view, &linear_sampler);
 
         let volumetric_pipeline = Self::mk_volumetric_pipeline(device, scene, &volumetric_bgl);
         let apply_pipeline = Self::mk_apply_pipeline(device, &apply_bgl);
@@ -89,8 +91,12 @@ impl VolumetricState {
             &self.linear_sampler,
         );
 
-        self.apply_bind_group =
-            Self::mk_apply_bg(device, &self.apply_bgl, &self.volumetric_view, &self.linear_sampler);
+        self.apply_bind_group = Self::mk_apply_bg(
+            device,
+            &self.apply_bgl,
+            &self.volumetric_view,
+            &self.linear_sampler,
+        );
 
         self.width = width;
         self.height = height;
@@ -99,7 +105,11 @@ impl VolumetricState {
     fn mk_tex(device: &wgpu::Device, w: u32, h: u32) -> (wgpu::Texture, wgpu::TextureView) {
         let t = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("volumetric_texture"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -115,7 +125,8 @@ impl VolumetricState {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("volumetric_bgl"),
             entries: &[
-                wgpu::BindGroupLayoutEntry { // t_world_position
+                wgpu::BindGroupLayoutEntry {
+                    // t_world_position
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
@@ -125,7 +136,8 @@ impl VolumetricState {
                     },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry { // sampler
+                wgpu::BindGroupLayoutEntry {
+                    // sampler
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
@@ -169,8 +181,14 @@ impl VolumetricState {
             label: Some("volumetric_bg"),
             layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(pos_view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(pos_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
             ],
         })
     }
@@ -185,8 +203,14 @@ impl VolumetricState {
             label: Some("volumetric_apply_bg"),
             layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(vol_view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(vol_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
             ],
         })
     }
@@ -196,14 +220,18 @@ impl VolumetricState {
         scene: &SceneState,
         bgl: &wgpu::BindGroupLayout,
     ) -> wgpu::RenderPipeline {
-        let shader = load_shader(device, "demo/assets/shaders/volumetric.wgsl",
-            include_str!("shaders/volumetric.wgsl"), "Volumetric Shader");
+        let shader = load_shader(
+            device,
+            "demo/assets/shaders/volumetric.wgsl",
+            include_str!("shaders/volumetric.wgsl"),
+            "Volumetric Shader",
+        );
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("volumetric_layout"),
             bind_group_layouts: &[
                 &scene.global_bind_group_layout, // Group 0
                 &scene.shadow_bind_group_layout, // Group 1 (Shadow Maps)
-                bgl                              // Group 2
+                bgl,                             // Group 2
             ],
             push_constant_ranges: &[],
         });
@@ -211,11 +239,14 @@ impl VolumetricState {
             label: Some("volumetric_pipeline"),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
-                module: &shader, entry_point: "vs_main",
-                compilation_options: Default::default(), buffers: &[],
+                module: &shader,
+                entry_point: "vs_main",
+                compilation_options: Default::default(),
+                buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader, entry_point: "fs_main",
+                module: &shader,
+                entry_point: "fs_main",
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba16Float,
@@ -223,16 +254,27 @@ impl VolumetricState {
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
-            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: None, ..Default::default() },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
         })
     }
 
-    fn mk_apply_pipeline(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> wgpu::RenderPipeline {
-        let shader = load_shader(device, "demo/assets/shaders/volumetric_apply.wgsl",
-            include_str!("shaders/volumetric_apply.wgsl"), "Volumetric Apply Shader");
+    fn mk_apply_pipeline(
+        device: &wgpu::Device,
+        bgl: &wgpu::BindGroupLayout,
+    ) -> wgpu::RenderPipeline {
+        let shader = load_shader(
+            device,
+            "demo/assets/shaders/volumetric_apply.wgsl",
+            include_str!("shaders/volumetric_apply.wgsl"),
+            "Volumetric Apply Shader",
+        );
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("volumetric_apply_layout"),
             bind_group_layouts: &[bgl],
@@ -242,11 +284,14 @@ impl VolumetricState {
             label: Some("volumetric_apply_pipeline"),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
-                module: &shader, entry_point: "vs_main",
-                compilation_options: Default::default(), buffers: &[],
+                module: &shader,
+                entry_point: "vs_main",
+                compilation_options: Default::default(),
+                buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader, entry_point: "fs_main",
+                module: &shader,
+                entry_point: "fs_main",
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba16Float,
@@ -262,7 +307,11 @@ impl VolumetricState {
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
-            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: None, ..Default::default() },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,

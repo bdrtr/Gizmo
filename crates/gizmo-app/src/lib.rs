@@ -5,13 +5,13 @@ use gizmo_core::world::World;
 use gizmo_editor::gui::EditorContext;
 use gizmo_renderer::renderer::Renderer;
 use gizmo_renderer::RenderContext;
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
-use std::sync::atomic::{AtomicPtr, Ordering};
 
 static WORLD_PTR: AtomicPtr<gizmo_core::world::World> = AtomicPtr::new(std::ptr::null_mut());
 
@@ -50,7 +50,11 @@ pub fn setup_panic_hook() {
                 if !ptr.is_null() {
                     let world = &*ptr;
                     let registry = gizmo_scene::registry::SceneRegistry::default();
-                    let _ = gizmo_scene::scene::SceneData::save(world, "gizmo_crash_report.json", &registry);
+                    let _ = gizmo_scene::scene::SceneData::save(
+                        world,
+                        "gizmo_crash_report.json",
+                        &registry,
+                    );
                 }
             }
 
@@ -71,8 +75,11 @@ pub struct AssetPlugin;
 
 impl<State: 'static> Plugin<State> for AssetPlugin {
     fn build(&self, app: &mut App<State>) {
-        app.world.insert_resource(gizmo_core::asset::Assets::<gizmo_renderer::components::Mesh>::new());
-        app.world.insert_resource(gizmo_core::asset::Assets::<gizmo_renderer::components::Material>::new());
+        app.world
+            .insert_resource(gizmo_core::asset::Assets::<gizmo_renderer::components::Mesh>::new());
+        app.world.insert_resource(gizmo_core::asset::Assets::<
+            gizmo_renderer::components::Material,
+        >::new());
     }
 }
 
@@ -96,15 +103,7 @@ pub struct App<State: 'static = ()> {
             ),
         >,
     >, // light_time
-    simple_render_fn: Option<
-        Box<
-            dyn for<'a> FnMut(
-                &mut World,
-                &State,
-                &mut RenderContext<'a>,
-            ),
-        >,
-    >,
+    simple_render_fn: Option<Box<dyn for<'a> FnMut(&mut World, &State, &mut RenderContext<'a>)>>,
     input_fn: Option<Box<dyn FnMut(&mut World, &mut State, &winit::event::Event<()>) -> bool>>, // Input handler
     ui_fn: Option<Box<dyn FnMut(&mut World, &mut State, &egui::Context)>>, // Editor UI handler
     pub input: gizmo_core::input::Input,
@@ -260,7 +259,10 @@ impl<State: 'static> App<State> {
         self
     }
 
-    pub fn add_system<Params, S: gizmo_core::system::IntoSystemConfig<Params>>(mut self, system: S) -> Self {
+    pub fn add_system<Params, S: gizmo_core::system::IntoSystemConfig<Params>>(
+        mut self,
+        system: S,
+    ) -> Self {
         self.schedule.add_di_system(system);
         self
     }
@@ -293,7 +295,7 @@ impl<State: 'static> App<State> {
                 }
             }
         }
-        
+
         let event_loop = EventLoop::new().expect("Event Loop başlatılamadı");
         let mut builder = WindowBuilder::new()
             .with_title(&self.window_title)
@@ -337,7 +339,7 @@ impl<State: 'static> App<State> {
         }
 
         let window = Arc::new(builder.build(&event_loop).expect("Pencere oluşturulamadı!"));
-        
+
         #[cfg(not(target_arch = "wasm32"))]
         {
             pollster::block_on(self.run_internal(event_loop, window));
@@ -350,7 +352,8 @@ impl<State: 'static> App<State> {
 
     async fn run_internal(mut self, event_loop: EventLoop<()>, window: Arc<winit::window::Window>) {
         // Initialize Core Dev Console Systems BEFORE setup so setup can register cvars
-        self.world.insert_resource(gizmo_core::cvar::CVarRegistry::new());
+        self.world
+            .insert_resource(gizmo_core::cvar::CVarRegistry::new());
         // Window Resource oluştur ve World'e ekle
         self.world.insert_resource(gizmo_core::window::WindowInfo {
             width: self.window_size.0 as f32,
@@ -359,7 +362,8 @@ impl<State: 'static> App<State> {
 
         // Renderer Resource oluştur ve World'e ekle
         let renderer = Renderer::new(window.clone()).await;
-        renderer.asset_manager.write().unwrap().embedded_assets = std::mem::take(&mut self.embedded_assets);
+        renderer.asset_manager.write().unwrap().embedded_assets =
+            std::mem::take(&mut self.embedded_assets);
         self.world.insert_resource(renderer);
 
         let mut state = if let Some(setup) = self.setup_fn.take() {
@@ -444,7 +448,9 @@ impl<State: 'static> App<State> {
                             WindowEvent::CloseRequested => {
                                 if let Some(record) = &self.record_data {
                                     let _ = record.save("gizmo_record.ron");
-                                    println!("Kayit basariyla 'gizmo_record.ron' dosyasina kaydedildi.");
+                                    println!(
+                                        "Kayit basariyla 'gizmo_record.ron' dosyasina kaydedildi."
+                                    );
                                 }
                                 // TLS'teki GPU kaynaklarını temizlemekle uğraşmak yerine direkt çık
                                 #[cfg(not(target_arch = "wasm32"))]
@@ -558,7 +564,7 @@ impl<State: 'static> App<State> {
                             let mut dt = now.duration_since(last_frame_time).as_secs_f32();
                             dt = dt.min(0.05); // Güvenlik çemberi: Frame takılırsa 50ms'den fazla zıplamayacak, yerçekiminden düşme engellenecek.
                             last_frame_time = now;
-                            
+
                             // Playback / Record mantigi
                             if let Some(playback) = &self.playback_data {
                                 if self.playback_frame_index < playback.frames.len() {
@@ -586,11 +592,10 @@ impl<State: 'static> App<State> {
                                 if let Some(ui_hk) = self.ui_fn.as_mut() {
                                     ui_hk(&mut self.world, &mut state, ctx);
                                 }
-                                
+
                                 // Render Global Dev Console on top of everything
                                 dev_console::ui_dev_console(&mut self.world, ctx, &self.input);
                             });
-
 
                             // --- Scene View RTT (Render To Texture) YÖNETİMİ ---
                             if self
@@ -733,7 +738,7 @@ impl<State: 'static> App<State> {
                                                 view,
                                                 width: w,
                                                 height: h,
-                                            }
+                                            },
                                         ),
                                     );
                                 }
@@ -744,7 +749,7 @@ impl<State: 'static> App<State> {
                                                 view,
                                                 width: w,
                                                 height: h,
-                                            }
+                                            },
                                         ),
                                     );
                                 }
@@ -822,8 +827,7 @@ impl<State: 'static> App<State> {
                                             .get_resource_mut::<gizmo_editor::EditorState>()
                                         {
                                             ed.has_unsaved_changes = false;
-                                            ed.status_message =
-                                                format!("Kaydedildi: {}", path);
+                                            ed.status_message = format!("Kaydedildi: {}", path);
                                         }
                                     }
                                     Err(e) => eprintln!("[App] Sahne kayıt hatası: {}", e),
@@ -833,8 +837,7 @@ impl<State: 'static> App<State> {
                             // 4. Clear + Load
                             if clear_req || load_req.is_some() {
                                 let editor_entities: std::collections::HashSet<u32> = {
-                                    let names =
-                                        self.world.borrow::<gizmo_core::EntityName>();
+                                    let names = self.world.borrow::<gizmo_core::EntityName>();
                                     names
                                         .iter()
                                         .filter_map(|(id, _)| {
@@ -861,15 +864,14 @@ impl<State: 'static> App<State> {
                                 }
                             }
                             if let Some(ref path) = load_req {
-                                if let Some(mut asset_manager) = self
-                                    .world
-                                    .remove_resource::<gizmo_renderer::asset::AssetManager>()
+                                if let Some(mut asset_manager) =
+                                    self.world
+                                        .remove_resource::<gizmo_renderer::asset::AssetManager>()
                                 {
                                     let r = self.world.remove_resource::<Renderer>().unwrap();
                                     let dummy_rgba = [255u8, 255, 255, 255];
                                     let dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
-                                    let registry =
-                                        gizmo_scene::registry::SceneRegistry::default();
+                                    let registry = gizmo_scene::registry::SceneRegistry::default();
                                     let ok = gizmo_scene::scene::SceneData::load_into(
                                         path,
                                         &mut self.world,
@@ -882,9 +884,8 @@ impl<State: 'static> App<State> {
                                     );
                                     self.world.insert_resource(r);
                                     self.world.insert_resource(asset_manager);
-                                    if let Some(mut ed) = self
-                                        .world
-                                        .get_resource_mut::<gizmo_editor::EditorState>()
+                                    if let Some(mut ed) =
+                                        self.world.get_resource_mut::<gizmo_editor::EditorState>()
                                     {
                                         ed.status_message = if ok {
                                             format!("Yüklendi: {}", path)
@@ -918,8 +919,13 @@ impl<State: 'static> App<State> {
 
                             // ═══ Fixed Timestep Fizik Döngüsü ═══
                             // PhysicsTime resource'u yoksa oluştur
-                            if self.world.get_resource::<gizmo_core::time::PhysicsTime>().is_none() {
-                                self.world.insert_resource(gizmo_core::time::PhysicsTime::default());
+                            if self
+                                .world
+                                .get_resource::<gizmo_core::time::PhysicsTime>()
+                                .is_none()
+                            {
+                                self.world
+                                    .insert_resource(gizmo_core::time::PhysicsTime::default());
                             }
                             {
                                 let mut phys_time = self
@@ -936,7 +942,9 @@ impl<State: 'static> App<State> {
                                     .get_resource::<gizmo_core::time::PhysicsTime>()
                                     .map(|pt| pt.should_step())
                                     .unwrap_or(false);
-                                if !should { break; }
+                                if !should {
+                                    break;
+                                }
 
                                 let fixed_dt = self
                                     .world
@@ -972,16 +980,32 @@ impl<State: 'static> App<State> {
                             self.world.apply_commands();
 
                             // --- DYNAMIC FRACTURE & PARTICLE INTEGRATION ---
-                            if let Some(physics_world) = self.world.get_resource::<gizmo_physics::world::PhysicsWorld>() {
+                            if let Some(physics_world) =
+                                self.world
+                                    .get_resource::<gizmo_physics::world::PhysicsWorld>()
+                            {
                                 if !physics_world.fracture_events.is_empty() {
                                     let renderer = self.world.get_resource::<Renderer>().unwrap();
                                     if let Some(gpu_particles) = &renderer.gpu_particles {
                                         for event in &physics_world.fracture_events {
-                                            let center = [event.impact_point.x, event.impact_point.y, event.impact_point.z];
+                                            let center = [
+                                                event.impact_point.x,
+                                                event.impact_point.y,
+                                                event.impact_point.z,
+                                            ];
                                             let dust_color = [0.6, 0.55, 0.5, 0.8]; // Dust color
-                                            let force = (event.impact_force * 0.01).clamp(2.0, 15.0);
-                                            let particle_count = (event.impact_force * 0.1).clamp(50.0, 500.0) as u32;
-                                            gpu_particles.spawn_explosion(&renderer.queue, center, particle_count, dust_color, force);
+                                            let force =
+                                                (event.impact_force * 0.01).clamp(2.0, 15.0);
+                                            let particle_count = (event.impact_force * 0.1)
+                                                .clamp(50.0, 500.0)
+                                                as u32;
+                                            gpu_particles.spawn_explosion(
+                                                &renderer.queue,
+                                                center,
+                                                particle_count,
+                                                dust_color,
+                                                force,
+                                            );
                                         }
                                     }
                                 }
@@ -994,7 +1018,7 @@ impl<State: 'static> App<State> {
 
                             // --- DRAW KISMI ---
                             let mut renderer = self.world.remove_resource::<Renderer>().unwrap();
-                            
+
                             let output = match renderer.surface.get_current_texture() {
                                 Ok(texture) => texture,
                                 Err(wgpu::SurfaceError::Outdated) => {
@@ -1029,7 +1053,12 @@ impl<State: 'static> App<State> {
                                     light_time,
                                 );
                             } else if let Some(s_render) = self.simple_render_fn.as_mut() {
-                                let mut ctx = RenderContext::new(&mut encoder, &view, &mut renderer, light_time);
+                                let mut ctx = RenderContext::new(
+                                    &mut encoder,
+                                    &view,
+                                    &mut renderer,
+                                    light_time,
+                                );
                                 s_render(&mut self.world, &state, &mut ctx);
                             }
 
@@ -1044,9 +1073,9 @@ impl<State: 'static> App<State> {
 
                             renderer.queue.submit(std::iter::once(encoder.finish()));
                             output.present();
-                            
+
                             self.world.insert_resource(renderer);
-                            
+
                             // İşlemlerin bitiminde frame-özel input girdilerini (fare delta vs.) temizle
                             self.input.begin_frame();
                         }

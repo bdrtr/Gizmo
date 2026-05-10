@@ -1,20 +1,20 @@
 pub mod animation;
 pub mod camera;
+pub mod decal;
 pub mod light;
 pub mod material;
 pub mod mesh;
 pub mod misc;
 pub mod sprite;
-pub mod decal;
 
 pub use animation::*;
 pub use camera::*;
+pub use decal::*;
 pub use light::*;
 pub use material::*;
 pub use mesh::*;
 pub use misc::*;
 pub use sprite::*;
-pub use decal::*;
 
 gizmo_core::impl_component!(
     Mesh,

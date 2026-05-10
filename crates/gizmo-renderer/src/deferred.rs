@@ -32,9 +32,12 @@ pub struct DeferredState {
 impl DeferredState {
     pub fn new(device: &wgpu::Device, scene: &SceneState, width: u32, height: u32) -> Self {
         let (
-            albedo_metallic_tex, albedo_metallic_view,
-            normal_roughness_tex, normal_roughness_view,
-            world_position_tex, world_position_view,
+            albedo_metallic_tex,
+            albedo_metallic_view,
+            normal_roughness_tex,
+            normal_roughness_view,
+            world_position_tex,
+            world_position_view,
             gbuf_sampler,
         ) = Self::create_gbuffer_textures(device, width, height);
 
@@ -51,20 +54,24 @@ impl DeferredState {
 
         let z_prepass_pipeline = Self::create_z_prepass_pipeline(device, scene);
         let gbuffer_pipeline = Self::create_gbuffer_pipeline(device, scene);
-        let lighting_pipeline = Self::create_lighting_pipeline(
-            device,
-            scene,
-            &gbuffer_bind_group_layout,
-        );
+        let lighting_pipeline =
+            Self::create_lighting_pipeline(device, scene, &gbuffer_bind_group_layout);
 
         Self {
-            albedo_metallic_tex, albedo_metallic_view,
-            normal_roughness_tex, normal_roughness_view,
-            world_position_tex, world_position_view,
-            gbuffer_pipeline, z_prepass_pipeline, lighting_pipeline,
-            gbuffer_bind_group_layout, gbuffer_bind_group,
+            albedo_metallic_tex,
+            albedo_metallic_view,
+            normal_roughness_tex,
+            normal_roughness_view,
+            world_position_tex,
+            world_position_view,
+            gbuffer_pipeline,
+            z_prepass_pipeline,
+            lighting_pipeline,
+            gbuffer_bind_group_layout,
+            gbuffer_bind_group,
             gbuf_sampler,
-            width, height,
+            width,
+            height,
         }
     }
 
@@ -74,9 +81,12 @@ impl DeferredState {
             return;
         }
         let (
-            albedo_metallic_tex, albedo_metallic_view,
-            normal_roughness_tex, normal_roughness_view,
-            world_position_tex, world_position_view,
+            albedo_metallic_tex,
+            albedo_metallic_view,
+            normal_roughness_tex,
+            normal_roughness_view,
+            world_position_tex,
+            world_position_view,
             gbuf_sampler,
         ) = Self::create_gbuffer_textures(device, width, height);
 
@@ -89,14 +99,14 @@ impl DeferredState {
             &gbuf_sampler,
         );
 
-        self.albedo_metallic_tex  = albedo_metallic_tex;
+        self.albedo_metallic_tex = albedo_metallic_tex;
         self.albedo_metallic_view = albedo_metallic_view;
-        self.normal_roughness_tex  = normal_roughness_tex;
+        self.normal_roughness_tex = normal_roughness_tex;
         self.normal_roughness_view = normal_roughness_view;
-        self.world_position_tex  = world_position_tex;
+        self.world_position_tex = world_position_tex;
         self.world_position_view = world_position_view;
         self.gbuf_sampler = gbuf_sampler;
-        self.width  = width;
+        self.width = width;
         self.height = height;
     }
 
@@ -104,31 +114,40 @@ impl DeferredState {
 
     fn create_gbuffer_textures(
         device: &wgpu::Device,
-        w: u32, h: u32,
+        w: u32,
+        h: u32,
     ) -> (
-        wgpu::Texture, wgpu::TextureView,
-        wgpu::Texture, wgpu::TextureView,
-        wgpu::Texture, wgpu::TextureView,
+        wgpu::Texture,
+        wgpu::TextureView,
+        wgpu::Texture,
+        wgpu::TextureView,
+        wgpu::Texture,
+        wgpu::TextureView,
         wgpu::Sampler,
     ) {
         let mk = |label: &str, fmt: wgpu::TextureFormat| {
             let t = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
-                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: fmt,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
             let v = t.create_view(&wgpu::TextureViewDescriptor::default());
             (t, v)
         };
 
-        let (a, av) = mk("gbuf_albedo_metallic",  wgpu::TextureFormat::Rgba16Float);
+        let (a, av) = mk("gbuf_albedo_metallic", wgpu::TextureFormat::Rgba16Float);
         let (n, nv) = mk("gbuf_normal_roughness", wgpu::TextureFormat::Rgba16Float);
-        let (p, pv) = mk("gbuf_world_position",   wgpu::TextureFormat::Rgba32Float);
+        let (p, pv) = mk("gbuf_world_position", wgpu::TextureFormat::Rgba32Float);
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -192,19 +211,31 @@ impl DeferredState {
     fn create_gbuffer_bind_group(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
-        albedo_v:  &wgpu::TextureView,
-        normal_v:  &wgpu::TextureView,
-        pos_v:     &wgpu::TextureView,
-        sampler:   &wgpu::Sampler,
+        albedo_v: &wgpu::TextureView,
+        normal_v: &wgpu::TextureView,
+        pos_v: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("gbuffer_bind_group"),
             layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(albedo_v) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(normal_v) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(pos_v) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(albedo_v),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(normal_v),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(pos_v),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
             ],
         })
     }
@@ -222,7 +253,7 @@ impl DeferredState {
             bind_group_layouts: &[
                 &scene.global_bind_group_layout,   // 0: SceneUniforms
                 &scene.texture_bind_group_layout,  // 1: albedo texture
-                &scene.shadow_bind_group_layout,   // 2: shadow (unused in G-pass but slot must exist)
+                &scene.shadow_bind_group_layout, // 2: shadow (unused in G-pass but slot must exist)
                 &scene.skeleton_bind_group_layout, // 3: skeleton
                 &scene.instance_bind_group_layout, // 4: instances
             ],
@@ -280,7 +311,10 @@ impl DeferredState {
         })
     }
 
-    fn create_z_prepass_pipeline(device: &wgpu::Device, scene: &SceneState) -> wgpu::RenderPipeline {
+    fn create_z_prepass_pipeline(
+        device: &wgpu::Device,
+        scene: &SceneState,
+    ) -> wgpu::RenderPipeline {
         let shader = load_shader(
             device,
             "demo/assets/shaders/gbuffer.wgsl",
@@ -292,8 +326,8 @@ impl DeferredState {
             label: Some("Z-Prepass Pipeline Layout"),
             bind_group_layouts: &[
                 &scene.global_bind_group_layout,   // 0: SceneUniforms
-                &scene.texture_bind_group_layout,  // 1: albedo texture (unused but required by shader layout)
-                &scene.shadow_bind_group_layout,   // 2: shadow
+                &scene.texture_bind_group_layout, // 1: albedo texture (unused but required by shader layout)
+                &scene.shadow_bind_group_layout,  // 2: shadow
                 &scene.skeleton_bind_group_layout, // 3: skeleton
                 &scene.instance_bind_group_layout, // 4: instances
             ],
@@ -342,9 +376,9 @@ impl DeferredState {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Deferred Lighting Layout"),
             bind_group_layouts: &[
-                &scene.global_bind_group_layout,  // 0: SceneUniforms
-                &scene.shadow_bind_group_layout,  // 1: shadow CSM
-                gbuffer_layout,                   // 2: G-buffers
+                &scene.global_bind_group_layout, // 0: SceneUniforms
+                &scene.shadow_bind_group_layout, // 1: shadow CSM
+                gbuffer_layout,                  // 2: G-buffers
             ],
             push_constant_ranges: &[],
         });

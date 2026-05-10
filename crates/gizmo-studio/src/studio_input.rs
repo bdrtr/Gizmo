@@ -187,7 +187,11 @@ pub fn sync_gizmos(world: &mut World, state: &EditorState) {
                     let mut base_extents = Vec3::ONE;
                     if let Some(c) = &selected_col {
                         // AABB'yi origin'de hesapla, sonra scale uygula
-                        base_extents = (c.compute_aabb(Vec3::ZERO, gizmo::math::Quat::IDENTITY).half_extents() * gizmo::math::Vec3A::from(selected_scale)).into();
+                        base_extents = (c
+                            .compute_aabb(Vec3::ZERO, gizmo::math::Quat::IDENTITY)
+                            .half_extents()
+                            * gizmo::math::Vec3A::from(selected_scale))
+                        .into();
                     }
 
                     hb.scale = base_extents * 1.05; // Çerçeveyi tam objenin collision AABB bounds'una sığdır

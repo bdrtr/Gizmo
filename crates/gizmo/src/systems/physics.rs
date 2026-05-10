@@ -2,30 +2,38 @@ use crate::math::Vec3;
 use crate::physics::{Collider, ColliderShape, GpuPhysicsLink, RigidBody, Transform};
 use crate::renderer::Renderer;
 
-
 pub fn physics_debug_system(world: &crate::core::World) {
     if let Some(mut gizmos) = world.get_resource_mut::<crate::renderer::Gizmos>() {
-        let draw_collider = |trans: &Transform, col: &Collider, color: [f32; 4], gizmos: &mut crate::renderer::Gizmos| {
+        let draw_collider = |trans: &Transform,
+                             col: &Collider,
+                             color: [f32; 4],
+                             gizmos: &mut crate::renderer::Gizmos| {
             match &col.shape {
                 gizmo_physics::ColliderShape::Box(b) => {
                     let h = b.half_extents;
                     let r = trans.rotation;
                     let p = trans.position;
                     let p0 = p + r.mul_vec3(Vec3::new(-h.x, -h.y, -h.z));
-                    let p1 = p + r.mul_vec3(Vec3::new( h.x, -h.y, -h.z));
-                    let p2 = p + r.mul_vec3(Vec3::new( h.x,  h.y, -h.z));
-                    let p3 = p + r.mul_vec3(Vec3::new(-h.x,  h.y, -h.z));
-                    let p4 = p + r.mul_vec3(Vec3::new(-h.x, -h.y,  h.z));
-                    let p5 = p + r.mul_vec3(Vec3::new( h.x, -h.y,  h.z));
-                    let p6 = p + r.mul_vec3(Vec3::new( h.x,  h.y,  h.z));
-                    let p7 = p + r.mul_vec3(Vec3::new(-h.x,  h.y,  h.z));
-                    
-                    gizmos.draw_line(p0, p1, color); gizmos.draw_line(p1, p2, color);
-                    gizmos.draw_line(p2, p3, color); gizmos.draw_line(p3, p0, color);
-                    gizmos.draw_line(p4, p5, color); gizmos.draw_line(p5, p6, color);
-                    gizmos.draw_line(p6, p7, color); gizmos.draw_line(p7, p4, color);
-                    gizmos.draw_line(p0, p4, color); gizmos.draw_line(p1, p5, color);
-                    gizmos.draw_line(p2, p6, color); gizmos.draw_line(p3, p7, color);
+                    let p1 = p + r.mul_vec3(Vec3::new(h.x, -h.y, -h.z));
+                    let p2 = p + r.mul_vec3(Vec3::new(h.x, h.y, -h.z));
+                    let p3 = p + r.mul_vec3(Vec3::new(-h.x, h.y, -h.z));
+                    let p4 = p + r.mul_vec3(Vec3::new(-h.x, -h.y, h.z));
+                    let p5 = p + r.mul_vec3(Vec3::new(h.x, -h.y, h.z));
+                    let p6 = p + r.mul_vec3(Vec3::new(h.x, h.y, h.z));
+                    let p7 = p + r.mul_vec3(Vec3::new(-h.x, h.y, h.z));
+
+                    gizmos.draw_line(p0, p1, color);
+                    gizmos.draw_line(p1, p2, color);
+                    gizmos.draw_line(p2, p3, color);
+                    gizmos.draw_line(p3, p0, color);
+                    gizmos.draw_line(p4, p5, color);
+                    gizmos.draw_line(p5, p6, color);
+                    gizmos.draw_line(p6, p7, color);
+                    gizmos.draw_line(p7, p4, color);
+                    gizmos.draw_line(p0, p4, color);
+                    gizmos.draw_line(p1, p5, color);
+                    gizmos.draw_line(p2, p6, color);
+                    gizmos.draw_line(p3, p7, color);
                 }
                 gizmo_physics::ColliderShape::Sphere(s) => {
                     let r = s.radius;
@@ -53,7 +61,11 @@ pub fn physics_debug_system(world: &crate::core::World) {
             }
         };
 
-        if let Some(q) = world.query::<(&crate::physics::Transform, &gizmo_physics::Collider, &gizmo_physics::RigidBody)>() {
+        if let Some(q) = world.query::<(
+            &crate::physics::Transform,
+            &gizmo_physics::Collider,
+            &gizmo_physics::RigidBody,
+        )>() {
             for (_, (trans, col, rb)) in q.iter() {
                 let color = if rb.is_static() {
                     [0.5, 0.5, 0.5, 1.0]
@@ -66,12 +78,16 @@ pub fn physics_debug_system(world: &crate::core::World) {
             }
         }
 
-        if let Some(q) = world.query::<(&crate::physics::Transform, &gizmo_physics::Collider, crate::core::query::Without<gizmo_physics::RigidBody>)>() {
+        if let Some(q) = world.query::<(
+            &crate::physics::Transform,
+            &gizmo_physics::Collider,
+            crate::core::query::Without<gizmo_physics::RigidBody>,
+        )>() {
             for (_, (trans, col, _)) in q.iter() {
                 draw_collider(trans, col, [0.5, 0.5, 0.5, 1.0], &mut gizmos);
             }
         }
-        
+
         let soft_color = [1.0, 0.4, 0.8, 1.0]; // Pinkish for soft body
         if let Some(q) = world.query::<&gizmo_physics::soft_body::SoftBodyMesh>() {
             for (_, sm) in q.iter() {
@@ -80,7 +96,7 @@ pub fn physics_debug_system(world: &crate::core::World) {
                     let p1 = sm.nodes[elem.node_indices[1] as usize].position;
                     let p2 = sm.nodes[elem.node_indices[2] as usize].position;
                     let p3 = sm.nodes[elem.node_indices[3] as usize].position;
-                    
+
                     // 6 edges of a tetrahedron
                     gizmos.draw_line(p0, p1, soft_color);
                     gizmos.draw_line(p0, p2, soft_color);
@@ -93,27 +109,35 @@ pub fn physics_debug_system(world: &crate::core::World) {
         }
 
         // --- Phase 6.1: Süspansiyon Raycast Çizgisi + Kuvvet Okları ---
-        if let Some(q) = world.query::<(&crate::physics::Transform, &gizmo_physics::vehicle::VehicleController)>() {
+        if let Some(q) = world.query::<(
+            &crate::physics::Transform,
+            &gizmo_physics::vehicle::VehicleController,
+        )>() {
             for (_, (trans, vehicle)) in q.iter() {
                 for wheel in &vehicle.wheels {
-                    let attach_world = trans.position + trans.rotation.mul_vec3(wheel.attachment_local_pos);
+                    let attach_world =
+                        trans.position + trans.rotation.mul_vec3(wheel.attachment_local_pos);
                     let ray_dir = trans.rotation.mul_vec3(wheel.direction_local).normalize();
-                    let ray_end = attach_world + ray_dir * (wheel.suspension_rest_length + wheel.suspension_max_travel + wheel.radius);
-                    
+                    let ray_end = attach_world
+                        + ray_dir
+                            * (wheel.suspension_rest_length
+                                + wheel.suspension_max_travel
+                                + wheel.radius);
+
                     // Draw raycast maximum extent (Yellow line)
-                    gizmos.draw_line(attach_world, ray_end, [1.0, 1.0, 0.0, 1.0]); 
-                    
+                    gizmos.draw_line(attach_world, ray_end, [1.0, 1.0, 0.0, 1.0]);
+
                     if wheel.is_grounded {
                         if let Some(hit) = &wheel.ground_hit {
                             // Kuvvet oku (Mavi) - sadece uzunluğu normalize edip görselleştirmek için / 10000 kullanıyoruz
                             let force_dir = -ray_dir;
-                            let force_len = (wheel.suspension_force / 10000.0).clamp(0.1, 2.0); 
+                            let force_len = (wheel.suspension_force / 10000.0).clamp(0.1, 2.0);
                             let arrow_end = hit.point + force_dir * force_len;
                             gizmos.draw_line(hit.point, arrow_end, [0.0, 0.0, 1.0, 1.0]);
-                            
+
                             // Mevcut süspansiyon uzunluğu + tekerlek merkezi çizgisi (Turuncu)
                             let wheel_center = attach_world + ray_dir * wheel.suspension_length;
-                            gizmos.draw_line(wheel_center, hit.point, [1.0, 0.5, 0.0, 1.0]); 
+                            gizmos.draw_line(wheel_center, hit.point, [1.0, 0.5, 0.0, 1.0]);
                         }
                     }
                 }
@@ -127,13 +151,16 @@ pub fn physics_debug_system(world: &crate::core::World) {
                     let p1 = contact.point;
                     let p2 = contact.point + contact.normal * 0.5; // Normal arrow
                     gizmos.draw_line(p1, p2, [1.0, 0.0, 0.0, 1.0]); // Red normal
-                    
+
                     let p_pen = contact.point - contact.normal * contact.penetration;
                     gizmos.draw_line(p1, p_pen, [1.0, 0.0, 1.0, 1.0]); // Magenta penetration depth
                 }
             }
         }
-        tracing::info!("physics_debug_system: gizmos lines count = {}", gizmos.lines.len());
+        tracing::info!(
+            "physics_debug_system: gizmos lines count = {}",
+            gizmos.lines.len()
+        );
     }
 }
 
@@ -153,7 +180,7 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
             let velocities = world.borrow::<Velocity>();
             for (e, (rb, trans, col)) in q.iter() {
                 if links.get(e).is_none() {
-                    let vel = velocities.get(e).map(|v| *v).unwrap_or_default();
+                    let vel = velocities.get(e).copied().unwrap_or_default();
                     unlinked_entities.push((e, *rb, *trans, col.clone(), vel));
                 }
             }
@@ -205,9 +232,7 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
                 next_dynamic_id += 1;
 
                 let extents = match &col.shape {
-                    ColliderShape::Box(b) => {
-                        [b.half_extents.x, b.half_extents.y, b.half_extents.z]
-                    }
+                    ColliderShape::Box(b) => [b.half_extents.x, b.half_extents.y, b.half_extents.z],
                     _ => [0.5, 0.5, 0.5],
                 };
 

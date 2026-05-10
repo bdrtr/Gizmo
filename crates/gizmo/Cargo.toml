@@ -32,6 +32,3 @@ tracing = "0.1.44"
 criterion = "0.5"
 rayon = "1.11.0"
 
-[[bench]]
-name = "gizmo_benchmark"
-harness = false

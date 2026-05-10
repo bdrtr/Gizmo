@@ -1,5 +1,5 @@
 //! Client-Side Prediction & Server Reconciliation
-//! 
+//!
 //! İstemcinin (Client) kendi hareketlerini sunucuyu beklemeden anında uygulaması (Prediction)
 //! ve sunucudan gelen kesin (Authoritative) sonuçlara göre gerekirse geçmişe dönüp düzeltmesi (Reconciliation)
 
@@ -28,6 +28,12 @@ pub struct ClientPredictor {
     pub pending_inputs: VecDeque<PlayerInput>,
     /// İstemcinin şu anki simülasyon tick'i
     pub current_tick: u32,
+}
+
+impl Default for ClientPredictor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ClientPredictor {

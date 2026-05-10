@@ -1,5 +1,5 @@
-use std::fmt;
 use gizmo_core::entity::Entity;
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum GizmoError {
@@ -18,16 +18,34 @@ pub enum GizmoError {
 impl fmt::Display for GizmoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            GizmoError::CollisionOverflow { count, limit } => write!(f, "Too many collisions detected (count: {}, limit: {})", count, limit),
-            GizmoError::NaNVelocity(ent) => write!(f, "NaN velocity detected for entity: {:?}", ent),
-            GizmoError::NaNPosition(ent) => write!(f, "NaN position detected for entity: {:?}", ent),
+            GizmoError::CollisionOverflow { count, limit } => write!(
+                f,
+                "Too many collisions detected (count: {}, limit: {})",
+                count, limit
+            ),
+            GizmoError::NaNVelocity(ent) => {
+                write!(f, "NaN velocity detected for entity: {:?}", ent)
+            }
+            GizmoError::NaNPosition(ent) => {
+                write!(f, "NaN position detected for entity: {:?}", ent)
+            }
             GizmoError::InvalidConstraint(msg) => write!(f, "Invalid constraint: {}", msg),
-            GizmoError::DivideByZero(ent) => write!(f, "Divide by zero encountered for entity: {:?}", ent),
-            GizmoError::TunnelingDetected(ent) => write!(f, "Tunneling detected for entity: {:?}", ent),
+            GizmoError::DivideByZero(ent) => {
+                write!(f, "Divide by zero encountered for entity: {:?}", ent)
+            }
+            GizmoError::TunnelingDetected(ent) => {
+                write!(f, "Tunneling detected for entity: {:?}", ent)
+            }
             GizmoError::BvhBuildFailed => write!(f, "BVH build failed"),
-            GizmoError::JointEntityNotFound(ent) => write!(f, "Joint entity not found in entity_index_map: {:?}", ent),
-            GizmoError::InvalidShapeData(msg) => write!(f, "Invalid shape data (degenerate shape): {}", msg),
-            GizmoError::SleepStateCorrupted(ent) => write!(f, "Sleep/wake state corrupted for entity: {:?}", ent),
+            GizmoError::JointEntityNotFound(ent) => {
+                write!(f, "Joint entity not found in entity_index_map: {:?}", ent)
+            }
+            GizmoError::InvalidShapeData(msg) => {
+                write!(f, "Invalid shape data (degenerate shape): {}", msg)
+            }
+            GizmoError::SleepStateCorrupted(ent) => {
+                write!(f, "Sleep/wake state corrupted for entity: {:?}", ent)
+            }
         }
     }
 }

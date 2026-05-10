@@ -1,5 +1,5 @@
 use crate::collision::ContactPoint;
-use crate::components::{ColliderShape, SphereShape, BoxShape, CapsuleShape};
+use crate::components::{BoxShape, CapsuleShape, ColliderShape, SphereShape};
 use gizmo_math::Vec3;
 
 const EPA_TOLERANCE: f32 = 0.001;
@@ -41,8 +41,9 @@ impl Gjk {
             sa - sb
         };
 
-        let res = if let Some(simplex) = Self::gjk_with_simplex(support) {
-            if let Some(contact) = Self::epa(simplex, shape_a, pos_a, rot_a, shape_b, pos_b, rot_b) {
+        if let Some(simplex) = Self::gjk_with_simplex(support) {
+            if let Some(contact) = Self::epa(simplex, shape_a, pos_a, rot_a, shape_b, pos_b, rot_b)
+            {
                 Some(contact)
             } else {
                 // EPA failed (likely degenerate simplex), but we KNOW they intersect.
@@ -56,9 +57,7 @@ impl Gjk {
             }
         } else {
             None
-        };
-
-        res
+        }
     }
 
     /// GJK that returns the final simplex for EPA
@@ -146,7 +145,11 @@ impl Gjk {
         }
 
         let dist = min_dist_sq.sqrt();
-        let normal = if dist > 1e-6 { closest_point / dist } else { Vec3::X };
+        let normal = if dist > 1e-6 {
+            closest_point / dist
+        } else {
+            Vec3::X
+        };
         Some((dist, normal))
     }
 
@@ -168,7 +171,7 @@ impl Gjk {
                 } else {
                     a + ab * t
                 }
-            },
+            }
             3 => {
                 let c = simplex[0];
                 let b = simplex[1];
@@ -226,7 +229,7 @@ impl Gjk {
                 let v = vb * denom;
                 let w = vc * denom;
                 a + ab * v + ac * w
-            },
+            }
             4 => {
                 let d = simplex[0];
                 let c = simplex[1];
@@ -238,13 +241,25 @@ impl Gjk {
                 let adb = (d - a).cross(b - a);
                 let bdc = (c - b).cross(d - b);
 
-                if abc.dot(-a) > 0.0 { *simplex = vec![c, b, a]; return Self::closest_point_on_simplex(simplex); }
-                if acd.dot(-a) > 0.0 { *simplex = vec![d, c, a]; return Self::closest_point_on_simplex(simplex); }
-                if adb.dot(-a) > 0.0 { *simplex = vec![b, d, a]; return Self::closest_point_on_simplex(simplex); }
-                if bdc.dot(-b) > 0.0 { *simplex = vec![d, c, b]; return Self::closest_point_on_simplex(simplex); }
+                if abc.dot(-a) > 0.0 {
+                    *simplex = vec![c, b, a];
+                    return Self::closest_point_on_simplex(simplex);
+                }
+                if acd.dot(-a) > 0.0 {
+                    *simplex = vec![d, c, a];
+                    return Self::closest_point_on_simplex(simplex);
+                }
+                if adb.dot(-a) > 0.0 {
+                    *simplex = vec![b, d, a];
+                    return Self::closest_point_on_simplex(simplex);
+                }
+                if bdc.dot(-b) > 0.0 {
+                    *simplex = vec![d, c, b];
+                    return Self::closest_point_on_simplex(simplex);
+                }
 
                 Vec3::ZERO
-            },
+            }
             _ => Vec3::ZERO,
         }
     }
@@ -316,9 +331,7 @@ impl Gjk {
         dt: f32,
     ) -> Option<ContactPoint> {
         if let Some((t, normal)) = Self::conservative_advancement(
-            shape_a, pos_a, rot_a, vel_a,
-            shape_b, pos_b, rot_b, vel_b,
-            dt,
+            shape_a, pos_a, rot_a, vel_a, shape_b, pos_b, rot_b, vel_b, dt,
         ) {
             let normal_a_to_b = -normal; // CA normal is B→A, flip to A→B
 
@@ -397,14 +410,22 @@ impl Gjk {
                 *simplex = vec![c, a];
                 let mut cross = ac.cross(ao);
                 if cross.length_squared() < 1e-6 {
-                    cross = if ac.x.abs() > ac.y.abs() { Vec3::new(ac.y, -ac.x, 0.0) } else { Vec3::new(0.0, ac.z, -ac.y) };
+                    cross = if ac.x.abs() > ac.y.abs() {
+                        Vec3::new(ac.y, -ac.x, 0.0)
+                    } else {
+                        Vec3::new(0.0, ac.z, -ac.y)
+                    };
                 }
                 *direction = cross.cross(ac);
             } else {
                 *simplex = vec![b, a];
                 let mut cross = ab.cross(ao);
                 if cross.length_squared() < 1e-6 {
-                    cross = if ab.x.abs() > ab.y.abs() { Vec3::new(ab.y, -ab.x, 0.0) } else { Vec3::new(0.0, ab.z, -ab.y) };
+                    cross = if ab.x.abs() > ab.y.abs() {
+                        Vec3::new(ab.y, -ab.x, 0.0)
+                    } else {
+                        Vec3::new(0.0, ab.z, -ab.y)
+                    };
                 }
                 *direction = cross.cross(ab);
             }
@@ -412,7 +433,11 @@ impl Gjk {
             *simplex = vec![b, a];
             let mut cross = ab.cross(ao);
             if cross.length_squared() < 1e-6 {
-                cross = if ab.x.abs() > ab.y.abs() { Vec3::new(ab.y, -ab.x, 0.0) } else { Vec3::new(0.0, ab.z, -ab.y) };
+                cross = if ab.x.abs() > ab.y.abs() {
+                    Vec3::new(ab.y, -ab.x, 0.0)
+                } else {
+                    Vec3::new(0.0, ab.z, -ab.y)
+                };
             }
             *direction = cross.cross(ab);
         } else {
@@ -549,19 +574,16 @@ impl Gjk {
         // normal points from Minkowski surface outward (i.e., from B toward A in world space).
         // shape_a's extreme point in +normal direction = the deepest point of A along the contact.
         // shape_b's extreme point in -normal direction = the deepest point of B along the contact.
-        let pt_a = Self::support_point(shape_a, pos_a, rot_a, normal);   // was -normal — FIXED
-        let pt_b = Self::support_point(shape_b, pos_b, rot_b, -normal);  // correct, unchanged
+        let pt_a = Self::support_point(shape_a, pos_a, rot_a, normal); // was -normal — FIXED
+        let pt_b = Self::support_point(shape_b, pos_b, rot_b, -normal); // correct, unchanged
 
         // FIX 2: Barycentric interpolation on the closest EPA face for a more accurate
         // contact point, especially for box corner/edge collisions.
         let (fa, fb, fc) = faces[closest_idx];
         let contact_point = Self::barycentric_contact_point(
-            &simplex,
-            fa, fb, fc,
-            normal,
-            shape_a, pos_a, rot_a,
-            shape_b, pos_b, rot_b,
-        ).unwrap_or_else(|| (pt_a + pt_b) * 0.5);
+            &simplex, fa, fb, fc, normal, shape_a, pos_a, rot_a, shape_b, pos_b, rot_b,
+        )
+        .unwrap_or_else(|| (pt_a + pt_b) * 0.5);
 
         Some(ContactPoint {
             point: contact_point,
@@ -580,7 +602,9 @@ impl Gjk {
     /// We approximate by projecting the origin onto the closest face and using those weights.
     fn barycentric_contact_point(
         simplex: &[Vec3],
-        a: usize, b: usize, c: usize,
+        a: usize,
+        b: usize,
+        c: usize,
         _normal: Vec3,
         shape_a: &ColliderShape,
         pos_a: Vec3,
@@ -604,11 +628,11 @@ impl Gjk {
         let dir_c = vc.try_normalize().unwrap_or(Vec3::X);
 
         let pt_a = u * Self::support_point(shape_a, pos_a, rot_a, dir_a)
-                 + v * Self::support_point(shape_a, pos_a, rot_a, dir_b)
-                 + w * Self::support_point(shape_a, pos_a, rot_a, dir_c);
+            + v * Self::support_point(shape_a, pos_a, rot_a, dir_b)
+            + w * Self::support_point(shape_a, pos_a, rot_a, dir_c);
         let pt_b = u * Self::support_point(shape_b, pos_b, rot_b, -dir_a)
-                 + v * Self::support_point(shape_b, pos_b, rot_b, -dir_b)
-                 + w * Self::support_point(shape_b, pos_b, rot_b, -dir_c);
+            + v * Self::support_point(shape_b, pos_b, rot_b, -dir_b)
+            + w * Self::support_point(shape_b, pos_b, rot_b, -dir_c);
 
         Some((pt_a + pt_b) * 0.5)
     }
@@ -619,17 +643,16 @@ impl Gjk {
         let ab = b - a;
         let ac = c - a;
 
-
-        let d3 = ab.dot(b - a);  // = ab·ab
+        let d3 = ab.dot(b - a); // = ab·ab
         let d4 = ac.dot(b - a);
         let d5 = ab.dot(c - a);
-        let d6 = ac.dot(c - a);  // = ac·ac
+        let d6 = ac.dot(c - a); // = ac·ac
 
         let denom = d3 * d6 - d4 * d5;
         if denom.abs() < 1e-8 {
             return None; // Degenerate triangle
         }
-        
+
         // Correct standard formula using Cramer's rule
         let ab = b - a;
         let ac = c - a;
@@ -729,7 +752,11 @@ impl Gjk {
                     let mut stack = Vec::with_capacity(64);
                     stack.push(0);
 
-                    let abs_dir = gizmo_math::Vec3A::new(local_dir.x.abs(), local_dir.y.abs(), local_dir.z.abs());
+                    let abs_dir = gizmo_math::Vec3A::new(
+                        local_dir.x.abs(),
+                        local_dir.y.abs(),
+                        local_dir.z.abs(),
+                    );
                     let dir_a = gizmo_math::Vec3A::new(local_dir.x, local_dir.y, local_dir.z);
 
                     while let Some(node_idx) = stack.pop() {
@@ -739,9 +766,9 @@ impl Gjk {
                         let half_extents = node.aabb.half_extents();
 
                         let max_node_dot = center.dot(dir_a)
-                                         + half_extents.x * abs_dir.x
-                                         + half_extents.y * abs_dir.y
-                                         + half_extents.z * abs_dir.z;
+                            + half_extents.x * abs_dir.x
+                            + half_extents.y * abs_dir.y
+                            + half_extents.z * abs_dir.z;
 
                         if max_node_dot < best_dot {
                             continue;
@@ -759,8 +786,12 @@ impl Gjk {
                                 }
                             }
                         } else {
-                            if node.left_child >= 0 { stack.push(node.left_child as usize); }
-                            if node.right_child >= 0 { stack.push(node.right_child as usize); }
+                            if node.left_child >= 0 {
+                                stack.push(node.left_child as usize);
+                            }
+                            if node.right_child >= 0 {
+                                stack.push(node.right_child as usize);
+                            }
                         }
                     }
                 } else {
@@ -787,7 +818,10 @@ impl Gjk {
                 best_pt
             }
             crate::components::ColliderShape::Compound(_) => {
-                debug_assert!(false, "Compound shapes must use separate collision detection");
+                debug_assert!(
+                    false,
+                    "Compound shapes must use separate collision detection"
+                );
                 Vec3::ZERO
             }
         };
@@ -801,9 +835,21 @@ impl Gjk {
 
     fn box_support(box_shape: &BoxShape, dir: Vec3) -> Vec3 {
         Vec3::new(
-            if dir.x > 0.0 { box_shape.half_extents.x } else { -box_shape.half_extents.x },
-            if dir.y > 0.0 { box_shape.half_extents.y } else { -box_shape.half_extents.y },
-            if dir.z > 0.0 { box_shape.half_extents.z } else { -box_shape.half_extents.z },
+            if dir.x > 0.0 {
+                box_shape.half_extents.x
+            } else {
+                -box_shape.half_extents.x
+            },
+            if dir.y > 0.0 {
+                box_shape.half_extents.y
+            } else {
+                -box_shape.half_extents.y
+            },
+            if dir.z > 0.0 {
+                box_shape.half_extents.z
+            } else {
+                -box_shape.half_extents.z
+            },
         )
     }
 
@@ -821,36 +867,85 @@ impl Gjk {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gizmo_math::{Vec3, Quat};
+    use gizmo_math::{Quat, Vec3};
 
     #[test]
     fn test_sphere_vs_sphere_collision() {
         let shape = ColliderShape::Sphere(SphereShape { radius: 1.0 });
 
-        assert!(Gjk::test_collision(&shape, Vec3::ZERO, Quat::IDENTITY, &shape, Vec3::new(1.5, 0.0, 0.0), Quat::IDENTITY));
-        assert!(!Gjk::test_collision(&shape, Vec3::ZERO, Quat::IDENTITY, &shape, Vec3::new(2.5, 0.0, 0.0), Quat::IDENTITY));
+        assert!(Gjk::test_collision(
+            &shape,
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            &shape,
+            Vec3::new(1.5, 0.0, 0.0),
+            Quat::IDENTITY
+        ));
+        assert!(!Gjk::test_collision(
+            &shape,
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            &shape,
+            Vec3::new(2.5, 0.0, 0.0),
+            Quat::IDENTITY
+        ));
     }
 
     #[test]
     fn test_box_vs_box_collision() {
-        let shape = ColliderShape::Box(BoxShape { half_extents: Vec3::new(1.0, 1.0, 1.0) });
+        let shape = ColliderShape::Box(BoxShape {
+            half_extents: Vec3::new(1.0, 1.0, 1.0),
+        });
 
-        assert!(Gjk::test_collision(&shape, Vec3::ZERO, Quat::IDENTITY, &shape, Vec3::new(1.5, 0.0, 0.0), Quat::IDENTITY));
-        assert!(!Gjk::test_collision(&shape, Vec3::ZERO, Quat::IDENTITY, &shape, Vec3::new(2.5, 0.0, 0.0), Quat::IDENTITY));
+        assert!(Gjk::test_collision(
+            &shape,
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            &shape,
+            Vec3::new(1.5, 0.0, 0.0),
+            Quat::IDENTITY
+        ));
+        assert!(!Gjk::test_collision(
+            &shape,
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            &shape,
+            Vec3::new(2.5, 0.0, 0.0),
+            Quat::IDENTITY
+        ));
     }
 
     #[test]
     fn test_epa_contact_generation() {
-        let shape_a = ColliderShape::Box(BoxShape { half_extents: Vec3::new(1.0, 1.0, 1.0) });
-        let shape_b = ColliderShape::Box(BoxShape { half_extents: Vec3::new(1.0, 1.0, 1.0) });
+        let shape_a = ColliderShape::Box(BoxShape {
+            half_extents: Vec3::new(1.0, 1.0, 1.0),
+        });
+        let shape_b = ColliderShape::Box(BoxShape {
+            half_extents: Vec3::new(1.0, 1.0, 1.0),
+        });
 
-        let contact = Gjk::get_contact(&shape_a, Vec3::ZERO, Quat::IDENTITY, &shape_b, Vec3::new(1.5, 0.0, 0.0), Quat::IDENTITY);
+        let contact = Gjk::get_contact(
+            &shape_a,
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            &shape_b,
+            Vec3::new(1.5, 0.0, 0.0),
+            Quat::IDENTITY,
+        );
 
         assert!(contact.is_some(), "EPA failed to generate contact");
         let contact = contact.unwrap();
 
-        assert!((contact.penetration - 0.5).abs() < 0.001, "Penetration depth is wrong: {}", contact.penetration);
-        assert!((contact.normal.x.abs() - 1.0).abs() < 0.001, "Normal is wrong: {:?}", contact.normal);
+        assert!(
+            (contact.penetration - 0.5).abs() < 0.001,
+            "Penetration depth is wrong: {}",
+            contact.penetration
+        );
+        assert!(
+            (contact.normal.x.abs() - 1.0).abs() < 0.001,
+            "Normal is wrong: {:?}",
+            contact.normal
+        );
     }
 
     #[test]
@@ -859,12 +954,21 @@ mod tests {
         let shape = ColliderShape::Sphere(SphereShape { radius: 0.5 });
 
         let contact = Gjk::speculative_contact(
-            &shape, Vec3::new(-5.0, 0.0, 0.0), Quat::IDENTITY, Vec3::new(10.0, 0.0, 0.0),
-            &shape, Vec3::new(5.0, 0.0, 0.0),  Quat::IDENTITY, Vec3::new(-10.0, 0.0, 0.0),
+            &shape,
+            Vec3::new(-5.0, 0.0, 0.0),
+            Quat::IDENTITY,
+            Vec3::new(10.0, 0.0, 0.0),
+            &shape,
+            Vec3::new(5.0, 0.0, 0.0),
+            Quat::IDENTITY,
+            Vec3::new(-10.0, 0.0, 0.0),
             1.0,
         );
 
-        assert!(contact.is_some(), "Speculative contact missed approaching spheres");
+        assert!(
+            contact.is_some(),
+            "Speculative contact missed approaching spheres"
+        );
     }
 
     #[test]
@@ -873,11 +977,20 @@ mod tests {
         let shape = ColliderShape::Sphere(SphereShape { radius: 0.5 });
 
         let contact = Gjk::speculative_contact(
-            &shape, Vec3::new(-5.0, 0.0, 0.0), Quat::IDENTITY, Vec3::new(-10.0, 0.0, 0.0),
-            &shape, Vec3::new(5.0, 0.0, 0.0),  Quat::IDENTITY, Vec3::new(10.0, 0.0, 0.0),
+            &shape,
+            Vec3::new(-5.0, 0.0, 0.0),
+            Quat::IDENTITY,
+            Vec3::new(-10.0, 0.0, 0.0),
+            &shape,
+            Vec3::new(5.0, 0.0, 0.0),
+            Quat::IDENTITY,
+            Vec3::new(10.0, 0.0, 0.0),
             1.0,
         );
 
-        assert!(contact.is_none(), "Speculative contact incorrectly fired for separating shapes");
+        assert!(
+            contact.is_none(),
+            "Speculative contact incorrectly fired for separating shapes"
+        );
     }
 }

@@ -36,7 +36,12 @@ impl<'a> RenderContext<'a> {
         renderer: &'a mut Renderer,
         light_time: f32,
     ) -> Self {
-        Self { encoder, view, renderer, light_time }
+        Self {
+            encoder,
+            view,
+            renderer,
+            light_time,
+        }
     }
 
     /// GPU Compute alt sistemlerini devre dışı bırakır (fluid, particles, physics).
@@ -78,7 +83,6 @@ impl<'a> RenderContext<'a> {
         (self.encoder, self.view, self.renderer)
     }
 }
-
 
 pub struct Renderer {
     // === TEMEL WGPU KAYNAKLARI ===
@@ -158,7 +162,7 @@ impl Renderer {
         if size.width == 0 || size.height == 0 {
             size = winit::dpi::PhysicalSize::new(1280, 720);
         }
-        
+
         #[cfg(target_arch = "wasm32")]
         {
             // Web'de 4K/Retina ekranlarda devasa çözünürlükler performansı katleder.
@@ -195,16 +199,22 @@ impl Renderer {
             log::info!("[Renderer] {} adapter bulundu", adapters.len());
             for (i, a) in adapters.iter().enumerate() {
                 let info = a.get_info();
-                log::info!("[Renderer]   Adapter {}: {} ({:?}, {:?})", i, info.name, info.backend, info.device_type);
+                log::info!(
+                    "[Renderer]   Adapter {}: {} ({:?}, {:?})",
+                    i,
+                    info.name,
+                    info.backend,
+                    info.device_type
+                );
             }
         }
 
         let surface = instance
             .create_surface(window.clone())
             .expect("Surface oluşturulamadı!");
-        
+
         log::info!("[Renderer] Surface oluşturuldu, adapter aranıyor...");
-        
+
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::default(),
@@ -212,15 +222,21 @@ impl Renderer {
                 force_fallback_adapter: false,
             })
             .await;
-        
+
         let adapter = match adapter {
             Some(a) => {
                 let info = a.get_info();
-                log::info!("[Renderer] Adapter bulundu: {} ({:?})", info.name, info.backend);
+                log::info!(
+                    "[Renderer] Adapter bulundu: {} ({:?})",
+                    info.name,
+                    info.backend
+                );
                 a
             }
             None => {
-                log::warn!("[Renderer] Surface uyumlu adapter bulunamadı, surface'siz deneniyor...");
+                log::warn!(
+                    "[Renderer] Surface uyumlu adapter bulunamadı, surface'siz deneniyor..."
+                );
                 // Surface'siz adapter dene
                 match instance
                     .request_adapter(&wgpu::RequestAdapterOptions {
@@ -232,12 +248,22 @@ impl Renderer {
                 {
                     Some(a) => {
                         let info = a.get_info();
-                        log::info!("[Renderer] Surface'siz adapter bulundu: {} ({:?})", info.name, info.backend);
+                        log::info!(
+                            "[Renderer] Surface'siz adapter bulundu: {} ({:?})",
+                            info.name,
+                            info.backend
+                        );
                         a
                     }
                     None => {
-                        log::error!("[Renderer] Hiçbir adapter bulunamadı! Backends: {:?}", backends);
-                        panic!("GPU adapter bulunamadı! Backends: {:?}, Window size: {}x{}", backends, size.width, size.height);
+                        log::error!(
+                            "[Renderer] Hiçbir adapter bulunamadı! Backends: {:?}",
+                            backends
+                        );
+                        panic!(
+                            "GPU adapter bulunamadı! Backends: {:?}, Window size: {}x{}",
+                            backends, size.width, size.height
+                        );
                     }
                 }
             }
@@ -351,14 +377,13 @@ impl Renderer {
             config.height,
         ));
         #[cfg(target_arch = "wasm32")]
-        let gpu_fluid: Option<crate::gpu_fluid::GpuFluidSystem> = None;        
+        let gpu_fluid: Option<crate::gpu_fluid::GpuFluidSystem> = None;
         let debug_renderer = Some(crate::debug_renderer::GizmoRendererSystem::new(
             &device,
             &scene.global_bind_group_layout,
             wgpu::TextureFormat::Rgba16Float,
             wgpu::TextureFormat::Depth32Float,
         ));
-
 
         let scene_state = SceneState {
             render_pipeline: scene.render_pipeline,
@@ -414,20 +439,40 @@ impl Renderer {
         });
 
         let ssr = deferred.as_ref().map(|def| {
-            crate::ssr::SsrState::new(&device, &scene_state, def, &post_res.hdr_texture_view, size.width, size.height)
+            crate::ssr::SsrState::new(
+                &device,
+                &scene_state,
+                def,
+                &post_res.hdr_texture_view,
+                size.width,
+                size.height,
+            )
         });
 
         let ssgi = deferred.as_ref().map(|def| {
-            crate::ssgi::SsgiState::new(&device, &scene_state, def, &post_res.hdr_texture_view, size.width, size.height)
+            crate::ssgi::SsgiState::new(
+                &device,
+                &scene_state,
+                def,
+                &post_res.hdr_texture_view,
+                size.width,
+                size.height,
+            )
         });
 
         let volumetric = deferred.as_ref().map(|def| {
-            crate::volumetric::VolumetricState::new(&device, &scene_state, def, size.width, size.height)
+            crate::volumetric::VolumetricState::new(
+                &device,
+                &scene_state,
+                def,
+                size.width,
+                size.height,
+            )
         });
 
-        let decal = deferred.as_ref().map(|def| {
-            crate::decal::DecalState::new(&device, &scene_state, def)
-        });
+        let decal = deferred
+            .as_ref()
+            .map(|def| crate::decal::DecalState::new(&device, &scene_state, def));
 
         let taa = if let Some(ref def) = deferred {
             Some(crate::taa::TaaState::new(
@@ -598,32 +643,53 @@ impl Renderer {
     /// Dama dokusu (checkerboard) oluşturur — test materyalleri için idealdir.
     /// Cache'lenir: aynı doku tekrar oluşturulmaz.
     pub fn create_checkerboard_texture(&self) -> Arc<wgpu::BindGroup> {
-        self.asset_manager.write().unwrap()
-            .create_checkerboard_texture(&self.device, &self.queue, &self.scene.texture_bind_group_layout)
+        self.asset_manager
+            .write()
+            .unwrap()
+            .create_checkerboard_texture(
+                &self.device,
+                &self.queue,
+                &self.scene.texture_bind_group_layout,
+            )
     }
 
     /// Düz beyaz doku — varsayılan materyal için.
     /// Cache'lenir: aynı doku tekrar oluşturulmaz.
     pub fn create_white_texture(&self) -> Arc<wgpu::BindGroup> {
-        self.asset_manager.write().unwrap()
-            .create_white_texture(&self.device, &self.queue, &self.scene.texture_bind_group_layout)
+        self.asset_manager.write().unwrap().create_white_texture(
+            &self.device,
+            &self.queue,
+            &self.scene.texture_bind_group_layout,
+        )
     }
 
     /// Diskten doku yükler (BC7 pipeline dahil).
     /// Cache'lenir: aynı dosya yolu tekrar yüklenmez.
     pub fn load_texture(&self, path: &str) -> Result<Arc<wgpu::BindGroup>, String> {
-        self.asset_manager.write().unwrap()
-            .load_material_texture(&self.device, &self.queue, &self.scene.texture_bind_group_layout, path)
+        self.asset_manager.write().unwrap().load_material_texture(
+            &self.device,
+            &self.queue,
+            &self.scene.texture_bind_group_layout,
+            path,
+        )
     }
 
     /// Diskten bir GLTF (veya GLB) modelini senkron olarak yükler.
     pub fn load_gltf(&self, path: &str) -> Result<crate::asset::loaders::GltfSceneAsset, String> {
         let white_tex = self.create_white_texture();
-        self.asset_manager.write().unwrap()
-            .load_gltf_scene(&self.device, &self.queue, &self.scene.texture_bind_group_layout, white_tex, path)
+        self.asset_manager.write().unwrap().load_gltf_scene(
+            &self.device,
+            &self.queue,
+            &self.scene.texture_bind_group_layout,
+            white_tex,
+            path,
+        )
     }
 
-    pub fn create_skeleton(&self, hierarchy: std::sync::Arc<crate::animation::SkeletonHierarchy>) -> crate::components::Skeleton {
+    pub fn create_skeleton(
+        &self,
+        hierarchy: std::sync::Arc<crate::animation::SkeletonHierarchy>,
+    ) -> crate::components::Skeleton {
         use wgpu::util::DeviceExt;
 
         // İlk local_poses'u her kemiğin orijinal local_bind_transform'undan al.
@@ -642,26 +708,29 @@ impl Renderer {
             }
         }
 
-
-
-        let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Skeleton Joint Buffer"),
-            contents: bytemuck::cast_slice(&joint_matrices),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Skeleton Joint Buffer"),
+                contents: bytemuck::cast_slice(&joint_matrices),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Skeleton Bind Group"),
             layout: &self.scene.skeleton_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buffer.as_entire_binding(),
-                }
-            ]
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
         });
 
-        crate::components::Skeleton::new(std::sync::Arc::new(bind_group), std::sync::Arc::new(buffer), hierarchy, local_poses)
+        crate::components::Skeleton::new(
+            std::sync::Arc::new(bind_group),
+            std::sync::Arc::new(buffer),
+            hierarchy,
+            local_poses,
+        )
     }
 
     pub fn run_post_processing(

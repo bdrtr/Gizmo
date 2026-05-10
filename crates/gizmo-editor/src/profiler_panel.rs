@@ -18,22 +18,26 @@ const COLOR_BAD: egui::Color32 = egui::Color32::from_rgb(220, 60, 60);
 
 /// Frame süresine göre renk döndürür
 fn frame_color(ms: f64) -> egui::Color32 {
-    if ms < 16.67 { COLOR_GOOD }
-    else if ms < 33.33 { COLOR_WARN }
-    else { COLOR_BAD }
+    if ms < 16.67 {
+        COLOR_GOOD
+    } else if ms < 33.33 {
+        COLOR_WARN
+    } else {
+        COLOR_BAD
+    }
 }
 
 /// Scope derinliğine göre renk paleti
 fn scope_color(depth: u32, idx: usize) -> egui::Color32 {
     const PALETTE: &[egui::Color32] = &[
-        egui::Color32::from_rgb(86, 156, 214),   // Mavi
-        egui::Color32::from_rgb(78, 201, 176),   // Turkuaz
-        egui::Color32::from_rgb(220, 220, 170),  // Sarı
-        egui::Color32::from_rgb(206, 145, 120),  // Turuncu
-        egui::Color32::from_rgb(181, 137, 214),  // Mor
-        egui::Color32::from_rgb(215, 186, 125),  // Altın
-        egui::Color32::from_rgb(156, 220, 254),  // Açık mavi
-        egui::Color32::from_rgb(244, 135, 113),  // Mercan
+        egui::Color32::from_rgb(86, 156, 214),  // Mavi
+        egui::Color32::from_rgb(78, 201, 176),  // Turkuaz
+        egui::Color32::from_rgb(220, 220, 170), // Sarı
+        egui::Color32::from_rgb(206, 145, 120), // Turuncu
+        egui::Color32::from_rgb(181, 137, 214), // Mor
+        egui::Color32::from_rgb(215, 186, 125), // Altın
+        egui::Color32::from_rgb(156, 220, 254), // Açık mavi
+        egui::Color32::from_rgb(244, 135, 113), // Mercan
     ];
     let i = (depth as usize * 3 + idx) % PALETTE.len();
     PALETTE[i]
@@ -102,8 +106,14 @@ pub fn ui_profiler(ui: &mut egui::Ui, world: &World, _state: &mut EditorState) {
 
         // 60fps hedef çizgisi
         painter.line_segment(
-            [egui::pos2(rect.left(), y_16ms), egui::pos2(rect.right(), y_16ms)],
-            egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(80, 200, 120, 60)),
+            [
+                egui::pos2(rect.left(), y_16ms),
+                egui::pos2(rect.right(), y_16ms),
+            ],
+            egui::Stroke::new(
+                1.0,
+                egui::Color32::from_rgba_premultiplied(80, 200, 120, 60),
+            ),
         );
 
         // Çubuklar
@@ -141,17 +151,13 @@ pub fn ui_profiler(ui: &mut egui::Ui, world: &World, _state: &mut EditorState) {
 
     ui.horizontal(|ui| {
         ui.label("60fps:");
-        let (bar_rect, _) = ui.allocate_exact_size(
-            egui::vec2(budget_rect_width, 16.0),
-            egui::Sense::hover(),
-        );
+        let (bar_rect, _) =
+            ui.allocate_exact_size(egui::vec2(budget_rect_width, 16.0), egui::Sense::hover());
         let painter = ui.painter_at(bar_rect);
         painter.rect_filled(bar_rect, 3.0, COLOR_BG_BAR);
         let fill_w = (budget_16 * 0.5 * bar_rect.width()).min(bar_rect.width());
-        let fill_rect = egui::Rect::from_min_size(
-            bar_rect.left_top(),
-            egui::vec2(fill_w, bar_rect.height()),
-        );
+        let fill_rect =
+            egui::Rect::from_min_size(bar_rect.left_top(), egui::vec2(fill_w, bar_rect.height()));
         painter.rect_filled(fill_rect, 3.0, frame_color(avg_ms));
         painter.text(
             bar_rect.center(),
@@ -230,8 +236,16 @@ pub fn ui_profiler(ui: &mut egui::Ui, world: &World, _state: &mut EditorState) {
     ui.label(egui::RichText::new("Ortalama Zamanlamalar (60 frame)").strong());
 
     let known_scopes = [
-        "ecs_update", "pre_update", "update", "physics", "post_update", "render",
-        "broadphase", "narrowphase", "solver", "integrate",
+        "ecs_update",
+        "pre_update",
+        "update",
+        "physics",
+        "post_update",
+        "render",
+        "broadphase",
+        "narrowphase",
+        "solver",
+        "integrate",
     ];
 
     egui::Grid::new("profiler_avg_grid")

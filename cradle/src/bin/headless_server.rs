@@ -1,7 +1,7 @@
-use gizmo::prelude::*;
 use gizmo::app::Plugin;
+use gizmo::prelude::*;
 
-/// Bu eklenti (Plugin), motorun normal pencereli (Winit+Wgpu) döngüsünü 
+/// Bu eklenti (Plugin), motorun normal pencereli (Winit+Wgpu) döngüsünü
 /// tamamen ezip yerine penceresiz ve sadece CPU odaklı (Headless) bir döngü kurar.
 struct HeadlessServerPlugin;
 
@@ -11,33 +11,49 @@ impl Plugin for HeadlessServerPlugin {
         app.set_runner_mut(|mut app| {
             println!("\n[Sunucu] Gizmo Engine Headless (Penceresiz) Sunucu Başlatıldı!");
             println!("[Sunucu] Render ve Winit devre dışı. Sadece fizik simüle ediliyor...\n");
-            
+
             // Not: PhysicsPlugin önceden eklendiği için PhysicsWorld zaten başlatıldı.
 
             // Başlangıç objeleri
             let ent = app.world.spawn();
-            app.world.add_component(ent, gizmo::physics::components::Transform::new(gizmo::math::Vec3::new(0.0, 10.0, 0.0)));
-            app.world.add_component(ent, gizmo::physics::components::Velocity::default());
-            app.world.add_component(ent, gizmo::physics::components::RigidBody {
-                mass: 1.0,
-                ..Default::default()
-            });
+            app.world.add_component(
+                ent,
+                gizmo::physics::components::Transform::new(gizmo::math::Vec3::new(0.0, 10.0, 0.0)),
+            );
+            app.world
+                .add_component(ent, gizmo::physics::components::Velocity::default());
+            app.world.add_component(
+                ent,
+                gizmo::physics::components::RigidBody {
+                    mass: 1.0,
+                    ..Default::default()
+                },
+            );
 
             let mut tick = 0;
             loop {
                 // Sadece fizik ve oyun mantığı güncelleniyor
-                gizmo::physics::system::physics_step_system(&mut app.world, 0.016);
-                
+                gizmo::physics::system::physics_step_system(&app.world, 0.016);
+
                 tick += 1;
-                if tick % 60 == 0 { // Saniyede 1 kez log bas
-                    if let Some(trans) = app.world.borrow::<gizmo::physics::components::Transform>().get(ent.id()) {
-                        println!("[Simülasyon] Saniye: {} - Obje Y ekseni: {:.2}", tick / 60, trans.position.y);
+                if tick % 60 == 0 {
+                    // Saniyede 1 kez log bas
+                    if let Some(trans) = app
+                        .world
+                        .borrow::<gizmo::physics::components::Transform>()
+                        .get(ent.id())
+                    {
+                        println!(
+                            "[Simülasyon] Saniye: {} - Obje Y ekseni: {:.2}",
+                            tick / 60,
+                            trans.position.y
+                        );
                     }
                 }
 
                 // Saniyede 60 tick (16ms) sabitleme
                 std::thread::sleep(std::time::Duration::from_millis(16));
-                
+
                 // Demo amaçlı 5 saniye sonra çık
                 if tick > 300 {
                     println!("\n[Sunucu] Simülasyon tamamlandı. Çıkılıyor.");

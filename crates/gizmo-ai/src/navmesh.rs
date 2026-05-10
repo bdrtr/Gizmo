@@ -35,7 +35,9 @@ impl NavPoly {
     /// Nokta bu polygon'un içinde mi? (XZ düzleminde)
     pub fn contains_point_xz(&self, point: Vec3) -> bool {
         let n = self.vertices.len();
-        if n < 3 { return false; }
+        if n < 3 {
+            return false;
+        }
 
         for i in 0..n {
             let a = self.vertices[i];
@@ -127,7 +129,9 @@ impl NavMesh {
 
         for i in 0..physics.entities.len() {
             let rb = &physics.rigid_bodies[i];
-            if rb.is_dynamic() { continue; }
+            if rb.is_dynamic() {
+                continue;
+            }
 
             let transform = &physics.transforms[i];
             let collider = &physics.colliders[i];
@@ -182,7 +186,9 @@ impl NavMesh {
         let mut regions: Vec<HashSet<GridCell>> = Vec::new();
 
         for &cell in &all_walkable {
-            if visited.contains(&cell) { continue; }
+            if visited.contains(&cell) {
+                continue;
+            }
 
             // Flood fill
             let mut region = HashSet::new();
@@ -197,14 +203,18 @@ impl NavMesh {
 
                 // 4-yön komşuluk
                 for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-                    let neighbor = GridCell { x: current.x + dx, z: current.z + dz };
+                    let neighbor = GridCell {
+                        x: current.x + dx,
+                        z: current.z + dz,
+                    };
                     if all_walkable.contains(&neighbor) && !visited.contains(&neighbor) {
                         stack.push(neighbor);
                     }
                 }
             }
 
-            if region.len() >= 4 { // Çok küçük bölgeleri atla
+            if region.len() >= 4 {
+                // Çok küçük bölgeleri atla
                 regions.push(region);
             }
         }
@@ -225,7 +235,10 @@ impl NavMesh {
                 let mut max_z = start_cell.z;
 
                 // X yönünde genişlet
-                while remaining.contains(&GridCell { x: max_x + 1, z: start_cell.z }) {
+                while remaining.contains(&GridCell {
+                    x: max_x + 1,
+                    z: start_cell.z,
+                }) {
                     max_x += 1;
                 }
 
@@ -247,10 +260,7 @@ impl NavMesh {
                 }
 
                 // Polygon oluştur
-                let y = walkable_y
-                    .get(&start_cell)
-                    .copied()
-                    .unwrap_or(0.0);
+                let y = walkable_y.get(&start_cell).copied().unwrap_or(0.0);
 
                 let min_world = Vec3::new(
                     start_cell.x as f32 * cell_size,
@@ -333,11 +343,9 @@ impl NavMesh {
                 }
 
                 // Kenar paylaşımı kontrolü
-                if let Some(edge) = Self::find_shared_edge(
-                    &polygons[i].vertices,
-                    &polygons[j].vertices,
-                    tolerance,
-                ) {
+                if let Some(edge) =
+                    Self::find_shared_edge(&polygons[i].vertices, &polygons[j].vertices, tolerance)
+                {
                     let id_i = polygons[i].id;
                     let id_j = polygons[j].id;
                     adjacency[i].push((id_j, edge));
@@ -365,10 +373,10 @@ impl NavMesh {
                 let b2 = verts_b[(j + 1) % verts_b.len()];
 
                 // 1. Tam kenar eşleşmesi (her iki yönde)
-                let match_1 = (a1 - b1).length_squared() < tol_sq
-                    && (a2 - b2).length_squared() < tol_sq;
-                let match_2 = (a1 - b2).length_squared() < tol_sq
-                    && (a2 - b1).length_squared() < tol_sq;
+                let match_1 =
+                    (a1 - b1).length_squared() < tol_sq && (a2 - b2).length_squared() < tol_sq;
+                let match_2 =
+                    (a1 - b2).length_squared() < tol_sq && (a2 - b1).length_squared() < tol_sq;
 
                 if match_1 || match_2 {
                     return Some([a1, a2]);
@@ -384,7 +392,13 @@ impl NavMesh {
     }
 
     /// İki kenar parçasının kollineer olup olmadığını ve örtüşüp örtüşmediğini kontrol eder.
-    fn check_edge_overlap(a1: Vec3, a2: Vec3, b1: Vec3, b2: Vec3, tolerance: f32) -> Option<[Vec3; 2]> {
+    fn check_edge_overlap(
+        a1: Vec3,
+        a2: Vec3,
+        b1: Vec3,
+        b2: Vec3,
+        tolerance: f32,
+    ) -> Option<[Vec3; 2]> {
         // Kenarların yönleri
         let da = a2 - a1;
         let db = b2 - b1;
@@ -393,16 +407,22 @@ impl NavMesh {
         let da_len = (da.x * da.x + da.z * da.z).sqrt();
         let db_len = (db.x * db.x + db.z * db.z).sqrt();
 
-        if da_len < 0.001 || db_len < 0.001 { return None; }
+        if da_len < 0.001 || db_len < 0.001 {
+            return None;
+        }
 
         // Kollineerlik: cross product ≈ 0
         let cross = da.x * db.z - da.z * db.x;
-        if cross.abs() / (da_len * db_len) > 0.01 { return None; } // Paralel değil
+        if cross.abs() / (da_len * db_len) > 0.01 {
+            return None;
+        } // Paralel değil
 
         // b1'in a kenarına olan noktadan doğruya uzaklığı
         let ab = b1 - a1;
         let dist_to_line = (ab.x * da.z - ab.z * da.x).abs() / da_len;
-        if dist_to_line > tolerance { return None; } // Aynı doğru üzerinde değil
+        if dist_to_line > tolerance {
+            return None;
+        } // Aynı doğru üzerinde değil
 
         // Kenarın yönünde parametrik projeksiyonlar
         let dir = Vec3::new(da.x / da_len, 0.0, da.z / da_len);
@@ -419,16 +439,8 @@ impl NavMesh {
         let overlap_max = t_a2.min(b_max);
 
         if overlap_max - overlap_min > tolerance * 0.5 {
-            let p1 = Vec3::new(
-                a1.x + dir.x * overlap_min,
-                a1.y,
-                a1.z + dir.z * overlap_min,
-            );
-            let p2 = Vec3::new(
-                a1.x + dir.x * overlap_max,
-                a1.y,
-                a1.z + dir.z * overlap_max,
-            );
+            let p1 = Vec3::new(a1.x + dir.x * overlap_min, a1.y, a1.z + dir.z * overlap_min);
+            let p2 = Vec3::new(a1.x + dir.x * overlap_max, a1.y, a1.z + dir.z * overlap_max);
             Some([p1, p2])
         } else {
             None
@@ -497,11 +509,16 @@ impl NavMesh {
         let mut g_score: HashMap<u32, f32> = HashMap::new();
         let mut closed: HashSet<u32> = HashSet::new();
 
-        open.push(Node { poly_id: start_poly.id, f_cost: 0.0 });
+        open.push(Node {
+            poly_id: start_poly.id,
+            f_cost: 0.0,
+        });
         g_score.insert(start_poly.id, 0.0);
 
         while let Some(current) = open.pop() {
-            if closed.contains(&current.poly_id) { continue; }
+            if closed.contains(&current.poly_id) {
+                continue;
+            }
             closed.insert(current.poly_id);
 
             if current.poly_id == end_poly.id {
@@ -531,7 +548,9 @@ impl NavMesh {
             let curr_g = *g_score.get(&current.poly_id).unwrap_or(&f32::MAX);
 
             for &(neighbor_id, ref _edge) in &current_poly.neighbors {
-                if closed.contains(&neighbor_id) { continue; }
+                if closed.contains(&neighbor_id) {
+                    continue;
+                }
 
                 let neighbor_poly = match poly_map.get(&neighbor_id) {
                     Some(p) => p,
@@ -544,8 +563,11 @@ impl NavMesh {
                 if tentative_g < *g_score.get(&neighbor_id).unwrap_or(&f32::MAX) {
                     g_score.insert(neighbor_id, tentative_g);
                     let h = (neighbor_poly.center - end).length();
-                    came_from.insert(neighbor_id, (current.poly_id, _edge.clone()));
-                    open.push(Node { poly_id: neighbor_id, f_cost: tentative_g + h });
+                    came_from.insert(neighbor_id, (current.poly_id, *_edge));
+                    open.push(Node {
+                        poly_id: neighbor_id,
+                        f_cost: tentative_g + h,
+                    });
                 }
             }
         }
@@ -627,7 +649,7 @@ mod tests {
         };
 
         let mesh = NavMesh::build_from_physics(&world, &config);
-        assert!(mesh.polygons.len() > 0, "En az bir polygon olmalı");
+        assert!(!mesh.polygons.is_empty(), "En az bir polygon olmalı");
 
         let stats = mesh.stats();
         println!("Test NavMesh: {}", stats);
@@ -645,14 +667,11 @@ mod tests {
 
         let mesh = NavMesh::build_from_physics(&world, &config);
 
-        let path = mesh.find_path(
-            Vec3::new(-5.0, 0.0, 0.0),
-            Vec3::new(10.0, 0.0, 0.0),
-        );
+        let path = mesh.find_path(Vec3::new(-5.0, 0.0, 0.0), Vec3::new(10.0, 0.0, 0.0));
 
         assert!(path.is_some(), "Yol bulunmalı");
         let path = path.unwrap();
-        assert!(path.len() >= 1, "Yol en az bir waypoint içermeli");
+        assert!(!path.is_empty(), "Yol en az bir waypoint içermeli");
     }
 
     #[test]

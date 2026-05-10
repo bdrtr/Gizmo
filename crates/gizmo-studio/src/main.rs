@@ -20,7 +20,7 @@ fn main() {
         .with_icon(include_bytes!("../../../media/logo.png"))
         .add_event::<crate::state::ShaderReloadEvent>();
 
-    app = app.set_setup(|world, renderer| setup::setup_studio_scene(world, renderer));
+    app = app.set_setup(setup::setup_studio_scene);
 
     app = app.set_update(|world, state, dt, input| {
         gizmo::systems::physics::cpu_physics_step_system(world, dt);

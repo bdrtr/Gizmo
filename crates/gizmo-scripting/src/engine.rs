@@ -103,19 +103,22 @@ impl ScriptEngine {
         lua.globals().set(
             "print",
             lua.create_function(move |_, values: LuaMultiValue| {
-                let parts: Vec<String> = values.iter().map(|v| {
-                    if let mlua::Value::String(s) = v {
-                        s.to_str().unwrap_or("").to_string()
-                    } else if let mlua::Value::Number(n) = v {
-                        n.to_string()
-                    } else if let mlua::Value::Integer(i) = v {
-                        i.to_string()
-                    } else if let mlua::Value::Boolean(b) = v {
-                        b.to_string()
-                    } else {
-                        format!("{:?}", v)
-                    }
-                }).collect();
+                let parts: Vec<String> = values
+                    .iter()
+                    .map(|v| {
+                        if let mlua::Value::String(s) = v {
+                            s.to_str().unwrap_or("").to_string()
+                        } else if let mlua::Value::Number(n) = v {
+                            n.to_string()
+                        } else if let mlua::Value::Integer(i) = v {
+                            i.to_string()
+                        } else if let mlua::Value::Boolean(b) = v {
+                            b.to_string()
+                        } else {
+                            format!("{:?}", v)
+                        }
+                    })
+                    .collect();
                 if let Ok(mut q) = lq_clone2.lock() {
                     q.push(("info".to_string(), parts.join("\t")));
                 }

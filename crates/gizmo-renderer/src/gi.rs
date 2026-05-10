@@ -46,19 +46,19 @@ impl SHCoeffs {
         self.l0 += color * y0;
 
         // Band 1
-        let y1_neg1 = 0.488603 * d.y;  // sqrt(3) / (2*sqrt(pi)) * y
-        let y1_0    = 0.488603 * d.z;  // sqrt(3) / (2*sqrt(pi)) * z
-        let y1_pos1 = 0.488603 * d.x;  // sqrt(3) / (2*sqrt(pi)) * x
+        let y1_neg1 = 0.488603 * d.y; // sqrt(3) / (2*sqrt(pi)) * y
+        let y1_0 = 0.488603 * d.z; // sqrt(3) / (2*sqrt(pi)) * z
+        let y1_pos1 = 0.488603 * d.x; // sqrt(3) / (2*sqrt(pi)) * x
         self.l1[0] += color * y1_neg1;
         self.l1[1] += color * y1_0;
         self.l1[2] += color * y1_pos1;
 
         // Band 2
-        let y2_neg2 = 1.092548 * d.x * d.y;                      // sqrt(15)/(2*sqrt(pi)) * xy
-        let y2_neg1 = 1.092548 * d.y * d.z;                      // sqrt(15)/(2*sqrt(pi)) * yz
-        let y2_0    = 0.315392 * (3.0 * d.z * d.z - 1.0);        // sqrt(5)/(4*sqrt(pi)) * (3z²-1)
-        let y2_pos1 = 1.092548 * d.x * d.z;                      // sqrt(15)/(2*sqrt(pi)) * xz
-        let y2_pos2 = 0.546274 * (d.x * d.x - d.y * d.y);       // sqrt(15)/(4*sqrt(pi)) * (x²-y²)
+        let y2_neg2 = 1.092548 * d.x * d.y; // sqrt(15)/(2*sqrt(pi)) * xy
+        let y2_neg1 = 1.092548 * d.y * d.z; // sqrt(15)/(2*sqrt(pi)) * yz
+        let y2_0 = 0.315392 * (3.0 * d.z * d.z - 1.0); // sqrt(5)/(4*sqrt(pi)) * (3z²-1)
+        let y2_pos1 = 1.092548 * d.x * d.z; // sqrt(15)/(2*sqrt(pi)) * xz
+        let y2_pos2 = 0.546274 * (d.x * d.x - d.y * d.y); // sqrt(15)/(4*sqrt(pi)) * (x²-y²)
         self.l2[0] += color * y2_neg2;
         self.l2[1] += color * y2_neg1;
         self.l2[2] += color * y2_0;
@@ -72,11 +72,11 @@ impl SHCoeffs {
 
         let y0 = 0.282095;
         let y1_neg1 = 0.488603 * d.y;
-        let y1_0    = 0.488603 * d.z;
+        let y1_0 = 0.488603 * d.z;
         let y1_pos1 = 0.488603 * d.x;
         let y2_neg2 = 1.092548 * d.x * d.y;
         let y2_neg1 = 1.092548 * d.y * d.z;
-        let y2_0    = 0.315392 * (3.0 * d.z * d.z - 1.0);
+        let y2_0 = 0.315392 * (3.0 * d.z * d.z - 1.0);
         let y2_pos1 = 1.092548 * d.x * d.z;
         let y2_pos2 = 0.546274 * (d.x * d.x - d.y * d.y);
 
@@ -124,15 +124,33 @@ impl SHCoeffs {
     /// GPU'ya gönderilebilecek flat float dizisi (27 float)
     pub fn to_gpu_data(&self) -> [f32; 28] {
         let mut data = [0.0f32; 28]; // 28 = 27 + 1 padding (16-byte aligned)
-        data[0]  = self.l0.x; data[1]  = self.l0.y; data[2]  = self.l0.z;
-        data[3]  = self.l1[0].x; data[4]  = self.l1[0].y; data[5]  = self.l1[0].z;
-        data[6]  = self.l1[1].x; data[7]  = self.l1[1].y; data[8]  = self.l1[1].z;
-        data[9]  = self.l1[2].x; data[10] = self.l1[2].y; data[11] = self.l1[2].z;
-        data[12] = self.l2[0].x; data[13] = self.l2[0].y; data[14] = self.l2[0].z;
-        data[15] = self.l2[1].x; data[16] = self.l2[1].y; data[17] = self.l2[1].z;
-        data[18] = self.l2[2].x; data[19] = self.l2[2].y; data[20] = self.l2[2].z;
-        data[21] = self.l2[3].x; data[22] = self.l2[3].y; data[23] = self.l2[3].z;
-        data[24] = self.l2[4].x; data[25] = self.l2[4].y; data[26] = self.l2[4].z;
+        data[0] = self.l0.x;
+        data[1] = self.l0.y;
+        data[2] = self.l0.z;
+        data[3] = self.l1[0].x;
+        data[4] = self.l1[0].y;
+        data[5] = self.l1[0].z;
+        data[6] = self.l1[1].x;
+        data[7] = self.l1[1].y;
+        data[8] = self.l1[1].z;
+        data[9] = self.l1[2].x;
+        data[10] = self.l1[2].y;
+        data[11] = self.l1[2].z;
+        data[12] = self.l2[0].x;
+        data[13] = self.l2[0].y;
+        data[14] = self.l2[0].z;
+        data[15] = self.l2[1].x;
+        data[16] = self.l2[1].y;
+        data[17] = self.l2[1].z;
+        data[18] = self.l2[2].x;
+        data[19] = self.l2[2].y;
+        data[20] = self.l2[2].z;
+        data[21] = self.l2[3].x;
+        data[22] = self.l2[3].y;
+        data[23] = self.l2[3].z;
+        data[24] = self.l2[4].x;
+        data[25] = self.l2[4].y;
+        data[26] = self.l2[4].z;
         data[27] = 0.0; // padding
         data
     }
@@ -225,7 +243,9 @@ impl ProbeGrid {
             for &(light_pos, color, intensity, radius) in point_lights {
                 let to_light = light_pos - probe.position;
                 let dist = to_light.length();
-                if dist < 0.001 || dist > radius { continue; }
+                if dist < 0.001 || dist > radius {
+                    continue;
+                }
 
                 let direction = to_light / dist;
                 let attenuation = 1.0 - (dist / radius).min(1.0);
@@ -264,9 +284,7 @@ impl ProbeGrid {
 
         // 8 köşe probe'u oku
         let idx = |x: u32, y: u32, z: u32| -> usize {
-            (z * self.resolution[1] * self.resolution[0]
-                + y * self.resolution[0]
-                + x) as usize
+            (z * self.resolution[1] * self.resolution[0] + y * self.resolution[0] + x) as usize
         };
 
         let get = |x: u32, y: u32, z: u32| -> &SHCoeffs {
@@ -361,7 +379,7 @@ mod tests {
         let dir_lights = vec![(
             Vec3::new(0.0, -1.0, 0.0), // Yukarıdan aşağı
             Vec3::new(1.0, 0.9, 0.7),  // Sıcak beyaz
-            2.0,                         // Yoğunluk
+            2.0,                       // Yoğunluk
         )];
 
         grid.bake_from_lights(&dir_lights, &[], Vec3::new(0.1, 0.1, 0.15));

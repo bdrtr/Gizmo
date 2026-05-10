@@ -90,25 +90,54 @@ impl Joint {
         }
     }
 
-    pub fn fixed(entity_a: Entity, entity_b: Entity, local_anchor_a: Vec3, local_anchor_b: Vec3) -> Self {
-        debug_assert_ne!(entity_a, entity_b, "Joint: entity_a and entity_b must be different");
-        Self {
+    pub fn fixed(
+        entity_a: Entity,
+        entity_b: Entity,
+        local_anchor_a: Vec3,
+        local_anchor_b: Vec3,
+    ) -> Self {
+        debug_assert_ne!(
             entity_a, entity_b,
-            local_anchor_a, local_anchor_b,
-            break_force: f32::INFINITY, break_torque: f32::INFINITY,
-            is_broken: false, collision_enabled: false,
+            "Joint: entity_a and entity_b must be different"
+        );
+        Self {
+            entity_a,
+            entity_b,
+            local_anchor_a,
+            local_anchor_b,
+            break_force: f32::INFINITY,
+            break_torque: f32::INFINITY,
+            is_broken: false,
+            collision_enabled: false,
             data: JointData::Fixed,
         }
     }
 
-    pub fn hinge(entity_a: Entity, entity_b: Entity, local_anchor_a: Vec3, local_anchor_b: Vec3, axis: Vec3) -> Self {
-        debug_assert_ne!(entity_a, entity_b, "Joint: entity_a and entity_b must be different");
-        let safe_axis = if axis.length_squared() > 1e-6 { axis.normalize() } else { Vec3::Y };
-        Self {
+    pub fn hinge(
+        entity_a: Entity,
+        entity_b: Entity,
+        local_anchor_a: Vec3,
+        local_anchor_b: Vec3,
+        axis: Vec3,
+    ) -> Self {
+        debug_assert_ne!(
             entity_a, entity_b,
-            local_anchor_a, local_anchor_b,
-            break_force: f32::INFINITY, break_torque: f32::INFINITY,
-            is_broken: false, collision_enabled: false,
+            "Joint: entity_a and entity_b must be different"
+        );
+        let safe_axis = if axis.length_squared() > 1e-6 {
+            axis.normalize()
+        } else {
+            Vec3::Y
+        };
+        Self {
+            entity_a,
+            entity_b,
+            local_anchor_a,
+            local_anchor_b,
+            break_force: f32::INFINITY,
+            break_torque: f32::INFINITY,
+            is_broken: false,
+            collision_enabled: false,
             data: JointData::Hinge(HingeJointData {
                 axis: safe_axis,
                 use_limits: false,
@@ -122,13 +151,25 @@ impl Joint {
         }
     }
 
-    pub fn ball_socket(entity_a: Entity, entity_b: Entity, local_anchor_a: Vec3, local_anchor_b: Vec3) -> Self {
-        debug_assert_ne!(entity_a, entity_b, "Joint: entity_a and entity_b must be different");
-        Self {
+    pub fn ball_socket(
+        entity_a: Entity,
+        entity_b: Entity,
+        local_anchor_a: Vec3,
+        local_anchor_b: Vec3,
+    ) -> Self {
+        debug_assert_ne!(
             entity_a, entity_b,
-            local_anchor_a, local_anchor_b,
-            break_force: f32::INFINITY, break_torque: f32::INFINITY,
-            is_broken: false, collision_enabled: false,
+            "Joint: entity_a and entity_b must be different"
+        );
+        Self {
+            entity_a,
+            entity_b,
+            local_anchor_a,
+            local_anchor_b,
+            break_force: f32::INFINITY,
+            break_torque: f32::INFINITY,
+            is_broken: false,
+            collision_enabled: false,
             data: JointData::BallSocket(BallSocketJointData {
                 use_cone_limit: false,
                 cone_limit_angle: std::f32::consts::PI,
@@ -137,36 +178,73 @@ impl Joint {
         }
     }
 
-    pub fn slider(entity_a: Entity, entity_b: Entity, local_anchor_a: Vec3, local_anchor_b: Vec3, axis: Vec3) -> Self {
-        debug_assert_ne!(entity_a, entity_b, "Joint: entity_a and entity_b must be different");
-        let safe_axis = if axis.length_squared() > 1e-6 { axis.normalize() } else { Vec3::Y };
-        Self {
+    pub fn slider(
+        entity_a: Entity,
+        entity_b: Entity,
+        local_anchor_a: Vec3,
+        local_anchor_b: Vec3,
+        axis: Vec3,
+    ) -> Self {
+        debug_assert_ne!(
             entity_a, entity_b,
-            local_anchor_a, local_anchor_b,
-            break_force: f32::INFINITY, break_torque: f32::INFINITY,
-            is_broken: false, collision_enabled: false,
+            "Joint: entity_a and entity_b must be different"
+        );
+        let safe_axis = if axis.length_squared() > 1e-6 {
+            axis.normalize()
+        } else {
+            Vec3::Y
+        };
+        Self {
+            entity_a,
+            entity_b,
+            local_anchor_a,
+            local_anchor_b,
+            break_force: f32::INFINITY,
+            break_torque: f32::INFINITY,
+            is_broken: false,
+            collision_enabled: false,
             data: JointData::Slider(SliderJointData {
                 axis: safe_axis,
                 use_limits: false,
-                lower_limit: -10.0, upper_limit: 10.0,
+                lower_limit: -10.0,
+                upper_limit: 10.0,
                 use_motor: false,
-                motor_target_velocity: 0.0, motor_max_force: 0.0,
+                motor_target_velocity: 0.0,
+                motor_max_force: 0.0,
                 current_position: 0.0,
                 initial_relative_rotation: None,
             }),
         }
     }
 
-    pub fn spring(entity_a: Entity, entity_b: Entity, local_anchor_a: Vec3, local_anchor_b: Vec3, rest_length: f32, stiffness: f32, damping: f32) -> Self {
-        debug_assert_ne!(entity_a, entity_b, "Joint: entity_a and entity_b must be different");
-        Self {
+    pub fn spring(
+        entity_a: Entity,
+        entity_b: Entity,
+        local_anchor_a: Vec3,
+        local_anchor_b: Vec3,
+        rest_length: f32,
+        stiffness: f32,
+        damping: f32,
+    ) -> Self {
+        debug_assert_ne!(
             entity_a, entity_b,
-            local_anchor_a, local_anchor_b,
-            break_force: f32::INFINITY, break_torque: f32::INFINITY,
-            is_broken: false, collision_enabled: false,
+            "Joint: entity_a and entity_b must be different"
+        );
+        Self {
+            entity_a,
+            entity_b,
+            local_anchor_a,
+            local_anchor_b,
+            break_force: f32::INFINITY,
+            break_torque: f32::INFINITY,
+            is_broken: false,
+            collision_enabled: false,
             data: JointData::Spring(SpringJointData {
-                rest_length, stiffness, damping,
-                min_length: 0.0, max_length: None,
+                rest_length,
+                stiffness,
+                damping,
+                min_length: 0.0,
+                max_length: None,
             }),
         }
     }
@@ -194,4 +272,3 @@ impl Joint {
         false
     }
 }
-

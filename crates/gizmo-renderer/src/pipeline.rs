@@ -127,7 +127,9 @@ pub fn load_shader_web(
             let mut depth = 0i32;
             let mut end_offset = 0;
             for (j, ch) in after_start.char_indices() {
-                if ch == '{' { depth += 1; }
+                if ch == '{' {
+                    depth += 1;
+                }
                 if ch == '}' {
                     depth -= 1;
                     if depth == 0 {
@@ -430,27 +432,52 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
     });
 
     #[cfg(not(target_arch = "wasm32"))]
-    let shader = load_shader(device, "demo/assets/shaders/shader.wgsl", include_str!("shaders/shader.wgsl"), "Shader");
+    let shader = load_shader(
+        device,
+        "demo/assets/shaders/shader.wgsl",
+        include_str!("shaders/shader.wgsl"),
+        "Shader",
+    );
     #[cfg(target_arch = "wasm32")]
     let shader = load_shader_web(device, include_str!("shaders/shader.wgsl"), "Shader");
 
     #[cfg(not(target_arch = "wasm32"))]
-    let unlit_shader = load_shader(device, "demo/assets/shaders/unlit.wgsl", include_str!("shaders/unlit.wgsl"), "Unlit Shader");
+    let unlit_shader = load_shader(
+        device,
+        "demo/assets/shaders/unlit.wgsl",
+        include_str!("shaders/unlit.wgsl"),
+        "Unlit Shader",
+    );
     #[cfg(target_arch = "wasm32")]
     let unlit_shader = load_shader_web(device, include_str!("shaders/unlit.wgsl"), "Unlit Shader");
 
     #[cfg(not(target_arch = "wasm32"))]
-    let water_shader = load_shader(device, "demo/assets/shaders/water.wgsl", include_str!("shaders/water.wgsl"), "Water Shader");
+    let water_shader = load_shader(
+        device,
+        "demo/assets/shaders/water.wgsl",
+        include_str!("shaders/water.wgsl"),
+        "Water Shader",
+    );
     #[cfg(target_arch = "wasm32")]
     let water_shader = load_shader_web(device, include_str!("shaders/water.wgsl"), "Water Shader");
 
     #[cfg(not(target_arch = "wasm32"))]
-    let sky_shader = load_shader(device, "demo/assets/shaders/sky.wgsl", include_str!("shaders/sky.wgsl"), "Sky Shader");
+    let sky_shader = load_shader(
+        device,
+        "demo/assets/shaders/sky.wgsl",
+        include_str!("shaders/sky.wgsl"),
+        "Sky Shader",
+    );
     #[cfg(target_arch = "wasm32")]
     let sky_shader = load_shader_web(device, include_str!("shaders/sky.wgsl"), "Sky Shader");
 
     #[cfg(not(target_arch = "wasm32"))]
-    let grid_shader = load_shader(device, "demo/assets/shaders/grid.wgsl", include_str!("shaders/grid.wgsl"), "Grid Shader");
+    let grid_shader = load_shader(
+        device,
+        "demo/assets/shaders/grid.wgsl",
+        include_str!("shaders/grid.wgsl"),
+        "Grid Shader",
+    );
     #[cfg(target_arch = "wasm32")]
     let grid_shader = load_shader_web(device, include_str!("shaders/grid.wgsl"), "Grid Shader");
 
@@ -528,7 +555,11 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
             None,
             Some(wgpu::BlendState::ALPHA_BLENDING),
             // WebGPU/WebGL2 PolygonMode::Line desteklemiyor
-            if cfg!(target_arch = "wasm32") { wgpu::PolygonMode::Fill } else { wgpu::PolygonMode::Line },
+            if cfg!(target_arch = "wasm32") {
+                wgpu::PolygonMode::Fill
+            } else {
+                wgpu::PolygonMode::Line
+            },
         ),
         transparent: create_main(
             &shader,

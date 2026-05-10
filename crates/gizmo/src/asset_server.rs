@@ -1,12 +1,18 @@
 use crate::core::asset::Handle;
-use crate::renderer::components::{Material, Mesh};
 use crate::renderer::async_assets::AsyncAssetLoader;
+use crate::renderer::components::{Material, Mesh};
 use wgpu::util::DeviceExt;
 
 pub struct AssetServer {
     pub loader: AsyncAssetLoader,
     mesh_paths: std::collections::HashMap<String, Handle<Mesh>>,
     _material_paths: std::collections::HashMap<String, Handle<Material>>,
+}
+
+impl Default for AssetServer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AssetServer {
@@ -43,11 +49,13 @@ pub fn asset_server_update_system(
     for obj in completed.objs {
         let mesh_source = format!("obj:{}", obj.path);
         // Create wgpu buffer
-        let vbuf = renderer.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(&format!("Obj VBuf: {}", obj.path)),
-            contents: bytemuck::cast_slice(&obj.vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
+        let vbuf = renderer
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(&format!("Obj VBuf: {}", obj.path)),
+                contents: bytemuck::cast_slice(&obj.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
         let mesh = Mesh::new(
             &renderer.device,
             std::sync::Arc::new(vbuf),

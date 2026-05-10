@@ -23,11 +23,14 @@ use gizmo_physics::components::{Transform, Velocity};
 pub fn ai_navmesh_rebuild_system(world: &World, _dt: f32) {
     let grid_opt = world.get_resource_mut::<NavGrid>();
     let physics_opt = world.get_resource::<gizmo_physics::world::PhysicsWorld>();
-    
+
     if let (Some(mut grid), Some(physics_world)) = (grid_opt, physics_opt) {
         if grid.needs_rebuild {
             grid.update_from_physics_world(&physics_world);
-            println!("[AI] NavMesh dinamik olarak PhysicsWorld üzerinden güncellendi! Toplam engel: {}", grid.obstacles.len());
+            println!(
+                "[AI] NavMesh dinamik olarak PhysicsWorld üzerinden güncellendi! Toplam engel: {}",
+                grid.obstacles.len()
+            );
         }
     }
 }

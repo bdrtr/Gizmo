@@ -90,7 +90,7 @@ pub fn handle_scene_operations(
 
     if editor_state.scene.rebuild_navmesh_request {
         editor_state.scene.rebuild_navmesh_request = false;
-        
+
         // Tetiklendiğinde gizmo-ai içindeki grid'in needs_rebuild bayrağını true yaparız
         if let Some(mut grid) = world.get_resource_mut::<gizmo::ai::pathfinding::NavGrid>() {
             grid.needs_rebuild = true;
@@ -198,7 +198,9 @@ pub fn handle_scene_operations(
                     );
                     world.add_component(
                         e,
-                        gizmo::physics::Collider::box_collider(gizmo::math::Vec3::new(1.0, 1.0, 1.0)),
+                        gizmo::physics::Collider::box_collider(gizmo::math::Vec3::new(
+                            1.0, 1.0, 1.0,
+                        )),
                     );
                     editor_state.log_info("Yeni küp oluşturuldu.");
                 }

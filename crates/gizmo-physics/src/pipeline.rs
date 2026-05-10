@@ -12,8 +12,8 @@ use crate::{
     soft_body::SoftBodyMesh,
     world::{PhysicsWorld, ZoneShape},
 };
-use gizmo_math::Aabb;
 use gizmo_core::entity::Entity;
+use gizmo_math::Aabb;
 use rayon::prelude::*;
 use std::collections::HashMap;
 
@@ -29,10 +29,10 @@ impl PhysicsWorld {
         &mut self,
         dt: f32,
     ) -> Result<(), crate::error::GizmoError> {
-        let default_gravity  = self.integrator.gravity;
-        let gravity_fields   = &self.gravity_fields;
-        let fluid_zones      = &self.fluid_zones;
-        let watchlist        = &self.watchlist;
+        let default_gravity = self.integrator.gravity;
+        let gravity_fields = &self.gravity_fields;
+        let fluid_zones = &self.fluid_zones;
+        let watchlist = &self.watchlist;
 
         // Parallel iteration over all entities.
         // `try_for_each` short-circuits on the first `Err` and propagates it.
@@ -123,8 +123,8 @@ impl PhysicsWorld {
     #[tracing::instrument(skip_all, name = "soft_body_fluid")]
     pub(crate) fn soft_body_and_fluid_step(
         &mut self,
-        soft_bodies:  &mut [(Entity, SoftBodyMesh, Transform)],
-        _fluid_sims:  &mut [(Entity, crate::components::FluidSimulation, Transform)],
+        soft_bodies: &mut [(Entity, SoftBodyMesh, Transform)],
+        _fluid_sims: &mut [(Entity, crate::components::FluidSimulation, Transform)],
         dt: f32,
     ) {
         let gravity = self.integrator.gravity;
@@ -175,11 +175,11 @@ impl PhysicsWorld {
 
         // Rigid bodies — sequential because `spatial_hash` needs `&mut self`.
         for i in 0..self.entities.len() {
-            let entity    = self.entities[i];
-            let rb        = &self.rigid_bodies[i];
+            let entity = self.entities[i];
+            let rb = &self.rigid_bodies[i];
             let transform = &self.transforms[i];
-            let vel       = &self.velocities[i];
-            let collider  = &self.colliders[i];
+            let vel = &self.velocities[i];
+            let collider = &self.colliders[i];
 
             let base_aabb = collider.compute_aabb(transform.position, transform.rotation);
 
@@ -191,7 +191,7 @@ impl PhysicsWorld {
                 } else {
                     dt
                 };
-                let swept_pos  = transform.position + vel.linear * sweep_dt;
+                let swept_pos = transform.position + vel.linear * sweep_dt;
                 let swept_aabb = collider.compute_aabb(swept_pos, transform.rotation);
                 base_aabb.merge(swept_aabb)
             } else {
@@ -212,7 +212,10 @@ impl PhysicsWorld {
             );
             self.spatial_hash.insert(
                 *entity,
-                Aabb { min: min.into(), max: max.into() },
+                Aabb {
+                    min: min.into(),
+                    max: max.into(),
+                },
             );
         }
     }
@@ -231,7 +234,7 @@ impl PhysicsWorld {
         soft_bodies: &mut [(Entity, SoftBodyMesh, Transform)],
         dt: f32,
     ) -> Vec<ContactManifold> {
-        let entity_map      = &self.entity_index_map;
+        let entity_map = &self.entity_index_map;
         let soft_entity_map: HashMap<u32, usize> = soft_bodies
             .iter()
             .enumerate()
@@ -360,10 +363,10 @@ impl PhysicsWorld {
             .collect();
 
         // ── Sequential post-processing ────────────────────────────────────
-        let mut manifolds          = Vec::new();
-        let mut current_cache      = HashMap::new();
-        let mut soft_rigid_pairs   = Vec::new();
-        let mut soft_soft_pairs    = Vec::new();
+        let mut manifolds = Vec::new();
+        let mut current_cache = HashMap::new();
+        let mut soft_rigid_pairs = Vec::new();
+        let mut soft_soft_pairs = Vec::new();
 
         for (entity_a, entity_b, contacts, is_trigger_a, is_trigger_b, mat_a, mat_b, is_soft) in
             narrowphase_results
@@ -375,7 +378,7 @@ impl PhysicsWorld {
                 match (is_a_rigid, is_b_rigid) {
                     (true, false) => soft_rigid_pairs.push((entity_a, entity_b)),
                     (false, true) => soft_rigid_pairs.push((entity_b, entity_a)),
-                    _             => soft_soft_pairs.push((entity_a, entity_b)),
+                    _ => soft_soft_pairs.push((entity_a, entity_b)),
                 }
                 continue;
             }
@@ -393,26 +396,26 @@ impl PhysicsWorld {
                 };
                 self.trigger_events.push(TriggerEvent {
                     trigger_entity: if is_trigger_a { entity_a } else { entity_b },
-                    other_entity:   if is_trigger_a { entity_b } else { entity_a },
+                    other_entity: if is_trigger_a { entity_b } else { entity_a },
                     event_type,
                 });
             } else {
                 // ── Solid contact ─────────────────────────────────────────
                 let mut manifold = ContactManifold::new(entity_a, entity_b);
-                manifold.friction =
-                    (mat_a.dynamic_friction * mat_b.dynamic_friction).sqrt();
-                manifold.static_friction =
-                    (mat_a.static_friction * mat_b.static_friction).sqrt();
+                manifold.friction = (mat_a.dynamic_friction * mat_b.dynamic_friction).sqrt();
+                manifold.static_friction = (mat_a.static_friction * mat_b.static_friction).sqrt();
                 manifold.restitution = mat_a.restitution.max(mat_b.restitution);
 
                 // Warm-start: reuse impulses from the previous frame's manifold.
                 if let Some((_, Some(old_manifold))) = self.contact_cache.get(&pair) {
                     manifold.lifetime = old_manifold.lifetime + 1;
                     for mut contact in contacts.iter().copied() {
-                        if let Some(old) = old_manifold.contacts.iter().find(|o| {
-                            (o.point - contact.point).length_squared() < 0.02 * 0.02
-                        }) {
-                            contact.normal_impulse  = old.normal_impulse;
+                        if let Some(old) = old_manifold
+                            .contacts
+                            .iter()
+                            .find(|o| (o.point - contact.point).length_squared() < 0.02 * 0.02)
+                        {
+                            contact.normal_impulse = old.normal_impulse;
                             contact.tangent_impulse = old.tangent_impulse;
                         }
                         manifold.contacts.push(contact);
@@ -457,14 +460,14 @@ impl PhysicsWorld {
             if *is_trigger {
                 self.trigger_events.push(TriggerEvent {
                     trigger_entity: pair.0,
-                    other_entity:   pair.1,
-                    event_type:     CollisionEventType::Ended,
+                    other_entity: pair.1,
+                    event_type: CollisionEventType::Ended,
                 });
             } else {
                 self.collision_events.push(CollisionEvent {
-                    entity_a:       pair.0,
-                    entity_b:       pair.1,
-                    event_type:     CollisionEventType::Ended,
+                    entity_a: pair.0,
+                    entity_b: pair.1,
+                    event_type: CollisionEventType::Ended,
                     contact_points: arrayvec::ArrayVec::new(),
                 });
             }
@@ -473,9 +476,9 @@ impl PhysicsWorld {
         self.contact_cache = current_cache;
 
         // ── Stage 3.5: Soft vs Rigid contacts (sequential) ───────────────
-        let node_shape = crate::components::ColliderShape::Sphere(
-            crate::components::SphereShape { radius: 0.1 },
-        );
+        let node_shape = crate::components::ColliderShape::Sphere(crate::components::SphereShape {
+            radius: 0.1,
+        });
 
         for (rigid_ent, soft_ent) in soft_rigid_pairs {
             let (Some(&rigid_idx), Some(&soft_idx)) = (
@@ -486,13 +489,13 @@ impl PhysicsWorld {
             };
 
             // Copy out the mutable data we need from self before the loop.
-            let rigid_transform  = self.transforms[rigid_idx];
-            let rigid_collider   = self.colliders[rigid_idx].clone();
-            let rigid_rb         = &self.rigid_bodies[rigid_idx];
+            let rigid_transform = self.transforms[rigid_idx];
+            let rigid_collider = self.colliders[rigid_idx].clone();
+            let rigid_rb = &self.rigid_bodies[rigid_idx];
             let is_rigid_dynamic = rigid_rb.is_dynamic();
-            let inv_m_rb         = rigid_rb.inv_mass();
+            let inv_m_rb = rigid_rb.inv_mass();
 
-            let mut rigid_vel   = self.velocities[rigid_idx];
+            let mut rigid_vel = self.velocities[rigid_idx];
             let mut vel_changed = false;
 
             let (_, soft_body, _) = &mut soft_bodies[soft_idx];
@@ -510,21 +513,21 @@ impl PhysicsWorld {
                 };
 
                 // Normal points from the rigid body toward the node (separating direction).
-                let normal      = -contact.normal;
+                let normal = -contact.normal;
                 let penetration = contact.penetration;
 
-                let inv_m_node  = 1.0 / node.mass;
+                let inv_m_node = 1.0 / node.mass;
                 let total_inv_m = inv_m_node + inv_m_rb;
 
-                let r_rb   = contact.point - rigid_transform.position;
-                let v_rb   = rigid_vel.linear + rigid_vel.angular.cross(r_rb);
+                let r_rb = contact.point - rigid_transform.position;
+                let v_rb = rigid_vel.linear + rigid_vel.angular.cross(r_rb);
                 let rel_vel = node.velocity - v_rb;
                 let vel_along_normal = rel_vel.dot(normal);
 
                 // Only resolve if approaching.
                 if vel_along_normal < 0.0 {
                     let restitution = 0.2;
-                    let j       = -(1.0 + restitution) * vel_along_normal / total_inv_m;
+                    let j = -(1.0 + restitution) * vel_along_normal / total_inv_m;
                     let impulse = normal * j;
 
                     node.velocity += impulse * inv_m_node;
@@ -546,9 +549,9 @@ impl PhysicsWorld {
         }
 
         // ── Stage 3.6: Soft vs Soft contacts (sequential) ────────────────
-        const NODE_RADIUS:       f32 = 0.1;
+        const NODE_RADIUS: f32 = 0.1;
         const PENALTY_STIFFNESS: f32 = 5_000.0;
-        const PENALTY_DAMPING:   f32 = 50.0;
+        const PENALTY_DAMPING: f32 = 50.0;
 
         let node_diam_sq = (NODE_RADIUS * 2.0) * (NODE_RADIUS * 2.0);
 
@@ -575,18 +578,18 @@ impl PhysicsWorld {
 
             for node_a in &mut sb_a.nodes {
                 for node_b in &mut sb_b.nodes {
-                    let diff    = node_a.position - node_b.position;
+                    let diff = node_a.position - node_b.position;
                     let dist_sq = diff.length_squared();
 
                     if dist_sq >= node_diam_sq || dist_sq <= 1e-6 {
                         continue;
                     }
 
-                    let dist        = dist_sq.sqrt();
-                    let normal      = diff / dist; // B → A
+                    let dist = dist_sq.sqrt();
+                    let normal = diff / dist; // B → A
                     let penetration = NODE_RADIUS * 2.0 - dist;
 
-                    let rel_vel         = node_a.velocity - node_b.velocity;
+                    let rel_vel = node_a.velocity - node_b.velocity;
                     let vel_along_normal = rel_vel.dot(normal);
 
                     let force_mag =
@@ -612,11 +615,11 @@ impl PhysicsWorld {
                         continue;
                     }
 
-                    let impulse  = normal * (force_mag * dt);
+                    let impulse = normal * (force_mag * dt);
                     node_a.velocity += impulse * inv_m_a;
                     node_b.velocity -= impulse * inv_m_b;
 
-                    let correction  = normal * (penetration * 0.5);
+                    let correction = normal * (penetration * 0.5);
                     node_a.position += correction * (inv_m_a / total_inv_m);
                     node_b.position -= correction * (inv_m_b / total_inv_m);
                 }
@@ -633,11 +636,7 @@ impl PhysicsWorld {
     /// Solve collision constraints (via island-parallel PGS) and explicit
     /// joints (hinges, springs, …).
     #[tracing::instrument(skip_all, name = "constraint_solve")]
-    pub(crate) fn constraint_solve_step(
-        &mut self,
-        manifolds: Vec<ContactManifold>,
-        dt: f32,
-    ) {
+    pub(crate) fn constraint_solve_step(&mut self, manifolds: Vec<ContactManifold>, dt: f32) {
         let entity_map = &self.entity_index_map;
 
         // ── Collision constraints ─────────────────────────────────────────
@@ -645,23 +644,22 @@ impl PhysicsWorld {
             let is_dynamic = |entity: Entity| -> bool {
                 entity_map
                     .get(&entity.id())
-                    .map_or(false, |&idx| self.rigid_bodies[idx].is_dynamic())
+                    .is_some_and(|&idx| self.rigid_bodies[idx].is_dynamic())
             };
 
             let islands = crate::island::IslandManager::build_islands(&manifolds, &is_dynamic);
-            let island_groups =
-                crate::island::IslandManager::split_manifolds(manifolds, &islands);
+            let island_groups = crate::island::IslandManager::split_manifolds(manifolds, &islands);
 
-            let rigid_bodies  = &self.rigid_bodies;
-            let transforms    = &self.transforms;
-            let velocities    = &self.velocities;
-            let solver        = &self.solver;
-            let entities_arr  = &self.entities;
+            let rigid_bodies = &self.rigid_bodies;
+            let transforms = &self.transforms;
+            let velocities = &self.velocities;
+            let solver = &self.solver;
+            let entities_arr = &self.entities;
 
             type IslandResult = (
-                Vec<(Entity, Velocity)>,            // velocity updates
-                Vec<ContactManifold>,               // solved manifolds (warm-start data)
-                Vec<Entity>,                        // entities to wake up
+                Vec<(Entity, Velocity)>, // velocity updates
+                Vec<ContactManifold>,    // solved manifolds (warm-start data)
+                Vec<Entity>,             // entities to wake up
                 Vec<crate::collision::FractureEvent>,
             );
 
@@ -671,9 +669,9 @@ impl PhysicsWorld {
                     // Skip entirely if the whole island is asleep.
                     let island_awake = island_manifolds.iter().any(|m| {
                         [m.entity_a, m.entity_b].iter().any(|&e| {
-                            entity_map
-                                .get(&e.id())
-                                .map_or(false, |&i| rigid_bodies[i].is_dynamic() && !rigid_bodies[i].is_sleeping)
+                            entity_map.get(&e.id()).is_some_and(|&i| {
+                                rigid_bodies[i].is_dynamic() && !rigid_bodies[i].is_sleeping
+                            })
                         })
                     });
 
@@ -683,7 +681,7 @@ impl PhysicsWorld {
 
                     // Collect island indices and bodies that need waking.
                     let mut island_indices = std::collections::HashSet::new();
-                    let mut wake_updates   = Vec::new();
+                    let mut wake_updates = Vec::new();
 
                     for m in &island_manifolds {
                         for &e in &[m.entity_a, m.entity_b] {
@@ -699,7 +697,7 @@ impl PhysicsWorld {
                     // Thread-local velocity buffer to avoid per-island allocations.
                     thread_local! {
                         static VEL_CACHE: std::cell::RefCell<Vec<Velocity>> =
-                            std::cell::RefCell::new(Vec::new());
+                            const { std::cell::RefCell::new(Vec::new()) };
                     }
 
                     let mut velocity_updates = Vec::with_capacity(island_indices.len());
@@ -737,16 +735,13 @@ impl PhysicsWorld {
                     // Fracture detection.
                     let mut fractures = Vec::new();
                     for m in &island_manifolds {
-                        let max_impulse_contact = m
-                            .contacts
-                            .iter()
-                            .max_by(|a, b| {
-                                a.normal_impulse.partial_cmp(&b.normal_impulse).unwrap()
-                            });
+                        let max_impulse_contact = m.contacts.iter().max_by(|a, b| {
+                            a.normal_impulse.partial_cmp(&b.normal_impulse).unwrap()
+                        });
 
                         if let Some(contact) = max_impulse_contact {
                             let impulse = contact.normal_impulse;
-                            let point   = contact.point;
+                            let point = contact.point;
 
                             for &(entity, manifold_ent) in
                                 &[(m.entity_a, m.entity_a), (m.entity_b, m.entity_b)]
@@ -802,7 +797,10 @@ impl PhysicsWorld {
                     let key_ab = (manifold.entity_a, manifold.entity_b);
                     let key_ba = (manifold.entity_b, manifold.entity_a);
 
-                    if let Some(&idx) = event_index.get(&key_ab).or_else(|| event_index.get(&key_ba)) {
+                    if let Some(&idx) = event_index
+                        .get(&key_ab)
+                        .or_else(|| event_index.get(&key_ba))
+                    {
                         self.collision_events[idx].contact_points = solved;
                     }
                 }

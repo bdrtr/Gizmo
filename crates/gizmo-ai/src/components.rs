@@ -78,7 +78,7 @@ impl NavAgent {
     pub fn path_index(&self) -> usize {
         self.current_path_index
     }
-    
+
     pub fn set_target(&mut self, target: Vec3) {
         self.target = Some(target);
         self.recalc.timer = 0.0; // Zorla yeniden hesaplat

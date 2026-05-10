@@ -34,13 +34,15 @@ impl IslandManager {
         manifolds: &[ContactManifold],
         entity_is_dynamic: &impl Fn(Entity) -> bool,
     ) -> Vec<Island> {
-        if manifolds.is_empty() { return Vec::new(); }
+        if manifolds.is_empty() {
+            return Vec::new();
+        }
 
         let n = manifolds.len();
 
         // ── Union-Find veri yapısı ────────────────────────────────────────────
         let mut parent: Vec<usize> = (0..n).collect();
-        let mut rank:   Vec<u8>    = vec![0; n];
+        let mut rank: Vec<u8> = vec![0; n];
 
         fn find(parent: &mut Vec<usize>, mut i: usize) -> usize {
             while parent[i] != i {
@@ -53,12 +55,17 @@ impl IslandManager {
         fn union(parent: &mut Vec<usize>, rank: &mut Vec<u8>, a: usize, b: usize) {
             let ra = find(parent, a);
             let rb = find(parent, b);
-            if ra == rb { return; }
+            if ra == rb {
+                return;
+            }
             // Rank-based union
             match rank[ra].cmp(&rank[rb]) {
-                std::cmp::Ordering::Less    => parent[ra] = rb,
+                std::cmp::Ordering::Less => parent[ra] = rb,
                 std::cmp::Ordering::Greater => parent[rb] = ra,
-                std::cmp::Ordering::Equal   => { parent[rb] = ra; rank[ra] += 1; }
+                std::cmp::Ordering::Equal => {
+                    parent[rb] = ra;
+                    rank[ra] += 1;
+                }
             }
         }
 
@@ -66,10 +73,16 @@ impl IslandManager {
         let mut entity_to_manifolds: HashMap<u32, Vec<usize>> = HashMap::new();
         for (i, m) in manifolds.iter().enumerate() {
             if entity_is_dynamic(m.entity_a) {
-                entity_to_manifolds.entry(m.entity_a.id()).or_default().push(i);
+                entity_to_manifolds
+                    .entry(m.entity_a.id())
+                    .or_default()
+                    .push(i);
             }
             if entity_is_dynamic(m.entity_b) {
-                entity_to_manifolds.entry(m.entity_b.id()).or_default().push(i);
+                entity_to_manifolds
+                    .entry(m.entity_b.id())
+                    .or_default()
+                    .push(i);
             }
         }
 
@@ -87,8 +100,12 @@ impl IslandManager {
             groups.entry(root).or_default().push(i);
         }
 
-        groups.into_values()
-            .map(|indices| Island { manifold_indices: indices, sleeping: false })
+        groups
+            .into_values()
+            .map(|indices| Island {
+                manifold_indices: indices,
+                sleeping: false,
+            })
             .collect()
     }
 
@@ -116,8 +133,10 @@ impl IslandManager {
     /// Island'ın uyuma uygun olup olmadığını kontrol et.
     /// Tüm temas noktalarındaki impuls toplamı eşiğin altındaysa → uyku
     pub fn should_sleep(manifolds: &[ContactManifold], impulse_threshold: f32) -> bool {
-        if manifolds.is_empty() { return false; }
-        
+        if manifolds.is_empty() {
+            return false;
+        }
+
         manifolds.iter().all(|m| {
             m.lifetime > 3 && // En az birkaç frame aktif olmalı (warm-up)
             m.contacts.iter().all(|c| {
@@ -134,14 +153,14 @@ impl IslandManager {
 
 #[derive(Debug, Default, Clone)]
 pub struct PhysicsMetrics {
-    pub broadphase_ms:   f32,
-    pub narrowphase_ms:  f32,
-    pub solver_ms:       f32,
-    pub integration_ms:  f32,
-    pub island_count:    usize,
-    pub sleeping_count:  usize,
-    pub contact_count:   usize,
-    pub body_count:      usize,
+    pub broadphase_ms: f32,
+    pub narrowphase_ms: f32,
+    pub solver_ms: f32,
+    pub integration_ms: f32,
+    pub island_count: usize,
+    pub sleeping_count: usize,
+    pub contact_count: usize,
+    pub body_count: usize,
 }
 
 impl PhysicsMetrics {
@@ -173,16 +192,20 @@ impl PhysicsMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gizmo_core::entity::Entity;
     use crate::collision::{ContactManifold, ContactPoint};
+    use gizmo_core::entity::Entity;
     use gizmo_math::Vec3;
 
     fn make_manifold(ea: u32, eb: u32) -> ContactManifold {
         let mut m = ContactManifold::new(Entity::new(ea, 0), Entity::new(eb, 0));
         m.contacts.push(ContactPoint {
-            point: Vec3::ZERO, normal: Vec3::Y, penetration: 0.01,
-            local_point_a: Vec3::ZERO, local_point_b: Vec3::ZERO,
-            normal_impulse: 0.0, tangent_impulse: Vec3::ZERO,
+            point: Vec3::ZERO,
+            normal: Vec3::Y,
+            penetration: 0.01,
+            local_point_a: Vec3::ZERO,
+            local_point_b: Vec3::ZERO,
+            normal_impulse: 0.0,
+            tangent_impulse: Vec3::ZERO,
         });
         m
     }
