@@ -14,17 +14,17 @@ wgpu = "0.20"
 egui = "0.28"
 egui-winit = { version = "0.28", default-features = false, features = ["links"] }
 egui-wgpu = "0.28"
-gizmo-core = { path = "../gizmo-core" }
-gizmo-math = { path = "../gizmo-math" }
-gizmo-physics = { path = "../gizmo-physics" }
-gizmo-renderer = { path = "../gizmo-renderer" }
-gizmo-audio = { path = "../gizmo-audio" }
-gizmo-ai = { path = "../gizmo-ai" }
+gizmo-core = { path = "../gizmo-core" , version = "0.1.0" }
+gizmo-math = { path = "../gizmo-math" , version = "0.1.0" }
+gizmo-physics = { path = "../gizmo-physics" , version = "0.1.0" }
+gizmo-renderer = { path = "../gizmo-renderer" , version = "0.1.0" }
+gizmo-audio = { path = "../gizmo-audio" , version = "0.1.0" }
+gizmo-ai = { path = "../gizmo-ai" , version = "0.1.0" }
 egui_dock = { version = "0.13", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 toml = "0.8"
 rfd = "0.17.2"
 gizmo-scripting = { version = "0.1.0", path = "../gizmo-scripting" }
-gizmo-scene = { path = "../gizmo-scene" }
+gizmo-scene = { path = "../gizmo-scene" , version = "0.1.0" }
 dirs = "6.0.0"

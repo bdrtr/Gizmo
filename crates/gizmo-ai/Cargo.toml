@@ -9,7 +9,7 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
-gizmo-math = { path = "../gizmo-math" }
-gizmo-core = { path = "../gizmo-core" }
-gizmo-physics = { path = "../gizmo-physics" }
+gizmo-math = { path = "../gizmo-math" , version = "0.1.0" }
+gizmo-core = { path = "../gizmo-core" , version = "0.1.0" }
+gizmo-physics = { path = "../gizmo-physics" , version = "0.1.0" }
 serde = { version = "1.0", features = ["derive"] }

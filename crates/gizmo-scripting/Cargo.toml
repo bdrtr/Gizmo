@@ -9,10 +9,10 @@ license.workspace = true
 repository.workspace = true
 readme.workspace = true
 [dependencies]
-gizmo-core = { path = "../gizmo-core" }
-gizmo-math = { path = "../gizmo-math" }
-gizmo-physics = { path = "../gizmo-physics" }
-gizmo-ai = { path = "../gizmo-ai" }
+gizmo-core = { path = "../gizmo-core" , version = "0.1.0" }
+gizmo-math = { path = "../gizmo-math" , version = "0.1.0" }
+gizmo-physics = { path = "../gizmo-physics" , version = "0.1.0" }
+gizmo-ai = { path = "../gizmo-ai" , version = "0.1.0" }
 serde = { version = "1.0.228", features = ["derive"] }
 mlua = { version = "0.9", features = ["lua54", "vendored", "send"] }
 notify = "8.2.0"

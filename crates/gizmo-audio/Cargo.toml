@@ -12,4 +12,4 @@ readme.workspace = true
 log = "0.4.29"
 rodio = "0.17"
 serde = { version = "1.0", features = ["derive"] }
-gizmo-core = { path = "../gizmo-core" }
+gizmo-core = { path = "../gizmo-core" , version = "0.1.0" }
