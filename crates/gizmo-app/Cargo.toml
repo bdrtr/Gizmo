@@ -9,17 +9,17 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
-gizmo-core = { path = "../gizmo-core" }
-gizmo-renderer = { path = "../gizmo-renderer" }
-gizmo-math = { path = "../gizmo-math" }
-gizmo-physics = { path = "../gizmo-physics" }
+gizmo-core = { path = "../gizmo-core" , version = "0.1.0" }
+gizmo-renderer = { path = "../gizmo-renderer" , version = "0.1.0" }
+gizmo-math = { path = "../gizmo-math" , version = "0.1.0" }
+gizmo-physics = { path = "../gizmo-physics" , version = "0.1.0" }
 winit = "0.29"
 wgpu = { version = "0.20", features = ["fragile-send-sync-non-atomic-wasm", "webgl"] }
 pollster = "0.3"
 egui = "0.28"
-gizmo-editor = { path = "../gizmo-editor" }
-gizmo-audio = { path = "../gizmo-audio" }
-gizmo-scene = { path = "../gizmo-scene" }
+gizmo-editor = { path = "../gizmo-editor" , version = "0.1.0" }
+gizmo-audio = { path = "../gizmo-audio" , version = "0.1.0" }
+gizmo-scene = { path = "../gizmo-scene" , version = "0.1.0" }
 image = "0.25"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

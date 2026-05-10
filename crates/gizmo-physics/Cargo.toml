@@ -15,8 +15,8 @@ gpu_physics = ["wgpu", "bytemuck", "pollster"]
 [dependencies]
 rayon = "1.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
-gizmo-core = { path = "../gizmo-core" }
-gizmo-math = { path = "../gizmo-math" }
+gizmo-core = { path = "../gizmo-core" , version = "0.1.0" }
+gizmo-math = { path = "../gizmo-math" , version = "0.1.0" }
 wide = "1.2.0"
 arrayvec = "0.7.6"
 rand = "0.10.1"

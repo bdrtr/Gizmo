@@ -16,21 +16,21 @@ scripting = ["dep:gizmo-scripting"]
 scene = ["dep:gizmo-scene"]
 
 [dependencies]
-gizmo-core = { path = "../gizmo-core" }
-gizmo-math = { path = "../gizmo-math" }
-gizmo-renderer = { path = "../gizmo-renderer" }
-gizmo-window = { path = "../gizmo-window" }
-gizmo-physics = { path = "../gizmo-physics", features = ["gpu_physics"] }
-gizmo-app = { path = "../gizmo-app" }
-gizmo-ai = { path = "../gizmo-ai" }
-gizmo-audio = { path = "../gizmo-audio", optional = true }
-gizmo-scripting = { path = "../gizmo-scripting", optional = true }
-gizmo-scene = { path = "../gizmo-scene", optional = true }
+gizmo-core = { path = "../gizmo-core" , version = "0.1.0" }
+gizmo-math = { path = "../gizmo-math" , version = "0.1.0" }
+gizmo-renderer = { path = "../gizmo-renderer" , version = "0.1.0" }
+gizmo-window = { path = "../gizmo-window" , version = "0.1.0" }
+gizmo-physics = { path = "../gizmo-physics", features = ["gpu_physics"] , version = "0.1.0" }
+gizmo-app = { path = "../gizmo-app" , version = "0.1.0" }
+gizmo-ai = { path = "../gizmo-ai" , version = "0.1.0" }
+gizmo-audio = { path = "../gizmo-audio", optional = true , version = "0.1.0" }
+gizmo-scripting = { path = "../gizmo-scripting", optional = true , version = "0.1.0" }
+gizmo-scene = { path = "../gizmo-scene", optional = true , version = "0.1.0" }
 winit = { workspace = true }
 wgpu = "0.20"
 egui = "0.28"
 bytemuck = "1"
-gizmo-editor = { path = "../gizmo-editor", optional = true }
+gizmo-editor = { path = "../gizmo-editor", optional = true , version = "0.1.0" }
 tracing = "0.1.44"
 
 [dev-dependencies]
