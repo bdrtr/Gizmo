@@ -100,12 +100,6 @@ Gizmo's decoupled workspace architecture allows you to pick and choose exactly w
   <img src="media/demo_racetrack.jpg" width="70%" />
 </p>
 
-## 📚 Documentation & Technical Write-ups
-
-Check out our technical logs on debugging complex GPU and Engine Architecture issues:
-- [WGSL Mesa `pow(0.0)` Linux Driver Bug & PBR Crash Analysis](WGSL_MESA_BUG.md)
-
-*(Comprehensive Wiki and deep-dive documentation coming soon!)*
 
 ## 🛠️ Building and Running
 
