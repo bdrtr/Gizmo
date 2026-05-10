@@ -16,6 +16,9 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Bedir"]
 description = "A custom ECS and physics engine aimed for realistic simulations."
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://git.bedirkaraabali.com/bdrtr/Yelbegen-engine"
 
 # Bağımlılıkları tek bir yerden yönetmek için (Inherited Dependencies)
 [workspace.dependencies]
