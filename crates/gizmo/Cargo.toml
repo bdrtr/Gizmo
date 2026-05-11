@@ -1,5 +1,5 @@
 [package]
-name = "gizmo"
+name = "gizmo-engine"
 version.workspace = true
 edition.workspace = true
 
