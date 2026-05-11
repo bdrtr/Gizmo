@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-gizmo = { path = "../crates/gizmo", features = ["audio", "scripting", "scene"] }
+gizmo-engine = { path = "../crates/gizmo", features = ["audio", "scripting", "scene"] }
 gizmo-math = { path = "../crates/gizmo-math" }
 gizmo-core = { path = "../crates/gizmo-core" }
 pollster = "0.3"
