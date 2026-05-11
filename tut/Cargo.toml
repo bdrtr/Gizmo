@@ -5,7 +5,7 @@ edition.workspace = true
 default-run = "test_sandbox"
 
 [dependencies]
-gizmo = { path = "../crates/gizmo", features = ["audio", "scripting", "scene"] }
+gizmo-engine = { path = "../crates/gizmo", features = ["audio", "scripting", "scene"] }
 pollster = "0.3"
 rand = "0.8"
 winit = { workspace = true }
