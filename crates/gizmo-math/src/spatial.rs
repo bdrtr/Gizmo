@@ -188,7 +188,12 @@ impl SpatialInertia {
         SpatialVector::new(force_w, force_v)
     }
 
-    pub fn add(self, other: Self) -> Self {
+}
+
+impl Add for SpatialInertia {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
         let total_mass = self.mass + other.mass;
         if total_mass == 0.0 {
             return Self::from_mass_inertia(0.0, Mat3::ZERO);
@@ -210,7 +215,9 @@ impl SpatialInertia {
             rot: shift(&self) + shift(&other),
         }
     }
+}
 
+impl SpatialInertia {
     /// Converts the Rigid Body Inertia to a full 6x6 Spatial Matrix.
     pub fn to_matrix(self) -> SpatialMatrix {
         let m = self.mass;
