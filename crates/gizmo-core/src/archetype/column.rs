@@ -52,6 +52,12 @@ impl Column {
         self.data.len()
     }
 
+    /// Returns true if the column contains no elements.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
     /// Belirtilen satırdaki component'a immutable pointer döndürür.
     ///
     /// # Safety
@@ -62,10 +68,6 @@ impl Column {
         self.data.get_unchecked(row)
     }
 
-    /// Belirtilen satırdaki component'a mutable pointer döndürür.
-    ///
-    /// # Safety
-    /// - `row < self.len()` olmalıdır
     /// Sütun verisinin başlangıç pointer'ını döndürür.
     #[inline]
     pub fn data_ptr(&self) -> *const u8 {
@@ -90,6 +92,10 @@ impl Column {
         self.ticks.as_mut_ptr()
     }
 
+    /// Belirtilen satırdaki component'a mutable pointer döndürür.
+    ///
+    /// # Safety
+    /// - `row < self.len()` olmalıdır
     /// - Dönen pointer geçerli bir `T` tipindeki veriye işaret eder
     #[inline]
     pub unsafe fn get_mut_ptr(&self, row: usize) -> *mut u8 {
@@ -97,6 +103,9 @@ impl Column {
     }
 
     /// Sütun içindeki iki satırı takas eder.
+    ///
+    /// # Safety
+    /// - `a < self.len()` ve `b < self.len()` olmalıdır
     #[inline]
     pub unsafe fn swap_rows(&mut self, a: usize, b: usize) {
         self.data.swap_rows(a, b);
@@ -114,6 +123,9 @@ impl Column {
     }
 
     /// Bir component referansını alıp arka arkaya N kez kopyalar (Batch Prefab Cloning).
+    ///
+    /// # Safety
+    /// - `src` pointer'ı bu sütunun tip boyutu kadar okunabilir belleğe işaret etmelidir
     #[inline]
     pub unsafe fn push_cloned_batch(&mut self, src: *const u8, count: usize, tick: u32) {
         self.data.push_cloned_batch(src, count, self.clone_fn);
@@ -122,6 +134,9 @@ impl Column {
     }
 
     /// Bir component'i bulunduğu satırdan kopyalar (realloc safety).
+    ///
+    /// # Safety
+    /// - `row < self.len()` olmalıdır
     #[inline]
     pub unsafe fn push_cloned_batch_from_row(&mut self, row: usize, count: usize, tick: u32) {
         self.data

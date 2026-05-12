@@ -14,21 +14,25 @@
 use std::any::TypeId;
 use std::collections::BTreeMap;
 
+/// Type alias for component serialization function pointers.
+pub type SerializeFn = fn(*const u8) -> Result<String, String>;
+/// Type alias for component deserialization function pointers.
+pub type DeserializeFn =
+    fn(&mut crate::world::World, crate::entity::Entity, &str) -> Result<(), String>;
+/// Type alias for component JSON getter function pointers.
+pub type GetJsonFn = fn(*const u8) -> Result<serde_json::Value, String>;
+/// Type alias for component JSON setter function pointers.
+pub type SetJsonFn =
+    fn(&mut crate::world::World, crate::entity::Entity, serde_json::Value) -> Result<(), String>;
+
 /// ECS tabanlı opsiyonel reflection yeteneklerini taşıyan serileştirme yapısı
 pub struct TypeRegistration {
     pub type_id: TypeId,
     pub name: String,
-    pub serialize_fn: Option<fn(*const u8) -> Result<String, String>>,
-    pub deserialize_fn:
-        Option<fn(&mut crate::world::World, crate::entity::Entity, &str) -> Result<(), String>>,
-    pub get_json_fn: Option<fn(*const u8) -> Result<serde_json::Value, String>>,
-    pub set_json_fn: Option<
-        fn(
-            &mut crate::world::World,
-            crate::entity::Entity,
-            serde_json::Value,
-        ) -> Result<(), String>,
-    >,
+    pub serialize_fn: Option<SerializeFn>,
+    pub deserialize_fn: Option<DeserializeFn>,
+    pub get_json_fn: Option<GetJsonFn>,
+    pub set_json_fn: Option<SetJsonFn>,
 }
 
 /// Component tiplerini isme göre sorgulama ve yönetim kaydı.
