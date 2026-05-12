@@ -330,32 +330,29 @@ impl Gjk {
         vel_b: Vec3,
         dt: f32,
     ) -> Option<ContactPoint> {
-        if let Some((t, normal)) = Self::conservative_advancement(
+        if let Some((t, _ca_normal)) = Self::conservative_advancement(
             shape_a, pos_a, rot_a, vel_a, shape_b, pos_b, rot_b, vel_b, dt,
         ) {
-            let normal_a_to_b = -normal; // CA normal is B→A, flip to A→B
+            let hit_pos_a = pos_a + vel_a * t;
+            let hit_pos_b = pos_b + vel_b * t;
 
-            // FIX 5: rel_vel = vel_b - vel_a, normal is B→A.
-            // Closing velocity = how fast A approaches B along normal_a_to_b.
-            // dot(vel_a - vel_b, normal_a_to_b) > 0 means approaching.
-            let closing_speed = (vel_a - vel_b).dot(normal_a_to_b);
-            if closing_speed > 0.0 {
-                let gap = closing_speed * t;
+            // Derive normal from actual body positions at TOI — more reliable
+            // than the CA normal which can be a fallback Vec3::X when dist ≈ 0.
+            let normal_a_to_b = (hit_pos_b - hit_pos_a)
+                .try_normalize()
+                .unwrap_or(Vec3::X);
 
-                let hit_pos_a = pos_a + vel_a * t;
-                let hit_pos_b = pos_b + vel_b * t;
-                let contact_point = (hit_pos_a + hit_pos_b) * 0.5;
+            let contact_point = (hit_pos_a + hit_pos_b) * 0.5;
 
-                return Some(ContactPoint {
-                    point: contact_point,
-                    normal: normal_a_to_b,
-                    penetration: -gap,
-                    local_point_a: contact_point - pos_a,
-                    local_point_b: contact_point - pos_b,
-                    normal_impulse: 0.0,
-                    tangent_impulse: Vec3::ZERO,
-                });
-            }
+            return Some(ContactPoint {
+                point: contact_point,
+                normal: normal_a_to_b,
+                penetration: 0.0, // speculative — bodies are just touching at TOI
+                local_point_a: contact_point - pos_a,
+                local_point_b: contact_point - pos_b,
+                normal_impulse: 0.0,
+                tangent_impulse: Vec3::ZERO,
+            });
         }
         None
     }

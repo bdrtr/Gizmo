@@ -44,7 +44,7 @@ impl IslandManager {
         let mut parent: Vec<usize> = (0..n).collect();
         let mut rank: Vec<u8> = vec![0; n];
 
-        fn find(parent: &mut Vec<usize>, mut i: usize) -> usize {
+        fn find(parent: &mut [usize], mut i: usize) -> usize {
             while parent[i] != i {
                 parent[i] = parent[parent[i]]; // Path splitting / compression
                 i = parent[i];
@@ -52,7 +52,7 @@ impl IslandManager {
             i
         }
 
-        fn union(parent: &mut Vec<usize>, rank: &mut Vec<u8>, a: usize, b: usize) {
+        fn union(parent: &mut [usize], rank: &mut [u8], a: usize, b: usize) {
             let ra = find(parent, a);
             let rb = find(parent, b);
             if ra == rb {

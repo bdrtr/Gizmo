@@ -34,8 +34,7 @@ impl BvhTree {
         }
 
         let tri_count = (indices.len() / 3) as u32;
-        let mut nodes = Vec::new();
-        nodes.reserve((tri_count * 2) as usize);
+        let mut nodes = Vec::with_capacity((tri_count * 2) as usize);
 
         // Root node
         nodes.push(BvhNode {

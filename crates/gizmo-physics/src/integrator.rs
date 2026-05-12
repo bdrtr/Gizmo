@@ -421,7 +421,8 @@ mod tests {
         let integrator = Integrator::default();
         let mut rb = RigidBody::default();
         rb.body_type = crate::components::BodyType::Dynamic;
-        // Do NOT call wake_up() — body stays asleep.
+        // Explicitly put the body to sleep — the integrator must skip it.
+        rb.is_sleeping = true;
 
         let mut vel = Velocity::default();
         integrator

@@ -79,13 +79,15 @@ pub fn physics_step_system(world: &World, dt: f32) {
                 } else if compound_shapes.len() == 1 {
                     // Single collider, avoid nesting in Compound
                     let (_t, s) = compound_shapes.remove(0);
-                    let mut c = Collider::default();
-                    c.shape = *s;
-                    c
+                    Collider {
+                        shape: *s,
+                        ..Default::default()
+                    }
                 } else {
-                    let mut c = Collider::default();
-                    c.shape = crate::components::ColliderShape::Compound(compound_shapes);
-                    c
+                    Collider {
+                        shape: crate::components::ColliderShape::Compound(compound_shapes),
+                        ..Default::default()
+                    }
                 };
 
                 compound_shapes_map.insert(id, final_collider);
