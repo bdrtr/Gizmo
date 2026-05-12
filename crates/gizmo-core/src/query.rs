@@ -16,12 +16,21 @@ pub trait FetchComponent {
     const IS_MUT: bool;
 
     /// Bir archetype bazında ham pointer fetch hazırlar.
+    ///
+    /// # Safety
+    /// Archetype geçerli olmalı ve döndürülen fetch pointer'ı archetype'ın yaşam süresi boyunca geçerli kalmalıdır.
     unsafe fn fetch_raw<'w>(arch: &Archetype, system_tick: u32) -> Option<Self::Fetch<'w>>;
 
     /// Ham pointer'dan veriyi getirir.
+    ///
+    /// # Safety
+    /// `row` değeri archetype'ın eleman sayısından küçük olmalıdır.
     unsafe fn get_item<'w>(fetch: Self::Fetch<'w>, row: usize) -> Self::Item<'w>;
 
     /// Chunk olarak ardışık belleği Slice şeklinde getirir (SIMD).
+    ///
+    /// # Safety
+    /// `len` değeri archetype'ın eleman sayısını aşmamalıdır.
     unsafe fn get_slice<'w>(fetch: Self::Fetch<'w>, len: usize) -> Self::Slice<'w>;
 }
 
@@ -113,14 +122,22 @@ pub trait WorldQuery {
     type Item<'w>;
     type Slice<'w>;
 
+    /// # Safety
+    /// Archetype geçerli olmalı ve döndürülen fetch pointer'ı archetype'ın yaşam süresi boyunca geçerli kalmalıdır.
     unsafe fn fetch_raw<'w>(arch: &Archetype, system_tick: u32) -> Option<Self::Fetch<'w>>;
     fn check_aliasing(types: &mut Vec<(TypeId, bool)>);
     fn matches_archetype(arch: &Archetype) -> bool;
 
+    /// # Safety
+    /// `row` değeri archetype'ın eleman sayısından küçük olmalıdır.
     unsafe fn get_item<'w>(fetch: Self::Fetch<'w>, row: usize) -> Self::Item<'w>;
 
+    /// # Safety
+    /// Geçerli bir fetch ve archetype sınırları içinde bir `row` sağlanmalıdır.
     unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, row: usize, system_tick: u32) -> bool;
 
+    /// # Safety
+    /// `len` değeri archetype'ın eleman sayısını aşmamalıdır.
     unsafe fn get_slice<'w>(fetch: Self::Fetch<'w>, len: usize) -> Self::Slice<'w>;
 }
 

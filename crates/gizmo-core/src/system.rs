@@ -639,8 +639,8 @@ impl Schedule {
         for i in 0..count {
             for before_label in &configs[i].before {
                 let mut found = false;
-                for j in 0..count {
-                    if i != j && configs[j].labels.contains(before_label) {
+                for (j, config_j) in configs.iter().enumerate() {
+                    if i != j && config_j.labels.contains(before_label) {
                         add_edge(i, j, &mut edge_set, &mut adj, &mut in_degree);
                         found = true;
                     }
@@ -656,8 +656,8 @@ impl Schedule {
             }
             for after_label in &configs[i].after {
                 let mut found = false;
-                for j in 0..count {
-                    if i != j && configs[j].labels.contains(after_label) {
+                for (j, config_j) in configs.iter().enumerate() {
+                    if i != j && config_j.labels.contains(after_label) {
                         add_edge(j, i, &mut edge_set, &mut adj, &mut in_degree);
                         found = true;
                     }
@@ -674,8 +674,8 @@ impl Schedule {
         }
 
         let mut queue = std::collections::VecDeque::new();
-        for i in 0..count {
-            if in_degree[i] == 0 {
+        for (i, deg) in in_degree.iter().enumerate() {
+            if *deg == 0 {
                 queue.push_back(i);
             }
         }
@@ -701,8 +701,8 @@ impl Schedule {
 
         // Reverse adjacency
         let mut predecessors = vec![Vec::<usize>::new(); count];
-        for from in 0..count {
-            for &to in &adj[from] {
+        for (from, neighbors) in adj.iter().enumerate() {
+            for &to in neighbors {
                 predecessors[to].push(from);
             }
         }
@@ -844,7 +844,6 @@ mod tests {
     // --- Mock Bileşen ve Kaynaklar ---
     struct CompA;
     struct CompB;
-    struct ResA;
 
     // Testlerin çalışma sırasını takip etmek için kullanacağımız log
     #[derive(Clone)]

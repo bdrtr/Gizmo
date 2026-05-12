@@ -85,6 +85,10 @@ impl BlobVec {
         self.data.as_ptr().add(index * self.item_layout.size())
     }
 
+    /// Yeni bir eleman ekler.
+    ///
+    /// # Safety
+    /// `value` pointer'ı `item_layout.size()` bayt okunabilir belleğe işaret etmelidir.
     pub unsafe fn push(&mut self, value: *const u8) {
         if self.item_layout.size() == 0 {
             self.len += 1;
@@ -132,6 +136,9 @@ impl BlobVec {
 
     /// Bir component'i bulunduğu indeksten alıp N kere çoğaltarak arkaya ekler.
     /// Realloc sırasında src pointer'ının dangling olmasını engeller.
+    ///
+    /// # Safety
+    /// `row < self.len` olmalıdır.
     pub unsafe fn push_cloned_batch_from_row(
         &mut self,
         row: usize,
@@ -199,7 +206,7 @@ impl BlobVec {
         let last = self.len - 1;
 
         if index != last {
-            let src = self.get_unchecked(last) as *const u8;
+            let src = self.get_unchecked(last);
             let dst = self.get_unchecked_mut(index);
             // Önce eski değeri düşür
             if let Some(drop_fn) = self.drop_fn {
@@ -228,12 +235,12 @@ impl BlobVec {
         let last = self.len - 1;
 
         // Çıkarılan elemanı out'a kopyala
-        let src = self.get_unchecked(index) as *const u8;
+        let src = self.get_unchecked(index);
         ptr::copy_nonoverlapping(src, out, self.item_layout.size());
 
         if index != last {
             // Son elemanı çıkarılan yere taşı
-            let last_src = self.get_unchecked(last) as *const u8;
+            let last_src = self.get_unchecked(last);
             let dst = self.get_unchecked_mut(index);
             ptr::copy_nonoverlapping(last_src, dst, self.item_layout.size());
         }
