@@ -287,8 +287,8 @@ pub fn execute_render_pipeline(
         let skeletons = world.borrow::<gizmo::renderer::components::Skeleton>();
         let lod_groups = world.borrow::<gizmo::renderer::components::LodGroup>();
 
-        if let Some(mut q) = world.query::<(&Mesh, &Transform, &Material)>() {
-            for (e, (mesh, trans, mat)) in q.iter_mut() {
+        if let Some(mut q) = world.query::<(&Mesh, &gizmo::physics::components::GlobalTransform, &Material)>() {
+            for (e, (mesh, global_trans, mat)) in q.iter_mut() {
                 // Sadece MeshRenderer tagli olanları çiz:
                 // Sadece MeshRenderer tagli olanları çiz:
                 let r = &renderers;
@@ -310,9 +310,8 @@ pub fn execute_render_pipeline(
                 }
 
                 // --- GLOBAL TRANSFORM HESAPLAMA ---
-                // transform_hierarchy_system() daha önce tüm hiyerarşiyi t.local_matrix'te çözdüğü için
-                // doğrudan local_matrix'i kullanmamız yeterlidir. Çift çarpım yapmıyoruz!
-                let global_model = trans.local_matrix;
+                // ECS transform senkronizasyonu GlobalTransform'u güncellediği için doğrudan onu kullanıyoruz.
+                let global_model = global_trans.matrix;
 
                 let center_mat = Mat4::from_translation(mesh.center_offset);
                 let model = global_model * center_mat;
@@ -747,8 +746,24 @@ pub fn execute_render_pipeline(
                 render_pass.set_vertex_buffer(1, gpu_particles.particles_buffer.slice(..));
                 render_pass.draw(0..4, 0..gpu_particles.active_particles);
             }
+            // --- 5. GIZMOS VE DEBUG LINES ÇİZİMİ (Turuncu Seçim Çerçevesi vs) ---
+            if let Some(gizmos) = world.get_resource::<gizmo::renderer::Gizmos>() {
+                if let Some(debug_renderer) = &mut renderer.debug_renderer {
+                    debug_renderer.update(&renderer.queue, &gizmos);
+                    debug_renderer.render(
+                        &mut render_pass,
+                        &renderer.scene.global_bind_group,
+                        gizmos.depth_test,
+                    );
+                }
+            }
         }
     }); // Cikis: CACHE.with bloğu
+
+    // Çizilen Gizmo'ları sonraki frame için temizle
+    if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
+        gizmos.clear();
+    }
 
     // --- 3. POST-PROCESSING (Bloom + Tone Mapping → Ekrana Yaz) ---
     let render_target = world.get_resource::<gizmo::renderer::components::EditorRenderTarget>();

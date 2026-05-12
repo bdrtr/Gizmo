@@ -7,6 +7,8 @@ pub struct AssetServer {
     pub loader: AsyncAssetLoader,
     mesh_paths: std::collections::HashMap<String, Handle<Mesh>>,
     _material_paths: std::collections::HashMap<String, Handle<Material>>,
+    pub completed_gltfs: Vec<crate::renderer::async_assets::GltfImportCompletion>,
+    pub completed_gltf_errors: Vec<crate::renderer::async_assets::GltfImportError>,
 }
 
 impl Default for AssetServer {
@@ -21,6 +23,8 @@ impl AssetServer {
             loader: AsyncAssetLoader::new(),
             mesh_paths: std::collections::HashMap::new(),
             _material_paths: std::collections::HashMap::new(),
+            completed_gltfs: Vec::new(),
+            completed_gltf_errors: Vec::new(),
         }
     }
 
@@ -36,11 +40,14 @@ impl AssetServer {
 }
 
 pub fn asset_server_update_system(
-    server: crate::core::system::ResMut<AssetServer>,
+    mut server: crate::core::system::ResMut<AssetServer>,
     renderer: crate::core::system::ResMut<crate::renderer::Renderer>,
     mut meshes: crate::core::system::ResMut<crate::core::asset::Assets<Mesh>>,
 ) {
     let completed = server.loader.drain_completed();
+
+    server.completed_gltfs.extend(completed.gltfs);
+    server.completed_gltf_errors.extend(completed.gltf_errors);
 
     if completed.objs.is_empty() && completed.textures.is_empty() {
         return;

@@ -21,7 +21,7 @@ pub mod world;
 // ──── Explicit re-exports ────
 pub use archetype::{Archetype, ComponentInfo, EntityLocation};
 pub use commands::{CommandQueue, Commands, EntityCommands};
-pub use component::{Bundle, BundleExt, Component, EntityName, IsHidden, PrefabRequest};
+pub use component::{Bundle, BundleExt, Component, EntityName, IsHidden, IsDeleted, PrefabRequest};
 pub use cvar::{CVarRegistry, CVarValue, DevConsoleState};
 pub use entity::Entity;
 pub use event::{EventReader, EventWriter, Events};
@@ -46,7 +46,7 @@ pub mod prelude {
     pub use super::{
         ActionMap, Bundle, Changed, CommandQueue, Commands, Component, Entity, EntityName,
         EventReader, EventWriter, Events, FrameProfiler, Input, InputBinding, IntoSystem,
-        IntoSystemConfig, IsHidden, Mut, Phase, PhysicsTime, PoolManager, Pooled, PrefabRequest,
+        IntoSystemConfig, IsHidden, IsDeleted, Mut, Phase, PhysicsTime, PoolManager, Pooled, PrefabRequest,
         Query, Res, ResMut, Schedule, StorageView, StorageViewMut, System, SystemConfig,
         SystemParam, Time, WindowInfo, World,
     };

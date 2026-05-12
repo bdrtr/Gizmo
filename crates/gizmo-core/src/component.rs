@@ -32,6 +32,10 @@ impl EntityName {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IsHidden;
 
+/// Geçici silinme etiketi (Undo/Redo ve Çöp kutusu için). Eğer bu component varsa, render, fizik ve picking gibi sistemlerden dışlanır.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct IsDeleted;
+
 /// Prefab spawn talebi. Entity'ye eklendiğinde prefab yükleme sistemi tarafından işlenir
 /// ve işlendikten sonra component kaldırılır.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -54,7 +58,7 @@ impl std::fmt::Display for EntityName {
     }
 }
 
-impl_component!(Parent, Children, EntityName, IsHidden, PrefabRequest);
+impl_component!(Parent, Children, EntityName, IsHidden, PrefabRequest, IsDeleted);
 
 // ============================================================
 //  Bundle Trait — Birden fazla component'i tek seferde ekleme

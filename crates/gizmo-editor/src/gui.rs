@@ -57,12 +57,13 @@ impl EditorContext {
         visuals.widgets.active.rounding = widget_rounding;
         visuals.widgets.open.rounding = widget_rounding;
 
-        visuals.window_fill = egui::Color32::from_rgb(22, 22, 24);
-        visuals.panel_fill = egui::Color32::from_rgb(28, 28, 30);
-        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(45, 45, 48);
-        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(60, 60, 63);
-        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(80, 80, 85);
-        visuals.selection.bg_fill = egui::Color32::from_rgb(0, 110, 200);
+        visuals.window_fill = egui::Color32::from_rgb(35, 35, 35); // Blender Window Background
+        visuals.panel_fill = egui::Color32::from_rgb(43, 43, 43); // Blender Panel Background
+        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(61, 61, 61); // Blender Inactive Widget
+        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(74, 74, 74); // Blender Hover Widget
+        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(86, 86, 86); // Blender Active Widget
+        visuals.selection.bg_fill = egui::Color32::from_rgb(237, 113, 28); // Blender Signature Orange
+        visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(237, 113, 28));
         self.context.set_visuals(visuals);
 
         let mut style = (*self.context.style()).clone();

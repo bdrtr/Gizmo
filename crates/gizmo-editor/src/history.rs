@@ -9,9 +9,8 @@ pub enum EditorAction {
     TransformsChanged {
         changes: Vec<(gizmo_core::entity::Entity, Transform, Transform)>, // (Entity, old_transform, new_transform)
     },
-    /// Objelerin silinmesi
-    /// TODO: Implement a reliable serialized state buffer format
-    EntityDespawned { data: Vec<Vec<u8>> },
+    /// Objelerin silinmesi (Soft Delete kullanılarak gizlenmiş)
+    EntityDespawned { entity_ids: Vec<gizmo_core::entity::Entity> },
     /// Objelerin oluşturulması
     EntitySpawned {
         entity_ids: Vec<gizmo_core::entity::Entity>,
@@ -64,7 +63,7 @@ impl History {
     }
 
     /// Son işlemi geri al (Undo) - Semantic Note: world state mutasyona uğratılır (interior mutability ile)
-    pub fn undo(&mut self, world: &World) {
+    pub fn undo(&mut self, world: &mut World) {
         if let Some(action) = self.undo_stack.pop_back() {
             match action.clone() {
                 EditorAction::TransformsChanged { changes } => {
@@ -80,6 +79,26 @@ impl History {
                     self.redo_stack
                         .push_back(EditorAction::TransformsChanged { changes });
                 }
+                EditorAction::EntityDespawned { entity_ids } => {
+                    for entity in &entity_ids {
+                        if let Some(ent) = world.get_entity(entity.id()) {
+                            world.remove_component::<gizmo_core::component::IsDeleted>(ent);
+                            world.remove_component::<gizmo_core::component::IsHidden>(ent);
+                        }
+                    }
+                    self.redo_stack
+                        .push_back(EditorAction::EntityDespawned { entity_ids });
+                }
+                EditorAction::EntitySpawned { entity_ids } => {
+                    for entity in &entity_ids {
+                        if let Some(ent) = world.get_entity(entity.id()) {
+                            world.add_component(ent, gizmo_core::component::IsDeleted);
+                            world.add_component(ent, gizmo_core::component::IsHidden);
+                        }
+                    }
+                    self.redo_stack
+                        .push_back(EditorAction::EntitySpawned { entity_ids });
+                }
                 _ => {
                     // Henüz implement edilmedi — stack'e geri koy
                     eprintln!("Uyarı: Bu action türü henüz geri alınamıyor (Undo desteklenmiyor).");
@@ -90,7 +109,7 @@ impl History {
     }
 
     /// Geri alınan işlemi yeniden uygula (Redo) - Semantic Note: world state mutasyona uğratılır (interior mutability)
-    pub fn redo(&mut self, world: &World) {
+    pub fn redo(&mut self, world: &mut World) {
         if let Some(action) = self.redo_stack.pop_back() {
             match action.clone() {
                 EditorAction::TransformsChanged { changes } => {
@@ -105,6 +124,26 @@ impl History {
                     }
                     self.undo_stack
                         .push_back(EditorAction::TransformsChanged { changes });
+                }
+                EditorAction::EntityDespawned { entity_ids } => {
+                    for entity in &entity_ids {
+                        if let Some(ent) = world.get_entity(entity.id()) {
+                            world.add_component(ent, gizmo_core::component::IsDeleted);
+                            world.add_component(ent, gizmo_core::component::IsHidden);
+                        }
+                    }
+                    self.undo_stack
+                        .push_back(EditorAction::EntityDespawned { entity_ids });
+                }
+                EditorAction::EntitySpawned { entity_ids } => {
+                    for entity in &entity_ids {
+                        if let Some(ent) = world.get_entity(entity.id()) {
+                            world.remove_component::<gizmo_core::component::IsDeleted>(ent);
+                            world.remove_component::<gizmo_core::component::IsHidden>(ent);
+                        }
+                    }
+                    self.undo_stack
+                        .push_back(EditorAction::EntitySpawned { entity_ids });
                 }
                 _ => {
                     eprintln!(

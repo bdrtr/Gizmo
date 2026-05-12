@@ -45,7 +45,7 @@ impl Mesh {
 
         // 1. Un-indexed vertex array üzerinden index array oluştur (meshopt için gereklidir)
         #[cfg(not(target_arch = "wasm32"))]
-        if vertex_count > u32::MAX {
+        if vertex_count > 1000 {
             let (unique_count, indices) = meshopt::generate_vertex_remap(vertices, None);
 
             let mut unique_vertices = vec![crate::gpu_types::Vertex::default(); unique_count];

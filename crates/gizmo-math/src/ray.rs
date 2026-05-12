@@ -17,6 +17,29 @@ impl Ray {
         }
     }
 
+    /// NDC (Normalized Device Coordinates) uzayından 3B Dünya (World) uzayına bir Ray oluşturur.
+    /// `ndc`: [-1.0, 1.0] aralığında ekran koordinatları.
+    /// `view_proj_inv`: (Projection * View) matrisinin tersi.
+    #[inline]
+    pub fn from_ndc(ndc: glam::Vec2, view_proj_inv: glam::Mat4) -> Self {
+        // WGPU standardında NDC depth 0.0 (near) ile 1.0 (far) arasındadır.
+        let near_ndc = glam::Vec4::new(ndc.x, ndc.y, 0.0, 1.0);
+        let far_ndc = glam::Vec4::new(ndc.x, ndc.y, 1.0, 1.0);
+
+        let mut near_world = view_proj_inv * near_ndc;
+        debug_assert!(near_world.w.abs() > 1e-10, "Ray::from_ndc: degenerate near w (singular VP inverse?)");
+        near_world /= near_world.w;
+        
+        let mut far_world = view_proj_inv * far_ndc;
+        debug_assert!(far_world.w.abs() > 1e-10, "Ray::from_ndc: degenerate far w (singular VP inverse?)");
+        far_world /= far_world.w;
+
+        let origin = near_world.truncate();
+        let direction = (far_world.truncate() - origin).normalize();
+
+        Self::new(origin, direction)
+    }
+
     /// Işının uzayda `t` uzaklığındaki ulaştığı (çarpıştığı) kesin noktayı hesaplar.
     #[inline]
     pub fn at(self, t: f32) -> Vec3A {
@@ -211,5 +234,24 @@ mod tests {
 
         let t_miss = ray_miss.intersect_aabb(aabb);
         assert!(t_miss.is_none());
+    }
+    #[test]
+    fn test_ray_from_ndc() {
+        let view = glam::Mat4::look_at_rh(
+            Vec3::new(0.0, 0.0, 10.0), // Camera at Z=10
+            Vec3::ZERO,                 // Looking at origin
+            Vec3::Y,                    // Up is Y
+        );
+        let proj = glam::Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.1, 100.0);
+        let view_proj_inv = (proj * view).inverse();
+
+        // Center pixel (NDC = 0,0)
+        let ray_center = Ray::from_ndc(glam::Vec2::new(0.0, 0.0), view_proj_inv);
+        
+        // Origins usually lie on the near plane.
+        // The camera is at Z=10, looking at Z=0. Direction should be -Z.
+        assert!((ray_center.direction.z - (-1.0)).abs() < 1e-5);
+        assert!(ray_center.direction.x.abs() < 1e-5);
+        assert!(ray_center.direction.y.abs() < 1e-5);
     }
 }

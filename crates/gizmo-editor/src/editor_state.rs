@@ -119,7 +119,6 @@ pub struct SceneState {
 pub struct SelectionState {
     pub entities: std::collections::HashSet<gizmo_core::entity::Entity>,
     pub primary: Option<gizmo_core::entity::Entity>,
-    pub highlight_box: Option<gizmo_core::entity::Entity>,
     pub rubber_band_start: Option<gizmo_math::Vec2>,
     pub rubber_band_current: Option<gizmo_math::Vec2>,
     pub rubber_band_request: Option<(gizmo_math::Vec2, gizmo_math::Vec2)>,
@@ -197,6 +196,7 @@ pub struct EditorState {
     pub scene_path: String,
     pub has_unsaved_changes: bool,
     pub dragged_asset: Option<String>,
+    pub transform_gizmo: transform_gizmo_egui::Gizmo,
 
     // Nested Yapılar
     pub camera: CameraState,
@@ -224,6 +224,7 @@ pub struct EditorState {
     pub spawn_asset_request: Option<String>,
     pub spawn_asset_position: Option<gizmo_math::Vec3>,
     pub gltf_load_request: Option<(String, Option<gizmo_math::Vec3>)>,
+    pub pending_async_gltfs: std::collections::HashMap<String, gizmo_math::Vec3>,
     pub reparent_request: Option<(gizmo_core::entity::Entity, gizmo_core::entity::Entity)>,
     pub unparent_request: Option<gizmo_core::entity::Entity>,
     pub add_component_request: Option<(gizmo_core::entity::Entity, String)>,
@@ -295,6 +296,7 @@ impl EditorState {
             scene_path: String::new(),
             has_unsaved_changes: false,
             dragged_asset: None,
+            transform_gizmo: transform_gizmo_egui::Gizmo::default(),
 
             camera: CameraState::default(),
             build: BuildState::default(),
@@ -316,6 +318,7 @@ impl EditorState {
             spawn_asset_request: None,
             spawn_asset_position: None,
             gltf_load_request: None,
+            pending_async_gltfs: std::collections::HashMap::new(),
             reparent_request: None,
             unparent_request: None,
             add_component_request: None,

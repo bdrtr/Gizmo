@@ -854,10 +854,19 @@ mod tests {
                 }
             };
 
+            // Wireframe pipeline requires POLYGON_MODE_LINE
+            let adapter_features = adapter.features();
+            if !adapter_features.contains(wgpu::Features::POLYGON_MODE_LINE) {
+                println!(
+                    "GPU adapter does not support POLYGON_MODE_LINE. Skipping pipeline test."
+                );
+                return;
+            }
+
             let (device, _) = adapter
                 .request_device(
                     &wgpu::DeviceDescriptor {
-                        required_features: wgpu::Features::empty(),
+                        required_features: wgpu::Features::POLYGON_MODE_LINE,
                         required_limits: wgpu::Limits {
                             max_bind_groups: 6,
                             ..wgpu::Limits::default()

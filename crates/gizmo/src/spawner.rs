@@ -507,6 +507,81 @@ impl<'a> Commands<'a> {
             )),
         }
     }
+
+    /// Asenkron GLTF yükleme tamamlandığında çağrılacak metot.
+    pub fn spawn_gltf_async_completed(
+        &mut self,
+        completion: gizmo_renderer::async_assets::GltfImportCompletion,
+        pos: Vec3,
+        attach_colliders: bool,
+    ) -> Result<EntityBuilder<'_, 'a>, String> {
+        let default_bg = self.asset_manager.as_mut().unwrap().create_white_texture(
+            &self.renderer.device,
+            &self.renderer.queue,
+            &self.renderer.scene.texture_bind_group_layout,
+        );
+        let default_mat = Material::new(default_bg.clone());
+
+        match self.asset_manager.as_mut().unwrap().load_gltf_from_import(
+            &self.renderer.device,
+            &self.renderer.queue,
+            &self.renderer.scene.texture_bind_group_layout,
+            default_bg,
+            &completion.path,
+            completion.document,
+            completion.buffers,
+            completion.images,
+        ) {
+            Ok(asset) => {
+                let root = self.world.spawn();
+                let mut trans = Transform::new(pos);
+                trans.update_local_matrix();
+
+                self.world.add_component(root, trans);
+                self.world
+                    .add_component(root, gizmo_physics::GlobalTransform::default());
+                self.world
+                    .add_component(root, EntityName(format!("GLTF: {}", completion.path)));
+                self.world
+                    .add_component(root, gizmo_core::component::Children(Vec::new()));
+
+                for node in &asset.roots {
+                    spawn_gltf_node_flat(
+                        self.world,
+                        node,
+                        root.id(),
+                        default_mat.clone(),
+                        attach_colliders,
+                    );
+                }
+
+                if !asset.animations.is_empty() {
+                    self.world.add_component(
+                        root,
+                        gizmo_renderer::components::AnimationPlayer {
+                            active_animation: 0,
+                            current_time: 0.0,
+                            loop_anim: true,
+                            speed: 1.0,
+                            animations: std::sync::Arc::from(
+                                asset.animations.clone().into_boxed_slice(),
+                            ),
+                            ..Default::default()
+                        },
+                    );
+                }
+
+                Ok(EntityBuilder {
+                    commands: self,
+                    entity: root,
+                })
+            }
+            Err(e) => Err(format!(
+                "[Commands::spawn_gltf_async_completed] '{}' yüklenemedi: {}",
+                completion.path, e
+            )),
+        }
+    }
 }
 
 // ─── EntityBuilder — Zincir API ───────────────────────────────────────────────
