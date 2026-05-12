@@ -182,17 +182,27 @@ fn select_4_contacts(pool: &[ContactPoint; 5]) -> [ContactPoint; 4] {
         })
         .unwrap();
 
-    // Step 4 — the remaining point that maximises the signed area of the
-    // quadrilateral (i.e. keeps the hull as convex as possible).
+    // Step 4 — the remaining point that maximises the area of the
+    // quadrilateral formed by the 4 selected points.
+    //
+    // When the contact patch is coplanar (common case: face-on-face) the
+    // volume-based heuristic degenerates to zero.  Instead, compute the
+    // sum of triangle areas from the candidate to every pair of
+    // already-selected points.  This always picks the point that keeps
+    // the contact patch as spread-out as possible.
     let p2 = pool[i2].point;
-    let normal_approx = (p1 - p0).cross(p2 - p0); // rough face normal
     let i3 = (0..5)
         .filter(|&i| i != i0 && i != i1 && i != i2)
         .max_by(|&a, &b| {
-            // Maximise the volume of the tetrahedron formed with the triangle.
-            let va = normal_approx.dot(pool[a].point - p0).abs();
-            let vb = normal_approx.dot(pool[b].point - p0).abs();
-            va.total_cmp(&vb)
+            let score = |idx: usize| -> f32 {
+                let q = pool[idx].point;
+                // Sum of cross-product magnitudes gives a good proxy for
+                // how much area the candidate adds to the patch.
+                (q - p0).cross(q - p1).length_squared()
+                    + (q - p1).cross(q - p2).length_squared()
+                    + (q - p2).cross(q - p0).length_squared()
+            };
+            score(a).total_cmp(&score(b))
         })
         .unwrap();
 
