@@ -189,6 +189,7 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
                     // Drag & Drop başlatma (viewport'ta yakalanır)
                     let drag_id = egui::Id::new("drag_asset").with(path.as_os_str());
                     let drag_response = ui.interact(response.rect, drag_id, egui::Sense::drag());
+                    
                     if drag_response.drag_started() {
                         state.dragged_asset = Some(path_str.clone());
                     }

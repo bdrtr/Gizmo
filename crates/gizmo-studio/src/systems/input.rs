@@ -58,7 +58,6 @@ pub fn handle_input_and_scene_view(
         }
     }
 
-    studio_input::sync_gizmos(world, editor_state);
 
     // GIZMO DEBUG RENDERER: Spawn and Despawn logic
     // Zamanlayıcısı dolanları sil
@@ -101,73 +100,16 @@ pub fn handle_input_and_scene_view(
 
     // Asset browser sürükle bırak spawn işlemi
     if let Some(asset_path) = editor_state.spawn_asset_request.take() {
-        let mut final_pos = None;
-        if let Some(ndc) = editor_state.spawn_asset_position {
-            let (ww, wh) = window.size();
-            let aspect = if let Some(rect) = editor_state.scene_view_rect {
-                rect.width() / rect.height()
-            } else {
-                ww / wh
-            };
+        let final_pos = editor_state.spawn_asset_position;
 
-            if let Some(ray) =
-                studio_input::build_ray(world, state.editor_camera, ndc.x, ndc.y, aspect, 1.0)
-            {
-                // Raycast yap (Gizmo'ları yoksayarak)
-                let mut closest_t = std::f32::MAX;
-                let colliders = world.borrow::<Collider>();
-                let transforms = world.borrow::<Transform>();
-                {
-                    for (id, col) in colliders.iter() {
-                        if id == state.editor_camera
-                            || Some(gizmo::prelude::Entity::new(id, 0))
-                                == editor_state.selection.highlight_box
-                        {
-                            continue;
-                        }
-
-                        if let Some(t) = transforms.get(id) {
-                            let aabb = col.compute_aabb(gizmo::math::Vec3::ZERO, t.rotation);
-                            let extents = (aabb.max - aabb.min) * 0.5;
-                            let scaled_half = gizmo::math::Vec3::new(
-                                extents.x * t.scale.x,
-                                extents.y * t.scale.y,
-                                extents.z * t.scale.z,
-                            );
-
-                            if let Some(hitt) =
-                                ray.intersect_obb(t.position, scaled_half, t.rotation)
-                            {
-                                if hitt > 0.0 && hitt < closest_t {
-                                    closest_t = hitt;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if closest_t < std::f32::MAX {
-                    final_pos = Some((ray.origin + ray.direction * closest_t).into());
-                } else {
-                    // Basit bir Z=0 / Y=0 zemin kesişimi yapalım
-                    if ray.direction.y < -0.0001 {
-                        let t = -ray.origin.y / ray.direction.y;
-                        final_pos = Some((ray.origin + ray.direction * t).into());
-                    } else {
-                        // Işık yukarı bakıyorsa 15 birim öteye atalım
-                        final_pos = Some((ray.origin + ray.direction * 15.0).into());
-                    }
-                }
-            }
-        }
-
-        if asset_path.ends_with(".prefab") {
+        let lower_path = asset_path.to_lowercase();
+        if lower_path.ends_with(".prefab") {
             editor_state.prefab_load_request = Some((asset_path, None, final_pos));
-        } else if asset_path.ends_with(".gizmo") {
+        } else if lower_path.ends_with(".gizmo") {
             editor_state.scene.load_request = Some(asset_path);
-        } else if asset_path.ends_with(".glb")
-            || asset_path.ends_with(".gltf")
-            || asset_path.ends_with(".obj")
+        } else if lower_path.ends_with(".glb")
+            || lower_path.ends_with(".gltf")
+            || lower_path.ends_with(".obj")
         {
             editor_state.gltf_load_request = Some((asset_path, final_pos));
         } else {

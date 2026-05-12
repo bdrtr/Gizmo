@@ -92,6 +92,7 @@ pub fn directional_cascade_view_projs(
         let mut max_b = Vec3::splat(f32::MIN);
         for c in corners {
             let v = light_view * Vec4::new(c.x, c.y, c.z, 1.0);
+            debug_assert!(v.w.abs() > 1e-6, "CSM corner projection: v.w ≈ 0 — degenerate light view matrix");
             let p = Vec3::new(v.x, v.y, v.z) / v.w;
             min_b = min_b.min(p);
             max_b = max_b.max(p);

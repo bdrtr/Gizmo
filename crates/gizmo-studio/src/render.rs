@@ -20,7 +20,7 @@ pub fn render_studio(
     let mut duplicate_reqs = Vec::new();
     let mut play_start = false;
     let mut play_stop = false;
-    let mut highlight_box_id = 0u32;
+    let mut play_stop = false;
 
     if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
         save_req = ed.scene.save_request.take();
@@ -31,7 +31,6 @@ pub fn render_studio(
         prefab_load_req = ed.prefab_load_request.take();
         gltf_req = ed.gltf_load_request.take();
         duplicate_reqs = ed.duplicate_requests.drain(..).collect();
-        highlight_box_id = ed.selection.highlight_box.map(|h| h.id()).unwrap_or(0);
 
         if ed.play_start_request {
             ed.play_start_request = false;
@@ -43,13 +42,61 @@ pub fn render_studio(
         }
     }
 
+    // Yeni istekleri loader'a aktar
     if let Some((path, pos)) = gltf_req {
+        println!(">>> render.rs: gltf_load_request yakalandı: {}", path);
+        let mut handled = false;
+        if let Some(asset_server) = world.get_resource::<gizmo::asset_server::AssetServer>() {
+            println!(">>> render.rs: AssetServer bulundu, import isteği gönderiliyor...");
+            if asset_server.loader.request_gltf_import(path.clone()) {
+                handled = true;
+            }
+        } else {
+            println!(">>> render.rs: HATA - AssetServer bulunamadı!");
+        }
+        if handled {
+            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+                ed.pending_async_gltfs.insert(path.clone(), pos.unwrap_or(gizmo::math::Vec3::ZERO));
+                ed.log_info(&format!("⌛ Asenkron model yüklemesi başlatıldı: {}", path));
+            }
+        } else {
+            println!(">>> render.rs: HATA - İstek AssetServer tarafından reddedildi veya işlenmedi!");
+            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+                ed.log_error(&format!("❌ Model yüklenemedi veya zaten yükleniyor: {}", path));
+            }
+        }
+    }
+
+    // Tamamlanan GLTF asenkron yüklemeleri işle
+    let mut completed_gltfs = Vec::new();
+    let mut completed_errors = Vec::new();
+    if let Some(mut asset_server) = world.get_resource_mut::<gizmo::asset_server::AssetServer>() {
+        completed_gltfs = asset_server.completed_gltfs.drain(..).collect();
+        completed_errors = asset_server.completed_gltf_errors.drain(..).collect();
+    }
+
+    for err in completed_errors {
+        if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+            ed.log_error(&format!("❌ Model yüklenemedi: {} ({})", err.path, err.message));
+        }
+    }
+
+    for comp in completed_gltfs {
+        let pos = {
+            let mut ed = world.get_resource_mut::<EditorState>().unwrap();
+            ed.pending_async_gltfs.remove(&comp.path).unwrap_or(gizmo::math::Vec3::ZERO)
+        };
+
+        let path = comp.path.clone();
         let mut cmds = gizmo::spawner::Commands::new(world, renderer);
-        let _ = cmds.spawn_gltf(pos.unwrap_or(gizmo::math::Vec3::ZERO), &path, false);
+        let result = cmds.spawn_gltf_async_completed(comp, pos, false).map(|b| b.id());
         drop(cmds);
 
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-            ed.log_info(&format!("Model sahneye eklendi: {}", path));
+            match result {
+                Ok(_) => ed.log_info(&format!("✅ Model sahneye eklendi: {}", path)),
+                Err(e) => ed.log_error(&e),
+            }
         }
     }
 
@@ -62,7 +109,6 @@ pub fn render_studio(
         // 1. In-memory snapshot al (hızlı yol — fizik state dahil)
         let mut protected_ids = std::collections::HashSet::new();
         protected_ids.insert(state.editor_camera);
-        protected_ids.insert(highlight_box_id);
         {
             let names = world.borrow::<gizmo::core::component::EntityName>();
             for e in world.iter_alive_entities() {
@@ -110,12 +156,11 @@ pub fn render_studio(
             // Hızlı yol: In-memory restore (fizik bileşenleri dahil)
             let mut protected_ids = std::collections::HashSet::new();
             protected_ids.insert(state.editor_camera);
-            protected_ids.insert(highlight_box_id);
             {
                 let names = world.borrow::<gizmo::core::component::EntityName>();
                 for e in world.iter_alive_entities() {
                     if let Some(name) = names.get(e.id()) {
-                        if name.0.starts_with("Editor ") || name.0 == "Highlight Box" {
+                        if name.0.starts_with("Editor ") {
                             protected_ids.insert(e.id());
                         }
                     }
@@ -174,7 +219,6 @@ pub fn render_studio(
         let ents = world.iter_alive_entities();
         let mut protected_ids = std::collections::HashSet::new();
         protected_ids.insert(state.editor_camera);
-        protected_ids.insert(highlight_box_id);
 
         {
             let names = world.borrow::<gizmo::core::component::EntityName>();
@@ -222,7 +266,6 @@ pub fn render_studio(
 
         let mut protected_ids = std::collections::HashSet::new();
         protected_ids.insert(state.editor_camera);
-        protected_ids.insert(highlight_box_id);
 
         {
             let names = world.borrow::<gizmo::core::component::EntityName>();

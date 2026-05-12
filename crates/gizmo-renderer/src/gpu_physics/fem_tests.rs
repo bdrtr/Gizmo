@@ -171,13 +171,24 @@ mod tests {
                 rest_volume_pad: [0.0; 4],
             }];
 
+            // Y=0 zemin düzlemi collider'ı ekliyoruz
+            use crate::gpu_physics::fem::GpuFemCollider;
+            let colliders = vec![GpuFemCollider {
+                shape_type: 0, // Plane
+                radius: 0.0,
+                _pad0: 0,
+                _pad1: 0,
+                position: [0.0, 0.0, 0.0, 0.0], // Düzlem üzerindeki bir nokta
+                normal: [0.0, 1.0, 0.0, 0.0],    // Yukarı bakan normal
+            }];
+
             let params = GpuFemParams {
                 properties: [0.1, 1.0, 1.0, 0.9], // dt=0.1, damping=0.9
                 gravity: [0.0, 0.0, 0.0, 0.0],    // Yerçekimi yok (sadece hızı test ediyoruz)
-                counts: [2, 0, 0, 0],
+                counts: [2, 0, 1, 0],              // 2 node, 0 element, 1 collider
             };
 
-            let fem_system = GpuFemSystem::new(&device, &nodes, &elements, &[], &params);
+            let fem_system = GpuFemSystem::new(&device, &nodes, &elements, &colliders, &params);
 
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -195,29 +206,34 @@ mod tests {
             let result_nodes: Vec<GpuSoftBodyNode> =
                 read_buffer(&device, &queue, &fem_system.nodes_buffer).await;
 
-            // --- Node 0 Test (Serbest Düşüş) ---
+            // --- Node 0 Test (Serbest Düşüş, Y=2.0 → zeminin üstünde) ---
             let n0 = &result_nodes[0];
-            // Beklenen hız: v = v * damping = -10.0 * 0.9 = -9.0
-            assert!((n0.velocity_fixed[1] - (-9.0)).abs() < 0.001);
-            // Beklenen pos: p = p + v * dt = 2.0 + (-9.0 * 0.1) = 1.1
-            assert!((n0.position_mass[1] - 1.1).abs() < 0.001);
+            // Beklenen: velocity *= damping → -10.0 * 0.9 = -9.0
+            assert!((n0.velocity_fixed[1] - (-9.0)).abs() < 0.001,
+                "Node 0 velocity Y: expected -9.0, got {}", n0.velocity_fixed[1]);
+            // Beklenen: pos = 2.0 + (-9.0 * 0.1) = 1.1
+            assert!((n0.position_mass[1] - 1.1).abs() < 0.001,
+                "Node 0 position Y: expected 1.1, got {}", n0.position_mass[1]);
 
-            // --- Node 1 Test (Zemin Çarpışması) ---
+            // --- Node 1 Test (Zemin Çarpışması, Y=-1.0) ---
             let n1 = &result_nodes[1];
-            // İlk hız Y=-10. Çarpışmadan dolayı: v.y *= -0.5 => 5.0. Sonra damping => 5.0 * 0.9 = 4.5
-            // Wait: shader önce damping yapıyor mu, yoksa çarptıktan sonra mı?
-            // Shader: velocity *= damping. future_pos = pos + velocity * dt.
-            // Eğer Y < 0 ise velocity.y *= -0.5, velocity.x *= 0.9.
-            // Y= -1.0, velocity.y = -10.0 * 0.9 = -9.0.
-            // future_pos = -1.0 + (-9.0 * 0.1) = -1.9 < 0.
-            // velocity.y *= -0.5 => 4.5.
-            assert!((n1.velocity_fixed[1] - 4.5).abs() < 0.001);
-
-            // X ve Z için sürtünme test: velocity.x = (5.0 * 0.9) * 0.9 = 4.05
-            assert!((n1.velocity_fixed[0] - 4.05).abs() < 0.001);
-
+            // Shader akışı:
+            //   velocity *= damping → (5*0.9, -10*0.9, 5*0.9) = (4.5, -9.0, 4.5)
+            //   future_pos = (-1) + (-9.0 * 0.1) = -1.9 (< 0 → çarpışma!)
+            //   future_pos.y -= normal * dist = -1.9 - (0,1,0) * (-1.9) = 0.0
+            //   v_dot_n = -9.0 < 0 → çarpışma yanıtı:
+            //     normal_vel = (0, -9.0, 0)
+            //     tangent_vel = (4.5, 0, 4.5)
+            //     velocity = tangent * 0.8 - normal * 0.2 = (3.6, 1.8, 3.6)
+            assert!((n1.velocity_fixed[1] - 1.8).abs() < 0.01,
+                "Node 1 velocity Y: expected 1.8 (bounce), got {}", n1.velocity_fixed[1]);
+            assert!((n1.velocity_fixed[0] - 3.6).abs() < 0.01,
+                "Node 1 velocity X: expected 3.6 (friction), got {}", n1.velocity_fixed[0]);
+            assert!((n1.velocity_fixed[2] - 3.6).abs() < 0.01,
+                "Node 1 velocity Z: expected 3.6 (friction), got {}", n1.velocity_fixed[2]);
             // Pozisyon Y = 0.0 olmalı (zemine sıfırlanmalı)
-            assert_eq!(n1.position_mass[1], 0.0);
+            assert!((n1.position_mass[1] - 0.0).abs() < 0.01,
+                "Node 1 position Y: expected 0.0, got {}", n1.position_mass[1]);
         });
     }
 

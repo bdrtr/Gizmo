@@ -101,29 +101,29 @@ pub fn handle_scene_operations(
     }
 
     if !editor_state.despawn_requests.is_empty() {
-        let mut history_backup = Vec::new();
+        let mut soft_deleted_entities = Vec::new();
         let despawn_reqs: Vec<gizmo::prelude::Entity> =
             editor_state.despawn_requests.drain(..).collect();
         for ent_id in despawn_reqs {
             editor_state.selection.entities.remove(&ent_id);
 
-            // 1. Parent'ın Children listesinden kendini çıkar
-            {
-                let parent_storage = world.borrow::<gizmo::core::component::Parent>();
-                if let Some(p) = parent_storage.get(ent_id.id()) {
-                    let parent_id = p.0;
-                    drop(parent_storage);
-                    {
-                        let mut children_storage =
-                            world.borrow_mut::<gizmo::core::component::Children>();
-                        if let Some(c) = children_storage.get_mut(parent_id) {
-                            c.0.retain(|&id| id != ent_id.id());
-                        }
-                    }
+            // Korumalı objelerin (Kamera, Grid, Işık) silinmesini engelle
+            let mut is_protected = false;
+            if world.borrow::<gizmo::renderer::components::Camera>().get(ent_id.id()).is_some() {
+                is_protected = true;
+            }
+            if let Some(name) = world.borrow::<gizmo::core::component::EntityName>().get(ent_id.id()) {
+                if name.0 == "Editor Grid" || name.0 == "Editor Guidelines" || name.0 == "Directional Light" || name.0.starts_with("Editor Light Icon") {
+                    is_protected = true;
                 }
             }
 
-            // 2. Tüm çocuklarını topla
+            if is_protected {
+                editor_state.log_warning(&format!("Entity {} korumalı bir objedir ve silinemez.", ent_id.id()));
+                continue;
+            }
+
+            // 1. Tüm çocuklarını topla (kendisi dahil)
             let mut ids_to_delete = vec![ent_id.id()];
             {
                 let children_storage = world.borrow::<gizmo::core::component::Children>();
@@ -139,36 +139,26 @@ pub fn handle_scene_operations(
                 }
             }
 
-            // 3. Geçmişe kaydet (yalnızca kökü kaydediyoruz şimdilik) ve hepsini despawn et
-            if let Some(_ent) = world.get_entity(ent_id.id()) {
-                let backup = gizmo::scene::SceneData::serialize_entities(
-                    world,
-                    vec![ent_id.id()],
-                    &gizmo::scene::SceneRegistry::default(),
-                );
-                if let Some(data) = backup.into_iter().next() {
-                    if let Ok(bytes) = bincode::serialize(&data) {
-                        history_backup.push(bytes);
-                    }
+            // 2. Etiketleri ekle (Soft Delete)
+            for &id in &ids_to_delete {
+                if let Some(ent) = world.get_entity(id) {
+                    world.add_component(ent, gizmo::core::component::IsDeleted);
+                    world.add_component(ent, gizmo::core::component::IsHidden);
+                    soft_deleted_entities.push(ent);
                 }
-
-                for &id in &ids_to_delete {
-                    if let Some(ent) = world.get_entity(id) {
-                        world.despawn(ent);
-                    }
-                }
-                editor_state.log_info(&format!(
-                    "Entity {} ve {} çocuğu silindi.",
-                    ent_id,
-                    ids_to_delete.len() - 1
-                ));
             }
+            editor_state.log_info(&format!(
+                "Entity {} ve {} çocuğu silindi (Soft Delete).",
+                ent_id,
+                ids_to_delete.len() - 1
+            ));
         }
-        if !history_backup.is_empty() {
+
+        if !soft_deleted_entities.is_empty() {
             editor_state
                 .history
                 .push(gizmo::editor::history::EditorAction::EntityDespawned {
-                    data: history_backup,
+                    entity_ids: soft_deleted_entities,
                 });
         }
     }

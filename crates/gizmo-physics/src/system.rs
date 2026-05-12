@@ -32,10 +32,11 @@ pub fn physics_step_system(world: &World, dt: f32) {
         let trans_storage = world.borrow::<Transform>();
         let rb_storage = world.borrow::<RigidBody>();
         let pooled_storage = world.borrow::<gizmo_core::pool::Pooled>();
+        let deleted_storage = world.borrow::<gizmo_core::component::IsDeleted>();
 
         for (id, _rb) in rb_storage.iter() {
-            // Pooled (havuzda pasif) nesneleri simüle etme
-            if pooled_storage.get(id).is_some() {
+            // Pooled veya silinmiş nesneleri simüle etme
+            if pooled_storage.get(id).is_some() || deleted_storage.get(id).is_some() {
                 continue;
             }
             if let Some(transform) = trans_storage.get(id) {
@@ -104,7 +105,11 @@ pub fn physics_step_system(world: &World, dt: f32) {
         gizmo_core::query::Without<gizmo_core::pool::Pooled>,
     )>::new(world)
     {
+        let deleted_storage = world.borrow::<gizmo_core::component::IsDeleted>();
         for (id, (rb, transform, vel, _)) in query.iter() {
+            if deleted_storage.get(id).is_some() {
+                continue;
+            }
             if let Some(final_collider) = compound_shapes_map.remove(&id) {
                 rigid_bodies.push((Entity::new(id, 0), *rb, *transform, *vel, final_collider));
             }

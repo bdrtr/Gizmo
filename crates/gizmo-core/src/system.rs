@@ -263,13 +263,11 @@ macro_rules! impl_into_system {
                             let $P = match $P::fetch(world, dt) {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    crate::gizmo_log!(
-                                        Warning,
-                                        "[SystemParam] fetch failed for {}: {:?}",
-                                        std::any::type_name::<$P>(),
-                                        e
+                                    panic!(
+                                        "❌ FATAL ECS ERROR ❌\n\nSistem parametresi '{param_type}' Dünya'da (World) bulunamadı!\n\nHata Detayı: {e:?}\n\nÇözüm: `app.world.insert_resource()` veya `app.add_plugin()` kullanarak eksik kaynağı başlangıçta Dünya'ya eklediğinizden emin olun. Gizmo Engine, hataların sessizce yok sayılmasını önlemek için sistemi durdurdu.\n",
+                                        param_type = std::any::type_name::<$P>(),
+                                        e = e
                                     );
-                                    return;
                                 }
                             };
                         )+

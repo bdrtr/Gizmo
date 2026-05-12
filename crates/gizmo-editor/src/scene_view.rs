@@ -1,7 +1,7 @@
 use crate::EditorState;
 use gizmo_core::World;
 
-pub fn ui_scene_view(ui: &mut egui::Ui, _world: &World, state: &mut EditorState) {
+pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     state.scene_view_visible = true;
 
     let response = ui.allocate_response(ui.available_size(), egui::Sense::click_and_drag());
@@ -29,20 +29,22 @@ pub fn ui_scene_view(ui: &mut egui::Ui, _world: &World, state: &mut EditorState)
     }
 
     // --- GIZMO FARE (MOUSE) ETKİLEŞİMLERİ ---
-    let (alt_pressed, scroll_y, hover_pos, any_released, _primary_down, press_origin) =
+    let (hover_pos, interact_pos, latest_pos, any_released, alt_pressed, scroll_y, _primary_down, press_origin) =
         ui.input(|i| {
             (
+                i.pointer.hover_pos(),
+                i.pointer.interact_pos(),
+                i.pointer.latest_pos(),
+                i.pointer.any_released(),
                 i.modifiers.alt,
                 i.raw_scroll_delta.y,
-                i.pointer.hover_pos(),
-                i.pointer.any_released(),
-                i.pointer.primary_down(),
                 i.pointer.press_origin(),
+                i.pointer.press_origin(), // Sadece tuple uyumluluğu için
             )
         });
 
     if response.contains_pointer() || response.dragged() {
-        if let Some(pos) = hover_pos {
+        if let Some(pos) = interact_pos {
             // Fare sahne içinde veya sürükleniyor ise NDC (-1.0 ile 1.0) hesapla
             let nx = ((pos.x - rect.left()) / rect.width()) * 2.0 - 1.0;
             let ny = 1.0 - ((pos.y - rect.top()) / rect.height()) * 2.0;
@@ -89,149 +91,107 @@ pub fn ui_scene_view(ui: &mut egui::Ui, _world: &World, state: &mut EditorState)
     } else {
         state.mouse_ndc = None;
         state.camera.look_delta = None;
-        state.camera.pan_delta = None;
-        state.camera.orbit_delta = None;
         state.camera.scroll_delta = None;
     }
 
-    // Dışarıdan veya UI'dan sürüklenen objeyi Scene View'a bırakma yakakalayıcısı
     if let Some(dragged_path) = state.dragged_asset.clone() {
-        if response.hovered() && any_released {
-            state.spawn_asset_request = Some(dragged_path);
-
-            // Farenin bırakıldığı yerin NDC koordinatı ile objeyi spawner'a gönderelim (sıfır değil)
-            // Asset Drop Raycasting (Aşama 2):
-            if let Some(_ndc) = state.mouse_ndc {
-                todo!(
-                    "NDC koordinatı kamera raycast'i kullanılarak world position'a dönüştürülmeli"
-                );
-            } else {
+        if any_released {
+            let latest_pos = ui.input(|i| i.pointer.latest_pos());
+            let in_scene = latest_pos.map(|p| rect.contains(p)).unwrap_or(false);
+            
+            println!(">>> DRAG RELEASED! latest_pos: {:?}, rect: {:?}, in_scene: {}", latest_pos, rect, in_scene);
+            
+            if in_scene {
+                state.log_info(&format!("Model sahneye bırakıldı: {}", dragged_path));
+                state.spawn_asset_request = Some(dragged_path);
                 state.spawn_asset_position = Some(gizmo_math::Vec3::ZERO);
             }
-
-            state.dragged_asset = None;
+            state.dragged_asset = None; // Her ihtimale karşı sıfırla
         }
     }
-
     // --- EGUI-GIZMO Entegrasyonu (Aşama 1) ---
-    // DISABLED: egui-gizmo does not support egui 0.28 yet.
-    let gizmo_interacted = false;
-    /*
+    let mut gizmo_interacted = false;
+    
     if let (Some(view_mat), Some(proj_mat)) =
         (state.camera.view, state.camera.proj)
     {
         if !state.selection.entities.is_empty() {
             let mut transforms = world.borrow_mut::<gizmo_physics::components::Transform>();
-            {
-                {
-                    let primary_id = state.selection.primary.unwrap_or_else(|| *state.selection.entities.iter().next().unwrap());
-                    let mut primary_model_mat = gizmo_math::Mat4::IDENTITY;
-                    if let Some(primary_t) = transforms.get(primary_id.id()) {
-                        primary_model_mat = primary_t.model_matrix();
-                    }
-
-                let gizmo_mode = match state.gizmo_mode {
-                    crate::editor_state::GizmoMode::Translate => {
-                        egui_gizmo::GizmoMode::Translate
-                    }
-                    crate::editor_state::GizmoMode::Rotate => {
-                        egui_gizmo::GizmoMode::Rotate
-                    }
-                    crate::editor_state::GizmoMode::Scale => {
-                        egui_gizmo::GizmoMode::Scale
-                    }
-                };
+            
+            let primary_id = state.selection.primary.unwrap_or_else(|| *state.selection.entities.iter().next().unwrap());
+            if let Some(mut primary_t) = transforms.get_mut(primary_id.id()) {
+                
+                use transform_gizmo_egui::prelude::*;
+                use transform_gizmo_egui::math::Transform as GizmoTransform;
 
                 let gizmo_orientation = if state.gizmo_local_space {
-                    egui_gizmo::GizmoOrientation::Local
+                    GizmoOrientation::Local
                 } else {
-                    egui_gizmo::GizmoOrientation::Global
+                    GizmoOrientation::Global
                 };
 
-                let snap_enabled = state.prefs.snap_enabled || ui.input(|i| i.modifiers.command);
-                let snap_distance = state.prefs.snap_translate;
-                let snap_angle = state.prefs.snap_rotate_deg.to_radians();
+                let snap_distance = if state.prefs.snap_enabled { state.prefs.snap_translate as f32 } else { 0.0 };
+                let snap_angle = if state.prefs.snap_enabled { state.prefs.snap_rotate_deg.to_radians() as f32 } else { 0.0 };
 
-                let gizmo = egui_gizmo::Gizmo::new("scene_gizmo")
-                    .view_matrix(view_mat.to_cols_array_2d().into())
-                    .projection_matrix(proj_mat.to_cols_array_2d().into())
-                    .model_matrix(primary_model_mat.to_cols_array_2d().into())
-                    .mode(gizmo_mode)
-                    .orientation(gizmo_orientation)
-                    .snapping(snap_enabled)
-                    .snap_distance(snap_distance)
-                    .snap_angle(snap_angle)
-                    .visuals(egui_gizmo::GizmoVisuals {
-                        gizmo_size: state.prefs.gizmo_size,
-                        ..Default::default()
-                    });
+                let vm = view_mat.to_cols_array_2d();
+                let pm = proj_mat.to_cols_array_2d();
+                
+                let view_matrix = transform_gizmo_egui::mint::RowMatrix4 {
+                    x: transform_gizmo_egui::mint::Vector4 { x: vm[0][0] as f64, y: vm[1][0] as f64, z: vm[2][0] as f64, w: vm[3][0] as f64 },
+                    y: transform_gizmo_egui::mint::Vector4 { x: vm[0][1] as f64, y: vm[1][1] as f64, z: vm[2][1] as f64, w: vm[3][1] as f64 },
+                    z: transform_gizmo_egui::mint::Vector4 { x: vm[0][2] as f64, y: vm[1][2] as f64, z: vm[2][2] as f64, w: vm[3][2] as f64 },
+                    w: transform_gizmo_egui::mint::Vector4 { x: vm[0][3] as f64, y: vm[1][3] as f64, z: vm[2][3] as f64, w: vm[3][3] as f64 },
+                };
+                let projection_matrix = transform_gizmo_egui::mint::RowMatrix4 {
+                    x: transform_gizmo_egui::mint::Vector4 { x: pm[0][0] as f64, y: pm[1][0] as f64, z: pm[2][0] as f64, w: pm[3][0] as f64 },
+                    y: transform_gizmo_egui::mint::Vector4 { x: pm[0][1] as f64, y: pm[1][1] as f64, z: pm[2][1] as f64, w: pm[3][1] as f64 },
+                    z: transform_gizmo_egui::mint::Vector4 { x: pm[0][2] as f64, y: pm[1][2] as f64, z: pm[2][2] as f64, w: pm[3][2] as f64 },
+                    w: transform_gizmo_egui::mint::Vector4 { x: pm[0][3] as f64, y: pm[1][3] as f64, z: pm[2][3] as f64, w: pm[3][3] as f64 },
+                };
 
-                if let Some(result) = gizmo.interact(ui) {
+                let config = GizmoConfig {
+                    view_matrix,
+                    projection_matrix,
+                    viewport: transform_gizmo_egui::math::Rect::from_min_max(
+                        transform_gizmo_egui::math::Pos2::new(rect.min.x, rect.min.y),
+                        transform_gizmo_egui::math::Pos2::new(rect.max.x, rect.max.y),
+                    ),
+                    modes: GizmoMode::all(), // Simply allow all modes
+                    orientation: gizmo_orientation,
+                    snap_distance,
+                    snap_angle,
+                    ..Default::default()
+                };
+                state.transform_gizmo.update_config(config);
+
+                // Gizmo transform oluştur
+                let tr = primary_t.position;
+                let rt = primary_t.rotation;
+                let sc = primary_t.scale;
+                
+                let translation = transform_gizmo_egui::mint::Vector3 { x: tr.x as f64, y: tr.y as f64, z: tr.z as f64 };
+                let rotation = transform_gizmo_egui::mint::Quaternion { v: transform_gizmo_egui::mint::Vector3 { x: rt.x as f64, y: rt.y as f64, z: rt.z as f64 }, s: rt.w as f64 };
+                let scale = transform_gizmo_egui::mint::Vector3 { x: sc.x as f64, y: sc.y as f64, z: sc.z as f64 };
+                
+                let gizmo_transform = GizmoTransform::from_scale_rotation_translation(scale, rotation, translation);
+
+                use transform_gizmo_egui::GizmoExt;
+                if let Some((_result, new_transforms)) = state.transform_gizmo.interact(ui, &[gizmo_transform]) {
                     gizmo_interacted = true;
-                    if state.scene.gizmo_original_transforms.is_empty() {
-                        // Tüm seçili objelerin orijinal durumlarını kaydet
-                        for &id in state.selection.entities.iter() {
-                            if let Some(tx) = transforms.get(id.id()) {
-                                state.scene.gizmo_original_transforms.insert(id, *tx);
-                            }
-                        }
+                    if let Some(new_t) = new_transforms.first() {
+                        let nt: transform_gizmo_egui::mint::Vector3<f64> = new_t.translation.into();
+                        let nr: transform_gizmo_egui::mint::Quaternion<f64> = new_t.rotation.into();
+                        let ns: transform_gizmo_egui::mint::Vector3<f64> = new_t.scale.into();
+                        
+                        primary_t.position = gizmo_math::Vec3::new(nt.x as f32, nt.y as f32, nt.z as f32);
+                        primary_t.rotation = gizmo_math::Quat::from_xyzw(nr.v.x as f32, nr.v.y as f32, nr.v.z as f32, nr.s as f32);
+                        primary_t.scale = gizmo_math::Vec3::new(ns.x as f32, ns.y as f32, ns.z as f32);
+                        primary_t.update_local_matrix();
                     }
-
-                    if let Some(orig_pivot) =
-                        state.scene.gizmo_original_transforms.get(&primary_id)
-                    {
-                        let new_mat = gizmo_math::Mat4::from_cols_array_2d(
-                            &result.transform().into(),
-                        );
-                        let delta_mat = new_mat * orig_pivot.model_matrix().inverse();
-
-                        for &id in state.selection.entities.iter() {
-                            if let Some(orig_t) =
-                                state.scene.gizmo_original_transforms.get(&id)
-                            {
-                                if let Some(t) = transforms.get_mut(id.id()) {
-                                    let final_mat = delta_mat * orig_t.model_matrix();
-                                    let (scale, rot, pos) =
-                                        final_mat.to_scale_rotation_translation();
-                                    t.position = pos;
-                                    t.rotation = rot;
-                                    t.scale = scale;
-                                    t.update_local_matrix();
-                                }
-                            }
-                        }
-                    }
-                } else if !state.scene.gizmo_original_transforms.is_empty() {
-                    // Gizmo bırakıldıysa veya sürükleme iptal edildiyse
-                    if !primary_down {
-                        // Sürükleme bittiğinde değişimi History'e aktar
-                    let mut changes = Vec::new();
-                    for &id in state.selection.entities.iter() {
-                        if let Some(old_t) = state.scene.gizmo_original_transforms.get(&id) {
-                            if let Some(t) = transforms.get(id.id()) {
-                                if old_t.position != t.position
-                                    || old_t.rotation != t.rotation
-                                    || old_t.scale != t.scale
-                                {
-                                    changes.push((id, *old_t, *t));
-                                }
-                            }
-                        }
-                    }
-
-                    if !changes.is_empty() {
-                        state.history.push(
-                            crate::history::EditorAction::TransformsChanged { changes },
-                        );
-                    }
-                    state.scene.gizmo_original_transforms.clear();
-                    }
-                }
                 }
             }
         }
     }
-    */
 
     // --- RUBBER BAND (KUTU İLE ÇOKLU SEÇİM) ---
     let is_dragging_gizmo = gizmo_interacted || !state.scene.gizmo_original_transforms.is_empty();

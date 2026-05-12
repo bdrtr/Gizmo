@@ -26,6 +26,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
             -std::f32::consts::FRAC_PI_4,
         )),
     );
+    world.add_component(light, gizmo::physics::components::GlobalTransform::default());
     world.add_component(
         light,
         gizmo::renderer::components::DirectionalLight::new(
@@ -49,6 +50,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
         icon1,
         Transform::new(Vec3::ZERO).with_scale(Vec3::new(0.04, 0.6, 0.04)),
     );
+    world.add_component(icon1, gizmo::physics::components::GlobalTransform::default());
     world.add_component(
         icon1,
         gizmo::renderer::asset::AssetManager::create_cube(&renderer.device),
@@ -69,6 +71,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
         icon2,
         Transform::new(Vec3::ZERO).with_scale(Vec3::new(0.6, 0.04, 0.04)),
     );
+    world.add_component(icon2, gizmo::physics::components::GlobalTransform::default());
     world.add_component(
         icon2,
         gizmo::renderer::asset::AssetManager::create_cube(&renderer.device),
@@ -89,6 +92,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
         icon3,
         Transform::new(Vec3::ZERO).with_scale(Vec3::new(0.04, 0.04, 0.6)),
     );
+    world.add_component(icon3, gizmo::physics::components::GlobalTransform::default());
     world.add_component(
         icon3,
         gizmo::renderer::asset::AssetManager::create_cube(&renderer.device),
@@ -112,6 +116,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
         gizmo::core::component::EntityName("Editor Guidelines".to_string()),
     );
     world.add_component(gizmo_root, Transform::new(Vec3::ZERO));
+    world.add_component(gizmo_root, gizmo::physics::components::GlobalTransform::default());
     let mut gizmo_children = Vec::new();
 
     // Procedural 3D Grid Lines and Infinite Axes
@@ -122,6 +127,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
         gizmo::core::component::EntityName("Editor Grid".to_string()),
     );
     world.add_component(grid_entity, Transform::new(Vec3::ZERO));
+    world.add_component(grid_entity, gizmo::physics::components::GlobalTransform::default());
     world.add_component(grid_entity, gizmo::core::component::Parent(gizmo_root.id()));
 
     let grid_mesh =
@@ -154,6 +160,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
         gizmo::core::component::EntityName("Default Cube".to_string()),
     );
     world.add_component(cube1, Transform::new(Vec3::new(0.0, 0.0, 0.0))); // Tam Merkez!
+    world.add_component(cube1, gizmo::physics::components::GlobalTransform::default());
     world.add_component(
         cube1,
         gizmo::renderer::asset::AssetManager::create_cube(&renderer.device),
@@ -173,9 +180,11 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
     ); // Visual mesh is 2x2x2 (from -1 to +1)
 
     // Fizik sistemleri
+    world.insert_resource(gizmo::physics::world::PhysicsWorld::new());
 
     // Custom Skybox or proper horizon color
     world.insert_resource(asset_manager);
+    world.insert_resource(gizmo::core::asset::Assets::<gizmo::renderer::components::Mesh>::default());
 
     // Editor Camera
     let cam = world.spawn();
@@ -189,6 +198,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
         cam,
         Transform::new(Vec3::new(0.0, 8.0, 18.0)).with_rotation(q_yaw * q_pitch),
     );
+    world.add_component(cam, gizmo::physics::components::GlobalTransform::default());
     world.add_component(
         cam,
         gizmo::renderer::components::Camera::new(
@@ -201,32 +211,10 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
         ),
     );
 
-    // Highlight Box (Selection Outline Representation)
-    let highlight_box = world.spawn();
-    world.add_component(
-        highlight_box,
-        gizmo::core::component::EntityName("Highlight Box".to_string()),
-    );
-    world.add_component(highlight_box, Transform::new(Vec3::new(0.0, -10000.0, 0.0))); // Hide initially
-    world.add_component(
-        highlight_box,
-        gizmo::renderer::asset::AssetManager::create_cube(&renderer.device),
-    );
-    world.add_component(
-        highlight_box,
-        gizmo::prelude::Material::new(white_tex.clone())
-            .with_unlit(Vec4::new(0.05, 0.45, 1.0, 0.3))
-            .with_transparent(true),
-    );
-    world.add_component(
-        highlight_box,
-        gizmo::renderer::components::MeshRenderer::new(),
-    );
     // --- GIZMO HANDLES (TRANSLATE) EGUI-GIZMO İÇİN İPTAL EDİLDİ ---
 
     let mut editor_state = EditorState::new();
     editor_state.open = true; // Always open in Studio!
-    editor_state.selection.highlight_box = Some(highlight_box);
 
     world.insert_resource(editor_state);
 

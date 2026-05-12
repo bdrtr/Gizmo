@@ -1,0 +1,122 @@
+   Compiling gizmo-studio v0.1.1 (/home/bedir/Documents/code/Gizmo-engine/crates/gizmo-studio)
+error[E0425]: cannot find type `EditorGrid` in module `crate::render`
+   --> crates/gizmo-studio/src/systems/scene_ops.rs:112:57
+    |
+112 |                 || world.has_component::<crate::render::EditorGrid>(ent_id.id()) 
+    |                                                         ^^^^^^^^^^ not found in `crate::render`
+
+error[E0425]: cannot find type `EditorCamera` in module `crate::render_pipeline`
+   --> crates/gizmo-studio/src/systems/scene_ops.rs:113:66
+    |
+113 |                 || world.has_component::<crate::render_pipeline::EditorCamera>(ent_id.id()) 
+    |                                                                  ^^^^^^^^^^^^ not found in `crate::render_pipeline`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `gizmo_core`
+  --> crates/gizmo-studio/src/update.rs:40:5
+   |
+40 |     gizmo_core::system::System::run(&mut transform_sync, world, dt);
+   |     ^^^^^^^^^^ use of unresolved module or unlinked crate `gizmo_core`
+   |
+   = help: if you wanted to use a crate named `gizmo_core`, use `cargo add gizmo_core` to add it to your `Cargo.toml`
+help: consider importing this struct
+   |
+ 1 + use std::alloc::System;
+   |
+help: if you import `System`, refer to it directly
+   |
+40 -     gizmo_core::system::System::run(&mut transform_sync, world, dt);
+40 +     System::run(&mut transform_sync, world, dt);
+   |
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `gizmo_core`
+  --> crates/gizmo-studio/src/update.rs:41:5
+   |
+41 |     gizmo_core::system::System::run(&mut transform_propagate, world, dt);
+   |     ^^^^^^^^^^ use of unresolved module or unlinked crate `gizmo_core`
+   |
+   = help: if you wanted to use a crate named `gizmo_core`, use `cargo add gizmo_core` to add it to your `Cargo.toml`
+help: consider importing this struct
+   |
+ 1 + use std::alloc::System;
+   |
+help: if you import `System`, refer to it directly
+   |
+41 -     gizmo_core::system::System::run(&mut transform_propagate, world, dt);
+41 +     System::run(&mut transform_propagate, world, dt);
+   |
+
+warning: unused import: `gizmo::physics::shape::Collider`
+ --> crates/gizmo-studio/src/systems/input.rs:5:5
+  |
+5 | use gizmo::physics::shape::Collider;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0599]: no method named `has_component` found for mutable reference `&mut gizmo_engine::prelude::World` in the current scope
+   --> crates/gizmo-studio/src/systems/scene_ops.rs:111:22
+    |
+111 |             if world.has_component::<gizmo::renderer::components::Camera>(ent_id.id()) 
+    |                      ^^^^^^^^^^^^^
+    |
+help: there is a method `add_component` with a similar name, but with different arguments
+   --> crates/gizmo-core/src/world/mod.rs:374:5
+    |
+374 |     pub fn add_component<T: Component>(&mut self, entity: Entity, component: T) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no method named `has_component` found for mutable reference `&mut gizmo_engine::prelude::World` in the current scope
+   --> crates/gizmo-studio/src/systems/scene_ops.rs:112:26
+    |
+112 |                 || world.has_component::<crate::render::EditorGrid>(ent_id.id()) 
+    |                          ^^^^^^^^^^^^^
+    |
+help: there is a method `add_component` with a similar name, but with different arguments
+   --> crates/gizmo-core/src/world/mod.rs:374:5
+    |
+374 |     pub fn add_component<T: Component>(&mut self, entity: Entity, component: T) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no method named `has_component` found for mutable reference `&mut gizmo_engine::prelude::World` in the current scope
+   --> crates/gizmo-studio/src/systems/scene_ops.rs:113:26
+    |
+113 |                 || world.has_component::<crate::render_pipeline::EditorCamera>(ent_id.id()) 
+    |                          ^^^^^^^^^^^^^
+    |
+help: there is a method `add_component` with a similar name, but with different arguments
+   --> crates/gizmo-core/src/world/mod.rs:374:5
+    |
+374 |     pub fn add_component<T: Component>(&mut self, entity: Entity, component: T) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+  --> crates/gizmo-studio/src/render.rs:22:9
+   |
+22 |     let mut play_stop = false;
+   |         ----^^^^^^^^^
+   |         |
+   |         help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `play_stop`
+  --> crates/gizmo-studio/src/render.rs:22:9
+   |
+22 |     let mut play_stop = false;
+   |         ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_play_stop`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `duplicate_reqs` is never read
+  --> crates/gizmo-studio/src/render.rs:33:9
+   |
+33 |         duplicate_reqs = ed.duplicate_requests.drain(..).collect();
+   |         ^^^^^^^^^^^^^^
+   |
+   = help: maybe it is overwritten before being read?
+   = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+Some errors have detailed explanations: E0425, E0433, E0599.
+For more information about an error, try `rustc --explain E0425`.
+warning: `gizmo-studio` (bin "gizmo-studio") generated 4 warnings
+error: could not compile `gizmo-studio` (bin "gizmo-studio") due to 7 previous errors; 4 warnings emitted

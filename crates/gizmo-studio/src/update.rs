@@ -34,7 +34,13 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
         crate::systems::scene_ops::handle_scene_operations(world, editor_state, state);
     });
 
+    // İşletim sistemleri (Async Asset Server ve Transform senkronizasyonları)
+
     // Resolve all Transform hierarchy
+    let mut transform_sync = gizmo::systems::transform::TransformSyncSystem;
+    let mut transform_propagate = gizmo::systems::transform::TransformPropagateSystem;
+    gizmo::core::system::System::run(&mut transform_sync, world, dt);
+    gizmo::core::system::System::run(&mut transform_propagate, world, dt);
 
     // Kamera sistemine editor state'e geri dönmüş haliyle pas atıyoruz (scroll delta Optional'ı unwrap_or(0.0) diye verdik, orijinal kodda Optional idi ama sistem f32 bekliyor. Bizim argüman f32, Option verilmiş. Düzeltilecekti). Wait, let's fix it properly.
     if scroll_delta.is_none() {

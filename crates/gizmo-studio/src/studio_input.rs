@@ -56,13 +56,24 @@ fn perform_rubber_band_selection(
         let is_hidden = world.borrow::<gizmo::core::component::IsHidden>();
 
         for (id, t) in transforms.iter() {
-            if id == player_id || state.selection.highlight_box.map(|h| h.id()) == Some(id) {
+            if id == player_id {
                 continue;
             }
 
             let hidden = &is_hidden;
             if hidden.contains(id) {
                 continue;
+            }
+
+            // Editör donanımlarını (Grid, Işık vb) seçilebilir objelerden çıkar
+            if let Some(name) = world.borrow::<gizmo::core::component::EntityName>().get(id) {
+                if name.0 == "Editor Grid" 
+                    || name.0 == "Editor Guidelines" 
+                    || name.0 == "Directional Light" 
+                    || name.0.starts_with("Editor Light Icon") 
+                {
+                    continue;
+                }
             }
 
             let clip_pos =
@@ -102,37 +113,49 @@ fn perform_raycast(
     let mut closest_t = std::f32::MAX;
     let mut hit_entity = None;
 
-    let colliders = world.borrow::<Collider>();
     let transforms = world.borrow::<Transform>();
     {
+        let colliders = world.borrow::<Collider>();
         let is_hidden = world.borrow::<gizmo::core::component::IsHidden>();
 
-        for (id, col) in colliders.iter() {
-            // Editör objelerini, highlight box'ı es geç
-            if id == player_id || state.selection.highlight_box.map(|h| h.id()) == Some(id) {
+        for (id, t) in transforms.iter() {
+            // Editör objelerini es geç
+            if id == player_id {
                 continue;
             }
-            // Gizli component'i olan objeleri tıklanabilir yapma.
-            // Seçili objemiz bittiğinde Gizmo okları IsHidden alır, o yüzden tıklanmazlar.
             let hidden = &is_hidden;
             if hidden.contains(id) {
                 continue;
             }
 
-            if let Some(t) = transforms.get(id) {
-                let extents = col.compute_aabb(t.position, t.rotation).half_extents();
-                let scaled_half = Vec3::new(
-                    extents.x * t.scale.x,
-                    extents.y * t.scale.y,
-                    extents.z * t.scale.z,
-                );
+            // Editör donanımlarını (Grid, Işık vb) seçilebilir objelerden çıkar
+            if let Some(name) = world.borrow::<gizmo::core::component::EntityName>().get(id) {
+                if name.0 == "Editor Grid" 
+                    || name.0 == "Editor Guidelines" 
+                    || name.0 == "Directional Light" 
+                    || name.0.starts_with("Editor Light Icon") 
+                {
+                    continue;
+                }
+            }
 
-                // Işın testi (OBB Testi)
-                if let Some(hitt) = ray.intersect_obb(t.position, scaled_half, t.rotation) {
-                    if hitt > 0.0 && hitt < closest_t {
-                        closest_t = hitt;
-                        hit_entity = Some(id);
-                    }
+            // Objenin collider'ı varsa onun boyutunu al, yoksa standart 1x1x1 (çarpı scale) kutu farz et.
+            let mut extents = Vec3::ONE;
+            if let Some(col) = colliders.get(id) {
+                extents = col.compute_aabb(gizmo::math::Vec3::ZERO, gizmo::math::Quat::IDENTITY).half_extents().into();
+            }
+
+            let scaled_half = Vec3::new(
+                extents.x * t.scale.x,
+                extents.y * t.scale.y,
+                extents.z * t.scale.z,
+            );
+
+            // Işın testi (OBB Testi)
+            if let Some(hitt) = ray.intersect_obb(t.position, scaled_half, t.rotation) {
+                if hitt > 0.0 && hitt < closest_t {
+                    closest_t = hitt;
+                    hit_entity = Some(id);
                 }
             }
         }
@@ -149,70 +172,7 @@ fn perform_raycast(
     }
 }
 
-pub fn sync_gizmos(world: &mut World, state: &EditorState) {
-    let mut any_selected = false;
-    let mut selected_pos = gizmo::math::Vec3::ZERO;
-    let mut selected_rot = gizmo::math::Quat::IDENTITY;
-    let mut selected_scale = gizmo::math::Vec3::ONE;
-    let mut selected_col = None;
-
-    if let Some(&selected) = state.selection.entities.iter().next() {
-        let transforms = world.borrow::<Transform>();
-        {
-            if let Some(t) = transforms.get(selected.id()) {
-                any_selected = true;
-                selected_pos = t.position;
-                selected_rot = t.rotation;
-                selected_scale = t.scale;
-
-                let colls = world.borrow::<Collider>();
-                {
-                    if let Some(c) = colls.get(selected.id()) {
-                        selected_col = Some(c.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    if any_selected {
-        // Obje seçiliyse Highlight Box pozisyonunu ve boyutunu güncelle
-        if let Some(highlight_box) = state.selection.highlight_box {
-            {
-                let mut trans = world.borrow_mut::<Transform>();
-                if let Some(hb) = trans.get_mut(highlight_box.id()) {
-                    hb.position = selected_pos;
-                    hb.rotation = selected_rot;
-
-                    let mut base_extents = Vec3::ONE;
-                    if let Some(c) = &selected_col {
-                        // AABB'yi origin'de hesapla, sonra scale uygula
-                        base_extents = (c
-                            .compute_aabb(Vec3::ZERO, gizmo::math::Quat::IDENTITY)
-                            .half_extents()
-                            * gizmo::math::Vec3A::from(selected_scale))
-                        .into();
-                    }
-
-                    hb.scale = base_extents * 1.05; // Çerçeveyi tam objenin collision AABB bounds'una sığdır
-                }
-            }
-
-            // ECS üzerinden görünür yap
-            if let Some(entity_hb) = world.get_entity(highlight_box.id()) {
-                world.remove_component::<gizmo::core::component::IsHidden>(entity_hb);
-            }
-        }
-    } else {
-        // Hiçbir şey seçili değilse ECS üzerinden render'ı atla
-        if let Some(highlight_box) = state.selection.highlight_box {
-            if let Some(entity_hb) = world.get_entity(highlight_box.id()) {
-                world.add_component(entity_hb, gizmo::core::component::IsHidden);
-            }
-        }
-    }
-}
-
+// Removed sync_gizmos
 pub fn build_ray(
     world: &World,
     player_id: u32,

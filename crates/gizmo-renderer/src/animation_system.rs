@@ -318,6 +318,10 @@ fn blend_poses(
     b: &[(Vec3, Quat, Vec3)],
     alpha: f32,
 ) -> Vec<(Vec3, Quat, Vec3)> {
+    debug_assert_eq!(
+        a.len(), b.len(),
+        "blend_poses: Pose dizileri farklı uzunlukta! a={}, b={}", a.len(), b.len()
+    );
     a.iter()
         .zip(b.iter())
         .map(|((ta, ra, sa), (tb, rb, sb))| {
@@ -348,9 +352,9 @@ fn upload_skin_matrices(skeleton: &Skeleton, queue: &wgpu::Queue) {
 #[allow(dead_code)]
 fn decompose_mat4(m: Mat4) -> (Vec3, Quat, Vec3) {
     let t = Vec3::new(m.w_axis.x, m.w_axis.y, m.w_axis.z);
-    let sx = Vec3::new(m.x_axis.x, m.x_axis.y, m.x_axis.z).length();
-    let sy = Vec3::new(m.y_axis.x, m.y_axis.y, m.y_axis.z).length();
-    let sz = Vec3::new(m.z_axis.x, m.z_axis.y, m.z_axis.z).length();
+    let sx = Vec3::new(m.x_axis.x, m.x_axis.y, m.x_axis.z).length().max(1e-6);
+    let sy = Vec3::new(m.y_axis.x, m.y_axis.y, m.y_axis.z).length().max(1e-6);
+    let sz = Vec3::new(m.z_axis.x, m.z_axis.y, m.z_axis.z).length().max(1e-6);
     let scale = Vec3::new(sx, sy, sz);
     let r_mat = Mat4::from_cols(
         gizmo_math::Vec4::new(m.x_axis.x / sx, m.x_axis.y / sx, m.x_axis.z / sx, 0.0),

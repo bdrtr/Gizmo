@@ -616,6 +616,22 @@ impl Renderer {
                     new_size.height,
                 );
             }
+            if let (Some(ref mut ssao), Some(ref def)) = (&mut self.ssao, &self.deferred) {
+                ssao.resize(
+                    &self.device,
+                    def,
+                    new_size.width,
+                    new_size.height,
+                );
+            }
+            if let (Some(ref mut vol), Some(ref def)) = (&mut self.volumetric, &self.deferred) {
+                vol.resize(
+                    &self.device,
+                    def,
+                    new_size.width,
+                    new_size.height,
+                );
+            }
         }
     }
 

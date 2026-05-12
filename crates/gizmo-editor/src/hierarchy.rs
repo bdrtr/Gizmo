@@ -28,8 +28,11 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     );
 
     // Asset Drop Yakalama
-    if bg_response.hovered() {
-        if let Some(dragged_path) = state.dragged_asset.clone() {
+    if let Some(dragged_path) = state.dragged_asset.clone() {
+        let latest_pos = ui.input(|i| i.pointer.latest_pos());
+        let in_hierarchy = latest_pos.map(|p| bg_response.rect.contains(p)).unwrap_or(false);
+        
+        if in_hierarchy {
             ui.painter().rect_stroke(
                 bg_response.rect,
                 2.0,
@@ -80,6 +83,7 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         let parents = world.borrow::<Parent>();
         let children_comp = world.borrow::<Children>();
         let is_hidden_comp = world.borrow::<gizmo_core::component::IsHidden>();
+        let is_deleted_comp = world.borrow::<gizmo_core::component::IsDeleted>();
 
         let filter_lower = state.hierarchy_filter.to_lowercase(); // Bir kez hesaplanır
 
@@ -87,7 +91,7 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         let root_entities: Vec<gizmo_core::entity::Entity> = world
             .iter_alive_entities()
             .into_iter()
-            .filter(|e| !parents.contains(e.id()))
+            .filter(|e| !parents.contains(e.id()) && !is_deleted_comp.contains(e.id()))
             .collect();
 
         // Root entity'leri çiz
@@ -110,6 +114,7 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
                 &names,
                 &children_comp,
                 &is_hidden_comp,
+                &is_deleted_comp,
                 &filter_lower,
             );
         }
@@ -128,6 +133,7 @@ fn draw_entity_node(
     names: &gizmo_core::storage::StorageView<EntityName>,
     children_comp: &gizmo_core::storage::StorageView<Children>,
     is_hidden_comp: &gizmo_core::storage::StorageView<gizmo_core::component::IsHidden>,
+    is_deleted_comp: &gizmo_core::storage::StorageView<gizmo_core::component::IsDeleted>,
     filter_lower: &str,
 ) {
     let entity_name = names
@@ -135,10 +141,13 @@ fn draw_entity_node(
         .map(|n| n.0.clone())
         .unwrap_or_else(|| format!("Entity_{}", entity.id()));
 
-    // Editor objelerini Hiyerarşiden tamamen gizle (eğer ayar açıksa)
     if state.hide_editor_entities
         && (entity_name.starts_with("Editor ") || entity_name == "Highlight Box")
     {
+        return;
+    }
+
+    if is_deleted_comp.contains(entity.id()) {
         return;
     }
 
@@ -158,6 +167,7 @@ fn draw_entity_node(
                             names,
                             children_comp,
                             is_hidden_comp,
+                            is_deleted_comp,
                             filter_lower,
                         );
                     }
@@ -280,6 +290,7 @@ fn draw_entity_node(
                                     names,
                                     children_comp,
                                     is_hidden_comp,
+                                    is_deleted_comp,
                                     filter_lower,
                                 );
                             }

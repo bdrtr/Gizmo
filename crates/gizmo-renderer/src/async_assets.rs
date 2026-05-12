@@ -178,12 +178,16 @@ impl AsyncAssetLoader {
 
     /// Run `gltf::import` off the main thread; upload with `AssetManager::load_gltf_from_import`.
     pub fn request_gltf_import(&self, path: String) -> bool {
+        println!(">>> request_gltf_import çağrıldı: {}", path);
         let mut g = self.shared.lock().expect("async asset mutex");
         if g.gltf_inflight.contains(&path) {
+            println!(">>> request_gltf_import: Model zaten yükleniyor!");
             return false;
         }
         g.gltf_inflight.insert(path.clone());
-        g.job_tx.send(Job::Gltf { path }).is_ok()
+        let ok = g.job_tx.send(Job::Gltf { path }).is_ok();
+        println!(">>> request_gltf_import: İşlem gönderildi mi? {}", ok);
+        ok
     }
 
     /// Non-blocking: collect all finished jobs since the last call.
