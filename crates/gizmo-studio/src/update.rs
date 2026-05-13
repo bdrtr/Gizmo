@@ -49,12 +49,27 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
     if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
         let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
         let global_transforms = world.borrow::<gizmo::physics::components::GlobalTransform>();
+        let children_comp = world.borrow::<gizmo::core::component::Children>();
         
         let editor_state = world.get_resource::<gizmo::editor::EditorState>().unwrap();
         let selected_entities = editor_state.selection.entities.iter().copied().collect::<Vec<gizmo::core::entity::Entity>>();
         let color = [1.0, 0.5, 0.0, 1.0]; // Blender Orange
 
-        for entity in selected_entities {
+        // BFS to collect all descendants
+        let mut to_draw = selected_entities.clone();
+        let mut i = 0;
+        while i < to_draw.len() {
+            let ent = to_draw[i];
+            if let Some(children) = children_comp.get(ent.id()) {
+                for &child_id in &children.0 {
+                    // Generation is not strictly checked here for highlight rendering
+                    to_draw.push(gizmo::core::entity::Entity::new(child_id, 0));
+                }
+            }
+            i += 1;
+        }
+
+        for entity in to_draw {
             if let (Some(mesh), Some(gt)) = (meshes.get(entity.id()), global_transforms.get(entity.id())) {
                 let min = mesh.bounds.min;
                 let max = mesh.bounds.max;
@@ -71,9 +86,9 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
                 
                 // Transform to global space
                 let mut tc = [gizmo::math::Vec3::ZERO; 8];
-                for i in 0..8 {
-                    let v4 = gt.matrix * gizmo::math::Vec4::new(c[i].x, c[i].y, c[i].z, 1.0);
-                    tc[i] = gizmo::math::Vec3::new(v4.x, v4.y, v4.z);
+                for j in 0..8 {
+                    let v4 = gt.matrix * gizmo::math::Vec4::new(c[j].x, c[j].y, c[j].z, 1.0);
+                    tc[j] = gizmo::math::Vec3::new(v4.x, v4.y, v4.z);
                 }
 
                 // Draw 12 lines
