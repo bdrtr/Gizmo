@@ -136,3 +136,55 @@ pub fn update_physics_api(
     
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gizmo_core::World;
+    use gizmo_physics::world::PhysicsWorld;
+    use gizmo_physics::collision::{TriggerEvent, CollisionEvent, CollisionEventType};
+    use mlua::Lua;
+
+    #[test]
+    fn test_update_physics_api() {
+        let lua = Lua::new();
+        let globals = lua.globals();
+        
+        // build_physics_api initializes the `physics` global table
+        let physics_table = lua.create_table().unwrap();
+        globals.set("physics", physics_table).unwrap();
+
+        let mut world = World::new();
+        let ent1 = world.spawn();
+        let ent2 = world.spawn();
+
+        let mut physics_world = PhysicsWorld::new();
+        physics_world.trigger_events.push(TriggerEvent {
+            trigger_entity: ent1,
+            other_entity: ent2,
+            event_type: CollisionEventType::Started,
+        });
+
+        physics_world.collision_events.push(CollisionEvent {
+            entity_a: ent1,
+            entity_b: ent2,
+            event_type: CollisionEventType::Started,
+            contact_points: Default::default(),
+        });
+
+        world.insert_resource(physics_world);
+
+        update_physics_api(&lua, &world).unwrap();
+
+        let script = r#"
+            local triggers = physics.triggers
+            local collisions = physics.collisions
+            assert(#triggers == 1)
+            assert(triggers[1].status == "enter")
+            assert(#collisions == 1)
+            assert(collisions[1].status == "enter")
+        "#;
+
+        lua.load(script).exec().unwrap();
+    }
+}

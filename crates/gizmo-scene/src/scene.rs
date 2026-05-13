@@ -513,6 +513,39 @@ impl SceneData {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use gizmo_core::World;
+    use gizmo_physics::joints::data::{Joint, JointType};
 
-    // Test removed because EntityData relies dynamically on SceneRegistry serialization
+    #[test]
+    fn test_prefab_joint_serialization() {
+        let mut world = World::new();
+        let ent1 = world.spawn();
+        let ent2 = world.spawn();
+
+        let joint = Joint {
+            entity_a: ent1,
+            entity_b: ent2,
+            local_anchor_a: gizmo_math::Vec3::ZERO,
+            local_anchor_b: gizmo_math::Vec3::ZERO,
+            break_force: 1000.0,
+            break_torque: 1000.0,
+            is_broken: false,
+            collision_enabled: false,
+            data: gizmo_physics::joints::data::JointData::Fixed,
+        };
+
+        let prefab_data = PrefabData {
+            root_id: ent1.id(),
+            entities: vec![],
+            joints: vec![joint.clone()],
+        };
+
+        let serialized = ron::ser::to_string(&prefab_data).unwrap();
+        assert!(serialized.contains("Fixed"));
+
+        let deserialized: PrefabData = ron::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.joints.len(), 1);
+        assert!(matches!(deserialized.joints[0].data, gizmo_physics::joints::data::JointData::Fixed));
+    }
 }
