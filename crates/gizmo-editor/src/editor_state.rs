@@ -16,7 +16,7 @@ pub enum EditorTab {
 }
 
 /// Gizmo aracı modu
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GizmoMode {
     Select,
     Translate,
@@ -25,7 +25,7 @@ pub enum GizmoMode {
 }
 
 /// Build hedef işletim sistemi
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BuildTarget {
     /// Mevcut işletim sistemi (native)
     Native,
@@ -38,7 +38,7 @@ pub enum BuildTarget {
 }
 
 /// Editor çalışma modu
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EditorMode {
     /// Düzenleme modu — fizik durur, entity'ler serbestçe manipüle edilir
     Edit,
@@ -134,7 +134,7 @@ pub struct ScriptEditorState {
     pub pending_clear_confirm: bool,
 }
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum ConsoleMode {
     EngineLogs,
     BuildOutput,
@@ -422,20 +422,25 @@ impl EditorState {
     pub fn clear_selection(&mut self) {
         self.selection.entities.clear();
         self.selection.primary = None;
+        self.selection.rubber_band_start = None;
+        self.selection.rubber_band_current = None;
+        self.selection.rubber_band_request = None;
         self.scene.gizmo_original_transforms.clear();
     }
 
+    /// Play/Stop geçişi yapar.
+    /// Edit → Play: Sahne snapshot'ı alınması için `play_start_request` set edilir.
+    /// Play veya Paused → Edit: Sahne geri yüklenmesi için `play_stop_request` set edilir.
     pub fn toggle_play(&mut self) {
         self.mode = match self.mode {
             EditorMode::Edit => {
                 self.play_start_request = true;
                 EditorMode::Play
             }
-            EditorMode::Play => {
+            EditorMode::Play | EditorMode::Paused => {
                 self.play_stop_request = true;
                 EditorMode::Edit
             }
-            EditorMode::Paused => EditorMode::Play,
         };
     }
 
@@ -447,12 +452,33 @@ impl EditorState {
         };
     }
 
+    /// Oyun aktif olarak çalışıyor mu? (Sadece Play, Paused değil)
     pub fn is_playing(&self) -> bool {
         self.mode == EditorMode::Play
     }
 
+    /// Oyun oturumu aktif mi? (Play veya Paused — snapshot hâlâ hayatta)
+    pub fn is_in_play_session(&self) -> bool {
+        matches!(self.mode, EditorMode::Play | EditorMode::Paused)
+    }
+
     pub fn is_editing(&self) -> bool {
         self.mode == EditorMode::Edit
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.mode == EditorMode::Paused
+    }
+
+    // --- Post-Process Validation ---
+    /// Post-process değerlerini güvenli aralıklara sıkıştırır.
+    /// Render pipeline'a geçmeden önce çağrılmalıdır.
+    pub fn validate_post_process(&mut self) {
+        self.bloom_intensity = self.bloom_intensity.clamp(0.0, 5.0);
+        self.bloom_threshold = self.bloom_threshold.clamp(0.0, 10.0);
+        self.exposure = self.exposure.clamp(0.01, 20.0);
+        self.vignette = self.vignette.clamp(0.0, 1.0);
+        self.chromatic_aberration = self.chromatic_aberration.clamp(0.0, 0.1);
     }
 
     pub fn reset_layout(&mut self) {
@@ -545,13 +571,387 @@ fn create_default_dock_state() -> egui_dock::DockState<EditorTab> {
 mod tests {
     use super::*;
 
+    // === Yardımcı ===
+    fn make_entity(id: u32) -> gizmo_core::entity::Entity {
+        gizmo_core::entity::Entity::new(id, 0)
+    }
+
+    // =========================================================
+    //  Post-Process Defaults
+    // =========================================================
     #[test]
-    fn test_editor_state_post_process_defaults() {
+    fn test_post_process_defaults() {
         let state = EditorState::new();
         assert_eq!(state.bloom_intensity, 0.8);
         assert_eq!(state.bloom_threshold, 0.85);
         assert_eq!(state.exposure, 1.0);
         assert_eq!(state.vignette, 0.2);
         assert_eq!(state.chromatic_aberration, 0.005);
+    }
+
+    #[test]
+    fn test_post_process_validation_clamps() {
+        let mut state = EditorState::new();
+        state.bloom_intensity = -5.0;
+        state.bloom_threshold = 999.0;
+        state.exposure = -1.0;
+        state.vignette = 2.0;
+        state.chromatic_aberration = 0.5;
+        state.validate_post_process();
+        assert_eq!(state.bloom_intensity, 0.0);
+        assert_eq!(state.bloom_threshold, 10.0);
+        assert_eq!(state.exposure, 0.01);
+        assert_eq!(state.vignette, 1.0);
+        assert_eq!(state.chromatic_aberration, 0.1);
+    }
+
+    #[test]
+    fn test_post_process_validation_noop_on_valid() {
+        let mut state = EditorState::new();
+        let orig_bloom = state.bloom_intensity;
+        let orig_exposure = state.exposure;
+        state.validate_post_process();
+        assert_eq!(state.bloom_intensity, orig_bloom);
+        assert_eq!(state.exposure, orig_exposure);
+    }
+
+    // =========================================================
+    //  Selection API
+    // =========================================================
+    #[test]
+    fn test_select_exclusive() {
+        let mut state = EditorState::new();
+        let e1 = make_entity(1);
+        let e2 = make_entity(2);
+        state.select_exclusive(e1);
+        assert!(state.is_selected(e1));
+        assert_eq!(state.selection.primary, Some(e1));
+        // İkinci obje seçildiğinde birincisi çıkmalı
+        state.select_exclusive(e2);
+        assert!(!state.is_selected(e1));
+        assert!(state.is_selected(e2));
+        assert_eq!(state.selection.primary, Some(e2));
+        assert_eq!(state.selection.entities.len(), 1);
+    }
+
+    #[test]
+    fn test_toggle_selection_add_and_remove() {
+        let mut state = EditorState::new();
+        let e1 = make_entity(1);
+        let e2 = make_entity(2);
+        // Ekle
+        state.toggle_selection(e1);
+        assert!(state.is_selected(e1));
+        assert_eq!(state.selection.primary, Some(e1));
+        // İkincisini de ekle
+        state.toggle_selection(e2);
+        assert!(state.is_selected(e1));
+        assert!(state.is_selected(e2));
+        assert_eq!(state.selection.primary, Some(e2));
+        assert_eq!(state.selection.entities.len(), 2);
+        // Birincisini çıkar
+        state.toggle_selection(e1);
+        assert!(!state.is_selected(e1));
+        assert!(state.is_selected(e2));
+    }
+
+    #[test]
+    fn test_toggle_selection_removes_primary_reassigns() {
+        let mut state = EditorState::new();
+        let e1 = make_entity(1);
+        let e2 = make_entity(2);
+        state.toggle_selection(e1);
+        state.toggle_selection(e2);
+        // e2 primary, onu çıkar → primary e1'e düşmeli
+        state.toggle_selection(e2);
+        assert_eq!(state.selection.primary, Some(e1));
+    }
+
+    #[test]
+    fn test_unselect_entity() {
+        let mut state = EditorState::new();
+        let e1 = make_entity(1);
+        state.select_exclusive(e1);
+        state.unselect_entity(e1);
+        assert!(!state.is_selected(e1));
+        assert_eq!(state.selection.primary, None);
+        assert!(state.selection.entities.is_empty());
+    }
+
+    #[test]
+    fn test_unselect_nonexistent_noop() {
+        let mut state = EditorState::new();
+        let e1 = make_entity(1);
+        let e2 = make_entity(2);
+        state.select_exclusive(e1);
+        state.unselect_entity(e2); // e2 seçili değil
+        assert!(state.is_selected(e1));
+        assert_eq!(state.selection.primary, Some(e1));
+    }
+
+    #[test]
+    fn test_clear_selection() {
+        let mut state = EditorState::new();
+        let e1 = make_entity(1);
+        let e2 = make_entity(2);
+        state.select_exclusive(e1);
+        state.toggle_selection(e2);
+        state.clear_selection();
+        assert!(state.selection.entities.is_empty());
+        assert_eq!(state.selection.primary, None);
+        assert!(state.selection.rubber_band_start.is_none());
+        assert!(state.selection.rubber_band_current.is_none());
+        assert!(state.selection.rubber_band_request.is_none());
+    }
+
+    // =========================================================
+    //  Play / Pause / Stop State Machine
+    // =========================================================
+    #[test]
+    fn test_toggle_play_edit_to_play() {
+        let mut state = EditorState::new();
+        assert_eq!(state.mode, EditorMode::Edit);
+        state.toggle_play();
+        assert_eq!(state.mode, EditorMode::Play);
+        assert!(state.play_start_request);
+        assert!(!state.play_stop_request);
+    }
+
+    #[test]
+    fn test_toggle_play_play_to_edit() {
+        let mut state = EditorState::new();
+        state.mode = EditorMode::Play;
+        state.toggle_play();
+        assert_eq!(state.mode, EditorMode::Edit);
+        assert!(state.play_stop_request);
+    }
+
+    #[test]
+    fn test_toggle_play_paused_to_edit() {
+        let mut state = EditorState::new();
+        state.mode = EditorMode::Paused;
+        state.toggle_play();
+        // Paused durumundan Stop'a basmak Edit'e dönmeli ve play_stop_request set etmeli
+        assert_eq!(state.mode, EditorMode::Edit);
+        assert!(state.play_stop_request);
+    }
+
+    #[test]
+    fn test_toggle_pause() {
+        let mut state = EditorState::new();
+        state.mode = EditorMode::Play;
+        state.toggle_pause();
+        assert_eq!(state.mode, EditorMode::Paused);
+        state.toggle_pause();
+        assert_eq!(state.mode, EditorMode::Play);
+    }
+
+    #[test]
+    fn test_toggle_pause_noop_in_edit() {
+        let mut state = EditorState::new();
+        state.toggle_pause();
+        assert_eq!(state.mode, EditorMode::Edit);
+    }
+
+    #[test]
+    fn test_full_play_cycle() {
+        let mut state = EditorState::new();
+        // Edit → Play
+        state.toggle_play();
+        assert!(state.is_playing());
+        assert!(state.is_in_play_session());
+        assert!(!state.is_editing());
+        state.play_start_request = false; // Consume request
+
+        // Play → Paused
+        state.toggle_pause();
+        assert!(!state.is_playing());
+        assert!(state.is_in_play_session());
+        assert!(state.is_paused());
+
+        // Paused → Play (resume)
+        state.toggle_pause();
+        assert!(state.is_playing());
+
+        // Play → Edit (stop)
+        state.toggle_play();
+        assert!(state.is_editing());
+        assert!(!state.is_in_play_session());
+        assert!(state.play_stop_request);
+    }
+
+    // =========================================================
+    //  Mode Query Helpers
+    // =========================================================
+    #[test]
+    fn test_is_playing_false_when_paused() {
+        let mut state = EditorState::new();
+        state.mode = EditorMode::Paused;
+        assert!(!state.is_playing());
+    }
+
+    #[test]
+    fn test_is_in_play_session_covers_paused() {
+        let mut state = EditorState::new();
+        state.mode = EditorMode::Paused;
+        assert!(state.is_in_play_session());
+    }
+
+    #[test]
+    fn test_is_in_play_session_false_in_edit() {
+        let state = EditorState::new();
+        assert!(!state.is_in_play_session());
+    }
+
+    // =========================================================
+    //  GizmoMode
+    // =========================================================
+    #[test]
+    fn test_gizmo_mode_default_translate() {
+        let state = EditorState::new();
+        assert_eq!(state.gizmo_mode, GizmoMode::Translate);
+    }
+
+    // =========================================================
+    //  Logging
+    // =========================================================
+    #[test]
+    fn test_log_error_sets_last_error() {
+        let mut state = EditorState::new();
+        assert!(state.last_error.is_none());
+        state.log_error("test hata");
+        assert_eq!(state.last_error.as_deref(), Some("test hata"));
+    }
+
+    #[test]
+    fn test_log_info_does_not_set_last_error() {
+        let mut state = EditorState::new();
+        state.log_info("bilgi");
+        assert!(state.last_error.is_none());
+    }
+
+    // =========================================================
+    //  Dock / Tab
+    // =========================================================
+    #[test]
+    fn test_default_dock_has_scene_view() {
+        let state = EditorState::new();
+        assert!(state.is_tab_open(&EditorTab::SceneView));
+    }
+
+    #[test]
+    fn test_toggle_tab() {
+        let mut state = EditorState::new();
+        let has_profiler = state.is_tab_open(&EditorTab::Profiler);
+        state.toggle_tab(EditorTab::Profiler);
+        assert_ne!(has_profiler, state.is_tab_open(&EditorTab::Profiler));
+        state.toggle_tab(EditorTab::Profiler);
+        assert_eq!(has_profiler, state.is_tab_open(&EditorTab::Profiler));
+    }
+
+    #[test]
+    fn test_open_tab_idempotent() {
+        let mut state = EditorState::new();
+        state.open_tab(EditorTab::Settings);
+        assert!(state.is_tab_open(&EditorTab::Settings));
+        // İkinci kez açmak duplicate tab yaratmamalı
+        state.open_tab(EditorTab::Settings);
+        let count = state.dock_state.iter_all_tabs().filter(|t| t.1 == &EditorTab::Settings).count();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_reset_layout() {
+        let mut state = EditorState::new();
+        // Bir tab kapat
+        if state.is_tab_open(&EditorTab::Console) {
+            state.toggle_tab(EditorTab::Console);
+        }
+        assert!(!state.is_tab_open(&EditorTab::Console));
+        // Reset
+        state.reset_layout();
+        assert!(state.is_tab_open(&EditorTab::Console));
+    }
+
+    // =========================================================
+    //  Default State Invariants
+    // =========================================================
+    #[test]
+    fn test_initial_state_invariants() {
+        let state = EditorState::new();
+        assert_eq!(state.mode, EditorMode::Edit);
+        assert!(!state.play_start_request);
+        assert!(!state.play_stop_request);
+        assert!(state.selection.entities.is_empty());
+        assert!(state.selection.primary.is_none());
+        assert!(state.despawn_requests.is_empty());
+        assert!(state.duplicate_requests.is_empty());
+        assert!(state.pending_async_gltfs.is_empty());
+        assert!(state.play_snapshot.is_none());
+        assert_eq!(state.status_message, "Hazır");
+    }
+
+    // =========================================================
+    //  ConsoleState
+    // =========================================================
+    #[test]
+    fn test_console_defaults() {
+        let console = ConsoleState::default();
+        assert_eq!(console.mode, ConsoleMode::EngineLogs);
+        assert!(console.show_info);
+        assert!(console.show_warn);
+        assert!(console.show_error);
+        assert!(console.filter_text.is_empty());
+        assert!(console.cached_logs.is_empty());
+        assert_eq!(console.last_version, 0);
+    }
+
+    // =========================================================
+    //  BuildState
+    // =========================================================
+    #[test]
+    fn test_build_state_defaults() {
+        let build = BuildState::default();
+        assert!(!build.request);
+        assert_eq!(build.target, BuildTarget::Native);
+        assert!(!build.is_building.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(build.logs_rx.is_none());
+        assert!(build.cached_logs.is_empty());
+        assert!(build.start_time.is_none());
+    }
+
+    // =========================================================
+    //  CameraState
+    // =========================================================
+    #[test]
+    fn test_camera_state_defaults() {
+        let cam = CameraState::default();
+        assert!(cam.look_delta.is_none());
+        assert!(cam.pan_delta.is_none());
+        assert!(cam.orbit_delta.is_none());
+        assert!(cam.scroll_delta.is_none());
+        assert!(cam.focus_target.is_none());
+        assert!(cam.bookmarks.iter().all(|b| b.is_none()));
+    }
+
+    // =========================================================
+    //  Enum Eq / Derive
+    // =========================================================
+    #[test]
+    fn test_gizmo_mode_eq() {
+        assert_eq!(GizmoMode::Select, GizmoMode::Select);
+        assert_ne!(GizmoMode::Select, GizmoMode::Translate);
+    }
+
+    #[test]
+    fn test_editor_mode_eq() {
+        assert_eq!(EditorMode::Edit, EditorMode::Edit);
+        assert_ne!(EditorMode::Edit, EditorMode::Play);
+    }
+
+    #[test]
+    fn test_build_target_eq() {
+        assert_eq!(BuildTarget::Native, BuildTarget::Native);
+        assert_ne!(BuildTarget::Native, BuildTarget::Linux);
     }
 }
