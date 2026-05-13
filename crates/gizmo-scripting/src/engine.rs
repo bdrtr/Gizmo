@@ -258,6 +258,8 @@ impl ScriptEngine {
             .map_err(|e| format!("Scene API güncelleme hatası: {}", e))?;
         api_time::update_time_api(&self.lua, dt, self.elapsed_time, 1.0 / dt.max(0.0001))
             .map_err(|e| format!("Time API güncelleme hatası: {}", e))?;
+        api_physics::update_physics_api(&self.lua, world)
+            .map_err(|e| format!("Physics API güncelleme hatası: {}", e))?;
 
         // 2. on_update callback'ini çağır (varsa)
         let globals = self.lua.globals();
