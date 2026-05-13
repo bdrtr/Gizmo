@@ -240,6 +240,7 @@ fn draw_entity_node(
         let response = ui.selectable_label(is_selected, label);
 
         if response.clicked() {
+            state.log_info(&format!("Hiyerarşiden tıklandı: {}", entity_name));
             if ui.input(|i| i.modifiers.command) {
                 state.toggle_selection(entity);
             } else {

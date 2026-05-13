@@ -146,6 +146,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
         if response.clicked_by(egui::PointerButton::Primary)
             || response.drag_started_by(egui::PointerButton::Primary)
         {
+            tracing::info!("SceneView CLICKED/DRAG_STARTED! ndc: {:?}", state.mouse_ndc);
             state.do_raycast = true;
         }
 
