@@ -218,6 +218,29 @@ impl AssetManager {
         manager
     }
 
+    /// Serbest bırakılmış GPU kaynaklarını (mesh/texture) cache'ten siler.
+    /// Sadece referans sayısı 1'e düşmüş (yani ECS'te kullanılmayan ve 
+    /// sadece AssetManager'ın bildiği) varlıklar silinir.
+    pub fn garbage_collect(&mut self) -> usize {
+        let mut freed = 0;
+        
+        let initial_meshes = self.mesh_cache.len();
+        self.mesh_cache.retain(|key, mesh| {
+            if key.starts_with("primitive/") { return true; }
+            std::sync::Arc::strong_count(&mesh.vbuf) > 1
+        });
+        freed += initial_meshes - self.mesh_cache.len();
+
+        let initial_textures = self.texture_cache.len();
+        self.texture_cache.retain(|key, tex| {
+            if key.starts_with("primitive/") { return true; }
+            std::sync::Arc::strong_count(tex) > 1
+        });
+        freed += initial_textures - self.texture_cache.len();
+        
+        freed
+    }
+
     // ── Path / UUID helpers ───────────────────────────────────────────────
 
     /// Normalise a file-system path to forward-slash form for use as a map key.
