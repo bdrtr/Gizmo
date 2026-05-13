@@ -309,50 +309,81 @@ fn draw_collider_section(
         if let Some(collider) = colliders.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("🛡️ Collider")
                 .default_open(true)
-                .show(ui, |ui| match &mut collider.shape {
-                    gizmo_physics::shape::ColliderShape::Box(aabb) => {
-                        ui.label("Mod: Kutu (AABB)");
-                        ui.horizontal(|ui| {
-                            ui.label("Extents:");
-                            ui.add(
-                                egui::DragValue::new(&mut aabb.half_extents.x)
-                                    .speed(0.1)
-                                    .prefix("X: "),
-                            );
-                            ui.add(
-                                egui::DragValue::new(&mut aabb.half_extents.y)
-                                    .speed(0.1)
-                                    .prefix("Y: "),
-                            );
-                            ui.add(
-                                egui::DragValue::new(&mut aabb.half_extents.z)
-                                    .speed(0.1)
-                                    .prefix("Z: "),
-                            );
-                        });
-                    }
-                    gizmo_physics::shape::ColliderShape::Sphere(sphere) => {
-                        ui.label("Mod: Küre (Sphere)");
-                        ui.horizontal(|ui| {
-                            ui.label("Yarıçap:");
-                            ui.add(egui::DragValue::new(&mut sphere.radius).speed(0.1));
-                        });
-                    }
-                    gizmo_physics::shape::ColliderShape::Capsule(capsule) => {
-                        ui.label("Mod: Kapsül");
-                        ui.horizontal(|ui| {
-                            ui.label("Yarıçap:");
-                            ui.add(egui::DragValue::new(&mut capsule.radius).speed(0.1));
-                            ui.label("Y. Yükseklik:");
-                            ui.add(egui::DragValue::new(&mut capsule.half_height).speed(0.1));
-                        });
-                    }
-                    other => {
+                .show(ui, |ui| {
+                    // === IS TRIGGER ===
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut collider.is_trigger, "Trigger (Tetikleyici)");
                         ui.label(
-                            egui::RichText::new(format!("Şekil: {:?} (Sadece Okunur)", other))
-                                .color(egui::Color32::GRAY),
+                            egui::RichText::new("ℹ")
+                                .weak()
+                                .small(),
+                        ).on_hover_text("Trigger açıkken fiziksel çarpışma olmaz,\nsadece giriş/çıkış olayları tetiklenir.\n(Kapı sensörü, checkpoint, alan hasarı vb.)");
+                    });
+
+                    if collider.is_trigger {
+                        ui.label(
+                            egui::RichText::new("⚡ Bu collider bir tetikleyicidir — fiziksel tepki vermez.")
+                                .color(egui::Color32::from_rgb(240, 180, 50))
+                                .small(),
                         );
                     }
+
+                    ui.add_space(4.0);
+
+                    // === ŞEKİL AYARLARI ===
+                    match &mut collider.shape {
+                        gizmo_physics::shape::ColliderShape::Box(aabb) => {
+                            ui.label("Şekil: Kutu (AABB)");
+                            ui.horizontal(|ui| {
+                                ui.label("Boyut:");
+                                ui.add(
+                                    egui::DragValue::new(&mut aabb.half_extents.x)
+                                        .speed(0.1)
+                                        .prefix("X: "),
+                                );
+                                ui.add(
+                                    egui::DragValue::new(&mut aabb.half_extents.y)
+                                        .speed(0.1)
+                                        .prefix("Y: "),
+                                );
+                                ui.add(
+                                    egui::DragValue::new(&mut aabb.half_extents.z)
+                                        .speed(0.1)
+                                        .prefix("Z: "),
+                                );
+                            });
+                        }
+                        gizmo_physics::shape::ColliderShape::Sphere(sphere) => {
+                            ui.label("Şekil: Küre (Sphere)");
+                            ui.horizontal(|ui| {
+                                ui.label("Yarıçap:");
+                                ui.add(egui::DragValue::new(&mut sphere.radius).speed(0.1));
+                            });
+                        }
+                        gizmo_physics::shape::ColliderShape::Capsule(capsule) => {
+                            ui.label("Şekil: Kapsül");
+                            ui.horizontal(|ui| {
+                                ui.label("Yarıçap:");
+                                ui.add(egui::DragValue::new(&mut capsule.radius).speed(0.1));
+                                ui.label("Y. Yükseklik:");
+                                ui.add(egui::DragValue::new(&mut capsule.half_height).speed(0.1));
+                            });
+                        }
+                        other => {
+                            ui.label(
+                                egui::RichText::new(format!("Şekil: {:?} (Sadece Okunur)", other))
+                                    .color(egui::Color32::GRAY),
+                            );
+                        }
+                    }
+
+                    // === OFFSET ===
+                    ui.horizontal(|ui| {
+                        ui.label("Ofset:");
+                        ui.add(egui::DragValue::new(&mut collider.offset.x).speed(0.05).prefix("X: "));
+                        ui.add(egui::DragValue::new(&mut collider.offset.y).speed(0.05).prefix("Y: "));
+                        ui.add(egui::DragValue::new(&mut collider.offset.z).speed(0.05).prefix("Z: "));
+                    });
                 });
             ui.separator();
         }

@@ -76,12 +76,22 @@ pub fn execute_render_pipeline(
     };
 
     let mut ed_shading_mode = 0;
+    let mut ed_fxaa_enabled = true;
     if let Some(ed_state) = world.get_resource::<gizmo::editor::EditorState>() {
         ed_shading_mode = ed_state.shading_mode;
+        ed_fxaa_enabled = ed_state.fxaa_enabled;
         if let Some(rect) = ed_state.scene_view_rect {
             if rect.height() > 0.0 {
                 aspect = rect.width() / rect.height();
             }
+        }
+    }
+
+    // FXAA toggle senkronizasyonu (EditorState → Renderer)
+    if let Some(ref mut fxaa) = renderer.fxaa {
+        if fxaa.enabled != ed_fxaa_enabled {
+            fxaa.enabled = ed_fxaa_enabled;
+            fxaa.set_enabled(&renderer.queue, ed_fxaa_enabled);
         }
     }
 
@@ -289,24 +299,14 @@ pub fn execute_render_pipeline(
 
         if let Some(mut q) = world.query::<(&Mesh, &gizmo::physics::components::GlobalTransform, &Material)>() {
             for (e, (mesh, global_trans, mat)) in q.iter_mut() {
-                // Sadece MeshRenderer tagli olanları çiz:
-                // Sadece MeshRenderer tagli olanları çiz:
-                let r = &renderers;
-                if true {
-                    if r.get(e).is_none() {
-                        continue;
-                    }
-                } else {
+                // Sadece MeshRenderer tagli olanları çiz
+                if renderers.get(e).is_none() {
                     continue;
                 }
 
-                // Gizli olarak işaretlenmiş objeleri atla!
-                // Gizli olarak işaretlenmiş objeleri atla!
-                let hidden = world.borrow::<gizmo::core::component::IsHidden>();
-                {
-                    if hidden.contains(e) {
-                        continue;
-                    }
+                // Gizli olarak işaretlenmiş objeleri atla
+                if _is_hidden_guard.contains(e) {
+                    continue;
                 }
 
                 // --- GLOBAL TRANSFORM HESAPLAMA ---
@@ -354,11 +354,8 @@ pub fn execute_render_pipeline(
                 // Skeleton bind group, skinned mesh'ler spawn edilirken doğrudan entity'ye önbelleklenmelidir.
                 // Bu nedenle her frame parent zincirini tırmanıp Skeleton aramak yerine doğrudan kendi üzerindekini kullanıyoruz.
                 let mut skel_bg = renderer.scene.dummy_skeleton_bind_group.clone();
-                let skels = &skeletons;
-                if true {
-                    if let Some(s) = skels.get(e) {
-                        skel_bg = s.bind_group.clone();
-                    }
+                if let Some(s) = skeletons.get(e) {
+                    skel_bg = s.bind_group.clone();
                 }
 
                 let vbuf_ptr = std::sync::Arc::as_ptr(&active_mesh.vbuf);

@@ -241,5 +241,9 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
         do_raycast: false,
         physics_accumulator: 0.0,
         asset_watcher: gizmo::renderer::hot_reload::AssetWatcher::new(&["demo/assets", "scripts"]),
+        gc_timer: 0.0,
+        autosave_timer: 0.0,
+        visible_entity_count: 0,
+        draw_call_count: 0,
     }
 }

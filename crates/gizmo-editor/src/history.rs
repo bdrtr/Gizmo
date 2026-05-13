@@ -65,11 +65,11 @@ impl History {
     /// Son işlemi geri al (Undo) - Semantic Note: world state mutasyona uğratılır (interior mutability ile)
     pub fn undo(&mut self, world: &mut World) {
         if let Some(action) = self.undo_stack.pop_back() {
-            match action.clone() {
+            match action {
                 EditorAction::TransformsChanged { changes } => {
                     let mut transforms = world.borrow_mut::<Transform>();
                     {
-                        for (entity, old_transform, _new_transform) in changes.iter() {
+                        for (entity, ref old_transform, _) in changes.iter() {
                             if let Some(t) = transforms.get_mut(entity.id()) {
                                 *t = *old_transform;
                                 t.update_local_matrix();
@@ -99,10 +99,10 @@ impl History {
                     self.redo_stack
                         .push_back(EditorAction::EntitySpawned { entity_ids });
                 }
-                _ => {
+                other => {
                     // Henüz implement edilmedi — stack'e geri koy
                     eprintln!("Uyarı: Bu action türü henüz geri alınamıyor (Undo desteklenmiyor).");
-                    self.undo_stack.push_back(action);
+                    self.undo_stack.push_back(other);
                 }
             }
         }
@@ -111,11 +111,11 @@ impl History {
     /// Geri alınan işlemi yeniden uygula (Redo) - Semantic Note: world state mutasyona uğratılır (interior mutability)
     pub fn redo(&mut self, world: &mut World) {
         if let Some(action) = self.redo_stack.pop_back() {
-            match action.clone() {
+            match action {
                 EditorAction::TransformsChanged { changes } => {
                     let mut transforms = world.borrow_mut::<Transform>();
                     {
-                        for (entity, _old_transform, new_transform) in changes.iter() {
+                        for (entity, _, ref new_transform) in changes.iter() {
                             if let Some(t) = transforms.get_mut(entity.id()) {
                                 *t = *new_transform;
                                 t.update_local_matrix();
@@ -145,11 +145,11 @@ impl History {
                     self.undo_stack
                         .push_back(EditorAction::EntitySpawned { entity_ids });
                 }
-                _ => {
+                other => {
                     eprintln!(
                         "Uyarı: Bu action türü henüz ileri alınamıyor (Redo desteklenmiyor)."
                     );
-                    self.redo_stack.push_back(action);
+                    self.redo_stack.push_back(other);
                 }
             }
         }

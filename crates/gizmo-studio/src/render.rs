@@ -2,6 +2,57 @@ use crate::render_pipeline;
 use crate::state::StudioState;
 use gizmo::editor::EditorState;
 use gizmo::prelude::*;
+use std::collections::HashSet;
+
+/// Editor'ün iç nesnelerini (Kamera, Grid, Işık, Highlight Box) tanımlayıp
+/// korumalı ID kümesi döndürür. Sahne temizleme ve yükleme sırasında
+/// bu nesnelerin silinmesini engellemek için kullanılır.
+fn collect_protected_ids(world: &World, editor_camera: u32) -> HashSet<u32> {
+    let mut protected = HashSet::new();
+    protected.insert(editor_camera);
+
+    {
+        let names = world.borrow::<gizmo::core::component::EntityName>();
+        for e in world.iter_alive_entities() {
+            if let Some(name) = names.get(e.id()) {
+                if name.0.starts_with("Editor ") || name.0 == "Highlight Box" {
+                    protected.insert(e.id());
+                }
+            }
+        }
+    }
+
+    // BFS: Korunan objelerin tüm çocuklarını da ekle
+    {
+        let children = world.borrow::<gizmo::core::component::Children>();
+        let mut queue: Vec<u32> = protected.iter().copied().collect();
+        let mut i = 0;
+        while i < queue.len() {
+            let id = queue[i];
+            if let Some(c) = children.get(id) {
+                for &child_id in &c.0 {
+                    if protected.insert(child_id) {
+                        queue.push(child_id);
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
+
+    protected
+}
+
+/// Dünya'daki editor-dışı entity'leri temizler (despawn).
+/// Korumalı nesneler (kamera, ızgara, ışıklar) dokunulmaz.
+fn despawn_non_protected(world: &mut World, protected: &HashSet<u32>) {
+    let ents = world.iter_alive_entities();
+    for e in ents {
+        if !protected.contains(&e.id()) {
+            world.despawn(e);
+        }
+    }
+}
 
 pub fn render_studio(
     world: &mut World,
@@ -19,7 +70,6 @@ pub fn render_studio(
     let mut gltf_req = None;
     let mut duplicate_reqs = Vec::new();
     let mut play_start = false;
-    let mut play_stop = false;
     let mut play_stop = false;
 
     if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
@@ -107,18 +157,7 @@ pub fn render_studio(
 
     if play_start {
         // 1. In-memory snapshot al (hızlı yol — fizik state dahil)
-        let mut protected_ids = std::collections::HashSet::new();
-        protected_ids.insert(state.editor_camera);
-        {
-            let names = world.borrow::<gizmo::core::component::EntityName>();
-            for e in world.iter_alive_entities() {
-                if let Some(name) = names.get(e.id()) {
-                    if name.0.starts_with("Editor ") || name.0 == "Highlight Box" {
-                        protected_ids.insert(e.id());
-                    }
-                }
-            }
-        }
+        let protected_ids = collect_protected_ids(world, state.editor_camera);
         let snapshot = gizmo::scene::SceneSnapshot::capture(
             world,
             &gizmo::scene::SceneRegistry::default(),
@@ -154,18 +193,7 @@ pub fn render_studio(
 
         if let Some(snapshot) = snapshot_opt {
             // Hızlı yol: In-memory restore (fizik bileşenleri dahil)
-            let mut protected_ids = std::collections::HashSet::new();
-            protected_ids.insert(state.editor_camera);
-            {
-                let names = world.borrow::<gizmo::core::component::EntityName>();
-                for e in world.iter_alive_entities() {
-                    if let Some(name) = names.get(e.id()) {
-                        if name.0.starts_with("Editor ") {
-                            protected_ids.insert(e.id());
-                        }
-                    }
-                }
-            }
+            let protected_ids = collect_protected_ids(world, state.editor_camera);
 
             let result = snapshot.restore(
                 world,
@@ -216,44 +244,8 @@ pub fn render_studio(
     }
 
     if clear_req {
-        let ents = world.iter_alive_entities();
-        let mut protected_ids = std::collections::HashSet::new();
-        protected_ids.insert(state.editor_camera);
-
-        {
-            let names = world.borrow::<gizmo::core::component::EntityName>();
-            for e in &ents {
-                if let Some(name) = names.get(e.id()) {
-                    if name.0.starts_with("Editor ") || name.0 == "Highlight Box" {
-                        protected_ids.insert(e.id());
-                    }
-                }
-            }
-        }
-
-        {
-            let children = world.borrow::<gizmo::core::component::Children>();
-            let mut i = 0;
-            let mut pro_list: Vec<u32> = protected_ids.iter().copied().collect();
-            while i < pro_list.len() {
-                let id = pro_list[i];
-                if let Some(c) = children.get(id) {
-                    for &child_id in &c.0 {
-                        if protected_ids.insert(child_id) {
-                            pro_list.push(child_id);
-                        }
-                    }
-                }
-                i += 1;
-            }
-        }
-
-        for e in ents {
-            if protected_ids.contains(&e.id()) {
-                continue;
-            }
-            world.despawn(e);
-        }
+        let protected_ids = collect_protected_ids(world, state.editor_camera);
+        despawn_non_protected(world, &protected_ids);
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             ed.clear_selection();
             ed.log_info("Sahne temizlendi. Yeni sahne hazır.");
@@ -262,45 +254,8 @@ pub fn render_studio(
     }
 
     if let Some(path) = load_req {
-        let ents = world.iter_alive_entities();
-
-        let mut protected_ids = std::collections::HashSet::new();
-        protected_ids.insert(state.editor_camera);
-
-        {
-            let names = world.borrow::<gizmo::core::component::EntityName>();
-            for e in &ents {
-                if let Some(name) = names.get(e.id()) {
-                    if name.0.starts_with("Editor ") || name.0 == "Highlight Box" {
-                        protected_ids.insert(e.id());
-                    }
-                }
-            }
-        }
-
-        {
-            let children = world.borrow::<gizmo::core::component::Children>();
-            let mut i = 0;
-            let mut pro_list: Vec<u32> = protected_ids.iter().copied().collect();
-            while i < pro_list.len() {
-                let id = pro_list[i];
-                if let Some(c) = children.get(id) {
-                    for &child_id in &c.0 {
-                        if protected_ids.insert(child_id) {
-                            pro_list.push(child_id);
-                        }
-                    }
-                }
-                i += 1;
-            }
-        }
-
-        for e in ents {
-            if protected_ids.contains(&e.id()) {
-                continue;
-            }
-            world.despawn(e);
-        }
+        let protected_ids = collect_protected_ids(world, state.editor_camera);
+        despawn_non_protected(world, &protected_ids);
         if let Some(mut asset_manager) =
             world.remove_resource::<gizmo::renderer::asset::AssetManager>()
         {

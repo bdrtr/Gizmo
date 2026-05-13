@@ -37,26 +37,7 @@ pub fn handle_camera(
 
                 cam.yaw += delta.x * sensitivity;
                 cam.pitch -= delta.y * sensitivity;
-
-                // Gimbal Lock'u (tepetaklak olmayı) önle
-                let max_pitch = 89.0_f32.to_radians();
-                if cam.pitch > max_pitch {
-                    cam.pitch = max_pitch;
-                }
-                if cam.pitch < -max_pitch {
-                    cam.pitch = -max_pitch;
-                }
-
-                // Transform rotasyonunu kameraya uydur (motor içi tutarlılık için)
-                let q_yaw = gizmo::math::Quat::from_axis_angle(
-                    gizmo::math::Vec3::new(0.0, 1.0, 0.0),
-                    cam.yaw,
-                );
-                let q_pitch = gizmo::math::Quat::from_axis_angle(
-                    gizmo::math::Vec3::new(1.0, 0.0, 0.0),
-                    cam.pitch,
-                );
-                t.rotation = q_yaw * q_pitch;
+                // Pitch sınırlaması fonksiyonun sonunda yapılıyor
             }
 
             // 2. Serbest Uçuş (WASD + Q/E)
@@ -116,15 +97,9 @@ pub fn handle_camera(
 
                 cam.yaw += orbit.x * orbit_speed;
                 cam.pitch -= orbit.y * orbit_speed;
+                // Pitch sınırlaması fonksiyonun sonunda yapılıyor
 
-                let max_pitch = 89.0_f32.to_radians();
-                if cam.pitch > max_pitch {
-                    cam.pitch = max_pitch;
-                }
-                if cam.pitch < -max_pitch {
-                    cam.pitch = -max_pitch;
-                }
-
+                // Quaternion'u güncelle (orbit hesaplaması için gerekli)
                 let q_yaw = gizmo::math::Quat::from_axis_angle(
                     gizmo::math::Vec3::new(0.0, 1.0, 0.0),
                     cam.yaw,

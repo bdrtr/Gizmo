@@ -28,8 +28,99 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
         });
     }
 
+    // ─── VIEWPORT BİLGİ OVERLAY'İ ───
+    // FPS, entity sayısı, kamera pozisyonu gibi bilgileri sahne görünümünün
+    // sol üst köşesinde yarı-şeffaf arkaplanla gösterir (Blender viewport overlay benzeri)
+    {
+        let painter = ui.painter();
+        let overlay_margin = 8.0;
+        let line_height = 14.0;
+
+        // FPS bilgisi
+        let profiler_fps = world
+            .get_resource::<gizmo_core::FrameProfiler>()
+            .map(|p| p.estimated_fps())
+            .unwrap_or(0.0);
+        let fps_color = if profiler_fps >= 55.0 {
+            egui::Color32::from_rgb(80, 200, 120) // Yeşil
+        } else if profiler_fps >= 30.0 {
+            egui::Color32::from_rgb(240, 180, 50) // Sarı
+        } else {
+            egui::Color32::from_rgb(220, 60, 60) // Kırmızı
+        };
+
+        // Entity sayısı
+        let entity_count = world.iter_alive_entities().len();
+        let selected_count = state.selection.entities.len();
+
+        // Kamera pozisyonu
+        let cam_pos = {
+            let transforms = world.borrow::<gizmo_physics::components::Transform>();
+            // Editor camera'yı bulmak için en basit yol: birinci entity'yi tara
+            // (state.editor_camera zaten SceneView'dan erişilemez, ama World'den çekebiliriz)
+            let mut pos = gizmo_math::Vec3::ZERO;
+            let cameras = world.borrow::<gizmo_renderer::components::Camera>();
+            for e in world.iter_alive_entities() {
+                if cameras.get(e.id()).is_some() {
+                    if let Some(t) = transforms.get(e.id()) {
+                        pos = t.position;
+                        break;
+                    }
+                }
+            }
+            pos
+        };
+
+        let lines = [
+            (format!("⚡ {:.0} FPS", profiler_fps), fps_color),
+            (
+                format!("📦 {} obje", entity_count),
+                egui::Color32::from_rgb(180, 180, 200),
+            ),
+            (
+                if selected_count > 0 {
+                    format!("✅ {} seçili", selected_count)
+                } else {
+                    "✅ —".to_string()
+                },
+                if selected_count > 0 {
+                    egui::Color32::from_rgb(237, 113, 28) // Blender turuncu
+                } else {
+                    egui::Color32::from_rgb(120, 120, 140)
+                },
+            ),
+            (
+                format!("📍 {:.1}, {:.1}, {:.1}", cam_pos.x, cam_pos.y, cam_pos.z),
+                egui::Color32::from_rgb(140, 140, 160),
+            ),
+        ];
+
+        // Arka plan kutusu
+        let bg_height = lines.len() as f32 * line_height + 12.0;
+        let bg_width = 165.0;
+        let bg_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + overlay_margin, rect.top() + overlay_margin),
+            egui::vec2(bg_width, bg_height),
+        );
+        painter.rect_filled(bg_rect, 4.0, egui::Color32::from_rgba_premultiplied(20, 20, 25, 180));
+
+        // Metin
+        for (i, (text, color)) in lines.iter().enumerate() {
+            painter.text(
+                egui::pos2(
+                    rect.left() + overlay_margin + 6.0,
+                    rect.top() + overlay_margin + 6.0 + i as f32 * line_height,
+                ),
+                egui::Align2::LEFT_TOP,
+                text,
+                egui::FontId::monospace(11.0),
+                *color,
+            );
+        }
+    }
+
     // --- GIZMO FARE (MOUSE) ETKİLEŞİMLERİ ---
-    let (hover_pos, interact_pos, latest_pos, any_released, alt_pressed, scroll_y, _primary_down, press_origin) =
+    let (hover_pos, interact_pos, _latest_pos, any_released, alt_pressed, scroll_y, _primary_down, press_origin) =
         ui.input(|i| {
             (
                 i.pointer.hover_pos(),
@@ -119,7 +210,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
             let mut transforms = world.borrow_mut::<gizmo_physics::components::Transform>();
             
             let primary_id = state.selection.primary.unwrap_or_else(|| *state.selection.entities.iter().next().unwrap());
-            if let Some(mut primary_t) = transforms.get_mut(primary_id.id()) {
+            if let Some(primary_t) = transforms.get_mut(primary_id.id()) {
                 
                 use transform_gizmo_egui::prelude::*;
                 use transform_gizmo_egui::math::Transform as GizmoTransform;

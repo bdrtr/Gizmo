@@ -107,13 +107,13 @@ pub fn handle_scene_operations(
         for ent_id in despawn_reqs {
             editor_state.selection.entities.remove(&ent_id);
 
-            // Korumalı objelerin (Kamera, Grid, Işık) silinmesini engelle
+            // Korumalı objelerin (Editor Kamera, Grid, Işık) silinmesini engelle
             let mut is_protected = false;
-            if world.borrow::<gizmo::renderer::components::Camera>().get(ent_id.id()).is_some() {
-                is_protected = true;
-            }
             if let Some(name) = world.borrow::<gizmo::core::component::EntityName>().get(ent_id.id()) {
-                if name.0 == "Editor Grid" || name.0 == "Editor Guidelines" || name.0 == "Directional Light" || name.0.starts_with("Editor Light Icon") {
+                if name.0.starts_with("Editor ")
+                    || name.0 == "Directional Light"
+                    || name.0 == "Highlight Box"
+                {
                     is_protected = true;
                 }
             }

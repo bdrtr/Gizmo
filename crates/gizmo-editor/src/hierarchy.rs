@@ -47,26 +47,62 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 
     // Sağ tık menüsü — boşluğa tıklayınca
     bg_response.context_menu(|ui| {
-        if ui.button("➕ Boş Entity Ekle").clicked() {
-            state.spawn_request = Some("Empty".to_string());
-            ui.close_menu();
-        }
-        if ui.button("📦 Küp Ekle").clicked() {
-            state.spawn_request = Some("Cube".to_string());
-            ui.close_menu();
-        }
-        if ui.button("🔴 Küre Ekle").clicked() {
-            state.spawn_request = Some("Sphere".to_string());
-            ui.close_menu();
-        }
+        ui.menu_button("➕ Boş Obje", |ui| {
+            if ui.button("📦 Boş Entity").clicked() {
+                state.spawn_request = Some("Empty".to_string());
+                ui.close_menu();
+            }
+            if ui.button("📂 Grup (Klasör)").clicked() {
+                state.spawn_request = Some("Group".to_string());
+                ui.close_menu();
+            }
+        });
+        ui.menu_button("🔶 3D Primitif", |ui| {
+            if ui.button("📦 Küp (Cube)").clicked() {
+                state.spawn_request = Some("Cube".to_string());
+                ui.close_menu();
+            }
+            if ui.button("🔴 Küre (Sphere)").clicked() {
+                state.spawn_request = Some("Sphere".to_string());
+                ui.close_menu();
+            }
+            if ui.button("▬ Düzlem (Plane)").clicked() {
+                state.spawn_request = Some("Plane".to_string());
+                ui.close_menu();
+            }
+            if ui.button("🔵 Silindir (Cylinder)").clicked() {
+                state.spawn_request = Some("Cylinder".to_string());
+                ui.close_menu();
+            }
+            if ui.button("💊 Kapsül (Capsule)").clicked() {
+                state.spawn_request = Some("Capsule".to_string());
+                ui.close_menu();
+            }
+        });
+        ui.menu_button("💡 Işık & Kamera", |ui| {
+            if ui.button("💡 Nokta Işığı (Point Light)").clicked() {
+                state.spawn_request = Some("PointLight".to_string());
+                ui.close_menu();
+            }
+            if ui.button("📷 Kamera (Camera)").clicked() {
+                state.spawn_request = Some("Camera".to_string());
+                ui.close_menu();
+            }
+        });
+        ui.menu_button("✨ Efekt", |ui| {
+            if ui.button("✨ Particle Emitter").clicked() {
+                state.spawn_request = Some("ParticleEmitter".to_string());
+                ui.close_menu();
+            }
+        });
+        ui.separator();
 
         // Unparent yapabilmek için (Kök yapmak)
         if let Some(dragged) = ui.memory(|mem| {
             mem.data
                 .get_temp::<gizmo_core::entity::Entity>(egui::Id::new("dragged_ent"))
         }) {
-            if ui.button("Düzene Geri Al (Unparent)").clicked() {
-                // Düzeltildi
+            if ui.button("🔗 Kökten Ayır (Unparent)").clicked() {
                 state.unparent_request = Some(dragged);
                 ui.memory_mut(|mem| {
                     mem.data
@@ -241,30 +277,56 @@ fn draw_entity_node(
         }
 
         response.context_menu(|ui| {
+            // === GÖRÜNÜRLÜK ===
             let hide_text = if is_hidden {
                 "👁 Görünür Yap (Göster)"
             } else {
-                "🙈 Gizle (Sakla)"
+                "🙈 Gizle (H)"
             };
             if ui.button(hide_text).clicked() {
                 state.toggle_visibility_requests.push(entity);
                 ui.close_menu();
             }
+
+            ui.separator();
+
+            // === DÜZENLEME ===
+            if ui.button("📑 Çoğalt (Ctrl+D)").clicked() {
+                state.duplicate_requests.push(entity);
+                ui.close_menu();
+            }
+
+            if ui.button("🗑 Sil (Delete)").clicked() {
+                state.despawn_requests.push(entity);
+                ui.close_menu();
+            }
+
+            ui.separator();
+
+            // === HİYERARŞİ ===
+            if ui.button("🔗 Kökten Ayır (Unparent)").clicked() {
+                state.unparent_request = Some(entity);
+                ui.close_menu();
+            }
+
+            // Seçili birden fazla obje varsa gruplama butonu
+            if state.selection.entities.len() > 1 {
+                if ui.button("📂 Seçilileri Grupla").clicked() {
+                    // Boş bir parent entity oluştur, sonra seçili objeleri ona bağla
+                    state.spawn_request = Some("Group".to_string());
+                    ui.close_menu();
+                }
+            }
+
+            ui.separator();
+
+            // === DIŞA AKTARMA ===
             if ui.button("💾 Prefab Olarak Kaydet").clicked() {
-                // Asset path yönetimi standardize edilmeli, şimdilik prefix dinamik
                 let path = format!(
                     "demo/assets/prefabs/{}.prefab",
                     entity_name.replace(" ", "_")
                 );
                 state.prefab_save_request = Some((entity, path));
-                ui.close_menu();
-            }
-            if ui.button("📑 Çoğalt (Duplicate)").clicked() {
-                state.duplicate_requests.push(entity);
-                ui.close_menu();
-            }
-            if ui.button("🗑 Sil").clicked() {
-                state.despawn_requests.push(entity);
                 ui.close_menu();
             }
         });
