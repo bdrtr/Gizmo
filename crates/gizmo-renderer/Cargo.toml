@@ -14,8 +14,8 @@ log = "0.4"
 pollster = "0.3"
 winit = { workspace = true }
 bytemuck = { version = "1.14", features = ["derive"] }
-gizmo-math = { path = "../gizmo-math" , version = "0.1.0" }
-gizmo-core = { path = "../gizmo-core" , version = "0.1.0" }
+gizmo-math = { path = "../gizmo-math" , version = "0.1.2" }
+gizmo-core = { path = "../gizmo-core" , version = "0.1.2" }
 tobj = "4.0.3"
 image = { version = "0.25", features = ["webp"] }
 serde = { version = "1.0.228", features = ["derive"] }
