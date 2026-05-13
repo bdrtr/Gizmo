@@ -9,7 +9,7 @@ license.workspace = true
 repository.workspace = true
 readme.workspace = true
 [dependencies]
-gizmo = { package = "gizmo-engine", path = "../gizmo", features = ["editor", "scene", "audio", "scripting"] , version = "0.1.1" }
+gizmo = { package = "gizmo-engine", path = "../gizmo", features = ["editor", "scene", "audio", "scripting"] , version = "0.1.2" }
 rand = "0.9.0"
 serde = { version = "1.0", features = ["derive"] }
 bincode = "1.3"
