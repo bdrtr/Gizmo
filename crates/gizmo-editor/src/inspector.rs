@@ -92,6 +92,7 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         draw_ai_section(ui, world, entity_id, state);
         draw_reflection_section(ui, world, entity_id, state);
         draw_animation_player_section(ui, world, entity_id, state);
+        draw_bone_attachment_section(ui, world, entity_id, state);
 
         ui.separator();
 
@@ -1279,6 +1280,36 @@ fn draw_hurtbox_section(
                 
                 if ui.button("🗑 Bileşeni Sil").clicked() {
                     _state.remove_component_request = Some((entity_id, "Hurtbox".to_string()));
+                }
+            });
+    }
+}
+
+fn draw_bone_attachment_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    _state: &mut EditorState,
+) {
+    let mut attachments = world.borrow_mut::<gizmo_renderer::components::BoneAttachment>();
+    if let Some(attachment) = attachments.get_mut(entity_id.id()) {
+        egui::CollapsingHeader::new("🔗 Bone Attachment")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Target Entity ID:");
+                    let mut tid = attachment.target_entity.id();
+                    if ui.add(egui::DragValue::new(&mut tid)).changed() {
+                        attachment.target_entity = gizmo_core::entity::Entity::new(tid, 0);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Bone Index:");
+                    ui.add(egui::DragValue::new(&mut attachment.bone_index));
+                });
+                
+                if ui.button("🗑 Bileşeni Sil").clicked() {
+                    _state.remove_component_request = Some((entity_id, "BoneAttachment".to_string()));
                 }
             });
     }

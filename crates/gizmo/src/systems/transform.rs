@@ -70,3 +70,37 @@ impl gizmo_core::system::System for TransformPropagateSystem {
         }
     }
 }
+
+pub struct BoneAttachmentSystem;
+
+impl gizmo_core::system::System for BoneAttachmentSystem {
+    fn access_info(&self) -> gizmo_core::system::AccessInfo {
+        let mut info = gizmo_core::system::AccessInfo::new();
+        info.is_exclusive = true;
+        info
+    }
+
+    fn run(&mut self, world: &gizmo_core::world::World, _dt: f32) {
+        let attachments = world.borrow::<gizmo_renderer::components::BoneAttachment>();
+        let skeletons = world.borrow::<gizmo_renderer::components::Skeleton>();
+        let mut transforms = world.borrow_mut::<crate::physics::Transform>();
+        
+        for (id, attachment) in attachments.iter() {
+            if let Some(skeleton) = skeletons.get(attachment.target_entity.id()) {
+                if let Some(global_matrix) = skeleton.global_poses.get(attachment.bone_index) {
+                    if let Some(trans) = transforms.get_mut(id) {
+                        // Bone's transform is in skeleton-local space!
+                        // To get world space, we need the skeleton entity's GlobalTransform.
+                        // Let's assume the skeleton is always at identity or we just apply the local offset for now.
+                        let final_mat = *global_matrix * attachment.offset;
+                        let (t, r, s) = gizmo_renderer::decompose_mat4(final_mat);
+                        trans.position = t;
+                        trans.rotation = r;
+                        trans.scale = s;
+                        trans.update_local_matrix();
+                    }
+                }
+            }
+        }
+    }
+}
