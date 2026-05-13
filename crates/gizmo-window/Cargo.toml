@@ -11,3 +11,4 @@ readme.workspace = true
 [dependencies]
 winit = { workspace = true }
 image = "0.25"
+tracing = "0.1.44"

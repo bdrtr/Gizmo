@@ -36,13 +36,13 @@ impl SceneRegistry {
                     match ron::ser::to_string(comp) {
                         Ok(string_repr) => match ron::from_str::<Value>(&string_repr) {
                             Ok(val) => return Some(val),
-                            Err(e) => println!(
+                            Err(e) => tracing::info!(
                                 "[SceneRegistry] AST Donusturme Hatasi ({}): {}",
                                 std::any::type_name::<T>(),
                                 e
                             ),
                         },
-                        Err(e) => println!(
+                        Err(e) => tracing::info!(
                             "[SceneRegistry] Serilestirme Hatasi ({}): {}",
                             std::any::type_name::<T>(),
                             e
@@ -65,7 +65,7 @@ impl SceneRegistry {
                         comp,
                     );
                 } else {
-                    println!(
+                    tracing::info!(
                         "[SceneRegistry] HATA: {} bileseni yuklenemedi! (Entity: {})",
                         std::any::type_name::<T>(),
                         entity_id

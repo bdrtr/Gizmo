@@ -227,11 +227,11 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
 
     // --- SCRIPT ENGINE & ASSET WATCHER BİRLEŞİMİ ---
     if let Ok(engine) = gizmo::scripting::ScriptEngine::new() {
-        println!("🚀 Gizmo Studio Script Motoru Başlatıldı.");
+        tracing::info!("🚀 Gizmo Studio Script Motoru Başlatıldı.");
         // Olası scriptleri preload yapabiliriz
         world.insert_resource(engine);
     } else {
-        println!("❌ HATA: Gizmo Studio Script Motoru Başlatılamadı!");
+        tracing::info!("❌ HATA: Gizmo Studio Script Motoru Başlatılamadı!");
     }
 
     StudioState {

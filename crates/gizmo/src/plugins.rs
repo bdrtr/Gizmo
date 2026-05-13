@@ -19,7 +19,7 @@ impl Default for PhysicsPlugin {
 
 impl<State: 'static> Plugin<State> for PhysicsPlugin {
     fn build(&self, app: &mut App<State>) {
-        println!(
+        tracing::info!(
             "[Plugin] PhysicsPlugin yükleniyor (Yerçekimi: {:?})...",
             self.gravity
         );

@@ -68,7 +68,7 @@ impl super::AssetManager {
         let file_path = match self.resolve_path_from_meta_source(file_path_or_uuid) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("[AssetManager] ERROR: {e}");
+                tracing::error!("[AssetManager] ERROR: {e}");
                 return self.loading_placeholder_mesh(device);
             }
         };
@@ -86,7 +86,7 @@ impl super::AssetManager {
         let (vertices, aabb) = match decode_obj_vertices_for_async(&file_path) {
             Ok(v) => v,
             Err(e) => {
-                eprintln!("[AssetManager] OBJ load failed: {file_path} — {e}");
+                tracing::error!("[AssetManager] OBJ load failed: {file_path} — {e}");
                 // Return a valid-but-empty mesh so nothing downstream panics.
                 let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Fallback VBuf (not found)"),
@@ -308,7 +308,7 @@ impl super::AssetManager {
             for (prim_i, primitive) in mesh.primitives().enumerate() {
                 // Only handle triangles — skip lines, points, strips, etc.
                 if primitive.mode() != gltf::mesh::Mode::Triangles {
-                    eprintln!(
+                    tracing::error!(
                         "[GLTF WARN] Skipping non-triangle primitive (mode={:?}) on node '{}'",
                         primitive.mode(),
                         node.name().unwrap_or("<unnamed>"),
@@ -502,7 +502,7 @@ fn convert_image_to_rgba8(image: &gltf::image::Data, idx: usize, file_path: &str
         }
 
         unknown => {
-            eprintln!(
+            tracing::error!(
                 "[GLTF WARN] Unknown pixel format {unknown:?} on image {idx} in '{file_path}'. \
                  Falling back to RGBA8 with clamped copy."
             );

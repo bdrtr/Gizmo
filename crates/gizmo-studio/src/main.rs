@@ -16,6 +16,7 @@ pub use state::{DebugAssets, StudioState};
 pub use studio_input::*;
 
 fn main() {
+    gizmo::core::logger::init_tracing();
     let mut app = App::<StudioState>::new("Gizmo Studio", 1600, 900)
         .with_icon(include_bytes!("../../../media/logo.png"))
         .add_event::<crate::state::ShaderReloadEvent>()

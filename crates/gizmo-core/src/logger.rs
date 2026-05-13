@@ -160,6 +160,73 @@ macro_rules! gizmo_log {
     };
 }
 
+use tracing_subscriber::Layer;
+use tracing::Subscriber;
+use tracing_subscriber::layer::Context;
+use tracing_subscriber::registry::LookupSpan;
+
+/// A custom tracing layer that forwards tracing events to Gizmo's internal UI logger.
+pub struct GizmoTracingLayer;
+
+impl<S> Layer<S> for GizmoTracingLayer
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+        let meta = event.metadata();
+        let level = match *meta.level() {
+            tracing::Level::ERROR => LogLevel::Error,
+            tracing::Level::WARN => LogLevel::Warning,
+            _ => LogLevel::Info, // Map TRACE, DEBUG, INFO to Info
+        };
+
+        struct EventVisitor(String);
+        impl tracing::field::Visit for EventVisitor {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = format!("{:?}", value);
+                } else {
+                    self.0.push_str(&format!(" {}={:?}", field.name(), value));
+                }
+            }
+        }
+
+        let mut visitor = EventVisitor(String::new());
+        event.record(&mut visitor);
+
+        // Remove quotes around the message if it was formatted as a debug string
+        let mut msg = visitor.0;
+        if msg.starts_with('"') && msg.ends_with('"') {
+            msg = msg[1..msg.len()-1].to_string();
+        }
+
+        log_message(level, msg, meta.file().unwrap_or("unknown"), meta.line().unwrap_or(0));
+    }
+}
+
+/// Initializes the global tracing subscriber with the Gizmo UI logger and console output.
+pub fn init_tracing() {
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::EnvFilter;
+
+    // Use RUST_LOG environment variable if set, otherwise default to info
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,wgpu=warn,naga=warn,gizmo_core=debug"));
+
+    // Set up standard console output for tracing
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_target(false)
+        .without_time();
+
+    let subscriber = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt_layer)
+        .with(GizmoTracingLayer);
+
+    // Try to set global default. This might fail if another test/part already initialized tracing
+    let _ = tracing::subscriber::set_global_default(subscriber);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

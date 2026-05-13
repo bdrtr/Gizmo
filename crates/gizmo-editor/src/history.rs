@@ -101,7 +101,7 @@ impl History {
                 }
                 other => {
                     // Henüz implement edilmedi — stack'e geri koy
-                    eprintln!("Uyarı: Bu action türü henüz geri alınamıyor (Undo desteklenmiyor).");
+                    tracing::error!("Uyarı: Bu action türü henüz geri alınamıyor (Undo desteklenmiyor).");
                     self.undo_stack.push_back(other);
                 }
             }
@@ -146,7 +146,7 @@ impl History {
                         .push_back(EditorAction::EntitySpawned { entity_ids });
                 }
                 other => {
-                    eprintln!(
+                    tracing::error!(
                         "Uyarı: Bu action türü henüz ileri alınamıyor (Redo desteklenmiyor)."
                     );
                     self.redo_stack.push_back(other);

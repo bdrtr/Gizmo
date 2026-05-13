@@ -27,7 +27,7 @@ pub fn ai_navmesh_rebuild_system(world: &World, _dt: f32) {
     if let (Some(mut grid), Some(physics_world)) = (grid_opt, physics_opt) {
         if grid.needs_rebuild {
             grid.update_from_physics_world(&physics_world);
-            println!(
+            tracing::info!(
                 "[AI] NavMesh dinamik olarak PhysicsWorld üzerinden güncellendi! Toplam engel: {}",
                 grid.obstacles.len()
             );

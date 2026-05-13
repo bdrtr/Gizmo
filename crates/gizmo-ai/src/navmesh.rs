@@ -306,7 +306,7 @@ impl NavMesh {
 
         let build_time_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-        println!(
+        tracing::info!(
             "[NavMesh] Mesh oluşturuldu: {} polygon, {} bölge, {:.1}ms",
             polygons.len(),
             regions.len(),
@@ -652,7 +652,7 @@ mod tests {
         assert!(!mesh.polygons.is_empty(), "En az bir polygon olmalı");
 
         let stats = mesh.stats();
-        println!("Test NavMesh: {}", stats);
+        tracing::info!("Test NavMesh: {}", stats);
     }
 
     #[test]

@@ -197,7 +197,7 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
                 let slot =
                     NEXT_STATIC_COLLIDER_SLOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if slot >= 100 {
-                    eprintln!("[GpuPhysics] Statik collider slot limiti (100) aşıldı, collider atlanıyor.");
+                    tracing::error!("[GpuPhysics] Statik collider slot limiti (100) aşıldı, collider atlanıyor.");
                     NEXT_STATIC_COLLIDER_SLOT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     continue;
                 }

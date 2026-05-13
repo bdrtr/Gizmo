@@ -20,7 +20,7 @@ use crate::world::World;
 /// // Olay okuma (herhangi bir sistem, non-destructive):
 /// let events = world.get_resource::<Events<CollisionEvent>>().unwrap();
 /// for event in events.iter() {
-///     println!("Çarpışma oldu: {:?}", event);
+///     tracing::info!("Çarpışma oldu: {:?}", event);
 /// }
 /// ```
 pub struct Events<T> {

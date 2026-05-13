@@ -847,7 +847,7 @@ mod tests {
             let adapter = match adapter {
                 Some(a) => a,
                 None => {
-                    println!(
+                    tracing::info!(
                         "No suitable GPU adapter found for headless test. Skipping wgpu test."
                     );
                     return;
@@ -857,7 +857,7 @@ mod tests {
             // Wireframe pipeline requires POLYGON_MODE_LINE
             let adapter_features = adapter.features();
             if !adapter_features.contains(wgpu::Features::POLYGON_MODE_LINE) {
-                println!(
+                tracing::info!(
                     "GPU adapter does not support POLYGON_MODE_LINE. Skipping pipeline test."
                 );
                 return;

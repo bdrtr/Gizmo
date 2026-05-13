@@ -74,8 +74,8 @@ fn main() {
     registry.register::<gizmo_renderer::components::PointLight>("PointLight");
 
     if let Err(e) = SceneData::save(&world, "demo/assets/perfect_car.scene", &registry) {
-        println!("Error: {}", e);
+        tracing::info!("Error: {}", e);
     } else {
-        println!("perfect_car.scene created successfully!");
+        tracing::info!("perfect_car.scene created successfully!");
     }
 }

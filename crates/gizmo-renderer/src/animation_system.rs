@@ -29,7 +29,7 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
             let anim = match animations.get(player.active_animation) {
                 Some(c) => c,
                 None => {
-                    eprintln!("Warning: Invalid active_animation index for entity.");
+                    tracing::error!("Warning: Invalid active_animation index for entity.");
                     continue;
                 }
             };

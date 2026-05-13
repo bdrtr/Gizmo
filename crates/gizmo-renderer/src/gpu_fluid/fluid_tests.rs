@@ -733,7 +733,7 @@ mod tests {
             "10K parçacık makul sürede güncellenmeli: {:.1}ms",
             elapsed_ms
         );
-        println!("  ⏱ 10K parçacık step süresi: {:.1}ms", elapsed_ms);
+        tracing::info!("  ⏱ 10K parçacık step süresi: {:.1}ms", elapsed_ms);
     }
 
     // ─── 10. SurfaceTension_DropletsCoalesce (C++ karşılığı) ───

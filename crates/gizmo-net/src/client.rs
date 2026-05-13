@@ -35,7 +35,7 @@ impl NetworkClient {
     pub fn update(&mut self, dt_secs: f64) {
         let dt = Duration::from_secs_f64(dt_secs);
         if let Err(_e) = self.transport.update(dt, &mut self.client) {
-            // println!("Network error: {}", e);
+            // tracing::info!("Network error: {}", e);
         }
     }
 

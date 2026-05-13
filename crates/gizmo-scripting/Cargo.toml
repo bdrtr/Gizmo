@@ -16,3 +16,4 @@ gizmo-ai = { path = "../gizmo-ai" , version = "0.1.0" }
 serde = { version = "1.0.228", features = ["derive"] }
 mlua = { version = "0.9", features = ["lua54", "vendored", "send"] }
 notify = "8.2.0"
+tracing = "0.1.44"

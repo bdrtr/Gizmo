@@ -21,6 +21,7 @@ gizmo-editor = { path = "../gizmo-editor" , version = "0.1.0" }
 gizmo-audio = { path = "../gizmo-audio" , version = "0.1.0" }
 gizmo-scene = { path = "../gizmo-scene" , version = "0.1.0" }
 image = "0.25"
+tracing = "0.1.44"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = "0.17.2"

@@ -19,7 +19,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
     let mut physics_world = match world.try_get_resource_mut::<PhysicsWorld>() {
         Ok(res) => res,
         Err(e) => {
-            println!("[Physics] FAILED TO GET PhysicsWorld Resource: {:?}", e);
+            tracing::info!("[Physics] FAILED TO GET PhysicsWorld Resource: {:?}", e);
             return;
         }
     };
@@ -115,7 +115,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
             }
         }
     } else {
-        println!("[Physics] FAILED TO BORROW RigidBody/Transform/Velocity Mutably!");
+        tracing::info!("[Physics] FAILED TO BORROW RigidBody/Transform/Velocity Mutably!");
     }
 
     // 3.5. Query Soft Bodies

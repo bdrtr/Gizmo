@@ -94,15 +94,15 @@ pub fn render_studio(
 
     // Yeni istekleri loader'a aktar
     if let Some((path, pos)) = gltf_req {
-        println!(">>> render.rs: gltf_load_request yakalandı: {}", path);
+        tracing::info!(">>> render.rs: gltf_load_request yakalandı: {}", path);
         let mut handled = false;
         if let Some(asset_server) = world.get_resource::<gizmo::asset_server::AssetServer>() {
-            println!(">>> render.rs: AssetServer bulundu, import isteği gönderiliyor...");
+            tracing::info!(">>> render.rs: AssetServer bulundu, import isteği gönderiliyor...");
             if asset_server.loader.request_gltf_import(path.clone()) {
                 handled = true;
             }
         } else {
-            println!(">>> render.rs: HATA - AssetServer bulunamadı!");
+            tracing::info!(">>> render.rs: HATA - AssetServer bulunamadı!");
         }
         if handled {
             if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
@@ -110,7 +110,7 @@ pub fn render_studio(
                 ed.log_info(&format!("⌛ Asenkron model yüklemesi başlatıldı: {}", path));
             }
         } else {
-            println!(">>> render.rs: HATA - İstek AssetServer tarafından reddedildi veya işlenmedi!");
+            tracing::info!(">>> render.rs: HATA - İstek AssetServer tarafından reddedildi veya işlenmedi!");
             if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
                 ed.log_error(&format!("❌ Model yüklenemedi veya zaten yükleniyor: {}", path));
             }

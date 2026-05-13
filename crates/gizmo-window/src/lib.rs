@@ -31,7 +31,7 @@ pub fn run_window(title: &str, width: u32, height: u32) {
 
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    println!(
+    tracing::info!(
         "{} {}x{} çözünürlüğünde başlatıldı. Ekranda bir pencere görmelisin!",
         title, width, height
     );

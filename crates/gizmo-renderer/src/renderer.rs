@@ -548,7 +548,7 @@ impl Renderer {
     }
 
     pub fn rebuild_shaders(&mut self) {
-        println!("🚀 Rebuilding Shaders Pipeline...");
+        tracing::info!("🚀 Rebuilding Shaders Pipeline...");
         crate::pipeline::rebuild_pipelines(self);
     }
 
@@ -1033,7 +1033,7 @@ mod tests {
             let adapter = match adapter {
                 Some(a) => a,
                 None => {
-                    println!(
+                    tracing::info!(
                         "No suitable GPU adapter found for headless test. Skipping wgpu test."
                     );
                     return;
