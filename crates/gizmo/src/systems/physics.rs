@@ -88,6 +88,51 @@ pub fn physics_debug_system(world: &crate::core::World) {
             }
         }
 
+        // --- Phase 5.5: Hitbox / Hurtbox Visuals ---
+        let draw_oriented_box = |trans: &crate::physics::Transform,
+                                 offset: gizmo_math::Vec3,
+                                 h: gizmo_math::Vec3,
+                                 color: [f32; 4],
+                                 gizmos: &mut crate::renderer::Gizmos| {
+            let p = trans.position + trans.rotation.mul_vec3(offset);
+            let r = trans.rotation;
+            let p0 = p + r.mul_vec3(Vec3::new(-h.x, -h.y, -h.z));
+            let p1 = p + r.mul_vec3(Vec3::new(h.x, -h.y, -h.z));
+            let p2 = p + r.mul_vec3(Vec3::new(h.x, h.y, -h.z));
+            let p3 = p + r.mul_vec3(Vec3::new(-h.x, h.y, -h.z));
+            let p4 = p + r.mul_vec3(Vec3::new(-h.x, -h.y, h.z));
+            let p5 = p + r.mul_vec3(Vec3::new(h.x, -h.y, h.z));
+            let p6 = p + r.mul_vec3(Vec3::new(h.x, h.y, h.z));
+            let p7 = p + r.mul_vec3(Vec3::new(-h.x, h.y, h.z));
+
+            gizmos.draw_line(p0, p1, color);
+            gizmos.draw_line(p1, p2, color);
+            gizmos.draw_line(p2, p3, color);
+            gizmos.draw_line(p3, p0, color);
+            gizmos.draw_line(p4, p5, color);
+            gizmos.draw_line(p5, p6, color);
+            gizmos.draw_line(p6, p7, color);
+            gizmos.draw_line(p7, p4, color);
+            gizmos.draw_line(p0, p4, color);
+            gizmos.draw_line(p1, p5, color);
+            gizmos.draw_line(p2, p6, color);
+            gizmos.draw_line(p3, p7, color);
+        };
+
+        if let Some(q) = world.query::<(&crate::physics::Transform, &gizmo_physics::components::Hitbox)>() {
+            for (_, (trans, hitbox)) in q.iter() {
+                if hitbox.active {
+                    draw_oriented_box(trans, hitbox.offset, hitbox.half_extents, [1.0, 0.0, 0.0, 1.0], &mut gizmos); // RED
+                }
+            }
+        }
+
+        if let Some(q) = world.query::<(&crate::physics::Transform, &gizmo_physics::components::Hurtbox)>() {
+            for (_, (trans, hurtbox)) in q.iter() {
+                draw_oriented_box(trans, hurtbox.offset, hurtbox.half_extents, [0.0, 1.0, 0.0, 1.0], &mut gizmos); // GREEN
+            }
+        }
+
         let soft_color = [1.0, 0.4, 0.8, 1.0]; // Pinkish for soft body
         if let Some(q) = world.query::<&gizmo_physics::soft_body::SoftBodyMesh>() {
             for (_, sm) in q.iter() {
