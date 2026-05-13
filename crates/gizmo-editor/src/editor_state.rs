@@ -10,7 +10,6 @@ pub enum EditorTab {
     SceneView,
     GameView,
     Console,
-    BuildConsole,
     Settings,
     ScriptEditor,
     Profiler,
@@ -135,7 +134,14 @@ pub struct ScriptEditorState {
     pub pending_clear_confirm: bool,
 }
 
+#[derive(PartialEq, Clone, Copy)]
+pub enum ConsoleMode {
+    EngineLogs,
+    BuildOutput,
+}
+
 pub struct ConsoleState {
+    pub mode: ConsoleMode,
     pub show_info: bool,
     pub show_warn: bool,
     pub show_error: bool,
@@ -154,6 +160,7 @@ pub struct ConsoleState {
 impl Default for ConsoleState {
     fn default() -> Self {
         Self {
+            mode: ConsoleMode::EngineLogs,
             show_info: true,
             show_warn: true,
             show_error: true,

@@ -89,10 +89,29 @@ pub fn handle_camera(
             }
 
             if let Some(target) = focus_target {
-                let desired_pos = target - forward * camera_focus_distance;
-                t.position = t.position.lerp(desired_pos, 10.0 * dt);
-                if t.position.distance(desired_pos) < 0.05 {
-                    t.position = desired_pos;
+                let diff = target - t.position;
+                let dist_to_target = diff.length();
+                let dir = if dist_to_target > 0.001 { diff / dist_to_target } else { forward };
+                
+                let desired_pitch = dir.y.asin();
+                let desired_yaw = dir.z.atan2(dir.x);
+                
+                let mut yaw_diff = desired_yaw - cam.yaw;
+                while yaw_diff > std::f32::consts::PI { yaw_diff -= std::f32::consts::TAU; }
+                while yaw_diff < -std::f32::consts::PI { yaw_diff += std::f32::consts::TAU; }
+                
+                // Yumuşak kamera dönüşü
+                cam.yaw += yaw_diff * (8.0 * dt).clamp(0.0, 1.0);
+                cam.pitch += (desired_pitch - cam.pitch) * (8.0 * dt).clamp(0.0, 1.0);
+                
+                // Güncel bakış açısına göre hedef noktayı belirle
+                let current_forward = cam.get_front();
+                let desired_pos = target - current_forward * camera_focus_distance;
+                
+                // Pozisyonu yumuşakça lerple
+                t.position = t.position.lerp(desired_pos, 8.0 * dt);
+                
+                if t.position.distance(desired_pos) < 0.1 && yaw_diff.abs() < 0.05 && (desired_pitch - cam.pitch).abs() < 0.05 {
                     if let Some(mut es) = world.get_resource_mut::<EditorState>() {
                         es.camera.focus_target = None;
                     }
