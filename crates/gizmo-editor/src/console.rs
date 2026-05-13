@@ -100,7 +100,7 @@ fn draw_engine_logs(ui: &mut egui::Ui, state: &mut EditorState) {
                     let log = &state.console.cached_logs[i];
                     let (text_color, bg_color, icon) = match log.level {
                         LogLevel::Info => (egui::Color32::WHITE, egui::Color32::TRANSPARENT, "ℹ"),
-                        LogLevel::Warning => (egui::Color32::from_rgb(255, 200, 0), egui::Color32::from_rgba_unmultiplied(255, 200, 0, 15), "⚠️"),
+                        LogLevel::Warning => (egui::Color32::from_rgb(100, 255, 100), egui::Color32::from_rgba_unmultiplied(100, 255, 100, 15), "⚠️"),
                         LogLevel::Error => (egui::Color32::RED, egui::Color32::from_rgba_unmultiplied(255, 0, 0, 20), "🔴"),
                     };
 
