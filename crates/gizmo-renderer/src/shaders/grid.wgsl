@@ -87,7 +87,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let coord = in.world_pos.xz;
-    let grid_size = 1.0;
+    let grid_size = 2.0; // Izgara boşlukları daha geniş
     
     let grid_coord = coord / grid_size;
     let derivative = fwidth(grid_coord);
@@ -99,14 +99,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let dist_x = abs(coord.x) / derivative.x;
     let dist_y = abs(coord.y) / derivative.y; // coord.y is actually world Z
     
-    var color = vec3<f32>(0.35, 0.35, 0.35); // Base grid color (göz yormayan gri)
+    var color = vec3<f32>(0.25, 0.25, 0.25); // Parlaklığı biraz daha azalttık (çok daha mat)
     let axis_width = 1.5;
     
     // Axes: X (red), Z (green like Blender's Y)
     if dist_y < axis_width {
-        color = vec3<f32>(0.85, 0.25, 0.35); // X Axis (Red)
+        color = vec3<f32>(0.7, 0.2, 0.25); // X Axis (Red)
     } else if dist_x < axis_width {
-        color = vec3<f32>(0.45, 0.75, 0.25); // Z Axis (Green)
+        color = vec3<f32>(0.35, 0.6, 0.2); // Z Axis (Green)
     }
     
     // Major lines every 10 units
@@ -117,11 +117,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let is_major_line = 1.0 - min(major_line_val, 1.0);
     
     if (dist_y >= axis_width && dist_x >= axis_width && is_major_line > 0.0) {
-        color = vec3<f32>(0.42, 0.42, 0.42); // Slightly lighter for major lines
+        color = vec3<f32>(0.3, 0.3, 0.3); // Ana çizgiler de biraz daha az parlak
     }
 
-    // Yumuşak alfa, gözü yormaması için Blender gibi hafif şeffaf
-    let alpha_multiplier = max(is_line * 0.15, is_major_line * 0.4);
+    // Yumuşak alfa, parlaklığı azaltmak için iyice kıstık
+    let alpha_multiplier = max(is_line * 0.08, is_major_line * 0.25);
 
     // Fade out distance
     let dist_to_camera = distance(scene.camera_pos.xz, coord);
