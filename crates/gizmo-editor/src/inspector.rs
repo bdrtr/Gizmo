@@ -89,6 +89,7 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         draw_fluid_section(ui, world, entity_id, state);
         draw_ai_section(ui, world, entity_id, state);
         draw_reflection_section(ui, world, entity_id, state);
+        draw_animation_player_section(ui, world, entity_id, state);
 
         ui.separator();
 
@@ -105,6 +106,96 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
             }
         }
     });
+}
+
+fn draw_animation_player_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    _state: &mut EditorState,
+) {
+    let mut anim_players = world.borrow_mut::<gizmo_renderer::components::AnimationPlayer>();
+    if let Some(player) = anim_players.get_mut(entity_id.id()) {
+        egui::CollapsingHeader::new("🏃 Animation Player")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Speed:");
+                    ui.add(egui::DragValue::new(&mut player.speed).speed(0.1));
+                });
+                ui.checkbox(&mut player.loop_anim, "Loop Animation");
+                
+                let num_anims = player.animations.len();
+                if num_anims > 0 {
+                    ui.label(format!("Animations ({}):", num_anims));
+                    
+                    let current_anim = player.active_animation;
+                    let mut selected_anim = current_anim;
+                    
+                    let mut anim_name = format!("Anim {}", current_anim);
+                    if let Some(clip) = player.animations.get(current_anim) {
+                        anim_name = clip.name.clone();
+                    }
+                    
+                    egui::ComboBox::from_id_source(format!("anim_select_{}", entity_id.id()))
+                        .selected_text(anim_name)
+                        .show_ui(ui, |ui| {
+                            for i in 0..num_anims {
+                                let name = if let Some(clip) = player.animations.get(i) {
+                                    clip.name.clone()
+                                } else {
+                                    format!("Anim {}", i)
+                                };
+                                ui.selectable_value(&mut selected_anim, i, name);
+                            }
+                        });
+                        
+                    if selected_anim != current_anim {
+                        // Yavaş geçiş (Cross-fade blending) başlat
+                        player.prev_animation = Some(player.active_animation);
+                        player.prev_time = player.current_time;
+                        player.active_animation = selected_anim;
+                        player.current_time = 0.0;
+                        player.blend_time = 0.0;
+                        player.blend_duration = 0.25; // Çeyrek saniyede blend
+                    }
+                    
+                    // Timeline progress slider
+                    if let Some(clip) = player.animations.get(player.active_animation) {
+                        let duration = clip.duration;
+                        ui.horizontal(|ui| {
+                            let is_playing = player.speed != 0.0;
+                            let play_icon = if is_playing { "⏸" } else { "▶" };
+                            
+                            if ui.button(play_icon).clicked() {
+                                if is_playing {
+                                    player.speed = 0.0;
+                                } else {
+                                    player.speed = 1.0;
+                                }
+                            }
+                            if ui.button("⏹").clicked() {
+                                player.speed = 0.0;
+                                player.current_time = 0.0;
+                            }
+                            
+                            ui.add(egui::Slider::new(&mut player.current_time, 0.0..=duration).show_value(true).text("s"));
+                        });
+                    }
+                } else {
+                    ui.label(egui::RichText::new("⚠️ Modelde animasyon bulunamadı").color(egui::Color32::YELLOW));
+                }
+            });
+    }
+
+    let skeletons = world.borrow::<gizmo_renderer::components::Skeleton>();
+    if let Some(skel) = skeletons.get(entity_id.id()) {
+        egui::CollapsingHeader::new("🦴 Skeleton")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(format!("Joints: {}", skel.hierarchy.joints.len()));
+            });
+    }
 }
 
 fn draw_name_section(
