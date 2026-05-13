@@ -331,7 +331,8 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                     {
                         state.build.request = true;
                         state.build.start_time = Some(std::time::Instant::now());
-                        state.open_tab(crate::editor_state::EditorTab::BuildConsole);
+                        state.open_tab(crate::editor_state::EditorTab::Console);
+                        state.console.mode = crate::editor_state::ConsoleMode::BuildOutput;
                     }
                 }
             });
