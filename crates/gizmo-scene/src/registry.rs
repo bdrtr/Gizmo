@@ -116,6 +116,7 @@ impl SceneRegistry {
         reg.register::<gizmo_renderer::components::DirectionalLight>("DirectionalLight");
         reg.register::<gizmo_renderer::components::Terrain>("Terrain");
         reg.register::<gizmo_renderer::components::ParticleEmitter>("ParticleEmitter");
+        reg.register::<gizmo_renderer::components::BoneAttachment>("BoneAttachment");
 
         reg.register::<gizmo_audio::AudioSource>("AudioSource");
         reg.register::<gizmo_scripting::Script>("Script");

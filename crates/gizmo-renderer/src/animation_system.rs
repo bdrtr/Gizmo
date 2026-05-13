@@ -333,10 +333,12 @@ fn blend_poses(
         .collect()
 }
 
-fn upload_skin_matrices(skeleton: &Skeleton, queue: &wgpu::Queue) {
+fn upload_skin_matrices(skeleton: &mut Skeleton, queue: &wgpu::Queue) {
     let global_matrices = skeleton
         .hierarchy
         .calculate_global_matrices(&skeleton.local_poses);
+    skeleton.global_poses = global_matrices.clone();
+
 
     let mut joint_matrices = vec![Mat4::IDENTITY; 128];
     for (i, joint) in skeleton.hierarchy.joints.iter().enumerate() {
@@ -350,7 +352,7 @@ fn upload_skin_matrices(skeleton: &Skeleton, queue: &wgpu::Queue) {
 // find_joint_for_node artik kullanilmiyor
 
 #[allow(dead_code)]
-fn decompose_mat4(m: Mat4) -> (Vec3, Quat, Vec3) {
+pub fn decompose_mat4(m: Mat4) -> (Vec3, Quat, Vec3) {
     let t = Vec3::new(m.w_axis.x, m.w_axis.y, m.w_axis.z);
     let sx = Vec3::new(m.x_axis.x, m.x_axis.y, m.x_axis.z).length().max(1e-6);
     let sy = Vec3::new(m.y_axis.x, m.y_axis.y, m.y_axis.z).length().max(1e-6);

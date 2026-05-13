@@ -85,6 +85,7 @@ pub fn handle_scene_operations(
 
                 "Hitbox" => world.add_component(ent, gizmo::physics::components::Hitbox::default()),
                 "Hurtbox" => world.add_component(ent, gizmo::physics::components::Hurtbox::default()),
+                "BoneAttachment" => world.add_component(ent, gizmo::renderer::components::BoneAttachment::default()),
 
                 _ => editor_state.log_warning(&format!("Bilinmeyen component: {}", comp_name)),
             }
@@ -96,6 +97,7 @@ pub fn handle_scene_operations(
             match comp_name.as_str() {
                 "Hitbox" => { world.remove_component::<gizmo::physics::components::Hitbox>(ent); }
                 "Hurtbox" => { world.remove_component::<gizmo::physics::components::Hurtbox>(ent); }
+                "BoneAttachment" => { world.remove_component::<gizmo::renderer::components::BoneAttachment>(ent); }
                 _ => editor_state.log_warning(&format!("Component turu silinemiyor: {}", comp_name)),
             }
         }

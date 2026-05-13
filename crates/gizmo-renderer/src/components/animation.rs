@@ -10,6 +10,7 @@ pub struct Skeleton {
     pub buffer: Arc<wgpu::Buffer>,
     pub hierarchy: Arc<crate::animation::SkeletonHierarchy>,
     pub local_poses: Vec<gizmo_math::Mat4>,
+    pub global_poses: Vec<gizmo_math::Mat4>,
 }
 
 impl Skeleton {
@@ -24,11 +25,13 @@ impl Skeleton {
             local_poses.len(),
             "Skeleton joints uzunlugu ile local_poses esit olmali"
         );
+        let global_poses = local_poses.clone(); // Initial
         Self {
             bind_group,
             buffer,
             hierarchy,
             local_poses,
+            global_poses,
         }
     }
 }
@@ -68,3 +71,22 @@ impl AnimationPlayer {
         self.animations.get(self.active_animation)
     }
 }
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct BoneAttachment {
+    pub target_entity: gizmo_core::entity::Entity,
+    pub bone_index: usize,
+    pub offset: gizmo_math::Mat4,
+}
+
+impl Default for BoneAttachment {
+    fn default() -> Self {
+        Self {
+            target_entity: gizmo_core::entity::Entity::new(0, 0),
+            bone_index: 0,
+            offset: gizmo_math::Mat4::IDENTITY,
+        }
+    }
+}
+
+gizmo_core::impl_component!(BoneAttachment);

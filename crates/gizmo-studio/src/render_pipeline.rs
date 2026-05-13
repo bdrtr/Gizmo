@@ -68,6 +68,9 @@ pub fn execute_render_pipeline(
     // --- SKELETAL ANIMATION UPDATE (Done before any ECS borrows!) ---
     let delta_time = state.actual_dt;
     gizmo::renderer::animation_update_system(world, delta_time, &renderer.queue);
+    
+    let mut bone_att = gizmo::systems::transform::BoneAttachmentSystem;
+    gizmo::core::system::System::run(&mut bone_att, world, delta_time);
 
     let mut aspect = if renderer.size.height > 0 {
         renderer.size.width as f32 / renderer.size.height as f32
