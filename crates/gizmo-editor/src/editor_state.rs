@@ -180,6 +180,13 @@ pub struct EditorState {
     pub shading_mode: u32,
     /// FXAA Anti-Aliasing açık/kapalı durumu
     pub fxaa_enabled: bool,
+    
+    // Post-Processing Settings
+    pub bloom_intensity: f32,
+    pub bloom_threshold: f32,
+    pub exposure: f32,
+    pub vignette: f32,
+    pub chromatic_aberration: f32,
 
     pub history: crate::history::History,
 
@@ -283,6 +290,12 @@ impl EditorState {
             gizmo_local_space: false,
             shading_mode: 0,
             fxaa_enabled: true,
+
+            bloom_intensity: 0.8,
+            bloom_threshold: 0.85,
+            exposure: 1.0,
+            vignette: 0.2,
+            chromatic_aberration: 0.005,
 
             history: crate::history::History::new(prefs.max_history),
 
