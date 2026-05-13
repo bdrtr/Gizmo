@@ -5,6 +5,14 @@ pub struct StudioState {
     pub do_raycast: bool,
     pub physics_accumulator: f32,
     pub asset_watcher: Option<gizmo::renderer::hot_reload::AssetWatcher>,
+    /// Garbage Collection zamanlayıcı — soft-deleted entity'leri temizler
+    pub gc_timer: f32,
+    /// Auto-Save zamanlayıcı — sahneyi belirli aralıklarla yedekler
+    pub autosave_timer: f32,
+    /// Sahnedeki aktif (görünür) entity sayısı
+    pub visible_entity_count: u32,
+    /// Son frame'deki draw call sayısı
+    pub draw_call_count: u32,
 }
 
 pub struct DebugAssets {

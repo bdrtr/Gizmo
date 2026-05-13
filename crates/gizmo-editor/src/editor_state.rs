@@ -178,6 +178,8 @@ pub struct EditorState {
     pub mouse_ndc: Option<gizmo_math::Vec2>,
     pub gizmo_local_space: bool,
     pub shading_mode: u32,
+    /// FXAA Anti-Aliasing açık/kapalı durumu
+    pub fxaa_enabled: bool,
 
     pub history: crate::history::History,
 
@@ -280,6 +282,7 @@ impl EditorState {
             mouse_ndc: None,
             gizmo_local_space: false,
             shading_mode: 0,
+            fxaa_enabled: true,
 
             history: crate::history::History::new(prefs.max_history),
 

@@ -32,6 +32,9 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
         crate::systems::shortcuts::handle_editor_shortcuts(world, editor_state, state, input);
         crate::systems::simulation::handle_simulation(world, editor_state, state, dt, input);
         crate::systems::scene_ops::handle_scene_operations(world, editor_state, state);
+
+        // Garbage Collection & Auto-Save (her frame kontrol, belirli aralıklarla çalışır)
+        crate::systems::gc::garbage_collection_system(world, state, editor_state, dt);
     });
 
     // İşletim sistemleri (Async Asset Server ve Transform senkronizasyonları)
@@ -42,10 +45,7 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
     gizmo::core::system::System::run(&mut transform_sync, world, dt);
     gizmo::core::system::System::run(&mut transform_propagate, world, dt);
 
-    // Kamera sistemine editor state'e geri dönmüş haliyle pas atıyoruz (scroll delta Optional'ı unwrap_or(0.0) diye verdik, orijinal kodda Optional idi ama sistem f32 bekliyor. Bizim argüman f32, Option verilmiş. Düzeltilecekti). Wait, let's fix it properly.
-    if scroll_delta.is_none() {
-        scroll_delta = Some(0.0);
-    }
+    // Kamera sistemine editor state'e geri dönmüş delta'yı gönder
     crate::systems::camera::handle_camera(
         world,
         state,

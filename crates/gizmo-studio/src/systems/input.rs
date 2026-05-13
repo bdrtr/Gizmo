@@ -2,7 +2,6 @@ use crate::state::{DebugAssets, StudioState};
 use crate::studio_input;
 use gizmo::editor::EditorState;
 use gizmo::physics::components::Transform;
-use gizmo::physics::shape::Collider;
 use gizmo::prelude::*;
 
 pub fn handle_input_and_scene_view(

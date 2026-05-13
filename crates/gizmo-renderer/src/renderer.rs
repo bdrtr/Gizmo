@@ -131,6 +131,9 @@ pub struct Renderer {
     // === TAA — Temporal Anti-Aliasing (ping-pong history + Halton jitter) ===
     pub taa: Option<crate::taa::TaaState>,
 
+    // === FXAA — Fast Approximate Anti-Aliasing (son post-process pass) ===
+    pub fxaa: Option<crate::fxaa::FxaaState>,
+
     // === GIZMO HATA AYIKLAMA (Debug Lines) ===
     pub debug_renderer: Option<crate::debug_renderer::GizmoRendererSystem>,
 
@@ -509,6 +512,14 @@ impl Renderer {
             post_params_bind_group: post_res.post_params_bind_group,
         };
 
+        // === FXAA Başlatma ===
+        let fxaa = Some(crate::fxaa::FxaaState::new(
+            &device,
+            config.format,
+            size.width,
+            size.height,
+        ));
+
         Self {
             surface,
             device,
@@ -526,6 +537,7 @@ impl Renderer {
             volumetric,
             decal,
             taa,
+            fxaa,
             gpu_particles,
             gpu_physics,
             gpu_fluid,
@@ -631,6 +643,10 @@ impl Renderer {
                     new_size.width,
                     new_size.height,
                 );
+            }
+            // FXAA resize
+            if let Some(ref mut fxaa) = self.fxaa {
+                fxaa.resize(&self.device, &self.queue, self.config.format, new_size.width, new_size.height);
             }
         }
     }
@@ -754,6 +770,15 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         output_view: &wgpu::TextureView,
     ) {
+        if let Some(ref fxaa) = self.fxaa {
+            if fxaa.enabled {
+                // Composite → FXAA input texture → FXAA → output_view
+                crate::post_process::run_post_processing(self, encoder, &fxaa.input_texture_view);
+                crate::fxaa::run_fxaa_pass(fxaa, encoder, output_view);
+                return;
+            }
+        }
+        // FXAA kapalıysa doğrudan output'a yaz
         crate::post_process::run_post_processing(self, encoder, output_view);
     }
 

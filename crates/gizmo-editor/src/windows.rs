@@ -169,6 +169,20 @@ pub fn ui_settings_window(ui: &mut egui::Ui, state: &mut EditorState) {
 
         ui.separator();
 
+        // --- Rendering ---
+        egui::CollapsingHeader::new("🎨 Rendering")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.checkbox(&mut state.fxaa_enabled, "FXAA Anti-Aliasing");
+                ui.label(
+                    egui::RichText::new("Kenar yumuşatma — düşük GPU maliyeti ile pürüzsüz kenarlar.")
+                        .weak()
+                        .small(),
+                );
+            });
+
+        ui.separator();
+
         // --- Düzeni Yönet ---
         egui::CollapsingHeader::new("🪟 Panel Düzeni")
             .default_open(false)
