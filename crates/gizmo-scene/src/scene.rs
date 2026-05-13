@@ -85,7 +85,7 @@ impl SceneData {
         fs::write(file_path, string_data)
             .map_err(|e| format!("[SceneData::save] Dosya yazma hatası: {}", e))?;
 
-        println!("✅ Sahne kaydedildi → {}", file_path);
+        tracing::info!("✅ Sahne kaydedildi → {}", file_path);
         Ok(())
     }
 
@@ -173,7 +173,7 @@ impl SceneData {
         let scene: SceneData = match ron::from_str(&string_data) {
             Ok(s) => s,
             Err(e) => {
-                println!("❌ Sahne dosyası geçersiz ({}): {}", file_path, e);
+                tracing::info!("❌ Sahne dosyası geçersiz ({}): {}", file_path, e);
                 return false;
             }
         };
@@ -200,7 +200,7 @@ impl SceneData {
             }
         }
 
-        println!("✅ Sahne yüklendi ← {}", file_path);
+        tracing::info!("✅ Sahne yüklendi ← {}", file_path);
         true
     }
 
@@ -299,7 +299,7 @@ impl SceneData {
                     asset_manager
                         .load_material_texture(device, queue, texture_bind_group_layout, tex_path)
                         .unwrap_or_else(|e| {
-                            println!("Scene Texture error: {}", e);
+                            tracing::info!("Scene Texture error: {}", e);
                             default_texture_bind_group.clone()
                         })
                 } else {
@@ -416,7 +416,7 @@ impl SceneData {
         fs::write(file_path, string_data)
             .map_err(|e| format!("[SceneData::save_prefab] Dosya yazma hatası: {}", e))?;
 
-        println!("✅ Prefab kaydedildi → {}", file_path);
+        tracing::info!("✅ Prefab kaydedildi → {}", file_path);
         Ok(())
     }
 
@@ -440,7 +440,7 @@ impl SceneData {
         let prefab: PrefabData = match ron::from_str(&string_data) {
             Ok(p) => p,
             Err(e) => {
-                println!("❌ Prefab dosyası geçersiz ({}): {}", file_path, e);
+                tracing::info!("❌ Prefab dosyası geçersiz ({}): {}", file_path, e);
                 return None;
             }
         };
@@ -481,7 +481,7 @@ impl SceneData {
             }
         }
 
-        println!("✅ Prefab yüklendi ← {}", file_path);
+        tracing::info!("✅ Prefab yüklendi ← {}", file_path);
         new_root_id
     }
 

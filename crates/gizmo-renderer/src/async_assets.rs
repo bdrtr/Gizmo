@@ -178,15 +178,15 @@ impl AsyncAssetLoader {
 
     /// Run `gltf::import` off the main thread; upload with `AssetManager::load_gltf_from_import`.
     pub fn request_gltf_import(&self, path: String) -> bool {
-        println!(">>> request_gltf_import çağrıldı: {}", path);
+        tracing::info!(">>> request_gltf_import çağrıldı: {}", path);
         let mut g = self.shared.lock().expect("async asset mutex");
         if g.gltf_inflight.contains(&path) {
-            println!(">>> request_gltf_import: Model zaten yükleniyor!");
+            tracing::info!(">>> request_gltf_import: Model zaten yükleniyor!");
             return false;
         }
         g.gltf_inflight.insert(path.clone());
         let ok = g.job_tx.send(Job::Gltf { path }).is_ok();
-        println!(">>> request_gltf_import: İşlem gönderildi mi? {}", ok);
+        tracing::info!(">>> request_gltf_import: İşlem gönderildi mi? {}", ok);
         ok
     }
 
@@ -223,7 +223,7 @@ impl AsyncAssetLoader {
                             });
                         }
                         Err(e) => {
-                            eprintln!(
+                            tracing::error!(
                                 "[AsyncAssetLoader] Texture decode failed ({request_path}): {e}"
                             );
                         }
@@ -245,7 +245,7 @@ impl AsyncAssetLoader {
                             });
                         }
                         Err(e) => {
-                            eprintln!("[AsyncAssetLoader] OBJ decode failed ({path}): {e}");
+                            tracing::error!("[AsyncAssetLoader] OBJ decode failed ({path}): {e}");
                         }
                     }
                 }

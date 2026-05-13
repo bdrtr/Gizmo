@@ -24,7 +24,7 @@ impl AssetWatcher {
         let mut watcher = match notify::recommended_watcher(tx) {
             Ok(w) => w,
             Err(e) => {
-                eprintln!("AssetWatcher: Dosya izleyici oluşturulamadı: {:?}", e);
+                tracing::error!("AssetWatcher: Dosya izleyici oluşturulamadı: {:?}", e);
                 return None;
             }
         };
@@ -33,9 +33,9 @@ impl AssetWatcher {
             let path = dir.as_ref().to_path_buf();
             if path.exists() {
                 if let Err(e) = watcher.watch(&path, RecursiveMode::Recursive) {
-                    eprintln!("AssetWatcher: Dizin izlenemedi {:?}: {:?}", path, e);
+                    tracing::error!("AssetWatcher: Dizin izlenemedi {:?}: {:?}", path, e);
                 } else {
-                    println!("AssetWatcher: İzleniyor → {:?}", path);
+                    tracing::info!("AssetWatcher: İzleniyor → {:?}", path);
                 }
             }
         }

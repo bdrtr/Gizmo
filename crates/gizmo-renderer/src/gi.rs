@@ -259,7 +259,7 @@ impl ProbeGrid {
         }
 
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
-        println!(
+        tracing::info!(
             "[GI] {} probe bake edildi ({:.1}ms)",
             self.probes.len(),
             elapsed

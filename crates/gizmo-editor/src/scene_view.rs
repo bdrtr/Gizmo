@@ -190,7 +190,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
             let latest_pos = ui.input(|i| i.pointer.latest_pos());
             let in_scene = latest_pos.map(|p| rect.contains(p)).unwrap_or(false);
             
-            println!(">>> DRAG RELEASED! latest_pos: {:?}, rect: {:?}, in_scene: {}", latest_pos, rect, in_scene);
+            tracing::info!(">>> DRAG RELEASED! latest_pos: {:?}, rect: {:?}, in_scene: {}", latest_pos, rect, in_scene);
             
             if in_scene {
                 state.log_info(&format!("Model sahneye bırakıldı: {}", dragged_path));

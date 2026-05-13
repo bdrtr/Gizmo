@@ -12,7 +12,7 @@
 //! // Okuma (UI panelinde)
 //! let profiler = world.get_resource::<FrameProfiler>().unwrap();
 //! for scope in profiler.current_frame_scopes() {
-//!     println!("{}: {:.2}ms", scope.name, scope.duration_ms());
+//!     tracing::info!("{}: {:.2}ms", scope.name, scope.duration_ms());
 //! }
 //! ```
 

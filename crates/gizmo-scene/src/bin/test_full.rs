@@ -20,5 +20,5 @@ fn main() {
         joints: Vec::new(),
     };
     let sz = ron::ser::to_string_pretty(&scene, ron::ser::PrettyConfig::default()).unwrap();
-    println!("{}", sz);
+    tracing::info!("{}", sz);
 }

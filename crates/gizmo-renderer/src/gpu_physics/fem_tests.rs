@@ -81,7 +81,7 @@ mod tests {
     fn test_fem_compute_clear_forces() {
         pollster::block_on(async {
             let Some((device, queue)) = setup_headless_gpu().await else {
-                println!("Skipping GPU test: no wgpu adapter found");
+                tracing::info!("Skipping GPU test: no wgpu adapter found");
                 return;
             };
 
@@ -144,7 +144,7 @@ mod tests {
     fn test_fem_compute_integration_and_collision() {
         pollster::block_on(async {
             let Some((device, queue)) = setup_headless_gpu().await else {
-                println!("Skipping GPU test: no wgpu adapter found");
+                tracing::info!("Skipping GPU test: no wgpu adapter found");
                 return;
             };
 
@@ -241,7 +241,7 @@ mod tests {
     fn test_fem_compute_stress() {
         pollster::block_on(async {
             let Some((device, queue)) = setup_headless_gpu().await else {
-                println!("Skipping GPU test: no wgpu adapter found");
+                tracing::info!("Skipping GPU test: no wgpu adapter found");
                 return;
             };
 

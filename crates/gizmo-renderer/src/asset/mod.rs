@@ -140,7 +140,7 @@ pub fn decode_obj_vertices_for_async(
             let model_verts = &mut vertices[model_start..];
             let remainder = compute_flat_normals_inplace(model_verts);
             if remainder > 0 {
-                eprintln!(
+                tracing::error!(
                     "[AssetManager] WARN: '{file_path}' model '{}' has {remainder} \
                      trailing vertices that don't form a complete triangle — \
                      normals for those vertices left as Y-up.",
@@ -281,7 +281,7 @@ impl AssetManager {
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
             Err(e) => {
-                eprintln!(
+                tracing::error!(
                     "[AssetManager] Cannot read directory {}: {e}",
                     dir.display()
                 );
@@ -341,7 +341,7 @@ impl AssetManager {
             {
                 Ok(meta) => return meta.uuid,
                 Err(e) => {
-                    eprintln!(
+                    tracing::error!(
                         "[AssetManager] WARN: corrupt .meta for '{}' ({e}). \
                          Regenerating UUID — existing scene references to this \
                          asset will break.",
@@ -358,13 +358,13 @@ impl AssetManager {
         match ron::ser::to_string_pretty(&meta, ron::ser::PrettyConfig::default()) {
             Ok(ron_str) => {
                 if let Err(e) = std::fs::write(meta_path, ron_str) {
-                    eprintln!(
+                    tracing::error!(
                         "[AssetManager] WARN: could not write .meta for '{}': {e}",
                         asset_path.display()
                     );
                 }
             }
-            Err(e) => eprintln!("[AssetManager] WARN: RON serialisation failed: {e}"),
+            Err(e) => tracing::error!("[AssetManager] WARN: RON serialisation failed: {e}"),
         }
 
         uuid

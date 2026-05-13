@@ -180,7 +180,7 @@ impl GpuCompute {
             .iter()
             .any(|(_, sb, _)| sb.mu != soft_bodies[0].1.mu)
         {
-            eprintln!("Warning: Mixed soft body materials not supported on GPU path");
+            tracing::error!("Warning: Mixed soft body materials not supported on GPU path");
         }
 
         // --- GPU PATHWAY ---

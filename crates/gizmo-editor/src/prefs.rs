@@ -54,7 +54,7 @@ impl EditorPrefs {
                     prefs
                 }
                 Err(e) => {
-                    eprintln!("[EditorPrefs] Parse hatası: {}, varsayılan kullanılıyor", e);
+                    tracing::error!("[EditorPrefs] Parse hatası: {}, varsayılan kullanılıyor", e);
                     // Bozuk dosyayı yedekle
                     let _ = std::fs::rename(&path, path.with_extension("toml.bak"));
                     Self::default()

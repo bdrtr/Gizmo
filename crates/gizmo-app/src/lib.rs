@@ -40,10 +40,10 @@ pub fn setup_panic_hook() {
 
             let error_msg = format!("Gizmo Engine Coktu!\n\nKonum: {}\nHata: {}\n\nOlay Yeri Inceleme Raporu 'gizmo_crash_report.json' olarak kaydedildi.", location, message);
 
-            println!("{}", error_msg);
+            tracing::info!("{}", error_msg);
 
             let backtrace = backtrace::Backtrace::new();
-            println!("--- BACKTRACE ---\n{:?}", backtrace);
+            tracing::info!("--- BACKTRACE ---\n{:?}", backtrace);
 
             unsafe {
                 let ptr = WORLD_PTR.load(Ordering::Acquire);
@@ -288,10 +288,10 @@ impl<State: 'static> App<State> {
             match gizmo_core::input::PlaybackData::load(path) {
                 Ok(data) => {
                     self.playback_data = Some(data);
-                    println!("Playback loaded from: {}", path);
+                    tracing::info!("Playback loaded from: {}", path);
                 }
                 Err(e) => {
-                    eprintln!("Failed to load playback data: {}", e);
+                    tracing::error!("Failed to load playback data: {}", e);
                 }
             }
         }
@@ -400,7 +400,7 @@ impl<State: 'static> App<State> {
                 self.world.insert_resource(r);
                 self.world.insert_resource(asset_manager);
             } else {
-                eprintln!("[App::run] AssetManager bulunamadı, sahne yüklenemiyor!");
+                tracing::error!("[App::run] AssetManager bulunamadı, sahne yüklenemiyor!");
             }
         }
 
@@ -448,7 +448,7 @@ impl<State: 'static> App<State> {
                             WindowEvent::CloseRequested => {
                                 if let Some(record) = &self.record_data {
                                     let _ = record.save("gizmo_record.ron");
-                                    println!(
+                                    tracing::info!(
                                         "Kayit basariyla 'gizmo_record.ron' dosyasina kaydedildi."
                                     );
                                 }
@@ -573,7 +573,7 @@ impl<State: 'static> App<State> {
                                     self.input = frame.input.clone();
                                     self.playback_frame_index += 1;
                                 } else {
-                                    println!("Playback bitti. Uygulama kapaniyor...");
+                                    tracing::info!("Playback bitti. Uygulama kapaniyor...");
                                     current_window.exit();
                                 }
                             } else if self.record_mode {
@@ -830,7 +830,7 @@ impl<State: 'static> App<State> {
                                             ed.status_message = format!("Kaydedildi: {}", path);
                                         }
                                     }
-                                    Err(e) => eprintln!("[App] Sahne kayıt hatası: {}", e),
+                                    Err(e) => tracing::error!("[App] Sahne kayıt hatası: {}", e),
                                 }
                             }
 
@@ -1026,7 +1026,7 @@ impl<State: 'static> App<State> {
                                     return;
                                 }
                                 Err(e) => {
-                                    eprintln!("Surface hatasi: {:?}", e);
+                                    tracing::error!("Surface hatasi: {:?}", e);
                                     self.world.insert_resource(renderer);
                                     return;
                                 }

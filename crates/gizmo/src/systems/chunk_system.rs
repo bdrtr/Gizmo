@@ -120,7 +120,7 @@ pub fn open_world_chunk_system<F, U>(
             drop(manager);
             unload_callback(world, chunk, entities);
         }
-        println!("🗑️ Chunk Yüklemesi Kaldırıldı (Havuzlandı): {:?}", chunk);
+        tracing::info!("🗑️ Chunk Yüklemesi Kaldırıldı (Havuzlandı): {:?}", chunk);
     }
 
     // --- YÜKLEME İŞLEMİ (LOAD) ---
@@ -129,7 +129,7 @@ pub fn open_world_chunk_system<F, U>(
             let mut manager = world.get_resource_mut::<ChunkManager>().unwrap();
             manager.active_chunks.insert(chunk);
         }
-        println!("🌍 Yeni Chunk Yüklendi: {:?}", chunk);
+        tracing::info!("🌍 Yeni Chunk Yüklendi: {:?}", chunk);
 
         // Kullanıcının sağladığı (Örn: rpg_demo.rs içindeki) ağaç oluşturma fonksiyonunu çağırıyoruz
         load_callback(world, chunk);

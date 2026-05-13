@@ -12,3 +12,4 @@ readme.workspace = true
 getrandom = { version = "0.2", features = ["js"] }
 glam = { version = "=0.32.1", features = ["serde", "bytemuck", "rand"] }
 serde = { version = "1.0.228", features = ["derive"] }
+tracing = "0.1.44"

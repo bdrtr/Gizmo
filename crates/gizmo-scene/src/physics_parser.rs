@@ -68,7 +68,7 @@ pub fn auto_generate_colliders(world: &mut gizmo_core::World, use_convex: bool) 
         world.add_component(entity, collider);
     }
 
-    println!(
+    tracing::info!(
         "[PhysicsParser] {} adet mesh'e otomatik Collider üretildi.",
         count
     );

@@ -241,7 +241,7 @@ impl ScriptEngine {
             let _ = self.lua.remove_registry_value(old_key);
         }
 
-        println!("🔧 ScriptEngine: Yüklendi ve İzole Edildi → {}", path);
+        tracing::info!("🔧 ScriptEngine: Yüklendi ve İzole Edildi → {}", path);
         Ok(())
     }
 

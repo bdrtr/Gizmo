@@ -213,7 +213,7 @@ impl NavGrid {
         while let Some(current_node) = open_set.pop() {
             iterations += 1;
             if iterations > max_iterations {
-                eprintln!(
+                tracing::error!(
                     "[AI] Pathfinding limit aşıldı ({}/{}). Ulaşılamaz rota?",
                     iterations, max_iterations
                 );
