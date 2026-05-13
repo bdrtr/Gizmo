@@ -44,7 +44,11 @@ impl SceneState {
             return false;
         }
 
-        let new_capacity = (needed * 2).max(8_192);
+        let new_capacity = if self.instance_capacity == 0 {
+            needed.max(8_192)
+        } else {
+            needed.max(self.instance_capacity + self.instance_capacity / 2).max(self.instance_capacity + 4096)
+        };
         let new_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Instance Buffer (grown)"),
             size: (new_capacity * std::mem::size_of::<crate::InstanceRaw>()) as u64,

@@ -60,9 +60,18 @@ pub fn garbage_collection_system(
                 }
             }
 
+            // GPU Memory GC
+            let mut freed_gpu = 0;
+            if let Ok(mut asset_manager) = world.try_get_resource_mut::<AssetManager>() {
+                freed_gpu = asset_manager.garbage_collect();
+            }
+
+            // RAM Memory Defragmentation
+            world.compact();
+
             editor_state.log_info(&format!(
-                "♻ GC: {} soft-deleted entity temizlendi (RAM serbest bırakıldı).",
-                count
+                "♻ GC: {} soft-deleted entity ve {} GPU asset'i temizlendi (RAM/VRAM serbest bırakıldı).",
+                count, freed_gpu
             ));
         }
     }
