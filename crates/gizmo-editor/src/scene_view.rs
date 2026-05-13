@@ -211,7 +211,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
             let mut transforms = world.borrow_mut::<gizmo_physics::components::Transform>();
             
             let primary_id = state.selection.primary.unwrap_or_else(|| *state.selection.entities.iter().next().unwrap());
-            if let Some(primary_t) = transforms.get_mut(primary_id.id()) {
+            if transforms.get(primary_id.id()).is_some() {
                 
                 use transform_gizmo_egui::prelude::*;
                 use transform_gizmo_egui::math::Transform as GizmoTransform;
@@ -222,8 +222,10 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                     GizmoOrientation::Global
                 };
 
-                let snap_distance = if state.prefs.snap_enabled { state.prefs.snap_translate as f32 } else { 0.0 };
-                let snap_angle = if state.prefs.snap_enabled { state.prefs.snap_rotate_deg.to_radians() as f32 } else { 0.0 };
+                let is_ctrl = ui.input(|i| i.modifiers.ctrl);
+                let snap_enabled = state.prefs.snap_enabled ^ is_ctrl;
+                let snap_distance = if snap_enabled { state.prefs.snap_translate as f32 } else { 0.0 };
+                let snap_angle = if snap_enabled { state.prefs.snap_rotate_deg.to_radians() as f32 } else { 0.0 };
 
                 let vm = view_mat.to_cols_array_2d();
                 let pm = proj_mat.to_cols_array_2d();
@@ -283,30 +285,38 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                 };
                 state.transform_gizmo.update_config(config);
 
-                // Gizmo transform oluştur
-                let tr = primary_t.position;
-                let rt = primary_t.rotation;
-                let sc = primary_t.scale;
-                
-                let translation = transform_gizmo_egui::mint::Vector3 { x: tr.x as f64, y: tr.y as f64, z: tr.z as f64 };
-                let rotation = transform_gizmo_egui::mint::Quaternion { v: transform_gizmo_egui::mint::Vector3 { x: rt.x as f64, y: rt.y as f64, z: rt.z as f64 }, s: rt.w as f64 };
-                let scale = transform_gizmo_egui::mint::Vector3 { x: sc.x as f64, y: sc.y as f64, z: sc.z as f64 };
-                
-                let gizmo_transform = GizmoTransform::from_scale_rotation_translation(scale, rotation, translation);
+                // Tüm seçili objelerin transformlarını topla
+                let mut gizmo_transforms = Vec::new();
+                let mut selected_ids = Vec::new();
+
+                for &id in state.selection.entities.iter() {
+                    if let Some(&t) = transforms.get(id.id()) {
+                        let translation = transform_gizmo_egui::mint::Vector3 { x: t.position.x as f64, y: t.position.y as f64, z: t.position.z as f64 };
+                        let rotation = transform_gizmo_egui::mint::Quaternion { v: transform_gizmo_egui::mint::Vector3 { x: t.rotation.x as f64, y: t.rotation.y as f64, z: t.rotation.z as f64 }, s: t.rotation.w as f64 };
+                        let scale = transform_gizmo_egui::mint::Vector3 { x: t.scale.x as f64, y: t.scale.y as f64, z: t.scale.z as f64 };
+                        
+                        gizmo_transforms.push(GizmoTransform::from_scale_rotation_translation(scale, rotation, translation));
+                        selected_ids.push(id.id());
+                    }
+                }
 
                 use transform_gizmo_egui::GizmoExt;
-                if state.gizmo_mode != crate::editor_state::GizmoMode::Select {
-                    if let Some((_result, new_transforms)) = state.transform_gizmo.interact(ui, &[gizmo_transform]) {
+                if state.gizmo_mode != crate::editor_state::GizmoMode::Select && !gizmo_transforms.is_empty() {
+                    if let Some((_result, new_transforms)) = state.transform_gizmo.interact(ui, &gizmo_transforms) {
                         gizmo_interacted = true;
-                        if let Some(new_t) = new_transforms.first() {
-                            let nt: transform_gizmo_egui::mint::Vector3<f64> = new_t.translation.into();
-                            let nr: transform_gizmo_egui::mint::Quaternion<f64> = new_t.rotation.into();
-                            let ns: transform_gizmo_egui::mint::Vector3<f64> = new_t.scale.into();
-                            
-                            primary_t.position = gizmo_math::Vec3::new(nt.x as f32, nt.y as f32, nt.z as f32);
-                            primary_t.rotation = gizmo_math::Quat::from_xyzw(nr.v.x as f32, nr.v.y as f32, nr.v.z as f32, nr.s as f32);
-                            primary_t.scale = gizmo_math::Vec3::new(ns.x as f32, ns.y as f32, ns.z as f32);
-                            primary_t.update_local_matrix();
+                        for (i, new_t) in new_transforms.iter().enumerate() {
+                            if let Some(&entity_id) = selected_ids.get(i) {
+                                if let Some(t) = transforms.get_mut(entity_id) {
+                                    let nt: transform_gizmo_egui::mint::Vector3<f64> = new_t.translation.into();
+                                    let nr: transform_gizmo_egui::mint::Quaternion<f64> = new_t.rotation.into();
+                                    let ns: transform_gizmo_egui::mint::Vector3<f64> = new_t.scale.into();
+                                    
+                                    t.position = gizmo_math::Vec3::new(nt.x as f32, nt.y as f32, nt.z as f32);
+                                    t.rotation = gizmo_math::Quat::from_xyzw(nr.v.x as f32, nr.v.y as f32, nr.v.z as f32, nr.s as f32);
+                                    t.scale = gizmo_math::Vec3::new(ns.x as f32, ns.y as f32, ns.z as f32);
+                                    t.update_local_matrix();
+                                }
+                            }
                         }
                     }
                 }

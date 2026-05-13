@@ -17,12 +17,18 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         return;
     }
 
+    let primary_entity = state
+        .selection
+        .primary
+        .unwrap_or_else(|| *state.selection.entities.iter().next().unwrap());
+
+    if !world.is_alive(primary_entity) {
+        return;
+    }
+
     if sel_len > 1 {
-        ui.heading(format!("🔧 Çoklu Oje Seçili ({} adet)", sel_len));
-        ui.separator();
-
-        ui.label("Şu anda çoklu seçim modundasınız. Çoklu objelerin özelliklerinin aynı anda değiştirilmesi ilerleyen versiyonlarda desteklenecektir.");
-
+        ui.heading(format!("🔧 Çoklu Obje Seçili ({} adet)", sel_len));
+        ui.label(egui::RichText::new("💡 Transform değişiklikleri tüm seçili objelere bağıl (relative) olarak uygulanır.").weak());
         if ui
             .button(egui::RichText::new("🗑️ Seçili Objeleri Sil").color(egui::Color32::RED))
             .clicked()
@@ -31,65 +37,63 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
                 state.despawn_requests.push(entity);
             }
         }
-        return;
-    }
-
-    // Tekli seçim durumu
-    if let Some(&entity_id) = state.selection.entities.iter().next() {
-        if !world.is_alive(entity_id) {
-            return;
-        }
-        ui.heading(format!("🔧 Inspector [{}]", entity_id.id()));
-
+    } else {
+        ui.heading(format!("🔧 Inspector [{}]", primary_entity.id()));
         if ui
             .button(egui::RichText::new("🗑️ Seçili Objeyi Sil").color(egui::Color32::RED))
             .clicked()
         {
-            state.despawn_requests.push(entity_id);
+            state.despawn_requests.push(primary_entity);
         }
+    }
+
+    ui.separator();
+
+    let entity_id = primary_entity;
+
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        // === ENTITY NAME ===
+        if sel_len == 1 {
+            draw_name_section(ui, world, entity_id, state);
+        }
+
+        // === TRANSFORM ===
+        draw_transform_section(ui, world, entity_id, state);
+
+        // === VELOCITY ===
+        draw_velocity_section(ui, world, entity_id, state);
+
+        // === RIGIDBODY ===
+        draw_rigidbody_section(ui, world, entity_id, state);
+
+        // === COLLIDER ===
+        draw_collider_section(ui, world, entity_id, state);
+
+        // === JOINTS (FİZİKSEL BAĞLANTILAR) ===
+        draw_joint_section(ui, world, entity_id, state);
+
+        // === CAMERA ===
+        draw_camera_section(ui, world, entity_id, state);
+
+        // === POINT LIGHT ===
+        draw_point_light_section(ui, world, entity_id, state);
+
+        // === MATERIAL ===
+        draw_material_section(ui, world, entity_id, state);
+
+        // === PARTICLE EMITTER ===
+        draw_particle_emitter_section(ui, world, entity_id, state);
+
+        draw_terrain_section(ui, world, entity_id, state);
+        draw_script_section(ui, world, entity_id, state);
+        draw_fluid_section(ui, world, entity_id, state);
+        draw_ai_section(ui, world, entity_id, state);
+        draw_reflection_section(ui, world, entity_id, state);
 
         ui.separator();
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            // === ENTITY NAME ===
-            draw_name_section(ui, world, entity_id, state);
-
-            // === TRANSFORM ===
-            draw_transform_section(ui, world, entity_id, state);
-
-            // === VELOCITY ===
-            draw_velocity_section(ui, world, entity_id, state);
-
-            // === RIGIDBODY ===
-            draw_rigidbody_section(ui, world, entity_id, state);
-
-            // === COLLIDER ===
-            draw_collider_section(ui, world, entity_id, state);
-
-            // === JOINTS (FİZİKSEL BAĞLANTILAR) ===
-            draw_joint_section(ui, world, entity_id, state);
-
-            // === CAMERA ===
-            draw_camera_section(ui, world, entity_id, state);
-
-            // === POINT LIGHT ===
-            draw_point_light_section(ui, world, entity_id, state);
-
-            // === MATERIAL ===
-            draw_material_section(ui, world, entity_id, state);
-
-            // === PARTICLE EMITTER ===
-            draw_particle_emitter_section(ui, world, entity_id, state);
-
-            draw_terrain_section(ui, world, entity_id, state);
-            draw_script_section(ui, world, entity_id, state);
-            draw_fluid_section(ui, world, entity_id, state);
-            draw_ai_section(ui, world, entity_id, state);
-            draw_reflection_section(ui, world, entity_id, state);
-
-            ui.separator();
-
-            // === ADD COMPONENT BUTONU ===
+        // === ADD COMPONENT BUTONU ===
+        if sel_len == 1 {
             ui.horizontal(|ui| {
                 if ui.button("➕ Bileşen Ekle").clicked() {
                     state.add_component_open = !state.add_component_open;
@@ -99,14 +103,8 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
             if state.add_component_open {
                 draw_add_component_menu(ui, world, entity_id, state);
             }
-        });
-    } else {
-        ui.heading("🔧 Inspector");
-        ui.separator();
-        ui.label("Bir entity seçin.");
-        ui.label("");
-        ui.label(egui::RichText::new("💡 İpucu: Sol panel'den\nbir entity'ye tıklayın.").weak());
-    }
+        }
+    });
 }
 
 fn draw_name_section(
@@ -131,63 +129,82 @@ fn draw_transform_section(
     ui: &mut egui::Ui,
     world: &World,
     entity_id: gizmo_core::entity::Entity,
-    _state: &mut EditorState,
+    state: &mut EditorState,
 ) {
     let mut transforms = world.borrow_mut::<Transform>();
-    {
-        if let Some(t) = transforms.get_mut(entity_id.id()) {
-            egui::CollapsingHeader::new("📐 Transform")
-                .default_open(true)
-                .show(ui, |ui| {
-                    ui.label("Pozisyon:");
-                    ui.horizontal(|ui| {
-                        ui.label("X");
-                        ui.add(egui::DragValue::new(&mut t.position.x).speed(0.1));
-                        ui.label("Y");
-                        ui.add(egui::DragValue::new(&mut t.position.y).speed(0.1));
-                        ui.label("Z");
-                        ui.add(egui::DragValue::new(&mut t.position.z).speed(0.1));
-                    });
+    
+    // Eski durumu yedekleyelim (multi-select delta hesaplaması için)
+    let old_t = transforms.get(entity_id.id()).copied();
 
-                    // Rotasyonu Euler açılarına çevir (daha kullanıcı dostu)
-                    ui.label("Rotasyon (Euler°):");
-                    let (mut rx, mut ry, mut rz) = quat_to_euler_deg(t.rotation);
-                    let old = (rx, ry, rz);
-                    ui.horizontal(|ui| {
-                        ui.label("X");
-                        ui.add(egui::DragValue::new(&mut rx).speed(1.0).suffix("°"));
-                        ui.label("Y");
-                        ui.add(egui::DragValue::new(&mut ry).speed(1.0).suffix("°"));
-                        ui.label("Z");
-                        ui.add(egui::DragValue::new(&mut rz).speed(1.0).suffix("°"));
-                    });
-                    if (rx, ry, rz) != old {
-                        t.rotation = euler_deg_to_quat(rx, ry, rz);
-                    }
-
-                    ui.label("Ölçek:");
-                    ui.horizontal(|ui| {
-                        ui.label("X");
-                        ui.add(
-                            egui::DragValue::new(&mut t.scale.x)
-                                .speed(0.05)
-                                .range(0.01..=100.0),
-                        );
-                        ui.label("Y");
-                        ui.add(
-                            egui::DragValue::new(&mut t.scale.y)
-                                .speed(0.05)
-                                .range(0.01..=100.0),
-                        );
-                        ui.label("Z");
-                        ui.add(
-                            egui::DragValue::new(&mut t.scale.z)
-                                .speed(0.05)
-                                .range(0.01..=100.0),
-                        );
-                    });
+    let mut changed = false;
+    if let Some(t) = transforms.get_mut(entity_id.id()) {
+        egui::CollapsingHeader::new("📐 Transform")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.label("Pozisyon:");
+                ui.horizontal(|ui| {
+                    ui.label("X");
+                    if ui.add(egui::DragValue::new(&mut t.position.x).speed(0.1)).changed() { changed = true; }
+                    ui.label("Y");
+                    if ui.add(egui::DragValue::new(&mut t.position.y).speed(0.1)).changed() { changed = true; }
+                    ui.label("Z");
+                    if ui.add(egui::DragValue::new(&mut t.position.z).speed(0.1)).changed() { changed = true; }
                 });
-            ui.separator();
+
+                ui.label("Rotasyon (Euler°):");
+                let (mut rx, mut ry, mut rz) = quat_to_euler_deg(t.rotation);
+                let old_euler = (rx, ry, rz);
+                ui.horizontal(|ui| {
+                    ui.label("X");
+                    if ui.add(egui::DragValue::new(&mut rx).speed(1.0).suffix("°")).changed() { changed = true; }
+                    ui.label("Y");
+                    if ui.add(egui::DragValue::new(&mut ry).speed(1.0).suffix("°")).changed() { changed = true; }
+                    ui.label("Z");
+                    if ui.add(egui::DragValue::new(&mut rz).speed(1.0).suffix("°")).changed() { changed = true; }
+                });
+                if (rx, ry, rz) != old_euler {
+                    t.rotation = euler_deg_to_quat(rx, ry, rz);
+                }
+
+                ui.label("Ölçek:");
+                ui.horizontal(|ui| {
+                    ui.label("X");
+                    if ui.add(egui::DragValue::new(&mut t.scale.x).speed(0.05).range(0.01..=100.0)).changed() { changed = true; }
+                    ui.label("Y");
+                    if ui.add(egui::DragValue::new(&mut t.scale.y).speed(0.05).range(0.01..=100.0)).changed() { changed = true; }
+                    ui.label("Z");
+                    if ui.add(egui::DragValue::new(&mut t.scale.z).speed(0.05).range(0.01..=100.0)).changed() { changed = true; }
+                });
+            });
+        
+        if changed {
+            t.update_local_matrix();
+        }
+        ui.separator();
+    }
+
+    // Çoklu seçim (Multi-Object Editing) Delta Uygulaması
+    if changed && state.selection.entities.len() > 1 {
+        if let Some(old) = old_t {
+            if let Some(new_t) = transforms.get(entity_id.id()).copied() {
+                let delta_pos = new_t.position - old.position;
+                let delta_rot = new_t.rotation * old.rotation.inverse();
+                let delta_scale = gizmo_math::Vec3::new(
+                    if old.scale.x != 0.0 { new_t.scale.x / old.scale.x } else { 1.0 },
+                    if old.scale.y != 0.0 { new_t.scale.y / old.scale.y } else { 1.0 },
+                    if old.scale.z != 0.0 { new_t.scale.z / old.scale.z } else { 1.0 },
+                );
+
+                let others: Vec<_> = state.selection.entities.iter().copied().filter(|&e| e != entity_id).collect();
+                for e in others {
+                    if let Some(other_t) = transforms.get_mut(e.id()) {
+                        other_t.position += delta_pos;
+                        other_t.rotation = delta_rot * other_t.rotation;
+                        other_t.scale *= delta_scale;
+                        other_t.update_local_matrix();
+                    }
+                }
+            }
         }
     }
 }
