@@ -204,6 +204,7 @@ pub struct EditorState {
     pub show_inspector: bool,
     pub show_toolbar: bool,
     pub settings_open: bool,
+    pub show_colliders: bool,
 
     // Diğer global UI state
     pub hierarchy_filter: String,
@@ -312,6 +313,7 @@ impl EditorState {
             show_inspector: true,
             show_toolbar: true,
             settings_open: false,
+            show_colliders: false,
 
             hierarchy_filter: String::new(),
             hide_editor_entities: true,

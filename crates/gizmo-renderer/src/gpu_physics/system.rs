@@ -603,6 +603,17 @@ impl GpuPhysicsSystem {
         self.debug_enabled = !self.debug_enabled;
     }
 
+    /// Debug flag'leri günceller (show_wireframes)
+    pub fn set_debug_flags(&self, queue: &wgpu::Queue, show_wireframes: u32) {
+        let dp = DebugParams {
+            num_boxes: self.max_boxes,
+            num_joints: self.joint_count,
+            show_wireframes,
+            _pad: 0,
+        };
+        queue.write_buffer(&self.debug_params_buffer, 0, bytemuck::cast_slice(&[dp]));
+    }
+
     pub fn compute_pass(&self, encoder: &mut wgpu::CommandEncoder) {
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Physics Compute Pass"),

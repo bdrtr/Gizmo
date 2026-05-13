@@ -112,6 +112,11 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
         }
     }
 
+    let show_colliders = world.get_resource::<gizmo::editor::EditorState>().map(|ed| ed.show_colliders).unwrap_or(false);
+    if show_colliders {
+        gizmo::systems::physics::physics_debug_system(world);
+    }
+
     // Kamera sistemine editor state'e geri dönmüş delta'yı gönder
     crate::systems::camera::handle_camera(
         world,

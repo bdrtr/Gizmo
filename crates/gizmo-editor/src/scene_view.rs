@@ -302,8 +302,20 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
 
                 use transform_gizmo_egui::GizmoExt;
                 if state.gizmo_mode != crate::editor_state::GizmoMode::Select && !gizmo_transforms.is_empty() {
+                    let is_primary_down = ui.input(|i| i.pointer.primary_down());
+                    
                     if let Some((_result, new_transforms)) = state.transform_gizmo.interact(ui, &gizmo_transforms) {
                         gizmo_interacted = true;
+                        
+                        // Undo (Geri Al) için harekete başlarken ilk değerleri sakla
+                        if state.scene.gizmo_original_transforms.is_empty() {
+                            for &id in &selected_ids {
+                                if let Some(&t) = transforms.get(id) {
+                                    state.scene.gizmo_original_transforms.insert(gizmo_core::entity::Entity::new(id, 0), t);
+                                }
+                            }
+                        }
+
                         for (i, new_t) in new_transforms.iter().enumerate() {
                             if let Some(&entity_id) = selected_ids.get(i) {
                                 if let Some(t) = transforms.get_mut(entity_id) {
@@ -317,6 +329,21 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                                     t.update_local_matrix();
                                 }
                             }
+                        }
+                    } else if !is_primary_down && !state.scene.gizmo_original_transforms.is_empty() {
+                        // Fare bırakıldı (Sürükleme bitti), tüm değişiklikleri History'ye bas
+                        let mut changes = Vec::new();
+                        for (entity, old_t) in state.scene.gizmo_original_transforms.drain() {
+                            if let Some(&new_t) = transforms.get(entity.id()) {
+                                if old_t != new_t {
+                                    changes.push((entity, old_t, new_t));
+                                }
+                            }
+                        }
+                        if !changes.is_empty() {
+                            let count = changes.len();
+                            state.history.push(crate::history::EditorAction::TransformsChanged { changes });
+                            state.status_message = format!("💾 {} obje değiştirildi (Geri Almak için Ctrl+Z)", count);
                         }
                     }
                 }

@@ -190,6 +190,10 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                     });
 
                 ui.separator();
+                
+                ui.toggle_value(&mut state.show_colliders, "🟩 Çarpışma (Colliders)");
+
+                ui.separator();
 
                 // === GIZMO UZAYI (LOCAL/GLOBAL) ===
                 let space_text = if state.gizmo_local_space {

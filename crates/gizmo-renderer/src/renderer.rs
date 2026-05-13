@@ -358,13 +358,15 @@ impl Renderer {
         #[cfg(not(target_arch = "wasm32"))]
         let gpu_physics = {
             let max_physics_spheres: u32 = 50_000;
-            Some(crate::gpu_physics::GpuPhysicsSystem::new(
+            let mut physics = crate::gpu_physics::GpuPhysicsSystem::new(
                 &device,
                 max_physics_spheres,
                 &scene.global_bind_group_layout,
                 wgpu::TextureFormat::Rgba16Float,
                 wgpu::TextureFormat::Depth32Float,
-            ))
+            );
+            physics.enable_debug(&device, 0);
+            Some(physics)
         };
         #[cfg(target_arch = "wasm32")]
         let gpu_physics: Option<crate::gpu_physics::GpuPhysicsSystem> = None;
