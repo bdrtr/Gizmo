@@ -190,6 +190,13 @@ pub fn ui_settings_window(ui: &mut egui::Ui, state: &mut EditorState) {
                 ui.add(egui::Slider::new(&mut state.exposure, 0.1..=5.0).text("Pozlama (Exposure)"));
                 ui.add(egui::Slider::new(&mut state.vignette, 0.0..=1.0).text("Vignette (Kenar Karartması)"));
                 ui.add(egui::Slider::new(&mut state.chromatic_aberration, 0.0..=0.05).text("Chromatic Aberration"));
+                ui.add(egui::Slider::new(&mut state.film_grain, 0.0..=1.0).text("Film Grain"));
+
+                ui.separator();
+                ui.heading("Kamera Odak (Depth of Field)");
+                ui.add(egui::Slider::new(&mut state.dof_focus_dist, 0.1..=100.0).text("Odak Mesafesi"));
+                ui.add(egui::Slider::new(&mut state.dof_focus_range, 0.1..=50.0).text("Odak Alanı (Range)"));
+                ui.add(egui::Slider::new(&mut state.dof_blur_size, 0.0..=10.0).text("Bulanıklık Miktarı"));
             });
 
         ui.separator();

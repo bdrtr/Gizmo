@@ -196,6 +196,10 @@ pub struct EditorState {
     pub exposure: f32,
     pub vignette: f32,
     pub chromatic_aberration: f32,
+    pub dof_focus_dist: f32,
+    pub dof_focus_range: f32,
+    pub dof_blur_size: f32,
+    pub film_grain: f32,
 
     pub history: crate::history::History,
 
@@ -306,6 +310,10 @@ impl EditorState {
             exposure: 1.0,
             vignette: 0.2,
             chromatic_aberration: 0.005,
+            dof_focus_dist: 10.0,
+            dof_focus_range: 20.0,
+            dof_blur_size: 2.0,
+            film_grain: 0.0,
 
             history: crate::history::History::new(prefs.max_history),
 
