@@ -17,10 +17,12 @@ pub fn handle_camera(
     let mut camera_speed = 8.0;
     let mut camera_focus_distance = 10.0;
     let mut is_playing = false;
+    let mut focus_target = None;
     if let Some(es) = world.get_resource::<EditorState>() {
         camera_speed = es.prefs.camera_speed;
         camera_focus_distance = es.prefs.camera_focus_distance;
         is_playing = es.is_playing();
+        focus_target = es.camera.focus_target;
     }
 
     // Editor Camera WASD Controller
@@ -78,7 +80,26 @@ pub fn handle_camera(
                 }
             }
 
-            t.position += move_dir.normalize_or_zero() * (speed * dt);
+            // Eğer kullanıcı manuel olarak kamerayı hareket ettirirse, odaklanmayı iptal et
+            if move_dir.length_squared() > 0.0 || look_delta.is_some() || pan_delta.is_some() || orbit_delta.is_some() || scroll_delta != 0.0 {
+                focus_target = None;
+                if let Some(mut es) = world.get_resource_mut::<EditorState>() {
+                    es.camera.focus_target = None;
+                }
+            }
+
+            if let Some(target) = focus_target {
+                let desired_pos = target - forward * camera_focus_distance;
+                t.position = t.position.lerp(desired_pos, 10.0 * dt);
+                if t.position.distance(desired_pos) < 0.05 {
+                    t.position = desired_pos;
+                    if let Some(mut es) = world.get_resource_mut::<EditorState>() {
+                        es.camera.focus_target = None;
+                    }
+                }
+            } else {
+                t.position += move_dir.normalize_or_zero() * (speed * dt);
+            }
 
             // 3. Orta Tık Pan (Kaydırma)
             if let Some(pan) = pan_delta {

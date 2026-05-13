@@ -58,6 +58,7 @@ pub struct CameraState {
     pub scroll_delta: Option<f32>,
     pub view: Option<gizmo_math::Mat4>,
     pub proj: Option<gizmo_math::Mat4>,
+    pub focus_target: Option<gizmo_math::Vec3>,
     pub bookmarks: [Option<(gizmo_math::Vec3, f32, f32)>; 10],
 }
 
