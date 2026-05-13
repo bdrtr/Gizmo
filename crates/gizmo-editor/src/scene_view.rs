@@ -247,7 +247,34 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                         transform_gizmo_egui::math::Pos2::new(rect.min.x, rect.min.y),
                         transform_gizmo_egui::math::Pos2::new(rect.max.x, rect.max.y),
                     ),
-                    modes: GizmoMode::all(), // Simply allow all modes
+                    modes: match state.gizmo_mode {
+                        crate::editor_state::GizmoMode::Translate => {
+                            let mut m = transform_gizmo_egui::EnumSet::empty();
+                            m.insert(transform_gizmo_egui::GizmoMode::TranslateX);
+                            m.insert(transform_gizmo_egui::GizmoMode::TranslateY);
+                            m.insert(transform_gizmo_egui::GizmoMode::TranslateZ);
+                            m.insert(transform_gizmo_egui::GizmoMode::TranslateXY);
+                            m.insert(transform_gizmo_egui::GizmoMode::TranslateYZ);
+                            m.insert(transform_gizmo_egui::GizmoMode::TranslateXZ);
+                            m
+                        },
+                        crate::editor_state::GizmoMode::Rotate => {
+                            let mut m = transform_gizmo_egui::EnumSet::empty();
+                            m.insert(transform_gizmo_egui::GizmoMode::RotateX);
+                            m.insert(transform_gizmo_egui::GizmoMode::RotateY);
+                            m.insert(transform_gizmo_egui::GizmoMode::RotateZ);
+                            m
+                        },
+                        crate::editor_state::GizmoMode::Scale => {
+                            let mut m = transform_gizmo_egui::EnumSet::empty();
+                            m.insert(transform_gizmo_egui::GizmoMode::ScaleX);
+                            m.insert(transform_gizmo_egui::GizmoMode::ScaleY);
+                            m.insert(transform_gizmo_egui::GizmoMode::ScaleZ);
+                            m.insert(transform_gizmo_egui::GizmoMode::ScaleUniform);
+                            m
+                        },
+                        crate::editor_state::GizmoMode::Select => transform_gizmo_egui::GizmoMode::all(),
+                    },
                     orientation: gizmo_orientation,
                     snap_distance,
                     snap_angle,
@@ -267,17 +294,19 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                 let gizmo_transform = GizmoTransform::from_scale_rotation_translation(scale, rotation, translation);
 
                 use transform_gizmo_egui::GizmoExt;
-                if let Some((_result, new_transforms)) = state.transform_gizmo.interact(ui, &[gizmo_transform]) {
-                    gizmo_interacted = true;
-                    if let Some(new_t) = new_transforms.first() {
-                        let nt: transform_gizmo_egui::mint::Vector3<f64> = new_t.translation.into();
-                        let nr: transform_gizmo_egui::mint::Quaternion<f64> = new_t.rotation.into();
-                        let ns: transform_gizmo_egui::mint::Vector3<f64> = new_t.scale.into();
-                        
-                        primary_t.position = gizmo_math::Vec3::new(nt.x as f32, nt.y as f32, nt.z as f32);
-                        primary_t.rotation = gizmo_math::Quat::from_xyzw(nr.v.x as f32, nr.v.y as f32, nr.v.z as f32, nr.s as f32);
-                        primary_t.scale = gizmo_math::Vec3::new(ns.x as f32, ns.y as f32, ns.z as f32);
-                        primary_t.update_local_matrix();
+                if state.gizmo_mode != crate::editor_state::GizmoMode::Select {
+                    if let Some((_result, new_transforms)) = state.transform_gizmo.interact(ui, &[gizmo_transform]) {
+                        gizmo_interacted = true;
+                        if let Some(new_t) = new_transforms.first() {
+                            let nt: transform_gizmo_egui::mint::Vector3<f64> = new_t.translation.into();
+                            let nr: transform_gizmo_egui::mint::Quaternion<f64> = new_t.rotation.into();
+                            let ns: transform_gizmo_egui::mint::Vector3<f64> = new_t.scale.into();
+                            
+                            primary_t.position = gizmo_math::Vec3::new(nt.x as f32, nt.y as f32, nt.z as f32);
+                            primary_t.rotation = gizmo_math::Quat::from_xyzw(nr.v.x as f32, nr.v.y as f32, nr.v.z as f32, nr.s as f32);
+                            primary_t.scale = gizmo_math::Vec3::new(ns.x as f32, ns.y as f32, ns.z as f32);
+                            primary_t.update_local_matrix();
+                        }
                     }
                 }
             }
