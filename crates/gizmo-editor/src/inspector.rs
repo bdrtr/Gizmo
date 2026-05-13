@@ -951,7 +951,7 @@ fn draw_joint_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut physics_world_res = world.try_get_resource_mut::<gizmo_physics::world::PhysicsWorld>();
+    let physics_world_res = world.try_get_resource_mut::<gizmo_physics::world::PhysicsWorld>();
     if let Ok(mut physics_world) = physics_world_res {
         let mut has_joints = false;
         for joint in &physics_world.joints {

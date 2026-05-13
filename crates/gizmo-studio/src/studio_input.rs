@@ -129,7 +129,7 @@ fn perform_raycast(
             }
 
             // Editör donanımlarını (Grid, Işık vb) seçilebilir objelerden çıkar
-            let mut name_str = String::new();
+            let mut _name_str = String::new();
             if let Some(name) = world.borrow::<gizmo::core::component::EntityName>().get(id) {
                 if name.0 == "Editor Grid" 
                     || name.0 == "Editor Guidelines" 
@@ -138,7 +138,7 @@ fn perform_raycast(
                 {
                     continue;
                 }
-                name_str = name.0.clone();
+                _name_str = name.0.clone();
             }
 
             // Objenin collider'ı varsa onun boyutunu al, yoksa standart 1x1x1 (çarpı scale) kutu farz et.
