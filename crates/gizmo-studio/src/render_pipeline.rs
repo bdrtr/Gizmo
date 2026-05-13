@@ -90,9 +90,12 @@ pub fn execute_render_pipeline(
         _padding: [0.0; 3],
     };
 
+    let mut show_colliders = false;
+
     if let Some(ed_state) = world.get_resource::<gizmo::editor::EditorState>() {
         ed_shading_mode = ed_state.shading_mode;
         ed_fxaa_enabled = ed_state.fxaa_enabled;
+        show_colliders = ed_state.show_colliders;
         post_params.bloom_intensity = ed_state.bloom_intensity;
         post_params.bloom_threshold = ed_state.bloom_threshold;
         post_params.exposure = ed_state.exposure;
@@ -563,7 +566,11 @@ pub fn execute_render_pipeline(
         }
 
         if let Some(physics) = &renderer.gpu_physics {
+            physics.set_debug_flags(&renderer.queue, if show_colliders { 1 } else { 0 });
             physics.compute_pass(encoder);
+            if show_colliders {
+                physics.debug_compute_pass(encoder);
+            }
         }
 
         // --- 1. CSM GÖLGE PASS ---
@@ -773,6 +780,12 @@ pub fn execute_render_pipeline(
                         &renderer.scene.global_bind_group,
                         gizmos.depth_test,
                     );
+                }
+            }
+
+            if show_colliders {
+                if let Some(physics) = &renderer.gpu_physics {
+                    physics.debug_render_pass(&mut render_pass, &renderer.scene.global_bind_group);
                 }
             }
         }
