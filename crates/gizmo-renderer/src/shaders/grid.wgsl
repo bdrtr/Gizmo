@@ -99,14 +99,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let dist_x = abs(coord.x) / derivative.x;
     let dist_y = abs(coord.y) / derivative.y; // coord.y is actually world Z
     
-    var color = vec3<f32>(0.5, 0.5, 0.5); // base color
+    var color = vec3<f32>(0.35, 0.35, 0.35); // Base grid color (göz yormayan gri)
     let axis_width = 1.5;
     
-    // Axes: X (red), Z (blue)
+    // Axes: X (red), Z (green like Blender's Y)
     if dist_y < axis_width {
-        color = vec3<f32>(1.0, 0.2, 0.2);
+        color = vec3<f32>(0.85, 0.25, 0.35); // X Axis (Red)
     } else if dist_x < axis_width {
-        color = vec3<f32>(0.2, 0.2, 1.0);
+        color = vec3<f32>(0.45, 0.75, 0.25); // Z Axis (Green)
     }
     
     // Major lines every 10 units
@@ -117,10 +117,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let is_major_line = 1.0 - min(major_line_val, 1.0);
     
     if (dist_y >= axis_width && dist_x >= axis_width && is_major_line > 0.0) {
-        color = vec3<f32>(0.8, 0.8, 0.8);
+        color = vec3<f32>(0.42, 0.42, 0.42); // Slightly lighter for major lines
     }
 
-    let alpha_multiplier = max(is_line * 0.3, is_major_line * 0.8);
+    // Yumuşak alfa, gözü yormaması için Blender gibi hafif şeffaf
+    let alpha_multiplier = max(is_line * 0.15, is_major_line * 0.4);
 
     // Fade out distance
     let dist_to_camera = distance(scene.camera_pos.xz, coord);
@@ -133,3 +134,4 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     
     return vec4<f32>(color, final_alpha * in.inst_albedo.a);
 }
+
