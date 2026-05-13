@@ -45,6 +45,57 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
     gizmo::core::system::System::run(&mut transform_sync, world, dt);
     gizmo::core::system::System::run(&mut transform_propagate, world, dt);
 
+    // OBB Highlight for Selected Entities
+    if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
+        let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
+        let global_transforms = world.borrow::<gizmo::physics::components::GlobalTransform>();
+        
+        let editor_state = world.get_resource::<gizmo::editor::EditorState>().unwrap();
+        let selected_entities = editor_state.selection.entities.iter().copied().collect::<Vec<gizmo::core::entity::Entity>>();
+        let color = [1.0, 0.5, 0.0, 1.0]; // Blender Orange
+
+        for entity in selected_entities {
+            if let (Some(mesh), Some(gt)) = (meshes.get(entity.id()), global_transforms.get(entity.id())) {
+                let min = mesh.bounds.min;
+                let max = mesh.bounds.max;
+                let c = [
+                    gizmo::math::Vec3::new(min.x, min.y, min.z),
+                    gizmo::math::Vec3::new(max.x, min.y, min.z),
+                    gizmo::math::Vec3::new(max.x, max.y, min.z),
+                    gizmo::math::Vec3::new(min.x, max.y, min.z),
+                    gizmo::math::Vec3::new(min.x, min.y, max.z),
+                    gizmo::math::Vec3::new(max.x, min.y, max.z),
+                    gizmo::math::Vec3::new(max.x, max.y, max.z),
+                    gizmo::math::Vec3::new(min.x, max.y, max.z),
+                ];
+                
+                // Transform to global space
+                let mut tc = [gizmo::math::Vec3::ZERO; 8];
+                for i in 0..8 {
+                    let v4 = gt.matrix * gizmo::math::Vec4::new(c[i].x, c[i].y, c[i].z, 1.0);
+                    tc[i] = gizmo::math::Vec3::new(v4.x, v4.y, v4.z);
+                }
+
+                // Draw 12 lines
+                // Bottom face
+                gizmos.draw_line(tc[0], tc[1], color);
+                gizmos.draw_line(tc[1], tc[2], color);
+                gizmos.draw_line(tc[2], tc[3], color);
+                gizmos.draw_line(tc[3], tc[0], color);
+                // Top face
+                gizmos.draw_line(tc[4], tc[5], color);
+                gizmos.draw_line(tc[5], tc[6], color);
+                gizmos.draw_line(tc[6], tc[7], color);
+                gizmos.draw_line(tc[7], tc[4], color);
+                // Connecting edges
+                gizmos.draw_line(tc[0], tc[4], color);
+                gizmos.draw_line(tc[1], tc[5], color);
+                gizmos.draw_line(tc[2], tc[6], color);
+                gizmos.draw_line(tc[3], tc[7], color);
+            }
+        }
+    }
+
     // Kamera sistemine editor state'e geri dönmüş delta'yı gönder
     crate::systems::camera::handle_camera(
         world,
