@@ -145,16 +145,28 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                 // === GIZMO MODE ===
                 ui.label("Araç:");
 
+                // Q-W-E-R Kısayolları (Sadece yazı yazılmıyorken çalışır)
+                if !ui.ctx().wants_keyboard_input() {
+                    if ui.input(|i| i.key_pressed(egui::Key::Q)) { state.gizmo_mode = GizmoMode::Select; }
+                    if ui.input(|i| i.key_pressed(egui::Key::W)) { state.gizmo_mode = GizmoMode::Translate; }
+                    if ui.input(|i| i.key_pressed(egui::Key::E)) { state.gizmo_mode = GizmoMode::Rotate; }
+                    if ui.input(|i| i.key_pressed(egui::Key::R)) { state.gizmo_mode = GizmoMode::Scale; }
+                }
+
+                let q_selected = state.gizmo_mode == GizmoMode::Select;
+                if ui.selectable_label(q_selected, "🖐 Seç (Q)").clicked() {
+                    state.gizmo_mode = GizmoMode::Select;
+                }
                 let t_selected = state.gizmo_mode == GizmoMode::Translate;
-                if ui.selectable_label(t_selected, "🔀 Taşı").clicked() {
+                if ui.selectable_label(t_selected, "🔀 Taşı (W)").clicked() {
                     state.gizmo_mode = GizmoMode::Translate;
                 }
                 let r_selected = state.gizmo_mode == GizmoMode::Rotate;
-                if ui.selectable_label(r_selected, "🔄 Döndür").clicked() {
+                if ui.selectable_label(r_selected, "🔄 Döndür (E)").clicked() {
                     state.gizmo_mode = GizmoMode::Rotate;
                 }
                 let s_selected = state.gizmo_mode == GizmoMode::Scale;
-                if ui.selectable_label(s_selected, "📏 Ölçekle").clicked() {
+                if ui.selectable_label(s_selected, "📏 Ölçekle (R)").clicked() {
                     state.gizmo_mode = GizmoMode::Scale;
                 }
 

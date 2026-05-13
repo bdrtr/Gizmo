@@ -19,6 +19,7 @@ pub enum EditorTab {
 /// Gizmo aracı modu
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum GizmoMode {
+    Select,
     Translate,
     Rotate,
     Scale,
