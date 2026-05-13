@@ -83,7 +83,20 @@ pub fn handle_scene_operations(
                     editor_state.generate_terrain_requests.push(ent_id);
                 }
 
+                "Hitbox" => world.add_component(ent, gizmo::physics::components::Hitbox::default()),
+                "Hurtbox" => world.add_component(ent, gizmo::physics::components::Hurtbox::default()),
+
                 _ => editor_state.log_warning(&format!("Bilinmeyen component: {}", comp_name)),
+            }
+        }
+    }
+
+    if let Some((ent_id, comp_name)) = editor_state.remove_component_request.take() {
+        if let Some(ent) = world.get_entity(ent_id.id()) {
+            match comp_name.as_str() {
+                "Hitbox" => { world.remove_component::<gizmo::physics::components::Hitbox>(ent); }
+                "Hurtbox" => { world.remove_component::<gizmo::physics::components::Hurtbox>(ent); }
+                _ => editor_state.log_warning(&format!("Component turu silinemiyor: {}", comp_name)),
             }
         }
     }

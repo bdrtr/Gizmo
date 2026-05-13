@@ -83,6 +83,8 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 
         // === PARTICLE EMITTER ===
         draw_particle_emitter_section(ui, world, entity_id, state);
+        draw_hitbox_section(ui, world, entity_id, state);
+        draw_hurtbox_section(ui, world, entity_id, state);
 
         draw_terrain_section(ui, world, entity_id, state);
         draw_script_section(ui, world, entity_id, state);
@@ -1202,6 +1204,81 @@ fn draw_joint_section(
                         };
                         physics_world.joints.push(new_joint);
                     }
+                }
+            });
+    }
+}
+
+fn draw_hitbox_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    _state: &mut EditorState,
+) {
+    let mut hitboxes = world.borrow_mut::<gizmo_physics::components::Hitbox>();
+    if let Some(hitbox) = hitboxes.get_mut(entity_id.id()) {
+        egui::CollapsingHeader::new("🥊 Hitbox")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.checkbox(&mut hitbox.active, "Aktif (Vurabilir)");
+                ui.horizontal(|ui| {
+                    ui.label("Damage:");
+                    ui.add(egui::DragValue::new(&mut hitbox.damage).speed(1.0));
+                });
+                
+                ui.label("Offset:");
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut hitbox.offset.x).speed(0.1).prefix("X: "));
+                    ui.add(egui::DragValue::new(&mut hitbox.offset.y).speed(0.1).prefix("Y: "));
+                    ui.add(egui::DragValue::new(&mut hitbox.offset.z).speed(0.1).prefix("Z: "));
+                });
+                
+                ui.label("Half Extents (Boyut):");
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut hitbox.half_extents.x).speed(0.1).prefix("X: "));
+                    ui.add(egui::DragValue::new(&mut hitbox.half_extents.y).speed(0.1).prefix("Y: "));
+                    ui.add(egui::DragValue::new(&mut hitbox.half_extents.z).speed(0.1).prefix("Z: "));
+                });
+                
+                if ui.button("🗑 Bileşeni Sil").clicked() {
+                    _state.remove_component_request = Some((entity_id, "Hitbox".to_string()));
+                }
+            });
+    }
+}
+
+fn draw_hurtbox_section(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity_id: gizmo_core::entity::Entity,
+    _state: &mut EditorState,
+) {
+    let mut hurtboxes = world.borrow_mut::<gizmo_physics::components::Hurtbox>();
+    if let Some(hurtbox) = hurtboxes.get_mut(entity_id.id()) {
+        egui::CollapsingHeader::new("🛡 Hurtbox")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Damage Multiplier:");
+                    ui.add(egui::DragValue::new(&mut hurtbox.damage_multiplier).speed(0.1));
+                });
+                
+                ui.label("Offset:");
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut hurtbox.offset.x).speed(0.1).prefix("X: "));
+                    ui.add(egui::DragValue::new(&mut hurtbox.offset.y).speed(0.1).prefix("Y: "));
+                    ui.add(egui::DragValue::new(&mut hurtbox.offset.z).speed(0.1).prefix("Z: "));
+                });
+                
+                ui.label("Half Extents (Boyut):");
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut hurtbox.half_extents.x).speed(0.1).prefix("X: "));
+                    ui.add(egui::DragValue::new(&mut hurtbox.half_extents.y).speed(0.1).prefix("Y: "));
+                    ui.add(egui::DragValue::new(&mut hurtbox.half_extents.z).speed(0.1).prefix("Z: "));
+                });
+                
+                if ui.button("🗑 Bileşeni Sil").clicked() {
+                    _state.remove_component_request = Some((entity_id, "Hurtbox".to_string()));
                 }
             });
     }

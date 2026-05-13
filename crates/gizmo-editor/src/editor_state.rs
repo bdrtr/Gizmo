@@ -251,6 +251,7 @@ pub struct EditorState {
     pub reparent_request: Option<(gizmo_core::entity::Entity, gizmo_core::entity::Entity)>,
     pub unparent_request: Option<gizmo_core::entity::Entity>,
     pub add_component_request: Option<(gizmo_core::entity::Entity, String)>,
+    pub remove_component_request: Option<(gizmo_core::entity::Entity, String)>,
 
     pub scene_view_visible: bool,
     pub game_view_visible: bool,
@@ -357,6 +358,7 @@ impl EditorState {
             reparent_request: None,
             unparent_request: None,
             add_component_request: None,
+            remove_component_request: None,
 
             scene_view_visible: true,
             game_view_visible: false,
