@@ -67,6 +67,21 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
 
 /// Tüm editör panellerini tek çağrıyla çizer
 pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) {
+    // ==== Global Klavye Kısayolları (Sadece text alanları odakta değilken) ====
+    if !ctx.wants_keyboard_input() {
+        ctx.input(|i| {
+            if i.key_pressed(egui::Key::Q) { state.gizmo_mode = GizmoMode::Select; }
+            if i.key_pressed(egui::Key::W) { state.gizmo_mode = GizmoMode::Translate; }
+            if i.key_pressed(egui::Key::E) { state.gizmo_mode = GizmoMode::Rotate; }
+            if i.key_pressed(egui::Key::R) { state.gizmo_mode = GizmoMode::Scale; }
+            if i.key_pressed(egui::Key::Delete) {
+                for &entity in state.selection.entities.iter() {
+                    state.despawn_requests.push(entity);
+                }
+            }
+        });
+    }
+
     // ==== Asenkron İletişim (Dialog vb.) Olay Döngüsü ====
     let msg = if let Some(rx) = &state.pending_dialog_rx {
         match rx.lock().unwrap().try_recv() {
