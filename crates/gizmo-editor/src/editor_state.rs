@@ -531,3 +531,18 @@ fn create_default_dock_state() -> egui_dock::DockState<EditorTab> {
 
     state
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_editor_state_post_process_defaults() {
+        let state = EditorState::new();
+        assert_eq!(state.bloom_intensity, 0.8);
+        assert_eq!(state.bloom_threshold, 0.85);
+        assert_eq!(state.exposure, 1.0);
+        assert_eq!(state.vignette, 0.2);
+        assert_eq!(state.chromatic_aberration, 0.005);
+    }
+}
