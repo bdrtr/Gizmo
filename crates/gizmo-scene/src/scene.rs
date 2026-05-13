@@ -13,6 +13,8 @@ use std::collections::HashMap;
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SceneData {
     pub entities: Vec<EntityData>,
+    #[serde(default)]
+    pub joints: Vec<gizmo_physics::joints::Joint>,
 }
 
 /// Prefab verisi — Tıpkı SceneData gibi ama kök entity'si var
@@ -20,6 +22,8 @@ pub struct SceneData {
 pub struct PrefabData {
     pub root_id: u32,
     pub entities: Vec<EntityData>,
+    #[serde(default)]
+    pub joints: Vec<gizmo_physics::joints::Joint>,
 }
 
 /// Tek bir entity'nin serileştirilebilir verisi
@@ -65,8 +69,14 @@ impl SceneData {
             registry,
         );
 
+        let mut joints = Vec::new();
+        if let Ok(physics_world) = world.try_get_resource::<gizmo_physics::world::PhysicsWorld>() {
+            joints = physics_world.joints.clone();
+        }
+
         let scene = SceneData {
             entities: entities_data,
+            joints,
         };
 
         let string_data = ron::ser::to_string_pretty(&scene, ron::ser::PrettyConfig::default())
@@ -168,7 +178,7 @@ impl SceneData {
             }
         };
 
-        Self::instantiate_entities(
+        let id_map = Self::instantiate_entities(
             scene.entities,
             None,
             world,
@@ -179,6 +189,16 @@ impl SceneData {
             &default_texture_bind_group,
             registry,
         );
+
+        if let Ok(mut physics_world) = world.try_get_resource_mut::<gizmo_physics::world::PhysicsWorld>() {
+            for mut joint in scene.joints {
+                if let (Some(&new_a), Some(&new_b)) = (id_map.get(&joint.entity_a.id()), id_map.get(&joint.entity_b.id())) {
+                    joint.entity_a = gizmo_core::entity::Entity::new(new_a, 0);
+                    joint.entity_b = gizmo_core::entity::Entity::new(new_b, 0);
+                    physics_world.joints.push(joint);
+                }
+            }
+        }
 
         println!("✅ Sahne yüklendi ← {}", file_path);
         true
@@ -365,7 +385,7 @@ impl SceneData {
             i += 1;
         }
 
-        let mut entities_data = Self::serialize_entities(world, ids_to_save, registry);
+        let mut entities_data = Self::serialize_entities(world, ids_to_save.clone(), registry);
 
         // Prefab'ın root entity'sinin parent'ını kopar ki bağımsız yüklensin
         if let Some(root_data) = entities_data
@@ -375,9 +395,19 @@ impl SceneData {
             root_data.parent_id = None;
         }
 
+        let mut joints = Vec::new();
+        if let Ok(physics_world) = world.try_get_resource::<gizmo_physics::world::PhysicsWorld>() {
+            for joint in &physics_world.joints {
+                if ids_to_save.contains(&joint.entity_a.id()) && ids_to_save.contains(&joint.entity_b.id()) {
+                    joints.push(joint.clone());
+                }
+            }
+        }
+
         let prefab = PrefabData {
             root_id: root_entity_id,
             entities: entities_data,
+            joints,
         };
 
         let string_data = ron::ser::to_string_pretty(&prefab, ron::ser::PrettyConfig::default())
@@ -438,6 +468,16 @@ impl SceneData {
                     .unwrap_or_default();
                 children_list.push(new_r);
                 world.add_component(p_ent, Children(children_list));
+            }
+        }
+
+        if let Ok(mut physics_world) = world.try_get_resource_mut::<gizmo_physics::world::PhysicsWorld>() {
+            for mut joint in prefab.joints {
+                if let (Some(&new_a), Some(&new_b)) = (id_map.get(&joint.entity_a.id()), id_map.get(&joint.entity_b.id())) {
+                    joint.entity_a = gizmo_core::entity::Entity::new(new_a, 0);
+                    joint.entity_b = gizmo_core::entity::Entity::new(new_b, 0);
+                    physics_world.joints.push(joint);
+                }
             }
         }
 

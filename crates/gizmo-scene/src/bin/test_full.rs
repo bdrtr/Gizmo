@@ -17,6 +17,7 @@ fn main() {
 
     let scene = SceneData {
         entities: entities_data,
+        joints: Vec::new(),
     };
     let sz = ron::ser::to_string_pretty(&scene, ron::ser::PrettyConfig::default()).unwrap();
     println!("{}", sz);
