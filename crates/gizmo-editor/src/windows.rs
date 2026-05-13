@@ -170,7 +170,7 @@ pub fn ui_settings_window(ui: &mut egui::Ui, state: &mut EditorState) {
         ui.separator();
 
         // --- Rendering ---
-        egui::CollapsingHeader::new("🎨 Rendering")
+        egui::CollapsingHeader::new("🎨 Rendering & Post-Processing")
             .default_open(true)
             .show(ui, |ui| {
                 ui.checkbox(&mut state.fxaa_enabled, "FXAA Anti-Aliasing");
@@ -179,6 +179,17 @@ pub fn ui_settings_window(ui: &mut egui::Ui, state: &mut EditorState) {
                         .weak()
                         .small(),
                 );
+                
+                ui.separator();
+                ui.heading("Bloom (Parlama)");
+                ui.add(egui::Slider::new(&mut state.bloom_intensity, 0.0..=3.0).text("Şiddet (Intensity)"));
+                ui.add(egui::Slider::new(&mut state.bloom_threshold, 0.0..=2.0).text("Eşik (Threshold)"));
+                
+                ui.separator();
+                ui.heading("Tonemapping (Renk Filtreleri)");
+                ui.add(egui::Slider::new(&mut state.exposure, 0.1..=5.0).text("Pozlama (Exposure)"));
+                ui.add(egui::Slider::new(&mut state.vignette, 0.0..=1.0).text("Vignette (Kenar Karartması)"));
+                ui.add(egui::Slider::new(&mut state.chromatic_aberration, 0.0..=0.05).text("Chromatic Aberration"));
             });
 
         ui.separator();

@@ -77,15 +77,36 @@ pub fn execute_render_pipeline(
 
     let mut ed_shading_mode = 0;
     let mut ed_fxaa_enabled = true;
+    let mut post_params = gizmo::renderer::renderer::PostProcessUniforms {
+        bloom_intensity: 0.8,
+        bloom_threshold: 0.85,
+        exposure: 1.0,
+        vignette_intensity: 0.2,
+        chromatic_aberration: 0.005,
+        film_grain_intensity: 0.0,
+        dof_focus_dist: 10.0,
+        dof_focus_range: 20.0,
+        dof_blur_size: 2.0,
+        _padding: [0.0; 3],
+    };
+
     if let Some(ed_state) = world.get_resource::<gizmo::editor::EditorState>() {
         ed_shading_mode = ed_state.shading_mode;
         ed_fxaa_enabled = ed_state.fxaa_enabled;
+        post_params.bloom_intensity = ed_state.bloom_intensity;
+        post_params.bloom_threshold = ed_state.bloom_threshold;
+        post_params.exposure = ed_state.exposure;
+        post_params.vignette_intensity = ed_state.vignette;
+        post_params.chromatic_aberration = ed_state.chromatic_aberration;
+
         if let Some(rect) = ed_state.scene_view_rect {
             if rect.height() > 0.0 {
                 aspect = rect.width() / rect.height();
             }
         }
     }
+
+    renderer.update_post_process(&renderer.queue, post_params);
 
     // FXAA toggle senkronizasyonu (EditorState → Renderer)
     if let Some(ref mut fxaa) = renderer.fxaa {
