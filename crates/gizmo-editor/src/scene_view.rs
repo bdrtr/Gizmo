@@ -355,4 +355,14 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
             egui::Stroke::new(1.0, egui::Color32::WHITE),
         );
     }
+
+    // F (Focus) Kamera Odaklanması
+    if !ui.ctx().wants_keyboard_input() && ui.input(|i| i.key_pressed(egui::Key::F)) {
+        if let Some(entity) = state.selection.primary {
+            let transforms = world.borrow::<gizmo_physics::components::Transform>();
+            if let Some(t) = transforms.get(entity.id()) {
+                state.camera.focus_target = Some(t.position);
+            }
+        }
+    }
 }
