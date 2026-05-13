@@ -101,6 +101,10 @@ pub fn execute_render_pipeline(
         post_params.exposure = ed_state.exposure;
         post_params.vignette_intensity = ed_state.vignette;
         post_params.chromatic_aberration = ed_state.chromatic_aberration;
+        post_params.dof_focus_dist = ed_state.dof_focus_dist;
+        post_params.dof_focus_range = ed_state.dof_focus_range;
+        post_params.dof_blur_size = ed_state.dof_blur_size;
+        post_params.film_grain_intensity = ed_state.film_grain;
 
         if let Some(rect) = ed_state.scene_view_rect {
             if rect.height() > 0.0 {
