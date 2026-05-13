@@ -129,6 +129,7 @@ fn perform_raycast(
             }
 
             // Editör donanımlarını (Grid, Işık vb) seçilebilir objelerden çıkar
+            let mut name_str = String::new();
             if let Some(name) = world.borrow::<gizmo::core::component::EntityName>().get(id) {
                 if name.0 == "Editor Grid" 
                     || name.0 == "Editor Guidelines" 
@@ -137,6 +138,7 @@ fn perform_raycast(
                 {
                     continue;
                 }
+                name_str = name.0.clone();
             }
 
             // Objenin collider'ı varsa onun boyutunu al, yoksa standart 1x1x1 (çarpı scale) kutu farz et.
@@ -145,6 +147,8 @@ fn perform_raycast(
                 extents = col.compute_aabb(gizmo::math::Vec3::ZERO, gizmo::math::Quat::IDENTITY).half_extents().into();
             }
 
+            // Burada t.scale kullanımı local. Eğer obje child ise raycast yanlış yeri test edebilir!
+            // Ama default cube bir child değil.
             let scaled_half = Vec3::new(
                 extents.x * t.scale.x,
                 extents.y * t.scale.y,
@@ -162,12 +166,18 @@ fn perform_raycast(
     }
 
     if let Some(hit) = hit_entity {
+        let mut name_str = format!("Entity {}", hit);
+        if let Some(name) = world.borrow::<gizmo::core::component::EntityName>().get(hit) {
+            name_str = name.0.clone();
+        }
+        state.log_info(&format!("Seçildi: {}", name_str));
         if ctrl_pressed {
             state.toggle_selection(gizmo::prelude::Entity::new(hit, 0));
         } else {
             state.select_exclusive(gizmo::prelude::Entity::new(hit, 0));
         }
     } else {
+        state.log_info("Boşluğa tıklandı, seçim temizlendi.");
         state.clear_selection();
     }
 }

@@ -47,6 +47,7 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
 
     // OBB Highlight for Selected Entities
     if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
+        gizmos.depth_test = false;
         let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
         let global_transforms = world.borrow::<gizmo::physics::components::GlobalTransform>();
         let children_comp = world.borrow::<gizmo::core::component::Children>();
