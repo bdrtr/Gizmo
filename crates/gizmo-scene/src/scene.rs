@@ -36,7 +36,7 @@ pub struct EntityData {
     #[serde(default)]
     pub parent_id: Option<u32>,
     #[serde(default)]
-    pub components: std::collections::BTreeMap<String, ron::Value>,
+    pub components: std::collections::BTreeMap<String, String>,
 }
 
 /// Material serileştirme verisi (GPU bind group'u diske yazılamaz)
@@ -151,6 +151,8 @@ impl SceneData {
                 });
             }
         }
+        
+        tracing::info!(">>> serialize_entities: total entities checked: {}, serialized: {}", entity_ids.len(), entities_data.len());
         entities_data
     }
 
@@ -173,13 +175,16 @@ impl SceneData {
         let scene: SceneData = match ron::from_str(&string_data) {
             Ok(s) => s,
             Err(e) => {
-                tracing::info!("❌ Sahne dosyası geçersiz ({}): {}", file_path, e);
+                tracing::error!("❌ Sahne dosyası geçersiz ({}): {}", file_path, e);
                 return false;
             }
         };
 
+        let entities = scene.entities;
+        tracing::info!(">>> load_into: Read {} entities from file", entities.len());
+
         let id_map = Self::instantiate_entities(
-            scene.entities,
+            entities,
             None,
             world,
             device,
