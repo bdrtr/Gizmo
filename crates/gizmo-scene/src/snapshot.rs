@@ -16,8 +16,7 @@ use gizmo_core::World;
 pub struct EntitySnapshot {
     pub entity_id: u32,
     pub name: Option<String>,
-    /// RON formatında dinamik bileşen snapshot'ı
-    pub components: std::collections::BTreeMap<String, ron::Value>,
+    pub components: std::collections::BTreeMap<String, String>,
 }
 
 /// Tüm sahnenin in-memory snapshot'ı
@@ -95,7 +94,12 @@ impl SceneSnapshot {
         let mut restored_count = 0u32;
         let mut despawned_count = 0u32;
 
-        // 1. Korunmayan tüm entity'leri sil
+        let mut snap_ids = std::collections::HashSet::new();
+        for snap_ent in &self.entities {
+            snap_ids.insert(snap_ent.entity_id);
+        }
+
+        // 1. Korunmayan ve snapshot'ta OLMAYAN (Play sırasında oluşturulmuş) entity'leri sil
         let alive = world.iter_alive_entities();
         let mut to_despawn = Vec::new();
 
@@ -111,7 +115,10 @@ impl SceneSnapshot {
                         continue;
                     }
                 }
-                to_despawn.push(*ent);
+                
+                if !snap_ids.contains(&id) {
+                    to_despawn.push(*ent);
+                }
             }
         }
 
@@ -120,16 +127,23 @@ impl SceneSnapshot {
             despawned_count += 1;
         }
 
-        // 2. Snapshot'taki entity'leri yeniden oluştur
+        // 2. Snapshot'taki entity'lerin bileşenlerini mevcutların üzerine yaz
         for snap_entity in &self.entities {
-            let ent = world.spawn();
+            // Eğer entity silinmişse yeni bir tane oluştur (Not: Mesh gibi GPU verileri kaybolur, ideal değil ama çökmez)
+            let ent = if let Some(e) = world.get_entity(snap_entity.entity_id) {
+                if world.is_alive(e) {
+                    e
+                } else {
+                    world.spawn()
+                }
+            } else {
+                world.spawn()
+            };
 
-            // İsmi geri yükle
             if let Some(ref name) = snap_entity.name {
                 world.add_component(ent, gizmo_core::EntityName::new(name));
             }
 
-            // Dinamik bileşenleri registry üzerinden geri yükle
             for (comp_name, comp_val) in &snap_entity.components {
                 if let Some(deserializer) = registry.get_deserializer(comp_name) {
                     deserializer(world, ent.id(), comp_val);

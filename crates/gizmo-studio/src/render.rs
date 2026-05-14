@@ -133,8 +133,11 @@ pub fn render_studio(
 
     for comp in completed_gltfs {
         let pos = {
-            let mut ed = world.get_resource_mut::<EditorState>().unwrap();
-            ed.pending_async_gltfs.remove(&comp.path).unwrap_or(gizmo::math::Vec3::ZERO)
+            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+                ed.pending_async_gltfs.remove(&comp.path).unwrap_or(gizmo::math::Vec3::ZERO)
+            } else {
+                gizmo::math::Vec3::ZERO
+            }
         };
 
         let path = comp.path.clone();
@@ -150,25 +153,13 @@ pub fn render_studio(
         }
     }
 
-    let play_backup_path = format!(
-        "{}/.play_backup.scene",
-        std::env::var("CARGO_MANIFEST_DIR").unwrap_or(".".to_string())
-    );
-
     if play_start {
-        // 1. In-memory snapshot al (hızlı yol — fizik state dahil)
+        // 1. In-memory snapshot al (hızlı yol — fizik state dahil, GPU state korunur)
         let protected_ids = collect_protected_ids(world, state.editor_camera);
         let snapshot = gizmo::scene::SceneSnapshot::capture(
             world,
             &gizmo::scene::SceneRegistry::default(),
             &protected_ids,
-        );
-
-        // 2. Disk yedeği de al (GPU kaynakları — Mesh, Material — için)
-        let _ = gizmo::scene::SceneData::save(
-            world,
-            &play_backup_path,
-            &gizmo::scene::SceneRegistry::default(),
         );
 
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
@@ -182,7 +173,6 @@ pub fn render_studio(
     }
 
     if play_stop {
-        // In-memory snapshot varsa onu kullan, yoksa disk yedeğine düş
         let snapshot_opt = {
             if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
                 ed.play_snapshot.take()
@@ -192,45 +182,21 @@ pub fn render_studio(
         };
 
         if let Some(snapshot) = snapshot_opt {
-            // Hızlı yol: In-memory restore (fizik bileşenleri dahil)
             let protected_ids = collect_protected_ids(world, state.editor_camera);
-
             let result = snapshot.restore(
                 world,
                 &gizmo::scene::SceneRegistry::default(),
                 &protected_ids,
             );
-
-            // GPU kaynaklarını (Mesh/Material) disk yedeğinden yükle
-            if std::path::Path::new(&play_backup_path).exists() {
-                if let Some(mut asset_manager) =
-                    world.remove_resource::<gizmo::renderer::asset::AssetManager>()
-                {
-                    let dummy_rgba = [255, 255, 255, 255];
-                    let dummy_bg = renderer.create_texture(&dummy_rgba, 1, 1);
-                    gizmo::scene::SceneData::load_into(
-                        &play_backup_path,
-                        world,
-                        &renderer.device,
-                        &renderer.queue,
-                        &renderer.scene.texture_bind_group_layout,
-                        &mut asset_manager,
-                        std::sync::Arc::new(dummy_bg),
-                        &gizmo::scene::SceneRegistry::default(),
-                    );
-                    world.insert_resource(asset_manager);
-                }
-            }
-
             if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-                ed.clear_selection();
-                ed.log_info(&format!("⏹ Stop: {}", result));
+                ed.log_info(&format!(
+                    "⏹ Stop: Sahne geri yüklendi (Silinen: {}, Geri Gelen: {}, Süre: {:?})",
+                    result.despawned, result.restored, result.duration
+                ));
             }
         } else {
-            // Fallback: Disk yedeğinden yükle
-            load_req = Some(play_backup_path.clone());
             if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-                ed.log_info("⏹ Stop: Disk yedeğinden geri dönüldü (fallback).");
+                ed.log_warning("Geri yüklenecek snapshot bulunamadı!");
             }
         }
     }
@@ -358,7 +324,7 @@ pub fn render_studio(
         {
             let dummy_rgba = [255, 255, 255, 255];
             let dummy_bg = renderer.create_texture(&dummy_rgba, 1, 1);
-            gizmo::scene::SceneData::load_prefab(
+            let root_res = gizmo::scene::SceneData::load_prefab(
                 &temp_path,
                 None,
                 world,
@@ -372,6 +338,13 @@ pub fn render_studio(
             world.insert_resource(asset_manager);
             if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
                 ed.log_info("Obje çoğaltıldı.");
+                if let Some(new_id) = root_res {
+                    ed.clear_selection();
+                    if let Some(new_ent) = world.get_entity(new_id) {
+                        ed.selection.entities.insert(new_ent);
+                        ed.selection.primary = Some(new_ent);
+                    }
+                }
             }
         } else {
             if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
