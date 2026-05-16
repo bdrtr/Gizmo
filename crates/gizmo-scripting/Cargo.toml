@@ -17,3 +17,4 @@ serde = { version = "1.0.228", features = ["derive"] }
 mlua = { version = "0.9", features = ["lua54", "vendored", "send"] }
 notify = "8.2.0"
 tracing = "0.1.44"
+gizmo-renderer = { version = "0.1.2", path = "../gizmo-renderer" }

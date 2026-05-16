@@ -4,10 +4,12 @@ use crate::renderer::Renderer;
 
 pub fn physics_debug_system(world: &crate::core::World) {
     if let Some(mut gizmos) = world.get_resource_mut::<crate::renderer::Gizmos>() {
-        let draw_collider = |trans: &Transform,
-                             col: &Collider,
-                             color: [f32; 4],
-                             gizmos: &mut crate::renderer::Gizmos| {
+        fn draw_collider(
+            trans: &Transform,
+            col: &Collider,
+            color: [f32; 4],
+            gizmos: &mut crate::renderer::Gizmos,
+        ) {
             match &col.shape {
                 gizmo_physics::ColliderShape::Box(b) => {
                     let h = b.half_extents;
@@ -53,13 +55,30 @@ pub fn physics_debug_system(world: &crate::core::World) {
                         gizmos.draw_line(p2, p0, color);
                     }
                 }
+                gizmo_physics::ColliderShape::Compound(shapes) => {
+                    for (local_t, sub_shape) in shapes {
+                        let world_pos = trans.position + trans.rotation.mul_vec3(local_t.position);
+                        let world_rot = trans.rotation * local_t.rotation;
+                        let sub_trans = crate::physics::Transform {
+                            position: world_pos,
+                            rotation: world_rot,
+                            scale: trans.scale,
+                            ..*trans
+                        };
+                        let temp_col = gizmo_physics::Collider {
+                            shape: (**sub_shape).clone(),
+                            ..Default::default()
+                        };
+                        draw_collider(&sub_trans, &temp_col, color, gizmos);
+                    }
+                }
                 _ => {
                     let min = trans.position - Vec3::new(1.0, 1.0, 1.0);
                     let max = trans.position + Vec3::new(1.0, 1.0, 1.0);
                     gizmos.draw_box(min, max, color);
                 }
             }
-        };
+        }
 
         if let Some(q) = world.query::<(
             &crate::physics::Transform,
@@ -276,13 +295,26 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
                 let id = next_dynamic_id;
                 next_dynamic_id += 1;
 
-                let extents = match &col.shape {
-                    ColliderShape::Box(b) => [b.half_extents.x, b.half_extents.y, b.half_extents.z],
-                    _ => [0.5, 0.5, 0.5],
+                let (extents, offset) = match &col.shape {
+                    ColliderShape::Box(b) => ([b.half_extents.x, b.half_extents.y, b.half_extents.z], Vec3::ZERO),
+                    ColliderShape::Compound(shapes) => {
+                        if let Some((local_t, box_shape)) = shapes.first() {
+                            if let ColliderShape::Box(b) = &**box_shape {
+                                ([b.half_extents.x, b.half_extents.y, b.half_extents.z], local_t.position)
+                            } else {
+                                ([0.5, 0.5, 0.5], Vec3::ZERO)
+                            }
+                        } else {
+                            ([0.5, 0.5, 0.5], Vec3::ZERO)
+                        }
+                    }
+                    _ => ([0.5, 0.5, 0.5], Vec3::ZERO),
                 };
 
+                let world_pos = trans.position + trans.rotation.mul_vec3(offset);
+
                 let gpu_box = gizmo_renderer::gpu_physics::GpuBox {
-                    position: [trans.position.x, trans.position.y, trans.position.z],
+                    position: [world_pos.x, world_pos.y, world_pos.z],
                     mass: rb.mass,
                     velocity: [vel.linear.x, vel.linear.y, vel.linear.z],
                     state: 0,
@@ -312,23 +344,38 @@ pub fn gpu_physics_readback_system(world: &mut crate::core::World, renderer: &Re
     if let Some(physics) = &renderer.gpu_physics {
         if let Some(gpu_data) = physics.poll_readback_data(&renderer.device) {
             if let Some(mut q) =
-                world.query::<(gizmo_core::prelude::Mut<Transform>, &GpuPhysicsLink)>()
+                world.query::<(gizmo_core::prelude::Mut<Transform>, &GpuPhysicsLink, &gizmo_physics::shape::Collider)>()
             {
-                for (_, (mut trans, link)) in q.iter_mut() {
+                for (_, (mut trans, link, col)) in q.iter_mut() {
                     let idx = link.id as usize;
                     if idx < gpu_data.len() {
                         let box_data = &gpu_data[idx];
-                        trans.position = gizmo_math::Vec3::new(
-                            box_data.position[0],
-                            box_data.position[1],
-                            box_data.position[2],
-                        );
-                        trans.rotation = gizmo_math::Quat::from_xyzw(
+                        
+                        let offset = match &col.shape {
+                            gizmo_physics::shape::ColliderShape::Compound(shapes) => {
+                                if let Some((local_t, _)) = shapes.first() {
+                                    local_t.position
+                                } else {
+                                    gizmo_math::Vec3::ZERO
+                                }
+                            }
+                            _ => gizmo_math::Vec3::ZERO,
+                        };
+
+                        let new_rot = gizmo_math::Quat::from_xyzw(
                             box_data.rotation[0],
                             box_data.rotation[1],
                             box_data.rotation[2],
                             box_data.rotation[3],
                         );
+
+                        trans.position = gizmo_math::Vec3::new(
+                            box_data.position[0],
+                            box_data.position[1],
+                            box_data.position[2],
+                        ) - new_rot.mul_vec3(offset);
+                        
+                        trans.rotation = new_rot;
                         trans.update_local_matrix();
                     }
                 }

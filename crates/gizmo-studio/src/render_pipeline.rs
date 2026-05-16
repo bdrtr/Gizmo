@@ -72,59 +72,7 @@ pub fn execute_render_pipeline(
     let mut bone_att = gizmo::systems::transform::BoneAttachmentSystem;
     gizmo::core::system::System::run(&mut bone_att, world, delta_time);
 
-    let mut aspect = if renderer.size.height > 0 {
-        renderer.size.width as f32 / renderer.size.height as f32
-    } else {
-        1.0
-    };
-
-    let mut ed_shading_mode = 0;
-    let mut ed_fxaa_enabled = true;
-    let mut post_params = gizmo::renderer::renderer::PostProcessUniforms {
-        bloom_intensity: 0.8,
-        bloom_threshold: 0.85,
-        exposure: 1.0,
-        vignette_intensity: 0.2,
-        chromatic_aberration: 0.005,
-        film_grain_intensity: 0.0,
-        dof_focus_dist: 10.0,
-        dof_focus_range: 20.0,
-        dof_blur_size: 2.0,
-        _padding: [0.0; 3],
-    };
-
-    let mut show_colliders = false;
-
-    if let Some(ed_state) = world.get_resource::<gizmo::editor::EditorState>() {
-        ed_shading_mode = ed_state.shading_mode;
-        ed_fxaa_enabled = ed_state.fxaa_enabled;
-        show_colliders = ed_state.show_colliders;
-        post_params.bloom_intensity = ed_state.bloom_intensity;
-        post_params.bloom_threshold = ed_state.bloom_threshold;
-        post_params.exposure = ed_state.exposure;
-        post_params.vignette_intensity = ed_state.vignette;
-        post_params.chromatic_aberration = ed_state.chromatic_aberration;
-        post_params.dof_focus_dist = ed_state.dof_focus_dist;
-        post_params.dof_focus_range = ed_state.dof_focus_range;
-        post_params.dof_blur_size = ed_state.dof_blur_size;
-        post_params.film_grain_intensity = ed_state.film_grain;
-
-        if let Some(rect) = ed_state.scene_view_rect {
-            if rect.height() > 0.0 {
-                aspect = rect.width() / rect.height();
-            }
-        }
-    }
-
-    renderer.update_post_process(&renderer.queue, post_params);
-
-    // FXAA toggle senkronizasyonu (EditorState → Renderer)
-    if let Some(ref mut fxaa) = renderer.fxaa {
-        if fxaa.enabled != ed_fxaa_enabled {
-            fxaa.enabled = ed_fxaa_enabled;
-            fxaa.set_enabled(&renderer.queue, ed_fxaa_enabled);
-        }
-    }
+    let (aspect, ed_shading_mode, show_colliders) = sync_editor_settings(world, renderer);
 
     let mut proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 2000.0);
     let mut view_mat = Mat4::from_translation(Vec3::ZERO);
@@ -137,10 +85,22 @@ pub fn execute_render_pipeline(
 
     let cameras = world.borrow::<Camera>();
     let transforms = world.borrow::<Transform>();
+
+    // Play modunda Game Camera, Edit modunda Editor Camera kullan
+    let is_playing_mode = world.get_resource::<gizmo::editor::EditorState>()
+        .map(|ed| ed.is_playing() || ed.mode == gizmo::editor::EditorMode::Paused)
+        .unwrap_or(false);
+
+    let active_camera_id = if is_playing_mode && cameras.get(state.game_camera).is_some() {
+        state.game_camera
+    } else {
+        state.editor_camera
+    };
+
     {
         if let (Some(cam), Some(trans)) = (
-            cameras.get(state.editor_camera),
-            transforms.get(state.editor_camera),
+            cameras.get(active_camera_id),
+            transforms.get(active_camera_id),
         ) {
             proj = cam.get_projection(aspect);
             view_mat = cam.get_view(trans.position);
@@ -488,6 +448,7 @@ pub fn execute_render_pipeline(
             vec_pool,
         );
 
+
         if !all_instances.is_empty() {
             renderer.ensure_instance_capacity(all_instances.len());
             renderer.queue.write_buffer(
@@ -749,25 +710,30 @@ pub fn execute_render_pipeline(
                 render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
             }
 
-            // 5. GRID ÇİZİMİ
-            render_pass.set_pipeline(&renderer.scene.grid_pipeline);
-            for batch in &*flat_batches {
-                if !batch.is_grid {
-                    continue;
-                }
-                if batch.start_instance >= renderer.scene.instance_capacity as u32 {
-                    continue;
-                }
-                let safe_end =
-                    std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
+            // 5. GRID ÇİZİMİ (Play modunda gizle — Game View temiz görünsün)
+            let is_playing_mode = world.get_resource::<gizmo::editor::EditorState>()
+                .map(|ed| ed.is_playing() || ed.mode == gizmo::editor::EditorMode::Paused)
+                .unwrap_or(false);
+            if !is_playing_mode {
+                render_pass.set_pipeline(&renderer.scene.grid_pipeline);
+                for batch in &*flat_batches {
+                    if !batch.is_grid {
+                        continue;
+                    }
+                    if batch.start_instance >= renderer.scene.instance_capacity as u32 {
+                        continue;
+                    }
+                    let safe_end =
+                        std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
 
-                render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
-                render_pass.set_bind_group(1, &batch.bind_group, &[]);
-                render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-                render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
-                render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
-                render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
-                render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
+                    render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+                    render_pass.set_bind_group(1, &batch.bind_group, &[]);
+                    render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+                    render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
+                    render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
+                    render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
+                }
             }
 
             // --- 4. DRAW GPU PARTICLES (Billboard & Şeffaf) ---
@@ -778,15 +744,17 @@ pub fn execute_render_pipeline(
                 render_pass.set_vertex_buffer(1, gpu_particles.particles_buffer.slice(..));
                 render_pass.draw(0..4, 0..gpu_particles.active_particles);
             }
-            // --- 5. GIZMOS VE DEBUG LINES ÇİZİMİ (Turuncu Seçim Çerçevesi vs) ---
-            if let Some(gizmos) = world.get_resource::<gizmo::renderer::Gizmos>() {
-                if let Some(debug_renderer) = &mut renderer.debug_renderer {
-                    debug_renderer.update(&renderer.queue, &gizmos);
-                    debug_renderer.render(
-                        &mut render_pass,
-                        &renderer.scene.global_bind_group,
-                        gizmos.depth_test,
-                    );
+            // --- 5. GIZMOS VE DEBUG LINES ÇİZİMİ (Play modunda gizle) ---
+            if !is_playing_mode {
+                if let Some(gizmos) = world.get_resource::<gizmo::renderer::Gizmos>() {
+                    if let Some(debug_renderer) = &mut renderer.debug_renderer {
+                        debug_renderer.update(&renderer.queue, &gizmos);
+                        debug_renderer.render(
+                            &mut render_pass,
+                            &renderer.scene.global_bind_group,
+                            gizmos.depth_test,
+                        );
+                    }
                 }
             }
 
@@ -827,4 +795,79 @@ pub fn execute_render_pipeline(
     };
 
     renderer.run_post_processing(encoder, output_view);
+
+    // Game View RTT: Post-processing çıktısını GameRenderTarget'a da yaz
+    let game_target = world.get_resource::<gizmo::renderer::components::GameRenderTarget>();
+    if let Some(target) = &game_target {
+        renderer.run_post_processing(encoder, &target.0.view);
+    }
+}
+
+
+
+fn sync_editor_settings(world: &gizmo::core::World, renderer: &mut gizmo::renderer::Renderer) -> (f32, u32, bool) {
+    let mut aspect = if renderer.size.height > 0 {
+        renderer.size.width as f32 / renderer.size.height as f32
+    } else {
+        1.0
+    };
+
+    let mut ed_shading_mode = 0;
+    let mut ed_fxaa_enabled = true;
+    let mut ed_ssao_enabled = true;
+    let mut ed_ssao_strength = 0.8;
+    let mut show_colliders = false;
+    
+    let mut post_params = gizmo::renderer::renderer::PostProcessUniforms {
+        bloom_intensity: 0.8,
+        bloom_threshold: 0.85,
+        exposure: 1.0,
+        vignette_intensity: 0.2,
+        chromatic_aberration: 0.005,
+        film_grain_intensity: 0.0,
+        dof_focus_dist: 10.0,
+        dof_focus_range: 20.0,
+        dof_blur_size: 2.0,
+        _padding: [0.0; 3],
+    };
+
+    if let Some(ed_state) = world.get_resource::<gizmo::editor::EditorState>() {
+        ed_shading_mode = ed_state.shading_mode;
+        ed_fxaa_enabled = ed_state.post_process.fxaa_enabled;
+        ed_ssao_enabled = ed_state.post_process.ssao_enabled;
+        ed_ssao_strength = ed_state.post_process.ssao_strength;
+        
+        show_colliders = ed_state.show_colliders;
+        post_params.bloom_intensity = ed_state.post_process.bloom_intensity;
+        post_params.bloom_threshold = ed_state.post_process.bloom_threshold;
+        post_params.exposure = ed_state.post_process.exposure;
+        post_params.vignette_intensity = ed_state.post_process.vignette;
+        post_params.chromatic_aberration = ed_state.post_process.chromatic_aberration;
+        post_params.dof_focus_dist = ed_state.post_process.dof_focus_dist;
+        post_params.dof_focus_range = ed_state.post_process.dof_focus_range;
+        post_params.dof_blur_size = ed_state.post_process.dof_blur_size;
+        post_params.film_grain_intensity = ed_state.post_process.film_grain;
+
+        if let Some(rect) = ed_state.scene_view_rect {
+            if rect.height() > 0.0 {
+                aspect = rect.width() / rect.height();
+            }
+        }
+    }
+
+    renderer.update_post_process(&renderer.queue, post_params);
+
+    if let Some(ref mut fxaa) = renderer.fxaa {
+        if fxaa.enabled != ed_fxaa_enabled {
+            fxaa.enabled = ed_fxaa_enabled;
+            fxaa.set_enabled(&renderer.queue, ed_fxaa_enabled);
+        }
+    }
+
+    if let Some(ref mut ssao) = renderer.ssao {
+        let actual_strength = if ed_ssao_enabled { ed_ssao_strength } else { 0.0 };
+        ssao.set_strength(&renderer.queue, actual_strength);
+    }
+
+    (aspect, ed_shading_mode, show_colliders)
 }

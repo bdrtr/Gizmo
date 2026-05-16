@@ -128,6 +128,16 @@ impl Collider {
         }
     }
 
+    pub fn offset_box(offset: Vec3, half_extents: Vec3) -> Self {
+        Self {
+            shape: ColliderShape::Compound(vec![(
+                Transform::new(offset),
+                Box::new(ColliderShape::Box(BoxShape { half_extents })),
+            )]),
+            ..Default::default()
+        }
+    }
+
     pub fn capsule(radius: f32, half_height: f32) -> Self {
         Self {
             shape: ColliderShape::Capsule(CapsuleShape {

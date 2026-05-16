@@ -193,12 +193,8 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
     var final_color = ambient + total_diffuse + total_specular + specular_ibl;
 
-    // ACES tone mapping
-    let a = 2.51; let b = 0.03; let c = 2.43; let d = 0.59; let e = 0.14;
-    final_color = clamp(
-        (final_color * (a * final_color + b)) / (final_color * (c * final_color + d) + e),
-        vec3<f32>(0.0), vec3<f32>(1.0)
-    );
+    // Tone mapping is handled in post_process.wgsl because we write to an HDR buffer (Rgba16Float).
+    // Do not apply ACES tone mapping here.
 
     // Shading Mode overrides
     if (scene.shading_mode == 1u) {

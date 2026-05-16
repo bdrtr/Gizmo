@@ -44,7 +44,6 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let d = 0.59;
     let e = 0.14;
     let mapped = clamp((hdr_color * (a * hdr_color + b)) / (hdr_color * (c * hdr_color + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
-    let gamma = vec3<f32>(1.0 / 2.2);
-    let final_color = pow(mapped, gamma);
-    return vec4<f32>(final_color, 1.0);
+    // Swapchain uses sRGB format, so we don't need manual gamma correction
+    return vec4<f32>(mapped, 1.0);
 }

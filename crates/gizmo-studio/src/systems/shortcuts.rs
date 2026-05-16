@@ -38,6 +38,35 @@ pub fn handle_editor_shortcuts(
             editor_state.status_message = "↩ Redo".to_string();
         }
 
+        
+        // Ctrl+C → Kopyala (Copy)
+        if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyC as u32) {
+            editor_state.clipboard_entities.clear();
+            for &entity in editor_state.selection.entities.iter() {
+                editor_state.clipboard_entities.push(entity);
+            }
+            if !editor_state.clipboard_entities.is_empty() {
+                editor_state.status_message = format!(
+                    "📋 {} obje panoya kopyalandı",
+                    editor_state.clipboard_entities.len()
+                );
+            }
+        }
+
+        // Ctrl+V → Yapıştır (Paste)
+        if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyV as u32) {
+            let count = editor_state.clipboard_entities.len();
+            for &entity in &editor_state.clipboard_entities {
+                editor_state.duplicate_requests.push(entity);
+            }
+            if count > 0 {
+                editor_state.status_message = format!(
+                    "📥 {} obje yapıştırıldı",
+                    count
+                );
+            }
+        }
+
         // Ctrl+D → Çoğalt (Duplicate)
         if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyD as u32) {
             for &entity in editor_state.selection.entities.iter() {
@@ -51,14 +80,16 @@ pub fn handle_editor_shortcuts(
             }
         }
 
-        // Ctrl+S → Hızlı Kaydet
+        // Ctrl+S → Hızlı Kaydet (yol varsa) / Dialog aç (yol yoksa)
         if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyS as u32) {
             if !editor_state.scene_path.is_empty() {
                 editor_state.scene.save_request = Some(editor_state.scene_path.clone());
                 editor_state.status_message = format!("💾 Kaydediliyor: {}", editor_state.scene_path);
             } else {
-                // Sahne yolu yoksa status mesajıyla bildir
-                editor_state.status_message = "⚠ Kaydetmek için önce bir sahne yolu belirleyin (Toolbar → Kaydet)".to_string();
+                // Sahne yolu yoksa save dialog isteği işaretle
+                // (lib.rs'deki draw_editor fonksiyonu bu flag'i okuyup dialog açar)
+                editor_state.scene.request_save_dialog = true;
+                editor_state.status_message = "💾 Kaydetme penceresi açılıyor...".to_string();
             }
         }
 
@@ -138,6 +169,9 @@ pub fn handle_editor_shortcuts(
     //  TEKİL TUŞLAR (Ctrl/Alt/Shift olmadan)
     // ========================================
 
+    // Sağ tık basılıyken kamera serbest uçuş modu aktif → gizmo modu değiştirme tuşlarını engelle
+    let right_click_held = input.is_mouse_button_pressed(2);
+
     // Delete → Seçili objeleri sil
     if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Delete as u32) {
         let count = editor_state.selection.entities.len();
@@ -150,20 +184,20 @@ pub fn handle_editor_shortcuts(
         }
     }
 
-    // W → Translate (Taşı) Gizmo
-    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyW as u32) {
+    // W → Translate (Taşı) Gizmo (Sağ tık + WASD kamera uçuşu sırasında tetiklenmez)
+    if !right_click_held && input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyW as u32) {
         editor_state.gizmo_mode = GizmoMode::Translate;
         editor_state.status_message = "🔀 Taşıma Modu (W)".to_string();
     }
 
     // E → Rotate (Döndür) Gizmo
-    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyE as u32) {
+    if !right_click_held && input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyE as u32) {
         editor_state.gizmo_mode = GizmoMode::Rotate;
         editor_state.status_message = "🔄 Döndürme Modu (E)".to_string();
     }
 
     // R → Scale (Ölçekle) Gizmo
-    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyR as u32) {
+    if !right_click_held && input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyR as u32) {
         editor_state.gizmo_mode = GizmoMode::Scale;
         editor_state.status_message = "📏 Ölçekleme Modu (R)".to_string();
     }

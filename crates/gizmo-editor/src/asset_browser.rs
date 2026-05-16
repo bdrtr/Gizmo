@@ -6,10 +6,24 @@ use std::path::Path;
 
 /// Asset Browser sekmesini çizer
 pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
+let mut finished = false;
     if let Some(rx) = &state.assets.workspace_rx {
-        if let Ok(path) = rx.lock().unwrap().try_recv() {
-            state.assets.root = path;
+        match rx.lock().unwrap().try_recv() {
+            Ok(path) => {
+                if !path.is_empty() {
+                    state.assets.root = path;
+                }
+                finished = true;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                finished = true;
+            }
+            _ => {}
         }
+    }
+
+    if finished {
+        state.assets.workspace_rx = None;
     }
 
     ui.horizontal(|ui| {

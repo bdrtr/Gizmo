@@ -38,25 +38,27 @@ pub fn garbage_collection_system(
         if !to_despawn.is_empty() {
             let count = to_despawn.len();
             for id in to_despawn {
-                // Önce çocuklarını da temizle (cascade delete)
-                let child_ids: Vec<u32> = {
+                // BFS ile tüm torunları (cascade) bul
+                let mut all_ids = vec![id];
+                {
                     let children = world.borrow::<gizmo::core::component::Children>();
-                    if let Some(c) = children.get(id) {
-                        c.0.clone()
-                    } else {
-                        Vec::new()
-                    }
-                };
-
-                for child_id in child_ids {
-                    if let Some(child_ent) = world.get_entity(child_id) {
-                        world.despawn(child_ent);
+                    let mut i = 0;
+                    while i < all_ids.len() {
+                        let current = all_ids[i];
+                        if let Some(c) = children.get(current) {
+                            for &child_id in &c.0 {
+                                all_ids.push(child_id);
+                            }
+                        }
+                        i += 1;
                     }
                 }
 
-                // Entity'nin kendisini despawn et
-                if let Some(ent) = world.get_entity(id) {
-                    world.despawn(ent);
+                // Tüm torunları ve kendisini sil (ters sıra — yapraklardan başla)
+                for &del_id in all_ids.iter().rev() {
+                    if let Some(ent) = world.get_entity(del_id) {
+                        world.despawn(ent);
+                    }
                 }
             }
 

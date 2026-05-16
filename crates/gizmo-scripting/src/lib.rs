@@ -21,6 +21,7 @@
 pub mod api_ai;
 pub mod api_audio;
 pub mod api_entity;
+pub mod api_fighter;
 pub mod api_input;
 pub mod api_physics;
 pub mod api_scene;

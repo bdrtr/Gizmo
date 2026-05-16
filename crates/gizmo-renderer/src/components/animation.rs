@@ -70,6 +70,23 @@ impl AnimationPlayer {
     pub fn current_clip(&self) -> Option<&crate::animation::AnimationClip> {
         self.animations.get(self.active_animation)
     }
+
+    pub fn play_animation_by_name(&mut self, name: &str, blend: f32, loop_anim: bool) -> bool {
+        if let Some(idx) = self.animations.iter().position(|a| a.name == name) {
+            if self.active_animation != idx {
+                self.prev_animation = Some(self.active_animation);
+                self.prev_time = self.current_time;
+                self.active_animation = idx;
+                self.current_time = 0.0;
+                self.blend_duration = blend;
+                self.blend_time = 0.0;
+                self.loop_anim = loop_anim;
+            }
+            true
+        } else {
+            false
+        }
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

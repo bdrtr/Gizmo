@@ -213,17 +213,68 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
 
     // --- GIZMO HANDLES (TRANSLATE) EGUI-GIZMO İÇİN İPTAL EDİLDİ ---
 
+    // Game Camera (Play modunda kullanılacak oyun kamerası)
+    let game_cam = world.spawn();
+    world.add_component(
+        game_cam,
+        gizmo::core::component::EntityName("Game Camera".to_string()),
+    );
+    // Dövüş oyunu için yan görünüm: Z ekseninde 12 birim uzakta, hafif yukarıdan bakıyor
+    let game_cam_pos = Vec3::new(0.0, 3.0, 12.0);
+    let look_target = Vec3::new(0.0, 1.0, 0.0);
+    let game_cam_forward = (look_target - game_cam_pos).normalize();
+    let game_cam_yaw = game_cam_forward.x.atan2(-game_cam_forward.z);
+    let game_cam_pitch = (-game_cam_forward.y).asin();
+    world.add_component(
+        game_cam,
+        Transform::new(game_cam_pos),
+    );
+    world.add_component(game_cam, gizmo::physics::components::GlobalTransform::default());
+    world.add_component(
+        game_cam,
+        gizmo::renderer::components::Camera::new(
+            50.0_f32.to_radians(), // Biraz daha dar FOV (sinematik)
+            0.1,
+            500.0,
+            game_cam_yaw,
+            game_cam_pitch,
+            false, // Editör kamerası DEĞİL
+        ),
+    );
+
     let mut editor_state = EditorState::new();
     editor_state.open = true; // Always open in Studio!
 
-    world.insert_resource(editor_state);
+world.insert_resource(editor_state);
 
     let debug_cube = gizmo::renderer::asset::AssetManager::create_cube(&renderer.device);
+    let debug_sphere = gizmo::renderer::asset::AssetManager::create_sphere(&renderer.device, 0.5, 16, 16);
     world.insert_resource(DebugAssets {
         cube: debug_cube,
+        sphere: debug_sphere,
         white_tex: white_tex.clone(),
     });
     world.insert_resource(gizmo::renderer::Gizmos::default());
+    world.insert_resource(gizmo::core::FrameProfiler::new());
+
+// Register ComponentRegistry so Editor can list components
+    let mut component_registry = gizmo::core::ComponentRegistry::new();
+    component_registry.register::<gizmo::physics::components::Transform>("Transform");
+    component_registry.register::<gizmo::physics::Velocity>("Velocity");
+    component_registry.register::<gizmo::physics::RigidBody>("RigidBody");
+    component_registry.register::<gizmo::physics::Collider>("Collider");
+    component_registry.register::<gizmo::renderer::components::Camera>("Camera");
+    component_registry.register::<gizmo::renderer::components::PointLight>("PointLight");
+    component_registry.register::<gizmo::prelude::Material>("Material");
+    component_registry.register::<gizmo::scripting::Script>("Script");
+    component_registry.register::<gizmo::renderer::components::ParticleEmitter>("ParticleEmitter");
+    component_registry.register::<gizmo::prelude::AudioSource>("AudioSource");
+    component_registry.register::<gizmo::renderer::components::Terrain>("Terrain");
+    component_registry.register::<gizmo::physics::components::Hitbox>("Hitbox");
+    component_registry.register::<gizmo::physics::components::Hurtbox>("Hurtbox");
+    component_registry.register::<gizmo::renderer::components::BoneAttachment>("BoneAttachment");
+    component_registry.register::<gizmo::physics::components::fighter::FighterController>("FighterController");
+    world.insert_resource(component_registry);
 
     // --- SCRIPT ENGINE & ASSET WATCHER BİRLEŞİMİ ---
     if let Ok(engine) = gizmo::scripting::ScriptEngine::new() {
@@ -238,6 +289,7 @@ pub fn setup_studio_scene(world: &mut World, renderer: &gizmo::renderer::Rendere
         current_fps: 0.0,
         actual_dt: 0.0,
         editor_camera: cam.id(),
+        game_camera: game_cam.id(),
         do_raycast: false,
         physics_accumulator: 0.0,
         asset_watcher: gizmo::renderer::hot_reload::AssetWatcher::new(&["demo/assets", "scripts"]),

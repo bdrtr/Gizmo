@@ -173,7 +173,7 @@ pub fn ui_settings_window(ui: &mut egui::Ui, state: &mut EditorState) {
         egui::CollapsingHeader::new("🎨 Rendering & Post-Processing")
             .default_open(true)
             .show(ui, |ui| {
-                ui.checkbox(&mut state.fxaa_enabled, "FXAA Anti-Aliasing");
+                ui.checkbox(&mut state.post_process.fxaa_enabled, "FXAA Anti-Aliasing");
                 ui.label(
                     egui::RichText::new("Kenar yumuşatma — düşük GPU maliyeti ile pürüzsüz kenarlar.")
                         .weak()
@@ -181,22 +181,29 @@ pub fn ui_settings_window(ui: &mut egui::Ui, state: &mut EditorState) {
                 );
                 
                 ui.separator();
+                ui.heading("SSAO (Ekran Uzayı Ortam Gölgeleme)");
+                ui.checkbox(&mut state.post_process.ssao_enabled, "SSAO Aktif");
+                if state.post_process.ssao_enabled {
+                    ui.add(egui::Slider::new(&mut state.post_process.ssao_strength, 0.0..=5.0).text("Gölgelendirme Şiddeti"));
+                }
+                
+                ui.separator();
                 ui.heading("Bloom (Parlama)");
-                ui.add(egui::Slider::new(&mut state.bloom_intensity, 0.0..=3.0).text("Şiddet (Intensity)"));
-                ui.add(egui::Slider::new(&mut state.bloom_threshold, 0.0..=2.0).text("Eşik (Threshold)"));
+                ui.add(egui::Slider::new(&mut state.post_process.bloom_intensity, 0.0..=3.0).text("Şiddet (Intensity)"));
+                ui.add(egui::Slider::new(&mut state.post_process.bloom_threshold, 0.0..=2.0).text("Eşik (Threshold)"));
                 
                 ui.separator();
                 ui.heading("Tonemapping (Renk Filtreleri)");
-                ui.add(egui::Slider::new(&mut state.exposure, 0.1..=5.0).text("Pozlama (Exposure)"));
-                ui.add(egui::Slider::new(&mut state.vignette, 0.0..=1.0).text("Vignette (Kenar Karartması)"));
-                ui.add(egui::Slider::new(&mut state.chromatic_aberration, 0.0..=0.05).text("Chromatic Aberration"));
-                ui.add(egui::Slider::new(&mut state.film_grain, 0.0..=1.0).text("Film Grain"));
+                ui.add(egui::Slider::new(&mut state.post_process.exposure, 0.1..=5.0).text("Pozlama (Exposure)"));
+                ui.add(egui::Slider::new(&mut state.post_process.vignette, 0.0..=1.0).text("Vignette (Kenar Karartması)"));
+                ui.add(egui::Slider::new(&mut state.post_process.chromatic_aberration, 0.0..=0.05).text("Chromatic Aberration"));
+                ui.add(egui::Slider::new(&mut state.post_process.film_grain, 0.0..=1.0).text("Film Grain"));
 
                 ui.separator();
                 ui.heading("Kamera Odak (Depth of Field)");
-                ui.add(egui::Slider::new(&mut state.dof_focus_dist, 0.1..=100.0).text("Odak Mesafesi"));
-                ui.add(egui::Slider::new(&mut state.dof_focus_range, 0.1..=50.0).text("Odak Alanı (Range)"));
-                ui.add(egui::Slider::new(&mut state.dof_blur_size, 0.0..=10.0).text("Bulanıklık Miktarı"));
+                ui.add(egui::Slider::new(&mut state.post_process.dof_focus_dist, 0.1..=100.0).text("Odak Mesafesi"));
+                ui.add(egui::Slider::new(&mut state.post_process.dof_focus_range, 0.1..=50.0).text("Odak Alanı (Range)"));
+                ui.add(egui::Slider::new(&mut state.post_process.dof_blur_size, 0.0..=10.0).text("Bulanıklık Miktarı"));
             });
 
         ui.separator();

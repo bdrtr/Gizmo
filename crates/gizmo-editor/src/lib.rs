@@ -74,11 +74,7 @@ pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) 
             if i.key_pressed(egui::Key::W) { state.gizmo_mode = GizmoMode::Translate; }
             if i.key_pressed(egui::Key::E) { state.gizmo_mode = GizmoMode::Rotate; }
             if i.key_pressed(egui::Key::R) { state.gizmo_mode = GizmoMode::Scale; }
-            if i.key_pressed(egui::Key::Delete) {
-                for &entity in state.selection.entities.iter() {
-                    state.despawn_requests.push(entity);
-                }
-            }
+            // Delete kısayolu shortcuts.rs'de işleniyor (BUG-11 düzeltmesi: çift tetikleme önlendi)
         });
     }
 
@@ -107,6 +103,37 @@ pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) 
         state.pending_dialog_rx = None;
     }
 
+    // ==== Ctrl+S ile tetiklenen kaydetme dialog isteği (shortcuts.rs'den gelir) ====
+    if state.scene.request_save_dialog {
+        state.scene.request_save_dialog = false;
+        if state.pending_dialog_rx.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            state.pending_dialog_rx = Some(std::sync::Mutex::new(rx));
+            std::thread::spawn(move || {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let res = rfd::FileDialog::new()
+                        .add_filter("Gizmo Scene", &["scene"])
+                        .set_directory(".")
+                        .save_file();
+                    let _ = tx.send((
+                        true,
+                        res.map(|p: std::path::PathBuf| {
+                            let s = p.to_string_lossy().to_string();
+                            if s.starts_with(r"\\?\") {
+                                s[4..].to_string()
+                            } else {
+                                s
+                            }
+                        }),
+                    ));
+                }
+                #[cfg(target_arch = "wasm32")]
+                let _ = tx.send((true, None));
+            });
+        }
+    }
+
     // 1. Status Bar (En altta)
     egui::TopBottomPanel::bottom("status_bar")
         .exact_height(24.0)
@@ -129,11 +156,30 @@ pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) 
 
     let mut viewer = EditorTabViewer { world, state };
 
+    let mut dock_style = egui_dock::Style::from_egui(ctx.style().as_ref());
+    dock_style.separator.width = 2.0;
+    dock_style.separator.color_idle = egui::Color32::from_rgb(20, 20, 22);
+    dock_style.separator.color_hovered = egui::Color32::from_rgb(64, 120, 240);
+    dock_style.separator.color_dragged = egui::Color32::from_rgb(80, 140, 255);
+    
+    // Tab styling
+    dock_style.tab_bar.bg_fill = egui::Color32::from_rgb(22, 22, 24);
+    dock_style.tab.active.bg_fill = egui::Color32::from_rgb(34, 34, 36);
+    dock_style.tab.inactive.bg_fill = egui::Color32::from_rgb(28, 28, 30);
+    dock_style.tab.active.text_color = egui::Color32::WHITE;
+    dock_style.tab.inactive.text_color = egui::Color32::from_rgb(150, 150, 150);
+
     DockArea::new(&mut dock_state)
-        .style(egui_dock::Style::from_egui(ctx.style().as_ref()))
+        .style(dock_style)
         .show(ctx, &mut viewer);
 
-    viewer.state.dock_state = dock_state;
+viewer.state.dock_state = dock_state;
+
+    // Handle delayed tab opening safely outside the dock tree loop
+    if state.script.open {
+        state.open_tab(EditorTab::ScriptEditor);
+        state.script.open = false;
+    }
 
     // Her çerçevenin sonunda I/O optimizasyonu olarak prefs kirlendiyse dosyaya yaz
     state.prefs.flush_if_dirty();
