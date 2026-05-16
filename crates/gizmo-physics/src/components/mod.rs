@@ -1,4 +1,5 @@
 pub mod breakable;
+pub mod fighter;
 pub mod character;
 pub mod collider;
 pub mod collision_layer;

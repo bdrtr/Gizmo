@@ -918,6 +918,9 @@ impl<State: 'static> App<State> {
                             }
 
                             // ═══ Fixed Timestep Fizik Döngüsü ═══
+                            if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+                                profiler.begin_scope("physics");
+                            }
                             // PhysicsTime resource'u yoksa oluştur
                             if self
                                 .world
@@ -971,6 +974,14 @@ impl<State: 'static> App<State> {
                                 phys_time.compute_alpha();
                             }
 
+                            if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+                                profiler.end_scope("physics");
+                            }
+
+                            if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+                                profiler.begin_scope("update");
+                            }
+
                             // Kullanıcı update hook'u (render dt ile — kamera, UI, vb.)
                             if let Some(update_hk) = self.update_fn.as_mut() {
                                 update_hk(&mut self.world, &mut state, dt, &self.input);
@@ -978,6 +989,10 @@ impl<State: 'static> App<State> {
 
                             // Update sonrası olası ertelenmiş komutları (CommandQueue) hemen işle
                             self.world.apply_commands();
+
+                            if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+                                profiler.end_scope("update");
+                            }
 
                             // --- DYNAMIC FRACTURE & PARTICLE INTEGRATION ---
                             if let Some(physics_world) =
@@ -1017,17 +1032,26 @@ impl<State: 'static> App<State> {
                             }
 
                             // --- DRAW KISMI ---
+                            if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+                                profiler.begin_scope("render");
+                            }
                             let mut renderer = self.world.remove_resource::<Renderer>().unwrap();
 
                             let output = match renderer.surface.get_current_texture() {
                                 Ok(texture) => texture,
                                 Err(wgpu::SurfaceError::Outdated) => {
                                     self.world.insert_resource(renderer);
+                                    if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+                                        profiler.end_scope("render");
+                                    }
                                     return;
                                 }
                                 Err(e) => {
                                     tracing::error!("Surface hatasi: {:?}", e);
                                     self.world.insert_resource(renderer);
+                                    if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+                                        profiler.end_scope("render");
+                                    }
                                     return;
                                 }
                             };
@@ -1076,8 +1100,16 @@ impl<State: 'static> App<State> {
 
                             self.world.insert_resource(renderer);
 
+                            if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+                                profiler.end_scope("render");
+                            }
+
                             // İşlemlerin bitiminde frame-özel input girdilerini (fare delta vs.) temizle
                             self.input.begin_frame();
+
+                            if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+                                profiler.end_frame();
+                            }
                         }
                     }
                     Event::AboutToWait => {

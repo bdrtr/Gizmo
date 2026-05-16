@@ -160,9 +160,9 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // 3. ACES Tone Mapping
     let mapped = aces_tonemap(combined);
     
-    // 4. Gamma Correction
-    let gamma = vec3<f32>(1.0 / 2.2);
-    var final_color = pow(mapped, gamma);
+    // Swapchain is configured as an sRGB format (Bgra8UnormSrgb/Rgba8UnormSrgb)
+    // Hardware automatically applies gamma correction upon writing.
+    var final_color = mapped;
     
     // 5. Vignette
     let vignette = smoothstep(1.5, 0.3, center_dist * (1.0 + params.vignette_intensity));

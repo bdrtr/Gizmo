@@ -111,6 +111,7 @@ pub struct SceneState {
     pub load_request: Option<String>,
     pub clear_request: bool,
     pub rebuild_navmesh_request: bool,
+    pub request_save_dialog: bool,
     pub load_confirm_dialog: Option<String>,
     pub gizmo_original_transforms:
         std::collections::HashMap<gizmo_core::entity::Entity, gizmo_physics::components::Transform>,
@@ -165,6 +166,7 @@ impl Default for ConsoleState {
             show_warn: true,
             show_error: true,
             filter_text: String::new(),
+
             cached_logs: Vec::new(),
             last_version: 0,
             count_info: 0,
@@ -175,7 +177,78 @@ impl Default for ConsoleState {
 }
 
 /// Editörün tüm durumunu tutan yapı
+
+#[derive(Clone, Debug)]
+pub struct PostProcessSettings {
+    pub bloom_intensity: f32,
+    pub bloom_threshold: f32,
+    pub exposure: f32,
+    pub vignette: f32,
+    pub chromatic_aberration: f32,
+    pub dof_focus_dist: f32,
+    pub dof_focus_range: f32,
+    pub dof_blur_size: f32,
+    pub film_grain: f32,
+    pub fxaa_enabled: bool,
+    pub ssao_enabled: bool,
+    pub ssao_strength: f32,
+}
+
+impl Default for PostProcessSettings {
+    fn default() -> Self {
+        Self {
+            bloom_intensity: 0.8,
+            bloom_threshold: 0.85,
+            exposure: 1.0,
+            vignette: 0.2,
+            chromatic_aberration: 0.005,
+            dof_focus_dist: 10.0,
+            dof_focus_range: 20.0,
+            dof_blur_size: 2.0,
+            film_grain: 0.0,
+            fxaa_enabled: true,
+            ssao_enabled: true,
+            ssao_strength: 0.8,
+        }
+    }
+}
+
+/// Dövüş oyunu HUD durumu — game_view.rs tarafından okunur,
+/// simulation loop tarafından yazılır.
+pub struct FightHudState {
+    pub active: bool,
+    pub p1_name: String,
+    pub p2_name: String,
+    pub p1_health: f32,
+    pub p1_max_health: f32,
+    pub p2_health: f32,
+    pub p2_max_health: f32,
+    pub current_round: u32,
+    pub timer_seconds: f32,
+    pub p1_entity: Option<u32>,
+    pub p2_entity: Option<u32>,
+}
+
+impl Default for FightHudState {
+    fn default() -> Self {
+        Self {
+            active: false,
+            p1_name: "Player 1".to_string(),
+            p2_name: "Player 2".to_string(),
+            p1_health: 100.0,
+            p1_max_health: 100.0,
+            p2_health: 100.0,
+            p2_max_health: 100.0,
+            current_round: 1,
+            timer_seconds: 99.0,
+            p1_entity: None,
+            p2_entity: None,
+        }
+    }
+}
+
 pub struct EditorState {
+    pub post_process: PostProcessSettings,
     pub open: bool,
     pub mode: EditorMode,
     pub gizmo_mode: GizmoMode,
@@ -188,19 +261,7 @@ pub struct EditorState {
     pub gizmo_local_space: bool,
     pub shading_mode: u32,
     /// FXAA Anti-Aliasing açık/kapalı durumu
-    pub fxaa_enabled: bool,
-    
     // Post-Processing Settings
-    pub bloom_intensity: f32,
-    pub bloom_threshold: f32,
-    pub exposure: f32,
-    pub vignette: f32,
-    pub chromatic_aberration: f32,
-    pub dof_focus_dist: f32,
-    pub dof_focus_range: f32,
-    pub dof_blur_size: f32,
-    pub film_grain: f32,
-
     pub history: crate::history::History,
 
     // Panellerin görünürlüğü (asset browser hariç)
@@ -209,6 +270,8 @@ pub struct EditorState {
     pub show_toolbar: bool,
     pub settings_open: bool,
     pub show_colliders: bool,
+
+    pub inspector_drag_original_transforms: std::collections::HashMap<gizmo_core::entity::Entity, gizmo_physics::components::Transform>,
 
     // Diğer global UI state
     pub hierarchy_filter: String,
@@ -244,6 +307,10 @@ pub struct EditorState {
         Option<gizmo_math::Vec3>,
     )>,
     pub spawn_request: Option<String>,
+    /// Spawn edilen entity'nin otomatik olarak bağlanacağı parent
+    pub pending_child_parent: Option<gizmo_core::entity::Entity>,
+    /// Spawn edilen entity'ye otomatik eklenecek bileşenler
+    pub pending_child_components: Vec<String>,
     pub spawn_asset_request: Option<String>,
     pub spawn_asset_position: Option<gizmo_math::Vec3>,
     pub gltf_load_request: Option<(String, Option<gizmo_math::Vec3>)>,
@@ -270,6 +337,7 @@ pub struct EditorState {
         gizmo_math::Vec4,
     )>,
     pub debug_spawned_entities: Vec<(f32, u32)>,
+    pub clipboard_entities: Vec<gizmo_core::entity::Entity>,
 
     pub pending_dialog_rx:
         Option<std::sync::Mutex<std::sync::mpsc::Receiver<(bool, Option<String>)>>>,
@@ -287,6 +355,9 @@ pub struct EditorState {
         ) -> Result<(), String>,
         serde_json::Value,
     )>,
+
+    /// Fighting game HUD durumu (health bar, round, timer)
+    pub fight_hud: FightHudState,
 }
 
 impl EditorState {
@@ -304,18 +375,7 @@ impl EditorState {
             mouse_ndc: None,
             gizmo_local_space: false,
             shading_mode: 0,
-            fxaa_enabled: true,
-
-            bloom_intensity: 0.8,
-            bloom_threshold: 0.85,
-            exposure: 1.0,
-            vignette: 0.2,
-            chromatic_aberration: 0.005,
-            dof_focus_dist: 10.0,
-            dof_focus_range: 20.0,
-            dof_blur_size: 2.0,
-            film_grain: 0.0,
-
+            post_process: PostProcessSettings::default(),
             history: crate::history::History::new(prefs.max_history),
 
             show_hierarchy: true,
@@ -343,6 +403,8 @@ impl EditorState {
             script: ScriptEditorState::default(),
             prefs,
 
+            inspector_drag_original_transforms: std::collections::HashMap::new(),
+
             despawn_requests: Vec::new(),
             generate_terrain_requests: Vec::new(),
             duplicate_requests: Vec::new(),
@@ -351,6 +413,8 @@ impl EditorState {
             prefab_save_request: None,
             prefab_load_request: None,
             spawn_request: None,
+            pending_child_parent: None,
+            pending_child_components: Vec::new(),
             spawn_asset_request: None,
             spawn_asset_position: None,
             gltf_load_request: None,
@@ -373,12 +437,15 @@ impl EditorState {
 
             debug_draw_requests: Vec::new(),
             debug_spawned_entities: Vec::new(),
+            clipboard_entities: Vec::new(),
 
             pending_dialog_rx: None,
 
             play_snapshot: None,
 
             pending_json_updates: Vec::new(),
+
+            fight_hud: FightHudState::default(),
         }
     }
 
@@ -394,9 +461,14 @@ impl EditorState {
         }
     }
 
-    pub fn open_tab(&mut self, tab: EditorTab) {
-        if !self.is_tab_open(&tab) {
-            self.dock_state.push_to_first_leaf(tab);
+pub fn open_tab(&mut self, tab: EditorTab) {
+        if let Some(index) = self.dock_state.find_tab(&tab) {
+            self.dock_state.set_active_tab(index);
+        } else {
+            self.dock_state.push_to_first_leaf(tab.clone());
+            if let Some(index) = self.dock_state.find_tab(&tab) {
+                self.dock_state.set_active_tab(index);
+            }
         }
     }
     // --- Selection API ---
@@ -447,10 +519,12 @@ impl EditorState {
         self.mode = match self.mode {
             EditorMode::Edit => {
                 self.play_start_request = true;
+                self.open_tab(EditorTab::GameView);
                 EditorMode::Play
             }
             EditorMode::Play | EditorMode::Paused => {
                 self.play_stop_request = true;
+                self.open_tab(EditorTab::SceneView);
                 EditorMode::Edit
             }
         };
@@ -486,11 +560,11 @@ impl EditorState {
     /// Post-process değerlerini güvenli aralıklara sıkıştırır.
     /// Render pipeline'a geçmeden önce çağrılmalıdır.
     pub fn validate_post_process(&mut self) {
-        self.bloom_intensity = self.bloom_intensity.clamp(0.0, 5.0);
-        self.bloom_threshold = self.bloom_threshold.clamp(0.0, 10.0);
-        self.exposure = self.exposure.clamp(0.01, 20.0);
-        self.vignette = self.vignette.clamp(0.0, 1.0);
-        self.chromatic_aberration = self.chromatic_aberration.clamp(0.0, 0.1);
+        self.post_process.bloom_intensity = self.post_process.bloom_intensity.clamp(0.0, 5.0);
+        self.post_process.bloom_threshold = self.post_process.bloom_threshold.clamp(0.0, 10.0);
+        self.post_process.exposure = self.post_process.exposure.clamp(0.01, 20.0);
+        self.post_process.vignette = self.post_process.vignette.clamp(0.0, 1.0);
+        self.post_process.chromatic_aberration = self.post_process.chromatic_aberration.clamp(0.0, 0.1);
     }
 
     pub fn reset_layout(&mut self) {
@@ -562,19 +636,22 @@ impl Default for EditorState {
 
 fn create_default_dock_state() -> egui_dock::DockState<EditorTab> {
     use egui_dock::{DockState, NodeIndex};
+    
     // Root tab "Scene View" and "Game View" in the same area
     let mut state = DockState::new(vec![EditorTab::SceneView, EditorTab::GameView]);
     let surface = state.main_surface_mut();
 
-    // Right Split for Inspector & Hierarchy
-    let [main, right_panel] =
-        surface.split_right(NodeIndex::root(), 0.8, vec![EditorTab::Inspector]);
-    let [_hierarchy, _inspector] =
-        surface.split_above(right_panel, 0.4, vec![EditorTab::Hierarchy]);
+    // 1. Split right for Inspector (takes 25% of screen width)
+    let [main, _inspector] =
+        surface.split_right(NodeIndex::root(), 0.75, vec![EditorTab::Inspector]);
 
-    // Bottom Split for Asset Browser
-    let [_main, _bottom] =
-        surface.split_below(main, 0.7, vec![EditorTab::AssetBrowser, EditorTab::Console]);
+    // 2. Split left for Hierarchy (takes 20% of the remaining 75% width)
+    let [_hierarchy, center] =
+        surface.split_left(main, 0.20, vec![EditorTab::Hierarchy]);
+
+    // 3. Split bottom of the center area for Asset Browser and Console
+    let [_scene, _bottom] =
+        surface.split_below(center, 0.65, vec![EditorTab::AssetBrowser, EditorTab::Console]);
 
     state
 }
@@ -594,37 +671,37 @@ mod tests {
     #[test]
     fn test_post_process_defaults() {
         let state = EditorState::new();
-        assert_eq!(state.bloom_intensity, 0.8);
-        assert_eq!(state.bloom_threshold, 0.85);
-        assert_eq!(state.exposure, 1.0);
-        assert_eq!(state.vignette, 0.2);
-        assert_eq!(state.chromatic_aberration, 0.005);
+        assert_eq!(state.post_process.bloom_intensity, 0.8);
+        assert_eq!(state.post_process.bloom_threshold, 0.85);
+        assert_eq!(state.post_process.exposure, 1.0);
+        assert_eq!(state.post_process.vignette, 0.2);
+        assert_eq!(state.post_process.chromatic_aberration, 0.005);
     }
 
     #[test]
     fn test_post_process_validation_clamps() {
         let mut state = EditorState::new();
-        state.bloom_intensity = -5.0;
-        state.bloom_threshold = 999.0;
-        state.exposure = -1.0;
-        state.vignette = 2.0;
-        state.chromatic_aberration = 0.5;
+        state.post_process.bloom_intensity = -5.0;
+        state.post_process.bloom_threshold = 999.0;
+        state.post_process.exposure = -1.0;
+        state.post_process.vignette = 2.0;
+        state.post_process.chromatic_aberration = 0.5;
         state.validate_post_process();
-        assert_eq!(state.bloom_intensity, 0.0);
-        assert_eq!(state.bloom_threshold, 10.0);
-        assert_eq!(state.exposure, 0.01);
-        assert_eq!(state.vignette, 1.0);
-        assert_eq!(state.chromatic_aberration, 0.1);
+        assert_eq!(state.post_process.bloom_intensity, 0.0);
+        assert_eq!(state.post_process.bloom_threshold, 10.0);
+        assert_eq!(state.post_process.exposure, 0.01);
+        assert_eq!(state.post_process.vignette, 1.0);
+        assert_eq!(state.post_process.chromatic_aberration, 0.1);
     }
 
     #[test]
     fn test_post_process_validation_noop_on_valid() {
         let mut state = EditorState::new();
-        let orig_bloom = state.bloom_intensity;
-        let orig_exposure = state.exposure;
+        let orig_bloom = state.post_process.bloom_intensity;
+        let orig_exposure = state.post_process.exposure;
         state.validate_post_process();
-        assert_eq!(state.bloom_intensity, orig_bloom);
-        assert_eq!(state.exposure, orig_exposure);
+        assert_eq!(state.post_process.bloom_intensity, orig_bloom);
+        assert_eq!(state.post_process.exposure, orig_exposure);
     }
 
     // =========================================================

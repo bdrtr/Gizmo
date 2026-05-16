@@ -286,12 +286,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     var final_color = v_color * (ambient + total_diffuse + total_specular + fake_ibl_specular);
     
-    let a = 2.51;
-    let b = 0.03;
-    let c = 2.43;
-    let d = 0.59;
-    let e = 0.14;
-    final_color = clamp((final_color * (a * final_color + b)) / (final_color * (c * final_color + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
+    // We render to an Rgba16Float HDR buffer. Tone mapping is handled in post_process.wgsl.
     
     return vec4<f32>(final_color, in.inst_albedo.a * tex_color.a);
 }

@@ -3,8 +3,8 @@ use ron::Value;
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::HashMap;
 
-pub type SerializeFn = Box<dyn Fn(&World, u32) -> Option<Value> + Send + Sync>;
-pub type DeserializeFn = Box<dyn Fn(&mut World, u32, &Value) + Send + Sync>;
+pub type SerializeFn = Box<dyn Fn(&World, u32) -> Option<String> + Send + Sync>;
+pub type DeserializeFn = Box<dyn Fn(&mut World, u32, &String) + Send + Sync>;
 
 pub struct SceneRegistry {
     serializers: HashMap<String, SerializeFn>,
@@ -32,16 +32,8 @@ impl SceneRegistry {
             Box::new(move |world, entity_id| {
                 let storage = world.borrow::<T>();
                 if let Some(comp) = storage.get(entity_id) {
-                    // RON String'e dönüştür ve oradan AST'ye (Value) Parse et
                     match ron::ser::to_string(comp) {
-                        Ok(string_repr) => match ron::from_str::<Value>(&string_repr) {
-                            Ok(val) => return Some(val),
-                            Err(e) => tracing::info!(
-                                "[SceneRegistry] AST Donusturme Hatasi ({}): {}",
-                                std::any::type_name::<T>(),
-                                e
-                            ),
-                        },
+                        Ok(string_repr) => return Some(string_repr),
                         Err(e) => tracing::info!(
                             "[SceneRegistry] Serilestirme Hatasi ({}): {}",
                             std::any::type_name::<T>(),
@@ -55,21 +47,24 @@ impl SceneRegistry {
 
         self.deserializers.insert(
             name_de,
-            Box::new(move |world, entity_id, value| {
-                // RON AST'sinden (Value) doğrudan hedeflenen T türüne çevir (Gereksiz String dönüşümünü atlar ve düzgün parse eder)
-                if let Ok(comp) = value.clone().into_rust::<T>() {
-                    world.add_component(
-                        world
-                            .get_entity(entity_id)
-                            .expect("Invalid entity mapping during deserialization!"),
-                        comp,
-                    );
-                } else {
-                    tracing::info!(
-                        "[SceneRegistry] HATA: {} bileseni yuklenemedi! (Entity: {})",
-                        std::any::type_name::<T>(),
-                        entity_id
-                    );
+            Box::new(move |world, entity_id, value_str| {
+                match ron::from_str::<T>(value_str) {
+                    Ok(comp) => {
+                        world.add_component(
+                            world
+                                .get_entity(entity_id)
+                                .expect("Invalid entity mapping during deserialization!"),
+                            comp,
+                        );
+                    }
+                    Err(e) => {
+                        tracing::info!(
+                            "[SceneRegistry] HATA: {} bileseni yuklenemedi! (Entity: {}) - {}",
+                            std::any::type_name::<T>(),
+                            entity_id,
+                            e
+                        );
+                    }
                 }
             }),
         );
@@ -79,8 +74,8 @@ impl SceneRegistry {
     pub fn register_custom(
         &mut self,
         name: &str,
-        serialize: impl Fn(&World, u32) -> Option<Value> + Send + Sync + 'static,
-        deserialize: impl Fn(&mut World, u32, &Value) + Send + Sync + 'static,
+        serialize: impl Fn(&World, u32) -> Option<String> + Send + Sync + 'static,
+        deserialize: impl Fn(&mut World, u32, &String) + Send + Sync + 'static,
     ) {
         self.serializers
             .insert(name.to_string(), Box::new(serialize));
@@ -110,6 +105,7 @@ impl SceneRegistry {
         reg.register::<gizmo_physics::shape::Collider>("Collider");
         reg.register::<gizmo_physics::components::Hitbox>("Hitbox");
         reg.register::<gizmo_physics::components::Hurtbox>("Hurtbox");
+        reg.register::<gizmo_physics::components::fighter::FighterController>("FighterController");
 
         reg.register::<gizmo_renderer::components::Camera>("Camera");
         reg.register::<gizmo_renderer::components::PointLight>("PointLight");

@@ -48,28 +48,44 @@ impl EditorContext {
 
     pub fn apply_theme(&self) {
         let mut visuals = egui::Visuals::dark();
-        visuals.window_rounding = egui::Rounding::same(8.0);
-        visuals.menu_rounding = egui::Rounding::same(6.0);
-        let widget_rounding = egui::Rounding::same(4.0);
+        
+        // Modern, sleek rounding
+        let widget_rounding = egui::Rounding::same(6.0);
+        visuals.window_rounding = egui::Rounding::same(10.0);
+        visuals.menu_rounding = egui::Rounding::same(8.0);
         visuals.widgets.noninteractive.rounding = widget_rounding;
         visuals.widgets.inactive.rounding = widget_rounding;
         visuals.widgets.hovered.rounding = widget_rounding;
         visuals.widgets.active.rounding = widget_rounding;
         visuals.widgets.open.rounding = widget_rounding;
 
-        visuals.window_fill = egui::Color32::from_rgb(35, 35, 35); // Blender Window Background
-        visuals.panel_fill = egui::Color32::from_rgb(43, 43, 43); // Blender Panel Background
-        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(61, 61, 61); // Blender Inactive Widget
-        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(74, 74, 74); // Blender Hover Widget
-        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(86, 86, 86); // Blender Active Widget
-        visuals.selection.bg_fill = egui::Color32::from_rgb(237, 113, 28); // Blender Signature Orange
-        visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(237, 113, 28));
+        // Modern Dark Colors (similar to Unreal Engine / VS Code)
+        visuals.window_fill = egui::Color32::from_rgb(28, 28, 30); // Deep dark gray
+        visuals.panel_fill = egui::Color32::from_rgb(34, 34, 36);  // Slightly lighter panel
+        visuals.faint_bg_color = egui::Color32::from_rgb(42, 42, 45);
+
+        // Widget Backgrounds
+        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(45, 45, 48); // Buttons
+        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(58, 58, 62);  // Hover
+        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(70, 70, 75);   // Clicked
+
+        // Accent Color: Modern Soft Blue/Purple
+        let accent_color = egui::Color32::from_rgb(64, 120, 240); // Soft Tech Blue
+        visuals.selection.bg_fill = accent_color;
+        visuals.selection.stroke = egui::Stroke::new(1.0, accent_color);
+        
+        // Improve text contrast slightly
+        visuals.override_text_color = Some(egui::Color32::from_rgb(230, 230, 230));
+
         self.context.set_visuals(visuals);
 
+        // Improve spacing and padding for a less cluttered look
         let mut style = (*self.context.style()).clone();
-        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        style.spacing.button_padding = egui::vec2(8.0, 4.0);
-        style.spacing.window_margin = egui::Margin::same(10.0);
+        style.spacing.item_spacing = egui::vec2(10.0, 8.0);
+        style.spacing.button_padding = egui::vec2(12.0, 6.0);
+        style.spacing.window_margin = egui::Margin::same(12.0);
+        style.spacing.interact_size = egui::vec2(40.0, 24.0); // Make clickable areas taller
+        
         self.context.set_style(style);
     }
 

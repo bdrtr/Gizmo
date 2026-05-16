@@ -470,6 +470,11 @@ impl<'a> Commands<'a> {
                 self.world
                     .add_component(root, gizmo_core::component::Children(Vec::new()));
 
+                let mut skeletons = Vec::new();
+                for skel_data in &asset.skeletons {
+                    skeletons.push(self.renderer.create_skeleton(std::sync::Arc::new(skel_data.clone())));
+                }
+
                 for node in &asset.roots {
                     spawn_gltf_node_flat(
                         self.world,
@@ -477,7 +482,12 @@ impl<'a> Commands<'a> {
                         root.id(),
                         default_mat.clone(),
                         attach_colliders,
+                        &skeletons,
                     );
+                }
+
+                if !skeletons.is_empty() {
+                    self.world.add_component(root, skeletons[0].clone());
                 }
 
                 if !asset.animations.is_empty() {
@@ -545,6 +555,11 @@ impl<'a> Commands<'a> {
                 self.world
                     .add_component(root, gizmo_core::component::Children(Vec::new()));
 
+                let mut skeletons = Vec::new();
+                for skel_data in &asset.skeletons {
+                    skeletons.push(self.renderer.create_skeleton(std::sync::Arc::new(skel_data.clone())));
+                }
+
                 for node in &asset.roots {
                     spawn_gltf_node_flat(
                         self.world,
@@ -552,7 +567,12 @@ impl<'a> Commands<'a> {
                         root.id(),
                         default_mat.clone(),
                         attach_colliders,
+                        &skeletons,
                     );
+                }
+
+                if !skeletons.is_empty() {
+                    self.world.add_component(root, skeletons[0].clone());
                 }
 
                 if !asset.animations.is_empty() {
@@ -632,6 +652,7 @@ fn spawn_mesh_entity(
     trans.update_local_matrix();
 
     world.add_component(id, trans);
+    world.add_component(id, gizmo_physics::components::GlobalTransform::default());
     world.add_component(id, mesh);
     world.add_component(id, mat);
     world.add_component(id, MeshRenderer::new());
@@ -645,6 +666,7 @@ fn spawn_gltf_node_flat(
     parent_id: u32,
     default_mat: Material,
     attach_colliders: bool,
+    skeletons: &[gizmo_renderer::components::Skeleton],
 ) {
     use gizmo_core::component::{Children, Parent};
     let entity = world.spawn();
@@ -673,13 +695,18 @@ fn spawn_gltf_node_flat(
         raw_rot.normalize()
     };
 
-    let t = Transform::new(Vec3::new(
+    let mut t = Transform::new(Vec3::new(
         node.translation[0],
         node.translation[1],
         node.translation[2],
     ))
     .with_rotation(rot)
     .with_scale(Vec3::new(node.scale[0], node.scale[1], node.scale[2]));
+
+    if node.skin_index.is_some() || node.name.as_deref() == Some("Armature") {
+        t = Transform::default();
+    }
+    
     world.add_component(entity, t);
     world.add_component(entity, gizmo_physics::GlobalTransform::default());
 
@@ -697,12 +724,28 @@ fn spawn_gltf_node_flat(
         world.add_component(prim, mat_opt.clone().unwrap_or_else(|| default_mat.clone()));
         world.add_component(prim, MeshRenderer::new());
 
+        if let Some(skin_idx) = node.skin_index {
+            if skin_idx < skeletons.len() {
+                world.add_component(prim, skeletons[skin_idx].clone());
+            }
+        }
+
         if attach_colliders {
             let extents = (mesh.bounds.max - mesh.bounds.min) / 2.0;
+            let center_offset = (mesh.bounds.max + mesh.bounds.min) / 2.0;
             let cx = extents.x.max(0.01);
             let cy = extents.y.max(0.01);
             let cz = extents.z.max(0.01);
-            world.add_component(prim, gizmo_physics::shape::Collider::new_aabb(cx, cy, cz));
+            
+            // Eğer merkeze tam oturmuyorsa Compound(offset_box) kullanarak hizala
+            if center_offset.length_squared() > 0.0001 {
+                world.add_component(
+                    prim,
+                    gizmo_physics::shape::Collider::offset_box(center_offset.into(), gizmo_math::Vec3::new(cx, cy, cz)),
+                );
+            } else {
+                world.add_component(prim, gizmo_physics::shape::Collider::new_aabb(cx, cy, cz));
+            }
         }
     }
 
@@ -723,6 +766,7 @@ fn spawn_gltf_node_flat(
             entity.id(),
             default_mat.clone(),
             attach_colliders,
+            skeletons,
         );
     }
 }

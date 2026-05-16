@@ -143,12 +143,6 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
             state.mouse_ndc = Some(gizmo_math::Vec2::new(nx, ny));
         }
 
-        if response.clicked_by(egui::PointerButton::Primary)
-            || response.drag_started_by(egui::PointerButton::Primary)
-        {
-            tracing::info!("SceneView CLICKED/DRAG_STARTED! ndc: {:?}", state.mouse_ndc);
-            state.do_raycast = true;
-        }
 
         // Sağ tık kamerayı çevirmek için (Egui ham input'u yuttuğu için burdan geçirmeliyiz)
         if response.dragged_by(egui::PointerButton::Secondary) {
@@ -183,6 +177,8 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
     } else {
         state.mouse_ndc = None;
         state.camera.look_delta = None;
+        state.camera.pan_delta = None;
+        state.camera.orbit_delta = None;
         state.camera.scroll_delta = None;
     }
 
@@ -194,9 +190,34 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
             tracing::info!(">>> DRAG RELEASED! latest_pos: {:?}, rect: {:?}, in_scene: {}", latest_pos, rect, in_scene);
             
             if in_scene {
-                state.log_info(&format!("Model sahneye bırakıldı: {}", dragged_path));
+                let mut spawn_pos = gizmo_math::Vec3::ZERO;
+                
+                // Fare pozisyonuna göre yer düzlemi (Y=0) ile kesişimi hesapla
+                if let (Some(ndc), Some(view_mat), Some(proj_mat)) = (state.mouse_ndc, state.camera.view, state.camera.proj) {
+                    let view_proj_inv = (proj_mat * view_mat).inverse();
+                    let ray = gizmo_math::Ray::from_ndc(ndc, view_proj_inv);
+                    
+                    if ray.direction.y.abs() > 1e-4 {
+                        let t = -ray.origin.y / ray.direction.y;
+                        if t > 0.0 {
+                            let raw_pos = ray.at(t);
+                            let snap = if state.prefs.snap_enabled { state.prefs.snap_translate as f32 } else { 0.0 };
+                            if snap > 0.0 {
+                                spawn_pos = gizmo_math::Vec3::new(
+                                    (raw_pos.x / snap).round() * snap,
+                                    0.0,
+                                    (raw_pos.z / snap).round() * snap,
+                                );
+                            } else {
+                                spawn_pos = gizmo_math::Vec3::new(raw_pos.x, 0.0, raw_pos.z);
+                            }
+                        }
+                    }
+                }
+
+                state.log_info(&format!("Model sahneye bırakıldı: {} ({:.1}, {:.1}, {:.1})", dragged_path, spawn_pos.x, spawn_pos.y, spawn_pos.z));
                 state.spawn_asset_request = Some(dragged_path);
-                state.spawn_asset_position = Some(gizmo_math::Vec3::ZERO);
+                state.spawn_asset_position = Some(spawn_pos);
             }
             state.dragged_asset = None; // Her ihtimale karşı sıfırla
         }
@@ -353,6 +374,15 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
 
     // --- RUBBER BAND (KUTU İLE ÇOKLU SEÇİM) ---
     let is_dragging_gizmo = gizmo_interacted || !state.scene.gizmo_original_transforms.is_empty();
+
+    if !is_dragging_gizmo {
+        if response.clicked_by(egui::PointerButton::Primary)
+            || response.drag_started_by(egui::PointerButton::Primary)
+        {
+            tracing::info!("SceneView CLICKED/DRAG_STARTED! ndc: {:?}", state.mouse_ndc);
+            state.do_raycast = true;
+        }
+    }
     if !is_dragging_gizmo && response.dragged_by(egui::PointerButton::Primary) {
         if state.selection.rubber_band_start.is_none() {
             if let Some(pos) = press_origin {

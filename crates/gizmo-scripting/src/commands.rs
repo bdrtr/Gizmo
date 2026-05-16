@@ -92,15 +92,43 @@ pub enum ScriptCommand {
     // Kamera
     SetCameraTarget(u32), // hangi entity'yi takip etsin
     SetCameraFov(f32),
+    /// İki dövüşçüyü aynı anda takip eden fighting camera
+    SetFightCamera {
+        p1_id: u32,
+        p2_id: u32,
+        height: f32,     // Kamera yüksekliği (Y offset)
+        distance: f32,   // Minimum uzaklık (Z offset)
+    },
 
-    // Component
+// Component
     SetEntityName(u32, String),
+PlayAnimation {
+        id: u32,
+        name: String,
+        blend: f32,
+        loop_anim: bool,
+    },
+    SetAnimationSpeed(u32, f32),
+
 
     // AI
     AddNavAgent(u32),
     SetAiTarget(u32, Vec3),
     ClearAiTarget(u32),
+
+    // Fighter
+    SetFighterMove {
+        id: u32,
+        name: String,
+        startup: u32,
+        active: u32,
+        recovery: u32,
+        damage: f32,
+    },
+    ApplyHitstop(u32, u32),
+    ApplyHitstun(u32, u32),
 }
+
 
 /// Thread-local komut kuyruğu (Lua callback'leri içinden erişilebilir)
 pub struct CommandQueue {

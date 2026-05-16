@@ -221,24 +221,57 @@ fn draw_entity_node(
 
     let is_hidden = is_hidden_comp.contains(entity.id());
 
-    // Düğüm Çizimi + Drag Drop Kapsüllemesi (Satır Duplicate Engellendi)
+    // Düğüm Çizimi + Drag Drop Kapsüllemesi
     let mut draw_row = |ui: &mut egui::Ui| {
+        let icon = if entity_name.to_lowercase().contains("camera") {
+            "📷"
+        } else if entity_name.to_lowercase().contains("light") {
+            "💡"
+        } else {
+            "📦"
+        };
+
         let label_text = if is_hidden {
-            format!("📦 {} (Gizli)", entity_name)
+            format!("{} {} (Gizli)", icon, entity_name)
         } else {
-            format!("📦 {}", entity_name)
+            format!("{} {}", icon, entity_name)
         };
 
-        let label = if is_selected {
-            egui::RichText::new(label_text)
-                .strong()
-                .color(egui::Color32::from_rgb(100, 200, 255))
+        // Tek bir interaction alanı: hem click hem drag (önceki ui.interact çakışmasını önler)
+        let _row_id = egui::Id::new("hierarchy_row").with(entity.id());
+        let desired_size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+        let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click_and_drag());
+
+        // Arka plan — seçili ise vurgu
+        if is_selected || response.hovered() {
+            let bg_color = if is_selected {
+                ui.style().visuals.selection.bg_fill
+            } else {
+                egui::Color32::from_white_alpha(8)
+            };
+            ui.painter().rect_filled(rect, 2.0, bg_color);
+        }
+
+        // Metin
+        let text_color = if is_selected {
+            egui::Color32::from_rgb(100, 200, 255)
         } else {
-            egui::RichText::new(label_text)
+            ui.style().visuals.text_color()
         };
+        let font = if is_selected {
+            egui::FontId::proportional(13.0)
+        } else {
+            egui::FontId::proportional(13.0)
+        };
+        ui.painter().text(
+            rect.left_center() + egui::vec2(4.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            &label_text,
+            font,
+            text_color,
+        );
 
-        let response = ui.selectable_label(is_selected, label);
-
+        // Tıklama — seçim
         if response.clicked() {
             state.log_info(&format!("Hiyerarşiden tıklandı: {}", entity_name));
             if ui.input(|i| i.modifiers.command) {
@@ -248,22 +281,19 @@ fn draw_entity_node(
             }
         }
 
-        // --- Sürükle Bırak (Drag & Drop) ---
-        let drag_id = egui::Id::new("drag_ent").with(entity.id());
-        let drag_response = ui.interact(response.rect, drag_id, egui::Sense::drag());
-
-        if drag_response.drag_started() {
+        // --- Sürükle Bırak (Drag & Drop) --- aynı response üzerinden
+        if response.drag_started() {
             ui.memory_mut(|m| m.data.insert_temp(egui::Id::new("dragged_ent"), entity));
         }
 
-        if drag_response.hovered() {
+        if response.hovered() {
             if let Some(dragged) = ui.memory(|m| {
                 m.data
                     .get_temp::<gizmo_core::entity::Entity>(egui::Id::new("dragged_ent"))
             }) {
                 // Vurgu rengi ile bırakılabilecek yeri göster
                 ui.painter().rect_stroke(
-                    response.rect,
+                    rect,
                     2.0,
                     egui::Stroke::new(1.0, egui::Color32::YELLOW),
                 );
@@ -305,6 +335,32 @@ fn draw_entity_node(
             ui.separator();
 
             // === HİYERARŞİ ===
+            if ui.button("➕ Çocuk Entity Ekle").clicked() {
+                // Boş child entity oluştur ve bu entity'nin altına bağla
+                state.spawn_request = Some("Empty".to_string());
+                // spawn sonrası reparent yapılacak → spawn_request işlenirken
+                // parent'ı ayarlamak için pending_child_parent kullanılacak
+                state.pending_child_parent = Some(entity);
+                ui.close_menu();
+            }
+
+            // Dövüş oyunu kısayolları
+            if ui.button("🥊 Hitbox Ekle (Çocuk)").clicked() {
+                state.spawn_request = Some("Empty".to_string());
+                state.pending_child_parent = Some(entity);
+                state.pending_child_components.push("Hitbox".to_string());
+                ui.close_menu();
+            }
+
+            if ui.button("🛡 Hurtbox Ekle (Çocuk)").clicked() {
+                state.spawn_request = Some("Empty".to_string());
+                state.pending_child_parent = Some(entity);
+                state.pending_child_components.push("Hurtbox".to_string());
+                ui.close_menu();
+            }
+
+            ui.separator();
+
             if ui.button("🔗 Kökten Ayır (Unparent)").clicked() {
                 state.unparent_request = Some(entity);
                 ui.close_menu();
@@ -334,13 +390,33 @@ fn draw_entity_node(
     };
 
     if has_children {
-        // Katlanabilir ağaç düğümü
+        // Katlanabilir ağaç düğümü — Toggle ve Label ayrı click alanı
         let id = ui.make_persistent_id(format!("entity_{}", entity.id()));
-        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
-            .show_header(ui, |ui| {
-                draw_row(ui);
-            })
-            .body(|ui| {
+        let mut collapsing_state =
+            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
+        let is_open = collapsing_state.is_open();
+
+        // Yatay satır: [▼ toggle] [seçilebilir label]
+        let _header_res = ui.horizontal(|ui| {
+            // Küçük üçgen toggle butonu (sadece bu alana tıklanınca aç/kapa)
+            let triangle = if is_open { "▼" } else { "▶" };
+            if ui
+                .add(egui::Button::new(
+                    egui::RichText::new(triangle).size(10.0),
+                ).frame(false).min_size(egui::vec2(14.0, 14.0)))
+                .clicked()
+            {
+                collapsing_state.toggle(ui);
+            }
+            // Seçilebilir label (ayrı click alanı — seçim burada)
+            draw_row(ui);
+        });
+
+        collapsing_state.store(ui.ctx());
+
+        // Açıksa çocukları girintili çiz
+        if is_open {
+            ui.indent(id, |ui| {
                 if let Some(children) = children_comp.get(entity.id()) {
                     for &child_id in &children.0 {
                         if let Some(child_ent) = world.get_entity(child_id) {
@@ -361,6 +437,7 @@ fn draw_entity_node(
                     }
                 }
             });
+        }
     } else {
         // Alt elemanı olmayan düz düğüm
         draw_row(ui);

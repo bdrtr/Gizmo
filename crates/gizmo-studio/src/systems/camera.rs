@@ -34,12 +34,14 @@ pub fn handle_camera(
             cameras.get_mut(state.editor_camera),
         ) {
             // 1. Mouse Look (Egui üzerinden gelen delta okuması)
-            if let Some(delta) = look_delta {
-                let sensitivity = 0.003;
+            if !is_playing {
+                if let Some(delta) = look_delta {
+                    let sensitivity = 0.003;
 
-                cam.yaw += delta.x * sensitivity;
-                cam.pitch -= delta.y * sensitivity;
-                // Pitch sınırlaması fonksiyonun sonunda yapılıyor
+                    cam.yaw += delta.x * sensitivity;
+                    cam.pitch -= delta.y * sensitivity;
+                    // Pitch sınırlaması fonksiyonun sonunda yapılıyor
+                }
             }
 
             // 2. Serbest Uçuş (WASD + Q/E)
@@ -155,11 +157,12 @@ pub fn handle_camera(
                     - (t.rotation * gizmo::math::Vec3::new(0.0, 0.0, 1.0)) * camera_focus_distance;
             }
 
-            // 5. Scroll Zoom (İleri / Geri)
-            if scroll_delta.abs() > 0.0001 {
+            // 5. Scroll Zoom (İleri / Geri) — Play modunda devre dışı
+            if !is_playing && scroll_delta.abs() > 0.0001 {
                 let scroll = scroll_delta;
                 // Zoom hızı da odak noktasına yaklaştıkça yavaşlayıp hassaslaşacak
-                let zoom_amount = scroll * camera_focus_distance * 0.1;
+                // Egui'den gelen scroll_delta piksel cinsinden olduğu için çarpanı çok düşük tutmalıyız
+                let zoom_amount = scroll * camera_focus_distance * 0.003;
                 camera_focus_distance -= zoom_amount;
                 if camera_focus_distance < 0.1 {
                     camera_focus_distance = 0.1;

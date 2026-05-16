@@ -86,6 +86,7 @@ pub fn handle_scene_operations(
                 "Hitbox" => world.add_component(ent, gizmo::physics::components::Hitbox::default()),
                 "Hurtbox" => world.add_component(ent, gizmo::physics::components::Hurtbox::default()),
                 "BoneAttachment" => world.add_component(ent, gizmo::renderer::components::BoneAttachment::default()),
+                "FighterController" => world.add_component(ent, gizmo::physics::components::fighter::FighterController::default()),
 
                 _ => editor_state.log_warning(&format!("Bilinmeyen component: {}", comp_name)),
             }
@@ -185,8 +186,12 @@ pub fn handle_scene_operations(
             .map(|a| (a.cube.clone(), a.white_tex.clone()));
 
         if let Some((cube_mesh, white_tex)) = pending_assets {
+            let sphere_mesh = world
+                .get_resource::<DebugAssets>()
+                .map(|a| a.sphere.clone());
             let e = world.spawn();
             world.add_component(e, Transform::new(Vec3::ZERO));
+            world.add_component(e, gizmo::physics::components::GlobalTransform::default());
             world.add_component(e, gizmo::renderer::components::MeshRenderer::new());
 
             match kind.as_str() {
@@ -211,7 +216,7 @@ pub fn handle_scene_operations(
                 }
                 "Sphere" => {
                     world.add_component(e, gizmo::core::component::EntityName("Küre".to_string()));
-                    world.add_component(e, cube_mesh);
+                    world.add_component(e, sphere_mesh.clone().unwrap_or(cube_mesh.clone()));
                     world.add_component(
                         e,
                         gizmo::prelude::Material::new(white_tex).with_pbr(
@@ -238,6 +243,70 @@ pub fn handle_scene_operations(
                 .push(gizmo::editor::history::EditorAction::EntitySpawned {
                     entity_ids: vec![e],
                 });
+
+            // === Çocuk Entity olarak bağla (pending_child_parent) ===
+            if let Some(parent_entity) = editor_state.pending_child_parent.take() {
+                // Parent → Children listesine ekle
+                {
+                    let mut children_comp = world.borrow_mut::<gizmo::core::component::Children>();
+                    if let Some(ch) = children_comp.get_mut(parent_entity.id()) {
+                        if !ch.0.contains(&e.id()) {
+                            ch.0.push(e.id());
+                        }
+                    } else {
+                        drop(children_comp);
+                        world.add_component(
+                            parent_entity,
+                            gizmo::core::component::Children(vec![e.id()]),
+                        );
+                    }
+                }
+                // Child → Parent bileşenini ayarla
+                world.add_component(e, gizmo::core::component::Parent(parent_entity.id()));
+
+                // İsmi parent'a göre güncelle
+                let parent_name = world
+                    .borrow::<gizmo::core::component::EntityName>()
+                    .get(parent_entity.id())
+                    .map(|n| n.0.clone())
+                    .unwrap_or_default();
+
+                editor_state.log_info(&format!(
+                    "Entity, '{}' altına çocuk olarak eklendi.",
+                    parent_name
+                ));
+            }
+
+            // === Otomatik bileşen ekleme (pending_child_components) ===
+            let pending_components: Vec<String> = editor_state.pending_child_components.drain(..).collect();
+            for comp_name in &pending_components {
+                match comp_name.as_str() {
+                    "Hitbox" => {
+                        world.add_component(e, gizmo::physics::components::Hitbox::default());
+                        // İsmi güncelle
+                        if let Some(ent) = world.get_entity(e.id()) {
+                            world.add_component(
+                                ent,
+                                gizmo::core::component::EntityName("Hitbox".to_string()),
+                            );
+                        }
+                        editor_state.log_info("🥊 Hitbox bileşeni eklendi.");
+                    }
+                    "Hurtbox" => {
+                        world.add_component(e, gizmo::physics::components::Hurtbox::default());
+                        if let Some(ent) = world.get_entity(e.id()) {
+                            world.add_component(
+                                ent,
+                                gizmo::core::component::EntityName("Hurtbox".to_string()),
+                            );
+                        }
+                        editor_state.log_info("🛡 Hurtbox bileşeni eklendi.");
+                    }
+                    _ => {
+                        editor_state.add_component_request = Some((e, comp_name.clone()));
+                    }
+                }
+            }
         }
     }
 
@@ -280,7 +349,17 @@ pub fn handle_scene_operations(
                 if !ch.0.contains(&child_id.id()) {
                     ch.0.push(child_id.id());
                 }
+            } else {
+                // Yeni parent'ın henüz Children component'i yok → oluştur
+                drop(children_comp);
+                if let Some(parent_ent) = world.get_entity(new_parent_id.id()) {
+                    world.add_component(
+                        parent_ent,
+                        gizmo::core::component::Children(vec![child_id.id()]),
+                    );
+                }
             }
+
         }
 
         if let Some(child_ent) = world.get_entity(child_id.id()) {

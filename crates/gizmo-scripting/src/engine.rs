@@ -8,6 +8,7 @@ use std::sync::Arc;
 use crate::api_ai;
 use crate::api_audio;
 use crate::api_entity;
+use crate::api_fighter;
 use crate::api_input;
 use crate::api_physics;
 use crate::api_scene;
@@ -196,6 +197,7 @@ impl ScriptEngine {
 
         // === API MODÜLLERİNİ KAYDET ===
         api_entity::register_entity_api(&lua, command_queue.clone())?;
+        api_fighter::register_fighter_api(&lua, command_queue.clone())?;
         api_input::register_input_api(&lua)?;
         api_physics::register_physics_api(&lua, command_queue.clone())?;
         api_scene::register_scene_api(&lua, command_queue.clone())?;
@@ -252,6 +254,8 @@ impl ScriptEngine {
         // 1. World verilerini Lua'ya aktar (read snapshot)
         api_entity::update_entity_read_api(&self.lua, world)
             .map_err(|e| format!("Entity API güncelleme hatası: {}", e))?;
+        api_fighter::update_fighter_read_api(&self.lua, world)
+            .map_err(|e| format!("Fighter API güncelleme hatası: {}", e))?;
         api_input::update_input_api(&self.lua, input)
             .map_err(|e| format!("Input API güncelleme hatası: {}", e))?;
         api_scene::update_scene_api(&self.lua, world)
@@ -453,10 +457,22 @@ impl ScriptEngine {
                         q.push(("info".to_string(), format!("Entity destroyed: {}", id)));
                     }
                 }
-                ScriptCommand::SetEntityName(id, name) => {
+ScriptCommand::SetEntityName(id, name) => {
                     let mut names = world.borrow_mut::<gizmo_core::EntityName>();
                     if let Some(n) = names.get_mut(id) {
                         n.0 = name;
+                    }
+                }
+ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
+                    let mut players = world.borrow_mut::<gizmo_renderer::components::AnimationPlayer>();
+                    if let Some(player) = players.get_mut(id) {
+                        player.play_animation_by_name(&name, blend, loop_anim);
+                    }
+                }
+                ScriptCommand::SetAnimationSpeed(id, speed) => {
+                    let mut players = world.borrow_mut::<gizmo_renderer::components::AnimationPlayer>();
+                    if let Some(player) = players.get_mut(id) {
+                        player.speed = speed;
                     }
                 }
                 ScriptCommand::AddNavAgent(id) => {
@@ -474,10 +490,38 @@ impl ScriptEngine {
                         agent.set_target(target);
                     }
                 }
-                ScriptCommand::ClearAiTarget(id) => {
+ScriptCommand::ClearAiTarget(id) => {
                     let mut agents = world.borrow_mut::<gizmo_ai::components::NavAgent>();
                     if let Some(agent) = agents.get_mut(id) {
                         agent.clear_path();
+                    }
+                }
+                ScriptCommand::SetFighterMove { id, name, startup, active, recovery, damage } => {
+                    let mut fighters = world.borrow_mut::<gizmo_physics::components::fighter::FighterController>();
+                    if let Some(fighter) = fighters.get_mut(id) {
+                        fighter.active_move = Some(gizmo_physics::components::fighter::CombatMove {
+                            name,
+                            frame_data: gizmo_physics::components::fighter::FrameData {
+                                startup,
+                                active,
+                                recovery,
+                                damage,
+                                ..Default::default()
+                            }
+                        });
+                        fighter.current_move_frame = 0;
+                    }
+                }
+                ScriptCommand::ApplyHitstop(id, frames) => {
+                    let mut fighters = world.borrow_mut::<gizmo_physics::components::fighter::FighterController>();
+                    if let Some(fighter) = fighters.get_mut(id) {
+                        fighter.apply_hitstop(frames);
+                    }
+                }
+                ScriptCommand::ApplyHitstun(id, frames) => {
+                    let mut fighters = world.borrow_mut::<gizmo_physics::components::fighter::FighterController>();
+                    if let Some(fighter) = fighters.get_mut(id) {
+                        fighter.apply_hitstun(frames);
                     }
                 }
                 ScriptCommand::SaveScene(_)
@@ -491,8 +535,9 @@ impl ScriptEngine {
                 | ScriptCommand::FinishRace { .. }
                 | ScriptCommand::ResetRace
                 | ScriptCommand::SetCameraTarget(_)
-                | ScriptCommand::SetCameraFov(_) => {
-                    // Ignored
+                | ScriptCommand::SetCameraFov(_)
+                | ScriptCommand::SetFightCamera { .. } => {
+                    // Bu komutlar flush_commands'ın dönüş değerinde (unhandled) zaten yer alacak
                 }
                 other => {
                     unhandled.push(other);
