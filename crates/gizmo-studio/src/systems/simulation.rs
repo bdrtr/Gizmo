@@ -97,11 +97,148 @@ pub fn handle_simulation(
         let mut steps = 0;
         while state.physics_accumulator >= fixed_dt && steps < 16 {
             gizmo::physics::system::physics_step_system(world, fixed_dt);
+            
+            // Fighter System: Dövüş mekanikleri (Input Buffer, Hitstop) her fizik karesinde güncellenir
+            {
+                let has_am = world.try_get_resource::<gizmo::core::input::ActionMap>().is_ok();
+                if !has_am {
+                    let mut am = gizmo::core::input::ActionMap::new();
+                    use gizmo::prelude::KeyCode;
+                    // Yön tuşları (Ok tuşları)
+                    am.bind_key("Up",    KeyCode::ArrowUp as u32);
+                    am.bind_key("Down",  KeyCode::ArrowDown as u32);
+                    am.bind_key("Left",  KeyCode::ArrowLeft as u32);
+                    am.bind_key("Right", KeyCode::ArrowRight as u32);
+                    // Alternatif yön: WASD
+                    am.bind_key("Up",    KeyCode::KeyW as u32);
+                    am.bind_key("Down",  KeyCode::KeyS as u32);
+                    am.bind_key("Left",  KeyCode::KeyA as u32);
+                    am.bind_key("Right", KeyCode::KeyD as u32);
+                    // Saldırı tuşları: J=LightPunch, K=HeavyPunch, L=LightKick, U=HeavyKick
+                    am.bind_key("LightPunch", KeyCode::KeyJ as u32);
+                    am.bind_key("HeavyPunch", KeyCode::KeyK as u32);
+                    am.bind_key("LightKick",  KeyCode::KeyL as u32);
+                    am.bind_key("HeavyKick",  KeyCode::KeyU as u32);
+                    world.insert_resource(am);
+                }
+                
+                if let Ok(am) = world.try_get_resource::<gizmo::core::input::ActionMap>() {
+                    gizmo::physics::system::physics_fighter_system(world, input, &am);
+                }
+                
+                // Hit Detection: Hitbox ↔ Hurtbox çarpışma algılama
+                let hit_events = gizmo::physics::system::hit_detection_system(world);
+                for event in &hit_events {
+                    editor_state.log_info(&format!(
+                        "💥 HIT! Saldırgan:{} → Kurban:{} | Hasar: {:.1} | Pozisyon: ({:.1}, {:.1}, {:.1})",
+                        event.attacker_id, event.victim_id, event.damage,
+                        event.hit_point.x, event.hit_point.y, event.hit_point.z
+                    ));
+                }
+            }
+            
             state.physics_accumulator -= fixed_dt;
             steps += 1;
         }
     } else {
         state.physics_accumulator = 0.0;
+    }
+
+    // --- FIGHT HUD SYNC: FighterController → EditorState.fight_hud ---
+    if editor_state.is_playing() {
+        let fighters = world.borrow::<gizmo::physics::components::fighter::FighterController>();
+        let names = world.borrow::<gizmo::core::component::EntityName>();
+        let mut found_any = false;
+
+        for (id, fighter) in fighters.iter() {
+            found_any = true;
+            if fighter.player_id == 1 {
+                editor_state.fight_hud.p1_entity = Some(id);
+                editor_state.fight_hud.p1_health = fighter.health;
+                editor_state.fight_hud.p1_max_health = fighter.max_health;
+                if let Some(name) = names.get(id) {
+                    editor_state.fight_hud.p1_name = name.0.clone();
+                }
+            } else if fighter.player_id == 2 {
+                editor_state.fight_hud.p2_entity = Some(id);
+                editor_state.fight_hud.p2_health = fighter.health;
+                editor_state.fight_hud.p2_max_health = fighter.max_health;
+                if let Some(name) = names.get(id) {
+                    editor_state.fight_hud.p2_name = name.0.clone();
+                }
+            }
+        }
+
+        editor_state.fight_hud.active = found_any && editor_state.fight_hud.p1_entity.is_some() && editor_state.fight_hud.p2_entity.is_some();
+
+        // Timer countdown
+        if editor_state.fight_hud.active && editor_state.fight_hud.timer_seconds > 0.0 {
+            editor_state.fight_hud.timer_seconds = (editor_state.fight_hud.timer_seconds - dt).max(0.0);
+        }
+
+        // --- MISSING-3: DÖVÜŞ KAMERASI ---
+        // İki dövüşçü varsa kamerayı otomatik olarak aralarına konumlandır
+        if editor_state.fight_hud.active {
+            if let (Some(p1_id), Some(p2_id)) = (editor_state.fight_hud.p1_entity, editor_state.fight_hud.p2_entity) {
+                let p1_pos;
+                let p2_pos;
+                {
+                    let transforms = world.borrow::<gizmo::physics::Transform>();
+                    p1_pos = transforms.get(p1_id).map(|t| t.position);
+                    p2_pos = transforms.get(p2_id).map(|t| t.position);
+                }
+
+                if let (Some(p1), Some(p2)) = (p1_pos, p2_pos) {
+                    let midpoint = (p1 + p2) * 0.5;
+                    let separation = (p2 - p1).length().max(2.0);
+
+                    let camera_height = 1.8_f32;
+                    let min_dist = 4.0_f32;
+                    let camera_distance = (separation * 1.2).max(min_dist);
+
+                    let target_pos = gizmo::math::Vec3::new(
+                        midpoint.x,
+                        midpoint.y + camera_height,
+                        midpoint.z + camera_distance,
+                    );
+
+                    let look_target = gizmo::math::Vec3::new(
+                        midpoint.x,
+                        midpoint.y + camera_height * 0.5,
+                        midpoint.z,
+                    );
+
+                    // Editör kamera entity'sinin Transform ve Camera bileşenlerini güncelle
+                    let cam_entity_id = state.editor_camera;
+                    {
+                        let mut transforms = world.borrow_mut::<gizmo::physics::Transform>();
+                        let mut cameras = world.borrow_mut::<gizmo::renderer::components::Camera>();
+
+                        if let Some(t) = transforms.get_mut(cam_entity_id) {
+                            // Yumuşak geçiş (lerp)
+                            let lerp_speed = (5.0 * dt).min(1.0);
+                            t.position = gizmo::math::Vec3::new(
+                                t.position.x + (target_pos.x - t.position.x) * lerp_speed,
+                                t.position.y + (target_pos.y - t.position.y) * lerp_speed,
+                                t.position.z + (target_pos.z - t.position.z) * lerp_speed,
+                            );
+
+                            // Look-at: Yaw/Pitch hesapla
+                            if let Some(cam) = cameras.get_mut(cam_entity_id) {
+                                let dir = (look_target - t.position).normalize();
+                                cam.yaw = dir.x.atan2(dir.z);
+                                cam.pitch = (-dir.y).asin();
+                            }
+
+                            t.update_local_matrix();
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // Play modundan çıkınca HUD'u sıfırla
+        editor_state.fight_hud = gizmo::editor::editor_state::FightHudState::default();
     }
 
     // --- NAVMESH DEBUG GIZMOS ---
@@ -122,62 +259,7 @@ pub fn handle_simulation(
                 }
             }
             
-            // Draw Editor Selection Outlines (Blender Style Orange)
-            let transforms = world.borrow::<gizmo::physics::components::Transform>();
-            let global_transforms = world.borrow::<gizmo::physics::components::GlobalTransform>();
-            let colliders = world.borrow::<gizmo::physics::Collider>();
-            let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
-            for &entity in &editor_state.selection.entities {
-                if let Some(t) = transforms.get(entity.id()) {
-                    let mut min = gizmo::math::Vec3::new(-1.0, -1.0, -1.0);
-                    let mut max = gizmo::math::Vec3::new(1.0, 1.0, 1.0);
 
-                    if let Some(m) = meshes.get(entity.id()) {
-                        let center = m.bounds.center();
-                        let half = m.bounds.half_extents();
-                        min = (center - half).into();
-                        max = (center + half).into();
-                    } else if let Some(c) = colliders.get(entity.id()) {
-                        let extents: gizmo::math::Vec3 = c.compute_aabb(gizmo::math::Vec3::ZERO, gizmo::math::Quat::IDENTITY).half_extents().into();
-                        min = -extents;
-                        max = extents;
-                    }
-
-                    // Eşik payı ver (çizgiler objenin içine girmesin diye)
-                    min = min * 1.02;
-                    max = max * 1.02;
-
-                    let model = if let Some(gt) = global_transforms.get(entity.id()) {
-                        gt.matrix
-                    } else {
-                        t.local_matrix
-                    };
-
-                    let p0 = model.transform_point3(gizmo::math::Vec3::new(min.x, min.y, min.z));
-                    let p1 = model.transform_point3(gizmo::math::Vec3::new(max.x, min.y, min.z));
-                    let p2 = model.transform_point3(gizmo::math::Vec3::new(max.x, max.y, min.z));
-                    let p3 = model.transform_point3(gizmo::math::Vec3::new(min.x, max.y, min.z));
-                    let p4 = model.transform_point3(gizmo::math::Vec3::new(min.x, min.y, max.z));
-                    let p5 = model.transform_point3(gizmo::math::Vec3::new(max.x, min.y, max.z));
-                    let p6 = model.transform_point3(gizmo::math::Vec3::new(max.x, max.y, max.z));
-                    let p7 = model.transform_point3(gizmo::math::Vec3::new(min.x, max.y, max.z));
-
-                    // Draw clean orange lines around the selected object
-                    let color = [1.0, 0.5, 0.0, 1.0];
-                    gizmos.draw_line(p0, p1, color);
-                    gizmos.draw_line(p1, p2, color);
-                    gizmos.draw_line(p2, p3, color);
-                    gizmos.draw_line(p3, p0, color);
-                    gizmos.draw_line(p4, p5, color);
-                    gizmos.draw_line(p5, p6, color);
-                    gizmos.draw_line(p6, p7, color);
-                    gizmos.draw_line(p7, p4, color);
-                    gizmos.draw_line(p0, p4, color);
-                    gizmos.draw_line(p1, p5, color);
-                    gizmos.draw_line(p2, p6, color);
-                    gizmos.draw_line(p3, p7, color);
-                }
-            }
         }
     }
 }
