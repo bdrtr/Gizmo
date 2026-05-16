@@ -673,3 +673,418 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
         commands.entity(exp_entity).despawn();
     }
 }
+
+/// Sistem: Fighter Controller'ları günceller ve Input Buffer'a veri yazar.
+pub fn physics_fighter_system(world: &gizmo_core::world::World, input: &gizmo_core::input::Input, action_map: &gizmo_core::input::ActionMap) {
+    let mut active_fighters = Vec::new();
+
+    if let Some(query) = gizmo_core::query::Query::<(
+        gizmo_core::query::Mut<crate::components::fighter::FighterController>,
+        gizmo_core::query::Without<gizmo_core::pool::Pooled>
+    )>::new(world) {
+        let actions = ["Up", "Down", "Left", "Right", "LightPunch", "HeavyPunch", "LightKick", "HeavyKick"];
+        
+        for (id, (mut fighter, _)) in query.iter() {
+            let was_locked = fighter.is_locked();
+
+            if fighter.hitstop_frames > 0 {
+                fighter.hitstop_frames -= 1;
+            }
+
+            if fighter.hitstun_frames > 0 {
+                fighter.hitstun_frames -= 1;
+            }
+
+            fighter.input_buffer.update(input, action_map, &actions);
+
+            if !was_locked {
+                // --- Saldırı Tetikleme: Tuşa basıldığında yeni hareket başlat ---
+                if fighter.active_move.is_none() {
+                    use crate::components::fighter::{CombatMove, FrameData};
+
+                    if action_map.is_action_just_pressed(input, "LightPunch") {
+                        fighter.active_move = Some(CombatMove {
+                            name: "Jab".to_string(),
+                            frame_data: FrameData {
+                                startup: 5, active: 3, recovery: 8,
+                                damage: 8.0, hitstun: 15, hitstop: 3,
+                            },
+                        });
+                        fighter.current_move_frame = 0;
+                    } else if action_map.is_action_just_pressed(input, "HeavyPunch") {
+                        fighter.active_move = Some(CombatMove {
+                            name: "Straight".to_string(),
+                            frame_data: FrameData {
+                                startup: 10, active: 4, recovery: 15,
+                                damage: 18.0, hitstun: 25, hitstop: 6,
+                            },
+                        });
+                        fighter.current_move_frame = 0;
+                    } else if action_map.is_action_just_pressed(input, "LightKick") {
+                        fighter.active_move = Some(CombatMove {
+                            name: "Low Kick".to_string(),
+                            frame_data: FrameData {
+                                startup: 6, active: 4, recovery: 10,
+                                damage: 10.0, hitstun: 18, hitstop: 3,
+                            },
+                        });
+                        fighter.current_move_frame = 0;
+                    } else if action_map.is_action_just_pressed(input, "HeavyKick") {
+                        fighter.active_move = Some(CombatMove {
+                            name: "Roundhouse".to_string(),
+                            frame_data: FrameData {
+                                startup: 12, active: 5, recovery: 18,
+                                damage: 22.0, hitstun: 30, hitstop: 8,
+                            },
+                        });
+                        fighter.current_move_frame = 0;
+                    }
+                }
+
+                // --- Aktif hareketin kare ilerlemesi ---
+                let mut move_ended = false;
+                let mut move_duration = 0;
+                
+                if let Some(move_data) = &fighter.active_move {
+                    move_duration = move_data.frame_data.startup + move_data.frame_data.active + move_data.frame_data.recovery;
+                }
+                
+                if move_duration > 0 {
+                    fighter.current_move_frame += 1;
+                    if fighter.current_move_frame >= move_duration {
+                        move_ended = true;
+                    }
+                } else {
+                    fighter.current_move_frame = 0;
+                }
+                
+                if move_ended {
+                    fighter.active_move = None;
+                    fighter.current_move_frame = 0;
+                }
+            }
+            
+            active_fighters.push((id, fighter.is_in_active_window()));
+        }
+    }
+    
+    // Hitbox Active durumu senkronizasyonu
+    let children_storage = world.borrow::<gizmo_core::component::Children>();
+    let mut hitbox_storage = world.borrow_mut::<crate::components::Hitbox>();
+    
+    for (fighter_id, is_active_window) in active_fighters {
+        let mut stack = vec![fighter_id];
+        while let Some(current_id) = stack.pop() {
+            if let Some(hitbox) = hitbox_storage.get_mut(current_id) {
+                hitbox.active = is_active_window;
+            }
+            if let Some(children) = children_storage.get(current_id) {
+                for &child_id in &children.0 {
+                    stack.push(child_id);
+                }
+            }
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod fighter_tests {
+    use super::*;
+    use gizmo_core::world::World;
+    use gizmo_core::input::{Input, ActionMap};
+    use crate::components::fighter::{FighterController, CombatMove, FrameData};
+    use crate::components::Hitbox;
+
+    #[test]
+    fn test_fighter_frame_data_and_hitbox_sync() {
+        let mut world = World::new();
+        let input = Input::new();
+        let action_map = ActionMap::new();
+
+        let parent_id = world.spawn();
+        let child_id = world.spawn();
+
+        let move_data = CombatMove {
+            name: "Jab".to_string(),
+            frame_data: FrameData {
+                startup: 5,
+                active: 3,
+                recovery: 10,
+                ..Default::default()
+            },
+        };
+
+        let mut fighter = FighterController::default();
+        fighter.active_move = Some(move_data);
+        world.add_component(parent_id, fighter);
+
+        // Child entity with Hitbox
+        let hitbox = Hitbox::new(gizmo_math::Vec3::new(1.0, 1.0, 1.0), 10.0);
+        world.add_component(child_id, hitbox);
+        world.add_component(child_id, gizmo_core::component::Parent(parent_id.id()));
+        world.add_component(parent_id, gizmo_core::component::Children(vec![child_id.id()]));
+
+        // Simüle et ve Hitbox'un durumunu test et
+        // Frame 1-4 (Startup) -> Hitbox Inactive
+        for _ in 0..4 {
+            physics_fighter_system(&world, &input, &action_map);
+            let h = world.borrow::<Hitbox>().get(child_id.id()).unwrap().clone();
+            assert!(!h.active, "Startup framelerinde Hitbox inaktif olmalidir");
+        }
+
+        // Frame 5-7 (Active) -> Hitbox Active
+        for _ in 0..3 {
+            physics_fighter_system(&world, &input, &action_map);
+            let h = world.borrow::<Hitbox>().get(child_id.id()).unwrap().clone();
+            assert!(h.active, "Active framelerinde Hitbox aktif olmalidir");
+        }
+
+        // Frame 8-17 (Recovery) -> Hitbox Inactive
+        for _ in 0..10 {
+            physics_fighter_system(&world, &input, &action_map);
+            let h = world.borrow::<Hitbox>().get(child_id.id()).unwrap().clone();
+            assert!(!h.active, "Recovery framelerinde Hitbox tekrar inaktif olmalidir");
+        }
+
+        // Frame 18 (End of Move) -> Hitbox Inactive, active_move = None
+        physics_fighter_system(&world, &input, &action_map);
+        let f = world.borrow::<FighterController>().get(parent_id.id()).unwrap().clone();
+        assert!(f.active_move.is_none(), "Hareket bittiginde active_move temizlenmelidir");
+    }
+
+    #[test]
+    fn test_fighter_hitstop_freezes_animation() {
+        let mut world = World::new();
+        let input = Input::new();
+        let action_map = ActionMap::new();
+
+        let fighter_id = world.spawn();
+
+        let move_data = CombatMove {
+            name: "Heavy".to_string(),
+            frame_data: FrameData {
+                startup: 5,
+                active: 5,
+                recovery: 5,
+                ..Default::default()
+            },
+        };
+
+        let mut fighter = FighterController::default();
+        fighter.active_move = Some(move_data);
+        // Hitstop ekle!
+        fighter.apply_hitstop(10);
+        world.add_component(fighter_id, fighter);
+
+        // 10 frame boyunca hitstop nedeniyle current_move_frame hiç ilerlememeli
+        for _ in 0..10 {
+            physics_fighter_system(&world, &input, &action_map);
+            let f = world.borrow::<FighterController>().get(fighter_id.id()).unwrap().clone();
+            assert_eq!(f.current_move_frame, 0, "Hitstop suresince animasyon kareleri donmalidir");
+        }
+
+        // Hitstop bitti, simdi ilerlemeye baslamali
+        physics_fighter_system(&world, &input, &action_map);
+        let f = world.borrow::<FighterController>().get(fighter_id.id()).unwrap().clone();
+        assert_eq!(f.current_move_frame, 1, "Hitstop bittiginde animasyon devam etmelidir");
+    }
+}
+
+
+/// Hitbox ↔ Hurtbox AABB çarpışma algılama ve hasar uygulama sistemi.
+///
+/// Her frame'de:
+/// 1. Tüm aktif Hitbox'ları dünya pozisyonlarıyla toplar
+/// 2. Tüm Hurtbox'ları dünya pozisyonlarıyla toplar
+/// 3. AABB overlap testi yapar
+/// 4. Aynı entity'ye ait hitbox ↔ hurtbox çarpışmasını engeller (kendi kendine vuruş yok)
+/// 5. Çarpışma varsa: hasar uygular, hitstop/hitstun tetikler
+///
+/// Döndürülen `HitEvent` listesi, UI ve efekt sistemlerinin kullanabilmesi içindir.
+#[derive(Debug, Clone)]
+pub struct HitEvent {
+    /// Vuran entity (Hitbox sahibi veya parent FighterController)
+    pub attacker_id: u32,
+    /// Vurulan entity (Hurtbox sahibi veya parent FighterController)
+    pub victim_id: u32,
+    /// Uygulanan hasar
+    pub damage: f32,
+    /// Dünya uzayında çarpışma noktası (orta nokta yaklaşımı)
+    pub hit_point: gizmo_math::Vec3,
+}
+
+pub fn hit_detection_system(world: &gizmo_core::world::World) -> Vec<HitEvent> {
+    let mut hit_events = Vec::new();
+
+    let transforms = world.borrow::<Transform>();
+    let global_transforms = world.borrow::<crate::components::transform::GlobalTransform>();
+    let hitboxes = world.borrow::<crate::components::Hitbox>();
+    let hurtboxes = world.borrow::<crate::components::Hurtbox>();
+    let parents = world.borrow::<gizmo_core::component::Parent>();
+
+    // --- Faz 1: Aktif Hitbox'ları topla (dünya pozisyonu + sahibi) ---
+    struct HitboxInfo {
+        owner_id: u32,      // FighterController sahibi (root parent)
+        world_min: gizmo_math::Vec3,
+        world_max: gizmo_math::Vec3,
+        damage: f32,
+    }
+
+    struct HurtboxInfo {
+        owner_id: u32,      // FighterController sahibi (root parent)
+        entity_id: u32,
+        world_min: gizmo_math::Vec3,
+        world_max: gizmo_math::Vec3,
+        multiplier: f32,
+    }
+
+    // Entity'nin root parent'ını bul (FighterController aranan yol)
+    let find_root = |entity_id: u32| -> u32 {
+        let mut current = entity_id;
+        loop {
+            if let Some(parent) = parents.get(current) {
+                current = parent.0;
+            } else {
+                return current;
+            }
+        }
+    };
+
+    let get_world_pos = |entity_id: u32| -> gizmo_math::Vec3 {
+        if let Some(gt) = global_transforms.get(entity_id) {
+            // GlobalTransform stores a Mat4 — position is in the 4th column
+            let m = &gt.matrix;
+            gizmo_math::Vec3::new(m.w_axis.x, m.w_axis.y, m.w_axis.z)
+        } else if let Some(t) = transforms.get(entity_id) {
+            t.position
+        } else {
+            gizmo_math::Vec3::ZERO
+        }
+    };
+
+    let mut active_hitboxes = Vec::new();
+    for (id, hitbox) in hitboxes.iter() {
+        if !hitbox.active {
+            continue;
+        }
+        let world_pos = get_world_pos(id) + hitbox.offset;
+        active_hitboxes.push(HitboxInfo {
+            owner_id: find_root(id),
+            world_min: world_pos - hitbox.half_extents,
+            world_max: world_pos + hitbox.half_extents,
+            damage: hitbox.damage,
+        });
+    }
+
+    if active_hitboxes.is_empty() {
+        return hit_events;
+    }
+
+    // --- Faz 2: Tüm Hurtbox'ları topla ---
+    let mut all_hurtboxes = Vec::new();
+    for (id, hurtbox) in hurtboxes.iter() {
+        let world_pos = get_world_pos(id) + hurtbox.offset;
+        all_hurtboxes.push(HurtboxInfo {
+            owner_id: find_root(id),
+            entity_id: id,
+            world_min: world_pos - hurtbox.half_extents,
+            world_max: world_pos + hurtbox.half_extents,
+            multiplier: hurtbox.damage_multiplier,
+        });
+    }
+
+    if all_hurtboxes.is_empty() {
+        return hit_events;
+    }
+
+    // --- Faz 3: AABB Overlap Testi ---
+    // Aynı owner'a ait hitbox/hurtbox çarpışmasını engelle (kendi kendine vuruş yok)
+    // Aynı saldırı window'unda aynı hedefi birden fazla vurmayı engelle
+    let mut already_hit: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
+
+    for hitbox in &active_hitboxes {
+        for hurtbox in &all_hurtboxes {
+            // Kendi kendine vuruş engeli
+            if hitbox.owner_id == hurtbox.owner_id {
+                continue;
+            }
+
+            // Aynı (saldırgan, kurban) çiftini tekrar vurma
+            let pair = (hitbox.owner_id, hurtbox.owner_id);
+            if already_hit.contains(&pair) {
+                continue;
+            }
+
+            // AABB Overlap
+            let overlap = hitbox.world_min.x <= hurtbox.world_max.x
+                && hitbox.world_max.x >= hurtbox.world_min.x
+                && hitbox.world_min.y <= hurtbox.world_max.y
+                && hitbox.world_max.y >= hurtbox.world_min.y
+                && hitbox.world_min.z <= hurtbox.world_max.z
+                && hitbox.world_max.z >= hurtbox.world_min.z;
+
+            if overlap {
+                let final_damage = hitbox.damage * hurtbox.multiplier;
+                let hit_point = (hitbox.world_min + hitbox.world_max + hurtbox.world_min + hurtbox.world_max) * 0.25;
+
+                hit_events.push(HitEvent {
+                    attacker_id: hitbox.owner_id,
+                    victim_id: hurtbox.owner_id,
+                    damage: final_damage,
+                    hit_point,
+                });
+
+                already_hit.insert(pair);
+            }
+        }
+    }
+
+    // Borrow'ları bırak
+    drop(transforms);
+    drop(global_transforms);
+    drop(hitboxes);
+    drop(hurtboxes);
+    drop(parents);
+
+    // --- Faz 4: Hasar, Hitstop ve Hitstun Uygula ---
+    if !hit_events.is_empty() {
+        let mut fighters = world.borrow_mut::<crate::components::fighter::FighterController>();
+
+        for event in &hit_events {
+            // Kurbanın frame data'sından hitstun/hitstop değerlerini al
+            let (hitstun, hitstop) = {
+                if let Some(attacker) = fighters.get(event.attacker_id) {
+                    if let Some(active_move) = &attacker.active_move {
+                        (active_move.frame_data.hitstun, active_move.frame_data.hitstop)
+                    } else {
+                        (20, 5) // Varsayılan
+                    }
+                } else {
+                    (20, 5)
+                }
+            };
+
+            // Kurbana hasar + hitstun uygula
+            if let Some(victim) = fighters.get_mut(event.victim_id) {
+                if !victim.is_blocking {
+                    victim.health = (victim.health - event.damage).max(0.0);
+                    victim.apply_hitstun(hitstun);
+                } else {
+                    // Block durumunda yarı hitstun, hasar yok
+                    victim.apply_hitstun(hitstun / 3);
+                }
+            }
+
+            // Her iki tarafa hitstop uygula (dövüş oyunlarındaki o "donma" hissi)
+            if let Some(attacker) = fighters.get_mut(event.attacker_id) {
+                attacker.apply_hitstop(hitstop);
+            }
+            if let Some(victim) = fighters.get_mut(event.victim_id) {
+                victim.apply_hitstop(hitstop);
+            }
+        }
+    }
+
+    hit_events
+}
