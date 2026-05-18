@@ -13,6 +13,7 @@ echo "Starting publishing workspace crates to crates.io (Version 0.1.3)..."
 crates=(
     "crates/gizmo-math"
     "crates/gizmo-core"
+    "crates/gizmo-net"
     "crates/gizmo-physics-core"
     "crates/gizmo-physics-rigid"
     "crates/gizmo-physics-soft"
@@ -20,14 +21,15 @@ crates=(
     "crates/gizmo-renderer"
     "crates/gizmo-window"
     "crates/gizmo-audio"
-    "crates/gizmo-scene"
-    "crates/gizmo-scripting"
     "crates/gizmo-network"
     "crates/gizmo-ai"
     "crates/gizmo-ui"
+    "crates/gizmo-scripting"
+    "crates/gizmo-scene"
     "crates/gizmo-editor"
     "crates/gizmo-app"
     "crates/gizmo"
+    "crates/gizmo-studio"
 )
 
 total=${#crates[@]}
