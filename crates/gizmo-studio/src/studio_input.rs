@@ -133,7 +133,7 @@ fn find_closest_hit(world: &World, ray: &Ray, player_id: u32) -> Option<u32> {
 
     for (id, t) in transforms.iter() {
         // Filtreleme: Kamera, gizli, editör objeleri
-        if id == player_id || is_hidden.contains(id) || is_editor_entity(world, id) {
+        if id == player_id || is_hidden.get(id).is_some() || is_editor_entity(world, id) {
             continue;
         }
 
@@ -165,9 +165,9 @@ struct ObbInfo {
 fn compute_entity_obb(
     id: u32,
     local_transform: &Transform,
-    meshes: &gizmo::core::storage::StorageView<gizmo::renderer::components::Mesh>,
-    colliders: &gizmo::core::storage::StorageView<Collider>,
-    global_transforms: &gizmo::core::storage::StorageView<gizmo::physics::components::GlobalTransform>,
+    meshes: &gizmo::core::Query<'_, &gizmo::renderer::components::Mesh>,
+    colliders: &gizmo::core::Query<'_, &Collider>,
+    global_transforms: &gizmo::core::Query<'_, &gizmo::physics::components::GlobalTransform>,
 ) -> Option<ObbInfo> {
     let mut extents;
     let mut local_offset = Vec3::ZERO;
@@ -255,7 +255,7 @@ fn perform_rubber_band_selection(
     let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
 
     for (id, t) in transforms.iter() {
-        if id == player_id || is_hidden.contains(id) || is_editor_entity(world, id) {
+        if id == player_id || is_hidden.get(id).is_some() || is_editor_entity(world, id) {
             continue;
         }
 

@@ -122,7 +122,7 @@ pub fn handle_simulation(
                     world.insert_resource(am);
                 }
                 
-                if let Ok(am) = world.try_get_resource::<gizmo::core::input::ActionMap>() {
+                if let Ok(_am) = world.try_get_resource::<gizmo::core::input::ActionMap>() {
                     // gizmo::physics::system::physics_fighter_system(world, input, &am);
                 }
                 
@@ -216,7 +216,7 @@ pub fn handle_simulation(
                         let mut transforms = world.borrow_mut::<gizmo::prelude::Transform>();
                         let mut cameras = world.borrow_mut::<gizmo::renderer::components::Camera>();
 
-                        if let Some(t) = transforms.get_mut(cam_entity_id) {
+                        if let Some(mut t) = transforms.get_mut(cam_entity_id) {
                             // Yumuşak geçiş (lerp)
                             let lerp_speed = (5.0 * dt).min(1.0);
                             t.position = gizmo::math::Vec3::new(
@@ -226,7 +226,7 @@ pub fn handle_simulation(
                             );
 
                             // Look-at: Yaw/Pitch hesapla
-                            if let Some(cam) = cameras.get_mut(cam_entity_id) {
+                            if let Some(mut cam) = cameras.get_mut(cam_entity_id) {
                                 let dir = (look_target - t.position).normalize();
                                 cam.yaw = dir.x.atan2(dir.z);
                                 cam.pitch = (-dir.y).asin();

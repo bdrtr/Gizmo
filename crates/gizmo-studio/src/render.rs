@@ -257,7 +257,7 @@ pub fn render_studio(
         if let (Some(root_id), Some(pos)) = (loaded_root, target_pos) {
             let mut transforms = world.borrow_mut::<gizmo::physics::components::Transform>();
             {
-                if let Some(t) = transforms.get_mut(root_id) {
+                if let Some(mut t) = transforms.get_mut(root_id) {
                     t.position = pos;
                     t.update_local_matrix();
                 }

@@ -247,6 +247,12 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         self.entity_count() == 0
     }
 
+    /// Belirli bir entity'nin bu query'ye ait olup olmadığını kontrol eder.
+    #[inline]
+    pub fn contains(&self, entity_id: u32) -> bool {
+        self.get(entity_id).is_some()
+    }
+
     pub fn entities<'a>(&'a self) -> impl Iterator<Item = u32> + 'a {
         self.iter().map(|(id, _)| id)
     }

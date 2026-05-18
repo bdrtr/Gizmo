@@ -473,7 +473,7 @@ pub fn execute_render_pipeline(
 
                     let emitter_entities: Vec<u32> = emitters.iter().map(|(id, _)| id).collect();
                     for e_id in emitter_entities {
-                        if let Some(emitter) = emitters.get_mut(e_id) {
+                        if let Some(mut emitter) = emitters.get_mut(e_id) {
                             if !emitter.is_active || emitter.spawn_rate <= 0.0 {
                                 continue;
                             }
