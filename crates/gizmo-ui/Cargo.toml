@@ -8,4 +8,4 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-gizmo-math = { path = "../gizmo-math", version = "0.1.2" }
+gizmo-math = { path = "../gizmo-math", version = "0.1.3" }
