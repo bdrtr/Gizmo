@@ -14,7 +14,7 @@ pub fn draw_material_section(
 ) {
     let mut materials = world.borrow_mut::<Material>();
     {
-        if let Some(mat) = materials.get_mut(entity_id.id()) {
+        if let Some(mut mat) = materials.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("🎨 Material Properties")
                 .default_open(true)
                 .show(ui, |ui| {

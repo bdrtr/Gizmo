@@ -63,4 +63,5 @@ pub mod cloth {
     pub use gizmo_physics_soft::cloth::*;
 }
 
-pub use system::{physics_fracture_system, physics_explosion_system};
+pub use system::{physics_fracture_system, physics_explosion_system, physics_step_system};
+pub use gizmo_physics_rigid::vehicle::physics_vehicle_system;

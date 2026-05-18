@@ -220,6 +220,17 @@ impl PhysicsWorld {
                             return None;
                         }
 
+                        // Check if entities are connected by a joint with collision_enabled == false
+                        let has_disabled_joint = self.joints.iter().any(|j| {
+                            !j.collision_enabled && 
+                            ((j.entity_a.id() == entity_a.id() && j.entity_b.id() == entity_b.id()) ||
+                             (j.entity_a.id() == entity_b.id() && j.entity_b.id() == entity_a.id()))
+                        });
+
+                        if has_disabled_joint {
+                            return None;
+                        }
+
                         let transform_a = &self.transforms[idx_a];
                         let transform_b = &self.transforms[idx_b];
 
@@ -590,6 +601,13 @@ impl PhysicsWorld {
                         .or_else(|| event_index.get(&key_ba))
                     {
                         self.collision_events[idx].contact_points = solved;
+                    }
+
+                    // WARM-START FIX: Save the solved manifold back to the cache!
+                    if let Some(entry) = self.contact_cache.get_mut(&key_ab) {
+                        entry.1 = Some(manifold);
+                    } else if let Some(entry) = self.contact_cache.get_mut(&key_ba) {
+                        entry.1 = Some(manifold);
                     }
                 }
             }

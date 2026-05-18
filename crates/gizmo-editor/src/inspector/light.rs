@@ -14,7 +14,7 @@ pub fn draw_point_light_section(
 ) {
     let mut lights = world.borrow_mut::<PointLight>();
     {
-        if let Some(light) = lights.get_mut(entity_id.id()) {
+        if let Some(mut light) = lights.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("💡 PointLight")
                 .default_open(false)
                 .show(ui, |ui| {
@@ -47,7 +47,7 @@ pub fn draw_directional_light_section(
     _state: &mut EditorState,
 ) {
     let mut lights = world.borrow_mut::<DirectionalLight>();
-    if let Some(light) = lights.get_mut(entity_id.id()) {
+    if let Some(mut light) = lights.get_mut(entity_id.id()) {
         egui::CollapsingHeader::new("☀️ Directional Light (Güneş)")
             .default_open(true)
             .show(ui, |ui| {

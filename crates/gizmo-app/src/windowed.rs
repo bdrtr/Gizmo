@@ -873,7 +873,57 @@ impl<State: 'static> App<State> {
                                 phys_time.accumulate(dt);
                             }
 
-                            // Sabit dt'de fizik adımları — frame rate'ten bağımsız
+                            #[cfg(feature = "network")]
+                            {
+                                let mut rollback_needed = false;
+                                let mut rm = self.world.remove_resource::<gizmo_network::RollbackManager>();
+                                
+                                if let Some(ref mut manager) = rm {
+                                    rollback_needed = manager.begin_frame(&mut self.world);
+                                }
+                                
+                                if rollback_needed {
+                                    let target_tick = rm.as_ref().unwrap().latest_tick;
+                                    
+                                    // Desync'i temizlemek için fiziği World'den zorla kopyalattır
+                                    if let Some(mut pw) = self.world.get_resource_mut::<gizmo_physics_rigid::world::PhysicsWorld>() {
+                                        pw.clear_bodies();
+                                    }
+                                    
+                                    let fixed_dt = self
+                                        .world
+                                        .get_resource::<gizmo_core::time::PhysicsTime>()
+                                        .map(|pt| pt.fixed_dt())
+                                        .unwrap_or(1.0 / 60.0);
+
+                                    loop {
+                                        let curr = rm.as_ref().unwrap().current_tick;
+                                        if curr >= target_tick {
+                                            break;
+                                        }
+
+                                        // Simüle et (Geçmişten Günümüze Fast-Forward)
+                                        // Dikkat: rm World'de olmadığı için içeride rollback.rs çalışmayabilir.
+                                        // Ama physics_step_system RollbackManager'i kullanmıyor!
+                                        self.schedule.run(&mut self.world, fixed_dt);
+
+                                        // Yeni geçmiş karesini hafızaya al
+                                        if let Some(ref mut manager) = rm {
+                                            let snapshot = gizmo_network::PhysicsStateSnapshot::capture(&self.world, manager.current_tick);
+                                            manager.state_buffer.save(snapshot);
+                                            manager.current_tick += 1;
+                                            // latest_tick güncellenmeyecek çünkü zaten eskiyi simüle ediyoruz
+                                        }
+                                    }
+                                }
+
+                                // Tekrar yerine koy
+                                if let Some(manager) = rm {
+                                    self.world.insert_resource(manager);
+                                }
+                            }
+
+                            // Sabit dt'de normal fizik adımları — frame rate'ten bağımsız
                             loop {
                                 let should = self
                                     .world
@@ -892,6 +942,13 @@ impl<State: 'static> App<State> {
 
                                 // ECS fizik sistemlerini sabit dt ile çalıştır
                                 self.schedule.run(&mut self.world, fixed_dt);
+
+                                #[cfg(feature = "network")]
+                                {
+                                    if let Some(mut rm) = self.world.get_resource_mut::<gizmo_network::RollbackManager>() {
+                                        rm.end_frame(&self.world);
+                                    }
+                                }
 
                                 let mut phys_time = self
                                     .world

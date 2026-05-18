@@ -60,7 +60,7 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
 
     // Tüm ses kaynaklarını güncelle
     for id in source_ids {
-        let mut source = if let Some(s) = sources.get_mut(id) {
+        let mut source = if let Some(mut s) = sources.get_mut(id) {
             s.clone()
         } else {
             continue;
@@ -90,7 +90,7 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
                 )
             };
             source._internal_sink_id = sink_id;
-            if let Some(s) = sources.get_mut(id) {
+            if let Some(mut s) = sources.get_mut(id) {
                 s._internal_sink_id = sink_id;
             }
         }
@@ -100,7 +100,7 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
             if !audio.is_playing(sink_id) {
                 if !source.loop_sound {
                     // Tek seferlik ses bittiyse ID'yi temizle
-                    if let Some(s) = sources.get_mut(id) {
+                    if let Some(mut s) = sources.get_mut(id) {
                         s._internal_sink_id = None;
                     }
                 }

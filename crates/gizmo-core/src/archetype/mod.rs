@@ -16,7 +16,7 @@ pub use self::column::*;
 
 use std::any::TypeId;
 use std::collections::HashMap;
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::cell::UnsafeCell;
 
 /// Entity'nin World içindeki fiziksel konumu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,15 +56,18 @@ pub struct Archetype {
     /// Component tipi → sütun indeksi (columns vektöründeki)
     column_indices: HashMap<TypeId, usize>,
     /// Sütunların vektörü — her biri bir component tipinin verisi.
-    /// RwLock ile sarmalandı çünkü aynı archetype içindeki farklı sütunlara
-    /// eşzamanlı ve multi-thread erişim (örn: &Transform ve &mut Velocity) gerekebilir.
-    columns: Vec<RwLock<Column>>,
+    /// UnsafeCell ile sarmalandı çünkü motorun Scheduler'ı (DAG) paralel erişim
+    /// güvenliğini çalışma zamanında (RwLock) değil derleme/planlama zamanında garanti eder.
+    columns: Vec<UnsafeCell<Column>>,
     /// Bu archetype'taki entity ID'leri (sıra = satır indeksi)
     entities: Vec<u32>,
     /// Component ekleme/çıkarma geçiş cache'i
     /// TypeId → ArchetypeEdge
     pub(crate) edges: HashMap<TypeId, ArchetypeEdge>,
 }
+
+unsafe impl Send for Archetype {}
+unsafe impl Sync for Archetype {}
 
 impl Archetype {
     /// Belirtilen component tipleri için yeni boş archetype oluşturur.
@@ -74,7 +77,7 @@ impl Archetype {
 
         for (idx, info) in component_infos.iter().enumerate() {
             column_indices.insert(info.type_id, idx);
-            columns.push(RwLock::new(Column::new(
+            columns.push(UnsafeCell::new(Column::new(
                 info.type_id,
                 info.layout,
                 info.drop_fn,
@@ -109,8 +112,8 @@ impl Archetype {
             return;
         }
         // Tüm sütunlarda takas işlemini gerçekleştir
-        for col_cell in &mut self.columns {
-            col_cell.write().unwrap().swap_rows(a, b);
+        for col_cell in &self.columns {
+            (&mut *col_cell.get()).swap_rows(a, b);
         }
         // Entity ID'lerini takasla
         self.entities.swap(a, b);
@@ -140,20 +143,20 @@ impl Archetype {
         types
     }
 
-    /// Belirtilen component tipinin sütununa RwLock üzerinden immutable erişim
+    /// Belirtilen component tipinin sütununa raw pointer erişimi
     #[inline]
-    pub fn get_column(&self, type_id: TypeId) -> Option<RwLockReadGuard<'_, Column>> {
+    pub fn get_column(&self, type_id: TypeId) -> Option<&Column> {
         self.column_indices
             .get(&type_id)
-            .map(|&idx| self.columns[idx].read().unwrap())
+            .map(|&idx| unsafe { &*self.columns[idx].get() })
     }
 
-    /// Belirtilen component tipinin sütununa RwLock üzerinden mutable erişim
+    /// Belirtilen component tipinin sütununa mutable raw pointer erişimi
     #[inline]
-    pub fn get_column_mut(&self, type_id: TypeId) -> Option<RwLockWriteGuard<'_, Column>> {
+    pub fn get_column_mut(&self, type_id: TypeId) -> Option<&mut Column> {
         self.column_indices
             .get(&type_id)
-            .map(|&idx| self.columns[idx].write().unwrap())
+            .map(|&idx| unsafe { &mut *self.columns[idx].get() })
     }
 
     /// Yeni bir entity satırı ekler. Tüm sütunlara veri zaten push edilmiş olmalıdır.
@@ -172,9 +175,9 @@ impl Archetype {
         let last = self.entities.len() - 1;
 
         // Tüm sütunlarda swap_remove_and_drop
-        for col_cell in &mut self.columns {
+        for col_cell in &self.columns {
             unsafe {
-                col_cell.get_mut().unwrap().swap_remove_and_drop(row);
+                (&mut *col_cell.get()).swap_remove_and_drop(row);
             }
         }
 
@@ -202,7 +205,7 @@ impl Archetype {
 
         // 1. Hedef archetype'ın TÜM sütunlarını genişlet (ortak olanları taşı, olmayanları boş bırak)
         for (type_id, &dst_col_idx) in &target.column_indices {
-            let mut dst_col = target.columns[dst_col_idx].write().unwrap();
+            let dst_col = &mut *target.columns[dst_col_idx].get();
 
             // Hedefte her zaman yer açmalıyız ki sütun boyu entity listesiyle uyuşsun
             dst_col.data.reserve(1);
@@ -212,7 +215,7 @@ impl Archetype {
             let dst_ptr = dst_col.data.get_unchecked_mut(row_to_write);
 
             if let Some(&src_col_idx) = self.column_indices.get(type_id) {
-                let mut src_col = self.columns[src_col_idx].write().unwrap();
+                let src_col = &mut *self.columns[src_col_idx].get();
                 // Veriyi kopyala ve kaynak sütunda swap-remove yap
                 src_col.data.swap_remove_unchecked(source_row, dst_ptr);
                 let tick = src_col.ticks.swap_remove(source_row);
@@ -226,7 +229,7 @@ impl Archetype {
         // 2. Hedefte olmayan ama kaynakta olan component'ları temizle
         for (type_id, &src_col_idx) in &self.column_indices {
             if !target.column_indices.contains_key(type_id) {
-                let mut src_col = self.columns[src_col_idx].write().unwrap();
+                let src_col = &mut *self.columns[src_col_idx].get();
                 src_col.swap_remove_and_drop(source_row);
             }
         }
@@ -286,8 +289,8 @@ impl Archetype {
             return Vec::new();
         }
 
-        for col_cell in &mut self.columns {
-            let mut col = col_cell.write().unwrap();
+        for col_cell in &self.columns {
+            let col = &mut *col_cell.get();
             col.push_cloned_batch_from_row(row, count, tick);
         }
 
@@ -301,8 +304,10 @@ impl Archetype {
     /// Bellek boyutlarını (kapasite) aktif varlık sayısına göre daraltır.
     pub fn shrink_to_fit(&mut self) {
         self.entities.shrink_to_fit();
-        for col_cell in &mut self.columns {
-            col_cell.write().unwrap().shrink_to_fit();
+        for col_cell in &self.columns {
+            unsafe {
+                (&mut *col_cell.get()).shrink_to_fit();
+            }
         }
         self.edges.shrink_to_fit();
         self.column_indices.shrink_to_fit();

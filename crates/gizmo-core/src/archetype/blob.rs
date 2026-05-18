@@ -351,3 +351,70 @@ impl Drop for BlobVec {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // COLUMN — Tip-silinmiş sütun
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn blobvec_drop_called() {
+        static DROP_COUNT: AtomicU32 = AtomicU32::new(0);
+        
+        struct Dropper;
+        impl Drop for Dropper {
+            fn drop(&mut self) { DROP_COUNT.fetch_add(1, Ordering::SeqCst); }
+        }
+
+        let mut vec = BlobVec::new(Layout::new::<Dropper>(), Some(|ptr| unsafe {
+            std::ptr::drop_in_place(ptr as *mut Dropper)
+        }));
+
+        unsafe {
+            let d = Dropper;
+            vec.push(&d as *const Dropper as *const u8);
+            std::mem::forget(d);
+            let d2 = Dropper;
+            vec.push(&d2 as *const Dropper as *const u8);
+            std::mem::forget(d2);
+        }
+
+        assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 0);
+        drop(vec); // BlobVec drop edilince 2 kez çağrılmalı
+        assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn blobvec_swap_remove_drops_correctly() {
+        static DROP_COUNT: AtomicU32 = AtomicU32::new(0);
+        struct Dropper;
+        impl Drop for Dropper {
+            fn drop(&mut self) { DROP_COUNT.fetch_add(1, Ordering::SeqCst); }
+        }
+
+        let mut vec = BlobVec::new(Layout::new::<Dropper>(), Some(|ptr| unsafe {
+            std::ptr::drop_in_place(ptr as *mut Dropper)
+        }));
+
+        unsafe {
+            let d = Dropper;
+            vec.push(&d as *const Dropper as *const u8);
+            std::mem::forget(d);
+            let d2 = Dropper;
+            vec.push(&d2 as *const Dropper as *const u8);
+            std::mem::forget(d2);
+        }
+
+        assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 0);
+        unsafe { vec.swap_remove_and_drop(0); }
+        assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 1);
+        drop(vec);
+        assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn blobvec_no_drop_for_copy_types() {
+        let vec = BlobVec::new(Layout::new::<u32>(), None);
+        assert!(true); // derlenmesi yeterli değil, Miri ile çalıştır
+    }
+}

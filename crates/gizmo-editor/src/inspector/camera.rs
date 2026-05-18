@@ -13,7 +13,7 @@ pub fn draw_camera_section(
 ) {
     let mut cameras = world.borrow_mut::<Camera>();
     {
-        if let Some(cam) = cameras.get_mut(entity_id.id()) {
+        if let Some(mut cam) = cameras.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("📷 Camera")
                 .default_open(false)
                 .show(ui, |ui| {

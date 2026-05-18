@@ -86,7 +86,7 @@ impl<T: 'static> FetchComponent for Mut<'_, T> {
     const IS_MUT: bool = true;
 
     unsafe fn fetch_raw<'w>(arch: &Archetype, system_tick: u32) -> Option<Self::Fetch<'w>> {
-        let mut col = arch.get_column_mut(TypeId::of::<T>())?;
+        let col = arch.get_column_mut(TypeId::of::<T>())?;
         Some((col.data_ptr_mut(), col.ticks_ptr_mut(), system_tick))
     }
 
@@ -225,11 +225,30 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     }
 
     #[inline]
+    pub fn get_mut(&self, entity_id: u32) -> Option<Q::Item<'_>> {
+        self.get(entity_id)
+    }
+
+    #[inline]
     pub fn entity_count(&self) -> usize {
         self.matching_archetypes
             .iter()
             .map(|&idx| self.world.archetype_index.archetypes[idx].len())
             .sum()
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.entity_count()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.entity_count() == 0
+    }
+
+    pub fn entities<'a>(&'a self) -> impl Iterator<Item = u32> + 'a {
+        self.iter().map(|(id, _)| id)
     }
 
     /// İş parçacığı havuzu (Work-Stealing) ile çalışan lock-free paralel iterasyon

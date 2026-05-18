@@ -247,7 +247,7 @@ impl<'a> Commands<'a> {
             &self.renderer.queue,
             &self.renderer.scene.texture_bind_group_layout,
         );
-        let mat = Material::new(bg).with_skybox().with_unlit(color.to_vec4());
+        let mat = Material::new(bg).with_unlit(color.to_vec4()).with_skybox();
         let id = self.world.spawn();
         let mut trans = Transform::new(Vec3::ZERO);
         trans.scale = Vec3::new(500.0, 500.0, 500.0);
@@ -285,7 +285,7 @@ impl<'a> Commands<'a> {
         // Scale'i half_extents ile eşleştir
         {
             let mut trans_store = self.world.borrow_mut::<Transform>();
-            if let Some(trans) = trans_store.get_mut(id.id()) {
+            if let Some(mut trans) = trans_store.get_mut(id.id()) {
                 trans.scale = half_extents * 2.0;
                 trans.update_local_matrix();
             }
@@ -676,7 +676,7 @@ fn spawn_gltf_node_flat(
     {
         let mut ch_store = world.borrow_mut::<Children>();
         // Safe to push since entity just spawned and didn't trigger any complex re-borrow updates
-        if let Some(parent_ch) = ch_store.get_mut(parent_id) {
+        if let Some(mut parent_ch) = ch_store.get_mut(parent_id) {
             parent_ch.0.push(entity.id());
         }
     }
@@ -751,7 +751,7 @@ fn spawn_gltf_node_flat(
     if !newly_added_prims.is_empty() {
         {
             let mut ch_store = world.borrow_mut::<Children>();
-            if let Some(parent_ch) = ch_store.get_mut(entity.id()) {
+            if let Some(mut parent_ch) = ch_store.get_mut(entity.id()) {
                 parent_ch.0.extend(newly_added_prims);
             }
         }
@@ -861,8 +861,8 @@ impl WorldExt for World {
         if let Some(target_id) = target {
             {
                 let mut storage = self.borrow_mut::<T>();
-                if let Some(comp) = storage.get_mut(target_id) {
-                    f(comp);
+                if let Some(mut comp) = storage.get_mut(target_id) {
+                    f(&mut *comp);
                 }
             }
         }

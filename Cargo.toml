@@ -11,6 +11,7 @@ members = [
     "crates/gizmo-app",
     "crates/gizmo-scripting",
     "crates/gizmo-scene",
+    "crates/gizmo-network",
     "server", "demo", "cradle"
 ]
 
