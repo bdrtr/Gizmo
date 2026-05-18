@@ -41,8 +41,24 @@ for i in "${!crates[@]}"; do
     echo "[$index/$total] Publishing: $crate..."
     echo "=========================================================="
     
-    # Enter crate directory and publish
-    (cd "$crate" && cargo publish)
+    # Enter crate directory and publish with robust already-exists check
+    (
+        cd "$crate"
+        # Run cargo publish and capture stderr/stdout
+        if ! output=$(cargo publish 2>&1); then
+            # If failed, check if it's just because the version already exists
+            if echo "$output" | grep -qi "already exists"; then
+                echo "Notice: Crate version already exists on crates.io. Skipping..."
+            else
+                echo "Error publishing $crate:"
+                echo "$output"
+                exit 1
+            fi
+        else
+            echo "$output"
+            echo "Successfully published!"
+        fi
+    )
     
     # If not the last crate, sleep to let crates.io index update
     if [ $index -lt $total ]; then
