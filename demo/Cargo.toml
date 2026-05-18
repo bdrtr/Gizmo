@@ -27,3 +27,7 @@ path = "src/bin/advanced_physics.rs"
 [[bin]]
 name = "headless_stress_test"
 path = "src/bin/headless_stress_test.rs"
+
+[[bin]]
+name = "car_demo"
+path = "src/bin/car_demo.rs"

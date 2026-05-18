@@ -2,7 +2,7 @@ use crate::archetype::index::ArchetypeIndex;
 use crate::archetype::{Archetype, ComponentInfo, EntityLocation};
 use crate::component::Component;
 use crate::entity::Entity;
-use crate::storage::{StorageView, StorageViewMut};
+
 use std::any::TypeId;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -395,7 +395,7 @@ impl World {
             // Zaten bu archetype'ta (aynı tip tekrar eklenmiş olabilir) — sadece üzerine yaz
             {
                 let arch = &self.archetype_index.archetypes[target_arch_id];
-                let mut col = arch
+                let col = arch
                     .get_column_mut(type_id)
                     .expect("component column missing in current archetype");
                 unsafe {
@@ -439,7 +439,7 @@ impl World {
         // 3. Yeni component'ı hedef archetype'a ekle
         {
             let arch = &self.archetype_index.archetypes[target_arch_id];
-            let mut col = arch
+            let col = arch
                 .get_column_mut(type_id)
                 .expect("Mandatory component column missing");
             unsafe {
@@ -549,52 +549,7 @@ impl World {
         }
     }
 
-    /// Component dizisine okuma erişimi (Read-Only, Ref ile paylaşılabilir).
-    pub fn borrow<T: Component>(&self) -> StorageView<'_, T> {
-        let type_id = TypeId::of::<T>();
 
-        // Bu componenti içeren tüm archetype'ları bul
-        let mut matching = Vec::new();
-        // StorageView için bir ID haritası gerekebilir
-        let mut arch_id_to_idx = vec![None; self.archetype_index.archetypes.len()];
-
-        for arch in self.archetype_index.archetypes.iter() {
-            if let Some(col) = arch.get_column(type_id) {
-                arch_id_to_idx[arch.id as usize] = Some(matching.len());
-                matching.push((arch.entities(), col));
-            }
-        }
-
-        StorageView {
-            archetypes: matching,
-            arch_id_to_idx,
-            entity_locations: &self.entity_locations,
-            _marker: PhantomData,
-        }
-    }
-
-    pub fn borrow_mut<T: Component>(&self) -> StorageViewMut<'_, T> {
-        let type_id = TypeId::of::<T>();
-
-        let mut matching = Vec::new();
-        let mut arch_id_to_idx = vec![None; self.archetype_index.archetypes.len()];
-
-        for arch in self.archetype_index.archetypes.iter() {
-            if let Some(col) = arch.get_column_mut(type_id) {
-                arch_id_to_idx[arch.id as usize] = Some(matching.len());
-                matching.push((arch.entities(), col));
-            }
-        }
-
-        StorageViewMut {
-            archetypes: matching,
-            arch_id_to_idx,
-            entity_locations: &self.entity_locations,
-            _marker: PhantomData,
-        }
-    }
-
-    // Query sistemi `StorageView` ve `Archetype` üzerinden çalışır.
 
     // ==========================================================
     // ERGONOMİK SORGULAR (QUERY API)
@@ -602,6 +557,18 @@ impl World {
 
     pub fn query<'w, Q: crate::query::WorldQuery>(&'w self) -> Option<crate::query::Query<'w, Q>> {
         crate::query::Query::new(self)
+    }
+
+    /// Geriye uyumluluk için StorageView alternatifi
+    #[inline]
+    pub fn borrow<'w, T: Component>(&'w self) -> crate::query::Query<'w, &'w T> {
+        self.query::<&T>().expect("Failed to create borrow Query")
+    }
+
+    /// Geriye uyumluluk için StorageViewMut alternatifi
+    #[inline]
+    pub fn borrow_mut<'w, T: Component>(&'w self) -> crate::query::Query<'w, crate::query::Mut<'w, T>> {
+        self.query::<crate::query::Mut<T>>().expect("Failed to create borrow_mut Query")
     }
 
     /// Cache'li query — archetype indeks cache'ini kullanır.
@@ -1015,5 +982,235 @@ mod tests {
         // Sonuçta e0, e1, e2, e3 dizilimi kendiliğinden oluşur (visited mantığı).
         assert_eq!(l1.row + 1, l2.row);
         assert_eq!(l2.row + 1, l3.row);
+    }
+
+
+    #[test]
+    fn spawn_despawn_generation() {
+        let mut world = World::new();
+        let e1 = world.spawn();
+        world.despawn(e1);
+        
+        let e2 = world.spawn(); // aynı id, farklı generation
+        assert_eq!(e1.id(), e2.id());
+        assert_ne!(e1.generation(), e2.generation());
+        
+        // Eski handle artık geçersiz
+        assert!(!world.is_alive(e1));
+        assert!(world.is_alive(e2));
+    }
+
+    #[test]
+    fn despawn_updates_swapped_entity_location() {
+        #[derive(Clone)]
+        struct TestComp(i32);
+        impl crate::component::Component for TestComp {}
+
+        let mut world = World::new();
+        world.register_component_type::<TestComp>();
+        
+        let e1 = world.spawn(); world.add_component(e1, TestComp(1));
+        let e2 = world.spawn(); world.add_component(e2, TestComp(2));
+        let e3 = world.spawn(); world.add_component(e3, TestComp(3));
+        
+        // e2'yi despawn et — e3 onun yerine swap_remove ile gelir
+        world.despawn(e2);
+        
+        // e3 hâlâ erişilebilir olmalı
+        let comps = world.borrow::<TestComp>();
+        let val = comps.get(e3.id()).unwrap();
+        assert_eq!(val.0, 3);
+    }
+
+    #[test]
+    fn add_component_migrates_archetype() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct TestCompI32(i32);
+        impl crate::component::Component for TestCompI32 {}
+
+        #[derive(Clone, Debug, PartialEq)]
+        struct TestCompF32(f32);
+        impl crate::component::Component for TestCompF32 {}
+
+        let mut world = World::new();
+        world.register_component_type::<TestCompI32>();
+        world.register_component_type::<TestCompF32>();
+        
+        let e = world.spawn();
+        world.add_component(e, TestCompI32(10));
+        
+        let loc1 = world.entity_location(e.id());
+        
+        world.add_component(e, TestCompF32(3.14));
+        
+        let loc2 = world.entity_location(e.id());
+        assert_ne!(loc1.archetype_id, loc2.archetype_id);
+        
+        assert_eq!(world.borrow::<TestCompI32>().get(e.id()).unwrap().0, 10);
+        assert_eq!(world.borrow::<TestCompF32>().get(e.id()).unwrap().0, 3.14);
+    }
+
+    #[test]
+    fn add_same_component_overwrites() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct TestCompI32(i32);
+        impl crate::component::Component for TestCompI32 {}
+
+        let mut world = World::new();
+        world.register_component_type::<TestCompI32>();
+        
+        let e = world.spawn();
+        world.add_component(e, TestCompI32(1));
+        world.add_component(e, TestCompI32(99)); // overwrite
+        
+        assert_eq!(world.borrow::<TestCompI32>().get(e.id()).unwrap().0, 99);
+    }
+
+    #[test]
+    fn archetype_graph_reuses_archetypes() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct TestCompI32(i32);
+        impl crate::component::Component for TestCompI32 {}
+
+        #[derive(Clone, Debug, PartialEq)]
+        struct TestCompF32(f32);
+        impl crate::component::Component for TestCompF32 {}
+
+        let mut world = World::new();
+        world.register_component_type::<TestCompI32>();
+        world.register_component_type::<TestCompF32>();
+        
+        let e1 = world.spawn(); world.add_component(e1, TestCompI32(1)); world.add_component(e1, TestCompF32(1.0));
+        let e2 = world.spawn(); world.add_component(e2, TestCompI32(2)); world.add_component(e2, TestCompF32(2.0));
+        
+        let loc1 = world.entity_location(e1.id());
+        let loc2 = world.entity_location(e2.id());
+        assert_eq!(loc1.archetype_id, loc2.archetype_id);
+        
+        assert!(world.archetype_index.archetypes.len() < 5);
+    }
+
+    #[test]
+    fn query_finds_matching_archetypes() {
+        #[derive(Clone)]
+        struct TestCompI32(i32);
+        impl crate::component::Component for TestCompI32 {}
+
+        #[derive(Clone)]
+        struct TestCompF32(f32);
+        impl crate::component::Component for TestCompF32 {}
+
+        #[derive(Clone)]
+        struct TestCompBool(bool);
+        impl crate::component::Component for TestCompBool {}
+
+        let mut world = World::new();
+        world.register_component_type::<TestCompI32>();
+        world.register_component_type::<TestCompF32>();
+        world.register_component_type::<TestCompBool>();
+        
+        let e1 = world.spawn(); world.add_component(e1, TestCompI32(1)); world.add_component(e1, TestCompF32(1.0));
+        let e2 = world.spawn(); world.add_component(e2, TestCompI32(2)); world.add_component(e2, TestCompBool(true));
+        let e3 = world.spawn(); world.add_component(e3, TestCompI32(3)); // sadece i32
+        
+        // i32 query'si 3 entity'yi de bulmalı
+        let count = world.query::<&TestCompI32>().unwrap().iter().count();
+        assert_eq!(count, 3);
+        
+        // (i32, f32) query'si sadece e1'i bulmalı
+        let count = world.query::<(&TestCompI32, &TestCompF32)>().unwrap().iter().count();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn query_mut_modifies_data() {
+        #[derive(Clone)]
+        struct TestCompI32(i32);
+        impl crate::component::Component for TestCompI32 {}
+
+        let mut world = World::new();
+        world.register_component_type::<TestCompI32>();
+        
+        let e1 = world.spawn(); world.add_component(e1, TestCompI32(1));
+        let e2 = world.spawn(); world.add_component(e2, TestCompI32(2));
+        
+        // Query ile tüm i32'leri iki katına çıkar
+        if let Some(mut q) = world.query::<crate::query::Mut<TestCompI32>>() {
+            for (_, mut val) in q.iter_mut() {
+                val.0 *= 2;
+            }
+        }
+        
+        assert_eq!(world.borrow::<TestCompI32>().get(e1.id()).unwrap().0, 2);
+        assert_eq!(world.borrow::<TestCompI32>().get(e2.id()).unwrap().0, 4);
+    }
+
+    #[test]
+    fn query_skips_non_matching() {
+        #[derive(Clone)]
+        struct CompA;
+        impl crate::component::Component for CompA {}
+        #[derive(Clone)]
+        struct CompB;
+        impl crate::component::Component for CompB {}
+
+        let mut world = World::new();
+        world.register_component_type::<CompA>();
+        world.register_component_type::<CompB>();
+
+        for _ in 0..100 {
+            let e = world.spawn();
+            world.add_component(e, CompA);
+        }
+
+        for _ in 0..50 {
+            let e = world.spawn();
+            world.add_component(e, CompB);
+        }
+
+        let a_count = world.query::<&CompA>().unwrap().iter().count();
+        let b_count = world.query::<&CompB>().unwrap().iter().count();
+        let both_count = world.query::<(&CompA, &CompB)>().unwrap().iter().count();
+
+        assert_eq!(a_count, 100);
+        assert_eq!(b_count, 50);
+        assert_eq!(both_count, 0);
+    }
+
+    #[test]
+    fn spawn_despawn_10k_entities_archetype_stability() {
+        #[derive(Clone)]
+        struct CompA(i32);
+        impl crate::component::Component for CompA {}
+        #[derive(Clone)]
+        struct CompB(f32);
+        impl crate::component::Component for CompB {}
+
+        let mut world = World::new();
+        world.register_component_type::<CompA>();
+        world.register_component_type::<CompB>();
+
+        let initial_archetypes = world.archetype_index.archetypes.len();
+
+        // Spawn 10k entities
+        let mut entities = Vec::new();
+        for i in 0..10_000 {
+            let e = world.spawn();
+            world.add_component(e, CompA(i as i32));
+            if i % 2 == 0 {
+                world.add_component(e, CompB(i as f32));
+            }
+            entities.push(e);
+        }
+
+        // Despawn all
+        for e in entities {
+            world.despawn(e.id());
+        }
+
+        // Archetype sayısı aynı kalmalı
+        let final_archetypes = world.archetype_index.archetypes.len();
+        // 1 empty, 1 for CompA, 1 for (CompA, CompB) = 3 total usually.
+        assert!(final_archetypes <= initial_archetypes + 2);
     }
 }

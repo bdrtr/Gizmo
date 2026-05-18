@@ -722,7 +722,7 @@ pub fn default_render_pass(
                 view: &renderer.post.hdr_texture_view,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.4, g: 0.6, b: 0.9, a: 1.0 }),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -807,9 +807,9 @@ pub fn default_render_pass(
             wgpu::LoadOp::Load
         } else {
             wgpu::LoadOp::Clear(wgpu::Color {
-                r: 0.1,
-                g: 0.1,
-                b: 0.15,
+                r: 0.4,
+                g: 0.6,
+                b: 0.9,
                 a: 1.0,
             })
         };

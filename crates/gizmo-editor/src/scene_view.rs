@@ -311,7 +311,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                 let mut selected_ids = Vec::new();
 
                 for &id in state.selection.entities.iter() {
-                    if let Some(&t) = transforms.get(id.id()) {
+                    if let Some(t) = transforms.get(id.id()).map(|t| *t) {
                         let translation = transform_gizmo_egui::mint::Vector3 { x: t.position.x as f64, y: t.position.y as f64, z: t.position.z as f64 };
                         let rotation = transform_gizmo_egui::mint::Quaternion { v: transform_gizmo_egui::mint::Vector3 { x: t.rotation.x as f64, y: t.rotation.y as f64, z: t.rotation.z as f64 }, s: t.rotation.w as f64 };
                         let scale = transform_gizmo_egui::mint::Vector3 { x: t.scale.x as f64, y: t.scale.y as f64, z: t.scale.z as f64 };
@@ -331,7 +331,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                         // Undo (Geri Al) için harekete başlarken ilk değerleri sakla
                         if state.scene.gizmo_original_transforms.is_empty() {
                             for &id in &selected_ids {
-                                if let Some(&t) = transforms.get(id) {
+                                if let Some(t) = transforms.get(id).map(|t| *t) {
                                     state.scene.gizmo_original_transforms.insert(gizmo_core::entity::Entity::new(id, 0), t);
                                 }
                             }
@@ -339,7 +339,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
 
                         for (i, new_t) in new_transforms.iter().enumerate() {
                             if let Some(&entity_id) = selected_ids.get(i) {
-                                if let Some(t) = transforms.get_mut(entity_id) {
+                                if let Some(mut t) = transforms.get_mut(entity_id) {
                                     let nt: transform_gizmo_egui::mint::Vector3<f64> = new_t.translation.into();
                                     let nr: transform_gizmo_egui::mint::Quaternion<f64> = new_t.rotation.into();
                                     let ns: transform_gizmo_egui::mint::Vector3<f64> = new_t.scale.into();
@@ -355,7 +355,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                         // Fare bırakıldı (Sürükleme bitti), tüm değişiklikleri History'ye bas
                         let mut changes = Vec::new();
                         for (entity, old_t) in state.scene.gizmo_original_transforms.drain() {
-                            if let Some(&new_t) = transforms.get(entity.id()) {
+                            if let Some(new_t) = transforms.get(entity.id()).map(|t| *t) {
                                 if old_t != new_t {
                                     changes.push((entity, old_t, new_t));
                                 }

@@ -60,12 +60,12 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
         } else {
             continue;
         };
-        let v = if let Some(v) = velocities.get_mut(agent_id) {
+        let mut v = if let Some(v) = velocities.get_mut(agent_id) {
             v
         } else {
             continue;
         };
-        let agent = agents.get_mut(agent_id).unwrap();
+        let mut agent = agents.get_mut(agent_id).unwrap();
 
         if agent.target.is_none() {
             // Yavaşla ve dur (Fiziksel sönümleme)

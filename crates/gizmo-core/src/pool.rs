@@ -94,7 +94,7 @@ impl PoolManager {
 
     /// Bir nesneyi tamamen yok etmek (despawn) yerine havuza geri gönderir.
     pub fn destroy(&mut self, world: &mut World, name: &str, entity: Entity) {
-        if let Some(pool) = self.pools.get_mut(name) {
+        if let Some(mut pool) = self.pools.get_mut(name) {
             // Nesne pasife alındığını bilmesi için Pooled bileşeni ekleniyor.
             world.add_component(entity, Pooled);
             pool.inactive.push_back(entity);

@@ -127,7 +127,7 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         let root_entities: Vec<gizmo_core::entity::Entity> = world
             .iter_alive_entities()
             .into_iter()
-            .filter(|e| !parents.contains(e.id()) && !is_deleted_comp.contains(e.id()))
+            .filter(|e| parents.get(e.id()).is_none() && is_deleted_comp.get(e.id()).is_none())
             .collect();
 
         // Root entity'leri çiz
@@ -166,10 +166,10 @@ fn draw_entity_node(
     world: &World,
     entity: gizmo_core::entity::Entity,
     state: &mut EditorState,
-    names: &gizmo_core::storage::StorageView<EntityName>,
-    children_comp: &gizmo_core::storage::StorageView<Children>,
-    is_hidden_comp: &gizmo_core::storage::StorageView<gizmo_core::component::IsHidden>,
-    is_deleted_comp: &gizmo_core::storage::StorageView<gizmo_core::component::IsDeleted>,
+    names: &gizmo_core::StorageView<EntityName>,
+    children_comp: &gizmo_core::StorageView<Children>,
+    is_hidden_comp: &gizmo_core::StorageView<gizmo_core::component::IsHidden>,
+    is_deleted_comp: &gizmo_core::StorageView<gizmo_core::component::IsDeleted>,
     filter_lower: &str,
 ) {
     let entity_name = names
@@ -183,7 +183,7 @@ fn draw_entity_node(
         return;
     }
 
-    if is_deleted_comp.contains(entity.id()) {
+    if is_deleted_comp.get(entity.id()).is_some() {
         return;
     }
 
@@ -219,7 +219,7 @@ fn draw_entity_node(
         .map(|c| !c.0.is_empty())
         .unwrap_or(false);
 
-    let is_hidden = is_hidden_comp.contains(entity.id());
+    let is_hidden = is_hidden_comp.get(entity.id()).is_some();
 
     // Düğüm Çizimi + Drag Drop Kapsüllemesi
     let mut draw_row = |ui: &mut egui::Ui| {

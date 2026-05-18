@@ -203,14 +203,14 @@ pub fn behavior_tree_system(world: &mut World, dt: f32) {
 
     for entity in entities {
         let mut root_opt = None;
-        if let Some(tree) = world.borrow_mut::<BehaviorTree>().get_mut(entity) {
+        if let Some(mut tree) = world.borrow_mut::<BehaviorTree>().get_mut(entity) {
             root_opt = tree.root.take();
         }
 
         if let Some(mut root) = root_opt {
             root.tick(entity, world, dt);
 
-            if let Some(tree) = world.borrow_mut::<BehaviorTree>().get_mut(entity) {
+            if let Some(mut tree) = world.borrow_mut::<BehaviorTree>().get_mut(entity) {
                 tree.root = Some(root);
             }
         }

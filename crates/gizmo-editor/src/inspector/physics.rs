@@ -14,7 +14,7 @@ pub fn draw_velocity_section(
 ) {
     let mut velocities = world.borrow_mut::<Velocity>();
     {
-        if let Some(v) = velocities.get_mut(entity_id.id()) {
+        if let Some(mut v) = velocities.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("💨 Velocity")
                 .default_open(false)
                 .show(ui, |ui| {
@@ -69,7 +69,7 @@ pub fn draw_rigidbody_section(
 ) {
     let mut rigidbodies = world.borrow_mut::<RigidBody>();
     {
-        if let Some(rb) = rigidbodies.get_mut(entity_id.id()) {
+        if let Some(mut rb) = rigidbodies.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("⚙️ RigidBody")
                 .default_open(false)
                 .show(ui, |ui| {
@@ -125,7 +125,7 @@ pub fn draw_collider_section(
 ) {
     let mut colliders = world.borrow_mut::<Collider>();
     {
-        if let Some(collider) = colliders.get_mut(entity_id.id()) {
+        if let Some(mut collider) = colliders.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("🛡️ Collider")
                 .default_open(true)
                 .show(ui, |ui| {

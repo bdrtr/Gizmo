@@ -70,7 +70,7 @@ impl History {
                     let mut transforms = world.borrow_mut::<Transform>();
                     {
                         for (entity, ref old_transform, _) in changes.iter() {
-                            if let Some(t) = transforms.get_mut(entity.id()) {
+                            if let Some(mut t) = transforms.get_mut(entity.id()) {
                                 *t = *old_transform;
                                 t.update_local_matrix();
                             }
@@ -116,7 +116,7 @@ impl History {
                     let mut transforms = world.borrow_mut::<Transform>();
                     {
                         for (entity, _, ref new_transform) in changes.iter() {
-                            if let Some(t) = transforms.get_mut(entity.id()) {
+                            if let Some(mut t) = transforms.get_mut(entity.id()) {
                                 *t = *new_transform;
                                 t.update_local_matrix();
                             }

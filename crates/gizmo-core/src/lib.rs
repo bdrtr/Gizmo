@@ -12,7 +12,7 @@ pub mod pool;
 pub mod profiler;
 pub mod query;
 pub mod registry;
-pub mod storage;
+
 pub mod system;
 pub mod time;
 pub mod window;
@@ -31,13 +31,16 @@ pub use profiler::FrameProfiler;
 pub use query::{Changed, FetchComponent, Mut, Or, Query, With, Without, WorldQuery};
 pub use registry::ComponentRegistry;
 pub use state::{in_state, State};
-pub use storage::{StorageView, StorageViewMut};
+
 pub use system::{
     IntoSystem, IntoSystemConfig, Phase, Res, ResMut, Schedule, System, SystemConfig, SystemParam,
 };
 pub use time::{PhysicsTime, Time};
 pub use window::WindowInfo;
 pub use world::World;
+
+pub type StorageView<'w, T> = crate::query::Query<'w, &'w T>;
+pub type StorageViewMut<'w, T> = crate::query::Query<'w, crate::query::Mut<'w, T>>;
 
 // ──── Prelude ────
 /// Tek bir `use gizmo_core::prelude::*;` ile tüm temel tiplere erişim.

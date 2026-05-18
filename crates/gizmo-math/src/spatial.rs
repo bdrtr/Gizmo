@@ -1,12 +1,13 @@
 use crate::{Mat3, Vec3};
 use std::ops::{Add, Mul, Sub};
+use serde::{Deserialize, Serialize};
 
 /// Plücker Coordinate (Spatial Vector)
 /// Temsil ettiği kavrama göre:
 /// - Hız (Velocity): [angular_velocity, linear_velocity]
 /// - Kuvvet (Force): [moment, force]
 /// - İvme (Acceleration): [angular_acceleration, linear_acceleration]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct SpatialVector {
     pub w: Vec3, // Angular part (w)
     pub v: Vec3, // Linear part (v)
@@ -86,7 +87,7 @@ impl Mul<f32> for SpatialVector {
 }
 
 /// 6x6 Spatial Matrix (Articulated Body Inertia)
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct SpatialMatrix {
     pub m00: Mat3,
     pub m01: Mat3,
@@ -145,7 +146,7 @@ impl Sub for SpatialMatrix {
 
 /// Spatial Inertia Tensor (6x6 Matris Karşılığı)
 /// Bir RigidBody modelinin eylemsizlik profilidir.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct SpatialInertia {
     pub rot: Mat3, // Angular Inertia (I)
     pub mass: f32, // Linear Mass (m)
@@ -232,7 +233,7 @@ impl SpatialInertia {
         let mc_cross_t = mc_cross.transpose();
 
         let c_cross_c_cross = c_cross * c_cross;
-        let rot_shifted = self.rot + c_cross_c_cross * m;
+        let rot_shifted = self.rot - c_cross_c_cross * m;
 
         SpatialMatrix {
             m00: rot_shifted,

@@ -1052,4 +1052,40 @@ mod tests {
         // Toplam batch sayısı: Update(1) + Physics(2) = 3
         assert_eq!(schedule.total_batch_count(), 3);
     }
+
+    #[test]
+    fn write_write_conflict() {
+        let mut a = AccessInfo::new();
+        a.component_writes.push(TypeId::of::<CompA>());
+        let mut b = AccessInfo::new();
+        b.component_writes.push(TypeId::of::<CompA>());
+        assert!(!a.is_compatible_with(&b));
+    }
+
+    #[test]
+    fn read_write_conflict() {
+        let mut a = AccessInfo::new();
+        a.component_reads.push(TypeId::of::<CompA>());
+        let mut b = AccessInfo::new();
+        b.component_writes.push(TypeId::of::<CompA>());
+        assert!(!a.is_compatible_with(&b));
+    }
+
+    #[test]
+    fn read_read_no_conflict() {
+        let mut a = AccessInfo::new();
+        a.component_reads.push(TypeId::of::<CompA>());
+        let mut b = AccessInfo::new();
+        b.component_reads.push(TypeId::of::<CompA>());
+        assert!(a.is_compatible_with(&b));
+    }
+
+    #[test]
+    fn different_types_no_conflict() {
+        let mut a = AccessInfo::new();
+        a.component_writes.push(TypeId::of::<CompA>());
+        let mut b = AccessInfo::new();
+        b.component_writes.push(TypeId::of::<CompB>());
+        assert!(a.is_compatible_with(&b));
+    }
 }

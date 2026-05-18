@@ -12,11 +12,11 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
     {
         let entities: Vec<u32> = players.entities().collect();
         for entity in entities {
-            let player = match players.get_mut(entity) {
+            let mut player = match players.get_mut(entity) {
                 Some(p) => p,
                 None => continue,
             };
-            let skeleton = match skeletons.get_mut(entity) {
+            let mut skeleton = match skeletons.get_mut(entity) {
                 Some(s) => s,
                 None => continue,
             };
@@ -82,7 +82,7 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
 
             skeleton.local_poses = poses;
 
-            upload_skin_matrices(skeleton, queue);
+            upload_skin_matrices(&mut *skeleton, queue);
         }
     }
 }
@@ -95,14 +95,17 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
 
     let entities: Vec<u32> = machines.entities().collect();
     for entity in entities {
-        let machine = match machines.get_mut(entity) {
+        let mut machine_mut = match machines.get_mut(entity) {
             Some(m) => m,
             None => continue,
         };
-        let skeleton = match skeletons.get_mut(entity) {
+        let machine = &mut *machine_mut;
+        
+        let mut skeleton_mut = match skeletons.get_mut(entity) {
             Some(s) => s,
             None => continue,
         };
+        let skeleton = &mut *skeleton_mut;
 
         if machine.clips.is_empty() || machine.states.is_empty() {
             continue;
@@ -231,7 +234,7 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
             .collect();
 
         skeleton.local_poses = poses;
-        upload_skin_matrices(skeleton, queue);
+        upload_skin_matrices(&mut *skeleton, queue);
     }
 }
 

@@ -34,11 +34,11 @@ pub fn texture_streaming_system(world: &mut World, cam_pos: Vec3) {
 
     // Tüm materyalleri döngüye al
     for e in entities {
-        if hidden.contains(e) {
+        if hidden.get(e).is_some() {
             continue; // Gizli objeler stream edilmez
         }
 
-        let mat = if let Some(m) = materials.get_mut(e) {
+        let mut mat = if let Some(mut m) = materials.get_mut(e) {
             m
         } else {
             continue;

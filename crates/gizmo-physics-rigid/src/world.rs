@@ -64,6 +64,19 @@ const FIXED_DT: f32 = 1.0 / PHYSICS_HZ;
 /// Sub-step başına maksimum adım sayısı — spiral'i önler
 const MAX_SUBSTEPS: u32 = 64; // Increased from 8 to support larger DTs without losing simulation time
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Weather {
+    Sunny,
+    Rain,
+    Snow,
+}
+
+impl Default for Weather {
+    fn default() -> Self {
+        Self::Sunny
+    }
+}
+
 /// A compact snapshot of the physics state for rewinding
 #[derive(Clone)]
 pub struct PhysicsStateSnapshot {
@@ -74,6 +87,8 @@ pub struct PhysicsStateSnapshot {
 /// Main physics world that manages all physics simulation
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct PhysicsWorld {
+    pub weather: Weather,
+    
     #[serde(skip)]
     pub integrator: Integrator,
     #[serde(skip)]
@@ -137,6 +152,7 @@ impl Default for PhysicsWorld {
 impl PhysicsWorld {
     pub fn new() -> Self {
         Self {
+            weather: Weather::Sunny,
             integrator: Integrator::default(),
             solver: ConstraintSolver::default(),
             spatial_hash: SpatialHash::new(10.0),
@@ -601,5 +617,322 @@ mod tests {
 
         // Object should have fallen due to gravity
         assert!(world.transforms[0].position.y < 10.0);
+    }
+
+    #[test]
+    fn test_high_stack_stability() {
+        let mut world = PhysicsWorld::new();
+        // Akademik doğrulama için iterasyon sayısını yüksek tutalım
+        world.solver.iterations = 30;
+
+        // Ground
+        let mut ground_rb = RigidBody::default();
+        ground_rb.body_type = crate::components::rigid_body::BodyType::Static;
+        ground_rb.wake_up();
+        world.add_body(
+            Entity::new(0, 0),
+            ground_rb,
+            Transform::new(Vec3::new(0.0, -0.5, 0.0)),
+            Velocity::default(),
+            Collider::box_collider(Vec3::new(50.0, 0.5, 50.0)),
+        );
+
+        // 10 Kutuluk bir kule inşa et
+        let box_count = 10;
+        let box_size = 1.0;
+        let half_size = box_size / 2.0;
+
+        for i in 1..=box_count {
+            let mut rb = RigidBody::new(1.0, 0.5, 0.5, true);
+            rb.wake_up(); // Uyumasını engelle ki solver test edilsin
+            
+            let y_pos = half_size + (i - 1) as f32 * box_size;
+            
+            world.add_body(
+                Entity::new(i, 0),
+                rb,
+                Transform::new(Vec3::new(0.0, y_pos, 0.0)),
+                Velocity::default(),
+                Collider::box_collider(Vec3::new(half_size, half_size, half_size)),
+            );
+        }
+
+        // 10 saniye (600 kare) simüle et
+        for i in 0..600 {
+            let _ = world.step(1.0 / 60.0);
+            if i % 60 == 0 {
+                println!("Frame {}: Y={}, X={}, Z={}", i, world.transforms[10].position.y, world.transforms[10].position.x, world.transforms[10].position.z);
+            }
+        }
+
+        // Kule yıkılmamış olmalı (X ve Z ekseninde çok kaymamış olmalı)
+        // En üstteki kutunun durumuna bakalım
+        let top_box_idx = box_count as usize; // Entity ID starts from 1 for boxes, so idx is `box_count` because ground is 0
+        let top_box_pos = world.transforms[top_box_idx].position;
+
+        // Akademik limitler: 10 saniye boyunca dik durmalı, yana yatmamalı
+        assert!(
+            top_box_pos.x.abs() < 0.1,
+            "Top box slid too much on X axis: {}",
+            top_box_pos.x
+        );
+        assert!(
+            top_box_pos.z.abs() < 0.1,
+            "Top box slid too much on Z axis: {}",
+            top_box_pos.z
+        );
+
+        // Yüksekliği korunmalı (Jitter / Penetrasyon testi)
+        let expected_y = half_size + (box_count - 1) as f32 * box_size;
+        let y_error = (top_box_pos.y - expected_y).abs();
+        assert!(
+            y_error < 0.1,
+            "Top box sunk or bounced too much. Expected Y: {}, Actual Y: {}",
+            expected_y,
+            top_box_pos.y
+        );
+    }
+
+    #[test]
+    fn test_ccd_tunneling_prevention() {
+        let mut world = PhysicsWorld::new();
+        // Gravity kapalı ki tam düz uçsun
+        world.integrator.gravity = Vec3::ZERO;
+
+        // İnce bir duvar (kalınlık 0.2m)
+        let mut wall_rb = RigidBody::new_static();
+        wall_rb.wake_up();
+        world.add_body(
+            Entity::new(0, 0),
+            wall_rb,
+            Transform::new(Vec3::new(0.0, 0.0, 0.0)),
+            Velocity::default(),
+            Collider::box_collider(Vec3::new(0.1, 5.0, 5.0)),
+        );
+
+        // Mermi (CCD Açık)
+        let mut bullet_rb = RigidBody::new(1.0, 0.0, 0.0, false);
+        bullet_rb.ccd_enabled = true;
+        bullet_rb.wake_up();
+
+        // Mermiyi duvarın önünden, saniyede 1200 metre hızla (mach 3.5) ateşle!
+        // 1 kare (1/60) saniyede 20 metre yol alır. Duvar sadece 0.2m kalınlığında!
+        world.add_body(
+            Entity::new(1, 0),
+            bullet_rb,
+            Transform::new(Vec3::new(-5.0, 0.0, 0.0)),
+            Velocity::new(Vec3::new(1200.0, 0.0, 0.0)),
+            Collider::sphere(0.2),
+        );
+
+        // 1 Frame simüle et (Tunneling ihtimali olan an)
+        let _ = world.step(1.0 / 60.0);
+
+        let bullet_pos = world.transforms[1].position;
+        let bullet_vel = world.velocities[1].linear;
+
+        // CCD çalıştığı için mermi duvarı GEÇMEMELİ!
+        // Eğer CCD çalışmasaydı, X konumu 15.0 civarında olurdu.
+        // CCD çalıştığı için duvarda durmalı (X <= 0) veya sekip eksi hıza geçmeli.
+        assert!(
+            bullet_pos.x <= 0.0,
+            "TUNNELING FAILED! Bullet phased through the wall. Position: {}",
+            bullet_pos.x
+        );
+        // Hız durdurulmuş veya sekmiş olmalı
+        assert!(
+            bullet_vel.x <= 0.01,
+            "Bullet did not lose velocity after hitting the wall. Vel: {}",
+            bullet_vel.x
+        );
+    }
+
+    #[test]
+    fn test_coulomb_friction_and_sleeping() {
+        let mut world = PhysicsWorld::new();
+        // Sürtünme için yerçekimi şart (Normal kuvveti yaratmak için)
+        world.integrator.gravity = Vec3::new(0.0, -10.0, 0.0);
+
+        // Zemin (Sürtünme: 0.5)
+        let mut ground_rb = RigidBody::new_static();
+        ground_rb.friction = 0.5;
+        ground_rb.wake_up();
+        world.add_body(
+            Entity::new(0, 0),
+            ground_rb,
+            Transform::new(Vec3::new(0.0, -0.5, 0.0)),
+            Velocity::default(),
+            Collider::box_collider(Vec3::new(100.0, 0.5, 100.0)),
+        );
+
+        // Kutu A: Düşük Sürtünme (0.1)
+        let mut box_a = RigidBody::new(1.0, 0.0, 0.1, true);
+        box_a.wake_up();
+        world.add_body(
+            Entity::new(1, 0),
+            box_a,
+            Transform::new(Vec3::new(0.0, 0.5, -2.0)),
+            Velocity::new(Vec3::new(10.0, 0.0, 0.0)),
+            Collider::box_collider(Vec3::splat(0.5)),
+        );
+
+        // Kutu B: Yüksek Sürtünme (0.8)
+        let mut box_b = RigidBody::new(1.0, 0.0, 0.8, true);
+        box_b.wake_up();
+        world.add_body(
+            Entity::new(2, 0),
+            box_b,
+            Transform::new(Vec3::new(0.0, 0.5, 2.0)),
+            Velocity::new(Vec3::new(10.0, 0.0, 0.0)),
+            Collider::box_collider(Vec3::splat(0.5)),
+        );
+
+        // 5 saniye simüle et (300 kare) - İkisi de tamamen durup uyumalı
+        for _ in 0..300 {
+            let _ = world.step(1.0 / 60.0);
+        }
+
+        let pos_a = world.transforms[1].position;
+        let pos_b = world.transforms[2].position;
+        let sleep_a = world.rigid_bodies[1].is_sleeping;
+        let sleep_b = world.rigid_bodies[2].is_sleeping;
+
+        // Yüksek sürtünmeli kutu daha erken durmuş olmalı (Daha az X mesafesi)
+        assert!(
+            pos_b.x < pos_a.x,
+            "High friction box should travel less. Pos A: {}, Pos B: {}",
+            pos_a.x,
+            pos_b.x
+        );
+
+        // İkisi de kinetik enerjisini sıfırlayıp UYKU MODUNA geçmiş olmalı
+        assert!(
+            sleep_a,
+            "Low friction box did not enter sleeping mode!"
+        );
+        assert!(
+            sleep_b,
+            "High friction box did not enter sleeping mode!"
+        );
+    }
+
+    #[test]
+    fn test_car_simulation() {
+        use crate::joints::data::{Joint, JointData, HingeJointData};
+
+        let mut world = PhysicsWorld::new();
+        // Yerçekimi açık (Sürtünme ve ağırlık için gerekli)
+        world.integrator.gravity = Vec3::new(0.0, -10.0, 0.0);
+
+        // --- Zemin ---
+        let mut ground_rb = RigidBody::new_static();
+        ground_rb.friction = 0.8;
+        ground_rb.wake_up();
+        world.add_body(
+            Entity::new(0, 0),
+            ground_rb,
+            Transform::new(Vec3::new(0.0, -0.5, 0.0)),
+            Velocity::default(),
+            Collider::box_collider(Vec3::new(100.0, 0.5, 100.0)),
+        );
+
+        // --- Şasi (Chassis) ---
+        // 1000 kg, sürtünme önemsiz, dinamik
+        let mut chassis_rb = RigidBody::new(1000.0, 0.1, 0.5, true);
+        chassis_rb.wake_up();
+        let chassis_entity = Entity::new(1, 0);
+        let chassis_pos = Vec3::new(0.0, 1.5, 0.0);
+        world.add_body(
+            chassis_entity,
+            chassis_rb,
+            Transform::new(chassis_pos),
+            Velocity::default(),
+            Collider::box_collider(Vec3::new(1.0, 0.5, 2.0)), // Genişlik 2, Yükseklik 1, Uzunluk 4 (Yarıçaplar)
+        );
+
+        // Tekerlek Şablonu
+        let mut wheel_rb = RigidBody::new(50.0, 0.1, 0.9, true); // Yüksek kütle (50kg) ve yüksek sürtünme (0.9)
+        wheel_rb.wake_up();
+
+        let wheel_radius = 0.5;
+        let wheel_offsets = vec![
+            Vec3::new(-1.2, -0.2, 1.5),  // Sol Ön
+            Vec3::new(1.2, -0.2, 1.5),   // Sağ Ön
+            Vec3::new(-1.2, -0.2, -1.5), // Sol Arka
+            Vec3::new(1.2, -0.2, -1.5),  // Sağ Arka
+        ];
+
+        let mut wheel_entities = Vec::new();
+
+        for (i, offset) in wheel_offsets.iter().enumerate() {
+            let wheel_entity = Entity::new(2 + i as u32, 0);
+            wheel_entities.push(wheel_entity);
+
+            world.add_body(
+                wheel_entity,
+                wheel_rb.clone(),
+                Transform::new(chassis_pos + *offset),
+                Velocity::default(),
+                Collider::sphere(wheel_radius),
+            );
+
+            // Menteşe Eklemi (Hinge Joint) oluştur
+            let is_rear = i >= 2;
+            let hinge_data = HingeJointData {
+                axis: Vec3::X, // Tekerlekler X ekseni etrafında dönecek
+                use_limits: false,
+                lower_limit: 0.0,
+                upper_limit: 0.0,
+                use_motor: is_rear, // Sadece arka tekerleklerde motor var
+                motor_target_velocity: if is_rear { 10.0 } else { 0.0 }, // İleri doğru 10 rad/s
+                motor_max_force: if is_rear { 10000.0 } else { 0.0 }, // 10000 N güç
+                current_angle: 0.0,
+            };
+
+            let joint = Joint {
+                entity_a: chassis_entity,
+                entity_b: wheel_entity,
+                local_anchor_a: *offset, // Şasinin lokal uzayında bağlantı noktası
+                local_anchor_b: Vec3::ZERO, // Tekerleğin tam ortası
+                break_force: f32::MAX, // Asla kopmasın
+                break_torque: f32::MAX,
+                is_broken: false,
+                collision_enabled: false, // Şasi ile tekerlek çarpışmasın
+                data: JointData::Hinge(hinge_data),
+            };
+
+            world.joints.push(joint);
+        }
+
+        // --- Simülasyon ---
+        // Motorlar çalışacak ve arabayı 5 saniye boyunca (300 kare) ileri doğru (Z+) sürecek
+        for _ in 0..300 {
+            let _ = world.step(1.0 / 60.0);
+        }
+
+        // Doğrulama
+        let final_chassis_pos = world.transforms[1].position;
+        
+        // 1. İleri Sürüş: Araba Z ekseninde (ileri) hareket etmiş olmalı
+        assert!(
+            final_chassis_pos.z > 3.0,
+            "Araba yeterince ileri gidemedi! Motor veya sürtünme çalışmıyor. Z pozisyonu: {}",
+            final_chassis_pos.z
+        );
+
+        // 2. Denge (Devrilmeme): Arabanın Y pozisyonu stabil kalmalı (uçmamalı veya batmamalı)
+        // Başlangıç Y: 1.5, Tekerlek yarıçapı 0.5. Araba yere oturunca Y ~1.0 - 1.2 civarı olmalı
+        assert!(
+            final_chassis_pos.y > 0.5 && final_chassis_pos.y < 2.0,
+            "Araba devrildi, uçtu veya yere battı! Y pozisyonu: {}",
+            final_chassis_pos.y
+        );
+
+        // 3. X Ekseninde Düz Gitme (Sağa sola savrulmama)
+        assert!(
+            final_chassis_pos.x.abs() < 1.0,
+            "Araba düz gidemedi, sağa sola savruldu! X pozisyonu: {}",
+            final_chassis_pos.x
+        );
     }
 }

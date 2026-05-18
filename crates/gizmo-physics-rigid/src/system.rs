@@ -26,47 +26,43 @@ pub fn physics_step_system(world: &World, dt: f32) {
     // 2. Gather Compound Shapes (Read Locks Only)
     let mut compound_shapes_map = std::collections::HashMap::new();
     {
-        let col_storage = world.borrow::<Collider>();
-        let children_storage = world.borrow::<gizmo_core::component::Children>();
-        let trans_storage = world.borrow::<Transform>();
-        let rb_storage = world.borrow::<RigidBody>();
-        let pooled_storage = world.borrow::<gizmo_core::pool::Pooled>();
-        let deleted_storage = world.borrow::<gizmo_core::component::IsDeleted>();
+        if let Some(query) = world.query::<(
+            &Collider,
+            &Transform,
+            &RigidBody,
+            gizmo_core::query::Without<gizmo_core::pool::Pooled>,
+            gizmo_core::query::Without<gizmo_core::component::IsDeleted>,
+        )>() {
+            let mut children_query = world.query::<&gizmo_core::component::Children>();
+            let trans_query = world.query::<&Transform>();
+            let col_query = world.query::<&Collider>();
 
-        for (id, _rb) in rb_storage.iter() {
-            // Pooled veya silinmiş nesneleri simüle etme
-            if pooled_storage.get(id).is_some() || deleted_storage.get(id).is_some() {
-                continue;
-            }
-            if let Some(transform) = trans_storage.get(id) {
+            for (id, (col, transform, _rb, _, _)) in query.iter() {
                 let mut compound_shapes = Vec::new();
-
-                // Check self
-                if let Some(c) = col_storage.get(id) {
-                    compound_shapes.push((
-                        gizmo_physics_core::Transform::default(),
-                        Box::new(c.shape.clone()),
-                    ));
-                }
+                compound_shapes.push((
+                    gizmo_physics_core::Transform::default(),
+                    Box::new(col.shape.clone()),
+                ));
 
                 // Check children recursively
                 let mut stack = vec![id];
                 while let Some(curr_id) = stack.pop() {
-                    if let Some(children) = children_storage.get(curr_id) {
-                        for &child_id in &children.0 {
-                            stack.push(child_id);
-                            if let Some(child_trans) = trans_storage.get(child_id) {
-                                if let Some(child_col) = col_storage.get(child_id) {
-                                    // Compute local transform relative to the root
-                                    let inv_rot = transform.rotation.inverse();
-                                    let local_pos =
-                                        inv_rot.mul_vec3(child_trans.position - transform.position);
-                                    let local_rot = inv_rot * child_trans.rotation;
+                    if let Some(children_query_ref) = &mut children_query {
+                        if let Some(children) = children_query_ref.get(curr_id) {
+                            for &child_id in &children.0 {
+                                stack.push(child_id);
+                                if let (Some(tq), Some(cq)) = (&trans_query, &col_query) {
+                                    if let (Some(child_trans), Some(child_col)) = (tq.get(child_id), cq.get(child_id)) {
+                                        let inv_rot = transform.rotation.inverse();
+                                        let local_pos =
+                                            inv_rot.mul_vec3(child_trans.position - transform.position);
+                                        let local_rot = inv_rot * child_trans.rotation;
 
-                                    let local_t = gizmo_physics_core::Transform::new(local_pos)
-                                        .with_rotation(local_rot);
-                                    compound_shapes
-                                        .push((local_t, Box::new(child_col.shape.clone())));
+                                        let local_t = gizmo_physics_core::Transform::new(local_pos)
+                                            .with_rotation(local_rot);
+                                        compound_shapes
+                                            .push((local_t, Box::new(child_col.shape.clone())));
+                                    }
                                 }
                             }
                         }
@@ -93,22 +89,18 @@ pub fn physics_step_system(world: &World, dt: f32) {
                 compound_shapes_map.insert(id, final_collider);
             }
         }
-    } // Read locks are dropped here!
+    }
 
     // 3. Query Rigid Bodies (Write Locks)
     let mut rigid_bodies = Vec::new();
-    if let Some(query) = Query::<(
+    if let Some(mut query) = world.query::<(
         Mut<RigidBody>,
         Mut<Transform>,
         Mut<Velocity>,
         gizmo_core::query::Without<gizmo_core::pool::Pooled>,
-    )>::new(world)
-    {
-        let deleted_storage = world.borrow::<gizmo_core::component::IsDeleted>();
-        for (id, (rb, transform, vel, _)) in query.iter() {
-            if deleted_storage.get(id).is_some() {
-                continue;
-            }
+        gizmo_core::query::Without<gizmo_core::component::IsDeleted>,
+    )>() {
+        for (id, (rb, transform, vel, _, _)) in query.iter_mut() {
             if let Some(final_collider) = compound_shapes_map.remove(&id) {
                 rigid_bodies.push((Entity::new(id, 0), *rb, *transform, *vel, final_collider));
             }
@@ -136,13 +128,12 @@ pub fn physics_step_system(world: &World, dt: f32) {
 
     // 5. Write back to ECS (Rigid Bodies)
     if !rigid_bodies.is_empty() {
-        if let Some(query) = Query::<(
+        if let Some(mut query) = world.query::<(
             Mut<RigidBody>,
             Mut<Transform>,
             Mut<Velocity>,
             gizmo_core::query::Without<gizmo_core::pool::Pooled>,
-        )>::new(world)
-        {
+        )>() {
             for (entity, rb, transform, vel, _collider) in rigid_bodies {
                 if let Some((mut ecs_rb, mut ecs_trans, mut ecs_vel, _)) = query.get(entity.id()) {
                     *ecs_rb = rb;

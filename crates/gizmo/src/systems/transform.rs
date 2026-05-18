@@ -10,9 +10,10 @@ impl gizmo_core::system::System for TransformSyncSystem {
     }
 
     fn run(&mut self, world: &gizmo_core::world::World, _dt: f32) {
-        let transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
-        for (_, trans) in transforms.iter_mut() {
-            trans.update_local_matrix();
+        if let Some(mut transforms) = world.query::<gizmo_core::query::Mut<gizmo_physics_core::Transform>>() {
+            for (_, mut trans) in transforms.iter_mut() {
+                trans.update_local_matrix();
+            }
         }
     }
 }
@@ -27,21 +28,21 @@ impl gizmo_core::system::System for TransformPropagateSystem {
     }
 
     fn run(&mut self, world: &gizmo_core::world::World, _dt: f32) {
-        let locals = world.borrow::<gizmo_physics_core::Transform>();
-        let mut globals = world.borrow_mut::<gizmo_physics_core::components::GlobalTransform>();
-        let parents = world.borrow::<gizmo_core::component::Parent>();
-        let children_storage = world.borrow::<gizmo_core::component::Children>();
+        // Query to get root transforms (no Parent)
+        let root_query = world.query::<(
+            &gizmo_physics_core::Transform,
+            gizmo_core::query::Mut<gizmo_physics_core::components::GlobalTransform>,
+            gizmo_core::query::Without<gizmo_core::component::Parent>,
+        )>();
 
         let mut queue = Vec::new();
 
-        // 1. Kökleri (Root) işle ve GlobalTransform'larını kendi yerellerine eşitle
-        for (id, local) in locals.iter() {
-            if parents.get(id).is_none() {
-                if let Some(global) = globals.get_mut(id) {
-                    global.matrix = local.local_matrix;
-
-                    // Eğer çocukları varsa kuyruğa ekle
-                    if let Some(children) = children_storage.get(id) {
+        if let Some(mut roots) = root_query {
+            let mut children_query = world.query::<&gizmo_core::component::Children>();
+            for (id, (local, mut global, _)) in roots.iter_mut() {
+                global.matrix = local.local_matrix;
+                if let Some(children_q) = &mut children_query {
+                    if let Some(children) = children_q.get(id) {
                         for &child_id in &children.0 {
                             queue.push((global.matrix, child_id));
                         }
@@ -50,19 +51,25 @@ impl gizmo_core::system::System for TransformPropagateSystem {
             }
         }
 
-        // 2. Çocukları hiyerarşik olarak BFS ile işle
+        // Processing children (we need random access, so we do individual queries)
+        let mut local_query = world.query::<&gizmo_physics_core::Transform>();
+        let mut global_query = world.query::<gizmo_core::query::Mut<gizmo_physics_core::components::GlobalTransform>>();
+        let mut children_query = world.query::<&gizmo_core::component::Children>();
+
         let mut head = 0;
         while head < queue.len() {
             let (parent_matrix, current_id) = queue[head];
             head += 1;
 
-            if let Some(local) = locals.get(current_id) {
-                if let Some(global) = globals.get_mut(current_id) {
+            if let (Some(lq), Some(gq)) = (&mut local_query, &mut global_query) {
+                if let (Some(local), Some(mut global)) = (lq.get(current_id), gq.get(current_id)) {
                     global.matrix = parent_matrix * local.local_matrix;
 
-                    if let Some(children) = children_storage.get(current_id) {
-                        for &child_id in &children.0 {
-                            queue.push((global.matrix, child_id));
+                    if let Some(cq) = &mut children_query {
+                        if let Some(children) = cq.get(current_id) {
+                            for &child_id in &children.0 {
+                                queue.push((global.matrix, child_id));
+                            }
                         }
                     }
                 }
@@ -81,23 +88,25 @@ impl gizmo_core::system::System for BoneAttachmentSystem {
     }
 
     fn run(&mut self, world: &gizmo_core::world::World, _dt: f32) {
-        let attachments = world.borrow::<gizmo_renderer::components::BoneAttachment>();
-        let skeletons = world.borrow::<gizmo_renderer::components::Skeleton>();
-        let mut transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
-        
-        for (id, attachment) in attachments.iter() {
-            if let Some(skeleton) = skeletons.get(attachment.target_entity.id()) {
-                if let Some(global_matrix) = skeleton.global_poses.get(attachment.bone_index) {
-                    if let Some(trans) = transforms.get_mut(id) {
-                        // Bone's transform is in skeleton-local space!
-                        // To get world space, we need the skeleton entity's GlobalTransform.
-                        // Let's assume the skeleton is always at identity or we just apply the local offset for now.
-                        let final_mat = *global_matrix * attachment.offset;
-                        let (t, r, s) = gizmo_renderer::decompose_mat4(final_mat);
-                        trans.position = t;
-                        trans.rotation = r;
-                        trans.scale = s;
-                        trans.update_local_matrix();
+        if let Some(query) = world.query::<&gizmo_renderer::components::BoneAttachment>() {
+            let mut skeletons = world.query::<&gizmo_renderer::components::Skeleton>();
+            let mut transforms = world.query::<gizmo_core::query::Mut<gizmo_physics_core::Transform>>();
+            
+            for (id, attachment) in query.iter() {
+                if let Some(sq) = &mut skeletons {
+                    if let Some(skeleton) = sq.get(attachment.target_entity.id()) {
+                        if let Some(global_matrix) = skeleton.global_poses.get(attachment.bone_index) {
+                            if let Some(tq) = &mut transforms {
+                                if let Some(mut trans) = tq.get(id) {
+                                    let final_mat = *global_matrix * attachment.offset;
+                                    let (t, r, s) = gizmo_renderer::decompose_mat4(final_mat);
+                                    trans.position = t;
+                                    trans.rotation = r;
+                                    trans.scale = s;
+                                    trans.update_local_matrix();
+                                }
+                            }
+                        }
                     }
                 }
             }
