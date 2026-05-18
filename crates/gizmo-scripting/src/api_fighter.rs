@@ -109,7 +109,7 @@ pub fn update_fighter_read_api(lua: &Lua, world: &World) -> Result<(), LuaError>
     let buffers = lua.create_table()?;
     let is_locked = lua.create_table()?;
 
-    let controllers = world.borrow::<gizmo_physics::components::fighter::FighterController>();
+    let controllers = world.borrow::<gizmo_physics_core::components::FighterController>();
     for (eid, _) in controllers.iter() {
         if let Some(fighter) = controllers.get(eid) {
             is_locked.set(eid, fighter.is_locked())?;

@@ -1,5 +1,5 @@
 use crate::app::{App, Plugin};
-use crate::physics::world::PhysicsWorld;
+use gizmo_physics_rigid::world::PhysicsWorld;
 
 use crate::math::Vec3;
 

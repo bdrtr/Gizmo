@@ -11,6 +11,7 @@ readme.workspace = true
 [dependencies]
 gizmo-math = { path = "../gizmo-math" , version = "0.1.2" }
 gizmo-core = { path = "../gizmo-core" , version = "0.1.2" }
-gizmo-physics = { path = "../gizmo-physics" , version = "0.1.2" }
+gizmo-physics-core = { path = "../gizmo-physics-core" , version = "0.1.2" }
+gizmo-physics-rigid = { path = "../gizmo-physics-rigid" , version = "0.1.2" }
 serde = { version = "1.0", features = ["derive"] }
 tracing = "0.1.44"

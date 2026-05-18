@@ -12,7 +12,7 @@
 
 use crate::core::{Bundle, Entity, EntityName, World};
 use crate::math::{Quat, Vec3};
-use crate::physics::Transform;
+use gizmo_physics_core::Transform;
 use crate::renderer::components::{
     Camera, DirectionalLight, LightRole, Material, Mesh, MeshRenderer, PointLight, SpotLight,
 };
@@ -46,7 +46,7 @@ impl Bundle for DirectionalLightBundle {
             entity,
             Transform::new(Vec3::ZERO).with_rotation(self.rotation),
         );
-        world.add_component(entity, crate::physics::GlobalTransform::default());
+        world.add_component(entity, gizmo_physics_core::components::GlobalTransform::default());
         world.add_component(
             entity,
             DirectionalLight::new(self.color, self.intensity, self.role),
@@ -80,7 +80,7 @@ impl Default for PointLightBundle {
 impl Bundle for PointLightBundle {
     fn apply(self, world: &mut World, entity: Entity) {
         world.add_component(entity, Transform::new(self.position));
-        world.add_component(entity, crate::physics::GlobalTransform::default());
+        world.add_component(entity, gizmo_physics_core::components::GlobalTransform::default());
         world.add_component(
             entity,
             PointLight::new(self.color, self.intensity, self.radius),
@@ -123,7 +123,7 @@ impl Bundle for SpotLightBundle {
             entity,
             Transform::new(self.position).with_rotation(self.rotation),
         );
-        world.add_component(entity, crate::physics::GlobalTransform::default());
+        world.add_component(entity, gizmo_physics_core::components::GlobalTransform::default());
         world.add_component(
             entity,
             SpotLight::new(
@@ -169,7 +169,7 @@ impl Default for CameraBundle {
 impl Bundle for CameraBundle {
     fn apply(self, world: &mut World, entity: Entity) {
         world.add_component(entity, Transform::new(self.position));
-        world.add_component(entity, crate::physics::GlobalTransform::default());
+        world.add_component(entity, gizmo_physics_core::components::GlobalTransform::default());
         world.add_component(
             entity,
             Camera::new(
@@ -255,7 +255,7 @@ impl Bundle for MeshBundle {
                 .with_rotation(self.rotation)
                 .with_scale(self.scale),
         );
-        world.add_component(entity, crate::physics::GlobalTransform::default());
+        world.add_component(entity, gizmo_physics_core::components::GlobalTransform::default());
         world.add_component(entity, self.mesh);
         world.add_component(entity, self.material);
         world.add_component(entity, MeshRenderer::new());

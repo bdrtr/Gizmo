@@ -11,10 +11,8 @@ use crate::color::Color;
 /// ```
 use gizmo_core::{Entity, EntityName, World};
 use gizmo_math::{Quat, Vec3};
-use gizmo_physics::{
-    components::{Collider, RigidBody, Velocity},
-    Transform,
-};
+use gizmo_physics_core::{Collider, Transform};
+use gizmo_physics_rigid::components::{RigidBody, Velocity};
 use gizmo_renderer::{
     asset::AssetManager,
     components::{Camera, DirectionalLight, Material, MeshRenderer, PointLight},
@@ -464,7 +462,7 @@ impl<'a> Commands<'a> {
 
                 self.world.add_component(root, trans);
                 self.world
-                    .add_component(root, gizmo_physics::GlobalTransform::default());
+                    .add_component(root, gizmo_physics_core::components::GlobalTransform::default());
                 self.world
                     .add_component(root, EntityName(format!("GLTF: {}", path)));
                 self.world
@@ -549,7 +547,7 @@ impl<'a> Commands<'a> {
 
                 self.world.add_component(root, trans);
                 self.world
-                    .add_component(root, gizmo_physics::GlobalTransform::default());
+                    .add_component(root, gizmo_physics_core::components::GlobalTransform::default());
                 self.world
                     .add_component(root, EntityName(format!("GLTF: {}", completion.path)));
                 self.world
@@ -652,7 +650,7 @@ fn spawn_mesh_entity(
     trans.update_local_matrix();
 
     world.add_component(id, trans);
-    world.add_component(id, gizmo_physics::components::GlobalTransform::default());
+    world.add_component(id, gizmo_physics_core::components::GlobalTransform::default());
     world.add_component(id, mesh);
     world.add_component(id, mat);
     world.add_component(id, MeshRenderer::new());
@@ -708,13 +706,13 @@ fn spawn_gltf_node_flat(
     }
     
     world.add_component(entity, t);
-    world.add_component(entity, gizmo_physics::GlobalTransform::default());
+    world.add_component(entity, gizmo_physics_core::components::GlobalTransform::default());
 
     let mut newly_added_prims = Vec::new();
     for (mesh, mat_opt) in node.primitives.iter() {
         let prim = world.spawn();
         world.add_component(prim, Transform::new(Vec3::ZERO));
-        world.add_component(prim, gizmo_physics::GlobalTransform::default());
+        world.add_component(prim, gizmo_physics_core::components::GlobalTransform::default());
         world.add_component(prim, Parent(entity.id()));
         world.add_component(prim, Children(Vec::new()));
 
@@ -741,10 +739,10 @@ fn spawn_gltf_node_flat(
             if center_offset.length_squared() > 0.0001 {
                 world.add_component(
                     prim,
-                    gizmo_physics::shape::Collider::offset_box(center_offset.into(), gizmo_math::Vec3::new(cx, cy, cz)),
+                    gizmo_physics_core::Collider::offset_box(center_offset.into(), gizmo_math::Vec3::new(cx, cy, cz)),
                 );
             } else {
-                world.add_component(prim, gizmo_physics::shape::Collider::new_aabb(cx, cy, cz));
+                world.add_component(prim, gizmo_physics_core::Collider::new_aabb(cx, cy, cz));
             }
         }
     }
@@ -780,7 +778,7 @@ pub trait WorldExt {
     fn entity_named(&self, name: &str) -> Option<u32>;
 
     /// İsme göre entity'nin Transform'unu değiştir. Transform matrisi otomatik güncellenir.
-    fn move_entity_named<F: FnMut(&mut gizmo_physics::Transform)>(&mut self, name: &str, f: F);
+    fn move_entity_named<F: FnMut(&mut gizmo_physics_core::Transform)>(&mut self, name: &str, f: F);
 
     /// İsme göre entity'nin dünya pozisyonunu al.
     fn position_of(&self, name: &str) -> Option<Vec3>;
@@ -806,7 +804,7 @@ impl WorldExt for World {
         None
     }
 
-    fn move_entity_named<F: FnMut(&mut gizmo_physics::Transform)>(&mut self, name: &str, mut f: F) {
+    fn move_entity_named<F: FnMut(&mut gizmo_physics_core::Transform)>(&mut self, name: &str, mut f: F) {
         let target: Option<u32> = {
             if let Some(mut names) = self.query::<&EntityName>() {
                 let mut found = None;
@@ -823,7 +821,7 @@ impl WorldExt for World {
         };
         if let Some(target_id) = target {
             if let Some(mut transforms) =
-                self.query::<gizmo_core::prelude::Mut<gizmo_physics::Transform>>()
+                self.query::<gizmo_core::prelude::Mut<gizmo_physics_core::Transform>>()
             {
                 for (tid, mut trans) in transforms.iter_mut() {
                     if tid == target_id {
@@ -837,7 +835,7 @@ impl WorldExt for World {
 
     fn position_of(&self, name: &str) -> Option<Vec3> {
         let target_id = self.entity_named(name)?;
-        let transforms = self.borrow::<gizmo_physics::components::Transform>();
+        let transforms = self.borrow::<gizmo_physics_core::Transform>();
         transforms.get(target_id).map(|t| t.position)
     }
 

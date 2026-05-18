@@ -1,7 +1,8 @@
 use gizmo_audio::{AudioManager, AudioSource};
 use gizmo_core::World;
 use gizmo_math::Vec3;
-use gizmo_physics::components::{Transform, Velocity};
+use gizmo_physics_core::Transform;
+use gizmo_physics_rigid::components::Velocity;
 
 /// Gelişmiş 3D Uzamsal Ses (Spatial Audio) ve Doppler Etkisi Sistemi
 ///

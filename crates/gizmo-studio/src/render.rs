@@ -222,30 +222,14 @@ pub fn render_studio(
     if let Some(path) = load_req {
         let protected_ids = collect_protected_ids(world, state.editor_camera);
         despawn_non_protected(world, &protected_ids);
-        if let Some(mut asset_manager) =
-            world.remove_resource::<gizmo::renderer::asset::AssetManager>()
-        {
-            let dummy_rgba = [255, 255, 255, 255];
-            let dummy_bg = renderer.create_texture(&dummy_rgba, 1, 1);
-            gizmo::scene::SceneData::load_into(
-                &path,
-                world,
-                &renderer.device,
-                &renderer.queue,
-                &renderer.scene.texture_bind_group_layout,
-                &mut asset_manager,
-                std::sync::Arc::new(dummy_bg),
-                &gizmo::scene::SceneRegistry::default(),
-            );
-            world.insert_resource(asset_manager);
-            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-                ed.clear_selection();
-                ed.log_info("Sahne yüklendi.");
-            }
-        } else {
-            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-                ed.log_error("Kritik Hata: Sahne yüklenemedi. AssetManager bulunamadı!");
-            }
+        gizmo::scene::SceneData::load_into(
+            &path,
+            world,
+            &gizmo::scene::SceneRegistry::default(),
+        );
+        if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+            ed.clear_selection();
+            ed.log_info("Sahne yüklendi.");
         }
     }
 
@@ -262,42 +246,26 @@ pub fn render_studio(
     }
 
     if let Some((path, parent, target_pos)) = prefab_load_req {
-        if let Some(mut asset_manager) =
-            world.remove_resource::<gizmo::renderer::asset::AssetManager>()
-        {
-            let dummy_rgba = [255, 255, 255, 255];
-            let dummy_bg = renderer.create_texture(&dummy_rgba, 1, 1);
-            let loaded_root = gizmo::scene::SceneData::load_prefab(
-                &path,
-                parent.map(|p| p.id()),
-                world,
-                &renderer.device,
-                &renderer.queue,
-                &renderer.scene.texture_bind_group_layout,
-                &mut asset_manager,
-                std::sync::Arc::new(dummy_bg),
-                &gizmo::scene::SceneRegistry::default(),
-            );
+        let loaded_root = gizmo::scene::SceneData::load_prefab(
+            &path,
+            parent.map(|p| p.id()),
+            world,
+            &gizmo::scene::SceneRegistry::default(),
+        );
 
-            // Prefab spawn pozisyonunu (Asset browser'dan drop edilmişse) uygula
-            if let (Some(root_id), Some(pos)) = (loaded_root, target_pos) {
-                let mut transforms = world.borrow_mut::<gizmo::physics::components::Transform>();
-                {
-                    if let Some(t) = transforms.get_mut(root_id) {
-                        t.position = pos;
-                        t.update_local_matrix();
-                    }
+        // Prefab spawn pozisyonunu (Asset browser'dan drop edilmişse) uygula
+        if let (Some(root_id), Some(pos)) = (loaded_root, target_pos) {
+            let mut transforms = world.borrow_mut::<gizmo::physics::components::Transform>();
+            {
+                if let Some(t) = transforms.get_mut(root_id) {
+                    t.position = pos;
+                    t.update_local_matrix();
                 }
             }
+        }
 
-            world.insert_resource(asset_manager);
-            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-                ed.log_info("Prefab yüklendi.");
-            }
-        } else {
-            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-                ed.log_error("Kritik Hata: Prefab yüklenemedi. AssetManager bulunamadı!");
-            }
+        if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+            ed.log_info("Prefab yüklendi.");
         }
     }
 
@@ -319,36 +287,20 @@ pub fn render_studio(
             &gizmo::scene::SceneRegistry::default(),
         );
 
-        if let Some(mut asset_manager) =
-            world.remove_resource::<gizmo::renderer::asset::AssetManager>()
-        {
-            let dummy_rgba = [255, 255, 255, 255];
-            let dummy_bg = renderer.create_texture(&dummy_rgba, 1, 1);
-            let root_res = gizmo::scene::SceneData::load_prefab(
-                &temp_path,
-                None,
-                world,
-                &renderer.device,
-                &renderer.queue,
-                &renderer.scene.texture_bind_group_layout,
-                &mut asset_manager,
-                std::sync::Arc::new(dummy_bg),
-                &gizmo::scene::SceneRegistry::default(),
-            );
-            world.insert_resource(asset_manager);
-            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-                ed.log_info("Obje çoğaltıldı.");
-                if let Some(new_id) = root_res {
-                    ed.clear_selection();
-                    if let Some(new_ent) = world.get_entity(new_id) {
-                        ed.selection.entities.insert(new_ent);
-                        ed.selection.primary = Some(new_ent);
-                    }
+        let root_res = gizmo::scene::SceneData::load_prefab(
+            &temp_path,
+            None,
+            world,
+            &gizmo::scene::SceneRegistry::default(),
+        );
+        if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+            ed.log_info("Obje çoğaltıldı.");
+            if let Some(new_id) = root_res {
+                ed.clear_selection();
+                if let Some(new_ent) = world.get_entity(new_id) {
+                    ed.selection.entities.insert(new_ent);
+                    ed.selection.primary = Some(new_ent);
                 }
-            }
-        } else {
-            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-                ed.log_error("Kritik Hata: Obje çoğaltılamadı. AssetManager bulunamadı!");
             }
         }
 

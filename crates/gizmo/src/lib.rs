@@ -11,8 +11,11 @@ pub use gizmo_ai as ai;
 pub use gizmo_app as app;
 pub use gizmo_core as core;
 pub use gizmo_math as math;
-pub use gizmo_physics as physics;
+pub mod physics;
+#[cfg(feature = "render")]
 pub use gizmo_renderer as renderer;
+
+#[cfg(feature = "window")]
 pub use gizmo_window as window;
 
 // Sık kullanılan matematik tiplerini lib.rs'ten doğrudan aç:
@@ -30,11 +33,23 @@ pub use gizmo_scripting as scripting;
 
 #[cfg(feature = "scene")]
 pub use gizmo_scene as scene;
+#[cfg(feature = "scene")]
+pub use gizmo_scene::ron;
+
+#[cfg(feature = "ui")]
+pub use gizmo_ui as ui;
 
 // === 3. Parti Re-Export (Kullanıcının ayrıca eklemesine gerek kalmasın) ===
 pub use gizmo_core::gizmo_log;
 
+#[cfg(feature = "render")]
 pub use bytemuck;
+
+#[cfg(feature = "editor")]
 pub use egui;
+
+#[cfg(feature = "render")]
 pub use wgpu;
+
+#[cfg(feature = "window")]
 pub use winit;

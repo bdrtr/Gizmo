@@ -9,7 +9,8 @@ description.workspace = true
 [dependencies]
 gizmo-core = { path = "../crates/gizmo-core" }
 gizmo-math = { path = "../crates/gizmo-math" }
-gizmo-physics = { path = "../crates/gizmo-physics" }
+gizmo-physics-core = { path = "../crates/gizmo-physics-core" }
+gizmo-physics-rigid = { path = "../crates/gizmo-physics-rigid" }
 gizmo-net = { path = "../crates/gizmo-net" }
 renet = "2.0.0"
 serde = { version = "1.0", features = ["derive"] }

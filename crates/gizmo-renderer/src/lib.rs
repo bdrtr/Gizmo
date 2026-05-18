@@ -33,7 +33,6 @@ pub mod decal;
 pub mod deferred;
 pub mod frustum_cull;
 pub mod fxaa;
-pub mod game_ui;
 pub mod gi;
 pub mod gpu_cull;
 pub mod gpu_fluid;
@@ -50,6 +49,7 @@ pub mod ssr;
 pub mod taa;
 pub mod volumetric;
 pub mod web_profile;
+pub mod asset_loading;
 
 pub use frustum_cull::{visible_in_frustum, Frustum};
 pub use web_profile::{PostProcessLevel, ShadowQuality, WebProfile};
@@ -77,7 +77,6 @@ pub use csm::{
 pub use debug_renderer::{GizmoRendererSystem, Gizmos};
 pub use decal::DecalState;
 pub use deferred::DeferredState;
-pub use game_ui::{Anchor, UiCanvas, UiElement, UiKind};
 pub use gi::{LightProbe, ProbeGrid, SHCoeffs};
 pub use gpu_cull::{DrawIndirectArgs, GpuCullState, MeshBoundsRaw};
 pub use gpu_types::{

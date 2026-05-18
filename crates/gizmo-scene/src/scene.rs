@@ -1,10 +1,7 @@
 use gizmo_core::{EntityName, World};
-use gizmo_math::Vec4;
-use gizmo_renderer::asset::AssetManager;
-use gizmo_renderer::components::{Material, Mesh, MeshRenderer};
+use gizmo_core::component::{MeshSource, MaterialSource};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::sync::Arc;
 
 use gizmo_core::component::{Children, Parent};
 use std::collections::HashMap;
@@ -14,7 +11,7 @@ use std::collections::HashMap;
 pub struct SceneData {
     pub entities: Vec<EntityData>,
     #[serde(default)]
-    pub joints: Vec<gizmo_physics::joints::Joint>,
+    pub joints: Vec<gizmo_physics_rigid::joints::Joint>,
 }
 
 /// Prefab verisi — Tıpkı SceneData gibi ama kök entity'si var
@@ -23,7 +20,7 @@ pub struct PrefabData {
     pub root_id: u32,
     pub entities: Vec<EntityData>,
     #[serde(default)]
-    pub joints: Vec<gizmo_physics::joints::Joint>,
+    pub joints: Vec<gizmo_physics_rigid::joints::Joint>,
 }
 
 /// Tek bir entity'nin serileştirilebilir verisi
@@ -39,10 +36,10 @@ pub struct EntityData {
     pub components: std::collections::BTreeMap<String, String>,
 }
 
-/// Material serileştirme verisi (GPU bind group'u diske yazılamaz)
+/// Material serileştirme verisi
 #[derive(Serialize, Deserialize, Clone)]
 pub struct MaterialData {
-    pub albedo: Vec4,
+    pub albedo: [f32; 4],
     pub roughness: f32,
     pub metallic: f32,
     pub unlit: f32,
@@ -70,7 +67,7 @@ impl SceneData {
         );
 
         let mut joints = Vec::new();
-        if let Ok(physics_world) = world.try_get_resource::<gizmo_physics::world::PhysicsWorld>() {
+        if let Ok(physics_world) = world.try_get_resource::<gizmo_physics_rigid::world::PhysicsWorld>() {
             joints = physics_world.joints.clone();
         }
 
@@ -97,35 +94,30 @@ impl SceneData {
     ) -> Vec<EntityData> {
         let mut entities_data = Vec::new();
         let names = world.borrow::<EntityName>();
-        let meshes = world.borrow::<Mesh>();
-        let materials = world.borrow::<Material>();
+        let meshes = world.borrow::<MeshSource>();
+        let materials = world.borrow::<MaterialSource>();
         let parents = world.borrow::<Parent>();
 
         for &id in &entity_ids {
             let name = names.get(id).map(|n| n.0.clone());
 
-            // Gizmo Studio'nun içsel araçlarını kaydetme (Gizmo kurguları, Highlight box, grid vs.)
+            // Gizmo Studio'nun içsel araçlarını kaydetme
             if let Some(ref n) = name {
                 if n.starts_with("Editor ") || n == "Highlight Box" {
                     continue;
                 }
             }
 
-            let mesh_source = meshes.get(id).map(|m| m.source.clone());
+            let mesh_source = meshes.get(id).map(|m| m.0.clone());
             let material_source = materials.get(id).map(|m| MaterialData {
                 albedo: m.albedo,
                 roughness: m.roughness,
                 metallic: m.metallic,
-                unlit: match m.material_type {
-                    gizmo_renderer::components::MaterialType::Skybox => 2.0,
-                    gizmo_renderer::components::MaterialType::Unlit => 1.0,
-                    _ => 0.0,
-                },
+                unlit: m.unlit,
                 texture_source: m.texture_source.clone(),
             });
             let parent_id = parents.get(id).map(|p| p.0);
 
-            // Dinamik bileşenleri Registry üzerinden tarayarak JSON AST'sine (ron::Value) dönüştür
             let mut dynamic_components = std::collections::BTreeMap::new();
             for comp_name in registry.all_components() {
                 if let Some(serializer) = registry.get_serializer(comp_name) {
@@ -160,11 +152,6 @@ impl SceneData {
     pub fn load_into(
         file_path: &str,
         world: &mut World,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        texture_bind_group_layout: &wgpu::BindGroupLayout,
-        asset_manager: &mut AssetManager,
-        default_texture_bind_group: Arc<wgpu::BindGroup>,
         registry: &crate::registry::SceneRegistry,
     ) -> bool {
         let string_data = match fs::read_to_string(file_path) {
@@ -187,15 +174,10 @@ impl SceneData {
             entities,
             None,
             world,
-            device,
-            queue,
-            texture_bind_group_layout,
-            asset_manager,
-            &default_texture_bind_group,
             registry,
         );
 
-        if let Ok(mut physics_world) = world.try_get_resource_mut::<gizmo_physics::world::PhysicsWorld>() {
+        if let Ok(mut physics_world) = world.try_get_resource_mut::<gizmo_physics_rigid::world::PhysicsWorld>() {
             for mut joint in scene.joints {
                 if let (Some(&new_a), Some(&new_b)) = (id_map.get(&joint.entity_a.id()), id_map.get(&joint.entity_b.id())) {
                     joint.entity_a = gizmo_core::entity::Entity::new(new_a, 0);
@@ -209,29 +191,22 @@ impl SceneData {
         true
     }
 
-    /// Verilen entity listesini instantiate eder, id eşleştirmelerini yapar ve gerekirse root bir parent'a bağlar
+    /// Verilen entity listesini instantiate eder
     pub fn instantiate_entities(
         entities: Vec<EntityData>,
         root_parent: Option<u32>,
         world: &mut World,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        texture_bind_group_layout: &wgpu::BindGroupLayout,
-        asset_manager: &mut AssetManager,
-        default_texture_bind_group: &Arc<wgpu::BindGroup>,
         registry: &crate::registry::SceneRegistry,
     ) -> HashMap<u32, u32> {
-        let mut id_map = HashMap::new(); // original_id -> new_entity_id
+        let mut id_map = HashMap::new(); 
         let mut entity_structs = HashMap::new();
 
-        // Entity'leri oluştur ve id haritasını çıkar
         for data in &entities {
             let root_ent = world.spawn();
             id_map.insert(data.original_id, root_ent.id());
             entity_structs.insert(root_ent.id(), root_ent);
         }
 
-        // Parent-Child ilişkilerini toplayacağımız geçici yapı (new_parent -> [new_children])
         let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
 
         for data in entities {
@@ -241,7 +216,7 @@ impl SceneData {
             if let Some(n) = data.name {
                 world.add_component(entity, EntityName::new(&n));
             }
-            // Dinamik bileşenleri Registry üzerinden yükle
+            
             for (comp_name, comp_val) in &data.components {
                 if let Some(deserializer) = registry.get_deserializer(comp_name) {
                     deserializer(world, new_id, comp_val);
@@ -249,93 +224,25 @@ impl SceneData {
             }
 
             if let Some(mesh_src) = data.mesh_source {
-                let mesh = if mesh_src == "inverted_cube" {
-                    AssetManager::create_inverted_cube(device)
-                } else if mesh_src == "plane" {
-                    AssetManager::create_plane(device, 200.0)
-                } else if mesh_src == "standard_cube" {
-                    AssetManager::create_cube(device)
-                } else if mesh_src == "sphere" {
-                    AssetManager::create_sphere(device, 1.0, 16, 16)
-                } else if mesh_src == "sprite_quad" {
-                    AssetManager::create_sprite_quad(device, 1.0, 1.0)
-                } else if mesh_src.starts_with("gltf_mesh_") {
-                    if let Some(cached) = asset_manager.get_cached_mesh(&mesh_src) {
-                        cached
-                    } else {
-                        // Eğer GLTF RAM'de yoksa, path'i çıkar ve gizlice parse edip Cache'e yükle.
-                        let file_path = if let Some(idx) = mesh_src.find(".glb") {
-                            Some(&mesh_src["gltf_mesh_".len()..idx + 4])
-                        } else {
-                            mesh_src
-                                .find(".gltf")
-                                .map(|idx| &mesh_src["gltf_mesh_".len()..idx + 5])
-                        };
-
-                        if let Some(path) = file_path {
-                            let _ = asset_manager.load_gltf_scene(
-                                device,
-                                queue,
-                                texture_bind_group_layout,
-                                default_texture_bind_group.clone(),
-                                path,
-                            );
-                            if let Some(cached) = asset_manager.get_cached_mesh(&mesh_src) {
-                                cached
-                            } else {
-                                asset_manager.loading_placeholder_mesh(device)
-                            }
-                        } else {
-                            asset_manager.loading_placeholder_mesh(device)
-                        }
-                    }
-                } else if mesh_src.starts_with("obj:") {
-                    let path = mesh_src.trim_start_matches("obj:");
-                    asset_manager.load_obj(device, path)
-                } else {
-                    // Fail-safe obj loading
-                    asset_manager.load_obj(device, &mesh_src)
-                };
-                world.add_component(entity, mesh);
+                world.add_component(entity, MeshSource(mesh_src));
             }
 
             if let Some(mat_data) = data.material_source {
-                let bind_group = if let Some(tex_path) = &mat_data.texture_source {
-                    asset_manager
-                        .load_material_texture(device, queue, texture_bind_group_layout, tex_path)
-                        .unwrap_or_else(|e| {
-                            tracing::info!("Scene Texture error: {}", e);
-                            default_texture_bind_group.clone()
-                        })
-                } else {
-                    default_texture_bind_group.clone()
-                };
-
-                let mut mat = Material::new(bind_group);
-                mat.albedo = mat_data.albedo;
-                mat.roughness = mat_data.roughness;
-                mat.metallic = mat_data.metallic;
-                mat.material_type = if mat_data.unlit > 1.5 {
-                    gizmo_renderer::components::MaterialType::Skybox
-                } else if mat_data.unlit > 0.5 {
-                    gizmo_renderer::components::MaterialType::Unlit
-                } else {
-                    gizmo_renderer::components::MaterialType::Pbr
-                };
-                mat.texture_source = mat_data.texture_source;
-                world.add_component(entity, mat);
-                world.add_component(entity, MeshRenderer::new());
+                world.add_component(entity, MaterialSource {
+                    albedo: mat_data.albedo,
+                    roughness: mat_data.roughness,
+                    metallic: mat_data.metallic,
+                    unlit: mat_data.unlit,
+                    texture_source: mat_data.texture_source,
+                });
             }
 
-            // Hiyerarşi Bağlantıları
             let mut resolved_parent = None;
             if let Some(orig_parent) = data.parent_id {
-                // Kendi içerisinde (bu sahnede/prefabda) kaydedilmiş bir parent varsa ona bağla
                 if let Some(&p_id) = id_map.get(&orig_parent) {
                     resolved_parent = Some(p_id);
                 }
             } else {
-                // Eğer entity'nin kendi parent'ı yoksa, root_parent verilmişse ona tak
                 resolved_parent = root_parent;
             }
 
@@ -345,12 +252,10 @@ impl SceneData {
             }
         }
 
-        // Tüm Children bileşenlerini ilgili parent'lara ekle
         for (p_id, mut c_list) in children_map {
             if let Some(&p_ent) = entity_structs.get(&p_id) {
                 world.add_component(p_ent, Children(c_list));
             } else if let Some(p_ent) = world.get_entity(p_id) {
-                // External parent (e.g. root_parent passed in) — merge with existing children.
                 let existing: Vec<u32> = world
                     .borrow::<Children>()
                     .get(p_id)
@@ -365,7 +270,7 @@ impl SceneData {
         id_map
     }
 
-    /// Prefab kaydet (Verilen entity ve tüm alt çocukları)
+    /// Prefab kaydet
     pub fn save_prefab(
         world: &World,
         root_entity_id: u32,
@@ -392,7 +297,6 @@ impl SceneData {
 
         let mut entities_data = Self::serialize_entities(world, ids_to_save.clone(), registry);
 
-        // Prefab'ın root entity'sinin parent'ını kopar ki bağımsız yüklensin
         if let Some(root_data) = entities_data
             .iter_mut()
             .find(|d| d.original_id == root_entity_id)
@@ -401,7 +305,7 @@ impl SceneData {
         }
 
         let mut joints = Vec::new();
-        if let Ok(physics_world) = world.try_get_resource::<gizmo_physics::world::PhysicsWorld>() {
+        if let Ok(physics_world) = world.try_get_resource::<gizmo_physics_rigid::world::PhysicsWorld>() {
             for joint in &physics_world.joints {
                 if ids_to_save.contains(&joint.entity_a.id()) && ids_to_save.contains(&joint.entity_b.id()) {
                     joints.push(joint.clone());
@@ -430,11 +334,6 @@ impl SceneData {
         file_path: &str,
         parent_entity: Option<u32>,
         world: &mut World,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        texture_bind_group_layout: &wgpu::BindGroupLayout,
-        asset_manager: &mut AssetManager,
-        default_texture_bind_group: Arc<wgpu::BindGroup>,
         registry: &crate::registry::SceneRegistry,
     ) -> Option<u32> {
         let string_data = match fs::read_to_string(file_path) {
@@ -454,11 +353,6 @@ impl SceneData {
             prefab.entities,
             parent_entity,
             world,
-            device,
-            queue,
-            texture_bind_group_layout,
-            asset_manager,
-            &default_texture_bind_group,
             registry,
         );
 
@@ -476,7 +370,7 @@ impl SceneData {
             }
         }
 
-        if let Ok(mut physics_world) = world.try_get_resource_mut::<gizmo_physics::world::PhysicsWorld>() {
+        if let Ok(mut physics_world) = world.try_get_resource_mut::<gizmo_physics_rigid::world::PhysicsWorld>() {
             for mut joint in prefab.joints {
                 if let (Some(&new_a), Some(&new_b)) = (id_map.get(&joint.entity_a.id()), id_map.get(&joint.entity_b.id())) {
                     joint.entity_a = gizmo_core::entity::Entity::new(new_a, 0);
@@ -520,7 +414,7 @@ impl SceneData {
 mod tests {
     use super::*;
     use gizmo_core::World;
-    use gizmo_physics::joints::data::{Joint, JointType};
+    use gizmo_physics_rigid::joints::data::{Joint, JointType};
 
     #[test]
     fn test_prefab_joint_serialization() {
@@ -537,7 +431,7 @@ mod tests {
             break_torque: 1000.0,
             is_broken: false,
             collision_enabled: false,
-            data: gizmo_physics::joints::data::JointData::Fixed,
+            data: gizmo_physics_rigid::joints::data::JointData::Fixed,
         };
 
         let prefab_data = PrefabData {
@@ -551,6 +445,6 @@ mod tests {
 
         let deserialized: PrefabData = ron::from_str(&serialized).unwrap();
         assert_eq!(deserialized.joints.len(), 1);
-        assert!(matches!(deserialized.joints[0].data, gizmo_physics::joints::data::JointData::Fixed));
+        assert!(matches!(deserialized.joints[0].data, gizmo_physics_rigid::joints::data::JointData::Fixed));
     }
 }

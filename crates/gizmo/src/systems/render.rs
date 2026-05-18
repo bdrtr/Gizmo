@@ -86,7 +86,7 @@ pub fn default_render_pass(
 
     // KAMERALARI BUL VE MATRIX YARAT
     let cameras = world.borrow::<Camera>();
-    let transforms = world.borrow::<crate::physics::GlobalTransform>();
+    let transforms = world.borrow::<gizmo_physics_core::components::GlobalTransform>();
     {
         // TODO: Aktif kamera için `ActiveCamera` tarzı bir marker bileşeni kullanılmalı.
         // ECS array sırası stabil değildir. Şimdilik geçici çözüm olarak ilki alınıyor.
@@ -125,7 +125,7 @@ pub fn default_render_pass(
     let mut sun_col = gizmo_math::Vec4::new(1.0, 1.0, 1.0, 1.0);
     if let Some(q) = world.query::<(
         &crate::renderer::components::DirectionalLight,
-        &crate::physics::GlobalTransform,
+        &gizmo_physics_core::components::GlobalTransform,
     )>() {
         for (_id, (light, transform)) in q.iter() {
             if light.role == crate::renderer::components::LightRole::Sun {
@@ -168,7 +168,7 @@ pub fn default_render_pass(
 
     if let Some(q) = world.query::<(
         &crate::renderer::components::PointLight,
-        &crate::physics::GlobalTransform,
+        &gizmo_physics_core::components::GlobalTransform,
     )>() {
         for (_id, (light, transform)) in q.iter() {
             if num_lights >= 10 {
@@ -187,7 +187,7 @@ pub fn default_render_pass(
 
     if let Some(q) = world.query::<(
         &crate::renderer::components::SpotLight,
-        &crate::physics::GlobalTransform,
+        &gizmo_physics_core::components::GlobalTransform,
     )>() {
         for (_id, (light, transform)) in q.iter() {
             if num_lights >= 10 {
@@ -356,7 +356,7 @@ pub fn default_render_pass(
 
         let skeletons = world.borrow::<crate::renderer::components::Skeleton>();
 
-        if let Some(mut q) = world.query::<(&Mesh, &crate::physics::GlobalTransform, &Material)>() {
+        if let Some(mut q) = world.query::<(&Mesh, &gizmo_physics_core::components::GlobalTransform, &Material)>() {
             for (e, (mesh, trans, mat)) in q.iter_mut() {
                 process_mesh!(e, mesh, trans, mat, skeletons.get(e));
             }
@@ -366,7 +366,7 @@ pub fn default_render_pass(
         let materials = world.try_get_resource::<gizmo_core::asset::Assets<Material>>().ok();
         
         if let (Some(meshes), Some(materials)) = (meshes, materials) {
-            if let Some(mut q) = world.query::<(&gizmo_core::asset::Handle<Mesh>, &crate::physics::GlobalTransform, &gizmo_core::asset::Handle<Material>)>() {
+            if let Some(mut q) = world.query::<(&gizmo_core::asset::Handle<Mesh>, &gizmo_physics_core::components::GlobalTransform, &gizmo_core::asset::Handle<Material>)>() {
                 for (e, (h_mesh, trans, h_mat)) in q.iter_mut() {
                     if let (Some(mesh), Some(mat)) = (meshes.get(h_mesh), materials.get(h_mat)) {
                         process_mesh!(e, mesh, trans, mat, skeletons.get(e));
@@ -652,7 +652,7 @@ pub fn default_render_pass(
     let mut decal_draws = Vec::new();
     if let Some(ref decal_state) = renderer.decal {
         let decals = world.borrow::<crate::renderer::components::Decal>();
-        let transforms = world.borrow::<crate::physics::Transform>();
+        let transforms = world.borrow::<gizmo_physics_core::Transform>();
         let mut uniform_data = Vec::new();
 
         for (id, decal) in decals.iter() {

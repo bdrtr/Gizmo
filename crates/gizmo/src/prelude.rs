@@ -38,34 +38,46 @@ pub use crate::spawner::{Commands as SpawnCommands, InputExt, WorldExt};
 pub use crate::gizmo_log;
 
 // === Fizik ===
-pub use crate::physics::{
-    Collider, ColliderShape, GlobalTransform, RigidBody, Transform, Velocity,
-};
-pub use gizmo_physics::shape::{Aabb, Sphere};
+pub use gizmo_physics_core::{Collider, ColliderShape, Transform};
+pub use gizmo_physics_core::components::GlobalTransform;
+pub use gizmo_physics_rigid::components::{RigidBody, Velocity};
+pub use gizmo_math::Aabb;
 
 // === Renderer Bileşenleri ===
+#[cfg(feature = "render")]
 pub use crate::renderer::asset::AssetManager;
+#[cfg(feature = "render")]
 pub use crate::renderer::components::{
     Camera, DirectionalLight, LightRole, Material, Mesh, MeshRenderer, PointLight, SpotLight,
 };
+#[cfg(feature = "render")]
 pub use crate::renderer::RenderContext;
+#[cfg(feature = "render")]
 pub use crate::renderer::Renderer;
+#[cfg(feature = "render")]
 pub use crate::renderer::{GizmoRendererSystem, Gizmos};
 
 // === Hazır Sistemler ===
+#[cfg(feature = "render")]
 pub use crate::systems::render::default_render_pass;
+#[cfg(feature = "render")]
 pub use crate::systems::render::RenderContextExt;
 
 // === Uygulama Çerçevesi ===
 
 // === Windowing & Input ===
 pub use crate::core::input::Input;
+
+#[cfg(feature = "window")]
 pub use winit::event::{ElementState, MouseButton};
 /// `input.key(Key::W)` kısaltması için `KeyCode` alias'ı.
+#[cfg(feature = "window")]
 pub use winit::keyboard::KeyCode as Key;
+#[cfg(feature = "window")]
 pub use winit::keyboard::{KeyCode, PhysicalKey};
 
 // === GPU (sık kullanılan tipler) ===
+#[cfg(feature = "render")]
 pub use wgpu;
 
 // === Audio (feature flag ile) ===

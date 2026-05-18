@@ -3,7 +3,8 @@ use crate::pathfinding::NavGrid;
 use crate::steering;
 use gizmo_core::World;
 use gizmo_math::Vec3;
-use gizmo_physics::components::{Transform, Velocity};
+use gizmo_physics_core::Transform;
+use gizmo_physics_rigid::components::Velocity;
 
 /// AI Navigasyon Sistemi — Per-frame ajan güncelleme döngüsü.
 ///
@@ -22,7 +23,7 @@ use gizmo_physics::components::{Transform, Velocity};
 /// Fizik dünyasındaki statik objeleri NavGrid'e geçirir
 pub fn ai_navmesh_rebuild_system(world: &World, _dt: f32) {
     let grid_opt = world.get_resource_mut::<NavGrid>();
-    let physics_opt = world.get_resource::<gizmo_physics::world::PhysicsWorld>();
+    let physics_opt = world.get_resource::<gizmo_physics_rigid::world::PhysicsWorld>();
 
     if let (Some(mut grid), Some(physics_world)) = (grid_opt, physics_opt) {
         if grid.needs_rebuild {

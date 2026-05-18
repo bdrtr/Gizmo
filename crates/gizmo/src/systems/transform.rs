@@ -10,7 +10,7 @@ impl gizmo_core::system::System for TransformSyncSystem {
     }
 
     fn run(&mut self, world: &gizmo_core::world::World, _dt: f32) {
-        let transforms = world.borrow_mut::<crate::physics::Transform>();
+        let transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
         for (_, trans) in transforms.iter_mut() {
             trans.update_local_matrix();
         }
@@ -27,8 +27,8 @@ impl gizmo_core::system::System for TransformPropagateSystem {
     }
 
     fn run(&mut self, world: &gizmo_core::world::World, _dt: f32) {
-        let locals = world.borrow::<crate::physics::Transform>();
-        let mut globals = world.borrow_mut::<crate::physics::GlobalTransform>();
+        let locals = world.borrow::<gizmo_physics_core::Transform>();
+        let mut globals = world.borrow_mut::<gizmo_physics_core::components::GlobalTransform>();
         let parents = world.borrow::<gizmo_core::component::Parent>();
         let children_storage = world.borrow::<gizmo_core::component::Children>();
 
@@ -83,7 +83,7 @@ impl gizmo_core::system::System for BoneAttachmentSystem {
     fn run(&mut self, world: &gizmo_core::world::World, _dt: f32) {
         let attachments = world.borrow::<gizmo_renderer::components::BoneAttachment>();
         let skeletons = world.borrow::<gizmo_renderer::components::Skeleton>();
-        let mut transforms = world.borrow_mut::<crate::physics::Transform>();
+        let mut transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
         
         for (id, attachment) in attachments.iter() {
             if let Some(skeleton) = skeletons.get(attachment.target_entity.id()) {

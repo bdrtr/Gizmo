@@ -123,11 +123,12 @@ pub fn handle_simulation(
                 }
                 
                 if let Ok(am) = world.try_get_resource::<gizmo::core::input::ActionMap>() {
-                    gizmo::physics::system::physics_fighter_system(world, input, &am);
+                    // gizmo::physics::system::physics_fighter_system(world, input, &am);
                 }
                 
                 // Hit Detection: Hitbox ↔ Hurtbox çarpışma algılama
-                let hit_events = gizmo::physics::system::hit_detection_system(world);
+                // let hit_events = gizmo::physics::system::hit_detection_system(world);
+                /*
                 for event in &hit_events {
                     editor_state.log_info(&format!(
                         "💥 HIT! Saldırgan:{} → Kurban:{} | Hasar: {:.1} | Pozisyon: ({:.1}, {:.1}, {:.1})",
@@ -135,6 +136,7 @@ pub fn handle_simulation(
                         event.hit_point.x, event.hit_point.y, event.hit_point.z
                     ));
                 }
+                */
             }
             
             state.physics_accumulator -= fixed_dt;
@@ -146,7 +148,7 @@ pub fn handle_simulation(
 
     // --- FIGHT HUD SYNC: FighterController → EditorState.fight_hud ---
     if editor_state.is_playing() {
-        let fighters = world.borrow::<gizmo::physics::components::fighter::FighterController>();
+        let fighters = world.borrow::<gizmo::physics::components::FighterController>();
         let names = world.borrow::<gizmo::core::component::EntityName>();
         let mut found_any = false;
 
@@ -183,7 +185,7 @@ pub fn handle_simulation(
                 let p1_pos;
                 let p2_pos;
                 {
-                    let transforms = world.borrow::<gizmo::physics::Transform>();
+                    let transforms = world.borrow::<gizmo::prelude::Transform>();
                     p1_pos = transforms.get(p1_id).map(|t| t.position);
                     p2_pos = transforms.get(p2_id).map(|t| t.position);
                 }
@@ -211,7 +213,7 @@ pub fn handle_simulation(
                     // Editör kamera entity'sinin Transform ve Camera bileşenlerini güncelle
                     let cam_entity_id = state.editor_camera;
                     {
-                        let mut transforms = world.borrow_mut::<gizmo::physics::Transform>();
+                        let mut transforms = world.borrow_mut::<gizmo::prelude::Transform>();
                         let mut cameras = world.borrow_mut::<gizmo::renderer::components::Camera>();
 
                         if let Some(t) = transforms.get_mut(cam_entity_id) {

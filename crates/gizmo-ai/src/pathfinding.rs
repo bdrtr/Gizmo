@@ -95,7 +95,7 @@ impl NavGrid {
     }
 
     /// Fizik dünyasındaki statik nesneleri tarayıp navigasyon engel ızgarasını (NavMesh) günceller
-    pub fn update_from_physics_world(&mut self, physics: &gizmo_physics::world::PhysicsWorld) {
+    pub fn update_from_physics_world(&mut self, physics: &gizmo_physics_rigid::world::PhysicsWorld) {
         let cell_size = self.cell_size;
 
         let world_to_grid_fn = |pos: Vec3| -> GridPos {
@@ -118,7 +118,7 @@ impl NavGrid {
                     let mut local_obs = HashSet::new();
                     for i in start..end {
                         let rb = &physics.rigid_bodies[i];
-                        if rb.body_type == gizmo_physics::components::BodyType::Dynamic {
+                        if rb.body_type == gizmo_physics_rigid::components::BodyType::Dynamic {
                             continue;
                         }
                         let transform = &physics.transforms[i];

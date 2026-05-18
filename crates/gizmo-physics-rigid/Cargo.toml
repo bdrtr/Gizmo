@@ -1,0 +1,23 @@
+[package]
+name = "gizmo-physics-rigid"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+rayon = "1.11.0"
+serde = { version = "1.0.228", features = ["derive"] }
+gizmo-core = { path = "../gizmo-core", version = "0.1.2" }
+gizmo-math = { path = "../gizmo-math", version = "0.1.2" }
+gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.1.2" }
+wide = "1.2.0"
+arrayvec = "0.7.6"
+rand = "0.10.1"
+dashmap = "5.5"
+crossbeam-queue = "0.3"
+tracing = "0.1.44"
+serde_json = "1.0"

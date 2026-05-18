@@ -312,43 +312,43 @@ impl ScriptEngine {
         for cmd in commands {
             match cmd {
                 ScriptCommand::SetPosition(id, pos) => {
-                    let mut transforms = world.borrow_mut::<gizmo_physics::components::Transform>();
+                    let mut transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
                     if let Some(t) = transforms.get_mut(id) {
                         t.position = pos;
                     }
                 }
                 ScriptCommand::SetRotation(id, rot) => {
-                    let mut transforms = world.borrow_mut::<gizmo_physics::components::Transform>();
+                    let mut transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
                     if let Some(t) = transforms.get_mut(id) {
                         t.rotation = rot;
                     }
                 }
                 ScriptCommand::SetScale(id, scale) => {
-                    let mut transforms = world.borrow_mut::<gizmo_physics::components::Transform>();
+                    let mut transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
                     if let Some(t) = transforms.get_mut(id) {
                         t.scale = scale;
                     }
                 }
                 ScriptCommand::SetVelocity(id, vel) => {
-                    let mut velocities = world.borrow_mut::<gizmo_physics::components::Velocity>();
+                    let mut velocities = world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
                     if let Some(v) = velocities.get_mut(id) {
                         v.linear = vel;
                     }
                 }
                 ScriptCommand::SetAngularVelocity(id, ang_vel) => {
-                    let mut velocities = world.borrow_mut::<gizmo_physics::components::Velocity>();
+                    let mut velocities = world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
                     if let Some(v) = velocities.get_mut(id) {
                         v.angular = ang_vel;
                     }
                 }
                 ScriptCommand::ApplyForce(id, force) => {
-                    let rbs = world.borrow::<gizmo_physics::components::RigidBody>();
+                    let rbs = world.borrow::<gizmo_physics_rigid::components::RigidBody>();
                     if let Some(rb) = rbs.get(id) {
                         if rb.mass > 0.0 {
                             let accel = force * (1.0 / rb.mass);
                             drop(rbs);
                             let mut vels =
-                                world.borrow_mut::<gizmo_physics::components::Velocity>();
+                                world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
                             if let Some(v) = vels.get_mut(id) {
                                 v.linear += accel * dt;
                             }
@@ -356,13 +356,13 @@ impl ScriptEngine {
                     }
                 }
                 ScriptCommand::ApplyImpulse(id, impulse) => {
-                    let rbs = world.borrow::<gizmo_physics::components::RigidBody>();
+                    let rbs = world.borrow::<gizmo_physics_rigid::components::RigidBody>();
                     if let Some(rb) = rbs.get(id) {
                         if rb.mass > 0.0 {
                             let delta_v = impulse * (1.0 / rb.mass);
                             drop(rbs);
                             let mut vels =
-                                world.borrow_mut::<gizmo_physics::components::Velocity>();
+                                world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
                             if let Some(v) = vels.get_mut(id) {
                                 v.linear += delta_v;
                             }
@@ -381,7 +381,7 @@ impl ScriptEngine {
                         .into_iter()
                         .find(|e| e.id() == id);
                     if let Some(e) = entity {
-                        let rb = gizmo_physics::components::RigidBody::new(
+                        let rb = gizmo_physics_rigid::components::RigidBody::new(
                             mass,
                             restitution,
                             friction,
@@ -390,13 +390,13 @@ impl ScriptEngine {
                         world.add_component(e, rb);
                         // Make sure velocity exists so it can move
                         if world
-                            .borrow::<gizmo_physics::components::Velocity>()
+                            .borrow::<gizmo_physics_rigid::components::Velocity>()
                             .get(id)
                             .is_none()
                         {
                             world.add_component(
                                 e,
-                                gizmo_physics::components::Velocity::new(gizmo_math::Vec3::ZERO),
+                                gizmo_physics_rigid::components::Velocity::new(gizmo_math::Vec3::ZERO),
                             );
                         }
                     }
@@ -408,7 +408,7 @@ impl ScriptEngine {
                         .find(|e| e.id() == id);
                     if let Some(e) = entity {
                         let col =
-                            gizmo_physics::shape::Collider::aabb(gizmo_math::Vec3::new(hx, hy, hz));
+                            gizmo_physics_core::Collider::aabb(gizmo_math::Vec3::new(hx, hy, hz));
                         world.add_component(e, col);
                     }
                 }
@@ -418,7 +418,7 @@ impl ScriptEngine {
                         .into_iter()
                         .find(|e| e.id() == id);
                     if let Some(e) = entity {
-                        let col = gizmo_physics::shape::Collider::sphere(radius);
+                        let col = gizmo_physics_core::Collider::sphere(radius);
                         world.add_component(e, col);
                     }
                 }
@@ -431,7 +431,7 @@ impl ScriptEngine {
                     let entity = world.spawn();
                     world.add_component(entity, gizmo_core::EntityName::new(&name));
                     world
-                        .add_component(entity, gizmo_physics::components::Transform::new(position));
+                        .add_component(entity, gizmo_physics_core::Transform::new(position));
                     let msg = format!(
                         "Entity spawn: '{}' at ({:.1}, {:.1}, {:.1})",
                         name, position.x, position.y, position.z
@@ -448,7 +448,7 @@ impl ScriptEngine {
                     let entity = world.spawn();
                     world.add_component(entity, gizmo_core::EntityName::new(&name));
                     world
-                        .add_component(entity, gizmo_physics::components::Transform::new(position));
+                        .add_component(entity, gizmo_physics_core::Transform::new(position));
                     world.add_component(entity, gizmo_core::PrefabRequest(prefab_type.clone()));
                 }
                 ScriptCommand::DestroyEntity(id) => {
@@ -497,11 +497,11 @@ ScriptCommand::ClearAiTarget(id) => {
                     }
                 }
                 ScriptCommand::SetFighterMove { id, name, startup, active, recovery, damage } => {
-                    let mut fighters = world.borrow_mut::<gizmo_physics::components::fighter::FighterController>();
+                    let mut fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
                     if let Some(fighter) = fighters.get_mut(id) {
-                        fighter.active_move = Some(gizmo_physics::components::fighter::CombatMove {
+                        fighter.active_move = Some(gizmo_physics_core::components::fighter::CombatMove {
                             name,
-                            frame_data: gizmo_physics::components::fighter::FrameData {
+                            frame_data: gizmo_physics_core::components::fighter::FrameData {
                                 startup,
                                 active,
                                 recovery,
@@ -513,13 +513,13 @@ ScriptCommand::ClearAiTarget(id) => {
                     }
                 }
                 ScriptCommand::ApplyHitstop(id, frames) => {
-                    let mut fighters = world.borrow_mut::<gizmo_physics::components::fighter::FighterController>();
+                    let mut fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
                     if let Some(fighter) = fighters.get_mut(id) {
                         fighter.apply_hitstop(frames);
                     }
                 }
                 ScriptCommand::ApplyHitstun(id, frames) => {
-                    let mut fighters = world.borrow_mut::<gizmo_physics::components::fighter::FighterController>();
+                    let mut fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
                     if let Some(fighter) = fighters.get_mut(id) {
                         fighter.apply_hitstun(frames);
                     }

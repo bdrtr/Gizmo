@@ -117,7 +117,7 @@ struct GridCell {
 impl NavMesh {
     /// Fizik dünyasından NavMesh oluşturur (Recast-tarzı pipeline)
     pub fn build_from_physics(
-        physics: &gizmo_physics::world::PhysicsWorld,
+        physics: &gizmo_physics_rigid::world::PhysicsWorld,
         config: &NavMeshConfig,
     ) -> Self {
         let start = std::time::Instant::now();
@@ -612,16 +612,16 @@ impl std::fmt::Display for NavMeshStats {
 mod tests {
     use super::*;
     use gizmo_core::entity::Entity;
-    use gizmo_physics::components::{Collider, RigidBody, Velocity};
+    use gizmo_physics_core::components::{Collider, RigidBody, Velocity};
 
-    fn create_test_world() -> gizmo_physics::world::PhysicsWorld {
-        let mut world = gizmo_physics::world::PhysicsWorld::new();
+    fn create_test_world() -> gizmo_physics_rigid::world::PhysicsWorld {
+        let mut world = gizmo_physics_rigid::world::PhysicsWorld::new();
 
         // Zemin
         world.add_body(
             Entity::new(1, 0),
             RigidBody::new_static(),
-            gizmo_physics::components::Transform::new(Vec3::new(0.0, 0.0, 0.0)),
+            gizmo_physics_core::Transform::new(Vec3::new(0.0, 0.0, 0.0)),
             Velocity::default(),
             Collider::box_collider(Vec3::new(20.0, 0.5, 20.0)),
         );
@@ -630,7 +630,7 @@ mod tests {
         world.add_body(
             Entity::new(2, 0),
             RigidBody::new_static(),
-            gizmo_physics::components::Transform::new(Vec3::new(5.0, 1.0, 0.0)),
+            gizmo_physics_core::Transform::new(Vec3::new(5.0, 1.0, 0.0)),
             Velocity::default(),
             Collider::box_collider(Vec3::new(2.0, 2.0, 2.0)),
         );

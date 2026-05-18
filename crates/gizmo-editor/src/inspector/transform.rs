@@ -2,7 +2,7 @@
 use crate::editor_state::EditorState;
 use egui;
 use gizmo_core::World;
-use gizmo_physics::components::Transform;
+use gizmo_physics_core::Transform;
 
 
 pub fn draw_transform_section(

@@ -100,16 +100,16 @@ pub fn update_physics_api(
     let triggers = lua.create_table()?;
     let collisions = lua.create_table()?;
     
-    if let Ok(physics_world) = world.try_get_resource::<gizmo_physics::world::PhysicsWorld>() {
+    if let Ok(physics_world) = world.try_get_resource::<gizmo_physics_rigid::world::PhysicsWorld>() {
         // Trigger (Tetikleyici) Olayları
         for (i, t_event) in physics_world.trigger_events().iter().enumerate() {
             let ev = lua.create_table()?;
             ev.set("trigger_id", t_event.trigger_entity.id())?;
             ev.set("other_id", t_event.other_entity.id())?;
             let status = match t_event.event_type {
-                gizmo_physics::collision::CollisionEventType::Started => "enter",
-                gizmo_physics::collision::CollisionEventType::Persisting => "stay",
-                gizmo_physics::collision::CollisionEventType::Ended => "exit",
+                gizmo_physics_core::collision::CollisionEventType::Started => "enter",
+                gizmo_physics_core::collision::CollisionEventType::Persisting => "stay",
+                gizmo_physics_core::collision::CollisionEventType::Ended => "exit",
             };
             ev.set("status", status)?;
             triggers.set(i + 1, ev)?;
@@ -121,9 +121,9 @@ pub fn update_physics_api(
             ev.set("entity_a", c_event.entity_a.id())?;
             ev.set("entity_b", c_event.entity_b.id())?;
             let status = match c_event.event_type {
-                gizmo_physics::collision::CollisionEventType::Started => "enter",
-                gizmo_physics::collision::CollisionEventType::Persisting => "stay",
-                gizmo_physics::collision::CollisionEventType::Ended => "exit",
+                gizmo_physics_core::collision::CollisionEventType::Started => "enter",
+                gizmo_physics_core::collision::CollisionEventType::Persisting => "stay",
+                gizmo_physics_core::collision::CollisionEventType::Ended => "exit",
             };
             ev.set("status", status)?;
             collisions.set(i + 1, ev)?;
@@ -141,8 +141,8 @@ pub fn update_physics_api(
 mod tests {
     use super::*;
     use gizmo_core::World;
-    use gizmo_physics::world::PhysicsWorld;
-    use gizmo_physics::collision::{TriggerEvent, CollisionEvent, CollisionEventType};
+    use gizmo_physics_rigid::world::PhysicsWorld;
+    use gizmo_physics_core::collision::{TriggerEvent, CollisionEvent, CollisionEventType};
     use mlua::Lua;
 
     #[test]

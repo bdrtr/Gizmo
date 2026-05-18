@@ -55,7 +55,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
 
         // Kamera pozisyonu
         let cam_pos = {
-            let transforms = world.borrow::<gizmo_physics::components::Transform>();
+            let transforms = world.borrow::<gizmo_physics_core::Transform>();
             // Editor camera'yı bulmak için en basit yol: birinci entity'yi tara
             // (state.editor_camera zaten SceneView'dan erişilemez, ama World'den çekebiliriz)
             let mut pos = gizmo_math::Vec3::ZERO;
@@ -229,7 +229,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
         (state.camera.view, state.camera.proj)
     {
         if !state.selection.entities.is_empty() {
-            let mut transforms = world.borrow_mut::<gizmo_physics::components::Transform>();
+            let mut transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
             
             let primary_id = state.selection.primary.unwrap_or_else(|| *state.selection.entities.iter().next().unwrap());
             if transforms.get(primary_id.id()).is_some() {
@@ -427,7 +427,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
     // F (Focus) Kamera Odaklanması
     if !ui.ctx().wants_keyboard_input() && ui.input(|i| i.key_pressed(egui::Key::F)) {
         if let Some(entity) = state.selection.primary {
-            let transforms = world.borrow::<gizmo_physics::components::Transform>();
+            let transforms = world.borrow::<gizmo_physics_core::Transform>();
             if let Some(t) = transforms.get(entity.id()) {
                 state.camera.focus_target = Some(t.position);
             }
