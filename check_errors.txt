@@ -1,0 +1,155 @@
+warning: unused import: `gizmo_physics_core::Transform`
+  --> crates/gizmo-physics-rigid/src/pipeline.rs:12:5
+   |
+12 | use gizmo_physics_core::Transform;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `gizmo_math::Aabb`
+  --> crates/gizmo-physics-rigid/src/pipeline.rs:16:5
+   |
+16 | use gizmo_math::Aabb;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unexpected `cfg` condition value: `gpu_physics`
+   --> crates/gizmo-physics-rigid/src/world.rs:100:11
+    |
+100 |     #[cfg(feature = "gpu_physics")]
+    |           ^^^^^^^^^^^^^^^^^^^^^^^ help: remove the condition
+    |
+    = note: no expected values for `feature`
+    = help: consider adding `gpu_physics` as a feature in `Cargo.toml`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+    = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: unexpected `cfg` condition value: `gpu_physics`
+   --> crates/gizmo-physics-rigid/src/world.rs:180:11
+    |
+180 |     #[cfg(feature = "gpu_physics")]
+    |           ^^^^^^^^^^^^^^^^^^^^^^^ help: remove the condition
+    |
+    = note: no expected values for `feature`
+    = help: consider adding `gpu_physics` as a feature in `Cargo.toml`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `gpu_physics`
+   --> crates/gizmo-physics-rigid/src/world.rs:154:19
+    |
+154 |             #[cfg(feature = "gpu_physics")]
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^ help: remove the condition
+    |
+    = note: no expected values for `feature`
+    = help: consider adding `gpu_physics` as a feature in `Cargo.toml`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unused variable: `dt`
+   --> crates/gizmo-physics-rigid/src/pipeline.rs:126:9
+    |
+126 |         dt: f32,
+    |         ^^ help: if this is intentional, prefix it with an underscore: `_dt`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `soft_body_and_fluid_step` is never used
+   --> crates/gizmo-physics-rigid/src/pipeline.rs:124:19
+    |
+ 20 | impl PhysicsWorld {
+    | ----------------- method in this implementation
+...
+124 |     pub(crate) fn soft_body_and_fluid_step(
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `gizmo-physics-rigid` (lib) generated 7 warnings (run `cargo fix --lib -p gizmo-physics-rigid` to apply 3 suggestions)
+warning: unused import: `ron::Value`
+ --> crates/gizmo-scene/src/registry.rs:2:5
+  |
+2 | use ron::Value;
+  |     ^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `gizmo-scene` (lib) generated 1 warning (run `cargo fix --lib -p gizmo-scene` to apply 1 suggestion)
+    Checking gizmo-editor v0.1.2 (/home/bedir/Documents/code/Gizmo-engine/crates/gizmo-editor)
+warning: unused import: `DirectionalLight`
+ --> crates/gizmo-scene/src/bin/test_ron.rs:1:41
+  |
+1 | use gizmo_renderer::components::light::{DirectionalLight, LightRole};
+  |                                         ^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `gizmo-scene` (bin "test_ron") generated 1 warning (run `cargo fix --bin "test_ron" -p gizmo-scene` to apply 1 suggestion)
+error[E0432]: unresolved imports `gizmo_physics_core::components::RigidBody`, `gizmo_physics_core::components::Velocity`
+ --> crates/gizmo-editor/src/inspector/physics.rs:5:38
+  |
+5 | use gizmo_physics_core::components::{RigidBody, Velocity};
+  |                                      ^^^^^^^^^  ^^^^^^^^ no `Velocity` in `components`
+  |                                      |
+  |                                      no `RigidBody` in `components`
+  |
+  = help: consider importing this struct instead:
+          gizmo_physics_rigid::RigidBody
+  = help: consider importing this struct instead:
+          gizmo_physics_rigid::Velocity
+
+warning: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+  --> crates/gizmo-editor/src/gui.rs:75:54
+   |
+75 |         visuals.selection.stroke = egui::Stroke::new(1.0, accent_color);
+   |                                                      ^^^ help: explicitly specify the type as `f32`: `1.0_f32`
+   |
+   = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+   = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+   = note: `#[warn(float_literal_f32_fallback)]` (part of `#[warn(future_incompatible)]`) on by default
+
+warning: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+  --> crates/gizmo-editor/src/hierarchy.rs:39:35
+   |
+39 |                 egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 255, 100)),
+   |                                   ^^^ help: explicitly specify the type as `f32`: `2.0_f32`
+   |
+   = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+   = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+
+warning: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+   --> crates/gizmo-editor/src/hierarchy.rs:298:39
+    |
+298 |                     egui::Stroke::new(1.0, egui::Color32::YELLOW),
+    |                                       ^^^ help: explicitly specify the type as `f32`: `1.0_f32`
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+
+warning: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+   --> crates/gizmo-editor/src/inspector/material.rs:108:79
+    |
+108 |                         ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0, stroke_color));
+    |                                                                               ^^^ help: explicitly specify the type as `f32`: `1.0_f32`
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+
+warning: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+   --> crates/gizmo-editor/src/profiler_panel.rs:114:17
+    |
+114 |                 1.0,
+    |                 ^^^ help: explicitly specify the type as `f32`: `1.0_f32`
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+
+warning: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+   --> crates/gizmo-editor/src/scene_view.rs:423:31
+    |
+423 |             egui::Stroke::new(1.0, egui::Color32::WHITE),
+    |                               ^^^ help: explicitly specify the type as `f32`: `1.0_f32`
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+
+For more information about this error, try `rustc --explain E0432`.
+warning: `gizmo-editor` (lib) generated 6 warnings
+error: could not compile `gizmo-editor` (lib) due to 1 previous error; 6 warnings emitted

@@ -1,5 +1,5 @@
 use gizmo_core::World;
-use gizmo_physics::components::Transform;
+use gizmo_physics_core::Transform;
 use std::collections::VecDeque;
 
 /// Editör içinde yapılan geri alınabilir tekil bir işlem

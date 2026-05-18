@@ -2,7 +2,7 @@
 use crate::editor_state::EditorState;
 use egui;
 use gizmo_core::{EntityName, World};
-use gizmo_physics::components::FluidSimulation;
+use gizmo_physics_core::components::FluidSimulation;
 use gizmo_renderer::components::ParticleEmitter;
 use gizmo_ai::components::NavAgent;
 
@@ -434,7 +434,7 @@ pub fn draw_hitbox_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut hitboxes = world.borrow_mut::<gizmo_physics::components::Hitbox>();
+    let mut hitboxes = world.borrow_mut::<gizmo_physics_core::components::Hitbox>();
     if let Some(hitbox) = hitboxes.get_mut(entity_id.id()) {
         egui::CollapsingHeader::new("🥊 Hitbox")
             .default_open(true)
@@ -473,7 +473,7 @@ pub fn draw_hurtbox_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut hurtboxes = world.borrow_mut::<gizmo_physics::components::Hurtbox>();
+    let mut hurtboxes = world.borrow_mut::<gizmo_physics_core::components::Hurtbox>();
     if let Some(hurtbox) = hurtboxes.get_mut(entity_id.id()) {
         egui::CollapsingHeader::new("🛡 Hurtbox")
             .default_open(true)
@@ -616,7 +616,7 @@ pub fn draw_fighter_controller_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut controllers = world.borrow_mut::<gizmo_physics::components::fighter::FighterController>();
+    let mut controllers = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
     if let Some(fighter) = controllers.get_mut(entity_id.id()) {
         egui::CollapsingHeader::new("🥋 Fighter Controller")
             .default_open(true)

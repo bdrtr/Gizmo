@@ -1,15 +1,19 @@
+#[cfg(feature = "audio")]
 pub mod audio;
 pub mod chunk_system;
 pub mod fluid;
 pub mod physics;
+#[cfg(feature = "render")]
 pub mod render;
 pub mod streaming;
 pub mod transform;
 
+#[cfg(feature = "audio")]
 pub use audio::*;
 pub use chunk_system::*;
 pub use fluid::*;
 pub use physics::*;
+#[cfg(feature = "render")]
 pub use render::*;
 pub use streaming::*;
 pub use transform::*;

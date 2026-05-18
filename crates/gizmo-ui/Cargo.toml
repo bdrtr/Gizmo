@@ -1,0 +1,11 @@
+[package]
+name = "gizmo-ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+gizmo-math = { path = "../gizmo-math", version = "0.1.2" }

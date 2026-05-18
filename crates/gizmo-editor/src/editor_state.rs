@@ -114,7 +114,7 @@ pub struct SceneState {
     pub request_save_dialog: bool,
     pub load_confirm_dialog: Option<String>,
     pub gizmo_original_transforms:
-        std::collections::HashMap<gizmo_core::entity::Entity, gizmo_physics::components::Transform>,
+        std::collections::HashMap<gizmo_core::entity::Entity, gizmo_physics_core::Transform>,
 }
 
 #[derive(Default)]
@@ -271,7 +271,7 @@ pub struct EditorState {
     pub settings_open: bool,
     pub show_colliders: bool,
 
-    pub inspector_drag_original_transforms: std::collections::HashMap<gizmo_core::entity::Entity, gizmo_physics::components::Transform>,
+    pub inspector_drag_original_transforms: std::collections::HashMap<gizmo_core::entity::Entity, gizmo_physics_core::Transform>,
 
     // Diğer global UI state
     pub hierarchy_filter: String,

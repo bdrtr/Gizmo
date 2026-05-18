@@ -1,7 +1,10 @@
 use crate::math::Vec3;
-use crate::physics::{Collider, ColliderShape, GpuPhysicsLink, RigidBody, Transform};
+use gizmo_physics_core::{Collider, ColliderShape, Transform, components::GpuPhysicsLink};
+use gizmo_physics_rigid::components::RigidBody;
+#[cfg(feature = "render")]
 use crate::renderer::Renderer;
 
+#[cfg(feature = "render")]
 pub fn physics_debug_system(world: &crate::core::World) {
     if let Some(mut gizmos) = world.get_resource_mut::<crate::renderer::Gizmos>() {
         fn draw_collider(
@@ -11,7 +14,7 @@ pub fn physics_debug_system(world: &crate::core::World) {
             gizmos: &mut crate::renderer::Gizmos,
         ) {
             match &col.shape {
-                gizmo_physics::ColliderShape::Box(b) => {
+                gizmo_physics_core::ColliderShape::Box(b) => {
                     let h = b.half_extents;
                     let r = trans.rotation;
                     let p = trans.position;
@@ -37,13 +40,13 @@ pub fn physics_debug_system(world: &crate::core::World) {
                     gizmos.draw_line(p2, p6, color);
                     gizmos.draw_line(p3, p7, color);
                 }
-                gizmo_physics::ColliderShape::Sphere(s) => {
+                gizmo_physics_core::ColliderShape::Sphere(s) => {
                     let r = s.radius;
                     let min = trans.position - Vec3::new(r, r, r);
                     let max = trans.position + Vec3::new(r, r, r);
                     gizmos.draw_box(min, max, color);
                 }
-                gizmo_physics::ColliderShape::ConvexHull(ch) => {
+                gizmo_physics_core::ColliderShape::ConvexHull(ch) => {
                     let r = trans.rotation;
                     let p = trans.position;
                     for face in ch.faces.iter() {
@@ -55,18 +58,18 @@ pub fn physics_debug_system(world: &crate::core::World) {
                         gizmos.draw_line(p2, p0, color);
                     }
                 }
-                gizmo_physics::ColliderShape::Compound(shapes) => {
+                gizmo_physics_core::ColliderShape::Compound(shapes) => {
                     for (local_t, sub_shape) in shapes {
                         let world_pos = trans.position + trans.rotation.mul_vec3(local_t.position);
                         let world_rot = trans.rotation * local_t.rotation;
-                        let sub_trans = crate::physics::Transform {
+                        let sub_trans = gizmo_physics_core::Transform {
                             position: world_pos,
                             rotation: world_rot,
                             scale: trans.scale,
                             ..*trans
                         };
-                        let temp_col = gizmo_physics::Collider {
-                            shape: (**sub_shape).clone(),
+                        let temp_col = gizmo_physics_core::Collider {
+                            shape: *sub_shape.clone(),
                             ..Default::default()
                         };
                         draw_collider(&sub_trans, &temp_col, color, gizmos);
@@ -81,9 +84,9 @@ pub fn physics_debug_system(world: &crate::core::World) {
         }
 
         if let Some(q) = world.query::<(
-            &crate::physics::Transform,
-            &gizmo_physics::Collider,
-            &gizmo_physics::RigidBody,
+            &gizmo_physics_core::Transform,
+            &gizmo_physics_core::Collider,
+            &gizmo_physics_rigid::components::RigidBody,
         )>() {
             for (_, (trans, col, rb)) in q.iter() {
                 let color = if rb.is_static() {
@@ -98,9 +101,9 @@ pub fn physics_debug_system(world: &crate::core::World) {
         }
 
         if let Some(q) = world.query::<(
-            &crate::physics::Transform,
-            &gizmo_physics::Collider,
-            crate::core::query::Without<gizmo_physics::RigidBody>,
+            &gizmo_physics_core::Transform,
+            &gizmo_physics_core::Collider,
+            crate::core::query::Without<gizmo_physics_rigid::components::RigidBody>,
         )>() {
             for (_, (trans, col, _)) in q.iter() {
                 draw_collider(trans, col, [0.5, 0.5, 0.5, 1.0], &mut gizmos);
@@ -108,7 +111,7 @@ pub fn physics_debug_system(world: &crate::core::World) {
         }
 
         // --- Phase 5.5: Hitbox / Hurtbox Visuals ---
-        let draw_oriented_box = |trans: &crate::physics::Transform,
+        let draw_oriented_box = |trans: &gizmo_physics_core::Transform,
                                  offset: gizmo_math::Vec3,
                                  h: gizmo_math::Vec3,
                                  color: [f32; 4],
@@ -138,7 +141,7 @@ pub fn physics_debug_system(world: &crate::core::World) {
             gizmos.draw_line(p3, p7, color);
         };
 
-        if let Some(q) = world.query::<(&crate::physics::Transform, &gizmo_physics::components::Hitbox)>() {
+        if let Some(q) = world.query::<(&gizmo_physics_core::Transform, &gizmo_physics_core::components::Hitbox)>() {
             for (_, (trans, hitbox)) in q.iter() {
                 if hitbox.active {
                     draw_oriented_box(trans, hitbox.offset, hitbox.half_extents, [1.0, 0.0, 0.0, 1.0], &mut gizmos); // RED
@@ -146,14 +149,15 @@ pub fn physics_debug_system(world: &crate::core::World) {
             }
         }
 
-        if let Some(q) = world.query::<(&crate::physics::Transform, &gizmo_physics::components::Hurtbox)>() {
+        if let Some(q) = world.query::<(&gizmo_physics_core::Transform, &gizmo_physics_core::components::Hurtbox)>() {
             for (_, (trans, hurtbox)) in q.iter() {
                 draw_oriented_box(trans, hurtbox.offset, hurtbox.half_extents, [0.0, 1.0, 0.0, 1.0], &mut gizmos); // GREEN
             }
         }
 
         let soft_color = [1.0, 0.4, 0.8, 1.0]; // Pinkish for soft body
-        if let Some(q) = world.query::<&gizmo_physics::soft_body::SoftBodyMesh>() {
+        #[cfg(feature = "physics-soft")]
+        if let Some(q) = world.query::<&gizmo_physics_soft::SoftBodyMesh>() {
             for (_, sm) in q.iter() {
                 for elem in &sm.elements {
                     let p0 = sm.nodes[elem.node_indices[0] as usize].position;
@@ -173,9 +177,10 @@ pub fn physics_debug_system(world: &crate::core::World) {
         }
 
         // --- Phase 6.1: Süspansiyon Raycast Çizgisi + Kuvvet Okları ---
+        #[cfg(feature = "physics-dynamics")]
         if let Some(q) = world.query::<(
-            &crate::physics::Transform,
-            &gizmo_physics::vehicle::VehicleController,
+            &gizmo_physics_core::Transform,
+            &gizmo_physics_dynamics::VehicleController,
         )>() {
             for (_, (trans, vehicle)) in q.iter() {
                 for wheel in &vehicle.wheels {
@@ -209,7 +214,7 @@ pub fn physics_debug_system(world: &crate::core::World) {
         }
 
         // --- Phase 6.2: Temas Normalleri ve Penetrasyon Derinliği ---
-        if let Some(phys_world) = world.get_resource::<gizmo_physics::world::PhysicsWorld>() {
+        if let Some(phys_world) = world.get_resource::<gizmo_physics_rigid::world::PhysicsWorld>() {
             for event in phys_world.collision_events() {
                 for contact in &event.contact_points {
                     let p1 = contact.point;
@@ -234,8 +239,9 @@ pub fn physics_debug_system(world: &crate::core::World) {
 static NEXT_STATIC_COLLIDER_SLOT: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(3);
 
+#[cfg(feature = "render")]
 pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Renderer) {
-    use crate::physics::Velocity;
+    use gizmo_physics_rigid::components::Velocity;
 
     if let Some(physics) = &renderer.gpu_physics {
         let mut unlinked_entities = Vec::new();
@@ -344,7 +350,7 @@ pub fn gpu_physics_readback_system(world: &mut crate::core::World, renderer: &Re
     if let Some(physics) = &renderer.gpu_physics {
         if let Some(gpu_data) = physics.poll_readback_data(&renderer.device) {
             if let Some(mut q) =
-                world.query::<(gizmo_core::prelude::Mut<Transform>, &GpuPhysicsLink, &gizmo_physics::shape::Collider)>()
+                world.query::<(gizmo_core::prelude::Mut<Transform>, &GpuPhysicsLink, &gizmo_physics_core::Collider)>()
             {
                 for (_, (mut trans, link, col)) in q.iter_mut() {
                     let idx = link.id as usize;
@@ -352,7 +358,7 @@ pub fn gpu_physics_readback_system(world: &mut crate::core::World, renderer: &Re
                         let box_data = &gpu_data[idx];
                         
                         let offset = match &col.shape {
-                            gizmo_physics::shape::ColliderShape::Compound(shapes) => {
+                            gizmo_physics_core::ColliderShape::Compound(shapes) => {
                                 if let Some((local_t, _)) = shapes.first() {
                                     local_t.position
                                 } else {
@@ -388,5 +394,17 @@ pub fn gpu_physics_readback_system(world: &mut crate::core::World, renderer: &Re
 /// Senkronize eder: GpuPhysicsLink sahibi objeleri FluidCollider buffer'ına yazar.
 
 pub fn cpu_physics_step_system(world: &crate::core::World, dt: f32) {
-    gizmo_physics::system::physics_step_system(world, dt);
+    gizmo_physics_rigid::system::physics_step_system(world, dt);
+
+    #[cfg(feature = "physics-soft")]
+    {
+        // Obtain gravity from the PhysicsWorld if it exists
+        let gravity = world.get_resource::<gizmo_physics_rigid::world::PhysicsWorld>()
+            .map(|w| w.integrator.gravity)
+            .unwrap_or(gizmo_math::Vec3::new(0.0, -9.81, 0.0));
+            
+        gizmo_physics_soft::system::soft_body_step_system(world, dt, gravity);
+        gizmo_physics_soft::system::cloth_step_system(world, dt, gravity);
+        gizmo_physics_soft::system::rope_step_system(world, dt, gravity);
+    }
 }

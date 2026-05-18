@@ -58,7 +58,21 @@ impl std::fmt::Display for EntityName {
     }
 }
 
-impl_component!(Parent, Children, EntityName, IsHidden, PrefabRequest, IsDeleted);
+/// A string-based identifier pointing to a mesh asset, used by scene loaders to request mesh loading.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MeshSource(pub String);
+
+/// Pure data description of a material, used by scene loaders.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MaterialSource {
+    pub albedo: [f32; 4],
+    pub roughness: f32,
+    pub metallic: f32,
+    pub unlit: f32,
+    pub texture_source: Option<String>,
+}
+
+impl_component!(Parent, Children, EntityName, IsHidden, PrefabRequest, IsDeleted, MeshSource, MaterialSource);
 
 // ============================================================
 //  Bundle Trait — Birden fazla component'i tek seferde ekleme

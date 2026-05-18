@@ -6,7 +6,7 @@
 
 use gizmo_core::World;
 use gizmo_math::Vec3;
-use gizmo_physics::components::Transform;
+use gizmo_physics_core::Transform;
 use gizmo_renderer::async_assets::AsyncAssetLoader;
 use gizmo_renderer::components::Material;
 

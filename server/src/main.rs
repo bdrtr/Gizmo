@@ -5,7 +5,7 @@ use gizmo_net::protocol::{
     ClientChannel, ClientMessage, ServerChannel, ServerMessage, TransformData,
 };
 use gizmo_net::server::NetworkServer;
-use gizmo_physics::components::Transform;
+use gizmo_physics_core::Transform;
 use std::collections::HashMap;
 
 pub fn server_network_system(world: &World, dt: f32) {

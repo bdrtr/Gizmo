@@ -1,0 +1,17 @@
+[package]
+name = "gizmo-physics-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+rayon = "1.11.0"
+serde = { version = "1.0.228", features = ["derive"] }
+gizmo-core = { path = "../gizmo-core", version = "0.1.2" }
+gizmo-math = { path = "../gizmo-math", version = "0.1.2" }
+arrayvec = "0.7.6"
+tracing = "0.1.44"

@@ -1,4 +1,4 @@
-use gizmo_physics::components::{ColliderShape, TriMeshShape};
+use gizmo_physics_core::components::{ColliderShape, TriMeshShape};
 use gizmo_renderer::components::Mesh;
 // use gizmo_math::Vec3;
 
@@ -11,7 +11,7 @@ pub fn create_collider_from_mesh(mesh: &Mesh, use_convex_hull: bool) -> Collider
     if use_convex_hull {
         // İleride QuickHull algoritması ile gerçek bir Convex Hull oluşturulabilir.
         // Şimdilik sadece vertex dizisini aktarıyoruz (gizmo-physics NarrowPhase stub olarak SAT implementasyonunu bekler)
-        gizmo_physics::components::Collider::convex_hull(&vertices).shape
+        gizmo_physics_core::Collider::convex_hull(&vertices).shape
     } else {
         // TriMesh (Tüm vertex ve indexler)
         let mut indices = Vec::with_capacity(vertices.len());
@@ -19,7 +19,7 @@ pub fn create_collider_from_mesh(mesh: &Mesh, use_convex_hull: bool) -> Collider
             indices.push(i as u32);
         }
 
-        let bvh = gizmo_physics::bvh::BvhTree::build(&vertices, &mut indices).unwrap_or_default();
+        let bvh = gizmo_physics_core::bvh::BvhTree::build(&vertices, &mut indices).unwrap_or_default();
 
         ColliderShape::TriMesh(TriMeshShape {
             vertices: std::sync::Arc::new(vertices),
@@ -35,7 +35,7 @@ pub fn auto_generate_colliders(world: &mut gizmo_core::World, use_convex: bool) 
 
     // Collider'ı olmayan Mesh'leri bul
     if let Some(mesh_q) = world.query::<&Mesh>() {
-        let colliders = world.borrow::<gizmo_physics::components::Collider>();
+        let colliders = world.borrow::<gizmo_physics_core::Collider>();
         for (e, mesh) in mesh_q.iter() {
             if colliders.get(e).is_none() {
                 missing_colliders.push((e, mesh.clone()));
@@ -47,7 +47,7 @@ pub fn auto_generate_colliders(world: &mut gizmo_core::World, use_convex: bool) 
     for (e, mesh) in missing_colliders {
         let entity = world.get_entity(e).unwrap();
         let shape = create_collider_from_mesh(&mesh, use_convex);
-        let collider = gizmo_physics::components::Collider {
+        let collider = gizmo_physics_core::Collider {
             shape,
             is_trigger: false,
             material: Default::default(),
@@ -56,11 +56,11 @@ pub fn auto_generate_colliders(world: &mut gizmo_core::World, use_convex: bool) 
 
         // Eğer RigidBody yoksa, statik olarak ekleyelim (Zemin / Çevre objesi gibi davranması için)
         if world
-            .borrow::<gizmo_physics::components::RigidBody>()
+            .borrow::<gizmo_physics_rigid::components::RigidBody>()
             .get(e)
             .is_none()
         {
-            let mut rb = gizmo_physics::components::RigidBody::new_static();
+            let mut rb = gizmo_physics_rigid::components::RigidBody::new_static();
             rb.update_inertia_from_collider(&collider);
             world.add_component(entity, rb);
         }

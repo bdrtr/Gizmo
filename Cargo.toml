@@ -4,11 +4,14 @@ members = [
     "crates/*",
     "crates/gizmo-renderer",
     "crates/gizmo-window",
-    "crates/gizmo-physics",
+    "crates/gizmo-physics-core",
+    "crates/gizmo-physics-rigid",
+    "crates/gizmo-physics-soft",
+    "crates/gizmo-physics-dynamics",
     "crates/gizmo-app",
     "crates/gizmo-scripting",
     "crates/gizmo-scene",
-    "server", "tut", "cradle"
+    "server", "demo", "cradle"
 ]
 
 [workspace.package]

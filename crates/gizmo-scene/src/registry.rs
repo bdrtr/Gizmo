@@ -99,22 +99,14 @@ impl SceneRegistry {
     pub fn with_core_components() -> Self {
         let mut reg = Self::new();
 
-        reg.register::<gizmo_physics::components::Transform>("Transform");
-        reg.register::<gizmo_physics::components::Velocity>("Velocity");
-        reg.register::<gizmo_physics::components::RigidBody>("RigidBody");
-        reg.register::<gizmo_physics::shape::Collider>("Collider");
-        reg.register::<gizmo_physics::components::Hitbox>("Hitbox");
-        reg.register::<gizmo_physics::components::Hurtbox>("Hurtbox");
-        reg.register::<gizmo_physics::components::fighter::FighterController>("FighterController");
+        reg.register::<gizmo_physics_core::Transform>("Transform");
+        reg.register::<gizmo_physics_rigid::components::Velocity>("Velocity");
+        reg.register::<gizmo_physics_rigid::components::RigidBody>("RigidBody");
+        reg.register::<gizmo_physics_core::Collider>("Collider");
+        reg.register::<gizmo_physics_core::components::Hitbox>("Hitbox");
+        reg.register::<gizmo_physics_core::components::Hurtbox>("Hurtbox");
+        reg.register::<gizmo_physics_core::components::FighterController>("FighterController");
 
-        reg.register::<gizmo_renderer::components::Camera>("Camera");
-        reg.register::<gizmo_renderer::components::PointLight>("PointLight");
-        reg.register::<gizmo_renderer::components::DirectionalLight>("DirectionalLight");
-        reg.register::<gizmo_renderer::components::Terrain>("Terrain");
-        reg.register::<gizmo_renderer::components::ParticleEmitter>("ParticleEmitter");
-        reg.register::<gizmo_renderer::components::BoneAttachment>("BoneAttachment");
-
-        reg.register::<gizmo_audio::AudioSource>("AudioSource");
         reg.register::<gizmo_scripting::Script>("Script");
 
         reg

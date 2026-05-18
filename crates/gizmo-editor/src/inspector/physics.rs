@@ -2,8 +2,8 @@
 use crate::editor_state::EditorState;
 use egui;
 use gizmo_core::World;
-use gizmo_physics::components::{RigidBody, Velocity};
-use gizmo_physics::shape::Collider;
+use gizmo_physics_core::Collider;
+use gizmo_physics_rigid::components::{RigidBody, Velocity};
 
 
 pub fn draw_velocity_section(
@@ -151,7 +151,7 @@ pub fn draw_collider_section(
 
                     // === ŞEKİL AYARLARI ===
                     match &mut collider.shape {
-                        gizmo_physics::shape::ColliderShape::Box(aabb) => {
+                        gizmo_physics_core::ColliderShape::Box(aabb) => {
                             ui.label("Şekil: Kutu (AABB)");
                             ui.horizontal(|ui| {
                                 ui.label("Boyut:");
@@ -172,14 +172,14 @@ pub fn draw_collider_section(
                                 );
                             });
                         }
-                        gizmo_physics::shape::ColliderShape::Sphere(sphere) => {
+                        gizmo_physics_core::ColliderShape::Sphere(sphere) => {
                             ui.label("Şekil: Küre (Sphere)");
                             ui.horizontal(|ui| {
                                 ui.label("Yarıçap:");
                                 ui.add(egui::DragValue::new(&mut sphere.radius).speed(0.1));
                             });
                         }
-                        gizmo_physics::shape::ColliderShape::Capsule(capsule) => {
+                        gizmo_physics_core::ColliderShape::Capsule(capsule) => {
                             ui.label("Şekil: Kapsül");
                             ui.horizontal(|ui| {
                                 ui.label("Yarıçap:");
@@ -210,7 +210,7 @@ pub fn draw_joint_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let physics_world_res = world.try_get_resource_mut::<gizmo_physics::world::PhysicsWorld>();
+    let physics_world_res = world.try_get_resource_mut::<gizmo_physics_rigid::world::PhysicsWorld>();
     if let Ok(mut physics_world) = physics_world_res {
         let mut has_joints = false;
         for joint in &physics_world.joints {
@@ -256,15 +256,15 @@ pub fn draw_joint_section(
 
                             ui.separator();
                             match &mut joint.data {
-                                gizmo_physics::joints::JointData::Fixed => {
+                                gizmo_physics_rigid::joints::JointData::Fixed => {
                                     ui.label("Sabit bağlantı (ayarı yok)");
                                 }
-                                gizmo_physics::joints::JointData::Spring(spring) => {
+                                gizmo_physics_rigid::joints::JointData::Spring(spring) => {
                                     ui.horizontal(|ui| { ui.label("Sertlik:"); ui.add(egui::DragValue::new(&mut spring.stiffness).speed(1.0)); });
                                     ui.horizontal(|ui| { ui.label("Sönümleme:"); ui.add(egui::DragValue::new(&mut spring.damping).speed(0.1)); });
                                     ui.horizontal(|ui| { ui.label("Dinlenme Boyu:"); ui.add(egui::DragValue::new(&mut spring.rest_length).speed(0.1)); });
                                 }
-                                gizmo_physics::joints::JointData::Hinge(hinge) => {
+                                gizmo_physics_rigid::joints::JointData::Hinge(hinge) => {
                                     ui.horizontal(|ui| {
                                         ui.label("Eksen:");
                                         ui.add(egui::DragValue::new(&mut hinge.axis.x).speed(0.1));
@@ -277,7 +277,7 @@ pub fn draw_joint_section(
                                         ui.horizontal(|ui| { ui.label("Maks Güç:"); ui.add(egui::DragValue::new(&mut hinge.motor_max_force).speed(1.0)); });
                                     }
                                 }
-                                gizmo_physics::joints::JointData::Slider(slider) => {
+                                gizmo_physics_rigid::joints::JointData::Slider(slider) => {
                                     ui.horizontal(|ui| {
                                         ui.label("Eksen:");
                                         ui.add(egui::DragValue::new(&mut slider.axis.x).speed(0.1));
@@ -290,7 +290,7 @@ pub fn draw_joint_section(
                                         ui.horizontal(|ui| { ui.label("Max:"); ui.add(egui::DragValue::new(&mut slider.upper_limit).speed(0.1)); });
                                     }
                                 }
-                                gizmo_physics::joints::JointData::BallSocket(ball) => {
+                                gizmo_physics_rigid::joints::JointData::BallSocket(ball) => {
                                     ui.checkbox(&mut ball.use_cone_limit, "Koni Limiti Kullan");
                                     if ball.use_cone_limit {
                                         ui.horizontal(|ui| { ui.label("Açı (Radyan):"); ui.add(egui::DragValue::new(&mut ball.cone_limit_angle).speed(0.01)); });
@@ -344,12 +344,12 @@ pub fn draw_joint_section(
                     if let Ok(target_id) = target_id_str.parse::<u32>() {
                         let target_entity = gizmo_core::entity::Entity::new(target_id, 0); // Varsayılan generation 0
                         let new_joint = match type_idx {
-                            0 => gizmo_physics::joints::Joint::fixed(entity_id, target_entity, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO),
-                            1 => gizmo_physics::joints::Joint::hinge(entity_id, target_entity, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::Y),
-                            2 => gizmo_physics::joints::Joint::ball_socket(entity_id, target_entity, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO),
-                            3 => gizmo_physics::joints::Joint::slider(entity_id, target_entity, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::Y),
-                            4 => gizmo_physics::joints::Joint::spring(entity_id, target_entity, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO, 1.0, 10.0, 1.0),
-                            _ => gizmo_physics::joints::Joint::fixed(entity_id, target_entity, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO),
+                            0 => gizmo_physics_rigid::joints::Joint::fixed(entity_id, target_entity, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO),
+                            1 => gizmo_physics_rigid::joints::Joint::hinge(entity_id, target_entity, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::Y),
+                            2 => gizmo_physics_rigid::joints::Joint::ball_socket(entity_id, target_entity, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO),
+                            3 => gizmo_physics_rigid::joints::Joint::slider(entity_id, target_entity, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::Y),
+                            4 => gizmo_physics_rigid::joints::Joint::spring(entity_id, target_entity, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO, 1.0, 10.0, 1.0),
+                            _ => gizmo_physics_rigid::joints::Joint::fixed(entity_id, target_entity, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO),
                         };
                         physics_world.joints.push(new_joint);
                     }

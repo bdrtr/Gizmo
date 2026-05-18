@@ -216,7 +216,7 @@ mod tests {
         world.add_component(ent, gizmo_core::EntityName::new("TestCube"));
         world.add_component(
             ent,
-            gizmo_physics::components::Transform::new(gizmo_math::Vec3::new(1.0, 2.0, 3.0)),
+            gizmo_physics_core::Transform::new(gizmo_math::Vec3::new(1.0, 2.0, 3.0)),
         );
 
         // Snapshot al
