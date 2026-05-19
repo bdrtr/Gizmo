@@ -30,10 +30,12 @@ pub struct World {
     component_infos: HashMap<TypeId, ComponentInfo>,
 
     pub(crate) component_hooks: HashMap<TypeId, ComponentHooks>,
+    pub(crate) sparse_sets: HashMap<TypeId, crate::archetype::sparse_set::ComponentSparseSet>,
 
     despawn_hooks: Vec<DespawnHook>,
     entities_to_despawn: Vec<Entity>,
     is_despawning: bool,
+    pub(crate) entity_observers: HashMap<TypeId, Box<dyn std::any::Any + Send + Sync>>,
     pub tick: u32,
 }
 
@@ -45,14 +47,36 @@ impl World {
             archetype_index: ArchetypeIndex::new(),
             component_infos: HashMap::new(),
             component_hooks: HashMap::new(),
+            sparse_sets: HashMap::new(),
             despawn_hooks: Vec::new(),
             entities_to_despawn: Vec::new(),
             is_despawning: false,
+            entity_observers: HashMap::new(),
             tick: 1,
         };
         world.insert_resource(crate::commands::CommandQueue::new());
         world.insert_resource(Entities::new());
+        world.insert_resource(Entities::new());
         world
+    }
+
+    fn run_hooks<F>(&mut self, type_id: TypeId, mut f: F)
+    where
+        F: FnMut(&mut ComponentHooks, &mut World),
+    {
+        let mut hooks = self.component_hooks.remove(&type_id);
+        if let Some(ref mut h) = hooks {
+            f(h, self);
+        }
+        if let Some(h) = hooks {
+            if let Some(existing) = self.component_hooks.get_mut(&type_id) {
+                existing.on_add.extend(h.on_add);
+                existing.on_set.extend(h.on_set);
+                existing.on_remove.extend(h.on_remove);
+            } else {
+                self.component_hooks.insert(type_id, h);
+            }
+        }
     }
 
     /// Increments the local tick counter, guaranteeing it skips 0 on wrap.
@@ -93,6 +117,88 @@ impl World {
         self.component_infos
             .entry(type_id)
             .or_insert_with(ComponentInfo::of::<T>);
+    }
+
+    /// Registers a Component hook (Observer) for `OnInsert`.
+    pub fn add_observer<T: Component, F>(&mut self, mut system: F) -> &mut Self
+    where
+        F: FnMut(crate::observer::On<crate::observer::Insert, T>) + Send + Sync + 'static,
+    {
+        let type_id = TypeId::of::<T>();
+        let mut hooks = self.component_hooks.remove(&type_id).unwrap_or_default();
+        
+        hooks.on_add.push(Box::new(move |_world, entity| {
+            let event = crate::observer::On {
+                event: crate::observer::Insert,
+                entity,
+                _marker: std::marker::PhantomData,
+            };
+            system(event);
+        }));
+        
+        self.component_hooks.insert(type_id, hooks);
+        self
+    }
+
+    /// Özel EntityEvent'ler için Entity bazlı Observer kaydı
+    pub fn observe<E: crate::observer::EntityEvent, F>(&mut self, entity: Entity, listener: F) -> &mut Self
+    where
+        F: FnMut(crate::observer::On<E>) + Send + Sync + 'static,
+    {
+        let type_id = TypeId::of::<E>();
+        let map_any = self.entity_observers.entry(type_id).or_insert_with(|| {
+            Box::new(HashMap::<Entity, Vec<Box<dyn FnMut(crate::observer::On<E>) + Send + Sync + 'static>>>::new())
+        });
+        
+        let map = map_any.downcast_mut::<HashMap<Entity, Vec<Box<dyn FnMut(crate::observer::On<E>) + Send + Sync + 'static>>>>().unwrap();
+        map.entry(entity).or_default().push(Box::new(listener));
+        self
+    }
+
+    /// Bir Event'i tetikler ve hiyerarşide yukarı doğru yayar (bubble-up)
+    pub fn trigger<E: crate::observer::EntityEvent>(&mut self, event: E) {
+        use crate::component::Parent;
+        let mut current_entity = event.target();
+
+        loop {
+            // Observer'ları bu entity için bul ve çalıştır
+            let mut hooks_to_run = Vec::new();
+            
+            if let Some(map_any) = self.entity_observers.get_mut(&TypeId::of::<E>()) {
+                if let Some(map) = map_any.downcast_mut::<HashMap<Entity, Vec<Box<dyn FnMut(crate::observer::On<E>) + Send + Sync + 'static>>>>() {
+                    if let Some(listeners) = map.remove(&current_entity) {
+                        hooks_to_run = listeners;
+                    }
+                }
+            }
+
+            for mut listener in hooks_to_run.drain(..) {
+                let e = crate::observer::On {
+                    event: event.clone(),
+                    entity: current_entity,
+                    _marker: std::marker::PhantomData,
+                };
+                listener(e);
+                
+                // Geri koy
+                if let Some(map_any) = self.entity_observers.get_mut(&TypeId::of::<E>()) {
+                    if let Some(map) = map_any.downcast_mut::<HashMap<Entity, Vec<Box<dyn FnMut(crate::observer::On<E>) + Send + Sync + 'static>>>>() {
+                        map.entry(current_entity).or_default().push(listener);
+                    }
+                }
+            }
+
+            if !event.can_propagate() {
+                break;
+            }
+
+            // Propagate to parent
+            if let Some(parent_ptr) = self.get_component_ptr(current_entity, TypeId::of::<Parent>()) {
+                current_entity = self.reconstruct_entity(unsafe { (*(parent_ptr as *const Parent)).0 }).unwrap();
+            } else {
+                break;
+            }
+        }
     }
 
     /// Belirli bir component turu kayitli mi?
@@ -251,6 +357,68 @@ impl World {
         self.despawn_hooks.push(hook);
     }
 
+    
+    pub fn spawn_batch<I>(&mut self, iter: I) -> impl Iterator<Item = Entity>
+    where
+        I: IntoIterator,
+        I::Item: crate::component::Bundle,
+    {
+        let mut iter = iter.into_iter();
+        let mut entities = Vec::new();
+
+        let first_bundle = match iter.next() {
+            Some(b) => b,
+            None => return entities.into_iter(),
+        };
+
+        let first_entity = self.spawn_bundle(first_bundle);
+        entities.push(first_entity);
+
+        let loc = self.entity_locations[first_entity.id() as usize];
+        let target_arch_id = loc.archetype_id as usize;
+
+        for bundle in iter {
+            let entity = {
+                let e_res = self.get_resource::<crate::entity::allocator::Entities>().expect("Entities not init");
+                e_res.reserve_entity()
+            };
+            let eid = entity.id();
+
+            let new_row = {
+                let arch = &mut self.archetype_index.archetypes[target_arch_id];
+                let row = arch.push_entity(eid);
+                unsafe { crate::component::Bundle::write_to_archetype(bundle, arch, row as usize, self.tick); }
+                row
+            };
+
+            let loc_idx = eid as usize;
+            if loc_idx >= self.entity_locations.len() {
+                self.entity_locations.resize(loc_idx + 1, crate::archetype::EntityLocation::INVALID);
+            }
+            self.entity_locations[loc_idx] = crate::archetype::EntityLocation {
+                archetype_id: target_arch_id as u32,
+                row: new_row,
+            };
+            self.archetype_index.entity_archetype.insert(eid, target_arch_id);
+
+            entities.push(entity);
+        }
+
+        entities.into_iter()
+    }
+
+    /// Tüm entityleri temizler.
+    pub fn clear_entities(&mut self) {
+        self.archetype_index.clear_entities();
+        self.entity_locations.clear();
+        self.entities_to_despawn.clear();
+        
+        // Entities resource'unu temizle (allocator state)
+        if let Some(entities) = self.get_resource::<Entities>() {
+            entities.clear();
+        }
+    }
+
     pub fn despawn(&mut self, entity: Entity) {
         self.entities_to_despawn.push(entity);
         if self.is_despawning {
@@ -263,10 +431,11 @@ impl World {
                 continue;
             }
 
-            let hooks = self.despawn_hooks.clone();
-            for hook in hooks {
+            let mut hooks = std::mem::take(&mut self.despawn_hooks);
+            for hook in &mut hooks {
                 hook(self, e);
             }
+            self.despawn_hooks.extend(hooks);
 
             let id = e.id();
             let loc = self.entity_locations[id as usize];
@@ -278,12 +447,11 @@ impl World {
                     arch.component_types()
                 };
                 for t in comp_types {
-                    let c_hooks = self.component_hooks.get(&t).cloned();
-                    if let Some(c_hooks) = c_hooks {
-                        for hook in c_hooks.on_remove {
-                            hook(self, e);
+                    self.run_hooks(t, |h, w| {
+                        for hook in &mut h.on_remove {
+                            hook(w, e);
                         }
-                    }
+                    });
                 }
 
                 // Re-fetch location safely after hooks might have mutated state
@@ -371,14 +539,151 @@ impl World {
     }
 
     /// Sisteme component ekleme — Veriyi archetype sütununa taşır.
-    pub fn add_component<T: Component>(&mut self, entity: Entity, component: T) {
-        if !self.is_alive(entity) {
+    
+    pub fn add_bundle<B: crate::component::Bundle>(&mut self, entity: Entity, bundle: B) {
+        if !self.is_alive(entity) { return; }
+        let eid = entity.id();
+        let infos = B::get_infos();
+        
+        for info in &infos {
+            self.component_infos.entry(info.type_id).or_insert_with(|| *info);
+        }
+        
+        // Şimdilik SparseSet desteklemiyor (bundle içi SparseSet olursa ayrıştırmak zor, future work)
+        // Table bazlı block move:
+        let old_arch_id = match self.archetype_index.entity_archetype.get(&eid) {
+            Some(&id) => id,
+            None => {
+                // Eğer entity önceden bomboşsa (sadece spawn edilmişse)
+                let _arch = &mut self.archetype_index.archetypes[0];
+                0
+            }
+        };
+
+        let mut new_types = self.archetype_index.archetypes[old_arch_id as usize].sorted_component_types();
+        for info in &infos {
+            if let Err(pos) = new_types.binary_search(&info.type_id) {
+                new_types.insert(pos, info.type_id);
+            }
+        }
+
+        let target_arch_id = if let Some(&id) = self.archetype_index.set_to_id.get(&new_types) {
+            id
+        } else {
+            let id = self.archetype_index.archetypes.len();
+            let mut new_infos = Vec::new();
+            for &t in &new_types {
+                new_infos.push(self.component_infos.get(&t).cloned().unwrap());
+            }
+            self.archetype_index.archetypes.push(crate::archetype::Archetype::new(id as u32, &new_infos));
+            self.archetype_index.set_to_id.insert(new_types, id);
+            id
+        };
+
+        if old_arch_id == target_arch_id {
+            // Sadece override
+            let loc = self.entity_locations[eid as usize];
+            let arch = &mut self.archetype_index.archetypes[target_arch_id];
+            unsafe { bundle.write_to_archetype(arch, loc.row as usize, self.tick); }
             return;
         }
 
+        let old_loc = self.entity_locations[eid as usize];
+        let (new_row, moved_eid) = unsafe {
+            let old_arch_ptr = &mut self.archetype_index.archetypes[old_arch_id] as *mut crate::archetype::Archetype;
+            let target_arch_ptr = &mut self.archetype_index.archetypes[target_arch_id] as *mut crate::archetype::Archetype;
+            (&mut *old_arch_ptr).move_entity_to(old_loc.row as usize, &mut *target_arch_ptr)
+        };
+
+        if let Some(moved) = moved_eid {
+            self.entity_locations[moved as usize].row = old_loc.row;
+        }
+
+        let arch = &mut self.archetype_index.archetypes[target_arch_id];
+        unsafe { bundle.write_to_archetype(arch, new_row as usize, self.tick); }
+
+        self.entity_locations[eid as usize] = EntityLocation {
+            archetype_id: target_arch_id as u32,
+            row: new_row,
+        };
+        self.archetype_index.entity_archetype.insert(eid, target_arch_id);
+    }
+
+    pub fn remove_bundle<B: crate::component::Bundle>(&mut self, entity: Entity) {
+        if !self.is_alive(entity) { return; }
+        let eid = entity.id();
+        let infos = B::get_infos();
+
+        let old_arch_id = match self.archetype_index.entity_archetype.get(&eid) {
+            Some(&id) => id,
+            None => return,
+        };
+
+        let mut new_types = self.archetype_index.archetypes[old_arch_id as usize].sorted_component_types();
+        for info in &infos {
+            if let Ok(pos) = new_types.binary_search(&info.type_id) {
+                new_types.remove(pos);
+            }
+        }
+
+        let target_arch_id = if let Some(&id) = self.archetype_index.set_to_id.get(&new_types) {
+            id
+        } else {
+            let id = self.archetype_index.archetypes.len();
+            let mut new_infos = Vec::new();
+            for &t in &new_types {
+                new_infos.push(self.component_infos.get(&t).cloned().unwrap());
+            }
+            self.archetype_index.archetypes.push(crate::archetype::Archetype::new(id as u32, &new_infos));
+            self.archetype_index.set_to_id.insert(new_types, id);
+            id
+        };
+
+        if old_arch_id == target_arch_id { return; }
+
+        let old_loc = self.entity_locations[eid as usize];
+        let (new_row, moved_eid) = unsafe {
+            let old_arch_ptr = &mut self.archetype_index.archetypes[old_arch_id] as *mut crate::archetype::Archetype;
+            let target_arch_ptr = &mut self.archetype_index.archetypes[target_arch_id] as *mut crate::archetype::Archetype;
+            (&mut *old_arch_ptr).move_entity_to(old_loc.row as usize, &mut *target_arch_ptr)
+        };
+
+        if let Some(moved) = moved_eid {
+            self.entity_locations[moved as usize].row = old_loc.row;
+        }
+
+        self.entity_locations[eid as usize] = EntityLocation {
+            archetype_id: target_arch_id as u32,
+            row: new_row,
+        };
+        self.archetype_index.entity_archetype.insert(eid, target_arch_id);
+    }
+
+    pub fn add_component<T: Component>(&mut self, entity: Entity, component: T) {
+        if !self.is_alive(entity) { return; }
         let eid = entity.id();
         self.register_component_type::<T>();
         let type_id = TypeId::of::<T>();
+
+        if T::storage_type() == crate::component::StorageType::SparseSet {
+            let info = self.component_infos.get(&type_id).copied().unwrap_or_else(|| ComponentInfo::of::<T>());
+            let set = self.sparse_sets.entry(type_id).or_insert_with(|| {
+                crate::archetype::sparse_set::ComponentSparseSet::new(info)
+            });
+            let ptr = &component as *const T as *const u8;
+            set.insert(eid, ptr, self.tick);
+            std::mem::forget(component);
+
+            self.run_hooks(type_id, |h, w| {
+                for hook in &mut h.on_add { hook(w, entity); }
+                for hook in &mut h.on_set { hook(w, entity); }
+            });
+            return;
+        }
+
+        // Original logic follows but skip register and eid assignments
+
+
 
         // 1. Hedef archetype'ı belirle
         let target_arch_id =
@@ -407,10 +712,19 @@ impl World {
                 }
             }
             // Trigger OnSet hooks
-            let hooks = self.component_hooks.get(&type_id).cloned();
-            if let Some(hooks) = hooks {
-                for hook in hooks.on_set {
+            let mut hooks = self.component_hooks.remove(&type_id);
+            if let Some(ref mut h) = hooks {
+                for hook in &mut h.on_set {
                     hook(self, entity);
+                }
+            }
+            if let Some(h) = hooks {
+                if let Some(existing) = self.component_hooks.get_mut(&type_id) {
+                    existing.on_add.extend(h.on_add);
+                    existing.on_set.extend(h.on_set);
+                    existing.on_remove.extend(h.on_remove);
+                } else {
+                    self.component_hooks.insert(type_id, h);
                 }
             }
             return;
@@ -460,13 +774,22 @@ impl World {
             .entity_archetype
             .insert(eid, target_arch_id);
 
-        let hooks = self.component_hooks.get(&type_id).cloned();
-        if let Some(hooks) = hooks {
-            for hook in hooks.on_add {
+        let mut hooks = self.component_hooks.remove(&type_id);
+        if let Some(ref mut h) = hooks {
+            for hook in &mut h.on_add {
                 hook(self, entity);
             }
-            for hook in hooks.on_set {
+            for hook in &mut h.on_set {
                 hook(self, entity);
+            }
+        }
+        if let Some(h) = hooks {
+            if let Some(existing) = self.component_hooks.get_mut(&type_id) {
+                existing.on_add.extend(h.on_add);
+                existing.on_set.extend(h.on_set);
+                existing.on_remove.extend(h.on_remove);
+            } else {
+                self.component_hooks.insert(type_id, h);
             }
         }
     }
@@ -496,14 +819,48 @@ impl World {
         Some(unsafe { col.get_ptr(loc.row as usize) })
     }
 
+    /// Mut mutable Component pointer alma (HierarchyExt vs için)
+    pub fn get_component_mut_ptr(&mut self, entity: Entity, type_id: TypeId) -> Option<*mut u8> {
+        let loc = self.entity_locations.get(entity.id() as usize).copied()?;
+        if !loc.is_valid() {
+            return None;
+        }
+        let arch = &mut self.archetype_index.archetypes[loc.archetype_id as usize];
+        let col = arch.get_column_mut(type_id)?;
+        Some(unsafe { col.get_mut_ptr(loc.row as usize) })
+    }
+
+    /// Entity ID'sinden geçerli nesneyi tekrar yapılandırır
+    pub fn reconstruct_entity(&self, id: u32) -> Option<Entity> {
+        if id as usize >= self.entity_locations.len() || !self.entity_locations[id as usize].is_valid() {
+            return None;
+        }
+        let entities = self.get_resource::<Entities>()?;
+        let state = entities.state.lock().unwrap();
+        if id as usize >= state.generations.len() || state.free_set.contains(&id) {
+            return None;
+        }
+        Some(Entity::new(id, state.generations[id as usize]))
+    }
+
     /// Sistemden component silme
     pub fn remove_component<T: Component>(&mut self, entity: Entity) {
-        if !self.is_alive(entity) {
+        if !self.is_alive(entity) { return; }
+        let eid = entity.id();
+        let type_id = TypeId::of::<T>();
+
+        if T::storage_type() == crate::component::StorageType::SparseSet {
+            if let Some(set) = self.sparse_sets.get_mut(&type_id) {
+                if set.remove(eid) {
+                    self.run_hooks(type_id, |h, w| {
+                        for hook in &mut h.on_remove { hook(w, entity); }
+                    });
+                }
+            }
             return;
         }
 
-        let eid = entity.id();
-        let type_id = TypeId::of::<T>();
+
         let old_loc = self.entity_locations[eid as usize];
 
         // 1. Hedef archetype'ı belirle
@@ -541,12 +898,11 @@ impl World {
             .entity_archetype
             .insert(eid, target_arch_id);
 
-        let hooks = self.component_hooks.get(&type_id).cloned();
-        if let Some(hooks) = hooks {
-            for hook in hooks.on_remove {
-                hook(self, entity);
+        self.run_hooks(type_id, |h, w| {
+            for hook in &mut h.on_remove {
+                hook(w, entity);
             }
-        }
+        });
     }
 
 
@@ -587,6 +943,157 @@ impl World {
     ///     t.position += v.linear * dt;
     /// }
     /// ```
+    
+    /// Toplu (Batch) component ekleme. O(N) archetype lookup maliyetini O(1)'e düşürür.
+    pub fn insert_batch<T: Component + Clone>(&mut self, entities: &[Entity], component: T) {
+        if T::storage_type() == crate::component::StorageType::SparseSet {
+            for &e in entities {
+                self.add_component(e, component.clone());
+            }
+            return;
+        }
+
+        self.register_component_type::<T>();
+        let type_id = TypeId::of::<T>();
+
+        // 1. Gruplama: source_arch_id -> Vec<Entity>
+        let mut groups: std::collections::HashMap<u32, Vec<Entity>> = std::collections::HashMap::new();
+        
+        for &e in entities {
+            if !self.is_alive(e) { continue; }
+            let loc = self.entity_locations[e.id() as usize];
+            if !loc.is_valid() { continue; }
+            groups.entry(loc.archetype_id).or_default().push(e);
+        }
+
+        for (source_arch_id, group_entities) in groups {
+            let target_arch_id = match self.archetype_index.get_add_component_target(
+                group_entities[0].id(), type_id, &self.component_infos
+            ) {
+                Some(id) => id,
+                None => continue,
+            };
+
+            if source_arch_id == target_arch_id as u32 {
+                let arch = &self.archetype_index.archetypes[target_arch_id];
+                let col = arch.get_column_mut(type_id).unwrap();
+                for e in &group_entities {
+                    let row = self.entity_locations[e.id() as usize].row as usize;
+                    unsafe {
+                        std::ptr::write(col.get_ptr(row) as *mut T, component.clone());
+                        col.ticks_ptr_mut().add(row).write(crate::archetype::ComponentTicks::new(self.tick));
+                    }
+                }
+                self.run_hooks(type_id, |h, w| {
+                    for e in &group_entities {
+                        for hook in &mut h.on_set {
+                            hook(w, *e);
+                        }
+                    }
+                });
+                continue;
+            }
+
+            for e in &group_entities {
+                let eid = e.id();
+                let old_loc = self.entity_locations[eid as usize];
+                let old_row = old_loc.row as usize;
+
+                let (new_row, moved_eid) = unsafe {
+                    let old_arch_ptr = &mut self.archetype_index.archetypes[source_arch_id as usize] as *mut Archetype;
+                    let target_arch_ptr = &mut self.archetype_index.archetypes[target_arch_id] as *mut Archetype;
+                    (&mut *old_arch_ptr).move_entity_to(old_row, &mut *target_arch_ptr)
+                };
+
+                if let Some(moved) = moved_eid {
+                    self.entity_locations[moved as usize].row = old_row as u32;
+                }
+
+                {
+                    let arch = &self.archetype_index.archetypes[target_arch_id];
+                    let col = arch.get_column_mut(type_id).unwrap();
+                    unsafe {
+                        std::ptr::write(col.get_ptr(new_row as usize) as *mut T, component.clone());
+                        col.ticks_ptr_mut().add(new_row as usize).write(crate::archetype::ComponentTicks::new(self.tick));
+                    }
+                }
+
+                self.entity_locations[eid as usize] = EntityLocation {
+                    archetype_id: target_arch_id as u32,
+                    row: new_row,
+                };
+                self.archetype_index.entity_archetype.insert(eid, target_arch_id);
+            }
+
+            self.run_hooks(type_id, |h, w| {
+                for e in &group_entities {
+                    for hook in &mut h.on_add { hook(w, *e); }
+                    for hook in &mut h.on_set { hook(w, *e); }
+                }
+            });
+        }
+    }
+
+    /// Toplu (Batch) component çıkarma
+    pub fn remove_batch<T: Component>(&mut self, entities: &[Entity]) {
+        if T::storage_type() == crate::component::StorageType::SparseSet {
+            for &e in entities {
+                self.remove_component::<T>(e);
+            }
+            return;
+        }
+
+        let type_id = TypeId::of::<T>();
+        let mut groups: std::collections::HashMap<u32, Vec<Entity>> = std::collections::HashMap::new();
+        
+        for &e in entities {
+            if !self.is_alive(e) { continue; }
+            let loc = self.entity_locations[e.id() as usize];
+            if !loc.is_valid() { continue; }
+            groups.entry(loc.archetype_id).or_default().push(e);
+        }
+
+        for (source_arch_id, group_entities) in groups {
+            let target_arch_id = match self.archetype_index.get_remove_component_target(
+                group_entities[0].id(), type_id, &self.component_infos
+            ) {
+                Some(id) => id,
+                None => continue,
+            };
+
+            if source_arch_id == target_arch_id as u32 {
+                continue;
+            }
+
+            for e in &group_entities {
+                let eid = e.id();
+                let old_loc = self.entity_locations[eid as usize];
+                
+                let (new_row, moved_eid) = unsafe {
+                    let old_arch_ptr = &mut self.archetype_index.archetypes[source_arch_id as usize] as *mut Archetype;
+                    let target_arch_ptr = &mut self.archetype_index.archetypes[target_arch_id] as *mut Archetype;
+                    (&mut *old_arch_ptr).move_entity_to(old_loc.row as usize, &mut *target_arch_ptr)
+                };
+
+                if let Some(moved) = moved_eid {
+                    self.entity_locations[moved as usize].row = old_loc.row;
+                }
+
+                self.entity_locations[eid as usize] = EntityLocation {
+                    archetype_id: target_arch_id as u32,
+                    row: new_row,
+                };
+                self.archetype_index.entity_archetype.insert(eid, target_arch_id);
+            }
+
+            self.run_hooks(type_id, |h, w| {
+                for e in &group_entities {
+                    for hook in &mut h.on_remove { hook(w, *e); }
+                }
+            });
+        }
+    }
+
     pub fn query_entity_mut<'w, Q: crate::query::WorldQuery>(
         &'w mut self,
         entity_id: u32,
@@ -600,11 +1107,11 @@ impl World {
             return None;
         }
         unsafe {
-            let fetch = Q::fetch_raw(arch, self.tick)?;
-            if !Q::filter_row(fetch, loc.row as usize, self.tick) {
+            let fetch = Q::fetch_raw(self, arch, self.tick)?;
+            if !Q::filter_row(fetch, loc.row as usize, entity_id, self.tick) {
                 return None;
             }
-            Some(Q::get_item(fetch, loc.row as usize))
+            Some(Q::get_item(fetch, loc.row as usize, entity_id))
         }
     }
 
@@ -622,11 +1129,11 @@ impl World {
             return None;
         }
         unsafe {
-            let fetch = Q::fetch_raw(arch, self.tick)?;
-            if !Q::filter_row(fetch, loc.row as usize, self.tick) {
+            let fetch = Q::fetch_raw(self, arch, self.tick)?;
+            if !Q::filter_row(fetch, loc.row as usize, entity_id, self.tick) {
                 return None;
             }
-            Some(Q::get_item(fetch, loc.row as usize))
+            Some(Q::get_item(fetch, loc.row as usize, entity_id))
         }
     }
 
@@ -838,15 +1345,10 @@ impl World {
 
                 let children_opt = {
                     let fetch = unsafe {
-                        <&crate::component::Children as crate::query::FetchComponent>::fetch_raw(
-                            &self.archetype_index.archetypes[arch_idx],
-                            self.tick,
-                        )
+                        <&crate::component::Children as crate::query::FetchComponent>::fetch_raw(self, &self.archetype_index.archetypes[arch_idx], self.tick)
                     };
                     fetch.map(|f| unsafe {
-                        <&crate::component::Children as crate::query::FetchComponent>::get_item(
-                            f, row,
-                        )
+                        <&crate::component::Children as crate::query::FetchComponent>::get_item(f, row, parent_entity_id)
                     })
                 };
 
@@ -1205,7 +1707,7 @@ mod tests {
 
         // Despawn all
         for e in entities {
-            world.despawn(e.id());
+            world.despawn(e);
         }
 
         // Archetype sayısı aynı kalmalı

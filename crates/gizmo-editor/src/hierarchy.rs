@@ -36,7 +36,7 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
             ui.painter().rect_stroke(
                 bg_response.rect,
                 2.0,
-                egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 255, 100)),
+                egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(100, 255, 100)),
             );
             if ui.input(|i| i.pointer.any_released()) {
                 state.spawn_asset_request = Some(dragged_path);
@@ -295,7 +295,7 @@ fn draw_entity_node(
                 ui.painter().rect_stroke(
                     rect,
                     2.0,
-                    egui::Stroke::new(1.0, egui::Color32::YELLOW),
+                    egui::Stroke::new(1.0_f32, egui::Color32::YELLOW),
                 );
                 if ui.input(|i| i.pointer.any_released()) && dragged != entity {
                     state.reparent_request = Some((dragged, entity));

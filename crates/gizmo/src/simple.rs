@@ -1,0 +1,211 @@
+use crate::app::App;
+use crate::core::world::World;
+use crate::core::Bundle;
+use crate::bundles::{RigidBodyBundle, MeshBundle, CameraBundle, DirectionalLightBundle};
+use crate::physics::components::{Collider, RigidBody, Transform, Velocity};
+use crate::physics::world::PhysicsWorld;
+use crate::renderer::asset::AssetManager;
+use crate::renderer::components::{Camera, DirectionalLight, LightRole, Material, MeshRenderer};
+use crate::renderer::Renderer;
+use std::f32::consts::{FRAC_PI_2, FRAC_PI_3, PI};
+use crate::math::{Quat, Vec3, Vec4};
+use crate::systems;
+
+pub struct SimpleSceneState {
+    pub camera_speed: f32,
+    pub camera_pitch: f32,
+    pub camera_yaw: f32,
+    pub camera_pos: Vec3,
+}
+
+pub struct SceneBuilder<'a> {
+    pub world: &'a mut World,
+    pub renderer: &'a Renderer,
+    pub asset_manager: &'a mut AssetManager,
+}
+
+impl<'a> SceneBuilder<'a> {
+    pub fn spawn_cube(&mut self, position: Vec3, size: f32, color: Vec3) {
+        let mesh = AssetManager::create_cube(&self.renderer.device);
+        let tex = self.asset_manager.create_white_texture(
+            &self.renderer.device,
+            &self.renderer.queue,
+            &self.renderer.scene.texture_bind_group_layout,
+        );
+        let mat = Material::new(tex).with_pbr(Vec4::new(color.x, color.y, color.z, 1.0), 1.0, 0.0);
+
+        // Gizmo cube is from -1.0 to 1.0 (size 2.0).
+        // To get a cube of `size`, we scale by `size / 2.0`.
+        let half_extents = size / 2.0;
+
+        let ent = self.world.spawn();
+        self.world.add_component(
+            ent,
+            Transform::new(position).with_scale(Vec3::splat(half_extents)),
+        );
+        self.world.add_component(ent, crate::physics::components::GlobalTransform::default());
+        self.world.add_component(ent, mesh);
+        self.world.add_component(ent, mat);
+        self.world.add_component(ent, MeshRenderer::new());
+        self.world.add_bundle(ent, RigidBodyBundle::dynamic(10.0).with_collider(Collider::box_collider(Vec3::splat(half_extents))));
+    }
+
+    pub fn spawn_ground(&mut self, radius: f32) {
+        let mesh = AssetManager::create_circle(&self.renderer.device, radius, 128);
+        let tex = self.asset_manager.create_white_texture(
+            &self.renderer.device,
+            &self.renderer.queue,
+            &self.renderer.scene.texture_bind_group_layout,
+        );
+        // Bevy's ground is Color::WHITE
+        let mat = Material::new(tex).with_pbr(Vec4::new(0.3, 0.3, 0.3, 1.0), 1.0, 0.0);
+
+        let ent = self.world.spawn();
+        self.world.add_component(
+            ent,
+            Transform::new(Vec3::new(0.0, 0.0, 0.0)),
+        );
+        self.world.add_component(ent, crate::physics::components::GlobalTransform::default());
+        self.world.add_component(ent, mesh);
+        self.world.add_component(ent, mat);
+        self.world.add_component(ent, MeshRenderer::new());
+        self.world.add_bundle(ent, RigidBodyBundle::static_body().with_collider(Collider::plane(Vec3::new(0.0, 1.0, 0.0), 0.0)));
+    }
+
+    pub fn spawn_point_light(&mut self, position: Vec3) {
+        let light_ent = self.world.spawn();
+        let mut bundle = crate::bundles::PointLightBundle::default();
+        bundle.position = position;
+        bundle.color = Vec3::new(1.0, 1.0, 1.0);
+        bundle.intensity = 20.0;
+        
+        bundle.apply(self.world, light_ent);
+    }
+    
+    pub fn spawn_camera(&mut self, state: &mut SimpleSceneState, pos: Vec3, look_at: Vec3) {
+        let look_dir = (look_at - pos).normalize_or_zero();
+        state.camera_pos = pos;
+        if look_dir != Vec3::ZERO {
+            state.camera_yaw = look_dir.z.atan2(look_dir.x);
+            state.camera_pitch = look_dir.y.asin();
+        }
+
+        let camera_ent = self.world.spawn();
+        let mut bundle = CameraBundle::default();
+        bundle.position = state.camera_pos;
+        bundle.yaw = state.camera_yaw;
+        bundle.pitch = state.camera_pitch;
+
+        bundle.apply(self.world, camera_ent);
+    }
+}
+
+pub trait SimpleAppExt {
+    fn with_simple_scene<F>(self, setup_fn: F) -> Self
+    where
+        F: FnOnce(&mut SceneBuilder, &mut SimpleSceneState) + 'static;
+}
+
+impl SimpleAppExt for App<SimpleSceneState> {
+    fn with_simple_scene<F>(self, setup_fn: F) -> Self
+    where
+        F: FnOnce(&mut SceneBuilder, &mut SimpleSceneState) + 'static,
+    {
+        self.set_setup(move |world, renderer| {
+            let mut asset_manager = AssetManager::new();
+            let phys_world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
+
+            let mut state = SimpleSceneState {
+                camera_speed: 15.0,
+                camera_pitch: 0.0,
+                camera_yaw: 0.0,
+                camera_pos: Vec3::new(0.0, 2.0, 5.0),
+            };
+
+            let mut builder = SceneBuilder {
+                world,
+                renderer,
+                asset_manager: &mut asset_manager,
+            };
+
+            setup_fn(&mut builder, &mut state);
+
+            world.insert_resource(phys_world);
+            world.insert_resource(asset_manager);
+            state
+        })
+        .set_update(|world, state, dt, input| {
+            if input.is_mouse_button_pressed(1) {
+                let delta = input.mouse_delta();
+                state.camera_yaw -= delta.0 * 0.005;
+                state.camera_pitch -= delta.1 * 0.005;
+                state.camera_pitch = state.camera_pitch.clamp(-PI / 2.0 + 0.1, PI / 2.0 - 0.1);
+            }
+
+            let fx = state.camera_yaw.cos() * state.camera_pitch.cos();
+            let fy = state.camera_pitch.sin();
+            let fz = state.camera_yaw.sin() * state.camera_pitch.cos();
+            let forward = Vec3::new(fx, fy, fz).normalize();
+            let right = forward.cross(Vec3::new(0.0, 1.0, 0.0)).normalize();
+            let up = Vec3::new(0.0, 1.0, 0.0);
+
+            let speed = if input.is_key_pressed(crate::winit::keyboard::KeyCode::ShiftLeft as u32) {
+                state.camera_speed * 3.0
+            } else {
+                state.camera_speed
+            };
+
+            let mut cam_move = Vec3::ZERO;
+            if input.is_key_pressed(crate::winit::keyboard::KeyCode::KeyW as u32) { cam_move += forward; }
+            if input.is_key_pressed(crate::winit::keyboard::KeyCode::KeyS as u32) { cam_move -= forward; }
+            if input.is_key_pressed(crate::winit::keyboard::KeyCode::KeyD as u32) { cam_move += right; }
+            if input.is_key_pressed(crate::winit::keyboard::KeyCode::KeyA as u32) { cam_move -= right; }
+            if input.is_key_pressed(crate::winit::keyboard::KeyCode::KeyE as u32) { cam_move += up; }
+            if input.is_key_pressed(crate::winit::keyboard::KeyCode::KeyQ as u32) { cam_move -= up; }
+
+            if cam_move.length_squared() > 0.0 {
+                state.camera_pos += cam_move.normalize() * speed * dt;
+            }
+
+            if let Some(mut q) = world.query::<(
+                crate::core::query::Mut<Transform>,
+                crate::core::query::Mut<Camera>,
+            )>() {
+                let yaw_rot = Quat::from_rotation_y(-state.camera_yaw + FRAC_PI_2);
+                let pitch_rot = Quat::from_rotation_x(state.camera_pitch);
+                let rot = yaw_rot * pitch_rot;
+
+                for (_, (mut trans, mut cam)) in q.iter_mut() {
+                    trans.position = state.camera_pos;
+                    trans.rotation = rot;
+                    cam.yaw = state.camera_yaw;
+                    cam.pitch = state.camera_pitch;
+                }
+            }
+
+            let mut physics_dt = dt.min(0.1);
+            while physics_dt > 0.0 {
+                let step = physics_dt.min(0.016);
+                systems::cpu_physics_step_system(world, step);
+                physics_dt -= step;
+            }
+
+            use crate::core::system::System;
+            let mut transform_sync = systems::transform::TransformSyncSystem;
+            let mut transform_propagate = systems::transform::TransformPropagateSystem;
+            transform_sync.run(world, dt);
+            transform_propagate.run(world, dt);
+        })
+        .set_render(|world, _state, encoder, view, renderer, _light_time| {
+            // Basit sahnelerde varsayılan olarak gelen GPU compute sistemlerini ve reflection'ları kapatıyoruz
+            // Böylece sadece bizim eklediğimiz küp ve ışık temiz bir şekilde render edilecek.
+            renderer.gpu_physics = None;
+            renderer.gpu_fluid = None;
+            renderer.gpu_particles = None;
+            renderer.ssr = None; // Arkadaki istenmeyen yansımaları (Screen Space Reflections) kapatır
+            renderer.ssgi = None; // SSGI kapatır
+            
+            systems::default_render_pass(world, encoder, view, renderer);
+        })
+    }
+}

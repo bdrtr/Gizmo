@@ -216,7 +216,7 @@ fn update(
     let mut player_pos = Vec3::ZERO;
 
     // 3. Karakter Kontrolü
-    if let Some(kcc) = world
+    if let Some(mut kcc) = world
         .borrow_mut::<CharacterController>()
         .get_mut(state.player.id())
     {
@@ -243,13 +243,13 @@ fn update(
     }
 
     // Death Check
-    if let Some(t) = world.borrow_mut::<Transform>().get_mut(state.player.id()) {
+    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(state.player.id()) {
         player_pos = t.position;
         if t.position.y < -3.0 {
             // Lav yüksekliği
             println!("💀 ÖLDÜN! Respawn oluyorsun...");
             t.position = state.respawn_point;
-            if let Some(v) = world.borrow_mut::<Velocity>().get_mut(state.player.id()) {
+            if let Some(mut v) = world.borrow_mut::<Velocity>().get_mut(state.player.id()) {
                 v.linear = Vec3::ZERO;
             }
         }

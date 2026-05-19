@@ -19,7 +19,8 @@ struct SceneUniforms {
     camera_forward:  vec4<f32>,
     cascade_params:  vec4<f32>,
     num_lights: u32,
-    _pad1: vec3<u32>,
+    exposure: f32,
+    _pad1: vec2<u32>,
     _pad2: vec3<u32>,
     shading_mode: u32,
 };
@@ -28,6 +29,7 @@ struct SceneUniforms {
 
 @group(1) @binding(0) var t_shadow: texture_depth_2d_array;
 @group(1) @binding(1) var s_shadow: sampler_comparison;
+@group(1) @binding(2) var t_point_shadow: texture_depth_cube;
 
 @group(2) @binding(0) var t_albedo_metallic:  texture_2d<f32>;
 @group(2) @binding(1) var t_normal_roughness: texture_2d<f32>;
@@ -84,8 +86,8 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let normal_roughness = textureLoad(t_normal_roughness, iuv, 0);
     let pos_sample       = textureLoad(t_world_position,   iuv, 0);
 
-    // Unwritten pixels (skipped geometry, unlit objects) — output black, will be overwritten
-    if (pos_sample.w < 0.5) { return vec4<f32>(0.0, 0.0, 0.0, 0.0); }
+    // Unwritten pixels (skipped geometry, unlit objects) — discard to preserve clear color
+    if (pos_sample.w < 0.5) { discard; }
 
     let albedo    = albedo_metallic.rgb;
     let metallic  = albedo_metallic.a;
@@ -104,14 +106,14 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     
     // 1. Diffuse IBL (Irradiance)
     // We sample the sky at the normal vector with max roughness.
-    let irradiance = get_sky_color(N, sun_dir, 1.0) * 0.4;
+    let irradiance = get_sky_color(N, sun_dir, 1.0) * 0.01; // Gölgenin zifiri karanlık olmaması için sadece %1 ortam ışığı
     let ambient = albedo * irradiance * (1.0 - metallic);
     
     // 2. Specular IBL (Pre-filtered Environment Map)
     // We sample the sky at the reflection vector. The reflection vector is pulled towards normal for rough surfaces.
     let R = reflect(-view_dir, N);
     let R_rough = normalize(mix(R, N, roughness)); 
-    let specular_env = get_sky_color(R_rough, sun_dir, roughness);
+    let specular_env = get_sky_color(R_rough, sun_dir, roughness) * 0.05; // ÇOK düşürüldü
     
     // 3. Environment BRDF (Schlick approximation for IBL)
     let env_brdf = f0 + (max(vec3<f32>(1.0 - roughness), f0) - f0) * pow(1.0 - NdV, 5.0);
@@ -182,6 +184,20 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                 let eps      = max(inner - outer, 0.001);
                 let sf       = clamp((cos_a - outer) / eps, 0.0, 1.0);
                 atten *= sf * sf;
+            } else if (light_type == 0u) {
+                // Point Light Shadow
+                let dir_from_light = world_pos - light.position.xyz;
+                let abs_dir = abs(dir_from_light);
+                let z_near = 0.1;
+                let z_far  = 100.0;
+                let z_val  = max(abs_dir.x, max(abs_dir.y, abs_dir.z));
+                // glam::Mat4::perspective_rh uses [0, 1] depth range natively!
+                let clip_z = (z_far * (z_val - z_near)) / (z_val * (z_far - z_near));
+                
+                let slope = 1.0 - max(dot(N, normalize(dir_from_light)), 0.0);
+                let bias = max(0.0005 * slope, 0.00005);
+                let shadow_vis = textureSampleCompare(t_point_shadow, s_shadow, dir_from_light, clip_z - bias);
+                atten *= shadow_vis;
             }
         }
 
@@ -192,9 +208,17 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     }
 
     var final_color = ambient + total_diffuse + total_specular + specular_ibl;
+    final_color *= scene.exposure;
 
-    // Tone mapping is handled in post_process.wgsl because we write to an HDR buffer (Rgba16Float).
-    // Do not apply ACES tone mapping here.
+    // Inline ACES tone mapping for simple scene path (no post-process hooked up)
+    let a2 = 2.51;
+    let b2 = 0.03;
+    let c2 = 2.43;
+    let d2 = 0.59;
+    let e2 = 0.14;
+    final_color = clamp((final_color * (a2 * final_color + b2)) / (final_color * (c2 * final_color + d2) + e2), vec3<f32>(0.0), vec3<f32>(1.0));
+    // Gamma correction
+    final_color = pow(final_color, vec3<f32>(1.0 / 2.2));
 
     // Shading Mode overrides
     if (scene.shading_mode == 1u) {

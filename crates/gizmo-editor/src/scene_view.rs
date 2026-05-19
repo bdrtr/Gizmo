@@ -229,7 +229,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
         (state.camera.view, state.camera.proj)
     {
         if !state.selection.entities.is_empty() {
-            let mut transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
+            let transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
             
             let primary_id = state.selection.primary.unwrap_or_else(|| *state.selection.entities.iter().next().unwrap());
             if transforms.get(primary_id.id()).is_some() {
@@ -420,7 +420,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
             rect,
             0.0,
             egui::Color32::from_white_alpha(30),
-            egui::Stroke::new(1.0, egui::Color32::WHITE),
+            egui::Stroke::new(1.0_f32, egui::Color32::WHITE),
         );
     }
 

@@ -67,7 +67,7 @@ impl History {
         if let Some(action) = self.undo_stack.pop_back() {
             match action {
                 EditorAction::TransformsChanged { changes } => {
-                    let mut transforms = world.borrow_mut::<Transform>();
+                    let transforms = world.borrow_mut::<Transform>();
                     {
                         for (entity, ref old_transform, _) in changes.iter() {
                             if let Some(mut t) = transforms.get_mut(entity.id()) {
@@ -113,7 +113,7 @@ impl History {
         if let Some(action) = self.redo_stack.pop_back() {
             match action {
                 EditorAction::TransformsChanged { changes } => {
-                    let mut transforms = world.borrow_mut::<Transform>();
+                    let transforms = world.borrow_mut::<Transform>();
                     {
                         for (entity, _, ref new_transform) in changes.iter() {
                             if let Some(mut t) = transforms.get_mut(entity.id()) {

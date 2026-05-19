@@ -74,10 +74,19 @@ pub fn voronoi_shatter(extents: Vec3, num_pieces: u32, seed: u64) -> Vec<Procedu
         MathPlane::from_point_normal(Vec3::new(0.0, 0.0, -extents.z), Vec3::new(0.0, 0.0, -1.0)),
     ];
 
+    // Reusable buffers to avoid memory allocation jitter
+    let mut planes = Vec::with_capacity(box_planes.len() + num_pieces as usize);
+    let mut raw_vertices = Vec::with_capacity(256);
+    let mut out_vertices = Vec::with_capacity(256);
+    let mut out_normals = Vec::with_capacity(256);
+    let mut out_indices = Vec::with_capacity(512);
+    let mut face_verts = Vec::with_capacity(64);
+
     for i in 0..num_pieces as usize {
         let p_i = seeds[i];
 
-        let mut planes = box_planes.clone();
+        planes.clear();
+        planes.extend_from_slice(&box_planes);
 
         for j in 0..num_pieces as usize {
             if i == j {
@@ -95,7 +104,7 @@ pub fn voronoi_shatter(extents: Vec3, num_pieces: u32, seed: u64) -> Vec<Procedu
         }
 
         // Find vertices via plane intersections
-        let mut raw_vertices = Vec::new();
+        raw_vertices.clear();
         let num_planes = planes.len();
 
         for p1 in 0..num_planes {
@@ -146,14 +155,14 @@ pub fn voronoi_shatter(extents: Vec3, num_pieces: u32, seed: u64) -> Vec<Procedu
         }
         center /= raw_vertices.len() as f32;
 
-        let mut out_vertices = Vec::new();
-        let mut out_normals = Vec::new();
-        let mut out_indices = Vec::new();
+        out_vertices.clear();
+        out_normals.clear();
+        out_indices.clear();
 
         // Accumulate face triangles
         // A face is formed by a subset of raw_vertices that lie on one of the `planes`.
         for plane in &planes {
-            let mut face_verts = Vec::new();
+            face_verts.clear();
             for &v in &raw_vertices {
                 if plane.distance(v).abs() < 0.005 {
                     face_verts.push(v);
@@ -225,9 +234,9 @@ pub fn voronoi_shatter(extents: Vec3, num_pieces: u32, seed: u64) -> Vec<Procedu
 
         let volume = compute_convex_volume(&out_vertices, &out_indices);
         chunks.push(ProceduralChunk {
-            vertices: out_vertices,
-            normals: out_normals,
-            indices: out_indices,
+            vertices: out_vertices.clone(),
+            normals: out_normals.clone(),
+            indices: out_indices.clone(),
             center_of_mass: center,
             volume,
         });

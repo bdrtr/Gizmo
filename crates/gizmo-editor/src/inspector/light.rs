@@ -12,7 +12,7 @@ pub fn draw_point_light_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut lights = world.borrow_mut::<PointLight>();
+    let lights = world.borrow_mut::<PointLight>();
     {
         if let Some(mut light) = lights.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("💡 PointLight")
@@ -46,7 +46,7 @@ pub fn draw_directional_light_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut lights = world.borrow_mut::<DirectionalLight>();
+    let lights = world.borrow_mut::<DirectionalLight>();
     if let Some(mut light) = lights.get_mut(entity_id.id()) {
         egui::CollapsingHeader::new("☀️ Directional Light (Güneş)")
             .default_open(true)

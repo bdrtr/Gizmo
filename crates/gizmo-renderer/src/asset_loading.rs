@@ -5,7 +5,6 @@ use crate::asset::AssetManager;
 use wgpu::Device;
 use wgpu::Queue;
 use wgpu::BindGroupLayout;
-use std::sync::Arc;
 
 /// Sürekli olarak sahnede yeni eklenen `MeshSource` ve `MaterialSource` bileşenlerini
 /// tarayarak, eksik olan `Mesh` ve `Material` GPU bileşenlerini yükler.

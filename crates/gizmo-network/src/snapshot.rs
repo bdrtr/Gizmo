@@ -61,9 +61,9 @@ impl PhysicsStateSnapshot {
         use gizmo_physics_rigid::components::velocity::Velocity;
         use gizmo_physics_rigid::components::rigid_body::RigidBody;
 
-        let mut transforms = world.borrow_mut::<Transform>();
-        let mut velocities = world.borrow_mut::<Velocity>();
-        let mut rigid_bodies = world.borrow_mut::<RigidBody>();
+        let transforms = world.borrow_mut::<Transform>();
+        let velocities = world.borrow_mut::<Velocity>();
+        let rigid_bodies = world.borrow_mut::<RigidBody>();
 
         for state in &self.states {
             let id = state.entity.id();

@@ -40,6 +40,20 @@ impl ArchetypeIndex {
 
     /// Component ekleme — entity'yi yeni archetype'a taşı
     /// NOT: Veri taşıma işlemi World tarafından yapılır, bu metod sadece yapısal geçişi takip eder.
+    pub(crate) fn get_or_create_archetype(&mut self, infos: &[ComponentInfo]) -> usize {
+        let mut new_types: Vec<TypeId> = infos.iter().map(|i| i.type_id).collect();
+        new_types.sort();
+        
+        if let Some(&id) = self.set_to_id.get(&new_types) {
+            id
+        } else {
+            let id = self.archetypes.len();
+            self.archetypes.push(Archetype::new(id as u32, infos));
+            self.set_to_id.insert(new_types, id);
+            id
+        }
+    }
+
     pub(crate) fn get_add_component_target(
         &mut self,
         entity_id: u32,
@@ -280,5 +294,13 @@ impl ArchetypeIndex {
         self.query_cache.shrink_to_fit();
 
         removed_count
+    }
+
+    pub(crate) fn clear_entities(&mut self) {
+        for arch in &mut self.archetypes {
+            arch.clear();
+        }
+        self.entity_archetype.clear();
+        self.cache_dirty = true;
     }
 }

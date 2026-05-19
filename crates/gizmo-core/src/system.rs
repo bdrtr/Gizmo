@@ -238,6 +238,58 @@ where
     }
 }
 
+// Box<dyn System> dönüşümü
+impl IntoSystem<()> for Box<dyn System> {
+    fn into_system(self) -> Box<dyn System> {
+        self
+    }
+}
+
+impl System for Box<dyn System> {
+    fn run(&mut self, world: &World, dt: f32) {
+        (**self).run(world, dt);
+    }
+    fn access_info(&self) -> AccessInfo {
+        (**self).access_info()
+    }
+}
+
+pub struct PipeSystem {
+    a: Box<dyn System>,
+    b: Box<dyn System>,
+}
+
+impl System for PipeSystem {
+    fn run(&mut self, world: &World, dt: f32) {
+        self.a.run(world, dt);
+        self.b.run(world, dt);
+    }
+
+    fn access_info(&self) -> AccessInfo {
+        let mut info = self.a.access_info();
+        let mut b_info = self.b.access_info();
+        info.component_reads.append(&mut b_info.component_reads);
+        info.component_writes.append(&mut b_info.component_writes);
+        info.resource_reads.append(&mut b_info.resource_reads);
+        info.resource_writes.append(&mut b_info.resource_writes);
+        info.is_exclusive = info.is_exclusive || b_info.is_exclusive;
+        info
+    }
+}
+
+pub trait SystemExt<ParamA> {
+    fn pipe<ParamB, SystemB: IntoSystem<ParamB>>(self, other: SystemB) -> Box<dyn System>;
+}
+
+impl<ParamA, SystemA: IntoSystem<ParamA>> SystemExt<ParamA> for SystemA {
+    fn pipe<ParamB, SystemB: IntoSystem<ParamB>>(self, other: SystemB) -> Box<dyn System> {
+        Box::new(PipeSystem {
+            a: self.into_system(),
+            b: other.into_system(),
+        })
+    }
+}
+
 /// 1-8 parametreli IntoSystem implementasyonlarını üretir.
 macro_rules! impl_into_system {
     ($($P:ident),+) => {
@@ -322,6 +374,57 @@ where
 // RUN CONDITIONS
 // ==============================================================
 
+pub trait IntoCondition<Params> {
+    fn into_condition(self) -> Box<dyn FnMut(&World) -> bool + Send + Sync>;
+}
+
+impl<F> IntoCondition<()> for F
+where
+    F: FnMut() -> bool + Send + Sync + 'static,
+{
+    fn into_condition(mut self) -> Box<dyn FnMut(&World) -> bool + Send + Sync> {
+        Box::new(move |_world| self())
+    }
+}
+
+macro_rules! impl_into_condition {
+    ($($P:ident),+) => {
+        #[allow(non_snake_case)]
+        impl<F, $($P),+> IntoCondition<($($P,)+)> for F
+        where
+            F: FnMut($($P::Item<'_>),+) -> bool + Send + Sync + 'static,
+            $($P: SystemParam + 'static,)+
+        {
+            fn into_condition(mut self) -> Box<dyn FnMut(&World) -> bool + Send + Sync> {
+                Box::new(move |world| {
+                    $(let $P = $P::fetch(world, 0.0).unwrap();)+
+                    (self)($($P),+)
+                })
+            }
+        }
+    };
+}
+
+impl_into_condition!(P1);
+impl_into_condition!(P1, P2);
+impl_into_condition!(P1, P2, P3);
+impl_into_condition!(P1, P2, P3, P4);
+impl_into_condition!(P1, P2, P3, P4, P5);
+impl_into_condition!(P1, P2, P3, P4, P5, P6);
+
+pub trait SystemExtRunIf {
+    fn run_if_sys<ParamC, Cond: IntoCondition<ParamC>>(self, cond: Cond) -> Box<dyn System>;
+}
+
+impl SystemExtRunIf for Box<dyn System> {
+    fn run_if_sys<ParamC, Cond: IntoCondition<ParamC>>(self, cond: Cond) -> Box<dyn System> {
+        Box::new(ConditionalSystem {
+            inner: self,
+            condition: cond.into_condition(),
+        })
+    }
+}
+
 pub struct ConditionalSystem {
     inner: Box<dyn System>,
     condition: Box<dyn FnMut(&World) -> bool + Send + Sync>,
@@ -335,6 +438,54 @@ impl System for ConditionalSystem {
     }
     fn access_info(&self) -> AccessInfo {
         self.inner.access_info()
+    }
+}
+
+pub trait DistributiveRunIfExt<P1, P2, P3, P4, P5> {
+    fn distributive_run_if<ParamC, Cond: IntoCondition<ParamC> + Clone + Send + Sync + 'static>(self, cond: Cond) -> Box<dyn System>;
+}
+
+// Sadece Tuple-5 için yazıyoruz çünkü test bunu istiyor. Bevy'de bu macro ile üretilir.
+impl<P1, P2, P3, P4, P5, S1, S2, S3, S4, S5> DistributiveRunIfExt<P1, P2, P3, P4, P5> for (S1, S2, S3, S4, S5)
+where
+    S1: IntoSystem<P1> + 'static,
+    S2: IntoSystem<P2> + 'static,
+    S3: IntoSystem<P3> + 'static,
+    S4: IntoSystem<P4> + 'static,
+    S5: IntoSystem<P5> + 'static,
+{
+    fn distributive_run_if<ParamC, Cond: IntoCondition<ParamC> + Clone + Send + Sync + 'static>(self, cond: Cond) -> Box<dyn System> {
+        let sys1 = self.0.into_system().run_if_sys(cond.clone());
+        let sys2 = self.1.into_system().run_if_sys(cond.clone());
+        let sys3 = self.2.into_system().run_if_sys(cond.clone());
+        let sys4 = self.3.into_system().run_if_sys(cond.clone());
+        let sys5 = self.4.into_system().run_if_sys(cond);
+
+        struct MacroSystem {
+            systems: [Box<dyn System>; 5],
+        }
+        impl System for MacroSystem {
+            fn run(&mut self, world: &World, dt: f32) {
+                for s in &mut self.systems {
+                    s.run(world, dt);
+                }
+            }
+            fn access_info(&self) -> AccessInfo {
+                let mut info = AccessInfo::new();
+                for s in &self.systems {
+                    let s_info = s.access_info();
+                    info.component_reads.extend(s_info.component_reads);
+                    info.component_writes.extend(s_info.component_writes);
+                    info.resource_reads.extend(s_info.resource_reads);
+                    info.resource_writes.extend(s_info.resource_writes);
+                }
+                info
+            }
+        }
+
+        Box::new(MacroSystem {
+            systems: [sys1, sys2, sys3, sys4, sys5],
+        })
     }
 }
 
@@ -594,6 +745,10 @@ impl Schedule {
         self.invalidate();
     }
 
+    pub fn add_systems<T, Configs: IntoSystemConfigs<T>>(&mut self, configs: Configs) {
+        configs.into_configs(self);
+    }
+
     pub fn add_system_boxed(&mut self, system: Box<dyn System>) {
         self.unbuilt_configs.push(SystemConfig::new(system));
         self.invalidate();
@@ -740,7 +895,7 @@ impl Schedule {
         batches
     }
 
-    fn build(&mut self) {
+    pub fn build(&mut self) {
         if self.is_built() {
             return;
         }
@@ -833,6 +988,42 @@ impl Default for Schedule {
         Self::new()
     }
 }
+
+pub trait IntoSystemConfigs<T> {
+    fn into_configs(self, schedule: &mut Schedule);
+}
+
+impl<P1, S1> IntoSystemConfigs<(P1,)> for S1
+where
+    S1: IntoSystem<P1> + 'static,
+{
+    fn into_configs(self, schedule: &mut Schedule) {
+        schedule.add_system(self.into_system());
+    }
+}
+
+macro_rules! impl_into_system_configs {
+    ($($P:ident $S:ident),+) => {
+        impl<$($P, $S),+> IntoSystemConfigs<($($P,)+)> for ($($S,)+)
+        where
+            $($S: IntoSystem<$P> + 'static,)+
+        {
+            fn into_configs(self, schedule: &mut Schedule) {
+                #[allow(non_snake_case)]
+                let ($($S,)+) = self;
+                $(schedule.add_system($S.into_system());)+
+            }
+        }
+    };
+}
+
+impl_into_system_configs!(P1 S1, P2 S2);
+impl_into_system_configs!(P1 S1, P2 S2, P3 S3);
+impl_into_system_configs!(P1 S1, P2 S2, P3 S3, P4 S4);
+impl_into_system_configs!(P1 S1, P2 S2, P3 S3, P4 S4, P5 S5);
+impl_into_system_configs!(P1 S1, P2 S2, P3 S3, P4 S4, P5 S5, P6 S6);
+impl_into_system_configs!(P1 S1, P2 S2, P3 S3, P4 S4, P5 S5, P6 S6, P7 S7);
+impl_into_system_configs!(P1 S1, P2 S2, P3 S3, P4 S4, P5 S5, P6 S6, P7 S7, P8 S8);
 
 #[cfg(test)]
 mod tests {

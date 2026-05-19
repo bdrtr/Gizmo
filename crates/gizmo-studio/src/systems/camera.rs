@@ -26,8 +26,8 @@ pub fn handle_camera(
     }
 
     // Editor Camera WASD Controller
-    let mut transforms = world.borrow_mut::<Transform>();
-    let mut cameras = world.borrow_mut::<gizmo::renderer::components::Camera>();
+    let transforms = world.borrow_mut::<Transform>();
+    let cameras = world.borrow_mut::<gizmo::renderer::components::Camera>();
     {
         if let (Some(mut t), Some(mut cam)) = (
             transforms.get_mut(state.editor_camera),

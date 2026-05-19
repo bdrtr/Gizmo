@@ -321,13 +321,13 @@ impl<State: 'static> App<State> {
         };
 
         if let Some(scene_path) = self.initial_scene.take() {
-            if let Some(mut asset_manager) = self
+            if let Some(asset_manager) = self
                 .world
                 .remove_resource::<gizmo_renderer::asset::AssetManager>()
             {
                 let dummy_rgba = [255, 255, 255, 255];
                 let r = self.world.remove_resource::<Renderer>().unwrap();
-                let dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
+                let _dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
 
                 {
                     gizmo_scene::scene::SceneData::load_into(
@@ -804,13 +804,13 @@ impl<State: 'static> App<State> {
                                 }
                             }
                             if let Some(ref path) = load_req {
-                                if let Some(mut asset_manager) =
+                                if let Some(asset_manager) =
                                     self.world
                                         .remove_resource::<gizmo_renderer::asset::AssetManager>()
                                 {
                                     let r = self.world.remove_resource::<Renderer>().unwrap();
                                     let dummy_rgba = [255u8, 255, 255, 255];
-                                    let dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
+                                    let _dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
                                     let registry = gizmo_scene::registry::SceneRegistry::default();
                                     let ok = gizmo_scene::scene::SceneData::load_into(
                                         path,

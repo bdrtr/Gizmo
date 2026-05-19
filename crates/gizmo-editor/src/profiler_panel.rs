@@ -111,7 +111,7 @@ pub fn ui_profiler(ui: &mut egui::Ui, world: &World, _state: &mut EditorState) {
                 egui::pos2(rect.right(), y_16ms),
             ],
             egui::Stroke::new(
-                1.0,
+                1.0_f32,
                 egui::Color32::from_rgba_premultiplied(80, 200, 120, 60),
             ),
         );

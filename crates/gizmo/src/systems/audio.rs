@@ -50,7 +50,7 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
     let left_ear_arr = [left_ear.x, left_ear.y, left_ear.z];
     let right_ear_arr = [right_ear.x, right_ear.y, right_ear.z];
 
-    let mut sources = world.borrow_mut::<AudioSource>();
+    let sources = world.borrow_mut::<AudioSource>();
     let velocities = world.borrow::<Velocity>();
 
     let mut source_ids = Vec::new();
@@ -60,7 +60,7 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
 
     // Tüm ses kaynaklarını güncelle
     for id in source_ids {
-        let mut source = if let Some(mut s) = sources.get_mut(id) {
+        let mut source = if let Some(s) = sources.get_mut(id) {
             s.clone()
         } else {
             continue;

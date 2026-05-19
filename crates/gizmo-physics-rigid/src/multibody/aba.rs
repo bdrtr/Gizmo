@@ -1,4 +1,4 @@
-use super::{ArticulatedTree, SpatialTransform};
+use super::ArticulatedTree;
 use gizmo_math::spatial::SpatialVector;
 use gizmo_math::Vec3;
 

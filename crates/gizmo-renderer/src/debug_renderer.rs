@@ -62,6 +62,49 @@ impl Gizmos {
         self.draw_line(p2, p6, color);
         self.draw_line(p3, p7, color);
     }
+
+    pub fn draw_aabb(&mut self, aabb: gizmo_math::Aabb, color: [f32; 4]) {
+        self.draw_box(aabb.min.into(), aabb.max.into(), color);
+    }
+
+    pub fn draw_frustum(&mut self, view_proj: gizmo_math::Mat4, color: [f32; 4]) {
+        let inv = view_proj.inverse();
+        
+        let corners_ndc = [
+            Vec3::new(-1.0, -1.0, 1.0), // Near bottom left
+            Vec3::new(1.0, -1.0, 1.0),  // Near bottom right
+            Vec3::new(1.0, 1.0, 1.0),   // Near top right
+            Vec3::new(-1.0, 1.0, 1.0),  // Near top left
+            Vec3::new(-1.0, -1.0, 0.0), // Far bottom left
+            Vec3::new(1.0, -1.0, 0.0),  // Far bottom right
+            Vec3::new(1.0, 1.0, 0.0),   // Far top right
+            Vec3::new(-1.0, 1.0, 0.0),  // Far top left
+        ];
+
+        let mut corners_world = [Vec3::ZERO; 8];
+        for i in 0..8 {
+            let p = inv.project_point3(corners_ndc[i]);
+            corners_world[i] = p;
+        }
+
+        // Near plane
+        self.draw_line(corners_world[0], corners_world[1], color);
+        self.draw_line(corners_world[1], corners_world[2], color);
+        self.draw_line(corners_world[2], corners_world[3], color);
+        self.draw_line(corners_world[3], corners_world[0], color);
+
+        // Far plane
+        self.draw_line(corners_world[4], corners_world[5], color);
+        self.draw_line(corners_world[5], corners_world[6], color);
+        self.draw_line(corners_world[6], corners_world[7], color);
+        self.draw_line(corners_world[7], corners_world[4], color);
+
+        // Connecting lines
+        self.draw_line(corners_world[0], corners_world[4], color);
+        self.draw_line(corners_world[1], corners_world[5], color);
+        self.draw_line(corners_world[2], corners_world[6], color);
+        self.draw_line(corners_world[3], corners_world[7], color);
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

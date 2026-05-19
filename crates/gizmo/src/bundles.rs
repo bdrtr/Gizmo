@@ -41,6 +41,8 @@ impl Default for DirectionalLightBundle {
 }
 
 impl Bundle for DirectionalLightBundle {
+    fn get_infos() -> Vec<gizmo_core::archetype::ComponentInfo> { vec![] }
+    unsafe fn write_to_archetype(self, _arch: &mut gizmo_core::archetype::Archetype, _row: usize, _tick: u32) {}
     fn apply(self, world: &mut World, entity: Entity) {
         world.add_component(
             entity,
@@ -78,6 +80,8 @@ impl Default for PointLightBundle {
 }
 
 impl Bundle for PointLightBundle {
+    fn get_infos() -> Vec<gizmo_core::archetype::ComponentInfo> { vec![] }
+    unsafe fn write_to_archetype(self, _arch: &mut gizmo_core::archetype::Archetype, _row: usize, _tick: u32) {}
     fn apply(self, world: &mut World, entity: Entity) {
         world.add_component(entity, Transform::new(self.position));
         world.add_component(entity, gizmo_physics_core::components::GlobalTransform::default());
@@ -118,6 +122,8 @@ impl Default for SpotLightBundle {
 }
 
 impl Bundle for SpotLightBundle {
+    fn get_infos() -> Vec<gizmo_core::archetype::ComponentInfo> { vec![] }
+    unsafe fn write_to_archetype(self, _arch: &mut gizmo_core::archetype::Archetype, _row: usize, _tick: u32) {}
     fn apply(self, world: &mut World, entity: Entity) {
         world.add_component(
             entity,
@@ -149,6 +155,7 @@ pub struct CameraBundle {
     pub far: f32,
     pub yaw: f32,
     pub pitch: f32,
+    pub exposure: f32,
     pub primary: bool,
 }
 
@@ -161,26 +168,28 @@ impl Default for CameraBundle {
             far: 1500.0,
             yaw: 0.0,
             pitch: 0.0,
+            exposure: 1.0,
             primary: true,
         }
     }
 }
 
 impl Bundle for CameraBundle {
+    fn get_infos() -> Vec<gizmo_core::archetype::ComponentInfo> { vec![] }
+    unsafe fn write_to_archetype(self, _arch: &mut gizmo_core::archetype::Archetype, _row: usize, _tick: u32) {}
     fn apply(self, world: &mut World, entity: Entity) {
         world.add_component(entity, Transform::new(self.position));
         world.add_component(entity, gizmo_physics_core::components::GlobalTransform::default());
-        world.add_component(
-            entity,
-            Camera::new(
-                self.fov,
-                self.near,
-                self.far,
-                self.yaw,
-                self.pitch,
-                self.primary,
-            ),
+        let mut cam = Camera::new(
+            self.fov,
+            self.near,
+            self.far,
+            self.yaw,
+            self.pitch,
+            self.primary,
         );
+        cam.exposure = self.exposure;
+        world.add_component(entity, cam);
     }
 }
 
@@ -248,6 +257,8 @@ impl MeshBundle {
 }
 
 impl Bundle for MeshBundle {
+    fn get_infos() -> Vec<gizmo_core::archetype::ComponentInfo> { vec![] }
+    unsafe fn write_to_archetype(self, _arch: &mut gizmo_core::archetype::Archetype, _row: usize, _tick: u32) {}
     fn apply(self, world: &mut World, entity: Entity) {
         world.add_component(
             entity,
@@ -262,5 +273,65 @@ impl Bundle for MeshBundle {
         if let Some(name) = self.name {
             world.add_component(entity, EntityName(name));
         }
+    }
+}
+
+// ============================================================
+//  RigidBodyBundle
+// ============================================================
+
+use gizmo_physics_core::Collider;
+use gizmo_physics_rigid::components::{RigidBody, Velocity};
+
+/// Fizik nesnesi oluşturmak için sıfır-yük (zero-overhead) Bundle.
+/// Velocity veya Collider eklemeyi unutma hatalarını önler.
+pub struct RigidBodyBundle {
+    pub rigid_body: RigidBody,
+    pub velocity: Velocity,
+    pub collider: Collider,
+}
+
+impl Default for RigidBodyBundle {
+    fn default() -> Self {
+        Self {
+            rigid_body: RigidBody::default(),
+            velocity: Velocity::default(),
+            collider: Collider::default(),
+        }
+    }
+}
+
+impl RigidBodyBundle {
+    pub fn dynamic(mass: f32) -> Self {
+        Self {
+            rigid_body: RigidBody::new(mass, 0.5, 0.5, true),
+            ..Default::default()
+        }
+    }
+
+    pub fn static_body() -> Self {
+        Self {
+            rigid_body: RigidBody::new_static(),
+            ..Default::default()
+        }
+    }
+
+    pub fn with_collider(mut self, collider: Collider) -> Self {
+        self.collider = collider;
+        self
+    }
+}
+
+impl Bundle for RigidBodyBundle {
+    fn get_infos() -> Vec<gizmo_core::archetype::ComponentInfo> {
+        <(RigidBody, Velocity, Collider)>::get_infos()
+    }
+
+    unsafe fn write_to_archetype(self, arch: &mut gizmo_core::archetype::Archetype, row: usize, tick: u32) {
+        (self.rigid_body, self.velocity, self.collider).write_to_archetype(arch, row, tick)
+    }
+
+    fn apply(self, world: &mut World, entity: Entity) {
+        (self.rigid_body, self.velocity, self.collider).apply(world, entity)
     }
 }

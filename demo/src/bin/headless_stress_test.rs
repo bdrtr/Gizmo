@@ -1,8 +1,8 @@
 use gizmo::core::entity::Entity;
-use gizmo::math::{Vec3, Quat};
+use gizmo::math::Vec3;
 use gizmo::physics::components::{Collider, RigidBody, Transform, Velocity};
 use gizmo::physics::world::PhysicsWorld;
-use std::hash::{Hash, Hasher};
+use std::hash::Hasher;
 use std::collections::hash_map::DefaultHasher;
 
 fn run_simulation_and_get_hash() -> u64 {

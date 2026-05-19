@@ -11,7 +11,7 @@ pub fn draw_camera_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut cameras = world.borrow_mut::<Camera>();
+    let cameras = world.borrow_mut::<Camera>();
     {
         if let Some(mut cam) = cameras.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("📷 Camera")

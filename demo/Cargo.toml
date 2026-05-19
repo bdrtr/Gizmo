@@ -3,7 +3,7 @@ publish = false
 name = "demo"
 version.workspace = true
 edition.workspace = true
-default-run = "test_sandbox"
+default-run = "bevy_3d_scene"
 
 [dependencies]
 gizmo = { package = "gizmo-engine", path = "../crates/gizmo", features = ["audio", "scripting", "scene", "editor", "render", "window", "ui"] }
@@ -31,3 +31,7 @@ path = "src/bin/headless_stress_test.rs"
 [[bin]]
 name = "car_demo"
 path = "src/bin/car_demo.rs"
+
+[[bin]]
+name = "bevy_3d_scene"
+path = "src/bin/bevy_3d_scene.rs"

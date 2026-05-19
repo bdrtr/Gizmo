@@ -123,6 +123,35 @@ impl<'a, 'w> EntityCommands<'a, 'w> {
             world.despawn(e);
         });
     }
+
+    /// Entity'yi ve altındaki tüm çocukları yok eder (recursive)
+    pub fn despawn_recursive(&mut self) {
+        use crate::hierarchy::HierarchyExt;
+        let e = self.entity;
+        self.commands.queue.push(move |world| {
+            world.despawn_recursive(e);
+        });
+    }
+
+    /// Bu entity'ye bir çocuk ekler
+    pub fn add_child(&mut self, child: Entity) -> &mut Self {
+        use crate::hierarchy::HierarchyExt;
+        let p = self.entity;
+        self.commands.queue.push(move |world| {
+            world.add_child(p, child);
+        });
+        self
+    }
+
+    /// Bu entity'den bir çocuğu koparır
+    pub fn remove_child(&mut self, child: Entity) -> &mut Self {
+        use crate::hierarchy::HierarchyExt;
+        let p = self.entity;
+        self.commands.queue.push(move |world| {
+            world.remove_child(p, child);
+        });
+        self
+    }
 }
 
 #[cfg(test)]

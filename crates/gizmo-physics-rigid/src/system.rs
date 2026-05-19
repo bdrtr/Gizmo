@@ -128,7 +128,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
 
     // 5. Write back to ECS (Rigid Bodies)
     if !rigid_bodies.is_empty() {
-        if let Some(mut query) = world.query::<(
+        if let Some(query) = world.query::<(
             Mut<RigidBody>,
             Mut<Transform>,
             Mut<Velocity>,
