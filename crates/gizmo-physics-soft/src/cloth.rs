@@ -196,3 +196,5 @@ impl Cloth {
         }
     }
 }
+
+impl gizmo_core::Component for Cloth {}

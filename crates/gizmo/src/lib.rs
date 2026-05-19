@@ -21,6 +21,11 @@ pub use gizmo_window as window;
 // Sık kullanılan matematik tiplerini lib.rs'ten doğrudan aç:
 pub use math::{Mat4, Quat, Vec2, Vec3, Vec4};
 
+#[cfg(feature = "window")]
+pub mod simple;
+#[cfg(feature = "window")]
+pub use simple::*;
+
 // === Opsiyonel Modüller ===
 #[cfg(feature = "audio")]
 pub use gizmo_audio as audio;

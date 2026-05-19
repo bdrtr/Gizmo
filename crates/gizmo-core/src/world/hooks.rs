@@ -1,13 +1,13 @@
 use super::World;
 use crate::entity::Entity;
 
-pub type DespawnHook = fn(&mut World, Entity);
+pub type DespawnHook = Box<dyn FnMut(&mut World, Entity) + Send + Sync>;
 
-pub type AddHook = fn(&mut World, Entity);
-pub type RemoveHook = fn(&mut World, Entity);
-pub type SetHook = fn(&mut World, Entity);
+pub type AddHook = Box<dyn FnMut(&mut World, Entity) + Send + Sync>;
+pub type RemoveHook = Box<dyn FnMut(&mut World, Entity) + Send + Sync>;
+pub type SetHook = Box<dyn FnMut(&mut World, Entity) + Send + Sync>;
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct ComponentHooks {
     pub on_add: Vec<AddHook>,
     pub on_remove: Vec<RemoveHook>,

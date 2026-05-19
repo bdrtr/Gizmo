@@ -144,7 +144,7 @@ fn run() {
             }
 
             // Transformu Güncelle
-            if let Some(tr) = _world.borrow_mut::<Transform>().get_mut(state.cam_id) {
+            if let Some(mut tr) = _world.borrow_mut::<Transform>().get_mut(state.cam_id) {
                 let rot = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
                 tr.rotation = rot;
 
@@ -264,8 +264,8 @@ fn run() {
                     };
 
                     // Velocitiy üzerine yaz
-                    let mut vel_store = world.borrow_mut::<gizmo::physics::components::Velocity>();
-                    if let Some(v) = vel_store.get_mut(ball_id.id()) {
+                    let vel_store = world.borrow_mut::<gizmo::physics::components::Velocity>();
+                    if let Some(mut v) = vel_store.get_mut(ball_id.id()) {
                         v.linear = vel;
                     }
                 }

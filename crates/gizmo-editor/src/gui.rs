@@ -72,7 +72,7 @@ impl EditorContext {
         // Accent Color: Modern Soft Blue/Purple
         let accent_color = egui::Color32::from_rgb(64, 120, 240); // Soft Tech Blue
         visuals.selection.bg_fill = accent_color;
-        visuals.selection.stroke = egui::Stroke::new(1.0, accent_color);
+        visuals.selection.stroke = egui::Stroke::new(1.0_f32, accent_color);
         
         // Improve text contrast slightly
         visuals.override_text_color = Some(egui::Color32::from_rgb(230, 230, 230));

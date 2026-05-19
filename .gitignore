@@ -2,32 +2,34 @@
 /target
 Cargo.lock
 
-# İşletim sistemi kalıntıları
+# OS artifacts
 .DS_Store
 Thumbs.db
+
+# Binaries
 *.exe
 *.dll
 *.so
 *.dylib
 
-# Geçici dosyalar ve editör
+# Temporary files & editors
 *.log
 *.tmp
-.vscode/
-.idea/
-assets/*.crdownload
 *.swp
 *~
-test.py
-ray_test
-scratch.rs
-demo/scratch.rs
-scratch/
-.play_backup.scene
-araba sahnesi
-*.py
-tut/test
-tut/assets/domino.png
-tut/assets/domino_real.png
-*.glb
+.vscode/
+.idea/
 .aider*
+
+# Scratch / one-off files
+scratch/
+scratch.rs
+*.py
+
+# Runtime / editor state
+editor_prefs.toml
+.play_backup.scene
+
+# Large assets (tracked via Git LFS or downloaded separately)
+*.glb
+assets/*.crdownload

@@ -354,7 +354,7 @@ fn dir_to_quat(dir: Vec3) -> Quat {
 }
 
 fn update_ropes(world: &mut World, game: &CradleGame) {
-    let mut transforms = world.borrow_mut::<Transform>();
+    let transforms = world.borrow_mut::<Transform>();
     {
         let mut updates = Vec::new();
 
@@ -376,7 +376,7 @@ fn update_ropes(world: &mut World, game: &CradleGame) {
         }
 
         for (rope_id, mid, dist, rot) in updates {
-            if let Some(t_rope) = transforms.get_mut(rope_id) {
+            if let Some(mut t_rope) = transforms.get_mut(rope_id) {
                 t_rope.position = mid;
                 t_rope.rotation = rot;
                 t_rope.scale = Vec3::new(0.015, dist * 0.5, 0.015);
@@ -389,12 +389,12 @@ fn update_ropes(world: &mut World, game: &CradleGame) {
 fn trigger_cradle(world: &mut World, game: &mut CradleGame) {
     println!("Sarkaç bırakıldı!");
 
-    let mut transforms = world.borrow_mut::<Transform>();
-    let mut vels = world.borrow_mut::<Velocity>();
-    let mut rbs = world.borrow_mut::<RigidBody>();
+    let transforms = world.borrow_mut::<Transform>();
+    let vels = world.borrow_mut::<Velocity>();
+    let rbs = world.borrow_mut::<RigidBody>();
     {
         if let Some(&first_id) = game.ball_ids.first() {
-            if let Some(t) = transforms.get_mut(first_id) {
+            if let Some(mut t) = transforms.get_mut(first_id) {
                 let gap = 0.0;
                 let diameter = (BALL_RADIUS * 2.0) + gap;
                 let start_x = -((BALL_COUNT as f32 - 1.0) / 2.0) * diameter;
@@ -407,13 +407,13 @@ fn trigger_cradle(world: &mut World, game: &mut CradleGame) {
                 t.position = Vec3::new(start_x - dy, HINGE_HEIGHT, 0.0);
                 t.update_local_matrix();
             }
-            if let Some(v) = vels.get_mut(first_id) {
+            if let Some(mut v) = vels.get_mut(first_id) {
                 // Hız yapay olarak verilmez, yerçekimi serbest düşüşü sağlar
                 v.linear = Vec3::ZERO;
                 v.angular = Vec3::ZERO;
             }
-            if let Some(rb) = rbs.get_mut(first_id) {
-                (rb as &mut RigidBody).wake_up();
+            if let Some(mut rb) = rbs.get_mut(first_id) {
+                rb.wake_up();
             }
         }
     }
@@ -425,9 +425,9 @@ fn reset_cradle(world: &mut World, game: &mut CradleGame) {
     let diameter = (BALL_RADIUS * 2.0) + gap;
     let start_x = -((BALL_COUNT as f32 - 1.0) / 2.0) * diameter;
 
-    let mut transforms = world.borrow_mut::<Transform>();
-    let mut vels = world.borrow_mut::<Velocity>();
-    let mut rbs = world.borrow_mut::<RigidBody>();
+    let transforms = world.borrow_mut::<Transform>();
+    let vels = world.borrow_mut::<Velocity>();
+    let rbs = world.borrow_mut::<RigidBody>();
     {
         for (i, &ball_id) in game.ball_ids.iter().enumerate() {
             let x = start_x + (i as f32) * diameter;
@@ -437,17 +437,17 @@ fn reset_cradle(world: &mut World, game: &mut CradleGame) {
             let dy = (dist_len * dist_len - z_offset * z_offset).sqrt();
             let ball_y = HINGE_HEIGHT - dy;
 
-            if let Some(t) = transforms.get_mut(ball_id) {
+            if let Some(mut t) = transforms.get_mut(ball_id) {
                 t.position = Vec3::new(x, ball_y, 0.0);
                 t.rotation = Quat::IDENTITY;
                 t.update_local_matrix();
             }
-            if let Some(v) = vels.get_mut(ball_id) {
+            if let Some(mut v) = vels.get_mut(ball_id) {
                 v.linear = Vec3::ZERO;
                 v.angular = Vec3::ZERO;
             }
-            if let Some(rb) = rbs.get_mut(ball_id) {
-                (rb as &mut RigidBody).wake_up();
+            if let Some(mut rb) = rbs.get_mut(ball_id) {
+                rb.wake_up();
             }
         }
     }
@@ -489,17 +489,17 @@ fn update_camera(
         state.cam_pos.y += speed;
     }
 
-    let mut trans = world.borrow_mut::<Transform>();
+    let trans = world.borrow_mut::<Transform>();
     {
-        if let Some(t) = trans.get_mut(state.cam_id) {
+        if let Some(mut t) = trans.get_mut(state.cam_id) {
             t.position = state.cam_pos;
             t.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
             t.update_local_matrix();
         }
     }
-    let mut cams = world.borrow_mut::<Camera>();
+    let cams = world.borrow_mut::<Camera>();
     {
-        if let Some(c) = cams.get_mut(state.cam_id) {
+        if let Some(mut c) = cams.get_mut(state.cam_id) {
             c.yaw = state.cam_yaw;
             c.pitch = state.cam_pitch;
         }

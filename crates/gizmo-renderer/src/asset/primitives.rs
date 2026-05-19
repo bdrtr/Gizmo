@@ -420,6 +420,69 @@ impl super::AssetManager {
         )
     }
 
+    /// Yuvarlak bir disk (Çember tabanı) üretir. Bevy'nin Circle::new(radius) karşılığıdır.
+    pub fn create_circle(device: &wgpu::Device, radius: f32, segments: u32) -> Mesh {
+        let segments = segments.max(3);
+        let mut vertices = Vec::with_capacity((segments * 3) as usize);
+
+        let center = [0.0, 0.0, 0.0];
+        let normal = [0.0, 1.0, 0.0];
+        let def_j = [0; 4];
+        let def_w = [0.0; 4];
+
+        for i in 0..segments {
+            let angle1 = (i as f32 / segments as f32) * std::f32::consts::PI * 2.0;
+            let angle2 = ((i + 1) as f32 / segments as f32) * std::f32::consts::PI * 2.0;
+
+            let p1 = [radius * angle1.cos(), 0.0, radius * angle1.sin()];
+            let p2 = [radius * angle2.cos(), 0.0, radius * angle2.sin()];
+
+            let uv_center = [0.5, 0.5];
+            let uv1 = [0.5 + 0.5 * angle1.cos(), 0.5 + 0.5 * angle1.sin()];
+            let uv2 = [0.5 + 0.5 * angle2.cos(), 0.5 + 0.5 * angle2.sin()];
+
+            // CCW sarmalı (Center -> P2 -> P1)
+            vertices.push(Vertex {
+                position: center,
+                color: [1.0, 1.0, 1.0],
+                normal,
+                tex_coords: uv_center,
+                joint_indices: def_j,
+                joint_weights: def_w,
+            });
+            vertices.push(Vertex {
+                position: p2,
+                color: [1.0, 1.0, 1.0],
+                normal,
+                tex_coords: uv2,
+                joint_indices: def_j,
+                joint_weights: def_w,
+            });
+            vertices.push(Vertex {
+                position: p1,
+                color: [1.0, 1.0, 1.0],
+                normal,
+                tex_coords: uv1,
+                joint_indices: def_j,
+                joint_weights: def_w,
+            });
+        }
+
+        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Circle VBuf"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        Mesh::new(
+            device,
+            Arc::new(vbuf),
+            &vertices,
+            Vec3::ZERO,
+            format!("circle_{}_{}", radius, segments),
+        )
+    }
+
     /// Editör sahneleri için GPU'da çizilen sonsuz grid mesh (tek bir quad). Shader içinde matematiksel olarak çizilir.
     pub fn create_editor_grid_mesh(device: &wgpu::Device, extents: f32) -> Mesh {
         let mut vertices = Vec::new();

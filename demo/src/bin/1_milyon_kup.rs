@@ -129,7 +129,7 @@ fn run(cube_count: u32) {
             }
 
             // Transformu Güncelle
-            if let Some(tr) = world.borrow_mut::<Transform>().get_mut(state.cam_id) {
+            if let Some(mut tr) = world.borrow_mut::<Transform>().get_mut(state.cam_id) {
                 let rot = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
                 tr.rotation = rot;
 

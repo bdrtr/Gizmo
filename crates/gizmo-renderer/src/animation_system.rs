@@ -7,8 +7,8 @@ use std::sync::Arc;
 // ── Simple AnimationPlayer update ────────────────────────────────────────────
 
 pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) {
-    let mut players = world.borrow_mut::<AnimationPlayer>();
-    let mut skeletons = world.borrow_mut::<Skeleton>();
+    let players = world.borrow_mut::<AnimationPlayer>();
+    let skeletons = world.borrow_mut::<Skeleton>();
     {
         let entities: Vec<u32> = players.entities().collect();
         for entity in entities {
@@ -90,8 +90,8 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
 // ── AnimationStateMachine update ─────────────────────────────────────────────
 
 pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) {
-    let mut machines = world.borrow_mut::<AnimationStateMachine>();
-    let mut skeletons = world.borrow_mut::<Skeleton>();
+    let machines = world.borrow_mut::<AnimationStateMachine>();
+    let skeletons = world.borrow_mut::<Skeleton>();
 
     let entities: Vec<u32> = machines.entities().collect();
     for entity in entities {

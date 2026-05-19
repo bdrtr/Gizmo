@@ -198,7 +198,7 @@ fn main() {
                 }
             }
 
-            if let Some(tr) = world.borrow_mut::<Transform>().get_mut(state.cam_id) {
+            if let Some(mut tr) = world.borrow_mut::<Transform>().get_mut(state.cam_id) {
                 let rot = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
                 tr.rotation = rot;
                 let forward = rot * Vec3::new(0.0, 0.0, -1.0);

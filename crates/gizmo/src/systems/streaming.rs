@@ -20,7 +20,7 @@ pub fn texture_streaming_system(world: &mut World, cam_pos: Vec3) {
     };
 
     let transforms = world.borrow::<Transform>();
-    let mut materials = world.borrow_mut::<Material>();
+    let materials = world.borrow_mut::<Material>();
     let hidden = world.borrow::<gizmo_core::component::IsHidden>();
 
     // VRAM kilitlenmesini engellemek için her frame max yükleme limiti (Agresif Streaming)
@@ -38,7 +38,7 @@ pub fn texture_streaming_system(world: &mut World, cam_pos: Vec3) {
             continue; // Gizli objeler stream edilmez
         }
 
-        let mut mat = if let Some(mut m) = materials.get_mut(e) {
+        let mut mat = if let Some(m) = materials.get_mut(e) {
             m
         } else {
             continue;

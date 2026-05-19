@@ -210,15 +210,15 @@ mod tests {
 
         let mut world = World::new();
 
-        world.register_on_add::<HookTracker>(|_, _| {
+        world.register_on_add::<HookTracker>(Box::new(|_, _| {
             ADD_COUNT.fetch_add(1, Ordering::SeqCst);
-        });
-        world.register_on_set::<HookTracker>(|_, _| {
+        }));
+        world.register_on_set::<HookTracker>(Box::new(|_, _| {
             SET_COUNT.fetch_add(1, Ordering::SeqCst);
-        });
-        world.register_on_remove::<HookTracker>(|_, _| {
+        }));
+        world.register_on_remove::<HookTracker>(Box::new(|_, _| {
             REMOVE_COUNT.fetch_add(1, Ordering::SeqCst);
-        });
+        }));
 
         let e1 = world.spawn();
 

@@ -137,6 +137,7 @@ impl<'a> Commands<'a> {
                 far: 1000.0,
                 yaw: -std::f32::consts::FRAC_PI_2,
                 pitch: 0.0,
+                exposure: 1.0,
                 primary: true,
             },
         );
@@ -171,6 +172,7 @@ impl<'a> Commands<'a> {
                 far,
                 yaw: -std::f32::consts::FRAC_PI_2,
                 pitch: 0.0,
+                exposure: 1.0,
                 primary: true,
             },
         );
@@ -284,7 +286,7 @@ impl<'a> Commands<'a> {
         let id = spawn_mesh_entity(self.world, pos, mesh, mat);
         // Scale'i half_extents ile eşleştir
         {
-            let mut trans_store = self.world.borrow_mut::<Transform>();
+            let trans_store = self.world.borrow_mut::<Transform>();
             if let Some(mut trans) = trans_store.get_mut(id.id()) {
                 trans.scale = half_extents * 2.0;
                 trans.update_local_matrix();
@@ -674,7 +676,7 @@ fn spawn_gltf_node_flat(
     world.add_component(entity, Children(Vec::new()));
 
     {
-        let mut ch_store = world.borrow_mut::<Children>();
+        let ch_store = world.borrow_mut::<Children>();
         // Safe to push since entity just spawned and didn't trigger any complex re-borrow updates
         if let Some(mut parent_ch) = ch_store.get_mut(parent_id) {
             parent_ch.0.push(entity.id());
@@ -750,7 +752,7 @@ fn spawn_gltf_node_flat(
     // Pulling borrow_mut OUTSIDE the loop avoiding multiple overlapping mutable queries
     if !newly_added_prims.is_empty() {
         {
-            let mut ch_store = world.borrow_mut::<Children>();
+            let ch_store = world.borrow_mut::<Children>();
             if let Some(mut parent_ch) = ch_store.get_mut(entity.id()) {
                 parent_ch.0.extend(newly_added_prims);
             }
@@ -860,7 +862,7 @@ impl WorldExt for World {
         };
         if let Some(target_id) = target {
             {
-                let mut storage = self.borrow_mut::<T>();
+                let storage = self.borrow_mut::<T>();
                 if let Some(mut comp) = storage.get_mut(target_id) {
                     f(&mut *comp);
                 }

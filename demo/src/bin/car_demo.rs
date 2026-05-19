@@ -30,20 +30,20 @@ pub struct CarConfig {
 impl Default for CarConfig {
     fn default() -> Self {
         Self {
-            engine_power: 8000.0,
+            engine_power: 3000.0, // Increased slightly since mass is higher
             steer_speed: 6.0,
             steer_auto_return: 15.0,
             steer_max_angle: 1.0,
-            steer_torque: 2000.0,
+            steer_torque: 1000.0,
             engine_brake: 2.5,
             base_grip: 8.0,
             slip_threshold: 6.0,
             drift_grip: 1.0,
-            chassis_mass: 200.0,
-            linear_damping: 0.8,
-            angular_damping: 1.5,
+            chassis_mass: 1200.0, // Standard car weight
+            linear_damping: 0.9,
+            angular_damping: 1.8,
             friction: 0.8,
-            gravity_y: -10.0,
+            gravity_y: -20.0, // Stronger gravity to keep it grounded
         }
     }
 }
@@ -71,6 +71,7 @@ struct CarDemoState {
     skid_idx: usize,
     last_skid_time: f32,
     is_drifting: bool,
+    show_physics_debug: bool,
 }
 
 impl CarDemoState {
@@ -98,6 +99,7 @@ impl CarDemoState {
             skid_idx: 0,
             last_skid_time: 0.0,
             is_drifting: false,
+            show_physics_debug: true,
         }
     }
 }
@@ -142,11 +144,16 @@ fn main() {
             }
 
             {
-                let mut vehicle_store = world.borrow_mut::<Vehicle>();
+                let vehicle_store = world.borrow_mut::<Vehicle>();
                 if let Some(mut vehicle) = vehicle_store.get_mut(state.chassis_id) {
                     vehicle.current_throttle = throttle;
                     vehicle.current_brake = brake;
                     vehicle.current_steer = state.steer_angle;
+                    
+                    // Sync from UI
+                    vehicle.engine_power = state.config.engine_power;
+                    vehicle.brake_force = state.config.engine_power * 0.8;
+                    vehicle.downforce_coefficient = 1.5; // High downforce to prevent flying
 
                     if input.is_key_just_pressed(gizmo::prelude::KeyCode::KeyT as u32) {
                         vehicle.gearbox.is_automatic = !vehicle.gearbox.is_automatic;
@@ -175,8 +182,8 @@ fn main() {
                         phys_world.velocities[rb_idx] = Velocity::default();
                     }
                 }
-                let mut transforms = world.borrow_mut::<Transform>();
-                let mut velocities = world.borrow_mut::<Velocity>();
+                let transforms = world.borrow_mut::<Transform>();
+                let velocities = world.borrow_mut::<Velocity>();
                 if let Some(mut t) = transforms.get_mut(state.chassis_id) {
                     *t = Transform::new(Vec3::new(0.0, 1.5, 0.0));
                 }
@@ -185,8 +192,18 @@ fn main() {
                 }
             }
 
-            gizmo::physics::physics_vehicle_system(world, dt);
-            gizmo::physics::physics_step_system(world, dt);
+            // Sabit Fizik Adımı (Fixed Timestep) - Titremeyi ve hayalet etkisini çözer
+            let mut physics_dt = dt.min(0.1);
+            while physics_dt > 0.0 {
+                let step = physics_dt.min(1.0 / 60.0);
+                gizmo::physics::physics_vehicle_system(world, step);
+                gizmo::physics::physics_step_system(world, step);
+                physics_dt -= step;
+            }
+
+            if state.show_physics_debug {
+                gizmo::systems::physics::physics_debug_system(world);
+            }
 
             let mut car_speed = 0.0;
             {
@@ -204,7 +221,7 @@ fn main() {
             let steer_quat = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), state.steer_angle * 0.5);
 
             {
-                let mut ecs_transforms = world.borrow_mut::<Transform>();
+                let ecs_transforms = world.borrow_mut::<Transform>();
                 // Tekerlekleri animate et
                 if let Some(id) = state.wheel_fl {
                     if let Some(mut t) = ecs_transforms.get_mut(id) {
@@ -255,7 +272,7 @@ fn main() {
                 }
 
                 // 2. Yaz (Mutable Borrow)
-                let mut transforms = world.borrow_mut::<Transform>();
+                let transforms = world.borrow_mut::<Transform>();
                 
                 if let Some(pos) = bl_pos {
                     if let Some(&skid_id) = state.skid_pool.get(state.skid_idx) {
@@ -292,8 +309,9 @@ fn main() {
                 let height = 3.0;
                 let target_pos = t.position - forward * distance + Vec3::new(0.0, height, 0.0);
                 
-                // Kamerayı hedef pozisyona çok daha hızlı (agresif) götür
-                state.cam_pos = state.cam_pos.lerp(target_pos, dt * 15.0);
+                // Kamerayı hedef pozisyona çok daha yumuşak ve framerate-bağımsız (sabit) götür
+                let lerp_factor = 1.0 - (-15.0 * dt).exp();
+                state.cam_pos = state.cam_pos.lerp(target_pos, lerp_factor);
                 
                 // Kameranın hedeften maksimum ne kadar uzaklaşabileceğini sınırla (lastik bant etkisi)
                 let max_lag_distance = 3.0;
@@ -337,8 +355,26 @@ fn main() {
                         state.wheel_bl.is_some(), state.wheel_br.is_some()));
                 });
 
+            egui::Window::new("🛠 Gizmo Debugger")
+                .default_pos([10.0, 10.0])
+                .show(ctx, |ui| {
+                    ui.checkbox(&mut state.show_physics_debug, "Görsel Çarpışma (Debug Draw)");
+                    if let Some(mut phys) = world.get_resource_mut::<PhysicsWorld>() {
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut phys.is_paused, "Durdur (Pause)");
+                            if ui.button("1 Adım İleri (Step)").clicked() {
+                                phys.step_once = true;
+                            }
+                            if ui.button("Geri Al (Rewind)").clicked() {
+                                phys.rewind_requested = true;
+                            }
+                        });
+                        ui.label(format!("Aktif Obje Sayısı: {}", phys.rigid_bodies.len()));
+                    }
+                });
+
             egui::Window::new("Car Inspector")
-                .default_pos([40.0, 40.0])
+                .default_pos([10.0, 150.0])
                 .show(ctx, |ui| {
                     let vehicle_store = world.borrow::<Vehicle>();
                     if let Some(vehicle) = vehicle_store.get(state.chassis_id) {
@@ -352,7 +388,7 @@ fn main() {
                     }
 
                     ui.heading("Engine & Steering");
-                    ui.add(egui::Slider::new(&mut state.config.engine_power, 10000.0..=100000.0).text("Engine Power"));
+                    ui.add(egui::Slider::new(&mut state.config.engine_power, 500.0..=20000.0).text("Engine Power"));
                     ui.add(egui::Slider::new(&mut state.config.engine_brake, 0.0..=10.0).text("Engine Brake"));
                     ui.add(egui::Slider::new(&mut state.config.steer_speed, 1.0..=20.0).text("Steer Speed"));
                     ui.add(egui::Slider::new(&mut state.config.steer_auto_return, 1.0..=30.0).text("Steer Auto Return"));
@@ -394,7 +430,7 @@ fn main() {
                         
                         // Update Ground Material Color
                         if let Some(gid) = state.ground_id {
-                            let mut materials = world.borrow_mut::<Material>();
+                            let materials = world.borrow_mut::<Material>();
                             if let Some(mut mat) = materials.get_mut(gid) {
                                 match state.weather_idx {
                                     0 => { // Sunny
@@ -570,7 +606,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
     
     // Modelin scale'ini ayarlayalım (Kenney modelleri bazen küçük gelebiliyor)
     {
-        let mut transforms = world.borrow_mut::<Transform>();
+        let transforms = world.borrow_mut::<Transform>();
         if let Some(mut t) = transforms.get_mut(chassis_entity.id()) {
             t.scale = Vec3::splat(2.0); // 5.0 çok büyük gelmişti
             t.update_local_matrix();
@@ -582,7 +618,8 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
     chassis_rb.linear_damping = config.linear_damping; // Asfalt sürtünmesini hissettirmek için sönümlemeyi artırdık
     chassis_rb.angular_damping = config.angular_damping; // Araba dönerken daha rahat kaysın / savrulsun
     chassis_rb.calculate_box_inertia(2.0, 1.0, 4.0);
-    chassis_rb.center_of_mass = Vec3::new(0.0, -0.55, 0.0); // Ağırlık merkezi tam teker hizasında olmalı ki gaz verince şaha kalkmasın
+    // Ağırlık merkezini (COM) yere çok daha yakın yapıyoruz (şahlanmayı önlemek için -1.0)
+    chassis_rb.center_of_mass = Vec3::new(0.0, -1.0, 0.0);
 
     // Araç fiziğinde dönüş süspansiyondan geleceği için kilitleri kaldırıyoruz (Gerçekçi fizik)
     chassis_rb.lock_rotation_x = false;
@@ -703,7 +740,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
     state
 }
 
-fn update_camera(world: &mut World, state: &mut CarDemoState, input: &Input, dt: f32) {
+fn update_camera(world: &mut World, state: &mut CarDemoState, input: &Input, _dt: f32) {
     if input.is_mouse_button_pressed(gizmo::core::input::mouse::RIGHT) {
         let delta = input.mouse_delta();
         state.cam_yaw += delta.0 * 0.005;
@@ -724,9 +761,9 @@ fn update_camera(world: &mut World, state: &mut CarDemoState, input: &Input, dt:
     // Kamera entity'sini güncelle (hem Transform, hem Camera, hem GlobalTransform)
     {
         let cam_id = state.camera_entity_id;
-        let mut transforms = world.borrow_mut::<Transform>();
-        let mut globals = world.borrow_mut::<GlobalTransform>();
-        let mut cameras = world.borrow_mut::<Camera>();
+        let transforms = world.borrow_mut::<Transform>();
+        let globals = world.borrow_mut::<GlobalTransform>();
+        let cameras = world.borrow_mut::<Camera>();
 
         if let Some(mut t) = transforms.get_mut(cam_id) {
             t.position = state.cam_pos;

@@ -63,7 +63,7 @@ impl CVarRegistry {
     }
 
     pub fn set(&mut self, name: &str, value: CVarValue) -> Result<(), String> {
-        if let Some(mut cvar) = self.cvars.get_mut(&name.to_lowercase()) {
+        if let Some(cvar) = self.cvars.get_mut(&name.to_lowercase()) {
             cvar.value = value;
             Ok(())
         } else {
@@ -88,7 +88,7 @@ impl CVarRegistry {
                 let cvar_name = parts[1].to_lowercase();
                 let value_str = parts[2..].join(" ");
 
-                if let Some(mut cvar) = self.cvars.get_mut(&cvar_name) {
+                if let Some(cvar) = self.cvars.get_mut(&cvar_name) {
                     // Try to parse based on existing type
                     match &cvar.default_value {
                         CVarValue::Int(_) => {

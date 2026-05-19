@@ -612,7 +612,8 @@ impl std::fmt::Display for NavMeshStats {
 mod tests {
     use super::*;
     use gizmo_core::entity::Entity;
-    use gizmo_physics_core::components::{Collider, RigidBody, Velocity};
+    use gizmo_physics_core::components::Collider;
+    use gizmo_physics_rigid::{RigidBody, Velocity};
 
     fn create_test_world() -> gizmo_physics_rigid::world::PhysicsWorld {
         let mut world = gizmo_physics_rigid::world::PhysicsWorld::new();

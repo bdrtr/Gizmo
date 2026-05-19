@@ -2,17 +2,9 @@
 resolver = "2"
 members = [
     "crates/*",
-    "crates/gizmo-renderer",
-    "crates/gizmo-window",
-    "crates/gizmo-physics-core",
-    "crates/gizmo-physics-rigid",
-    "crates/gizmo-physics-soft",
-    "crates/gizmo-physics-dynamics",
-    "crates/gizmo-app",
-    "crates/gizmo-scripting",
-    "crates/gizmo-scene",
-    "crates/gizmo-network",
-    "server", "demo", "cradle"
+    "server",
+    "demo",
+    "cradle", "test_glam",
 ]
 
 [workspace.package]

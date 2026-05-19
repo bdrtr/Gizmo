@@ -320,7 +320,8 @@ impl BlobVec {
     }
 
     /// Tüm elemanları düşürür (belleği serbest bırakmadan).
-    fn clear(&mut self) {
+    #[inline]
+    pub fn clear(&mut self) {
         if let Some(drop_fn) = self.drop_fn {
             let item_size = self.item_layout.size();
             for i in 0..self.len {

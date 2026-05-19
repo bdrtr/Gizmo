@@ -256,7 +256,26 @@ pub fn execute_render_pipeline(
     // --- BATCHING (INSTANCING) HAZIRLIĞI VE FRUSTUM CULLING ---
     use gizmo::renderer::renderer::InstanceRaw;
 
+    // --- GAME CAMERA FRUSTUM HESAPLAMA (Görselleştirme için) ---
+    let mut game_view_proj = None;
+    if !is_playing_mode {
+        if let (Some(cam), Some(trans)) = (
+            cameras.get(state.game_camera),
+            transforms.get(state.game_camera),
+        ) {
+            let p = cam.get_projection(aspect);
+            let v = cam.get_view(trans.position);
+            game_view_proj = Some(p * v);
+        }
+    }
+
     let frustum = gizmo::renderer::Frustum::from_matrix(&view_proj);
+    let game_frustum = game_view_proj.map(|vp| gizmo::renderer::Frustum::from_matrix(&vp));
+
+    // Frustum Culling için her zaman Game Camera'yı kullanalım (Edit modunda da culling test edebilmek için)
+    let culling_frustum = game_frustum.unwrap_or(frustum);
+
+    let mut debug_aabbs = Vec::new();
 
     CACHE.with(|cache_ref| {
         let mut cache = cache_ref.borrow_mut();
@@ -308,8 +327,13 @@ pub fn execute_render_pipeline(
                 let model = global_model * center_mat;
 
                 // Frustum Culling (AABB vs view-projection frustum)
-                if !gizmo::renderer::visible_in_frustum(&frustum, &model, mesh.bounds) {
+                if !gizmo::renderer::visible_in_frustum(&culling_frustum, &model, mesh.bounds) {
                     continue;
+                }
+
+                // Culling'i geçen objelerin Bounding Box'larını debug çizimi için kaydet
+                if !is_playing_mode {
+                    debug_aabbs.push(mesh.bounds.transform(&model));
                 }
 
                 // --- LOD (Level of Detail) SEÇİMİ ---
@@ -463,7 +487,7 @@ pub fn execute_render_pipeline(
             gpu_particles.update_params(&renderer.queue, delta_time);
 
             // --- YENİ PARTİCÜL SPAWNLAMA (CPU -> GPU) ---
-            let mut emitters = world.borrow_mut::<gizmo::renderer::components::ParticleEmitter>();
+            let emitters = world.borrow_mut::<gizmo::renderer::components::ParticleEmitter>();
             {
                 let transforms = world.borrow::<Transform>();
                 {
@@ -746,7 +770,17 @@ pub fn execute_render_pipeline(
             }
             // --- 5. GIZMOS VE DEBUG LINES ÇİZİMİ (Play modunda gizle) ---
             if !is_playing_mode {
-                if let Some(gizmos) = world.get_resource::<gizmo::renderer::Gizmos>() {
+                if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
+                    // Game Camera Frustum'unu Yeşil çiz
+                    if let Some(vp) = game_view_proj {
+                        gizmos.draw_frustum(vp, [0.0, 1.0, 0.0, 1.0]); // Yeşil
+                    }
+
+                    // Ekranda kalan (Cull edilmeyen) objelerin AABB'lerini Kırmızı çiz
+                    for aabb in &debug_aabbs {
+                        gizmos.draw_aabb(*aabb, [1.0, 0.0, 0.0, 1.0]); // Kırmızı
+                    }
+
                     if let Some(debug_renderer) = &mut renderer.debug_renderer {
                         debug_renderer.update(&renderer.queue, &gizmos);
                         debug_renderer.render(

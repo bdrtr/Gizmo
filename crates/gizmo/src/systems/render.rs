@@ -84,6 +84,8 @@ pub fn default_render_pass(
     gpu_physics_submit_system(world, renderer);
     gpu_physics_readback_system(world, renderer);
 
+    let mut cam_exposure = 1.0;
+
     // KAMERALARI BUL VE MATRIX YARAT
     let cameras = world.borrow::<Camera>();
     let transforms = world.borrow::<gizmo_physics_core::components::GlobalTransform>();
@@ -98,6 +100,7 @@ pub fn default_render_pass(
                 view_mat = cam.get_view(pos);
                 cam_pos = pos;
                 cam_forward = rot * Vec3::new(0.0, 0.0, -1.0);
+                cam_exposure = cam.exposure;
             }
         }
     }
@@ -120,9 +123,8 @@ pub fn default_render_pass(
     let view_proj = proj * view_mat; // jittered — used for SceneUniforms
     let unjittered_view_proj = unjittered_proj * view_mat; // clean    — stored in TaaState for next frame
 
-    // Güneş Işığını Bul
     let mut sun_dir = gizmo_math::Vec3::new(0.0, -1.0, 0.0);
-    let mut sun_col = gizmo_math::Vec4::new(1.0, 1.0, 1.0, 1.0);
+    let mut sun_col = gizmo_math::Vec4::new(0.0, 0.0, 0.0, 0.0); // W=0.0 means NO SUN by default!
     if let Some(q) = world.query::<(
         &crate::renderer::components::DirectionalLight,
         &gizmo_physics_core::components::GlobalTransform,
@@ -207,6 +209,37 @@ pub fn default_render_pass(
         }
     }
 
+    #[allow(unused_assignments)]
+    let mut point_light_view_projs = [gizmo_math::Mat4::IDENTITY; 6];
+    if let Some(q) = world.query::<(
+        &crate::renderer::components::PointLight,
+        &gizmo_physics_core::components::GlobalTransform,
+    )>() {
+        if let Some((_id, (_light, transform))) = q.iter().next() {
+            let (_, _, pos) = transform.matrix.to_scale_rotation_translation();
+            let proj = gizmo_math::Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.1, 100.0);
+            point_light_view_projs = [
+                proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::X, -gizmo_math::Vec3::Y),
+                proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_X, -gizmo_math::Vec3::Y),
+                proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::Y, gizmo_math::Vec3::Z),
+                proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_Y, gizmo_math::Vec3::NEG_Z),
+                proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::Z, -gizmo_math::Vec3::Y),
+                proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_Z, -gizmo_math::Vec3::Y),
+            ];
+            
+            for i in 0..6 {
+                renderer.queue.write_buffer(
+                    &renderer.scene.point_shadow_uniform_buffers[i],
+                    0,
+                    bytemuck::bytes_of(&crate::renderer::gpu_types::ShadowVsUniform {
+                        light_view_proj: point_light_view_projs[i].to_cols_array_2d(),
+                    }),
+                );
+            }
+        }
+    }
+
+
     let scene_uniform_data = crate::renderer::gpu_types::SceneUniforms {
         view_proj: view_proj.to_cols_array_2d(),
         camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
@@ -218,8 +251,8 @@ pub fn default_render_pass(
         camera_forward: [cam_forward.x, cam_forward.y, cam_forward.z, 0.0],
         cascade_params: [0.1, 1.0 / crate::renderer::SHADOW_MAP_RES as f32, 0.0, 0.0],
         num_lights,
-        // WGSL padding: vec3<u32> alignment 16 gerektirir
-        _pre_align_pad: [0; 3],
+        exposure: cam_exposure,
+        _pre_align_pad: [0; 2],
         _align_pad: [0; 3],
         _post_align_pad: 0,
         _pad_scene: [0; 3],
@@ -546,6 +579,42 @@ pub fn default_render_pass(
             );
         }
     }
+
+    // Point Light Shadow Passes — 6 faces
+    for i in 0..6 {
+        let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Point Shadow Pass"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &renderer.scene.point_shadow_face_views[i],
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        // We reuse the directional shadow pipeline because it only does position transformation
+        shadow_pass.set_pipeline(&renderer.scene.shadow_pipeline);
+        shadow_pass.set_bind_group(0, &renderer.scene.point_shadow_pass_bind_groups[i], &[]);
+        shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
+        for item in &draw_items {
+            if item.unlit { continue; }
+            let skel_bg = item
+                .skeleton_bind_group
+                .as_ref()
+                .unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
+            shadow_pass.set_bind_group(1, skel_bg, &[]);
+            shadow_pass.set_vertex_buffer(0, item.vbuf.slice(..));
+            shadow_pass.draw(
+                0..item.vertex_count,
+                item.first_instance..(item.first_instance + item.instance_count),
+            );
+        }
+    }
+
 
     // ── Z-Prepass (Depth Only) ────────────────────────────────────────────────
     if let Some(ref def) = renderer.deferred {

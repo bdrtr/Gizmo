@@ -91,7 +91,7 @@ impl Plane {
 #[derive(Debug, Clone, Copy)]
 pub struct Frustum {
     /// `[left, right, bottom, top, near, far]` — all outward-facing.
-    planes: [Plane; 6],
+    pub planes: [Plane; 6],
 }
 
 impl Frustum {
@@ -142,6 +142,70 @@ impl Frustum {
     pub fn intersects_sphere(&self, center: impl Into<Vec3A>, radius: f32) -> bool {
         let c = center.into();
         self.planes.iter().all(|p| p.signed_distance(c) >= -radius)
+    }
+
+    // -----------------------------------------------------------------------
+    // OBB tests
+    // -----------------------------------------------------------------------
+
+    /// Returns `true` if an Oriented Bounding Box (OBB) intersects the frustum.
+    ///
+    /// The OBB is defined by its center, half-extents (from center to faces),
+    /// and its rotation quaternion. This is a fast conservative test based on
+    /// projecting the OBB extents onto each frustum plane normal.
+    #[inline]
+    pub fn intersects_obb(
+        &self,
+        center: impl Into<Vec3A>,
+        half_extents: impl Into<Vec3A>,
+        rotation: glam::Quat,
+    ) -> bool {
+        self.test_obb(center, half_extents, rotation) != Intersection::Outside
+    }
+
+    /// Full OBB–frustum classification: `Outside`, `Partial`, or `Inside`.
+    #[inline]
+    pub fn test_obb(
+        &self,
+        center: impl Into<Vec3A>,
+        half_extents: impl Into<Vec3A>,
+        rotation: glam::Quat,
+    ) -> Intersection {
+        let center = center.into();
+        let extents = half_extents.into();
+
+        // Extract local axes of the OBB from the rotation quaternion
+        let rot_mat = glam::Mat3A::from_quat(rotation);
+        let axis_x = rot_mat.x_axis;
+        let axis_y = rot_mat.y_axis;
+        let axis_z = rot_mat.z_axis;
+
+        let mut all_inside = true;
+
+        for plane in &self.planes {
+            // Compute the projected "radius" of the OBB along the plane's normal
+            let r = extents.x * plane.normal.dot(axis_x).abs()
+                + extents.y * plane.normal.dot(axis_y).abs()
+                + extents.z * plane.normal.dot(axis_z).abs();
+
+            let d = plane.signed_distance(center);
+
+            // If the OBB's center is further behind the plane than its projected radius,
+            // the OBB is completely outside the frustum.
+            if d < -r {
+                return Intersection::Outside;
+            }
+            // If the center is within the radius distance of the plane, it crosses the boundary.
+            if d < r {
+                all_inside = false;
+            }
+        }
+
+        if all_inside {
+            Intersection::Inside
+        } else {
+            Intersection::Partial
+        }
     }
 
     // -----------------------------------------------------------------------

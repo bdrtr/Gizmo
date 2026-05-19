@@ -125,3 +125,5 @@ impl Rope {
         }
     }
 }
+
+impl gizmo_core::Component for Rope {}

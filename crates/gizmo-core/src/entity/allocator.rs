@@ -26,6 +26,14 @@ impl Entities {
         }
     }
 
+    pub fn clear(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.next_entity_id = 0;
+        state.generations.clear();
+        state.free_ids.clear();
+        state.free_set.clear();
+    }
+
     pub fn reserve_entity(&self) -> Entity {
         let mut state = self.state.lock().unwrap();
         if let Some(id) = state.free_ids.pop_front() {

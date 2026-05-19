@@ -171,11 +171,19 @@ impl Column {
         self.data.shrink_to_fit();
         self.ticks.shrink_to_fit();
     }
+
+    /// Sütundaki tüm verileri temizler (hafızayı serbest bırakmadan).
+    pub fn clear(&mut self) {
+        self.data.clear();
+        self.ticks.clear();
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // COMPONENT INFO — Runtime tip bilgisi
 // ═══════════════════════════════════════════════════════════════════════════
+
+use crate::component::StorageType;
 
 /// Bir component tipinin runtime'daki meta bilgileri.
 /// Column oluştururken ve archetype migration'da kullanılır.
@@ -185,11 +193,12 @@ pub struct ComponentInfo {
     pub layout: Layout,
     pub drop_fn: Option<unsafe fn(*mut u8)>,
     pub clone_fn: Option<unsafe fn(*const u8, *mut u8, usize)>,
+    pub storage_type: StorageType,
 }
 
 impl ComponentInfo {
     /// Belirtilen Rust tipi için ComponentInfo oluşturur.
-    pub fn of<T: 'static + Clone>() -> Self {
+    pub fn of<T: crate::component::Component>() -> Self {
         Self {
             type_id: TypeId::of::<T>(),
             layout: Layout::new::<T>(),
@@ -205,6 +214,7 @@ impl ComponentInfo {
                     ptr::write(dst.add(i), (*src).clone());
                 }
             }),
+            storage_type: T::storage_type(),
         }
     }
 
@@ -215,6 +225,7 @@ impl ComponentInfo {
             layout: Layout::from_size_align(0, 1).unwrap(), // Geçici, gerçek layout registry'den gelmeli
             drop_fn: None,
             clone_fn: None,
+            storage_type: StorageType::Table, // Varsayılan olarak Table (Registry tam bilgi bilmediğinde riskli olabilir ama şimdilik Table)
         }
     }
 }

@@ -209,7 +209,7 @@ fn update(world: &mut World, state: &mut KccState, _dt: f32, input: &gizmo::core
     // --- CHARACTER CONTROL ---
     let mut char_pos = Vec3::ZERO;
 
-    if let Some(kcc) = world
+    if let Some(mut kcc) = world
         .borrow_mut::<CharacterController>()
         .get_mut(state.character_entity.id())
     {
@@ -244,7 +244,7 @@ fn update(world: &mut World, state: &mut KccState, _dt: f32, input: &gizmo::core
     }
 
     // Update character rotation to match camera yaw
-    if let Some(trans) = world
+    if let Some(mut trans) = world
         .borrow_mut::<Transform>()
         .get_mut(state.character_entity.id())
     {

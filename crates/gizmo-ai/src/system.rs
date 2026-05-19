@@ -42,9 +42,9 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
         None => return,
     };
 
-    let mut agents = world.borrow_mut::<NavAgent>();
+    let agents = world.borrow_mut::<NavAgent>();
     let transforms = world.borrow::<Transform>();
-    let mut velocities = world.borrow_mut::<Velocity>();
+    let velocities = world.borrow_mut::<Velocity>();
 
     let mut agent_entities: Vec<u32> = Vec::with_capacity(agents.len());
     for (id, _) in agents.iter() {

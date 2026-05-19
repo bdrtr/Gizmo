@@ -6,7 +6,9 @@ pub mod component;
 pub mod cvar;
 pub mod entity;
 pub mod event;
+pub mod hierarchy;
 pub mod input;
+pub mod observer;
 pub mod logger;
 pub mod pool;
 pub mod profiler;
@@ -25,6 +27,7 @@ pub use component::{Bundle, BundleExt, Component, EntityName, IsHidden, IsDelete
 pub use cvar::{CVarRegistry, CVarValue, DevConsoleState};
 pub use entity::Entity;
 pub use event::{EventReader, EventWriter, Events};
+pub use hierarchy::HierarchyExt;
 pub use input::{ActionMap, Input, InputBinding};
 pub use pool::{PoolManager, Pooled};
 pub use profiler::FrameProfiler;

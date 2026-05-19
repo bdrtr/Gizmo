@@ -13,7 +13,7 @@ pub fn draw_animation_player_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut anim_players = world.borrow_mut::<gizmo_renderer::components::AnimationPlayer>();
+    let anim_players = world.borrow_mut::<gizmo_renderer::components::AnimationPlayer>();
     if let Some(mut player) = anim_players.get_mut(entity_id.id()) {
         egui::CollapsingHeader::new("🏃 Animation Player")
             .default_open(true)
@@ -104,7 +104,7 @@ pub fn draw_name_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut names = world.borrow_mut::<EntityName>();
+    let names = world.borrow_mut::<EntityName>();
     {
         if let Some(mut name) = names.get_mut(entity_id.id()) {
             ui.horizontal(|ui| {
@@ -123,7 +123,7 @@ pub fn draw_particle_emitter_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut emitters = world.borrow_mut::<ParticleEmitter>();
+    let emitters = world.borrow_mut::<ParticleEmitter>();
     {
         if let Some(mut emitter) = emitters.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("✨ Particle Emitter")
@@ -163,7 +163,7 @@ pub fn draw_script_section(
 ) {
     let mut pending_text = None;
     let mut file_path = String::new();
-    let mut scripts = world.borrow_mut::<gizmo_scripting::Script>();
+    let scripts = world.borrow_mut::<gizmo_scripting::Script>();
     {
         if let Some(mut script) = scripts.get_mut(entity_id.id()) {
             file_path = script.file_path.clone();
@@ -201,7 +201,7 @@ pub fn draw_terrain_section(
     entity_id: gizmo_core::entity::Entity,
     state: &mut EditorState,
 ) {
-    let mut terrains = world.borrow_mut::<gizmo_renderer::components::Terrain>();
+    let terrains = world.borrow_mut::<gizmo_renderer::components::Terrain>();
     {
         if let Some(mut terrain) = terrains.get_mut(entity_id.id()) {
             let mut changed = false;
@@ -258,7 +258,7 @@ pub fn draw_fluid_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut fluids = world.borrow_mut::<FluidSimulation>();
+    let fluids = world.borrow_mut::<FluidSimulation>();
     {
         if let Some(mut fluid) = fluids.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("🌊 SPH Fluid Simulation (GPU)")
@@ -313,7 +313,7 @@ pub fn draw_ai_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut agents = world.borrow_mut::<NavAgent>();
+    let agents = world.borrow_mut::<NavAgent>();
     {
         if let Some(mut agent) = agents.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("🤖 AI NavAgent")
@@ -434,7 +434,7 @@ pub fn draw_hitbox_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut hitboxes = world.borrow_mut::<gizmo_physics_core::components::Hitbox>();
+    let hitboxes = world.borrow_mut::<gizmo_physics_core::components::Hitbox>();
     if let Some(mut hitbox) = hitboxes.get_mut(entity_id.id()) {
         egui::CollapsingHeader::new("🥊 Hitbox")
             .default_open(true)
@@ -473,7 +473,7 @@ pub fn draw_hurtbox_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut hurtboxes = world.borrow_mut::<gizmo_physics_core::components::Hurtbox>();
+    let hurtboxes = world.borrow_mut::<gizmo_physics_core::components::Hurtbox>();
     if let Some(mut hurtbox) = hurtboxes.get_mut(entity_id.id()) {
         egui::CollapsingHeader::new("🛡 Hurtbox")
             .default_open(true)
@@ -511,7 +511,7 @@ pub fn draw_bone_attachment_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut attachments = world.borrow_mut::<gizmo_renderer::components::BoneAttachment>();
+    let attachments = world.borrow_mut::<gizmo_renderer::components::BoneAttachment>();
     if let Some(mut attachment) = attachments.get_mut(entity_id.id()) {
         egui::CollapsingHeader::new("🔗 Bone Attachment")
             .default_open(true)
@@ -616,7 +616,7 @@ pub fn draw_fighter_controller_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut controllers = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
+    let controllers = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
     if let Some(mut fighter) = controllers.get_mut(entity_id.id()) {
         egui::CollapsingHeader::new("🥋 Fighter Controller")
             .default_open(true)

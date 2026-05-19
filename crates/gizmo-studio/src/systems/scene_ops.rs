@@ -248,7 +248,7 @@ pub fn handle_scene_operations(
             if let Some(parent_entity) = editor_state.pending_child_parent.take() {
                 // Parent → Children listesine ekle
                 {
-                    let mut children_comp = world.borrow_mut::<gizmo::core::component::Children>();
+                    let children_comp = world.borrow_mut::<gizmo::core::component::Children>();
                     if let Some(mut ch) = children_comp.get_mut(parent_entity.id()) {
                         if !ch.0.contains(&e.id()) {
                             ch.0.push(e.id());
@@ -337,7 +337,7 @@ pub fn handle_scene_operations(
 
         // Eski parent'ın children listesinden çıkar ve yeni parent'a ekle
         {
-            let mut children_comp = world.borrow_mut::<gizmo::core::component::Children>();
+            let children_comp = world.borrow_mut::<gizmo::core::component::Children>();
             if let Some(old_pid) = old_parent_id {
                 if let Some(mut ch) = children_comp.get_mut(old_pid) {
                     ch.0.retain(|&cid| cid != child_id.id());
@@ -384,7 +384,7 @@ pub fn handle_scene_operations(
 
         if let Some(old_pid) = old_parent_id {
             {
-                let mut children_comp = world.borrow_mut::<gizmo::core::component::Children>();
+                let children_comp = world.borrow_mut::<gizmo::core::component::Children>();
                 if let Some(mut ch) = children_comp.get_mut(old_pid) {
                     ch.0.retain(|&cid| cid != child_id.id());
                 }

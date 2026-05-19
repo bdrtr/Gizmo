@@ -867,8 +867,8 @@ fn ui_debug_panel(world: &mut World, state: &mut DemoState, ctx: &gizmo::egui::C
     gizmo::egui::Window::new("Araç Dinamikleri (Vehicle Tuning)")
         .default_pos([10.0, 450.0])
         .show(ctx, |ui| {
-            let mut vehicles = world.borrow_mut::<gizmo::physics::vehicle::VehicleController>();
-            if let Some(vehicle) = vehicles.get_mut(state.car_entity.id()) {
+            let vehicles = world.borrow_mut::<gizmo::physics::vehicle::VehicleController>();
+            if let Some(mut vehicle) = vehicles.get_mut(state.car_entity.id()) {
                 ui.heading("Telemetri (Canlı Veri)");
                 ui.label(format!("Hız: {:.1} km/h", vehicle.current_speed_kmh.abs()));
                 ui.label(format!("Motor Devri: {:.0} RPM", vehicle.engine_rpm));
@@ -962,8 +962,8 @@ fn ui_debug_panel(world: &mut World, state: &mut DemoState, ctx: &gizmo::egui::C
 
             ui.separator();
             ui.heading("Şasi & Ağırlık");
-            let mut bodies = world.borrow_mut::<gizmo::physics::RigidBody>();
-            if let Some(rb) = bodies.get_mut(state.car_entity.id()) {
+            let bodies = world.borrow_mut::<gizmo::physics::RigidBody>();
+            if let Some(mut rb) = bodies.get_mut(state.car_entity.id()) {
                 let mut com_y = rb.center_of_mass.y;
                 let mut mass = rb.mass;
 

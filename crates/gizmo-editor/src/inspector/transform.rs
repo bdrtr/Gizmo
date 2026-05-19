@@ -11,7 +11,7 @@ pub fn draw_transform_section(
     entity_id: gizmo_core::entity::Entity,
     state: &mut EditorState,
 ) {
-    let mut transforms = world.borrow_mut::<Transform>();
+    let transforms = world.borrow_mut::<Transform>();
     let old_t = transforms.get(entity_id.id()).map(|t| *t);
     
     // Pointer status check for Drag operations

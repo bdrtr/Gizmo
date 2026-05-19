@@ -312,31 +312,31 @@ impl ScriptEngine {
         for cmd in commands {
             match cmd {
                 ScriptCommand::SetPosition(id, pos) => {
-                    let mut transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
+                    let transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
                     if let Some(mut t) = transforms.get_mut(id) {
                         t.position = pos;
                     }
                 }
                 ScriptCommand::SetRotation(id, rot) => {
-                    let mut transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
+                    let transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
                     if let Some(mut t) = transforms.get_mut(id) {
                         t.rotation = rot;
                     }
                 }
                 ScriptCommand::SetScale(id, scale) => {
-                    let mut transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
+                    let transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
                     if let Some(mut t) = transforms.get_mut(id) {
                         t.scale = scale;
                     }
                 }
                 ScriptCommand::SetVelocity(id, vel) => {
-                    let mut velocities = world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
+                    let velocities = world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
                     if let Some(mut v) = velocities.get_mut(id) {
                         v.linear = vel;
                     }
                 }
                 ScriptCommand::SetAngularVelocity(id, ang_vel) => {
-                    let mut velocities = world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
+                    let velocities = world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
                     if let Some(mut v) = velocities.get_mut(id) {
                         v.angular = ang_vel;
                     }
@@ -347,7 +347,7 @@ impl ScriptEngine {
                         if rb.mass > 0.0 {
                             let accel = force * (1.0 / rb.mass);
                             drop(rbs);
-                            let mut vels =
+                            let vels =
                                 world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
                             if let Some(mut v) = vels.get_mut(id) {
                                 v.linear += accel * dt;
@@ -361,7 +361,7 @@ impl ScriptEngine {
                         if rb.mass > 0.0 {
                             let delta_v = impulse * (1.0 / rb.mass);
                             drop(rbs);
-                            let mut vels =
+                            let vels =
                                 world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
                             if let Some(mut v) = vels.get_mut(id) {
                                 v.linear += delta_v;
@@ -458,19 +458,19 @@ impl ScriptEngine {
                     }
                 }
 ScriptCommand::SetEntityName(id, name) => {
-                    let mut names = world.borrow_mut::<gizmo_core::EntityName>();
+                    let names = world.borrow_mut::<gizmo_core::EntityName>();
                     if let Some(mut n) = names.get_mut(id) {
                         n.0 = name;
                     }
                 }
 ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
-                    let mut players = world.borrow_mut::<gizmo_renderer::components::AnimationPlayer>();
+                    let players = world.borrow_mut::<gizmo_renderer::components::AnimationPlayer>();
                     if let Some(mut player) = players.get_mut(id) {
                         player.play_animation_by_name(&name, blend, loop_anim);
                     }
                 }
                 ScriptCommand::SetAnimationSpeed(id, speed) => {
-                    let mut players = world.borrow_mut::<gizmo_renderer::components::AnimationPlayer>();
+                    let players = world.borrow_mut::<gizmo_renderer::components::AnimationPlayer>();
                     if let Some(mut player) = players.get_mut(id) {
                         player.speed = speed;
                     }
@@ -485,19 +485,19 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
                     }
                 }
                 ScriptCommand::SetAiTarget(id, target) => {
-                    let mut agents = world.borrow_mut::<gizmo_ai::components::NavAgent>();
+                    let agents = world.borrow_mut::<gizmo_ai::components::NavAgent>();
                     if let Some(mut agent) = agents.get_mut(id) {
                         agent.set_target(target);
                     }
                 }
 ScriptCommand::ClearAiTarget(id) => {
-                    let mut agents = world.borrow_mut::<gizmo_ai::components::NavAgent>();
+                    let agents = world.borrow_mut::<gizmo_ai::components::NavAgent>();
                     if let Some(mut agent) = agents.get_mut(id) {
                         agent.clear_path();
                     }
                 }
                 ScriptCommand::SetFighterMove { id, name, startup, active, recovery, damage } => {
-                    let mut fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
+                    let fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
                     if let Some(mut fighter) = fighters.get_mut(id) {
                         fighter.active_move = Some(gizmo_physics_core::components::fighter::CombatMove {
                             name,
@@ -513,13 +513,13 @@ ScriptCommand::ClearAiTarget(id) => {
                     }
                 }
                 ScriptCommand::ApplyHitstop(id, frames) => {
-                    let mut fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
+                    let fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
                     if let Some(mut fighter) = fighters.get_mut(id) {
                         fighter.apply_hitstop(frames);
                     }
                 }
                 ScriptCommand::ApplyHitstun(id, frames) => {
-                    let mut fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
+                    let fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
                     if let Some(mut fighter) = fighters.get_mut(id) {
                         fighter.apply_hitstun(frames);
                     }

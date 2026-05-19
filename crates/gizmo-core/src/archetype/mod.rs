@@ -10,9 +10,11 @@
 pub mod blob;
 pub mod column;
 pub mod index;
+pub mod sparse_set;
 
 pub use self::blob::*;
 pub use self::column::*;
+pub use self::sparse_set::*;
 
 use std::any::TypeId;
 use std::collections::HashMap;
@@ -312,6 +314,16 @@ impl Archetype {
         self.edges.shrink_to_fit();
         self.column_indices.shrink_to_fit();
     }
+
+    /// Bu archetype tablosundaki tüm satır verilerini hızlıca temizler.
+    pub fn clear(&mut self) {
+        for col_cell in &mut self.columns {
+            unsafe {
+                (&mut *col_cell.get()).clear();
+            }
+        }
+        self.entities.clear();
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -320,6 +332,10 @@ impl Archetype {
 
 #[cfg(test)]
 mod tests {
+    use crate::component::Component;
+    #[derive(Clone, Copy)] struct F32Comp(f32); impl Component for F32Comp {}
+    #[derive(Clone, Copy)] struct U32Comp(u32); impl Component for U32Comp {}
+    #[derive(Clone)] struct StringComp(String); impl Component for StringComp {}
     use super::*;
     use std::alloc::Layout;
     use std::ptr;
@@ -409,7 +425,7 @@ mod tests {
 
     #[test]
     fn column_basic_ops() {
-        let info = ComponentInfo::of::<f32>();
+        let info = ComponentInfo::of::<F32Comp>();
         let mut col = Column::new(info.type_id, info.layout, info.drop_fn, info.clone_fn);
 
         let vals: Vec<f32> = vec![1.0, 2.0, 3.0];
@@ -420,7 +436,7 @@ mod tests {
         }
 
         assert_eq!(col.len(), 3);
-        assert_eq!(col.type_id(), TypeId::of::<f32>());
+        assert_eq!(col.type_id(), TypeId::of::<F32Comp>());
 
         unsafe {
             let v = *(col.get_ptr(1) as *const f32);
@@ -431,26 +447,26 @@ mod tests {
     #[test]
     fn archetype_entity_management() {
         let infos = vec![
-            ComponentInfo::of::<f32>(), // "Position X"
-            ComponentInfo::of::<u32>(), // "Health"
+            ComponentInfo::of::<F32Comp>(), // "Position X"
+            ComponentInfo::of::<U32Comp>(), // "Health"
         ];
 
         let mut arch = Archetype::new(0, &infos);
-        assert!(arch.has_component(TypeId::of::<f32>()));
-        assert!(arch.has_component(TypeId::of::<u32>()));
+        assert!(arch.has_component(TypeId::of::<F32Comp>()));
+        assert!(arch.has_component(TypeId::of::<U32Comp>()));
         assert!(!arch.has_component(TypeId::of::<u64>()));
         assert_eq!(arch.len(), 0);
 
         // Entity 42 ekle
-        let pos: f32 = 10.0;
-        let hp: u32 = 100;
+        let pos: F32Comp = F32Comp(10.0);
+        let hp: U32Comp = U32Comp(100);
         unsafe {
-            arch.get_column_mut(TypeId::of::<f32>())
+            arch.get_column_mut(TypeId::of::<F32Comp>())
                 .unwrap()
-                .push_raw(&pos as *const f32 as *const u8, 1);
-            arch.get_column_mut(TypeId::of::<u32>())
+                .push_raw(&pos as *const F32Comp as *const u8, 1);
+            arch.get_column_mut(TypeId::of::<U32Comp>())
                 .unwrap()
-                .push_raw(&hp as *const u32 as *const u8, 1);
+                .push_raw(&hp as *const U32Comp as *const u8, 1);
         }
         let row = arch.push_entity(42);
         assert_eq!(row, 0);
@@ -458,15 +474,15 @@ mod tests {
         assert_eq!(arch.entities()[0], 42);
 
         // Entity 99 ekle
-        let pos2: f32 = 20.0;
-        let hp2: u32 = 50;
+        let pos2: F32Comp = F32Comp(20.0);
+        let hp2: U32Comp = U32Comp(50);
         unsafe {
-            arch.get_column_mut(TypeId::of::<f32>())
+            arch.get_column_mut(TypeId::of::<F32Comp>())
                 .unwrap()
-                .push_raw(&pos2 as *const f32 as *const u8, 1);
-            arch.get_column_mut(TypeId::of::<u32>())
+                .push_raw(&pos2 as *const F32Comp as *const u8, 1);
+            arch.get_column_mut(TypeId::of::<U32Comp>())
                 .unwrap()
-                .push_raw(&hp2 as *const u32 as *const u8, 1);
+                .push_raw(&hp2 as *const U32Comp as *const u8, 1);
         }
         arch.push_entity(99);
 
@@ -479,7 +495,7 @@ mod tests {
 
     #[test]
     fn archetype_edge_cache() {
-        let infos = vec![ComponentInfo::of::<f32>()];
+        let infos = vec![ComponentInfo::of::<F32Comp>()];
         let mut arch = Archetype::new(0, &infos);
 
         arch.set_add_edge(TypeId::of::<u32>(), 1);
@@ -508,11 +524,11 @@ mod tests {
     #[test]
     fn component_info_drop_detection() {
         // Copy type — drop_fn = None
-        let info_u32 = ComponentInfo::of::<u32>();
+        let info_u32 = ComponentInfo::of::<U32Comp>();
         assert!(info_u32.drop_fn.is_none());
 
         // Drop type — drop_fn = Some
-        let info_string = ComponentInfo::of::<String>();
+        let info_string = ComponentInfo::of::<StringComp>();
         assert!(info_string.drop_fn.is_some());
     }
 

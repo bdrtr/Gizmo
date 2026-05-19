@@ -15,7 +15,7 @@ pub use crate::core::{
 
 // === Hazır Bundle'lar ===
 pub use crate::bundles::{
-    CameraBundle, DirectionalLightBundle, MeshBundle, PointLightBundle, SpotLightBundle,
+    CameraBundle, DirectionalLightBundle, MeshBundle, PointLightBundle, SpotLightBundle, RigidBodyBundle,
 };
 
 // === ECS Sorgu Sistemi ===

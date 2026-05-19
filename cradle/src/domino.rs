@@ -257,17 +257,17 @@ fn update_camera(
         state.cam_pos.y += speed;
     }
 
-    let mut trans = world.borrow_mut::<Transform>();
+    let trans = world.borrow_mut::<Transform>();
     {
-        if let Some(t) = trans.get_mut(state.cam_id) {
+        if let Some(mut t) = trans.get_mut(state.cam_id) {
             t.position = state.cam_pos;
             t.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
             t.update_local_matrix();
         }
     }
-    let mut cams = world.borrow_mut::<Camera>();
+    let cams = world.borrow_mut::<Camera>();
     {
-        if let Some(c) = cams.get_mut(state.cam_id) {
+        if let Some(mut c) = cams.get_mut(state.cam_id) {
             c.yaw = state.cam_yaw;
             c.pitch = state.cam_pitch;
         }

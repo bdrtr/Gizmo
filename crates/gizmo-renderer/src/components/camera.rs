@@ -7,6 +7,7 @@ pub struct Camera {
     pub far: f32,
     pub yaw: f32,
     pub pitch: f32,
+    pub exposure: f32, // Fiziksel kamera pozlaması (EV tabanlı veya doğrudan çarpan)
     pub primary: bool,
 }
 
@@ -34,6 +35,7 @@ impl Camera {
             far,
             yaw,
             pitch,
+            exposure: 1.0, // Varsayılan pozlama 1.0
             primary,
         }
     }

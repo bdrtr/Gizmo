@@ -337,27 +337,27 @@ fn trigger_first_domino(world: &mut World, game: &DominoGame) {
     };
     let fwd = Vec3::new(angle.sin(), 0.0, angle.cos());
 
-    let mut vels = world.borrow_mut::<Velocity>();
-    let mut rbs = world.borrow_mut::<RigidBody>();
+    let vels = world.borrow_mut::<Velocity>();
+    let rbs = world.borrow_mut::<RigidBody>();
     {
         // Topa hız ver — ilk dominoya doğru
-        if let Some(v) = vels.get_mut(game.ball_id) {
+        if let Some(mut v) = vels.get_mut(game.ball_id) {
             v.linear = fwd * 4.0; // Hafif itme, çok güçlü → yığılma
         }
-        if let Some(rb) = rbs.get_mut(game.ball_id) {
+        if let Some(mut rb) = rbs.get_mut(game.ball_id) {
             rb.wake_up();
         }
 
         // İlk dominoyu da dürt — teğet yönünde devrilecek şekilde
         if let Some(first_id) = game.domino_ids.first() {
-            if let Some(v) = vels.get_mut(*first_id) {
+            if let Some(mut v) = vels.get_mut(*first_id) {
                 // Y × fwd = sağ yöndeki eksen → taşı ileri doğru devirir
                 let pitch_axis = Vec3::new(0.0, 1.0, 0.0).cross(fwd);
                 if pitch_axis.length_squared() > 0.001 {
                     v.angular = pitch_axis.normalize() * 5.0;
                 }
             }
-            if let Some(rb) = rbs.get_mut(*first_id) {
+            if let Some(mut rb) = rbs.get_mut(*first_id) {
                 rb.wake_up();
             }
         }
@@ -399,17 +399,17 @@ fn update_camera(
         state.cam_pos.y += speed;
     }
 
-    let mut trans = world.borrow_mut::<Transform>();
+    let trans = world.borrow_mut::<Transform>();
     {
-        if let Some(t) = trans.get_mut(state.cam_id) {
+        if let Some(mut t) = trans.get_mut(state.cam_id) {
             t.position = state.cam_pos;
             t.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
             t.update_local_matrix();
         }
     }
-    let mut cams = world.borrow_mut::<Camera>();
+    let cams = world.borrow_mut::<Camera>();
     {
-        if let Some(c) = cams.get_mut(state.cam_id) {
+        if let Some(mut c) = cams.get_mut(state.cam_id) {
             c.yaw = state.cam_yaw;
             c.pitch = state.cam_pitch;
         }

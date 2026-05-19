@@ -12,7 +12,7 @@ pub fn draw_velocity_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut velocities = world.borrow_mut::<Velocity>();
+    let velocities = world.borrow_mut::<Velocity>();
     {
         if let Some(mut v) = velocities.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("💨 Velocity")
@@ -67,7 +67,7 @@ pub fn draw_rigidbody_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut rigidbodies = world.borrow_mut::<RigidBody>();
+    let rigidbodies = world.borrow_mut::<RigidBody>();
     {
         if let Some(mut rb) = rigidbodies.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("⚙️ RigidBody")
@@ -123,7 +123,7 @@ pub fn draw_collider_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut colliders = world.borrow_mut::<Collider>();
+    let colliders = world.borrow_mut::<Collider>();
     {
         if let Some(mut collider) = colliders.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("🛡️ Collider")

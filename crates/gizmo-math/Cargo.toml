@@ -13,3 +13,30 @@ getrandom = { version = "0.2", features = ["js"] }
 glam = { version = "=0.32.1", features = ["serde", "bytemuck", "rand"] }
 serde = { version = "1.0.228", features = ["derive"] }
 tracing = "0.1.44"
+
+[dev-dependencies]
+criterion = "0.5.1"
+bevy_math = "0.15"
+rand = "0.8"
+bevy_picking = { version = "0.15", features = ["bevy_mesh_picking_backend"] }
+bevy_mesh = "0.15"
+
+[[bench]]
+name = "frustum_bench"
+harness = false
+
+[[bench]]
+name = "curve_bench"
+harness = false
+
+[[bench]]
+name = "bounding_bench"
+harness = false
+
+[[bench]]
+name = "mesh_picking_bench"
+harness = false
+
+[[bench]]
+name = "torus_bench"
+harness = false

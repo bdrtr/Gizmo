@@ -24,10 +24,15 @@ pub struct SceneState {
     /// One 2D depth view per cascade for shadow map rendering passes.
     pub shadow_cascade_layer_views: [wgpu::TextureView; 4],
     pub shadow_depth_texture: wgpu::Texture,
+    pub point_shadow_depth_texture: wgpu::Texture,
+    pub point_shadow_cube_view: wgpu::TextureView,
+    pub point_shadow_face_views: [wgpu::TextureView; 6],
     pub shadow_pass_bind_group_layout: wgpu::BindGroupLayout,
     /// One uniform buffer + bind group per CSM cascade (avoids per-pass overwrite races on the queue).
     pub shadow_cascade_uniform_buffers: [wgpu::Buffer; 4],
     pub shadow_pass_bind_groups: [wgpu::BindGroup; 4],
+    pub point_shadow_uniform_buffers: [wgpu::Buffer; 6],
+    pub point_shadow_pass_bind_groups: [wgpu::BindGroup; 6],
     pub texture_bind_group_layout: wgpu::BindGroupLayout,
     pub skeleton_bind_group_layout: wgpu::BindGroupLayout,
     pub dummy_skeleton_bind_group: Arc<wgpu::BindGroup>,
@@ -187,7 +192,8 @@ fn build_global_uniforms(device: &wgpu::Device) -> wgpu::Buffer {
         camera_forward: [0.0, 0.0, -1.0, 0.0],
         cascade_params: [0.1, 1.0 / SHADOW_MAP_RES as f32, 0.0, 0.0],
         num_lights: 0,
-        _pre_align_pad: [0; 3],
+        exposure: 1.0,
+        _pre_align_pad: [0; 2],
         _align_pad: [0; 3],
         _post_align_pad: 0,
         _pad_scene: [0; 3],
@@ -207,6 +213,9 @@ fn build_shadow_resources(
     wgpu::TextureView,
     [wgpu::TextureView; 4],
     wgpu::Sampler,
+    wgpu::Texture,
+    wgpu::TextureView,
+    [wgpu::TextureView; 6],
 ) {
     let shadow_depth_texture = device.create_texture(&wgpu::TextureDescriptor {
         size: wgpu::Extent3d {
@@ -258,11 +267,53 @@ fn build_shadow_resources(
         ..Default::default()
     });
 
+    let point_shadow_depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+        size: wgpu::Extent3d {
+            width: 1024,
+            height: 1024,
+            depth_or_array_layers: 6,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Depth32Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        label: Some("point_shadow_texture"),
+        view_formats: &[],
+    });
+
+    let point_shadow_cube_view = point_shadow_depth_texture.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("point_shadow_cube_view"),
+        format: None,
+        dimension: Some(wgpu::TextureViewDimension::Cube),
+        aspect: wgpu::TextureAspect::DepthOnly,
+        base_mip_level: 0,
+        mip_level_count: None,
+        base_array_layer: 0,
+        array_layer_count: None,
+    });
+
+    let point_shadow_face_views = std::array::from_fn(|i| {
+        point_shadow_depth_texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some(&format!("point_shadow_face_{i}")),
+            format: None,
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            aspect: wgpu::TextureAspect::DepthOnly,
+            base_mip_level: 0,
+            mip_level_count: None,
+            base_array_layer: i as u32,
+            array_layer_count: Some(1),
+        })
+    });
+
     (
         shadow_depth_texture,
         shadow_texture_view,
         shadow_cascade_layer_views,
         shadow_sampler,
+        point_shadow_depth_texture,
+        point_shadow_cube_view,
+        point_shadow_face_views,
     )
 }
 
@@ -309,6 +360,16 @@ fn build_layouts(device: &wgpu::Device) -> Layouts {
                 binding: 1,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::Cube,
+                    sample_type: wgpu::TextureSampleType::Depth,
+                },
                 count: None,
             },
         ],
@@ -634,7 +695,7 @@ fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs) -> wgpu::R
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
             front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Back),
+            cull_mode: None,
             polygon_mode: wgpu::PolygonMode::Fill,
             ..Default::default()
         },
@@ -660,8 +721,15 @@ fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs) -> wgpu::R
 
 pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     let global_uniform_buffer = build_global_uniforms(device);
-    let (shadow_depth_texture, shadow_texture_view, shadow_cascade_layer_views, shadow_sampler) =
-        build_shadow_resources(device);
+    let (
+        shadow_depth_texture,
+        shadow_texture_view,
+        shadow_cascade_layer_views,
+        shadow_sampler,
+        point_shadow_depth_texture,
+        point_shadow_cube_view,
+        point_shadow_face_views,
+    ) = build_shadow_resources(device);
     let layouts = build_layouts(device);
 
     let global_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -683,6 +751,10 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(&shadow_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(&point_shadow_cube_view),
             },
         ],
         label: Some("shadow_bind_group"),
@@ -712,6 +784,27 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
                 resource: shadow_cascade_uniform_buffers[i].as_entire_binding(),
             }],
             label: Some(&format!("shadow_pass_bind_group_{i}")),
+        })
+    });
+
+    let point_shadow_uniform_buffers = std::array::from_fn(|i| {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("Point shadow VS uniform {i}")),
+            contents: bytemuck::bytes_of(&ShadowVsUniform {
+                light_view_proj: id4,
+            }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })
+    });
+
+    let point_shadow_pass_bind_groups = std::array::from_fn(|i| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &layouts.shadow_pass, // Reusing same layout as directional shadows
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: point_shadow_uniform_buffers[i].as_entire_binding(),
+            }],
+            label: Some(&format!("point_shadow_pass_bind_group_{i}")),
         })
     });
 
@@ -781,9 +874,14 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         shadow_texture_view,
         shadow_cascade_layer_views,
         shadow_depth_texture,
+        point_shadow_depth_texture,
+        point_shadow_cube_view,
+        point_shadow_face_views,
         shadow_pass_bind_group_layout: layouts.shadow_pass,
         shadow_cascade_uniform_buffers,
         shadow_pass_bind_groups,
+        point_shadow_uniform_buffers,
+        point_shadow_pass_bind_groups,
         texture_bind_group_layout: layouts.texture,
         skeleton_bind_group_layout: layouts.skeleton,
         dummy_skeleton_bind_group,

@@ -265,9 +265,9 @@ fn focus_on_selection(
         let target_pos = center_pos / count;
         drop(transforms);
 
-        let mut t_mut = world.borrow_mut::<Transform>();
-        let mut cam_mut = world.borrow_mut::<gizmo::renderer::components::Camera>();
-        if let (Some(mut cam_t), Some(mut cam)) = (
+        let t_mut = world.borrow_mut::<Transform>();
+        let cam_mut = world.borrow_mut::<gizmo::renderer::components::Camera>();
+        if let (Some(mut cam_t), Some(cam)) = (
             t_mut.get_mut(state.editor_camera),
             cam_mut.get_mut(state.editor_camera),
         ) {

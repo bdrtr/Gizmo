@@ -303,13 +303,13 @@ fn main() {
             let sun_angle = (hour - 6.0) / 12.0 * std::f32::consts::PI; // 06:00 = 0, 12:00 = PI/2, 18:00 = PI
             let is_day = (6.0..=18.0).contains(&hour);
 
-            if let Some(trans) = world.borrow_mut::<Transform>().get_mut(state.sun_id) {
+            if let Some(mut trans) = world.borrow_mut::<Transform>().get_mut(state.sun_id) {
                 // Güneşin dönüşünü ayarla
                 trans.rotation = Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), -sun_angle);
                 trans.update_local_matrix();
             }
 
-            if let Some(light) = world.borrow_mut::<DirectionalLight>().get_mut(state.sun_id) {
+            if let Some(mut light) = world.borrow_mut::<DirectionalLight>().get_mut(state.sun_id) {
                 if !is_day {
                     // Gece: Ay ışığı (mavi/karanlık)
                     light.color = Vec3::new(0.1, 0.2, 0.4);
@@ -345,7 +345,7 @@ fn main() {
             let orbit_radius = 5.0;
             let speed = 2.0;
 
-            if let Some(trans) = world.borrow_mut::<Transform>().get_mut(state.light_1_id) {
+            if let Some(mut trans) = world.borrow_mut::<Transform>().get_mut(state.light_1_id) {
                 let angle = state.time * speed;
                 trans.position = pillar_pos
                     + Vec3::new(
@@ -355,7 +355,7 @@ fn main() {
                     );
                 trans.update_local_matrix();
             }
-            if let Some(trans) = world.borrow_mut::<Transform>().get_mut(state.light_2_id) {
+            if let Some(mut trans) = world.borrow_mut::<Transform>().get_mut(state.light_2_id) {
                 let angle = state.time * speed + 2.094; // 120 derece ofset
                 trans.position = pillar_pos
                     + Vec3::new(
@@ -365,7 +365,7 @@ fn main() {
                     );
                 trans.update_local_matrix();
             }
-            if let Some(trans) = world.borrow_mut::<Transform>().get_mut(state.light_3_id) {
+            if let Some(mut trans) = world.borrow_mut::<Transform>().get_mut(state.light_3_id) {
                 let angle = state.time * speed + 4.188; // 240 derece ofset
                 trans.position = pillar_pos
                     + Vec3::new(
@@ -440,8 +440,8 @@ fn main() {
             }
 
             {
-                let mut trans = world.borrow_mut::<Transform>();
-                if let Some(t) = trans.get_mut(state.cam_id) {
+                let trans = world.borrow_mut::<Transform>();
+                if let Some(mut t) = trans.get_mut(state.cam_id) {
                     t.position = state.cam_pos;
                     t.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
                     t.update_local_matrix();
@@ -505,8 +505,8 @@ fn main() {
             // Gravity Gun / Kavrama Mekaniği (E Tuşu)
             state.request_grab = input.is_key_pressed(KeyCode::KeyE as u32);
 
-            let mut cams = world.borrow_mut::<Camera>();
-            if let Some(c) = cams.get_mut(state.cam_id) {
+            let cams = world.borrow_mut::<Camera>();
+            if let Some(mut c) = cams.get_mut(state.cam_id) {
                 c.yaw = state.cam_yaw;
                 c.pitch = state.cam_pitch;
             }
@@ -628,7 +628,7 @@ fn main() {
             ));
 
             let stroke = gizmo::egui::Stroke::new(
-                1.5,
+                1.5_f32,
                 gizmo::egui::Color32::from_rgba_unmultiplied(255, 255, 255, 200),
             );
 
@@ -641,7 +641,7 @@ fn main() {
             painter.circle_stroke(
                 center,
                 2.5,
-                gizmo::egui::Stroke::new(1.0, gizmo::egui::Color32::BLACK),
+                gizmo::egui::Stroke::new(1.0_f32, gizmo::egui::Color32::BLACK),
             );
 
             // Artı işaretleri

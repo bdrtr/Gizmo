@@ -12,7 +12,7 @@ pub fn draw_material_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let mut materials = world.borrow_mut::<Material>();
+    let materials = world.borrow_mut::<Material>();
     {
         if let Some(mut mat) = materials.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("🎨 Material Properties")
@@ -105,7 +105,7 @@ pub fn draw_material_section(
                             }
                         }
 
-                        ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0, stroke_color));
+                        ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0_f32, stroke_color));
                         let text_pos = rect.left_center() + egui::vec2(8.0, 0.0);
                         
                         if let Some(src) = &mat.texture_source {

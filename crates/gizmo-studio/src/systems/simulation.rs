@@ -213,8 +213,8 @@ pub fn handle_simulation(
                     // Editör kamera entity'sinin Transform ve Camera bileşenlerini güncelle
                     let cam_entity_id = state.editor_camera;
                     {
-                        let mut transforms = world.borrow_mut::<gizmo::prelude::Transform>();
-                        let mut cameras = world.borrow_mut::<gizmo::renderer::components::Camera>();
+                        let transforms = world.borrow_mut::<gizmo::prelude::Transform>();
+                        let cameras = world.borrow_mut::<gizmo::renderer::components::Camera>();
 
                         if let Some(mut t) = transforms.get_mut(cam_entity_id) {
                             // Yumuşak geçiş (lerp)
