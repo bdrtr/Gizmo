@@ -1,17 +1,18 @@
 use gizmo_math::{Mat3, Quat, Vec3};
 use serde::{Deserialize, Serialize};
+use bevy_reflect::Reflect;
 
 use super::Velocity;
 use gizmo_physics_core::{Collider, ColliderShape};
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Reflect)]
 pub enum BodyType {
     Dynamic,   // Fully simulated
     Kinematic, // Moved by user, affects others
     Static,    // Never moves
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Reflect)]
 pub struct RigidBody {
     pub body_type: BodyType,
     pub mass: f32,

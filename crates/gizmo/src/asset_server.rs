@@ -9,6 +9,8 @@ pub struct AssetServer {
     _material_paths: std::collections::HashMap<String, Handle<Material>>,
     pub completed_gltfs: Vec<crate::renderer::async_assets::GltfImportCompletion>,
     pub completed_gltf_errors: Vec<crate::renderer::async_assets::GltfImportError>,
+    #[cfg(feature = "render")]
+    pub watcher: Option<crate::renderer::hot_reload::AssetWatcher>,
 }
 
 impl Default for AssetServer {
@@ -19,12 +21,18 @@ impl Default for AssetServer {
 
 impl AssetServer {
     pub fn new() -> Self {
+        #[cfg(feature = "render")]
+        let watcher = crate::renderer::hot_reload::AssetWatcher::new(&["assets", "demo/assets"]);
+        #[cfg(not(feature = "render"))]
+        let watcher = None;
+
         Self {
             loader: AsyncAssetLoader::new(),
             mesh_paths: std::collections::HashMap::new(),
             _material_paths: std::collections::HashMap::new(),
             completed_gltfs: Vec::new(),
             completed_gltf_errors: Vec::new(),
+            watcher,
         }
     }
 
@@ -32,7 +40,7 @@ impl AssetServer {
         if let Some(handle) = self.mesh_paths.get(path) {
             return handle.clone();
         }
-        let handle = Handle::new(); // Generates a new HandleId
+        let handle = crate::core::asset::Handle::weak(crate::core::asset::HandleId::new());
         self.loader.request_obj_load(path.to_string(), handle.id.0);
         self.mesh_paths.insert(path.to_string(), handle.clone());
         handle
@@ -44,6 +52,23 @@ pub fn asset_server_update_system(
     renderer: crate::core::system::ResMut<crate::renderer::Renderer>,
     mut meshes: crate::core::system::ResMut<crate::core::asset::Assets<Mesh>>,
 ) {
+    // Process Hot Reloading
+    #[cfg(feature = "render")]
+    if let Some(watcher) = &server.watcher {
+        let changed = watcher.poll_changes();
+        for path in changed {
+            let path_str = path.to_string_lossy().to_string();
+            // Check if mesh needs reloading
+            if let Some(handle) = server.mesh_paths.get(&path_str) {
+                tracing::info!("AssetWatcher: Reloading mesh {:?}", path_str);
+                server.loader.request_obj_load(path_str.clone(), handle.id.0);
+            }
+        }
+    }
+
+    // Process garbage collection
+    meshes.process_drops();
+
     let completed = server.loader.drain_completed();
 
     server.completed_gltfs.extend(completed.gltfs);

@@ -91,3 +91,11 @@ pub use crate::scene::{SceneData, SceneRegistry};
 // === Scripting (feature flag ile) ===
 #[cfg(feature = "scripting")]
 pub use crate::scripting as gizmo_scripting;
+
+// === UI (feature flag ile) ===
+#[cfg(feature = "ui")]
+pub use crate::ui::prelude::*;
+
+// === Animation (feature flag ile) ===
+#[cfg(feature = "animation")]
+pub use crate::animation::{clip::*, player::*};

@@ -58,6 +58,11 @@ impl<State: 'static> App<State> {
         self
     }
 
+    pub fn configure_set(mut self, config: gizmo_core::system::SetConfig) -> Self {
+        self.schedule.configure_set(config);
+        self
+    }
+
     pub fn run(mut self) {
         if let Some(runner) = self.runner.take() {
             runner(self);

@@ -759,6 +759,229 @@ impl super::AssetManager {
         )
     }
 
+    pub fn create_cylinder(device: &wgpu::Device, radius: f32, height: f32, radial_segments: u32) -> Mesh {
+        let radial_segments = radial_segments.max(3);
+        let mut vertices = Vec::new();
+        let pi = std::f32::consts::PI;
+        let half_h = height / 2.0;
+
+        // Tube
+        for i in 0..radial_segments {
+            let t1 = (i as f32 / radial_segments as f32) * 2.0 * pi;
+            let t2 = ((i + 1) as f32 / radial_segments as f32) * 2.0 * pi;
+
+            let u1 = i as f32 / radial_segments as f32;
+            let u2 = (i + 1) as f32 / radial_segments as f32;
+
+            let p1_top = [radius * t1.cos(), half_h, radius * t1.sin()];
+            let p1_bot = [radius * t1.cos(), -half_h, radius * t1.sin()];
+            let p2_top = [radius * t2.cos(), half_h, radius * t2.sin()];
+            let p2_bot = [radius * t2.cos(), -half_h, radius * t2.sin()];
+
+            let n1 = [t1.cos(), 0.0, t1.sin()];
+            let n2 = [t2.cos(), 0.0, t2.sin()];
+
+            let def_j = [0; 4]; let def_w = [0.0; 4];
+            let col = [1.0; 3];
+
+            // Tri 1
+            vertices.push(Vertex { position: p1_top, normal: n1, tex_coords: [u1, 0.0], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: p1_bot, normal: n1, tex_coords: [u1, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [u2, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
+
+            // Tri 2
+            vertices.push(Vertex { position: p1_top, normal: n1, tex_coords: [u1, 0.0], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [u2, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: p2_top, normal: n2, tex_coords: [u2, 0.0], color: col, joint_indices: def_j, joint_weights: def_w });
+
+            // Top Cap
+            vertices.push(Vertex { position: [0.0, half_h, 0.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: p2_top, normal: [0.0, 1.0, 0.0], tex_coords: [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: p1_top, normal: [0.0, 1.0, 0.0], tex_coords: [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()], color: col, joint_indices: def_j, joint_weights: def_w });
+
+            // Bottom Cap
+            vertices.push(Vertex { position: [0.0, -half_h, 0.0], normal: [0.0, -1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: p1_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: p2_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()], color: col, joint_indices: def_j, joint_weights: def_w });
+        }
+
+        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("Cylinder VBuf"), contents: bytemuck::cast_slice(&vertices), usage: wgpu::BufferUsages::VERTEX });
+        Mesh::new(device, Arc::new(vbuf), &vertices, Vec3::ZERO, format!("cylinder_{}_{}", radius, height))
+    }
+
+    pub fn create_cone(device: &wgpu::Device, radius: f32, height: f32, radial_segments: u32) -> Mesh {
+        let radial_segments = radial_segments.max(3);
+        let mut vertices = Vec::new();
+        let pi = std::f32::consts::PI;
+        let half_h = height / 2.0;
+
+        let slant = (radius * radius + height * height).sqrt();
+        let ny = radius / slant;
+        let n_xz = height / slant;
+
+        for i in 0..radial_segments {
+            let t1 = (i as f32 / radial_segments as f32) * 2.0 * pi;
+            let t2 = ((i + 1) as f32 / radial_segments as f32) * 2.0 * pi;
+
+            let p1_bot = [radius * t1.cos(), -half_h, radius * t1.sin()];
+            let p2_bot = [radius * t2.cos(), -half_h, radius * t2.sin()];
+            let apex = [0.0, half_h, 0.0];
+
+            let n1 = [n_xz * t1.cos(), ny, n_xz * t1.sin()];
+            let n2 = [n_xz * t2.cos(), ny, n_xz * t2.sin()];
+            let navg = [n_xz * ((t1+t2)/2.0).cos(), ny, n_xz * ((t1+t2)/2.0).sin()];
+
+            let u1 = i as f32 / radial_segments as f32;
+            let u2 = (i + 1) as f32 / radial_segments as f32;
+            let umid = (u1 + u2) / 2.0;
+
+            let def_j = [0; 4]; let def_w = [0.0; 4];
+            let col = [1.0; 3];
+
+            // Side Tri
+            vertices.push(Vertex { position: apex, normal: navg, tex_coords: [umid, 0.0], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: p1_bot, normal: n1, tex_coords: [u1, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [u2, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
+
+            // Bottom Cap
+            vertices.push(Vertex { position: [0.0, -half_h, 0.0], normal: [0.0, -1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: p2_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: p1_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()], color: col, joint_indices: def_j, joint_weights: def_w });
+        }
+
+        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("Cone VBuf"), contents: bytemuck::cast_slice(&vertices), usage: wgpu::BufferUsages::VERTEX });
+        Mesh::new(device, Arc::new(vbuf), &vertices, Vec3::ZERO, format!("cone_{}_{}", radius, height))
+    }
+
+    pub fn create_torus(device: &wgpu::Device, radius: f32, tube_radius: f32, radial_segments: u32, tubular_segments: u32) -> Mesh {
+        let radial_segments = radial_segments.max(3);
+        let tubular_segments = tubular_segments.max(3);
+        let mut vertices = Vec::new();
+        let pi = std::f32::consts::PI;
+
+        for i in 0..radial_segments {
+            for j in 0..tubular_segments {
+                let u1 = i as f32 / radial_segments as f32;
+                let u2 = (i + 1) as f32 / radial_segments as f32;
+                let v1 = j as f32 / tubular_segments as f32;
+                let v2 = (j + 1) as f32 / tubular_segments as f32;
+
+                let t1 = u1 * 2.0 * pi;
+                let t2 = u2 * 2.0 * pi;
+                let p1 = v1 * 2.0 * pi;
+                let p2 = v2 * 2.0 * pi;
+
+                let pos = |t: f32, p: f32| {
+                    [(radius + tube_radius * p.cos()) * t.cos(), tube_radius * p.sin(), (radius + tube_radius * p.cos()) * t.sin()]
+                };
+                let norm = |t: f32, p: f32| {
+                    [p.cos() * t.cos(), p.sin(), p.cos() * t.sin()]
+                };
+
+                let p_00 = pos(t1, p1); let n_00 = norm(t1, p1);
+                let p_10 = pos(t2, p1); let n_10 = norm(t2, p1);
+                let p_01 = pos(t1, p2); let n_01 = norm(t1, p2);
+                let p_11 = pos(t2, p2); let n_11 = norm(t2, p2);
+
+                let def_j = [0; 4]; let def_w = [0.0; 4];
+                let col = [1.0; 3];
+
+                vertices.push(Vertex { position: p_00, normal: n_00, tex_coords: [u1, v1], color: col, joint_indices: def_j, joint_weights: def_w });
+                vertices.push(Vertex { position: p_01, normal: n_01, tex_coords: [u1, v2], color: col, joint_indices: def_j, joint_weights: def_w });
+                vertices.push(Vertex { position: p_10, normal: n_10, tex_coords: [u2, v1], color: col, joint_indices: def_j, joint_weights: def_w });
+
+                vertices.push(Vertex { position: p_10, normal: n_10, tex_coords: [u2, v1], color: col, joint_indices: def_j, joint_weights: def_w });
+                vertices.push(Vertex { position: p_01, normal: n_01, tex_coords: [u1, v2], color: col, joint_indices: def_j, joint_weights: def_w });
+                vertices.push(Vertex { position: p_11, normal: n_11, tex_coords: [u2, v2], color: col, joint_indices: def_j, joint_weights: def_w });
+            }
+        }
+
+        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("Torus VBuf"), contents: bytemuck::cast_slice(&vertices), usage: wgpu::BufferUsages::VERTEX });
+        Mesh::new(device, Arc::new(vbuf), &vertices, Vec3::ZERO, format!("torus_{}_{}", radius, tube_radius))
+    }
+
+    pub fn create_capsule(device: &wgpu::Device, radius: f32, depth: f32, latitudes: u32, longitudes: u32) -> Mesh {
+        let latitudes = latitudes.max(4);
+        let longitudes = longitudes.max(4);
+        let mut vertices = Vec::new();
+        let pi = std::f32::consts::PI;
+        let half_d = depth / 2.0;
+
+        for i in 0..=latitudes {
+            let u1 = i as f32 / latitudes as f32;
+            let u2 = (i + 1) as f32 / latitudes as f32;
+            let theta1 = u1 * pi;
+            let theta2 = u2 * pi;
+
+            let y_offset1 = if u1 < 0.5 { half_d } else if u1 > 0.5 { -half_d } else { 0.0 };
+            let y_offset2 = if u2 < 0.5 { half_d } else if u2 > 0.5 { -half_d } else { 0.0 };
+            
+            // To properly insert a tube, we duplicate the equator loop
+            let is_equator = i == latitudes / 2;
+
+            if is_equator {
+                // Tube segment
+                for j in 0..longitudes {
+                    let v1 = j as f32 / longitudes as f32;
+                    let v2 = (j + 1) as f32 / longitudes as f32;
+                    let phi1 = v1 * 2.0 * pi;
+                    let phi2 = v2 * 2.0 * pi;
+
+                    let p1_top = [radius * phi1.cos(), half_d, radius * phi1.sin()];
+                    let p1_bot = [radius * phi1.cos(), -half_d, radius * phi1.sin()];
+                    let p2_top = [radius * phi2.cos(), half_d, radius * phi2.sin()];
+                    let p2_bot = [radius * phi2.cos(), -half_d, radius * phi2.sin()];
+
+                    let n1 = [phi1.cos(), 0.0, phi1.sin()];
+                    let n2 = [phi2.cos(), 0.0, phi2.sin()];
+
+                    let def_j = [0; 4]; let def_w = [0.0; 4]; let col = [1.0; 3];
+
+                    vertices.push(Vertex { position: p1_top, normal: n1, tex_coords: [v1, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
+                    vertices.push(Vertex { position: p1_bot, normal: n1, tex_coords: [v1, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
+                    vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [v2, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
+
+                    vertices.push(Vertex { position: p1_top, normal: n1, tex_coords: [v1, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
+                    vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [v2, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
+                    vertices.push(Vertex { position: p2_top, normal: n2, tex_coords: [v2, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
+                }
+            }
+
+            if i < latitudes {
+                for j in 0..longitudes {
+                    let v1 = j as f32 / longitudes as f32;
+                    let v2 = (j + 1) as f32 / longitudes as f32;
+                    let phi1 = v1 * 2.0 * pi;
+                    let phi2 = v2 * 2.0 * pi;
+
+                    let p1 = [radius * theta1.sin() * phi1.cos(), radius * theta1.cos() + y_offset1, radius * theta1.sin() * phi1.sin()];
+                    let p2 = [radius * theta2.sin() * phi1.cos(), radius * theta2.cos() + y_offset2, radius * theta2.sin() * phi1.sin()];
+                    let p3 = [radius * theta2.sin() * phi2.cos(), radius * theta2.cos() + y_offset2, radius * theta2.sin() * phi2.sin()];
+                    let p4 = [radius * theta1.sin() * phi2.cos(), radius * theta1.cos() + y_offset1, radius * theta1.sin() * phi2.sin()];
+
+                    let n1 = [theta1.sin() * phi1.cos(), theta1.cos(), theta1.sin() * phi1.sin()];
+                    let n2 = [theta2.sin() * phi1.cos(), theta2.cos(), theta2.sin() * phi1.sin()];
+                    let n3 = [theta2.sin() * phi2.cos(), theta2.cos(), theta2.sin() * phi2.sin()];
+                    let n4 = [theta1.sin() * phi2.cos(), theta1.cos(), theta1.sin() * phi2.sin()];
+
+                    let def_j = [0; 4]; let def_w = [0.0; 4]; let col = [1.0; 3];
+
+                    vertices.push(Vertex { position: p1, normal: n1, tex_coords: [v1, u1], color: col, joint_indices: def_j, joint_weights: def_w });
+                    vertices.push(Vertex { position: p2, normal: n2, tex_coords: [v1, u2], color: col, joint_indices: def_j, joint_weights: def_w });
+                    vertices.push(Vertex { position: p3, normal: n3, tex_coords: [v2, u2], color: col, joint_indices: def_j, joint_weights: def_w });
+
+                    vertices.push(Vertex { position: p1, normal: n1, tex_coords: [v1, u1], color: col, joint_indices: def_j, joint_weights: def_w });
+                    vertices.push(Vertex { position: p3, normal: n3, tex_coords: [v2, u2], color: col, joint_indices: def_j, joint_weights: def_w });
+                    vertices.push(Vertex { position: p4, normal: n4, tex_coords: [v2, u1], color: col, joint_indices: def_j, joint_weights: def_w });
+                }
+            }
+        }
+
+        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("Capsule VBuf"), contents: bytemuck::cast_slice(&vertices), usage: wgpu::BufferUsages::VERTEX });
+        Mesh::new(device, Arc::new(vbuf), &vertices, Vec3::ZERO, format!("capsule_{}_{}", radius, depth))
+    }
+
+
     pub fn create_terrain(
         device: &wgpu::Device,
         heightmap_path: &str,

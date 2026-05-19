@@ -8,4 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+gizmo-app = { version = "0.1.4", path = "../gizmo-app" }
+gizmo-core = { version = "0.1.4", path = "../gizmo-core" }
 gizmo-math = { path = "../gizmo-math", version = "0.1.4" }
+taffy = "0.10.1"

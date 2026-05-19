@@ -212,6 +212,11 @@ impl<State: 'static> App<State> {
         self
     }
 
+    pub fn configure_set(mut self, config: gizmo_core::system::SetConfig) -> Self {
+        self.schedule.configure_set(config);
+        self
+    }
+
     pub fn load_scene(mut self, path: &str) -> Self {
         self.initial_scene = Some(path.to_string());
         self
@@ -333,7 +338,7 @@ impl<State: 'static> App<State> {
                     gizmo_scene::scene::SceneData::load_into(
                         &scene_path,
                         &mut self.world,
-                        &gizmo_scene::registry::SceneRegistry::default(),
+                        &gizmo_scene::registry::default_scene_registry(),
                     );
                 }
 
@@ -755,7 +760,7 @@ impl<State: 'static> App<State> {
 
                             // 3. Save
                             if let Some(ref path) = save_req {
-                                let registry = gizmo_scene::registry::SceneRegistry::default();
+                                let registry = gizmo_scene::registry::default_scene_registry();
                                 match gizmo_scene::scene::SceneData::save(
                                     &self.world,
                                     path,
@@ -811,7 +816,7 @@ impl<State: 'static> App<State> {
                                     let r = self.world.remove_resource::<Renderer>().unwrap();
                                     let dummy_rgba = [255u8, 255, 255, 255];
                                     let _dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
-                                    let registry = gizmo_scene::registry::SceneRegistry::default();
+                                    let registry = gizmo_scene::registry::default_scene_registry();
                                     let ok = gizmo_scene::scene::SceneData::load_into(
                                         path,
                                         &mut self.world,

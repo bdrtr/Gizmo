@@ -51,7 +51,7 @@ impl SceneData {
     pub fn save(
         world: &World,
         file_path: &str,
-        registry: &crate::registry::SceneRegistry,
+        registry: &gizmo_core::registry::ComponentRegistry,
     ) -> Result<(), String> {
         if let Some(parent) = std::path::Path::new(file_path).parent() {
             let _ = fs::create_dir_all(parent);
@@ -86,11 +86,10 @@ impl SceneData {
         Ok(())
     }
 
-    /// Belirtilen entity ID'lerini serileştirir
     pub fn serialize_entities(
         world: &World,
         entity_ids: Vec<u32>,
-        registry: &crate::registry::SceneRegistry,
+        registry: &gizmo_core::registry::ComponentRegistry,
     ) -> Vec<EntityData> {
         let mut entities_data = Vec::new();
         let names = world.borrow::<EntityName>();
@@ -99,6 +98,8 @@ impl SceneData {
         let parents = world.borrow::<Parent>();
 
         for &id in &entity_ids {
+            let entity = gizmo_core::entity::Entity::new(id, 0); // Using generation 0 for lookup
+
             let name = names.get(id).map(|n| n.0.clone());
 
             // Gizmo Studio'nun içsel araçlarını kaydetme
@@ -119,10 +120,26 @@ impl SceneData {
             let parent_id = parents.get(id).map(|p| p.0);
 
             let mut dynamic_components = std::collections::BTreeMap::new();
-            for comp_name in registry.all_components() {
-                if let Some(serializer) = registry.get_serializer(comp_name) {
-                    if let Some(comp_value) = serializer(world, id) {
-                        dynamic_components.insert(comp_name.clone(), comp_value);
+            
+            let types = world.get_entity_component_types(entity);
+            for type_id in types {
+                if let Some(reg) = registry.get_registration(type_id) {
+                    if let (Some(ptr), Some(get_reflect_ptr)) = (world.get_component_ptr(entity, type_id), reg.get_reflect_ptr_fn) {
+                        let reflect_ptr = get_reflect_ptr(ptr);
+                        let reflect_val = unsafe { &*reflect_ptr };
+                        
+                        let type_reg = registry.reflect_registry.get(type_id);
+                        if let Some(_type_registration) = type_reg {
+                            let serializer = bevy_reflect::serde::TypedReflectSerializer::new(reflect_val, &registry.reflect_registry);
+                            if let Ok(string_repr) = ron::ser::to_string(&serializer) {
+                                dynamic_components.insert(reg.name.clone(), string_repr);
+                            }
+                        } else if let Some(ser_fn) = reg.serialize_fn {
+                            // Fallback to legacy serialization
+                            if let Ok(string_repr) = ser_fn(ptr) {
+                                dynamic_components.insert(reg.name.clone(), string_repr);
+                            }
+                        }
                     }
                 }
             }
@@ -152,7 +169,7 @@ impl SceneData {
     pub fn load_into(
         file_path: &str,
         world: &mut World,
-        registry: &crate::registry::SceneRegistry,
+        registry: &gizmo_core::registry::ComponentRegistry,
     ) -> bool {
         let string_data = match fs::read_to_string(file_path) {
             Ok(content) => content,
@@ -191,12 +208,11 @@ impl SceneData {
         true
     }
 
-    /// Verilen entity listesini instantiate eder
     pub fn instantiate_entities(
         entities: Vec<EntityData>,
         root_parent: Option<u32>,
         world: &mut World,
-        registry: &crate::registry::SceneRegistry,
+        registry: &gizmo_core::registry::ComponentRegistry,
     ) -> HashMap<u32, u32> {
         let mut id_map = HashMap::new(); 
         let mut entity_structs = HashMap::new();
@@ -218,8 +234,27 @@ impl SceneData {
             }
             
             for (comp_name, comp_val) in &data.components {
-                if let Some(deserializer) = registry.get_deserializer(comp_name) {
-                    deserializer(world, new_id, comp_val);
+                if let Some(type_id) = registry.get_type_id(comp_name) {
+                    if let Some(reg) = registry.get_registration(type_id) {
+                        if let Some(type_reg) = registry.reflect_registry.get(type_id) {
+                            // Use Bevy Reflect deserialization
+                            let deserializer = bevy_reflect::serde::TypedReflectDeserializer::new(type_reg, &registry.reflect_registry);
+                            if let Ok(mut de) = ron::de::Deserializer::from_str(comp_val) {
+                                if let Ok(reflect_val) = serde::de::DeserializeSeed::deserialize(deserializer, &mut de) {
+                                    if let Some(insert_fn) = reg.insert_reflect_fn {
+                                        if let Err(e) = insert_fn(world, entity, &*reflect_val) {
+                                            tracing::error!("Failed to insert reflect component {}: {}", comp_name, e);
+                                        }
+                                    }
+                                }
+                            }
+                        } else if let Some(deserialize_fn) = reg.deserialize_fn {
+                            // Fallback to legacy deserialization
+                            if let Err(e) = deserialize_fn(world, entity, comp_val) {
+                                tracing::error!("Failed to deserialize component {}: {}", comp_name, e);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -275,7 +310,7 @@ impl SceneData {
         world: &World,
         root_entity_id: u32,
         file_path: &str,
-        registry: &crate::registry::SceneRegistry,
+        registry: &gizmo_core::registry::ComponentRegistry,
     ) -> Result<(), String> {
         if let Some(parent) = std::path::Path::new(file_path).parent() {
             let _ = fs::create_dir_all(parent);
@@ -334,7 +369,7 @@ impl SceneData {
         file_path: &str,
         parent_entity: Option<u32>,
         world: &mut World,
-        registry: &crate::registry::SceneRegistry,
+        registry: &gizmo_core::registry::ComponentRegistry,
     ) -> Option<u32> {
         let string_data = match fs::read_to_string(file_path) {
             Ok(content) => content,

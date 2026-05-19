@@ -5,115 +5,21 @@ use std::collections::HashMap;
 pub type SerializeFn = Box<dyn Fn(&World, u32) -> Option<String> + Send + Sync>;
 pub type DeserializeFn = Box<dyn Fn(&mut World, u32, &String) + Send + Sync>;
 
-pub struct SceneRegistry {
-    serializers: HashMap<String, SerializeFn>,
-    deserializers: HashMap<String, DeserializeFn>,
-}
+pub type SceneRegistry = gizmo_core::registry::ComponentRegistry;
 
-impl SceneRegistry {
-    pub fn new() -> Self {
-        Self {
-            serializers: HashMap::new(),
-            deserializers: HashMap::new(),
-        }
-    }
+pub fn default_scene_registry() -> SceneRegistry {
+    let mut reg = SceneRegistry::new();
 
-    /// T türündeki standart bileşeni kaydeder. T, Ser/De yeteneğine sahip olmalıdır.
-    pub fn register<T>(&mut self, name: &str)
-    where
-        T: Component + Serialize + DeserializeOwned + Clone,
-    {
-        let name_ser = name.to_string();
-        let name_de = name.to_string();
+    reg.register_reflect::<gizmo_physics_core::Transform>("Transform");
+    reg.register_reflect::<gizmo_physics_rigid::components::Velocity>("Velocity");
+    reg.register_reflect::<gizmo_physics_rigid::components::RigidBody>("RigidBody");
+    // Collider has not been migrated to Reflect yet, use legacy serializable
+    reg.register_serializable::<gizmo_physics_core::Collider>("Collider");
+    reg.register_serializable::<gizmo_physics_core::components::Hitbox>("Hitbox");
+    reg.register_serializable::<gizmo_physics_core::components::Hurtbox>("Hurtbox");
+    reg.register_serializable::<gizmo_physics_core::components::FighterController>("FighterController");
 
-        self.serializers.insert(
-            name_ser,
-            Box::new(move |world, entity_id| {
-                let storage = world.borrow::<T>();
-                if let Some(comp) = storage.get(entity_id) {
-                    match ron::ser::to_string(comp) {
-                        Ok(string_repr) => return Some(string_repr),
-                        Err(e) => tracing::info!(
-                            "[SceneRegistry] Serilestirme Hatasi ({}): {}",
-                            std::any::type_name::<T>(),
-                            e
-                        ),
-                    }
-                }
-                None
-            }),
-        );
+    reg.register_serializable::<gizmo_scripting::Script>("Script");
 
-        self.deserializers.insert(
-            name_de,
-            Box::new(move |world, entity_id, value_str| {
-                match ron::from_str::<T>(value_str) {
-                    Ok(comp) => {
-                        world.add_component(
-                            world
-                                .get_entity(entity_id)
-                                .expect("Invalid entity mapping during deserialization!"),
-                            comp,
-                        );
-                    }
-                    Err(e) => {
-                        tracing::info!(
-                            "[SceneRegistry] HATA: {} bileseni yuklenemedi! (Entity: {}) - {}",
-                            std::any::type_name::<T>(),
-                            entity_id,
-                            e
-                        );
-                    }
-                }
-            }),
-        );
-    }
-
-    /// Ser/De Derive edilemeyen `Mesh`, `Material` gibi sistemler için manuel Closure kaydı.
-    pub fn register_custom(
-        &mut self,
-        name: &str,
-        serialize: impl Fn(&World, u32) -> Option<String> + Send + Sync + 'static,
-        deserialize: impl Fn(&mut World, u32, &String) + Send + Sync + 'static,
-    ) {
-        self.serializers
-            .insert(name.to_string(), Box::new(serialize));
-        self.deserializers
-            .insert(name.to_string(), Box::new(deserialize));
-    }
-
-    pub fn get_serializer(&self, name: &str) -> Option<&SerializeFn> {
-        self.serializers.get(name)
-    }
-
-    pub fn get_deserializer(&self, name: &str) -> Option<&DeserializeFn> {
-        self.deserializers.get(name)
-    }
-
-    pub fn all_components(&self) -> impl Iterator<Item = &String> {
-        self.serializers.keys()
-    }
-
-    /// Gizmo motorunun varsayılan bileşenleri eklenmiş halde registry döndürür.
-    pub fn with_core_components() -> Self {
-        let mut reg = Self::new();
-
-        reg.register::<gizmo_physics_core::Transform>("Transform");
-        reg.register::<gizmo_physics_rigid::components::Velocity>("Velocity");
-        reg.register::<gizmo_physics_rigid::components::RigidBody>("RigidBody");
-        reg.register::<gizmo_physics_core::Collider>("Collider");
-        reg.register::<gizmo_physics_core::components::Hitbox>("Hitbox");
-        reg.register::<gizmo_physics_core::components::Hurtbox>("Hurtbox");
-        reg.register::<gizmo_physics_core::components::FighterController>("FighterController");
-
-        reg.register::<gizmo_scripting::Script>("Script");
-
-        reg
-    }
-}
-
-impl Default for SceneRegistry {
-    fn default() -> Self {
-        Self::with_core_components()
-    }
+    reg
 }

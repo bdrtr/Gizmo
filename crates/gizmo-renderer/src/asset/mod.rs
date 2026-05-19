@@ -8,6 +8,7 @@ use wgpu::util::DeviceExt;
 
 pub mod loaders;
 pub mod primitives;
+pub mod procedural;
 pub mod texture;
 
 pub use loaders::GltfNodeData;

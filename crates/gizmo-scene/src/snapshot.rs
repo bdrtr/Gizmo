@@ -54,10 +54,26 @@ impl SceneSnapshot {
 
             // Registry üzerinden tüm dinamik bileşenleri RON AST'sine dönüştür
             let mut components = std::collections::BTreeMap::new();
-            for comp_name in registry.all_components() {
-                if let Some(serializer) = registry.get_serializer(comp_name) {
-                    if let Some(comp_value) = serializer(world, id) {
-                        components.insert(comp_name.clone(), comp_value);
+            
+            let entity = gizmo_core::entity::Entity::new(id, 0);
+            let types = world.get_entity_component_types(entity);
+            for type_id in types {
+                if let Some(reg) = registry.get_registration(type_id) {
+                    if let (Some(ptr), Some(get_reflect_ptr)) = (world.get_component_ptr(entity, type_id), reg.get_reflect_ptr_fn) {
+                        let reflect_ptr = get_reflect_ptr(ptr);
+                        let reflect_val = unsafe { &*reflect_ptr };
+                        
+                        let type_reg = registry.reflect_registry.get(type_id);
+                        if let Some(_type_registration) = type_reg {
+                            let serializer = bevy_reflect::serde::TypedReflectSerializer::new(reflect_val, &registry.reflect_registry);
+                            if let Ok(string_repr) = ron::ser::to_string(&serializer) {
+                                components.insert(reg.name.clone(), string_repr);
+                            }
+                        } else if let Some(ser_fn) = reg.serialize_fn {
+                            if let Ok(string_repr) = ser_fn(ptr) {
+                                components.insert(reg.name.clone(), string_repr);
+                            }
+                        }
                     }
                 }
             }
@@ -145,8 +161,21 @@ impl SceneSnapshot {
             }
 
             for (comp_name, comp_val) in &snap_entity.components {
-                if let Some(deserializer) = registry.get_deserializer(comp_name) {
-                    deserializer(world, ent.id(), comp_val);
+                if let Some(type_id) = registry.get_type_id(comp_name) {
+                    if let Some(reg) = registry.get_registration(type_id) {
+                        if let Some(type_reg) = registry.reflect_registry.get(type_id) {
+                            let deserializer = bevy_reflect::serde::TypedReflectDeserializer::new(type_reg, &registry.reflect_registry);
+                            if let Ok(mut de) = ron::de::Deserializer::from_str(comp_val) {
+                                if let Ok(reflect_val) = serde::de::DeserializeSeed::deserialize(deserializer, &mut de) {
+                                    if let Some(insert_fn) = reg.insert_reflect_fn {
+                                        let _ = insert_fn(world, ent, &*reflect_val);
+                                    }
+                                }
+                            }
+                        } else if let Some(deserialize_fn) = reg.deserialize_fn {
+                            let _ = deserialize_fn(world, ent, comp_val);
+                        }
+                    }
                 }
             }
 
@@ -208,7 +237,7 @@ mod tests {
     #[test]
     fn test_scene_snapshot_round_trip() {
         let mut world = World::new();
-        let registry = crate::registry::SceneRegistry::with_core_components();
+        let registry = crate::registry::default_scene_registry();
         let protected = std::collections::HashSet::new();
 
         // Entity oluştur

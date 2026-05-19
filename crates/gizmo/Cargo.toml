@@ -9,7 +9,7 @@ license.workspace = true
 repository.workspace = true
 readme.workspace = true
 [features]
-default = ["window", "render", "audio", "physics", "physics-dynamics", "physics-soft", "scene", "editor", "ui"]
+default = ["window", "render", "audio", "physics", "physics-dynamics", "physics-soft", "scene", "editor", "ui", "animation"]
 headless = ["physics", "gizmo-app/headless"]
 window = ["gizmo-app/window", "dep:winit", "dep:gizmo-window"]
 render = ["gizmo-app/render", "dep:gizmo-renderer", "dep:wgpu", "dep:bytemuck", "window"]
@@ -21,6 +21,7 @@ physics = ["gizmo-app/physics", "dep:gizmo-physics-core", "dep:gizmo-physics-rig
 physics-dynamics = ["dep:gizmo-physics-dynamics"]
 physics-soft = ["dep:gizmo-physics-soft"]
 ui = ["dep:gizmo-ui"]
+animation = ["dep:gizmo-animation"]
 
 [dependencies]
 gizmo-core = { path = "../gizmo-core" , version = "0.1.4" }
@@ -43,6 +44,7 @@ egui = { version = "0.28", optional = true }
 bytemuck = { version = "1", optional = true }
 gizmo-editor = { path = "../gizmo-editor", optional = true , version = "0.1.4" }
 tracing = "0.1.44"
+gizmo-animation = { version = "0.1.4", path = "../gizmo-animation", optional = true }
 
 [dev-dependencies]
 criterion = "0.5"

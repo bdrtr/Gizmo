@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use crossbeam_queue::SegQueue;
 
 static NEXT_HANDLE_ID: AtomicUsize = AtomicUsize::new(1);
 
@@ -20,21 +22,37 @@ impl HandleId {
     }
 }
 
+pub struct HandleIdTracker {
+    pub id: usize,
+    pub drop_queue: Arc<SegQueue<usize>>,
+}
+
+impl Drop for HandleIdTracker {
+    fn drop(&mut self) {
+        self.drop_queue.push(self.id);
+    }
+}
+
 pub struct Handle<T> {
     pub id: HandleId,
+    pub tracker: Option<Arc<HandleIdTracker>>,
     _marker: PhantomData<T>,
 }
 
 impl<T> Default for Handle<T> {
     fn default() -> Self {
-        Self::new()
+        Self::weak(HandleId::new())
     }
 }
 
 impl<T> Handle<T> {
-    pub fn new() -> Self {
+    pub fn new(id: HandleId, drop_queue: Arc<SegQueue<usize>>) -> Self {
         Self {
-            id: HandleId::new(),
+            id,
+            tracker: Some(Arc::new(HandleIdTracker {
+                id: id.0,
+                drop_queue,
+            })),
             _marker: PhantomData,
         }
     }
@@ -42,7 +60,21 @@ impl<T> Handle<T> {
     pub fn weak(id: HandleId) -> Self {
         Self {
             id,
+            tracker: None,
             _marker: PhantomData,
+        }
+    }
+    
+    pub fn is_weak(&self) -> bool {
+        self.tracker.is_none()
+    }
+    
+    pub fn make_strong(&mut self, drop_queue: Arc<SegQueue<usize>>) {
+        if self.tracker.is_none() {
+            self.tracker = Some(Arc::new(HandleIdTracker {
+                id: self.id.0,
+                drop_queue,
+            }));
         }
     }
 }
@@ -51,6 +83,7 @@ impl<T> Clone for Handle<T> {
     fn clone(&self) -> Self {
         Self {
             id: self.id,
+            tracker: self.tracker.clone(),
             _marker: PhantomData,
         }
     }
@@ -74,19 +107,25 @@ impl<T: 'static + Send + Sync> crate::component::Component for Handle<T> {}
 
 impl<T> std::fmt::Debug for Handle<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Handle({:?})", self.id)
+        if self.is_weak() {
+            write!(f, "WeakHandle({:?})", self.id)
+        } else {
+            write!(f, "StrongHandle({:?})", self.id)
+        }
     }
 }
 
 /// Generic resource to store assets by their handle ID.
 pub struct Assets<T> {
     pub data: HashMap<HandleId, T>,
+    drop_queue: Arc<SegQueue<usize>>,
 }
 
 impl<T> Default for Assets<T> {
     fn default() -> Self {
         Self {
             data: HashMap::new(),
+            drop_queue: Arc::new(SegQueue::new()),
         }
     }
 }
@@ -99,7 +138,7 @@ impl<T> Assets<T> {
     pub fn add(&mut self, asset: T) -> Handle<T> {
         let id = HandleId::new();
         self.data.insert(id, asset);
-        Handle::weak(id)
+        Handle::new(id, self.drop_queue.clone())
     }
 
     pub fn get(&self, handle: &Handle<T>) -> Option<&T> {
@@ -116,5 +155,12 @@ impl<T> Assets<T> {
 
     pub fn remove(&mut self, handle: &Handle<T>) -> Option<T> {
         self.data.remove(&handle.id)
+    }
+    
+    /// Collects dropped handles and removes their corresponding assets.
+    pub fn process_drops(&mut self) {
+        while let Some(dropped_id) = self.drop_queue.pop() {
+            self.data.remove(&HandleId(dropped_id));
+        }
     }
 }

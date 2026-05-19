@@ -9,11 +9,12 @@ use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::sync::Mutex;
 
 /// Dosya değişikliklerini izleyerek hot-reload tetikleyen Asset Watcher
 pub struct AssetWatcher {
     _watcher: notify::RecommendedWatcher,
-    rx: mpsc::Receiver<Result<Event, notify::Error>>,
+    rx: Mutex<mpsc::Receiver<Result<Event, notify::Error>>>,
 }
 
 impl AssetWatcher {
@@ -42,7 +43,7 @@ impl AssetWatcher {
 
         Some(Self {
             _watcher: watcher,
-            rx,
+            rx: Mutex::new(rx),
         })
     }
 
@@ -51,15 +52,17 @@ impl AssetWatcher {
         let mut seen = HashSet::new(); // O(1) dedup (eskiden Vec::contains ile O(N²))
 
         // Kuyrukta biriken tüm olayları al (non-blocking)
-        while let Ok(event_result) = self.rx.try_recv() {
-            if let Ok(event) = event_result {
-                match event.kind {
-                    EventKind::Modify(_) | EventKind::Create(_) => {
-                        for path in event.paths {
-                            seen.insert(path);
+        if let Ok(rx) = self.rx.lock() {
+            while let Ok(event_result) = rx.try_recv() {
+                if let Ok(event) = event_result {
+                    match event.kind {
+                        EventKind::Modify(_) | EventKind::Create(_) => {
+                            for path in event.paths {
+                                seen.insert(path);
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
         }

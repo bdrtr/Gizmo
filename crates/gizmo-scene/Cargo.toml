@@ -18,3 +18,4 @@ gizmo-scripting = { path = "../gizmo-scripting" , version = "0.1.4" }
 ron = "0.12.1"
 uuid = { version = "1.23.0", features = ["v4", "serde"] }
 tracing = "0.1.44"
+bevy_reflect = "0.15.1"
