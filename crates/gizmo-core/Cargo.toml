@@ -9,6 +9,7 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
+bevy_reflect = { version = "0.15.1", features = ["functions"] }
 chrono = "0.4.44"
 crossbeam-queue = "0.3.12"
 rayon = "1.11.0"
@@ -20,7 +21,6 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.23.0", features = ["v4", "serde"] }
 
 [dev-dependencies]
-bevy_reflect = { version = "0.15.1", features = ["functions"] }
 chacha20 = "0.10.0"
 criterion = "0.8.2"
 rand = "0.10.1"

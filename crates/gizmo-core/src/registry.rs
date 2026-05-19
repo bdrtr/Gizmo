@@ -33,6 +33,8 @@ pub struct TypeRegistration {
     pub deserialize_fn: Option<DeserializeFn>,
     pub get_json_fn: Option<GetJsonFn>,
     pub set_json_fn: Option<SetJsonFn>,
+    pub get_reflect_ptr_fn: Option<fn(*const u8) -> *const dyn bevy_reflect::Reflect>,
+    pub insert_reflect_fn: Option<fn(&mut crate::world::World, crate::entity::Entity, &dyn bevy_reflect::PartialReflect) -> Result<(), String>>,
 }
 
 /// Component tiplerini isme göre sorgulama ve yönetim kaydı.
@@ -44,6 +46,8 @@ pub struct ComponentRegistry {
     name_to_type: BTreeMap<String, TypeId>,
     /// TypeId → Reflection & Serialization Kaydı
     type_to_reg: BTreeMap<TypeId, TypeRegistration>,
+    /// Bevy Reflect tabanlı tip kayıtları (gizmo-reflect)
+    pub reflect_registry: bevy_reflect::TypeRegistry,
 }
 
 impl ComponentRegistry {
@@ -51,6 +55,7 @@ impl ComponentRegistry {
         Self {
             name_to_type: BTreeMap::new(),
             type_to_reg: BTreeMap::new(),
+            reflect_registry: bevy_reflect::TypeRegistry::default(),
         }
     }
 
@@ -92,11 +97,52 @@ impl ComponentRegistry {
                 deserialize_fn: None,
                 get_json_fn: None,
                 set_json_fn: None,
+                get_reflect_ptr_fn: None,
+                insert_reflect_fn: None,
             },
         );
     }
 
     /// Yeni bir component tipini isme göre ve Reflection (serde) yeteneği ile kaydet.
+    pub fn register_reflect<T: bevy_reflect::Reflect + bevy_reflect::FromReflect + bevy_reflect::GetTypeRegistration + crate::component::Component + Clone + 'static>(&mut self, name: &str) {
+        self.reflect_registry.register::<T>();
+        let type_id = TypeId::of::<T>();
+
+        let get_reflect_ptr_fn: fn(*const u8) -> *const dyn bevy_reflect::Reflect = |ptr| {
+            let component = unsafe { &*(ptr as *const T) };
+            component as &dyn bevy_reflect::Reflect as *const dyn bevy_reflect::Reflect
+        };
+
+        let insert_reflect_fn: fn(&mut crate::world::World, crate::entity::Entity, &dyn bevy_reflect::PartialReflect) -> Result<(), String> = |world, entity, partial_reflect| {
+            if let Some(concrete) = <T as bevy_reflect::FromReflect>::from_reflect(partial_reflect) {
+                world.add_component(entity, concrete);
+                Ok(())
+            } else {
+                Err(format!("Could not convert PartialReflect to {}", std::any::type_name::<T>()))
+            }
+        };
+
+        if let Some(reg) = self.type_to_reg.get_mut(&type_id) {
+            reg.get_reflect_ptr_fn = Some(get_reflect_ptr_fn);
+            reg.insert_reflect_fn = Some(insert_reflect_fn);
+        } else {
+            self.name_to_type.insert(name.to_string(), type_id);
+            self.type_to_reg.insert(
+                type_id,
+                TypeRegistration {
+                    type_id,
+                    name: name.to_string(),
+                    serialize_fn: None,
+                    deserialize_fn: None,
+                    get_json_fn: None,
+                    set_json_fn: None,
+                    get_reflect_ptr_fn: Some(get_reflect_ptr_fn),
+                    insert_reflect_fn: Some(insert_reflect_fn),
+                },
+            );
+        }
+    }
+
     pub fn register_serializable<
         T: crate::component::Component + serde::Serialize + serde::de::DeserializeOwned,
     >(
@@ -162,6 +208,8 @@ impl ComponentRegistry {
                 deserialize_fn: Some(deserialize_fn),
                 get_json_fn: Some(get_json_fn),
                 set_json_fn: Some(set_json_fn),
+                get_reflect_ptr_fn: None,
+                insert_reflect_fn: None,
             },
         );
     }

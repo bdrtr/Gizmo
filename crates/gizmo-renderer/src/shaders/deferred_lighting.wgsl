@@ -106,7 +106,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     
     // 1. Diffuse IBL (Irradiance)
     // We sample the sky at the normal vector with max roughness.
-    let irradiance = get_sky_color(N, sun_dir, 1.0) * 0.01; // Gölgenin zifiri karanlık olmaması için sadece %1 ortam ışığı
+    let irradiance = get_sky_color(N, sun_dir, 1.0) * 0.15; // Increased ambient light
     let ambient = albedo * irradiance * (1.0 - metallic);
     
     // 2. Specular IBL (Pre-filtered Environment Map)

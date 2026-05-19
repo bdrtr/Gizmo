@@ -88,7 +88,7 @@ pub fn garbage_collection_system(
             let _ = gizmo::scene::SceneData::save(
                 world,
                 &autosave_path,
-                &gizmo::scene::SceneRegistry::default(),
+                &gizmo::scene::registry::default_scene_registry(),
             );
             editor_state.log_info(&format!("💾 Auto-Save: {}", autosave_path));
         }

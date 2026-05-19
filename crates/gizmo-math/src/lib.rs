@@ -19,7 +19,7 @@ pub mod spatial;
 
 // Geriye dönük uyumluluk veya ekstra yardımcı metodlar için pub modüller kalsın
 // ama custom tipleri glam ile değiştiriyoruz.
-pub use glam::{EulerRot, Mat3, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
+pub use bevy_math::{EulerRot, Mat3, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 
 pub use aabb::Aabb;
 pub use fixed::{Fp32, FpVec3};

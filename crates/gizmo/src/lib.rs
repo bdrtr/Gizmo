@@ -44,6 +44,9 @@ pub use gizmo_scene::ron;
 #[cfg(feature = "ui")]
 pub use gizmo_ui as ui;
 
+#[cfg(feature = "animation")]
+pub use gizmo_animation as animation;
+
 // === 3. Parti Re-Export (Kullanıcının ayrıca eklemesine gerek kalmasın) ===
 pub use gizmo_core::gizmo_log;
 

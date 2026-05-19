@@ -15,3 +15,4 @@ gizmo-core = { path = "../gizmo-core", version = "0.1.4" }
 gizmo-math = { path = "../gizmo-math", version = "0.1.4" }
 arrayvec = "0.7.6"
 tracing = "0.1.44"
+bevy_reflect = "0.15.1"

@@ -9,6 +9,11 @@ use bytemuck;
 use wgpu;
 
 #[derive(Default)]
+pub struct WireframeConfig {
+    pub global: bool,
+}
+
+#[derive(Default)]
 pub struct RenderCache {
     pub(crate) batches: std::collections::HashMap<BatchKey, BatchData>,
     pub instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
@@ -912,28 +917,53 @@ pub fn default_render_pass(
         render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
         render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
 
+        let show_wireframes = world.get_resource::<WireframeConfig>().map(|c| c.global).unwrap_or(false);
+
         for item in &draw_items {
-            let pipeline = if item.is_skybox {
-                &renderer.scene.sky_pipeline
+            let mut draw_solid = false;
+            let draw_wire = show_wireframes && !item.is_skybox;
+
+            if item.is_skybox {
+                draw_solid = true;
             } else if item.unlit {
-                &renderer.scene.unlit_pipeline
+                draw_solid = true;
             } else if renderer.deferred.is_none() {
-                &renderer.scene.render_pipeline
-            } else {
-                continue; // PBR already rendered in deferred G-buffer + lighting pass
-            };
-            render_pass.set_pipeline(pipeline);
+                draw_solid = true;
+            }
+
             let skel_bg = item
                 .skeleton_bind_group
                 .as_ref()
                 .unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
-            render_pass.set_bind_group(1, &item.bind_group, &[]);
-            render_pass.set_bind_group(3, skel_bg, &[]);
-            render_pass.set_vertex_buffer(0, item.vbuf.slice(..));
-            render_pass.draw(
-                0..item.vertex_count,
-                item.first_instance..(item.first_instance + item.instance_count),
-            );
+
+            if draw_solid {
+                let pipeline = if item.is_skybox {
+                    &renderer.scene.sky_pipeline
+                } else if item.unlit {
+                    &renderer.scene.unlit_pipeline
+                } else {
+                    &renderer.scene.render_pipeline
+                };
+                render_pass.set_pipeline(pipeline);
+                render_pass.set_bind_group(1, &item.bind_group, &[]);
+                render_pass.set_bind_group(3, skel_bg, &[]);
+                render_pass.set_vertex_buffer(0, item.vbuf.slice(..));
+                render_pass.draw(
+                    0..item.vertex_count,
+                    item.first_instance..(item.first_instance + item.instance_count),
+                );
+            }
+
+            if draw_wire {
+                render_pass.set_pipeline(&renderer.scene.wireframe_pipeline);
+                render_pass.set_bind_group(1, &item.bind_group, &[]);
+                render_pass.set_bind_group(3, skel_bg, &[]);
+                render_pass.set_vertex_buffer(0, item.vbuf.slice(..));
+                render_pass.draw(
+                    0..item.vertex_count,
+                    item.first_instance..(item.first_instance + item.instance_count),
+                );
+            }
         }
 
         // Draw GPU Physics Spheres!

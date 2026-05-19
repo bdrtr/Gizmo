@@ -441,63 +441,75 @@ impl System for ConditionalSystem {
     }
 }
 
-pub trait DistributiveRunIfExt<P1, P2, P3, P4, P5> {
+pub trait DistributiveRunIfExt<Params> {
     fn distributive_run_if<ParamC, Cond: IntoCondition<ParamC> + Clone + Send + Sync + 'static>(self, cond: Cond) -> Box<dyn System>;
 }
 
-// Sadece Tuple-5 için yazıyoruz çünkü test bunu istiyor. Bevy'de bu macro ile üretilir.
-impl<P1, P2, P3, P4, P5, S1, S2, S3, S4, S5> DistributiveRunIfExt<P1, P2, P3, P4, P5> for (S1, S2, S3, S4, S5)
-where
-    S1: IntoSystem<P1> + 'static,
-    S2: IntoSystem<P2> + 'static,
-    S3: IntoSystem<P3> + 'static,
-    S4: IntoSystem<P4> + 'static,
-    S5: IntoSystem<P5> + 'static,
-{
-    fn distributive_run_if<ParamC, Cond: IntoCondition<ParamC> + Clone + Send + Sync + 'static>(self, cond: Cond) -> Box<dyn System> {
-        let sys1 = self.0.into_system().run_if_sys(cond.clone());
-        let sys2 = self.1.into_system().run_if_sys(cond.clone());
-        let sys3 = self.2.into_system().run_if_sys(cond.clone());
-        let sys4 = self.3.into_system().run_if_sys(cond.clone());
-        let sys5 = self.4.into_system().run_if_sys(cond);
+macro_rules! impl_distributive_run_if {
+    ($($P:ident $S:ident $idx:tt),+) => {
+        impl<$($P, $S),+> DistributiveRunIfExt<($($P,)+)> for ($($S,)+)
+        where
+            $($S: IntoSystem<$P> + 'static,)+
+        {
+            fn distributive_run_if<ParamC, Cond: IntoCondition<ParamC> + Clone + Send + Sync + 'static>(self, cond: Cond) -> Box<dyn System> {
+                let mut systems: Vec<Box<dyn System>> = Vec::new();
+                $(
+                    systems.push(self.$idx.into_system().run_if_sys(cond.clone()));
+                )+
 
-        struct MacroSystem {
-            systems: [Box<dyn System>; 5],
-        }
-        impl System for MacroSystem {
-            fn run(&mut self, world: &World, dt: f32) {
-                for s in &mut self.systems {
-                    s.run(world, dt);
+                struct MacroSystem {
+                    systems: Vec<Box<dyn System>>,
                 }
-            }
-            fn access_info(&self) -> AccessInfo {
-                let mut info = AccessInfo::new();
-                for s in &self.systems {
-                    let s_info = s.access_info();
-                    info.component_reads.extend(s_info.component_reads);
-                    info.component_writes.extend(s_info.component_writes);
-                    info.resource_reads.extend(s_info.resource_reads);
-                    info.resource_writes.extend(s_info.resource_writes);
+                impl System for MacroSystem {
+                    fn run(&mut self, world: &World, dt: f32) {
+                        for s in &mut self.systems {
+                            s.run(world, dt);
+                        }
+                    }
+                    fn access_info(&self) -> AccessInfo {
+                        let mut info = AccessInfo::new();
+                        for s in &self.systems {
+                            let s_info = s.access_info();
+                            info.component_reads.extend(s_info.component_reads);
+                            info.component_writes.extend(s_info.component_writes);
+                            info.resource_reads.extend(s_info.resource_reads);
+                            info.resource_writes.extend(s_info.resource_writes);
+                        }
+                        info
+                    }
                 }
-                info
-            }
-        }
 
-        Box::new(MacroSystem {
-            systems: [sys1, sys2, sys3, sys4, sys5],
-        })
-    }
+                Box::new(MacroSystem { systems })
+            }
+        }
+    };
 }
+
+impl_distributive_run_if!(P1 S1 0);
+impl_distributive_run_if!(P1 S1 0, P2 S2 1);
+impl_distributive_run_if!(P1 S1 0, P2 S2 1, P3 S3 2);
+impl_distributive_run_if!(P1 S1 0, P2 S2 1, P3 S3 2, P4 S4 3);
+impl_distributive_run_if!(P1 S1 0, P2 S2 1, P3 S3 2, P4 S4 3, P5 S5 4);
+impl_distributive_run_if!(P1 S1 0, P2 S2 1, P3 S3 2, P4 S4 3, P5 S5 4, P6 S6 5);
+impl_distributive_run_if!(P1 S1 0, P2 S2 1, P3 S3 2, P4 S4 3, P5 S5 4, P6 S6 5, P7 S7 6);
+impl_distributive_run_if!(P1 S1 0, P2 S2 1, P3 S3 2, P4 S4 3, P5 S5 4, P6 S6 5, P7 S7 6, P8 S8 7);
 
 // ==============================================================
 // SYSTEM CONFIG — LABEL / BEFORE / AFTER / READS / WRITES
 // ==============================================================
+
+pub trait SystemSet: 'static {
+    fn set_name() -> &'static str {
+        std::any::type_name::<Self>()
+    }
+}
 
 pub struct SystemConfig {
     pub(crate) system: Box<dyn System>,
     pub(crate) labels: Vec<&'static str>,
     pub(crate) before: Vec<&'static str>,
     pub(crate) after: Vec<&'static str>,
+    pub(crate) in_sets: Vec<&'static str>,
     pub(crate) added_info: AccessInfo,
     pub(crate) phase: Phase,
 }
@@ -509,9 +521,16 @@ impl SystemConfig {
             labels: Vec::new(),
             before: Vec::new(),
             after: Vec::new(),
+            in_sets: Vec::new(),
             added_info: AccessInfo::new(),
             phase: Phase::default(),
         }
+    }
+
+    pub fn in_set<S: SystemSet>(mut self) -> Self {
+        self.in_sets.push(S::set_name());
+        self.labels.push(S::set_name());
+        self
     }
 
     pub fn label(mut self, label: &'static str) -> Self {
@@ -524,8 +543,18 @@ impl SystemConfig {
         self
     }
 
+    pub fn before_set<S: SystemSet>(mut self) -> Self {
+        self.before.push(S::set_name());
+        self
+    }
+
     pub fn after(mut self, target: &'static str) -> Self {
         self.after.push(target);
+        self
+    }
+
+    pub fn after_set<S: SystemSet>(mut self) -> Self {
+        self.after.push(S::set_name());
         self
     }
 
@@ -575,17 +604,40 @@ pub trait IntoSystemConfig<Params> {
     {
         self.into_config().label(l)
     }
+    
+    fn in_set<S: SystemSet>(self) -> SystemConfig
+    where
+        Self: Sized,
+    {
+        self.into_config().in_set::<S>()
+    }
+    
     fn before(self, target: &'static str) -> SystemConfig
     where
         Self: Sized,
     {
         self.into_config().before(target)
     }
+    
+    fn before_set<S: SystemSet>(self) -> SystemConfig
+    where
+        Self: Sized,
+    {
+        self.into_config().before_set::<S>()
+    }
+    
     fn after(self, target: &'static str) -> SystemConfig
     where
         Self: Sized,
     {
         self.into_config().after(target)
+    }
+
+    fn after_set<S: SystemSet>(self) -> SystemConfig
+    where
+        Self: Sized,
+    {
+        self.into_config().after_set::<S>()
     }
 
     fn reads<C: 'static>(self) -> SystemConfig
@@ -715,8 +767,39 @@ impl SystemBatch {
     }
 }
 
+pub struct SetConfig {
+    pub name: &'static str,
+    pub before: Vec<&'static str>,
+    pub after: Vec<&'static str>,
+    pub phase: Option<Phase>,
+}
+
+impl SetConfig {
+    pub fn new<S: SystemSet>() -> Self {
+        Self {
+            name: S::set_name(),
+            before: Vec::new(),
+            after: Vec::new(),
+            phase: None,
+        }
+    }
+    pub fn before<S: SystemSet>(mut self) -> Self {
+        self.before.push(S::set_name());
+        self
+    }
+    pub fn after<S: SystemSet>(mut self) -> Self {
+        self.after.push(S::set_name());
+        self
+    }
+    pub fn in_phase(mut self, phase: Phase) -> Self {
+        self.phase = Some(phase);
+        self
+    }
+}
+
 pub struct Schedule {
     unbuilt_configs: Vec<SystemConfig>,
+    set_configs: std::collections::HashMap<&'static str, SetConfig>,
     /// Her faz için ayrı batch listesi. Fazlar sıralı çalışır, faz içi batch'ler paralel.
     phase_batches: Vec<(Phase, Vec<SystemBatch>)>,
     /// Geriye dönük uyumluluk: faz kullanılmadığında eski düz batch listesi.
@@ -728,10 +811,16 @@ impl Schedule {
     pub fn new() -> Self {
         Self {
             unbuilt_configs: Vec::new(),
+            set_configs: std::collections::HashMap::new(),
             phase_batches: Vec::new(),
             legacy_batches: Vec::new(),
             uses_phases: false,
         }
+    }
+
+    pub fn configure_set(&mut self, config: SetConfig) {
+        self.set_configs.insert(config.name, config);
+        self.invalidate();
     }
 
     pub fn add_di_system<Params, S: IntoSystemConfig<Params>>(&mut self, system: S) {
@@ -900,9 +989,22 @@ impl Schedule {
             return;
         }
 
-        let configs = std::mem::take(&mut self.unbuilt_configs);
+        let mut configs = std::mem::take(&mut self.unbuilt_configs);
         if configs.is_empty() {
             return;
+        }
+
+        // Apply SetConfigs to systems
+        for config in &mut configs {
+            for set_name in &config.in_sets {
+                if let Some(set_cfg) = self.set_configs.get(set_name) {
+                    config.before.extend(set_cfg.before.iter().copied());
+                    config.after.extend(set_cfg.after.iter().copied());
+                    if let Some(phase) = set_cfg.phase {
+                        config.phase = phase;
+                    }
+                }
+            }
         }
 
         // Herhangi bir config varsayılan olmayan Phase kullanıyor mu?
@@ -1099,6 +1201,28 @@ mod tests {
         // Hepsi aynı anda paralel çalışabileceği için 1 adet batch oluşmalı
         assert_eq!(schedule.legacy_batches.len(), 1);
         assert_eq!(schedule.legacy_batches[0].systems.len(), 3);
+    }
+
+    struct PhysicsSet;
+    impl SystemSet for PhysicsSet {}
+
+    #[test]
+    fn test_system_set_configuration() {
+        let mut schedule = Schedule::new();
+        let log = RunLog::new();
+
+        schedule.add_di_system(
+            create_system("sys_a", log.clone()).in_set::<PhysicsSet>()
+        );
+        schedule.add_di_system(
+            create_system("sys_b", log.clone()).after_set::<PhysicsSet>()
+        );
+
+        schedule.configure_set(SetConfig::new::<PhysicsSet>());
+
+        schedule.build();
+        
+        assert_eq!(schedule.legacy_batches.len(), 2);
     }
 
     #[test]

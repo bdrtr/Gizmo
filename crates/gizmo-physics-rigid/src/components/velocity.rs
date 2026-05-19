@@ -1,14 +1,17 @@
 use gizmo_math::Vec3;
 use serde::{Deserialize, Serialize};
+use bevy_reflect::Reflect;
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Reflect)]
 pub struct Velocity {
     pub linear: Vec3,
     pub angular: Vec3,
     /// Önceki karenin hızı (Diferansiyel hesap / Heun's method için)
     #[serde(skip)]
+    #[reflect(ignore)]
     pub pre_linear: Vec3,
     #[serde(skip)]
+    #[reflect(ignore)]
     pub pre_angular: Vec3,
 }
 
