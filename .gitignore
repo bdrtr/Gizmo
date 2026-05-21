@@ -33,3 +33,9 @@ editor_prefs.toml
 # Large assets (tracked via Git LFS or downloaded separately)
 *.glb
 assets/*.crdownload
+
+# Environment variables
+.env
+.env.local
+.env.development
+.env.production
