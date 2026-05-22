@@ -4,7 +4,7 @@ members = [
     "crates/*",
     "server",
     "demo",
-    "cradle", "test_glam",
+    "cradle",
 ]
 
 [workspace.package]

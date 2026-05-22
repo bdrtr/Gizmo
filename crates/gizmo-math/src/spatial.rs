@@ -181,7 +181,7 @@ impl SpatialInertia {
         let mut force_w = self.rot.mul_vec3(v.w) + com_cross_v * self.mass;
         // Parallel axis theorem correction if COM offset is non-zero
         if self.com.length_squared() > 1e-12 {
-            force_w += self.com.cross(com_cross_w) * self.mass;
+            force_w -= self.com.cross(com_cross_w) * self.mass;
         }
 
         let force_v = v.v * self.mass - com_cross_w * self.mass;

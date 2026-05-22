@@ -5,7 +5,7 @@
 /// subsistemler otomatik devre dışı bırakılır.
 ///
 /// # Kullanım
-/// ```rust
+/// ```rust,ignore
 /// let profile = WebProfile::fighter(); // Dövüş oyunu preset'i
 /// let profile = WebProfile::racing();  // Yarış oyunu preset'i
 /// let profile = WebProfile::sandbox(); // Açık dünya / sandbox

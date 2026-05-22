@@ -15,7 +15,11 @@ fn main() {
             scene.spawn_cube(Vec3::new(0.0, 0.5, 0.0), 1.0, Vec3::new(0.20, 0.28, 1.0));
             
             // Light (ışık)
-            scene.spawn_point_light(Vec3::new(2.0, 2.0, 2.0));
+            let light_ent = scene.world.spawn();
+            let mut bundle = DirectionalLightBundle::default();
+            bundle.rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4) * Quat::from_rotation_y(std::f32::consts::FRAC_PI_4);
+            bundle.intensity = 1.8;
+            bundle.apply(scene.world, light_ent);
             
             // Camera (kamera)
             scene.spawn_camera(state, Vec3::new(-2.5, 4.5, 9.0), Vec3::ZERO);

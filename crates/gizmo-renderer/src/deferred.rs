@@ -296,6 +296,7 @@ impl DeferredState {
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Cw,
                 cull_mode: Some(wgpu::Face::Back),
                 ..Default::default()
             },
@@ -346,6 +347,7 @@ impl DeferredState {
             fragment: None, // NO COLOR TARGETS!
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Cw,
                 cull_mode: Some(wgpu::Face::Back),
                 ..Default::default()
             },

@@ -574,7 +574,7 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
+                front_face: wgpu::FrontFace::Cw,
                 cull_mode: cull,
                 unclipped_depth: false,
                 polygon_mode,
@@ -694,7 +694,7 @@ fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs) -> wgpu::R
         fragment: None,
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
-            front_face: wgpu::FrontFace::Ccw,
+            front_face: wgpu::FrontFace::Cw,
             cull_mode: None,
             polygon_mode: wgpu::PolygonMode::Fill,
             ..Default::default()
@@ -989,19 +989,19 @@ mod tests {
             assert!(!grew, "Buffer should not grow if capacity is enough");
             assert_eq!(scene_state.instance_capacity, 8_192);
 
-            // Mevcudun disine ciktiginda (Ornegin 10_000) 2 katina grow eder.
+            // Mevcudun disine ciktiginda (Ornegin 10_000) 1.5 katina grow eder.
             let grew2 = scene_state.ensure_instance_capacity(&device, 10_000);
             assert!(grew2, "Buffer should grow since needed > capacity");
-            assert_eq!(scene_state.instance_capacity, 20_000);
+            assert_eq!(scene_state.instance_capacity, 12_288);
 
             // Gercek byte miktarinin da artmis oldugundan emin olalim.
-            let expected_bytes = (20_000 * std::mem::size_of::<crate::InstanceRaw>()) as u64;
+            let expected_bytes = (12_288 * std::mem::size_of::<crate::InstanceRaw>()) as u64;
             assert_eq!(scene_state.instance_buffer.size(), expected_bytes);
 
             // Yeniden mevcut sinirlar icinde kaldiginda grow etmez
             let grew3 = scene_state.ensure_instance_capacity(&device, 12_000);
             assert!(!grew3, "Buffer should not grow if capacity is enough");
-            assert_eq!(scene_state.instance_capacity, 20_000);
+            assert_eq!(scene_state.instance_capacity, 12_288);
         });
     }
 }

@@ -219,21 +219,21 @@ impl JointSolver {
             let (l, r) = velocities.split_at_mut(idx_b);
             if dyn_a {
                 l[idx_a].linear -= impulse * inv_m_a;
-                l[idx_a].angular -= inv_i_a.mul_vec3(r_a).cross(impulse);
+                l[idx_a].angular -= inv_i_a.mul_vec3(r_a.cross(impulse));
             }
             if dyn_b {
                 r[0].linear += impulse * inv_m_b;
-                r[0].angular += inv_i_b.mul_vec3(r_b).cross(impulse);
+                r[0].angular += inv_i_b.mul_vec3(r_b.cross(impulse));
             }
         } else {
             let (l, r) = velocities.split_at_mut(idx_a);
             if dyn_b {
                 l[idx_b].linear += impulse * inv_m_b;
-                l[idx_b].angular += inv_i_b.mul_vec3(r_b).cross(impulse);
+                l[idx_b].angular += inv_i_b.mul_vec3(r_b.cross(impulse));
             }
             if dyn_a {
                 r[0].linear -= impulse * inv_m_a;
-                r[0].angular -= inv_i_a.mul_vec3(r_a).cross(impulse);
+                r[0].angular -= inv_i_a.mul_vec3(r_a.cross(impulse));
             }
         }
         lambda
@@ -745,21 +745,21 @@ impl JointSolver {
                     let (l, r) = velocities.split_at_mut(idx_b);
                     if dyn_a {
                         l[idx_a].linear -= impulse * inv_m_a;
-                        l[idx_a].angular -= inv_i_a.mul_vec3(r_a).cross(impulse);
+                        l[idx_a].angular -= inv_i_a.mul_vec3(r_a.cross(impulse));
                     }
                     if dyn_b {
                         r[0].linear += impulse * inv_m_b;
-                        r[0].angular += inv_i_b.mul_vec3(r_b).cross(impulse);
+                        r[0].angular += inv_i_b.mul_vec3(r_b.cross(impulse));
                     }
                 } else {
                     let (l, r) = velocities.split_at_mut(idx_a);
                     if dyn_b {
                         l[idx_b].linear += impulse * inv_m_b;
-                        l[idx_b].angular += inv_i_b.mul_vec3(r_b).cross(impulse);
+                        l[idx_b].angular += inv_i_b.mul_vec3(r_b.cross(impulse));
                     }
                     if dyn_a {
                         r[0].linear -= impulse * inv_m_a;
-                        r[0].angular -= inv_i_a.mul_vec3(r_a).cross(impulse);
+                        r[0].angular -= inv_i_a.mul_vec3(r_a.cross(impulse));
                     }
                 }
             }
@@ -839,21 +839,21 @@ impl JointSolver {
             let (l, r) = velocities.split_at_mut(idx_b);
             if dyn_a {
                 l[idx_a].linear += impulse * inv_m_a;
-                l[idx_a].angular += inv_i_a.mul_vec3(r_a).cross(impulse);
+                l[idx_a].angular += inv_i_a.mul_vec3(r_a.cross(impulse));
             }
             if dyn_b {
                 r[0].linear -= impulse * inv_m_b;
-                r[0].angular -= inv_i_b.mul_vec3(r_b).cross(impulse);
+                r[0].angular -= inv_i_b.mul_vec3(r_b.cross(impulse));
             }
         } else {
             let (l, r) = velocities.split_at_mut(idx_a);
             if dyn_b {
                 l[idx_b].linear -= impulse * inv_m_b;
-                l[idx_b].angular -= inv_i_b.mul_vec3(r_b).cross(impulse);
+                l[idx_b].angular -= inv_i_b.mul_vec3(r_b.cross(impulse));
             }
             if dyn_a {
                 r[0].linear += impulse * inv_m_a;
-                r[0].angular += inv_i_a.mul_vec3(r_a).cross(impulse);
+                r[0].angular += inv_i_a.mul_vec3(r_a.cross(impulse));
             }
         }
     }

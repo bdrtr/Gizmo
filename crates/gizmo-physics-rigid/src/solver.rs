@@ -234,11 +234,11 @@ impl ConstraintSolver {
                     let imp_n = normal * actual_n;
                     if dyn_a {
                         velocities[idx_a].linear -= imp_n * inv_m_a;
-                        velocities[idx_a].angular -= inv_i_a.mul_vec3(r_a).cross(imp_n);
+                        velocities[idx_a].angular -= inv_i_a.mul_vec3(r_a.cross(imp_n));
                     }
                     if dyn_b {
                         velocities[idx_b].linear += imp_n * inv_m_b;
-                        velocities[idx_b].angular += inv_i_b.mul_vec3(r_b).cross(imp_n);
+                        velocities[idx_b].angular += inv_i_b.mul_vec3(r_b.cross(imp_n));
                     }
 
                     // ── Sürtünme İmpulsu (2D Coulomb Cone) ──────────────────
@@ -305,11 +305,11 @@ impl ConstraintSolver {
                     let imp_t = tangent * actual_t;
                     if dyn_a {
                         velocities[idx_a].linear -= imp_t * inv_m_a;
-                        velocities[idx_a].angular -= inv_i_a.mul_vec3(r_a).cross(imp_t);
+                        velocities[idx_a].angular -= inv_i_a.mul_vec3(r_a.cross(imp_t));
                     }
                     if dyn_b {
                         velocities[idx_b].linear += imp_t * inv_m_b;
-                        velocities[idx_b].angular += inv_i_b.mul_vec3(r_b).cross(imp_t);
+                        velocities[idx_b].angular += inv_i_b.mul_vec3(r_b.cross(imp_t));
                     }
                 }
             }
@@ -408,11 +408,11 @@ impl ConstraintSolver {
                         let imp_p = normal * actual_delta;
                         if dyn_a {
                             pseudo_vel[idx_a].0 -= imp_p * inv_m_a;
-                            pseudo_vel[idx_a].1 -= inv_i_a.mul_vec3(r_a).cross(imp_p);
+                            pseudo_vel[idx_a].1 -= inv_i_a.mul_vec3(r_a.cross(imp_p));
                         }
                         if dyn_b {
                             pseudo_vel[idx_b].0 += imp_p * inv_m_b;
-                            pseudo_vel[idx_b].1 += inv_i_b.mul_vec3(r_b).cross(imp_p);
+                            pseudo_vel[idx_b].1 += inv_i_b.mul_vec3(r_b.cross(imp_p));
                         }
                     }
                 }
@@ -493,11 +493,11 @@ impl ConstraintSolver {
 
         if rb_a.is_dynamic() {
             vel_a.linear -= impulse * inv_m_a;
-            vel_a.angular -= inv_i_a.mul_vec3(r_a).cross(impulse);
+            vel_a.angular -= inv_i_a.mul_vec3(r_a.cross(impulse));
         }
         if rb_b.is_dynamic() {
             vel_b.linear += impulse * inv_m_b;
-            vel_b.angular += inv_i_b.mul_vec3(r_b).cross(impulse);
+            vel_b.angular += inv_i_b.mul_vec3(r_b.cross(impulse));
         }
 
         // Sürtünme
@@ -570,11 +570,11 @@ impl ConstraintSolver {
         let ft = tangent * jt;
         if rb_a.is_dynamic() {
             vel_a.linear -= ft * inv_m_a;
-            vel_a.angular -= inv_i_a.mul_vec3(r_a).cross(ft);
+            vel_a.angular -= inv_i_a.mul_vec3(r_a.cross(ft));
         }
         if rb_b.is_dynamic() {
             vel_b.linear += ft * inv_m_b;
-            vel_b.angular += inv_i_b.mul_vec3(r_b).cross(ft);
+            vel_b.angular += inv_i_b.mul_vec3(r_b.cross(ft));
         }
     }
 }

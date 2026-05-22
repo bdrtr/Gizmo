@@ -87,8 +87,17 @@ fn main() {
             let mut bundle = gizmo::bundles::PointLightBundle::default();
             bundle.position = Vec3::new(8.0, 16.0, 8.0);
             bundle.color = Vec3::new(1.0, 1.0, 1.0);
-            bundle.intensity = 200.0;
+            bundle.intensity = 10.0;
+            bundle.radius = 40.0;
             bundle.apply(scene.world, light_ent);
+
+            // Directional Light (Sun)
+            let sun_ent = scene.world.spawn();
+            let mut sun_bundle = gizmo::bundles::DirectionalLightBundle::default();
+            sun_bundle.rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4) * Quat::from_rotation_y(std::f32::consts::FRAC_PI_4);
+            sun_bundle.intensity = 1.2;
+            sun_bundle.color = Vec3::new(1.0, 1.0, 1.0);
+            sun_bundle.apply(scene.world, sun_ent);
 
             // Camera setup
             scene.spawn_camera(&mut state, Vec3::new(0.0, 7.0, 14.0), Vec3::new(0.0, 1.0, 0.0));
@@ -237,6 +246,7 @@ fn main() {
             world.insert_resource(phys_world);
             world.insert_resource(asset_manager);
             world.insert_resource(gizmo::systems::render::WireframeConfig { global: false });
+            world.insert_resource(Gizmos::default());
 
             world.insert_resource(DemoState {
                 simple: state,
@@ -249,6 +259,7 @@ fn main() {
         .add_system(advance_rows.in_phase(Phase::Update))
         .add_system(rotate_shapes.in_phase(Phase::Update))
         .add_system(camera_movement.in_phase(Phase::Update))
+        .add_system(draw_cursor.in_phase(Phase::Update))
         .add_system((Box::new(PhysicsSystem) as Box<dyn gizmo::core::system::System>).in_phase(Phase::Physics))
         .add_system((Box::new(TransformUpdateSystem) as Box<dyn gizmo::core::system::System>).in_phase(Phase::PostUpdate))
         .set_render(|world, _state, encoder, view, renderer, _light_time| {
@@ -384,3 +395,69 @@ impl gizmo::core::system::System for TransformUpdateSystem {
         gizmo::core::system::AccessInfo::new()
     }
 }
+
+fn draw_cursor(
+    mut gizmos: ResMut<Gizmos>,
+    win_info: Res<WindowInfo>,
+    input: Res<Input>,
+    q_cam: Query<(&Transform, &gizmo::renderer::components::Camera)>,
+) {
+    let (mouse_x, mouse_y) = input.mouse_position();
+    if mouse_x < 0.0 || mouse_y < 0.0 || mouse_x > win_info.width || mouse_y > win_info.height {
+        return;
+    }
+
+    let mut cam_data = None;
+    for (_id, (trans, cam)) in q_cam.iter() {
+        if cam.primary {
+            cam_data = Some((trans.position, cam));
+            break;
+        }
+    }
+
+    if let Some((cam_pos, cam)) = cam_data {
+        let ndc_x = (mouse_x / win_info.width) * 2.0 - 1.0;
+        let ndc_y = 1.0 - (mouse_y / win_info.height) * 2.0;
+
+        let aspect = win_info.aspect_ratio();
+        let proj = cam.get_projection(aspect);
+        let view = cam.get_view(cam_pos);
+        let view_proj_inv = (proj * view).inverse();
+
+        let near_ndc = Vec4::new(ndc_x, ndc_y, 0.0, 1.0);
+        let far_ndc = Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
+
+        let mut near_world = view_proj_inv * near_ndc;
+        if near_world.w.abs() > 1e-6 {
+            near_world /= near_world.w;
+        }
+        let mut far_world = view_proj_inv * far_ndc;
+        if far_world.w.abs() > 1e-6 {
+            far_world /= far_world.w;
+        }
+
+        let origin = near_world.truncate();
+        let direction = (far_world.truncate() - origin).normalize();
+
+        let denominator = direction.y;
+        if denominator.abs() > 1e-6 {
+            let t = -origin.y / denominator;
+            if t >= 0.0 {
+                let hit_point = origin + direction * t;
+                let hit_vec3 = Vec3::new(hit_point.x, hit_point.y, hit_point.z);
+
+                let segments = 32;
+                let radius = 0.2;
+                let color = [1.0, 1.0, 1.0, 1.0];
+                for j in 0..segments {
+                    let a1 = j as f32 * 2.0 * std::f32::consts::PI / segments as f32;
+                    let a2 = (j + 1) as f32 * 2.0 * std::f32::consts::PI / segments as f32;
+                    let start = Vec3::new(hit_vec3.x + radius * a1.cos(), 0.01, hit_vec3.z + radius * a1.sin());
+                    let end = Vec3::new(hit_vec3.x + radius * a2.cos(), 0.01, hit_vec3.z + radius * a2.sin());
+                    gizmos.draw_line(start, end, color);
+                }
+            }
+        }
+    }
+}
+
