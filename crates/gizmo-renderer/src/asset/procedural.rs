@@ -27,7 +27,7 @@ impl super::AssetManager {
             let va = Vec3::from_array(a);
             let vb = Vec3::from_array(b);
             let vc = Vec3::from_array(c);
-            let n = (vb - va).cross(vc - va).normalize();
+            let n = (vc - va).cross(vb - va).normalize();
             let normal = [n.x, n.y, n.z];
 
             vertices.push(Vertex { position: a, color: [1.0; 3], normal, tex_coords: [0.0, 0.0], joint_indices: def_j, joint_weights: def_w });
@@ -67,12 +67,12 @@ impl super::AssetManager {
             let p2_top = [radius_top * t2.cos(), half_h, radius_top * t2.sin()];
             let p2_bot = [radius_bottom * t2.cos(), -half_h, radius_bottom * t2.sin()];
 
-            let mut n1 = Vec3::new(t1.cos(), y_normal, t1.sin()).normalize();
-            let mut n2 = Vec3::new(t2.cos(), y_normal, t2.sin()).normalize();
+            let n1 = Vec3::new(t1.cos(), y_normal, t1.sin()).normalize();
+            let n2 = Vec3::new(t2.cos(), y_normal, t2.sin()).normalize();
             let n1_arr = [n1.x, n1.y, n1.z];
             let n2_arr = [n2.x, n2.y, n2.z];
 
-            // Sides
+            // Sides (CCW from outside)
             vertices.push(Vertex { position: p1_top, normal: n1_arr, tex_coords: [u1, 0.0], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: p1_bot, normal: n1_arr, tex_coords: [u1, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: p2_bot, normal: n2_arr, tex_coords: [u2, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
@@ -81,15 +81,15 @@ impl super::AssetManager {
             vertices.push(Vertex { position: p2_bot, normal: n2_arr, tex_coords: [u2, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: p2_top, normal: n2_arr, tex_coords: [u2, 0.0], color: col, joint_indices: def_j, joint_weights: def_w });
 
-            // Top Cap
+            // Top Cap (CCW from above)
             vertices.push(Vertex { position: [0.0, half_h, 0.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: p2_top, normal: [0.0, 1.0, 0.0], tex_coords: [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: p1_top, normal: [0.0, 1.0, 0.0], tex_coords: [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: p2_top, normal: [0.0, 1.0, 0.0], tex_coords: [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()], color: col, joint_indices: def_j, joint_weights: def_w });
 
-            // Bottom Cap
+            // Bottom Cap (CCW from below)
             vertices.push(Vertex { position: [0.0, -half_h, 0.0], normal: [0.0, -1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: p1_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: p2_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: p1_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()], color: col, joint_indices: def_j, joint_weights: def_w });
         }
 
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -134,7 +134,7 @@ impl super::AssetManager {
             let v2_top = [p2[0], half_d, p2[1]];
             let v2_bot = [p2[0], -half_d, p2[1]];
 
-            // Side
+            // Side (CCW from outside)
             vertices.push(Vertex { position: v1_top, normal, tex_coords: [0.0, 0.0], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: v1_bot, normal, tex_coords: [0.0, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: v2_bot, normal, tex_coords: [1.0, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
@@ -143,15 +143,15 @@ impl super::AssetManager {
             vertices.push(Vertex { position: v2_bot, normal, tex_coords: [1.0, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: v2_top, normal, tex_coords: [1.0, 0.0], color: col, joint_indices: def_j, joint_weights: def_w });
 
-            // Top Cap (Triangulate via center)
+            // Top Cap (Triangulate via center, CCW from above)
             vertices.push(Vertex { position: [cx, half_d, cy], normal: [0.0, 1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: v2_top, normal: [0.0, 1.0, 0.0], tex_coords: [0.5 + p2[0], 0.5 + p2[1]], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: v1_top, normal: [0.0, 1.0, 0.0], tex_coords: [0.5 + p1[0], 0.5 + p1[1]], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: v2_top, normal: [0.0, 1.0, 0.0], tex_coords: [0.5 + p2[0], 0.5 + p2[1]], color: col, joint_indices: def_j, joint_weights: def_w });
 
-            // Bottom Cap
+            // Bottom Cap (CCW from below)
             vertices.push(Vertex { position: [cx, -half_d, cy], normal: [0.0, -1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: v1_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + p1[0], 0.5 + p1[1]], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: v2_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + p2[0], 0.5 + p2[1]], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: v1_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + p1[0], 0.5 + p1[1]], color: col, joint_indices: def_j, joint_weights: def_w });
         }
 
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -195,7 +195,7 @@ impl super::AssetManager {
             let v_i1_t = [i1[0], half_d, i1[1]]; let v_i1_b = [i1[0], -half_d, i1[1]];
             let v_i2_t = [i2[0], half_d, i2[1]]; let v_i2_b = [i2[0], -half_d, i2[1]];
 
-            // Outer Side
+            // Outer Side (CCW from outside)
             vertices.push(Vertex { position: v_o1_t, normal: normal_o, tex_coords: [0.0, 0.0], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: v_o1_b, normal: normal_o, tex_coords: [0.0, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: v_o2_b, normal: normal_o, tex_coords: [1.0, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
@@ -204,7 +204,7 @@ impl super::AssetManager {
             vertices.push(Vertex { position: v_o2_b, normal: normal_o, tex_coords: [1.0, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: v_o2_t, normal: normal_o, tex_coords: [1.0, 0.0], color: col, joint_indices: def_j, joint_weights: def_w });
 
-            // Inner Side
+            // Inner Side (CCW from outside)
             vertices.push(Vertex { position: v_i2_t, normal: normal_i, tex_coords: [0.0, 0.0], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: v_i2_b, normal: normal_i, tex_coords: [0.0, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: v_i1_b, normal: normal_i, tex_coords: [1.0, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
@@ -213,25 +213,25 @@ impl super::AssetManager {
             vertices.push(Vertex { position: v_i1_b, normal: normal_i, tex_coords: [1.0, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: v_i1_t, normal: normal_i, tex_coords: [1.0, 0.0], color: col, joint_indices: def_j, joint_weights: def_w });
 
-            // Top Cap Quad (o1, o2, i2, i1)
+            // Top Cap Quad (o1, o2, i1, i2 - CCW from above)
             let n_top = [0.0, 1.0, 0.0];
             vertices.push(Vertex { position: v_o1_t, normal: n_top, tex_coords: [o1[0], o1[1]], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: v_o2_t, normal: n_top, tex_coords: [o2[0], o2[1]], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: v_i1_t, normal: n_top, tex_coords: [i1[0], i1[1]], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: v_o2_t, normal: n_top, tex_coords: [o2[0], o2[1]], color: col, joint_indices: def_j, joint_weights: def_w });
             
             vertices.push(Vertex { position: v_o2_t, normal: n_top, tex_coords: [o2[0], o2[1]], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: v_i2_t, normal: n_top, tex_coords: [i2[0], i2[1]], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: v_i1_t, normal: n_top, tex_coords: [i1[0], i1[1]], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: v_i2_t, normal: n_top, tex_coords: [i2[0], i2[1]], color: col, joint_indices: def_j, joint_weights: def_w });
 
-            // Bottom Cap Quad (o1, i1, i2, o2)
+            // Bottom Cap Quad (o1, o2, i1, i2 - CCW from below)
             let n_bot = [0.0, -1.0, 0.0];
             vertices.push(Vertex { position: v_o1_b, normal: n_bot, tex_coords: [o1[0], o1[1]], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: v_i1_b, normal: n_bot, tex_coords: [i1[0], i1[1]], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: v_o2_b, normal: n_bot, tex_coords: [o2[0], o2[1]], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: v_i1_b, normal: n_bot, tex_coords: [i1[0], i1[1]], color: col, joint_indices: def_j, joint_weights: def_w });
             
-            vertices.push(Vertex { position: v_i1_b, normal: n_bot, tex_coords: [i1[0], i1[1]], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: v_i2_b, normal: n_bot, tex_coords: [i2[0], i2[1]], color: col, joint_indices: def_j, joint_weights: def_w });
             vertices.push(Vertex { position: v_o2_b, normal: n_bot, tex_coords: [o2[0], o2[1]], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: v_i2_b, normal: n_bot, tex_coords: [i2[0], i2[1]], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: v_i1_b, normal: n_bot, tex_coords: [i1[0], i1[1]], color: col, joint_indices: def_j, joint_weights: def_w });
         }
 
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

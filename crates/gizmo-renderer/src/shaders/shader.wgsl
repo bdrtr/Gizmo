@@ -144,6 +144,60 @@ fn select_cascade(view_depth: f32) -> u32 {
     return 3u;
 }
 
+fn D_GGX(NoH: f32, roughness: f32) -> f32 {
+    let a = roughness * roughness;
+    let a2 = a * a;
+    let denom = NoH * NoH * (a2 - 1.0) + 1.0;
+    return a2 / (3.1415926535 * denom * denom);
+}
+
+fn V_SmithJointGGX(NoV: f32, NoL: f32, roughness: f32) -> f32 {
+    let a = roughness * roughness;
+    let a2 = a * a;
+    let lambdaV = NoL * sqrt(NoV * NoV * (1.0 - a2) + a2);
+    let lambdaL = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);
+    return 0.5 / max(lambdaV + lambdaL, 0.0001);
+}
+
+fn F_Schlick(VoH: f32, f0: vec3<f32>) -> vec3<f32> {
+    return f0 + (vec3<f32>(1.0) - f0) * pow(clamp(1.0 - VoH, 0.0, 1.0), 5.0);
+}
+
+fn compute_direct_lighting(
+    N: vec3<f32>, 
+    V: vec3<f32>, 
+    L: vec3<f32>, 
+    albedo: vec3<f32>, 
+    roughness: f32, 
+    metallic: f32, 
+    f0: vec3<f32>, 
+    light_color: vec3<f32>, 
+    intensity: f32, 
+    atten: f32
+) -> vec3<f32> {
+    let H = normalize(V + L);
+    let NoL = max(dot(N, L), 0.0);
+    let NoV = max(dot(N, V), 0.001);
+    let NoH = max(dot(N, H), 0.0);
+    let VoH = max(dot(V, H), 0.0);
+
+    if (NoL <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+
+    let D = D_GGX(NoH, roughness);
+    let Vis = V_SmithJointGGX(NoV, NoL, roughness);
+    let F = F_Schlick(VoH, f0);
+
+    let kS = F;
+    let kD = (vec3<f32>(1.0) - kS) * (1.0 - metallic);
+
+    let diffuse = kD * albedo * NoL;
+    let specular = D * Vis * F * NoL;
+
+    return (diffuse + specular) * light_color * intensity * atten;
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
@@ -218,7 +272,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     
     let min_roughness = max(in.inst_pbr.x, 0.05);
-    let shininess = 2.0 / (min_roughness * min_roughness) - 2.0;
     let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
     let f0 = mix(vec3<f32>(0.04), base_color, metallic);
     
@@ -232,18 +285,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let fake_env_color = mix(ground_ambient, vec3<f32>(1.0, 0.6, 0.4), reflect_mix);
     let fake_ibl_specular = f0 * fake_env_color * ((1.0 - min_roughness) * (1.0 - min_roughness) * 2.0);
 
-    var total_diffuse = vec3<f32>(0.0);
-    var total_specular = vec3<f32>(0.0);
+    var total_lighting = vec3<f32>(0.0);
 
     if (scene.sun_direction.w > 0.5) { 
         let L = normalize(-scene.sun_direction.xyz);
-        let diff = max(dot(N, L), 0.0);
-        let reflect_dir = reflect(-L, N);
-        let spec = pow(max(dot(view_dir, reflect_dir), 0.0), shininess);
-        let intensity = scene.sun_color.w;
-        let sun_color = scene.sun_color.rgb;
-        total_diffuse += base_color * (1.0 - metallic) * diff * sun_color * intensity * shadow_visibility;
-        total_specular += f0 * spec * (1.0 - min_roughness) * sun_color * intensity * shadow_visibility;
+        let sun_light = compute_direct_lighting(
+            N, view_dir, L, base_color, min_roughness, metallic, f0,
+            scene.sun_color.rgb, scene.sun_color.w, shadow_visibility
+        );
+        total_lighting += sun_light;
     }
 
     for (var i = 0u; i < scene.num_lights; i++) {
@@ -273,18 +323,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 attenuation *= spot_factor * spot_factor;
             }
         }
-        let diff = max(dot(N, L), 0.0);
-        let reflect_dir = reflect(-L, N);
-        let spec = pow(max(dot(view_dir, reflect_dir), 0.0), shininess);
-        total_diffuse += base_color * (1.0 - metallic) * diff * light.color.rgb * attenuation * intensity;
-        total_specular += f0 * spec * (1.0 - min_roughness) * light.color.rgb * attenuation * intensity;
+        let light_color_contrib = compute_direct_lighting(
+            N, view_dir, L, base_color, min_roughness, metallic, f0,
+            light.color.rgb, intensity, attenuation
+        );
+        total_lighting += light_color_contrib;
     }
     
     var v_color = in.color;
     if (length(v_color) < 0.0001) {
         v_color = vec3<f32>(1.0, 1.0, 1.0);
     }
-    var final_color = v_color * (ambient + total_diffuse + total_specular + fake_ibl_specular);
+    var final_color = v_color * (ambient + total_lighting + fake_ibl_specular);
     
     // We render to an Rgba16Float HDR buffer. Tone mapping is handled in post_process.wgsl.
     

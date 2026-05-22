@@ -840,6 +840,8 @@ mod tests {
         // 1000 kg, sürtünme önemsiz, dinamik
         let mut chassis_rb = RigidBody::new(1000.0, 0.1, 0.5, true);
         chassis_rb.wake_up();
+        let chassis_col = Collider::box_collider(Vec3::new(1.0, 0.5, 2.0)); // Genişlik 2, Yükseklik 1, Uzunluk 4 (Yarıçaplar)
+        chassis_rb.update_inertia_from_collider(&chassis_col);
         let chassis_entity = Entity::new(1, 0);
         let chassis_pos = Vec3::new(0.0, 1.5, 0.0);
         world.add_body(
@@ -847,14 +849,16 @@ mod tests {
             chassis_rb,
             Transform::new(chassis_pos),
             Velocity::default(),
-            Collider::box_collider(Vec3::new(1.0, 0.5, 2.0)), // Genişlik 2, Yükseklik 1, Uzunluk 4 (Yarıçaplar)
+            chassis_col,
         );
 
         // Tekerlek Şablonu
+        let wheel_radius = 0.5;
         let mut wheel_rb = RigidBody::new(50.0, 0.1, 0.9, true); // Yüksek kütle (50kg) ve yüksek sürtünme (0.9)
         wheel_rb.wake_up();
+        let wheel_col = Collider::sphere(wheel_radius);
+        wheel_rb.update_inertia_from_collider(&wheel_col);
 
-        let wheel_radius = 0.5;
         let wheel_offsets = vec![
             Vec3::new(-1.2, -0.2, 1.5),  // Sol Ön
             Vec3::new(1.2, -0.2, 1.5),   // Sağ Ön
@@ -873,7 +877,7 @@ mod tests {
                 wheel_rb.clone(),
                 Transform::new(chassis_pos + *offset),
                 Velocity::default(),
-                Collider::sphere(wheel_radius),
+                wheel_col.clone(),
             );
 
             // Menteşe Eklemi (Hinge Joint) oluştur
@@ -903,13 +907,11 @@ mod tests {
 
             world.joints.push(joint);
         }
-
         // --- Simülasyon ---
         // Motorlar çalışacak ve arabayı 5 saniye boyunca (300 kare) ileri doğru (Z+) sürecek
         for _ in 0..300 {
             let _ = world.step(1.0 / 60.0);
         }
-
         // Doğrulama
         let final_chassis_pos = world.transforms[1].position;
         

@@ -78,7 +78,7 @@ impl<'a> SceneBuilder<'a> {
             &self.renderer.queue,
             &self.renderer.scene.texture_bind_group_layout,
         );
-        let mat = Material::new(tex).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.0, 0.5);
+        let mat = Material::new(tex).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.6, 0.0);
 
         let half_extents = size / 2.0;
         let ent = self.world.spawn();
@@ -98,7 +98,7 @@ impl<'a> SceneBuilder<'a> {
             &self.renderer.queue,
             &self.renderer.scene.texture_bind_group_layout,
         );
-        let mat = Material::new(tex).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.0, 0.5);
+        let mat = Material::new(tex).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.6, 0.0);
 
         let ent = self.world.spawn();
         self.world.add_component(ent, Transform::new(position));
@@ -113,7 +113,7 @@ impl<'a> SceneBuilder<'a> {
     pub fn spawn_textured_cylinder(&mut self, position: Vec3, radius: f32, height: f32) -> crate::core::entity::Entity {
         let mesh = AssetManager::create_cylinder(&self.renderer.device, radius, height, 32);
         let tex = self.asset_manager.create_uv_debug_texture(&self.renderer.device, &self.renderer.queue, &self.renderer.scene.texture_bind_group_layout);
-        let mat = Material::new(tex).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.0, 0.5);
+        let mat = Material::new(tex).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.6, 0.0);
         let ent = self.world.spawn();
         self.world.add_component(ent, Transform::new(position));
         self.world.add_component(ent, crate::physics::components::GlobalTransform::default());
@@ -127,7 +127,7 @@ impl<'a> SceneBuilder<'a> {
     pub fn spawn_textured_cone(&mut self, position: Vec3, radius: f32, height: f32) -> crate::core::entity::Entity {
         let mesh = AssetManager::create_cone(&self.renderer.device, radius, height, 32);
         let tex = self.asset_manager.create_uv_debug_texture(&self.renderer.device, &self.renderer.queue, &self.renderer.scene.texture_bind_group_layout);
-        let mat = Material::new(tex).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.0, 0.5);
+        let mat = Material::new(tex).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.6, 0.0);
         let ent = self.world.spawn();
         self.world.add_component(ent, Transform::new(position));
         self.world.add_component(ent, crate::physics::components::GlobalTransform::default());
@@ -141,7 +141,7 @@ impl<'a> SceneBuilder<'a> {
     pub fn spawn_textured_torus(&mut self, position: Vec3, radius: f32, tube_radius: f32) -> crate::core::entity::Entity {
         let mesh = AssetManager::create_torus(&self.renderer.device, radius, tube_radius, 32, 16);
         let tex = self.asset_manager.create_uv_debug_texture(&self.renderer.device, &self.renderer.queue, &self.renderer.scene.texture_bind_group_layout);
-        let mat = Material::new(tex).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.0, 0.5);
+        let mat = Material::new(tex).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.6, 0.0);
         let ent = self.world.spawn();
         self.world.add_component(ent, Transform::new(position));
         self.world.add_component(ent, crate::physics::components::GlobalTransform::default());
@@ -155,7 +155,7 @@ impl<'a> SceneBuilder<'a> {
     pub fn spawn_textured_capsule(&mut self, position: Vec3, radius: f32, depth: f32) -> crate::core::entity::Entity {
         let mesh = AssetManager::create_capsule(&self.renderer.device, radius, depth, 16, 32);
         let tex = self.asset_manager.create_uv_debug_texture(&self.renderer.device, &self.renderer.queue, &self.renderer.scene.texture_bind_group_layout);
-        let mat = Material::new(tex).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.0, 0.5);
+        let mat = Material::new(tex).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.6, 0.0);
         let ent = self.world.spawn();
         self.world.add_component(ent, Transform::new(position));
         self.world.add_component(ent, crate::physics::components::GlobalTransform::default());
@@ -169,7 +169,7 @@ impl<'a> SceneBuilder<'a> {
     pub fn spawn_textured_tetrahedron(&mut self, position: Vec3, size: f32) -> crate::core::entity::Entity {
         let mesh = AssetManager::create_tetrahedron(&self.renderer.device, size);
         let tex = self.asset_manager.create_uv_debug_texture(&self.renderer.device, &self.renderer.queue, &self.renderer.scene.texture_bind_group_layout);
-        let mat = Material::new(tex).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.0, 0.5);
+        let mat = Material::new(tex).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.6, 0.0);
         let ent = self.world.spawn();
         self.world.add_component(ent, Transform::new(position));
         self.world.add_component(ent, crate::physics::components::GlobalTransform::default());
@@ -183,7 +183,7 @@ impl<'a> SceneBuilder<'a> {
     pub fn spawn_textured_conical_frustum(&mut self, position: Vec3, radius_bottom: f32, radius_top: f32, height: f32) -> crate::core::entity::Entity {
         let mesh = AssetManager::create_conical_frustum(&self.renderer.device, radius_bottom, radius_top, height, 32);
         let tex = self.asset_manager.create_uv_debug_texture(&self.renderer.device, &self.renderer.queue, &self.renderer.scene.texture_bind_group_layout);
-        let mat = Material::new(tex).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.0, 0.5);
+        let mat = Material::new(tex).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.6, 0.0);
         let ent = self.world.spawn();
         self.world.add_component(ent, Transform::new(position));
         self.world.add_component(ent, crate::physics::components::GlobalTransform::default());
@@ -197,7 +197,7 @@ impl<'a> SceneBuilder<'a> {
     pub fn spawn_textured_convex_extrusion(&mut self, position: Vec3, points: &[[f32; 2]], depth: f32) -> crate::core::entity::Entity {
         let mesh = AssetManager::create_convex_extrusion(&self.renderer.device, points, depth);
         let tex = self.asset_manager.create_uv_debug_texture(&self.renderer.device, &self.renderer.queue, &self.renderer.scene.texture_bind_group_layout);
-        let mat = Material::new(tex).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.0, 0.5);
+        let mat = Material::new(tex).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.6, 0.0);
         let ent = self.world.spawn();
         // Since we are in XZ plane initially in demo2, let's allow it to just spawn.
         // Or actually the generated extrusion might be in XZ plane already. 
@@ -213,7 +213,7 @@ impl<'a> SceneBuilder<'a> {
     pub fn spawn_textured_ring_extrusion(&mut self, position: Vec3, inner_points: &[[f32; 2]], outer_points: &[[f32; 2]], depth: f32) -> crate::core::entity::Entity {
         let mesh = AssetManager::create_ring_extrusion(&self.renderer.device, inner_points, outer_points, depth);
         let tex = self.asset_manager.create_uv_debug_texture(&self.renderer.device, &self.renderer.queue, &self.renderer.scene.texture_bind_group_layout);
-        let mat = Material::new(tex).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.0, 0.5);
+        let mat = Material::new(tex).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.6, 0.0);
         let ent = self.world.spawn();
         self.world.add_component(ent, Transform::new(position));
         self.world.add_component(ent, crate::physics::components::GlobalTransform::default());
@@ -231,8 +231,7 @@ impl<'a> SceneBuilder<'a> {
             &self.renderer.queue,
             &self.renderer.scene.texture_bind_group_layout,
         );
-        // Bevy's ground is Color::WHITE with some tint
-        let mat = Material::new(tex).with_pbr(Vec4::new(0.2, 0.2, 0.2, 1.0), 0.0, 0.5);
+        let mat = Material::new(tex).with_pbr(Vec4::new(0.2, 0.2, 0.2, 1.0), 0.9, 0.0);
 
         let ent = self.world.spawn();
         self.world.add_component(

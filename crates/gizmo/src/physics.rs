@@ -9,7 +9,7 @@ pub mod components {
 }
 
 // Some legacy usages accessed RigidBody directly from gizmo::physics
-pub use components::{RigidBody, Velocity, GpuPhysicsLink};
+pub use components::{RigidBody, Velocity, GpuPhysicsLink, GlobalTransform};
 pub use gizmo_physics_core::Transform;
 
 pub mod world {

@@ -97,8 +97,8 @@ pub fn directional_cascade_view_projs(
             min_b = min_b.min(p);
             max_b = max_b.max(p);
         }
-        min_b.z -= 120.0;
-        max_b.z += 280.0;
+        min_b.z -= 40.0;
+        max_b.z += 60.0;
 
         // Light-space texel snap (reduces edge swimming)
         let world_units_per_texel_x = (max_b.x - min_b.x) / shadow_map_size as f32;
@@ -110,7 +110,7 @@ pub fn directional_cascade_view_projs(
             max_b.y = min_b.y + world_units_per_texel_y * shadow_map_size as f32;
         }
 
-        let ortho = Mat4::orthographic_rh(min_b.x, max_b.x, min_b.y, max_b.y, min_b.z, max_b.z);
+        let ortho = Mat4::orthographic_rh(min_b.x, max_b.x, min_b.y, max_b.y, -max_b.z, -min_b.z);
         mats[i] = ortho * light_view;
         prev_z = zf;
     }

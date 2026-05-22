@@ -104,7 +104,7 @@ pub fn default_render_pass(
                 proj = cam.get_projection(aspect);
                 view_mat = cam.get_view(pos);
                 cam_pos = pos;
-                cam_forward = rot * Vec3::new(0.0, 0.0, -1.0);
+                cam_forward = cam.get_front();
                 cam_exposure = cam.exposure;
             }
         }
@@ -151,7 +151,7 @@ pub fn default_render_pass(
         }
     }
 
-    let cascade_splits = [10.0f32, 50.0, 200.0, 2000.0];
+    let cascade_splits = [20.0f32, 80.0, 250.0, 2000.0];
     let cascade_vp = crate::renderer::directional_cascade_view_projs(
         cam_pos,
         cam_forward,
@@ -987,16 +987,7 @@ pub fn default_render_pass(
             );
         }
 
-        if let Some(gizmos) = world.get_resource::<crate::renderer::Gizmos>() {
-            if let Some(debug_renderer) = &mut renderer.debug_renderer {
-                debug_renderer.update(&renderer.queue, &gizmos);
-                debug_renderer.render(
-                    &mut render_pass,
-                    &renderer.scene.global_bind_group,
-                    gizmos.depth_test,
-                );
-            }
-        }
+
     }
 
     if let Some(fluid) = &renderer.gpu_fluid {
@@ -1011,10 +1002,7 @@ pub fn default_render_pass(
         );
     }
 
-    // Auto-clear gizmos for the next frame
-    if let Some(mut gizmos) = world.get_resource_mut::<crate::renderer::Gizmos>() {
-        gizmos.clear();
-    }
+
 
     // ── SSR: Screen Space Reflections ───────────────────────────────────────────
     if let Some(ref ssr) = renderer.ssr {
@@ -1219,6 +1207,67 @@ pub fn default_render_pass(
         pass.set_bind_group(0, &taa.empty_bg, &[]);
         pass.set_bind_group(1, blit_bg, &[]);
         pass.draw(0..3, 0..1);
+    }
+
+    // Render Gizmos AFTER TAA to avoid ghosting/washing out dynamic overlays
+    if let Some(gizmos) = world.get_resource::<crate::renderer::Gizmos>() {
+        if let Some(debug_renderer) = &mut renderer.debug_renderer {
+            debug_renderer.update(&renderer.queue, &gizmos);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Gizmo Render Pass (Post-TAA)"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &renderer.post.hdr_texture_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load, // Keep TAA-stabilized geometry scene
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &renderer.depth_texture_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            debug_renderer.render(
+                &mut pass,
+                &renderer.scene.global_bind_group,
+                gizmos.depth_test,
+            );
+        }
+    }
+
+    // Auto-clear gizmos for the next frame ONLY if a physics step occurred
+    let mut should_clear = true;
+    let current_step = world.get_resource::<gizmo_core::time::PhysicsTime>()
+        .map(|pt| pt.step_count());
+
+    if let Some(current_step) = current_step {
+        struct GizmosLastStepCount(u64);
+        
+        let has_resource = world.get_resource::<GizmosLastStepCount>().is_some();
+        if has_resource {
+            if let Some(mut last_step) = world.get_resource_mut::<GizmosLastStepCount>() {
+                if last_step.0 == current_step {
+                    should_clear = false;
+                } else {
+                    last_step.0 = current_step;
+                }
+            }
+        } else {
+            world.insert_resource(GizmosLastStepCount(current_step));
+        }
+    }
+
+    if should_clear {
+        if let Some(mut gizmos) = world.get_resource_mut::<crate::renderer::Gizmos>() {
+            gizmos.clear();
+        }
     }
 
     // Advance TAA ping-pong and frame counter

@@ -196,7 +196,7 @@ impl GizmoRendererSystem {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: depth_format,
                 depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_compare: wgpu::CompareFunction::Always, // Unconditionally pass depth testing for all gizmos
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),

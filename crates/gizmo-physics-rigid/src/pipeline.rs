@@ -624,6 +624,13 @@ impl PhysicsWorld {
                 dt,
             );
         }
+
+        // Sync pre-velocities with the solver-corrected velocities so that Heun's method
+        // integrates the corrected state without uncorrected gravity/force drift.
+        for vel in &mut self.velocities {
+            vel.pre_linear = vel.linear;
+            vel.pre_angular = vel.angular;
+        }
     }
 
     // ================================================================== //

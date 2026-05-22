@@ -154,7 +154,7 @@ pub fn build_post_process_resources(
             film_grain_intensity: 0.03, // Film greni (Realistic noise)
             dof_focus_dist: 15.0,
             dof_focus_range: 25.0,
-            dof_blur_size: 2.0, // Daha yumuşak odak derinliği (DoF)
+            dof_blur_size: 0.0, // Disable focus depth blur to prevent thin gizmo lines from washing out
             _padding: [0.0; 3],
         }]),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
