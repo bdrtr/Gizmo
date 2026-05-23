@@ -9,18 +9,18 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
-gizmo-core = { path = "../gizmo-core" , version = "0.1.4" }
-gizmo-math = { path = "../gizmo-math" , version = "0.1.4" }
+gizmo-core = { path = "../gizmo-core" , version = "0.1.5" }
+gizmo-math = { path = "../gizmo-math" , version = "0.1.5" }
 tracing = "0.1.44"
 
 # Optional dependencies
-gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.1.4", optional = true }
-gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.1.4", optional = true }
-gizmo-renderer = { path = "../gizmo-renderer" , version = "0.1.4", optional = true }
-gizmo-audio = { path = "../gizmo-audio" , version = "0.1.4", optional = true }
-gizmo-editor = { path = "../gizmo-editor" , version = "0.1.4", optional = true }
-gizmo-scene = { path = "../gizmo-scene" , version = "0.1.4", optional = true }
-gizmo-network = { path = "../gizmo-network", version = "0.1.4", optional = true }
+gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.1.5", optional = true }
+gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.1.5", optional = true }
+gizmo-renderer = { path = "../gizmo-renderer" , version = "0.1.5", optional = true }
+gizmo-audio = { path = "../gizmo-audio" , version = "0.1.5", optional = true }
+gizmo-editor = { path = "../gizmo-editor" , version = "0.1.5", optional = true }
+gizmo-scene = { path = "../gizmo-scene" , version = "0.1.5", optional = true }
+gizmo-network = { path = "../gizmo-network", version = "0.1.5", optional = true }
 winit = { version = "0.29", optional = true }
 wgpu = { version = "0.20", features = ["fragile-send-sync-non-atomic-wasm", "webgl"], optional = true }
 pollster = { version = "0.3", optional = true }
