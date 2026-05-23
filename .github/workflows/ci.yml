@@ -41,7 +41,7 @@ jobs:
       continue-on-error: true
 
     - name: Run Determinism CI Tests
-      run: cargo test -p gizmo-physics --test determinism --verbose
+      run: cargo run --bin headless_stress_test --release
 
     - name: Run All Engine Tests
       run: cargo test --verbose
