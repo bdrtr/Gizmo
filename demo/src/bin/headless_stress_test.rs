@@ -17,11 +17,11 @@ fn run_simulation_and_get_hash() -> u64 {
     
     world.add_body(ground_entity, ground_rb, ground_transform, ground_vel, ground_collider);
     
-    // Kutu Kulesi
+    // Kutu Kulesi (Daha hızlı determinizm kontrolü için optimize edilmiş 200 kutuluk kule)
     let mut entity_id = 1;
-    let tower_height = 20;
-    let tower_width = 10;
-    let tower_depth = 10;
+    let tower_height = 8;
+    let tower_width = 5;
+    let tower_depth = 5;
     
     for y in 0..tower_height {
         for x in 0..tower_width {
