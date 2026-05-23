@@ -40,6 +40,7 @@ impl ArchetypeIndex {
 
     /// Component ekleme — entity'yi yeni archetype'a taşı
     /// NOT: Veri taşıma işlemi World tarafından yapılır, bu metod sadece yapısal geçişi takip eder.
+    #[allow(dead_code)]
     pub(crate) fn get_or_create_archetype(&mut self, infos: &[ComponentInfo]) -> usize {
         let mut new_types: Vec<TypeId> = infos.iter().map(|i| i.type_id).collect();
         new_types.sort();

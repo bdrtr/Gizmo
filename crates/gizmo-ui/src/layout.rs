@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use taffy::{TaffyTree, NodeId};
-use gizmo_core::entity::Entity;
 use gizmo_math::Vec2;
 
 pub struct UiContext {

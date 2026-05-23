@@ -1,13 +1,13 @@
 use crate::app::App;
 use crate::core::world::World;
 use crate::core::Bundle;
-use crate::bundles::{RigidBodyBundle, MeshBundle, CameraBundle, DirectionalLightBundle};
-use crate::physics::components::{Collider, RigidBody, Transform, Velocity};
+use crate::bundles::{RigidBodyBundle, CameraBundle};
+use crate::physics::components::{Collider, Transform};
 use crate::physics::world::PhysicsWorld;
 use crate::renderer::asset::AssetManager;
-use crate::renderer::components::{Camera, DirectionalLight, LightRole, Material, MeshRenderer};
+use crate::renderer::components::{Camera, Material, MeshRenderer};
 use crate::renderer::Renderer;
-use std::f32::consts::{FRAC_PI_2, FRAC_PI_3, PI};
+use std::f32::consts::{FRAC_PI_2, PI};
 use crate::math::{Quat, Vec3, Vec4};
 use crate::systems;
 
