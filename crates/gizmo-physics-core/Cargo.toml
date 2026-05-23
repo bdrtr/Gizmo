@@ -11,8 +11,8 @@ readme.workspace = true
 [dependencies]
 rayon = "1.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
-gizmo-core = { path = "../gizmo-core", version = "0.1.4" }
-gizmo-math = { path = "../gizmo-math", version = "0.1.4" }
+gizmo-core = { path = "../gizmo-core", version = "0.1.5" }
+gizmo-math = { path = "../gizmo-math", version = "0.1.5" }
 arrayvec = "0.7.6"
 tracing = "0.1.44"
 bevy_reflect = "0.15.1"

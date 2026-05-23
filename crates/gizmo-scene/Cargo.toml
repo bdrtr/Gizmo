@@ -9,12 +9,12 @@ license.workspace = true
 repository.workspace = true
 readme.workspace = true
 [dependencies]
-gizmo-core = { path = "../gizmo-core" , version = "0.1.4" }
-gizmo-math = { path = "../gizmo-math" , version = "0.1.4" }
-gizmo-physics-core = { path = "../gizmo-physics-core" , version = "0.1.4" }
-gizmo-physics-rigid = { path = "../gizmo-physics-rigid" , version = "0.1.4" }
+gizmo-core = { path = "../gizmo-core" , version = "0.1.5" }
+gizmo-math = { path = "../gizmo-math" , version = "0.1.5" }
+gizmo-physics-core = { path = "../gizmo-physics-core" , version = "0.1.5" }
+gizmo-physics-rigid = { path = "../gizmo-physics-rigid" , version = "0.1.5" }
 serde = { version = "1.0", features = ["derive"] }
-gizmo-scripting = { path = "../gizmo-scripting" , version = "0.1.4" }
+gizmo-scripting = { path = "../gizmo-scripting" , version = "0.1.5" }
 ron = "0.12.1"
 uuid = { version = "1.23.0", features = ["v4", "serde"] }
 tracing = "0.1.44"
