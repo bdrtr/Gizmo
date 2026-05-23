@@ -100,7 +100,7 @@ pub fn default_render_pass(
         if let Some((active_cam, _)) = cameras.iter().next() {
             if let (Some(cam), Some(trans)) = (cameras.get(active_cam), transforms.get(active_cam))
             {
-                let (_, rot, pos) = trans.matrix.to_scale_rotation_translation();
+                let (_, _, pos) = trans.matrix.to_scale_rotation_translation();
                 proj = cam.get_projection(aspect);
                 view_mat = cam.get_view(pos);
                 cam_pos = pos;

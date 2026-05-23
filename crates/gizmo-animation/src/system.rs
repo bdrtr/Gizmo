@@ -11,7 +11,7 @@ pub fn animation_system(
     mut players: Query<Mut<AnimationPlayer>>,
     names: Query<&EntityName>,
     children: Query<&Children>,
-    mut transforms: Query<Mut<Transform>>,
+    transforms: Query<Mut<Transform>>,
 ) {
     let dt = time.dt();
 

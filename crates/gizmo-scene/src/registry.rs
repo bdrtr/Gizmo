@@ -1,6 +1,4 @@
-use gizmo_core::{Component, World};
-use serde::{de::DeserializeOwned, Serialize};
-use std::collections::HashMap;
+use gizmo_core::World;
 
 pub type SerializeFn = Box<dyn Fn(&World, u32) -> Option<String> + Send + Sync>;
 pub type DeserializeFn = Box<dyn Fn(&mut World, u32, &String) + Send + Sync>;
