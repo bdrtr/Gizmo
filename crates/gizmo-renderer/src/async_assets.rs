@@ -4,7 +4,7 @@
 
 use crate::asset::{decode_obj_vertices_for_async, decode_rgba_image_file};
 use std::collections::{HashMap, HashSet};
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -92,6 +92,8 @@ struct LoaderShared {
 pub struct AsyncAssetLoader {
     shared: Arc<Mutex<LoaderShared>>,
     _worker: Option<thread::JoinHandle<()>>,
+    #[allow(dead_code)]
+    result_tx: Sender<WorkerMsg>,
 }
 
 impl AsyncAssetLoader {
@@ -148,6 +150,7 @@ impl AsyncAssetLoader {
                 gltf_inflight: HashSet::new(),
             })),
             _worker,
+            result_tx,
         }
     }
 
@@ -160,7 +163,24 @@ impl AsyncAssetLoader {
             .or_default()
             .push(handle_id);
         if g.texture_inflight.insert(request_path.clone()) {
-            let _ = g.job_tx.send(Job::Texture { request_path });
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let _ = g.job_tx.send(Job::Texture { request_path });
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let result_tx = self.result_tx.clone();
+                let path = request_path.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let result = fetch_and_decode_texture_wasm(&path).await;
+                    let cache_key = path.clone();
+                    let _ = result_tx.send(WorkerMsg::Texture {
+                        request_path: path,
+                        cache_key,
+                        result,
+                    });
+                });
+            }
         }
     }
 
@@ -172,7 +192,22 @@ impl AsyncAssetLoader {
             .or_default()
             .push(handle_id);
         if g.obj_inflight.insert(path.clone()) {
-            let _ = g.job_tx.send(Job::Obj { path });
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let _ = g.job_tx.send(Job::Obj { path });
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let result_tx = self.result_tx.clone();
+                let path_clone = path.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let result = fetch_and_decode_obj_wasm(&path_clone).await;
+                    let _ = result_tx.send(WorkerMsg::Obj {
+                        path: path_clone,
+                        result,
+                    });
+                });
+            }
         }
     }
 
@@ -185,9 +220,26 @@ impl AsyncAssetLoader {
             return false;
         }
         g.gltf_inflight.insert(path.clone());
-        let ok = g.job_tx.send(Job::Gltf { path }).is_ok();
-        tracing::info!(">>> request_gltf_import: İşlem gönderildi mi? {}", ok);
-        ok
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let ok = g.job_tx.send(Job::Gltf { path }).is_ok();
+            tracing::info!(">>> request_gltf_import: İşlem gönderildi mi? {}", ok);
+            ok
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let result_tx = self.result_tx.clone();
+            let path_clone = path.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = fetch_and_parse_gltf_wasm(&path_clone).await;
+                let _ = result_tx.send(WorkerMsg::Gltf {
+                    path: path_clone,
+                    result,
+                });
+            });
+            true
+        }
     }
 
     /// Non-blocking: collect all finished jobs since the last call.
@@ -276,4 +328,128 @@ impl Default for AsyncAssetLoader {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ── WASM Fetch & Parse Helpers ──────────────────────────────────────────────
+
+#[cfg(target_arch = "wasm32")]
+async fn fetch_and_decode_texture_wasm(path: &str) -> Result<(Vec<u8>, u32, u32), String> {
+    let bytes = reqwest::get(path)
+        .await
+        .map_err(|e| format!("Failed to fetch texture ({path}): {e}"))?
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read texture bytes ({path}): {e}"))?
+        .to_vec();
+
+    let img = image::load_from_memory(&bytes)
+        .map_err(|e| format!("Cannot read texture ({path}) from memory: {e}"))?
+        .to_rgba8();
+    let (w, h) = img.dimensions();
+    Ok((img.into_raw(), w, h))
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn fetch_and_parse_gltf_wasm(
+    path: &str,
+) -> Result<
+    (
+        gltf::Document,
+        Vec<gltf::buffer::Data>,
+        Vec<gltf::image::Data>,
+    ),
+    String,
+> {
+    let bytes = reqwest::get(path)
+        .await
+        .map_err(|e| format!("Failed to fetch glTF ({path}): {e}"))?
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read glTF bytes ({path}): {e}"))?
+        .to_vec();
+
+    gltf::import_slice(&bytes)
+        .map_err(|e| format!("glTF parse slice failed ({path}): {e}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn fetch_and_decode_obj_wasm(
+    path: &str,
+) -> Result<(Vec<crate::gpu_types::Vertex>, gizmo_math::Aabb), String> {
+    let bytes = reqwest::get(path)
+        .await
+        .map_err(|e| format!("Failed to fetch OBJ ({path}): {e}"))?
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read OBJ bytes ({path}): {e}"))?
+        .to_vec();
+
+    let mut reader = std::io::Cursor::new(bytes);
+    let (models, _) = tobj::load_obj_buf(
+        &mut reader,
+        &tobj::LoadOptions {
+            single_index: true,
+            triangulate: true,
+            ignore_points: true,
+            ignore_lines: true,
+        },
+        |_| Err(tobj::LoadError::OpenFileFailed),
+    )
+    .map_err(|e| format!("OBJ load from buffer failed ({path}): {e}"))?;
+
+    if models.is_empty() {
+        return Err(format!("OBJ file contains no models: {path}"));
+    }
+
+    let mut aabb = gizmo_math::Aabb::empty();
+    let mut vertices = Vec::new();
+
+    for model in &models {
+        let m = &model.mesh;
+        let has_normals = !m.normals.is_empty();
+        let has_texcoords = !m.texcoords.is_empty();
+
+        for &raw_idx in &m.indices {
+            let idx = raw_idx as usize;
+            let pos_base = idx * 3;
+            if pos_base + 2 >= m.positions.len() {
+                return Err(format!("OBJ ({path}): position index out of range"));
+            }
+            let position = [
+                m.positions[pos_base],
+                m.positions[pos_base + 1],
+                m.positions[pos_base + 2],
+            ];
+            aabb.extend(gizmo_math::Vec3::new(position[0], position[1], position[2]));
+
+            let normal = if has_normals {
+                let n_base = idx * 3;
+                [
+                    m.normals[n_base],
+                    m.normals[n_base + 1],
+                    m.normals[n_base + 2],
+                ]
+            } else {
+                [0.0, 1.0, 0.0]
+            };
+
+            let tex_coords = if has_texcoords {
+                let uv_base = idx * 2;
+                [m.texcoords[uv_base], 1.0 - m.texcoords[uv_base + 1]]
+            } else {
+                [0.0, 0.0]
+            };
+
+            vertices.push(crate::renderer::Vertex {
+                position,
+                normal,
+                tex_coords,
+                color: [1.0, 1.0, 1.0],
+                joint_indices: [0; 4],
+                joint_weights: [0.0; 4],
+            });
+        }
+    }
+
+    Ok((vertices, aabb))
 }
