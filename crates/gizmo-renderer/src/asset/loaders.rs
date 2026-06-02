@@ -330,6 +330,9 @@ impl super::AssetManager {
                 let supplied_normals: Option<Vec<[f32; 3]>> =
                     reader.read_normals().map(|it| it.collect());
 
+                let supplied_tangents: Option<Vec<[f32; 4]>> =
+                    reader.read_tangents().map(|it| it.collect());
+
                 let tex_coords: Vec<[f32; 2]> = reader
                     .read_tex_coords(0)
                     .map(|it| it.into_f32().collect())
@@ -364,6 +367,19 @@ impl super::AssetManager {
                         .copied()
                         .unwrap_or([0.0; 4]);
 
+                    let tangent = if let Some(ref tangents) = supplied_tangents {
+                        tangents.get(idx).copied().unwrap_or([1.0, 0.0, 0.0, 1.0])
+                    } else {
+                        // Calculate a dynamic tangent orthogonal to normal
+                        let n = gizmo_math::Vec3::from(normal);
+                        let t = if n.x.abs() > 0.9 {
+                            gizmo_math::Vec3::new(0.0, 1.0, 0.0).cross(n).normalize()
+                        } else {
+                            gizmo_math::Vec3::new(1.0, 0.0, 0.0).cross(n).normalize()
+                        };
+                        [t.x, t.y, t.z, 1.0]
+                    };
+
                     Vertex {
                         position: pos,
                         normal,
@@ -371,6 +387,7 @@ impl super::AssetManager {
                         color: [1.0, 1.0, 1.0],
                         joint_indices: j,
                         joint_weights: w,
+                        tangent,
                     }
                 };
 
@@ -575,19 +592,25 @@ fn build_gltf_materials(
                 })
                 .unwrap_or_else(|| Material::new(default_tbind.clone()));
 
-            // Some Blender exporters write alpha=0 for opaque materials, making
-            // meshes invisible.  Override alpha to 1.0 for opaque alpha modes.
-            let alpha = if material.alpha_mode() == gltf::material::AlphaMode::Opaque {
+            let mat_name = material.name().unwrap_or("").to_lowercase();
+            let is_glass = mat_name.contains("glass");
+
+            let alpha = if is_glass {
+                0.25 // Glass bulb should be translucent and glowing!
+            } else if material.alpha_mode() == gltf::material::AlphaMode::Opaque {
                 1.0
             } else {
                 base_color[3]
             };
 
+            println!("GLTF LOAD MAT: name={:?}, alpha_mode={:?}, alpha_factor={}, base_color={:?}, double_sided={}",
+                material.name(), material.alpha_mode(), alpha, base_color, material.double_sided());
+
             mat.albedo = gizmo_math::Vec4::new(base_color[0], base_color[1], base_color[2], alpha);
             mat.metallic = pbr.metallic_factor();
             mat.roughness = pbr.roughness_factor();
 
-            mat.is_transparent = false;
+            mat.is_transparent = material.alpha_mode() != gltf::material::AlphaMode::Opaque || alpha < 0.99 || is_glass;
             mat.is_double_sided = material.double_sided();
 
             mat

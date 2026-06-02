@@ -10,8 +10,15 @@ struct SceneUniforms {
     cascade_splits:  vec4<f32>,
     camera_forward:  vec4<f32>,
     cascade_params:  vec4<f32>,
-    num_lights:      u32,
-    _pad:            vec3<u32>,
+    num_lights: u32,
+    exposure: f32,
+    _pre_align_pad: vec2<u32>,
+    _align_pad: vec3<u32>,
+    environment_blend_t: f32,
+    environment_preset: u32,
+    point_shadows_enabled: u32,
+    environment_preset_2: u32,
+    shading_mode: u32,
 };
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;

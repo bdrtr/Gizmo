@@ -35,3 +35,7 @@ path = "src/bin/car_demo.rs"
 [[bin]]
 name = "bevy_3d_scene"
 path = "src/bin/bevy_3d_scene.rs"
+
+[[bin]]
+name = "bevy_anisotropy"
+path = "src/bin/bevy_anisotropy.rs"

@@ -195,8 +195,10 @@ fn build_global_uniforms(device: &wgpu::Device) -> wgpu::Buffer {
         exposure: 1.0,
         _pre_align_pad: [0; 2],
         _align_pad: [0; 3],
-        _post_align_pad: 0,
-        _pad_scene: [0; 3],
+        environment_blend_t: 0.0,
+        environment_preset: 0,
+        point_shadows_enabled: 0,
+        environment_preset_2: 0,
         shading_mode: 0,
     };
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -574,7 +576,7 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
-                front_face: wgpu::FrontFace::Cw,
+                front_face: wgpu::FrontFace::Ccw,
                 cull_mode: cull,
                 unclipped_depth: false,
                 polygon_mode,
@@ -646,7 +648,7 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
             &sky_shader,
             "Sky Pipeline",
             false,
-            Some(wgpu::Face::Back),
+            None,
             Some(wgpu::BlendState::ALPHA_BLENDING),
             wgpu::PolygonMode::Fill,
         ),
@@ -694,7 +696,7 @@ fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs) -> wgpu::R
         fragment: None,
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
-            front_face: wgpu::FrontFace::Cw,
+            front_face: wgpu::FrontFace::Ccw,
             cull_mode: None,
             polygon_mode: wgpu::PolygonMode::Fill,
             ..Default::default()

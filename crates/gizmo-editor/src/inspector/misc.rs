@@ -155,6 +155,7 @@ pub fn draw_particle_emitter_section(
 }
 
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn draw_script_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -175,7 +176,7 @@ pub fn draw_script_section(
                         ui.text_edit_singleline(&mut script.file_path);
                     });
 
-if ui.button("✏️ Düzenle").clicked() {
+                    if ui.button("✏️ Düzenle").clicked() {
                         let text = std::fs::read_to_string(&script.file_path).unwrap_or_else(|_| "".to_string());
                         pending_text = Some(text);
                         state.log_info("✏️ Düzenle butonuna basıldı! Dosya okunmaya çalışılıyor...");
@@ -185,7 +186,7 @@ if ui.button("✏️ Düzenle").clicked() {
         }
     }
 
-if let Some(content) = pending_text {
+    if let Some(content) = pending_text {
         state.script.active_content = Some(content);
         state.script.active_path = Some(file_path);
         state.script.is_dirty = false;
@@ -193,6 +194,14 @@ if let Some(content) = pending_text {
         state.script.open = true; // Request opening the tab safely
     }
 }
+
+#[cfg(target_arch = "wasm32")]
+pub fn draw_script_section(
+    _ui: &mut egui::Ui,
+    _world: &World,
+    _entity_id: gizmo_core::entity::Entity,
+    _state: &mut EditorState,
+) {}
 
 
 pub fn draw_terrain_section(

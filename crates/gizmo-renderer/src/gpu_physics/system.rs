@@ -816,6 +816,7 @@ fn create_cube() -> (Vec<crate::gpu_types::Vertex>, Vec<u32>) {
                 tex_coords: [0.0, 0.0],
                 joint_indices: [0; 4],
                 joint_weights: [0.0; 4],
+                ..Default::default()
             });
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 3, base]);

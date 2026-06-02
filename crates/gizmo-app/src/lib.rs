@@ -17,7 +17,9 @@ pub use headless::*;
 pub fn setup_panic_hook() {
     #[cfg(target_arch = "wasm32")]
     {
-        // wasm_bindgen console_error_panic_hook vs.
+        console_error_panic_hook::set_once();
+        let _ = console_log::init_with_level(log::Level::Debug);
+        let _ = tracing_wasm::try_set_as_global_default();
     }
     #[cfg(not(target_arch = "wasm32"))]
     {

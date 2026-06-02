@@ -9,7 +9,7 @@ pub struct AssetServer {
     _material_paths: std::collections::HashMap<String, Handle<Material>>,
     pub completed_gltfs: Vec<crate::renderer::async_assets::GltfImportCompletion>,
     pub completed_gltf_errors: Vec<crate::renderer::async_assets::GltfImportError>,
-    #[cfg(feature = "render")]
+    #[cfg(all(feature = "render", not(target_arch = "wasm32")))]
     pub watcher: Option<crate::renderer::hot_reload::AssetWatcher>,
 }
 
@@ -21,10 +21,8 @@ impl Default for AssetServer {
 
 impl AssetServer {
     pub fn new() -> Self {
-        #[cfg(feature = "render")]
+        #[cfg(all(feature = "render", not(target_arch = "wasm32")))]
         let watcher = crate::renderer::hot_reload::AssetWatcher::new(&["assets", "demo/assets"]);
-        #[cfg(not(feature = "render"))]
-        let watcher = None;
 
         Self {
             loader: AsyncAssetLoader::new(),
@@ -32,6 +30,7 @@ impl AssetServer {
             _material_paths: std::collections::HashMap::new(),
             completed_gltfs: Vec::new(),
             completed_gltf_errors: Vec::new(),
+            #[cfg(all(feature = "render", not(target_arch = "wasm32")))]
             watcher,
         }
     }
@@ -53,7 +52,7 @@ pub fn asset_server_update_system(
     mut meshes: crate::core::system::ResMut<crate::core::asset::Assets<Mesh>>,
 ) {
     // Process Hot Reloading
-    #[cfg(feature = "render")]
+    #[cfg(all(feature = "render", not(target_arch = "wasm32")))]
     if let Some(watcher) = &server.watcher {
         let changed = watcher.poll_changes();
         for path in changed {

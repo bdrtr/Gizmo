@@ -10,8 +10,10 @@ pub struct DeferredState {
     pub normal_roughness_view: wgpu::TextureView,
     pub world_position_tex: wgpu::Texture,
     pub world_position_view: wgpu::TextureView,
+    pub world_tangent_tex: wgpu::Texture,
+    pub world_tangent_view: wgpu::TextureView,
 
-    // Geometry pass (writes to 3 MRTs)
+    // Geometry pass (writes to 4 MRTs)
     pub gbuffer_pipeline: wgpu::RenderPipeline,
 
     // Z-Prepass (Depth only)
@@ -38,6 +40,8 @@ impl DeferredState {
             normal_roughness_view,
             world_position_tex,
             world_position_view,
+            world_tangent_tex,
+            world_tangent_view,
             gbuf_sampler,
         ) = Self::create_gbuffer_textures(device, width, height);
 
@@ -49,6 +53,7 @@ impl DeferredState {
             &albedo_metallic_view,
             &normal_roughness_view,
             &world_position_view,
+            &world_tangent_view,
             &gbuf_sampler,
         );
 
@@ -64,6 +69,8 @@ impl DeferredState {
             normal_roughness_view,
             world_position_tex,
             world_position_view,
+            world_tangent_tex,
+            world_tangent_view,
             gbuffer_pipeline,
             z_prepass_pipeline,
             lighting_pipeline,
@@ -87,6 +94,8 @@ impl DeferredState {
             normal_roughness_view,
             world_position_tex,
             world_position_view,
+            world_tangent_tex,
+            world_tangent_view,
             gbuf_sampler,
         ) = Self::create_gbuffer_textures(device, width, height);
 
@@ -96,6 +105,7 @@ impl DeferredState {
             &albedo_metallic_view,
             &normal_roughness_view,
             &world_position_view,
+            &world_tangent_view,
             &gbuf_sampler,
         );
 
@@ -105,6 +115,8 @@ impl DeferredState {
         self.normal_roughness_view = normal_roughness_view;
         self.world_position_tex = world_position_tex;
         self.world_position_view = world_position_view;
+        self.world_tangent_tex = world_tangent_tex;
+        self.world_tangent_view = world_tangent_view;
         self.gbuf_sampler = gbuf_sampler;
         self.width = width;
         self.height = height;
@@ -117,6 +129,8 @@ impl DeferredState {
         w: u32,
         h: u32,
     ) -> (
+        wgpu::Texture,
+        wgpu::TextureView,
         wgpu::Texture,
         wgpu::TextureView,
         wgpu::Texture,
@@ -145,9 +159,10 @@ impl DeferredState {
             (t, v)
         };
 
-        let (a, av) = mk("gbuf_albedo_metallic", wgpu::TextureFormat::Rgba16Float);
+        let (a, av) = mk("gbuf_albedo_metallic", wgpu::TextureFormat::Rgba8Unorm);
         let (n, nv) = mk("gbuf_normal_roughness", wgpu::TextureFormat::Rgba16Float);
-        let (p, pv) = mk("gbuf_world_position", wgpu::TextureFormat::Rgba32Float);
+        let (p, pv) = mk("gbuf_world_position", wgpu::TextureFormat::Rgba16Float);
+        let (t, tv) = mk("gbuf_world_tangent", wgpu::TextureFormat::Rgba16Float);
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -157,7 +172,7 @@ impl DeferredState {
             ..Default::default()
         });
 
-        (a, av, n, nv, p, pv, sampler)
+        (a, av, n, nv, p, pv, t, tv, sampler)
     }
 
     fn create_gbuffer_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -204,6 +219,17 @@ impl DeferredState {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                     count: None,
                 },
+                // world_tangent
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -214,6 +240,7 @@ impl DeferredState {
         albedo_v: &wgpu::TextureView,
         normal_v: &wgpu::TextureView,
         pos_v: &wgpu::TextureView,
+        tangent_v: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -235,6 +262,10 @@ impl DeferredState {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(tangent_v),
                 },
             ],
         })
@@ -276,7 +307,7 @@ impl DeferredState {
                 targets: &[
                     // RT0: albedo_metallic  Rgba8Unorm
                     Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba16Float,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
@@ -286,9 +317,15 @@ impl DeferredState {
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
-                    // RT2: world_position   Rgba32Float
+                    // RT2: world_position   Rgba16Float
                     Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba32Float,
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    // RT3: world_tangent    Rgba16Float
+                    Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba16Float,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
@@ -296,7 +333,7 @@ impl DeferredState {
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
-                front_face: wgpu::FrontFace::Cw,
+                front_face: wgpu::FrontFace::Ccw,
                 cull_mode: Some(wgpu::Face::Back),
                 ..Default::default()
             },
@@ -347,7 +384,7 @@ impl DeferredState {
             fragment: None, // NO COLOR TARGETS!
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
-                front_face: wgpu::FrontFace::Cw,
+                front_face: wgpu::FrontFace::Ccw,
                 cull_mode: Some(wgpu::Face::Back),
                 ..Default::default()
             },

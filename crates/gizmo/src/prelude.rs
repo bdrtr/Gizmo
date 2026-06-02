@@ -99,3 +99,7 @@ pub use crate::ui::prelude::*;
 // === Animation (feature flag ile) ===
 #[cfg(feature = "animation")]
 pub use crate::animation::{clip::*, player::*};
+
+// === Sadelik Modüler Sistemleri (Phase 3) ===
+#[cfg(feature = "window")]
+pub use crate::simple::{CameraSettings, LightingSettings, CameraState, EditorState};

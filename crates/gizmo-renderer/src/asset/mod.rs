@@ -132,6 +132,7 @@ pub fn decode_obj_vertices_for_async(
                 color: [1.0, 1.0, 1.0],
                 joint_indices: [0; 4],
                 joint_weights: [0.0; 4],
+                ..Default::default()
             });
         }
 
@@ -442,6 +443,7 @@ impl AssetManager {
                     color: COLOR,
                     joint_indices: [0; 4],
                     joint_weights: [0.0; 4],
+                    ..Default::default()
                 });
             }
         }

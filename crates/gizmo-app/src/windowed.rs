@@ -67,6 +67,7 @@ pub struct App<State: 'static = ()> {
 
 impl<State: 'static> App<State> {
     pub fn new(title: &str, width: u32, height: u32) -> Self {
+        super::setup_panic_hook();
         let mut app = Self {
             world: World::new(),
             schedule: Schedule::new(),

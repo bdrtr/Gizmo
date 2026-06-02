@@ -14,6 +14,11 @@
 use gizmo_math::Vec3;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+
 /// NavMesh'teki tek bir konveks polygon
 #[derive(Debug, Clone)]
 pub struct NavPoly {
@@ -120,7 +125,7 @@ impl NavMesh {
         physics: &gizmo_physics_rigid::world::PhysicsWorld,
         config: &NavMeshConfig,
     ) -> Self {
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let cell_size = config.cell_size;
 
         // 1. Voxelization: Statik collider'ları grid'e yaz

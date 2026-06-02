@@ -11,6 +11,11 @@
 
 use gizmo_core::World;
 
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+
 /// Tek bir entity'nin in-memory yedeği
 #[derive(Clone)]
 pub struct EntitySnapshot {
@@ -23,7 +28,7 @@ pub struct EntitySnapshot {
 #[derive(Clone)]
 pub struct SceneSnapshot {
     pub entities: Vec<EntitySnapshot>,
-    pub timestamp: std::time::Instant,
+    pub timestamp: Instant,
 }
 
 impl SceneSnapshot {
@@ -90,7 +95,7 @@ impl SceneSnapshot {
 
         Self {
             entities,
-            timestamp: std::time::Instant::now(),
+            timestamp: Instant::now(),
         }
     }
 
@@ -106,7 +111,7 @@ impl SceneSnapshot {
         registry: &crate::registry::SceneRegistry,
         protected_ids: &std::collections::HashSet<u32>,
     ) -> RestoreResult {
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let mut restored_count = 0u32;
         let mut despawned_count = 0u32;
 

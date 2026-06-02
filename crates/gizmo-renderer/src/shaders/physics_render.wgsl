@@ -31,12 +31,12 @@ struct VertexInput {
 }
 
 struct GpuBox {
-    @location(6) pos_mass: vec4<f32>,
-    @location(7) vel_state: vec4<f32>,
-    @location(8) rotation: vec4<f32>,
-    @location(9) ang_sleep: vec4<f32>,
-    @location(10) color: vec4<f32>,
-    @location(11) extents_pad: vec4<f32>,
+    @location(8) pos_mass: vec4<f32>,
+    @location(9) vel_state: vec4<f32>,
+    @location(10) rotation: vec4<f32>,
+    @location(11) ang_sleep: vec4<f32>,
+    @location(12) color: vec4<f32>,
+    @location(13) extents_pad: vec4<f32>,
 }
 
 fn rotate_vector_by_quat(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {

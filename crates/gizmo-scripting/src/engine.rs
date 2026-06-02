@@ -376,10 +376,7 @@ impl ScriptEngine {
                     friction,
                     use_gravity,
                 } => {
-                    let entity = world
-                        .iter_alive_entities()
-                        .into_iter()
-                        .find(|e| e.id() == id);
+                    let entity = world.reconstruct_entity(id);
                     if let Some(e) = entity {
                         let rb = gizmo_physics_rigid::components::RigidBody::new(
                             mass,
@@ -402,10 +399,7 @@ impl ScriptEngine {
                     }
                 }
                 ScriptCommand::AddBoxCollider { id, hx, hy, hz } => {
-                    let entity = world
-                        .iter_alive_entities()
-                        .into_iter()
-                        .find(|e| e.id() == id);
+                    let entity = world.reconstruct_entity(id);
                     if let Some(e) = entity {
                         let col =
                             gizmo_physics_core::Collider::aabb(gizmo_math::Vec3::new(hx, hy, hz));
@@ -413,10 +407,7 @@ impl ScriptEngine {
                     }
                 }
                 ScriptCommand::AddSphereCollider { id, radius } => {
-                    let entity = world
-                        .iter_alive_entities()
-                        .into_iter()
-                        .find(|e| e.id() == id);
+                    let entity = world.reconstruct_entity(id);
                     if let Some(e) = entity {
                         let col = gizmo_physics_core::Collider::sphere(radius);
                         world.add_component(e, col);
@@ -476,10 +467,7 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
                     }
                 }
                 ScriptCommand::AddNavAgent(id) => {
-                    let entity = world
-                        .iter_alive_entities()
-                        .into_iter()
-                        .find(|e| e.id() == id);
+                    let entity = world.reconstruct_entity(id);
                     if let Some(e) = entity {
                         world.add_component(e, gizmo_ai::components::NavAgent::default());
                     }

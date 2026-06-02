@@ -71,6 +71,17 @@ pub fn log_message(level: LogLevel, msg: String, file: &'static str, line: u32) 
         logs.remove(0);
     }
 
+    #[cfg(target_arch = "wasm32")]
+    let timestamp = {
+        let now = web_time::SystemTime::now();
+        let duration = now.duration_since(web_time::SystemTime::UNIX_EPOCH).unwrap_or_default();
+        let secs = duration.as_secs();
+        let mins = (secs / 60) % 60;
+        let hours = (secs / 3600) % 24;
+        let secs_of_min = secs % 60;
+        format!("{:02}:{:02}:{:02}", hours, mins, secs_of_min)
+    };
+    #[cfg(not(target_arch = "wasm32"))]
     let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();
 
     logs.push(LogEntry {

@@ -207,6 +207,7 @@ fn run() {
                             position: [local_pos.x, local_pos.y, local_pos.z],
                             color: [0.8, 0.7, 0.6],
                             normal: [n.x, n.y, n.z],
+                            tangent: [0.0, 0.0, 0.0, 1.0],
                             tex_coords: [0.0, 0.0],
                             joint_indices: [0; 4],
                             joint_weights: [0.0; 4],

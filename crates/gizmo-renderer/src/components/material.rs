@@ -15,6 +15,9 @@ pub struct Material {
     pub albedo: gizmo_math::Vec4,
     pub roughness: f32,
     pub metallic: f32,
+    pub anisotropy: f32,
+    pub clear_coat: f32,
+    pub subsurface: f32,
     pub texture_source: Option<String>,
     pub material_type: MaterialType,
     pub is_transparent: bool,
@@ -28,6 +31,9 @@ impl Material {
             albedo: gizmo_math::Vec4::new(1.0, 1.0, 1.0, 1.0),
             roughness: 0.5,
             metallic: 0.0,
+            anisotropy: 0.0,
+            clear_coat: 0.0,
+            subsurface: 0.0,
             texture_source: None,
             material_type: MaterialType::Pbr,
             is_transparent: false,
@@ -46,6 +52,21 @@ impl Material {
         if albedo.w < 1.0 {
             self.is_transparent = true;
         }
+        self
+    }
+
+    pub fn with_anisotropy(mut self, anisotropy: f32) -> Self {
+        self.anisotropy = anisotropy.clamp(0.0, 1.0);
+        self
+    }
+
+    pub fn with_clear_coat(mut self, clear_coat: f32) -> Self {
+        self.clear_coat = clear_coat.clamp(0.0, 1.0);
+        self
+    }
+
+    pub fn with_subsurface(mut self, subsurface: f32) -> Self {
+        self.subsurface = subsurface.clamp(0.0, 1.0);
         self
     }
 

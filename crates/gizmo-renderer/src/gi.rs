@@ -10,6 +10,11 @@
 
 use gizmo_math::Vec3;
 
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+
 /// 2. derece Spherical Harmonics katsayıları (9 katsayı × 3 kanal = 27 float)
 ///
 /// Band 0 (L=0): 1 katsayı  → ortam ışığı (DC bileşen)
@@ -226,7 +231,7 @@ impl ProbeGrid {
         point_lights: &[(Vec3, Vec3, f32, f32)],  // (position, color, intensity, radius)
         ambient_color: Vec3,
     ) {
-        let start = std::time::Instant::now();
+        let start = Instant::now();
 
         for probe in &mut self.probes {
             let mut coeffs = SHCoeffs::default();
