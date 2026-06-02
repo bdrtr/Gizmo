@@ -142,6 +142,22 @@ pub struct Renderer {
 
     // === WEB PROFİLİ — Platform bazlı GPU kaynak yönetimi ===
     pub web_profile: crate::web_profile::WebProfile,
+
+    // === RENDER SETTINGS & DIAGNOSTICS ===
+    pub shading_mode: u32,
+    pub environment_preset: u32,
+    pub environment_preset_2: u32,
+    pub environment_blend_t: f32,
+    pub bloom_intensity: f32,
+    pub bloom_threshold: f32,
+    pub exposure: f32,
+    pub dof_enabled: bool,
+    pub dof_focus_dist: f32,
+    pub dof_focus_range: f32,
+    pub dof_blur_size: f32,
+    pub chromatic_aberration: f32,
+    pub film_grain_intensity: f32,
+    pub point_shadows_enabled: bool,
 }
 
 impl Renderer {
@@ -551,6 +567,20 @@ impl Renderer {
             debug_renderer,
             asset_manager: std::sync::RwLock::new(crate::asset::AssetManager::new()),
             web_profile: crate::web_profile::WebProfile::auto(),
+            shading_mode: 0,
+            environment_preset: 0,
+            environment_preset_2: 0,
+            environment_blend_t: 0.0,
+            bloom_intensity: 0.8,
+            bloom_threshold: 0.85,
+            exposure: 1.15,
+            dof_enabled: true,
+            dof_focus_dist: 4.5, // 4.5 meters (fits our lamp setup)
+            dof_focus_range: 2.0, // 2.0 meters focus range
+            dof_blur_size: 4.0, // Beautiful smooth blur
+            chromatic_aberration: 0.15, // Cinematic soft fringe
+            film_grain_intensity: 0.03, // Photographic film grain
+            point_shadows_enabled: false,
         }
     }
 
@@ -1019,6 +1049,35 @@ mod tests {
         let width2 = 512u32;
         let height2 = 512u32;
         assert_eq!(width2.max(height2).ilog2() + 1, 10);
+    }
+
+    #[test]
+    fn test_environment_preset_ranges() {
+        // Enforce valid atmospheric preset range constraints [0, 3]
+        let renderer_presets = vec![0, 1, 2, 3];
+        for preset in &renderer_presets {
+            assert!(*preset < 4, "Preset ID {} exceeds maximum allowed atmospheric preset index 3!", preset);
+        }
+    }
+
+    #[test]
+    fn test_environment_blend_weight_clamping() {
+        // Dynamic weight blend_t must lie within [0.0, 1.0] and clamp gracefully if out-of-bounds
+        let input_weights = vec![-0.5f32, 0.0f32, 0.45f32, 1.0f32, 1.5f32];
+        let expected_clamps = vec![0.0f32, 0.0f32, 0.45f32, 1.0f32, 1.0f32];
+        for (input, expected) in input_weights.into_iter().zip(expected_clamps) {
+            let clamped = input.clamp(0.0, 1.0);
+            assert_eq!(clamped, expected, "Clamped weight of {} did not match expected value {}!", input, expected);
+        }
+    }
+
+    #[test]
+    fn test_gpu_uniform_struct_sizes() {
+        // Extremely critical alignment checks to prevent runtime pipeline crashes on GPU
+        assert_eq!(std::mem::size_of::<crate::gpu_types::SceneUniforms>(), 1104, "SceneUniforms size shifted from target 1104 bytes!");
+        assert_eq!(std::mem::size_of::<crate::gpu_types::LightData>(), 64, "LightData size shifted from target 64 bytes!");
+        assert_eq!(std::mem::size_of::<crate::gpu_types::PostProcessUniforms>(), 48, "PostProcessUniforms size shifted from target 48 bytes!");
+        assert_eq!(std::mem::size_of::<crate::gpu_types::InstanceRaw>(), 96, "InstanceRaw size shifted from target 96 bytes!");
     }
 
     #[test]

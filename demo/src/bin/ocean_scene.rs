@@ -499,6 +499,7 @@ fn render(
                         position: [pos.x, pos.y, pos.z],
                         color: [1.0, 1.0, 1.0],
                         normal: [normal.x, normal.y, normal.z],
+                        tangent: [0.0, 0.0, 0.0, 1.0],
                         tex_coords: [0.0, 0.0],
                         joint_indices: [0; 4],
                         joint_weights: [0.0; 4],

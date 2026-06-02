@@ -9,6 +9,7 @@ pub struct Vertex {
     pub tex_coords: [f32; 2],
     pub joint_indices: [u32; 4],
     pub joint_weights: [f32; 4],
+    pub tangent: [f32; 4],
 }
 
 impl Default for Vertex {
@@ -20,6 +21,7 @@ impl Default for Vertex {
             tex_coords: [0.0; 2],
             joint_indices: [0; 4],
             joint_weights: [0.0; 4],
+            tangent: [1.0, 0.0, 0.0, 1.0],
         }
     }
 }
@@ -59,6 +61,12 @@ impl Vertex {
                     offset: (std::mem::size_of::<[f32; 11]>() + std::mem::size_of::<[u32; 4]>())
                         as wgpu::BufferAddress,
                     shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: (std::mem::size_of::<[f32; 11]>() + std::mem::size_of::<[u32; 4]>() + std::mem::size_of::<[f32; 4]>())
+                        as wgpu::BufferAddress,
+                    shader_location: 6,
                     format: wgpu::VertexFormat::Float32x4,
                 },
             ],
@@ -117,9 +125,11 @@ pub struct SceneUniforms {
     pub exposure: f32,
     pub _pre_align_pad: [u32; 2], // offset 1064-1071
     pub _align_pad: [u32; 3],     // offset 1072-1083
-    pub _post_align_pad: u32,     // offset 1084-1087
-    pub _pad_scene: [u32; 3],     // offset 1088-1099
-    pub shading_mode: u32, // offset 1100-1103
+    pub environment_blend_t: f32, // offset 1084-1087
+    pub environment_preset: u32,  // offset 1088-1091
+    pub point_shadows_enabled: u32, // offset 1092-1095
+    pub environment_preset_2: u32, // offset 1096-1099
+    pub shading_mode: u32,        // offset 1100-1103
                            // Total: 1104 bytes
 }
 

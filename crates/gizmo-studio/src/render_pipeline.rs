@@ -244,8 +244,10 @@ pub fn execute_render_pipeline(
         exposure: 1.0,
         _pre_align_pad: [0; 2],
         _align_pad: [0; 3],
-        _post_align_pad: 0,
-        _pad_scene: [0; 3],
+        environment_blend_t: 0.0,
+        environment_preset: 0,
+        point_shadows_enabled: 0,
+        environment_preset_2: 0,
         shading_mode: ed_shading_mode,
     };
     renderer.queue.write_buffer(
@@ -353,6 +355,8 @@ pub fn execute_render_pipeline(
                     None => continue, // CULL edildi!
                 };
 
+                let packed_params = ((mat.anisotropy * 1000.0).floor() + 1000.0 * (mat.clear_coat * 1000.0).floor() + 1000000.0 * (mat.subsurface * 100.0).floor()) as f32;
+
                 let instance_data = InstanceRaw {
                     model: model.to_cols_array_2d(),
                     albedo_color: [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w],
@@ -363,7 +367,7 @@ pub fn execute_render_pipeline(
                         gizmo::renderer::components::MaterialType::Unlit => 1.0,
                         _ => 0.0,
                     },
-                    _padding: 0.0,
+                    _padding: packed_params,
                 };
 
                 // --- SKELETON (KEMİK) ARAMASI ---

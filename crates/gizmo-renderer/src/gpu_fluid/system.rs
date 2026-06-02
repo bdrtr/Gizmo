@@ -904,6 +904,7 @@ fn alloc_sphere_verts(radius: f32, stacks: u32, slices: u32) -> Vec<Vertex> {
                 tex_coords: [0.0; 2],
                 joint_indices: [0; 4],
                 joint_weights: [0.0; 4],
+                ..Default::default()
             });
             vertices.push(Vertex {
                 position: p2,
@@ -912,6 +913,7 @@ fn alloc_sphere_verts(radius: f32, stacks: u32, slices: u32) -> Vec<Vertex> {
                 tex_coords: [0.0; 2],
                 joint_indices: [0; 4],
                 joint_weights: [0.0; 4],
+                ..Default::default()
             });
             vertices.push(Vertex {
                 position: p3,
@@ -920,6 +922,7 @@ fn alloc_sphere_verts(radius: f32, stacks: u32, slices: u32) -> Vec<Vertex> {
                 tex_coords: [0.0; 2],
                 joint_indices: [0; 4],
                 joint_weights: [0.0; 4],
+                ..Default::default()
             });
             vertices.push(Vertex {
                 position: p1,
@@ -928,6 +931,7 @@ fn alloc_sphere_verts(radius: f32, stacks: u32, slices: u32) -> Vec<Vertex> {
                 tex_coords: [0.0; 2],
                 joint_indices: [0; 4],
                 joint_weights: [0.0; 4],
+                ..Default::default()
             });
             vertices.push(Vertex {
                 position: p3,
@@ -936,6 +940,7 @@ fn alloc_sphere_verts(radius: f32, stacks: u32, slices: u32) -> Vec<Vertex> {
                 tex_coords: [0.0; 2],
                 joint_indices: [0; 4],
                 joint_weights: [0.0; 4],
+                ..Default::default()
             });
             vertices.push(Vertex {
                 position: p4,
@@ -944,6 +949,7 @@ fn alloc_sphere_verts(radius: f32, stacks: u32, slices: u32) -> Vec<Vertex> {
                 tex_coords: [0.0; 2],
                 joint_indices: [0; 4],
                 joint_weights: [0.0; 4],
+                ..Default::default()
             });
         }
     }

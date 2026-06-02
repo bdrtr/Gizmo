@@ -333,14 +333,33 @@ impl Default for AsyncAssetLoader {
 // ── WASM Fetch & Parse Helpers ──────────────────────────────────────────────
 
 #[cfg(target_arch = "wasm32")]
+async fn native_fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
+
+    let window = web_sys::window().ok_or("No global window found")?;
+    let resp_value = JsFuture::from(window.fetch_with_str(url))
+        .await
+        .map_err(|e| format!("Fetch failed for {url}: {e:?}"))?;
+    let resp: web_sys::Response = resp_value.dyn_into().map_err(|_| "Failed to cast to Response")?;
+
+    if !resp.ok() {
+        return Err(format!("HTTP error status for {url}: {}", resp.status()));
+    }
+
+    let array_buffer_value = JsFuture::from(resp.array_buffer().map_err(|e| format!("Failed to get array buffer: {e:?}"))?)
+        .await
+        .map_err(|e| format!("Failed to resolve array buffer: {e:?}"))?;
+    let array_buffer = js_sys::ArrayBuffer::from(array_buffer_value);
+    let uint8_array = js_sys::Uint8Array::new(&array_buffer);
+    let mut bytes = vec![0; uint8_array.length() as usize];
+    uint8_array.copy_to(&mut bytes);
+    Ok(bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
 async fn fetch_and_decode_texture_wasm(path: &str) -> Result<(Vec<u8>, u32, u32), String> {
-    let bytes = reqwest::get(path)
-        .await
-        .map_err(|e| format!("Failed to fetch texture ({path}): {e}"))?
-        .bytes()
-        .await
-        .map_err(|e| format!("Failed to read texture bytes ({path}): {e}"))?
-        .to_vec();
+    let bytes = native_fetch_bytes(path).await?;
 
     let img = image::load_from_memory(&bytes)
         .map_err(|e| format!("Cannot read texture ({path}) from memory: {e}"))?
@@ -360,13 +379,7 @@ async fn fetch_and_parse_gltf_wasm(
     ),
     String,
 > {
-    let bytes = reqwest::get(path)
-        .await
-        .map_err(|e| format!("Failed to fetch glTF ({path}): {e}"))?
-        .bytes()
-        .await
-        .map_err(|e| format!("Failed to read glTF bytes ({path}): {e}"))?
-        .to_vec();
+    let bytes = native_fetch_bytes(path).await?;
 
     gltf::import_slice(&bytes)
         .map_err(|e| format!("glTF parse slice failed ({path}): {e}"))
@@ -376,13 +389,7 @@ async fn fetch_and_parse_gltf_wasm(
 async fn fetch_and_decode_obj_wasm(
     path: &str,
 ) -> Result<(Vec<crate::gpu_types::Vertex>, gizmo_math::Aabb), String> {
-    let bytes = reqwest::get(path)
-        .await
-        .map_err(|e| format!("Failed to fetch OBJ ({path}): {e}"))?
-        .bytes()
-        .await
-        .map_err(|e| format!("Failed to read OBJ bytes ({path}): {e}"))?
-        .to_vec();
+    let bytes = native_fetch_bytes(path).await?;
 
     let mut reader = std::io::Cursor::new(bytes);
     let (models, _) = tobj::load_obj_buf(

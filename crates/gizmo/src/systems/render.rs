@@ -41,6 +41,7 @@ pub struct DrawItem {
     unlit: bool,
     is_skybox: bool,
     skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
+    is_transparent: bool,
     first_instance: u32,
     instance_count: u32,
 }
@@ -59,6 +60,7 @@ pub(crate) struct BatchData {
     unlit: bool,
     is_skybox: bool,
     skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
+    is_transparent: bool,
     instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
 }
 
@@ -72,6 +74,23 @@ pub fn default_render_pass(
     view: &wgpu::TextureView,
     renderer: &mut Renderer,
 ) {
+    // Update post process parameters dynamically from renderer settings!
+    renderer.update_post_process(
+        &renderer.queue,
+        crate::renderer::gpu_types::PostProcessUniforms {
+            bloom_intensity: renderer.bloom_intensity,
+            bloom_threshold: renderer.bloom_threshold,
+            exposure: renderer.exposure,
+            chromatic_aberration: renderer.chromatic_aberration,
+            vignette_intensity: 0.25,
+            film_grain_intensity: renderer.film_grain_intensity,
+            dof_focus_dist: renderer.dof_focus_dist,
+            dof_focus_range: renderer.dof_focus_range,
+            dof_blur_size: if renderer.dof_enabled { renderer.dof_blur_size } else { 0.0 },
+            _padding: [0.0; 3],
+        },
+    );
+
     let aspect = if renderer.size.height > 0 {
         renderer.size.width as f32 / renderer.size.height as f32
     } else {
@@ -115,14 +134,16 @@ pub fn default_render_pass(
 
     // ── TAA Halton jitter: subpixel offset applied via z-column of projection ──
     if let Some(ref taa) = renderer.taa {
-        let jp = crate::renderer::taa::TaaState::get_jitter(taa.frame_index);
-        // Convert pixel jitter [−0.5, 0.5] to NDC offset (2 / viewport_size per axis)
-        let jx = jp[0] * 2.0 / renderer.size.width as f32;
-        let jy = jp[1] * 2.0 / renderer.size.height as f32;
-        // Adding jitter to NDC.x requires: new_clip.x = clip.x - jx*vz
-        // ↔ subtract jx from proj.z_axis.x (the M[0][2] element, row0·col2)
-        proj.z_axis.x -= jx;
-        proj.z_axis.y -= jy;
+        if taa.enabled {
+            let jp = crate::renderer::taa::TaaState::get_jitter(taa.frame_index);
+            // Convert pixel jitter [−0.5, 0.5] to NDC offset (2 / viewport_size per axis)
+            let jx = jp[0] * 2.0 / renderer.size.width as f32;
+            let jy = jp[1] * 2.0 / renderer.size.height as f32;
+            // Adding jitter to NDC.x requires: new_clip.x = clip.x - jx*vz
+            // ↔ subtract jx from proj.z_axis.x (the M[0][2] element, row0·col2)
+            proj.z_axis.x -= jx;
+            proj.z_axis.y -= jy;
+        }
     }
 
     let view_proj = proj * view_mat; // jittered — used for SceneUniforms
@@ -216,30 +237,32 @@ pub fn default_render_pass(
 
     #[allow(unused_assignments)]
     let mut point_light_view_projs = [gizmo_math::Mat4::IDENTITY; 6];
-    if let Some(q) = world.query::<(
-        &crate::renderer::components::PointLight,
-        &gizmo_physics_core::components::GlobalTransform,
-    )>() {
-        if let Some((_id, (_light, transform))) = q.iter().next() {
-            let (_, _, pos) = transform.matrix.to_scale_rotation_translation();
-            let proj = gizmo_math::Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.1, 100.0);
-            point_light_view_projs = [
-                proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::X, -gizmo_math::Vec3::Y),
-                proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_X, -gizmo_math::Vec3::Y),
-                proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::Y, gizmo_math::Vec3::Z),
-                proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_Y, gizmo_math::Vec3::NEG_Z),
-                proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::Z, -gizmo_math::Vec3::Y),
-                proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_Z, -gizmo_math::Vec3::Y),
-            ];
-            
-            for i in 0..6 {
-                renderer.queue.write_buffer(
-                    &renderer.scene.point_shadow_uniform_buffers[i],
-                    0,
-                    bytemuck::bytes_of(&crate::renderer::gpu_types::ShadowVsUniform {
-                        light_view_proj: point_light_view_projs[i].to_cols_array_2d(),
-                    }),
-                );
+    if renderer.point_shadows_enabled {
+        if let Some(q) = world.query::<(
+            &crate::renderer::components::PointLight,
+            &gizmo_physics_core::components::GlobalTransform,
+        )>() {
+            if let Some((_id, (_light, transform))) = q.iter().next() {
+                let (_, _, pos) = transform.matrix.to_scale_rotation_translation();
+                let proj = gizmo_math::Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.1, 100.0);
+                point_light_view_projs = [
+                    proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::X, -gizmo_math::Vec3::Y),
+                    proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_X, -gizmo_math::Vec3::Y),
+                    proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::Y, gizmo_math::Vec3::Z),
+                    proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_Y, gizmo_math::Vec3::NEG_Z),
+                    proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::Z, -gizmo_math::Vec3::Y),
+                    proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_Z, -gizmo_math::Vec3::Y),
+                ];
+                
+                for i in 0..6 {
+                    renderer.queue.write_buffer(
+                        &renderer.scene.point_shadow_uniform_buffers[i],
+                        0,
+                        bytemuck::bytes_of(&crate::renderer::gpu_types::ShadowVsUniform {
+                            light_view_proj: point_light_view_projs[i].to_cols_array_2d(),
+                        }),
+                    );
+                }
             }
         }
     }
@@ -259,9 +282,11 @@ pub fn default_render_pass(
         exposure: cam_exposure,
         _pre_align_pad: [0; 2],
         _align_pad: [0; 3],
-        _post_align_pad: 0,
-        _pad_scene: [0; 3],
-        shading_mode: 0,
+        environment_blend_t: renderer.environment_blend_t,
+        environment_preset: renderer.environment_preset,
+        point_shadows_enabled: renderer.point_shadows_enabled as u32,
+        environment_preset_2: renderer.environment_preset_2,
+        shading_mode: renderer.shading_mode,
     };
     renderer.queue.write_buffer(
         &renderer.scene.global_uniform_buffer,
@@ -280,12 +305,14 @@ pub fn default_render_pass(
 
     // Upload TAA params (prev_vp from last frame, current jitter, blend alpha)
     if let Some(ref mut taa) = renderer.taa {
-        let jp = crate::renderer::taa::TaaState::get_jitter(taa.frame_index);
-        let jx = jp[0] * 2.0 / renderer.size.width as f32;
-        let jy = jp[1] * 2.0 / renderer.size.height as f32;
-        let alpha = if taa.frame_index == 0 { 1.0f32 } else { 0.1f32 };
-        taa.update_params(&renderer.queue, [jx, jy], alpha);
-        taa.store_prev_vp(unjittered_view_proj.to_cols_array_2d());
+        if taa.enabled {
+            let jp = crate::renderer::taa::TaaState::get_jitter(taa.frame_index);
+            let jx = jp[0] * 2.0 / renderer.size.width as f32;
+            let jy = jp[1] * 2.0 / renderer.size.height as f32;
+            let alpha = if taa.frame_index == 0 { 1.0f32 } else { 0.1f32 };
+            taa.update_params(&renderer.queue, [jx, jy], alpha);
+            taa.store_prev_vp(unjittered_view_proj.to_cols_array_2d());
+        }
     }
 
     // ... inside default_render_pass ...
@@ -358,6 +385,8 @@ pub fn default_render_pass(
                     $mesh.vertex_count
                 };
 
+                let packed_params = (($mat.anisotropy * 1000.0).floor() + 1000.0 * ($mat.clear_coat * 1000.0).floor() + 1000000.0 * ($mat.subsurface * 100.0).floor()) as f32;
+
                 let instance_data = crate::renderer::gpu_types::InstanceRaw {
                     model: model.to_cols_array_2d(),
                     albedo_color: [$mat.albedo.x, $mat.albedo.y, $mat.albedo.z, $mat.albedo.w],
@@ -368,7 +397,7 @@ pub fn default_render_pass(
                         crate::renderer::components::MaterialType::Unlit => 1.0,
                         _ => 0.0,
                     },
-                    _padding: 0.0,
+                    _padding: packed_params,
                 };
                 let skel_bg = $skeleton.map(|s: &crate::renderer::components::Skeleton| s.bind_group.clone());
                 
@@ -386,6 +415,7 @@ pub fn default_render_pass(
                         || $mat.material_type == crate::renderer::components::MaterialType::Skybox,
                     is_skybox: $mat.material_type == crate::renderer::components::MaterialType::Skybox,
                     skeleton_bind_group: skel_bg,
+                    is_transparent: $mat.is_transparent || $mat.albedo.w < 0.99,
                     instances: Vec::new(),
                 });
                 batch.instances.push(instance_data);
@@ -429,6 +459,7 @@ pub fn default_render_pass(
                 unlit: batch.unlit,
                 is_skybox: batch.is_skybox,
                 skeleton_bind_group: batch.skeleton_bind_group.clone(),
+                is_transparent: batch.is_transparent,
                 first_instance,
                 instance_count,
             });
@@ -502,7 +533,7 @@ pub fn default_render_pass(
         let active_parts = (particles.max_particles as f32 * particle_lod) as u32;
         let dt = world
             .get_resource::<gizmo_core::time::Time>()
-            .map(|t| t.time_scale() * 0.016)
+            .map(|t| t.dt())
             .unwrap_or(0.016);
         particles.update_params(&renderer.queue, dt); // Scale based on time_scale
         particles.compute_pass(encoder, active_parts);
@@ -569,7 +600,7 @@ pub fn default_render_pass(
         shadow_pass.set_bind_group(0, &renderer.scene.shadow_pass_bind_groups[i], &[]);
         shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
         for item in &draw_items {
-            if item.unlit {
+            if item.unlit || item.is_transparent {
                 continue;
             }
             let skel_bg = item
@@ -606,7 +637,7 @@ pub fn default_render_pass(
         shadow_pass.set_bind_group(0, &renderer.scene.point_shadow_pass_bind_groups[i], &[]);
         shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
         for item in &draw_items {
-            if item.unlit { continue; }
+            if item.unlit || item.is_transparent { continue; }
             let skel_bg = item
                 .skeleton_bind_group
                 .as_ref()
@@ -642,7 +673,7 @@ pub fn default_render_pass(
         z_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
         z_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
         for item in &draw_items {
-            if item.unlit || item.is_skybox {
+            if item.unlit || item.is_skybox || item.is_transparent {
                 continue;
             }
             let skel_bg = item
@@ -688,6 +719,14 @@ pub fn default_render_pass(
                         store: wgpu::StoreOp::Store,
                     },
                 }),
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &def.world_tangent_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
             ],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: &renderer.depth_texture_view,
@@ -705,7 +744,7 @@ pub fn default_render_pass(
         gbuf_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
         gbuf_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
         for item in &draw_items {
-            if item.unlit {
+            if item.unlit || item.is_transparent {
                 continue;
             }
             let skel_bg = item
@@ -929,6 +968,8 @@ pub fn default_render_pass(
                 draw_solid = true;
             } else if renderer.deferred.is_none() {
                 draw_solid = true;
+            } else if item.is_transparent {
+                draw_solid = true;
             }
 
             let skel_bg = item
@@ -941,6 +982,8 @@ pub fn default_render_pass(
                     &renderer.scene.sky_pipeline
                 } else if item.unlit {
                     &renderer.scene.unlit_pipeline
+                } else if item.is_transparent {
+                    &renderer.scene.transparent_pipeline
                 } else {
                     &renderer.scene.render_pipeline
                 };
@@ -1166,47 +1209,51 @@ pub fn default_render_pass(
 
     // ── TAA resolve: blend jittered HDR with clamped history ─────────────────
     if let Some(ref taa) = renderer.taa {
-        let (resolve_bg, output_view) = taa.current_resolve_inputs_output();
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("TAA Resolve Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: output_view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-        pass.set_pipeline(&taa.resolve_pipeline);
-        pass.set_bind_group(0, resolve_bg, &[]);
-        pass.draw(0..3, 0..1);
+        if taa.enabled {
+            let (resolve_bg, output_view) = taa.current_resolve_inputs_output();
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("TAA Resolve Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: output_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&taa.resolve_pipeline);
+            pass.set_bind_group(0, resolve_bg, &[]);
+            pass.draw(0..3, 0..1);
+        }
     }
 
     // ── TAA blit: copy stabilized history output back into HDR texture ───────
     if let Some(ref taa) = renderer.taa {
-        let blit_bg = taa.current_blit_bg();
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("TAA Blit Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &renderer.post.hdr_texture_view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-        pass.set_pipeline(&taa.blit_pipeline);
-        pass.set_bind_group(0, &taa.empty_bg, &[]);
-        pass.set_bind_group(1, blit_bg, &[]);
-        pass.draw(0..3, 0..1);
+        if taa.enabled {
+            let blit_bg = taa.current_blit_bg();
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("TAA Blit Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &renderer.post.hdr_texture_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&taa.blit_pipeline);
+            pass.set_bind_group(0, &taa.empty_bg, &[]);
+            pass.set_bind_group(1, blit_bg, &[]);
+            pass.draw(0..3, 0..1);
+        }
     }
 
     // Render Gizmos AFTER TAA to avoid ghosting/washing out dynamic overlays
@@ -1272,7 +1319,9 @@ pub fn default_render_pass(
 
     // Advance TAA ping-pong and frame counter
     if let Some(ref mut taa) = renderer.taa {
-        taa.advance_frame();
+        if taa.enabled {
+            taa.advance_frame();
+        }
     }
 
     renderer.run_post_processing(encoder, view);

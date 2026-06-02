@@ -1,7 +1,17 @@
 use std::sync::Arc;
 use crate::clip::AnimationClip;
-
 use std::collections::HashMap;
+use gizmo_core::entity::Entity;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Animated;
+
+impl gizmo_core::component::Component for Animated {
+    fn storage_type() -> gizmo_core::component::StorageType {
+        gizmo_core::component::StorageType::Table
+    }
+}
+
 
 #[derive(Clone)]
 pub struct AnimationPlayer {
@@ -10,7 +20,7 @@ pub struct AnimationPlayer {
     pub speed: f32,
     pub playing: bool,
     pub looping: bool,
-    pub target_entities: HashMap<String, u32>,
+    pub target_entities: HashMap<String, Entity>,
 }
 
 impl Default for AnimationPlayer {

@@ -49,6 +49,7 @@ pub struct TaaState {
 
     pub width: u32,
     pub height: u32,
+    pub enabled: bool,
 }
 
 impl TaaState {
@@ -152,6 +153,7 @@ impl TaaState {
             empty_bg,
             width,
             height,
+            enabled: true,
         }
     }
 
@@ -338,7 +340,7 @@ fn mk_resolve_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 },
                 count: None,
             },
-            tex_nf(1), // t_current  (HDR, textureLoad)
+            tex_f(1),  // t_current  (HDR, textureSample bilinear to undo jitter)
             tex_f(2),  // t_history  (history, textureSample bilinear)
             tex_nf(3), // t_position (G-buffer, textureLoad)
             sampler(4, wgpu::SamplerBindingType::Filtering), // s_linear

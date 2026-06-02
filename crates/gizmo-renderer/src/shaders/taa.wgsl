@@ -32,7 +32,9 @@ fn fs_resolve(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32
     let iuv      = vec2<i32>(i32(frag_coord.x), i32(frag_coord.y));
     let uv       = frag_coord.xy / dims;
 
-    let current = textureLoad(t_current, iuv, 0).rgb;
+    // Un-jitter the current frame sample to restore perfect pixel alignment and remove screen shaking
+    let current_uv = uv - params.jitter * vec2<f32>(0.5, -0.5);
+    let current = textureSample(t_current, s_linear, current_uv).rgb;
 
     // ── Reproject: find where this world-space point was last frame ───────────
     var history_uv = uv; // fallback: no movement

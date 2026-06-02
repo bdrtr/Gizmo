@@ -3,6 +3,11 @@
 use crate::editor_state::{BuildTarget, EditorMode, EditorState, GizmoMode};
 use egui;
 
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+
 /// Toolbar panelini çizer
 pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
     egui::TopBottomPanel::top("toolbar_panel")
@@ -334,7 +339,7 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                         .clicked()
                     {
                         state.build.request = true;
-                        state.build.start_time = Some(std::time::Instant::now());
+                        state.build.start_time = Some(Instant::now());
                         state.open_tab(crate::editor_state::EditorTab::Console);
                         state.console.mode = crate::editor_state::ConsoleMode::BuildOutput;
                     }

@@ -280,9 +280,9 @@ fn evaluate_clip(
         if let Some(joint_idx) = get_joint_idx(track.target_node, &track.target_node_name) {
             if let Some(v) = track.get_interpolated(time, |a: Vec3, b: Vec3, t| a.lerp(b, t)) {
                 // Sadece Hips (kök) kemiğinin hareketine izin ver, diğerlerini yoksay. Mixamo animasyonlarında root motion buradadır.
-                if track.target_node_name.as_deref() == Some("mixamorig:Hips")
-                    || track.target_node == 66
-                {
+                let is_hips = track.target_node_name.as_deref().is_some_and(|n| n.contains("Hips"))
+                    || track.target_node == 66;
+                if is_hips {
                     changes[joint_idx].0 = Some(v);
                 }
             }

@@ -2,6 +2,11 @@
 use crate::prefs::EditorPrefs;
 use serde::{Deserialize, Serialize};
 
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Hash, Debug)]
 pub enum EditorTab {
     Hierarchy,
@@ -67,7 +72,7 @@ pub struct BuildState {
     pub is_building: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub logs_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
     pub cached_logs: Vec<(String, egui::Color32)>,
-    pub start_time: Option<std::time::Instant>,
+    pub start_time: Option<Instant>,
 }
 impl Default for BuildState {
     fn default() -> Self {
@@ -89,7 +94,7 @@ pub struct AssetBrowserState {
     pub workspace_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
     pub cached_dir: Option<(
         String,
-        std::time::Instant,
+        Instant,
         Vec<(std::path::PathBuf, String, bool)>,
     )>,
 }

@@ -134,7 +134,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     
     let sun_col = scene.sun_color.xyz * scene.sun_color.w;
     
-    // Hafifce isigin altina gecir (Ambient)
-    let final_color = in.color * base_color + (vec3<f32>(0.2, 0.5, 0.8) * spec * sun_col * 2.0);
-    return vec4<f32>(final_color, in.inst_albedo.a * tex_color.a * 0.85); // Azcik saydam
+    // Physically-inspired water lighting: Diffuse response to sun + ambient light + shiny specular hotspot
+    let ambient = vec3<f32>(0.15, 0.2, 0.25);
+    let diffuse = max(dot(N, L), 0.0) * sun_col;
+    let final_color = base_color * (ambient + diffuse * 0.6) + (vec3<f32>(0.7, 0.9, 1.0) * spec * sun_col * 2.0);
+    return vec4<f32>(final_color, in.inst_albedo.a * tex_color.a * 0.85); // Transparent water
 }

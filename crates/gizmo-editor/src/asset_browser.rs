@@ -4,6 +4,11 @@ use crate::editor_state::EditorState;
 use egui;
 use std::path::Path;
 
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+
 /// Asset Browser sekmesini çizer
 pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
 let mut finished = false;
@@ -113,7 +118,7 @@ let mut finished = false;
                 return;
             }
 
-            let now = std::time::Instant::now();
+            let now = Instant::now();
             let mut need_refresh = true;
             if let Some((cached_path, last_update, _)) = &state.assets.cached_dir {
                 if cached_path == &state.assets.root

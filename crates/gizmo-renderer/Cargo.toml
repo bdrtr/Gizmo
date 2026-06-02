@@ -33,8 +33,10 @@ meshopt = "0.6.2"
 pollster = "0.3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-reqwest = "0.11"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Response"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 uuid = { version = "1.23.0", features = ["v4", "serde", "js"] }
+web-time = "0.2"

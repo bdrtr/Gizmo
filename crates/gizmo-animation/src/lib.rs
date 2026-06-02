@@ -13,6 +13,7 @@ pub struct AnimationPlugin;
 impl<State: 'static> gizmo_app::Plugin<State> for AnimationPlugin {
     fn build(&self, app: &mut gizmo_app::App<State>) {
         app.world.register_component_type::<player::AnimationPlayer>();
+        app.world.register_component_type::<player::Animated>();
         app.schedule.add_di_system(
             system::animation_system
                 .into_config()

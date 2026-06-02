@@ -17,6 +17,7 @@ pub fn default_scene_registry() -> SceneRegistry {
     reg.register_serializable::<gizmo_physics_core::components::Hurtbox>("Hurtbox");
     reg.register_serializable::<gizmo_physics_core::components::FighterController>("FighterController");
 
+    #[cfg(not(target_arch = "wasm32"))]
     reg.register_serializable::<gizmo_scripting::Script>("Script");
 
     reg

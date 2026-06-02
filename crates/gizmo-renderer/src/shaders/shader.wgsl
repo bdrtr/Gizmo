@@ -202,9 +202,9 @@ fn compute_direct_lighting(
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
     
-    // Alpha Cutoff (Alpha Test)
+    // Alpha Cutoff (Alpha Test) - lowered to 0.01 to allow transparent/glass meshes to render without being discarded
     let final_alpha = in.inst_albedo.a * tex_color.a;
-    if (final_alpha < 0.5) {
+    if (final_alpha < 0.01) {
         discard;
     }
 

@@ -18,6 +18,79 @@ pub struct SimpleSceneState {
     pub camera_pos: Vec3,
 }
 
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub struct CameraSettings {
+    pub speed: f32,
+    pub pitch: f32,
+    pub yaw: f32,
+    pub pos: Vec3,
+    pub exposure: f32,
+    pub bloom_intensity: f32,
+}
+
+impl Default for CameraSettings {
+    fn default() -> Self {
+        Self {
+            speed: 15.0,
+            pitch: 0.0,
+            yaw: 0.0,
+            pos: Vec3::new(0.0, 2.0, 5.0),
+            exposure: 1.0,
+            bloom_intensity: 0.05,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub struct LightingSettings {
+    pub preset: u32,
+    pub preset_2: u32,
+    pub blend_t: f32,
+    pub auto_cycle: bool,
+    pub rotation_speed: f32,
+    pub direct_intensity: f32,
+}
+
+impl Default for LightingSettings {
+    fn default() -> Self {
+        Self {
+            preset: 0,
+            preset_2: 1,
+            blend_t: 0.0,
+            auto_cycle: false,
+            rotation_speed: 1.0,
+            direct_intensity: 4.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CameraState {
+    Orbiting,
+    Stationary,
+    Manual,
+}
+
+impl Default for CameraState {
+    fn default() -> Self {
+        Self::Manual
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum EditorState {
+    PlayMode,
+    EditMode,
+    Paused,
+}
+
+impl Default for EditorState {
+    fn default() -> Self {
+        Self::PlayMode
+    }
+}
+
+
 pub struct SceneBuilder<'a> {
     pub world: &'a mut World,
     pub renderer: &'a Renderer,
@@ -380,5 +453,56 @@ impl SimpleAppExt for App<SimpleSceneState> {
             
             systems::default_render_pass(world, encoder, view, renderer);
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_camera_settings_default() {
+        let settings = CameraSettings::default();
+        assert_eq!(settings.speed, 15.0);
+        assert_eq!(settings.pitch, 0.0);
+        assert_eq!(settings.yaw, 0.0);
+        assert_eq!(settings.pos, Vec3::new(0.0, 2.0, 5.0));
+        assert_eq!(settings.exposure, 1.0);
+        assert_eq!(settings.bloom_intensity, 0.05);
+    }
+
+    #[test]
+    fn test_lighting_settings_default() {
+        let settings = LightingSettings::default();
+        assert_eq!(settings.preset, 0);
+        assert_eq!(settings.preset_2, 1);
+        assert_eq!(settings.blend_t, 0.0);
+        assert_eq!(settings.auto_cycle, false);
+        assert_eq!(settings.rotation_speed, 1.0);
+        assert_eq!(settings.direct_intensity, 4.0);
+    }
+
+    #[test]
+    fn test_camera_state_transitions() {
+        let mut state = CameraState::default();
+        assert_eq!(state, CameraState::Manual);
+        
+        state = CameraState::Orbiting;
+        assert_eq!(state, CameraState::Orbiting);
+        
+        state = CameraState::Stationary;
+        assert_eq!(state, CameraState::Stationary);
+    }
+
+    #[test]
+    fn test_editor_state_transitions() {
+        let mut state = EditorState::default();
+        assert_eq!(state, EditorState::PlayMode);
+        
+        state = EditorState::EditMode;
+        assert_eq!(state, EditorState::EditMode);
+        
+        state = EditorState::Paused;
+        assert_eq!(state, EditorState::Paused);
     }
 }

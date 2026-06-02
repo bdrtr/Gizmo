@@ -2,16 +2,20 @@ use gizmo_core::query::{Query, Mut};
 use gizmo_core::system::Res;
 use gizmo_core::Time;
 use gizmo_core::component::{Children, EntityName};
+use gizmo_core::entity::Entity;
+use gizmo_core::world::Entities;
 use gizmo_physics_core::Transform;
 use crate::player::AnimationPlayer;
 use crate::clip::InterpolatedValue;
 
 pub fn animation_system(
     time: Res<Time>,
+    entities: Res<Entities>,
+    mut commands: gizmo_core::Commands,
     mut players: Query<Mut<AnimationPlayer>>,
     names: Query<&EntityName>,
     children: Query<&Children>,
-    transforms: Query<Mut<Transform>>,
+    transforms: Query<(Mut<Transform>, gizmo_core::query::With<crate::player::Animated>)>,
 ) {
     let dt = time.dt();
 
@@ -49,7 +53,15 @@ pub fn animation_system(
                 if let Some(name) = names.get(current) {
                     for track in &clip.tracks {
                         if track.target_name == name.0 {
-                            player.target_entities.insert(name.0.clone(), current);
+                            let gen = {
+                                let state = entities.state.lock().unwrap();
+                                state.generations[current as usize]
+                            };
+                            let entity = Entity::new(current, gen);
+                            player.target_entities.insert(name.0.clone(), entity);
+                            
+                            // Target entity'ye Animated marker component'ini ekle!
+                            commands.entity(entity).insert(crate::player::Animated);
                         }
                     }
                 }
@@ -65,10 +77,15 @@ pub fn animation_system(
 
         // Apply animations
         for track in &clip.tracks {
-            if let Some(&target_id) = player.target_entities.get(&track.target_name) {
+            if let Some(&target_entity) = player.target_entities.get(&track.target_name) {
+                // Check if the target entity is still alive and matches the generation in the world
+                if !entities.is_alive(target_entity) {
+                    continue;
+                }
+                let target_id = target_entity.id();
                 let interpolated = track.sample(player.elapsed_time);
                 
-                if let Some(mut transform) = transforms.get_mut(target_id) {
+                if let Some((mut transform, _)) = transforms.get_mut(target_id) {
                     match interpolated {
                         InterpolatedValue::Translation(v) => {
                             transform.position = v;

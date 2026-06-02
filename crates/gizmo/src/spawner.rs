@@ -702,18 +702,24 @@ fn spawn_gltf_node_flat(
     ))
     .with_rotation(rot)
     .with_scale(Vec3::new(node.scale[0], node.scale[1], node.scale[2]));
+    t.update_local_matrix();
 
     if node.skin_index.is_some() || node.name.as_deref() == Some("Armature") {
         t = Transform::default();
+        t.update_local_matrix();
     }
     
     world.add_component(entity, t);
     world.add_component(entity, gizmo_physics_core::components::GlobalTransform::default());
 
+    println!("SPAWN GLTF NODE: name={:?}, num_primitives={}", node.name, node.primitives.len());
     let mut newly_added_prims = Vec::new();
     for (mesh, mat_opt) in node.primitives.iter() {
+        println!("  SPAWN PRIM: mesh_source='{}', bounds_min={:?}, bounds_max={:?}", mesh.source, mesh.bounds.min, mesh.bounds.max);
         let prim = world.spawn();
-        world.add_component(prim, Transform::new(Vec3::ZERO));
+        let mut prim_t = Transform::new(Vec3::ZERO);
+        prim_t.update_local_matrix();
+        world.add_component(prim, prim_t);
         world.add_component(prim, gizmo_physics_core::components::GlobalTransform::default());
         world.add_component(prim, Parent(entity.id()));
         world.add_component(prim, Children(Vec::new()));

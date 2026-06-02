@@ -531,8 +531,14 @@ impl PhysicsWorld {
     /// Telemetry and Debugging: Create a JSON snapshot of the physical world state
     pub fn trigger_snapshot(&self, reason: &str) {
         tracing::error!("Creating physics snapshot due to: {}", reason);
+        #[cfg(target_arch = "wasm32")]
+        let timestamp = web_time::SystemTime::now()
+            .duration_since(web_time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        #[cfg(not(target_arch = "wasm32"))]
         let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
         let filename = format!("physics_snapshot_{}.json", timestamp);

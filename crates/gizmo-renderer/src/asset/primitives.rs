@@ -117,7 +117,7 @@ impl super::AssetManager {
                     normal: face.normal,
                     tex_coords: face.uvs[i],
                     joint_indices: [0; 4],
-                    joint_weights: [0.0; 4],
+                    joint_weights: [0.0; 4], ..Default::default()
                 });
             }
         }
@@ -246,7 +246,7 @@ impl super::AssetManager {
                     normal: face.normal,
                     tex_coords: face.uvs[i],
                     joint_indices: [0; 4],
-                    joint_weights: [0.0; 4],
+                    joint_weights: [0.0; 4], ..Default::default()
                 });
             }
         }
@@ -322,7 +322,7 @@ impl super::AssetManager {
                     normal,
                     tex_coords: [0.0, 0.0],
                     joint_indices: [0; 4],
-                    joint_weights: [0.0; 4],
+                    joint_weights: [0.0; 4], ..Default::default()
                 });
             }
         }
@@ -358,7 +358,7 @@ impl super::AssetManager {
                 normal: [0.0, 1.0, 0.0],
                 tex_coords: [0.0, 0.0],
                 joint_indices: def_j,
-                joint_weights: def_w,
+                joint_weights: def_w, ..Default::default()
             },
             Vertex {
                 position: [half, y, -half],
@@ -366,7 +366,7 @@ impl super::AssetManager {
                 normal: [0.0, 1.0, 0.0],
                 tex_coords: [size, 0.0],
                 joint_indices: def_j,
-                joint_weights: def_w,
+                joint_weights: def_w, ..Default::default()
             },
             Vertex {
                 position: [half, y, half],
@@ -374,7 +374,7 @@ impl super::AssetManager {
                 normal: [0.0, 1.0, 0.0],
                 tex_coords: [size, size],
                 joint_indices: def_j,
-                joint_weights: def_w,
+                joint_weights: def_w, ..Default::default()
             },
             // İkinci Üçgen (CW from above)
             Vertex {
@@ -383,7 +383,7 @@ impl super::AssetManager {
                 normal: [0.0, 1.0, 0.0],
                 tex_coords: [0.0, 0.0],
                 joint_indices: def_j,
-                joint_weights: def_w,
+                joint_weights: def_w, ..Default::default()
             },
             Vertex {
                 position: [half, y, half],
@@ -391,7 +391,7 @@ impl super::AssetManager {
                 normal: [0.0, 1.0, 0.0],
                 tex_coords: [size, size],
                 joint_indices: def_j,
-                joint_weights: def_w,
+                joint_weights: def_w, ..Default::default()
             },
             Vertex {
                 position: [-half, y, half],
@@ -399,7 +399,7 @@ impl super::AssetManager {
                 normal: [0.0, 1.0, 0.0],
                 tex_coords: [0.0, size],
                 joint_indices: def_j,
-                joint_weights: def_w,
+                joint_weights: def_w, ..Default::default()
             },
         ];
 
@@ -446,7 +446,7 @@ impl super::AssetManager {
                 normal,
                 tex_coords: uv_center,
                 joint_indices: def_j,
-                joint_weights: def_w,
+                joint_weights: def_w, ..Default::default()
             });
             vertices.push(Vertex {
                 position: p1,
@@ -454,7 +454,7 @@ impl super::AssetManager {
                 normal,
                 tex_coords: uv1,
                 joint_indices: def_j,
-                joint_weights: def_w,
+                joint_weights: def_w, ..Default::default()
             });
             vertices.push(Vertex {
                 position: p2,
@@ -462,7 +462,7 @@ impl super::AssetManager {
                 normal,
                 tex_coords: uv2,
                 joint_indices: def_j,
-                joint_weights: def_w,
+                joint_weights: def_w, ..Default::default()
             });
         }
 
@@ -501,7 +501,7 @@ impl super::AssetManager {
                 normal: [0.0, 1.0, 0.0],
                 tex_coords: [0.0, 0.0],
                 joint_indices: [0; 4],
-                joint_weights: [0.0; 4],
+                joint_weights: [0.0; 4], ..Default::default()
             });
         }
 
@@ -536,7 +536,7 @@ impl super::AssetManager {
                 normal: [0.0, 0.0, 1.0],
                 tex_coords: [0.0, 1.0],
                 joint_indices: def_j,
-                joint_weights: def_w,
+                joint_weights: def_w, ..Default::default()
             },
             Vertex {
                 position: [hw, -hh, 0.0],
@@ -544,7 +544,7 @@ impl super::AssetManager {
                 normal: [0.0, 0.0, 1.0],
                 tex_coords: [1.0, 1.0],
                 joint_indices: def_j,
-                joint_weights: def_w,
+                joint_weights: def_w, ..Default::default()
             },
             Vertex {
                 position: [hw, hh, 0.0],
@@ -552,7 +552,7 @@ impl super::AssetManager {
                 normal: [0.0, 0.0, 1.0],
                 tex_coords: [1.0, 0.0],
                 joint_indices: def_j,
-                joint_weights: def_w,
+                joint_weights: def_w, ..Default::default()
             },
             Vertex {
                 position: [hw, hh, 0.0],
@@ -560,7 +560,7 @@ impl super::AssetManager {
                 normal: [0.0, 0.0, 1.0],
                 tex_coords: [1.0, 0.0],
                 joint_indices: def_j,
-                joint_weights: def_w,
+                joint_weights: def_w, ..Default::default()
             },
             Vertex {
                 position: [-hw, hh, 0.0],
@@ -568,7 +568,7 @@ impl super::AssetManager {
                 normal: [0.0, 0.0, 1.0],
                 tex_coords: [0.0, 0.0],
                 joint_indices: def_j,
-                joint_weights: def_w,
+                joint_weights: def_w, ..Default::default()
             },
             Vertex {
                 position: [-hw, -hh, 0.0],
@@ -576,7 +576,7 @@ impl super::AssetManager {
                 normal: [0.0, 0.0, 1.0],
                 tex_coords: [0.0, 1.0],
                 joint_indices: def_j,
-                joint_weights: def_w,
+                joint_weights: def_w, ..Default::default()
             },
         ];
 
@@ -696,7 +696,7 @@ impl super::AssetManager {
                     normal: n1,
                     tex_coords: uv1,
                     joint_indices: def_j,
-                    joint_weights: def_w,
+                    joint_weights: def_w, ..Default::default()
                 });
                 vertices.push(Vertex {
                     position: p2,
@@ -704,7 +704,7 @@ impl super::AssetManager {
                     normal: n2,
                     tex_coords: uv2,
                     joint_indices: def_j,
-                    joint_weights: def_w,
+                    joint_weights: def_w, ..Default::default()
                 });
                 vertices.push(Vertex {
                     position: p3,
@@ -712,7 +712,7 @@ impl super::AssetManager {
                     normal: n3,
                     tex_coords: uv3,
                     joint_indices: def_j,
-                    joint_weights: def_w,
+                    joint_weights: def_w, ..Default::default()
                 });
                 // Üçgen 2 (CCW)
                 vertices.push(Vertex {
@@ -721,7 +721,7 @@ impl super::AssetManager {
                     normal: n1,
                     tex_coords: uv1,
                     joint_indices: def_j,
-                    joint_weights: def_w,
+                    joint_weights: def_w, ..Default::default()
                 });
                 vertices.push(Vertex {
                     position: p3,
@@ -729,7 +729,7 @@ impl super::AssetManager {
                     normal: n3,
                     tex_coords: uv3,
                     joint_indices: def_j,
-                    joint_weights: def_w,
+                    joint_weights: def_w, ..Default::default()
                 });
                 vertices.push(Vertex {
                     position: p4,
@@ -737,7 +737,7 @@ impl super::AssetManager {
                     normal: n4,
                     tex_coords: uv4,
                     joint_indices: def_j,
-                    joint_weights: def_w,
+                    joint_weights: def_w, ..Default::default()
                 });
             }
         }
@@ -783,24 +783,24 @@ impl super::AssetManager {
             let col = [1.0; 3];
 
             // Tri 1 (CCW)
-            vertices.push(Vertex { position: p1_top, normal: n1, tex_coords: [u1, 0.0], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: p1_bot, normal: n1, tex_coords: [u1, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [u2, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: p1_top, normal: n1, tex_coords: [u1, 0.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: p1_bot, normal: n1, tex_coords: [u1, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [u2, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
 
             // Tri 2 (CCW)
-            vertices.push(Vertex { position: p1_top, normal: n1, tex_coords: [u1, 0.0], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [u2, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: p2_top, normal: n2, tex_coords: [u2, 0.0], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: p1_top, normal: n1, tex_coords: [u1, 0.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [u2, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: p2_top, normal: n2, tex_coords: [u2, 0.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
 
             // Top Cap (CCW from above)
-            vertices.push(Vertex { position: [0.0, half_h, 0.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: p1_top, normal: [0.0, 1.0, 0.0], tex_coords: [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: p2_top, normal: [0.0, 1.0, 0.0], tex_coords: [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: [0.0, half_h, 0.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: p1_top, normal: [0.0, 1.0, 0.0], tex_coords: [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: p2_top, normal: [0.0, 1.0, 0.0], tex_coords: [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
 
             // Bottom Cap (CCW from below)
-            vertices.push(Vertex { position: [0.0, -half_h, 0.0], normal: [0.0, -1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: p2_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: p1_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: [0.0, -half_h, 0.0], normal: [0.0, -1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: p2_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: p1_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
         }
 
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("Cylinder VBuf"), contents: bytemuck::cast_slice(&vertices), usage: wgpu::BufferUsages::VERTEX });
@@ -837,14 +837,14 @@ impl super::AssetManager {
             let col = [1.0; 3];
 
             // Side Tri (CCW from outside)
-            vertices.push(Vertex { position: apex, normal: navg, tex_coords: [umid, 0.0], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: p1_bot, normal: n1, tex_coords: [u1, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [u2, 1.0], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: apex, normal: navg, tex_coords: [umid, 0.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: p1_bot, normal: n1, tex_coords: [u1, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [u2, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
 
             // Bottom Cap (CCW from below)
-            vertices.push(Vertex { position: [0.0, -half_h, 0.0], normal: [0.0, -1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: p2_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()], color: col, joint_indices: def_j, joint_weights: def_w });
-            vertices.push(Vertex { position: p1_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()], color: col, joint_indices: def_j, joint_weights: def_w });
+            vertices.push(Vertex { position: [0.0, -half_h, 0.0], normal: [0.0, -1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: p2_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: p1_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
         }
 
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("Cone VBuf"), contents: bytemuck::cast_slice(&vertices), usage: wgpu::BufferUsages::VERTEX });
@@ -884,13 +884,13 @@ impl super::AssetManager {
                 let def_j = [0; 4]; let def_w = [0.0; 4];
                 let col = [1.0; 3];
 
-                vertices.push(Vertex { position: p_00, normal: n_00, tex_coords: [u1, v1], color: col, joint_indices: def_j, joint_weights: def_w });
-                vertices.push(Vertex { position: p_01, normal: n_01, tex_coords: [u1, v2], color: col, joint_indices: def_j, joint_weights: def_w });
-                vertices.push(Vertex { position: p_10, normal: n_10, tex_coords: [u2, v1], color: col, joint_indices: def_j, joint_weights: def_w });
+                vertices.push(Vertex { position: p_00, normal: n_00, tex_coords: [u1, v1], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                vertices.push(Vertex { position: p_01, normal: n_01, tex_coords: [u1, v2], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                vertices.push(Vertex { position: p_10, normal: n_10, tex_coords: [u2, v1], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
 
-                vertices.push(Vertex { position: p_10, normal: n_10, tex_coords: [u2, v1], color: col, joint_indices: def_j, joint_weights: def_w });
-                vertices.push(Vertex { position: p_01, normal: n_01, tex_coords: [u1, v2], color: col, joint_indices: def_j, joint_weights: def_w });
-                vertices.push(Vertex { position: p_11, normal: n_11, tex_coords: [u2, v2], color: col, joint_indices: def_j, joint_weights: def_w });
+                vertices.push(Vertex { position: p_10, normal: n_10, tex_coords: [u2, v1], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                vertices.push(Vertex { position: p_01, normal: n_01, tex_coords: [u1, v2], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                vertices.push(Vertex { position: p_11, normal: n_11, tex_coords: [u2, v2], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
             }
         }
 
@@ -936,14 +936,14 @@ impl super::AssetManager {
                     let def_j = [0; 4]; let def_w = [0.0; 4]; let col = [1.0; 3];
 
                     // Tri 1 (CCW)
-                    vertices.push(Vertex { position: p1_top, normal: n1, tex_coords: [v1, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
-                    vertices.push(Vertex { position: p1_bot, normal: n1, tex_coords: [v1, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
-                    vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [v2, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
+                    vertices.push(Vertex { position: p1_top, normal: n1, tex_coords: [v1, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                    vertices.push(Vertex { position: p1_bot, normal: n1, tex_coords: [v1, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                    vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [v2, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
 
                     // Tri 2 (CCW)
-                    vertices.push(Vertex { position: p1_top, normal: n1, tex_coords: [v1, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
-                    vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [v2, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
-                    vertices.push(Vertex { position: p2_top, normal: n2, tex_coords: [v2, 0.5], color: col, joint_indices: def_j, joint_weights: def_w });
+                    vertices.push(Vertex { position: p1_top, normal: n1, tex_coords: [v1, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                    vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [v2, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                    vertices.push(Vertex { position: p2_top, normal: n2, tex_coords: [v2, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
                 }
             }
 
@@ -967,14 +967,14 @@ impl super::AssetManager {
                     let def_j = [0; 4]; let def_w = [0.0; 4]; let col = [1.0; 3];
 
                     // Tri 1 (CCW)
-                    vertices.push(Vertex { position: p1, normal: n1, tex_coords: [v1, u1], color: col, joint_indices: def_j, joint_weights: def_w });
-                    vertices.push(Vertex { position: p2, normal: n2, tex_coords: [v1, u2], color: col, joint_indices: def_j, joint_weights: def_w });
-                    vertices.push(Vertex { position: p3, normal: n3, tex_coords: [v2, u2], color: col, joint_indices: def_j, joint_weights: def_w });
+                    vertices.push(Vertex { position: p1, normal: n1, tex_coords: [v1, u1], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                    vertices.push(Vertex { position: p2, normal: n2, tex_coords: [v1, u2], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                    vertices.push(Vertex { position: p3, normal: n3, tex_coords: [v2, u2], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
 
                     // Tri 2 (CCW)
-                    vertices.push(Vertex { position: p1, normal: n1, tex_coords: [v1, u1], color: col, joint_indices: def_j, joint_weights: def_w });
-                    vertices.push(Vertex { position: p3, normal: n3, tex_coords: [v2, u2], color: col, joint_indices: def_j, joint_weights: def_w });
-                    vertices.push(Vertex { position: p4, normal: n4, tex_coords: [v2, u1], color: col, joint_indices: def_j, joint_weights: def_w });
+                    vertices.push(Vertex { position: p1, normal: n1, tex_coords: [v1, u1], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                    vertices.push(Vertex { position: p3, normal: n3, tex_coords: [v2, u2], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                    vertices.push(Vertex { position: p4, normal: n4, tex_coords: [v2, u1], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
                 }
             }
         }
@@ -1035,7 +1035,7 @@ impl super::AssetManager {
                     normal: [0.0, 1.0, 0.0], // İlk başta düz yukarı
                     tex_coords: [uv_x, uv_y],
                     joint_indices: [0; 4],
-                    joint_weights: [0.0; 4],
+                    joint_weights: [0.0; 4], ..Default::default()
                 });
             }
         }

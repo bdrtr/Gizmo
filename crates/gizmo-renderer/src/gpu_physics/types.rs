@@ -21,32 +21,32 @@ impl GpuBox {
             attributes: &[
                 wgpu::VertexAttribute {
                     offset: 0,
-                    shader_location: 6,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: 16,
-                    shader_location: 7,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: 32,
                     shader_location: 8,
                     format: wgpu::VertexFormat::Float32x4,
                 },
                 wgpu::VertexAttribute {
-                    offset: 48,
+                    offset: 16,
                     shader_location: 9,
                     format: wgpu::VertexFormat::Float32x4,
                 },
                 wgpu::VertexAttribute {
-                    offset: 64,
+                    offset: 32,
                     shader_location: 10,
                     format: wgpu::VertexFormat::Float32x4,
                 },
                 wgpu::VertexAttribute {
-                    offset: 80,
+                    offset: 48,
                     shader_location: 11,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 64,
+                    shader_location: 12,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 80,
+                    shader_location: 13,
                     format: wgpu::VertexFormat::Float32x4,
                 },
             ],
