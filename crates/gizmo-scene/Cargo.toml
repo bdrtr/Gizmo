@@ -9,10 +9,10 @@ license.workspace = true
 repository.workspace = true
 readme.workspace = true
 [dependencies]
-gizmo-core = { path = "../gizmo-core" , version = "0.1.6" }
-gizmo-math = { path = "../gizmo-math" , version = "0.1.6" }
-gizmo-physics-core = { path = "../gizmo-physics-core" , version = "0.1.6" }
-gizmo-physics-rigid = { path = "../gizmo-physics-rigid" , version = "0.1.6" }
+gizmo-core = { path = "../gizmo-core" , version = "0.1.7" }
+gizmo-math = { path = "../gizmo-math" , version = "0.1.7" }
+gizmo-physics-core = { path = "../gizmo-physics-core" , version = "0.1.7" }
+gizmo-physics-rigid = { path = "../gizmo-physics-rigid" , version = "0.1.7" }
 serde = { version = "1.0", features = ["derive"] }
 ron = "0.12.1"
 uuid = { version = "1.23.0", features = ["v4", "serde"] }
@@ -20,7 +20,7 @@ tracing = "0.1.44"
 bevy_reflect = "0.15.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-gizmo-scripting = { path = "../gizmo-scripting" , version = "0.1.6" }
+gizmo-scripting = { path = "../gizmo-scripting" , version = "0.1.7" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-time = "0.2"

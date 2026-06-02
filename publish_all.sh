@@ -7,7 +7,7 @@ set -e
 # Crucial sleep duration to allow crates.io index propagation
 SLEEP_TIME=15
 
-echo "Starting publishing workspace crates to crates.io (Version 0.1.6)..."
+echo "Starting publishing workspace crates to crates.io (Version 0.1.7)..."
 
 # Array of crates in exact topological dependency order
 crates=(
