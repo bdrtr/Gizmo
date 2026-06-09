@@ -307,23 +307,58 @@ impl Renderer {
             .unwrap();
 
         #[cfg(target_arch = "wasm32")]
-        let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits {
-                        max_bind_groups: 4,
-                        max_storage_buffers_per_shader_stage: 8,
-                        max_storage_buffer_binding_size: 128 << 20, // 128 MB
-                        ..wgpu::Limits::downlevel_webgl2_defaults()
-                            .using_resolution(adapter.limits())
+        let (device, queue) = {
+            let mut limits = adapter.limits();
+            limits.max_bind_groups = limits.max_bind_groups.max(4);
+            limits.max_storage_buffers_per_shader_stage = limits.max_storage_buffers_per_shader_stage.max(8);
+            limits.max_storage_buffer_binding_size = limits.max_storage_buffer_binding_size.max(128 << 20);
+
+            match adapter
+                .request_device(
+                    &wgpu::DeviceDescriptor {
+                        required_features: wgpu::Features::empty(),
+                        required_limits: limits.clone(),
+                        label: None,
                     },
-                    label: None,
-                },
-                None,
-            )
-            .await
-            .unwrap();
+                    None,
+                )
+                .await
+            {
+                Ok(dq) => dq,
+                Err(e) => {
+                    log::warn!("[Renderer] request_device with custom adapter.limits() failed: {:?}", e);
+                    match adapter
+                        .request_device(
+                            &wgpu::DeviceDescriptor {
+                                required_features: wgpu::Features::empty(),
+                                required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                                label: None,
+                            },
+                            None,
+                        )
+                        .await
+                    {
+                        Ok(dq) => dq,
+                        Err(e2) => {
+                            log::warn!("[Renderer] request_device with downlevel_webgl2_defaults failed: {:?}", e2);
+                            adapter
+                                .request_device(
+                                    &wgpu::DeviceDescriptor {
+                                        required_features: wgpu::Features::empty(),
+                                        required_limits: wgpu::Limits::default(),
+                                        label: None,
+                                    },
+                                    None,
+                                )
+                                .await
+                                .unwrap_or_else(|e3| {
+                                    panic!("Fatal: Failed to request wgpu device on WASM: {:?}", e3);
+                                })
+                        }
+                    }
+                }
+            }
+        };
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps

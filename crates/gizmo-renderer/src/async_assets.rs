@@ -454,6 +454,7 @@ async fn fetch_and_decode_obj_wasm(
                 color: [1.0, 1.0, 1.0],
                 joint_indices: [0; 4],
                 joint_weights: [0.0; 4],
+                ..Default::default()
             });
         }
     }
