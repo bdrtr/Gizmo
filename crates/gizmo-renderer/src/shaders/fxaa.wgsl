@@ -47,16 +47,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Bypass modu
     if (params.fxaa_enabled < 0.5) {
-        return textureSample(input_tex, input_sampler, uv);
+        return textureSampleLevel(input_tex, input_sampler, uv, 0.0);
     }
 
     // ─── KENAR TESPİTİ (Edge Detection) ───
     // Merkez ve 4 komşu pikselin luma'sını al
-    let rgbM  = textureSample(input_tex, input_sampler, uv).rgb;
-    let rgbN  = textureSample(input_tex, input_sampler, uv + vec2<f32>( 0.0, -inv.y)).rgb;
-    let rgbS  = textureSample(input_tex, input_sampler, uv + vec2<f32>( 0.0,  inv.y)).rgb;
-    let rgbW  = textureSample(input_tex, input_sampler, uv + vec2<f32>(-inv.x,  0.0)).rgb;
-    let rgbE  = textureSample(input_tex, input_sampler, uv + vec2<f32>( inv.x,  0.0)).rgb;
+    let rgbM  = textureSampleLevel(input_tex, input_sampler, uv, 0.0).rgb;
+    let rgbN  = textureSampleLevel(input_tex, input_sampler, uv + vec2<f32>( 0.0, -inv.y), 0.0).rgb;
+    let rgbS  = textureSampleLevel(input_tex, input_sampler, uv + vec2<f32>( 0.0,  inv.y), 0.0).rgb;
+    let rgbW  = textureSampleLevel(input_tex, input_sampler, uv + vec2<f32>(-inv.x,  0.0), 0.0).rgb;
+    let rgbE  = textureSampleLevel(input_tex, input_sampler, uv + vec2<f32>( inv.x,  0.0), 0.0).rgb;
 
     let lumaM = luma(rgbM);
     let lumaN = luma(rgbN);
@@ -78,10 +78,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // ─── KENAR YÖNÜ TESPİTİ (Edge Direction) ───
     // Köşe luma'ları
-    let rgbNW = textureSample(input_tex, input_sampler, uv + vec2<f32>(-inv.x, -inv.y)).rgb;
-    let rgbNE = textureSample(input_tex, input_sampler, uv + vec2<f32>( inv.x, -inv.y)).rgb;
-    let rgbSW = textureSample(input_tex, input_sampler, uv + vec2<f32>(-inv.x,  inv.y)).rgb;
-    let rgbSE = textureSample(input_tex, input_sampler, uv + vec2<f32>( inv.x,  inv.y)).rgb;
+    let rgbNW = textureSampleLevel(input_tex, input_sampler, uv + vec2<f32>(-inv.x, -inv.y), 0.0).rgb;
+    let rgbNE = textureSampleLevel(input_tex, input_sampler, uv + vec2<f32>( inv.x, -inv.y), 0.0).rgb;
+    let rgbSW = textureSampleLevel(input_tex, input_sampler, uv + vec2<f32>(-inv.x,  inv.y), 0.0).rgb;
+    let rgbSE = textureSampleLevel(input_tex, input_sampler, uv + vec2<f32>( inv.x,  inv.y), 0.0).rgb;
 
     let lumaNW = luma(rgbNW);
     let lumaNE = luma(rgbNE);
@@ -141,8 +141,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let FXAA_SEARCH_STEPS: i32 = 6;
     let FXAA_SEARCH_THRESHOLD: f32 = 0.25;
 
-    var luma_end_neg = luma(textureSample(input_tex, input_sampler, uv_neg).rgb) - luma_local_avg;
-    var luma_end_pos = luma(textureSample(input_tex, input_sampler, uv_pos).rgb) - luma_local_avg;
+    var luma_end_neg = luma(textureSampleLevel(input_tex, input_sampler, uv_neg, 0.0).rgb) - luma_local_avg;
+    var luma_end_pos = luma(textureSampleLevel(input_tex, input_sampler, uv_pos, 0.0).rgb) - luma_local_avg;
 
     var reached_neg = abs(luma_end_neg) >= FXAA_SEARCH_THRESHOLD;
     var reached_pos = abs(luma_end_pos) >= FXAA_SEARCH_THRESHOLD;
@@ -150,12 +150,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     for (var i = 1; i < FXAA_SEARCH_STEPS; i = i + 1) {
         if (!reached_neg) {
             uv_neg -= step * 1.5;
-            luma_end_neg = luma(textureSample(input_tex, input_sampler, uv_neg).rgb) - luma_local_avg;
+            luma_end_neg = luma(textureSampleLevel(input_tex, input_sampler, uv_neg, 0.0).rgb) - luma_local_avg;
             reached_neg = abs(luma_end_neg) >= FXAA_SEARCH_THRESHOLD;
         }
         if (!reached_pos) {
             uv_pos += step * 1.5;
-            luma_end_pos = luma(textureSample(input_tex, input_sampler, uv_pos).rgb) - luma_local_avg;
+            luma_end_pos = luma(textureSampleLevel(input_tex, input_sampler, uv_pos, 0.0).rgb) - luma_local_avg;
             reached_pos = abs(luma_end_pos) >= FXAA_SEARCH_THRESHOLD;
         }
         if (reached_neg && reached_pos) { break; }
@@ -205,6 +205,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         final_uv.x += final_offset * correct_dir;
     }
 
-    let final_color = textureSample(input_tex, input_sampler, final_uv).rgb;
+    let final_color = textureSampleLevel(input_tex, input_sampler, final_uv, 0.0).rgb;
     return vec4<f32>(final_color, 1.0);
 }
