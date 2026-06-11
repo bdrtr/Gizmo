@@ -71,7 +71,7 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
       momentum/enerji sınırları, broad-phase pairs = brute-force.
 - [ ] **Stres + soak** — N-kutu yığını M dakika stabil mi; enerji patlaması/sürüklenme yok.
 - [ ] **Golden/regresyon** — referans senaryoların hash/snapshot'ı (zaten `headless_stress_test` var).
-- [ ] **CI matrisi** — Linux/macOS/Windows × stable; `clippy -D warnings`; `cargo test --workspace`.
+- [x] **CI matrisi** — `.github/workflows/ci.yml`: test (ubuntu/macos/windows × `cargo test --workspace` + gizmo-net feature'lı), lint (rustfmt report-only + `clippy -D warnings` RATCHET — mevcut 17 lint `-A` ile grandfather'lı, yenisi kırar), determinism (headless tower stress). NOT: clippy backlog'u (60 lib uyarı, çoğu auto-fix'lendi) kademeli temizlenip `-A` satırları kaldırılacak; rustfmt tam uyum sonra blocking yapılacak.
 - [ ] **Benchmark regresyon takibi** — criterion sonuçlarını CI'da izle.
 
 **Çıkış kriteri:** yeşil CI, anlamlı kapsam, regresyonlar otomatik yakalanıyor.
