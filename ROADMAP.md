@@ -4,9 +4,9 @@
 > Bu belge canlıdır — madde tamamlandıkça `[x]` işaretle, **Durum** bölümünü güncelle.
 
 ## Durum
-- **Şu anki aşama:** Faz 0 (Stabilizasyon & Güven)
-- **Son büyük iş (2026-06-11):** netcode birleştirme + 9 çekirdek bug düzeltmesi (commit `ba323fc`).
-- **Sıradaki:** Faz 0 — kalan şüpheli bug'ları kapatmak.
+- **Şu anki aşama:** Faz 0 BİTMEK ÜZERE → Faz 1 (Test & CI altyapısı)
+- **İlerleme:** ECS+çekirdek fizik (9 bug), vehicle, soft-body, fracture, multibody/ABA denetlendi+düzeltildi. ~469 test yeşil, hepsi push'lu.
+- **Sıradaki:** Faz 1 (CI matrisi, property/stres testleri) VEYA Faz 0 kalan küçük notlar (raycast kenar durumları, floating-base ABA).
 
 İlke: **önce doğruluk, sonra kapsam.** Bir fizik motoru ancak çekirdeği güvenilirse
 production-ready olur. Önce bilinen/şüpheli bug'lar ve test altyapısı; özellik eklemek sonra.
@@ -49,7 +49,7 @@ Derin incelemede işaretlenen ama henüz **kapatılmamış** orta-güvenli sorun
 
 Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı turu):
 - [x] FEM soft-body (`gizmo-physics-soft`) — DENETLENDİ+DÜZELTİLDİ: FEM J-cutoff 0.1→1e-4 (geçerli sıkışmış elemanlar artık direniyor, eskiden çöküyordu) + NaN guard; FEM kuvvet toplaması deterministik (paralel hesap, sıralı topla); cloth zemin sürtünmesi aşağı hızı biriktirmiyor (enerji enjeksiyonu); rope zemin çarpışması sabit düğümleri taşımıyor; rope damping sırası; system.rs dt clamp (1/30) — kare sıçramasında patlama yok. Testler: rope pinned-altta, soft-body sıkışma-direnci.
-- [ ] Multibody / ABA (`gizmo-physics-rigid/multibody`)
+- [x] Multibody / ABA (`gizmo-physics-rigid/multibody`) — DENETLENDİ: spatial cebir (cross_motion/force, inertia, transformlar), 3-pass ABA, gravity injection ve pass-3 q̈ formülleri SAĞLAM. Düzeltilen High bug: Fixed/tekil eklemde (D≈0) çocuğun atalet+bias'ı ebeveyne HİÇ taşınmıyordu (zinciri koparıyordu) → artık tam I^A/p^A taşınıyor, yalnız U·D⁻¹·Uᵀ projeksiyonu D'ye göre düşülüyor. Pendulum testi analitik değere bağlandı (q̈=-4.905, eskiden yalnız |q̈|>0.1). Eksen normalize guard. Testler: analitik pendulum + Fixed-eklem-zincir-koparmıyor (eski kodla FAIL). Bilinen TODO: serbest-yüzen taban (base) entegrasyonu implemente değil; S frame'i rotation_to_parent≠I'de latent.
 - [x] Fracture & destruction — DENETLENDİ: çekirdek Voronoi/Cramer/bisector matematiği SAĞLAM. Düzeltilenler: ince kıymık parçalarda `force/mass` patlaması (MAX_EXPLOSION_DV=50 clamp, her iki yol), ConvexHull/fracture parça ataleti artık AABB'den türetiliyor (eskiden sabit 1×1×1 → tüm parçalar aynı atalet). Testler: hull-AABB ataleti, kıymık-hız clamp. Bilinen sınırlamalar (ileri): ince hücrelerde açık-mesh/hacim (quickhull downstream onarıyor), yüz winding tutarlılığı (render), PreFracturedCache extents/seed doğrulamasız (Entity generation reuse'u kısmen koruyor).
 - [x] Vehicle modeli (`vehicle.rs`) — DENETLENDİ+DÜZELTİLDİ: tahrik kuvveti friction-circle'a clamp'lendi (eskiden sonsuz çekiş), lastik kuvvetleri temas-yamasında uygulanıyor (eskiden bağlantı noktası), gearbox indeks-güvenli (`update_gear`/`current_ratio`, panik yok), steer `max_steer_angle`'a clamp, tekerlek başına kütle `mass/wheel_count` (eskiden sabit ×0.25). Gearbox birim testleri eklendi. NOT: tam entegrasyon test harness'i (ECS+PhysicsWorld) Faz 1'e bırakıldı.
 - [ ] Raycast kalan kenar durumları (içeriden başlama, hull-AABB yaklaşımı)

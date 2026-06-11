@@ -112,10 +112,14 @@ pub struct ArticulatedLink {
 impl ArticulatedLink {
     pub fn compute_spatial_transform(&self) -> SpatialTransform {
         // Eklem durumuna (q) göre yerel transform
+        // Eksen normalize edilir: `from_axis_angle` birim eksen bekler ve normalize
+        // edilmemiş eksen NaN/bozuk dönüş (ve ölçeklenmiş q̈) üretir.
         let (local_rot, local_trans) = match self.joint_type {
             JointType::Fixed => (Quat::IDENTITY, Vec3::ZERO),
-            JointType::Revolute(axis) => (Quat::from_axis_angle(axis, self.q), Vec3::ZERO),
-            JointType::Prismatic(axis) => (Quat::IDENTITY, axis * self.q),
+            JointType::Revolute(axis) => {
+                (Quat::from_axis_angle(axis.normalize_or_zero(), self.q), Vec3::ZERO)
+            }
+            JointType::Prismatic(axis) => (Quat::IDENTITY, axis.normalize_or_zero() * self.q),
         };
 
         // Toplam transform (Parent'a göre)
@@ -126,10 +130,11 @@ impl ArticulatedLink {
     }
 
     pub fn compute_motion_subspace(&self) -> SpatialVector {
+        // Normalize: normalize edilmemiş eksen S'i ölçekler → q̈ yanlış ölçeklenir.
         match self.joint_type {
             JointType::Fixed => SpatialVector::ZERO,
-            JointType::Revolute(axis) => SpatialVector::new(axis, Vec3::ZERO),
-            JointType::Prismatic(axis) => SpatialVector::new(Vec3::ZERO, axis),
+            JointType::Revolute(axis) => SpatialVector::new(axis.normalize_or_zero(), Vec3::ZERO),
+            JointType::Prismatic(axis) => SpatialVector::new(Vec3::ZERO, axis.normalize_or_zero()),
         }
     }
 }
