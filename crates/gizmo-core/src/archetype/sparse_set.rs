@@ -24,7 +24,12 @@ impl ComponentSparseSet {
     }
 
     /// Bir entity için veriyi SparseSet'e yazar. (Ekler veya üzerine yazar).
-    pub fn insert(&mut self, entity: u32, data_ptr: *const u8, tick: u32) {
+    ///
+    /// # Safety
+    /// `data_ptr`, bu set'in `info.layout` değeriyle uyumlu, geçerli ve hizalanmış
+    /// bir bileşen örneğini göstermelidir. İşaretçinin sahipliği SparseSet'e devredilir
+    /// (çağıran taraf, kopyalanan değeri ayrıca `drop` etmemeli — bkz. `std::mem::forget`).
+    pub unsafe fn insert(&mut self, entity: u32, data_ptr: *const u8, tick: u32) {
         let e = entity as usize;
         if e >= self.sparse.len() {
             self.sparse.resize(e + 1, u32::MAX);
@@ -35,7 +40,14 @@ impl ComponentSparseSet {
             // Zaten var, üzerine yaz
             let row = existing_row as usize;
             unsafe {
-                std::ptr::copy_nonoverlapping(data_ptr, self.dense.get_unchecked_mut(row), self.info.layout.size());
+                let slot = self.dense.get_unchecked_mut(row);
+                // Üzerine yazmadan ÖNCE eski değeri düşür; aksi halde heap sahibi
+                // bir bileşen (String/Vec) yeniden eklenince eski tahsis sızardı
+                // (çağıran taraf yeni değeri mem::forget ediyor).
+                if let Some(drop_fn) = self.info.drop_fn {
+                    drop_fn(slot);
+                }
+                std::ptr::copy_nonoverlapping(data_ptr, slot, self.info.layout.size());
             }
             self.ticks[row].changed = tick;
         } else {

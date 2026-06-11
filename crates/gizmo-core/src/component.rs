@@ -90,6 +90,10 @@ impl_component!(Parent, Children, EntityName, IsHidden, PrefabRequest, IsDeleted
 
 pub trait Bundle {
     fn get_infos() -> Vec<crate::archetype::ComponentInfo>;
+    /// # Safety
+    /// `arch`, `Self::get_infos()`'un döndürdüğü bileşen sütunlarını içermeli ve `_row`
+    /// bu arketipte ayrılmış geçerli bir satır olmalıdır. Veriler ham olarak kopyalanır;
+    /// sahiplik arketipe devredilir.
     unsafe fn write_to_archetype(self, arch: &mut crate::archetype::Archetype, _row: usize, tick: u32);
     fn apply(self, _world: &mut crate::world::World, _entity: crate::entity::Entity) where Self: Sized {}
 }

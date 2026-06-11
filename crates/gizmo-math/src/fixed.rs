@@ -51,7 +51,10 @@ impl Fp32 {
 
     #[inline]
     pub fn to_i32(self) -> i32 {
-        self.0 >> Self::SHIFT
+        // Sıfıra doğru kes (truncation) — `from_i32` ile tutarlı ve geleneksel
+        // tamsayı dönüşümüyle aynı. (Aritmetik `>>` negatiflerde -∞'a yuvarlardı:
+        // to_i32(-1.5) = -2 ama to_i32(1.5) = 1 → asimetrik/tutarsızdı.)
+        self.0 / Self::ONE_RAW
     }
 
     #[inline]
@@ -123,7 +126,9 @@ impl Add for Fp32 {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        Self(self.0 + rhs.0)
+        // Sessiz taşma yerine doygunluk (saturating): determinizmi korur ama
+        // büyük koordinatlarda i32 sarmasından kaynaklanan çöp değer üretmez.
+        Self(self.0.saturating_add(rhs.0))
     }
 }
 
@@ -131,7 +136,7 @@ impl Sub for Fp32 {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        Self(self.0 - rhs.0)
+        Self(self.0.saturating_sub(rhs.0))
     }
 }
 
@@ -140,7 +145,8 @@ impl Mul for Fp32 {
     #[inline]
     fn mul(self, rhs: Self) -> Self {
         let val = (self.0 as i64 * rhs.0 as i64) >> Fp32::SHIFT;
-        Self(val as i32)
+        // Q16.16 aralığını aşarsa `as i32` sessizce sarıp çöp üretiyordu; doygunlukla sınırla.
+        Self(val.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
     }
 }
 

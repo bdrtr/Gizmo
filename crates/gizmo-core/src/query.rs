@@ -258,7 +258,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         let arch = &self.world.archetype_index.archetypes[loc.archetype_id as usize];
         unsafe {
             let fetch = Q::fetch_raw(self.world, arch, self.world.tick)?;
-            if !Q::filter_row(fetch, loc.row as usize, entity_id, self.world.tick) {
+            if !Q::filter_row(fetch, loc.row as usize, entity_id, self.world.change_ref_tick) {
                 return None;
             }
             Some(Q::get_item(fetch, loc.row as usize, entity_id))
@@ -318,6 +318,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         }
 
         let tick = self.world.tick;
+        let ref_tick = self.world.change_ref_tick;
         self.matching_archetypes.par_iter().for_each(|&arch_idx| {
             let arch = &self.world.archetype_index.archetypes[arch_idx];
             if let Some(fetch) = unsafe { Q::fetch_raw(self.world, arch, tick) } {
@@ -333,7 +334,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
                     .with_min_len(512)
                     .for_each(move |row| unsafe {
                         let id = *entities_ptr.get().add(row);
-                        if Q::filter_row(wrapped_fetch.get(), row, id, tick) {
+                        if Q::filter_row(wrapped_fetch.get(), row, id, ref_tick) {
                             let item = Q::get_item(wrapped_fetch.get(), row, id);
                             func_ref((id, item));
                         }
@@ -401,7 +402,7 @@ where
                 let row = self.current_row;
                 self.current_row += 1;
                 let id = arch.entities()[row];
-                if unsafe { Q::filter_row(fetch, row, id, self.world.tick) } {
+                if unsafe { Q::filter_row(fetch, row, id, self.world.change_ref_tick) } {
                     let item = unsafe { Q::get_item(fetch, row, id) };
                     return Some((id, item));
                 }
@@ -427,9 +428,8 @@ where
             }
             if let Some(fetch) = unsafe { Q::fetch_raw(self.world, arch, self.world.tick) } {
                 let entities = arch.entities();
-                for row in 0..len {
-                    let id = entities[row];
-                    if unsafe { Q::filter_row(fetch, row, id, self.world.tick) } {
+                for (row, &id) in entities.iter().enumerate().take(len) {
+                    if unsafe { Q::filter_row(fetch, row, id, self.world.change_ref_tick) } {
                         let item = unsafe { Q::get_item(fetch, row, id) };
                         f((id, item));
                     }
@@ -567,7 +567,10 @@ impl<T: crate::component::Component> WorldQuery for Changed<T> {
             true 
         } else {
             let ticks = &*fetch.add(row);
-            ticks.changed == tick
+            // `tick` burada change_ref_tick (son çalıştırmanın tick'i); referanstan
+            // SONRA değişenleri eşler. (Eskiden `== current_tick` idi → kareler arası
+            // çalışmıyordu.)
+            ticks.changed > tick
         }
     }
 
@@ -600,7 +603,8 @@ impl<T: crate::component::Component> WorldQuery for Added<T> {
             true 
         } else {
             let ticks = &*fetch.add(row);
-            ticks.added == tick
+            // change_ref_tick'ten sonra eklenenleri eşler (bkz. Changed).
+            ticks.added > tick
         }
     }
 
@@ -806,5 +810,38 @@ mod tests {
         // Farklı tipler — Query oluşturulabilmeli
         let q = world.query::<(Mut<Position>, Mut<Velocity>)>();
         assert!(q.is_some());
+    }
+
+    /// `Changed<T>`/`Added<T>` artık referans tick'e (son çalıştırma) göre çalışır,
+    /// `== current_tick` değil. Kareler arası doğru raporlama doğrulanır.
+    #[test]
+    fn change_detection_is_relative_to_ref_tick() {
+        let mut world = crate::World::new();
+        world.register_component_type::<Position>();
+        let e = world.spawn();
+        world.add_component(e, Position { x: 1.0, y: 2.0 });
+
+        // Frame 1: ref=0 → ilk gözlem eklenen bileşeni görür.
+        world.begin_change_frame(0);
+        assert_eq!(world.query::<Changed<Position>>().unwrap().iter().count(), 1);
+        assert_eq!(world.query::<Added<Position>>().unwrap().iter().count(), 1);
+
+        // Frame 2: değişiklik yok → Changed boş olmalı.
+        let prev = world.tick;
+        world.begin_change_frame(prev);
+        assert_eq!(
+            world.query::<Changed<Position>>().unwrap().iter().count(),
+            0,
+            "değişiklik olmayan frame'de Changed boş olmalı (eski `==` davranışı her şeyi eşliyordu)"
+        );
+
+        // Frame 2 içinde mutasyon → Changed yeniden 1 olmalı.
+        {
+            let mut q = world.query::<Mut<Position>>().unwrap();
+            for (_id, mut p) in q.iter_mut() {
+                p.x += 1.0;
+            }
+        }
+        assert_eq!(world.query::<Changed<Position>>().unwrap().iter().count(), 1);
     }
 }

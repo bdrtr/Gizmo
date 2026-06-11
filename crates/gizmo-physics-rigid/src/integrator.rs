@@ -37,6 +37,7 @@ impl Integrator {
         &self,
         entity: gizmo_core::entity::Entity,
         rb: &mut RigidBody,
+        rotation: Quat,
         vel: &mut Velocity,
         dt: f32,
     ) -> Result<(), gizmo_physics_core::GizmoError> {
@@ -62,7 +63,10 @@ impl Integrator {
         let inv_mass = rb.inv_mass();
         if inv_mass > 0.0 {
             vel.linear += rb.force_accumulator * inv_mass * dt;
-            let inv_inertia = rb.inv_world_inertia_tensor_identity(); // body-space shortcut
+            // Birikmiş tork dünya uzayında; bu yüzden dünya-uzayı ters atalet tensörü
+            // (R·I_local⁻¹·Rᵀ) kullanılmalı — gövde-uzayı kestirmesi dönmüş/anizotropik
+            // cisimlerde yanlış eksende açısal ivme üretiyordu.
+            let inv_inertia = rb.inv_world_inertia_tensor(rotation);
             vel.angular += inv_inertia * rb.torque_accumulator * dt;
         }
         rb.clear_forces();
@@ -183,7 +187,7 @@ impl Integrator {
         vel: &mut Velocity,
         dt: f32,
     ) -> Result<(), gizmo_physics_core::GizmoError> {
-        self.integrate_velocities(entity, rb, vel, dt)?;
+        self.integrate_velocities(entity, rb, transform.rotation, vel, dt)?;
         self.integrate_positions(entity, rb, transform, vel, dt)?;
         Ok(())
     }
@@ -279,7 +283,7 @@ mod tests {
         let entity = make_entity(0);
 
         integrator
-            .integrate_velocities(entity, &mut rb, &mut vel, 1.0)
+            .integrate_velocities(entity, &mut rb, Quat::IDENTITY, &mut vel, 1.0)
             .expect("integration must succeed");
 
         // After 1 s the expected vy = gravity.y * exp(-linear_damping * dt)
@@ -378,7 +382,7 @@ mod tests {
         rb.use_gravity = false;
 
         integrator
-            .integrate_velocities(make_entity(2), &mut rb, &mut vel, 1.0)
+            .integrate_velocities(make_entity(2), &mut rb, Quat::IDENTITY, &mut vel, 1.0)
             .expect("integration must succeed");
 
         assert!(
@@ -437,7 +441,7 @@ mod tests {
         vel.angular = Vec3::new(10.0, 10.0, 10.0);
 
         integrator
-            .integrate_velocities(make_entity(3), &mut rb, &mut vel, 1.0)
+            .integrate_velocities(make_entity(3), &mut rb, Quat::IDENTITY, &mut vel, 1.0)
             .expect("integration must succeed");
 
         // Planar axes must survive (may be damped).
@@ -462,7 +466,7 @@ mod tests {
 
         let mut vel = Velocity::new(Vec3::new(f32::NAN, 0.0, 0.0));
 
-        let result = integrator.integrate_velocities(make_entity(4), &mut rb, &mut vel, 1.0);
+        let result = integrator.integrate_velocities(make_entity(4), &mut rb, Quat::IDENTITY, &mut vel, 1.0);
         assert!(result.is_err(), "NaN velocity must return an error");
     }
 
@@ -476,7 +480,7 @@ mod tests {
 
         let mut vel = Velocity::default();
         integrator
-            .integrate_velocities(make_entity(5), &mut rb, &mut vel, 1.0)
+            .integrate_velocities(make_entity(5), &mut rb, Quat::IDENTITY, &mut vel, 1.0)
             .expect("sleeping body integration must be a no-op");
 
         assert_eq!(

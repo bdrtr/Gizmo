@@ -153,9 +153,19 @@ impl Archetype {
             .map(|&idx| unsafe { &*self.columns[idx].get() })
     }
 
-    /// Belirtilen component tipinin sütununa mutable raw pointer erişimi
+    /// Belirtilen component tipinin sütununa mutable erişim (`UnsafeCell` üzerinden iç-değişebilirlik).
+    ///
+    /// # Safety
+    /// `&self` üzerinden `&mut Column` döndürür: bu kasıtlı bir ECS desenidir ve güvenlik,
+    /// aynı sütun için aynı anda birden fazla `&mut` üretilmemesine bağlıdır. Bu değişmezlik
+    /// (disjoint erişim) çağıran tarafça — pratikte query zamanlayıcısının arketip-bazlı
+    /// ayrık erişim garantisiyle — sağlanmalıdır. Aynı `type_id` için iki canlı `&mut`
+    /// elde etmek tanımsız davranıştır.
+    // `mut_from_ref`: imza şekli (&self -> &mut) kasıtlı iç-değişebilirlik; güvenlik
+    // `unsafe` kontratıyla çağırana devredildiği için lint bastırılıyor.
+    #[allow(clippy::mut_from_ref)]
     #[inline]
-    pub fn get_column_mut(&self, type_id: TypeId) -> Option<&mut Column> {
+    pub unsafe fn get_column_mut(&self, type_id: TypeId) -> Option<&mut Column> {
         self.column_indices
             .get(&type_id)
             .map(|&idx| unsafe { &mut *self.columns[idx].get() })
