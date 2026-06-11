@@ -326,7 +326,23 @@ impl RigidBody {
             ColliderShape::Plane(_) => {
                 self.local_inertia = Vec3::splat(f32::INFINITY);
             }
-            ColliderShape::TriMesh(_) | ColliderShape::ConvexHull(_) => {
+            ColliderShape::ConvexHull(hull) => {
+                // AABB'den kutu ataleti türet (eskiden sabit 1×1×1 idi → tüm fracture
+                // parçaları boyuttan bağımsız aynı atalete sahip oluyordu, yanlış takla).
+                let mut mn = Vec3::splat(f32::INFINITY);
+                let mut mx = Vec3::splat(f32::NEG_INFINITY);
+                for &v in hull.vertices.iter() {
+                    mn = mn.min(v);
+                    mx = mx.max(v);
+                }
+                if mn.x <= mx.x {
+                    let e = mx - mn;
+                    self.calculate_box_inertia(e.x.max(1e-3), e.y.max(1e-3), e.z.max(1e-3));
+                } else {
+                    self.calculate_box_inertia(1.0, 1.0, 1.0);
+                }
+            }
+            ColliderShape::TriMesh(_) => {
                 self.calculate_box_inertia(1.0, 1.0, 1.0);
             }
             ColliderShape::Compound(shapes) => {
@@ -383,3 +399,55 @@ impl RigidBody {
 }
 
 gizmo_core::impl_component!(RigidBody);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gizmo_physics_core::components::collider::ConvexHullShape;
+    use std::sync::Arc;
+
+    /// ConvexHull ataleti AABB'den türetilmeli (eskiden sabit 1×1×1 idi → fracture
+    /// parçaları boyuttan bağımsız aynı atalete sahipti).
+    #[test]
+    fn convex_hull_inertia_uses_aabb_extents() {
+        // 4×2×6 kutuyu kapsayan köşeler.
+        let verts = vec![
+            Vec3::new(-2.0, -1.0, -3.0),
+            Vec3::new(2.0, -1.0, -3.0),
+            Vec3::new(2.0, 1.0, -3.0),
+            Vec3::new(-2.0, 1.0, -3.0),
+            Vec3::new(-2.0, -1.0, 3.0),
+            Vec3::new(2.0, -1.0, 3.0),
+            Vec3::new(2.0, 1.0, 3.0),
+            Vec3::new(-2.0, 1.0, 3.0),
+        ];
+        let hull_col = Collider {
+            shape: ColliderShape::ConvexHull(ConvexHullShape {
+                vertices: Arc::new(verts),
+                faces: Arc::new(vec![]),
+            }),
+            ..Default::default()
+        };
+
+        let mut rb_hull = RigidBody::new(8.0, 0.5, 0.5, true);
+        rb_hull.update_inertia_from_collider(&hull_col);
+
+        // Aynı boyutlu kutu ataletiyle eşleşmeli.
+        let mut rb_box = RigidBody::new(8.0, 0.5, 0.5, true);
+        rb_box.calculate_box_inertia(4.0, 2.0, 6.0);
+        assert!(
+            (rb_hull.local_inertia - rb_box.local_inertia).length() < 1e-3,
+            "hull ataleti AABB kutusuyla eşleşmeli: {:?} vs {:?}",
+            rb_hull.local_inertia,
+            rb_box.local_inertia
+        );
+
+        // ve 1×1×1'den belirgin farklı olmalı.
+        let mut rb_unit = RigidBody::new(8.0, 0.5, 0.5, true);
+        rb_unit.calculate_box_inertia(1.0, 1.0, 1.0);
+        assert!(
+            (rb_hull.local_inertia - rb_unit.local_inertia).length() > 1e-3,
+            "hull ataleti 1×1×1'den farklı olmalı"
+        );
+    }
+}

@@ -1,6 +1,11 @@
 use gizmo_math::Vec3;
 use rand::{rngs::StdRng, RngExt, SeedableRng};
 
+/// Patlama hız değişimi (force/mass) üst sınırı. İnce kıymık parçalar çok küçük kütleye
+/// sahip olduğundan `force/mass` patlayıp parçaları absürt hızlarda fırlatıyordu (tünelleme
+/// / kararsızlık). Hız değişimini bu makul sınıra kırp.
+const MAX_EXPLOSION_DV: f32 = 50.0;
+
 #[derive(Clone, Debug)]
 pub struct ProceduralChunk {
     pub vertices: Vec<Vec3>,
@@ -311,14 +316,15 @@ pub fn generate_fracture_chunks(
             let explosion_dir = dir.normalize();
             // Force drops off with distance (simplified)
             let force = impact_force * 0.1 / (dir.length() + 1.0);
-            vel.linear += explosion_dir * (force / mass);
+            let dv = (force / mass).min(MAX_EXPLOSION_DV);
+            vel.linear += explosion_dir * dv;
 
             // Add some random spin
             vel.angular += Vec3::new(
                 rand::random::<f32>() - 0.5,
                 rand::random::<f32>() - 0.5,
                 rand::random::<f32>() - 0.5,
-            ) * (force / mass)
+            ) * dv
                 * 0.5;
         }
 
@@ -426,14 +432,15 @@ impl PreFracturedCache {
             if dir.length_squared() > 0.001 {
                 let explosion_dir = dir.normalize();
                 let force = impact_force * 0.1 / (dir.length() + 1.0);
-                vel.linear += explosion_dir * (force / mass);
+                let dv = (force / mass).min(MAX_EXPLOSION_DV);
+                vel.linear += explosion_dir * dv;
 
                 // Deterministic spin based on chunk properties (since cache is pre-calculated)
                 vel.angular += Vec3::new(
                     (chunk.center_of_mass.x * 12.345).fract() - 0.5,
                     (chunk.center_of_mass.y * 67.890).fract() - 0.5,
                     (chunk.center_of_mass.z * 42.123).fract() - 0.5,
-                ) * (force / mass)
+                ) * dv
                     * 0.5;
             }
 
@@ -463,5 +470,61 @@ impl PreFracturedCache {
         }
 
         Some(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::{RigidBody, Velocity};
+    use gizmo_core::entity::Entity;
+    use gizmo_physics_core::Transform;
+
+    /// İnce kıymık (çok küçük hacim/kütle) parçalar, büyük çarpma kuvvetinde bile
+    /// makul hızda fırlatılmalı — `force/mass` patlaması MAX_EXPLOSION_DV ile kırpılır.
+    #[test]
+    fn explosion_velocity_clamped_for_tiny_chunks() {
+        let tetra = || {
+            vec![
+                Vec3::ZERO,
+                Vec3::X * 0.1,
+                Vec3::Y * 0.1,
+                Vec3::Z * 0.1,
+            ]
+        };
+        let big = ProceduralChunk {
+            vertices: tetra(),
+            normals: vec![],
+            indices: vec![],
+            center_of_mass: Vec3::new(1.0, 0.0, 0.0),
+            volume: 10.0,
+        };
+        let tiny = ProceduralChunk {
+            vertices: tetra(),
+            normals: vec![],
+            indices: vec![],
+            center_of_mass: Vec3::new(-1.0, 0.0, 0.0),
+            volume: 0.001, // minik → çok küçük kütle
+        };
+
+        let mut cache = PreFracturedCache::new();
+        let e = Entity::new(1, 0);
+        cache.cache.insert(e, vec![big, tiny]);
+
+        let tr = Transform::new(Vec3::ZERO);
+        let body = RigidBody::new(10.0, 0.5, 0.5, true);
+        let out = cache
+            .get_fracture_chunks(e, &tr, &body, &Velocity::default(), Vec3::new(0.0, 5.0, 0.0), 1.0e6)
+            .unwrap();
+
+        assert_eq!(out.len(), 2);
+        for (_rb, _t, _c, v, _chunk) in &out {
+            assert!(v.linear.is_finite() && v.angular.is_finite(), "hız sonlu olmalı");
+            assert!(
+                v.linear.length() < 100.0,
+                "patlama hızı makul sınırda olmalı (clamp), oldu: {}",
+                v.linear.length()
+            );
+        }
     }
 }
