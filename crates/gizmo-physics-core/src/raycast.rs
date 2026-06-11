@@ -38,7 +38,10 @@ pub struct Raycast;
 impl Raycast {
     /// Test ray against AABB
     pub fn ray_aabb(ray: &Ray, aabb: &Aabb) -> Option<f32> {
-        let mut tmin: f32 = 0.0;
+        // tmin gerçek giriş (negatif olabilir), tmax çıkış. (Eskiden tmin=0'dan
+        // başlıyordu → ışın kutunun İÇİNDE başlarsa t=0 dönüp `origin` yüzey üstünde
+        // olmadığından çağıran sahte normal üretiyordu.)
+        let mut tmin: f32 = f32::NEG_INFINITY;
         let mut tmax = f32::INFINITY;
 
         for i in 0..3 {
@@ -86,7 +89,11 @@ impl Raycast {
             }
         }
 
-        Some(tmin)
+        if tmax < 0.0 {
+            return None; // tüm kutu ışının arkasında
+        }
+        // İçeriden başlama: tmin<0 ise çıkış yüzeyini (tmax) döndür → geçerli yüzey noktası/normal.
+        Some(if tmin < 0.0 { tmax } else { tmin })
     }
 
     /// Test ray against sphere
@@ -377,22 +384,63 @@ impl Raycast {
                 }
             }
             ColliderShape::ConvexHull(ch) => {
-                let mut min = Vec3::splat(f32::MAX);
-                let mut max = Vec3::splat(f32::MIN);
-                for v in ch.vertices.iter() {
-                    min.x = min.x.min(v.x);
-                    min.y = min.y.min(v.y);
-                    min.z = min.z.min(v.z);
-                    max.x = max.x.max(v.x);
-                    max.y = max.y.max(v.y);
-                    max.z = max.z.max(v.z);
+                // Yüz yoksa AABB yaklaşımına düş (nadiren; hull genelde yüzleriyle gelir).
+                if ch.faces.is_empty() {
+                    let mut min = Vec3::splat(f32::MAX);
+                    let mut max = Vec3::splat(f32::MIN);
+                    for v in ch.vertices.iter() {
+                        min = min.min(*v);
+                        max = max.max(*v);
+                    }
+                    let center = (min + max) * 0.5;
+                    let half_extents = (max - min) * 0.5;
+                    let world_center = transform.position + transform.rotation * center;
+                    return Self::ray_box(ray, world_center, transform.rotation, half_extents);
                 }
-                let center = (min + max) * 0.5;
-                let half_extents = (max - min) * 0.5;
 
-                // Adjust transform to local space of the original transform
-                let world_center = transform.position + transform.rotation * center;
-                Self::ray_box(ray, world_center, transform.rotation, half_extents)
+                // Tam ray-hull testi: hull üçgenlerine Möller-Trumbore (eskiden yalnız AABB
+                // yaklaşımı vardı → kutu köşelerinde gerçek hull'ı ıskalayan sahte isabet).
+                let inv_rot = transform.rotation.inverse();
+                let local_origin = inv_rot * (ray.origin - transform.position);
+                let local_dir = inv_rot * ray.direction;
+                let mut best_t = f32::INFINITY;
+                let mut best_normal = Vec3::ZERO;
+                for tri in ch.faces.iter() {
+                    let v0 = ch.vertices[tri[0] as usize];
+                    let v1 = ch.vertices[tri[1] as usize];
+                    let v2 = ch.vertices[tri[2] as usize];
+                    let e1 = v1 - v0;
+                    let e2 = v2 - v0;
+                    let h = local_dir.cross(e2);
+                    let a = e1.dot(h);
+                    if a.abs() < 1e-6 {
+                        continue;
+                    }
+                    let f = 1.0 / a;
+                    let s = local_origin - v0;
+                    let u = f * s.dot(h);
+                    if !(0.0..=1.0).contains(&u) {
+                        continue;
+                    }
+                    let q = s.cross(e1);
+                    let v = f * local_dir.dot(q);
+                    if v < 0.0 || u + v > 1.0 {
+                        continue;
+                    }
+                    let t = f * e2.dot(q);
+                    if t > 0.0 && t < best_t {
+                        best_t = t;
+                        best_normal = e1.cross(e2).try_normalize().unwrap_or(Vec3::Y);
+                        if best_normal.dot(local_dir) > 0.0 {
+                            best_normal = -best_normal;
+                        }
+                    }
+                }
+                if best_t < f32::INFINITY {
+                    Some((best_t, transform.rotation * best_normal))
+                } else {
+                    None
+                }
             }
             ColliderShape::Compound(shapes) => {
                 let mut closest_dist = f32::MAX;
@@ -509,5 +557,49 @@ mod tests {
         let result = Raycast::ray_shape(&ray, &shape, &Transform::new(Vec3::ZERO));
         assert!(result.is_some());
         assert_eq!(result.unwrap().1, -Vec3::Z); // Should be flipped since ray hits the backface
+    }
+
+    /// İçeriden başlayan ışın geçerli bir çıkış-yüzeyi normali vermeli (eskiden t=0'da
+    /// `origin` yüzey üstünde olmadığından sahte +Y dönüyordu).
+    #[test]
+    fn ray_box_from_inside_returns_valid_exit_normal() {
+        use gizmo_math::Quat;
+        let ray = Ray::new(Vec3::ZERO, Vec3::X); // kutu merkezinden +X
+        let (t, normal) =
+            Raycast::ray_box(&ray, Vec3::ZERO, Quat::IDENTITY, Vec3::splat(1.0)).unwrap();
+        assert!(t > 0.0, "çıkış mesafesi pozitif olmalı");
+        assert!(
+            (normal - Vec3::X).length() < 1e-3,
+            "çıkış normali +X olmalı (sahte +Y değil), oldu: {normal:?}"
+        );
+    }
+
+    /// ConvexHull raycast'i AABB değil GERÇEK hull'a karşı olmalı: AABB köşesinden geçip
+    /// hull'ı ıskalayan ışın None dönmeli.
+    #[test]
+    fn convex_hull_raycast_is_exact_not_aabb() {
+        use crate::components::collider::ConvexHullShape;
+        use crate::quickhull::compute_convex_hull;
+        use std::sync::Arc;
+        // Tetrahedron (x+y+z ≤ 1 bölgesi); AABB ise [0,1]³.
+        let hull = compute_convex_hull(&[Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z]);
+        let shape = ColliderShape::ConvexHull(ConvexHullShape {
+            vertices: Arc::new(hull.vertices),
+            faces: Arc::new(hull.faces),
+        });
+        let tr = Transform::new(Vec3::ZERO);
+
+        // (0.9,0.9): AABB içinde ama tetrahedron dışında (x+y=1.8>1) → ıskala.
+        let miss = Ray::new(Vec3::new(0.9, 0.9, 5.0), Vec3::new(0.0, 0.0, -1.0));
+        assert!(
+            Raycast::ray_shape(&miss, &shape, &tr).is_none(),
+            "AABB köşesinden geçip hull'ı ıskalayan ışın None dönmeli (tam test)"
+        );
+        // Tetrahedronun içinden geçen ışın isabet etmeli.
+        let hit = Ray::new(Vec3::new(0.2, 0.2, 5.0), Vec3::new(0.0, 0.0, -1.0));
+        assert!(
+            Raycast::ray_shape(&hit, &shape, &tr).is_some(),
+            "hull'dan geçen ışın isabet etmeli"
+        );
     }
 }
