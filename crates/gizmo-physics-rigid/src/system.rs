@@ -260,8 +260,10 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
 
         // Check Entity A
         if !shattered.contains(&event.entity_a.id()) {
+            // get_entity: çarpışma olayı despawn edilmiş bir entity'ye işaret edebilir;
+            // generation kontrolü yeniden kullanılan slota yanlış yazmayı engeller.
             if let Some((mut breakable, transform, collider, vel, _)) =
-                query.get(event.entity_a.id())
+                query.get_entity(event.entity_a)
             {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
                     breakable.current_health -= max_impulse;
@@ -286,7 +288,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
         // Check Entity B
         if !shattered.contains(&event.entity_b.id()) {
             if let Some((mut breakable, transform, collider, vel, _)) =
-                query.get(event.entity_b.id())
+                query.get_entity(event.entity_b)
             {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
                     breakable.current_health -= max_impulse;
