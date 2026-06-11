@@ -201,7 +201,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                         let t = -ray.origin.y / ray.direction.y;
                         if t > 0.0 {
                             let raw_pos = ray.at(t);
-                            let snap = if state.prefs.snap_enabled { state.prefs.snap_translate as f32 } else { 0.0 };
+                            let snap = if state.prefs.snap_enabled { state.prefs.snap_translate } else { 0.0 };
                             if snap > 0.0 {
                                 spawn_pos = gizmo_math::Vec3::new(
                                     (raw_pos.x / snap).round() * snap,
@@ -245,8 +245,8 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
 
                 let is_ctrl = ui.input(|i| i.modifiers.ctrl);
                 let snap_enabled = state.prefs.snap_enabled ^ is_ctrl;
-                let snap_distance = if snap_enabled { state.prefs.snap_translate as f32 } else { 0.0 };
-                let snap_angle = if snap_enabled { state.prefs.snap_rotate_deg.to_radians() as f32 } else { 0.0 };
+                let snap_distance = if snap_enabled { state.prefs.snap_translate } else { 0.0 };
+                let snap_angle = if snap_enabled { state.prefs.snap_rotate_deg.to_radians() } else { 0.0 };
 
                 let vm = view_mat.to_cols_array_2d();
                 let pm = proj_mat.to_cols_array_2d();
@@ -340,9 +340,9 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                         for (i, new_t) in new_transforms.iter().enumerate() {
                             if let Some(&entity_id) = selected_ids.get(i) {
                                 if let Some(mut t) = transforms.get_mut(entity_id) {
-                                    let nt: transform_gizmo_egui::mint::Vector3<f64> = new_t.translation.into();
-                                    let nr: transform_gizmo_egui::mint::Quaternion<f64> = new_t.rotation.into();
-                                    let ns: transform_gizmo_egui::mint::Vector3<f64> = new_t.scale.into();
+                                    let nt: transform_gizmo_egui::mint::Vector3<f64> = new_t.translation;
+                                    let nr: transform_gizmo_egui::mint::Quaternion<f64> = new_t.rotation;
+                                    let ns: transform_gizmo_egui::mint::Vector3<f64> = new_t.scale;
                                     
                                     t.position = gizmo_math::Vec3::new(nt.x as f32, nt.y as f32, nt.z as f32);
                                     t.rotation = gizmo_math::Quat::from_xyzw(nr.v.x as f32, nr.v.y as f32, nr.v.z as f32, nr.s as f32);
@@ -375,14 +375,13 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
     // --- RUBBER BAND (KUTU İLE ÇOKLU SEÇİM) ---
     let is_dragging_gizmo = gizmo_interacted || !state.scene.gizmo_original_transforms.is_empty();
 
-    if !is_dragging_gizmo {
-        if response.clicked_by(egui::PointerButton::Primary)
-            || response.drag_started_by(egui::PointerButton::Primary)
+    if !is_dragging_gizmo
+        && (response.clicked_by(egui::PointerButton::Primary)
+            || response.drag_started_by(egui::PointerButton::Primary))
         {
             tracing::info!("SceneView CLICKED/DRAG_STARTED! ndc: {:?}", state.mouse_ndc);
             state.do_raycast = true;
         }
-    }
     if !is_dragging_gizmo && response.dragged_by(egui::PointerButton::Primary) {
         if state.selection.rubber_band_start.is_none() {
             if let Some(pos) = press_origin {

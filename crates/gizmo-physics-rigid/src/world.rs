@@ -65,17 +65,14 @@ const FIXED_DT: f32 = 1.0 / PHYSICS_HZ;
 const MAX_SUBSTEPS: u32 = 64; // Increased from 8 to support larger DTs without losing simulation time
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Default)]
 pub enum Weather {
+    #[default]
     Sunny,
     Rain,
     Snow,
 }
 
-impl Default for Weather {
-    fn default() -> Self {
-        Self::Sunny
-    }
-}
 
 /// A compact snapshot of the physics state for rewinding
 #[derive(Clone)]

@@ -65,30 +65,24 @@ impl Default for LightingSettings {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Default)]
 pub enum CameraState {
     Orbiting,
     Stationary,
+    #[default]
     Manual,
 }
 
-impl Default for CameraState {
-    fn default() -> Self {
-        Self::Manual
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Default)]
 pub enum EditorState {
+    #[default]
     PlayMode,
     EditMode,
     Paused,
 }
 
-impl Default for EditorState {
-    fn default() -> Self {
-        Self::PlayMode
-    }
-}
 
 
 pub struct SceneBuilder<'a> {

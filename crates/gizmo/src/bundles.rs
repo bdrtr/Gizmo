@@ -285,21 +285,13 @@ use gizmo_physics_rigid::components::{RigidBody, Velocity};
 
 /// Fizik nesnesi oluşturmak için sıfır-yük (zero-overhead) Bundle.
 /// Velocity veya Collider eklemeyi unutma hatalarını önler.
+#[derive(Default)]
 pub struct RigidBodyBundle {
     pub rigid_body: RigidBody,
     pub velocity: Velocity,
     pub collider: Collider,
 }
 
-impl Default for RigidBodyBundle {
-    fn default() -> Self {
-        Self {
-            rigid_body: RigidBody::default(),
-            velocity: Velocity::default(),
-            collider: Collider::default(),
-        }
-    }
-}
 
 impl RigidBodyBundle {
     pub fn dynamic(mass: f32) -> Self {

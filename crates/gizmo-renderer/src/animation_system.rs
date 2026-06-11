@@ -82,7 +82,7 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
 
             skeleton.local_poses = poses;
 
-            upload_skin_matrices(&mut *skeleton, queue);
+            upload_skin_matrices(&mut skeleton, queue);
         }
     }
 }

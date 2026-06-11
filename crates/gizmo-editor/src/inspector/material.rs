@@ -91,8 +91,8 @@ pub fn draw_material_section(
 
                         // Sürükle Bırak (Drag & Drop) Doku (Texture) atama
                         if let Some(dragged_path) = _state.dragged_asset.clone() {
-                            if dragged_path.ends_with(".png") || dragged_path.ends_with(".jpg") || dragged_path.ends_with(".jpeg") {
-                                if response.hovered() {
+                            if (dragged_path.ends_with(".png") || dragged_path.ends_with(".jpg") || dragged_path.ends_with(".jpeg"))
+                                && response.hovered() {
                                     stroke_color = egui::Color32::YELLOW;
                                     if ui.input(|i| i.pointer.any_released()) {
                                         _state.log_info(&format!("Doku atandı: {}", dragged_path));
@@ -102,7 +102,6 @@ pub fn draw_material_section(
                                         _state.dragged_asset = None;
                                     }
                                 }
-                            }
                         }
 
                         ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0_f32, stroke_color));
