@@ -1,12 +1,20 @@
 use gizmo_core::system::Schedule;
 use gizmo_core::time::Time;
 use gizmo_core::world::World;
-use gizmo_net::protocol::{
+use gizmo_net::client_server::protocol::{
     ClientChannel, ClientMessage, ServerChannel, ServerMessage, TransformData,
 };
-use gizmo_net::server::NetworkServer;
+use gizmo_net::client_server::server::NetworkServer;
 use gizmo_physics_core::Transform;
 use std::collections::HashMap;
+
+/// Sunucunun ağ durumu: otoriter tick sayacı ve her istemci için işlenen son
+/// girdinin tick'i (per-client reconciliation ACK'i).
+#[derive(Default)]
+struct ServerNetState {
+    tick: u32,
+    last_processed_input: HashMap<u64, u32>,
+}
 
 pub fn server_network_system(world: &World, dt: f32) {
     let dt_f64 = dt as f64;
@@ -35,13 +43,17 @@ pub fn server_network_system(world: &World, dt: f32) {
                 .server
                 .receive_message(client_id, ClientChannel::Command)
             {
-                if let Ok(ClientMessage::PlayerInput {
-                    move_x: _,
-                    move_z: _,
-                    jump: _,
-                }) = bincode::deserialize(&message)
+                if let Ok(ClientMessage::Input(input)) =
+                    bincode::deserialize::<ClientMessage>(&message)
                 {
-                    // Update physics...
+                    // Otoriter fizik burada uygulanır (demo: no-op).
+                    // Bu istemciden işlenen son girdi tick'ini ACK olarak kaydet.
+                    if let Some(mut st) = world.get_resource_mut::<ServerNetState>() {
+                        let entry = st.last_processed_input.entry(client_id).or_insert(0);
+                        if input.tick > *entry {
+                            *entry = input.tick;
+                        }
+                    }
                 }
             }
         }
@@ -73,7 +85,34 @@ pub fn server_network_system(world: &World, dt: f32) {
             }
         }
 
+        // Her istemciye yalnızca kendi reconciliation ACK'ini gönder (per-client, reliable).
+        let acks: Vec<(u64, u32)> = {
+            let st = world.get_resource::<ServerNetState>().unwrap();
+            server_res
+                .server
+                .clients_id()
+                .into_iter()
+                .map(|cid| (cid, st.last_processed_input.get(&cid).copied().unwrap_or(0)))
+                .collect()
+        };
+        for (cid, last_processed_input) in acks {
+            if let Ok(serialized) = bincode::serialize(&ServerMessage::InputAck {
+                last_processed_input,
+            }) {
+                server_res
+                    .server
+                    .send_message(cid, ServerChannel::Reliable, serialized);
+            }
+        }
+
+        // Otoriter tick'i ilerlet ve ortak dünya durumunu yayınla (broadcast, interpolasyon için).
+        let server_tick = {
+            let mut st = world.get_resource_mut::<ServerNetState>().unwrap();
+            st.tick = st.tick.wrapping_add(1);
+            st.tick
+        };
         if let Ok(serialized) = bincode::serialize(&ServerMessage::WorldStateUpdate {
+            server_tick,
             players: players_map,
         }) {
             server_res
@@ -92,7 +131,10 @@ fn main() {
     let mut schedule = Schedule::new();
 
     // 1. Ağ Sistemini Başlat
-    world.insert_resource(NetworkServer::new("0.0.0.0:4000"));
+    let network_server =
+        NetworkServer::new("0.0.0.0:4000").expect("Ağ sunucusu 0.0.0.0:4000 üzerinde başlatılamadı");
+    world.insert_resource(network_server);
+    world.insert_resource(ServerNetState::default());
 
     // 2. Zamanlayıcıyı Başlat
     world.insert_resource(Time::default());

@@ -1,6 +1,6 @@
 use std::net::{UdpSocket, SocketAddr};
 use std::io::ErrorKind;
-use crate::packet::NetworkPacket;
+use super::packet::NetworkPacket;
 
 /// Native (Masaüstü) ortamlar için Non-Blocking UDP haberleşme katmanı.
 pub struct UdpTransport {

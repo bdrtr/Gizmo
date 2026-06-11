@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
-use crate::input_buffer::PlayerInput;
-use crate::snapshot::PhysicsStateSnapshot;
+use super::input_buffer::PlayerInput;
+use super::snapshot::PhysicsStateSnapshot;
 
 /// Ağ üzerinden gönderilen tüm verilerin genel zarfı (Envelope).
 #[derive(Clone, Debug, Serialize, Deserialize)]

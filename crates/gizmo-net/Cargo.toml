@@ -8,10 +8,34 @@ license.workspace = true
 repository.workspace = true
 readme.workspace = true
 
+[features]
+default = []
+# renet tabanlı otoriter sunuculu mimari (prediction + interpolation dahil)
+client-server = ["dep:renet", "dep:renet_netcode"]
+# P2P deterministik rollback (fizik snapshot capture/restore)
+rollback = [
+    "dep:gizmo-core",
+    "dep:gizmo-math",
+    "dep:gizmo-physics-core",
+    "dep:gizmo-physics-rigid",
+]
+
 [dependencies]
+# Ortak (her iki mimari de kullanır)
 bincode = "1.3.3"
-gizmo-core = { version = "0.1.7", path = "../gizmo-core" }
-renet = "2.0.0"
-renet_netcode = "2.0.0"
 serde = { version = "1.0.228", features = ["derive"] }
 tracing = "0.1.44"
+
+# client-server backend
+renet = { version = "2.0.0", optional = true }
+renet_netcode = { version = "2.0.0", optional = true }
+
+# rollback backend
+gizmo-core = { version = "0.1.7", path = "../gizmo-core", optional = true }
+gizmo-math = { version = "0.1.7", path = "../gizmo-math", optional = true }
+gizmo-physics-core = { version = "0.1.7", path = "../gizmo-physics-core", optional = true }
+gizmo-physics-rigid = { version = "0.1.7", path = "../gizmo-physics-rigid", optional = true }
+
+[[example]]
+name = "p2p_rollback_test"
+required-features = ["rollback"]

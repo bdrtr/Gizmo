@@ -121,3 +121,36 @@ impl SnapshotInterpolator {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_buffer_returns_none() {
+        let interp = SnapshotInterpolator::new(0.0);
+        assert!(interp.get_interpolated_transform(0.5).is_none());
+    }
+
+    #[test]
+    fn interpolates_midpoint_between_two_snapshots() {
+        let mut interp = SnapshotInterpolator::new(0.0); // gecikme yok
+        interp.add_snapshot(0.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        interp.add_snapshot(1.0, [10.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+
+        // render_time = 0.5 → tam orta nokta
+        let (pos, _rot) = interp.get_interpolated_transform(0.5).unwrap();
+        assert!((pos[0] - 5.0).abs() < 1e-5, "beklenen 5.0, gelen {}", pos[0]);
+    }
+
+    #[test]
+    fn clamps_to_last_known_when_ahead() {
+        let mut interp = SnapshotInterpolator::new(0.0);
+        interp.add_snapshot(0.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        interp.add_snapshot(1.0, [10.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+
+        // Tüm snapshot'lardan ileride → son bilinen konum
+        let (pos, _rot) = interp.get_interpolated_transform(5.0).unwrap();
+        assert_eq!(pos[0], 10.0);
+    }
+}
