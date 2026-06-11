@@ -186,10 +186,13 @@ impl Cloth {
                 if node.position.y < self.thickness {
                     node.position.y = self.thickness;
 
-                    // Simple friction: damp horizontal velocity when touching ground
+                    // Simple friction: damp horizontal velocity when touching ground.
                     let mut vel = (node.position - node.prev_position) / sub_dt;
                     vel.x *= 1.0 - self.friction;
                     vel.z *= 1.0 - self.friction;
+                    // Aşağı yönlü hızı koru-MA: zemine doğru momentum biriktirmek
+                    // titreme/enerji enjeksiyonuna yol açıyordu (yukarı serbest).
+                    vel.y = vel.y.max(0.0);
                     node.prev_position = node.position - vel * sub_dt;
                 }
             }

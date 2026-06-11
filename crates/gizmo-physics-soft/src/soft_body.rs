@@ -161,70 +161,61 @@ impl SoftBodyMesh {
             gizmo_physics_core::Collider,
         )],
     ) {
-        let num_nodes = self.nodes.len();
         let mut forces: Vec<Vec3> = self.nodes.iter().map(|n| gravity * n.mass).collect();
 
         // 1. Calculate and accumulate internal elastic forces from all tetrahedra in PARALLEL
         use rayon::prelude::*;
 
         let positions: Vec<Vec3> = self.nodes.iter().map(|n| n.position).collect();
-        const MIN_JACOBIAN: f32 = 0.1;
+        // Yalnızca gerçekten dejenere/ters (J ≤ eps) elemanlar atlanır — NaN/tekillik
+        // koruması. Eskiden J < 0.1 ile GEÇERLİ ama sıkışmış elemanlar da tüm sertliğini
+        // kaybediyordu (sıkışma altında çöküyor, geri toparlanamıyordu).
+        const J_EPS: f32 = 1e-4;
 
-        let elastic_forces = self
+        // Her tetrahedronun düğüm kuvvetlerini PARALEL hesapla, sonra DETERMİNİSTİK
+        // (eleman sırasında) topla. (Paralel `reduce` float toplamı sırayı bozup
+        // lockstep determinizmini kırıyordu — float toplaması birleşmeli değil.)
+        let elem_forces: Vec<Option<([usize; 4], [Vec3; 4])>> = self
             .elements
             .par_iter()
-            .fold(
-                || vec![Vec3::ZERO; num_nodes],
-                |mut acc_forces, elem| {
-                    let i0 = elem.node_indices[0] as usize;
-                    let i1 = elem.node_indices[1] as usize;
-                    let i2 = elem.node_indices[2] as usize;
-                    let i3 = elem.node_indices[3] as usize;
+            .map(|elem| {
+                let idx = [
+                    elem.node_indices[0] as usize,
+                    elem.node_indices[1] as usize,
+                    elem.node_indices[2] as usize,
+                    elem.node_indices[3] as usize,
+                ];
+                let ds = Mat3::from_cols(
+                    positions[idx[1]] - positions[idx[0]],
+                    positions[idx[2]] - positions[idx[0]],
+                    positions[idx[3]] - positions[idx[0]],
+                );
+                let f = ds * elem.inv_rest_matrix;
+                let j = f.determinant();
+                if j <= J_EPS {
+                    return None;
+                }
+                let f_inv_t = f.inverse().transpose();
+                let ln_j = j.ln();
+                let p = f_inv_t * (-self.mu) + f * self.mu + f_inv_t * (self.lambda * ln_j);
+                let h = p * elem.inv_rest_matrix.transpose() * elem.rest_volume;
+                let f1 = -h.col(0);
+                let f2 = -h.col(1);
+                let f3 = -h.col(2);
+                let f0 = -(f1 + f2 + f3);
+                // NaN/Inf koruması: tutarsız kuvvet üretildiyse atla.
+                if !(f0.is_finite() && f1.is_finite() && f2.is_finite() && f3.is_finite()) {
+                    return None;
+                }
+                Some((idx, [f0, f1, f2, f3]))
+            })
+            .collect();
 
-                    let x0 = positions[i0];
-                    let x1 = positions[i1];
-                    let x2 = positions[i2];
-                    let x3 = positions[i3];
-
-                    let ds = Mat3::from_cols(x1 - x0, x2 - x0, x3 - x0);
-                    let f = ds * elem.inv_rest_matrix;
-                    let j = f.determinant();
-
-                    if j < MIN_JACOBIAN {
-                        return acc_forces;
-                    }
-
-                    let f_inv_t = f.inverse().transpose();
-                    let ln_j = j.ln();
-
-                    let p = f_inv_t * (-self.mu) + f * self.mu + f_inv_t * (self.lambda * ln_j);
-                    let h = p * elem.inv_rest_matrix.transpose() * elem.rest_volume;
-
-                    let f1 = -h.col(0);
-                    let f2 = -h.col(1);
-                    let f3 = -h.col(2);
-                    let f0 = -(f1 + f2 + f3);
-
-                    acc_forces[i0] += f0;
-                    acc_forces[i1] += f1;
-                    acc_forces[i2] += f2;
-                    acc_forces[i3] += f3;
-
-                    acc_forces
-                },
-            )
-            .reduce(
-                || vec![Vec3::ZERO; num_nodes],
-                |mut a, b| {
-                    for i in 0..num_nodes {
-                        a[i] += b[i];
-                    }
-                    a
-                },
-            );
-
-        for i in 0..num_nodes {
-            forces[i] += elastic_forces[i];
+        for (idx, f) in elem_forces.into_iter().flatten() {
+            forces[idx[0]] += f[0];
+            forces[idx[1]] += f[1];
+            forces[idx[2]] += f[2];
+            forces[idx[3]] += f[3];
         }
 
         // 2. Integrate velocities and positions
@@ -251,6 +242,45 @@ impl SoftBodyMesh {
             } else {
                 node.position = next_pos;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Orta derecede sıkışmış GEÇERLİ bir eleman (J ≈ 0.4³ ≈ 0.064, eski 0.1 eşiğinin
+    /// altında) artık direnç gösterip geri açılmalı. (Eski kod J < 0.1 olunca sıfır kuvvet
+    /// uyguluyordu → eleman çökük kalıyordu.) Ayrıca NaN/Inf üretmemeli.
+    #[test]
+    fn resists_moderate_compression_and_stays_finite() {
+        let mut sb = SoftBodyMesh::new(1000.0, 0.3);
+        sb.add_node(Vec3::ZERO, 1.0);
+        sb.add_node(Vec3::X, 1.0);
+        sb.add_node(Vec3::Y, 1.0);
+        sb.add_node(Vec3::Z, 1.0);
+        sb.add_element(0, 1, 2, 3);
+
+        // Üniform sıkıştır: F = 0.4·I → J = 0.064 (< eski 0.1 eşiği).
+        for node in &mut sb.nodes {
+            node.position *= 0.4;
+        }
+        let d_before = (sb.nodes[1].position - sb.nodes[0].position).length();
+
+        // Yerçekimsiz: yalnızca iç elastik kuvvetler etkili olsun.
+        for _ in 0..120 {
+            sb.step(1.0 / 240.0, Vec3::ZERO, &[]);
+        }
+
+        let d_after = (sb.nodes[1].position - sb.nodes[0].position).length();
+        assert!(
+            d_after > d_before + 1e-4,
+            "sıkışmış eleman geri açılmalı (direnç): {d_before} -> {d_after}"
+        );
+        for node in &sb.nodes {
+            assert!(node.position.is_finite(), "pozisyon NaN/Inf olmamalı");
+            assert!(node.velocity.is_finite(), "hız NaN/Inf olmamalı");
         }
     }
 }
