@@ -467,11 +467,19 @@ impl PhysicsWorld {
             let results: Vec<IslandResult> = island_groups
                 .into_par_iter()
                 .map(|mut island_manifolds| -> IslandResult {
-                    // Skip entirely if the whole island is asleep.
+                    // Adayı bir "mover" içeriyorsa uyanık say: uyanık bir dinamik gövde
+                    // VEYA hareket eden bir kinematik gövde. (Eskiden yalnızca dinamik-uyanık
+                    // sayılıyordu; hareket eden bir kinematik platformun üstündeki uyuyan
+                    // dinamik cisim hiç uyandırılmıyor, içinden geçiliyordu.) Mover varsa
+                    // aşağıdaki wake_updates döngüsü adadaki uyuyan dinamikleri uyandırır.
                     let island_awake = island_manifolds.iter().any(|m| {
                         [m.entity_a, m.entity_b].iter().any(|&e| {
                             entity_map.get(&e.id()).is_some_and(|&i| {
-                                rigid_bodies[i].is_dynamic() && !rigid_bodies[i].is_sleeping
+                                let rb = &rigid_bodies[i];
+                                (rb.is_dynamic() && !rb.is_sleeping)
+                                    || (rb.is_kinematic()
+                                        && (velocities[i].linear.length_squared() > 1e-8
+                                            || velocities[i].angular.length_squared() > 1e-8))
                             })
                         })
                     });

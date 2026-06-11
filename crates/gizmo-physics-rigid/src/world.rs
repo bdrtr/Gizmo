@@ -1002,4 +1002,66 @@ mod tests {
         assert!(speed_end < speed_mid, "yavaşlamadı: {speed_mid} -> {speed_end}");
         assert!(speed_end < 0.5, "durmaya yakın olmalı, kalan hız: {speed_end}");
     }
+
+    /// Hareket eden kinematik platform, üstündeki UYUYAN dinamik cismi uyandırmalı ve
+    /// sürtünmeyle sürüklemeli. (Eskiden kinematik gövde "mover" sayılmadığından ada
+    /// uyanmıyor, uyuyan cisim hiç uyandırılmıyordu.)
+    #[test]
+    fn moving_kinematic_platform_wakes_sleeping_body() {
+        let mut world = PhysicsWorld::new();
+        world.integrator.gravity = Vec3::new(0.0, -10.0, 0.0);
+
+        // Kinematik platform: merkez 0, üst yüz +0.5.
+        let mut plat = RigidBody::new_kinematic();
+        plat.friction = 1.0;
+        world.add_body(
+            Entity::new(0, 0),
+            plat,
+            Transform::new(Vec3::new(0.0, 0.0, 0.0)),
+            Velocity::default(),
+            Collider::box_collider(Vec3::new(5.0, 0.5, 5.0)),
+        );
+
+        // Üstünde dinamik kutu: merkez 1.0, alt 0.5 = platform üstü.
+        let mut box_rb = RigidBody::new(1.0, 0.0, 1.0, true);
+        box_rb.lock_rotation_x = true;
+        box_rb.lock_rotation_y = true;
+        box_rb.lock_rotation_z = true;
+        box_rb.wake_up();
+        let col = Collider::box_collider(Vec3::new(0.5, 0.5, 0.5));
+        box_rb.update_inertia_from_collider(&col);
+        world.add_body(
+            Entity::new(1, 0),
+            box_rb,
+            Transform::new(Vec3::new(0.0, 1.0, 0.0)),
+            Velocity::default(),
+            col,
+        );
+
+        // Platform sabitken kutuyu uyut.
+        for _ in 0..400 {
+            world.step(1.0 / 60.0).unwrap();
+        }
+        assert!(
+            world.rigid_bodies[1].is_sleeping,
+            "kutu önce uyumalı (uyumadıysa senaryo geçersiz)"
+        );
+        let x_before = world.transforms[1].position.x;
+
+        // Platformu +x yönünde hareket ettir.
+        world.velocities[0].linear = Vec3::new(2.0, 0.0, 0.0);
+        for _ in 0..30 {
+            world.step(1.0 / 60.0).unwrap();
+        }
+
+        assert!(
+            !world.rigid_bodies[1].is_sleeping,
+            "hareket eden kinematik platform kutuyu uyandırmalı"
+        );
+        let x_after = world.transforms[1].position.x;
+        assert!(
+            x_after > x_before + 0.05,
+            "kutu platformla sürüklenmeli: {x_before} -> {x_after}"
+        );
+    }
 }

@@ -30,8 +30,10 @@ Derin incelemede işaretlenen ama henüz **kapatılmamış** orta-güvenli sorun
       `entities.len() != column.len()` desync'i mümkün; değişmezi enforce et veya kontrol ekle.
 - [ ] **EPA yüz yönelimi** — `compute_face_normal` normali winding yerine origin'den zorluyor;
       sığ/dejenere temaslarda yanlış yüz seçilebilir. (Witness refactor'ı bunu değiştirmedi.)
-- [ ] **Uyku/kinematik etkileşimi** — hareket eden kinematik platform üstündeki uyuyan dinamik
-      cismi uyandırmıyor; `IslandManager::should_sleep` pipeline'dan hiç çağrılmıyor.
+- [x] **Uyku/kinematik etkileşimi** — ada "uyanık" sayımı artık hareket eden kinematik
+      gövdeyi de "mover" kabul ediyor; üstündeki uyuyan dinamik cisim uyandırılıp çözülüyor.
+      Test: hareket eden platform uyuyan kutuyu uyandırıp sürüklüyor. (Not: tam ada-uyumu /
+      `should_sleep` entegrasyonu ayrı bir iyileştirme; per-body uyku zaten çalışıyor.)
 - [ ] **`iter_chunks_mut` aşırı işaretleme** — `get_slice` tüm archetype satırlarını "changed"
       işaretliyor (yazılmayanlar dahil) → change detection'da false positive.
 - [ ] **SparseSet change tracking** — `Changed<T>`/`Added<T>` SparseSet bileşenlerinde her zaman
