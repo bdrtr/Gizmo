@@ -41,7 +41,10 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
             // Calculate velocity at Center of Mass
             let com_world = chassis_pos + chassis_rot * rb.center_of_mass;
 
-            let current_steer = vehicle.current_steer;
+            // max_steer_angle ile sınırla (eskiden ham açı doğrudan kullanılıyordu, sınır yoktu).
+            let current_steer = vehicle
+                .current_steer
+                .clamp(-vehicle.max_steer_angle, vehicle.max_steer_angle);
             let current_throttle = vehicle.current_throttle;
             let current_brake = vehicle.current_brake;
             let brake_force = vehicle.brake_force;
@@ -57,24 +60,10 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                 } else if vehicle.current_throttle > 0.01 && forward_speed > -0.1 {
                     vehicle.gearbox.is_reversing = false;
                 }
-
-                if !vehicle.gearbox.is_reversing {
-                    let speed = forward_speed.max(0.0);
-                    let cg = vehicle.gearbox.current_gear;
-                    
-                    if cg < vehicle.gearbox.gears.len() - 1 && speed > vehicle.gearbox.shift_up_speeds[cg] {
-                        vehicle.gearbox.current_gear += 1;
-                    } else if cg > 0 && speed < vehicle.gearbox.shift_down_speeds[cg - 1] {
-                        vehicle.gearbox.current_gear -= 1;
-                    }
-                }
+                vehicle.gearbox.update_gear(forward_speed);
             }
-            
-            let gear_ratio = if vehicle.gearbox.is_reversing {
-                vehicle.gearbox.reverse_ratio
-            } else {
-                vehicle.gearbox.gears[vehicle.gearbox.current_gear]
-            };
+
+            let gear_ratio = vehicle.gearbox.current_ratio();
             
             let engine_power = vehicle.engine_power * gear_ratio * vehicle.gearbox.final_drive;
 
@@ -96,6 +85,9 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                 let downforce_impulse = down_dir * downforce_mag * dt;
                 vel.linear += downforce_impulse * rb.inv_mass();
             }
+
+            // Tekerlek başına kütle payı (eskiden 4 tekerleğe sabit `mass*0.25` varsayılıyordu).
+            let per_wheel_mass = rb.mass / (vehicle.wheels.len().max(1) as f32);
 
             for wheel in &mut vehicle.wheels {
                 // Determine wheel attachment point in world space
@@ -137,9 +129,13 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                         let total_susp_force = (spring_force + damping_force).max(0.0);
                         let suspension_impulse = -ray_dir * total_susp_force * dt;
 
-                        // Apply suspension impulse
+                        // Apply suspension impulse (yay kuvveti strut boyunca, bağlantı noktasında).
                         vel.linear += suspension_impulse * rb.inv_mass();
                         vel.angular += rb.inv_world_inertia_tensor(chassis_rot) * r.cross(suspension_impulse);
+
+                        // Lastik kuvvetleri TEMAS NOKTASINDA etki eder (bağlantı noktasında değil);
+                        // doğru kaldıraç kolu için temas yamasından ölçülen r_contact kullanılır.
+                        let r_contact = wheel.contact_point - com_world;
 
                         // 2. Friction / Steering / Drive
                         let mut right = chassis_rot * Vec3::new(1.0, 0.0, 0.0);
@@ -154,8 +150,8 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                             forward = steer_rot * forward;
                         }
 
-                        // Recompute point velocity after suspension impulse for stability
-                        let point_vel = vel.linear + vel.angular.cross(r);
+                        // Temas noktasındaki hız (lastik kuvvetleri için).
+                        let point_vel = vel.linear + vel.angular.cross(r_contact);
 
                         // Surface Material (Grip & Rolling Resistance)
                         let mat = materials.get(hit.entity.id())
@@ -198,52 +194,59 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                         let max_lat_force = grip * total_susp_force;
                         let max_lat_impulse = max_lat_force * dt;
                         
-                        // Desired impulse to completely stop lateral sliding (mass per wheel approximation)
-                        let desired_lat_impulse = -lat_vel * (rb.mass * 0.25);
+                        // Yanal kaymayı durduracak istenen impuls (tekerlek başına kütle payı).
+                        let desired_lat_impulse = -lat_vel * per_wheel_mass;
                         let actual_lat_impulse_mag = desired_lat_impulse.clamp(-max_lat_impulse, max_lat_impulse);
                         let lat_impulse = right * actual_lat_impulse_mag;
-                        
+
                         vel.linear += lat_impulse * rb.inv_mass();
-                        vel.angular += rb.inv_world_inertia_tensor(chassis_rot) * r.cross(lat_impulse);
-                        
+                        vel.angular += rb.inv_world_inertia_tensor(chassis_rot) * r_contact.cross(lat_impulse);
+
                         // Recompute point vel after lateral impulse
-                        let point_vel = vel.linear + vel.angular.cross(r);
+                        let point_vel = vel.linear + vel.angular.cross(r_contact);
                         let long_vel = point_vel.dot(forward);
 
                         // Rolling Resistance
                         let rolling_force_mag = wheel.rolling_resistance_coefficient * rr_multiplier * total_susp_force;
                         let max_rolling_impulse = rolling_force_mag * dt;
-                        let desired_rolling_impulse = -long_vel * (rb.mass * 0.25);
+                        let desired_rolling_impulse = -long_vel * per_wheel_mass;
                         let actual_rolling_impulse_mag = desired_rolling_impulse.clamp(-max_rolling_impulse, max_rolling_impulse);
                         let rolling_impulse = forward * actual_rolling_impulse_mag;
-                        
-                        vel.linear += rolling_impulse * rb.inv_mass();
-                        vel.angular += rb.inv_world_inertia_tensor(chassis_rot) * r.cross(rolling_impulse);
 
-                        // Longitudinal Force (Drive / Brake)
+                        vel.linear += rolling_impulse * rb.inv_mass();
+                        vel.angular += rb.inv_world_inertia_tensor(chassis_rot) * r_contact.cross(rolling_impulse);
+
+                        // Longitudinal Force (Drive) — sürtünme dairesine (friction circle) clamp'lenir:
+                        // mevcut boyuna grip = sqrt((μ·N)² − kullanılan_yanal²). Eskiden tahrik kuvveti
+                        // hiç sınırlanmıyordu → sonsuz çekiş, yanal+boyuna birleşik kayma yoktu.
                         if wheel.is_drive {
-                            let drive_force = forward * current_throttle * engine_power;
-                            let drive_impulse = drive_force * dt;
+                            let max_tire_impulse = grip * total_susp_force * dt;
+                            let lat_used = actual_lat_impulse_mag.abs();
+                            let max_long_impulse =
+                                (max_tire_impulse * max_tire_impulse - lat_used * lat_used).max(0.0).sqrt();
+                            let desired_drive_impulse = current_throttle * engine_power * dt;
+                            let drive_mag = desired_drive_impulse.clamp(-max_long_impulse, max_long_impulse);
+                            let drive_impulse = forward * drive_mag;
                             vel.linear += drive_impulse * rb.inv_mass();
-                            vel.angular += rb.inv_world_inertia_tensor(chassis_rot) * r.cross(drive_impulse);
+                            vel.angular += rb.inv_world_inertia_tensor(chassis_rot) * r_contact.cross(drive_impulse);
                         }
 
                         // Brake Force
                         if current_brake > 0.0 {
-                            let point_vel = vel.linear + vel.angular.cross(r);
+                            let point_vel = vel.linear + vel.angular.cross(r_contact);
                             let long_vel = point_vel.dot(forward);
                             let max_brake_impulse = current_brake * brake_force * dt;
-                            let desired_brake_impulse = -long_vel * (rb.mass * 0.25);
-                            
+                            let desired_brake_impulse = -long_vel * per_wheel_mass;
+
                             let actual_brake_impulse_mag = if desired_brake_impulse > 0.0 {
                                 desired_brake_impulse.clamp(0.0, max_brake_impulse)
                             } else {
                                 desired_brake_impulse.clamp(-max_brake_impulse, 0.0)
                             };
-                            
+
                             let brake_impulse = forward * actual_brake_impulse_mag;
                             vel.linear += brake_impulse * rb.inv_mass();
-                            vel.angular += rb.inv_world_inertia_tensor(chassis_rot) * r.cross(brake_impulse);
+                            vel.angular += rb.inv_world_inertia_tensor(chassis_rot) * r_contact.cross(brake_impulse);
                         }
                     }
                 } else {
