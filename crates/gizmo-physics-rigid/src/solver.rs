@@ -64,15 +64,25 @@ impl ConstraintSolver {
     // ANA SOLVER: Manifold listesi üzerinde PGS (Projected Gauss-Seidel)
     // ─────────────────────────────────────────────────────────────────────────
 
+    /// `pos_corrections` (uzunluğu `velocities` ile aynı), split-impulse pozisyon
+    /// düzeltmesini gövde başına (lineer Δkonum, açısal Δ-scaled-axis) olarak DIŞARI
+    /// yazar. Eskiden bu düzeltme doğrudan `velocities`'e ekleniyordu; bu, pozisyon
+    /// düzeltme hızının kalıcı hıza sızmasına (resting jitter / cisimlerin uyumaması)
+    /// yol açıyordu. Çağıran bu deltaları pozisyona uygulamalıdır.
     pub fn solve_contacts(
         &self,
         manifolds: &mut [ContactManifold],
         rigid_bodies: &[RigidBody],
         transforms: &[Transform],
         velocities: &mut [Velocity],
+        pos_corrections: &mut [(Vec3, Vec3)],
         entity_index_map: &std::collections::HashMap<u32, usize>,
         dt: f32,
     ) {
+        // Pozisyon düzeltme buffer'ını sıfırla (çağıran tarafından yeniden kullanılabilir).
+        for pc in pos_corrections.iter_mut() {
+            *pc = (Vec3::ZERO, Vec3::ZERO);
+        }
         if manifolds.is_empty() {
             return;
         }
@@ -418,10 +428,11 @@ impl ConstraintSolver {
                 }
             }
 
-            // Pseudo-velocity'yi gerçek velocity'ye ekle (sadece pozisyon düzeltme bileşeni)
+            // Pseudo-velocity'yi HIZA EKLEME (eski hata buydu). Bunun yerine pozisyon
+            // düzeltmesi olarak dışarı yaz: Δkonum = pseudo_vel * dt. Çağıran bunu
+            // doğrudan transform'a uygular; hız kanalı temiz kalır.
             for i in 0..velocities.len() {
-                velocities[i].linear += pseudo_vel[i].0;
-                velocities[i].angular += pseudo_vel[i].1;
+                pos_corrections[i] = (pseudo_vel[i].0 * dt, pseudo_vel[i].1 * dt);
             }
         }
     }

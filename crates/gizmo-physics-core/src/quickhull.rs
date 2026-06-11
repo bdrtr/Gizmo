@@ -1,5 +1,5 @@
 use gizmo_math::Vec3;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 const EPSILON: f32 = 1e-4;
 
@@ -246,7 +246,10 @@ pub fn compute_convex_hull(points: &[Vec3]) -> ConvexHull {
 
         // Extract horizon edges
         // A directed edge (u, v) is added. If a neighboring visible face adds (v, u), they cancel out.
-        let mut edge_counts = HashMap::new();
+        // BTreeMap: deterministik iterasyon sırası (HashMap rastgele seed'liydi →
+        // horizon kenar sırası, dolayısıyla hull çıktısı çalıştırmadan çalıştırmaya
+        // değişiyordu; bu rollback/replay determinizmini bozuyordu).
+        let mut edge_counts = BTreeMap::new();
         for &f_idx in &visible_faces {
             let f = &faces[f_idx];
             let edges = [(f.v[0], f.v[1]), (f.v[1], f.v[2]), (f.v[2], f.v[0])];
@@ -309,8 +312,10 @@ pub fn compute_convex_hull(points: &[Vec3]) -> ConvexHull {
         }
     }
 
-    // Extract unique vertices and mapped indices
-    let mut vertex_set = HashSet::new();
+    // Extract unique vertices and mapped indices.
+    // BTreeSet: çıktı köşe sırasının deterministik olması için (HashSet iterasyonu
+    // rastgeleydi → out_vertices/faces remap sırası değişiyordu).
+    let mut vertex_set = BTreeSet::new();
     for f in &faces {
         vertex_set.insert(f.v[0]);
         vertex_set.insert(f.v[1]);

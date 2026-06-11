@@ -12,6 +12,7 @@ use crate::{
 use gizmo_physics_core::{CollisionEvent, CollisionEventType, ContactManifold, TriggerEvent};
 use gizmo_physics_core::narrowphase::NarrowPhase;
 use gizmo_core::entity::Entity;
+use gizmo_math::Vec3;
 use rayon::prelude::*;
 use std::collections::HashMap;
 
@@ -99,7 +100,7 @@ impl PhysicsWorld {
                     let local_integrator =
                         crate::integrator::Integrator { gravity: active_gravity };
 
-                    local_integrator.integrate_velocities(entity, rb, vel, dt)?;
+                    local_integrator.integrate_velocities(entity, rb, transform.rotation, vel, dt)?;
 
                     // ── Watchlist debug logging ───────────────────────────
                     if !watchlist.is_empty() && watchlist.contains(&entity) {
@@ -456,10 +457,11 @@ impl PhysicsWorld {
             let entities_arr = &self.entities;
 
             type IslandResult = (
-                Vec<(Entity, Velocity)>, // velocity updates
-                Vec<ContactManifold>,    // solved manifolds (warm-start data)
-                Vec<Entity>,             // entities to wake up
+                Vec<(Entity, Velocity)>,      // velocity updates
+                Vec<ContactManifold>,         // solved manifolds (warm-start data)
+                Vec<Entity>,                  // entities to wake up
                 Vec<gizmo_physics_core::FractureEvent>,
+                Vec<(Entity, Vec3, Vec3)>,    // split-impulse position corrections (Δlin, Δscaled-axis)
             );
 
             let results: Vec<IslandResult> = island_groups
@@ -475,7 +477,7 @@ impl PhysicsWorld {
                     });
 
                     if !island_awake {
-                        return (Vec::new(), island_manifolds, Vec::new(), Vec::new());
+                        return (Vec::new(), island_manifolds, Vec::new(), Vec::new(), Vec::new());
                     }
 
                     // Collect island indices and bodies that need waking.
@@ -493,42 +495,56 @@ impl PhysicsWorld {
                         }
                     }
 
-                    // Thread-local velocity buffer to avoid per-island allocations.
+                    // Thread-local buffers to avoid per-island allocations.
                     thread_local! {
                         static VEL_CACHE: std::cell::RefCell<Vec<Velocity>> =
+                            const { std::cell::RefCell::new(Vec::new()) };
+                        static POS_CACHE: std::cell::RefCell<Vec<(Vec3, Vec3)>> =
                             const { std::cell::RefCell::new(Vec::new()) };
                     }
 
                     let mut velocity_updates = Vec::with_capacity(island_indices.len());
+                    let mut position_updates = Vec::with_capacity(island_indices.len());
 
                     VEL_CACHE.with(|cache| {
-                        let mut buf = cache.borrow_mut();
+                        POS_CACHE.with(|pos_cache| {
+                            let mut buf = cache.borrow_mut();
+                            let mut pos_buf = pos_cache.borrow_mut();
 
-                        // Grow to fit the full velocity array if needed.
-                        if buf.len() < velocities.len() {
-                            buf.resize(velocities.len(), Velocity::default());
-                        }
-
-                        // Copy only this island's velocities in.
-                        for &idx in &island_indices {
-                            buf[idx] = velocities[idx];
-                        }
-
-                        solver.solve_contacts(
-                            &mut island_manifolds,
-                            rigid_bodies,
-                            transforms,
-                            &mut buf,
-                            entity_map,
-                            dt,
-                        );
-
-                        // Collect results.
-                        for &idx in &island_indices {
-                            if rigid_bodies[idx].is_dynamic() {
-                                velocity_updates.push((entities_arr[idx], buf[idx]));
+                            // Grow to fit the full velocity array if needed.
+                            if buf.len() < velocities.len() {
+                                buf.resize(velocities.len(), Velocity::default());
                             }
-                        }
+                            if pos_buf.len() < velocities.len() {
+                                pos_buf.resize(velocities.len(), (Vec3::ZERO, Vec3::ZERO));
+                            }
+
+                            // Copy only this island's velocities in.
+                            for &idx in &island_indices {
+                                buf[idx] = velocities[idx];
+                            }
+
+                            solver.solve_contacts(
+                                &mut island_manifolds,
+                                rigid_bodies,
+                                transforms,
+                                &mut buf,
+                                &mut pos_buf,
+                                entity_map,
+                                dt,
+                            );
+
+                            // Collect results.
+                            for &idx in &island_indices {
+                                if rigid_bodies[idx].is_dynamic() {
+                                    velocity_updates.push((entities_arr[idx], buf[idx]));
+                                    let (dlin, dang) = pos_buf[idx];
+                                    if dlin != Vec3::ZERO || dang != Vec3::ZERO {
+                                        position_updates.push((entities_arr[idx], dlin, dang));
+                                    }
+                                }
+                            }
+                        });
                     });
 
                     // Fracture detection.
@@ -561,7 +577,7 @@ impl PhysicsWorld {
                         }
                     }
 
-                    (velocity_updates, island_manifolds, wake_updates, fractures)
+                    (velocity_updates, island_manifolds, wake_updates, fractures, position_updates)
                 })
                 .collect();
 
@@ -574,10 +590,22 @@ impl PhysicsWorld {
                 .map(|(i, e)| ((e.entity_a, e.entity_b), i))
                 .collect();
 
-            for (island_vels, island_manifolds, wake_ups, local_fractures) in results {
+            for (island_vels, island_manifolds, wake_ups, local_fractures, pos_corrections) in results {
                 for (entity, vel) in island_vels {
                     if let Some(&idx) = entity_map.get(&entity.id()) {
                         self.velocities[idx] = vel;
+                    }
+                }
+                // Split-impulse pozisyon düzeltmesini doğrudan transform'a uygula
+                // (hız kanalına dokunmadan → resting jitter yok, cisimler uyuyabilir).
+                for (entity, dlin, dang) in pos_corrections {
+                    if let Some(&idx) = entity_map.get(&entity.id()) {
+                        let t = &mut self.transforms[idx];
+                        t.position += dlin;
+                        if dang.length_squared() > 1e-12 {
+                            t.rotation = (gizmo_math::Quat::from_scaled_axis(dang) * t.rotation).normalize();
+                        }
+                        t.update_local_matrix();
                     }
                 }
                 for entity in wake_ups {

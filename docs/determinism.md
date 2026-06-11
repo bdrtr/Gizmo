@@ -1,45 +1,73 @@
-# Cross-Platform Determinism in Gizmo Engine
+# Gizmo Engine'de Determinizm — Mevcut Durum
 
-Determinizm (Belirlenimcilik), aynı fiziksel durum (State) ile başlayan her simülasyonun adım adım çalıştırıldığında (aynı ΔT - dt süresinde) tamamen **Aynı Sonucu** üretmesidir.
+Determinizm: aynı başlangıç durumundan (state) aynı `dt` adımlarıyla çalıştırılan
+simülasyonun adım adım **aynı sonucu** üretmesidir. Rollback netcode (GGPO tarzı)
+ve replay sistemleri için gereklidir.
 
-Gizmo Engine, Multiplayer Rollback Netcode (Örn: GGPO) kullanan oyunlar veya Replay Sistemleri için katı (strict) determinizm koşullarına uygun tasarlanmıştır.
+> **Bu belge motorun GERÇEK durumunu anlatır.** Önceki sürüm bit-exact cross-platform
+> determinizm ve fixed-point matematik vaat ediyordu; bunların ikisi de şu an
+> **uygulanmış değil**. Aşağıda neyin garanti edildiği, neyin edilmediği açıkça yazılıdır.
 
-## Matematik Tasarımı: Strict IEEE-754
+## Şu an ne durumda?
 
-Tam (bit-exact) determinizm normalde I48F16 gibi Fixed-Point tamsayı matematiğini gerektirir çünkü FMA (Fused Multiply-Add) ve SIMD paralelizmi CPU mimarisine göre sonuçları saptırır. Gizmo Engine, bunu bir tamsayı kütüphanesine dönüştürmek yerine `glam`'ın float mantığını şu optimizasyonları ve engelleri aşarak IEEE-754 sınırlarında deterministik hale getirmiştir:
+Simülasyon durumu (`Transform`, `Velocity`, çözücü) tamamen **`glam` / `f32`** üzerinde
+çalışır. `gizmo-math` içindeki `Fp32` (Q16.16 sabit noktalı) tip **mevcut ama simülasyon
+tarafından kullanılmıyor** — bağımsız, deneysel bir yardımcıdır.
 
-### 1. Fast-Math Optimizasyonlarının Kapatılması
-Rust derleyicisi ve LLVM varsayılan olarak fast-math hedeflerine açık değildir. `gizmo-physics`, FMA talimatlarından kaynaklanan assosiyatif (associativity) farklılıklarını çözmek adına asit (strict) konfigürasyonlara uygun olarak çalışır. Aşağıdaki özellikleri `Cargo.toml` projelerinizde zorlamalısınız:
+| Senaryo | Durum |
+|---|---|
+| Aynı makine + aynı binary'de replay / rollback | ✅ Pratikte deterministik (aşağıdaki koşullarla) |
+| Aynı mimari, farklı derleme bayrakları | ⚠️ fast-math/FMA farklılıkları sapma yaratabilir |
+| Farklı CPU mimarileri (x86 ↔ ARM) bit-exact | ❌ **Garanti edilmiyor** (glam SIMD + transandantal fonksiyonlar) |
 
-```toml
-[profile.release]
-opt-level = 3
-lto = "fat"
-codegen-units = 1
-# DİKKAT: overflow-checks kapalı olmalı, fma disable olmalı.
-```
+## Aynı-makine determinizmi için sağlanan koşullar
 
-### 2. Standart LibM
-Aşkın matematiksel fonksiyonları (`sin`, `cos`, `sqrt`) işletim sistemi ve standard C kütüphanelerinde (`libc`) CPU çekirdeğine göre (Intel vs ARM) nano-farklılıklar barındırır.
-Gizmo platformlarında determinizmi aşmamak için donanımsal op kodlar yerine deterministik `libm` sandığının (crate) sağladığı float matematiğini izole edilmiş şekilde çalıştırabilme altyapısına sahibiz. Gizmo Math tamamen `core::f32` üzerindeki deterministic matematik uzantılarıyla desteklenir.
+- **Sıralama (ordering):** Çözücü, adaları (islands) ve gövdeleri indeks/entity-id'ye
+  göre işler; Rayon paralelliği sonucu değiştirmez (Gauss-Seidel toplamı sıradan bağımsız
+  birleşir). Hash tabanlı yapıların iterasyon sırasının çıktıyı etkilediği yerler
+  ayıklandı (ör. `quickhull` artık `BTreeMap`/`BTreeSet` kullanır — eskiden `HashMap`/`HashSet`
+  rastgele seed yüzünden convex hull çıktısını çalıştırmadan çalıştırmaya değiştiriyordu).
+- **Sabit zaman adımı:** `PhysicsWorld::step` bir accumulator ile sabit `dt` alt-adımları
+  (substep) çalıştırır; değişken kare süresi simülasyona sızmaz.
+- **Warm-starting:** Çözücü birikmiş impulse'ları sakladığından aynı giriş aynı çıkışı verir.
 
-## Mimari Özellikleri
+## Cross-platform bit-exact için ne gerekirdi (henüz YOK)
 
-- **Paralel Kilitlenmemesi (Parallel Determinism):** Rayon iş parçacıkları (Threads) çalıştırma sırasını rastgele atasa da; Gizmo Engine'in "Island Generation" (Adacık Sınıflandırma) ve "Graph Coloring" algoritmaları, obje çözümlerinde hafızayı (memory) indeks id'leriyle izler. Hangi nesnenin hangi işlemcide çözüldüğünden bağımsız olarak sırasal olarak tek bir Gauss-Seidel sonucunda buluşurlar.
-- **Sürtünme (Friction) ve Dürtü (Impulse):** Sürtünme katsayıları float epsilon hatalarını biriktirmemesi için "Warm-starting" algoritmasında 8-bit'lik offset toleransları ile eşiklenir. `system/solver.rs`'de `accumulated_j` değerleri bu tutarlılığı sağlar.
+Tam (bit-exact) cross-platform determinizm için tüm simülasyonun `f32` yerine `Fp32`
+sabit-noktalı matematikten geçmesi gerekir; çünkü:
 
-## Kullanım Testi
+- **SIMD & FMA:** `glam` SIMD yolları ve FMA (Fused Multiply-Add) komutları mimariye göre
+  farklı yuvarlama verir; result associativity CPU'ya bağlıdır.
+- **Transandantal fonksiyonlar:** `sin`/`cos`/`sqrt` donanım uygulamaları (Intel vs ARM)
+  nano-farklılıklar barındırır; bit-exact için `libm` gibi yazılımsal, sabit bir uygulama
+  şarttır.
+
+`Fp32` bu işin temelini sağlar ama `Transform`/`Velocity`/çözücü ona taşınmadıkça vaat
+edilemez. (Not: `Fp32::to_i32` artık sıfıra doğru kesiyor ve `+`/`-`/`*` doygunlukla
+sınırlanıyor — eskiden negatiflerde asimetrik yuvarlama ve sessiz i32 taşması vardı.)
+
+## Senkron kontrolü (sync check)
+
+İki tarafın durumunu hash'leyerek desync tespiti yapılabilir. **Doğru API ile**:
+
 ```rust
-// İki farklı makinede oyun durumlarını Hash bazlı denetleyebilirsiniz
-fn check_sync_state(world: &World) -> u64 {
+use std::hash::Hasher;
+use gizmo_physics_core::components::transform::Transform;
+
+fn check_sync_state(world: &gizmo_core::World) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for rb in world.query::<RigidBody>() {
-        hasher.write_u32(rb.position.x.to_bits());
-        hasher.write_u32(rb.position.y.to_bits());
-        hasher.write_u32(rb.position.z.to_bits());
+    let transforms = world.borrow::<Transform>();
+    // NOT: entity'leri SABİT bir sırada gez (id'ye göre) — aksi halde hash sırası değişir.
+    for ent in world.iter_alive_entities() {
+        if let Some(t) = transforms.get(ent.id()) {
+            for c in [t.position.x, t.position.y, t.position.z] {
+                hasher.write_u32(c.to_bits());
+            }
+        }
     }
     hasher.finish()
 }
 ```
 
-Bu belge doğrultusunda, motorun tüm AABB, DBVT ve Çözücü matematik döngüleri asenkron senaryolarda dahi çapraz platform uyumlu (Cross-Platform Parity) çalışmaktadır.
+Aynı makinede/binary'de bu hash adım adım eşleşmelidir. Farklı mimariler arasında
+eşleşme şu an **beklenmemelidir**.

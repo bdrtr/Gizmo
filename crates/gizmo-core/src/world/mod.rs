@@ -37,6 +37,12 @@ pub struct World {
     is_despawning: bool,
     pub(crate) entity_observers: HashMap<TypeId, Box<dyn std::any::Any + Send + Sync>>,
     pub tick: u32,
+    /// Değişiklik tespiti (change detection) referans tick'i: `Changed<T>`/`Added<T>`
+    /// filtreleri `ticks.changed > change_ref_tick` ile bu değere göre karşılaştırır.
+    /// Schedule, her frame başında bunu bir önceki frame'in tick'ine ayarlar; böylece
+    /// "son frame'den beri değişenler" doğru raporlanır. (Eskiden `== tick` idi ve tick
+    /// hiç ilerlemediği için ya hiçbir şeyi ya da her şeyi eşliyordu.)
+    pub change_ref_tick: u32,
 }
 
 impl World {
@@ -53,6 +59,7 @@ impl World {
             is_despawning: false,
             entity_observers: HashMap::new(),
             tick: 1,
+            change_ref_tick: 0,
         };
         world.insert_resource(crate::commands::CommandQueue::new());
         world.insert_resource(Entities::new());
@@ -88,6 +95,20 @@ impl World {
 
         // Apply topological memory alignment for caching locality
         self.sort_archetype_hierarchy();
+    }
+
+    /// Frame başında değişiklik-tespiti penceresini açar: bu frame'in karşılaştırma
+    /// referansını `ref_tick`'e (bir önceki çalıştırmanın tick'i) ayarlar ve dünya
+    /// tick'ini bu frame için ilerletir. `Changed<T>`/`Added<T>` filtreleri
+    /// `ticks.changed > change_ref_tick` ile karşılaştırır. Yeni tick'i döndürür.
+    /// (Sort yan-etkisi olan `increment_tick`'ten farklı olarak yalnızca sayaç ilerler.)
+    pub fn begin_change_frame(&mut self, ref_tick: u32) -> u32 {
+        self.change_ref_tick = ref_tick;
+        self.tick = self.tick.wrapping_add(1);
+        if self.tick == 0 {
+            self.tick = 1;
+        }
+        self.tick
     }
 
     /// Ertelenmiş komut kuyruğunu (CommandQueue) işler.
@@ -539,7 +560,6 @@ impl World {
     }
 
     /// Sisteme component ekleme — Veriyi archetype sütununa taşır.
-    
     pub fn add_bundle<B: crate::component::Bundle>(&mut self, entity: Entity, bundle: B) {
         if !self.is_alive(entity) { return; }
         let eid = entity.id();
@@ -560,7 +580,7 @@ impl World {
             }
         };
 
-        let mut new_types = self.archetype_index.archetypes[old_arch_id as usize].sorted_component_types();
+        let mut new_types = self.archetype_index.archetypes[old_arch_id].sorted_component_types();
         for info in &infos {
             if let Err(pos) = new_types.binary_search(&info.type_id) {
                 new_types.insert(pos, info.type_id);
@@ -619,7 +639,7 @@ impl World {
             None => return,
         };
 
-        let mut new_types = self.archetype_index.archetypes[old_arch_id as usize].sorted_component_types();
+        let mut new_types = self.archetype_index.archetypes[old_arch_id].sorted_component_types();
         for info in &infos {
             if let Ok(pos) = new_types.binary_search(&info.type_id) {
                 new_types.remove(pos);
@@ -671,7 +691,9 @@ impl World {
                 crate::archetype::sparse_set::ComponentSparseSet::new(info)
             });
             let ptr = &component as *const T as *const u8;
-            set.insert(eid, ptr, self.tick);
+            // SAFETY: `ptr`, set'in `info.layout`'u ile birebir eşleşen `T` bileşenini gösterir;
+            // sahiplik set'e devredilir ve aşağıda `forget` ile çift-drop engellenir.
+            unsafe { set.insert(eid, ptr, self.tick); }
             std::mem::forget(component);
 
             self.run_hooks(type_id, |h, w| {
@@ -700,8 +722,8 @@ impl World {
             // Zaten bu archetype'ta (aynı tip tekrar eklenmiş olabilir) — sadece üzerine yaz
             {
                 let arch = &self.archetype_index.archetypes[target_arch_id];
-                let col = arch
-                    .get_column_mut(type_id)
+                // SAFETY: query/scheduler bu archetype sütununa ayrık erişimi garanti eder.
+                let col = unsafe { arch.get_column_mut(type_id) }
                     .expect("component column missing in current archetype");
                 unsafe {
                     let ptr = col.get_ptr(old_loc.row as usize) as *mut T;
@@ -753,8 +775,8 @@ impl World {
         // 3. Yeni component'ı hedef archetype'a ekle
         {
             let arch = &self.archetype_index.archetypes[target_arch_id];
-            let col = arch
-                .get_column_mut(type_id)
+            // SAFETY: yeni satır bu archetype'a az önce ayrıldı; sütuna tekil erişim.
+            let col = unsafe { arch.get_column_mut(type_id) }
                 .expect("Mandatory component column missing");
             unsafe {
                 let ptr = col.get_ptr(new_row as usize) as *mut T;
@@ -826,7 +848,8 @@ impl World {
             return None;
         }
         let arch = &mut self.archetype_index.archetypes[loc.archetype_id as usize];
-        let col = arch.get_column_mut(type_id)?;
+        // SAFETY: &mut self ile tekil archetype erişimi; sütuna tekil &mut.
+        let col = unsafe { arch.get_column_mut(type_id) }?;
         Some(unsafe { col.get_mut_ptr(loc.row as usize) })
     }
 
@@ -943,7 +966,7 @@ impl World {
     ///     t.position += v.linear * dt;
     /// }
     /// ```
-    
+    ///
     /// Toplu (Batch) component ekleme. O(N) archetype lookup maliyetini O(1)'e düşürür.
     pub fn insert_batch<T: Component + Clone>(&mut self, entities: &[Entity], component: T) {
         if T::storage_type() == crate::component::StorageType::SparseSet {
@@ -976,7 +999,8 @@ impl World {
 
             if source_arch_id == target_arch_id as u32 {
                 let arch = &self.archetype_index.archetypes[target_arch_id];
-                let col = arch.get_column_mut(type_id).unwrap();
+                // SAFETY: batch insert sırasında bu sütuna tekil erişim.
+                let col = unsafe { arch.get_column_mut(type_id) }.unwrap();
                 for e in &group_entities {
                     let row = self.entity_locations[e.id() as usize].row as usize;
                     unsafe {
@@ -1011,7 +1035,8 @@ impl World {
 
                 {
                     let arch = &self.archetype_index.archetypes[target_arch_id];
-                    let col = arch.get_column_mut(type_id).unwrap();
+                    // SAFETY: yeni ayrılan satır; sütuna tekil erişim.
+                    let col = unsafe { arch.get_column_mut(type_id) }.unwrap();
                     unsafe {
                         std::ptr::write(col.get_ptr(new_row as usize) as *mut T, component.clone());
                         col.ticks_ptr_mut().add(new_row as usize).write(crate::archetype::ComponentTicks::new(self.tick));
@@ -1543,13 +1568,13 @@ mod tests {
         
         let loc1 = world.entity_location(e.id());
         
-        world.add_component(e, TestCompF32(3.14));
+        world.add_component(e, TestCompF32(2.5));
         
         let loc2 = world.entity_location(e.id());
         assert_ne!(loc1.archetype_id, loc2.archetype_id);
         
         assert_eq!(world.borrow::<TestCompI32>().get(e.id()).unwrap().0, 10);
-        assert_eq!(world.borrow::<TestCompF32>().get(e.id()).unwrap().0, 3.14);
+        assert_eq!(world.borrow::<TestCompF32>().get(e.id()).unwrap().0, 2.5);
     }
 
     #[test]

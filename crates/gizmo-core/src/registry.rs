@@ -24,6 +24,12 @@ pub type GetJsonFn = fn(*const u8) -> Result<serde_json::Value, String>;
 /// Type alias for component JSON setter function pointers.
 pub type SetJsonFn =
     fn(&mut crate::world::World, crate::entity::Entity, serde_json::Value) -> Result<(), String>;
+/// Type alias for reflection-based component insertion function pointers.
+pub type InsertReflectFn = fn(
+    &mut crate::world::World,
+    crate::entity::Entity,
+    &dyn bevy_reflect::PartialReflect,
+) -> Result<(), String>;
 
 /// ECS tabanlı opsiyonel reflection yeteneklerini taşıyan serileştirme yapısı
 pub struct TypeRegistration {
@@ -34,7 +40,7 @@ pub struct TypeRegistration {
     pub get_json_fn: Option<GetJsonFn>,
     pub set_json_fn: Option<SetJsonFn>,
     pub get_reflect_ptr_fn: Option<fn(*const u8) -> *const dyn bevy_reflect::Reflect>,
-    pub insert_reflect_fn: Option<fn(&mut crate::world::World, crate::entity::Entity, &dyn bevy_reflect::PartialReflect) -> Result<(), String>>,
+    pub insert_reflect_fn: Option<InsertReflectFn>,
 }
 
 /// Component tiplerini isme göre sorgulama ve yönetim kaydı.

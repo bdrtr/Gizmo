@@ -5,6 +5,20 @@ use gizmo_math::Vec3;
 const EPA_TOLERANCE: f32 = 0.001;
 const EPA_MAX_ITERATIONS: usize = 32;
 
+/// GJK/EPA simpleksindeki tek bir köşe: Minkowski-fark noktası ve onu üreten
+/// her iki şekildeki destek (witness) noktaları. Witness'ler EPA sonunda doğru
+/// temas noktasını barycentric olarak geri kurmak için taşınır — aksi halde
+/// temas noktası yanlış özelliğe (ör. tekerlek merkezine) düşebiliyordu.
+#[derive(Clone, Copy)]
+struct SupportPoint {
+    /// Minkowski farkı: support_a(d) - support_b(-d)
+    v: Vec3,
+    /// A şekli üzerindeki destek noktası (witness)
+    a: Vec3,
+    /// B şekli üzerindeki destek noktası (witness)
+    b: Vec3,
+}
+
 pub struct Gjk;
 
 impl Gjk {
@@ -20,7 +34,7 @@ impl Gjk {
         let support = |dir: Vec3| {
             let sa = Self::support_point(shape_a, pos_a, rot_a, dir);
             let sb = Self::support_point(shape_b, pos_b, rot_b, -dir);
-            sa - sb
+            SupportPoint { v: sa - sb, a: sa, b: sb }
         };
 
         Self::gjk_with_simplex(support).is_some()
@@ -38,7 +52,7 @@ impl Gjk {
         let support = |dir: Vec3| {
             let sa = Self::support_point(shape_a, pos_a, rot_a, dir);
             let sb = Self::support_point(shape_b, pos_b, rot_b, -dir);
-            sa - sb
+            SupportPoint { v: sa - sb, a: sa, b: sb }
         };
 
         if let Some(simplex) = Self::gjk_with_simplex(support) {
@@ -61,16 +75,16 @@ impl Gjk {
     }
 
     /// GJK that returns the final simplex for EPA
-    fn gjk_with_simplex<F>(support: F) -> Option<Vec<Vec3>>
+    fn gjk_with_simplex<F>(support: F) -> Option<Vec<SupportPoint>>
     where
-        F: Fn(Vec3) -> Vec3,
+        F: Fn(Vec3) -> SupportPoint,
     {
-        let mut simplex = Vec::with_capacity(4);
+        let mut simplex: Vec<SupportPoint> = Vec::with_capacity(4);
         let mut direction = Vec3::new(1.0, 0.0, 0.0);
 
         // First point
         simplex.push(support(direction));
-        direction = -simplex[0];
+        direction = -simplex[0].v;
 
         // FIX 3: More robust degenerate direction fallback — derive from existing simplex
         // rather than always falling back to Vec3::X which can be parallel to the simplex
@@ -79,7 +93,7 @@ impl Gjk {
             direction = direction.try_normalize().unwrap_or_else(|| {
                 // Derive a perpendicular direction from the current simplex
                 if simplex.len() >= 2 {
-                    let edge = simplex[simplex.len() - 1] - simplex[0];
+                    let edge = simplex[simplex.len() - 1].v - simplex[0].v;
                     let perp = if edge.x.abs() <= edge.y.abs() && edge.x.abs() <= edge.z.abs() {
                         Vec3::new(1.0, 0.0, 0.0)
                     } else if edge.y.abs() <= edge.z.abs() {
@@ -95,7 +109,7 @@ impl Gjk {
 
             let a = support(direction);
 
-            if a.dot(direction) < 0.0 {
+            if a.v.dot(direction) < 0.0 {
                 return None; // No collision
             }
 
@@ -357,7 +371,7 @@ impl Gjk {
         None
     }
 
-    fn handle_simplex(simplex: &mut Vec<Vec3>, direction: &mut Vec3) -> bool {
+    fn handle_simplex(simplex: &mut Vec<SupportPoint>, direction: &mut Vec3) -> bool {
         match simplex.len() {
             2 => Self::line_case(simplex, direction),
             3 => Self::triangle_case(simplex, direction),
@@ -366,9 +380,9 @@ impl Gjk {
         }
     }
 
-    fn line_case(simplex: &mut Vec<Vec3>, direction: &mut Vec3) -> bool {
-        let a = simplex[1];
-        let b = simplex[0];
+    fn line_case(simplex: &mut Vec<SupportPoint>, direction: &mut Vec3) -> bool {
+        let a = simplex[1].v;
+        let b = simplex[0].v;
 
         let ab = b - a;
         let ao = -a;
@@ -391,14 +405,14 @@ impl Gjk {
         false
     }
 
-    fn triangle_case(simplex: &mut Vec<Vec3>, direction: &mut Vec3) -> bool {
+    fn triangle_case(simplex: &mut Vec<SupportPoint>, direction: &mut Vec3) -> bool {
         let a = simplex[2];
         let b = simplex[1];
         let c = simplex[0];
 
-        let ab = b - a;
-        let ac = c - a;
-        let ao = -a;
+        let ab = b.v - a.v;
+        let ac = c.v - a.v;
+        let ao = -a.v;
 
         let abc = ab.cross(ac);
 
@@ -449,11 +463,11 @@ impl Gjk {
         false
     }
 
-    fn tetrahedron_case(simplex: &mut Vec<Vec3>, direction: &mut Vec3) -> bool {
-        let a = simplex[3];
-        let b = simplex[2];
-        let c = simplex[1];
-        let d = simplex[0];
+    fn tetrahedron_case(simplex: &mut Vec<SupportPoint>, direction: &mut Vec3) -> bool {
+        let a = simplex[3].v;
+        let b = simplex[2].v;
+        let c = simplex[1].v;
+        let d = simplex[0].v;
 
         let ab = b - a;
         let ac = c - a;
@@ -485,7 +499,7 @@ impl Gjk {
 
     /// EPA (Expanding Polytope Algorithm) for contact information
     fn epa(
-        mut simplex: Vec<Vec3>,
+        mut simplex: Vec<SupportPoint>,
         shape_a: &ColliderShape,
         pos_a: Vec3,
         rot_a: gizmo_math::Quat,
@@ -496,7 +510,7 @@ impl Gjk {
         let support = |dir: Vec3| {
             let sa = Self::support_point(shape_a, pos_a, rot_a, dir);
             let sb = Self::support_point(shape_b, pos_b, rot_b, -dir);
-            sa - sb
+            SupportPoint { v: sa - sb, a: sa, b: sb }
         };
 
         let mut faces: Vec<(usize, usize, usize)> = Vec::new();
@@ -510,7 +524,7 @@ impl Gjk {
             for (a, b, c) in initial_faces {
                 let n = Self::compute_face_normal(&simplex, a, b, c);
                 // Guarantee outward orientation: n · v_a > 0
-                if n.dot(simplex[a]) >= 0.0 {
+                if n.dot(simplex[a].v) >= 0.0 {
                     faces.push((a, b, c));
                 } else {
                     faces.push((a, c, b)); // flip winding
@@ -524,7 +538,7 @@ impl Gjk {
             let (_closest_face_idx, normal, distance) = Self::find_closest_face(&simplex, &faces)?;
 
             let support_point = support(normal);
-            let support_distance = support_point.dot(normal);
+            let support_distance = support_point.v.dot(normal);
 
             if support_distance - distance < EPA_TOLERANCE {
                 break;
@@ -538,7 +552,7 @@ impl Gjk {
             while i < faces.len() {
                 let (a, b, c) = faces[i];
                 let face_normal = Self::compute_face_normal(&simplex, a, b, c);
-                let to_point = simplex[new_point_idx] - simplex[a];
+                let to_point = simplex[new_point_idx].v - simplex[a].v;
 
                 if face_normal.dot(to_point) > 0.0 {
                     Self::add_edge(&mut edges, a, b);
@@ -556,7 +570,7 @@ impl Gjk {
                 let b = *e2;
                 let c = new_point_idx;
                 let n = Self::compute_face_normal(&simplex, a, b, c);
-                if n.dot(simplex[a]) >= 0.0 {
+                if n.dot(simplex[a].v) >= 0.0 {
                     faces.push((a, b, c));
                 } else {
                     faces.push((b, a, c)); // flip winding
@@ -566,21 +580,34 @@ impl Gjk {
 
         let (closest_idx, normal, penetration) = Self::find_closest_face(&simplex, &faces)?;
 
-        // FIX 1 + FIX 2: Correct support directions and barycentric contact point.
+        // Temas noktası: en yakın EPA yüzündeki Minkowski köşelerinin origin'e en
+        // yakın noktasının barycentric ağırlıkları, AYNI köşelerin SAKLANAN witness
+        // (support) noktalarına uygulanır. Bu, temas noktasını her iki yüzeyde de
+        // doğru özelliğe (köşe/kenar/yüz) yerleştirir.
         //
-        // normal points from Minkowski surface outward (i.e., from B toward A in world space).
-        // shape_a's extreme point in +normal direction = the deepest point of A along the contact.
-        // shape_b's extreme point in -normal direction = the deepest point of B along the contact.
-        let pt_a = Self::support_point(shape_a, pos_a, rot_a, normal); // was -normal — FIXED
-        let pt_b = Self::support_point(shape_b, pos_b, rot_b, -normal); // correct, unchanged
-
-        // FIX 2: Barycentric interpolation on the closest EPA face for a more accurate
-        // contact point, especially for box corner/edge collisions.
+        // Witness'ler taşınmadan önce support yönleri Minkowski köşelerinden "tahmin"
+        // ediliyordu — bu anlamsızdı ve teması yanlış yere (ör. tekerlek merkezine)
+        // koyabiliyordu. Artık doğru.
         let (fa, fb, fc) = faces[closest_idx];
-        let contact_point = Self::barycentric_contact_point(
-            &simplex, fa, fb, fc, normal, shape_a, pos_a, rot_a, shape_b, pos_b, rot_b,
-        )
-        .unwrap_or_else(|| (pt_a + pt_b) * 0.5);
+        let sa = simplex[fa];
+        let sb = simplex[fb];
+        let sc = simplex[fc];
+
+        // Origin'in yüze izdüşümü = normal * penetration (en yakın yüz origin'den bu uzaklıkta).
+        let closest_on_face = normal * penetration;
+        let contact_point = match Self::barycentric_coords(sa.v, sb.v, sc.v, closest_on_face) {
+            Some((u, v, w)) => {
+                let pt_a = sa.a * u + sb.a * v + sc.a * w; // A yüzeyindeki temas
+                let pt_b = sa.b * u + sb.b * v + sc.b * w; // B yüzeyindeki temas
+                (pt_a + pt_b) * 0.5
+            }
+            None => {
+                // Dejenere yüz: deepest-support orta-noktasına düş.
+                let pt_a = Self::support_point(shape_a, pos_a, rot_a, -normal);
+                let pt_b = Self::support_point(shape_b, pos_b, rot_b, normal);
+                (pt_a + pt_b) * 0.5
+            }
+        };
 
         Some(ContactPoint {
             point: contact_point,
@@ -591,47 +618,6 @@ impl Gjk {
             normal_impulse: 0.0,
             tangent_impulse: Vec3::ZERO,
         })
-    }
-
-    /// Compute the contact point via barycentric coordinates of the closest EPA face.
-    /// Each Minkowski vertex v_i = support_a(d_i) - support_b(-d_i).
-    /// The contact point on A is: sum(w_i * support_a(d_i)), and similarly for B.
-    /// We approximate by projecting the origin onto the closest face and using those weights.
-    fn barycentric_contact_point(
-        simplex: &[Vec3],
-        a: usize,
-        b: usize,
-        c: usize,
-        _normal: Vec3,
-        shape_a: &ColliderShape,
-        pos_a: Vec3,
-        rot_a: gizmo_math::Quat,
-        shape_b: &ColliderShape,
-        pos_b: Vec3,
-        rot_b: gizmo_math::Quat,
-    ) -> Option<Vec3> {
-        let va = simplex[a];
-        let vb = simplex[b];
-        let vc = simplex[c];
-
-        // Project origin onto the triangle plane and compute barycentric weights
-        let (u, v, w) = Self::barycentric_coords(va, vb, vc, Vec3::ZERO)?;
-
-        // Recover the original support directions for each Minkowski vertex.
-        // This is an approximation: we use the vertex positions as direction hints.
-        // For exact results one would cache the per-vertex support directions during GJK/EPA.
-        let dir_a = va.try_normalize().unwrap_or(Vec3::X);
-        let dir_b = vb.try_normalize().unwrap_or(Vec3::X);
-        let dir_c = vc.try_normalize().unwrap_or(Vec3::X);
-
-        let pt_a = u * Self::support_point(shape_a, pos_a, rot_a, dir_a)
-            + v * Self::support_point(shape_a, pos_a, rot_a, dir_b)
-            + w * Self::support_point(shape_a, pos_a, rot_a, dir_c);
-        let pt_b = u * Self::support_point(shape_b, pos_b, rot_b, -dir_a)
-            + v * Self::support_point(shape_b, pos_b, rot_b, -dir_b)
-            + w * Self::support_point(shape_b, pos_b, rot_b, -dir_c);
-
-        Some((pt_a + pt_b) * 0.5)
     }
 
     /// Barycentric coordinates of point p projected onto triangle (a, b, c).
@@ -674,7 +660,7 @@ impl Gjk {
     }
 
     fn find_closest_face(
-        simplex: &[Vec3],
+        simplex: &[SupportPoint],
         faces: &[(usize, usize, usize)],
     ) -> Option<(usize, Vec3, f32)> {
         let mut min_distance = f32::INFINITY;
@@ -683,7 +669,7 @@ impl Gjk {
 
         for (i, &(a, b, c)) in faces.iter().enumerate() {
             let normal = Self::compute_face_normal(simplex, a, b, c);
-            let distance = normal.dot(simplex[a]);
+            let distance = normal.dot(simplex[a].v);
 
             if distance < min_distance {
                 min_distance = distance;
@@ -699,12 +685,12 @@ impl Gjk {
         }
     }
 
-    fn compute_face_normal(simplex: &[Vec3], a: usize, b: usize, c: usize) -> Vec3 {
-        let ab = simplex[b] - simplex[a];
-        let ac = simplex[c] - simplex[a];
+    fn compute_face_normal(simplex: &[SupportPoint], a: usize, b: usize, c: usize) -> Vec3 {
+        let ab = simplex[b].v - simplex[a].v;
+        let ac = simplex[c].v - simplex[a].v;
         let normal_raw = ab.cross(ac);
         // Ensure outward orientation (away from origin)
-        if normal_raw.dot(simplex[a]) < 0.0 {
+        if normal_raw.dot(simplex[a].v) < 0.0 {
             -normal_raw.try_normalize().unwrap_or(Vec3::X)
         } else {
             normal_raw.try_normalize().unwrap_or(Vec3::X)

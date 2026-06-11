@@ -90,18 +90,32 @@ impl JointSolver {
                         idx_b,
                         dt,
                     ),
-                    "Spring" => self.solve_spring_joint(
-                        joint,
-                        rigid_bodies,
-                        transforms,
-                        velocities,
-                        idx_a,
-                        idx_b,
-                        dt,
-                    ),
+                    // Spring kuvvet-tabanlıdır (pozisyona bağlı, hıza değil); iterasyon
+                    // döngüsünün İÇİNDE çalıştırılırsa kuvvet ~iterations kez uygulanırdı.
+                    // Döngü dışında bir kez uygulanır (aşağıya bakınız).
+                    "Spring" => {}
                     _ => {}
                 }
             }
+        }
+
+        // ── Kuvvet-tabanlı eklemler: step başına BİR kez ──────────────────
+        // Yay kuvveti pozisyona bağlı olduğundan velocity-solver iterasyonları
+        // boyunca sabittir; döngü dışında tek sefer uygulanmalıdır.
+        for joint in joints.iter_mut() {
+            if joint.is_broken || joint.joint_type() != "Spring" {
+                continue;
+            }
+            let (Some(idx_a), Some(idx_b)) = (
+                entity_index_map.get(&joint.entity_a.id()).copied(),
+                entity_index_map.get(&joint.entity_b.id()).copied(),
+            ) else {
+                continue;
+            };
+            if idx_a == idx_b {
+                continue;
+            }
+            self.solve_spring_joint(joint, rigid_bodies, transforms, velocities, idx_a, idx_b, dt);
         }
     }
 
@@ -458,7 +472,10 @@ impl JointSolver {
             if k > 1e-10 {
                 let rel_vel = (w_b - w_a).dot(axis_w);
                 let vel_err = data.motor_target_velocity - rel_vel;
-                let max_impulse = data.motor_max_force * dt;
+                // Step başına toplam motor impulse bütçesini iterasyonlara böl; aksi
+                // halde her iterasyon ayrı sınırlandığından motor ~iterations kat fazla
+                // kuvvet uygulardı.
+                let max_impulse = data.motor_max_force * dt / self.iterations.max(1) as f32;
                 let lambda = (vel_err / k).clamp(-max_impulse, max_impulse);
 
                 let delta_a = inv_i_a.mul_vec3(axis_w) * lambda;
@@ -720,7 +737,8 @@ impl JointSolver {
 
         // 4. Motor — velocity along axis
         if data.use_motor {
-            let max_impulse = data.motor_max_force * dt;
+            // Step başına toplam motor impulse bütçesini iterasyonlara böl (bkz. hinge motor).
+            let max_impulse = data.motor_max_force * dt / self.iterations.max(1) as f32;
 
             let v_a = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
             let v_b = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);

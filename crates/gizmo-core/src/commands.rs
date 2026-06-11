@@ -206,7 +206,7 @@ mod tests {
             commands
                 .spawn()
                 .insert(ComponentA(100))
-                .insert(ComponentB(3.14));
+                .insert(ComponentB(2.5));
         });
 
         schedule.run(&mut world, 0.1);
@@ -215,7 +215,7 @@ mod tests {
         if let Some(q) = world.query::<(&ComponentA, &ComponentB)>() {
             for (_, (ca, cb)) in q.iter() {
                 assert_eq!(ca.0, 100);
-                assert_eq!(cb.0, 3.14);
+                assert_eq!(cb.0, 2.5);
                 count += 1;
             }
         }

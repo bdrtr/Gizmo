@@ -452,10 +452,9 @@ macro_rules! impl_distributive_run_if {
             $($S: IntoSystem<$P> + 'static,)+
         {
             fn distributive_run_if<ParamC, Cond: IntoCondition<ParamC> + Clone + Send + Sync + 'static>(self, cond: Cond) -> Box<dyn System> {
-                let mut systems: Vec<Box<dyn System>> = Vec::new();
-                $(
-                    systems.push(self.$idx.into_system().run_if_sys(cond.clone()));
-                )+
+                let systems: Vec<Box<dyn System>> = vec![
+                    $(self.$idx.into_system().run_if_sys(cond.clone()),)+
+                ];
 
                 struct MacroSystem {
                     systems: Vec<Box<dyn System>>,
@@ -805,6 +804,9 @@ pub struct Schedule {
     /// Geriye dönük uyumluluk: faz kullanılmadığında eski düz batch listesi.
     legacy_batches: Vec<SystemBatch>,
     uses_phases: bool,
+    /// Bu schedule'ın en son çalıştığı dünya tick'i — değişiklik tespiti (change
+    /// detection) için referans. Her `run`'da bir önceki değerle karşılaştırma yapılır.
+    last_run_tick: u32,
 }
 
 impl Schedule {
@@ -815,6 +817,7 @@ impl Schedule {
             phase_batches: Vec::new(),
             legacy_batches: Vec::new(),
             uses_phases: false,
+            last_run_tick: 0,
         }
     }
 
@@ -1057,6 +1060,13 @@ impl Schedule {
             self.build();
         }
 
+        // ── Değişiklik tespiti (change detection) penceresi ───────────────
+        // Bu frame'in karşılaştırma referansını bir önceki çalıştırmanın tick'ine
+        // ayarla ve dünya tick'ini ilerlet. Böylece `Changed<T>`/`Added<T>` "son
+        // çalıştırmadan beri değişenleri" raporlar. Referans tek seferde (paralel
+        // batch'lerden ÖNCE) ayarlandığından paralel sistemler arasında yarış yok.
+        world.begin_change_frame(self.last_run_tick);
+
         if self.uses_phases {
             // Fazları sırasıyla çalıştır: PreUpdate → Update → Physics → PostUpdate → Render
             for (_phase, batches) in &mut self.phase_batches {
@@ -1067,6 +1077,9 @@ impl Schedule {
             // Legacy mod: düz batch listesi
             Self::run_batches(&mut self.legacy_batches, world, dt);
         }
+
+        // Bir sonraki frame'in referansı: bu frame'in tick'i.
+        self.last_run_tick = world.tick;
 
         // Frame profiling verisini kaydet (ring buffer'a yaz)
         if let Some(mut profiler) = world.get_resource_mut::<crate::profiler::FrameProfiler>() {

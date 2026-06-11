@@ -194,9 +194,11 @@ impl Raycast {
             let h = k1 * k1 - k2 * k0;
             if h >= 0.0 {
                 let t = (-k1 - h.sqrt()) / k2;
-                // Check if hit is within cylinder height
+                // Check if hit is within cylinder height AND in front of the ray.
+                // (`t > 0.0` eksikti: ışının ARKASINDAKİ kapsül negatif t ile sahte
+                // isabet döndürüyordu — küre-cap dalı zaten t>0 kontrol ediyor.)
                 let y = baoc + t * bard;
-                if y > 0.0 && y < baba {
+                if t > 0.0 && y > 0.0 && y < baba {
                     let hit_point = local_origin + local_dir * t;
                     let normal = (hit_point - (p1 + ba * (y / baba)))
                         .try_normalize()
