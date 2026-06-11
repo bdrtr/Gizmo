@@ -943,4 +943,63 @@ mod tests {
             final_chassis_pos.x
         );
     }
+
+    /// 2-tangent sürtünme, eksen-hizalı olmayan (diyagonal) bir kaymayı her iki
+    /// tangent bileşeninde simetrik yavaşlatıp durdurmalı. Eski tek-tangent yöntemi
+    /// birikmiş impulsun dik bileşenini kaybedebiliyordu.
+    #[test]
+    fn friction_decelerates_diagonal_slide_symmetrically() {
+        let mut world = PhysicsWorld::new();
+        world.integrator.gravity = Vec3::new(0.0, -10.0, 0.0);
+
+        let mut ground = RigidBody::new_static();
+        ground.friction = 0.9;
+        ground.wake_up();
+        world.add_body(
+            Entity::new(0, 0),
+            ground,
+            Transform::new(Vec3::new(0.0, -0.5, 0.0)),
+            Velocity::default(),
+            Collider::box_collider(Vec3::new(100.0, 0.5, 100.0)),
+        );
+
+        // Diyagonal kayan kutu (vx = vz); dönmeyi kilitle → saf öteleme sürtünmesi.
+        let mut rb = RigidBody::new(1.0, 0.0, 0.9, true);
+        rb.lock_rotation_x = true;
+        rb.lock_rotation_y = true;
+        rb.lock_rotation_z = true;
+        rb.wake_up();
+        let col = Collider::box_collider(Vec3::new(0.5, 0.5, 0.5));
+        rb.update_inertia_from_collider(&col);
+        world.add_body(
+            Entity::new(1, 0),
+            rb,
+            Transform::new(Vec3::new(0.0, 0.5, 0.0)),
+            Velocity::new(Vec3::new(3.0, 0.0, 3.0)),
+            col,
+        );
+
+        for _ in 0..10 {
+            world.step(1.0 / 60.0).unwrap();
+        }
+        let v_mid = world.velocities[1].linear;
+        let speed_mid = (v_mid.x * v_mid.x + v_mid.z * v_mid.z).sqrt();
+
+        for _ in 0..150 {
+            world.step(1.0 / 60.0).unwrap();
+        }
+        let v_end = world.velocities[1].linear;
+        let speed_end = (v_end.x * v_end.x + v_end.z * v_end.z).sqrt();
+
+        // Simetri: x ve z bileşenleri yakın kalmalı (dik bileşen kaybolmaz).
+        assert!(
+            (v_mid.x - v_mid.z).abs() < 0.2,
+            "diyagonal simetri bozuldu: vx={} vz={}",
+            v_mid.x,
+            v_mid.z
+        );
+        // Sürtünme belirgin yavaşlatıp neredeyse durdurmalı.
+        assert!(speed_end < speed_mid, "yavaşlamadı: {speed_mid} -> {speed_end}");
+        assert!(speed_end < 0.5, "durmaya yakın olmalı, kalan hız: {speed_end}");
+    }
 }
