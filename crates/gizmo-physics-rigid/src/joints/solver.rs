@@ -215,9 +215,15 @@ impl JointSolver {
         let dyn_a = rigid_bodies[idx_a].is_dynamic();
         let dyn_b = rigid_bodies[idx_b].is_dynamic();
 
-        let ang_a = (inv_i_a.mul_vec3(r_a).cross(direction)).cross(r_a);
-        let ang_b = (inv_i_b.mul_vec3(r_b).cross(direction)).cross(r_b);
-        let k = inv_m_a + inv_m_b + ang_a.dot(direction) + ang_b.dot(direction);
+        // Efektif kütlenin açısal terimi: Jacobian açısal kısmı (r×n) olmak üzere
+        // k_ang = (r×n)·I⁻¹·(r×n). (Eskiden ((I⁻¹ r)×n)×r·n hesaplanıyordu — farklı bir
+        // nicelik; merkez-dışı ankor + anizotropik atalette yanlış impulse büyüklüğü.)
+        let rxn_a = r_a.cross(direction);
+        let rxn_b = r_b.cross(direction);
+        let k = inv_m_a
+            + inv_m_b
+            + inv_i_a.mul_vec3(rxn_a).dot(rxn_a)
+            + inv_i_b.mul_vec3(rxn_b).dot(rxn_b);
         if k < 1e-10 {
             return 0.0;
         }
@@ -752,9 +758,13 @@ impl JointSolver {
             let dyn_a = rigid_bodies[idx_a].is_dynamic();
             let dyn_b = rigid_bodies[idx_b].is_dynamic();
 
-            let ang_a = (inv_i_a.mul_vec3(r_a).cross(axis_w)).cross(r_a);
-            let ang_b = (inv_i_b.mul_vec3(r_b).cross(axis_w)).cross(r_b);
-            let k = inv_m_a + inv_m_b + ang_a.dot(axis_w) + ang_b.dot(axis_w);
+            // k_ang = (r×axis)·I⁻¹·(r×axis) — bkz. apply_linear_constraint düzeltmesi.
+            let rxa_a = r_a.cross(axis_w);
+            let rxa_b = r_b.cross(axis_w);
+            let k = inv_m_a
+                + inv_m_b
+                + inv_i_a.mul_vec3(rxa_a).dot(rxa_a)
+                + inv_i_b.mul_vec3(rxa_b).dot(rxa_b);
             if k > 1e-10 {
                 let lambda = (vel_err / k).clamp(-max_impulse, max_impulse);
                 let impulse = axis_w * lambda;
@@ -915,6 +925,55 @@ mod tests {
         } else {
             panic!("expected spring data");
         }
+    }
+
+    /// 1-DOF doğrusal hız kısıtı, DOĞRU efektif kütleyle tek uygulamada ankor
+    /// noktalarındaki bağıl hızı tam olarak sıfırlar (λ = -Jv/k, yeni Jv = Jv + kλ = 0).
+    /// Yanlış `k` ile (eski `((I⁻¹r)×n)×r·n`) over/undershoot olur ve bağıl hız ≠ 0 kalır;
+    /// bu test bu yüzden doğru çapraz-çarpım sırasını ayırt eder.
+    #[test]
+    fn linear_constraint_zeroes_relative_velocity_with_correct_effective_mass() {
+        let solver = JointSolver::default();
+
+        let body = || {
+            let mut rb = RigidBody::new(1.0, 0.0, 0.5, false);
+            rb.local_inertia = Vec3::new(2.0, 5.0, 8.0); // anizotropik atalet
+            rb
+        };
+        let bodies = [body(), body()];
+        let transforms = [Transform::new(Vec3::ZERO), Transform::new(Vec3::ZERO)];
+        let mut vels = [
+            Velocity::default(),
+            Velocity::new(Vec3::new(0.0, 1.0, 0.0)), // B ankora göre Y'de bağıl hız
+        ];
+
+        // Merkez-dışı ankorlar (bug bu durumda ortaya çıkar).
+        let r_a = Vec3::new(0.3, 0.0, 0.0);
+        let r_b = Vec3::new(-0.2, 0.1, 0.0);
+        let direction = Vec3::Y;
+
+        solver.apply_linear_constraint(
+            &bodies,
+            &transforms,
+            &mut vels,
+            0,
+            1,
+            direction,
+            r_a,
+            r_b,
+            0.0, // pozisyon hatası yok → saf hız kısıtı
+            1.0 / 60.0,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+        );
+
+        let v_a = vels[0].linear + vels[0].angular.cross(r_a);
+        let v_b = vels[1].linear + vels[1].angular.cross(r_b);
+        let rel_n = (v_b - v_a).dot(direction);
+        assert!(
+            rel_n.abs() < 1e-5,
+            "tek uygulamada bağıl hız sıfırlanmalı; kalan = {rel_n} (yanlış efektif kütle?)"
+        );
     }
 
     #[test]
