@@ -1119,6 +1119,8 @@ impl World {
         }
     }
 
+    /// **Ham `u32` id ile — generation kontrolü yapmaz.** Despawn+reuse sonrası yanlış
+    /// entity'nin verisi dönebilir; canlılık kritikse önce [`World::is_alive`] çağırın.
     pub fn query_entity_mut<'w, Q: crate::query::WorldQuery>(
         &'w mut self,
         entity_id: u32,
@@ -1133,7 +1135,7 @@ impl World {
         }
         unsafe {
             let fetch = Q::fetch_raw(self, arch, self.tick)?;
-            if !Q::filter_row(fetch, loc.row as usize, entity_id, self.tick) {
+            if !Q::filter_row(fetch, loc.row as usize, entity_id, self.change_ref_tick) {
                 return None;
             }
             Some(Q::get_item(fetch, loc.row as usize, entity_id))
@@ -1141,6 +1143,8 @@ impl World {
     }
 
     /// Tek bir entity üzerinde read-only `Query` çalıştırıp anında sonuç almanızı sağlar.
+    ///
+    /// **Ham `u32` id ile — generation kontrolü yapmaz** (bkz. [`World::query_entity_mut`]).
     pub fn query_entity<'w, Q: crate::query::WorldQuery>(
         &'w self,
         entity_id: u32,
@@ -1155,7 +1159,7 @@ impl World {
         }
         unsafe {
             let fetch = Q::fetch_raw(self, arch, self.tick)?;
-            if !Q::filter_row(fetch, loc.row as usize, entity_id, self.tick) {
+            if !Q::filter_row(fetch, loc.row as usize, entity_id, self.change_ref_tick) {
                 return None;
             }
             Some(Q::get_item(fetch, loc.row as usize, entity_id))

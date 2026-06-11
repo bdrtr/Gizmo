@@ -1,4 +1,5 @@
 use crate::archetype::Archetype;
+use crate::entity::Entity;
 use crate::world::World;
 use std::any::TypeId;
 use std::marker::PhantomData;
@@ -249,6 +250,10 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         self.iter_chunks()
     }
 
+    /// Ham `u32` id ile erişim. **DİKKAT: generation kontrolü YAPMAZ.** Despawn edilip
+    /// slotu yeniden kullanılan bir id verilirse, o slottaki YENİ entity'nin verisi
+    /// döner (use-after-free benzeri sessiz hata). Elinizde bir [`Entity`] handle'ı varsa
+    /// [`Query::get_entity`] kullanın — o, generation'ı doğrular.
     #[inline]
     pub fn get(&self, entity_id: u32) -> Option<Q::Item<'_>> {
         let loc = self.world.entity_location(entity_id);
@@ -265,9 +270,27 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         }
     }
 
+    /// Ham `u32` id ile mutable erişim — generation kontrolü yapmaz (bkz. [`Query::get`]).
     #[inline]
     pub fn get_mut(&self, entity_id: u32) -> Option<Q::Item<'_>> {
         self.get(entity_id)
+    }
+
+    /// Generation-doğrulamalı erişim: `entity` artık canlı değilse (despawn edilmiş veya
+    /// slotu başka bir entity'ye verilmiş) `None` döner. Stale-handle ile yanlış entity'nin
+    /// verisini okumayı engeller. Elinizde bir [`Entity`] handle'ı varsa bunu tercih edin.
+    #[inline]
+    pub fn get_entity(&self, entity: Entity) -> Option<Q::Item<'_>> {
+        if !self.world.is_alive(entity) {
+            return None;
+        }
+        self.get(entity.id())
+    }
+
+    /// Generation-doğrulamalı mutable erişim (bkz. [`Query::get_entity`]).
+    #[inline]
+    pub fn get_mut_entity(&self, entity: Entity) -> Option<Q::Item<'_>> {
+        self.get_entity(entity)
     }
 
     #[inline]
@@ -843,5 +866,34 @@ mod tests {
             }
         }
         assert_eq!(world.query::<Changed<Position>>().unwrap().iter().count(), 1);
+    }
+
+    /// `get_entity` generation'ı doğrular: despawn edilip slotu yeniden kullanılan bir
+    /// entity'nin eski handle'ı `None` döner; ham `get(id)` ise (footgun) yeni entity'nin
+    /// verisini döndürür.
+    #[test]
+    fn get_entity_rejects_stale_handle_after_despawn_reuse() {
+        let mut world = crate::World::new();
+        world.register_component_type::<Position>();
+
+        let e1 = world.spawn();
+        world.add_component(e1, Position { x: 1.0, y: 1.0 });
+        let stale = e1;
+
+        world.despawn(e1);
+
+        // Slotu yeniden kullan — aynı id, artmış generation.
+        let e2 = world.spawn();
+        world.add_component(e2, Position { x: 2.0, y: 2.0 });
+        assert_eq!(e2.id(), stale.id(), "slot yeniden kullanılmalı (aynı id)");
+        assert_ne!(e2.generation(), stale.generation(), "generation artmalı");
+
+        let q = world.query::<&Position>().unwrap();
+        // Ham id: generation kontrolü yok → yeni entity'nin verisi (footgun).
+        assert_eq!(q.get(stale.id()).map(|p| p.x), Some(2.0));
+        // Generation-doğrulamalı: stale handle reddedilir.
+        assert!(q.get_entity(stale).is_none(), "stale handle None dönmeli");
+        // Geçerli handle çalışır.
+        assert_eq!(q.get_entity(e2).map(|p| p.x), Some(2.0));
     }
 }
