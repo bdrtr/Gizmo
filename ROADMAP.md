@@ -37,8 +37,11 @@ Derin incelemede işaretlenen ama henüz **kapatılmamış** orta-güvenli sorun
       gövdeyi de "mover" kabul ediyor; üstündeki uyuyan dinamik cisim uyandırılıp çözülüyor.
       Test: hareket eden platform uyuyan kutuyu uyandırıp sürüklüyor. (Not: tam ada-uyumu /
       `should_sleep` entegrasyonu ayrı bir iyileştirme; per-body uyku zaten çalışıyor.)
-- [ ] **`iter_chunks_mut` aşırı işaretleme** — `get_slice` tüm archetype satırlarını "changed"
-      işaretliyor (yazılmayanlar dahil) → change detection'da false positive.
+- [x] **`iter_chunks_mut` aşırı işaretleme** — İNCELENDİ: ham `&mut [T]` dilimde hangi
+      elemanın yazıldığı izlenemez; "hepsini işaretle" TEMKİNLİ-DOĞRU (gerçek yazmayı
+      kaçırmaz; false negative yok). API zaten doğru aracı sunuyor: oku→`iter_chunks`,
+      hassas yaz→`iter_mut`, toplu yaz→`iter_chunks_mut`. Davranış belgelendi + chunked
+      yazmanın change detection'ı tetiklediğini doğrulayan test eklendi.
 - [ ] **SparseSet change tracking** — `Changed<T>`/`Added<T>` SparseSet bileşenlerinde her zaman
       `true` (TODO); gerçek tick takibi ekle.
 
