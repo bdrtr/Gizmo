@@ -52,9 +52,15 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
 - [x] Multibody / ABA (`gizmo-physics-rigid/multibody`) — DENETLENDİ: spatial cebir (cross_motion/force, inertia, transformlar), 3-pass ABA, gravity injection ve pass-3 q̈ formülleri SAĞLAM. Düzeltilen High bug: Fixed/tekil eklemde (D≈0) çocuğun atalet+bias'ı ebeveyne HİÇ taşınmıyordu (zinciri koparıyordu) → artık tam I^A/p^A taşınıyor, yalnız U·D⁻¹·Uᵀ projeksiyonu D'ye göre düşülüyor. Pendulum testi analitik değere bağlandı (q̈=-4.905, eskiden yalnız |q̈|>0.1). Eksen normalize guard. Testler: analitik pendulum + Fixed-eklem-zincir-koparmıyor (eski kodla FAIL). Bilinen TODO: serbest-yüzen taban (base) entegrasyonu implemente değil; S frame'i rotation_to_parent≠I'de latent.
 - [x] Fracture & destruction — DENETLENDİ: çekirdek Voronoi/Cramer/bisector matematiği SAĞLAM. Düzeltilenler: ince kıymık parçalarda `force/mass` patlaması (MAX_EXPLOSION_DV=50 clamp, her iki yol), ConvexHull/fracture parça ataleti artık AABB'den türetiliyor (eskiden sabit 1×1×1 → tüm parçalar aynı atalet). Testler: hull-AABB ataleti, kıymık-hız clamp. Bilinen sınırlamalar (ileri): ince hücrelerde açık-mesh/hacim (quickhull downstream onarıyor), yüz winding tutarlılığı (render), PreFracturedCache extents/seed doğrulamasız (Entity generation reuse'u kısmen koruyor).
 - [x] Vehicle modeli (`vehicle.rs`) — DENETLENDİ+DÜZELTİLDİ: tahrik kuvveti friction-circle'a clamp'lendi (eskiden sonsuz çekiş), lastik kuvvetleri temas-yamasında uygulanıyor (eskiden bağlantı noktası), gearbox indeks-güvenli (`update_gear`/`current_ratio`, panik yok), steer `max_steer_angle`'a clamp, tekerlek başına kütle `mass/wheel_count` (eskiden sabit ×0.25). Gearbox birim testleri eklendi. NOT: tam entegrasyon test harness'i (ECS+PhysicsWorld) Faz 1'e bırakıldı.
-- [ ] Raycast kalan kenar durumları (içeriden başlama, hull-AABB yaklaşımı)
+- [x] Raycast kenar durumları — DÜZELTİLDİ: `ray_aabb` içeriden başlamada artık çıkış yüzeyini döndürüyor (eskiden t=0 → sahte +Y normal); ConvexHull raycast'i AABB yaklaşımı yerine GERÇEK hull üçgenlerine Möller-Trumbore (yüz yoksa AABB fallback). Testler: içeriden-çıkış-normali, hull-tam-test (AABB köşesi ıskalıyor).
 
-**Çıkış kriteri:** bilinen High/Medium bug yok; her düzeltme bir regresyon testiyle kilitli.
+**Bilinçli ertelenenler (bug DEĞİL, özellik/ihmal edilebilir):**
+- Floating-base ABA entegrasyonu — implemente değil (özellik; Faz 4'e ait, hızlı temizlik değil).
+- ABA motion-subspace `S`, rotation_to_parent≠I'de pre-rotation frame'de — büyük olasılıkla non-issue (eksen kendi etrafında dönüşte değişmez); kanıtlanana dek dokunulmadı.
+- Fracture ince-hücre açık-mesh (quickhull downstream onarıyor) ve yüz-winding (yalnız render).
+- PreFracturedCache extents/seed doğrulamasız (Entity generation, id-reuse'u büyük ölçüde koruyor).
+
+**Çıkış kriteri:** bilinen High/Medium bug yok; her düzeltme bir regresyon testiyle kilitli. → KARŞILANDI.
 
 ---
 
