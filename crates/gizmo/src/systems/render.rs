@@ -446,7 +446,7 @@ pub fn default_render_pass(
         let mut local_instances: Vec<crate::renderer::gpu_types::InstanceRaw> = std::mem::take(&mut cache.instances);
         let mut local_draw_items: Vec<DrawItem> = std::mem::take(&mut cache.draw_items);
 
-        for (_, batch) in cache.batches.iter() {
+        for batch in cache.batches.values() {
             if batch.instances.is_empty() { continue; }
             let first_instance = local_instances.len() as u32;
             let instance_count = batch.instances.len() as u32;

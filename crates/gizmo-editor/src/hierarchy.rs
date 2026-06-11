@@ -367,13 +367,12 @@ fn draw_entity_node(
             }
 
             // Seçili birden fazla obje varsa gruplama butonu
-            if state.selection.entities.len() > 1 {
-                if ui.button("📂 Seçilileri Grupla").clicked() {
+            if state.selection.entities.len() > 1
+                && ui.button("📂 Seçilileri Grupla").clicked() {
                     // Boş bir parent entity oluştur, sonra seçili objeleri ona bağla
                     state.spawn_request = Some("Group".to_string());
                     ui.close_menu();
                 }
-            }
 
             ui.separator();
 

@@ -1,16 +1,12 @@
 use gizmo_math::{Vec2, Vec4};
 
 #[derive(Clone, Debug, PartialEq)]
+#[derive(Default)]
 pub struct Style(pub taffy::style::Style);
 
 unsafe impl Send for Style {}
 unsafe impl Sync for Style {}
 
-impl Default for Style {
-    fn default() -> Self {
-        Self(taffy::style::Style::default())
-    }
-}
 
 impl std::ops::Deref for Style {
     type Target = taffy::style::Style;
@@ -42,17 +38,14 @@ impl Default for Node {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Default)]
 pub enum Interaction {
+    #[default]
     None,
     Hovered,
     Pressed,
 }
 
-impl Default for Interaction {
-    fn default() -> Self {
-        Interaction::None
-    }
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BackgroundColor(pub Vec4);

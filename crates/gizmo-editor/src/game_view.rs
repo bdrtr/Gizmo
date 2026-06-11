@@ -184,7 +184,7 @@ fn draw_fight_hud(ui: &mut egui::Ui, rect: egui::Rect, state: &EditorState) {
     painter.text(
         egui::pos2(center_x, bar_y + bar_height * 0.5),
         egui::Align2::CENTER_CENTER,
-        &format!("R{}", hud.current_round),
+        format!("R{}", hud.current_round),
         egui::FontId::proportional(18.0),
         egui::Color32::from_rgb(255, 220, 80),
     );
@@ -193,7 +193,7 @@ fn draw_fight_hud(ui: &mut egui::Ui, rect: egui::Rect, state: &EditorState) {
     painter.text(
         egui::pos2(center_x, bar_y + bar_height + 6.0),
         egui::Align2::CENTER_TOP,
-        &format!("{}", timer_secs),
+        format!("{}", timer_secs),
         egui::FontId::proportional(24.0),
         egui::Color32::WHITE,
     );
@@ -211,7 +211,7 @@ fn draw_fight_hud(ui: &mut egui::Ui, rect: egui::Rect, state: &EditorState) {
         painter.text(
             egui::pos2(rect.center().x, rect.center().y + 50.0),
             egui::Align2::CENTER_CENTER,
-            &format!("{} WINS!", winner),
+            format!("{} WINS!", winner),
             egui::FontId::proportional(28.0),
             egui::Color32::from_rgb(255, 220, 80),
         );
