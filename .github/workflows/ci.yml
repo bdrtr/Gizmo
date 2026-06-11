@@ -1,4 +1,4 @@
-name: Physics Determinism CI
+name: CI
 
 on:
   push:
@@ -8,40 +8,70 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
+  # ── Cross-platform build + test (471+ tests) ──────────────────────────────
   test:
-    name: Cross-Platform Determinism Tests
-    runs-on: ubuntu-latest
-
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Rust
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        components: clippy, rustfmt
-        
-    - name: Install Linux Dependencies
-      run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
-        
-    - name: Cache Cargo Registry & Target
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --workspace --verbose
+      - name: Test (workspace, default features)
+        run: cargo test --workspace --verbose
+      - name: Test gizmo-net (feature-gated backends)
+        run: cargo test -p gizmo-net --features client-server,rollback
 
-    - name: Check Formatting
-      run: cargo fmt --all -- --check
-      continue-on-error: true
+  # ── Lint: rustfmt (report-only) + clippy (-D warnings, ratcheted) ─────────
+  lint:
+    name: Lint (fmt + clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Install Linux dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+      # Report-only: kod tabanı henüz tam rustfmt uyumlu değil (kademeli temizlenecek).
+      - name: Rustfmt check (report-only)
+        run: cargo fmt --all --check
+        continue-on-error: true
+      # `-D warnings` gerçek bir kapıdır. Mevcut (grandfather'lı) lint'ler `-A` ile
+      # muaf tutulur — bu bir RATCHET: YENİ lint türleri CI'yı kırar, mevcut backlog
+      # zamanla temizlendikçe ilgili `-A` satırı kaldırılır.
+      - name: Clippy (-D warnings, ratcheted)
+        run: |
+          cargo clippy --workspace -- -D warnings \
+            -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::large_enum_variant \
+            -A clippy::needless_range_loop -A clippy::field_reassign_with_default \
+            -A clippy::if_same_then_else -A clippy::empty_line_after_doc_comments \
+            -A clippy::clone_on_copy -A clippy::collapsible_if -A clippy::explicit_counter_loop \
+            -A clippy::assign_op_pattern -A clippy::manual_strip -A clippy::lines_filter_map_ok \
+            -A clippy::only_used_in_recursion -A clippy::question_mark -A clippy::redundant_closure \
+            -A clippy::unnecessary_cast
 
-    - name: Run Determinism CI Tests
-      run: cargo run --bin headless_stress_test --release
-
-    - name: Run All Engine Tests
-      run: cargo test --verbose
+  # ── Determinism & stability: 3× tower collapse, hashes must match ─────────
+  determinism:
+    name: Determinism & Stability
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+      - name: Headless stress test (200-box tower, 3 runs, hash match)
+        run: cargo run --release -p demo --bin headless_stress_test
