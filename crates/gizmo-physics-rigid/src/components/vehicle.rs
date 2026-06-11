@@ -86,6 +86,42 @@ pub struct Gearbox {
     pub is_reversing: bool,
 }
 
+impl Gearbox {
+    /// Otomatik vites: ileri hıza göre bir vites yukarı/aşağı geçer.
+    /// İndeksleri `.get()` ile sınırlar — `gears` ile `shift_*_speeds` dizileri tutarsız
+    /// uzunlukta olsa bile panik etmez (eskiden `shift_up_speeds[cg]` taşabiliyordu).
+    pub fn update_gear(&mut self, forward_speed: f32) {
+        if !self.is_automatic || self.is_reversing {
+            return;
+        }
+        let speed = forward_speed.max(0.0);
+        let cg = self.current_gear;
+
+        let can_up = cg + 1 < self.gears.len()
+            && self.shift_up_speeds.get(cg).is_some_and(|&s| speed > s);
+        let can_down = cg > 0
+            && self
+                .shift_down_speeds
+                .get(cg - 1)
+                .is_some_and(|&s| speed < s);
+
+        if can_up {
+            self.current_gear += 1;
+        } else if can_down {
+            self.current_gear -= 1;
+        }
+    }
+
+    /// Geçerli vites oranı (sınır-güvenli).
+    pub fn current_ratio(&self) -> f32 {
+        if self.is_reversing {
+            self.reverse_ratio
+        } else {
+            self.gears.get(self.current_gear).copied().unwrap_or(1.0)
+        }
+    }
+}
+
 impl Default for Gearbox {
     fn default() -> Self {
         Self {
@@ -152,3 +188,42 @@ impl Default for Vehicle {
 }
 
 gizmo_core::impl_component!(Vehicle);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gearbox_shifts_up_and_down() {
+        let mut gb = Gearbox::default();
+        assert_eq!(gb.current_gear, 0);
+        gb.update_gear(20.0); // > shift_up_speeds[0]=15 → vites 1
+        assert_eq!(gb.current_gear, 1);
+        gb.update_gear(5.0); // < shift_down_speeds[0]=10 → vites 0
+        assert_eq!(gb.current_gear, 0);
+        // Reverse'deyken vites değişmez.
+        gb.is_reversing = true;
+        gb.update_gear(100.0);
+        assert_eq!(gb.current_gear, 0);
+    }
+
+    #[test]
+    fn gearbox_does_not_panic_on_inconsistent_arrays() {
+        // gears uzun, shift dizileri kısa — eski kod `shift_up_speeds[cg]`'de panik ederdi.
+        let mut gb = Gearbox {
+            gears: vec![3.0, 2.0, 1.5, 1.0],
+            reverse_ratio: 3.0,
+            final_drive: 3.5,
+            current_gear: 2,
+            is_automatic: true,
+            shift_up_speeds: vec![10.0], // yalnızca 1 eleman
+            shift_down_speeds: vec![],
+            is_reversing: false,
+        };
+        gb.update_gear(100.0); // shift_up_speeds.get(2)=None → değişmez, panik yok
+        assert_eq!(gb.current_gear, 2);
+        gb.update_gear(0.0); // shift_down_speeds.get(1)=None → değişmez
+        assert_eq!(gb.current_gear, 2);
+        let _ = gb.current_ratio(); // sınır-güvenli
+    }
+}

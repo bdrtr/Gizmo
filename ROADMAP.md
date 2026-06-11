@@ -51,7 +51,7 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
 - [ ] FEM soft-body (`gizmo-physics-soft`)
 - [ ] Multibody / ABA (`gizmo-physics-rigid/multibody`)
 - [ ] Fracture & destruction
-- [ ] Vehicle modeli (`vehicle.rs`)
+- [x] Vehicle modeli (`vehicle.rs`) — DENETLENDİ+DÜZELTİLDİ: tahrik kuvveti friction-circle'a clamp'lendi (eskiden sonsuz çekiş), lastik kuvvetleri temas-yamasında uygulanıyor (eskiden bağlantı noktası), gearbox indeks-güvenli (`update_gear`/`current_ratio`, panik yok), steer `max_steer_angle`'a clamp, tekerlek başına kütle `mass/wheel_count` (eskiden sabit ×0.25). Gearbox birim testleri eklendi. NOT: tam entegrasyon test harness'i (ECS+PhysicsWorld) Faz 1'e bırakıldı.
 - [ ] Raycast kalan kenar durumları (içeriden başlama, hull-AABB yaklaşımı)
 
 **Çıkış kriteri:** bilinen High/Medium bug yok; her düzeltme bir regresyon testiyle kilitli.
