@@ -11,7 +11,7 @@ gizmo-core = { path = "../crates/gizmo-core" }
 gizmo-math = { path = "../crates/gizmo-math" }
 gizmo-physics-core = { path = "../crates/gizmo-physics-core" }
 gizmo-physics-rigid = { path = "../crates/gizmo-physics-rigid" }
-gizmo-net = { path = "../crates/gizmo-net" }
+gizmo-net = { path = "../crates/gizmo-net", features = ["client-server"] }
 renet = "2.0.0"
 serde = { version = "1.0", features = ["derive"] }
 bincode = "1.3.3"

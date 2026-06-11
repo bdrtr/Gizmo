@@ -39,7 +39,7 @@ impl PhysicsStateSnapshot {
             
             // Sadece Transform ve Velocity'si olan (hareketli) objeleri snapshot al
             if let (Some(t), Some(v)) = (transforms.get(id), velocities.get(id)) {
-                let is_sleeping = rigid_bodies.get(id).map_or(false, |rb| rb.is_sleeping);
+                let is_sleeping = rigid_bodies.get(id).is_some_and(|rb| rb.is_sleeping);
 
                 states.push(EntityState {
                     entity: ent,

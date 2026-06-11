@@ -882,7 +882,7 @@ impl<State: 'static> App<State> {
                             #[cfg(feature = "network")]
                             {
                                 let mut rollback_needed = false;
-                                let mut rm = self.world.remove_resource::<gizmo_network::RollbackManager>();
+                                let mut rm = self.world.remove_resource::<gizmo_net::rollback::RollbackManager>();
                                 
                                 if let Some(ref mut manager) = rm {
                                     rollback_needed = manager.begin_frame(&mut self.world);
@@ -915,7 +915,7 @@ impl<State: 'static> App<State> {
 
                                         // Yeni geçmiş karesini hafızaya al
                                         if let Some(ref mut manager) = rm {
-                                            let snapshot = gizmo_network::PhysicsStateSnapshot::capture(&self.world, manager.current_tick);
+                                            let snapshot = gizmo_net::rollback::PhysicsStateSnapshot::capture(&self.world, manager.current_tick);
                                             manager.state_buffer.save(snapshot);
                                             manager.current_tick += 1;
                                             // latest_tick güncellenmeyecek çünkü zaten eskiyi simüle ediyoruz
@@ -951,7 +951,7 @@ impl<State: 'static> App<State> {
 
                                 #[cfg(feature = "network")]
                                 {
-                                    if let Some(mut rm) = self.world.get_resource_mut::<gizmo_network::RollbackManager>() {
+                                    if let Some(mut rm) = self.world.get_resource_mut::<gizmo_net::rollback::RollbackManager>() {
                                         rm.end_frame(&self.world);
                                     }
                                 }

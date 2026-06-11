@@ -1,5 +1,5 @@
-use crate::input_buffer::{InputBuffer, PlayerInput};
-use crate::snapshot::{PhysicsStateSnapshot, RollbackBuffer};
+use super::input_buffer::{InputBuffer, PlayerInput};
+use super::snapshot::{PhysicsStateSnapshot, RollbackBuffer};
 use gizmo_core::World;
 
 /// Oyundaki tüm ağ trafiği, tahminler ve rollback süreçlerini yöneten ana sistem.
@@ -37,17 +37,15 @@ impl RollbackManager {
 
             // Eğer daha önceden (bu tick için) tahmin ettiğimiz girdi ile, 
             // az önce uzaktan gelen GERÇEK girdi farklıysa ROLLBACK tetiklenir!
-            if past_predicted.buttons != input.buttons 
-                || past_predicted.joystick_x != input.joystick_x 
-                || past_predicted.joystick_y != input.joystick_y 
-            {
-                if input.tick <= self.current_tick {
-                    let min_target = match self.rollback_target_tick {
-                        Some(target) => std::cmp::min(target, input.tick),
-                        None => input.tick,
-                    };
-                    self.rollback_target_tick = Some(min_target);
-                }
+            let prediction_diverged = past_predicted.buttons != input.buttons
+                || past_predicted.joystick_x != input.joystick_x
+                || past_predicted.joystick_y != input.joystick_y;
+            if prediction_diverged && input.tick <= self.current_tick {
+                let min_target = match self.rollback_target_tick {
+                    Some(target) => std::cmp::min(target, input.tick),
+                    None => input.tick,
+                };
+                self.rollback_target_tick = Some(min_target);
             }
         }
     }
@@ -90,7 +88,7 @@ impl RollbackManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input_buffer::PlayerInput;
+    use crate::rollback::input_buffer::PlayerInput;
     use gizmo_core::World;
     use gizmo_physics_core::components::transform::Transform;
     use gizmo_physics_rigid::components::velocity::Velocity;

@@ -20,7 +20,7 @@ gizmo-renderer = { path = "../gizmo-renderer" , version = "0.1.7", optional = tr
 gizmo-audio = { path = "../gizmo-audio" , version = "0.1.7", optional = true }
 gizmo-editor = { path = "../gizmo-editor" , version = "0.1.7", optional = true }
 gizmo-scene = { path = "../gizmo-scene" , version = "0.1.7", optional = true }
-gizmo-network = { path = "../gizmo-network", version = "0.1.7", optional = true }
+gizmo-net = { path = "../gizmo-net", version = "0.1.7", optional = true, default-features = false }
 winit = { version = "0.29", optional = true }
 wgpu = { version = "0.20", features = ["fragile-send-sync-non-atomic-wasm", "webgl"], optional = true }
 pollster = { version = "0.3", optional = true }
@@ -30,7 +30,7 @@ image = { version = "0.25", optional = true }
 [features]
 default = ["window", "render", "audio", "physics", "scene", "editor", "network"]
 headless = ["physics", "network"]
-network = ["dep:gizmo-network"]
+network = ["dep:gizmo-net", "gizmo-net/rollback"]
 window = ["dep:winit"]
 render = ["dep:wgpu", "dep:gizmo-renderer", "dep:pollster", "dep:image", "window"]
 audio = ["dep:gizmo-audio"]
