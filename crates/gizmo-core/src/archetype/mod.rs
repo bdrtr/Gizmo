@@ -102,6 +102,22 @@ impl Archetype {
         self.entities.len()
     }
 
+    /// Debug-only değişmez kontrolü: her sütun uzunluğu entity sayısına eşit olmalı.
+    /// `write_to_archetype` sözleşmesi: bir bundle, arketipin TÜM sütunlarını yazmalı;
+    /// aksi halde `entities.len() != column.len()` desync'i oluşur ve sorgu iterasyonu
+    /// sınır-dışı/initialize-edilmemiş bellek okur. Bu yardımcı o değişmezi kilitler.
+    #[cfg(debug_assertions)]
+    pub(crate) fn debug_assert_consistent(&self) {
+        let n = self.entities.len();
+        for cell in &self.columns {
+            let col_len = unsafe { (*cell.get()).len() };
+            debug_assert_eq!(
+                col_len, n,
+                "archetype column/entities desync: bir bundle tüm sütunları kapsamıyor olabilir"
+            );
+        }
+    }
+
     /// Boş mu?
     #[inline]
     pub fn is_empty(&self) -> bool {
