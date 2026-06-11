@@ -74,8 +74,9 @@ impl Rope {
             let velocity = (node.position - node.prev_position) / dt;
             node.prev_position = node.position;
 
-            // Add gravity and damping
-            let new_vel = (velocity + gravity * dt) * self.damping.powf(dt);
+            // Mevcut hızı sönümle, korunumlu yerçekimini sönümsüz ekle.
+            // (Eskiden taze yerçekimi de sönümleniyordu: `(v + g*dt) * damping`.)
+            let new_vel = velocity * self.damping.powf(dt) + gravity * dt;
             node.position += new_vel * dt;
         }
 
@@ -116,8 +117,12 @@ impl Rope {
             }
         }
 
-        // 3. Simple ground collision
+        // 3. Simple ground collision (sabit/pinned düğümleri TAŞIMA — bunlar her
+        //    yere sabitlenebilir, zeminin altında bile; eskiden is_fixed guard yoktu).
         for node in &mut self.nodes {
+            if node.is_fixed {
+                continue;
+            }
             if node.position.y < 0.0 {
                 node.position.y = 0.0;
                 node.prev_position.y = node.position.y; // zero vertical velocity
@@ -127,3 +132,35 @@ impl Rope {
 }
 
 impl gizmo_core::Component for Rope {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Zeminin ALTINA sabitlenmiş bir düğüm, zemin çarpışması tarafından taşınmamalı
+    /// (eskiden `is_fixed` guard yoktu → sabit düğüm y=0'a sıçrıyordu).
+    #[test]
+    fn fixed_node_below_floor_is_not_moved() {
+        let mut rope = Rope::new(
+            Vec3::new(0.0, -1.0, 0.0), // zeminin altında başla
+            Vec3::new(1.0, 0.0, 0.0),
+            3,
+            0.5,
+            1.0,
+            true,  // fix_start
+            false,
+        );
+        let fixed_pos = rope.nodes[0].position;
+        let g = Vec3::new(0.0, -9.81, 0.0);
+        for _ in 0..120 {
+            rope.step(1.0 / 60.0, g);
+        }
+        assert_eq!(
+            rope.nodes[0].position, fixed_pos,
+            "sabit düğüm taşınmamalı (y=-1'de kalmalı)"
+        );
+        for n in &rope.nodes {
+            assert!(n.position.is_finite(), "ip NaN/Inf üretmemeli");
+        }
+    }
+}
