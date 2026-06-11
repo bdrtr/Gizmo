@@ -103,10 +103,16 @@ Gizmo's decoupled workspace architecture allows you to pick and choose exactly w
 
 ## 🛠️ Building and Running
 
-To compile the engine and test the showcase map with advanced physics and rendering:
+To compile the engine and test the showcase scene with advanced physics and rendering:
 
 ```bash
-cargo run --release --bin showcase
+# Default demo scene (3D PBR + physics)
+cargo run --release -p demo
+
+# Other showcase binaries:
+cargo run --release -p demo --bin advanced_physics
+cargo run --release -p demo --bin car_demo
+cargo run --release -p demo --bin fluid_rigid
 ```
 
 > **Note:** Due to the extreme scale of the broad-phase and narrow-phase physics computations, compiling without `--release` will cause a severe CPU bottleneck. Always use the release profile for optimal performance.
