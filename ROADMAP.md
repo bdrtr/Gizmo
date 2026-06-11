@@ -17,9 +17,9 @@ production-ready olur. Önce bilinen/şüpheli bug'lar ve test altyapısı; öze
 
 Derin incelemede işaretlenen ama henüz **kapatılmamış** orta-güvenli sorunlar:
 
-- [ ] **Eklem efektif-kütle `k`** — `joints/solver.rs:~204` çapraz-çarpım sırası: doğrusu
-      `n·[(I⁻¹(r×n))×r]`, kodda `((I⁻¹ r)×n)×r`. Merkez-dışı ankor + anizotropik atalette
-      yanlış impulse büyüklüğü → sarkma/salınım.
+- [x] **Eklem efektif-kütle `k`** — `apply_linear_constraint` + slider motor artık
+      `k_ang = (r×n)·I⁻¹·(r×n)` kullanıyor (temas çözücüyle aynı, doğru form). Ayırt edici
+      test: 1-DOF kısıt tek uygulamada bağıl hızı sıfırlıyor (yanlış k'de kalan=0.0236).
 - [ ] **Sürtünme birikimi** — `solver.rs` 2D sürtünmede tangent yönü her iterasyonda yeniden
       hesaplanıp eski birikmiş vektör yeni tangente projekte ediliyor → kayıplı/yön kayması.
       Sabit iki tangent bazında skaler birikim yap.
