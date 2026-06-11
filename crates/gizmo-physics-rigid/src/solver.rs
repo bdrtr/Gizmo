@@ -251,68 +251,55 @@ impl ConstraintSolver {
                         velocities[idx_b].angular += inv_i_b.mul_vec3(r_b.cross(imp_n));
                     }
 
-                    // ── Sürtünme İmpulsu (2D Coulomb Cone) ──────────────────
-                    // Güncel hızları al (normal impuls uygulandıktan sonra)
+                    // ── Sürtünme İmpulsu (2-tangent Coulomb cone) ───────────
+                    // Normalden türetilen SABİT iki ortonormal tangent (t1,t2); birikim
+                    // her eksende skaler ve birlikte dairesel koniye clamp'lenir.
+                    // (Eski tek-tangent yöntemi tangenti her iterasyonda döndürüp birikmiş
+                    // impulsun dik bileşenini kaybediyordu → kayıplı/yön kayan sürtünme.)
+                    let (t1, t2) = {
+                        let a = if normal.x.abs() > 0.9 {
+                            Vec3::new(0.0, 1.0, 0.0).cross(normal)
+                        } else {
+                            Vec3::new(1.0, 0.0, 0.0).cross(normal)
+                        }
+                        .normalize();
+                        (a, normal.cross(a))
+                    };
+
                     let va2 = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
                     let vb2 = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
                     let rel2 = vb2 - va2;
-                    let tang_v = rel2 - normal * rel2.dot(normal);
-                    let tang_mag = tang_v.length();
 
-                    if tang_mag < 1e-8 && acc_t.length_squared() < 1e-8 {
-                        continue;
+                    // Eksen başına efektif kütle: k = inv_m + (r×t)·I⁻¹·(r×t).
+                    let eff_mass = |taxis: Vec3| -> f32 {
+                        let rxt_a = r_a.cross(taxis);
+                        let rxt_b = r_b.cross(taxis);
+                        inv_m_a
+                            + inv_m_b
+                            + inv_i_a.mul_vec3(rxt_a).dot(rxt_a)
+                            + inv_i_b.mul_vec3(rxt_b).dot(rxt_b)
+                    };
+                    let k_t1 = eff_mass(t1);
+                    let k_t2 = eff_mass(t2);
+
+                    // Birikmiş tangent impulsu sabit baza ayrıştır, her eksende çöz.
+                    let acc_t1 = acc_t.dot(t1);
+                    let acc_t2 = acc_t.dot(t2);
+                    let mut new1 = if k_t1 > 1e-8 { acc_t1 - rel2.dot(t1) / k_t1 } else { acc_t1 };
+                    let mut new2 = if k_t2 > 1e-8 { acc_t2 - rel2.dot(t2) / k_t2 } else { acc_t2 };
+
+                    // Dairesel Coulomb koni: |(new1,new2)| ≤ μ_s·N ise statik; aşarsa μ_d·N'e ölçekle.
+                    let max_static = manifolds[mid].static_friction * new_acc_n.abs();
+                    let max_dynamic = friction * new_acc_n.abs();
+                    let mag = (new1 * new1 + new2 * new2).sqrt();
+                    if mag > max_static && mag > 1e-12 {
+                        let s = max_dynamic / mag;
+                        new1 *= s;
+                        new2 *= s;
                     }
 
-                    let tangent = if acc_t.length_squared() > 1e-8 {
-                        acc_t.normalize()
-                    } else if tang_mag > 1e-8 {
-                        tang_v / tang_mag
-                    } else {
-                        if normal.x.abs() > 0.9 {
-                            gizmo_math::Vec3::new(0.0, 1.0, 0.0)
-                                .cross(normal)
-                                .normalize()
-                        } else {
-                            gizmo_math::Vec3::new(1.0, 0.0, 0.0)
-                                .cross(normal)
-                                .normalize()
-                        }
-                    };
-
-                    let r_a_x_t = r_a.cross(tangent);
-                    let r_b_x_t = r_b.cross(tangent);
-                    let k_t = inv_m_a
-                        + inv_m_b
-                        + (inv_i_a.mul_vec3(r_a_x_t)).dot(r_a_x_t)
-                        + (inv_i_b.mul_vec3(r_b_x_t)).dot(r_b_x_t);
-
-                    if k_t < 1e-8 {
-                        continue;
-                    }
-
-                    let rel_t = rel2.dot(tangent);
-                    let delta_t = -rel_t / k_t;
-
-                    // Coulomb cone: statik ≤ μ_s * N, dinamik = μ_d * N
-                    let static_mu = manifolds[mid].static_friction;
-                    let dynamic_mu = friction;
-                    let max_static = static_mu * new_acc_n.abs();
-                    let max_dynamic = dynamic_mu * new_acc_n.abs();
-
-                    // Önceki birikimli tanjant (aynı yön boyunca projeksiyon)
-                    let old_t_along = acc_t.dot(tangent);
-                    let new_t_along = old_t_along + delta_t;
-
-                    let clamped_t = if new_t_along.abs() <= max_static {
-                        new_t_along // Statik sürtünme koni içinde
-                    } else {
-                        new_t_along.signum() * max_dynamic // Dinamik sürtünmeye geç
-                    };
-
-                    let actual_t = clamped_t - old_t_along;
-                    manifolds[mid].contacts[cid].tangent_impulse = tangent * clamped_t;
-
-                    let imp_t = tangent * actual_t;
+                    let imp_t = t1 * (new1 - acc_t1) + t2 * (new2 - acc_t2);
+                    manifolds[mid].contacts[cid].tangent_impulse = t1 * new1 + t2 * new2;
                     if dyn_a {
                         velocities[idx_a].linear -= imp_t * inv_m_a;
                         velocities[idx_a].angular -= inv_i_a.mul_vec3(r_a.cross(imp_t));

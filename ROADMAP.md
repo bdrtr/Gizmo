@@ -20,9 +20,9 @@ Derin incelemede işaretlenen ama henüz **kapatılmamış** orta-güvenli sorun
 - [x] **Eklem efektif-kütle `k`** — `apply_linear_constraint` + slider motor artık
       `k_ang = (r×n)·I⁻¹·(r×n)` kullanıyor (temas çözücüyle aynı, doğru form). Ayırt edici
       test: 1-DOF kısıt tek uygulamada bağıl hızı sıfırlıyor (yanlış k'de kalan=0.0236).
-- [ ] **Sürtünme birikimi** — `solver.rs` 2D sürtünmede tangent yönü her iterasyonda yeniden
-      hesaplanıp eski birikmiş vektör yeni tangente projekte ediliyor → kayıplı/yön kayması.
-      Sabit iki tangent bazında skaler birikim yap.
+- [x] **Sürtünme birikimi** — normalden türetilen SABİT iki ortonormal tangent; her eksende
+      skaler birikim + dairesel Coulomb koni clamp. (Eski tek-tangent yöntemi dik bileşeni
+      kaybediyordu.) Test: diyagonal kayma simetrik yavaşlayıp duruyor.
 - [x] **Stale-handle okuma** — generation-doğrulamalı `Query::get_entity`/`get_mut_entity`
       eklendi; ham `get(u32)`/`query_entity*` "unchecked" olarak belgelendi; çarpışma-olayı
       caller'ları (fracture) checked sürüme geçirildi; regresyon testi eklendi. (e674424 sonrası)
