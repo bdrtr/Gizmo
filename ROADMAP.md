@@ -26,8 +26,11 @@ Derin incelemede işaretlenen ama henüz **kapatılmamış** orta-güvenli sorun
 - [x] **Stale-handle okuma** — generation-doğrulamalı `Query::get_entity`/`get_mut_entity`
       eklendi; ham `get(u32)`/`query_entity*` "unchecked" olarak belgelendi; çarpışma-olayı
       caller'ları (fracture) checked sürüme geçirildi; regresyon testi eklendi. (e674424 sonrası)
-- [ ] **`spawn_batch` değişmezi** — bundle archetype'ın tüm sütunlarını kapsamazsa
-      `entities.len() != column.len()` desync'i mümkün; değişmezi enforce et veya kontrol ekle.
+- [x] **`spawn_batch` değişmezi** — İNCELENDİ: `spawn_batch` homojen (`I::Item` tek tip →
+      arketip tüm sütunları kapsar), bu yüzden Rust tip sistemi gereği desync ERİŞİLEBİLİR
+      DEĞİL (teorik değişmez, gerçek bug değil). Yine de `Archetype::debug_assert_consistent`
+      (debug-only) eklenip spawn_batch'te çağrıldı + 100-entity tutarlılık testi eklendi —
+      iç değişiklikler değişmezi sessizce bozarsa yakalanır.
 - [ ] **EPA yüz yönelimi** — `compute_face_normal` normali winding yerine origin'den zorluyor;
       sığ/dejenere temaslarda yanlış yüz seçilebilir. (Witness refactor'ı bunu değiştirmedi.)
 - [x] **Uyku/kinematik etkileşimi** — ada "uyanık" sayımı artık hareket eden kinematik

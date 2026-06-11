@@ -425,6 +425,10 @@ impl World {
             entities.push(entity);
         }
 
+        // Değişmez: batch sonunda her sütun uzunluğu entity sayısına eşit olmalı.
+        #[cfg(debug_assertions)]
+        self.archetype_index.archetypes[target_arch_id].debug_assert_consistent();
+
         entities.into_iter()
     }
 
@@ -1579,6 +1583,36 @@ mod tests {
         
         assert_eq!(world.borrow::<TestCompI32>().get(e.id()).unwrap().0, 10);
         assert_eq!(world.borrow::<TestCompF32>().get(e.id()).unwrap().0, 2.5);
+    }
+
+    #[test]
+    fn spawn_batch_keeps_columns_and_entities_consistent() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct BatchI(i32);
+        impl crate::component::Component for BatchI {}
+        #[derive(Clone, Debug, PartialEq)]
+        struct BatchF(f32);
+        impl crate::component::Component for BatchF {}
+
+        let mut world = World::new();
+        world.register_component_type::<BatchI>();
+        world.register_component_type::<BatchF>();
+
+        let n = 100usize;
+        let bundles = (0..n).map(|i| (BatchI(i as i32), BatchF(i as f32 * 1.5)));
+        let ents: Vec<_> = world.spawn_batch(bundles).collect();
+        assert_eq!(ents.len(), n);
+
+        // Her entity'nin iki bileşeni de doğru olmalı (column/entities desync veya OOB yok).
+        let bi = world.borrow::<BatchI>();
+        let bf = world.borrow::<BatchF>();
+        for (i, e) in ents.iter().enumerate() {
+            assert_eq!(bi.get(e.id()).map(|c| c.0), Some(i as i32), "BatchI[{i}]");
+            assert_eq!(bf.get(e.id()).map(|c| c.0), Some(i as f32 * 1.5), "BatchF[{i}]");
+        }
+        // Query iterasyonu tam n eleman vermeli (her sütun uzunluğu == entities sayısı).
+        assert_eq!(bi.iter().count(), n, "column/entities tutarsızlığı");
+        assert_eq!(bf.iter().count(), n, "column/entities tutarsızlığı");
     }
 
     #[test]
