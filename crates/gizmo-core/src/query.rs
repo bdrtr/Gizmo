@@ -146,6 +146,9 @@ impl<T: crate::component::Component> FetchComponent for Mut<'_, T> {
         if set_opt.is_some() {
             panic!("Cannot use iter_chunks with SparseSet components");
         }
+        // Temkinli (conservative) işaretleme: ham `&mut [T]` dilimde hangi elemanın
+        // yazıldığı izlenemediğinden verilen tüm satırlar "changed" işaretlenir. Bu,
+        // gerçek bir yazmayı asla kaçırmaz (güvenli); detay için bkz. `iter_chunks_mut`.
         let ticks = std::slice::from_raw_parts_mut(ticks_ptr, len);
         for tick in ticks.iter_mut() {
             tick.changed = system_tick;
@@ -237,6 +240,8 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         self.iter()
     }
 
+    /// Salt-okunur SIMD-dostu chunk iterasyonu (`&[T]` döndürür). Değişiklik tespitini
+    /// (change detection) ETKİLEMEZ — bileşenleri okumak için kullanın.
     pub fn iter_chunks<'a>(&'a self) -> QueryChunksIter<'a, 'w, Q> {
         QueryChunksIter {
             world: self.world,
@@ -246,6 +251,16 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         }
     }
 
+    /// **Toplu (bulk) yazma** için mutable chunk iterasyonu (`&mut [T]` döndürür).
+    ///
+    /// Ham bir dilim verdiği için hangi elemanların yazıldığını izleyemez; bu yüzden
+    /// **verilen tüm satırları temkinli (conservative) olarak "changed" işaretler.**
+    /// Bu, gerçek bir değişikliği asla KAÇIRMAZ (change detection için güvenli taraf),
+    /// ama yalnızca bir kısmını yazarsanız yazılmayanları da "changed" gösterir
+    /// (false positive). Doğru aracı seçin:
+    /// - Sadece okuyacaksanız → [`Query::iter_chunks`] (işaretlemez).
+    /// - Bir kısmını hassas işaretleyerek yazacaksanız → `iter_mut` (eleman başına `Mut`).
+    /// - Hepsini yazacaksanız → bu metot (hepsini işaretlemek zaten doğru).
     pub fn iter_chunks_mut<'a>(&'a mut self) -> QueryChunksIter<'a, 'w, Q> {
         self.iter_chunks()
     }
@@ -895,5 +910,34 @@ mod tests {
         assert!(q.get_entity(stale).is_none(), "stale handle None dönmeli");
         // Geçerli handle çalışır.
         assert_eq!(q.get_entity(e2).map(|p| p.x), Some(2.0));
+    }
+
+    /// `iter_chunks_mut` ile yapılan toplu yazma, değişiklik tespitini tetiklemeli
+    /// (temkinli işaretleme → gerçek yazmayı asla kaçırmaz, false negative yok).
+    #[test]
+    fn iter_chunks_mut_triggers_change_detection() {
+        let mut world = crate::World::new();
+        world.register_component_type::<Position>();
+        let e = world.spawn();
+        world.add_component(e, Position { x: 1.0, y: 1.0 });
+
+        // Referansı bu tick'e ayarla ve frame'i ilerlet (Schedule'ın yaptığı gibi).
+        world.begin_change_frame(world.tick);
+        // Yazmadan önce: değişiklik yok.
+        assert_eq!(world.query::<Changed<Position>>().unwrap().iter().count(), 0);
+
+        // Chunked mutable yazma.
+        {
+            let mut q = world.query::<Mut<Position>>().unwrap();
+            for (_ids, slice) in q.iter_chunks_mut() {
+                for p in slice.iter_mut() {
+                    p.x += 10.0;
+                }
+            }
+        }
+
+        // Yazmadan sonra: Changed tetiklenmeli ve değer güncellenmeli.
+        assert_eq!(world.query::<Changed<Position>>().unwrap().iter().count(), 1);
+        assert_eq!(world.query::<&Position>().unwrap().get(e.id()).map(|p| p.x), Some(11.0));
     }
 }
