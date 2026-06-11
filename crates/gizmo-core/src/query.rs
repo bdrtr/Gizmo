@@ -584,13 +584,22 @@ pub struct Changed<T>(PhantomData<T>);
 
 impl<T: crate::component::Component> WorldQuery for Changed<T> {
     type StaticType = Changed<T>;
-    type Fetch<'w> = *const crate::archetype::ComponentTicks;
+    // (tablo ticks pointer'ı, SparseSet ise set pointer'ı)
+    type Fetch<'w> = (
+        *const crate::archetype::ComponentTicks,
+        Option<*const crate::archetype::sparse_set::ComponentSparseSet>,
+    );
     type Item<'w> = ();
     type Slice<'w> = ();
 
-    unsafe fn fetch_raw<'w>(_world: &'w World, arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
-        let col = arch.get_column(TypeId::of::<T>())?;
-        Some(col.ticks_ptr())
+    unsafe fn fetch_raw<'w>(world: &'w World, arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
+        if T::storage_type() == crate::component::StorageType::SparseSet {
+            let set = world.sparse_sets.get(&TypeId::of::<T>())?;
+            Some((std::ptr::null(), Some(set as *const _)))
+        } else {
+            let col = arch.get_column(TypeId::of::<T>())?;
+            Some((col.ticks_ptr(), None))
+        }
     }
 
     fn check_aliasing(_types: &mut Vec<(TypeId, bool)>) {}
@@ -599,16 +608,13 @@ impl<T: crate::component::Component> WorldQuery for Changed<T> {
         if T::storage_type() == crate::component::StorageType::SparseSet { true } else { arch.has_component(TypeId::of::<T>()) }
     }
 
-    unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, row: usize, _entity_id: u32, tick: u32) -> bool {
-        if T::storage_type() == crate::component::StorageType::SparseSet {
-            // TODO: Proper sparse set changed tracking, for now true if exists
-            true 
+    unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, row: usize, entity_id: u32, tick: u32) -> bool {
+        // `tick` = change_ref_tick (son çalıştırma); referanstan SONRA değişenler eşlenir.
+        if let Some(set_ptr) = fetch.1 {
+            // SparseSet: entity'nin saklanan tick'ini ara (eskiden her zaman true idi).
+            (*set_ptr).ticks_for(entity_id).is_some_and(|t| t.changed > tick)
         } else {
-            let ticks = &*fetch.add(row);
-            // `tick` burada change_ref_tick (son çalıştırmanın tick'i); referanstan
-            // SONRA değişenleri eşler. (Eskiden `== current_tick` idi → kareler arası
-            // çalışmıyordu.)
-            ticks.changed > tick
+            (*fetch.0.add(row)).changed > tick
         }
     }
 
@@ -621,13 +627,21 @@ pub struct Added<T>(PhantomData<T>);
 
 impl<T: crate::component::Component> WorldQuery for Added<T> {
     type StaticType = Added<T>;
-    type Fetch<'w> = *const crate::archetype::ComponentTicks;
+    type Fetch<'w> = (
+        *const crate::archetype::ComponentTicks,
+        Option<*const crate::archetype::sparse_set::ComponentSparseSet>,
+    );
     type Item<'w> = ();
     type Slice<'w> = ();
 
-    unsafe fn fetch_raw<'w>(_world: &'w World, arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
-        let col = arch.get_column(TypeId::of::<T>())?;
-        Some(col.ticks_ptr())
+    unsafe fn fetch_raw<'w>(world: &'w World, arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
+        if T::storage_type() == crate::component::StorageType::SparseSet {
+            let set = world.sparse_sets.get(&TypeId::of::<T>())?;
+            Some((std::ptr::null(), Some(set as *const _)))
+        } else {
+            let col = arch.get_column(TypeId::of::<T>())?;
+            Some((col.ticks_ptr(), None))
+        }
     }
 
     fn check_aliasing(_types: &mut Vec<(TypeId, bool)>) {}
@@ -636,13 +650,12 @@ impl<T: crate::component::Component> WorldQuery for Added<T> {
         if T::storage_type() == crate::component::StorageType::SparseSet { true } else { arch.has_component(TypeId::of::<T>()) }
     }
 
-    unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, row: usize, _entity_id: u32, tick: u32) -> bool {
-        if T::storage_type() == crate::component::StorageType::SparseSet {
-            true 
+    unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, row: usize, entity_id: u32, tick: u32) -> bool {
+        // change_ref_tick'ten sonra eklenenleri eşler (bkz. Changed).
+        if let Some(set_ptr) = fetch.1 {
+            (*set_ptr).ticks_for(entity_id).is_some_and(|t| t.added > tick)
         } else {
-            let ticks = &*fetch.add(row);
-            // change_ref_tick'ten sonra eklenenleri eşler (bkz. Changed).
-            ticks.added > tick
+            (*fetch.0.add(row)).added > tick
         }
     }
 
@@ -939,5 +952,44 @@ mod tests {
         // Yazmadan sonra: Changed tetiklenmeli ve değer güncellenmeli.
         assert_eq!(world.query::<Changed<Position>>().unwrap().iter().count(), 1);
         assert_eq!(world.query::<&Position>().unwrap().get(e.id()).map(|p| p.x), Some(11.0));
+    }
+
+    /// SparseSet bileşenlerinde `Changed`/`Added` artık gerçek tick takibi yapar
+    /// (eskiden her zaman `true` idi). Tablo bileşenleriyle aynı kareler-arası semantik.
+    #[test]
+    fn sparse_set_change_detection_tracks_ticks() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct SparseComp(i32);
+        impl crate::component::Component for SparseComp {
+            fn storage_type() -> crate::component::StorageType {
+                crate::component::StorageType::SparseSet
+            }
+        }
+
+        let mut world = crate::World::new();
+        world.register_component_type::<SparseComp>();
+        let e = world.spawn();
+        world.add_component(e, SparseComp(1));
+
+        // Frame 1: ref=0 → eklenen bileşen Added ve Changed olarak görülmeli.
+        world.begin_change_frame(0);
+        assert_eq!(world.query::<Added<SparseComp>>().unwrap().iter().count(), 1);
+        assert_eq!(world.query::<Changed<SparseComp>>().unwrap().iter().count(), 1);
+
+        // Frame 2: değişiklik yok → ikisi de boş (eski davranış burada hep 1 verirdi).
+        let prev = world.tick;
+        world.begin_change_frame(prev);
+        assert_eq!(world.query::<Changed<SparseComp>>().unwrap().iter().count(), 0);
+        assert_eq!(world.query::<Added<SparseComp>>().unwrap().iter().count(), 0);
+
+        // Frame 2 içinde mutasyon → Changed yeniden tetiklenmeli.
+        {
+            let mut q = world.query::<Mut<SparseComp>>().unwrap();
+            for (_id, mut c) in q.iter_mut() {
+                c.0 += 10;
+            }
+        }
+        assert_eq!(world.query::<Changed<SparseComp>>().unwrap().iter().count(), 1);
+        assert_eq!(world.query::<&SparseComp>().unwrap().get(e.id()).map(|c| c.0), Some(11));
     }
 }
