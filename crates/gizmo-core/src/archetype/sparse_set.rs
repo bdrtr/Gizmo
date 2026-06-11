@@ -96,6 +96,17 @@ impl ComponentSparseSet {
         e < self.sparse.len() && self.sparse[e] != u32::MAX
     }
 
+    /// Bir entity'nin değişiklik-tespiti tick'lerini döndürür (yoksa `None`).
+    /// `Changed<T>`/`Added<T>` filtreleri SparseSet bileşenleri için bunu kullanır.
+    #[inline]
+    pub fn ticks_for(&self, entity: u32) -> Option<&ComponentTicks> {
+        let e = entity as usize;
+        if e >= self.sparse.len() || self.sparse[e] == u32::MAX {
+            return None;
+        }
+        self.ticks.get(self.sparse[e] as usize)
+    }
+
     #[inline]
     pub fn get_ptr(&self, entity: u32) -> Option<*const u8> {
         let e = entity as usize;

@@ -42,8 +42,10 @@ Derin incelemede işaretlenen ama henüz **kapatılmamış** orta-güvenli sorun
       kaçırmaz; false negative yok). API zaten doğru aracı sunuyor: oku→`iter_chunks`,
       hassas yaz→`iter_mut`, toplu yaz→`iter_chunks_mut`. Davranış belgelendi + chunked
       yazmanın change detection'ı tetiklediğini doğrulayan test eklendi.
-- [ ] **SparseSet change tracking** — `Changed<T>`/`Added<T>` SparseSet bileşenlerinde her zaman
-      `true` (TODO); gerçek tick takibi ekle.
+- [x] **SparseSet change tracking** — `Changed<T>`/`Added<T>` artık SparseSet bileşenlerinde
+      entity'nin saklanan tick'ini okuyor (`ComponentSparseSet::ticks_for`); tablo
+      bileşenleriyle aynı kareler-arası semantik. Test: Added/Changed + mutasyon + "değişiklik
+      yok" durumları doğru.
 
 Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı turu):
 - [ ] FEM soft-body (`gizmo-physics-soft`)
