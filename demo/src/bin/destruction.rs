@@ -173,7 +173,7 @@ fn run() {
             // Let's fake an auto-trigger after a second maybe?
             // Space handles standard triggering. We will add an auto trigger at 60th frame in our test.
             // Oh wait, I don't have access to state.frames. I will just rely on Space or hardcode one time shatter.
-            if (input.is_key_pressed(KeyCode::Space as u32) || true) && !state.shattered {
+            if input.is_key_pressed(KeyCode::Space as u32) && !state.shattered {
                 state.shattered = true;
 
                 // Voronoi Shatter işlemi!
