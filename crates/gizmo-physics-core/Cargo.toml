@@ -16,3 +16,6 @@ gizmo-math = { path = "../gizmo-math", version = "0.1.7" }
 arrayvec = "0.7.6"
 tracing = "0.1.44"
 bevy_reflect = "0.15.1"
+
+[dev-dependencies]
+proptest = { workspace = true }
