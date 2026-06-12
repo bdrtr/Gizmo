@@ -118,7 +118,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> VehicleState {
 
     // YENİ ECS ARAÇ DENETLEYİCİSİNİ EKLİYORUZ
     let mut vehicle = gizmo::physics::vehicle::VehicleController::new();
-    for i in 0..4 {
+    for (i, &local_pos) in wheel_local_pos.iter().enumerate() {
         let axle_type = if i < 2 {
             gizmo::physics::vehicle::Axle::Front
         } else {
@@ -127,7 +127,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> VehicleState {
         let is_left = i % 2 == 0; // 0, 2 are Left; 1, 3 are Right
 
         vehicle.add_wheel(gizmo::physics::vehicle::Wheel {
-            attachment_local_pos: wheel_local_pos[i],
+            attachment_local_pos: local_pos,
             radius: wheel_radius,
             axle_type,
             is_left,

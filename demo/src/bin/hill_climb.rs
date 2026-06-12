@@ -353,7 +353,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     let mut suspension_entities = [chassis; 4];
     let strut_mat =
         Material::new(tire_tex.clone()).with_pbr(Vec4::new(0.9, 0.2, 0.2, 1.0), 0.5, 0.8);
-    for i in 0..4 {
+    for slot in suspension_entities.iter_mut() {
         let s = world.spawn();
         world.add_component(
             s,
@@ -362,7 +362,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         world.add_component(s, cylinder_mesh.clone());
         world.add_component(s, strut_mat.clone());
         world.add_component(s, MeshRenderer::new());
-        suspension_entities[i] = s;
+        *slot = s;
     }
 
     // Vehicle Controller Setup
@@ -373,7 +373,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     vehicle.tuning.max_engine_torque = 45000.0;
     vehicle.tuning.gear_ratios = vec![-4.0, 0.0, 4.0, 2.5, 1.8]; // Low gear ratios for climbing
 
-    for i in 0..4 {
+    for (i, &local_pos) in wheel_local_pos.iter().enumerate() {
         let axle_type = if i < 2 {
             gizmo::physics::vehicle::Axle::Rear
         } else {
@@ -382,11 +382,13 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         let is_left = i % 2 == 0;
 
         // Custom pacejka for arcade climbing
-        let mut pacejka = gizmo::physics::vehicle::PacejkaParams::default();
-        pacejka.d = 4.0; // Devasa sürtünme (tutunma) gücü
+        let pacejka = gizmo::physics::vehicle::PacejkaParams {
+            d: 4.0, // Devasa sürtünme (tutunma) gücü
+            ..Default::default()
+        };
 
         vehicle.add_wheel(gizmo::physics::vehicle::Wheel {
-            attachment_local_pos: wheel_local_pos[i],
+            attachment_local_pos: local_pos,
             radius: wheel_radius,
             axle_type,
             is_left,

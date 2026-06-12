@@ -184,10 +184,8 @@ pub fn update_scene_api(lua: &Lua, world: &World) -> Result<(), LuaError> {
 
     // Entity listesini güncelle
     let entities_table = lua.create_table()?;
-    let mut idx = 1;
-    for entity in world.iter_alive_entities() {
-        entities_table.set(idx, entity.id())?;
-        idx += 1;
+    for (idx, entity) in world.iter_alive_entities().into_iter().enumerate() {
+        entities_table.set(idx + 1, entity.id())?;
     }
     scene_table.set("_entities", entities_table)?;
 

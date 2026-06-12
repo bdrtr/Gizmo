@@ -258,11 +258,7 @@ fn draw_entity_node(
         } else {
             ui.style().visuals.text_color()
         };
-        let font = if is_selected {
-            egui::FontId::proportional(13.0)
-        } else {
-            egui::FontId::proportional(13.0)
-        };
+        let font = egui::FontId::proportional(13.0);
         ui.painter().text(
             rect.left_center() + egui::vec2(4.0, 0.0),
             egui::Align2::LEFT_CENTER,

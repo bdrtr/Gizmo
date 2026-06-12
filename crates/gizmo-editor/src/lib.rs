@@ -120,8 +120,8 @@ pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) 
                         true,
                         res.map(|p: std::path::PathBuf| {
                             let s = p.to_string_lossy().to_string();
-                            if s.starts_with(r"\\?\") {
-                                s[4..].to_string()
+                            if let Some(stripped) = s.strip_prefix(r"\\?\") {
+                                stripped.to_string()
                             } else {
                                 s
                             }

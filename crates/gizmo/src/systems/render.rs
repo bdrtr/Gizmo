@@ -254,12 +254,12 @@ pub fn default_render_pass(
                     proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_Z, -gizmo_math::Vec3::Y),
                 ];
                 
-                for i in 0..6 {
+                for (i, view_proj) in point_light_view_projs.iter().enumerate() {
                     renderer.queue.write_buffer(
                         &renderer.scene.point_shadow_uniform_buffers[i],
                         0,
                         bytemuck::bytes_of(&crate::renderer::gpu_types::ShadowVsUniform {
-                            light_view_proj: point_light_view_projs[i].to_cols_array_2d(),
+                            light_view_proj: view_proj.to_cols_array_2d(),
                         }),
                     );
                 }
@@ -293,12 +293,12 @@ pub fn default_render_pass(
         0,
         bytemuck::cast_slice(&[scene_uniform_data]),
     );
-    for i in 0..crate::renderer::CASCADE_COUNT {
+    for (i, light_view_proj) in light_view_projs.iter().enumerate() {
         renderer.queue.write_buffer(
             &renderer.scene.shadow_cascade_uniform_buffers[i],
             0,
             bytemuck::bytes_of(&crate::renderer::gpu_types::ShadowVsUniform {
-                light_view_proj: light_view_projs[i],
+                light_view_proj: *light_view_proj,
             }),
         );
     }
@@ -962,13 +962,7 @@ pub fn default_render_pass(
             let mut draw_solid = false;
             let draw_wire = show_wireframes && !item.is_skybox;
 
-            if item.is_skybox {
-                draw_solid = true;
-            } else if item.unlit {
-                draw_solid = true;
-            } else if renderer.deferred.is_none() {
-                draw_solid = true;
-            } else if item.is_transparent {
+            if item.is_skybox || item.unlit || renderer.deferred.is_none() || item.is_transparent {
                 draw_solid = true;
             }
 

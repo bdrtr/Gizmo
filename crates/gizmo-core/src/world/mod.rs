@@ -1761,7 +1761,7 @@ mod tests {
         let mut entities = Vec::new();
         for i in 0..10_000 {
             let e = world.spawn();
-            world.add_component(e, CompA(i as i32));
+            world.add_component(e, CompA(i));
             if i % 2 == 0 {
                 world.add_component(e, CompB(i as f32));
             }

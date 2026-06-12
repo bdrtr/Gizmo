@@ -1,4 +1,4 @@
-use bevy_math::{cubic_splines::*, prelude::*, VectorSpace, vec2, vec3, vec3a};
+use bevy_math::{cubic_splines::*, VectorSpace, vec2, vec3, vec3a};
 use criterion::{
     criterion_group, criterion_main, measurement::Measurement, BatchSize, BenchmarkGroup, BenchmarkId, Criterion,
 };

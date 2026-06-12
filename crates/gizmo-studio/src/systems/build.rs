@@ -68,7 +68,7 @@ pub fn handle_build_requests(editor_state: &mut EditorState) {
                     let stderr_thread = std::thread::spawn(move || {
                         use std::io::{BufRead, BufReader};
                         let reader = BufReader::new(stderr);
-                        for l in reader.lines().flatten() {
+                        for l in reader.lines().map_while(Result::ok) {
                             let _ = tx_err.send(l);
                         }
                     });
@@ -76,7 +76,7 @@ pub fn handle_build_requests(editor_state: &mut EditorState) {
                     let stdout_thread = std::thread::spawn(move || {
                         use std::io::{BufRead, BufReader};
                         let reader = BufReader::new(stdout);
-                        for l in reader.lines().flatten() {
+                        for l in reader.lines().map_while(Result::ok) {
                             let _ = tx_out.send(l);
                         }
                     });
@@ -121,14 +121,14 @@ pub fn handle_build_requests(editor_state: &mut EditorState) {
                         }
 
                         log("\n== [Adım 3/3] Assetler Taşınıyor ==");
-                        let _ = copy_dir_all("demo/assets", export_dir.join("assets"), &log);
+                        let _ = copy_dir_all("demo/assets", export_dir.join("assets"));
                         log("Kopyalandı -> assets/");
-                        let _ = copy_dir_all("demo/scenes", export_dir.join("scenes"), &log);
+                        let _ = copy_dir_all("demo/scenes", export_dir.join("scenes"));
                         log("Kopyalandı -> scenes/");
-                        let _ = copy_dir_all("demo/scripts", export_dir.join("scripts"), &log);
+                        let _ = copy_dir_all("demo/scripts", export_dir.join("scripts"));
                         log("Kopyalandı -> scripts/");
                         let _ =
-                            crate::update::copy_dir_all("media", export_dir.join("media"), &log);
+                            crate::update::copy_dir_all("media", export_dir.join("media"));
                         log("Kopyalandı -> media/");
 
                         log("\n🎉 BUILD TAMAMLANDI! 🎉");

@@ -66,13 +66,18 @@ enum WorkerMsg {
     },
     Gltf {
         path: String,
-        result: Result<
-            (
-                gltf::Document,
-                Vec<gltf::buffer::Data>,
-                Vec<gltf::image::Data>,
-            ),
-            String,
+        // Box'lu: bu varyantın payload'ı (gltf::Document + buffer/image data)
+        // diğer varyantlardan çok büyük; Box'lamak enum boyutunu küçük tutar
+        // (clippy::large_enum_variant). Gltf mesajları seyrek, indirection bedava.
+        result: Box<
+            Result<
+                (
+                    gltf::Document,
+                    Vec<gltf::buffer::Data>,
+                    Vec<gltf::image::Data>,
+                ),
+                String,
+            >,
         >,
     },
 }
@@ -128,7 +133,8 @@ impl AsyncAssetLoader {
                             }
                             Job::Gltf { path } => {
                                 let result = gltf::import(&path).map_err(|e| e.to_string());
-                                let _ = worker_result_tx.send(WorkerMsg::Gltf { path, result });
+                                let _ = worker_result_tx
+                                    .send(WorkerMsg::Gltf { path, result: Box::new(result) });
                             }
                         }
                     }
@@ -235,7 +241,7 @@ impl AsyncAssetLoader {
                 let result = fetch_and_parse_gltf_wasm(&path_clone).await;
                 let _ = result_tx.send(WorkerMsg::Gltf {
                     path: path_clone,
-                    result,
+                    result: Box::new(result),
                 });
             });
             true
@@ -303,7 +309,7 @@ impl AsyncAssetLoader {
                 }
                 WorkerMsg::Gltf { path, result } => {
                     g.gltf_inflight.remove(&path);
-                    match result {
+                    match *result {
                         Ok((document, buffers, images)) => {
                             out.gltfs.push(GltfImportCompletion {
                                 path,

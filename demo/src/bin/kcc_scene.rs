@@ -126,10 +126,12 @@ fn setup(world: &mut World, renderer: &Renderer) -> KccState {
     world.add_component(char_ent, char_mat);
     world.add_component(char_ent, MeshRenderer::new());
 
-    let mut kcc = CharacterController::default();
-    kcc.speed = 8.0;
-    kcc.jump_speed = 6.0;
-    kcc.step_height = 0.3;
+    let kcc = CharacterController {
+        speed: 8.0,
+        jump_speed: 6.0,
+        step_height: 0.3,
+        ..Default::default()
+    };
 
     world.add_component(char_ent, kcc);
 

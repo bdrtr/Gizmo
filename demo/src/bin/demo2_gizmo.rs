@@ -84,19 +84,22 @@ fn main() {
 
             // Point Light
             let light_ent = scene.world.spawn();
-            let mut bundle = gizmo::bundles::PointLightBundle::default();
-            bundle.position = Vec3::new(8.0, 16.0, 8.0);
-            bundle.color = Vec3::new(1.0, 1.0, 1.0);
-            bundle.intensity = 10.0;
-            bundle.radius = 40.0;
+            let bundle = gizmo::bundles::PointLightBundle {
+                position: Vec3::new(8.0, 16.0, 8.0),
+                color: Vec3::new(1.0, 1.0, 1.0),
+                intensity: 10.0,
+                radius: 40.0,
+            };
             bundle.apply(scene.world, light_ent);
 
             // Directional Light (Sun)
             let sun_ent = scene.world.spawn();
-            let mut sun_bundle = gizmo::bundles::DirectionalLightBundle::default();
-            sun_bundle.rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4) * Quat::from_rotation_y(std::f32::consts::FRAC_PI_4);
-            sun_bundle.intensity = 1.2;
-            sun_bundle.color = Vec3::new(1.0, 1.0, 1.0);
+            let sun_bundle = gizmo::bundles::DirectionalLightBundle {
+                rotation: Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4) * Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
+                intensity: 1.2,
+                color: Vec3::new(1.0, 1.0, 1.0),
+                ..Default::default()
+            };
             sun_bundle.apply(scene.world, sun_ent);
 
             // Camera setup

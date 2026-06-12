@@ -355,7 +355,7 @@ pub fn execute_render_pipeline(
                     None => continue, // CULL edildi!
                 };
 
-                let packed_params = ((mat.anisotropy * 1000.0).floor() + 1000.0 * (mat.clear_coat * 1000.0).floor() + 1000000.0 * (mat.subsurface * 100.0).floor()) as f32;
+                let packed_params = (mat.anisotropy * 1000.0).floor() + 1000.0 * (mat.clear_coat * 1000.0).floor() + 1000000.0 * (mat.subsurface * 100.0).floor() ;
 
                 let instance_data = InstanceRaw {
                     model: model.to_cols_array_2d(),
@@ -571,12 +571,12 @@ pub fn execute_render_pipeline(
         }
 
         // --- 1. CSM GÖLGE PASS ---
-        for cascade_i in 0..4usize {
+        for (cascade_i, &cascade_view_proj) in light_view_proj_cascades.iter().enumerate() {
             renderer.queue.write_buffer(
                 &renderer.scene.shadow_cascade_uniform_buffers[cascade_i],
                 0,
                 gizmo::bytemuck::bytes_of(&gizmo::renderer::ShadowVsUniform {
-                    light_view_proj: light_view_proj_cascades[cascade_i],
+                    light_view_proj: cascade_view_proj,
                 }),
             );
 

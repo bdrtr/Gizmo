@@ -22,10 +22,12 @@ fn main() {
 
             // Setup a directional sun light
             let sun_ent = scene.world.spawn();
-            let mut sun_bundle = DirectionalLightBundle::default();
-            sun_bundle.rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4);
-            sun_bundle.intensity = 0.8;
-            sun_bundle.color = Vec3::new(1.0, 1.0, 1.0);
+            let sun_bundle = DirectionalLightBundle {
+                rotation: Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4),
+                intensity: 0.8,
+                color: Vec3::new(1.0, 1.0, 1.0),
+                ..Default::default()
+            };
             sun_bundle.apply(scene.world, sun_ent);
 
             // Mesh & texture for cubes

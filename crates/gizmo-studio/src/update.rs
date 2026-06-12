@@ -332,14 +332,13 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
 pub fn copy_dir_all(
     src: impl AsRef<std::path::Path>,
     dst: impl AsRef<std::path::Path>,
-    log: &dyn Fn(&str),
 ) -> std::io::Result<()> {
     std::fs::create_dir_all(&dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         let ty = entry.file_type()?;
         if ty.is_dir() {
-            copy_dir_all(entry.path(), dst.as_ref().join(entry.file_name()), log)?;
+            copy_dir_all(entry.path(), dst.as_ref().join(entry.file_name()))?;
         } else {
             std::fs::copy(entry.path(), dst.as_ref().join(entry.file_name()))?;
         }

@@ -234,10 +234,11 @@ impl ProbeGrid {
         let start = Instant::now();
 
         for probe in &mut self.probes {
-            let mut coeffs = SHCoeffs::default();
-
             // Ambient (sabit terim)
-            coeffs.l0 = ambient_color * 0.282095;
+            let mut coeffs = SHCoeffs {
+                l0: ambient_color * 0.282095,
+                ..Default::default()
+            };
 
             // Directional lights
             for &(dir, color, intensity) in directional_lights {

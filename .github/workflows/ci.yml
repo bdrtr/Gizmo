@@ -52,16 +52,16 @@ jobs:
       # `-D warnings` gerçek bir kapıdır. Mevcut (grandfather'lı) lint'ler `-A` ile
       # muaf tutulur — bu bir RATCHET: YENİ lint türleri CI'yı kırar, mevcut backlog
       # zamanla temizlendikçe ilgili `-A` satırı kaldırılır.
+      #
+      # 2026-06-12: backlog temizliği — 17 muaf lint → 2'ye indi (bkz. git log).
+      # Kalan ikisi mimari: `too_many_arguments`/`type_complexity` fonksiyon
+      # imzalarını struct'a sarmadan refactor edilemez, ayrı bir iş. Tek meşru
+      # `needless_range_loop` istisnası (determinizm-kritik PGS solver) global
+      # `-A` yerine solver.rs'te yerel `#[allow]` + gerekçeyle dokümante edildi.
       - name: Clippy (-D warnings, ratcheted)
         run: |
           cargo clippy --workspace -- -D warnings \
-            -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::large_enum_variant \
-            -A clippy::needless_range_loop -A clippy::field_reassign_with_default \
-            -A clippy::if_same_then_else -A clippy::empty_line_after_doc_comments \
-            -A clippy::clone_on_copy -A clippy::collapsible_if -A clippy::explicit_counter_loop \
-            -A clippy::assign_op_pattern -A clippy::manual_strip -A clippy::lines_filter_map_ok \
-            -A clippy::only_used_in_recursion -A clippy::question_mark -A clippy::redundant_closure \
-            -A clippy::unnecessary_cast
+            -A clippy::too_many_arguments -A clippy::type_complexity
 
   # ── Determinism & stability: 3× tower collapse, hashes must match ─────────
   determinism:

@@ -186,11 +186,10 @@ fn compute_entity_obb(
         );
         // Çok ince mesh'ler için minimum tıklanabilir alan
         extents = extents.max(Vec3::splat(0.1));
-    } else if let Some(col) = colliders.get(id) {
+    } else {
+        let col = colliders.get(id)?;
         let aabb = col.compute_aabb(Vec3::ZERO, gizmo::math::Quat::IDENTITY);
         extents = Vec3::new(aabb.half_extents().x, aabb.half_extents().y, aabb.half_extents().z);
-    } else {
-        return None; // Hacmi yok — seçilemez
     }
 
     // Global transform üzerinden pozisyon, rotasyon, scale al
@@ -280,7 +279,7 @@ fn perform_rubber_band_selection(
                 (max.z + min.z) * 0.5,
             );
             // Renderer ile aynı: center_offset'i ekle
-            local_offset = local_offset + mesh.center_offset;
+            local_offset += mesh.center_offset;
         }
 
         let center = g_pos + (g_rot * (local_offset * g_scale));

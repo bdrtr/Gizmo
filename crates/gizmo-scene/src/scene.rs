@@ -449,7 +449,7 @@ impl SceneData {
 mod tests {
     use super::*;
     use gizmo_core::World;
-    use gizmo_physics_rigid::joints::data::{Joint, JointType};
+    use gizmo_physics_rigid::joints::data::Joint;
 
     #[test]
     fn test_prefab_joint_serialization() {

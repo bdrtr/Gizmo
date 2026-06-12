@@ -175,11 +175,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         world.add_component(link_ent, RigidBody::new(2.0, 0.1, 0.5, true));
         world.add_component(link_ent, Velocity::default());
 
-        let local_anchor_a = if i == 1 {
-            Vec3::new(0.0, -0.5, 0.0)
-        } else {
-            Vec3::new(0.0, -0.5, 0.0)
-        };
+        let local_anchor_a = Vec3::new(0.0, -0.5, 0.0);
         let local_anchor_b = Vec3::new(0.0, 0.5, 0.0);
 
         let mut ball_joint = Joint::ball_socket(prev_ent, link_ent, local_anchor_a, local_anchor_b);
