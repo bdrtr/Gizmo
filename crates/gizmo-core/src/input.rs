@@ -696,11 +696,11 @@ mod fighter_tests {
     #[test]
     fn test_fighter_input_buffer_combo() {
         let mut buffer = FighterInputBuffer::new(60);
-        let mut input = Input::new();
-        let mut action_map = ActionMap::new();
+        let _input = Input::new();
+        let _action_map = ActionMap::new();
 
         // 1. Frame: Sadece Down (pressed olarak gelecek)
-        let mut frame1 = FrameActions {
+        let frame1 = FrameActions {
             pressed: ["Down".to_string()].into_iter().collect(),
             just_pressed: [].into_iter().collect(),
             just_released: [].into_iter().collect(),
@@ -708,7 +708,7 @@ mod fighter_tests {
         buffer.frames.push_front(frame1);
 
         // 2. Frame: DownRight (Down + Right pressed)
-        let mut frame2 = FrameActions {
+        let frame2 = FrameActions {
             pressed: ["Down".to_string(), "Right".to_string()].into_iter().collect(),
             just_pressed: ["Right".to_string()].into_iter().collect(),
             just_released: [].into_iter().collect(),
@@ -716,7 +716,7 @@ mod fighter_tests {
         buffer.frames.push_front(frame2);
 
         // 3. Frame: Sadece Right (pressed), Down bırakıldı
-        let mut frame3 = FrameActions {
+        let frame3 = FrameActions {
             pressed: ["Right".to_string()].into_iter().collect(),
             just_pressed: [].into_iter().collect(),
             just_released: ["Down".to_string()].into_iter().collect(),
@@ -724,7 +724,7 @@ mod fighter_tests {
         buffer.frames.push_front(frame3);
 
         // 4. Frame: Punch (just_pressed)
-        let mut frame4 = FrameActions {
+        let frame4 = FrameActions {
             pressed: ["LightPunch".to_string()].into_iter().collect(),
             just_pressed: ["LightPunch".to_string()].into_iter().collect(),
             just_released: [].into_iter().collect(),
@@ -746,7 +746,7 @@ mod fighter_tests {
     fn test_fighter_input_buffer_max_gap() {
         let mut buffer = FighterInputBuffer::new(60);
 
-        let mut frame_down = FrameActions {
+        let frame_down = FrameActions {
             pressed: ["Down".to_string()].into_iter().collect(),
             just_pressed: ["Down".to_string()].into_iter().collect(),
             just_released: [].into_iter().collect(),
@@ -763,7 +763,7 @@ mod fighter_tests {
             buffer.frames.push_front(empty);
         }
 
-        let mut frame_punch = FrameActions {
+        let frame_punch = FrameActions {
             pressed: ["LightPunch".to_string()].into_iter().collect(),
             just_pressed: ["LightPunch".to_string()].into_iter().collect(),
             just_released: [].into_iter().collect(),

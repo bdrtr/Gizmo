@@ -129,10 +129,12 @@ fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
     world.add_component(char_ent, char_mat);
     world.add_component(char_ent, MeshRenderer::new());
 
-    let mut kcc = CharacterController::default();
-    kcc.speed = 10.0;
-    kcc.jump_speed = 8.0;
-    kcc.step_height = 0.5;
+    let kcc = CharacterController {
+        speed: 10.0,
+        jump_speed: 8.0,
+        step_height: 0.5,
+        ..Default::default()
+    };
 
     world.add_component(char_ent, kcc);
     world.add_component(char_ent, Collider::capsule(0.5, 0.5));

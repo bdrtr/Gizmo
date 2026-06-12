@@ -1,9 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use gizmo_math::{
-    aabb::Aabb,
-    frustum::{Frustum, Plane},
-};
-use glam::{Mat4, Quat, Vec3A, Vec4};
+use gizmo_math::frustum::{Frustum, Plane};
+use glam::{Quat, Vec3A};
 
 pub fn intersects_obb(c: &mut Criterion) {
     let mut group = c.benchmark_group("frustum_intersects");

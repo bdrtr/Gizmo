@@ -32,18 +32,22 @@ fn main() {
 
             // Directional Light (Sun)
             let sun_ent = scene.world.spawn();
-            let mut sun_bundle = DirectionalLightBundle::default();
-            sun_bundle.rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4);
-            sun_bundle.intensity = 0.8;
-            sun_bundle.color = Vec3::new(1.0, 1.0, 1.0);
+            let sun_bundle = DirectionalLightBundle {
+                rotation: Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4),
+                intensity: 0.8,
+                color: Vec3::new(1.0, 1.0, 1.0),
+                ..Default::default()
+            };
             sun_bundle.apply(scene.world, sun_ent);
 
             // Camera setup looking at Vec3::ZERO from (0.0, 10.0, 15.0) to match Bevy's camera example
             scene.spawn_camera(state, Vec3::new(0.0, 10.0, 15.0), Vec3::ZERO);
 
             // Insert Gizmos resource with depth testing disabled to prevent flickering/z-fighting
-            let mut debug_gizmos = gizmo::renderer::Gizmos::default();
-            debug_gizmos.depth_test = false;
+            let debug_gizmos = gizmo::renderer::Gizmos {
+                depth_test: false,
+                ..Default::default()
+            };
             scene.world.insert_resource(debug_gizmos);
         })
         .add_system(draw_cursor.in_phase(Phase::Update));

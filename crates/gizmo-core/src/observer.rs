@@ -52,7 +52,7 @@ mod tests {
         let counter_clone = counter.clone();
 
         // Register observer that increments the counter whenever a Health component is inserted.
-        world.add_observer(move |event: On<Insert, Health>| {
+        world.add_observer(move |_event: On<Insert, Health>| {
             *counter_clone.lock().unwrap() += 1;
         });
 

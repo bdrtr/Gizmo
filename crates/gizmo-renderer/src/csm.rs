@@ -17,11 +17,11 @@ pub fn cascade_split_distances(z_near: f32, z_far: f32, lambda: f32) -> [f32; CA
     let z_near = z_near.max(0.001);
     let z_far = z_far.max(z_near + 0.001);
     let n = CASCADE_COUNT as f32;
-    for i in 0..CASCADE_COUNT {
+    for (i, s) in s.iter_mut().enumerate() {
         let p = (i + 1) as f32 / n;
         let log_d = z_near * (z_far / z_near).powf(p);
         let uni_d = z_near + (z_far - z_near) * p;
-        s[i] = lambda * log_d + (1.0 - lambda) * uni_d;
+        *s = lambda * log_d + (1.0 - lambda) * uni_d;
     }
     s[CASCADE_COUNT - 1] = z_far;
     s

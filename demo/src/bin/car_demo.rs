@@ -115,7 +115,7 @@ fn main() {
 
     App::<CarDemoState>::new("Gizmo — Car Demo", 1600, 900)
         .add_plugin(gizmo::plugins::TransformPlugin)
-        .set_setup(|world, renderer| setup_scene(world, renderer))
+        .set_setup(setup_scene)
         .set_update(|world, state, dt, input| {
             let mut throttle = 0.0;
             let mut brake = 0.0;
@@ -160,16 +160,14 @@ fn main() {
                     }
 
                     if !vehicle.gearbox.is_automatic {
-                        if input.is_key_just_pressed(gizmo::prelude::KeyCode::KeyE as u32) {
-                            if vehicle.gearbox.current_gear < vehicle.gearbox.gears.len() - 1 {
+                        if input.is_key_just_pressed(gizmo::prelude::KeyCode::KeyE as u32)
+                            && vehicle.gearbox.current_gear < vehicle.gearbox.gears.len() - 1 {
                                 vehicle.gearbox.current_gear += 1;
                             }
-                        }
-                        if input.is_key_just_pressed(gizmo::prelude::KeyCode::KeyQ as u32) {
-                            if vehicle.gearbox.current_gear > 0 {
+                        if input.is_key_just_pressed(gizmo::prelude::KeyCode::KeyQ as u32)
+                            && vehicle.gearbox.current_gear > 0 {
                                 vehicle.gearbox.current_gear -= 1;
                             }
-                        }
                     }
                 }
             }
@@ -503,7 +501,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
 
     let mut ground_rb = RigidBody::new_static();
     ground_rb.friction = 0.8;
-    world.add_component(ground, ground_rb.clone());
+    world.add_component(ground, ground_rb);
     world.add_component(ground, Velocity::default());
     world.add_component(
         ground,
@@ -626,46 +624,56 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
     chassis_rb.lock_rotation_y = false;
     chassis_rb.lock_rotation_z = false;
     
-    let mut vehicle = Vehicle::default();
-    vehicle.engine_power = config.engine_power;
-    vehicle.brake_force = config.engine_power * 0.8;
+    let mut vehicle = Vehicle {
+        engine_power: config.engine_power,
+        brake_force: config.engine_power * 0.8,
+        ..Default::default()
+    };
     
     let w_x = 1.0;
     let w_z = 1.5;
     let w_y = -0.55; // Kasanın hemen altından başlasın (Çarpışma hatasını önlemek için)
     
     // Front Left
-    let mut wheel_fl = Wheel::default();
-    wheel_fl.local_position = Vec3::new(w_x, w_y, w_z);
-    wheel_fl.is_steering = true;
-    wheel_fl.is_drive = true;
-    wheel_fl.suspension_rest_length = 0.6;
+    let wheel_fl = Wheel {
+        local_position: Vec3::new(w_x, w_y, w_z),
+        is_steering: true,
+        is_drive: true,
+        suspension_rest_length: 0.6,
+        ..Default::default()
+    };
     vehicle.wheels.push(wheel_fl);
 
     // Front Right
-    let mut wheel_fr = Wheel::default();
-    wheel_fr.local_position = Vec3::new(-w_x, w_y, w_z);
-    wheel_fr.is_steering = true;
-    wheel_fr.is_drive = true;
-    wheel_fr.suspension_rest_length = 0.6;
+    let wheel_fr = Wheel {
+        local_position: Vec3::new(-w_x, w_y, w_z),
+        is_steering: true,
+        is_drive: true,
+        suspension_rest_length: 0.6,
+        ..Default::default()
+    };
     vehicle.wheels.push(wheel_fr);
 
     // Back Left
-    let mut wheel_bl = Wheel::default();
-    wheel_bl.local_position = Vec3::new(w_x, w_y, -w_z);
-    wheel_bl.is_drive = true;
-    wheel_bl.suspension_rest_length = 0.6;
+    let wheel_bl = Wheel {
+        local_position: Vec3::new(w_x, w_y, -w_z),
+        is_drive: true,
+        suspension_rest_length: 0.6,
+        ..Default::default()
+    };
     vehicle.wheels.push(wheel_bl);
 
     // Back Right
-    let mut wheel_br = Wheel::default();
-    wheel_br.local_position = Vec3::new(-w_x, w_y, -w_z);
-    wheel_br.is_drive = true;
-    wheel_br.suspension_rest_length = 0.6;
+    let wheel_br = Wheel {
+        local_position: Vec3::new(-w_x, w_y, -w_z),
+        is_drive: true,
+        suspension_rest_length: 0.6,
+        ..Default::default()
+    };
     vehicle.wheels.push(wheel_br);
 
     world.add_component(chassis_entity, vehicle);
-    world.add_component(chassis_entity, chassis_rb.clone());
+    world.add_component(chassis_entity, chassis_rb);
     world.add_component(chassis_entity, Velocity::new(Vec3::ZERO));
     world.add_component(
         chassis_entity,

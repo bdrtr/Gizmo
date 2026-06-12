@@ -126,7 +126,7 @@ fn bench_heavyweight_bundle(c: &mut Criterion) {
 fn bench_spawn_batch(c: &mut Criterion) {
     c.bench_function("spawn_batch_10k", |b| {
         b.iter_batched(
-            || World::new(),
+            World::new,
             |mut world| {
                 let iter = (0..10_000).map(|_| {
                     (
@@ -145,7 +145,7 @@ fn bench_spawn_batch(c: &mut Criterion) {
 
     c.bench_function("spawn_loop_10k", |b| {
         b.iter_batched(
-            || World::new(),
+            World::new,
             |mut world| {
                 for _ in 0..10_000 {
                     world.spawn_bundle((
@@ -181,7 +181,7 @@ fn bench_heavy_compute(c: &mut Criterion) {
                     // simulate inverse matrix
                     mat.0.0[0] *= 0.99;
                 }
-                pos.0.0[0] = mat.0.0[0] * pos.0.0[0];
+                pos.0.0[0] *= mat.0.0[0];
             });
         });
     });
@@ -1550,7 +1550,7 @@ pub fn build_schedule(criterion: &mut Criterion) {
             bencher.iter(|| {
                 let mut schedule = gizmo_core::system::Schedule::new();
                 for _ in 0..graph_size {
-                    use gizmo_core::system::IntoSystemConfig;
+                    
                     schedule.add_di_system(|| {});
                 }
                 schedule.build();
@@ -1566,10 +1566,10 @@ pub fn build_schedule(criterion: &mut Criterion) {
                 for i in 0..graph_size {
                     let mut sys = (|| {}).label(labels[i]).before("Dummy");
                     for label in labels.iter().take(i) {
-                        sys = sys.after(*label);
+                        sys = sys.after(label);
                     }
                     for label in &labels[i + 1..graph_size] {
-                        sys = sys.before(*label);
+                        sys = sys.before(label);
                     }
                     schedule.add_di_system(sys);
                 }
@@ -1897,7 +1897,7 @@ pub fn entity_set_build_and_lookup(c: &mut Criterion) {
                         .iter()
                         .copied()
                         .map(|e| Entity::from_bits(e.to_bits() + 1))
-                        .filter(|e| set.contains(&e))
+                        .filter(|e| set.contains(e))
                         .count()
                 });
             },
@@ -1911,7 +1911,7 @@ pub fn entity_set_build_and_lookup(c: &mut Criterion) {
                         .iter()
                         .copied()
                         .map(|e| Entity::from_bits(e.to_bits() + (1 << 32)))
-                        .filter(|e| set.contains(&e))
+                        .filter(|e| set.contains(e))
                         .count()
                 });
             },
@@ -1930,7 +1930,7 @@ pub fn entity_allocator_benches(criterion: &mut Criterion) {
     for entity_count in ENTITY_COUNTS {
         group.bench_function(format!("{entity_count}_entities"), |bencher| {
             bencher.iter_batched_ref(
-                || Entities::new(),
+                Entities::new,
                 |allocator| {
                     for _ in 0..entity_count {
                         let entity = allocator.reserve_entity();
@@ -1951,7 +1951,7 @@ pub fn entity_allocator_benches(criterion: &mut Criterion) {
     for entity_count in ENTITY_COUNTS {
         group.bench_function(format!("{entity_count}_entities"), |bencher| {
             bencher.iter_batched_ref(
-                || Entities::new(),
+                Entities::new,
                 |allocator| {
                     // Gizmo doesn't have bulk allocation yet, so we loop.
                     for _ in 0..entity_count {
@@ -2090,7 +2090,7 @@ pub fn entity_allocator_benches(criterion: &mut Criterion) {
     for entity_count in ENTITY_COUNTS {
         group.bench_function(format!("{entity_count}_entities"), |bencher| {
             bencher.iter_batched_ref(
-                || Entities::new(),
+                Entities::new,
                 |allocator| {
                     for _ in 0..entity_count {
                         let entity = allocator.reserve_entity();
@@ -2152,7 +2152,7 @@ pub fn world_spawn(criterion: &mut Criterion) {
     for entity_count in [1, 100, 10_000] {
         group.bench_function(format!("{entity_count}_entities"), |bencher| {
             bencher.iter_batched_ref(
-                || World::new(),
+                World::new,
                 |world| {
                     for _ in 0..entity_count {
                         let e = world.spawn();
@@ -2183,12 +2183,11 @@ pub fn world_spawn_batch(criterion: &mut Criterion) {
     for batch_count in [1, 100, 1000, 10_000] {
         group.bench_function(format!("{batch_count}_entities"), |bencher| {
             bencher.iter_batched_ref(
-                || World::new(),
+                World::new,
                 |world| {
                     for _ in 0..(10_000 / batch_count) {
                         let _ = world.spawn_batch(
-                            core::iter::repeat((LocalA(crate::Mat4::ZERO), LocalB([0.0; 4])))
-                                .take(batch_count as usize),
+                            std::iter::repeat_n((LocalA(crate::Mat4::ZERO), LocalB([0.0; 4])), batch_count as usize),
                         ).count();
                     }
                 },
@@ -2229,7 +2228,7 @@ const RANGE: core::ops::Range<u32> = 5..6;
 fn setup<T: Component + Default + Clone>(entity_count: u32) -> (World, Vec<Entity>) {
     let mut world = World::new();
     let entities: Vec<Entity> = world
-        .spawn_batch(core::iter::repeat((T::default(),)).take(entity_count as usize))
+        .spawn_batch(std::iter::repeat_n((T::default(),), entity_count as usize))
         .collect();
     core::hint::black_box((world, entities))
 }
@@ -2239,7 +2238,7 @@ fn setup_wide<T: Bundle + Default + Clone>(
 ) -> (World, Vec<Entity>) {
     let mut world = World::new();
     let entities: Vec<Entity> = world
-        .spawn_batch(core::iter::repeat(T::default()).take(entity_count as usize))
+        .spawn_batch(std::iter::repeat_n(T::default(), entity_count as usize))
         .collect();
     core::hint::black_box((world, entities))
 }
@@ -2300,7 +2299,7 @@ pub fn world_query_get(criterion: &mut Criterion) {
 
     for entity_count in RANGE.map(|i| i * 10_000) {
         group.bench_function(format!("{entity_count}_entities_table"), |bencher| {
-            let (mut world, entities) = setup::<Table>(entity_count);
+            let (world, entities) = setup::<Table>(entity_count);
             let query = world.query::<&Table>().unwrap();
 
             bencher.iter(|| {
@@ -2310,7 +2309,7 @@ pub fn world_query_get(criterion: &mut Criterion) {
             });
         });
         group.bench_function(format!("{entity_count}_entities_table_wide"), |bencher| {
-            let (mut world, entities) = setup_wide::<(
+            let (world, entities) = setup_wide::<(
                 WideTable<0>,
                 WideTable<1>,
                 WideTable<2>,
@@ -2334,7 +2333,7 @@ pub fn world_query_get(criterion: &mut Criterion) {
             });
         });
         group.bench_function(format!("{entity_count}_entities_sparse"), |bencher| {
-            let (mut world, entities) = setup::<Sparse>(entity_count);
+            let (world, entities) = setup::<Sparse>(entity_count);
             let query = world.query::<&Sparse>().unwrap();
 
             bencher.iter(|| {
@@ -2344,7 +2343,7 @@ pub fn world_query_get(criterion: &mut Criterion) {
             });
         });
         group.bench_function(format!("{entity_count}_entities_sparse_wide"), |bencher| {
-            let (mut world, entities) = setup_wide::<(
+            let (world, entities) = setup_wide::<(
                 WideSparse<0>,
                 WideSparse<1>,
                 WideSparse<2>,
@@ -2379,7 +2378,7 @@ pub fn world_query_iter(criterion: &mut Criterion) {
 
     for entity_count in RANGE.map(|i| i * 10_000) {
         group.bench_function(format!("{entity_count}_entities_table"), |bencher| {
-            let (mut world, _) = setup::<Table>(entity_count);
+            let (world, _) = setup::<Table>(entity_count);
             let query = world.query::<&Table>().unwrap();
 
             bencher.iter(|| {
@@ -2393,7 +2392,7 @@ pub fn world_query_iter(criterion: &mut Criterion) {
             });
         });
         group.bench_function(format!("{entity_count}_entities_sparse"), |bencher| {
-            let (mut world, _) = setup::<Sparse>(entity_count);
+            let (world, _) = setup::<Sparse>(entity_count);
             let query = world.query::<&Sparse>().unwrap();
 
             bencher.iter(|| {
@@ -2418,7 +2417,7 @@ pub fn world_query_for_each(criterion: &mut Criterion) {
 
     for entity_count in RANGE.map(|i| i * 10_000) {
         group.bench_function(format!("{entity_count}_entities_table"), |bencher| {
-            let (mut world, _) = setup::<Table>(entity_count);
+            let (world, _) = setup::<Table>(entity_count);
             let query = world.query::<&Table>().unwrap();
 
             bencher.iter(|| {
@@ -2432,7 +2431,7 @@ pub fn world_query_for_each(criterion: &mut Criterion) {
             });
         });
         group.bench_function(format!("{entity_count}_entities_sparse"), |bencher| {
-            let (mut world, _) = setup::<Sparse>(entity_count);
+            let (world, _) = setup::<Sparse>(entity_count);
             let query = world.query::<&Sparse>().unwrap();
 
             bencher.iter(|| {
@@ -2461,7 +2460,7 @@ pub fn query_get(criterion: &mut Criterion) {
         group.bench_function(format!("{entity_count}_entities_table"), |bencher| {
             let mut world = World::new();
             let mut entities: Vec<_> = world
-                .spawn_batch(core::iter::repeat((Table::default(),)).take(entity_count as usize))
+                .spawn_batch(std::iter::repeat_n((Table::default(),), entity_count as usize))
                 .collect();
             use rand::SeedableRng;
             let mut rng = chacha20::ChaCha8Rng::seed_from_u64(42);
@@ -2486,7 +2485,7 @@ pub fn query_get(criterion: &mut Criterion) {
         group.bench_function(format!("{entity_count}_entities_sparse"), |bencher| {
             let mut world = World::new();
             let mut entities: Vec<_> = world
-                .spawn_batch(core::iter::repeat((Sparse::default(),)).take(entity_count as usize))
+                .spawn_batch(std::iter::repeat_n((Sparse::default(),), entity_count as usize))
                 .collect();
             use rand::SeedableRng;
             let mut rng = chacha20::ChaCha8Rng::seed_from_u64(42);
@@ -2520,7 +2519,7 @@ pub fn query_get_components_mut_2(criterion: &mut Criterion) {
 
     for entity_count in RANGE.map(|i| i * 10_000) {
         group.bench_function(format!("2_components_{entity_count}_entities"), |bencher| {
-            let (mut world, entities) = setup_wide::<(WideTable<0>, WideTable<1>)>(entity_count);
+            let (world, entities) = setup_wide::<(WideTable<0>, WideTable<1>)>(entity_count);
             let query = world.query::<(Mut<WideTable<0>>, Mut<WideTable<1>>)>().unwrap();
             bencher.iter(|| {
                 for entity in &entities {
@@ -2540,7 +2539,7 @@ pub fn query_get_components_mut_5(criterion: &mut Criterion) {
 
     for entity_count in RANGE.map(|i| i * 10_000) {
         group.bench_function(format!("5_components_{entity_count}_entities"), |bencher| {
-            let (mut world, entities) = setup_wide::<(WideTable<0>, WideTable<1>, WideTable<2>, WideTable<3>, WideTable<4>)>(entity_count);
+            let (world, entities) = setup_wide::<(WideTable<0>, WideTable<1>, WideTable<2>, WideTable<3>, WideTable<4>)>(entity_count);
             let query = world.query::<(Mut<WideTable<0>>, Mut<WideTable<1>>, Mut<WideTable<2>>, Mut<WideTable<3>>, Mut<WideTable<4>>)>().unwrap();
             bencher.iter(|| {
                 for entity in &entities {
@@ -2560,7 +2559,7 @@ pub fn query_get_components_mut_10(criterion: &mut Criterion) {
 
     for entity_count in RANGE.map(|i| i * 10_000) {
         group.bench_function(format!("10_components_{entity_count}_entities"), |bencher| {
-            let (mut world, entities) = setup_wide::<(WideTable<0>, WideTable<1>, WideTable<2>, WideTable<3>, WideTable<4>, WideTable<5>, WideTable<6>, WideTable<7>, WideTable<8>, WideTable<9>)>(entity_count);
+            let (world, entities) = setup_wide::<(WideTable<0>, WideTable<1>, WideTable<2>, WideTable<3>, WideTable<4>, WideTable<5>, WideTable<6>, WideTable<7>, WideTable<8>, WideTable<9>)>(entity_count);
             let query = world.query::<(Mut<WideTable<0>>, Mut<WideTable<1>>, Mut<WideTable<2>>, Mut<WideTable<3>>, Mut<WideTable<4>>, Mut<WideTable<5>>, Mut<WideTable<6>>, Mut<WideTable<7>>, Mut<WideTable<8>>, Mut<WideTable<9>>)>().unwrap();
             bencher.iter(|| {
                 for entity in &entities {
@@ -2581,7 +2580,7 @@ fn all_added_detection_generic<T: Component + Default + Clone>(group: &mut crite
             bencher.iter_batched_ref(
                 || {
                     let mut world = World::new();
-                    let entities: Vec<_> = world.spawn_batch(core::iter::repeat((T::default(),)).take(entity_count as usize)).collect();
+                    let entities: Vec<_> = world.spawn_batch(std::iter::repeat_n((T::default(),), entity_count as usize)).collect();
                     world.increment_tick(); // Wait, added entities were added at the old tick, and query uses the current tick? No, they were added with world's current tick. Incrementing the tick makes the current tick different from the added tick. Wait, if we increment the tick, then `ticks.added == current_tick` will be false!
                     // Wait, Bevy's `Added` checks if `added_tick` is newer than `last_run_tick`.
                     // Gizmo's `Added` (which I just implemented) checks `ticks.added == tick`. `tick` is `world.tick`.
@@ -2624,7 +2623,7 @@ fn all_changed_detection_generic<T: Component + Default + Clone>(
             bencher.iter_batched_ref(
                 || {
                     let mut world = World::new();
-                    let entities: Vec<_> = world.spawn_batch(core::iter::repeat((T::default(),)).take(entity_count as usize)).collect();
+                    let entities: Vec<_> = world.spawn_batch(std::iter::repeat_n((T::default(),), entity_count as usize)).collect();
                     world.increment_tick();
                     let mut query_mut = world.query::<gizmo_core::query::Mut<T>>().unwrap();
                     for (_id, mut component) in query_mut.iter_mut() {
@@ -2677,7 +2676,7 @@ fn few_changed_detection_generic<T: Component + Default + Clone>(
             bencher.iter_batched_ref(
                 || {
                     let mut world = World::new();
-                    let mut entities: Vec<_> = world.spawn_batch(core::iter::repeat((T::default(),)).take(entity_count as usize)).collect();
+                    let mut entities: Vec<_> = world.spawn_batch(std::iter::repeat_n((T::default(),), entity_count as usize)).collect();
                     world.increment_tick();
                     
                     use rand::seq::SliceRandom;
@@ -2724,7 +2723,7 @@ fn none_changed_detection_generic<T: Component + Default + Clone>(
             bencher.iter_batched_ref(
                 || {
                     let mut world = World::new();
-                    let entities: Vec<_> = world.spawn_batch(core::iter::repeat((T::default(),)).take(entity_count as usize)).collect();
+                    let entities: Vec<_> = world.spawn_batch(std::iter::repeat_n((T::default(),), entity_count as usize)).collect();
                     world.increment_tick();
                     (world, entities)
                 },
@@ -3218,7 +3217,7 @@ pub fn iter_frag_empty(c: &mut Criterion) {
         spawn_empty_frag_archetype_wide::<Table>(&mut world);
         
         let mut schedule = gizmo_core::system::Schedule::new();
-        fn iter_table(query: gizmo_core::query::Query<(&Table)>) {
+        fn iter_table(query: gizmo_core::query::Query<&Table >) {
             let mut res = 0;
             // Iterate over entities
             for (e, t) in query.iter() {
@@ -3240,7 +3239,7 @@ pub fn iter_frag_empty(c: &mut Criterion) {
         spawn_empty_frag_archetype_wide::<Sparse>(&mut world);
         
         let mut schedule = gizmo_core::system::Schedule::new();
-        fn iter_sparse(query: gizmo_core::query::Query<(&Sparse)>) {
+        fn iter_sparse(query: gizmo_core::query::Query<&Sparse >) {
             let mut res = 0;
             // Iterate over entities
             for (e, t) in query.iter() {

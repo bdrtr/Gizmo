@@ -69,6 +69,12 @@ impl ConstraintSolver {
     /// yazar. Eskiden bu düzeltme doğrudan `velocities`'e ekleniyordu; bu, pozisyon
     /// düzeltme hızının kalıcı hıza sızmasına (resting jitter / cisimlerin uyumaması)
     /// yol açıyordu. Çağıran bu deltaları pozisyona uygulamalıdır.
+    // İndeks-tabanlı döngüler kasıtlı: `mid`/`cid` aynı anda paralel dizileri
+    // (manifolds + rigid_bodies/transforms/velocities/pseudo_vel, hepsi entity
+    // indeksiyle hizalı) okuyup `manifolds[mid].contacts[cid]` impulslarını geri
+    // yazıyor. iter_mut'a çevirmek split-borrow gymnastics gerektirir ve bu
+    // determinizm-kritik PGS yolunda fayda sağlamaz.
+    #[allow(clippy::needless_range_loop)]
     pub fn solve_contacts(
         &self,
         manifolds: &mut [ContactManifold],

@@ -401,8 +401,7 @@ impl super::AssetManager {
                         }
                     }
                 } else {
-                    for i in 0..positions.len() {
-                        let pos = positions[i];
+                    for (i, pos) in positions.iter().enumerate() {
                         aabb.extend(Vec3::new(pos[0], pos[1], pos[2]));
                         all_vertices.push(make_vertex(i));
                     }

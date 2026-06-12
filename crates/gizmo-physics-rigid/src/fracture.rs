@@ -93,11 +93,10 @@ pub fn voronoi_shatter(extents: Vec3, num_pieces: u32, seed: u64) -> Vec<Procedu
         planes.clear();
         planes.extend_from_slice(&box_planes);
 
-        for j in 0..num_pieces as usize {
+        for (j, &p_j) in seeds[..num_pieces as usize].iter().enumerate() {
             if i == j {
                 continue;
             }
-            let p_j = seeds[j];
             let dir = p_j - p_i;
             let length = dir.length();
             if length < 0.001 {

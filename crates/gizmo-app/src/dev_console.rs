@@ -10,8 +10,10 @@ pub fn ui_dev_console(world: &mut World, ctx: &egui::Context, input: &gizmo_core
             let mut state = world.get_resource_mut::<DevConsoleState>().unwrap();
             state.is_open = !state.is_open;
         } else {
-            let mut state = DevConsoleState::default();
-            state.is_open = true;
+            let state = DevConsoleState {
+                is_open: true,
+                ..Default::default()
+            };
             world.insert_resource(state);
         }
     }

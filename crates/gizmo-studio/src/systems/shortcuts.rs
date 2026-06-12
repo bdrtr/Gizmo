@@ -228,21 +228,19 @@ pub fn handle_editor_shortcuts(
     // if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Numpad5 as u32) { ... }
 
     // Escape → Seçimi temizle
-    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Escape as u32) {
-        if !editor_state.selection.entities.is_empty() {
+    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Escape as u32)
+        && !editor_state.selection.entities.is_empty() {
             editor_state.clear_selection();
             editor_state.status_message = "Seçim temizlendi".to_string();
         }
-    }
 
     // Space → Play/Stop geçiş
-    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Space as u32) {
-        if shift_pressed {
+    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Space as u32)
+        && shift_pressed {
             editor_state.toggle_play();
             let mode_str = if editor_state.is_playing() { "▶ Başladı" } else { "⏹ Durdu" };
             editor_state.status_message = format!("Simülasyon {}", mode_str);
         }
-    }
 }
 
 /// Kamerayı seçili objelerin merkezine odaklar

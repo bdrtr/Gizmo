@@ -390,9 +390,8 @@ pub fn gpu_physics_readback_system(world: &mut crate::core::World, renderer: &Re
     }
 }
 
-/// Phase 7.1: Fluid-Rigid Coupling
-/// Senkronize eder: GpuPhysicsLink sahibi objeleri FluidCollider buffer'ına yazar.
-
+// Phase 7.1: Fluid-Rigid Coupling
+// Senkronize eder: GpuPhysicsLink sahibi objeleri FluidCollider buffer'ına yazar.
 pub fn cpu_physics_step_system(world: &crate::core::World, dt: f32) {
     gizmo_physics_rigid::system::physics_step_system(world, dt);
 

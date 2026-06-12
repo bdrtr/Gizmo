@@ -877,7 +877,7 @@ mod tests {
 
             world.add_body(
                 wheel_entity,
-                wheel_rb.clone(),
+                wheel_rb,
                 Transform::new(chassis_pos + *offset),
                 Velocity::default(),
                 wheel_col.clone(),

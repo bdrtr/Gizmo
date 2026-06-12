@@ -314,11 +314,13 @@ impl<'a> SceneBuilder<'a> {
 
     pub fn spawn_point_light(&mut self, position: Vec3) {
         let light_ent = self.world.spawn();
-        let mut bundle = crate::bundles::PointLightBundle::default();
-        bundle.position = position;
-        bundle.color = Vec3::new(1.0, 1.0, 1.0);
-        bundle.intensity = 20.0;
-        
+        let bundle = crate::bundles::PointLightBundle {
+            position,
+            color: Vec3::new(1.0, 1.0, 1.0),
+            intensity: 20.0,
+            ..Default::default()
+        };
+
         bundle.apply(self.world, light_ent);
     }
     
@@ -331,10 +333,12 @@ impl<'a> SceneBuilder<'a> {
         }
 
         let camera_ent = self.world.spawn();
-        let mut bundle = CameraBundle::default();
-        bundle.position = state.camera_pos;
-        bundle.yaw = state.camera_yaw;
-        bundle.pitch = state.camera_pitch;
+        let bundle = CameraBundle {
+            position: state.camera_pos,
+            yaw: state.camera_yaw,
+            pitch: state.camera_pitch,
+            ..Default::default()
+        };
 
         bundle.apply(self.world, camera_ent);
     }
@@ -471,7 +475,7 @@ mod tests {
         assert_eq!(settings.preset, 0);
         assert_eq!(settings.preset_2, 1);
         assert_eq!(settings.blend_t, 0.0);
-        assert_eq!(settings.auto_cycle, false);
+        assert!(!settings.auto_cycle);
         assert_eq!(settings.rotation_speed, 1.0);
         assert_eq!(settings.direct_intensity, 4.0);
     }

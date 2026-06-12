@@ -92,27 +92,32 @@ fn main() {
 
             // Camera setup
             let camera_ent = world.spawn();
-            let mut cam_bundle = gizmo::bundles::CameraBundle::default();
-            cam_bundle.position = camera_settings.pos;
-            cam_bundle.yaw = camera_settings.yaw;
-            cam_bundle.pitch = camera_settings.pitch;
+            let cam_bundle = gizmo::bundles::CameraBundle {
+                position: camera_settings.pos,
+                yaw: camera_settings.yaw,
+                pitch: camera_settings.pitch,
+                ..Default::default()
+            };
             cam_bundle.apply(world, camera_ent);
 
             // Spawn Directional Light (Sun)
             let dir_light_ent = world.spawn();
-            let mut sun_bundle = gizmo::bundles::DirectionalLightBundle::default();
-            sun_bundle.rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4) * Quat::from_rotation_y(std::f32::consts::FRAC_PI_4);
-            sun_bundle.intensity = lighting_settings.direct_intensity;
-            sun_bundle.color = Vec3::new(1.0, 0.95, 0.9); // Warm sunshine
+            let sun_bundle = gizmo::bundles::DirectionalLightBundle {
+                rotation: Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4) * Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
+                intensity: lighting_settings.direct_intensity,
+                color: Vec3::new(1.0, 0.95, 0.9), // Warm sunshine
+                ..Default::default()
+            };
             sun_bundle.apply(world, dir_light_ent);
 
             // Point Light Setup
             let point_light_ent = world.spawn();
-            let mut point_bundle = gizmo::bundles::PointLightBundle::default();
-            point_bundle.position = Vec3::new(0.25, 0.15, -0.13);
-            point_bundle.intensity = 25.0; // High local intensity
-            point_bundle.radius = 1.0;     // 1.0 meter local radius so it behaves like a localized bulb
-            point_bundle.color = Vec3::new(1.0, 0.9, 0.7); // Glowing warm classic bulb light
+            let point_bundle = gizmo::bundles::PointLightBundle {
+                position: Vec3::new(0.25, 0.15, -0.13),
+                intensity: 25.0, // High local intensity
+                radius: 1.0,     // 1.0 meter local radius so it behaves like a localized bulb
+                color: Vec3::new(1.0, 0.9, 0.7), // Glowing warm classic bulb light
+            };
             point_bundle.apply(world, point_light_ent);
 
             // Spawn a reflective, fanned anisotropic Copper Torus on the left side of the lamp

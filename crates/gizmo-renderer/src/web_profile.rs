@@ -14,7 +14,6 @@
 ///     .with_shadows(true)
 ///     .with_post_processing(PostProcessLevel::Medium);
 /// ```
-
 /// Post-processing kalite seviyesi
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PostProcessLevel {

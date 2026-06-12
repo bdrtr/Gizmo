@@ -120,9 +120,11 @@ fn setup(world: &mut World, renderer: &Renderer) -> PlatformerState {
     world.add_component(player, RigidBody::new_kinematic());
     world.add_component(player, Velocity::default());
 
-    let mut kcc = CharacterController::default();
-    kcc.speed = 8.0;
-    kcc.jump_speed = 12.0;
+    let kcc = CharacterController {
+        speed: 8.0,
+        jump_speed: 12.0,
+        ..Default::default()
+    };
     world.add_component(player, kcc);
 
     // --- CAMERA ---

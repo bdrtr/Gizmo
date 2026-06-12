@@ -16,9 +16,11 @@ fn main() {
             
             // Light (ışık)
             let light_ent = scene.world.spawn();
-            let mut bundle = DirectionalLightBundle::default();
-            bundle.rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4) * Quat::from_rotation_y(std::f32::consts::FRAC_PI_4);
-            bundle.intensity = 1.8;
+            let bundle = DirectionalLightBundle {
+                rotation: Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4) * Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
+                intensity: 1.8,
+                ..Default::default()
+            };
             bundle.apply(scene.world, light_ent);
             
             // Camera (kamera)
