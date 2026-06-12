@@ -67,11 +67,19 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
 ## Faz 1 — Test & CI Altyapısı
 
 - [ ] Her çekirdek algoritmaya birim test (GJK/EPA, SAT, solver, integrator, joints, ECS).
-- [ ] **Property-based / differential testler** — fizik invariantları: penetrasyon ⟶ 0,
-      momentum/enerji sınırları, broad-phase pairs = brute-force.
+- [~] **Property-based testler** — BAŞLADI (2026-06-12, proptest 1.x). 9 test:
+      `gizmo-physics-core/tests/proptest_collision.rs` (4) — sphere_sphere analitik
+      gerçek, box_box çarpışma+normal simetrisi, contact NaN üretmeme + birim normal,
+      çakışık-kutu örtüşme. `gizmo-physics-rigid/tests/proptest_dynamics.rs` (5) —
+      determinizm (aynı sahne → bit-bit aynı), 120 kare NaN/Inf-yok, kuvvetsiz cisim
+      momentum korunumu, yalıtık cisim enerji-kazanmaz (damping monoton), düşen cisim
+      zeminden tünellemez. Bulgu: box_box per-contact penetrasyonu face-clip referans
+      seçimine bağlı asimetrik (MTV simetrik, contact-point değil — bug değil, dokümante
+      edildi). KALAN: differential test (broad-phase pairs = brute-force), joint/vehicle
+      invariantları, soft-body/fracture property kapsamı.
 - [ ] **Stres + soak** — N-kutu yığını M dakika stabil mi; enerji patlaması/sürüklenme yok.
 - [ ] **Golden/regresyon** — referans senaryoların hash/snapshot'ı (zaten `headless_stress_test` var).
-- [x] **CI matrisi** — `.github/workflows/ci.yml`: test (ubuntu/macos/windows × `cargo test --workspace` + gizmo-net feature'lı), lint (rustfmt report-only + `clippy -D warnings` RATCHET — mevcut 17 lint `-A` ile grandfather'lı, yenisi kırar), determinism (headless tower stress). NOT: clippy backlog'u (60 lib uyarı, çoğu auto-fix'lendi) kademeli temizlenip `-A` satırları kaldırılacak; rustfmt tam uyum sonra blocking yapılacak.
+- [x] **CI matrisi** — `.github/workflows/ci.yml`: test (ubuntu/macos/windows × `cargo test --workspace` + gizmo-net feature'lı), lint (rustfmt report-only + `clippy -D warnings` RATCHET — mevcut 17 lint `-A` ile grandfather'lı, yenisi kırar), determinism (headless tower stress). clippy backlog'u TEMİZLENDİ (2026-06-12): `-A` muafiyet listesi 17→2 (kalan `too_many_arguments`/`type_complexity` mimari); 2 gerçek bug yakalandı (lines_filter_map_ok, ölü recursion param). rustfmt tam uyum sonra blocking yapılacak.
 - [ ] **Benchmark regresyon takibi** — criterion sonuçlarını CI'da izle.
 
 **Çıkış kriteri:** yeşil CI, anlamlı kapsam, regresyonlar otomatik yakalanıyor.
