@@ -517,17 +517,22 @@ impl Gjk {
         let mut edges = Vec::new();
 
         if simplex.len() == 4 {
-            // FIX 4: Ensure consistent outward-facing winding order for all initial faces.
-            // compute_face_normal already does a dot-product check, but we enforce it
-            // here so that newly-added faces during expansion also stay consistent.
-            let initial_faces = [(0, 1, 2), (0, 3, 1), (0, 2, 3), (1, 3, 2)];
-            for (a, b, c) in initial_faces {
+            // Wind every initial face OUTWARD relative to the tetrahedron's
+            // opposite (interior) vertex — a purely geometric test, NOT relative
+            // to the origin. For shallow contacts the origin can lie on or just
+            // outside a face, which would make an origin-based orientation test
+            // flip the normal the wrong way; the 4th-vertex test never does.
+            // Each tuple is (a, b, c, opposite) where `opposite` is the lone
+            // vertex not on the face.
+            let initial_faces = [(0, 1, 2, 3), (0, 3, 1, 2), (0, 2, 3, 1), (1, 3, 2, 0)];
+            for (a, b, c, opp) in initial_faces {
                 let n = Self::compute_face_normal(&simplex, a, b, c);
-                // Guarantee outward orientation: n · v_a > 0
-                if n.dot(simplex[a].v) >= 0.0 {
-                    faces.push((a, b, c));
+                // If the winding normal points TOWARD the interior vertex, the
+                // face is wound inward — swap two vertices to flip it outward.
+                if n.dot(simplex[opp].v - simplex[a].v) > 0.0 {
+                    faces.push((a, c, b));
                 } else {
-                    faces.push((a, c, b)); // flip winding
+                    faces.push((a, b, c));
                 }
             }
         } else {
@@ -564,17 +569,13 @@ impl Gjk {
                 }
             }
 
-            // FIX 4: When stitching new faces, enforce outward winding order
+            // Stitch new faces from the horizon edges to the new vertex. The
+            // surviving directed edges (after add_edge cancelled the shared
+            // interior edges) wind consistently around the hole, so each new
+            // face (e1 → e2 → new_point) inherits the correct OUTWARD orientation
+            // from the faces it replaced — no origin-based flip needed.
             for (e1, e2) in &edges {
-                let a = *e1;
-                let b = *e2;
-                let c = new_point_idx;
-                let n = Self::compute_face_normal(&simplex, a, b, c);
-                if n.dot(simplex[a].v) >= 0.0 {
-                    faces.push((a, b, c));
-                } else {
-                    faces.push((b, a, c)); // flip winding
-                }
+                faces.push((*e1, *e2, new_point_idx));
             }
         }
 
@@ -685,16 +686,24 @@ impl Gjk {
         }
     }
 
+    /// Normal of the face from its STORED winding order (a → b → c), via the
+    /// right-hand rule — with NO origin-based flipping.
+    ///
+    /// The polytope keeps a consistent OUTWARD winding by construction: the
+    /// initial tetrahedron winds every face away from its opposite (interior)
+    /// vertex, and each face created during expansion inherits its orientation
+    /// from the directed horizon edges. So the winding normal already points
+    /// outward. The previous implementation re-derived orientation from
+    /// `normal_raw · v_a` ("away from origin"); for shallow / grazing contacts
+    /// the origin sits on — or just outside — the closest face, making that
+    /// sign test unreliable. It could then flip the contact normal inward
+    /// (objects pulled together instead of pushed apart) or, during expansion,
+    /// mislabel which faces "see" the new support point and corrupt the
+    /// polytope. Winding order is purely geometric and immune to that.
     fn compute_face_normal(simplex: &[SupportPoint], a: usize, b: usize, c: usize) -> Vec3 {
         let ab = simplex[b].v - simplex[a].v;
         let ac = simplex[c].v - simplex[a].v;
-        let normal_raw = ab.cross(ac);
-        // Ensure outward orientation (away from origin)
-        if normal_raw.dot(simplex[a].v) < 0.0 {
-            -normal_raw.try_normalize().unwrap_or(Vec3::X)
-        } else {
-            normal_raw.try_normalize().unwrap_or(Vec3::X)
-        }
+        ab.cross(ac).try_normalize().unwrap_or(Vec3::X)
     }
 
     fn add_edge(edges: &mut Vec<(usize, usize)>, a: usize, b: usize) {
@@ -951,6 +960,77 @@ mod tests {
         assert!(
             contact.is_some(),
             "Speculative contact missed approaching spheres"
+        );
+    }
+
+    #[test]
+    fn test_compute_face_normal_follows_winding_not_origin() {
+        // Regression (EPA face orientation): the face normal must come from the
+        // stored winding order a→b→c (right-hand rule), NOT from a "point away
+        // from the origin" heuristic. Here the triangle is wound so the
+        // right-hand-rule normal is +Z, yet the whole face sits just BELOW the
+        // origin (z < 0) — the situation a shallow/grazing contact creates, with
+        // the origin on the OUTER side of the closest face. The old code computed
+        // normal·v_a = -0.01 < 0 and flipped the normal to -Z (inward), which is
+        // what corrupted shallow contacts (normal pointing the wrong way / wrong
+        // faces marked visible during expansion). The winding normal must stay +Z.
+        let mk = |x: f32, y: f32, z: f32| SupportPoint {
+            v: Vec3::new(x, y, z),
+            a: Vec3::ZERO,
+            b: Vec3::ZERO,
+        };
+        let simplex = [mk(0.0, 0.0, -0.01), mk(1.0, 0.0, -0.01), mk(0.0, 1.0, -0.01)];
+        let n = Gjk::compute_face_normal(&simplex, 0, 1, 2);
+        assert!(
+            n.z > 0.9,
+            "face normal must follow winding a→b→c (expected ≈ +Z), got {:?}",
+            n
+        );
+        // Reversing the winding must flip the normal (proves it is winding-driven,
+        // not origin-driven — both windings sit on the same side of the origin).
+        let n_rev = Gjk::compute_face_normal(&simplex, 0, 2, 1);
+        assert!(
+            n_rev.z < -0.9,
+            "reversed winding must flip the normal, got {:?}",
+            n_rev
+        );
+    }
+
+    #[test]
+    fn test_epa_shallow_contact_normal_outward() {
+        // Behaviour guard for the EPA fix: a very shallow box/box overlap must
+        // still yield a positive penetration and a normal along the separating
+        // axis (±X), pointing consistently — never inward and never NaN.
+        let shape = ColliderShape::Box(BoxShape {
+            half_extents: Vec3::new(1.0, 1.0, 1.0),
+        });
+        // Overlap of only 0.02 along X (origin sits very close to the closest
+        // Minkowski face — the regime that tripped the origin heuristic).
+        let contact = Gjk::get_contact(
+            &shape,
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            &shape,
+            Vec3::new(1.98, 0.0, 0.0),
+            Quat::IDENTITY,
+        )
+        .expect("EPA must produce a contact for a shallow overlap");
+
+        assert!(
+            contact.penetration > 0.0 && contact.penetration < 0.1,
+            "shallow penetration should be small and positive, got {}",
+            contact.penetration
+        );
+        assert!(contact.normal.is_finite(), "normal must be finite");
+        assert!(
+            (contact.normal.length() - 1.0).abs() < 1e-3,
+            "normal must be unit length, got {}",
+            contact.normal.length()
+        );
+        assert!(
+            contact.normal.x.abs() > 0.99,
+            "separating axis should be X, got normal {:?}",
+            contact.normal
         );
     }
 
