@@ -122,10 +122,14 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     let world_pos = model * vec4<f32>(skinned_pos.xyz, 1.0);
     out.world_position = world_pos.xyz;
     
-    // Obje veya animasyon döndürüldüğünde ışık da tepki versin (Non-uniform scale desteği ile)
-    let skinned_normal = skin_mat * vec4<f32>(input.normal, 0.0);
+    // Obje veya animasyon döndürüldüğünde ışık da tepki versin (Non-uniform scale desteği ile).
+    // Normaller skin uzayında da inverse-transpose ile taşınmalı — aksi halde non-uniform
+    // bone scale/shear'da normal kayar. Rigid/uniform bone'da bu no-op'tur (fragment'ta
+    // normalize edildiğinden ölçek zaten yok olur), yani yalnız bug-vakasını düzeltir.
+    let skin_normal_mat = inverse_transpose_3x3(mat3x3<f32>(skin_mat[0].xyz, skin_mat[1].xyz, skin_mat[2].xyz));
+    let skinned_normal = skin_normal_mat * input.normal;
     let normal_matrix = inverse_transpose_3x3(mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz));
-    let world_normal = normal_matrix * skinned_normal.xyz;
+    let world_normal = normal_matrix * skinned_normal;
     out.normal = world_normal;
     
     out.inst_albedo = inst.albedo_color;

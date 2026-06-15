@@ -1113,6 +1113,19 @@ mod tests {
         assert_eq!(std::mem::size_of::<crate::gpu_types::LightData>(), 64, "LightData size shifted from target 64 bytes!");
         assert_eq!(std::mem::size_of::<crate::gpu_types::PostProcessUniforms>(), 48, "PostProcessUniforms size shifted from target 48 bytes!");
         assert_eq!(std::mem::size_of::<crate::gpu_types::InstanceRaw>(), 96, "InstanceRaw size shifted from target 96 bytes!");
+
+        // Vertex attribute offsetleri shader VertexInput @location'larıyla (ve
+        // Vertex::desc() ile) BİREBİR uyuşmalı. Bir alan kayarsa skinning/tangent
+        // bozulur ama toplam boyut değişmeyebilir — bu yüzden offset'leri de kilitle.
+        use crate::gpu_types::Vertex;
+        assert_eq!(std::mem::offset_of!(Vertex, position), 0);
+        assert_eq!(std::mem::offset_of!(Vertex, color), 12);
+        assert_eq!(std::mem::offset_of!(Vertex, normal), 24);
+        assert_eq!(std::mem::offset_of!(Vertex, tex_coords), 36);
+        assert_eq!(std::mem::offset_of!(Vertex, joint_indices), 44);
+        assert_eq!(std::mem::offset_of!(Vertex, joint_weights), 60);
+        assert_eq!(std::mem::offset_of!(Vertex, tangent), 76);
+        assert_eq!(std::mem::size_of::<Vertex>(), 92, "Vertex size/layout shifted!");
     }
 
     #[test]
