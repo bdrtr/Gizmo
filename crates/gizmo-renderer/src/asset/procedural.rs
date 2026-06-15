@@ -5,7 +5,8 @@ use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 impl super::AssetManager {
-    pub fn create_tetrahedron(device: &wgpu::Device, size: f32) -> Mesh {
+    /// Tetrahedron köşeleri (dış-yüzey CCW sarımlı). Saf veri.
+    pub(crate) fn tetrahedron_data(size: f32) -> Vec<Vertex> {
         let s = size;
         let p0 = [s, s, s];
         let p1 = [-s, -s, s];
@@ -27,14 +28,21 @@ impl super::AssetManager {
             let va = Vec3::from_array(a);
             let vb = Vec3::from_array(b);
             let vc = Vec3::from_array(c);
+            // Dış normal = (vc-va)×(vb-va). Sarımı bu normalle TUTARLI kılmak için
+            // köşeleri a → c → b emit ediyoruz (eskiden a,b,c → sağ-el normali
+            // declared normalin tersiydi → Ccw+Back-cull'da yüzler culllanıyordu).
             let n = (vc - va).cross(vb - va).normalize();
             let normal = [n.x, n.y, n.z];
 
             vertices.push(Vertex { position: a, color: [1.0; 3], normal, tex_coords: [0.0, 0.0], joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: b, color: [1.0; 3], normal, tex_coords: [1.0, 0.0], joint_indices: def_j, joint_weights: def_w, ..Default::default() });
             vertices.push(Vertex { position: c, color: [1.0; 3], normal, tex_coords: [0.5, 1.0], joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: b, color: [1.0; 3], normal, tex_coords: [1.0, 0.0], joint_indices: def_j, joint_weights: def_w, ..Default::default() });
         }
+        vertices
+    }
 
+    pub fn create_tetrahedron(device: &wgpu::Device, size: f32) -> Mesh {
+        let vertices = Self::tetrahedron_data(size);
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Tetrahedron VBuf"),
             contents: bytemuck::cast_slice(&vertices),
@@ -44,7 +52,8 @@ impl super::AssetManager {
         Mesh::new(device, Arc::new(vbuf), &vertices, Vec3::ZERO, "tetrahedron".to_string())
     }
 
-    pub fn create_conical_frustum(device: &wgpu::Device, radius_bottom: f32, radius_top: f32, height: f32, radial_segments: u32) -> Mesh {
+    /// Kesik koni (konik frustum) köşeleri, dış-yüzey CCW sarımlı. Saf veri.
+    pub(crate) fn conical_frustum_data(radius_bottom: f32, radius_top: f32, height: f32, radial_segments: u32) -> Vec<Vertex> {
         let radial_segments = radial_segments.max(3);
         let mut vertices = Vec::new();
         let pi = std::f32::consts::PI;
@@ -72,26 +81,32 @@ impl super::AssetManager {
             let n1_arr = [n1.x, n1.y, n1.z];
             let n2_arr = [n2.x, n2.y, n2.z];
 
-            // Sides (CCW from outside)
+            // Yan yüzler dıştan CCW (eskiden ters → culllanıyordu).
+            // Tri 1: p1_top → p2_bot → p1_bot
             vertices.push(Vertex { position: p1_top, normal: n1_arr, tex_coords: [u1, 0.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: p2_bot, normal: n2_arr, tex_coords: [u2, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
             vertices.push(Vertex { position: p1_bot, normal: n1_arr, tex_coords: [u1, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: p2_bot, normal: n2_arr, tex_coords: [u2, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
 
+            // Tri 2: p1_top → p2_top → p2_bot
             vertices.push(Vertex { position: p1_top, normal: n1_arr, tex_coords: [u1, 0.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: p2_bot, normal: n2_arr, tex_coords: [u2, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
             vertices.push(Vertex { position: p2_top, normal: n2_arr, tex_coords: [u2, 0.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: p2_bot, normal: n2_arr, tex_coords: [u2, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
 
-            // Top Cap (CCW from above)
+            // Üst kapak: center → p2_top → p1_top (sağ-el normali +Y).
             vertices.push(Vertex { position: [0.0, half_h, 0.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: p1_top, normal: [0.0, 1.0, 0.0], tex_coords: [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
             vertices.push(Vertex { position: p2_top, normal: [0.0, 1.0, 0.0], tex_coords: [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: p1_top, normal: [0.0, 1.0, 0.0], tex_coords: [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
 
-            // Bottom Cap (CCW from below)
+            // Alt kapak: center → p1_bot → p2_bot (sağ-el normali -Y).
             vertices.push(Vertex { position: [0.0, -half_h, 0.0], normal: [0.0, -1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: p2_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
             vertices.push(Vertex { position: p1_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: p2_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
         }
+        vertices
+    }
 
+    pub fn create_conical_frustum(device: &wgpu::Device, radius_bottom: f32, radius_top: f32, height: f32, radial_segments: u32) -> Mesh {
+        let vertices = Self::conical_frustum_data(radius_bottom, radius_top, height, radial_segments);
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Conical Frustum VBuf"),
             contents: bytemuck::cast_slice(&vertices),
