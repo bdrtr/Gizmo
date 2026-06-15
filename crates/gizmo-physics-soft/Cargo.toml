@@ -22,3 +22,6 @@ wgpu = { version = "0.20", optional = true }
 bytemuck = { version = "1.14", features = ["derive"], optional = true }
 pollster = { version = "0.3", optional = true }
 tracing = "0.1.44"
+
+[dev-dependencies]
+proptest = { workspace = true }
