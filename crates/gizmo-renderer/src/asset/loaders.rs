@@ -361,11 +361,13 @@ impl super::AssetManager {
                         .and_then(|js| js.get(idx))
                         .map(|&[a, b, c, d]| [a as u32, b as u32, c as u32, d as u32])
                         .unwrap_or([0; 4]);
-                    let w = weights
-                        .as_ref()
-                        .and_then(|ws| ws.get(idx))
-                        .copied()
-                        .unwrap_or([0.0; 4]);
+                    let w = normalize_skin_weights(
+                        weights
+                            .as_ref()
+                            .and_then(|ws| ws.get(idx))
+                            .copied()
+                            .unwrap_or([0.0; 4]),
+                    );
 
                     let tangent = if let Some(ref tangents) = supplied_tangents {
                         tangents.get(idx).copied().unwrap_or([1.0, 0.0, 0.0, 1.0])
@@ -392,9 +394,17 @@ impl super::AssetManager {
                 };
 
                 if let Some(indices) = reader.read_indices() {
-                    for idx in indices.into_u32() {
-                        let i = idx as usize;
-                        if i < positions.len() {
+                    // Triangle-list assembly: process indices in groups of 3 and
+                    // drop the WHOLE triangle if any index is out of bounds.
+                    // (Skipping a single OOB index would shift every later vertex
+                    // and corrupt the grouping of all following triangles.)
+                    let idx: Vec<u32> = indices.into_u32().collect();
+                    for tri in idx.chunks_exact(3) {
+                        if tri.iter().any(|&t| (t as usize) >= positions.len()) {
+                            continue;
+                        }
+                        for &t in tri {
+                            let i = t as usize;
                             let pos = positions[i];
                             aabb.extend(Vec3::new(pos[0], pos[1], pos[2]));
                             all_vertices.push(make_vertex(i));
@@ -498,10 +508,12 @@ fn convert_image_to_rgba8(image: &gltf::image::Data, idx: usize, file_path: &str
         }
 
         gltf::image::Format::R8G8 => {
-            // Luminance + Alpha: replicate L to R, G, B; keep A.
+            // glTF R8G8 = two independent channels (Red, Green) — NOT luminance+alpha.
+            // Map R→R, G→G, B=0, A=opaque. (Previously broadcast R into RGB and put
+            // G into alpha, losing the green channel.)
             let mut out = Vec::with_capacity(pixel_count * 4);
             for chunk in image.pixels.chunks_exact(2) {
-                out.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]);
+                out.extend_from_slice(&[chunk[0], chunk[1], 0, 255]);
             }
             out.resize(pixel_count * 4, 255);
             out
@@ -543,6 +555,21 @@ fn convert_image_to_rgba8(image: &gltf::image::Data, idx: usize, file_path: &str
 /// Compute per-triangle flat normals and assign them to each vertex in the
 /// triangle.  Vertices must already be in expanded (non-indexed) form and the
 /// primitive mode must be `Triangles` (guaranteed by the caller).
+/// glTF joint weights must form a partition of unity (sum = 1.0): the skinning
+/// shader computes `Σ wᵢ·Mᵢ` WITHOUT renormalizing (shader.wgsl). Exporters and
+/// quantized `KHR_mesh_quantization` weights frequently emit sums slightly ≠ 1
+/// (e.g. 0.998), which scales the skin matrix and distorts the mesh. Normalize
+/// whenever there is any weight; leave an all-zero weight (a non-skinned vertex)
+/// untouched so the shader's `sum > 0` guard correctly keeps it unskinned.
+fn normalize_skin_weights(w: [f32; 4]) -> [f32; 4] {
+    let sum = w[0] + w[1] + w[2] + w[3];
+    if sum > 1e-5 {
+        [w[0] / sum, w[1] / sum, w[2] / sum, w[3] / sum]
+    } else {
+        w
+    }
+}
+
 fn compute_flat_normals(vertices: &mut [Vertex]) {
     for tri in vertices.chunks_exact_mut(3) {
         let v0 = Vec3::from(tri[0].position);
@@ -859,4 +886,47 @@ fn compute_armature_root_transform(
     }
 
     root_transform
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wsum(w: [f32; 4]) -> f32 {
+        w[0] + w[1] + w[2] + w[3]
+    }
+
+    #[test]
+    fn skin_weights_normalize_to_unity() {
+        // Sum < 1 → ölçeklenip 1'e çıkar.
+        let w = normalize_skin_weights([0.25, 0.25, 0.0, 0.0]);
+        assert!((wsum(w) - 1.0).abs() < 1e-6, "sum={}", wsum(w));
+        assert!((w[0] - 0.5).abs() < 1e-6 && (w[1] - 0.5).abs() < 1e-6);
+
+        // Sum > 1 → küçültülüp 1'e iner, oranlar korunur.
+        let w = normalize_skin_weights([0.3, 0.3, 0.3, 0.3]);
+        assert!((wsum(w) - 1.0).abs() < 1e-6);
+        for c in w {
+            assert!((c - 0.25).abs() < 1e-6);
+        }
+
+        // Zaten 1 → değişmez.
+        let w = normalize_skin_weights([0.5, 0.5, 0.0, 0.0]);
+        assert!((wsum(w) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn skin_weights_all_zero_preserved() {
+        // Skinless vertex: [0,0,0,0] DOKUNULMAZ ki shader'ın `sum > 0` guard'ı
+        // onu doğru şekilde unskinned tutsun (yoksa skinless mesh bozulurdu).
+        assert_eq!(normalize_skin_weights([0.0; 4]), [0.0; 4]);
+    }
+
+    #[test]
+    fn skin_weights_arbitrary_sum_to_one() {
+        for w in [[0.1, 0.2, 0.3, 0.05], [0.9, 0.05, 0.02, 0.0], [2.0, 1.0, 0.5, 0.5]] {
+            let n = normalize_skin_weights(w);
+            assert!((wsum(n) - 1.0).abs() < 1e-5, "input {w:?} → {n:?} sum {}", wsum(n));
+        }
+    }
 }
