@@ -92,9 +92,13 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     let world_pos    = model    * vec4<f32>(skinned_pos.xyz, 1.0);
     out.world_position = world_pos.xyz;
 
-    let skinned_normal = skin_mat * vec4<f32>(input.normal, 0.0);
+    // Normal skin uzayında inverse-transpose ile taşınır (non-uniform bone scale/shear
+    // doğru; rigid/uniform'da no-op çünkü fragment'ta normalize edilir). Tangent ise
+    // bir yön olarak doğrudan matrisle taşınır (inverse-transpose DEĞİL).
+    let skin_normal_mat = inverse_transpose_3x3(mat3x3<f32>(skin_mat[0].xyz, skin_mat[1].xyz, skin_mat[2].xyz));
+    let skinned_normal = skin_normal_mat * input.normal;
     let normal_mat     = inverse_transpose_3x3(mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz));
-    out.normal = normal_mat * skinned_normal.xyz;
+    out.normal = normal_mat * skinned_normal;
 
     let skinned_tangent = skin_mat * vec4<f32>(input.tangent.xyz, 0.0);
     out.world_tangent = vec4<f32>(normal_mat * skinned_tangent.xyz, input.tangent.w);

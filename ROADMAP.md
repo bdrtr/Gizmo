@@ -4,9 +4,10 @@
 > Bu belge canlıdır — madde tamamlandıkça `[x]` işaretle, **Durum** bölümünü güncelle.
 
 ## Durum
-- **Şu anki aşama:** Faz 0 BİTMEK ÜZERE → Faz 1 (Test & CI altyapısı)
-- **İlerleme:** ECS+çekirdek fizik (9 bug), vehicle, soft-body, fracture, multibody/ABA denetlendi+düzeltildi. ~469 test yeşil, hepsi push'lu.
-- **Sıradaki:** Faz 1 (CI matrisi, property/stres testleri) VEYA Faz 0 kalan küçük notlar (raycast kenar durumları, floating-base ABA).
+- **Şu anki aşama:** Faz 0 TAMAMLANDI (son açık bug EPA yüz yönelimi de kapandı) → Faz 1 (Test & CI) ilerliyor.
+- **İlerleme:** ECS+çekirdek fizik (9 bug), vehicle, soft-body, fracture, multibody/ABA, EPA — denetlendi+düzeltildi. **496 test yeşil**, clippy ratchet temiz, determinizm 3/3 hash eşleşiyor.
+- **Faz 1 yeni kapsam (2026-06-15):** broad-phase DIFFERENTIAL test (BVH pairs = brute-force, margin=0 birebir + şişman-margin soundness), joint property (ball-socket yakınsama + zincir kararlılığı), gearbox index-güvenliği property (Faz 0 panik regresyonu), soft-body property (cloth/rope pinned + FEM sıkışma-geri-kazanımı/J-cutoff regresyonu), fracture property (voronoi determinizm + chunk geçerliliği), N-kutu SOAK (10sn kararlılık) + GOLDEN (zeminde dengelenen kutu) regresyon.
+- **Sıradaki:** Faz 1 kalanı (benchmark regresyon takibi) VEYA Faz 2 (determinizm kararı) / Faz 3 (netcode client).
 
 İlke: **önce doğruluk, sonra kapsam.** Bir fizik motoru ancak çekirdeği güvenilirse
 production-ready olur. Önce bilinen/şüpheli bug'lar ve test altyapısı; özellik eklemek sonra.
@@ -31,8 +32,13 @@ Derin incelemede işaretlenen ama henüz **kapatılmamış** orta-güvenli sorun
       DEĞİL (teorik değişmez, gerçek bug değil). Yine de `Archetype::debug_assert_consistent`
       (debug-only) eklenip spawn_batch'te çağrıldı + 100-entity tutarlılık testi eklendi —
       iç değişiklikler değişmezi sessizce bozarsa yakalanır.
-- [ ] **EPA yüz yönelimi** — `compute_face_normal` normali winding yerine origin'den zorluyor;
-      sığ/dejenere temaslarda yanlış yüz seçilebilir. (Witness refactor'ı bunu değiştirmedi.)
+- [x] **EPA yüz yönelimi** — DÜZELTİLDİ: `compute_face_normal` artık normali saklanan
+      winding'den (sağ-el kuralı) alıyor, origin-heuristiği (`normal_raw·v_a < 0`) kaldırıldı.
+      Polytope dışa-sarımı yapıca korunuyor: başlangıç tetrahedron'u her yüzü karşı (iç) köşeden
+      uzağa sarıyor; genişlemede yeni yüzler yatay-kenar (horizon) yönünü miras alıyor. Origin sığ/
+      değiyor temasta bir yüzün dışında kalabildiğinden eski işaret testi normali içe çevirip
+      teması yanlış yöne sokabiliyordu. Ayırt edici test (`test_compute_face_normal_follows_winding_not_origin`)
+      eski kodda FAIL, yenide PASS; + sığ-temas davranış muhafızı. (gjk.rs)
 - [x] **Uyku/kinematik etkileşimi** — ada "uyanık" sayımı artık hareket eden kinematik
       gövdeyi de "mover" kabul ediyor; üstündeki uyuyan dinamik cisim uyandırılıp çözülüyor.
       Test: hareket eden platform uyuyan kutuyu uyandırıp sürüklüyor. (Not: tam ada-uyumu /
@@ -66,19 +72,37 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
 
 ## Faz 1 — Test & CI Altyapısı
 
-- [ ] Her çekirdek algoritmaya birim test (GJK/EPA, SAT, solver, integrator, joints, ECS).
-- [~] **Property-based testler** — BAŞLADI (2026-06-12, proptest 1.x). 9 test:
-      `gizmo-physics-core/tests/proptest_collision.rs` (4) — sphere_sphere analitik
-      gerçek, box_box çarpışma+normal simetrisi, contact NaN üretmeme + birim normal,
-      çakışık-kutu örtüşme. `gizmo-physics-rigid/tests/proptest_dynamics.rs` (5) —
-      determinizm (aynı sahne → bit-bit aynı), 120 kare NaN/Inf-yok, kuvvetsiz cisim
-      momentum korunumu, yalıtık cisim enerji-kazanmaz (damping monoton), düşen cisim
-      zeminden tünellemez. Bulgu: box_box per-contact penetrasyonu face-clip referans
-      seçimine bağlı asimetrik (MTV simetrik, contact-point değil — bug değil, dokümante
-      edildi). KALAN: differential test (broad-phase pairs = brute-force), joint/vehicle
-      invariantları, soft-body/fracture property kapsamı.
-- [ ] **Stres + soak** — N-kutu yığını M dakika stabil mi; enerji patlaması/sürüklenme yok.
-- [ ] **Golden/regresyon** — referans senaryoların hash/snapshot'ı (zaten `headless_stress_test` var).
+- [x] Her çekirdek algoritmaya birim/property test (GJK/EPA, SAT manifold, solver, integrator, joints,
+      ECS, raycast, broad-phase, fracture, soft-body, gearbox, multibody/ABA kapsandı).
+- [x] **Property-based testler** — proptest 1.x. İlk 9 (2026-06-12):
+      `gizmo-physics-core/tests/proptest_collision.rs` (4) + `gizmo-physics-rigid/tests/proptest_dynamics.rs` (5).
+      **+9 (2026-06-15):** `proptest_broadphase.rs` (3) — DIFFERENTIAL: margin=0'da BVH
+      `query_pairs` kaba-kuvvetle BİREBİR + şişman-margin soundness (kaçırılan çift yok) +
+      self/duplicate-yok; `proptest_joints.rs` (2) — ball-socket anchor yakınsama + yerçekiminde
+      eklem-zinciri kararlı/patlamaz; `proptest_gearbox.rs` (1) — tutarsız dizilerle bile
+      otomatik vites panik etmez, indeks sınırda, oran sonlu (Faz 0 panik regresyonu);
+      `gizmo-physics-soft/tests/proptest_soft.rs` (4) — cloth/rope pinned düğüm sabit + sonlu,
+      FEM tet yerçekiminde sonlu, **sıkışmış FEM tet hacmini geri kazanır (J-cutoff 0.1→1e-4 regresyonu)**;
+      `proptest_fracture.rs` (2) — voronoi_shatter determinist (BTree fix #7 regresyonu) + chunk
+      geçerli (pozitif/sonlu hacim, sonlu köşe). **+5 (2026-06-15, ikinci tur):**
+      `gizmo-core/tests/proptest_ecs.rs` (1) — MODEL-TABANLI oracle: rastgele spawn/add/remove/
+      despawn dizileri arketip ECS'i referans modelle (canlı sayısı, component değerleri,
+      `&A`/`&B`/`(&A,&B)` query kümeleri, stale-handle) BİREBİR eşliyor — arketip göçü + generation
+      doğrulaması sağlam çıktı; `gizmo-physics-core/tests/proptest_raycast.rs` (4) — küre analitik
+      mesafe+ters-yön-ıska, **OBB rigid-transform DEĞİŞMEZLİĞİ** (ışın+kutu aynı katı dönüşümle → t
+      sabit, normal Q ile taşınır), ray_box↔ray_aabb identity tutarlılığı. **+6 (2026-06-15, üçüncü
+      tur):** `gizmo-physics-rigid/tests/proptest_multibody.rs` (3) — ABA analitik: tek revolute sarkaç
+      `q̈=−m·g·l·sin(q)/(1+m·l²)` HER açıda, tek prismatic `q̈=gravity·axis`, rastgele N-link zincir sonlu;
+      `gizmo-physics-core/tests/proptest_sat.rs` (3) — eksen-hizalı penetrasyon = MTV (analitik),
+      rastgele-dönmüş örtüşmede normal birim+sonlu & pen>0, bounding-sphere ayrık → boş. Bulgu (eski):
+      box_box per-contact penetrasyon face-clip-asimetrik (MTV simetrik — bug değil, dokümante).
+      **Üç bug-avı turunun (ECS, raycast, ABA, SAT) hiçbiri yeni bug bulmadı → çekirdek sağlam.**
+- [x] **Stres + soak** — `gizmo-physics-rigid/tests/soak_and_golden.rs::soak_box_stack_stays_stable`:
+      3-kutu yığını 10 sn (600 kare) — kalıntı hız ~1e-9, yanal sürüklenme ~1e-5, tünelleme/NaN yok.
+      (NOT: 6-kutu DÜŞEN yığın 10 sn'de çöküp yana kayıyor → tall-stack warm-starting Faz 4'e yazıldı.)
+- [x] **Golden/regresyon** — `soak_and_golden.rs::golden_box_settles_on_ground`: y=5'ten düşen kutu
+      zeminde y≈0.5'e, |v|<0.1, yanal<0.05 ile dengelenir (toleranslar cross-platform f32 sapmasını
+      soğurur). + `headless_stress_test` (2000-kutu kule) 3-koşu hash eşleşmesiyle determinizmi kilitliyor.
 - [x] **CI matrisi** — `.github/workflows/ci.yml`: test (ubuntu/macos/windows × `cargo test --workspace` + gizmo-net feature'lı), lint (rustfmt report-only + `clippy -D warnings` RATCHET — mevcut 17 lint `-A` ile grandfather'lı, yenisi kırar), determinism (headless tower stress). clippy backlog'u TEMİZLENDİ (2026-06-12): `-A` muafiyet listesi 17→2 (kalan `too_many_arguments`/`type_complexity` mimari); 2 gerçek bug yakalandı (lines_filter_map_ok, ölü recursion param). rustfmt tam uyum sonra blocking yapılacak.
 - [ ] **Benchmark regresyon takibi** — criterion sonuçlarını CI'da izle.
 
@@ -115,6 +139,9 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
 ## Faz 4 — Fizik Derinliği & Kalite
 
 - [ ] Solver kalite turu: warm-starting doğrulama, sub-stepping ayarı, manifold kararlılığı.
+      (Bulgu 2026-06-15: TAM-TEMASLA başlatılan 3-kutu yığını 10 sn kaya gibi sabit; ancak
+      boşluklu/düşen 6-kutu yığını çarpma jitter'ıyla 10 sn'de yana kayıp çöküyor — uzun yığın
+      kararlılığı warm-starting/sürtünme-birikimi iyileştirmesi gerektiriyor.)
 - [ ] CCD (sürekli çarpışma) sağlamlık testleri (tünelleme yok).
 - [ ] Joint kütüphanesini tamamla + her tür için test (fixed/hinge/slider/ballsocket/spring + motor/limit).
 - [ ] Islands & sleeping sağlamlaştırma (Faz 0 uyku bug'ı sonrası).
@@ -124,7 +151,37 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
 
 ## Faz 5 — Renderer & Araçlar
 
-- [ ] Renderer denetimi (`gizmo-renderer` — bu turda hiç denetlenmedi).
+- [~] Renderer denetimi (`gizmo-renderer`) — CPU-tarafı bug-avı BAŞLADI (2026-06-15, 3 paralel
+      subagent + elle doğrulama). **BÜYÜK BUG bulundu + düzeltildi:** prosedürel mesh üreticilerinin
+      ÇOĞU üçgenleri declared outward normalin TERSİNE sarıyordu → varsayılan `Ccw + Back-cull`
+      pipeline'ında (deferred.rs:336-337, pipeline.rs:579-580) yüzler back-face sayılıp culllanıyor,
+      yani şekiller "içi-dışına"/görünmez render oluyordu. cube/torus/arrow/terrain doğruydu;
+      sphere/cylinder/cone/capsule/plane/circle/tetrahedron/conical_frustum TERSTİ. 8 fonksiyon saf
+      `*_data()` fonksiyonlarına ayrılıp winding düzeltildi; sphere+capsule kutuplarındaki dejenere
+      üçgenler de kaldırıldı. **9 winding-tutarlılık testi** eklendi (geo-normal·declared-normal>0,
+      birim-normal, dejenere-yok); discriminating (eski winding'de FAIL, düzeltmede PASS) kanıtlandı.
+      **Kamera/view-projection + frustum culling DENETLENDİ → temiz** (Gribb-Hartmann plane çıkarımı
+      Z∈[0,1] formunda doğru, view matrisi RH look_at, p/n-vertex AABB testi doğru). Animasyon minör
+      bulgular (düzeltilmedi, düşük öncelik): (1) `animation_system.rs` blend sırasında `prev_time += dt`
+      hız çarpanı uygulamıyor (speed≠1'de crossfade yanlış hızda); (2) negatif speed (ters oynatma)
+      `%=` ile sarmıyor (`rem_euclid` gerek). **Asset/glTF/OBJ loader DENETLENDİ (subagent + elle):
+      3 bug düzeltildi** — (HIGH) skin joint weight'leri normalize edilmiyordu; shader `Σwᵢ·Mᵢ`'yi
+      renormalize etmediğinden 1'e toplanmayan weight'ler (quantization/export) mesh'i ölçekleyip
+      bozuyordu → `normalize_skin_weights` (sum>0 iken normalize, `[0,0,0,0]` skinless dokunulmaz;
+      3 birim test); (MED) indexed glTF'te OOB indeks tek tek atlanınca sonraki üçgenlerin gruplaması
+      kayıyordu → 3'erli işlenip OOB üçgen komple atlanıyor; (LOW) R8G8 doku luminance+alpha gibi
+      açılıyordu → gerçek (R,G,0,255). TRS/joint-remap/IBM/handedness/OBJ/normal-tangent-recalc/
+      animasyon-parse temiz çıktı. **GPU pipeline/shader DENETLENDİ (2 subagent + elle):**
+      CPU↔GPU arayüzü (SceneUniforms/LightData/InstanceRaw/Vertex std140 layout, vertex-attribute
+      location/format, array stride'ları) byte-byte TEMİZ — `Vertex` offset_of! assertion'larıyla
+      kilitlendi + `core_shaders_compile` testi (shader.wgsl/gbuffer/deferred_lighting'i headless
+      device'ta naga ile doğruluyor). Shader mantığında **1 bug düzeltildi:** skinned normal,
+      skin matrisinin inverse-transpose'u yerine ham matrisle çarpılıyordu (model kısmı doğruydu)
+      → non-uniform bone scale/shear'da normal kayıyordu; `inverse_transpose_3x3(skin3)` uygulandı
+      (rigid/uniform'da no-op — fragment'ta normalize edilir). PBR BRDF (D_GGX/V_SmithJoint/F_Schlick),
+      CSM/point shadow bias, sRGB/tonemap, TBN, attenuation temiz çıktı. (Not: normal-mapping TBN
+      döşeli ama normal-map dokusu hiç örneklenmez — eksik ÖZELLİK, bug değil.) KALAN: ileri
+      post-process (SSAO/SSGI/SSR/TAA) shader denetimi.
 - [ ] WASM hedefini uçtan uca doğrula (async asset loader dahil).
 - [ ] Editor/studio iş akışı: sahne kaydet/yükle, prefab, inspector güvenilirliği.
 

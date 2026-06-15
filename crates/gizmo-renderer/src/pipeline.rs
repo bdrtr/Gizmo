@@ -933,6 +933,62 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
 mod tests {
     use super::*;
 
+    /// Çekirdek WGSL shader'ları headless device'ta naga ile derlenebilmeli.
+    /// shader.wgsl/gbuffer.wgsl düzenlemelerinin (skinned-normal inverse-transpose vb.)
+    /// WGSL'i geçersiz kılmadığını doğrular. GPU adapter yoksa graceful atlanır.
+    #[test]
+    fn core_shaders_compile() {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::all(),
+                ..Default::default()
+            });
+            let Some(adapter) = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    ..Default::default()
+                })
+                .await
+            else {
+                tracing::info!("No GPU adapter; skipping core_shaders_compile.");
+                return;
+            };
+            let Ok((device, _queue)) = adapter
+                .request_device(
+                    &wgpu::DeviceDescriptor {
+                        // shader.wgsl group(4) kullanıyor → renderer'ın gerçek limitiyle eşle.
+                        required_limits: wgpu::Limits {
+                            max_bind_groups: 6,
+                            ..wgpu::Limits::default()
+                        },
+                        ..Default::default()
+                    },
+                    None,
+                )
+                .await
+            else {
+                return;
+            };
+
+            for (name, src) in [
+                ("shader.wgsl", include_str!("shaders/shader.wgsl")),
+                ("gbuffer.wgsl", include_str!("shaders/gbuffer.wgsl")),
+                (
+                    "deferred_lighting.wgsl",
+                    include_str!("shaders/deferred_lighting.wgsl"),
+                ),
+            ] {
+                device.push_error_scope(wgpu::ErrorFilter::Validation);
+                let _module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some(name),
+                    source: wgpu::ShaderSource::Wgsl(src.into()),
+                });
+                let err = device.pop_error_scope().await;
+                assert!(err.is_none(), "{name} WGSL doğrulaması başarısız: {err:?}");
+            }
+        });
+    }
+
     #[test]
     fn test_dynamic_instance_buffer_resize() {
         pollster::block_on(async {
