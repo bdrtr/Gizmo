@@ -343,66 +343,36 @@ impl super::AssetManager {
     }
 
     /// Basit, yatay bir düzlem (Plane) üretir.
-    pub fn create_plane(device: &wgpu::Device, size: f32) -> Mesh {
+    /// Düzlem köşeleri (XZ düzleminde, +Y'ye bakan). Saf veri — device gerekmez,
+    /// winding testi buna doğrudan erişebilir.
+    pub(crate) fn plane_data(size: f32) -> Vec<Vertex> {
         let half = size / 2.0;
         let y = 0.0;
-
-        // Üstten bakışla Saat yönünün tersi (CCW) 2 üçgen (Quad)
         let def_j = [0; 4];
         let def_w = [0.0; 4];
-        let vertices = [
-            // İlk Üçgen (CW from above)
-            Vertex {
-                position: [-half, y, -half],
-                color: [1.0, 1.0, 1.0],
-                normal: [0.0, 1.0, 0.0],
-                tex_coords: [0.0, 0.0],
-                joint_indices: def_j,
-                joint_weights: def_w, ..Default::default()
-            },
-            Vertex {
-                position: [half, y, -half],
-                color: [1.0, 1.0, 1.0],
-                normal: [0.0, 1.0, 0.0],
-                tex_coords: [size, 0.0],
-                joint_indices: def_j,
-                joint_weights: def_w, ..Default::default()
-            },
-            Vertex {
-                position: [half, y, half],
-                color: [1.0, 1.0, 1.0],
-                normal: [0.0, 1.0, 0.0],
-                tex_coords: [size, size],
-                joint_indices: def_j,
-                joint_weights: def_w, ..Default::default()
-            },
-            // İkinci Üçgen (CW from above)
-            Vertex {
-                position: [-half, y, -half],
-                color: [1.0, 1.0, 1.0],
-                normal: [0.0, 1.0, 0.0],
-                tex_coords: [0.0, 0.0],
-                joint_indices: def_j,
-                joint_weights: def_w, ..Default::default()
-            },
-            Vertex {
-                position: [half, y, half],
-                color: [1.0, 1.0, 1.0],
-                normal: [0.0, 1.0, 0.0],
-                tex_coords: [size, size],
-                joint_indices: def_j,
-                joint_weights: def_w, ..Default::default()
-            },
-            Vertex {
-                position: [-half, y, half],
-                color: [1.0, 1.0, 1.0],
-                normal: [0.0, 1.0, 0.0],
-                tex_coords: [0.0, size],
-                joint_indices: def_j,
-                joint_weights: def_w, ..Default::default()
-            },
-        ];
+        let vtx = |position: [f32; 3], tex_coords: [f32; 2]| Vertex {
+            position,
+            color: [1.0, 1.0, 1.0],
+            normal: [0.0, 1.0, 0.0],
+            tex_coords,
+            joint_indices: def_j,
+            joint_weights: def_w,
+            ..Default::default()
+        };
+        let a = ([-half, y, -half], [0.0, 0.0]);
+        let b = ([half, y, -half], [size, 0.0]);
+        let c = ([half, y, half], [size, size]);
+        let d = ([-half, y, half], [0.0, size]);
+        // Üstten bakışta CCW (sağ-el normali = +Y) → Ccw+Back-cull pipeline'ında
+        // üstten görünür. (Eskiden CW idi → düzlem üstten bakınca culllanıyordu.)
+        vec![
+            vtx(a.0, a.1), vtx(c.0, c.1), vtx(b.0, b.1), // Üçgen 1: A→C→B
+            vtx(a.0, a.1), vtx(d.0, d.1), vtx(c.0, c.1), // Üçgen 2: A→D→C
+        ]
+    }
 
+    pub fn create_plane(device: &wgpu::Device, size: f32) -> Mesh {
+        let vertices = Self::plane_data(size);
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Plane VBuf"),
             contents: bytemuck::cast_slice(&vertices),
@@ -418,8 +388,8 @@ impl super::AssetManager {
         )
     }
 
-    /// Yuvarlak bir disk (Çember tabanı) üretir. Bevy'nin Circle::new(radius) karşılığıdır.
-    pub fn create_circle(device: &wgpu::Device, radius: f32, segments: u32) -> Mesh {
+    /// Yuvarlak bir disk (Çember tabanı) köşeleri (+Y'ye bakan). Saf veri.
+    pub(crate) fn circle_data(radius: f32, segments: u32) -> Vec<Vertex> {
         let segments = segments.max(3);
         let mut vertices = Vec::with_capacity((segments * 3) as usize);
 
@@ -427,6 +397,15 @@ impl super::AssetManager {
         let normal = [0.0, 1.0, 0.0];
         let def_j = [0; 4];
         let def_w = [0.0; 4];
+        let vtx = |position: [f32; 3], tex_coords: [f32; 2]| Vertex {
+            position,
+            color: [1.0, 1.0, 1.0],
+            normal,
+            tex_coords,
+            joint_indices: def_j,
+            joint_weights: def_w,
+            ..Default::default()
+        };
 
         for i in 0..segments {
             let angle1 = (i as f32 / segments as f32) * std::f32::consts::PI * 2.0;
@@ -439,33 +418,17 @@ impl super::AssetManager {
             let uv1 = [0.5 + 0.5 * angle1.cos(), 0.5 + 0.5 * angle1.sin()];
             let uv2 = [0.5 + 0.5 * angle2.cos(), 0.5 + 0.5 * angle2.sin()];
 
-            // CW sarmalı (Center -> P1 -> P2)
-            vertices.push(Vertex {
-                position: center,
-                color: [1.0, 1.0, 1.0],
-                normal,
-                tex_coords: uv_center,
-                joint_indices: def_j,
-                joint_weights: def_w, ..Default::default()
-            });
-            vertices.push(Vertex {
-                position: p1,
-                color: [1.0, 1.0, 1.0],
-                normal,
-                tex_coords: uv1,
-                joint_indices: def_j,
-                joint_weights: def_w, ..Default::default()
-            });
-            vertices.push(Vertex {
-                position: p2,
-                color: [1.0, 1.0, 1.0],
-                normal,
-                tex_coords: uv2,
-                joint_indices: def_j,
-                joint_weights: def_w, ..Default::default()
-            });
+            // CCW sarım (Center → P2 → P1) → sağ-el normali +Y, üstten görünür.
+            // (Eskiden Center→P1→P2 idi → disk üstten bakınca culllanıyordu.)
+            vertices.push(vtx(center, uv_center));
+            vertices.push(vtx(p2, uv2));
+            vertices.push(vtx(p1, uv1));
         }
+        vertices
+    }
 
+    pub fn create_circle(device: &wgpu::Device, radius: f32, segments: u32) -> Mesh {
+        let vertices = Self::circle_data(radius, segments);
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Circle VBuf"),
             contents: bytemuck::cast_slice(&vertices),
@@ -596,7 +559,8 @@ impl super::AssetManager {
     }
 
     /// Programatik UV Küre (Sphere) üretir.
-    pub fn create_sphere(device: &wgpu::Device, radius: f32, stacks: u32, slices: u32) -> Mesh {
+    /// UV-küre köşeleri (dış-yüzey CCW sarımlı, kutup dejenereleri atlanmış). Saf veri.
+    pub(crate) fn sphere_data(radius: f32, stacks: u32, slices: u32) -> Vec<Vertex> {
         let stacks = stacks.max(3);
         let slices = slices.max(3);
         let mut vertices = Vec::new();
@@ -688,60 +652,41 @@ impl super::AssetManager {
 
                 let def_j = [0; 4];
                 let def_w = [0.0; 4];
+                let vtx = |position: [f32; 3], normal: [f32; 3], tex_coords: [f32; 2]| Vertex {
+                    position,
+                    color: [1.0; 3],
+                    normal,
+                    tex_coords,
+                    joint_indices: def_j,
+                    joint_weights: def_w,
+                    ..Default::default()
+                };
 
-                // Üçgen 1 (CCW)
-                vertices.push(Vertex {
-                    position: p1,
-                    color: [1.0; 3],
-                    normal: n1,
-                    tex_coords: uv1,
-                    joint_indices: def_j,
-                    joint_weights: def_w, ..Default::default()
-                });
-                vertices.push(Vertex {
-                    position: p2,
-                    color: [1.0; 3],
-                    normal: n2,
-                    tex_coords: uv2,
-                    joint_indices: def_j,
-                    joint_weights: def_w, ..Default::default()
-                });
-                vertices.push(Vertex {
-                    position: p3,
-                    color: [1.0; 3],
-                    normal: n3,
-                    tex_coords: uv3,
-                    joint_indices: def_j,
-                    joint_weights: def_w, ..Default::default()
-                });
-                // Üçgen 2 (CCW)
-                vertices.push(Vertex {
-                    position: p1,
-                    color: [1.0; 3],
-                    normal: n1,
-                    tex_coords: uv1,
-                    joint_indices: def_j,
-                    joint_weights: def_w, ..Default::default()
-                });
-                vertices.push(Vertex {
-                    position: p3,
-                    color: [1.0; 3],
-                    normal: n3,
-                    tex_coords: uv3,
-                    joint_indices: def_j,
-                    joint_weights: def_w, ..Default::default()
-                });
-                vertices.push(Vertex {
-                    position: p4,
-                    color: [1.0; 3],
-                    normal: n4,
-                    tex_coords: uv4,
-                    joint_indices: def_j,
-                    joint_weights: def_w, ..Default::default()
-                });
+                // Sağ-el (CCW dıştan) sarım: geometrik normal = dış yüzey normali, böylece
+                // Ccw+Back-cull pipeline'ında küre dışarıdan görünür. (Eskiden p1,p2,p3 /
+                // p1,p3,p4 sırası geometrik normali İÇE veriyordu → küre içi-dışına culllanıyordu.)
+                // Ayrıca kutup satırlarında iki köşesi çakışan DEJENERE üçgen atlanıyor.
+
+                // Üçgen 1: p1 → p3 → p2  (güney kutbu satırında p2==p3 → dejenere)
+                if i != stacks - 1 {
+                    vertices.push(vtx(p1, n1, uv1));
+                    vertices.push(vtx(p3, n3, uv3));
+                    vertices.push(vtx(p2, n2, uv2));
+                }
+                // Üçgen 2: p1 → p4 → p3  (kuzey kutbu satırında p1==p4 → dejenere)
+                if i != 0 {
+                    vertices.push(vtx(p1, n1, uv1));
+                    vertices.push(vtx(p4, n4, uv4));
+                    vertices.push(vtx(p3, n3, uv3));
+                }
             }
         }
 
+        vertices
+    }
+
+    pub fn create_sphere(device: &wgpu::Device, radius: f32, stacks: u32, slices: u32) -> Mesh {
+        let vertices = Self::sphere_data(radius, stacks, slices);
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Sphere VBuf"),
             contents: bytemuck::cast_slice(&vertices),
@@ -757,11 +702,16 @@ impl super::AssetManager {
         )
     }
 
-    pub fn create_cylinder(device: &wgpu::Device, radius: f32, height: f32, radial_segments: u32) -> Mesh {
+    /// Silindir köşeleri (yan + iki kapak), dış-yüzey CCW sarımlı. Saf veri.
+    pub(crate) fn cylinder_data(radius: f32, height: f32, radial_segments: u32) -> Vec<Vertex> {
         let radial_segments = radial_segments.max(3);
         let mut vertices = Vec::new();
         let pi = std::f32::consts::PI;
         let half_h = height / 2.0;
+        let def_j = [0; 4]; let def_w = [0.0; 4]; let col = [1.0; 3];
+        let vtx = |position: [f32; 3], normal: [f32; 3], tex_coords: [f32; 2]| Vertex {
+            position, color: col, normal, tex_coords, joint_indices: def_j, joint_weights: def_w, ..Default::default()
+        };
 
         // Tube
         for i in 0..radial_segments {
@@ -779,39 +729,45 @@ impl super::AssetManager {
             let n1 = [t1.cos(), 0.0, t1.sin()];
             let n2 = [t2.cos(), 0.0, t2.sin()];
 
-            let def_j = [0; 4]; let def_w = [0.0; 4];
-            let col = [1.0; 3];
+            // Yan yüzler: dıştan CCW (sağ-el normali dışa). (Eskiden ters → culllanıyordu.)
+            // Tri 1: p1_top → p2_bot → p1_bot
+            vertices.push(vtx(p1_top, n1, [u1, 0.0]));
+            vertices.push(vtx(p2_bot, n2, [u2, 1.0]));
+            vertices.push(vtx(p1_bot, n1, [u1, 1.0]));
+            // Tri 2: p1_top → p2_top → p2_bot
+            vertices.push(vtx(p1_top, n1, [u1, 0.0]));
+            vertices.push(vtx(p2_top, n2, [u2, 0.0]));
+            vertices.push(vtx(p2_bot, n2, [u2, 1.0]));
 
-            // Tri 1 (CCW)
-            vertices.push(Vertex { position: p1_top, normal: n1, tex_coords: [u1, 0.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: p1_bot, normal: n1, tex_coords: [u1, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [u2, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            // Üst kapak: center → p2_top → p1_top (sağ-el normali +Y).
+            vertices.push(vtx([0.0, half_h, 0.0], [0.0, 1.0, 0.0], [0.5, 0.5]));
+            vertices.push(vtx(p2_top, [0.0, 1.0, 0.0], [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()]));
+            vertices.push(vtx(p1_top, [0.0, 1.0, 0.0], [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()]));
 
-            // Tri 2 (CCW)
-            vertices.push(Vertex { position: p1_top, normal: n1, tex_coords: [u1, 0.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [u2, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: p2_top, normal: n2, tex_coords: [u2, 0.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-
-            // Top Cap (CCW from above)
-            vertices.push(Vertex { position: [0.0, half_h, 0.0], normal: [0.0, 1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: p1_top, normal: [0.0, 1.0, 0.0], tex_coords: [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: p2_top, normal: [0.0, 1.0, 0.0], tex_coords: [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-
-            // Bottom Cap (CCW from below)
-            vertices.push(Vertex { position: [0.0, -half_h, 0.0], normal: [0.0, -1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: p2_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: p1_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            // Alt kapak: center → p1_bot → p2_bot (sağ-el normali -Y).
+            vertices.push(vtx([0.0, -half_h, 0.0], [0.0, -1.0, 0.0], [0.5, 0.5]));
+            vertices.push(vtx(p1_bot, [0.0, -1.0, 0.0], [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()]));
+            vertices.push(vtx(p2_bot, [0.0, -1.0, 0.0], [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()]));
         }
+        vertices
+    }
 
+    pub fn create_cylinder(device: &wgpu::Device, radius: f32, height: f32, radial_segments: u32) -> Mesh {
+        let vertices = Self::cylinder_data(radius, height, radial_segments);
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("Cylinder VBuf"), contents: bytemuck::cast_slice(&vertices), usage: wgpu::BufferUsages::VERTEX });
         Mesh::new(device, Arc::new(vbuf), &vertices, Vec3::ZERO, format!("cylinder_{}_{}", radius, height))
     }
 
-    pub fn create_cone(device: &wgpu::Device, radius: f32, height: f32, radial_segments: u32) -> Mesh {
+    /// Koni köşeleri (yan + taban), dış-yüzey CCW sarımlı. Saf veri.
+    pub(crate) fn cone_data(radius: f32, height: f32, radial_segments: u32) -> Vec<Vertex> {
         let radial_segments = radial_segments.max(3);
         let mut vertices = Vec::new();
         let pi = std::f32::consts::PI;
         let half_h = height / 2.0;
+        let def_j = [0; 4]; let def_w = [0.0; 4]; let col = [1.0; 3];
+        let vtx = |position: [f32; 3], normal: [f32; 3], tex_coords: [f32; 2]| Vertex {
+            position, color: col, normal, tex_coords, joint_indices: def_j, joint_weights: def_w, ..Default::default()
+        };
 
         let slant = (radius * radius + height * height).sqrt();
         let ny = radius / slant;
@@ -833,20 +789,21 @@ impl super::AssetManager {
             let u2 = (i + 1) as f32 / radial_segments as f32;
             let umid = (u1 + u2) / 2.0;
 
-            let def_j = [0; 4]; let def_w = [0.0; 4];
-            let col = [1.0; 3];
+            // Yan üçgen: apex → p2_bot → p1_bot (dıştan CCW). (Eskiden ters → culllanıyordu.)
+            vertices.push(vtx(apex, navg, [umid, 0.0]));
+            vertices.push(vtx(p2_bot, n2, [u2, 1.0]));
+            vertices.push(vtx(p1_bot, n1, [u1, 1.0]));
 
-            // Side Tri (CCW from outside)
-            vertices.push(Vertex { position: apex, normal: navg, tex_coords: [umid, 0.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: p1_bot, normal: n1, tex_coords: [u1, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [u2, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-
-            // Bottom Cap (CCW from below)
-            vertices.push(Vertex { position: [0.0, -half_h, 0.0], normal: [0.0, -1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: p2_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: p1_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            // Taban kapağı: center → p1_bot → p2_bot (sağ-el normali -Y).
+            vertices.push(vtx([0.0, -half_h, 0.0], [0.0, -1.0, 0.0], [0.5, 0.5]));
+            vertices.push(vtx(p1_bot, [0.0, -1.0, 0.0], [0.5 + 0.5 * t1.cos(), 0.5 + 0.5 * t1.sin()]));
+            vertices.push(vtx(p2_bot, [0.0, -1.0, 0.0], [0.5 + 0.5 * t2.cos(), 0.5 + 0.5 * t2.sin()]));
         }
+        vertices
+    }
 
+    pub fn create_cone(device: &wgpu::Device, radius: f32, height: f32, radial_segments: u32) -> Mesh {
+        let vertices = Self::cone_data(radius, height, radial_segments);
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("Cone VBuf"), contents: bytemuck::cast_slice(&vertices), usage: wgpu::BufferUsages::VERTEX });
         Mesh::new(device, Arc::new(vbuf), &vertices, Vec3::ZERO, format!("cone_{}_{}", radius, height))
     }
@@ -898,7 +855,8 @@ impl super::AssetManager {
         Mesh::new(device, Arc::new(vbuf), &vertices, Vec3::ZERO, format!("torus_{}_{}", radius, tube_radius))
     }
 
-    pub fn create_capsule(device: &wgpu::Device, radius: f32, depth: f32, latitudes: u32, longitudes: u32) -> Mesh {
+    /// Kapsül köşeleri (tüp + iki yarıküre), dış-yüzey CCW sarımlı. Saf veri.
+    pub(crate) fn capsule_data(radius: f32, depth: f32, latitudes: u32, longitudes: u32) -> Vec<Vertex> {
         let latitudes = latitudes.max(4);
         let longitudes = longitudes.max(4);
         let mut vertices = Vec::new();
@@ -935,15 +893,16 @@ impl super::AssetManager {
 
                     let def_j = [0; 4]; let def_w = [0.0; 4]; let col = [1.0; 3];
 
-                    // Tri 1 (CCW)
+                    // Tüp dıştan CCW (eskiden ters → culllanıyordu).
+                    // Tri 1: p1_top → p2_bot → p1_bot
                     vertices.push(Vertex { position: p1_top, normal: n1, tex_coords: [v1, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                    vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [v2, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
                     vertices.push(Vertex { position: p1_bot, normal: n1, tex_coords: [v1, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-                    vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [v2, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
 
-                    // Tri 2 (CCW)
+                    // Tri 2: p1_top → p2_top → p2_bot
                     vertices.push(Vertex { position: p1_top, normal: n1, tex_coords: [v1, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-                    vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [v2, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
                     vertices.push(Vertex { position: p2_top, normal: n2, tex_coords: [v2, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                    vertices.push(Vertex { position: p2_bot, normal: n2, tex_coords: [v2, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
                 }
             }
 
@@ -966,19 +925,30 @@ impl super::AssetManager {
 
                     let def_j = [0; 4]; let def_w = [0.0; 4]; let col = [1.0; 3];
 
-                    // Tri 1 (CCW)
-                    vertices.push(Vertex { position: p1, normal: n1, tex_coords: [v1, u1], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-                    vertices.push(Vertex { position: p2, normal: n2, tex_coords: [v1, u2], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-                    vertices.push(Vertex { position: p3, normal: n3, tex_coords: [v2, u2], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                    // Yarıküre bantları dıştan CCW (eskiden ters → culllanıyordu).
+                    // Kutup satırlarında çakışan köşeli DEJENERE üçgen atlanır (sphere ile aynı).
+                    // Tri 1: p1 → p3 → p2  (güney kutbu satırında p2==p3 → dejenere)
+                    if i != latitudes - 1 {
+                        vertices.push(Vertex { position: p1, normal: n1, tex_coords: [v1, u1], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                        vertices.push(Vertex { position: p3, normal: n3, tex_coords: [v2, u2], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                        vertices.push(Vertex { position: p2, normal: n2, tex_coords: [v1, u2], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                    }
 
-                    // Tri 2 (CCW)
-                    vertices.push(Vertex { position: p1, normal: n1, tex_coords: [v1, u1], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-                    vertices.push(Vertex { position: p3, normal: n3, tex_coords: [v2, u2], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-                    vertices.push(Vertex { position: p4, normal: n4, tex_coords: [v2, u1], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                    // Tri 2: p1 → p4 → p3  (kuzey kutbu satırında p1==p4 → dejenere)
+                    if i != 0 {
+                        vertices.push(Vertex { position: p1, normal: n1, tex_coords: [v1, u1], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                        vertices.push(Vertex { position: p4, normal: n4, tex_coords: [v2, u1], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                        vertices.push(Vertex { position: p3, normal: n3, tex_coords: [v2, u2], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+                    }
                 }
             }
         }
 
+        vertices
+    }
+
+    pub fn create_capsule(device: &wgpu::Device, radius: f32, depth: f32, latitudes: u32, longitudes: u32) -> Mesh {
+        let vertices = Self::capsule_data(radius, depth, latitudes, longitudes);
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("Capsule VBuf"), contents: bytemuck::cast_slice(&vertices), usage: wgpu::BufferUsages::VERTEX });
         Mesh::new(device, Arc::new(vbuf), &vertices, Vec3::ZERO, format!("capsule_{}_{}", radius, depth))
     }
@@ -1106,5 +1076,116 @@ impl super::AssetManager {
             format!("terrain:{}", heightmap_path),
         );
         Ok((mesh, heights, img_width, img_height))
+    }
+}
+
+#[cfg(test)]
+mod winding_tests {
+    //! Prosedürel mesh'lerin üçgen sarımı (winding) ile declared yüzey normalleri
+    //! TUTARLI olmalı: geometrik (sağ-el) normal, declared outward normal ile aynı
+    //! yöne bakmalı (dot > 0). Aksi halde Ccw + Back-cull pipeline'ında (bkz.
+    //! pipeline.rs:579-580, deferred.rs:336-337) yüzeyler back-face sayılıp culllanır
+    //! → şekil "içi-dışına" / görünmez render olur. (Bu testin yakaladığı bug buydu.)
+    //!
+    //! Saf `*_data` fonksiyonları üzerinde çalışır — GPU device gerekmez.
+
+    use crate::asset::AssetManager;
+    use crate::gpu_types::Vertex;
+    use gizmo_math::Vec3;
+
+    /// Bir non-indexed üçgen listesinin sarım + normal geçerliliğini doğrula.
+    fn assert_outward(name: &str, verts: &[Vertex]) {
+        assert!(
+            !verts.is_empty() && verts.len() % 3 == 0,
+            "{name}: vertex sayısı pozitif ve 3'ün katı olmalı, {}",
+            verts.len()
+        );
+        let mut checked = 0usize;
+        for tri in verts.chunks_exact(3) {
+            for v in tri {
+                let n = Vec3::from(v.normal);
+                assert!(
+                    n.is_finite() && (n.length() - 1.0).abs() < 1e-3,
+                    "{name}: normal birim/sonlu değil: {:?}",
+                    v.normal
+                );
+            }
+            let p0 = Vec3::from(tri[0].position);
+            let p1 = Vec3::from(tri[1].position);
+            let p2 = Vec3::from(tri[2].position);
+            let geo = (p1 - p0).cross(p2 - p0);
+            // Dejenere üçgenleri (ör. kapsül yarıküre kutupları) atla.
+            if geo.length() < 1e-9 {
+                continue;
+            }
+            let n_avg = Vec3::from(tri[0].normal) + Vec3::from(tri[1].normal) + Vec3::from(tri[2].normal);
+            let d = geo.normalize().dot(n_avg.normalize());
+            assert!(
+                d > 0.0,
+                "{name}: üçgen sarımı declared normal'in TERSİNE (geo·n={d} ≤ 0) → \
+                 Ccw+Back-cull'da içi-dışına culllanır. p0={p0:?} p1={p1:?} p2={p2:?}"
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "{name}: dejenere olmayan üçgen yok");
+    }
+
+    #[test]
+    fn plane_winding_faces_up() {
+        assert_outward("plane", &AssetManager::plane_data(2.0));
+    }
+
+    #[test]
+    fn circle_winding_faces_up() {
+        assert_outward("circle", &AssetManager::circle_data(1.0, 16));
+    }
+
+    #[test]
+    fn sphere_winding_is_outward() {
+        for &(stacks, slices) in &[(3, 3), (8, 12), (16, 24)] {
+            assert_outward(
+                &format!("sphere({stacks},{slices})"),
+                &AssetManager::sphere_data(1.5, stacks, slices),
+            );
+        }
+    }
+
+    #[test]
+    fn sphere_has_no_degenerate_triangles() {
+        // Kutup dejenereleri kaldırıldı: hiçbir üçgenin iki köşesi çakışmamalı.
+        let v = AssetManager::sphere_data(1.0, 8, 12);
+        for tri in v.chunks_exact(3) {
+            let geo = (Vec3::from(tri[1].position) - Vec3::from(tri[0].position))
+                .cross(Vec3::from(tri[2].position) - Vec3::from(tri[0].position));
+            assert!(geo.length() > 1e-9, "sphere dejenere üçgen üretti");
+        }
+    }
+
+    #[test]
+    fn cylinder_winding_is_outward() {
+        assert_outward("cylinder", &AssetManager::cylinder_data(1.0, 2.0, 16));
+    }
+
+    #[test]
+    fn cone_winding_is_outward() {
+        assert_outward("cone", &AssetManager::cone_data(1.0, 2.0, 16));
+    }
+
+    #[test]
+    fn capsule_winding_is_outward() {
+        assert_outward("capsule", &AssetManager::capsule_data(0.5, 1.0, 8, 12));
+    }
+
+    #[test]
+    fn tetrahedron_winding_is_outward() {
+        assert_outward("tetrahedron", &AssetManager::tetrahedron_data(1.0));
+    }
+
+    #[test]
+    fn conical_frustum_winding_is_outward() {
+        assert_outward(
+            "conical_frustum",
+            &AssetManager::conical_frustum_data(1.0, 0.5, 2.0, 16),
+        );
     }
 }
