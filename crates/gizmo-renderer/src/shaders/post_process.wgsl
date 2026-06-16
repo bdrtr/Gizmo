@@ -119,11 +119,13 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let depth_dims = textureDimensions(t_depth, 0);
     let depth_uv = vec2<i32>(i32(in.uv.x * f32(depth_dims.x)), i32(in.uv.y * f32(depth_dims.y)));
     let depth_val = textureLoad(t_depth, depth_uv, 0);
-    // Linearize depth (assuming perspective projection, near=0.1, far=1000.0)
+    // Linearize depth. wgpu/glam perspective_rh writes NDC depth in [0,1] (NOT the
+    // OpenGL [-1,1] range), so the [0,1] reconstruction must be used:
+    //   view_dist = n*f / (f - d*(f - n))   →  d=0 → n, d=1 → f.
+    // (The old (2n)/(f+n-d(f-n)) was the OpenGL [-1,1] formula and was wrong here.)
     let n = 0.1;
     let f = 1000.0;
-    let linear_depth = (2.0 * n) / (f + n - depth_val * (f - n));
-    let view_dist = linear_depth * f;
+    let view_dist = (n * f) / (f - depth_val * (f - n));
     
     let coc = clamp(abs(view_dist - params.dof_focus_dist) / params.dof_focus_range, 0.0, 1.0);
     
