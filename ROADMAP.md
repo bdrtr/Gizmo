@@ -180,8 +180,15 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
       → non-uniform bone scale/shear'da normal kayıyordu; `inverse_transpose_3x3(skin3)` uygulandı
       (rigid/uniform'da no-op — fragment'ta normalize edilir). PBR BRDF (D_GGX/V_SmithJoint/F_Schlick),
       CSM/point shadow bias, sRGB/tonemap, TBN, attenuation temiz çıktı. (Not: normal-mapping TBN
-      döşeli ama normal-map dokusu hiç örneklenmez — eksik ÖZELLİK, bug değil.) KALAN: ileri
-      post-process (SSAO/SSGI/SSR/TAA) shader denetimi.
+      döşeli ama normal-map dokusu hiç örneklenmez — eksik ÖZELLİK, bug değil.) **İleri
+      post-process shader'ları DENETLENDİ (subagent + elle): 2 bug düzeltildi** — (1) DoF derinlik
+      linearizasyonu OpenGL `[-1,1]` formülü kullanıyordu (`(2n)/(f+n-d(f-n))`) ama wgpu `[0,1]`
+      yazıyor → `n·f/(f-d(f-n))` (post_process.wgsl; DoF varsayılan kapalı ama matematik artık doğru);
+      (2) SSGI hemisphere taban `up`-vektör seçimi `abs(normal.z)<0.999` ile yanlıştı → ±X'e bakan
+      normallerde `up`=(1,0,0) paralel olup `cross=0` → NaN tangent → kara SSGI; `abs(normal.y)>0.999`
+      ile düzeltildi (ssgi.wgsl). SSAO/SSR/TAA/FXAA/volumetric/blur/apply pasları temiz (depth/pozisyon
+      reconstruction, reprojection, tonemap-tek-sRGB doğru). 25 standalone render/post shader artık
+      `core_shaders_compile` testinde naga ile doğrulanıyor. KALAN: compute/fluid shader'ları.
 - [ ] WASM hedefini uçtan uca doğrula (async asset loader dahil).
 - [ ] Editor/studio iş akışı: sahne kaydet/yükle, prefab, inspector güvenilirliği.
 

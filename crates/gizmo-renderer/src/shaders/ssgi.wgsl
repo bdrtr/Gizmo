@@ -48,7 +48,10 @@ fn get_sample_dir(normal: vec3<f32>, seed1: f32, seed2: f32) -> vec3<f32> {
     let y = sin(theta) * sin(phi);
     let z = cos(theta);
 
-    let up = select(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), abs(normal.z) < 0.999);
+    // up, normal'e paralel OLMAMALI yoksa cross sıfır → NaN tangent. Y-up kullan;
+    // yalnız normal ±Y'ye yakınken X-up'a geç. (Eski test `abs(normal.z)<0.999`
+    // idi → ±X normalde up=(1,0,0) paralel olup tabanı çökertiyordu.)
+    let up = select(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), abs(normal.y) > 0.999);
     let tangent = normalize(cross(up, normal));
     let bitangent = cross(normal, tangent);
 

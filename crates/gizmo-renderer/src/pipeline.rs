@@ -970,22 +970,51 @@ mod tests {
                 return;
             };
 
-            for (name, src) in [
+            // Motorun standalone modül olarak yüklediği render/post-process shader'ları.
+            // (fluid_*/kernels/fluid_bindings concatenate edilen fragmanlar — hariç.)
+            let shaders: &[(&str, &str)] = &[
                 ("shader.wgsl", include_str!("shaders/shader.wgsl")),
                 ("gbuffer.wgsl", include_str!("shaders/gbuffer.wgsl")),
-                (
-                    "deferred_lighting.wgsl",
-                    include_str!("shaders/deferred_lighting.wgsl"),
-                ),
-            ] {
+                ("deferred_lighting.wgsl", include_str!("shaders/deferred_lighting.wgsl")),
+                ("post_process.wgsl", include_str!("shaders/post_process.wgsl")),
+                ("ssao.wgsl", include_str!("shaders/ssao.wgsl")),
+                ("ssao_blur.wgsl", include_str!("shaders/ssao_blur.wgsl")),
+                ("ssao_apply.wgsl", include_str!("shaders/ssao_apply.wgsl")),
+                ("ssr.wgsl", include_str!("shaders/ssr.wgsl")),
+                ("ssr_apply.wgsl", include_str!("shaders/ssr_apply.wgsl")),
+                ("ssgi.wgsl", include_str!("shaders/ssgi.wgsl")),
+                ("ssgi_blur.wgsl", include_str!("shaders/ssgi_blur.wgsl")),
+                ("ssgi_apply.wgsl", include_str!("shaders/ssgi_apply.wgsl")),
+                ("taa.wgsl", include_str!("shaders/taa.wgsl")),
+                ("fxaa.wgsl", include_str!("shaders/fxaa.wgsl")),
+                ("volumetric.wgsl", include_str!("shaders/volumetric.wgsl")),
+                ("volumetric_apply.wgsl", include_str!("shaders/volumetric_apply.wgsl")),
+                ("sky.wgsl", include_str!("shaders/sky.wgsl")),
+                ("unlit.wgsl", include_str!("shaders/unlit.wgsl")),
+                ("grid.wgsl", include_str!("shaders/grid.wgsl")),
+                ("shadow.wgsl", include_str!("shaders/shadow.wgsl")),
+                ("point_shadow.wgsl", include_str!("shaders/point_shadow.wgsl")),
+                ("decal.wgsl", include_str!("shaders/decal.wgsl")),
+                ("debug_lines.wgsl", include_str!("shaders/debug_lines.wgsl")),
+                ("mipmap.wgsl", include_str!("shaders/mipmap.wgsl")),
+            ];
+
+            let mut failures: Vec<String> = Vec::new();
+            for (name, src) in shaders {
                 device.push_error_scope(wgpu::ErrorFilter::Validation);
                 let _module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some(name),
-                    source: wgpu::ShaderSource::Wgsl(src.into()),
+                    source: wgpu::ShaderSource::Wgsl((*src).into()),
                 });
-                let err = device.pop_error_scope().await;
-                assert!(err.is_none(), "{name} WGSL doğrulaması başarısız: {err:?}");
+                if let Some(err) = device.pop_error_scope().await {
+                    failures.push(format!("{name}: {err:?}"));
+                }
             }
+            assert!(
+                failures.is_empty(),
+                "WGSL doğrulaması başarısız shader('lar):\n{}",
+                failures.join("\n")
+            );
         });
     }
 
