@@ -151,8 +151,19 @@ impl ConstraintSolver {
         // ── İteratif PGS ─────────────────────────────────────────────────────
         let inv_dt = if dt > 0.0 { 1.0 / dt } else { 0.0 };
 
-        for _ in 0..self.iterations {
-            for mid in 0..manifolds.len() {
+        let n_manifolds = manifolds.len();
+        for iter in 0..self.iterations {
+            // Symmetric Gauss-Seidel: alternate the sweep direction every
+            // iteration. Plain forward-only PGS applies the manifold's contact
+            // points in a fixed order; each point's impulse is off-centre, so the
+            // transient bias never fully cancels and a *perfectly symmetric* impact
+            // (e.g. an axis-aligned box stack) picks up spurious angular velocity
+            // that tips and collapses tall stacks. Reversing on odd iterations
+            // cancels the directional bias and keeps such stacks upright. The
+            // order is a deterministic function of `iter`, so determinism holds.
+            let reverse = iter % 2 == 1;
+            for mi in 0..n_manifolds {
+                let mid = if reverse { n_manifolds - 1 - mi } else { mi };
                 let entity_a_id = manifolds[mid].entity_a.id();
                 let entity_b_id = manifolds[mid].entity_b.id();
 
@@ -168,7 +179,9 @@ impl ConstraintSolver {
                 let friction = manifolds[mid].friction;
                 let restitution = manifolds[mid].restitution;
 
-                for cid in 0..manifolds[mid].contacts.len() {
+                let n_contacts = manifolds[mid].contacts.len();
+                for ci in 0..n_contacts {
+                    let cid = if reverse { n_contacts - 1 - ci } else { ci };
                     let contact_pt = manifolds[mid].contacts[cid].point;
                     let normal = manifolds[mid].contacts[cid].normal;
                     let penetration = manifolds[mid].contacts[cid].penetration;
@@ -235,8 +248,14 @@ impl ConstraintSolver {
                         self.baumgarte * inv_dt * correction
                     };
 
-                    // Restitution: sadece yüksek hızlı çarpışmalarda
-                    let e = if -vel_norm > self.restitution_velocity_threshold {
+                    // Restitution: sadece yüksek hızlı GERÇEK çarpışmalarda. Speculative
+                    // temas (penetration < 0) bir boşluk-kapatma LİMİTİdir; ona restitution
+                    // uygulamak bias'ı bozar (cisim substep'ler arası tutarsız yavaşlar ve
+                    // son substep'te yüzeyi aşıp girer). Sekme, cisim gerçekten değdiğinde
+                    // (penetration ≥ 0) doğal olarak uygulanır.
+                    let e = if penetration < 0.0 {
+                        0.0
+                    } else if -vel_norm > self.restitution_velocity_threshold {
                         restitution
                     } else {
                         0.0

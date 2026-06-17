@@ -332,43 +332,109 @@ impl Gjk {
         None
     }
 
-    /// Exact CCD Sweep Test using Conservative Advancement
+    /// Speculative contact for continuous collision detection (CCD).
+    ///
+    /// When two **separated** shapes are on a collision course this frame, this
+    /// emits a contact whose *negative penetration encodes the separation gap*.
+    /// The constraint solver reads that gap (`penetration < 0` ⇒ velocity bias
+    /// `gap/dt`) and lets the body advance **exactly up to the surface this step,
+    /// never past it** — instead of tunnelling through (no constraint) or freezing
+    /// far short (the old `penetration = 0` behaviour, which stopped the body at
+    /// its start-of-frame position).
+    ///
+    /// The body is intentionally halted a hair (`SKIN`) short of contact so the
+    /// *next* frame still measures a clean, GJK-reliable gap and converges to a
+    /// full stop without ever overlapping.
+    ///
+    /// The normal is oriented A→B. The contact is anchored at the **inverse-mass-
+    /// weighted centre** of the two bodies — which collapses onto the *dynamic*
+    /// body's centre of mass when the other is static. That makes the dynamic
+    /// body's lever arm `r × n ≈ 0`, so the impulse is a pure translational stop
+    /// with no spurious spin (anchoring on the static body instead would give the
+    /// far-away dynamic body a huge lever arm and a near-useless impulse). This
+    /// targets *translational* tunnelling; angular sweeps and the residual
+    /// rotational coupling between two far-apart fast dynamic bodies are out of scope.
+    ///
+    /// `inv_mass_a` / `inv_mass_b` are the bodies' inverse masses (0 for static).
     pub fn speculative_contact(
         shape_a: &ColliderShape,
         pos_a: Vec3,
         rot_a: gizmo_math::Quat,
         vel_a: Vec3,
+        inv_mass_a: f32,
         shape_b: &ColliderShape,
         pos_b: Vec3,
         rot_b: gizmo_math::Quat,
         vel_b: Vec3,
+        inv_mass_b: f32,
         dt: f32,
     ) -> Option<ContactPoint> {
-        if let Some((t, _ca_normal)) = Self::conservative_advancement(
-            shape_a, pos_a, rot_a, vel_a, shape_b, pos_b, rot_b, vel_b, dt,
-        ) {
-            let hit_pos_a = pos_a + vel_a * t;
-            let hit_pos_b = pos_b + vel_b * t;
+        /// Resting standoff: the body stops this far short of the surface so the
+        /// next frame still has a measurable, GJK-reliable separation.
+        const SKIN: f32 = 0.01;
+        /// Below this gap the GJK separating axis is unreliable (it degenerates to
+        /// a `Vec3::X` fallback), so we orient the normal from the approach instead.
+        const AXIS_RELIABLE_GAP: f32 = 1e-3;
 
-            // Derive normal from actual body positions at TOI — more reliable
-            // than the CA normal which can be a fallback Vec3::X when dist ≈ 0.
-            let normal_a_to_b = (hit_pos_b - hit_pos_a)
-                .try_normalize()
-                .unwrap_or(Vec3::X);
-
-            let contact_point = (hit_pos_a + hit_pos_b) * 0.5;
-
-            return Some(ContactPoint {
-                point: contact_point,
-                normal: normal_a_to_b,
-                penetration: 0.0, // speculative — bodies are just touching at TOI
-                local_point_a: contact_point - pos_a,
-                local_point_b: contact_point - pos_b,
-                normal_impulse: 0.0,
-                tangent_impulse: Vec3::ZERO,
-            });
+        if dt <= 0.0 {
+            return None;
         }
-        None
+
+        // Separation distance + separating axis at the *current* configuration.
+        let support = |dir: Vec3| {
+            Self::support_point(shape_a, pos_a, rot_a, dir)
+                - Self::support_point(shape_b, pos_b, rot_b, -dir)
+        };
+        let (gap, axis) = Self::distance(support)?;
+        let gap = gap.max(0.0);
+
+        let rel_vel = vel_a - vel_b;
+
+        // Contact normal, pointing A→B. `distance` returns the B→A separating axis,
+        // so negate it. When the gap is tiny that axis is unreliable, so derive the
+        // normal from the approach direction (which equals A→B while A closes on B).
+        let normal = if gap > AXIS_RELIABLE_GAP {
+            -axis
+        } else {
+            rel_vel.try_normalize()?
+        };
+
+        // Closing speed of A onto B along the normal. Not approaching ⇒ no contact.
+        let closing = rel_vel.dot(normal);
+        if closing <= 1e-4 {
+            return None;
+        }
+
+        // Only engage on the step where the bodies actually meet; otherwise a later
+        // (closer) frame handles it. This keeps the manifold list minimal and avoids
+        // constraining pairs that merely share a fattened broadphase cell.
+        if gap > closing * dt {
+            return None;
+        }
+
+        // How far the solver may let the body close this step (stop SKIN short).
+        let allowed_close = (gap - SKIN).max(0.0);
+
+        // Anchor at the inverse-mass-weighted centre: collapses onto the dynamic
+        // body when the other is static ⇒ that body's lever arm vanishes ⇒ the
+        // normal impulse is a clean linear stop.
+        let inv_sum = inv_mass_a + inv_mass_b;
+        let point = if inv_sum > 1e-12 {
+            (pos_a * inv_mass_a + pos_b * inv_mass_b) / inv_sum
+        } else {
+            (pos_a + pos_b) * 0.5
+        };
+
+        Some(ContactPoint {
+            point,
+            normal,
+            // Negative ⇒ speculative gap; solver bias allows closing exactly this much.
+            penetration: -allowed_close,
+            local_point_a: point - pos_a,
+            local_point_b: point - pos_b,
+            normal_impulse: 0.0,
+            tangent_impulse: Vec3::ZERO,
+        })
     }
 
     fn handle_simplex(simplex: &mut Vec<SupportPoint>, direction: &mut Vec3) -> bool {
@@ -950,10 +1016,12 @@ mod tests {
             Vec3::new(-5.0, 0.0, 0.0),
             Quat::IDENTITY,
             Vec3::new(10.0, 0.0, 0.0),
+            1.0,
             &shape,
             Vec3::new(5.0, 0.0, 0.0),
             Quat::IDENTITY,
             Vec3::new(-10.0, 0.0, 0.0),
+            1.0,
             1.0,
         );
 
@@ -1044,10 +1112,12 @@ mod tests {
             Vec3::new(-5.0, 0.0, 0.0),
             Quat::IDENTITY,
             Vec3::new(-10.0, 0.0, 0.0),
+            1.0,
             &shape,
             Vec3::new(5.0, 0.0, 0.0),
             Quat::IDENTITY,
             Vec3::new(10.0, 0.0, 0.0),
+            1.0,
             1.0,
         );
 

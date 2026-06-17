@@ -91,6 +91,71 @@ fn soak_box_stack_stays_stable() {
 }
 
 #[test]
+fn soak_falling_stack_survives_impact() {
+    // Faz 4 (solver kalite turu) regresyonu: 8 kutu KÜÇÜK BOŞLUKLARLA bırakılıp
+    // birbirine ÇARPARAK düşer. Mükemmel hizalı bir yığın metastable'dır; ileri-tek-
+    // yönlü PGS, manifoldun 4 temas noktasını sabit sırada işleyip her çarpmada küçük
+    // bir merkez-dışı (dönme) yanlılığı bırakır → yığın devrilip yanlara saçılırdı
+    // (eski davranış: bu senaryoda max|xz| ~3-5). Simetrik Gauss-Seidel (solver,
+    // iterasyonda yön değiştirir) bu yanlılığı iptal eder; yığın dik kalır.
+    //
+    // AYIRT EDİCİ: solver'da `reverse` sabit `false` yapılınca bu test DÜŞER.
+    let mut world = PhysicsWorld::new();
+    world.solver.iterations = 20; // varsayılan; 16'da bu yükseklik henüz yakınsamaz
+    add_ground(&mut world);
+
+    let n = 8;
+    let half = 0.5;
+    let gap = 0.1; // her kutu mükemmel temasın 0.1 m üstünde → düşüp çarpar
+    for i in 0..n {
+        let y = half + i as f32 * (2.0 * half + gap);
+        add_box(&mut world, i as u32 + 1, Vec3::new(0.0, y, 0.0), half);
+    }
+
+    for _ in 0..600 {
+        world.step(1.0 / 60.0).ok();
+    }
+
+    // 1) NaN/Inf yok.
+    for i in 1..=n {
+        assert!(
+            world.transforms[i].position.is_finite() && world.velocities[i].linear.is_finite(),
+            "kutu {i} NaN/Inf"
+        );
+    }
+
+    // 2) Çarpma sonrası yerleşmiş (jitter/patlama yok).
+    let max_speed = (1..=n)
+        .map(|i| world.velocities[i].linear.length() + world.velocities[i].angular.length())
+        .fold(0.0f32, f32::max);
+    assert!(max_speed < 0.5, "yığın yerleşmedi: max_speed={max_speed}");
+
+    // 3) Yığın dik kaldı: yanal sürüklenme yok ve sıra korundu (çökme/saçılma yok).
+    let mut prev_y = -1.0f32;
+    for i in 1..=n {
+        let p = world.transforms[i].position;
+        assert!(
+            p.x.abs() < 0.3 && p.z.abs() < 0.3,
+            "kutu {i} yanal kaydı (yığın çöktü): {p:?}"
+        );
+        assert!(
+            p.y > prev_y + 0.3,
+            "kutu {i} yığın sırasını bozdu: y={} prev={prev_y}",
+            p.y
+        );
+        prev_y = p.y;
+    }
+
+    // 4) Tepe kutu yaklaşık beklenen yükseklikte (yığın boyu korundu).
+    let expected_top = half + (n - 1) as f32 * (2.0 * half);
+    assert!(
+        (world.transforms[n].position.y - expected_top).abs() < 0.4,
+        "tepe kutu beklenen yükseklikte değil: y={} (beklenen ≈ {expected_top})",
+        world.transforms[n].position.y
+    );
+}
+
+#[test]
 fn golden_box_settles_on_ground() {
     let mut world = PhysicsWorld::new();
     world.solver.iterations = 16;
