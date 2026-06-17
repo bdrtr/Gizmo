@@ -16,7 +16,9 @@ pub struct ContactPoint {
     pub point: Vec3,
     /// Contact normal, pointing from A to B (unit vector).
     pub normal: Vec3,
-    /// Penetration depth (always ≥ 0).
+    /// Penetration depth. Positive for a real overlap (discrete contact); a
+    /// **negative** value marks a *speculative* CCD contact and encodes the
+    /// separation gap the solver may close this step (see `Gjk::speculative_contact`).
     pub penetration: f32,
     /// `point` expressed in body A's local space (set by the dispatcher).
     pub local_point_a: Vec3,

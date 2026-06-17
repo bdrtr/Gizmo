@@ -9,7 +9,7 @@ pub mod hitbox;
 
 pub use collider::{BoxShape, CapsuleShape, Collider, ColliderShape, ConvexHullShape, PlaneShape, SphereShape, TriMeshShape};
 pub use collision_layer::CollisionLayer;
-pub use physics_material::PhysicsMaterial;
+pub use physics_material::{CombineMode, PhysicsMaterial};
 pub use transform::{GlobalTransform, Transform};
 pub use fluid::FluidSimulation;
 pub use character::CharacterController;

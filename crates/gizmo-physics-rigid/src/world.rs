@@ -699,27 +699,25 @@ mod tests {
     #[test]
     fn test_ccd_tunneling_prevention() {
         let mut world = PhysicsWorld::new();
-        // Gravity kapalı ki tam düz uçsun
+        // Gravity kapalı ki tam düz uçsun.
         world.integrator.gravity = Vec3::ZERO;
 
-        // İnce bir duvar (kalınlık 0.2m)
+        // İnce statik duvar: kalınlık 0.2 m, x=0 merkezli → ön yüz x=-0.1, arka yüz x=+0.1.
         let mut wall_rb = RigidBody::new_static();
         wall_rb.wake_up();
         world.add_body(
             Entity::new(0, 0),
             wall_rb,
-            Transform::new(Vec3::new(0.0, 0.0, 0.0)),
+            Transform::new(Vec3::ZERO),
             Velocity::default(),
             Collider::box_collider(Vec3::new(0.1, 5.0, 5.0)),
         );
 
-        // Mermi (CCD Açık)
+        // Mermi (CCD açık): r=0.2, saniyede 1200 m (mach ~3.5). Bir karede (1/60 s)
+        // 20 m yol alır; duvar 0.2 m → CCD olmadan kesin tünelleme olurdu.
         let mut bullet_rb = RigidBody::new(1.0, 0.0, 0.0, false);
         bullet_rb.ccd_enabled = true;
         bullet_rb.wake_up();
-
-        // Mermiyi duvarın önünden, saniyede 1200 metre hızla (mach 3.5) ateşle!
-        // 1 kare (1/60) saniyede 20 metre yol alır. Duvar sadece 0.2m kalınlığında!
         world.add_body(
             Entity::new(1, 0),
             bullet_rb,
@@ -728,95 +726,169 @@ mod tests {
             Collider::sphere(0.2),
         );
 
-        // 1 Frame simüle et (Tunneling ihtimali olan an)
-        let _ = world.step(1.0 / 60.0);
+        // Birden çok kare simüle et: speculative CCD merminin yolunu o kareye izin
+        // verilen boşlukla SINIRLAR; mermi duvara varır, ertesi karede tam durur.
+        let mut max_x = f32::MIN;
+        for _ in 0..120 {
+            let _ = world.step(1.0 / 60.0);
+            max_x = max_x.max(world.transforms[1].position.x);
+        }
 
-        let bullet_pos = world.transforms[1].position;
-        let bullet_vel = world.velocities[1].linear;
-
-        // CCD çalıştığı için mermi duvarı GEÇMEMELİ!
-        // Eğer CCD çalışmasaydı, X konumu 15.0 civarında olurdu.
-        // CCD çalıştığı için duvarda durmalı (X <= 0) veya sekip eksi hıza geçmeli.
+        // 1) HİÇBİR karede duvar merkezini geçmemeli (geçseydi x ~ +15 olurdu).
         assert!(
-            bullet_pos.x <= 0.0,
-            "TUNNELING FAILED! Bullet phased through the wall. Position: {}",
-            bullet_pos.x
+            max_x < 0.0,
+            "TUNNELING! Bullet crossed the wall — peak x = {max_x}"
         );
-        // Hız durdurulmuş veya sekmiş olmalı
+
+        // 2) Eski `penetration = 0` hatasında mermi başlangıçta (x≈-5) DONUYORDU.
+        //    Doğru CCD'de duvarın ön yüzüne (x≈-0.31) dayanıp durmalı.
+        let final_x = world.transforms[1].position.x;
         assert!(
-            bullet_vel.x <= 0.01,
-            "Bullet did not lose velocity after hitting the wall. Vel: {}",
-            bullet_vel.x
+            (-0.6..=-0.1).contains(&final_x),
+            "Bullet should rest against the wall front (~ -0.31), got x = {final_x} \
+             (frozen far short would be ~ -5.0)"
+        );
+
+        // 3) Sonunda durmuş olmalı.
+        let final_v = world.velocities[1].linear.x;
+        assert!(
+            final_v.abs() < 1.0,
+            "Bullet should have stopped against the wall, vel.x = {final_v}"
+        );
+    }
+
+    #[test]
+    fn test_material_combine_modes_respected() {
+        use gizmo_physics_core::{CombineMode, PhysicsMaterial};
+        // Temas materyali artık her materyalin combine MODUYLA birleşir
+        // (`PhysicsMaterial::combine`). Eskiden pipeline geometrik-ortalama'yı
+        // hardcode ediyordu → `friction_combine` yok sayılıyordu.
+        //
+        // Yüksek-sürtünme + Max-combine kutu, DÜŞÜK-sürtünme zeminde:
+        //   Doğru (Max):  μ = max(0.9, 0.1) = 0.9 → ~5-6 m'de durur.
+        //   Eski (geo.ort): μ = sqrt(0.9·0.1) = 0.3 → ~17 m kayar.
+        // AYIRT EDİCİ: combine() yerine eski hardcode'a dönülürse test DÜŞER.
+        let mut world = PhysicsWorld::new();
+        world.integrator.gravity = Vec3::new(0.0, -10.0, 0.0);
+
+        let mut ground = RigidBody::new_static();
+        ground.wake_up();
+        let mut gcol = Collider::box_collider(Vec3::new(200.0, 0.5, 200.0));
+        gcol.material = PhysicsMaterial {
+            static_friction: 0.1,
+            dynamic_friction: 0.1,
+            friction_combine: CombineMode::GeometricMean,
+            ..PhysicsMaterial::default()
+        };
+        world.add_body(
+            Entity::new(0, 0),
+            ground,
+            Transform::new(Vec3::new(0.0, -0.5, 0.0)),
+            Velocity::default(),
+            gcol,
+        );
+
+        let mut rb = RigidBody::new(1.0, 0.0, 0.0, true);
+        rb.wake_up();
+        let mut col = Collider::box_collider(Vec3::splat(0.5));
+        col.material = PhysicsMaterial {
+            static_friction: 0.9,
+            dynamic_friction: 0.9,
+            friction_combine: CombineMode::Max, // Max, zemin GeometricMean'i ezer
+            ..PhysicsMaterial::default()
+        };
+        rb.update_inertia_from_collider(&col);
+        world.add_body(
+            Entity::new(1, 0),
+            rb,
+            Transform::new(Vec3::new(0.0, 0.5, 0.0)),
+            Velocity::new(Vec3::new(10.0, 0.0, 0.0)),
+            col,
+        );
+
+        for _ in 0..300 {
+            let _ = world.step(1.0 / 60.0);
+        }
+        let x = world.transforms[1].position.x;
+        assert!(
+            x < 10.0,
+            "Max friction_combine yok sayıldı — kutu {x} m kaydı (Max ile ~5-6 m beklenir; \
+             eski geo-ort hardcode'u ~17 m verirdi)"
         );
     }
 
     #[test]
     fn test_coulomb_friction_and_sleeping() {
+        use gizmo_physics_core::PhysicsMaterial;
         let mut world = PhysicsWorld::new();
-        // Sürtünme için yerçekimi şart (Normal kuvveti yaratmak için)
+        // Sürtünme için yerçekimi şart (normal kuvveti yaratmak için).
         world.integrator.gravity = Vec3::new(0.0, -10.0, 0.0);
 
-        // Zemin (Sürtünme: 0.5)
+        // ÖNEMLİ: temas sürtünmesi collider MATERYALİNDEN gelir
+        // (`manifold.friction = sqrt(mat_a.dyn * mat_b.dyn)`), `RigidBody::friction`
+        // alanından DEĞİL. Bu test eskiden rb.friction'ı değiştiriyordu — o alan
+        // temas çözücüye HİÇ ulaşmıyor, dolayısıyla iki kutu da varsayılan materyalle
+        // aynı mesafeyi gidip test yalnızca sub-mm gürültüyle "geçiyordu". Farkı
+        // gerçek sürücüye, yani materyale koyuyoruz.
+
+        // Zemin — yüksek sürtünmeli, geniş (A ~23 m kayabilir).
         let mut ground_rb = RigidBody::new_static();
-        ground_rb.friction = 0.5;
         ground_rb.wake_up();
+        let mut ground_col = Collider::box_collider(Vec3::new(200.0, 0.5, 200.0));
+        ground_col.material = PhysicsMaterial {
+            static_friction: 0.9,
+            dynamic_friction: 0.9,
+            ..PhysicsMaterial::default()
+        };
         world.add_body(
             Entity::new(0, 0),
             ground_rb,
             Transform::new(Vec3::new(0.0, -0.5, 0.0)),
             Velocity::default(),
-            Collider::box_collider(Vec3::new(100.0, 0.5, 100.0)),
+            ground_col,
         );
 
-        // Kutu A: Düşük Sürtünme (0.1)
-        let mut box_a = RigidBody::new(1.0, 0.0, 0.1, true);
-        box_a.wake_up();
-        world.add_body(
-            Entity::new(1, 0),
-            box_a,
-            Transform::new(Vec3::new(0.0, 0.5, -2.0)),
-            Velocity::new(Vec3::new(10.0, 0.0, 0.0)),
-            Collider::box_collider(Vec3::splat(0.5)),
-        );
+        let mut make_box = |id: u32, z: f32, fric: f32| {
+            let mut rb = RigidBody::new(1.0, 0.0, 0.0, true);
+            rb.wake_up();
+            let mut col = Collider::box_collider(Vec3::splat(0.5));
+            col.material = PhysicsMaterial {
+                static_friction: fric,
+                dynamic_friction: fric,
+                ..PhysicsMaterial::default()
+            };
+            rb.update_inertia_from_collider(&col);
+            world.add_body(
+                Entity::new(id, 0),
+                rb,
+                Transform::new(Vec3::new(0.0, 0.5, z)),
+                Velocity::new(Vec3::new(10.0, 0.0, 0.0)),
+                col,
+            );
+        };
+        make_box(1, -2.0, 0.05); // Kutu A: düşük sürtünme → uzağa kayar
+        make_box(2, 2.0, 0.9); //  Kutu B: yüksek sürtünme → erken durur
 
-        // Kutu B: Yüksek Sürtünme (0.8)
-        let mut box_b = RigidBody::new(1.0, 0.0, 0.8, true);
-        box_b.wake_up();
-        world.add_body(
-            Entity::new(2, 0),
-            box_b,
-            Transform::new(Vec3::new(0.0, 0.5, 2.0)),
-            Velocity::new(Vec3::new(10.0, 0.0, 0.0)),
-            Collider::box_collider(Vec3::splat(0.5)),
-        );
-
-        // 5 saniye simüle et (300 kare) - İkisi de tamamen durup uyumalı
+        // 5 saniye simüle et (300 kare) — ikisi de durup uyumalı.
         for _ in 0..300 {
             let _ = world.step(1.0 / 60.0);
         }
 
         let pos_a = world.transforms[1].position;
         let pos_b = world.transforms[2].position;
-        let sleep_a = world.rigid_bodies[1].is_sleeping;
-        let sleep_b = world.rigid_bodies[2].is_sleeping;
 
-        // Yüksek sürtünmeli kutu daha erken durmuş olmalı (Daha az X mesafesi)
+        // Yüksek sürtünmeli kutu BELİRGİN şekilde daha az yol gitmeli (~5 m'ye karşı
+        // ~23 m). Sağlam marj: sub-mm gürültüye değil gerçek sürtünmeye duyarlı.
         assert!(
-            pos_b.x < pos_a.x,
-            "High friction box should travel less. Pos A: {}, Pos B: {}",
+            pos_b.x < pos_a.x - 5.0,
+            "Yüksek sürtünmeli kutu belirgin daha az gitmeli. A: {}, B: {}",
             pos_a.x,
             pos_b.x
         );
 
-        // İkisi de kinetik enerjisini sıfırlayıp UYKU MODUNA geçmiş olmalı
-        assert!(
-            sleep_a,
-            "Low friction box did not enter sleeping mode!"
-        );
-        assert!(
-            sleep_b,
-            "High friction box did not enter sleeping mode!"
-        );
+        // İkisi de durup UYKU MODUNA geçmeli.
+        assert!(world.rigid_bodies[1].is_sleeping, "Düşük sürtünmeli kutu uyumadı!");
+        assert!(world.rigid_bodies[2].is_sleeping, "Yüksek sürtünmeli kutu uyumadı!");
     }
 
     #[test]

@@ -138,12 +138,76 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
 
 ## Faz 4 — Fizik Derinliği & Kalite
 
-- [ ] Solver kalite turu: warm-starting doğrulama, sub-stepping ayarı, manifold kararlılığı.
-      (Bulgu 2026-06-15: TAM-TEMASLA başlatılan 3-kutu yığını 10 sn kaya gibi sabit; ancak
-      boşluklu/düşen 6-kutu yığını çarpma jitter'ıyla 10 sn'de yana kayıp çöküyor — uzun yığın
-      kararlılığı warm-starting/sürtünme-birikimi iyileştirmesi gerektiriyor.)
-- [ ] CCD (sürekli çarpışma) sağlamlık testleri (tünelleme yok).
-- [ ] Joint kütüphanesini tamamla + her tür için test (fixed/hinge/slider/ballsocket/spring + motor/limit).
+- [~] **Solver kalite turu: warm-starting doğrulama, sub-stepping ayarı, manifold kararlılığı**
+      — DENETLENDİ + KISMEN DÜZELTİLDİ (2026-06-17). Çöküşün kök nedeni bulundu: mükemmel
+      hizalı kutu yığını **metastable**; ileri-tek-yönlü PGS manifoldun 4 temas noktasını sabit
+      sırada işleyip her çarpmada küçük bir merkez-dışı (dönme) yanlılığı bırakıyor → çarpma
+      anında açısal hız tohumlanıp yığını deviriyor (kanıt: çarpmada `maxang` 0→3.1 sıçrıyor).
+      **Düzeltmeler:** (1) **simetrik Gauss-Seidel** — solver iterasyonda tarama yönünü değiştirir
+      (`solver.rs`), yön-yanlılığını iptal eder; (2) **kalıcı temaslarda restitution bastırma**
+      — yerleşmiş/yığın teması (lifetime>0) sekme enerjisini her substep yeniden enjekte etmesin
+      (`pipeline.rs`; sıçrayan top hâlâ sekiyor çünkü temas kopunca lifetime sıfırlanır). Sonuç:
+      orta-boşluklu yığınlar (n≤~12, gap≤~0.2) artık varsayılan 20 iterasyonda çarpmayı atlatıp
+      dik kalıyor (eskiden çöküyordu). Regresyon: `soak_and_golden.rs::soak_falling_stack_survives_impact`
+      (n=8, gap=0.1 düşen yığın) — AYIRT EDİCİ: SGS kapatılınca DÜŞÜYOR. **Yan bulgu + düzeltme:**
+      `test_coulomb_friction_and_sleeping` kusurluymuş — `RigidBody::friction` alanını değiştiriyordu
+      ama temas sürtünmesi collider MATERYALİNDEN gelir (`sqrt(mat_a.dyn·mat_b.dyn)`), rb.friction
+      temas çözücüye HİÇ ulaşmaz; iki kutu da aynı mesafeyi gidip test sub-mm gürültüyle geçiyordu.
+      Test gerçek materyal sürtünmesini kullanacak + anlamlı marj (≈23 m'ye karşı ≈5 m) test edecek
+      şekilde düzeltildi. Doğrulama: workspace 528 test yeşil, clippy ratchet exit 0, determinizm
+      3/3 tutarlı (yeni hash **4F4A5BE6569A6ED4** — solver sırası değişti). **KALAN (ileri iş):**
+      aşırı uzun (n≥16) / büyük-boşluk (yüksek-enerji çarpma) mükemmel-hizalı yığınlar HÂLÂ kaotik
+      çöküyor — SI çözücünün temel sınırı; tam çözüm modern bir çözücü (TGS Soft / 2-nokta block
+      solver / iterasyon-arası pozisyon güncellemesi) gerektirir.
+- [x] **Materyal combine modları** — DÜZELTİLDİ (2026-06-17). Pipeline manifold sürtünme/sekme'yi
+      `sqrt(dyn·dyn)` + `restitution.max` ile HARDCODE ediyordu → her materyalin
+      `friction_combine`/`restitution_combine` modu (ICE=Min, RUBBER=Max, …) YOK SAYILIYORDU.
+      Artık `PhysicsMaterial::combine()` kullanılıyor. Varsayılan materyal (GeometricMean sürtünme,
+      Max sekme) için BİREBİR aynı → determinizm hash `4F4A5BE6569A6ED4` DEĞİŞMEDİ (default-nötr);
+      yalnız özel modlu materyaller düzeldi. `CombineMode` crate kökünden export edildi. Ayırt edici
+      test (`world.rs::test_material_combine_modes_respected`): Max-combine kutu düşük-sürtünme
+      zeminde ~5-6 m'de durur (eski hardcode ~17 m kaydırırdı).
+- [ ] **(Faz 6 / API) `RigidBody::friction`+`restitution` alanları temas çözücüde YOK SAYILIYOR**
+      — kaynak doğruluğu collider `material`'dir; rb alanları yalnız editor UI + fracture
+      propagation'da okunuyor. Ya materyale köprülenmeli ya kaldırılmalı (köprüleme varsayılanları
+      kaydırır: rb default 0.5 vs material default static 0.6/dyn 0.5 → davranış değişir; bu yüzden
+      şimdi yapılmadı, API kararı Faz 6'ya bırakıldı).
+- [x] **CCD (sürekli çarpışma) sağlamlık testleri (tünelleme yok)** — DENETLENDİ+DÜZELTİLDİ.
+      Speculative-contact CCD vardı ama 3 bug'ı kapatıldı: (1) `Gjk::speculative_contact`
+      temas noktasını `penetration = 0` ile üretiyordu → solver merminin hızını BAŞLANGIÇ
+      konumunda sıfırlıyor, mermi duvardan metrelerce ÖNCE donuyordu ("hayalet duvar").
+      Düzeltme: temas, ayrılma boşluğunu **negatif penetration** (`-allowed_close`) olarak
+      taşıyor; solver'da zaten var olan `penetration < 0 ⇒ bias = gap/dt` yolu cismin o adımda
+      yüzeye TAM kadar (SKIN=1cm payla) ilerleyip durmasını sağlıyor — ne tünel ne donma.
+      (2) Temas noktası A'nın (statik duvar) merkezine demirleniyordu → uzaktaki dinamik
+      mermi için devasa kaldıraç kolu (`k_n≈596`), impuls cılız, durdurmuyordu → **ters-kütle
+      ağırlıklı merkeze** demirlendi (dinamik-vs-statik'te dinamik cismin COM'una düşer,
+      `r×n=0`, saf doğrusal durdurma); bunun için `speculative_contact` imzasına `inv_mass_a/b`
+      eklendi. (3) Restitution speculative boşluk-kapatmaya uygulanıyordu (varsayılan materyal
+      e=0.3) → bias bozuluyor, çok-substep'te (240Hz, kare başına 4 substep) mermi son substep'te
+      yüzeyi aşıp giriyordu → solver'da `penetration < 0` iken `e=0` (sekme gerçek temasta,
+      penetration≥0'da uygulanır). **8 yeni test** (`tests/ccd.rs`): çok-hızlı head-on tünel-yok
+      + ön-yüzde durma, açılı/offset impact, temiz-yol/ayrılan cisim yanlış-durdurulmaz, iki
+      CCD cismi iç-içe geçmez, CCD küre zeminde normal yerleşir + **proptest** (rastgele
+      hız/duvar-kalınlığı/yarıçap → asla tünel/penetrasyon). Ayırt edici: eski ghost-freeze
+      bug'ı testleri DÜŞÜRÜYOR. Determinizm hash D96110593C3394F7 değişmedi (CCD yolu izole).
+- [x] **Joint kütüphanesi + her tür için test (fixed/hinge/slider/ballsocket/spring + motor/limit)**
+      — DENETLENDİ + 2 BUG DÜZELTİLDİ (2026-06-17). 5 tür de davranışsal olarak test edildi
+      (`tests/joints_behavior.rs`, 8 test). **Bug 1 — Fixed joint dönüşü KİLİTLEMİYORDU:**
+      `solve_fixed_joint` yalnız 3 doğrusal (anchor-pin) kısıt uyguluyordu → "Fixed" aslında
+      ball-socket gibi serbest dönüyordu (B spin'i 3 rad/4.5 rad·s⁻¹ ile devam ediyordu). Düzeltme:
+      bağıl açısal hızı 3 eksende sıfırlayan velocity-lock eklendi (yalnız `JointData::Fixed` iken;
+      solver hinge/ballsocket pozisyon aşamasıyla paylaşıldığından gate şart). AYRICA erken-`return`
+      (anchor çakışıksa) açısal kilidi atlıyordu → doğrusal kısım `if err_len>=ε` ile sarıldı, kilit
+      her zaman çalışıyor. Offset yerçekimi yükü altında 5 sn weld testi geçiyor (drift yok). **Bug 2
+      — Slider LİMİTİ tutmuyordu:** limit impulse-clamp sınırları çalışan hinge'in TERSİNE takılmıştı
+      (alt-limit err>0 için `(−∞,0)` ama `(0,+∞)` olmalı; üst tersi) → 5 m/s'lik cisim 1 m'lik üst
+      limiti delip 19.6 m'ye gidiyordu; clamp'ler swap'lendi → 1.002 m'de duruyor. Temiz çıkanlar:
+      hinge limit+motor, slider motor, ballsocket cone limit, spring (Hooke + damping + min/max).
+      Doğrulama: workspace 537 test yeşil, clippy exit 0, determinizm hash `4F4A5BE6569A6ED4` DEĞİŞMEDİ
+      (stress testi joint kullanmıyor). NOT (ileri): Fixed weld velocity-lock'tur (pozisyon-bias yok);
+      sürekli ağır yükte mikro-drift olabilir — gerekirse initial-relative-rotation saklayıp Baumgarte
+      eklenir (Faz 6 polish).
 - [ ] Islands & sleeping sağlamlaştırma (Faz 0 uyku bug'ı sonrası).
 - [ ] Geniş sahne performans profili (mimalloc/archetype cache locality doğrulama).
 

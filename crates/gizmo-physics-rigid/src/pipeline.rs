@@ -258,10 +258,12 @@ impl PhysicsWorld {
                                     transform_a.position,
                                     transform_a.rotation,
                                     vel_a.linear,
+                                    rb_a.inv_mass(),
                                     &collider_b.shape,
                                     transform_b.position,
                                     transform_b.rotation,
                                     vel_b.linear,
+                                    rb_b.inv_mass(),
                                     dt,
                                 ) {
                                     contacts.push(sc);
@@ -353,13 +355,27 @@ impl PhysicsWorld {
             } else {
                 // ── Solid contact ─────────────────────────────────────────
                 let mut manifold = ContactManifold::new(entity_a, entity_b);
-                manifold.friction = (mat_a.dynamic_friction * mat_b.dynamic_friction).sqrt();
-                manifold.static_friction = (mat_a.static_friction * mat_b.static_friction).sqrt();
-                manifold.restitution = mat_a.restitution.max(mat_b.restitution);
+                // Combine the two materials via their declared combine modes
+                // (`PhysicsMaterial::combine`) instead of hard-coding geometric-mean
+                // friction + max restitution. The hard-coded form silently ignored
+                // each material's `friction_combine`/`restitution_combine`, so presets
+                // like ICE (Min) and RUBBER (Max) never combined as specified. For the
+                // default material (GeometricMean friction, Max restitution) this is
+                // identical, so default-material scenes are unaffected.
+                let combined = gizmo_physics_core::PhysicsMaterial::combine(&mat_a, &mat_b);
+                manifold.friction = combined.dynamic_friction;
+                manifold.static_friction = combined.static_friction;
+                manifold.restitution = combined.restitution;
 
                 // Warm-start: reuse impulses from the previous frame's manifold.
                 if let Some((_, Some(old_manifold))) = self.contact_cache.get(&pair) {
                     manifold.lifetime = old_manifold.lifetime + 1;
+                    // Persisting contact ⇒ resting / stacking, not a fresh impact.
+                    // Restitution is only physically meaningful on the FIRST frame of
+                    // contact; re-applying it every frame (and, at 240 Hz, on each of
+                    // the 4 sub-steps) keeps pumping energy into a settled stack.
+                    // Suppress it once a contact has persisted so stacks can settle.
+                    manifold.restitution = 0.0;
                     for mut contact in contacts.iter().copied() {
                         if let Some(old) = old_manifold
                             .contacts

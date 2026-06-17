@@ -16,7 +16,7 @@ pub use collision::{
     CollisionEvent, CollisionEventType, ContactManifold, ContactPoint, TriggerEvent, FractureEvent
 };
 pub use components::{
-    Collider, ColliderShape, CollisionLayer, ConvexHullShape, PhysicsMaterial,
+    Collider, ColliderShape, CollisionLayer, CombineMode, ConvexHullShape, PhysicsMaterial,
     PlaneShape, SphereShape, Transform, TriMeshShape, BoxShape, CapsuleShape
 };
 pub use error::GizmoError;
