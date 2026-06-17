@@ -278,68 +278,95 @@ impl JointSolver {
         let error = anchor_a - anchor_b; // target = a, current = b, so error = a - b
         let err_len = error.length();
 
-        if err_len < 0.0001 {
-            return;
+        // Position (point) constraint — shared with the hinge / ball-socket position
+        // stage. Skip only the LINEAR part when the anchor is already coincident; the
+        // Fixed angular lock below must still run (earlier an early `return` here let a
+        // perfectly-pinned Fixed joint spin freely).
+        if err_len >= 0.0001 {
+            let r_a = anchor_a - transforms[idx_a].position;
+            let r_b = anchor_b - transforms[idx_b].position;
+
+            let max_impulse = f32::MAX;
+            let min_impulse = f32::MIN;
+
+            let mut impulse_sum = 0.0;
+            impulse_sum += self
+                .apply_linear_constraint(
+                    rigid_bodies,
+                    transforms,
+                    velocities,
+                    idx_a,
+                    idx_b,
+                    Vec3::new(1.0, 0.0, 0.0),
+                    r_a,
+                    r_b,
+                    error.x,
+                    dt,
+                    min_impulse,
+                    max_impulse,
+                )
+                .abs();
+            impulse_sum += self
+                .apply_linear_constraint(
+                    rigid_bodies,
+                    transforms,
+                    velocities,
+                    idx_a,
+                    idx_b,
+                    Vec3::new(0.0, 1.0, 0.0),
+                    r_a,
+                    r_b,
+                    error.y,
+                    dt,
+                    min_impulse,
+                    max_impulse,
+                )
+                .abs();
+            impulse_sum += self
+                .apply_linear_constraint(
+                    rigid_bodies,
+                    transforms,
+                    velocities,
+                    idx_a,
+                    idx_b,
+                    Vec3::new(0.0, 0.0, 1.0),
+                    r_a,
+                    r_b,
+                    error.z,
+                    dt,
+                    min_impulse,
+                    max_impulse,
+                )
+                .abs();
+
+            if impulse_sum / dt > joint.break_force {
+                joint.is_broken = true;
+            }
         }
 
-        let r_a = anchor_a - transforms[idx_a].position;
-        let r_b = anchor_b - transforms[idx_b].position;
-
-        let max_impulse = f32::MAX;
-        let min_impulse = f32::MIN;
-
-        let mut impulse_sum = 0.0;
-        impulse_sum += self
-            .apply_linear_constraint(
-                rigid_bodies,
-                transforms,
-                velocities,
-                idx_a,
-                idx_b,
-                Vec3::new(1.0, 0.0, 0.0),
-                r_a,
-                r_b,
-                error.x,
-                dt,
-                min_impulse,
-                max_impulse,
-            )
-            .abs();
-        impulse_sum += self
-            .apply_linear_constraint(
-                rigid_bodies,
-                transforms,
-                velocities,
-                idx_a,
-                idx_b,
-                Vec3::new(0.0, 1.0, 0.0),
-                r_a,
-                r_b,
-                error.y,
-                dt,
-                min_impulse,
-                max_impulse,
-            )
-            .abs();
-        impulse_sum += self
-            .apply_linear_constraint(
-                rigid_bodies,
-                transforms,
-                velocities,
-                idx_a,
-                idx_b,
-                Vec3::new(0.0, 0.0, 1.0),
-                r_a,
-                r_b,
-                error.z,
-                dt,
-                min_impulse,
-                max_impulse,
-            )
-            .abs();
-
-        if impulse_sum / dt > joint.break_force {
-            joint.is_broken = true;
+        // Angular lock — a genuine Fixed joint must ALSO prevent relative rotation.
+        // The point constraint above only pins an anchor, leaving the bodies free to
+        // spin around it (so "Fixed" behaved like a ball-socket). Drive the relative
+        // angular velocity to zero on all three axes. `solve_fixed_joint` is reused by
+        // the hinge/ball-socket position stage, so this gate keeps the lock exclusive
+        // to real Fixed joints (which allow no relative DOF). Velocity-level lock: the
+        // solver runs every sub-step before integration, so no relative rotation
+        // accumulates; the joint stays welded.
+        if matches!(joint.data, JointData::Fixed) {
+            for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+                self.apply_angular_constraint(
+                    rigid_bodies,
+                    transforms,
+                    velocities,
+                    idx_a,
+                    idx_b,
+                    axis,
+                    0.0,
+                    dt,
+                    f32::NEG_INFINITY,
+                    f32::INFINITY,
+                );
+            }
         }
     }
 
@@ -694,10 +721,15 @@ impl JointSolver {
             data.initial_relative_rotation = Some(relative_rot);
         }
 
-        // 3. Along-axis limits
+        // 3. Along-axis limits.
+        // Impulse-clamp yönü `apply_linear_constraint` konvansiyonuyla uyumlu olmalı
+        // (bkz. çalışan hinge limiti): alt-limit ihlali (err > 0) cismi +eksene İTER →
+        // pozitif lambda → clamp (0, +∞); üst-limit ihlali (err < 0) −eksene iter →
+        // negatif lambda → clamp (−∞, 0). (Eskiden ikisi de TERSTİ → limit hiç tutmuyordu;
+        // 5 m/s'lik cisim 1 m'lik üst limiti delip 19 m'ye gidiyordu.)
         if data.use_limits {
             if along < data.lower_limit {
-                let err = data.lower_limit - along;
+                let err = data.lower_limit - along; // positive
                 total_lin_impulse += self
                     .apply_linear_constraint(
                         rigid_bodies,
@@ -710,8 +742,8 @@ impl JointSolver {
                         r_b,
                         err,
                         dt,
-                        f32::NEG_INFINITY,
                         0.0,
+                        f32::INFINITY,
                     )
                     .abs();
             } else if along > data.upper_limit {
@@ -728,8 +760,8 @@ impl JointSolver {
                         r_b,
                         err,
                         dt,
+                        f32::NEG_INFINITY,
                         0.0,
-                        f32::INFINITY,
                     )
                     .abs();
             }
