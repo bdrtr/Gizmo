@@ -1,5 +1,55 @@
 use gizmo_math::{Vec3, Quat};
 
+/// Error returned when constructing a [`Track`] with inconsistent keyframe data.
+///
+/// A well-formed track requires its `keyframe_timestamps` to match the keyframe
+/// values one-to-one, to be sorted ascending, and to contain only finite values.
+/// Violating any of these invariants would otherwise lead to out-of-bounds
+/// indexing or `NaN`-poisoned interpolation at sample time, so [`Track::new`]
+/// rejects such data up front.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TrackError {
+    /// The number of keyframe timestamps did not match the number of keyframe
+    /// values.
+    LengthMismatch {
+        /// Number of supplied timestamps.
+        timestamps: usize,
+        /// Number of supplied keyframe values.
+        values: usize,
+    },
+    /// A timestamp was `NaN` or infinite.
+    NonFiniteTimestamp {
+        /// Index of the offending timestamp.
+        index: usize,
+    },
+    /// Timestamps were not sorted in ascending order.
+    UnsortedTimestamps {
+        /// Index of the timestamp that was smaller than its predecessor.
+        index: usize,
+    },
+}
+
+impl std::fmt::Display for TrackError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TrackError::LengthMismatch { timestamps, values } => write!(
+                f,
+                "keyframe timestamp count ({timestamps}) does not match keyframe value count ({values})"
+            ),
+            TrackError::NonFiniteTimestamp { index } => {
+                write!(f, "keyframe timestamp at index {index} is not finite")
+            }
+            TrackError::UnsortedTimestamps { index } => write!(
+                f,
+                "keyframe timestamp at index {index} is not in ascending order"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TrackError {}
+
 /// The keyframe data for a [`Track`], one variant per animated transform channel.
 ///
 /// Each vector is parallel to [`Track::keyframe_timestamps`].
@@ -12,6 +62,22 @@ pub enum Keyframes {
     Rotation(Vec<Quat>),
     /// Scale keyframes (linearly interpolated).
     Scale(Vec<Vec3>),
+}
+
+impl Keyframes {
+    /// Returns the number of keyframe values held by this channel.
+    pub fn len(&self) -> usize {
+        match self {
+            Keyframes::Translation(v) => v.len(),
+            Keyframes::Rotation(v) => v.len(),
+            Keyframes::Scale(v) => v.len(),
+        }
+    }
+
+    /// Returns `true` if this channel holds no keyframe values.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// A single animated channel targeting one named entity.
@@ -30,18 +96,42 @@ impl Track {
     /// Creates a new track targeting `target_name` with the given keyframe
     /// timestamps and values.
     ///
-    /// `keyframe_timestamps` must be sorted ascending and match the length of
-    /// the data inside `keyframes`.
+    /// # Errors
+    ///
+    /// Returns a [`TrackError`] if `keyframe_timestamps` does not match the
+    /// length of the data inside `keyframes`, if any timestamp is non-finite,
+    /// or if the timestamps are not sorted in ascending order. Enforcing these
+    /// invariants here guarantees that [`Track::sample`] cannot panic or emit
+    /// `NaN` values for a track built through this constructor.
     pub fn new(
         target_name: impl Into<String>,
         keyframe_timestamps: Vec<f32>,
         keyframes: Keyframes,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, TrackError> {
+        let values = keyframes.len();
+        let timestamps = keyframe_timestamps.len();
+        if timestamps != values {
+            return Err(TrackError::LengthMismatch { timestamps, values });
+        }
+
+        let mut prev: Option<f32> = None;
+        for (index, &ts) in keyframe_timestamps.iter().enumerate() {
+            if !ts.is_finite() {
+                return Err(TrackError::NonFiniteTimestamp { index });
+            }
+            if let Some(p) = prev {
+                if ts < p {
+                    return Err(TrackError::UnsortedTimestamps { index });
+                }
+            }
+            prev = Some(ts);
+        }
+
+        Ok(Self {
             target_name: target_name.into(),
             keyframe_timestamps,
             keyframes,
-        }
+        })
     }
 
     /// Returns the time of the last keyframe, or `0.0` if the track is empty.

@@ -230,7 +230,9 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                 // === PENCERELER ===
                 ui.menu_button("🪟 Pencereler", |ui| {
                     if ui.button("💾 Düzeni Kaydet").clicked() {
-                        state.save_layout();
+                        if let Err(e) = state.save_layout() {
+                            state.log_error(&format!("Layout kaydedilemedi: {}", e));
+                        }
                         ui.close_menu();
                     }
                     if ui.button("♻ Varsayılan Düzene Dön").clicked() {

@@ -52,7 +52,7 @@ fn main() {
         })
         .add_system(draw_cursor.in_phase(Phase::Update));
 
-    app.run();
+    app.run().expect("uygulama çalıştırılamadı");
 }
 
 fn draw_cursor(

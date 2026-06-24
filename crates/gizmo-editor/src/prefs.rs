@@ -1,3 +1,4 @@
+use crate::error::EditorError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -85,12 +86,19 @@ impl EditorPrefs {
         }
     }
 
-    pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn save(&self) -> Result<(), EditorError> {
         let path = prefs_path();
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).map_err(|source| EditorError::Io {
+                context: format!("tercih dizini oluşturulamadı: {}", parent.display()),
+                source,
+            })?;
         }
-        std::fs::write(path, toml::to_string_pretty(self)?)?;
+        let data = toml::to_string_pretty(self)?;
+        std::fs::write(&path, data).map_err(|source| EditorError::Io {
+            context: format!("tercihler yazılamadı: {}", path.display()),
+            source,
+        })?;
         Ok(())
     }
 }

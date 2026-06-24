@@ -15,11 +15,14 @@
 //! soft body via the `gpu_compute` module.
 
 pub mod cloth;
+pub mod error;
 #[cfg(feature = "gpu_physics")]
 pub mod gpu_compute;
 pub mod rope;
 pub mod soft_body;
 pub mod system;
+
+pub use error::SoftBodyError;
 
 // Re-export common traits and structs
 pub use cloth::*;

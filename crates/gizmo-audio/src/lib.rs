@@ -5,7 +5,7 @@
 //! - [`AudioSource`] — an ECS component describing a 2D or 3D playable sound.
 //! - [`AudioManager`] — a resource that loads sounds into memory and plays,
 //!   updates and stops both global (stereo) and 3D spatial sinks.
-//! - [`AudioError`] — the error type returned when loading sounds fails.
+//! - [`AudioError`] — the error type returned when loading or playing sounds fails.
 //!
 //! Sounds are decoded from in-memory byte buffers (loaded once via
 //! [`AudioManager::load_sound`]) to avoid per-play disk I/O. Spatial playback
@@ -22,7 +22,8 @@ use std::sync::Arc;
 
 // ======================== ERRORS ========================
 
-/// Errors that can occur while loading a sound into the [`AudioManager`].
+/// Errors that can occur while loading or playing a sound with the
+/// [`AudioManager`].
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum AudioError {
@@ -30,6 +31,13 @@ pub enum AudioError {
     Io(std::io::Error),
     /// The requested sound file could not be found at the given path.
     NotFound(String),
+    /// No usable audio output device/backend could be opened.
+    Backend(String),
+    /// A playback was requested for a sound name that has not been loaded
+    /// into memory via [`AudioManager::load_sound`].
+    NotLoaded(String),
+    /// The in-memory sound bytes could not be decoded into a playable stream.
+    Decode(String),
 }
 
 impl std::fmt::Display for AudioError {
@@ -37,11 +45,29 @@ impl std::fmt::Display for AudioError {
         match self {
             AudioError::Io(err) => write!(f, "IO Error: {}", err),
             AudioError::NotFound(path) => write!(f, "File not found: {}", path),
+            AudioError::Backend(msg) => write!(f, "Audio backend error: {}", msg),
+            AudioError::NotLoaded(name) => {
+                write!(f, "Sound '{}' is not loaded into memory", name)
+            }
+            AudioError::Decode(msg) => write!(f, "Failed to decode sound: {}", msg),
         }
     }
 }
 
-impl std::error::Error for AudioError {}
+impl std::error::Error for AudioError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            AudioError::Io(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for AudioError {
+    fn from(err: std::io::Error) -> Self {
+        AudioError::Io(err)
+    }
+}
 
 // ======================== ECS COMPONENT ========================
 
@@ -130,12 +156,15 @@ impl std::fmt::Debug for AudioManager {
 impl AudioManager {
     /// Creates a new audio manager bound to the default output device.
     ///
-    /// Returns `None` if no audio device is available.
-    pub fn new() -> Option<Self> {
+    /// # Errors
+    ///
+    /// Returns [`AudioError::Backend`] if no audio output device is available
+    /// or the default device cannot be opened.
+    pub fn new() -> Result<Self, AudioError> {
         match OutputStream::try_default() {
             Ok((stream, stream_handle)) => {
                 log::info!("Gizmo Audio: Ses cihazı başlatıldı! 3D Uzamsal (Spatial) Motor Aktif.");
-                Some(Self {
+                Ok(Self {
                     _stream: stream,
                     stream_handle,
                     sound_buffers: HashMap::new(),
@@ -146,7 +175,7 @@ impl AudioManager {
             }
             Err(e) => {
                 log::error!("Gizmo Audio Başarısız (Cihaz bulunamadı): {}", e);
-                None
+                Err(AudioError::Backend(e.to_string()))
             }
         }
     }
@@ -167,57 +196,78 @@ impl AudioManager {
     }
 
     /// Normal (Global/Stereo) bir ses oynatır (tek seferlik)
-    pub fn play(&mut self, name: &str) -> Option<u64> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioError::NotLoaded`] if `name` was never loaded,
+    /// [`AudioError::Decode`] if the bytes cannot be decoded, or
+    /// [`AudioError::Backend`] if a playback sink cannot be created.
+    pub fn play(&mut self, name: &str) -> Result<u64, AudioError> {
         self.play_internal(name, false)
     }
 
     /// Normal (Global/Stereo) bir sesi döngüsel oynatır
-    pub fn play_looped(&mut self, name: &str) -> Option<u64> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioError::NotLoaded`] if `name` was never loaded,
+    /// [`AudioError::Decode`] if the bytes cannot be decoded, or
+    /// [`AudioError::Backend`] if a playback sink cannot be created.
+    pub fn play_looped(&mut self, name: &str) -> Result<u64, AudioError> {
         self.play_internal(name, true)
     }
 
-    fn play_internal(&mut self, name: &str, looped: bool) -> Option<u64> {
-        if let Some(bytes) = self.sound_buffers.get(name) {
-            let cursor = Cursor::new(Arc::clone(bytes));
-            if let Ok(decoder) = Decoder::new(cursor) {
-                if let Ok(sink) = Sink::try_new(&self.stream_handle) {
-                    if looped {
-                        sink.append(decoder.repeat_infinite());
-                    } else {
-                        sink.append(decoder);
-                    }
-                    let id = self.next_sink_id;
-                    self.next_sink_id = self.next_sink_id.wrapping_add(1);
-
-                    self.active_sinks.insert(id, sink);
-                    return Some(id);
-                }
-            }
-        } else {
+    fn play_internal(&mut self, name: &str, looped: bool) -> Result<u64, AudioError> {
+        let bytes = self.sound_buffers.get(name).ok_or_else(|| {
             log::error!("AudioManager: '{}' adlı ses bellekte yok!", name);
+            AudioError::NotLoaded(name.to_string())
+        })?;
+        let cursor = Cursor::new(Arc::clone(bytes));
+        let decoder = Decoder::new(cursor).map_err(|e| AudioError::Decode(e.to_string()))?;
+        let sink = Sink::try_new(&self.stream_handle).map_err(|e| AudioError::Backend(e.to_string()))?;
+        if looped {
+            sink.append(decoder.repeat_infinite());
+        } else {
+            sink.append(decoder);
         }
-        None
+        let id = self.next_sink_id;
+        self.next_sink_id = self.next_sink_id.wrapping_add(1);
+
+        self.active_sinks.insert(id, sink);
+        Ok(id)
     }
 
     /// 3D Uzamsal (Spatial) bir ses oynatır (tek seferlik)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioError::NotLoaded`] if `name` was never loaded,
+    /// [`AudioError::Decode`] if the bytes cannot be decoded, or
+    /// [`AudioError::Backend`] if a spatial sink cannot be created.
     pub fn play_3d(
         &mut self,
         name: &str,
         emitter_pos: [f32; 3],
         left_ear: [f32; 3],
         right_ear: [f32; 3],
-    ) -> Option<u64> {
+    ) -> Result<u64, AudioError> {
         self.play_3d_internal(name, emitter_pos, left_ear, right_ear, false)
     }
 
     /// 3D Uzamsal bir sesi döngüsel oynatır
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioError::NotLoaded`] if `name` was never loaded,
+    /// [`AudioError::Decode`] if the bytes cannot be decoded, or
+    /// [`AudioError::Backend`] if a spatial sink cannot be created.
     pub fn play_3d_looped(
         &mut self,
         name: &str,
         emitter_pos: [f32; 3],
         left_ear: [f32; 3],
         right_ear: [f32; 3],
-    ) -> Option<u64> {
+    ) -> Result<u64, AudioError> {
         self.play_3d_internal(name, emitter_pos, left_ear, right_ear, true)
     }
 
@@ -228,30 +278,26 @@ impl AudioManager {
         left_ear: [f32; 3],
         right_ear: [f32; 3],
         looped: bool,
-    ) -> Option<u64> {
-        if let Some(bytes) = self.sound_buffers.get(name) {
-            let cursor = Cursor::new(Arc::clone(bytes));
-            if let Ok(decoder) = Decoder::new(cursor) {
-                if let Ok(sink) =
-                    SpatialSink::try_new(&self.stream_handle, emitter_pos, left_ear, right_ear)
-                {
-                    if looped {
-                        sink.append(decoder.repeat_infinite());
-                    } else {
-                        sink.append(decoder);
-                    }
-
-                    let id = self.next_sink_id;
-                    self.next_sink_id = self.next_sink_id.wrapping_add(1);
-
-                    self.active_spatial_sinks.insert(id, sink);
-                    return Some(id);
-                }
-            }
-        } else {
+    ) -> Result<u64, AudioError> {
+        let bytes = self.sound_buffers.get(name).ok_or_else(|| {
             log::error!("AudioManager: '{}' adlı 3D ses bellekte yok!", name);
+            AudioError::NotLoaded(name.to_string())
+        })?;
+        let cursor = Cursor::new(Arc::clone(bytes));
+        let decoder = Decoder::new(cursor).map_err(|e| AudioError::Decode(e.to_string()))?;
+        let sink = SpatialSink::try_new(&self.stream_handle, emitter_pos, left_ear, right_ear)
+            .map_err(|e| AudioError::Backend(e.to_string()))?;
+        if looped {
+            sink.append(decoder.repeat_infinite());
+        } else {
+            sink.append(decoder);
         }
-        None
+
+        let id = self.next_sink_id;
+        self.next_sink_id = self.next_sink_id.wrapping_add(1);
+
+        self.active_spatial_sinks.insert(id, sink);
+        Ok(id)
     }
 
     // ========== ECS SINK GÜNCELLEMELERİ ==========

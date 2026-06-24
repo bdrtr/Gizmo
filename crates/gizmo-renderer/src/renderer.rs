@@ -769,7 +769,10 @@ impl Renderer {
 
     /// Diskten doku yükler (BC7 pipeline dahil).
     /// Cache'lenir: aynı dosya yolu tekrar yüklenmez.
-    pub fn load_texture(&self, path: &str) -> Result<Arc<wgpu::BindGroup>, String> {
+    pub fn load_texture(
+        &self,
+        path: &str,
+    ) -> Result<Arc<wgpu::BindGroup>, crate::asset::AssetError> {
         self.asset_manager.write().unwrap().load_material_texture(
             &self.device,
             &self.queue,
@@ -779,7 +782,10 @@ impl Renderer {
     }
 
     /// Diskten bir GLTF (veya GLB) modelini senkron olarak yükler.
-    pub fn load_gltf(&self, path: &str) -> Result<crate::asset::loaders::GltfSceneAsset, String> {
+    pub fn load_gltf(
+        &self,
+        path: &str,
+    ) -> Result<crate::asset::loaders::GltfSceneAsset, crate::asset::AssetError> {
         let white_tex = self.create_white_texture();
         self.asset_manager.write().unwrap().load_gltf_scene(
             &self.device,

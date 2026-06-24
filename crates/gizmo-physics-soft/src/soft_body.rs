@@ -108,19 +108,33 @@ pub fn resolve_node_collision(
 }
 
 impl SoftBodyMesh {
-    pub fn new(youngs_modulus: f32, poissons_ratio: f32) -> Self {
-        // Tekillik koruması: nu=0.5'te lambda paydası (1-2·nu) sıfırlanıp +inf üretir
-        // (sıkışmaz limit), nu>0.5 ise NEGATİF lambda (kararsız) verir, nu<=-1 ise mu
-        // paydası (1+nu) sıfırlanır. Geçerli fiziksel aralığa [0, 0.499] kıstırarak
-        // inf/NaN/kararsız malzeme parametrelerini imza değiştirmeden engelliyoruz.
-        // (Doc: poissons_ratio geçerli aralığı 0.0 .. 0.499.)
-        let nu = poissons_ratio.clamp(0.0, 0.499);
+    /// Creates a new (empty) FEM soft body from material parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SoftBodyError::InvalidYoungsModulus`] if `youngs_modulus` is
+    /// not finite and strictly positive, and [`SoftBodyError::InvalidPoissonsRatio`]
+    /// if `poissons_ratio` is outside the physically valid range `[0.0, 0.5)`.
+    /// `nu >= 0.5` zeroes the Lamé denominator `(1 - 2·nu)` (incompressible
+    /// limit → `+inf`), `nu > 0.5` yields a negative (unstable) `lambda`, and
+    /// `nu < 0.0` is unsupported. Rejecting them here keeps the derived
+    /// `lambda`/`mu` finite and stable instead of silently clamping.
+    pub fn new(youngs_modulus: f32, poissons_ratio: f32) -> Result<Self, crate::SoftBodyError> {
+        if !youngs_modulus.is_finite() || youngs_modulus <= 0.0 {
+            return Err(crate::SoftBodyError::InvalidYoungsModulus {
+                value: youngs_modulus,
+            });
+        }
+        let nu = poissons_ratio;
+        if !nu.is_finite() || !(0.0..0.5).contains(&nu) {
+            return Err(crate::SoftBodyError::InvalidPoissonsRatio { value: nu });
+        }
 
         // Calculate Lame Parameters
         let mu = youngs_modulus / (2.0 * (1.0 + nu));
         let lambda = (youngs_modulus * nu) / ((1.0 + nu) * (1.0 - 2.0 * nu));
 
-        Self {
+        Ok(Self {
             nodes: Vec::new(),
             elements: Vec::new(),
             youngs_modulus,
@@ -128,7 +142,7 @@ impl SoftBodyMesh {
             lambda,
             mu,
             damping: 0.99,
-        }
+        })
     }
 
     pub fn add_node(&mut self, position: Vec3, mass: f32) -> u32 {
@@ -144,16 +158,26 @@ impl SoftBodyMesh {
 
     /// Adds a tetrahedral element referencing four existing node indices.
     ///
-    /// Sınır-dışı indeks (henüz eklenmemiş bir düğüm) verilirse panik etmek yerine
-    /// işlem sessizce atlanır (eleman eklenmez) ve uyarı loglanır; imza değişmez.
-    /// Result döndüren doğrulayan varyant BREAKING olduğundan Tur 3b'ye bırakıldı.
-    pub fn add_element(&mut self, i0: u32, i1: u32, i2: u32, i3: u32) {
+    /// # Errors
+    ///
+    /// Returns [`SoftBodyError::NodeIndexOutOfBounds`] if any of the four
+    /// indices refers to a node that has not been added yet. On success the
+    /// element is appended exactly as before.
+    pub fn add_element(
+        &mut self,
+        i0: u32,
+        i1: u32,
+        i2: u32,
+        i3: u32,
+    ) -> Result<(), crate::SoftBodyError> {
         let n = self.nodes.len() as u32;
-        if i0 >= n || i1 >= n || i2 >= n || i3 >= n {
-            tracing::warn!(
-                "add_element: sınır-dışı düğüm indeksi ({i0},{i1},{i2},{i3}) / düğüm sayısı {n}; eleman atlanıyor"
-            );
-            return;
+        for index in [i0, i1, i2, i3] {
+            if index >= n {
+                return Err(crate::SoftBodyError::NodeIndexOutOfBounds {
+                    index,
+                    node_count: n,
+                });
+            }
         }
 
         let p0 = self.nodes[i0 as usize].position;
@@ -168,6 +192,7 @@ impl SoftBodyMesh {
             rest_volume,
             inv_rest_matrix,
         });
+        Ok(())
     }
 
     /// Advances the FEM simulation by one timestep using a Neo-Hookean hyperelastic model.
@@ -275,12 +300,12 @@ mod tests {
     /// uyguluyordu → eleman çökük kalıyordu.) Ayrıca NaN/Inf üretmemeli.
     #[test]
     fn resists_moderate_compression_and_stays_finite() {
-        let mut sb = SoftBodyMesh::new(1000.0, 0.3);
+        let mut sb = SoftBodyMesh::new(1000.0, 0.3).expect("valid material params");
         sb.add_node(Vec3::ZERO, 1.0);
         sb.add_node(Vec3::X, 1.0);
         sb.add_node(Vec3::Y, 1.0);
         sb.add_node(Vec3::Z, 1.0);
-        sb.add_element(0, 1, 2, 3);
+        sb.add_element(0, 1, 2, 3).expect("valid node indices");
 
         // Üniform sıkıştır: F = 0.4·I → J = 0.064 (< eski 0.1 eşiği).
         for node in &mut sb.nodes {

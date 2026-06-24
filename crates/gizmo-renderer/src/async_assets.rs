@@ -2,6 +2,7 @@
 //! GPU upload and [`AssetManager`](crate::asset::AssetManager) updates must run on the main thread
 //! — call [`AsyncAssetLoader::drain_completed`] each frame and then upload via `AssetManager`.
 
+use crate::asset::error::AssetError;
 use crate::asset::{decode_obj_vertices_for_async, decode_rgba_image_file};
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
@@ -66,11 +67,11 @@ enum WorkerMsg {
     Texture {
         request_path: String,
         cache_key: String,
-        result: Result<(Vec<u8>, u32, u32), String>,
+        result: Result<(Vec<u8>, u32, u32), AssetError>,
     },
     Obj {
         path: String,
-        result: Result<(Vec<crate::gpu_types::Vertex>, gizmo_math::Aabb), String>,
+        result: Result<(Vec<crate::gpu_types::Vertex>, gizmo_math::Aabb), AssetError>,
     },
     Gltf {
         path: String,
@@ -84,7 +85,7 @@ enum WorkerMsg {
                     Vec<gltf::buffer::Data>,
                     Vec<gltf::image::Data>,
                 ),
-                String,
+                AssetError,
             >,
         >,
     },
@@ -140,7 +141,12 @@ impl AsyncAssetLoader {
                                 let _ = worker_result_tx.send(WorkerMsg::Obj { path, result });
                             }
                             Job::Gltf { path } => {
-                                let result = gltf::import(&path).map_err(|e| e.to_string());
+                                let result = gltf::import(&path).map_err(|source| {
+                                    AssetError::GltfImport {
+                                        path: std::path::PathBuf::from(&path),
+                                        source,
+                                    }
+                                });
                                 let _ = worker_result_tx
                                     .send(WorkerMsg::Gltf { path, result: Box::new(result) });
                             }
@@ -334,8 +340,11 @@ impl AsyncAssetLoader {
                                 images,
                             });
                         }
-                        Err(message) => {
-                            out.gltf_errors.push(GltfImportError { path, message });
+                        Err(err) => {
+                            out.gltf_errors.push(GltfImportError {
+                                path,
+                                message: err.to_string(),
+                            });
                         }
                     }
                 }
@@ -355,23 +364,33 @@ impl Default for AsyncAssetLoader {
 // ── WASM Fetch & Parse Helpers ──────────────────────────────────────────────
 
 #[cfg(target_arch = "wasm32")]
-async fn native_fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+async fn native_fetch_bytes(url: &str) -> Result<Vec<u8>, AssetError> {
     use wasm_bindgen::JsCast;
     use wasm_bindgen_futures::JsFuture;
 
-    let window = web_sys::window().ok_or("No global window found")?;
+    let fetch_err = |message: String| AssetError::Fetch {
+        url: url.to_string(),
+        message,
+    };
+
+    let window = web_sys::window().ok_or_else(|| fetch_err("no global window found".into()))?;
     let resp_value = JsFuture::from(window.fetch_with_str(url))
         .await
-        .map_err(|e| format!("Fetch failed for {url}: {e:?}"))?;
-    let resp: web_sys::Response = resp_value.dyn_into().map_err(|_| "Failed to cast to Response")?;
+        .map_err(|e| fetch_err(format!("fetch failed: {e:?}")))?;
+    let resp: web_sys::Response = resp_value
+        .dyn_into()
+        .map_err(|_| fetch_err("failed to cast to Response".into()))?;
 
     if !resp.ok() {
-        return Err(format!("HTTP error status for {url}: {}", resp.status()));
+        return Err(fetch_err(format!("HTTP error status: {}", resp.status())));
     }
 
-    let array_buffer_value = JsFuture::from(resp.array_buffer().map_err(|e| format!("Failed to get array buffer: {e:?}"))?)
-        .await
-        .map_err(|e| format!("Failed to resolve array buffer: {e:?}"))?;
+    let array_buffer_value = JsFuture::from(
+        resp.array_buffer()
+            .map_err(|e| fetch_err(format!("failed to get array buffer: {e:?}")))?,
+    )
+    .await
+    .map_err(|e| fetch_err(format!("failed to resolve array buffer: {e:?}")))?;
     let array_buffer = js_sys::ArrayBuffer::from(array_buffer_value);
     let uint8_array = js_sys::Uint8Array::new(&array_buffer);
     let mut bytes = vec![0; uint8_array.length() as usize];
@@ -380,11 +399,14 @@ async fn native_fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn fetch_and_decode_texture_wasm(path: &str) -> Result<(Vec<u8>, u32, u32), String> {
+async fn fetch_and_decode_texture_wasm(path: &str) -> Result<(Vec<u8>, u32, u32), AssetError> {
     let bytes = native_fetch_bytes(path).await?;
 
     let img = image::load_from_memory(&bytes)
-        .map_err(|e| format!("Cannot read texture ({path}) from memory: {e}"))?
+        .map_err(|source| AssetError::ImageDecode {
+            path: std::path::PathBuf::from(path),
+            source,
+        })?
         .to_rgba8();
     let (w, h) = img.dimensions();
     Ok((img.into_raw(), w, h))
@@ -399,18 +421,20 @@ async fn fetch_and_parse_gltf_wasm(
         Vec<gltf::buffer::Data>,
         Vec<gltf::image::Data>,
     ),
-    String,
+    AssetError,
 > {
     let bytes = native_fetch_bytes(path).await?;
 
-    gltf::import_slice(&bytes)
-        .map_err(|e| format!("glTF parse slice failed ({path}): {e}"))
+    gltf::import_slice(&bytes).map_err(|source| AssetError::GltfImport {
+        path: std::path::PathBuf::from(path),
+        source,
+    })
 }
 
 #[cfg(target_arch = "wasm32")]
 async fn fetch_and_decode_obj_wasm(
     path: &str,
-) -> Result<(Vec<crate::gpu_types::Vertex>, gizmo_math::Aabb), String> {
+) -> Result<(Vec<crate::gpu_types::Vertex>, gizmo_math::Aabb), AssetError> {
     let bytes = native_fetch_bytes(path).await?;
 
     let mut reader = std::io::Cursor::new(bytes);
@@ -424,10 +448,15 @@ async fn fetch_and_decode_obj_wasm(
         },
         |_| Err(tobj::LoadError::OpenFileFailed),
     )
-    .map_err(|e| format!("OBJ load from buffer failed ({path}): {e}"))?;
+    .map_err(|source| AssetError::ObjLoad {
+        path: std::path::PathBuf::from(path),
+        source,
+    })?;
 
     if models.is_empty() {
-        return Err(format!("OBJ file contains no models: {path}"));
+        return Err(AssetError::ObjEmpty {
+            path: std::path::PathBuf::from(path),
+        });
     }
 
     let mut aabb = gizmo_math::Aabb::empty();

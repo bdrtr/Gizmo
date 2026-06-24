@@ -271,15 +271,22 @@ impl<State: 'static> App<State> {
         self
     }
 
-    pub fn run(mut self) {
+    /// Runs the application.
+    ///
+    /// If a custom runner was configured via [`set_runner`](Self::set_runner)
+    /// it is invoked and `Ok(())` is returned. Otherwise the default windowed
+    /// event loop is driven. Returns an [`AppError`] if the event loop or
+    /// window cannot be created, a required setup hook is missing, or the
+    /// event loop terminates with an error.
+    pub fn run(mut self) -> Result<(), crate::AppError> {
         if let Some(runner) = self.runner.take() {
             runner(self);
-            return;
+            return Ok(());
         }
-        self.run_default();
+        self.run_default()
     }
 
-    fn run_default(mut self) {
+    fn run_default(mut self) -> Result<(), crate::AppError> {
         super::setup_panic_hook();
 
         if let Some(ref path) = self.playback_file {
@@ -294,7 +301,7 @@ impl<State: 'static> App<State> {
             }
         }
 
-        let event_loop = EventLoop::new().expect("Event Loop başlatılamadı");
+        let event_loop = EventLoop::new().map_err(crate::AppError::EventLoopCreation)?;
         let mut builder = WindowBuilder::new()
             .with_title(&self.window_title)
             .with_inner_size(winit::dpi::LogicalSize::new(
@@ -336,19 +343,35 @@ impl<State: 'static> App<State> {
             }
         }
 
-        let window = Arc::new(builder.build(&event_loop).expect("Pencere oluşturulamadı!"));
+        let window = Arc::new(
+            builder
+                .build(&event_loop)
+                .map_err(crate::AppError::WindowCreation)?,
+        );
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            pollster::block_on(self.run_internal(event_loop, window));
+            pollster::block_on(self.run_internal(event_loop, window))
         }
         #[cfg(target_arch = "wasm32")]
         {
-            wasm_bindgen_futures::spawn_local(self.run_internal(event_loop, window));
+            // On wasm the event loop is driven asynchronously and cannot
+            // propagate a terminal error back to the caller; spawn it and
+            // report success for the setup phase.
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Err(e) = self.run_internal(event_loop, window).await {
+                    tracing::error!("App event loop error: {}", e);
+                }
+            });
+            Ok(())
         }
     }
 
-    async fn run_internal(mut self, event_loop: EventLoop<()>, window: Arc<winit::window::Window>) {
+    async fn run_internal(
+        mut self,
+        event_loop: EventLoop<()>,
+        window: Arc<winit::window::Window>,
+    ) -> Result<(), crate::AppError> {
         // Initialize Core Dev Console Systems BEFORE setup so setup can register cvars
         self.world
             .insert_resource(gizmo_core::cvar::CVarRegistry::new());
@@ -365,12 +388,15 @@ impl<State: 'static> App<State> {
         self.world.insert_resource(renderer);
 
         let mut state = if let Some(setup) = self.setup_fn.take() {
-            let r = self.world.remove_resource::<Renderer>().unwrap();
+            let r = self
+                .world
+                .remove_resource::<Renderer>()
+                .ok_or(crate::AppError::MissingResource("Renderer"))?;
             let state = setup(&mut self.world, &r);
             self.world.insert_resource(r);
             state
         } else {
-            panic!("setup() fonksiyonu atanmadi! Lütfen set_setup çağırın veya State yapılandırmanızı kontrol edin.");
+            return Err(crate::AppError::MissingSetup);
         };
 
         if let Some(scene_path) = self.initial_scene.take() {
@@ -383,11 +409,13 @@ impl<State: 'static> App<State> {
                 let _dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
 
                 {
-                    gizmo_scene::scene::SceneData::load_into(
+                    if let Err(e) = gizmo_scene::scene::SceneData::load_into(
                         &scene_path,
                         &mut self.world,
                         &gizmo_scene::registry::default_scene_registry(),
-                    );
+                    ) {
+                        tracing::error!("[App::run] Sahne yüklenemedi '{}': {}", scene_path, e);
+                    }
                 }
 
                 self.world.insert_resource(r);
@@ -869,7 +897,8 @@ impl<State: 'static> App<State> {
                                         path,
                                         &mut self.world,
                                         &registry,
-                                    );
+                                    )
+                                    .is_ok();
                                     self.world.insert_resource(r);
                                     self.world.insert_resource(asset_manager);
                                     if let Some(mut ed) =
@@ -1183,6 +1212,8 @@ impl<State: 'static> App<State> {
                     _ => {}
                 }
             })
-            .unwrap();
+            .map_err(crate::AppError::EventLoop)?;
+
+        Ok(())
     }
 }

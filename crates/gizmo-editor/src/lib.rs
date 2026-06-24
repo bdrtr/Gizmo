@@ -17,6 +17,7 @@
 pub mod asset_browser;
 pub mod console;
 pub mod editor_state;
+pub mod error;
 pub mod game_view;
 pub mod gui;
 pub mod hierarchy;
@@ -29,6 +30,7 @@ pub mod toolbar;
 pub mod windows;
 
 pub use editor_state::{BuildTarget, EditorMode, EditorState, EditorTab, GizmoMode};
+pub use error::EditorError;
 pub use gui::EditorContext;
 
 use egui_dock::{DockArea, TabViewer};

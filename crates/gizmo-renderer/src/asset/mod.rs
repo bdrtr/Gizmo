@@ -6,11 +6,13 @@ use std::sync::Arc;
 use uuid::Uuid;
 use wgpu::util::DeviceExt;
 
+pub mod error;
 pub mod loaders;
 pub mod primitives;
 pub mod procedural;
 pub mod texture;
 
+pub use error::{AssetError, ObjIndexKind};
 pub use loaders::GltfNodeData;
 
 // ============================================================================
@@ -31,9 +33,12 @@ pub struct AssetMeta {
 // ============================================================================
 
 /// Decode an image file to RGBA8 on a background thread (no GPU access).
-pub fn decode_rgba_image_file(path: &str) -> Result<(Vec<u8>, u32, u32), String> {
+pub fn decode_rgba_image_file(path: &str) -> Result<(Vec<u8>, u32, u32), AssetError> {
     let img = image::open(path)
-        .map_err(|e| format!("Cannot read texture ({path}): {e}"))?
+        .map_err(|source| AssetError::ImageDecode {
+            path: PathBuf::from(path),
+            source,
+        })?
         .to_rgba8();
     let (w, h) = img.dimensions();
     Ok((img.into_raw(), w, h))
@@ -46,7 +51,7 @@ pub fn decode_rgba_image_file(path: &str) -> Result<(Vec<u8>, u32, u32), String>
 /// [`AssetManager::install_obj_mesh`] on the main thread.
 pub fn decode_obj_vertices_for_async(
     file_path: &str,
-) -> Result<(Vec<Vertex>, gizmo_math::Aabb), String> {
+) -> Result<(Vec<Vertex>, gizmo_math::Aabb), AssetError> {
     let (models, _) = tobj::load_obj(
         file_path,
         &tobj::LoadOptions {
@@ -56,10 +61,15 @@ pub fn decode_obj_vertices_for_async(
             ignore_lines: true,
         },
     )
-    .map_err(|e| format!("OBJ load failed ({file_path}): {e}"))?;
+    .map_err(|source| AssetError::ObjLoad {
+        path: PathBuf::from(file_path),
+        source,
+    })?;
 
     if models.is_empty() {
-        return Err(format!("OBJ file contains no models: {file_path}"));
+        return Err(AssetError::ObjEmpty {
+            path: PathBuf::from(file_path),
+        });
     }
 
     let mut aabb = gizmo_math::Aabb::empty();
@@ -77,11 +87,12 @@ pub fn decode_obj_vertices_for_async(
             // ── Position ─────────────────────────────────────────────────
             let pos_base = idx * 3;
             if pos_base + 2 >= m.positions.len() {
-                return Err(format!(
-                    "OBJ ({file_path}): position index {idx} out of range \
-                     (positions.len={})",
-                    m.positions.len()
-                ));
+                return Err(AssetError::ObjIndexOutOfRange {
+                    path: PathBuf::from(file_path),
+                    kind: ObjIndexKind::Position,
+                    index: idx,
+                    len: m.positions.len(),
+                });
             }
             let position = [
                 m.positions[pos_base],
@@ -94,11 +105,12 @@ pub fn decode_obj_vertices_for_async(
             let normal = if has_normals {
                 let n_base = idx * 3;
                 if n_base + 2 >= m.normals.len() {
-                    return Err(format!(
-                        "OBJ ({file_path}): normal index {idx} out of range \
-                         (normals.len={})",
-                        m.normals.len()
-                    ));
+                    return Err(AssetError::ObjIndexOutOfRange {
+                        path: PathBuf::from(file_path),
+                        kind: ObjIndexKind::Normal,
+                        index: idx,
+                        len: m.normals.len(),
+                    });
                 }
                 [
                     m.normals[n_base],
@@ -113,11 +125,12 @@ pub fn decode_obj_vertices_for_async(
             let tex_coords = if has_texcoords {
                 let uv_base = idx * 2;
                 if uv_base + 1 >= m.texcoords.len() {
-                    return Err(format!(
-                        "OBJ ({file_path}): texcoord index {idx} out of range \
-                         (texcoords.len={})",
-                        m.texcoords.len()
-                    ));
+                    return Err(AssetError::ObjIndexOutOfRange {
+                        path: PathBuf::from(file_path),
+                        kind: ObjIndexKind::TexCoord,
+                        index: idx,
+                        len: m.texcoords.len(),
+                    });
                 }
                 // OBJ UV origin is bottom-left; flip V to match GPU convention.
                 [m.texcoords[uv_base], 1.0 - m.texcoords[uv_base + 1]]
@@ -270,10 +283,11 @@ impl AssetManager {
     ///
     /// If `source` parses as a UUID, the registered path is returned.
     /// Otherwise `source` is normalised and returned as-is.
-    pub fn resolve_path_from_meta_source(&self, source: &str) -> Result<String, String> {
+    pub fn resolve_path_from_meta_source(&self, source: &str) -> Result<String, AssetError> {
         if let Ok(id) = Uuid::parse_str(source) {
-            self.get_path(&id)
-                .ok_or_else(|| format!("Missing UUID reference: {source}"))
+            self.get_path(&id).ok_or_else(|| AssetError::MissingUuid {
+                source: source.to_string(),
+            })
         } else {
             Ok(Self::normalize_path(source))
         }

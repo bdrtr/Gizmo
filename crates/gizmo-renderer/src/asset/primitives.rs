@@ -960,22 +960,26 @@ impl super::AssetManager {
         width: f32,
         depth: f32,
         max_height: f32,
-    ) -> Result<(Mesh, Vec<f32>, u32, u32), String> {
+    ) -> Result<(Mesh, Vec<f32>, u32, u32), super::error::AssetError> {
         let canonical = std::path::Path::new(heightmap_path)
             .canonicalize()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| heightmap_path.to_string());
 
         let img = image::open(&canonical)
-            .map_err(|e| format!("Heightmap yuklenemedi! {} ({})", canonical, e))?
+            .map_err(|source| super::error::AssetError::ImageDecode {
+                path: std::path::PathBuf::from(&canonical),
+                source,
+            })?
             .into_luma8(); // Grayscale format
 
         let (img_width, img_height) = img.dimensions();
         if img_width < 2 || img_height < 2 {
-            return Err(
-                "Heightmap boyutlari en az 2x2 olmalidir. 1x1 piksel ile arazi olusturulamaz."
-                    .to_string(),
-            );
+            return Err(super::error::AssetError::HeightmapTooSmall {
+                path: std::path::PathBuf::from(&canonical),
+                width: img_width,
+                height: img_height,
+            });
         }
         // Sınırlama: 512x512'den büyükse performans için uyar ya da downscale et
 

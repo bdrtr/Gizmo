@@ -14,6 +14,50 @@
 use std::any::TypeId;
 use std::collections::BTreeMap;
 
+/// Component Registry kayıt işlemlerinde oluşabilecek hatalar.
+///
+/// Bu hatalar programatik (kurtarılabilir) çakışmaları temsil eder; script/editor
+/// entegrasyonunda kullanıcı girdisiyle tetiklenebileceği için panic yerine
+/// `Result` ile yüzeylenir.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum RegistryError {
+    /// Aynı isim zaten farklı bir tipe atanmış.
+    NameAlreadyRegistered {
+        /// Çakışan isim.
+        name: String,
+    },
+    /// Aynı tip zaten farklı bir isimle kayıtlı.
+    TypeAlreadyRegistered {
+        /// Tipin mevcut kayıtlı ismi.
+        existing_name: String,
+        /// Kayıt edilmeye çalışılan yeni isim.
+        attempted_name: String,
+    },
+}
+
+impl std::fmt::Display for RegistryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RegistryError::NameAlreadyRegistered { name } => write!(
+                f,
+                "ComponentRegistry: '{}' ismi zaten farklı bir tipe atanmış!",
+                name
+            ),
+            RegistryError::TypeAlreadyRegistered {
+                existing_name,
+                attempted_name,
+            } => write!(
+                f,
+                "ComponentRegistry: Bu tip zaten '{}' ismiyle kayıtlı, '{}' ile tekrar kayıt edilemez!",
+                existing_name, attempted_name
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RegistryError {}
+
 /// Type alias for component serialization function pointers.
 pub type SerializeFn = fn(*const u8) -> Result<String, String>;
 /// Type alias for component deserialization function pointers.
@@ -68,30 +112,29 @@ impl ComponentRegistry {
 
     /// Yeni bir component tipini isme göre kaydet.
     ///
-    /// # Panics
-    /// - Aynı tip farklı bir isimle zaten kayıtlıysa
-    /// - Aynı isim farklı bir tipe zaten atanmışsa
+    /// # Errors
+    /// - [`RegistryError::NameAlreadyRegistered`] — Aynı isim farklı bir tipe zaten atanmışsa
+    /// - [`RegistryError::TypeAlreadyRegistered`] — Aynı tip farklı bir isimle zaten kayıtlıysa
     ///
-    /// Aynı tip-isim çifti ile tekrar kayıt yapmak güvenlidir (no-op).
-    pub fn register<T: 'static>(&mut self, name: &str) {
+    /// Aynı tip-isim çifti ile tekrar kayıt yapmak güvenlidir (no-op, `Ok(())`).
+    pub fn register<T: 'static>(&mut self, name: &str) -> Result<(), RegistryError> {
         let type_id = TypeId::of::<T>();
 
         // Aynı çiftle tekrar kayıt — no-op
         if let Some(&existing_tid) = self.name_to_type.get(name) {
             if existing_tid == type_id {
-                return; // Zaten kayıtlı, aynı çift
+                return Ok(()); // Zaten kayıtlı, aynı çift
             }
-            panic!(
-                "ComponentRegistry: '{}' ismi zaten farklı bir tipe atanmış!",
-                name
-            );
+            return Err(RegistryError::NameAlreadyRegistered {
+                name: name.to_string(),
+            });
         }
 
         if let Some(existing_reg) = self.type_to_reg.get(&type_id) {
-            panic!(
-                "ComponentRegistry: Bu tip zaten '{}' ismiyle kayıtlı, '{}' ile tekrar kayıt edilemez!",
-                existing_reg.name, name
-            );
+            return Err(RegistryError::TypeAlreadyRegistered {
+                existing_name: existing_reg.name.clone(),
+                attempted_name: name.to_string(),
+            });
         }
 
         self.name_to_type.insert(name.to_string(), type_id);
@@ -108,6 +151,7 @@ impl ComponentRegistry {
                 insert_reflect_fn: None,
             },
         );
+        Ok(())
     }
 
     /// Yeni bir component tipini isme göre ve Reflection (serde) yeteneği ile kaydet.
@@ -155,23 +199,22 @@ impl ComponentRegistry {
     >(
         &mut self,
         name: &str,
-    ) {
+    ) -> Result<(), RegistryError> {
         let type_id = TypeId::of::<T>();
 
         if let Some(&existing_tid) = self.name_to_type.get(name) {
             if existing_tid == type_id {
-                return;
+                return Ok(());
             }
-            panic!(
-                "ComponentRegistry: '{}' ismi zaten farklı bir tipe atanmış!",
-                name
-            );
+            return Err(RegistryError::NameAlreadyRegistered {
+                name: name.to_string(),
+            });
         }
         if let Some(existing_reg) = self.type_to_reg.get(&type_id) {
-            panic!(
-                "ComponentRegistry: Bu tip zaten '{}' ismiyle kayıtlı!",
-                existing_reg.name
-            );
+            return Err(RegistryError::TypeAlreadyRegistered {
+                existing_name: existing_reg.name.clone(),
+                attempted_name: name.to_string(),
+            });
         }
 
         self.name_to_type.insert(name.to_string(), type_id);
@@ -219,6 +262,7 @@ impl ComponentRegistry {
                 insert_reflect_fn: None,
             },
         );
+        Ok(())
     }
 
     /// Bir tipin kaydını siler. İsim ve TypeId eşlemesi birlikte kaldırılır.
@@ -322,8 +366,8 @@ mod tests {
     #[test]
     fn test_register_and_lookup() {
         let mut reg = ComponentRegistry::new();
-        reg.register::<Transform>("Transform");
-        reg.register::<Camera>("Camera");
+        reg.register::<Transform>("Transform").unwrap();
+        reg.register::<Camera>("Camera").unwrap();
 
         assert_eq!(reg.get_name::<Transform>(), Some("Transform"));
         assert_eq!(reg.get_name::<Camera>(), Some("Camera"));
@@ -337,31 +381,37 @@ mod tests {
     #[test]
     fn test_idempotent_register() {
         let mut reg = ComponentRegistry::new();
-        reg.register::<Transform>("Transform");
-        reg.register::<Transform>("Transform"); // No-op
+        reg.register::<Transform>("Transform").unwrap();
+        reg.register::<Transform>("Transform").unwrap(); // No-op
         assert_eq!(reg.len(), 1);
     }
 
     #[test]
-    #[should_panic(expected = "ismi zaten farklı bir tipe atanmış")]
-    fn test_duplicate_name_panics() {
+    fn test_duplicate_name_errors() {
         let mut reg = ComponentRegistry::new();
-        reg.register::<Transform>("Shared");
-        reg.register::<Camera>("Shared"); // Farklı tip, aynı isim
+        reg.register::<Transform>("Shared").unwrap();
+        let err = reg.register::<Camera>("Shared").unwrap_err(); // Farklı tip, aynı isim
+        assert!(matches!(
+            err,
+            RegistryError::NameAlreadyRegistered { .. }
+        ));
     }
 
     #[test]
-    #[should_panic(expected = "zaten")]
-    fn test_duplicate_type_panics() {
+    fn test_duplicate_type_errors() {
         let mut reg = ComponentRegistry::new();
-        reg.register::<Transform>("Transform");
-        reg.register::<Transform>("transform"); // Aynı tip, farklı isim
+        reg.register::<Transform>("Transform").unwrap();
+        let err = reg.register::<Transform>("transform").unwrap_err(); // Aynı tip, farklı isim
+        assert!(matches!(
+            err,
+            RegistryError::TypeAlreadyRegistered { .. }
+        ));
     }
 
     #[test]
     fn test_unregister() {
         let mut reg = ComponentRegistry::new();
-        reg.register::<Transform>("Transform");
+        reg.register::<Transform>("Transform").unwrap();
         assert!(reg.contains_type::<Transform>());
 
         assert!(reg.unregister::<Transform>());
@@ -373,7 +423,7 @@ mod tests {
     #[test]
     fn test_unregister_by_name() {
         let mut reg = ComponentRegistry::new();
-        reg.register::<Camera>("Camera");
+        reg.register::<Camera>("Camera").unwrap();
 
         assert!(reg.unregister_by_name("Camera"));
         assert!(!reg.contains_name("Camera"));
@@ -390,7 +440,7 @@ mod tests {
     #[test]
     fn test_contains() {
         let mut reg = ComponentRegistry::new();
-        reg.register::<Transform>("Transform");
+        reg.register::<Transform>("Transform").unwrap();
 
         assert!(reg.contains_name("Transform"));
         assert!(reg.contains_type::<Transform>());
@@ -401,9 +451,9 @@ mod tests {
     #[test]
     fn test_all_names_sorted() {
         let mut reg = ComponentRegistry::new();
-        reg.register::<PointLight>("PointLight");
-        reg.register::<Camera>("Camera");
-        reg.register::<Transform>("Transform");
+        reg.register::<PointLight>("PointLight").unwrap();
+        reg.register::<Camera>("Camera").unwrap();
+        reg.register::<Transform>("Transform").unwrap();
 
         let names = reg.all_names();
         assert_eq!(names, vec!["Camera", "PointLight", "Transform"]);
@@ -412,7 +462,7 @@ mod tests {
     #[test]
     fn test_get_name_delegates_to_get_name_by_id() {
         let mut reg = ComponentRegistry::new();
-        reg.register::<Transform>("Transform");
+        reg.register::<Transform>("Transform").unwrap();
 
         let by_generic = reg.get_name::<Transform>();
         let by_id = reg.get_name_by_id(TypeId::of::<Transform>());
@@ -422,7 +472,7 @@ mod tests {
     #[test]
     fn test_re_register_after_unregister() {
         let mut reg = ComponentRegistry::new();
-        reg.register::<Transform>("Transform");
+        reg.register::<Transform>("Transform").unwrap();
         reg.unregister::<Transform>();
         reg.register::<Transform>("NewTransform"); // Farklı isimle tekrar kayıt — artık sorunsuz
         assert_eq!(reg.get_name::<Transform>(), Some("NewTransform"));

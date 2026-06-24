@@ -259,21 +259,21 @@ world.insert_resource(editor_state);
 
 // Register ComponentRegistry so Editor can list components
     let mut component_registry = gizmo::core::ComponentRegistry::new();
-    component_registry.register::<gizmo::physics::components::Transform>("Transform");
-    component_registry.register::<gizmo::physics::Velocity>("Velocity");
-    component_registry.register::<gizmo::physics::RigidBody>("RigidBody");
-    component_registry.register::<gizmo::physics::Collider>("Collider");
-    component_registry.register::<gizmo::renderer::components::Camera>("Camera");
-    component_registry.register::<gizmo::renderer::components::PointLight>("PointLight");
-    component_registry.register::<gizmo::prelude::Material>("Material");
-    component_registry.register::<gizmo::scripting::Script>("Script");
-    component_registry.register::<gizmo::renderer::components::ParticleEmitter>("ParticleEmitter");
-    component_registry.register::<gizmo::prelude::AudioSource>("AudioSource");
-    component_registry.register::<gizmo::renderer::components::Terrain>("Terrain");
-    component_registry.register::<gizmo::physics::components::Hitbox>("Hitbox");
-    component_registry.register::<gizmo::physics::components::Hurtbox>("Hurtbox");
-    component_registry.register::<gizmo::renderer::components::BoneAttachment>("BoneAttachment");
-    component_registry.register::<gizmo::physics::components::fighter::FighterController>("FighterController");
+    let _ = component_registry.register::<gizmo::physics::components::Transform>("Transform");
+    let _ = component_registry.register::<gizmo::physics::Velocity>("Velocity");
+    let _ = component_registry.register::<gizmo::physics::RigidBody>("RigidBody");
+    let _ = component_registry.register::<gizmo::physics::Collider>("Collider");
+    let _ = component_registry.register::<gizmo::renderer::components::Camera>("Camera");
+    let _ = component_registry.register::<gizmo::renderer::components::PointLight>("PointLight");
+    let _ = component_registry.register::<gizmo::prelude::Material>("Material");
+    let _ = component_registry.register::<gizmo::scripting::Script>("Script");
+    let _ = component_registry.register::<gizmo::renderer::components::ParticleEmitter>("ParticleEmitter");
+    let _ = component_registry.register::<gizmo::prelude::AudioSource>("AudioSource");
+    let _ = component_registry.register::<gizmo::renderer::components::Terrain>("Terrain");
+    let _ = component_registry.register::<gizmo::physics::components::Hitbox>("Hitbox");
+    let _ = component_registry.register::<gizmo::physics::components::Hurtbox>("Hurtbox");
+    let _ = component_registry.register::<gizmo::renderer::components::BoneAttachment>("BoneAttachment");
+    let _ = component_registry.register::<gizmo::physics::components::fighter::FighterController>("FighterController");
     world.insert_resource(component_registry);
 
     // --- SCRIPT ENGINE & ASSET WATCHER BİRLEŞİMİ ---

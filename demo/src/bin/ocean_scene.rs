@@ -563,5 +563,6 @@ fn main() {
         .set_setup(setup)
         .set_update(update)
         .set_render(render)
-        .run();
+        .run()
+        .expect("uygulama çalıştırılamadı");
 }

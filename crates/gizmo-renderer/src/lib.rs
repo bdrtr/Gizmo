@@ -61,7 +61,8 @@ pub use animation_state_machine::{
 pub mod animation_system;
 pub use animation_system::{animation_state_machine_update_system, animation_update_system, decompose_mat4};
 pub use asset::{
-    decode_obj_vertices_for_async, decode_rgba_image_file, AssetManager, GltfNodeData,
+    decode_obj_vertices_for_async, decode_rgba_image_file, AssetError, AssetManager, GltfNodeData,
+    ObjIndexKind,
 };
 pub use async_assets::{
     AsyncAssetLoader, CompletedAsyncLoads, GltfImportCompletion, GltfImportError,

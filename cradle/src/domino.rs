@@ -116,7 +116,8 @@ fn main() {
         .set_render(|world, _state, encoder, view, renderer, _light_time| {
             gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
-        .run();
+        .run()
+        .expect("uygulama çalıştırılamadı");
 }
 
 fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> DominoGame {

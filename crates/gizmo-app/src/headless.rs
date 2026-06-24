@@ -84,19 +84,26 @@ impl<State: 'static> App<State> {
         self
     }
 
-    pub fn run(mut self) {
+    /// Runs the headless application.
+    ///
+    /// If a custom runner was configured via [`set_runner`](Self::set_runner)
+    /// it is invoked and `Ok(())` is returned. Otherwise the default update
+    /// loop is driven (which does not return under normal operation). Returns
+    /// [`AppError::MissingSetup`](crate::AppError::MissingSetup) if no setup
+    /// hook was assigned.
+    pub fn run(mut self) -> Result<(), crate::AppError> {
         if let Some(runner) = self.runner.take() {
             runner(self);
-            return;
+            return Ok(());
         }
-        self.run_default();
+        self.run_default()
     }
 
-    fn run_default(mut self) {
+    fn run_default(mut self) -> Result<(), crate::AppError> {
         let mut state = if let Some(setup) = self.setup_fn.take() {
             setup(&mut self.world)
         } else {
-            panic!("setup() fonksiyonu atanmadi!");
+            return Err(crate::AppError::MissingSetup);
         };
 
         let mut last_time = std::time::Instant::now();

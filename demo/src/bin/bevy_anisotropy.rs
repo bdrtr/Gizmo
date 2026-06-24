@@ -575,7 +575,7 @@ fn main() {
                 });
         });
 
-    app.run();
+    app.run().expect("uygulama çalıştırılamadı");
 }
 
 // Marker component for GLTF models

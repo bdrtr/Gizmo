@@ -32,7 +32,7 @@ pub use crate::app::{App, Plugin};
 pub use crate::asset_server::AssetServer;
 pub use crate::color::Color;
 pub use crate::plugins::*;
-pub use crate::spawner::{Commands as SpawnCommands, InputExt, WorldExt};
+pub use crate::spawner::{Commands as SpawnCommands, GltfLoadError, InputExt, WorldExt};
 
 // Temel Makrolar
 pub use crate::gizmo_log;

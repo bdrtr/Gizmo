@@ -1,7 +1,7 @@
+use super::error::NetError;
 use super::protocol::{connection_config, PROTOCOL_ID};
 use renet::RenetClient;
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
-use std::error::Error;
 use std::net::UdpSocket;
 use std::time::{Duration, SystemTime};
 
@@ -22,7 +22,7 @@ impl NetworkClient {
     ///
     /// Adres ayrıştırma, soket bağlama veya transport kurulumu başarısız olursa
     /// panik yerine hata döndürür.
-    pub fn new(server_addr: &str, client_id: u64) -> Result<Self, Box<dyn Error + Send + Sync>> {
+    pub fn new(server_addr: &str, client_id: u64) -> Result<Self, NetError> {
         let client = RenetClient::new(connection_config());
 
         let server_addr: std::net::SocketAddr = server_addr.parse()?;
@@ -36,7 +36,8 @@ impl NetworkClient {
             user_data: None,
         };
 
-        let transport = NetcodeClientTransport::new(current_time, authentication, socket)?;
+        let transport = NetcodeClientTransport::new(current_time, authentication, socket)
+            .map_err(|e| NetError::Transport(Box::new(e)))?;
 
         Ok(Self { client, transport })
     }

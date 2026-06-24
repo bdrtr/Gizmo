@@ -20,7 +20,14 @@ pub struct GpuCompute {
 }
 
 impl GpuCompute {
-    pub async fn new() -> Option<Self> {
+    /// Initializes the WGPU compute path for FEM soft bodies.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SoftBodyError::NoCompatibleAdapter`] if no GPU adapter could be
+    /// acquired, and [`SoftBodyError::DeviceRequestFailed`] if requesting the
+    /// logical device failed.
+    pub async fn new() -> Result<Self, crate::SoftBodyError> {
         let instance = wgpu::Instance::default();
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -28,7 +35,8 @@ impl GpuCompute {
                 compatible_surface: None,
                 force_fallback_adapter: false,
             })
-            .await?;
+            .await
+            .ok_or(crate::SoftBodyError::NoCompatibleAdapter)?;
 
         let (device, queue) = adapter
             .request_device(
@@ -40,7 +48,7 @@ impl GpuCompute {
                 None,
             )
             .await
-            .ok()?;
+            .map_err(|e| crate::SoftBodyError::DeviceRequestFailed(e.to_string()))?;
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("soft_body.wgsl"));
 
@@ -132,7 +140,7 @@ impl GpuCompute {
             compilation_options: Default::default(),
         });
 
-        Some(Self {
+        Ok(Self {
             device: Arc::new(device),
             queue: Arc::new(queue),
             compute_pipeline,
@@ -164,9 +172,9 @@ impl GpuCompute {
         )],
         dt: f32,
         gravity: gizmo_math::Vec3,
-    ) {
+    ) -> Result<(), crate::SoftBodyError> {
         if soft_bodies.is_empty() {
-            return;
+            return Ok(());
         }
 
         #[cfg(debug_assertions)]
@@ -215,17 +223,11 @@ impl GpuCompute {
                 });
             }
 
-            // Panik koruması: düğüm offset'i u32'yi taşırsa (aşırı sayıda düğüm)
-            // expect ile panik etmek yerine bu frame'i zarifçe atla (imza değişmez).
-            current_node_offset = match current_node_offset.checked_add(sb.nodes.len() as u32) {
-                Some(off) => off,
-                None => {
-                    tracing::error!(
-                        "Soft body node offset overflow (çok fazla düğüm); GPU adımı atlanıyor"
-                    );
-                    return;
-                }
-            };
+            // u32 taşması (aşırı sayıda düğüm) artık sessiz log+skip yerine somut
+            // bir hata olarak yayılır.
+            current_node_offset = current_node_offset
+                .checked_add(sb.nodes.len() as u32)
+                .ok_or(crate::SoftBodyError::NodeOffsetOverflow)?;
         }
 
         let params = GpuParameters {
@@ -421,7 +423,9 @@ impl GpuCompute {
         });
 
         if rx.recv().is_err() {
-            return;
+            return Err(crate::SoftBodyError::DeviceRequestFailed(
+                "GPU readback channel closed before mapping completed".to_string(),
+            ));
         }
 
         let mapped = slice.get_mapped_range();
@@ -462,6 +466,8 @@ impl GpuCompute {
         // Unmap
         drop(mapped);
         staging_nodes.unmap();
+
+        Ok(())
     }
 }
 

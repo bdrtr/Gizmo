@@ -1,4 +1,5 @@
 use super::decode_rgba_image_file;
+use super::error::AssetError;
 use std::sync::Arc;
 
 // ============================================================================
@@ -52,7 +53,10 @@ impl super::AssetManager {
     /// The cache key is the UUID string when one is registered, otherwise
     /// the normalised filesystem path.  Keeping cache keys stable across
     /// renames is why UUIDs are preferred.
-    fn resolve_texture_cache_key(&self, path_or_uuid: &str) -> Result<(String, String), String> {
+    fn resolve_texture_cache_key(
+        &self,
+        path_or_uuid: &str,
+    ) -> Result<(String, String), AssetError> {
         let resolved = self.resolve_path_from_meta_source(path_or_uuid)?;
         let cache_key = self
             .get_uuid(&resolved)
@@ -81,12 +85,14 @@ impl super::AssetManager {
         rgba: &[u8],
         width: u32,
         height: u32,
-    ) -> Result<Arc<wgpu::BindGroup>, String> {
+    ) -> Result<Arc<wgpu::BindGroup>, AssetError> {
         // Guard against zero-sized textures — wgpu panics on Extent3d { width:0, .. }.
         if width == 0 || height == 0 {
-            return Err(format!(
-                "Cannot create texture with zero dimension: {width}×{height} (key={cache_key})"
-            ));
+            return Err(AssetError::ZeroDimensionTexture {
+                cache_key: cache_key.to_string(),
+                width,
+                height,
+            });
         }
 
         let expected = (width as usize)
@@ -94,11 +100,13 @@ impl super::AssetManager {
             .saturating_mul(4);
 
         if rgba.len() != expected {
-            return Err(format!(
-                "RGBA size mismatch for '{cache_key}': got {} bytes, expected {expected} \
-                 ({width}×{height}×4)",
-                rgba.len()
-            ));
+            return Err(AssetError::RgbaSizeMismatch {
+                cache_key: cache_key.to_string(),
+                got: rgba.len(),
+                expected,
+                width,
+                height,
+            });
         }
 
         let texture_size = wgpu::Extent3d {
@@ -153,7 +161,7 @@ impl super::AssetManager {
         queue: &wgpu::Queue,
         layout: &wgpu::BindGroupLayout,
         path_or_uuid: &str,
-    ) -> Result<Arc<wgpu::BindGroup>, String> {
+    ) -> Result<Arc<wgpu::BindGroup>, AssetError> {
         let (resolved_path, cache_key) = self.resolve_texture_cache_key(path_or_uuid)?;
 
         if let Some(cached) = self.texture_cache.get(&cache_key) {
@@ -173,7 +181,7 @@ impl super::AssetManager {
         queue: &wgpu::Queue,
         layout: &wgpu::BindGroupLayout,
         path_or_uuid: &str,
-    ) -> Result<Arc<wgpu::BindGroup>, String> {
+    ) -> Result<Arc<wgpu::BindGroup>, AssetError> {
         // Resolve the key first so we evict the correct entry, then reload.
         let (_, cache_key) = self.resolve_texture_cache_key(path_or_uuid)?;
         self.texture_cache.remove(&cache_key);
@@ -279,10 +287,13 @@ impl super::AssetManager {
     // ── Private GPU helpers ───────────────────────────────────────────────
 
     /// Decode a texture file to RGBA8, preferring embedded data over disk.
-    fn decode_texture_rgba(&self, resolved_path: &str) -> Result<(Vec<u8>, u32, u32), String> {
+    fn decode_texture_rgba(&self, resolved_path: &str) -> Result<(Vec<u8>, u32, u32), AssetError> {
         if let Some(data) = self.embedded_assets.get(resolved_path) {
             let img = image::load_from_memory(data)
-                .map_err(|e| format!("Embedded texture decode failed ({resolved_path}): {e}"))?
+                .map_err(|source| AssetError::ImageDecode {
+                    path: std::path::PathBuf::from(resolved_path),
+                    source,
+                })?
                 .to_rgba8();
             let (w, h) = img.dimensions();
             return Ok((img.into_raw(), w, h));

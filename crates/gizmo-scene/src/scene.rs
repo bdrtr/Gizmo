@@ -1,3 +1,4 @@
+use crate::error::SceneError;
 use gizmo_core::{EntityName, World};
 use gizmo_core::component::{MeshSource, MaterialSource};
 use serde::{Deserialize, Serialize};
@@ -56,7 +57,7 @@ impl SceneData {
         world: &World,
         file_path: &str,
         registry: &gizmo_core::registry::ComponentRegistry,
-    ) -> Result<(), String> {
+    ) -> Result<(), SceneError> {
         if let Some(parent) = std::path::Path::new(file_path).parent() {
             let _ = fs::create_dir_all(parent);
         }
@@ -80,11 +81,9 @@ impl SceneData {
             joints,
         };
 
-        let string_data = ron::ser::to_string_pretty(&scene, ron::ser::PrettyConfig::default())
-            .map_err(|e| format!("[SceneData::save] Serileştirme hatası: {}", e))?;
+        let string_data = ron::ser::to_string_pretty(&scene, ron::ser::PrettyConfig::default())?;
 
-        fs::write(file_path, string_data)
-            .map_err(|e| format!("[SceneData::save] Dosya yazma hatası: {}", e))?;
+        fs::write(file_path, string_data)?;
 
         tracing::info!("✅ Sahne kaydedildi → {}", file_path);
         Ok(())
@@ -174,19 +173,10 @@ impl SceneData {
         file_path: &str,
         world: &mut World,
         registry: &gizmo_core::registry::ComponentRegistry,
-    ) -> bool {
-        let string_data = match fs::read_to_string(file_path) {
-            Ok(content) => content,
-            Err(_) => return false,
-        };
+    ) -> Result<(), SceneError> {
+        let string_data = fs::read_to_string(file_path)?;
 
-        let scene: SceneData = match ron::from_str(&string_data) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("❌ Sahne dosyası geçersiz ({}): {}", file_path, e);
-                return false;
-            }
-        };
+        let scene: SceneData = ron::from_str(&string_data)?;
 
         let entities = scene.entities;
         tracing::info!(">>> load_into: Read {} entities from file", entities.len());
@@ -209,7 +199,7 @@ impl SceneData {
         }
 
         tracing::info!("✅ Sahne yüklendi ← {}", file_path);
-        true
+        Ok(())
     }
 
     pub fn instantiate_entities(
@@ -315,7 +305,7 @@ impl SceneData {
         root_entity_id: u32,
         file_path: &str,
         registry: &gizmo_core::registry::ComponentRegistry,
-    ) -> Result<(), String> {
+    ) -> Result<(), SceneError> {
         if let Some(parent) = std::path::Path::new(file_path).parent() {
             let _ = fs::create_dir_all(parent);
         }
@@ -358,11 +348,9 @@ impl SceneData {
             joints,
         };
 
-        let string_data = ron::ser::to_string_pretty(&prefab, ron::ser::PrettyConfig::default())
-            .map_err(|e| format!("[SceneData::save_prefab] Serileştirme hatası: {}", e))?;
+        let string_data = ron::ser::to_string_pretty(&prefab, ron::ser::PrettyConfig::default())?;
 
-        fs::write(file_path, string_data)
-            .map_err(|e| format!("[SceneData::save_prefab] Dosya yazma hatası: {}", e))?;
+        fs::write(file_path, string_data)?;
 
         tracing::info!("✅ Prefab kaydedildi → {}", file_path);
         Ok(())
@@ -374,19 +362,10 @@ impl SceneData {
         parent_entity: Option<u32>,
         world: &mut World,
         registry: &gizmo_core::registry::ComponentRegistry,
-    ) -> Option<u32> {
-        let string_data = match fs::read_to_string(file_path) {
-            Ok(content) => content,
-            Err(_) => return None,
-        };
+    ) -> Result<Option<u32>, SceneError> {
+        let string_data = fs::read_to_string(file_path)?;
 
-        let prefab: PrefabData = match ron::from_str(&string_data) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::info!("❌ Prefab dosyası geçersiz ({}): {}", file_path, e);
-                return None;
-            }
-        };
+        let prefab: PrefabData = ron::from_str(&string_data)?;
 
         let id_map = Self::instantiate_entities(
             prefab.entities,
@@ -420,7 +399,7 @@ impl SceneData {
         }
 
         tracing::info!("✅ Prefab yüklendi ← {}", file_path);
-        new_root_id
+        Ok(new_root_id)
     }
 
     /// Entity listesini döndürür (Lua API'si için)
@@ -508,7 +487,7 @@ mod tests {
 
         // TAZE dünyaya yükle.
         let mut loaded = World::new();
-        assert!(SceneData::load_into(&path, &mut loaded, &registry), "load başarısız");
+        SceneData::load_into(&path, &mut loaded, &registry).expect("load başarısız");
         let _ = std::fs::remove_file(&path);
 
         // İsme göre entity bul.

@@ -247,7 +247,8 @@ fn main() {
         .set_render(|world, state, encoder, view, renderer, _light_time| {
             fluid_only_render_pass(world, state, encoder, view, renderer);
         })
-        .run();
+        .run()
+        .expect("uygulama çalıştırılamadı");
 }
 
 fn pitch_yaw_quat(pitch: f32, yaw: f32) -> Quat {

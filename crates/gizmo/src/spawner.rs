@@ -19,6 +19,46 @@ use gizmo_renderer::{
     Renderer,
 };
 
+// ─── Hata Tipleri ───────────────────────────────────────────────────────────
+
+/// GLTF/GLB spawn işlemlerinde oluşabilecek hatalar.
+///
+/// 1.0 hata kontratı: stringly-typed hata yerine somut, `match` edilebilir tip.
+///
+/// `#[non_exhaustive]`: alt katmandaki yükleyici (`gizmo-renderer`) somut hata
+/// tipine geçtikçe burada yeni varyantlar (Io, Parse, GpuUpload, …) eklenebilir;
+/// bu yüzden tüketiciler `_ =>` kolu bulundurmalıdır.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum GltfLoadError {
+    /// Alttaki yükleyici (`AssetManager::load_gltf_scene` /
+    /// `load_gltf_from_import`) bir hata döndürdü. `path`, yüklenmeye çalışılan
+    /// dosya yolu; `source`, alt katmanın hata açıklamasıdır.
+    ///
+    /// Not: alt katman henüz `Result<_, String>` döndürdüğü için kaynak burada
+    /// bir `String` olarak taşınır; alt katman somut bir `Error` tipine
+    /// geçtiğinde bu varyant `#[source]` ile zincirlenecek şekilde
+    /// güncellenecektir.
+    Load {
+        /// Yüklenmeye çalışılan dosya yolu.
+        path: String,
+        /// Alt katmandan gelen hata açıklaması.
+        source: String,
+    },
+}
+
+impl std::fmt::Display for GltfLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GltfLoadError::Load { path, source } => {
+                write!(f, "GLTF '{}' yuklenemedi: {}", path, source)
+            }
+        }
+    }
+}
+
+impl std::error::Error for GltfLoadError {}
+
 // ─── Commands ─────────────────────────────────────────────────────────────────
 
 pub struct Commands<'a> {
@@ -442,7 +482,7 @@ impl<'a> Commands<'a> {
         pos: Vec3,
         path: &str,
         attach_colliders: bool,
-    ) -> Result<EntityBuilder<'_, 'a>, String> {
+    ) -> Result<EntityBuilder<'_, 'a>, GltfLoadError> {
         let default_bg = self.asset_manager.as_mut().unwrap().create_white_texture(
             &self.renderer.device,
             &self.renderer.queue,
@@ -511,10 +551,10 @@ impl<'a> Commands<'a> {
                     entity: root,
                 })
             }
-            Err(e) => Err(format!(
-                "[Commands::spawn_gltf] '{}' yuklenemedi: {}",
-                path, e
-            )),
+            Err(e) => Err(GltfLoadError::Load {
+                path: path.to_string(),
+                source: e.to_string(),
+            }),
         }
     }
 
@@ -524,7 +564,7 @@ impl<'a> Commands<'a> {
         completion: gizmo_renderer::async_assets::GltfImportCompletion,
         pos: Vec3,
         attach_colliders: bool,
-    ) -> Result<EntityBuilder<'_, 'a>, String> {
+    ) -> Result<EntityBuilder<'_, 'a>, GltfLoadError> {
         let default_bg = self.asset_manager.as_mut().unwrap().create_white_texture(
             &self.renderer.device,
             &self.renderer.queue,
@@ -596,10 +636,10 @@ impl<'a> Commands<'a> {
                     entity: root,
                 })
             }
-            Err(e) => Err(format!(
-                "[Commands::spawn_gltf_async_completed] '{}' yüklenemedi: {}",
-                completion.path, e
-            )),
+            Err(e) => Err(GltfLoadError::Load {
+                path: completion.path.clone(),
+                source: e.to_string(),
+            }),
         }
     }
 }

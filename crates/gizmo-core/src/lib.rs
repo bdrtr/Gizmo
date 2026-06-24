@@ -60,7 +60,7 @@ pub use input::{ActionMap, Input, InputBinding};
 pub use pool::{PoolManager, Pooled};
 pub use profiler::FrameProfiler;
 pub use query::{Changed, FetchComponent, Mut, Or, Query, With, Without, WorldQuery};
-pub use registry::ComponentRegistry;
+pub use registry::{ComponentRegistry, RegistryError};
 pub use state::{in_state, State};
 
 pub use system::{

@@ -10,6 +10,51 @@ use gizmo_physics_core::components::{Collider, Transform};
 use gizmo_core::entity::Entity;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
+
+/// Errors that can occur while writing a physics-world diagnostic snapshot
+/// via [`PhysicsWorld::trigger_snapshot`].
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum SnapshotError {
+    /// The snapshot file could not be created on disk.
+    Create {
+        /// Path the snapshot was being written to.
+        path: PathBuf,
+        /// Underlying I/O error.
+        source: std::io::Error,
+    },
+    /// The world state could not be serialized to JSON.
+    Serialize(serde_json::Error),
+}
+
+impl std::fmt::Display for SnapshotError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SnapshotError::Create { path, .. } => {
+                write!(f, "failed to create physics snapshot file '{}'", path.display())
+            }
+            SnapshotError::Serialize(_) => {
+                write!(f, "failed to serialize physics snapshot to JSON")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SnapshotError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            SnapshotError::Create { source, .. } => Some(source),
+            SnapshotError::Serialize(source) => Some(source),
+        }
+    }
+}
+
+impl From<serde_json::Error> for SnapshotError {
+    fn from(e: serde_json::Error) -> Self {
+        SnapshotError::Serialize(e)
+    }
+}
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
@@ -671,8 +716,13 @@ impl PhysicsWorld {
         hits
     }
 
-    /// Telemetry and Debugging: Create a JSON snapshot of the physical world state
-    pub fn trigger_snapshot(&self, reason: &str) {
+    /// Telemetry and Debugging: Create a JSON snapshot of the physical world state.
+    ///
+    /// Writes a `physics_snapshot_<timestamp>.json` file to the current working
+    /// directory and returns the path it was written to. Any I/O or
+    /// serialization failure is surfaced as a [`SnapshotError`] instead of being
+    /// silently logged, so callers can react to (or escalate) the failure.
+    pub fn trigger_snapshot(&self, reason: &str) -> Result<PathBuf, SnapshotError> {
         tracing::error!("Creating physics snapshot due to: {}", reason);
         // unwrap_or_default: a clock set before UNIX_EPOCH (or WASM quirks)
         // must not panic during a diagnostic snapshot; fall back to ts=0.
@@ -686,20 +736,15 @@ impl PhysicsWorld {
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let filename = format!("physics_snapshot_{}.json", timestamp);
+        let path = PathBuf::from(format!("physics_snapshot_{}.json", timestamp));
 
-        match std::fs::File::create(&filename) {
-            Ok(file) => {
-                if let Err(e) = serde_json::to_writer_pretty(file, self) {
-                    tracing::error!("Failed to serialize physics snapshot: {:?}", e);
-                } else {
-                    tracing::info!("Physics snapshot successfully saved to {}", filename);
-                }
-            }
-            Err(e) => {
-                tracing::error!("Failed to create snapshot file {}: {:?}", filename, e);
-            }
-        }
+        let file = std::fs::File::create(&path).map_err(|source| SnapshotError::Create {
+            path: path.clone(),
+            source,
+        })?;
+        serde_json::to_writer_pretty(file, self)?;
+        tracing::info!("Physics snapshot successfully saved to {}", path.display());
+        Ok(path)
     }
 
     /// Calculate total kinetic and potential energy of the simulation

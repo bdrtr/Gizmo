@@ -162,7 +162,8 @@ fn run(cube_count: u32) {
             }
             gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
-        .run();
+        .run()
+        .expect("uygulama çalıştırılamadı");
 }
 
 fn pitch_yaw_quat(pitch: f32, yaw: f32) -> Quat {

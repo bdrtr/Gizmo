@@ -269,7 +269,8 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     world.add_component(jello_ent, gizmo::core::EntityName("Jello Cube".into()));
 
     // Create a 3x3x3 Soft Body Grid
-    let mut soft_body = gizmo::physics::soft_body::SoftBodyMesh::new(1000.0, 0.3); // Prevent v=0.5 singularity
+    let mut soft_body = gizmo::physics::soft_body::SoftBodyMesh::new(1000.0, 0.3)
+        .expect("geçerli Young modülü ve Poisson oranı ile SoftBodyMesh oluşturulmalı"); // Prevent v=0.5 singularity
     soft_body.damping = 5.0; // Higher damping for stability
     let grid_size = 3;
     let spacing = 0.8;
@@ -306,11 +307,11 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
                 let i7 = idx(x + 1, y + 1, z + 1);
 
                 // Split voxel into 5 tetrahedrons
-                soft_body.add_element(i0, i1, i2, i3);
-                soft_body.add_element(i1, i4, i2, i7);
-                soft_body.add_element(i1, i3, i5, i7);
-                soft_body.add_element(i2, i3, i6, i7);
-                soft_body.add_element(i1, i2, i3, i7);
+                let _ = soft_body.add_element(i0, i1, i2, i3);
+                let _ = soft_body.add_element(i1, i4, i2, i7);
+                let _ = soft_body.add_element(i1, i3, i5, i7);
+                let _ = soft_body.add_element(i2, i3, i6, i7);
+                let _ = soft_body.add_element(i1, i2, i3, i7);
             }
         }
     }
@@ -442,5 +443,6 @@ fn main() {
         .set_setup(setup)
         .set_update(update)
         .set_render(render)
-        .run();
+        .run()
+        .expect("uygulama çalıştırılamadı");
 }
