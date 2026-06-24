@@ -8,6 +8,11 @@ description.workspace = true
 license.workspace = true
 repository.workspace = true
 readme.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dependencies]
 gizmo-core = { path = "../gizmo-core" , version = "0.1.7" }
 gizmo-math = { path = "../gizmo-math" , version = "0.1.7" }
