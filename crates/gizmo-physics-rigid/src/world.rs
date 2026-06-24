@@ -468,6 +468,40 @@ impl PhysicsWorld {
         &self.trigger_events
     }
 
+    /// Simülasyon durumunun DETERMINISTIK hash'i — rollback/replay desync tespiti + testler.
+    ///
+    /// Cisimler **entity id'sine göre SABİT sırada** gezilir (ekleme/HashMap sırasından ve
+    /// dizi düzeninden bağımsız), her `f32` `to_bits()` ile karıştırılır. Sabit-anahtarlı
+    /// `DefaultHasher` (RandomState DEĞİL) kullanıldığından çıktı SÜREÇLER ARASI tutarlıdır.
+    ///
+    /// Garanti: **aynı platform + aynı binary**'de, aynı başlangıç durumundan aynı `dt`
+    /// adımlarıyla adım-adım eşleşir (replay/rollback için yeterli). Cross-platform bit-exact
+    /// GARANTİ EDİLMEZ (sim f32/glam üzerinde; bkz. `docs/determinism.md`).
+    pub fn state_hash(&self) -> u64 {
+        use std::hash::Hasher;
+        // Entity id'sine göre sabit sıra (dizi/ekleme sırasından bağımsız).
+        let mut order: Vec<usize> = (0..self.entities.len()).collect();
+        order.sort_by_key(|&i| self.entities[i].id());
+
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for &i in &order {
+            h.write_u32(self.entities[i].id());
+            let t = &self.transforms[i];
+            let v = &self.velocities[i];
+            for bits in [
+                t.position.x, t.position.y, t.position.z,
+                t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w,
+                v.linear.x, v.linear.y, v.linear.z,
+                v.angular.x, v.angular.y, v.angular.z,
+            ] {
+                h.write_u32(bits.to_bits());
+            }
+            // Uyku durumu da state'in parçası (rollback'te tutarlı olmalı).
+            h.write_u8(self.rigid_bodies[i].is_sleeping as u8);
+        }
+        h.finish()
+    }
+
     /// Apply an impulse to a body at a point.
     ///
     /// `rb` alınır `&mut` çünkü uyuyan bir cisme impuls uygulamak onu UYANDIRMALIDIR;

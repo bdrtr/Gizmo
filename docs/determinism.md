@@ -46,28 +46,30 @@ sabit-noktalı matematikten geçmesi gerekir; çünkü:
 edilemez. (Not: `Fp32::to_i32` artık sıfıra doğru kesiyor ve `+`/`-`/`*` doygunlukla
 sınırlanıyor — eskiden negatiflerde asimetrik yuvarlama ve sessiz i32 taşması vardı.)
 
-## Senkron kontrolü (sync check)
+## Senkron kontrolü (sync check) — `PhysicsWorld::state_hash()`
 
-İki tarafın durumunu hash'leyerek desync tespiti yapılabilir. **Doğru API ile**:
+Durumu hash'leyerek desync tespiti (rollback) ve replay doğrulaması için motorda hazır
+API vardır:
 
 ```rust
-use std::hash::Hasher;
-use gizmo_physics_core::components::transform::Transform;
-
-fn check_sync_state(world: &gizmo_core::World) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    let transforms = world.borrow::<Transform>();
-    // NOT: entity'leri SABİT bir sırada gez (id'ye göre) — aksi halde hash sırası değişir.
-    for ent in world.iter_alive_entities() {
-        if let Some(t) = transforms.get(ent.id()) {
-            for c in [t.position.x, t.position.y, t.position.z] {
-                hasher.write_u32(c.to_bits());
-            }
-        }
-    }
-    hasher.finish()
-}
+let h: u64 = world.state_hash(); // deterministik durum özeti
 ```
 
-Aynı makinede/binary'de bu hash adım adım eşleşmelidir. Farklı mimariler arasında
-eşleşme şu an **beklenmemelidir**.
+`state_hash()` cisimleri **entity id'sine göre SABİT sırada** gezer (ekleme/dizi/HashMap
+sırasından bağımsız), her `f32`'yi `to_bits()` ile ve uyku durumunu karıştırır; **sabit
+anahtarlı** `DefaultHasher` kullanır (RandomState DEĞİL) → çıktı **süreçler arası** tutarlıdır.
+Aynı makinede/binary'de adım adım eşleşir; farklı CPU mimarileri arası bit-exact beklenmez.
+
+## Faz 2 kararı: aynı-platform replay/rollback (test ile KİLİTLİ)
+
+Determinizm hedefi **aynı-platform replay/rollback** olarak belirlendi (cross-platform
+bit-exact KAPSAM DIŞI; gerekirse Fp32 göçü ayrı bir büyük iştir). Bu garanti artık otomatik
+testlerle sabitlenmiştir:
+
+- `crates/gizmo-physics-rigid/tests/determinism.rs` — iki ÖZDEŞ dünya aynı adımlarla AYNI
+  `state_hash` üretir (her dünya HashMap'lerini ayrı seed'le kurar → hash-iterasyon-sırası
+  bağımsızlığı kanıtı); hash adımla değişir; perturbasyon ayrıştırılır (desync tespiti).
+- `demo/tests/cross_process_determinism.rs` — `determinism_oracle` binary'si İKİ/ÜÇ AYRI
+  SÜREÇTE koşar, `state_hash`'ler eşittir (farklı süreç HashMap taban-seed'ine rağmen) →
+  **süreçler-arası** determinizm (aynı-binary farklı-makine için ön koşul).
+- `demo/src/bin/headless_stress_test` — 2000-kutu kule, 3 koşu hash eşleşmesi (CI determinism job).

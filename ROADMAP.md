@@ -4,7 +4,7 @@
 > Bu belge canlıdır — madde tamamlandıkça `[x]` işaretle, **Durum** bölümünü güncelle.
 
 ## Durum
-- **Şu anki aşama:** Faz 0–1 ve **Faz 4 TAMAMLANDI** — solver kalite turu, CCD, joint kütüphanesi, materyal combine, **TGS Soft çözücü**, **islands & sleeping hardening** ve **geniş-sahne perf profili** kapandı. Sıradaki: Faz 2 (determinizm kararı) / Faz 3 (netcode client) / Faz 5 (renderer-WASM/editor).
+- **Şu anki aşama:** Faz 0–1, **Faz 2 (determinizm)** ve **Faz 4 TAMAMLANDI** — solver kalite turu, CCD, joint kütüphanesi, materyal combine, **TGS Soft çözücü**, **islands & sleeping hardening**, **geniş-sahne perf profili**, ve **determinizm: aynı-platform replay/rollback kararı + state_hash API + süreçler-arası test** kapandı. Sıradaki: Faz 3 (netcode client — artık state_hash hazır) / Faz 5 (renderer-WASM/editor) / Faz 6 (API 1.0).
 - **İlerleme:** ECS+çekirdek fizik (9 bug), vehicle, soft-body, fracture, multibody/ABA, EPA, CCD, joints — denetlendi+düzeltildi. **TGS Soft (Box2D v3 Soft Step) uygulandı → n≥16 yüksek-enerji yığın çökmesi (SI'nin temel sınırı) çözüldü.** **538 test yeşil**, CI clippy temiz, determinizm 3/3 hash eşleşiyor (AAC365945335779E).
 - **Faz 1 yeni kapsam (2026-06-15):** broad-phase DIFFERENTIAL test (BVH pairs = brute-force, margin=0 birebir + şişman-margin soundness), joint property (ball-socket yakınsama + zincir kararlılığı), gearbox index-güvenliği property (Faz 0 panik regresyonu), soft-body property (cloth/rope pinned + FEM sıkışma-geri-kazanımı/J-cutoff regresyonu), fracture property (voronoi determinizm + chunk geçerliliği), N-kutu SOAK (10sn kararlılık) + GOLDEN (zeminde dengelenen kutu) regresyon.
 - **Sıradaki:** Faz 1 kalanı (benchmark regresyon takibi) VEYA Faz 2 (determinizm kararı) / Faz 3 (netcode client).
@@ -110,17 +110,22 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
 
 ---
 
-## Faz 2 — Determinizm Kararı
+## Faz 2 — Determinizm Kararı  ✅ TAMAM
 
-- [ ] **Hedefi netleştir:** cross-platform bit-exact mı, yoksa aynı-platform replay/rollback mı?
-- [ ] Aynı-platform yeterliyse: mevcut durumu test harness'iyle garanti et (hash eşleşmesi) +
-      `docs/determinism.md`'i bununla sınırla (kısmen yapıldı).
-- [ ] Cross-platform isteniyorsa (lockstep netcode için): simülasyon durumunu `f32`/glam'dan
-      `Fp32` sabit-noktaya taşı **veya** softfloat (`libm`) + SIMD/FMA kapatma stratejisi kur.
-      (Büyük iş — kapsamı netleştirmeden başlama.)
-- [ ] Çok-makineli determinizm test pipeline'ı (iki binary, hash diff).
+- [x] **Hedef KARARI:** **aynı-platform replay/rollback** (cross-platform bit-exact KAPSAM DIŞI).
+      Çoğu oyun için yeterli; cross-platform bit-exact ayrı/devasa iş (Fp32 göçü) ve gerekmiyor.
+- [x] **Test harness (hash eşleşmesi) + docs:** `PhysicsWorld::state_hash()` sync-hash API'si
+      eklendi (entity-id sıralı, `to_bits`, sabit-anahtarlı DefaultHasher → süreçler-arası tutarlı;
+      rollback desync tespiti + replay için). `crates/gizmo-physics-rigid/tests/determinism.rs`:
+      iki özdeş dünya → aynı hash (hash-iterasyon-sırası bağımsızlığı), hash adımla değişir,
+      perturbasyon ayrışır (desync). `docs/determinism.md` karara göre kesinleştirildi.
+- [~] Cross-platform (Fp32/softfloat) — BİLİNÇLİ ERTELENDİ (hedef aynı-platform; gerekmiyor).
+- [x] **Çok-makineli (süreçler-arası) test pipeline'ı:** `demo/src/bin/determinism_oracle.rs`
+      (kanonik küçük sahne → `state_hash`) + `demo/tests/cross_process_determinism.rs` oracle'ı
+      İKİ/ÜÇ AYRI SÜREÇTE koşup hash'leri karşılaştırır → farklı süreç HashMap taban-seed'ine
+      rağmen EŞİT (aynı-binary farklı-makine determinizmi için ön koşul). + mevcut headless 3-koşu.
 
-**Çıkış kriteri:** determinizm vaadi belgeyle uyuşuyor ve testle kanıtlı.
+**Çıkış kriteri:** determinizm vaadi belgeyle uyuşuyor ve testle kanıtlı. → KARŞILANDI.
 
 ---
 

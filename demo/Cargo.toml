@@ -34,6 +34,10 @@ name = "wide_scene_profile"
 path = "src/bin/wide_scene_profile.rs"
 
 [[bin]]
+name = "determinism_oracle"
+path = "src/bin/determinism_oracle.rs"
+
+[[bin]]
 name = "car_demo"
 path = "src/bin/car_demo.rs"
 
