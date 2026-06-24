@@ -8,7 +8,8 @@ pub fn ui_build_console(ui: &mut egui::Ui, state: &mut EditorState) {
 
     // Asenkron logları topla (Thread-safe)
     if let Some(rx) = &state.build.logs_rx {
-        while let Ok(log) = rx.lock().unwrap().try_recv() {
+        // Poison-recovery: mutex zehirlenmişse panik yerine iç değeri kurtar.
+        while let Ok(log) = rx.lock().unwrap_or_else(|e| e.into_inner()).try_recv() {
             let lower_log = log.to_lowercase();
             let color = if lower_log.starts_with("error")
                 || lower_log.contains("error[")

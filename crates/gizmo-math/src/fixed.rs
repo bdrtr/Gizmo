@@ -156,9 +156,20 @@ impl Div for Fp32 {
     type Output = Self;
     #[inline]
     fn div(self, rhs: Self) -> Self {
-        debug_assert!(rhs.0 != 0, "Fp32: division by zero");
+        // Sıfıra bölme: i64/0 release'de DAİMA panic eder. Determinizmi korumak ve
+        // kullanıcının kolayca tetikleyebileceği panik yolunu kapatmak için sıfıra
+        // bölmede panik yerine doygun (saturating) sonsuz/sıfır döndürürüz:
+        //   pozitif / 0 -> MAX, negatif / 0 -> MIN, 0 / 0 -> 0.
+        if rhs.0 == 0 {
+            return match self.0.cmp(&0) {
+                std::cmp::Ordering::Greater => Self(i32::MAX),
+                std::cmp::Ordering::Less => Self(i32::MIN),
+                std::cmp::Ordering::Equal => Self(0),
+            };
+        }
         let val = ((self.0 as i64) << Fp32::SHIFT) / (rhs.0 as i64);
-        Self(val as i32)
+        // Q16.16 aralığını aşarsa `as i32` sessizce sarıp çöp üretiyordu; doygunlukla sınırla.
+        Self(val.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
     }
 }
 
@@ -174,6 +185,11 @@ impl std::ops::Rem for Fp32 {
     type Output = Self;
     #[inline]
     fn rem(self, rhs: Self) -> Self {
+        // Sıfıra göre mod (% 0) release'de panic eder; determinizm için panik yerine
+        // sıfır döndür (x % 0 -> 0).
+        if rhs.0 == 0 {
+            return Self(0);
+        }
         Self(self.0 % rhs.0)
     }
 }
@@ -181,13 +197,16 @@ impl std::ops::Rem for Fp32 {
 impl AddAssign for Fp32 {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
-        self.0 += rhs.0;
+        // `a += b` ile `a + b` aynı (saturating) sonucu vermeli; ham `+=` debug'da
+        // panic / release'de wrapping üretip Add'den sapıyordu.
+        *self = *self + rhs;
     }
 }
 impl SubAssign for Fp32 {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
-        self.0 -= rhs.0;
+        // `a -= b` ile `a - b` aynı (saturating) sonucu vermeli.
+        *self = *self - rhs;
     }
 }
 impl MulAssign for Fp32 {

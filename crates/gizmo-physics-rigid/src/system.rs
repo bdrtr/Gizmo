@@ -108,7 +108,20 @@ pub fn physics_step_system(world: &World, dt: f32) {
     // 4. Step Simulation
     physics_world.sync_bodies(rigid_bodies.iter());
 
-    physics_world.step(dt).expect("Gizmo Physics Engine encountered a critical numerical error (NaN, Infinity, or Overflow) and halted!");
+    // A numerical error (NaN/Inf/Overflow) in physics may originate from
+    // user-controlled body state; panicking would crash the whole engine.
+    // Instead, log and skip this frame gracefully (signature unchanged).
+    if let Err(e) = physics_world.step(dt) {
+        tracing::error!(error = ?e, "Physics step failed (NaN/Inf/Overflow), skipping frame");
+        // Make sure the profiler scope opened above is closed before returning.
+        drop(physics_world); // release PhysicsWorld lock
+        if let Ok(mut profiler) =
+            world.try_get_resource_mut::<gizmo_core::profiler::FrameProfiler>()
+        {
+            profiler.end_scope("physics_total");
+        }
+        return;
+    }
 
     // Sync back to rigid_bodies so vehicles/ECS writeback works
     for i in 0..physics_world.entities.len() {

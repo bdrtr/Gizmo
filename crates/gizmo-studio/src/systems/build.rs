@@ -64,31 +64,48 @@ pub fn handle_build_requests(editor_state: &mut EditorState) {
 
             match command.spawn() {
                 Ok(mut child) => {
-                    let stderr = child.stderr.take().unwrap();
-                    let stdout = child.stdout.take().unwrap();
+                    // Graceful: piped stdout/stderr normalde Some'dur; yine de panik yerine
+                    // eksik handle'i atlayıp build thread'inin canlı kalmasını sağlıyoruz.
+                    let mut stderr_thread = None;
+                    let mut stdout_thread = None;
 
-                    let tx_err = tx.clone();
-                    let tx_out = tx.clone();
+                    if let Some(stderr) = child.stderr.take() {
+                        let tx_err = tx.clone();
+                        stderr_thread = Some(std::thread::spawn(move || {
+                            use std::io::{BufRead, BufReader};
+                            let reader = BufReader::new(stderr);
+                            for l in reader.lines().map_while(Result::ok) {
+                                let _ = tx_err.send(l);
+                            }
+                        }));
+                    }
 
-                    let stderr_thread = std::thread::spawn(move || {
-                        use std::io::{BufRead, BufReader};
-                        let reader = BufReader::new(stderr);
-                        for l in reader.lines().map_while(Result::ok) {
-                            let _ = tx_err.send(l);
+                    if let Some(stdout) = child.stdout.take() {
+                        let tx_out = tx.clone();
+                        stdout_thread = Some(std::thread::spawn(move || {
+                            use std::io::{BufRead, BufReader};
+                            let reader = BufReader::new(stdout);
+                            for l in reader.lines().map_while(Result::ok) {
+                                let _ = tx_out.send(l);
+                            }
+                        }));
+                    }
+
+                    // child.wait() hata verirse panik yerine başarısız-durum gibi davran.
+                    let status = match child.wait() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            log(&format!("\n!! Derleme süreci beklenirken hata: {} !!", e));
+                            is_building_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+                            return;
                         }
-                    });
-
-                    let stdout_thread = std::thread::spawn(move || {
-                        use std::io::{BufRead, BufReader};
-                        let reader = BufReader::new(stdout);
-                        for l in reader.lines().map_while(Result::ok) {
-                            let _ = tx_out.send(l);
-                        }
-                    });
-
-                    let status = child.wait().unwrap();
-                    let _ = stderr_thread.join();
-                    let _ = stdout_thread.join();
+                    };
+                    if let Some(t) = stderr_thread {
+                        let _ = t.join();
+                    }
+                    if let Some(t) = stdout_thread {
+                        let _ = t.join();
+                    }
 
                     if status.success() {
                         log("\n== [Adım 2/3] Derleme Başarılı! Dosyalar Kopyalanıyor ==");

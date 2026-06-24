@@ -9,6 +9,21 @@ pub enum ResourceFetchError {
     BorrowConflict(TypeId),
 }
 
+impl std::fmt::Display for ResourceFetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResourceFetchError::NotFound(tid) => {
+                write!(f, "resource not found in world (TypeId: {tid:?})")
+            }
+            ResourceFetchError::BorrowConflict(tid) => {
+                write!(f, "resource borrow conflict (TypeId: {tid:?})")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ResourceFetchError {}
+
 pub struct ResourceReadGuard<'a, T> {
     pub(crate) guard: RwLockReadGuard<'a, Box<dyn std::any::Any + Send + Sync>>,
     pub(crate) _marker: PhantomData<T>,

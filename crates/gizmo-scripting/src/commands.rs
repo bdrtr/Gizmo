@@ -151,21 +151,39 @@ impl CommandQueue {
 
     /// Appends a command to the queue.
     pub fn push(&self, cmd: ScriptCommand) {
-        self.commands.lock().unwrap().push(cmd);
+        // Poison-recovery: bir thread lock tutarken panic etse bile kuyruk
+        // kullanılabilir kalır (FFI/Lua callback sınırında panic-free).
+        self.commands
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(cmd);
     }
 
     /// Removes and returns all currently queued commands, leaving the queue empty.
     pub fn drain(&self) -> Vec<ScriptCommand> {
-        self.commands.lock().unwrap().drain(..).collect()
+        // Poison-recovery: zehirlenmiş mutex'i kurtar, panic etme.
+        self.commands
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain(..)
+            .collect()
     }
 
     /// Returns `true` if no commands are currently queued.
     pub fn is_empty(&self) -> bool {
-        self.commands.lock().unwrap().is_empty()
+        // Poison-recovery: zehirlenmiş mutex'i kurtar, panic etme.
+        self.commands
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
     }
 
     /// Returns the number of currently queued commands.
     pub fn len(&self) -> usize {
-        self.commands.lock().unwrap().len()
+        // Poison-recovery: zehirlenmiş mutex'i kurtar, panic etme.
+        self.commands
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
     }
 }

@@ -5,10 +5,24 @@ use std::any::TypeId;
 use std::marker::PhantomData;
 
 // =========================================================================
+// SEALED PATTERN
+// =========================================================================
+//
+// `FetchComponent` ve `WorldQuery` motorun içsel, tamamı `unsafe` metodlardan
+// oluşan DSL trait'leridir. Kullanıcının manuel impl etmesi İSTENMEZ (yanlış
+// bir impl aliasing/UB ihlali doğurur) ve cross-crate hiçbir impl yoktur.
+// Sealed supertrait deseni hem kaçak manuel impl'leri engeller hem de gelecekte
+// metod eklemeyi non-breaking yapar.
+mod sealed {
+    pub trait SealedFetch {}
+    pub trait SealedQuery {}
+}
+
+// =========================================================================
 // FETCH COMPONENT TRAIT
 // =========================================================================
 
-pub trait FetchComponent {
+pub trait FetchComponent: sealed::SealedFetch {
     type Component: 'static;
     type Fetch<'w>: Copy; // Raw pointers are Copy
     type Item<'w>;
@@ -35,6 +49,7 @@ pub trait FetchComponent {
     unsafe fn get_slice<'w>(fetch: Self::Fetch<'w>, len: usize) -> Self::Slice<'w>;
 }
 
+impl<T: crate::component::Component> sealed::SealedFetch for &T {}
 impl<T: crate::component::Component> FetchComponent for &T {
     type Component = T;
     type Fetch<'w> = (*const u8, Option<*const crate::archetype::sparse_set::ComponentSparseSet>);
@@ -100,6 +115,7 @@ impl<'a, T> Mut<'a, T> {
     }
 }
 
+impl<T: crate::component::Component> sealed::SealedFetch for Mut<'_, T> {}
 impl<T: crate::component::Component> FetchComponent for Mut<'_, T> {
     type Component = T;
     type Fetch<'w> = (*mut u8, *mut crate::archetype::ComponentTicks, u32, Option<*mut crate::archetype::sparse_set::ComponentSparseSet>);
@@ -161,7 +177,7 @@ impl<T: crate::component::Component> FetchComponent for Mut<'_, T> {
 // WORLD QUERY TRAIT
 // =========================================================================
 
-pub trait WorldQuery {
+pub trait WorldQuery: sealed::SealedQuery {
     type StaticType: 'static;
     type Fetch<'w>: Copy;
     type Item<'w>;
@@ -551,6 +567,7 @@ fn check(tid: TypeId, is_mut: bool, types: &mut Vec<(TypeId, bool)>) {
     types.push((tid, is_mut));
 }
 
+impl<T0: FetchComponent> sealed::SealedQuery for T0 where T0::Component: crate::component::Component {}
 impl<T0: FetchComponent> WorldQuery for T0 where T0::Component: crate::component::Component {
     type StaticType = T0::Component;
     type Fetch<'w> = T0::Fetch<'w>;
@@ -582,6 +599,7 @@ impl<T0: FetchComponent> WorldQuery for T0 where T0::Component: crate::component
 
 pub struct Changed<T>(PhantomData<T>);
 
+impl<T: crate::component::Component> sealed::SealedQuery for Changed<T> {}
 impl<T: crate::component::Component> WorldQuery for Changed<T> {
     type StaticType = Changed<T>;
     // (tablo ticks pointer'ı, SparseSet ise set pointer'ı)
@@ -625,6 +643,7 @@ impl<T: crate::component::Component> WorldQuery for Changed<T> {
 
 pub struct Added<T>(PhantomData<T>);
 
+impl<T: crate::component::Component> sealed::SealedQuery for Added<T> {}
 impl<T: crate::component::Component> WorldQuery for Added<T> {
     type StaticType = Added<T>;
     type Fetch<'w> = (
@@ -666,6 +685,7 @@ impl<T: crate::component::Component> WorldQuery for Added<T> {
 
 macro_rules! impl_query_tuple {
     ($($t:ident),*) => {
+        impl<$($t: WorldQuery),*> sealed::SealedQuery for ($($t,)*) {}
         #[allow(non_snake_case)]
         impl<$($t: WorldQuery),*> WorldQuery for ($($t,)*) {
             type StaticType = ($($t::StaticType,)*);
@@ -716,6 +736,7 @@ impl_query_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11);
 
 pub struct With<T>(PhantomData<T>);
 
+impl<T: crate::component::Component> sealed::SealedQuery for With<T> {}
 impl<T: crate::component::Component> WorldQuery for With<T> {
     type StaticType = With<T>;
     type Fetch<'w> = ();
@@ -741,6 +762,7 @@ impl<T: crate::component::Component> WorldQuery for With<T> {
 
 pub struct Without<T>(PhantomData<T>);
 
+impl<T: crate::component::Component> sealed::SealedQuery for Without<T> {}
 impl<T: crate::component::Component> WorldQuery for Without<T> {
     type StaticType = Without<T>;
     type Fetch<'w> = ();
@@ -766,6 +788,7 @@ impl<T: crate::component::Component> WorldQuery for Without<T> {
 
 pub struct Or<T1, T2>(PhantomData<(T1, T2)>);
 
+impl<T1: WorldQuery, T2: WorldQuery> sealed::SealedQuery for Or<T1, T2> {}
 impl<T1: WorldQuery, T2: WorldQuery> WorldQuery for Or<T1, T2> {
     type StaticType = Or<T1::StaticType, T2::StaticType>;
     type Fetch<'w> = ();

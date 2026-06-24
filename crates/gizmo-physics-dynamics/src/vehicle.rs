@@ -299,7 +299,12 @@ impl VehicleController {
         if self.shift_cooldown > 0.0 {
             return;
         }
-        let max_gear = self.tuning.gear_ratios.len() - 1;
+        // Guard: kullanıcı gear_ratios'u boş bırakabilir; `len() - 1` usize
+        // underflow panic'ini önle. Boşsa vites değişimi anlamsız → erken dön.
+        if self.tuning.gear_ratios.is_empty() {
+            return;
+        }
+        let max_gear = self.tuning.gear_ratios.len().saturating_sub(1);
         if self.engine_rpm > self.tuning.upshift_rpm && self.current_gear < max_gear {
             self.current_gear += 1;
             self.shift_cooldown = 0.4; // 400ms bekleme
@@ -568,8 +573,11 @@ pub fn update_vehicle(
             .normalize();
 
         // --- YAY KUVVET ENTEGRASYONu (her zaman, grounded veya değil) ---
-        // Tekerlek ataletini (I = 0.5 m r²) hesapla
-        let wheel_inertia = 0.5 * wheel.wheel_mass * wheel.radius.powi(2);
+        // Tekerlek ataletini (I = 0.5 m r²) hesapla.
+        // Guard: wheel_mass=0 veya radius=0 ise inertia=0 → net_torque/wheel_inertia
+        // = inf/NaN ve tüm simülasyon sessizce bozulur. Epsilon-clamp ile tek
+        // noktada koruyarak aşağıdaki tüm bölmeleri (690/693/710/713) güvene al.
+        let wheel_inertia = (0.5 * wheel.wheel_mass * wheel.radius.powi(2)).max(1e-6);
 
         if wheel.is_grounded {
             if let Some(hit) = wheel.ground_hit.as_ref() {

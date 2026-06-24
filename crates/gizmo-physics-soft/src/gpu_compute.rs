@@ -215,9 +215,17 @@ impl GpuCompute {
                 });
             }
 
-            current_node_offset = current_node_offset
-                .checked_add(sb.nodes.len() as u32)
-                .expect("Soft body node offset overflow. Too many nodes!");
+            // Panik koruması: düğüm offset'i u32'yi taşırsa (aşırı sayıda düğüm)
+            // expect ile panik etmek yerine bu frame'i zarifçe atla (imza değişmez).
+            current_node_offset = match current_node_offset.checked_add(sb.nodes.len() as u32) {
+                Some(off) => off,
+                None => {
+                    tracing::error!(
+                        "Soft body node offset overflow (çok fazla düğüm); GPU adımı atlanıyor"
+                    );
+                    return;
+                }
+            };
         }
 
         let params = GpuParameters {

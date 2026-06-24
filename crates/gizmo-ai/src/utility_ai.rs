@@ -10,6 +10,11 @@ use std::sync::Arc;
 pub type ContextScorer<T> = Arc<dyn Fn(&T) -> f32 + Send + Sync>;
 
 /// Eğri değerlendirme arayüzü (Normalize edilmiş 0-1 değerini, 0-1 arası fayda skoruna dönüştürür)
+///
+/// This trait is a deliberate **extension point**: users are expected to
+/// implement their own response curves in addition to the built-in
+/// [`LinearCurve`] and [`LogisticCurve`]. It is therefore intentionally
+/// **not** sealed.
 pub trait UtilityCurve: Send + Sync {
     /// Maps a normalized input `x` (0..=1) to a utility score (0..=1).
     fn evaluate(&self, x: f32) -> f32;

@@ -116,6 +116,10 @@ pub struct RollbackBuffer {
 impl RollbackBuffer {
     /// Creates a ring buffer holding the last `capacity` snapshots.
     pub fn new(capacity: usize) -> Self {
+        // Modulo-by-zero koruması: indeksleme `% self.capacity` kullandığından
+        // capacity=0 ilk save/get'te panik üretir. İmza değiştirmeden en az 1
+        // kapasiteye normalize ediyoruz (başarı yolu etkilenmez).
+        let capacity = capacity.max(1);
         Self {
             buffer: vec![None; capacity],
             capacity,

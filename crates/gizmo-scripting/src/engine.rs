@@ -245,7 +245,8 @@ impl ScriptEngine {
 
         // Link to _G via metatable
         let meta = self.lua.create_table().map_err(|e| e.to_string())?;
-        meta.set("__index", self.lua.globals()).unwrap();
+        meta.set("__index", self.lua.globals())
+            .map_err(|e| e.to_string())?;
         env.set_metatable(Some(meta));
 
         // Script'i İzole env içinde çalıştır

@@ -271,10 +271,11 @@ pub fn render_studio(
 
     for ent_id in duplicate_reqs {
         // Çakışmaları(Race condition) engellemek için temp dosyasını entity id ve zaman damgasıyla eşsiz(unique) yapıyoruz
+        // Saat UNIX_EPOCH'tan geride olsa bile (nadir) panik yerine 0 kullan.
         let time_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .subsec_nanos();
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
         let temp_path = format!(
             "demo/assets/prefabs/temp_duplicate_{}_{}.prefab",
             ent_id, time_ns

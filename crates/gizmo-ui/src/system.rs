@@ -21,8 +21,22 @@ pub fn ui_layout_system(
         current_entities.insert(entity);
 
         if !ctx.entity_to_node.contains_key(&entity) {
-            let node_id = ctx.taffy.new_leaf(style.0.clone()).unwrap();
-            ctx.entity_to_node.insert(entity, node_id);
+            // `new_leaf` returns a TaffyResult; on the rare allocation/insertion
+            // failure we skip this entity for this frame instead of panicking the
+            // whole frame loop. The entity will simply be retried next frame.
+            // This keeps the policy consistent with the other taffy calls below
+            // (`set_style`, `set_children`, `remove`, `compute_layout`) which all
+            // swallow their errors.
+            match ctx.taffy.new_leaf(style.0.clone()) {
+                Ok(node_id) => {
+                    ctx.entity_to_node.insert(entity, node_id);
+                }
+                Err(_) => {
+                    // Skip this entity this frame; layout write-back below is
+                    // guarded by `entity_to_node.get`, so a missing node is safe.
+                    continue;
+                }
+            }
         } else {
             // Update style if it changed (always updating for simplicity here)
             let node_id = ctx.entity_to_node[&entity];
@@ -64,7 +78,10 @@ pub fn ui_layout_system(
     let roots: Vec<_> = current_entities.iter()
         .filter_map(|&entity| {
             if parents.get(entity).is_none() {
-                Some(ctx.entity_to_node[&entity])
+                // Use `get` rather than indexing: an entity may be present in
+                // `current_entities` but missing from `entity_to_node` if its
+                // `new_leaf` allocation failed earlier this frame.
+                ctx.entity_to_node.get(&entity).copied()
             } else {
                 // Technically we should check if the parent also has a Style.
                 // For simplicity, we assume the ECS hierarchy accurately represents the UI tree.

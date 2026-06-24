@@ -27,7 +27,7 @@ impl Entities {
     }
 
     pub fn clear(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.next_entity_id = 0;
         state.generations.clear();
         state.free_ids.clear();
@@ -35,7 +35,7 @@ impl Entities {
     }
 
     pub fn reserve_entity(&self) -> Entity {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(id) = state.free_ids.pop_front() {
             state.free_set.remove(&id);
             let gen = state.generations[id as usize];
@@ -49,7 +49,7 @@ impl Entities {
     }
 
     pub fn free(&self, entity: Entity) -> bool {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let id = entity.id();
         let id_us = id as usize;
         if id_us < state.generations.len() && state.generations[id_us] == entity.generation() {
@@ -64,7 +64,7 @@ impl Entities {
 
     #[inline]
     pub fn is_alive(&self, entity: Entity) -> bool {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let id = entity.id() as usize;
         id < state.generations.len() && state.generations[id] == entity.generation()
     }

@@ -68,41 +68,63 @@ impl Track {
 
         // Find the segment
         let idx = self.keyframe_timestamps.partition_point(|&ts| ts <= t);
-        let idx0 = idx - 1;
-        let idx1 = idx;
+        // `idx` is in `1..len` here (the t-before-first / t-after-last cases
+        // returned above), but guard the subtraction defensively in case of
+        // NaN timestamps that break the ordering assumptions of partition_point.
+        let idx1 = idx.clamp(1, self.keyframe_timestamps.len() - 1);
+        let idx0 = idx1 - 1;
 
         let t0 = self.keyframe_timestamps[idx0];
         let t1 = self.keyframe_timestamps[idx1];
-        let factor = (t - t0) / (t1 - t0);
+        // Guard against a zero/degenerate (or non-finite) segment span: two
+        // identical or out-of-order timestamps would produce a division by zero
+        // (NaN/Inf). Fall back to the start value rather than emitting NaN.
+        let span = t1 - t0;
+        let factor = if span.abs() > f32::EPSILON {
+            ((t - t0) / span).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
 
         self.interpolate_values(idx0, idx1, factor)
     }
 
     fn get_value(&self, index: usize) -> InterpolatedValue {
+        // Bounds-checked access: the keyframe vectors are public and may be
+        // shorter than `keyframe_timestamps`, so a mismatched-length Track must
+        // not panic with an out-of-bounds index.
         match &self.keyframes {
-            Keyframes::Translation(v) => InterpolatedValue::Translation(v[index]),
-            Keyframes::Rotation(v) => InterpolatedValue::Rotation(v[index]),
-            Keyframes::Scale(v) => InterpolatedValue::Scale(v[index]),
+            Keyframes::Translation(v) => match v.get(index) {
+                Some(&val) => InterpolatedValue::Translation(val),
+                None => InterpolatedValue::None,
+            },
+            Keyframes::Rotation(v) => match v.get(index) {
+                Some(&val) => InterpolatedValue::Rotation(val),
+                None => InterpolatedValue::None,
+            },
+            Keyframes::Scale(v) => match v.get(index) {
+                Some(&val) => InterpolatedValue::Scale(val),
+                None => InterpolatedValue::None,
+            },
         }
     }
 
     fn interpolate_values(&self, idx0: usize, idx1: usize, factor: f32) -> InterpolatedValue {
+        // Bounds-checked: a Track whose `keyframes` vector is shorter than its
+        // `keyframe_timestamps` must degrade gracefully instead of panicking.
         match &self.keyframes {
-            Keyframes::Translation(v) => {
-                let v0 = v[idx0];
-                let v1 = v[idx1];
-                InterpolatedValue::Translation(v0.lerp(v1, factor))
-            }
-            Keyframes::Rotation(v) => {
-                let v0 = v[idx0];
-                let v1 = v[idx1];
-                InterpolatedValue::Rotation(v0.slerp(v1, factor))
-            }
-            Keyframes::Scale(v) => {
-                let v0 = v[idx0];
-                let v1 = v[idx1];
-                InterpolatedValue::Scale(v0.lerp(v1, factor))
-            }
+            Keyframes::Translation(v) => match (v.get(idx0), v.get(idx1)) {
+                (Some(&v0), Some(&v1)) => InterpolatedValue::Translation(v0.lerp(v1, factor)),
+                _ => InterpolatedValue::None,
+            },
+            Keyframes::Rotation(v) => match (v.get(idx0), v.get(idx1)) {
+                (Some(&v0), Some(&v1)) => InterpolatedValue::Rotation(v0.slerp(v1, factor)),
+                _ => InterpolatedValue::None,
+            },
+            Keyframes::Scale(v) => match (v.get(idx0), v.get(idx1)) {
+                (Some(&v0), Some(&v1)) => InterpolatedValue::Scale(v0.lerp(v1, factor)),
+                _ => InterpolatedValue::None,
+            },
         }
     }
 }
