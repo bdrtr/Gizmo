@@ -8,9 +8,15 @@ description.workspace = true
 license.workspace = true
 repository.workspace = true
 readme.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [features]
-default = ["window", "render", "audio", "physics", "physics-dynamics", "physics-soft", "scene", "editor", "ui", "animation"]
-headless = ["physics", "gizmo-app/headless"]
+default = ["window", "render", "audio", "physics", "physics-dynamics", "physics-soft", "scene", "editor", "ui", "animation", "network"]
+headless = ["physics", "network", "gizmo-app/headless"]
+network = ["dep:gizmo-net", "gizmo-app/network"]
 window = ["gizmo-app/window", "dep:winit", "dep:gizmo-window"]
 render = ["gizmo-app/render", "dep:gizmo-renderer", "dep:wgpu", "dep:bytemuck", "window"]
 audio = ["dep:gizmo-audio", "gizmo-app/audio"]
@@ -46,6 +52,7 @@ gizmo-editor = { path = "../gizmo-editor", optional = true , version = "0.1.7" }
 tracing = "0.1.44"
 serde = { version = "1.0", features = ["derive"] }
 gizmo-animation = { version = "0.1.7", path = "../gizmo-animation", optional = true }
+gizmo-net = { version = "0.1.7", path = "../gizmo-net", optional = true, default-features = false }
 
 [dev-dependencies]
 criterion = "0.5"

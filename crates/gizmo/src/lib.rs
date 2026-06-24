@@ -23,10 +23,11 @@
 //! - `ui` — the UI subsystem.
 //! - `animation` — skeletal/property animation.
 //! - `scripting` — scripting support.
+//! - `network` — networking / P2P deterministic rollback via `gizmo-net`.
 //! - `headless` — run the app loop without a window (e.g. for servers/tests).
 //!
 //! The `default` feature enables a full desktop game setup (`window`, `render`,
-//! `audio`, `physics`, `scene`, `editor`, `ui`, `animation`).
+//! `audio`, `physics`, `scene`, `editor`, `ui`, `animation`, `network`).
 //!
 //! ## Re-exported third-party crates
 //!
@@ -84,17 +85,30 @@ pub use gizmo_ui as ui;
 #[cfg(feature = "animation")]
 pub use gizmo_animation as animation;
 
+#[cfg(feature = "network")]
+pub use gizmo_net as net;
+
 // === 3. Parti Re-Export (Kullanıcının ayrıca eklemesine gerek kalmasın) ===
 pub use gizmo_core::gizmo_log;
 
+/// 1.0 kontratı: aşağıdaki dış grafik/pencere tipleri (`wgpu`, `bytemuck`,
+/// `egui`, `winit`) bilinçli olarak public API'nin parçasıdır. Sürümleri ilgili
+/// renderer/window crate'inin semver'ine bağlıdır; bu dış crate'lerde yapılan
+/// bir major sürüm yükseltmesi facade için de kırıcı (breaking) sayılır.
 #[cfg(feature = "render")]
 pub use bytemuck;
 
+/// 1.0 kontratı: bu dış grafik tipi bilinçli olarak public API'nin parçasıdır;
+/// sürümü renderer crate'inin semver'ine bağlıdır.
 #[cfg(feature = "editor")]
 pub use egui;
 
+/// 1.0 kontratı: bu dış grafik tipi bilinçli olarak public API'nin parçasıdır;
+/// sürümü renderer crate'inin semver'ine bağlıdır.
 #[cfg(feature = "render")]
 pub use wgpu;
 
+/// 1.0 kontratı: bu dış pencere tipi bilinçli olarak public API'nin parçasıdır;
+/// sürümü window crate'inin semver'ine bağlıdır.
 #[cfg(feature = "window")]
 pub use winit;

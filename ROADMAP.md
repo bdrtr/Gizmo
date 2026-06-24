@@ -336,10 +336,49 @@ gerçek-UDP örnek onaylı geçmişte senkron).
 
 ## Faz 6 — API Kararlılığı & 1.0
 
-- [ ] Genel API'yi gözden geçir/dondur; `unsafe` kontratlarını belgele.
-- [ ] Crates.io yayın hattını doğrula (`publish_all.sh` topolojik sıra güncel).
-- [ ] Sürümleme + CHANGELOG + migration kılavuzu.
-- [ ] `1.0.0`.
+> **Strateji:** Tüm 1.0 yayın stratejisi (kademeli/STAGED 1.0, crate-bazlı
+> hazırlık tablosu, dış-tip kontratı, kalan-iş kontrol listesi, yayın sırası)
+> [`RELEASING.md`](RELEASING.md) dosyasında. Motor 1.0'a **HENÜZ HAZIR DEĞİL**;
+> net bir kademeli yol var (önce dış-bağımlılığı hafif çekirdek = Stage A,
+> sonra grafik katmanı = Stage B).
+
+### Tamamlanan 1.0-hazırlık denetim turları (205 bulgu / 26 bloker)
+- [x] **Tur 1 — Güvenli/non-breaking sertleştirme** (`b39e082`): paketleme
+      (repository URL, LICENSE×2, `publish=false`, keywords/categories) +
+      temizlik (88 `Debug`, 12 bağımlılık, 7 ölü-kod) + doc.
+- [x] **Tur 2 — `#[non_exhaustive]`** (`2fdbe6c`): 96 açık public tipe semver
+      koruması.
+- [x] **Tur 3a — İmza-değişmeyen hata sertleştirme + trait sealing** (`f15d262`):
+      `Error`+`Display` impl'leri, 38 panik/NaN guard, `Fp32` tutarlılık,
+      `WorldQuery`/`SystemParam`/`FetchComponent` sealing.
+- [x] **Tur 3b — Breaking hata kontratı** (`613d140`): 13 somut `Error` enum'u,
+      46 `fn → Result` + tüm çağrı yerleri.
+- [x] Hepsi build + `--all-features` + 552 test + clippy(`-D warnings`) yeşil,
+      `main`'de.
+
+### Kalan 1.0 blokerleri (bkz. `RELEASING.md` §4 kontrol listesi)
+- [ ] **(a) `bevy_reflect` 'reflect' feature-gating** — *Stage A 1.0 blokeri,
+      denetim blokeri #1* — **L**. `Transform`/`RigidBody`/`Velocity` derive'ları
+      (core/physics-core/physics-rigid/scene) tek workspace `reflect` feature'ı
+      arkasına.
+- [ ] **(b) `arrayvec` opak newtype** — *Stage A 1.0 blokeri, #2* — **M**.
+      `physics-core` `CollisionEvent.contact_points`.
+- [ ] **(c) `wgpu`/`winit`/`egui` güncel sürüme yükseltme** — *Stage B 1.0
+      blokeri* — **XL**. `wgpu 0.20→güncel`, `winit 0.29→güncel`,
+      `egui 0.28→güncel` (+ egui ekosistemi). Tüm grafik katmanı + `gizmo`
+      facade buna bağlı.
+- [ ] **(d) `get_` rename (C-GETTER) + görünürlük daraltma** — should-do — **M**.
+- [ ] **(e) `glam`'i resmi public dep olarak belgele** — Stage A 1.0 gereği — **S**.
+- [ ] **(f) MSRV belirle** (`rust-version` + CI gate) — 1.0 gereği — **S**.
+
+### Yayın mekaniği
+- [ ] Kademeli sürümler tek-workspace-versiyon varsayımını kırar: Stage A `1.x`,
+      Stage B `0.y` (`RELEASING.md` §5). `publish_all.sh` / version inheritance
+      güncellenmeli.
+- [ ] Genel API'yi dondur; `unsafe` kontratlarını belgele (Stage A için).
+- [ ] CHANGELOG + migration kılavuzu.
+- [ ] **Stage A `1.0.0`** ((a)+(b)+(d)+(e)+(f) tek breaking turda).
+- [ ] **Stage B `1.0.0`** ((c) sonrası, ayrı/sonraki yayın).
 
 ---
 

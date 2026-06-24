@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 readme.workspace = true
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dependencies]
 log = "0.4.29"
 rodio = "0.17"

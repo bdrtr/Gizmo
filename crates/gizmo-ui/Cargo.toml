@@ -7,6 +7,10 @@ description.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dependencies]
 gizmo-app = { version = "0.1.7", path = "../gizmo-app", default-features = false }
 gizmo-core = { version = "0.1.7", path = "../gizmo-core" }

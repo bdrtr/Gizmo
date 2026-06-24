@@ -8,6 +8,11 @@ description.workspace = true
 license.workspace = true
 repository.workspace = true
 readme.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dependencies]
 wgpu = { version = "0.20", features = ["fragile-send-sync-non-atomic-wasm", "webgl"] }
 log = "0.4"
