@@ -129,15 +129,27 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
 
 ---
 
-## Faz 3 — Netcode Olgunlaştırma
+## Faz 3 — Netcode Olgunlaştırma  (rollback çekirdeği ✅; transport katmanı kaldı)
 
-- [ ] Gerçek **istemci binary'si**: `NetworkClient` + `ClientPredictor` + `SnapshotInterpolator`
-      + `InputAck`/`WorldStateUpdate` döngüsü (şu an kütüphane parçaları bağlanmaya hazır ama
-      uçtan uca çalışan bir client yok).
-- [ ] Rollback'i deterministik fizikle entegre et (Faz 2'ye bağlı).
-- [ ] Lag/jitter/packet-loss simülasyonuyla otomatik test.
+- [x] **Rollback'i deterministik fizikle ENTEGRE ET** (Faz 2'ye bağlıydı) — `PhysicsWorld::
+      snapshot()/restore_snapshot()` (`world.rs`, `WorldSnapshot`): rollback için TAM iç durum
+      (transforms+velocities+rigid_bodies/uyku + **contact_cache/warm-start** + accumulator).
+      Eski `PhysicsStateSnapshot` (ECS, yalnız transform+velocity+sleep) deterministik
+      re-simülasyona YETMİYORDU (warm-start kaybı → sapma). `tests/rollback.rs::
+      rollback_resimulation_matches_continuous`: rollback(20)+resim(20→40) BİT-BİT == kesintisiz
+      sim (state_hash eşit) → tam durum geri yükleme doğru.
+- [x] **Lag/jitter/packet-loss simülasyonuyla otomatik test** — `tests/rollback.rs::
+      rollback_netcode_converges_under_lag_jitter_loss`: kontrollü cisim + per-tick girdi;
+      her girdi LAG=5 tick geç öğrenilir (en kötü hal → her tick rollback), yanlış-tahmin
+      düzeltilir, döngü sonu kalan girdiler toplu teslim + son rollback. Peer "ground truth"
+      peer'e YAKINSAR (state_hash eşit) = senkron. GGPO rollback döngüsü deterministik çalışıyor.
+- [ ] Gerçek **istemci binary'si** (transport katmanı): `NetworkClient` + `ClientPredictor` +
+      `SnapshotInterpolator` + UDP `InputAck`/`WorldStateUpdate` döngüsü. Kütüphane parçaları
+      (`rollback/{manager,transport,packet,input_buffer}`) + artık deterministik snapshot var;
+      uçtan uca UDP client + ECS `RollbackManager`'ı `PhysicsWorld::snapshot` ile köprüleme kaldı.
 
-**Çıkış kriteri:** iki client gerçekçi ağ koşullarında senkron kalıyor.
+**Çıkış kriteri:** iki client gerçekçi ağ koşullarında senkron kalıyor → SİMÜLE testte KARŞILANDI
+(deterministik rollback + lag/jitter/loss yakınsama); gerçek-UDP uçtan uca client kaldı.
 
 ---
 
