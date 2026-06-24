@@ -482,4 +482,65 @@ mod tests {
         assert_eq!(deserialized.joints.len(), 1);
         assert!(matches!(deserialized.joints[0].data, gizmo_physics_rigid::joints::data::JointData::Fixed));
     }
+
+    // Faz 5 — sahne kaydet/yükle GÜVENİLİRLİĞİ: bir dünya kaydedilip TAZE bir dünyaya
+    // yüklendiğinde isim + bileşen değerleri + hiyerarşi KORUNMALI (round-trip sadakati).
+    #[test]
+    fn scene_save_load_roundtrip_preserves_components_and_hierarchy() {
+        use gizmo_core::registry::ComponentRegistry;
+        use gizmo_physics_core::components::Transform;
+        use gizmo_math::Vec3;
+
+        // Reflect bileşenlerini kaydet (save reflect ile serileştirir, load reflect ile geri yükler).
+        let mut registry = ComponentRegistry::new();
+        registry.register_reflect::<Transform>("Transform");
+
+        // Kaynak dünya: isimli ebeveyn + çocuk, bilinen Transform değerleriyle.
+        let mut world = World::new();
+        let parent = world.spawn();
+        world.add_component(parent, EntityName::new("Parent"));
+        world.add_component(parent, Transform::new(Vec3::new(1.0, 2.0, 3.0)));
+        let child = world.spawn();
+        world.add_component(child, EntityName::new("Child"));
+        world.add_component(child, Transform::new(Vec3::new(-4.0, 5.0, -6.0)));
+        world.add_component(child, Parent(parent.id()));
+
+        let path = std::env::temp_dir()
+            .join("gizmo_scene_roundtrip_test.ron")
+            .to_string_lossy()
+            .into_owned();
+        SceneData::save(&world, &path, &registry).expect("save başarısız");
+
+        // TAZE dünyaya yükle.
+        let mut loaded = World::new();
+        assert!(SceneData::load_into(&path, &mut loaded, &registry), "load başarısız");
+        let _ = std::fs::remove_file(&path);
+
+        // İsme göre entity bul.
+        let find = |w: &World, want: &str| -> Option<u32> {
+            let names = w.borrow::<EntityName>();
+            w.iter_alive_entities()
+                .into_iter()
+                .map(|e| e.id())
+                .find(|&id| names.get(id).map(|n| n.0.as_str()) == Some(want))
+        };
+
+        let p = find(&loaded, "Parent").expect("Parent yüklenmedi");
+        let c = find(&loaded, "Child").expect("Child yüklenmedi");
+
+        // Transform değerleri korunmalı.
+        {
+            let ts = loaded.borrow::<Transform>();
+            let pt = ts.get(p).expect("Parent Transform yok (reflect round-trip bozuk)");
+            let ct = ts.get(c).expect("Child Transform yok");
+            assert_eq!(pt.position, Vec3::new(1.0, 2.0, 3.0), "Parent pozisyonu round-trip'te bozuldu");
+            assert_eq!(ct.position, Vec3::new(-4.0, 5.0, -6.0), "Child pozisyonu round-trip'te bozuldu");
+        }
+
+        // Hiyerarşi korunmalı: Child'ın Parent'ı yeni p id'sine çözülmeli.
+        {
+            let parents = loaded.borrow::<Parent>();
+            assert_eq!(parents.get(c).map(|x| x.0), Some(p), "ebeveyn-çocuk ilişkisi round-trip'te bozuldu");
+        }
+    }
 }
