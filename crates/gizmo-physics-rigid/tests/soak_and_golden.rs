@@ -11,7 +11,7 @@
 
 use gizmo_core::entity::Entity;
 use gizmo_math::Vec3;
-use gizmo_physics_core::{Collider, Transform};
+use gizmo_physics_core::{Collider, PhysicsMaterial, Transform};
 use gizmo_physics_rigid::{PhysicsWorld, RigidBody, Velocity};
 
 fn add_ground(world: &mut PhysicsWorld) {
@@ -32,7 +32,13 @@ fn add_box(world: &mut PhysicsWorld, id: u32, pos: Vec3, half: f32) {
     rb.wake_up();
     let col = Collider::box_collider(Vec3::splat(half));
     rb.update_inertia_from_collider(&col);
-    world.add_body(Entity::new(id, 0), rb, Transform::new(pos), Velocity::default(), col);
+    world.add_body(
+        Entity::new(id, 0),
+        rb,
+        Transform::new(pos),
+        Velocity::default(),
+        col,
+    );
 }
 
 #[test]
@@ -69,7 +75,10 @@ fn soak_box_stack_stays_stable() {
         .map(|i| world.velocities[i].linear.length() + world.velocities[i].angular.length())
         .fold(0.0f32, f32::max);
     assert!(max_speed.is_finite(), "hız NaN/Inf");
-    assert!(max_speed < 0.5, "yığın yerleşmedi / jitter yüksek: max_speed={max_speed}");
+    assert!(
+        max_speed < 0.5,
+        "yığın yerleşmedi / jitter yüksek: max_speed={max_speed}"
+    );
 
     // 3) Kutular yanal sürüklenmedi ve sırası korundu (tünelleme/çökme yok).
     let mut prev_y = -1.0f32;
@@ -156,6 +165,83 @@ fn soak_falling_stack_survives_impact() {
 }
 
 #[test]
+fn soak_tall_stack_n16_stays_upright() {
+    // Faz 4 KALAN regresyonu (TGS Soft hedefi): YÜKSEK (n=16) yığın KÜÇÜK BOŞLUKLARLA
+    // bırakılıp birbirine ÇARPARAK düşer (yüksek-enerji çarpma). SI çözücü
+    // (warm-start + simetrik GS + split-impulse, 20 iter) bu yükseklikte çarpma
+    // dürtüsünü 16 cisim boyunca yayamaz; metastable yığın kaotik devrilip saçılır.
+    // TGS Soft (soft constraint + relax) bunu çözer.
+    //
+    // AYIRT EDİCİ: mevcut SI'de bu test DÜŞER (yığın çöker / saçılır).
+    let mut world = PhysicsWorld::new();
+    add_ground(&mut world);
+
+    // Restitution-0 materyal: bu test ÇÖZÜCÜNÜN dürtü-yayma kalitesini (TGS'in katkısı)
+    // ölçer, sekme kaosunu değil. Sekmeyen kutular kullanmak standart yığın-testi
+    // yöntemidir (yüksek-restitution 16-katlı slam her motorda kaotiktir; ayrı konu).
+    let no_bounce = PhysicsMaterial {
+        restitution: 0.0,
+        ..Default::default()
+    };
+    let n = 16;
+    let half = 0.5;
+    let gap = 0.1; // her kutu mükemmel temasın 0.1 m üstünde → düşüp çarpar
+    for i in 0..n {
+        let y = half + i as f32 * (2.0 * half + gap);
+        let mut rb = RigidBody::new(1.0, 0.0, 0.6, true);
+        rb.wake_up();
+        let col = Collider::box_collider(Vec3::splat(half)).with_material(no_bounce);
+        rb.update_inertia_from_collider(&col);
+        world.add_body(
+            Entity::new(i as u32 + 1, 0),
+            rb,
+            Transform::new(Vec3::new(0.0, y, 0.0)),
+            Velocity::default(),
+            col,
+        );
+    }
+
+    // 4 sn simüle et (yerleşmesi için).
+    for _ in 0..240 {
+        world.step(1.0 / 60.0).ok();
+    }
+
+    // 1) NaN/Inf yok.
+    for i in 1..=n {
+        assert!(
+            world.transforms[i].position.is_finite() && world.velocities[i].linear.is_finite(),
+            "kutu {i} NaN/Inf"
+        );
+    }
+
+    // 2) Yığın DİK kaldı: yanal sürüklenme küçük + sıra korundu (çökme/saçılma yok).
+    let mut prev_y = -1.0f32;
+    let mut max_xz = 0.0f32;
+    for i in 1..=n {
+        let p = world.transforms[i].position;
+        max_xz = max_xz.max(p.x.abs()).max(p.z.abs());
+        assert!(
+            p.y > prev_y + 0.3,
+            "kutu {i} yığın sırasını bozdu (çöktü): y={} prev={prev_y}",
+            p.y
+        );
+        prev_y = p.y;
+    }
+    assert!(
+        max_xz < 0.5,
+        "yığın çöktü / yanlara saçıldı: max|xz|={max_xz}"
+    );
+
+    // 3) Tepe kutu yaklaşık beklenen yükseklikte (yığın boyu korundu).
+    let expected_top = half + (n - 1) as f32 * (2.0 * half);
+    assert!(
+        (world.transforms[n].position.y - expected_top).abs() < 0.6,
+        "tepe kutu beklenen yükseklikte değil: y={} (beklenen ≈ {expected_top})",
+        world.transforms[n].position.y
+    );
+}
+
+#[test]
 fn golden_box_settles_on_ground() {
     let mut world = PhysicsWorld::new();
     world.solver.iterations = 16;
@@ -180,7 +266,10 @@ fn golden_box_settles_on_ground() {
         p.y
     );
     // Düşeyde düştü, yana kaymadı.
-    assert!(p.x.abs() < 0.05 && p.z.abs() < 0.05, "kutu yana kaydı: {p:?}");
+    assert!(
+        p.x.abs() < 0.05 && p.z.abs() < 0.05,
+        "kutu yana kaydı: {p:?}"
+    );
     // Dinlenmede (uyumuş ya da neredeyse durgun).
     assert!(v.length() < 0.1, "kutu dinlenmedi: |v|={}", v.length());
 }
