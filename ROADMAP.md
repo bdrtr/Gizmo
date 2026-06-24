@@ -4,8 +4,8 @@
 > Bu belge canlıdır — madde tamamlandıkça `[x]` işaretle, **Durum** bölümünü güncelle.
 
 ## Durum
-- **Şu anki aşama:** Faz 0 TAMAMLANDI (son açık bug EPA yüz yönelimi de kapandı) → Faz 1 (Test & CI) ilerliyor.
-- **İlerleme:** ECS+çekirdek fizik (9 bug), vehicle, soft-body, fracture, multibody/ABA, EPA — denetlendi+düzeltildi. **496 test yeşil**, clippy ratchet temiz, determinizm 3/3 hash eşleşiyor.
+- **Şu anki aşama:** Faz 0–1 TAMAMLANDI; Faz 4 (fizik derinliği/kalite) ilerliyor — solver kalite turu, CCD, joint kütüphanesi, materyal combine ve **TGS Soft çözücü** kapandı.
+- **İlerleme:** ECS+çekirdek fizik (9 bug), vehicle, soft-body, fracture, multibody/ABA, EPA, CCD, joints — denetlendi+düzeltildi. **TGS Soft (Box2D v3 Soft Step) uygulandı → n≥16 yüksek-enerji yığın çökmesi (SI'nin temel sınırı) çözüldü.** **538 test yeşil**, CI clippy temiz, determinizm 3/3 hash eşleşiyor (AAC365945335779E).
 - **Faz 1 yeni kapsam (2026-06-15):** broad-phase DIFFERENTIAL test (BVH pairs = brute-force, margin=0 birebir + şişman-margin soundness), joint property (ball-socket yakınsama + zincir kararlılığı), gearbox index-güvenliği property (Faz 0 panik regresyonu), soft-body property (cloth/rope pinned + FEM sıkışma-geri-kazanımı/J-cutoff regresyonu), fracture property (voronoi determinizm + chunk geçerliliği), N-kutu SOAK (10sn kararlılık) + GOLDEN (zeminde dengelenen kutu) regresyon.
 - **Sıradaki:** Faz 1 kalanı (benchmark regresyon takibi) VEYA Faz 2 (determinizm kararı) / Faz 3 (netcode client).
 
@@ -155,10 +155,23 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
       temas çözücüye HİÇ ulaşmaz; iki kutu da aynı mesafeyi gidip test sub-mm gürültüyle geçiyordu.
       Test gerçek materyal sürtünmesini kullanacak + anlamlı marj (≈23 m'ye karşı ≈5 m) test edecek
       şekilde düzeltildi. Doğrulama: workspace 528 test yeşil, clippy ratchet exit 0, determinizm
-      3/3 tutarlı (yeni hash **4F4A5BE6569A6ED4** — solver sırası değişti). **KALAN (ileri iş):**
-      aşırı uzun (n≥16) / büyük-boşluk (yüksek-enerji çarpma) mükemmel-hizalı yığınlar HÂLÂ kaotik
-      çöküyor — SI çözücünün temel sınırı; tam çözüm modern bir çözücü (TGS Soft / 2-nokta block
-      solver / iterasyon-arası pozisyon güncellemesi) gerektirir.
+      3/3 tutarlı (yeni hash **4F4A5BE6569A6ED4** — solver sırası değişti).
+- [x] **TGS Soft çözücü (uzun-yığın çözümü)** — UYGULANDI (Box2D v3 "Soft Step" uyarlaması,
+      `solver.rs`). SI'nin temel sınırı (n≥16 yüksek-enerji çarpan yığınların kaotik çökmesi)
+      kapatıldı. Her substep'te: warm-start → BIASED soft solve + **iterasyonlar-arası
+      pozisyon-delta entegrasyonu** (gerçek TGS: dp güncel hızla ilerler, bir sonraki
+      iterasyonun bias'ı GÜNCEL penetrasyonu görür → düzeltme yığın boyunca yayılır) → RELAX
+      (bias=0) + sönümlü restitution → pozisyon düzeltmesi `dp − relaxed·dt` olarak dışarı.
+      Soft katsayılar `contact_hertz=30`/`damping_ratio=10`'dan. `use_tgs_soft` (varsayılan
+      açık) ile gate'li; eski split-impulse yolu fallback. **CCD-etkin island'lar eski yolu
+      kullanır** (speculative temaslar ince ayarlı; TGS dp/relax akışı yüksek-hızlı açılı
+      çarpmada speculative clamp'le çatışıp tünelletiyordu). Ayırt edici regresyon:
+      `soak_and_golden.rs::soak_tall_stack_n16_stays_upright` (n=16 düşen yığın, restitution-0
+      materyal — propagation'ı izole eder; eski SI'de ÇÖKER, TGS'te dik kalır). Doğrulama:
+      workspace **538 test yeşil**, CI clippy exit 0, determinizm **3/3 tutarlı (yeni hash
+      AAC365945335779E)**. **KALAN (ileri iş):** yüksek-restitution (≥0.3) çok uzun yığınların
+      çarpma sekmesi hâlâ kaotik (her motorda fiziksel olarak öyle; ayrı konu) — restitution-0
+      / düşük materyalde kararlı.
 - [x] **Materyal combine modları** — DÜZELTİLDİ (2026-06-17). Pipeline manifold sürtünme/sekme'yi
       `sqrt(dyn·dyn)` + `restitution.max` ile HARDCODE ediyordu → her materyalin
       `friction_combine`/`restitution_combine` modu (ICE=Min, RUBBER=Max, …) YOK SAYILIYORDU.
