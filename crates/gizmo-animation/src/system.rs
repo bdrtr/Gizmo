@@ -56,13 +56,21 @@ pub fn animation_system(
                 if let Some(name) = names.get(current) {
                     for track in &clip.tracks {
                         if track.target_name == name.0 {
+                            // Recover from a poisoned mutex instead of panicking: a
+                            // poisoned lock here would otherwise abort the whole frame.
                             let gen = {
-                                let state = entities.state.lock().unwrap();
-                                state.generations[current as usize]
+                                let state =
+                                    entities.state.lock().unwrap_or_else(|e| e.into_inner());
+                                // Bounds-check the id: a stale/out-of-range id must skip
+                                // gracefully rather than panic on an out-of-bounds index.
+                                match state.generations.get(current as usize).copied() {
+                                    Some(gen) => gen,
+                                    None => continue,
+                                }
                             };
                             let entity = Entity::new(current, gen);
                             player.target_entities.insert(name.0.clone(), entity);
-                            
+
                             // Insert the Animated marker component onto the target entity.
                             commands.entity(entity).insert(crate::player::Animated);
                         }

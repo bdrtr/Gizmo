@@ -113,7 +113,9 @@ pub fn compute_convex_hull(points: &[Vec3]) -> ConvexHull {
     // Find p2 furthest from line p0-p1
     let mut max_dist_line = -1.0;
     let mut p2 = 0;
-    let line_dir = (pts[p1] - pts[p0]).normalize();
+    // try_normalize: p0==p1 dejenere durumunda normalize() NaN üretirdi; sıfır yön
+    // dönerek aşağıdaki mesafe taraması (dist_sq) bozulmadan en uzak noktayı bulur.
+    let line_dir = (pts[p1] - pts[p0]).try_normalize().unwrap_or(Vec3::ZERO);
     for i in 0..pts.len() {
         let p = pts[i];
         let v = p - pts[p0];
@@ -133,7 +135,13 @@ pub fn compute_convex_hull(points: &[Vec3]) -> ConvexHull {
     }
 
     // Find p3 furthest from plane p0-p1-p2
-    let plane_normal = (pts[p1] - pts[p0]).cross(pts[p2] - pts[p0]).normalize();
+    // try_normalize: eşdoğrusal/dejenere üçlüde cross sıfır olur ve normalize() NaN
+    // üretirdi; sıfır normal dönerek aşağıdaki `max_dist_plane < 1e-8` kontrolü
+    // dejenere durumu güvenle yakalar.
+    let plane_normal = (pts[p1] - pts[p0])
+        .cross(pts[p2] - pts[p0])
+        .try_normalize()
+        .unwrap_or(Vec3::ZERO);
     let mut max_dist_plane = -1.0;
     let mut p3 = 0;
     for i in 0..pts.len() {

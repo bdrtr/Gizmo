@@ -40,6 +40,14 @@ pub struct GltfImportError {
     pub message: String,
 }
 
+impl std::fmt::Display for GltfImportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "GLTF import failed for '{}': {}", self.path, self.message)
+    }
+}
+
+impl std::error::Error for GltfImportError {}
+
 #[derive(Debug)]
 pub struct CompletedAsyncLoads {
     pub textures: Vec<TextureReloadCompletion>,
@@ -163,7 +171,9 @@ impl AsyncAssetLoader {
     /// Queue a texture file decode; when done, [`drain_completed`] yields a row with `entity_ids`.
     /// Duplicate `request_path` while in-flight only adds more waiters (one disk read).
     pub fn request_texture_reload(&self, request_path: String, handle_id: usize) {
-        let mut g = self.shared.lock().expect("async asset mutex");
+        // Poison-recovery: guarded state is plain (queues/sets) and remains consistent
+        // even if a thread panicked while holding the lock, so recover instead of panicking.
+        let mut g = self.shared.lock().unwrap_or_else(|e| e.into_inner());
         g.texture_waiters
             .entry(request_path.clone())
             .or_default()
@@ -192,7 +202,9 @@ impl AsyncAssetLoader {
 
     /// Queue an OBJ load (returns `ObjLoadCompletion` eventually).
     pub fn request_obj_load(&self, path: String, handle_id: usize) {
-        let mut g = self.shared.lock().expect("async asset mutex");
+        // Poison-recovery: guarded state is plain (queues/sets) and remains consistent
+        // even if a thread panicked while holding the lock, so recover instead of panicking.
+        let mut g = self.shared.lock().unwrap_or_else(|e| e.into_inner());
         g.obj_waiters
             .entry(path.clone())
             .or_default()
@@ -220,7 +232,9 @@ impl AsyncAssetLoader {
     /// Run `gltf::import` off the main thread; upload with `AssetManager::load_gltf_from_import`.
     pub fn request_gltf_import(&self, path: String) -> bool {
         tracing::info!(">>> request_gltf_import çağrıldı: {}", path);
-        let mut g = self.shared.lock().expect("async asset mutex");
+        // Poison-recovery: guarded state is plain (queues/sets) and remains consistent
+        // even if a thread panicked while holding the lock, so recover instead of panicking.
+        let mut g = self.shared.lock().unwrap_or_else(|e| e.into_inner());
         if g.gltf_inflight.contains(&path) {
             tracing::info!(">>> request_gltf_import: Model zaten yükleniyor!");
             return false;
@@ -257,7 +271,9 @@ impl AsyncAssetLoader {
             gltf_errors: Vec::new(),
         };
 
-        let mut g = self.shared.lock().expect("async asset mutex");
+        // Poison-recovery: guarded state is plain (queues/sets) and remains consistent
+        // even if a thread panicked while holding the lock, so recover instead of panicking.
+        let mut g = self.shared.lock().unwrap_or_else(|e| e.into_inner());
         while let Ok(msg) = g.result_rx.try_recv() {
             match msg {
                 WorkerMsg::Texture {

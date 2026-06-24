@@ -712,10 +712,10 @@ fn spawn_gltf_node_flat(
     world.add_component(entity, t);
     world.add_component(entity, gizmo_physics_core::components::GlobalTransform::default());
 
-    println!("SPAWN GLTF NODE: name={:?}, num_primitives={}", node.name, node.primitives.len());
+    tracing::debug!("SPAWN GLTF NODE: name={:?}, num_primitives={}", node.name, node.primitives.len());
     let mut newly_added_prims = Vec::new();
     for (mesh, mat_opt) in node.primitives.iter() {
-        println!("  SPAWN PRIM: mesh_source='{}', bounds_min={:?}, bounds_max={:?}", mesh.source, mesh.bounds.min, mesh.bounds.max);
+        tracing::debug!("  SPAWN PRIM: mesh_source='{}', bounds_min={:?}, bounds_max={:?}", mesh.source, mesh.bounds.min, mesh.bounds.max);
         let prim = world.spawn();
         let mut prim_t = Transform::new(Vec3::ZERO);
         prim_t.update_local_matrix();

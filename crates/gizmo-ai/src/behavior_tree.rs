@@ -8,7 +8,12 @@ pub enum BtStatus {
     Running,
 }
 
-/// A node in the Behavior Tree
+/// A node in the Behavior Tree.
+///
+/// This trait is a deliberate **extension point**: downstream crates and users
+/// are expected to implement their own custom `BtNode` types alongside the
+/// built-in [`Sequence`], [`Selector`], [`Inverter`], [`Action`] and
+/// [`Condition`] nodes. It is therefore intentionally **not** sealed.
 pub trait BtNode: Send + Sync {
     /// Executes the node's logic.
     fn tick(&mut self, entity: u32, world: &mut World, dt: f32) -> BtStatus;
@@ -175,8 +180,17 @@ pub struct BehaviorTree {
 impl gizmo_core::component::Component for BehaviorTree {}
 
 impl Clone for BehaviorTree {
+    /// A `BehaviorTree` holds boxed trait objects (`Box<dyn BtNode>`) whose leaf
+    /// nodes can capture arbitrary non-`Clone` closures, so a deep clone is not
+    /// generally possible. Instead of panicking (which would violate the `Clone`
+    /// contract and could be triggered silently by ECS entity/prefab cloning via
+    /// the `Component: Clone` bound), cloning yields a fresh, empty tree.
+    ///
+    /// An empty tree is handled gracefully by [`BehaviorTree::tick`], which
+    /// returns [`BtStatus::Failure`] when `root` is `None`. Callers that need the
+    /// behavior preserved on the cloned entity should re-attach a tree explicitly.
     fn clone(&self) -> Self {
-        panic!("BehaviorTree cannot be cloned!");
+        Self { root: None }
     }
 }
 

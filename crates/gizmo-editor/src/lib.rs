@@ -95,7 +95,8 @@ pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) 
 
     // ==== Asenkron İletişim (Dialog vb.) Olay Döngüsü ====
     let msg = if let Some(rx) = &state.pending_dialog_rx {
-        match rx.lock().unwrap().try_recv() {
+        // Poison-recovery: mutex zehirlenmişse panik yerine iç değeri kurtar.
+        match rx.lock().unwrap_or_else(|e| e.into_inner()).try_recv() {
             Ok(v) => Some(v),
             Err(std::sync::mpsc::TryRecvError::Disconnected) => Some((false, None)),
             Err(_) => None,

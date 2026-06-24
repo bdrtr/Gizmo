@@ -11,10 +11,18 @@ pub struct Ray {
 }
 
 impl Ray {
+    /// Yeni bir ışın oluşturur. `direction` içeride normalize edilir.
+    ///
+    /// Sıfır-uzunlukta (veya non-finite) bir yön vektörü verilirse, glam'in
+    /// `normalize()` çağrısı sessizce NaN/Inf üreterek bozuk bir Ray yaratır ve
+    /// sonraki tüm raycast'ler sahte sonuç döndürür. Bunu önlemek için
+    /// `try_normalize()` kullanılır ve normalize edilemeyen yönlerde güvenli bir
+    /// varsayılan (`Vec3::Z`) seçilir; böylece Ray her zaman geçerli, sonlu bir
+    /// birim yöne sahip olur. Geçerli (sıfır olmayan) yönlerde davranış değişmez.
     pub fn new(origin: Vec3, direction: Vec3) -> Self {
         Self {
             origin,
-            direction: direction.normalize(),
+            direction: direction.try_normalize().unwrap_or(Vec3::Z),
         }
     }
 

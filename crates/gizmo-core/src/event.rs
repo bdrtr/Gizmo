@@ -120,6 +120,7 @@ impl<'w, T: 'static> EventReader<'w, T> {
     }
 }
 
+impl<T: 'static> crate::system::sealed::Sealed for EventReader<'static, T> {}
 impl<T: 'static> SystemParam for EventReader<'static, T> {
     type Item<'w> = EventReader<'w, T>;
     fn fetch<'w>(world: &'w World, _dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError> {
@@ -153,6 +154,7 @@ impl<'w, T: 'static> EventWriter<'w, T> {
     }
 }
 
+impl<T: 'static> crate::system::sealed::Sealed for EventWriter<'static, T> {}
 impl<T: 'static> SystemParam for EventWriter<'static, T> {
     type Item<'w> = EventWriter<'w, T>;
     fn fetch<'w>(world: &'w World, _dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError> {

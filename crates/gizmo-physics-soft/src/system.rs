@@ -20,7 +20,11 @@ pub fn soft_body_step_system(world: &World, dt: f32, gravity: Vec3) {
     if let Some(q) = world.query::<(&Transform, &Collider)>() {
         // SoftBodyMesh expects tuples of (Entity, Transform, Collider)
         for (e, (trans, col)) in q.iter() {
-            rigid_colliders.push((world.get_entity(e).unwrap(), *trans, col.clone()));
+            // Panik koruması: entity sorgu ile get_entity arasında despawn edilmiş
+            // olabilir (yarış/tutarsızlık) → unwrap yerine bu collider'ı sessizce atla.
+            if let Some(entity) = world.get_entity(e) {
+                rigid_colliders.push((entity, *trans, col.clone()));
+            }
         }
     }
 

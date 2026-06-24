@@ -12,11 +12,14 @@ pub struct Ray {
 impl Ray {
     #[inline]
     pub fn new(origin: impl Into<Vec3A>, direction: impl Into<Vec3A>) -> Self {
-        let dir = direction.into().normalize();
-        debug_assert!(dir.is_finite(), "Ray direction must be non-zero");
+        // normalize() sıfır/yakın-sıfır yönde NaN üretir; release'de debug_assert
+        // kaybolup geçersiz (NaN) Ray sessizce oluşurdu. normalize_or_zero ile
+        // dejenere yönü tespit edip güvenli bir varsayılana (+X) düşürüyoruz.
+        let dir = direction.into().normalize_or_zero();
+        let direction = if dir == Vec3A::ZERO { Vec3A::X } else { dir };
         Self {
             origin: origin.into(),
-            direction: dir,
+            direction,
         }
     }
 

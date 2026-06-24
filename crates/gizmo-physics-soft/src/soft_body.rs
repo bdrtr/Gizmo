@@ -109,16 +109,22 @@ pub fn resolve_node_collision(
 
 impl SoftBodyMesh {
     pub fn new(youngs_modulus: f32, poissons_ratio: f32) -> Self {
+        // Tekillik koruması: nu=0.5'te lambda paydası (1-2·nu) sıfırlanıp +inf üretir
+        // (sıkışmaz limit), nu>0.5 ise NEGATİF lambda (kararsız) verir, nu<=-1 ise mu
+        // paydası (1+nu) sıfırlanır. Geçerli fiziksel aralığa [0, 0.499] kıstırarak
+        // inf/NaN/kararsız malzeme parametrelerini imza değiştirmeden engelliyoruz.
+        // (Doc: poissons_ratio geçerli aralığı 0.0 .. 0.499.)
+        let nu = poissons_ratio.clamp(0.0, 0.499);
+
         // Calculate Lame Parameters
-        let mu = youngs_modulus / (2.0 * (1.0 + poissons_ratio));
-        let lambda = (youngs_modulus * poissons_ratio)
-            / ((1.0 + poissons_ratio) * (1.0 - 2.0 * poissons_ratio));
+        let mu = youngs_modulus / (2.0 * (1.0 + nu));
+        let lambda = (youngs_modulus * nu) / ((1.0 + nu) * (1.0 - 2.0 * nu));
 
         Self {
             nodes: Vec::new(),
             elements: Vec::new(),
             youngs_modulus,
-            poissons_ratio,
+            poissons_ratio: nu,
             lambda,
             mu,
             damping: 0.99,
@@ -136,7 +142,20 @@ impl SoftBodyMesh {
         idx
     }
 
+    /// Adds a tetrahedral element referencing four existing node indices.
+    ///
+    /// Sınır-dışı indeks (henüz eklenmemiş bir düğüm) verilirse panik etmek yerine
+    /// işlem sessizce atlanır (eleman eklenmez) ve uyarı loglanır; imza değişmez.
+    /// Result döndüren doğrulayan varyant BREAKING olduğundan Tur 3b'ye bırakıldı.
     pub fn add_element(&mut self, i0: u32, i1: u32, i2: u32, i3: u32) {
+        let n = self.nodes.len() as u32;
+        if i0 >= n || i1 >= n || i2 >= n || i3 >= n {
+            tracing::warn!(
+                "add_element: sınır-dışı düğüm indeksi ({i0},{i1},{i2},{i3}) / düğüm sayısı {n}; eleman atlanıyor"
+            );
+            return;
+        }
+
         let p0 = self.nodes[i0 as usize].position;
         let p1 = self.nodes[i1 as usize].position;
         let p2 = self.nodes[i2 as usize].position;

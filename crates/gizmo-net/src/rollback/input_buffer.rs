@@ -39,6 +39,11 @@ pub struct InputBuffer {
 impl InputBuffer {
     /// Creates a ring buffer holding up to `capacity` recent inputs for `player_id`.
     pub fn new(player_id: u32, capacity: usize) -> Self {
+        // Modulo-by-zero koruması: ring buffer indekslemesi `% self.capacity`
+        // kullandığı için capacity=0 ilk insert/get'te panik üretir. İmza
+        // değiştirmeden en az 1 kapasiteye normalize ediyoruz (RollbackSession
+        // içindeki .max(64) deseniyle tutarlı; başarı yolu etkilenmez).
+        let capacity = capacity.max(1);
         Self {
             player_id,
             buffer: vec![None; capacity],

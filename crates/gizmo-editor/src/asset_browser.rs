@@ -13,7 +13,8 @@ use std::time::Instant;
 pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
 let mut finished = false;
     if let Some(rx) = &state.assets.workspace_rx {
-        match rx.lock().unwrap().try_recv() {
+        // Poison-recovery: mutex zehirlenmişse panik yerine iç değeri kurtar.
+        match rx.lock().unwrap_or_else(|e| e.into_inner()).try_recv() {
             Ok(path) => {
                 if !path.is_empty() {
                     state.assets.root = path;

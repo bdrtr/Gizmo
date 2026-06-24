@@ -312,7 +312,7 @@ impl World {
         let entities = self
             .get_resource::<Entities>()
             .expect("Entities resource not initialized");
-        let state = entities.state.lock().expect("Entities mutex poisoned");
+        let state = entities.state.lock().unwrap_or_else(|e| e.into_inner());
         if (id as usize) < state.generations.len() && !state.free_set.contains(&id) {
             return Some(Entity::new(id, state.generations[id as usize]));
         }
@@ -528,7 +528,7 @@ impl World {
         let entities = self
             .get_resource::<Entities>()
             .expect("Entities resource not initialized");
-        let mut state = entities.state.lock().expect("Entities mutex poisoned");
+        let mut state = entities.state.lock().unwrap_or_else(|e| e.into_inner());
         state.generations.shrink_to_fit();
         state.free_ids.shrink_to_fit();
         state.free_set.shrink_to_fit();
@@ -546,7 +546,7 @@ impl World {
         let entities = self
             .get_resource::<Entities>()
             .expect("Entities resource not initialized");
-        let state = entities.state.lock().expect("Entities mutex poisoned");
+        let state = entities.state.lock().unwrap_or_else(|e| e.into_inner());
         let mut alive = Vec::new();
         for id in 0..state.next_entity_id {
             if !state.free_set.contains(&id) {
@@ -863,7 +863,7 @@ impl World {
             return None;
         }
         let entities = self.get_resource::<Entities>()?;
-        let state = entities.state.lock().unwrap();
+        let state = entities.state.lock().unwrap_or_else(|e| e.into_inner());
         if id as usize >= state.generations.len() || state.free_set.contains(&id) {
             return None;
         }
@@ -1187,7 +1187,7 @@ impl World {
         let entities = self
             .get_resource::<Entities>()
             .expect("Entities resource not initialized");
-        let state = entities.state.lock().expect("Entities mutex poisoned");
+        let state = entities.state.lock().unwrap_or_else(|e| e.into_inner());
         state
             .next_entity_id
             .saturating_sub(state.free_ids.len() as u32)
@@ -1264,7 +1264,9 @@ impl World {
             .resources
             .get(&type_id)
             .expect("resource just inserted");
-        let guard = storage.write().expect("resource write lock poisoned");
+        // Poison kurtarma: bir resource kullanıcısı panikleyip kilidi
+        // zehirlese bile motor çalışmaya devam etsin (imza değişmez).
+        let guard = storage.write().unwrap_or_else(|e| e.into_inner());
         ResourceWriteGuard {
             guard,
             _marker: PhantomData,

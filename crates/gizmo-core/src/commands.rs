@@ -44,6 +44,7 @@ pub struct Commands<'w> {
     pub entities: Res<'w, crate::entity::allocator::Entities>,
 }
 
+impl crate::system::sealed::Sealed for Commands<'static> {}
 impl SystemParam for Commands<'static> {
     type Item<'w> = Commands<'w>;
 

@@ -629,7 +629,7 @@ fn build_gltf_materials(
                 base_color[3]
             };
 
-            println!("GLTF LOAD MAT: name={:?}, alpha_mode={:?}, alpha_factor={}, base_color={:?}, double_sided={}",
+            tracing::debug!("GLTF LOAD MAT: name={:?}, alpha_mode={:?}, alpha_factor={}, base_color={:?}, double_sided={}",
                 material.name(), material.alpha_mode(), alpha, base_color, material.double_sided());
 
             mat.albedo = gizmo_math::Vec4::new(base_color[0], base_color[1], base_color[2], alpha);
