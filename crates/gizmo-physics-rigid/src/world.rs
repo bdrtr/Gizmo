@@ -363,12 +363,28 @@ impl PhysicsWorld {
         // Birikimci: render dt'yi sub-step'lere böl
         self.accumulator += frame_dt;
 
+        // PhysicsMetrics: bu frame'in aşama-zamanlamalarını sıfırla (substep'ler boyunca birikir).
+        self.metrics.broadphase_ms = 0.0;
+        self.metrics.narrowphase_ms = 0.0;
+        self.metrics.solver_ms = 0.0;
+        self.metrics.integration_ms = 0.0;
+        self.metrics.contact_count = 0;
+        self.metrics.island_count = 0;
+
         let mut steps = 0u32;
         while self.accumulator >= FIXED_DT && steps < MAX_SUBSTEPS {
             self.step_internal(FIXED_DT)?;
             self.accumulator -= FIXED_DT;
             steps += 1;
         }
+
+        // Gövde/uyku sayımları (profilleme — uyku optimizasyonunun etkisini gösterir).
+        self.metrics.body_count = self.entities.len();
+        self.metrics.sleeping_count = self
+            .rigid_bodies
+            .iter()
+            .filter(|rb| rb.is_dynamic() && rb.is_sleeping)
+            .count();
 
         // Alpha: render interpolasyonu için (0 = önceki adım, 1 = mevcut adım)
         self.render_alpha = self.accumulator / FIXED_DT;
@@ -401,22 +417,38 @@ impl PhysicsWorld {
             0.0
         };
 
+        // Aşama-başına zamanlama (PhysicsMetrics — profilleme). Instant::now() ~birkaç ns
+        // olduğundan ms-ölçekli fizik yanında ihmal edilebilir; simülasyon SONUCUNU
+        // etkilemez (determinizm pozisyon/hızdan; metrik ayrı) → hash değişmez.
+        let ms = |t: std::time::Instant| t.elapsed().as_secs_f32() * 1000.0;
+
         // 0-1. Yerçekimi, sıvı bölgeleri, hız entegrasyonu
+        let t0 = std::time::Instant::now();
         self.velocity_integration_step(dt)?;
+        self.metrics.integration_ms += ms(t0);
 
         // 1.5-1.6 Yumuşak cisim ve sıvı simülasyonu
 
         // 2. Broadphase — uzamsal hash güncelleme
+        let t1 = std::time::Instant::now();
         self.broadphase_step(dt);
+        self.metrics.broadphase_ms += ms(t1);
 
         // 3. Narrowphase — çarpışma tespiti ve olayları
+        let t2 = std::time::Instant::now();
         let manifolds = self.narrowphase_and_collision_step(dt);
+        self.metrics.narrowphase_ms += ms(t2);
+        self.metrics.contact_count += manifolds.iter().map(|m| m.contacts.len()).sum::<usize>();
 
         // 4-4.5 Kısıt çözücü (çarpışma + eklem)
+        let t3 = std::time::Instant::now();
         self.constraint_solve_step(manifolds, dt);
+        self.metrics.solver_ms += ms(t3);
 
         // 5-6. Pozisyon entegrasyonu ve uyku durumu
+        let t4 = std::time::Instant::now();
         self.position_integration_step(dt)?;
+        self.metrics.integration_ms += ms(t4);
 
         // Energy Conservation Check: Validate energy bounds (Zero-cost in release mode)
         if cfg!(debug_assertions) {
