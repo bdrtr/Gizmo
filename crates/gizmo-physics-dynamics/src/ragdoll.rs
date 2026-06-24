@@ -4,6 +4,7 @@ use gizmo_physics_rigid::joints::JointType;
 
 /// Identifies a bone within a humanoid ragdoll skeleton.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RagdollBoneType {
     Head,
     Torso,

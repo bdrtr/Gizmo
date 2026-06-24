@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 /// Errors that can occur while loading a sound into the [`AudioManager`].
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum AudioError {
     /// An I/O error occurred while reading the sound file.
     Io(std::io::Error),
@@ -46,6 +47,7 @@ impl std::error::Error for AudioError {}
 
 /// ECS component for a sound source that can be played in 2D or 3D.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct AudioSource {
     /// Name of the loaded sound to play (see [`AudioManager::load_sound`]).
     pub sound_name: String,

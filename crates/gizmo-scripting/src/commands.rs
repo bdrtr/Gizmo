@@ -7,6 +7,7 @@ use gizmo_math::{Quat, Vec3};
 use std::sync::Mutex;
 /// Lua'dan gelen tüm değişiklik istekleri
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ScriptCommand {
     // Transform
     SetPosition(u32, Vec3),

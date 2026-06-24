@@ -4,6 +4,7 @@ use gizmo_math::{Vec3, Quat};
 ///
 /// Each vector is parallel to [`Track::keyframe_timestamps`].
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum Keyframes {
     /// Position keyframes (linearly interpolated).
     Translation(Vec<Vec3>),
@@ -15,6 +16,7 @@ pub enum Keyframes {
 
 /// A single animated channel targeting one named entity.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct Track {
     /// Name of the entity this track animates (resolved at runtime).
     pub target_name: String,
@@ -25,6 +27,23 @@ pub struct Track {
 }
 
 impl Track {
+    /// Creates a new track targeting `target_name` with the given keyframe
+    /// timestamps and values.
+    ///
+    /// `keyframe_timestamps` must be sorted ascending and match the length of
+    /// the data inside `keyframes`.
+    pub fn new(
+        target_name: impl Into<String>,
+        keyframe_timestamps: Vec<f32>,
+        keyframes: Keyframes,
+    ) -> Self {
+        Self {
+            target_name: target_name.into(),
+            keyframe_timestamps,
+            keyframes,
+        }
+    }
+
     /// Returns the time of the last keyframe, or `0.0` if the track is empty.
     pub fn duration(&self) -> f32 {
         self.keyframe_timestamps.last().copied().unwrap_or(0.0)
@@ -92,6 +111,7 @@ impl Track {
 ///
 /// The variant indicates which transform channel the value belongs to.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum InterpolatedValue {
     /// The track produced no value (e.g. it had no keyframes).
     None,
@@ -105,6 +125,7 @@ pub enum InterpolatedValue {
 
 /// Represents an animation sequence: a named collection of [`Track`]s.
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct AnimationClip {
     /// Human-readable clip name.
     pub name: String,

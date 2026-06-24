@@ -72,6 +72,7 @@ impl SpatialTransform {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum JointType {
     Fixed,
     Revolute(Vec3), // Dönme ekseni (lokal)

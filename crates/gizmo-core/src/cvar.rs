@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum CVarValue {
     Int(i32),
     Float(f32),

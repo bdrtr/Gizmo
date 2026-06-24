@@ -34,6 +34,11 @@ pub fn handle_build_requests(editor_state: &mut EditorState) {
                     (Some("x86_64-pc-windows-gnu"), "demo.exe", "Windows (.exe)")
                 }
                 BuildTarget::MacOs => (Some("x86_64-apple-darwin"), "demo", "macOS"),
+                _ => (
+                    None,
+                    if cfg!(windows) { "demo.exe" } else { "demo" },
+                    "Native",
+                ),
             };
 
             log(&format!(

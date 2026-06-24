@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Tek bir objenin fiziki durumu (hızlı kopyalanabilir ve ağdan gönderilebilir)
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct EntityState {
     /// The entity this snapshot describes.
     pub entity: Entity,
@@ -19,8 +20,22 @@ pub struct EntityState {
     pub is_sleeping: bool,
 }
 
+impl Default for EntityState {
+    fn default() -> Self {
+        Self {
+            entity: Entity::INVALID,
+            position: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            linear_velocity: Vec3::ZERO,
+            angular_velocity: Vec3::ZERO,
+            is_sleeping: false,
+        }
+    }
+}
+
 /// Tüm dünyadaki fizik objelerinin anlık yedeği
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PhysicsStateSnapshot {
     /// Simulation tick this snapshot was captured at.
     pub tick: u64,

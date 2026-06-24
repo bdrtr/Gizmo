@@ -14,7 +14,8 @@ pub struct ClothNode {
 }
 
 /// A distance (stretch/bend/shear) constraint between two cloth nodes, solved with XPBD.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[non_exhaustive]
 pub struct DistanceConstraint {
     pub node_a: usize,
     pub node_b: usize,
@@ -28,6 +29,7 @@ pub struct DistanceConstraint {
 /// Built as a regular grid of [`ClothNode`]s linked by structural, bend and shear
 /// [`DistanceConstraint`]s. Step the simulation with [`Cloth::step`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Cloth {
     /// All particles of the cloth, laid out row-major (`idx = y * width + x`).
     pub nodes: Vec<ClothNode>,

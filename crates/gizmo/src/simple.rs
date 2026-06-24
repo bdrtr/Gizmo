@@ -67,6 +67,7 @@ impl Default for LightingSettings {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[derive(Default)]
+#[non_exhaustive]
 pub enum CameraState {
     Orbiting,
     Stationary,
@@ -77,6 +78,7 @@ pub enum CameraState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[derive(Default)]
+#[non_exhaustive]
 pub enum EditorState {
     #[default]
     PlayMode,

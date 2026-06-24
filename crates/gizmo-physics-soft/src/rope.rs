@@ -12,6 +12,7 @@ pub struct RopeNode {
 
 /// A rope or chain simulated using Position Based Dynamics (PBD).
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Rope {
     pub nodes: Vec<RopeNode>,
     pub link_length: f32,

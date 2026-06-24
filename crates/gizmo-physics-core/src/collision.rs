@@ -51,6 +51,7 @@ pub struct ContactPoint {
 /// This gives a good approximation of the convex hull of the contact patch
 /// without an expensive full hull computation.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ContactManifold {
     pub entity_a: Entity,
     pub entity_b: Entity,

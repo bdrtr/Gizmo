@@ -4,6 +4,7 @@ use super::snapshot::PhysicsStateSnapshot;
 
 /// Ağ üzerinden gönderilen tüm verilerin genel zarfı (Envelope).
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum NetworkPacket {
     /// Oynanış sırasında en sık yollanacak paket.
     /// Sadece oyuncunun o karedeki (tick) girişlerini içerir.

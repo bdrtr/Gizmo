@@ -8,6 +8,7 @@ use web_time::Instant;
 use std::time::Instant;
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Hash, Debug)]
+#[non_exhaustive]
 pub enum EditorTab {
     Hierarchy,
     Inspector,
@@ -22,6 +23,7 @@ pub enum EditorTab {
 
 /// Gizmo aracı modu
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum GizmoMode {
     Select,
     Translate,
@@ -31,6 +33,7 @@ pub enum GizmoMode {
 
 /// Build hedef işletim sistemi
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum BuildTarget {
     /// Mevcut işletim sistemi (native)
     Native,
@@ -44,6 +47,7 @@ pub enum BuildTarget {
 
 /// Editor çalışma modu
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum EditorMode {
     /// Düzenleme modu — fizik durur, entity'ler serbestçe manipüle edilir
     Edit,
@@ -55,6 +59,7 @@ pub enum EditorMode {
 
 // --- Alt Durum Yapilari ---
 #[derive(Default, Debug)]
+#[non_exhaustive]
 pub struct CameraState {
     pub look_delta: Option<gizmo_math::Vec2>,
     pub pan_delta: Option<gizmo_math::Vec2>,
@@ -67,6 +72,7 @@ pub struct CameraState {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct BuildState {
     pub request: bool,
     pub target: BuildTarget,
@@ -89,6 +95,7 @@ impl Default for BuildState {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct AssetBrowserState {
     pub filter: String,
     pub root: String,
@@ -113,6 +120,7 @@ impl Default for AssetBrowserState {
 }
 
 #[derive(Default, Debug)]
+#[non_exhaustive]
 pub struct SceneState {
     pub save_request: Option<String>,
     pub load_request: Option<String>,
@@ -125,6 +133,7 @@ pub struct SceneState {
 }
 
 #[derive(Default, Debug)]
+#[non_exhaustive]
 pub struct SelectionState {
     pub entities: std::collections::HashSet<gizmo_core::entity::Entity>,
     pub primary: Option<gizmo_core::entity::Entity>,
@@ -134,6 +143,7 @@ pub struct SelectionState {
 }
 
 #[derive(Default, Debug)]
+#[non_exhaustive]
 pub struct ScriptEditorState {
     pub open: bool,
     pub active_path: Option<String>,
@@ -143,11 +153,13 @@ pub struct ScriptEditorState {
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum ConsoleMode {
     EngineLogs,
     BuildOutput,
 }
 
+#[non_exhaustive]
 pub struct ConsoleState {
     pub mode: ConsoleMode,
     pub show_info: bool,
@@ -186,6 +198,7 @@ impl Default for ConsoleState {
 /// Editörün tüm durumunu tutan yapı
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct PostProcessSettings {
     pub bloom_intensity: f32,
     pub bloom_threshold: f32,
@@ -223,6 +236,7 @@ impl Default for PostProcessSettings {
 /// Dövüş oyunu HUD durumu — game_view.rs tarafından okunur,
 /// simulation loop tarafından yazılır.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct FightHudState {
     pub active: bool,
     pub p1_name: String,
@@ -255,6 +269,7 @@ impl Default for FightHudState {
     }
 }
 
+#[non_exhaustive]
 pub struct EditorState {
     pub post_process: PostProcessSettings,
     pub open: bool,

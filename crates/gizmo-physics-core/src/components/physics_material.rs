@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub enum CombineMode {
     Average, // (a + b) / 2
     Min,     // a.min(b)
@@ -40,6 +41,10 @@ fn resolve_combine_mode(m1: CombineMode, m2: CombineMode) -> CombineMode {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+// NOT `#[non_exhaustive]`: this is a plain value type that users routinely build
+// with `PhysicsMaterial { static_friction: 0.9, ..Default::default() }` to author
+// custom materials (the preset consts only cover a fixed set). Keeping it
+// exhaustive preserves that ergonomic struct-literal API.
 pub struct PhysicsMaterial {
     pub static_friction: f32,
     pub dynamic_friction: f32,

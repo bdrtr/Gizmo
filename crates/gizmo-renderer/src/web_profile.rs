@@ -16,6 +16,7 @@
 /// ```
 /// Post-processing kalite seviyesi
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PostProcessLevel {
     /// Sadece tone mapping, gamma correction
     Minimal,
@@ -29,6 +30,7 @@ pub enum PostProcessLevel {
 
 /// Shadow kalite seviyesi
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ShadowQuality {
     /// Gölge yok
     Off,
@@ -42,6 +44,7 @@ pub enum ShadowQuality {
 
 /// WASM ortamında GPU kaynak konfigürasyonu
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct WebProfile {
     /// Profil adı (log ve debug için)
     pub name: &'static str,

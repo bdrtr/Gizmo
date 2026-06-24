@@ -2,6 +2,7 @@ use gizmo_math::Vec3;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub enum ExplosionFalloff {
     None, // Sabit kuvvet
     #[default]

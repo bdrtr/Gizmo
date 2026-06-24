@@ -1,6 +1,7 @@
 use gizmo_math::Vec3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum NavAgentState {
     Idle,
     Moving,

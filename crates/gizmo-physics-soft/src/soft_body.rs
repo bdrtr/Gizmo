@@ -47,6 +47,7 @@ impl Tetrahedron {
 /// The main CPU-side structure for an FEM-based Soft Body.
 /// It contains the geometry and material properties needed to upload to the GPU.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct SoftBodyMesh {
     pub nodes: Vec<SoftBodyNode>,
     pub elements: Vec<Tetrahedron>,

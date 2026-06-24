@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ResourceFetchError {
     NotFound(TypeId),
     BorrowConflict(TypeId),

@@ -22,6 +22,7 @@ impl gizmo_core::component::Component for Animated {
 /// (caching the result in [`Self::target_entities`]), and writes the sampled
 /// transform values to those entities.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct AnimationPlayer {
     /// The clip currently being played, if any.
     pub clip: Option<Arc<AnimationClip>>,

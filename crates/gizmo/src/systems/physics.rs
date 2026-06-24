@@ -68,10 +68,7 @@ pub fn physics_debug_system(world: &crate::core::World) {
                             scale: trans.scale,
                             ..*trans
                         };
-                        let temp_col = gizmo_physics_core::Collider {
-                            shape: *sub_shape.clone(),
-                            ..Default::default()
-                        };
+                        let temp_col = gizmo_physics_core::Collider::from_shape(*sub_shape.clone());
                         draw_collider(&sub_trans, &temp_col, color, gizmos);
                     }
                 }

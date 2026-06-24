@@ -67,7 +67,8 @@ impl Script {
 }
 
 /// Lua'ya geçirilecek entity verisi (geriye dönük uyumluluk için)
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct ScriptContext {
     pub entity_id: u32,
     pub dt: f32,
@@ -508,16 +509,17 @@ ScriptCommand::ClearAiTarget(id) => {
                 ScriptCommand::SetFighterMove { id, name, startup, active, recovery, damage } => {
                     let fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
                     if let Some(mut fighter) = fighters.get_mut(id) {
-                        fighter.active_move = Some(gizmo_physics_core::components::fighter::CombatMove {
-                            name,
-                            frame_data: gizmo_physics_core::components::fighter::FrameData {
-                                startup,
-                                active,
-                                recovery,
-                                damage,
-                                ..Default::default()
-                            }
-                        });
+                        let mut frame_data =
+                            gizmo_physics_core::components::fighter::FrameData::default();
+                        frame_data.startup = startup;
+                        frame_data.active = active;
+                        frame_data.recovery = recovery;
+                        frame_data.damage = damage;
+                        let mut combat_move =
+                            gizmo_physics_core::components::fighter::CombatMove::default();
+                        combat_move.name = name;
+                        combat_move.frame_data = frame_data;
+                        fighter.active_move = Some(combat_move);
                         fighter.current_move_frame = 0;
                     }
                 }

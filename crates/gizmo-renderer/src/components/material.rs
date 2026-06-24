@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
 pub enum MaterialType {
     Pbr,
     Unlit,

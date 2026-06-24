@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use gizmo_core::input::FighterInputBuffer;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FrameData {
     pub startup: u32,
     pub active: u32,
@@ -25,12 +26,14 @@ impl Default for FrameData {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub struct CombatMove {
     pub name: String,
     pub frame_data: FrameData,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FighterController {
     pub player_id: u8,
     pub health: f32,

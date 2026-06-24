@@ -2,6 +2,7 @@ use gizmo_core::entity::Entity;
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum GizmoError {
     CollisionOverflow { count: usize, limit: usize },
     NaNVelocity(Entity),
