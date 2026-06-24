@@ -1,4 +1,5 @@
 use super::decode_obj_vertices_for_async;
+use super::error::AssetError;
 use crate::animation::{AnimationClip, Keyframe, SkeletonHierarchy, SkeletonJoint, Track};
 use crate::components::{Material, Mesh};
 use crate::renderer::Vertex;
@@ -113,7 +114,7 @@ impl super::AssetManager {
         texture_bind_group_layout: &wgpu::BindGroupLayout,
         default_tbind: Arc<wgpu::BindGroup>,
         path_or_uuid: &str,
-    ) -> Result<GltfSceneAsset, String> {
+    ) -> Result<GltfSceneAsset, AssetError> {
         let file_path = self.resolve_path_from_meta_source(path_or_uuid)?;
         let cache_key = self
             .get_uuid(&file_path)
@@ -122,13 +123,15 @@ impl super::AssetManager {
 
         let import_result = if let Some(data) = self.embedded_assets.get(&file_path) {
             gltf::import_slice(data.as_ref())
-                .map_err(|e| format!("Embedded glTF read failed ({file_path}): {e}"))
         } else {
             gltf::import(&file_path)
-                .map_err(|e| format!("glTF file load failed ({file_path}): {e}"))
         };
 
-        let (document, buffers, images) = import_result?;
+        let (document, buffers, images) =
+            import_result.map_err(|source| AssetError::GltfImport {
+                path: std::path::PathBuf::from(&file_path),
+                source,
+            })?;
         self.load_gltf_from_import(
             device,
             queue,
@@ -156,7 +159,7 @@ impl super::AssetManager {
         document: gltf::Document,
         buffers: Vec<gltf::buffer::Data>,
         images: Vec<gltf::image::Data>,
-    ) -> Result<GltfSceneAsset, String> {
+    ) -> Result<GltfSceneAsset, AssetError> {
         // ── 1. Textures ───────────────────────────────────────────────────
         let gltf_textures =
             self.upload_gltf_textures(device, queue, texture_bind_group_layout, file_path, &images);

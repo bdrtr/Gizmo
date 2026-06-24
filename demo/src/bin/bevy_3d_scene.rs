@@ -26,5 +26,6 @@ fn main() {
             // Camera (kamera)
             scene.spawn_camera(state, Vec3::new(-2.5, 4.5, 9.0), Vec3::ZERO);
         })
-        .run();
+        .run()
+        .expect("uygulama çalıştırılamadı");
 }

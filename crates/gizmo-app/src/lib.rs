@@ -29,6 +29,68 @@ pub mod plugin;
 
 pub use plugin::Plugin;
 
+/// Errors that can occur while building and running an [`App`].
+///
+/// This is the concrete error surface for the application entry points
+/// (`App::run` and friends). It is marked `#[non_exhaustive]` so new failure
+/// modes can be added without breaking downstream `match` arms.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum AppError {
+    /// No setup hook was assigned before [`App::run`] was called.
+    ///
+    /// Call `set_setup` (or configure a runner) before running the app.
+    MissingSetup,
+    /// The windowing event loop could not be created.
+    #[cfg(feature = "window")]
+    EventLoopCreation(winit::error::EventLoopError),
+    /// The application window could not be created.
+    #[cfg(feature = "window")]
+    WindowCreation(winit::error::OsError),
+    /// A resource that was expected to be present in the world was missing.
+    ///
+    /// Carries the (type) name of the missing resource. This generally
+    /// indicates an internal invariant violation rather than user error.
+    MissingResource(&'static str),
+    /// The event loop returned an error while running.
+    #[cfg(feature = "window")]
+    EventLoop(winit::error::EventLoopError),
+}
+
+impl std::fmt::Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AppError::MissingSetup => write!(
+                f,
+                "setup hook was not assigned; call set_setup() before run()"
+            ),
+            #[cfg(feature = "window")]
+            AppError::EventLoopCreation(_) => write!(f, "failed to create the event loop"),
+            #[cfg(feature = "window")]
+            AppError::WindowCreation(_) => write!(f, "failed to create the application window"),
+            AppError::MissingResource(name) => {
+                write!(f, "required resource `{}` was missing from the world", name)
+            }
+            #[cfg(feature = "window")]
+            AppError::EventLoop(_) => write!(f, "the event loop returned an error"),
+        }
+    }
+}
+
+impl std::error::Error for AppError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            #[cfg(feature = "window")]
+            AppError::EventLoopCreation(e) => Some(e),
+            #[cfg(feature = "window")]
+            AppError::WindowCreation(e) => Some(e),
+            #[cfg(feature = "window")]
+            AppError::EventLoop(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(feature = "window")]
 pub mod windowed;
 #[cfg(feature = "window")]

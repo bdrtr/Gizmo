@@ -115,7 +115,11 @@ impl PhysicsWorld {
             )
             .inspect_err(|e| {
                 tracing::error!("Velocity integration failed: {e:?}");
-                self.trigger_snapshot("Velocity Integration Error (NaN/Overflow)");
+                if let Err(snap_err) =
+                    self.trigger_snapshot("Velocity Integration Error (NaN/Overflow)")
+                {
+                    tracing::error!("Failed to write physics snapshot: {snap_err}");
+                }
             })
     }
 
@@ -822,7 +826,11 @@ impl PhysicsWorld {
             )
             .inspect_err(|e| {
                 tracing::error!("Position integration failed: {e:?}");
-                self.trigger_snapshot("Position Integration Error (NaN/Overflow)");
+                if let Err(snap_err) =
+                    self.trigger_snapshot("Position Integration Error (NaN/Overflow)")
+                {
+                    tracing::error!("Failed to write physics snapshot: {snap_err}");
+                }
             })
     }
 }

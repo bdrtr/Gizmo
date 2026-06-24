@@ -74,7 +74,7 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
 
         // Eğer ses henüz çalmıyorsa ve otomatik başlatılacaksa
         if source._internal_sink_id.is_none() && source.is_3d {
-            let sink_id = if source.loop_sound {
+            let sink_result = if source.loop_sound {
                 audio.play_3d_looped(
                     &source.sound_name,
                     [t.position.x, t.position.y, t.position.z],
@@ -88,6 +88,13 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
                     left_ear_arr,
                     right_ear_arr,
                 )
+            };
+            let sink_id = match sink_result {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    tracing::warn!("3D ses çalınamadı '{}': {}", source.sound_name, e);
+                    None
+                }
             };
             source._internal_sink_id = sink_id;
             if let Some(mut s) = sources.get_mut(id) {

@@ -52,5 +52,5 @@ fn main() {
         render::render_studio(world, state, encoder, view, renderer, light_time);
     });
 
-    app.run();
+    app.run().expect("uygulama çalıştırılamadı");
 }

@@ -11,10 +11,13 @@
 //!
 //! It is used by the editor, Lua scripting, and the runtime.
 
+pub mod error;
 pub mod registry;
 pub mod scene;
 pub mod snapshot;
 
+/// Re-export of [`error::SceneError`].
+pub use error::SceneError;
 /// Re-export of [`registry::SceneRegistry`].
 pub use registry::SceneRegistry;
 pub use scene::{EntityData, MaterialData, SceneData};

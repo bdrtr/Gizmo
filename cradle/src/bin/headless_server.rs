@@ -69,5 +69,6 @@ fn main() {
     App::new("Gizmo Dedicated Server", 0, 0)
         .add_plugin(PhysicsPlugin::default()) // Fizik Plugin'ini ekledik
         .add_plugin(HeadlessServerPlugin)
-        .run();
+        .run()
+        .expect("uygulama çalıştırılamadı");
 }

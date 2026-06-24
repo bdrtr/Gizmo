@@ -284,7 +284,7 @@ fn main() {
                 });
         });
 
-    app.run();
+    app.run().expect("uygulama çalıştırılamadı");
 }
 
 // =================== SYSTEMS ===================

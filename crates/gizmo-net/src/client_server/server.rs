@@ -1,7 +1,7 @@
+use super::error::NetError;
 use super::protocol::{connection_config, PROTOCOL_ID};
 use renet::RenetServer;
 use renet_netcode::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
-use std::error::Error;
 use std::net::UdpSocket;
 use std::time::{Duration, SystemTime};
 
@@ -18,7 +18,7 @@ impl NetworkServer {
     ///
     /// Adres ayrıştırma, soket bağlama veya transport kurulumu başarısız olursa
     /// (örn. port kullanımda) panik yerine hata döndürür.
-    pub fn new(public_addr: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
+    pub fn new(public_addr: &str) -> Result<Self, NetError> {
         let server = RenetServer::new(connection_config());
 
         let public_addr: std::net::SocketAddr = public_addr.parse()?;
@@ -33,7 +33,8 @@ impl NetworkServer {
             authentication: ServerAuthentication::Unsecure,
         };
 
-        let transport = NetcodeServerTransport::new(server_config, socket)?;
+        let transport = NetcodeServerTransport::new(server_config, socket)
+            .map_err(|e| NetError::Transport(Box::new(e)))?;
 
         Ok(Self { server, transport })
     }

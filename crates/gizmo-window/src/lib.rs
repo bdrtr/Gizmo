@@ -8,10 +8,56 @@
 //! see the `gizmo-app` crate instead.
 
 use winit::{
+    error::{EventLoopError, OsError},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::{Window, WindowBuilder},
 };
+
+/// Errors that can occur while creating or running an [`AppWindow`].
+///
+/// This enum wraps the underlying [`winit`] failures so callers can react
+/// to windowing problems (e.g. a missing display in a headless/CI
+/// environment) instead of panicking. The original error is preserved and
+/// available through [`std::error::Error::source`].
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum WindowError {
+    /// The platform failed to create the OS window.
+    Os(OsError),
+    /// The event loop could not be created or failed while running.
+    EventLoop(EventLoopError),
+}
+
+impl std::fmt::Display for WindowError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WindowError::Os(_) => write!(f, "failed to create the OS window"),
+            WindowError::EventLoop(_) => write!(f, "failed to create or run the event loop"),
+        }
+    }
+}
+
+impl std::error::Error for WindowError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            WindowError::Os(e) => Some(e),
+            WindowError::EventLoop(e) => Some(e),
+        }
+    }
+}
+
+impl From<OsError> for WindowError {
+    fn from(e: OsError) -> Self {
+        WindowError::Os(e)
+    }
+}
+
+impl From<EventLoopError> for WindowError {
+    fn from(e: EventLoopError) -> Self {
+        WindowError::EventLoop(e)
+    }
+}
 
 /// An owned OS window backed by [`winit`].
 ///
@@ -27,17 +73,22 @@ impl AppWindow {
     /// Creates a new window with the given title and dimensions on the
     /// provided event loop.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the underlying platform window cannot be created.
-    pub fn new(title: &str, width: u32, height: u32, event_loop: &EventLoop<()>) -> Self {
+    /// Returns [`WindowError::Os`] if the underlying platform window cannot
+    /// be created.
+    pub fn new(
+        title: &str,
+        width: u32,
+        height: u32,
+        event_loop: &EventLoop<()>,
+    ) -> Result<Self, WindowError> {
         let window = WindowBuilder::new()
             .with_title(title)
             .with_inner_size(winit::dpi::LogicalSize::new(width, height))
-            .build(event_loop)
-            .expect("HATA: Pencere oluşturulamadı!");
+            .build(event_loop)?;
 
-        Self { window }
+        Ok(Self { window })
     }
 
     /// Returns a reference to the underlying [`winit::window::Window`].
@@ -52,12 +103,14 @@ impl AppWindow {
 /// This is a convenience helper for simple demos. It blocks the calling
 /// thread for the lifetime of the window.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if the event loop or the window cannot be created.
-pub fn run_window(title: &str, width: u32, height: u32) {
-    let event_loop = EventLoop::new().expect("Event Loop başlatılamadı");
-    let _app = AppWindow::new(title, width, height, &event_loop);
+/// Returns [`WindowError::EventLoop`] if the event loop cannot be created
+/// or fails while running, and [`WindowError::Os`] if the window cannot be
+/// created.
+pub fn run_window(title: &str, width: u32, height: u32) -> Result<(), WindowError> {
+    let event_loop = EventLoop::new()?;
+    let _app = AppWindow::new(title, width, height, &event_loop)?;
 
     event_loop.set_control_flow(ControlFlow::Poll);
 
@@ -66,7 +119,7 @@ pub fn run_window(title: &str, width: u32, height: u32) {
         title, width, height
     );
 
-    let _ = event_loop.run(move |event, elwt| {
+    event_loop.run(move |event, elwt| {
         match event {
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
@@ -77,5 +130,7 @@ pub fn run_window(title: &str, width: u32, height: u32) {
             }
             _ => (),
         }
-    });
+    })?;
+
+    Ok(())
 }

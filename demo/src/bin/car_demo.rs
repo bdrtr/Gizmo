@@ -470,7 +470,8 @@ fn main() {
 
             gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
-        .run();
+        .run()
+        .expect("uygulama çalıştırılamadı");
 }
 
 fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDemoState {

@@ -72,7 +72,7 @@ fn main() {
         })
         .add_system(animate_materials.in_phase(Phase::Update));
 
-    app.run();
+    app.run().expect("uygulama çalıştırılamadı");
 }
 
 /// Dynamic HSL to RGB conversion helper.

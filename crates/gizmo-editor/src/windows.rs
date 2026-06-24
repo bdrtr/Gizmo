@@ -214,7 +214,9 @@ pub fn ui_settings_window(ui: &mut egui::Ui, state: &mut EditorState) {
             .default_open(false)
             .show(ui, |ui| {
                 if ui.button("💾 Mevcut Düzeni Kaydet").clicked() {
-                    state.save_layout();
+                    if let Err(e) = state.save_layout() {
+                        state.log_error(&format!("Layout kaydedilemedi: {}", e));
+                    }
                 }
                 if ui.button("♻ Varsayılan Düzene Dön").clicked() {
                     state.reset_layout();

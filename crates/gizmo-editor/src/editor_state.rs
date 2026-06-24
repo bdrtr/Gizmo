@@ -622,16 +622,16 @@ pub fn open_tab(&mut self, tab: EditorTab) {
         self.last_error = Some(msg.to_string());
     }
 
-    pub fn save_layout(&mut self) {
-        if let Ok(json) = serde_json::to_string(&self.dock_state) {
-            if let Err(e) = std::fs::write("editor_layout.json", json) {
-                self.log_error(&format!("Layout kaydedilemedi: {}", e));
-            } else {
-                self.log_info("Pencere düzeni başarıyla kaydedildi.");
+    pub fn save_layout(&mut self) -> Result<(), crate::error::EditorError> {
+        let json = serde_json::to_string(&self.dock_state)?;
+        std::fs::write("editor_layout.json", json).map_err(|source| {
+            crate::error::EditorError::Io {
+                context: "layout yazılamadı: editor_layout.json".to_string(),
+                source,
             }
-        } else {
-            self.log_error("Layout serialize edilemedi.");
-        }
+        })?;
+        self.log_info("Pencere düzeni başarıyla kaydedildi.");
+        Ok(())
     }
 
     pub fn load_layout() -> Option<egui_dock::DockState<EditorTab>> {

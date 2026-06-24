@@ -407,11 +407,11 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     let tire_track_bg = tire_tex.clone();
 
     let mut engine_audio_id = None;
-    let mut am = gizmo::prelude::AudioManager::new();
+    let mut am = gizmo::prelude::AudioManager::new().ok();
     if let Some(audio_manager) = &mut am {
         let _ = audio_manager.load_sound("engine", "tut/assets/audio/engine.wav");
         let _ = audio_manager.load_sound("crash", "tut/assets/audio/crash.wav");
-        engine_audio_id = audio_manager.play_looped("engine");
+        engine_audio_id = audio_manager.play_looped("engine").ok();
         if let Some(id) = engine_audio_id {
             audio_manager.set_volume(id, 0.2); // Idle volume
         }
@@ -731,7 +731,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
                     .fold(0.0_f32, f32::max);
                 if max_impulse > 1000.0 {
                     // arbitrary threshold
-                    if let Some(id) = audio_manager.play("crash") {
+                    if let Ok(id) = audio_manager.play("crash") {
                         let vol = (max_impulse / 10000.0).clamp(0.1, 1.0);
                         audio_manager.set_volume(id, vol);
                     }
@@ -1020,5 +1020,5 @@ fn main() {
         }
     }
 
-    app.run();
+    app.run().expect("uygulama çalıştırılamadı");
 }

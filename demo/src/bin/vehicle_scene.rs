@@ -390,5 +390,6 @@ fn main() {
         .set_update(update)
         .set_render(render)
         .set_ui(ui)
-        .run();
+        .run()
+        .expect("uygulama çalıştırılamadı");
 }

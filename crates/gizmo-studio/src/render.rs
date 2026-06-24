@@ -148,7 +148,7 @@ pub fn render_studio(
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             match result {
                 Ok(_) => ed.log_info(&format!("✅ Model sahneye eklendi: {}", path)),
-                Err(e) => ed.log_error(&e),
+                Err(e) => ed.log_error(&e.to_string()),
             }
         }
     }
@@ -222,14 +222,17 @@ pub fn render_studio(
     if let Some(path) = load_req {
         let protected_ids = collect_protected_ids(world, state.editor_camera);
         despawn_non_protected(world, &protected_ids);
-        gizmo::scene::SceneData::load_into(
+        let load_result = gizmo::scene::SceneData::load_into(
             &path,
             world,
             &gizmo::scene::registry::default_scene_registry(),
         );
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             ed.clear_selection();
-            ed.log_info("Sahne yüklendi.");
+            match load_result {
+                Ok(_) => ed.log_info("Sahne yüklendi."),
+                Err(e) => ed.log_error(&format!("Sahne yüklenemedi: {}", e)),
+            }
         }
     }
 
@@ -254,7 +257,8 @@ pub fn render_studio(
         );
 
         // Prefab spawn pozisyonunu (Asset browser'dan drop edilmişse) uygula
-        if let (Some(root_id), Some(pos)) = (loaded_root, target_pos) {
+        if let (Ok(Some(root_id)), Some(pos)) = (&loaded_root, target_pos) {
+            let root_id = *root_id;
             let transforms = world.borrow_mut::<gizmo::physics::components::Transform>();
             {
                 if let Some(mut t) = transforms.get_mut(root_id) {
@@ -265,7 +269,10 @@ pub fn render_studio(
         }
 
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-            ed.log_info("Prefab yüklendi.");
+            match &loaded_root {
+                Ok(_) => ed.log_info("Prefab yüklendi."),
+                Err(e) => ed.log_error(&format!("Prefab yüklenemedi: {}", e)),
+            }
         }
     }
 
@@ -296,7 +303,7 @@ pub fn render_studio(
         );
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             ed.log_info("Obje çoğaltıldı.");
-            if let Some(new_id) = root_res {
+            if let Ok(Some(new_id)) = root_res {
                 ed.clear_selection();
                 if let Some(new_ent) = world.get_entity(new_id) {
                     ed.selection.entities.insert(new_ent);

@@ -13,13 +13,18 @@ pub fn default_scene_registry() -> SceneRegistry {
     reg.register_reflect::<gizmo_physics_rigid::components::Velocity>("Velocity");
     reg.register_reflect::<gizmo_physics_rigid::components::RigidBody>("RigidBody");
     // Collider has not been migrated to Reflect yet, use legacy serializable
-    reg.register_serializable::<gizmo_physics_core::Collider>("Collider");
-    reg.register_serializable::<gizmo_physics_core::components::Hitbox>("Hitbox");
-    reg.register_serializable::<gizmo_physics_core::components::Hurtbox>("Hurtbox");
-    reg.register_serializable::<gizmo_physics_core::components::FighterController>("FighterController");
+    reg.register_serializable::<gizmo_physics_core::Collider>("Collider")
+        .expect("built-in component 'Collider' registration must not conflict");
+    reg.register_serializable::<gizmo_physics_core::components::Hitbox>("Hitbox")
+        .expect("built-in component 'Hitbox' registration must not conflict");
+    reg.register_serializable::<gizmo_physics_core::components::Hurtbox>("Hurtbox")
+        .expect("built-in component 'Hurtbox' registration must not conflict");
+    reg.register_serializable::<gizmo_physics_core::components::FighterController>("FighterController")
+        .expect("built-in component 'FighterController' registration must not conflict");
 
     #[cfg(not(target_arch = "wasm32"))]
-    reg.register_serializable::<gizmo_scripting::Script>("Script");
+    reg.register_serializable::<gizmo_scripting::Script>("Script")
+        .expect("built-in component 'Script' registration must not conflict");
 
     reg
 }

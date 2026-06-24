@@ -69,7 +69,7 @@ proptest! {
     /// NaN/Inf üretmez ve sonsuza ışınlanmaz.
     #[test]
     fn softbody_tet_finite_under_gravity(g in arb_gravity()) {
-        let mut sb = SoftBodyMesh::new(1.0e5, 0.3);
+        let mut sb = SoftBodyMesh::new(1.0e5, 0.3).expect("valid material params");
         let rest = [
             Vec3::new(0.0, 0.0, 0.0),
             Vec3::new(1.0, 0.0, 0.0),
@@ -79,7 +79,7 @@ proptest! {
         for p in rest {
             sb.add_node(p, 1.0);
         }
-        sb.add_element(0, 1, 2, 3);
+        sb.add_element(0, 1, 2, 3).expect("valid node indices");
 
         for _ in 0..120 {
             sb.step(1.0 / 60.0, g, &[]);
@@ -110,7 +110,7 @@ proptest! {
         let compressed: [Vec3; 4] =
             std::array::from_fn(|i| centroid + (rest[i] - centroid) * scale);
 
-        let mut sb = SoftBodyMesh::new(1.0e5, 0.3);
+        let mut sb = SoftBodyMesh::new(1.0e5, 0.3).expect("valid material params");
         for p in compressed {
             sb.add_node(p, 1.0);
         }
@@ -122,7 +122,7 @@ proptest! {
         sb.nodes[1].position = rest[1];
         sb.nodes[2].position = rest[2];
         sb.nodes[3].position = rest[3];
-        sb.add_element(0, 1, 2, 3);
+        sb.add_element(0, 1, 2, 3).expect("valid node indices");
         // Şimdi sıkıştır.
         for i in 0..4 {
             sb.nodes[i].position = compressed[i];
