@@ -146,7 +146,45 @@ impl Default for PhysicsWorld {
     }
 }
 
+/// Rollback/replay için TAM simülasyon durumu anlık görüntüsü (Faz 3 netcode).
+///
+/// `PhysicsStateSnapshot`'tan (yalnız transform+velocity, 1-kare rewind için) FARKLI:
+/// deterministik RE-SİMÜLASYON için gereken İÇ DURUMU da taşır — `rigid_bodies` (uyku
+/// durumu + sayaçlar), **`contact_cache` (warm-start impuls'ları)** ve substep
+/// `accumulator`. Bunlar olmadan restore sonrası çözücü farklı warm-start'la yakınsar →
+/// rollback re-simülasyonu kesintisiz simülasyondan SAPAR. (entities/colliders/
+/// entity_index_map rollback penceresinde DEĞİŞMEZ varsayılır — ekleme/silme yok.)
+#[derive(Clone)]
+pub struct WorldSnapshot {
+    transforms: Vec<Transform>,
+    velocities: Vec<crate::components::Velocity>,
+    rigid_bodies: Vec<crate::components::RigidBody>,
+    contact_cache: HashMap<(gizmo_core::entity::Entity, gizmo_core::entity::Entity), (bool, Option<ContactManifold>)>,
+    accumulator: f32,
+}
+
 impl PhysicsWorld {
+    /// Deterministik rollback/replay için TAM durum anlık görüntüsü al (bkz [`WorldSnapshot`]).
+    pub fn snapshot(&self) -> WorldSnapshot {
+        WorldSnapshot {
+            transforms: self.transforms.clone(),
+            velocities: self.velocities.clone(),
+            rigid_bodies: self.rigid_bodies.clone(),
+            contact_cache: self.contact_cache.clone(),
+            accumulator: self.accumulator,
+        }
+    }
+
+    /// Anlık görüntüyü geri yükle (rollback). entities/colliders aynı kalmalı (aksi halde
+    /// indeks hizası bozulur). Sonraki `step` çağrıları bu durumdan deterministik ilerler.
+    pub fn restore_snapshot(&mut self, snap: &WorldSnapshot) {
+        self.transforms.clone_from(&snap.transforms);
+        self.velocities.clone_from(&snap.velocities);
+        self.rigid_bodies.clone_from(&snap.rigid_bodies);
+        self.contact_cache.clone_from(&snap.contact_cache);
+        self.accumulator = snap.accumulator;
+    }
+
     pub fn new() -> Self {
         Self {
             weather: Weather::Sunny,

@@ -23,4 +23,4 @@ pub use joints::{
 pub use solver::ConstraintSolver;
 pub use system::{physics_explosion_system, physics_fracture_system, physics_step_system};
 pub use vehicle::physics_vehicle_system;
-pub use world::PhysicsWorld;
+pub use world::{PhysicsWorld, WorldSnapshot};
