@@ -183,6 +183,37 @@ impl PhysicsWorld {
 
         let potential_pairs = self.spatial_hash.query_pairs();
 
+        // ── Dormant-çift atlama (geniş-sahne perf) ────────────────────────
+        // Profil: narrowphase (GJK/SAT) geniş sahnede zamanın ~%82'si. İki cisim de
+        // DORMANT ise (statik VEYA uyuyan dinamik VEYA hareketsiz kinematik) yeni temas
+        // ÜRETEMEZ → pahalı narrowphase ATLANIR. Cache aşağıda KORUNUR (yoksa ended-
+        // collision wake sahte tetiklenir). En az biri aktifse normal narrowphase çalışır
+        // (temas + wake yakalanır), böylece düşen/itilen cisim uyuyan komşuyu uyandırır.
+        let is_active_body = |e: Entity| -> bool {
+            match entity_map.get(&e.id()) {
+                Some(&i) => {
+                    let rb = &self.rigid_bodies[i];
+                    (rb.is_dynamic() && !rb.is_sleeping)
+                        || (rb.is_kinematic()
+                            && (self.velocities[i].linear.length_squared() > 1e-8
+                                || self.velocities[i].angular.length_squared() > 1e-8))
+                }
+                None => true, // rigid değil (soft cisim) → aktif say (ayrı yol işler)
+            }
+        };
+        let mut dormant_pairs: Vec<(Entity, Entity)> = Vec::new();
+        let active_pairs: Vec<(Entity, Entity)> = potential_pairs
+            .into_iter()
+            .filter(|&(a, b)| {
+                if !is_active_body(a) && !is_active_body(b) {
+                    dormant_pairs.push((a, b));
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect();
+
         // ── Parallel narrowphase ──────────────────────────────────────────
         // Each entry: (entity_a, entity_b, contacts, is_trigger_a, is_trigger_b,
         //              mat_a, mat_b, is_soft_pair)
@@ -199,7 +230,7 @@ impl PhysicsWorld {
 
         let default_material = gizmo_physics_core::PhysicsMaterial::default();
 
-        let narrowphase_results: Vec<NpResult> = potential_pairs
+        let narrowphase_results: Vec<NpResult> = active_pairs
             .par_iter()
             .filter_map(|&(entity_a, entity_b)| {
                 let is_a_rigid = entity_map.contains_key(&entity_a.id());
@@ -406,6 +437,22 @@ impl PhysicsWorld {
                 });
 
                 manifolds.push(manifold);
+            }
+        }
+
+        // ── Dormant çiftlerin cache'ini KORU ──────────────────────────────
+        // Narrowphase atlandı (her iki cisim dormant). Önceki cache girdisini current_cache'e
+        // taşı ki aşağıdaki ended-collision döngüsü bunları "bitti" sanıp UYANDIRMASIN.
+        // Manifold solver'a EKLENMEZ (iki cisim de dormant → island zaten çözülmez); bu yalnız
+        // temas-cache sürekliliği. Bir cisim uyanınca çift "aktif" olur → narrowphase döner.
+        for &pair in &dormant_pairs {
+            if current_cache.contains_key(&pair) {
+                continue;
+            }
+            if let Some(entry) = self.contact_cache.get(&pair) {
+                current_cache.insert(pair, entry.clone());
+            } else if let Some(entry) = self.contact_cache.get(&(pair.1, pair.0)) {
+                current_cache.insert((pair.1, pair.0), entry.clone());
             }
         }
 

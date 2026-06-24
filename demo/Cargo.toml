@@ -7,6 +7,7 @@ default-run = "bevy_3d_scene"
 
 [dependencies]
 gizmo = { package = "gizmo-engine", path = "../crates/gizmo", features = ["audio", "scripting", "scene", "editor", "render", "window", "ui"] }
+mimalloc = { workspace = true }
 pollster = "0.3"
 rand = "0.8"
 winit = { workspace = true }
@@ -27,6 +28,10 @@ path = "src/bin/advanced_physics.rs"
 [[bin]]
 name = "headless_stress_test"
 path = "src/bin/headless_stress_test.rs"
+
+[[bin]]
+name = "wide_scene_profile"
+path = "src/bin/wide_scene_profile.rs"
 
 [[bin]]
 name = "car_demo"

@@ -4,7 +4,7 @@
 > Bu belge canlıdır — madde tamamlandıkça `[x]` işaretle, **Durum** bölümünü güncelle.
 
 ## Durum
-- **Şu anki aşama:** Faz 0–1 TAMAMLANDI; Faz 4 (fizik derinliği/kalite) ilerliyor — solver kalite turu, CCD, joint kütüphanesi, materyal combine ve **TGS Soft çözücü** kapandı.
+- **Şu anki aşama:** Faz 0–1 ve **Faz 4 TAMAMLANDI** — solver kalite turu, CCD, joint kütüphanesi, materyal combine, **TGS Soft çözücü**, **islands & sleeping hardening** ve **geniş-sahne perf profili** kapandı. Sıradaki: Faz 2 (determinizm kararı) / Faz 3 (netcode client) / Faz 5 (renderer-WASM/editor).
 - **İlerleme:** ECS+çekirdek fizik (9 bug), vehicle, soft-body, fracture, multibody/ABA, EPA, CCD, joints — denetlendi+düzeltildi. **TGS Soft (Box2D v3 Soft Step) uygulandı → n≥16 yüksek-enerji yığın çökmesi (SI'nin temel sınırı) çözüldü.** **538 test yeşil**, CI clippy temiz, determinizm 3/3 hash eşleşiyor (AAC365945335779E).
 - **Faz 1 yeni kapsam (2026-06-15):** broad-phase DIFFERENTIAL test (BVH pairs = brute-force, margin=0 birebir + şişman-margin soundness), joint property (ball-socket yakınsama + zincir kararlılığı), gearbox index-güvenliği property (Faz 0 panik regresyonu), soft-body property (cloth/rope pinned + FEM sıkışma-geri-kazanımı/J-cutoff regresyonu), fracture property (voronoi determinizm + chunk geçerliliği), N-kutu SOAK (10sn kararlılık) + GOLDEN (zeminde dengelenen kutu) regresyon.
 - **Sıradaki:** Faz 1 kalanı (benchmark regresyon takibi) VEYA Faz 2 (determinizm kararı) / Faz 3 (netcode client).
@@ -236,7 +236,22 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
       workspace **543 test yeşil**, CI clippy exit 0, determinizm 3/3 (yeni hash 9ED99A65E026DD68 —
       cisimler artık uyuduğundan). NOT: `should_sleep`/`Island.sleeping` hâlâ ölü kod (zararsız,
       ileride island-seviye uyku için bırakıldı).
-- [ ] Geniş sahne performans profili (mimalloc/archetype cache locality doğrulama).
+- [x] **Geniş sahne performans profili** (mimalloc/archetype cache locality doğrulama) —
+      YAPILDI. (1) **PhysicsMetrics zamanlaması BAĞLANDI** (`world.rs step_internal`): aşama
+      başına `Instant` (broadphase/narrowphase/solver/integration ms) + body/sleeping/contact
+      sayımları artık dolduruluyor (eskiden struct vardı ama HİÇ ölçülmüyordu — ölü profilleme);
+      simülasyon sonucunu etkilemez (determinizm korunur). (2) **Profil binary'si** eklendi
+      (`demo/src/bin/wide_scene_profile.rs`, mimalloc global allocator) — geniş yerleşmiş sahne
+      (ayrık sütunlar) profili. (3) **mimalloc fizik yüküne BAĞLANDI** (eskiden yalnız
+      gizmo-studio; profil binary'si artık kullanıyor). (4) Profilin ortaya çıkardığı DARBOĞAZ:
+      narrowphase (kaotik düşen sahnede zamanın ~%82'si) → **dormant-çift narrowphase ATLAMA**
+      (`pipeline.rs`): iki cisim de dormant (statik/uyuyan/hareketsiz-kinematik) ise GJK/SAT
+      atlanır, contact-cache KORUNUR (ended-collision sahte wake yok); en az biri aktifse normal
+      narrowphase → düşen/itilen cisim uyuyan komşuyu uyandırır. **Sonuç (1281 cisim, 400 frame):**
+      uyku %0→%50-66 monoton artar, erken→geç frame **1.7× hızlanma**, ~13.6 ms/frame (73 FPS),
+      yerleşmiş sahnede aşama dağılımı solver %41 / narrowphase %30 / broadphase %24. Archetype
+      bitişik-kolon ECS + mimalloc ile geniş sahne ms-ölçekli. Doğrulama: workspace 543 test
+      yeşil, CI clippy exit 0, determinizm 3/3 (yeni hash 598E315D0E7499FF). **Faz 4 TAMAM.**
 
 ---
 
