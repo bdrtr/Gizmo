@@ -3,6 +3,8 @@ use gizmo_core::system::Res;
 use gizmo_core::input::Input;
 use crate::components::{Interaction, Node};
 
+/// System that updates each element's [`Interaction`] state from the current
+/// mouse position and button state.
 pub fn ui_interaction_system(
     input: Res<Input>,
     mut interactions: Query<(&Node, Mut<Interaction>)>,

@@ -11,7 +11,9 @@ use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssi
 /// Q16.16 Sabit Noktalı Sayı (32-bit)
 ///
 /// 16 bit tam sayı kısmı, 16 bit ondalık kısmı temsil eder.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub struct Fp32(pub i32);
 
 impl Fp32 {
@@ -203,7 +205,7 @@ impl DivAssign for Fp32 {
 
 // --- Vektör yapıları (Sabit noktalı 3D Fizik için) ---
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FpVec3 {
     pub x: Fp32,
     pub y: Fp32,

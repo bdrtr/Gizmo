@@ -5,6 +5,8 @@ use crate::components::{Style, Node};
 use crate::layout::UiContext;
 use taffy::{AvailableSpace, Size};
 
+/// System that syncs UI entities into the taffy tree, computes layout for each
+/// root, and writes the results back into the [`Node`] components.
 pub fn ui_layout_system(
     mut ctx: ResMut<UiContext>,
     styles: Query<&Style>,

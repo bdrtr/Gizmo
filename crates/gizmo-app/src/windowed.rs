@@ -4,7 +4,6 @@ use gizmo_core::world::World;
 use gizmo_editor::gui::EditorContext;
 use gizmo_renderer::renderer::Renderer;
 use gizmo_renderer::RenderContext;
-use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 use winit::{
     event::{Event, WindowEvent},
@@ -12,10 +11,13 @@ use winit::{
     window::WindowBuilder,
 };
 
-static WORLD_PTR: AtomicPtr<gizmo_core::world::World> = AtomicPtr::new(std::ptr::null_mut());
-
 // setup_panic_hook ve Plugin lib.rs ve plugin.rs'ye taşındı.
 
+/// Plugin that registers the default renderer asset collections
+/// (`Assets<Mesh>` and `Assets<Material>`) into the [`App`]'s world.
+///
+/// Added automatically by [`App::new`].
+#[derive(Debug, Clone, Copy, Default)]
 pub struct AssetPlugin;
 
 impl<State: 'static> super::Plugin<State> for AssetPlugin {
@@ -28,8 +30,25 @@ impl<State: 'static> super::Plugin<State> for AssetPlugin {
     }
 }
 
+/// The windowed application builder and runtime.
+///
+/// `App` owns the ECS [`World`] and [`Schedule`], collects user-provided
+/// lifecycle hooks (setup, update, render, input, UI) through its builder
+/// methods, and finally drives the main event/render loop in [`App::run`].
+///
+/// Typical usage chains the builder methods and ends with [`App::run`]:
+/// the conventional order is `new` -> `set_setup` -> `set_update` ->
+/// (`set_render` / `set_simple_render` / `set_ui`) -> `run`. The render and
+/// UI hooks are only meaningful when the corresponding `render` / `editor`
+/// features are enabled.
+///
+/// This windowed variant is exported when the `window` feature is enabled.
+/// With the feature disabled, a different, headless `App` type is exported
+/// from the `headless` module instead.
 pub struct App<State: 'static = ()> {
+    /// The ECS world holding all entities, components and resources.
     pub world: World,
+    /// The system schedule executed every (fixed) simulation step.
     pub schedule: Schedule,
     window_title: String,
     window_size: (u32, u32),
@@ -51,18 +70,47 @@ pub struct App<State: 'static = ()> {
     simple_render_fn: Option<Box<dyn for<'a> FnMut(&mut World, &State, &mut RenderContext<'a>)>>,
     input_fn: Option<Box<dyn FnMut(&mut World, &mut State, &winit::event::Event<()>) -> bool>>, // Input handler
     ui_fn: Option<Box<dyn FnMut(&mut World, &mut State, &egui::Context)>>, // Editor UI handler
+    /// Current keyboard/mouse input state, updated from window events.
     pub input: gizmo_core::input::Input,
     #[allow(clippy::type_complexity)]
     event_updaters: Vec<Box<dyn FnMut(&mut World)>>,
     initial_scene: Option<String>,
     window_icon: Option<&'static [u8]>,
+    /// When `true`, per-frame input is recorded and saved on exit.
     pub record_mode: bool,
+    /// Optional path to an input recording to replay instead of live input.
     pub playback_file: Option<String>,
     record_data: Option<gizmo_core::input::PlaybackData>,
     playback_data: Option<gizmo_core::input::PlaybackData>,
     playback_frame_index: usize,
     runner: Option<Box<dyn FnOnce(App<State>)>>,
     embedded_assets: std::collections::HashMap<String, std::borrow::Cow<'static, [u8]>>,
+}
+
+impl<State: 'static> std::fmt::Debug for App<State> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("App")
+            .field("window_title", &self.window_title)
+            .field("window_size", &self.window_size)
+            .field("setup_fn", &self.setup_fn.as_ref().map(|_| "<closure>"))
+            .field("update_fn", &self.update_fn.as_ref().map(|_| "<closure>"))
+            .field("render_fn", &self.render_fn.as_ref().map(|_| "<closure>"))
+            .field(
+                "simple_render_fn",
+                &self.simple_render_fn.as_ref().map(|_| "<closure>"),
+            )
+            .field("input_fn", &self.input_fn.as_ref().map(|_| "<closure>"))
+            .field("ui_fn", &self.ui_fn.as_ref().map(|_| "<closure>"))
+            .field("event_updaters", &self.event_updaters.len())
+            .field("initial_scene", &self.initial_scene)
+            .field("window_icon", &self.window_icon.map(|b| b.len()))
+            .field("record_mode", &self.record_mode)
+            .field("playback_file", &self.playback_file)
+            .field("playback_frame_index", &self.playback_frame_index)
+            .field("runner", &self.runner.as_ref().map(|_| "<closure>"))
+            .field("embedded_assets", &self.embedded_assets.keys())
+            .finish_non_exhaustive()
+    }
 }
 
 impl<State: 'static> App<State> {
@@ -233,7 +281,6 @@ impl<State: 'static> App<State> {
 
     fn run_default(mut self) {
         super::setup_panic_hook();
-        WORLD_PTR.store(&mut self.world as *mut _, Ordering::Release);
 
         if let Some(ref path) = self.playback_file {
             match gizmo_core::input::PlaybackData::load(path) {

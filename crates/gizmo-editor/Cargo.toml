@@ -19,7 +19,6 @@ gizmo-math = { path = "../gizmo-math" , version = "0.1.7" }
 gizmo-physics-core = { path = "../gizmo-physics-core" , version = "0.1.7" }
 gizmo-physics-rigid = { path = "../gizmo-physics-rigid" , version = "0.1.7" }
 gizmo-renderer = { path = "../gizmo-renderer" , version = "0.1.7" }
-gizmo-audio = { path = "../gizmo-audio" , version = "0.1.7" }
 gizmo-ai = { path = "../gizmo-ai" , version = "0.1.7" }
 egui_dock = { version = "0.13", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }

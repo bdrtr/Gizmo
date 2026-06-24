@@ -5,18 +5,26 @@ use serde::{Deserialize, Serialize};
 /// Tek bir objenin fiziki durumu (hızlı kopyalanabilir ve ağdan gönderilebilir)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EntityState {
+    /// The entity this snapshot describes.
     pub entity: Entity,
+    /// World-space position.
     pub position: Vec3,
+    /// World-space orientation.
     pub rotation: Quat,
+    /// Linear velocity.
     pub linear_velocity: Vec3,
+    /// Angular velocity.
     pub angular_velocity: Vec3,
+    /// Whether the rigid body was asleep (skipped by the solver) at capture time.
     pub is_sleeping: bool,
 }
 
 /// Tüm dünyadaki fizik objelerinin anlık yedeği
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct PhysicsStateSnapshot {
+    /// Simulation tick this snapshot was captured at.
     pub tick: u64,
+    /// Per-entity physics state at this tick.
     pub states: Vec<EntityState>,
     // İleride ArticulatedTree (Multibody) state'leri de eklenebilir
 }
@@ -84,12 +92,14 @@ impl PhysicsStateSnapshot {
 }
 
 /// Dairesel Tampon (Ring Buffer), geçmiş N kareyi tutar
+#[derive(Debug, Clone)]
 pub struct RollbackBuffer {
     buffer: Vec<Option<PhysicsStateSnapshot>>,
     capacity: usize,
 }
 
 impl RollbackBuffer {
+    /// Creates a ring buffer holding the last `capacity` snapshots.
     pub fn new(capacity: usize) -> Self {
         Self {
             buffer: vec![None; capacity],
@@ -97,11 +107,13 @@ impl RollbackBuffer {
         }
     }
 
+    /// Stores a snapshot in its tick slot (overwriting any older entry there).
     pub fn save(&mut self, snapshot: PhysicsStateSnapshot) {
         let index = (snapshot.tick as usize) % self.capacity;
         self.buffer[index] = Some(snapshot);
     }
 
+    /// Returns the snapshot for `tick` if it is still present (not yet overwritten).
     pub fn get(&self, tick: u64) -> Option<&PhysicsStateSnapshot> {
         let index = (tick as usize) % self.capacity;
         if let Some(snap) = &self.buffer[index] {

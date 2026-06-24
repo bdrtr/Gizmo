@@ -1,6 +1,6 @@
 use gizmo_math::Vec3;
 
-#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Camera {
     pub fov: f32,
     pub near: f32,
@@ -77,7 +77,7 @@ impl Camera {
     }
 }
 
-#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Camera2D {
     pub zoom: f32,
     pub primary: bool,

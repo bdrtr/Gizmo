@@ -3,6 +3,7 @@ use gizmo_physics_core::components::Transform;
 use crate::components::{RigidBody, Velocity};
 use gizmo_math::Vec3;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct JointSolver {
     pub iterations: usize,
     pub max_correction_speed: f32,

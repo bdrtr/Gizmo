@@ -32,6 +32,7 @@ impl Transport for super::transport::UdpTransport {
 /// Tek-iş-parçacıklı eşli bellek-içi transport (TEST). `pair(lag, drop_modulo)` iki uç döner.
 /// lag = paket teslim gecikmesi (poll sayısı); drop_modulo = her N. gönderilen paket düşer
 /// (0 = kayıp yok). Paket kaybına dayanıklılık için oturum son girdileri yeniden gönderir.
+#[derive(Debug)]
 pub struct LoopbackTransport {
     inbox: std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<(u32, NetworkPacket)>>>,
     outbox: std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<(u32, NetworkPacket)>>>,

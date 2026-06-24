@@ -9,10 +9,7 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
-rayon = "1.11.0"
-serde = { version = "1.0.228", features = ["derive"] }
 gizmo-core = { path = "../gizmo-core", version = "0.1.7" }
 gizmo-math = { path = "../gizmo-math", version = "0.1.7" }
 gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.1.7" }
 gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.1.7" }
-tracing = "0.1.44"

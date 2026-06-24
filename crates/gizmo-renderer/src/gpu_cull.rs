@@ -3,7 +3,7 @@ use wgpu::util::DeviceExt;
 use crate::pipeline::SceneState;
 
 #[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MeshBoundsRaw {
     pub world_center: [f32; 3],
     pub radius: f32,
@@ -11,7 +11,7 @@ pub struct MeshBoundsRaw {
 
 /// Matches wgpu indirect draw args layout exactly (16 bytes).
 #[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct DrawIndirectArgs {
     pub vertex_count: u32,
     pub instance_count: u32,

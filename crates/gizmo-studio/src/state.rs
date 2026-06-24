@@ -1,3 +1,5 @@
+/// Per-application runtime state for Gizmo Studio (FPS, camera entities,
+/// timers and frame statistics) carried across the engine's update loop.
 pub struct StudioState {
     pub current_fps: f32,
     pub actual_dt: f32,
@@ -16,10 +18,14 @@ pub struct StudioState {
     pub draw_call_count: u32,
 }
 
+/// GPU resources used to render editor debug gizmos (primitive meshes and a
+/// default white texture bind group).
 pub struct DebugAssets {
     pub cube: gizmo::renderer::components::Mesh,
     pub sphere: gizmo::renderer::components::Mesh,
     pub white_tex: std::sync::Arc<gizmo::wgpu::BindGroup>,
 }
 
+/// Event fired to request a runtime shader hot-reload.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ShaderReloadEvent;

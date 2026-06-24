@@ -22,6 +22,7 @@ use crate::renderer::components::{
 // ============================================================
 
 /// Yönlü ışık (güneş) için hazır bundle.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DirectionalLightBundle {
     pub rotation: Quat,
     pub color: Vec3,
@@ -61,6 +62,7 @@ impl Bundle for DirectionalLightBundle {
 // ============================================================
 
 /// Nokta ışığı için hazır bundle.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PointLightBundle {
     pub position: Vec3,
     pub color: Vec3,
@@ -97,6 +99,7 @@ impl Bundle for PointLightBundle {
 // ============================================================
 
 /// Spot ışığı için hazır bundle.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpotLightBundle {
     pub position: Vec3,
     pub rotation: Quat,
@@ -148,6 +151,7 @@ impl Bundle for SpotLightBundle {
 // ============================================================
 
 /// Kamera için hazır bundle.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CameraBundle {
     pub position: Vec3,
     pub fov: f32,
@@ -285,7 +289,7 @@ use gizmo_physics_rigid::components::{RigidBody, Velocity};
 
 /// Fizik nesnesi oluşturmak için sıfır-yük (zero-overhead) Bundle.
 /// Velocity veya Collider eklemeyi unutma hatalarını önler.
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct RigidBodyBundle {
     pub rigid_body: RigidBody,
     pub velocity: Velocity,

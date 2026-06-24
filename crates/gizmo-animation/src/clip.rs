@@ -1,25 +1,39 @@
 use gizmo_math::{Vec3, Quat};
 
+/// The keyframe data for a [`Track`], one variant per animated transform channel.
+///
+/// Each vector is parallel to [`Track::keyframe_timestamps`].
 #[derive(Clone, Debug)]
 pub enum Keyframes {
+    /// Position keyframes (linearly interpolated).
     Translation(Vec<Vec3>),
+    /// Rotation keyframes (spherically interpolated).
     Rotation(Vec<Quat>),
+    /// Scale keyframes (linearly interpolated).
     Scale(Vec<Vec3>),
 }
 
+/// A single animated channel targeting one named entity.
 #[derive(Clone, Debug)]
 pub struct Track {
-    pub target_name: String, // Which entity this track applies to (by name)
+    /// Name of the entity this track animates (resolved at runtime).
+    pub target_name: String,
+    /// Keyframe times in seconds; must be sorted ascending and match `keyframes` in length.
     pub keyframe_timestamps: Vec<f32>,
+    /// The keyframe values for this track.
     pub keyframes: Keyframes,
 }
 
 impl Track {
+    /// Returns the time of the last keyframe, or `0.0` if the track is empty.
     pub fn duration(&self) -> f32 {
         self.keyframe_timestamps.last().copied().unwrap_or(0.0)
     }
 
     /// Interpolates the track at a given time `t`.
+    ///
+    /// Times before the first or after the last keyframe are clamped to the
+    /// endpoint value. An empty track returns [`InterpolatedValue::None`].
     pub fn sample(&self, t: f32) -> InterpolatedValue {
         if self.keyframe_timestamps.is_empty() {
             return InterpolatedValue::None;
@@ -74,21 +88,32 @@ impl Track {
     }
 }
 
+/// A value sampled from a [`Track`] at a specific time.
+///
+/// The variant indicates which transform channel the value belongs to.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum InterpolatedValue {
+    /// The track produced no value (e.g. it had no keyframes).
     None,
+    /// A sampled position.
     Translation(Vec3),
+    /// A sampled rotation.
     Rotation(Quat),
+    /// A sampled scale.
     Scale(Vec3),
 }
 
-/// Repesents an animation sequence
+/// Represents an animation sequence: a named collection of [`Track`]s.
 #[derive(Clone, Debug, Default)]
 pub struct AnimationClip {
+    /// Human-readable clip name.
     pub name: String,
+    /// The tracks that make up this clip.
     pub tracks: Vec<Track>,
 }
 
 impl AnimationClip {
+    /// Returns the length of the longest track, in seconds.
     pub fn duration(&self) -> f32 {
         self.tracks
             .iter()

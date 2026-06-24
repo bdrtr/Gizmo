@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use gizmo_physics_core::components::GpuPhysicsLink;
-
 pub struct GpuCompute {
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
@@ -157,12 +155,12 @@ impl GpuCompute {
         soft_bodies: &mut [(
             gizmo_core::entity::Entity,
             crate::soft_body::SoftBodyMesh,
-            crate::components::Transform,
+            gizmo_physics_core::components::Transform,
         )],
         rigid_colliders: &[(
             gizmo_core::entity::Entity,
-            crate::components::Transform,
-            crate::components::Collider,
+            gizmo_physics_core::components::Transform,
+            gizmo_physics_core::components::Collider,
         )],
         dt: f32,
         gravity: gizmo_math::Vec3,
@@ -185,7 +183,7 @@ impl GpuCompute {
         let mut gpu_elements = Vec::new();
         let mut node_offsets = Vec::new();
 
-        let mut current_node_offset = 0;
+        let mut current_node_offset: u32 = 0;
         for (_, sb, _) in soft_bodies.iter() {
             node_offsets.push(current_node_offset);
 

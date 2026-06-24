@@ -2,12 +2,33 @@ use gizmo_core::system::Schedule;
 use gizmo_core::world::World;
 use crate::plugin::Plugin;
 
+/// The headless application builder and runtime.
+///
+/// Exported when the `window` feature is disabled. It owns the ECS
+/// [`World`] and [`Schedule`] and runs a minimal update loop without a window
+/// or GPU. Builder methods are typically chained ending with [`App::run`], in
+/// the order `new` -> `set_setup` -> `set_update` -> `run`.
+///
+/// Unlike the windowed variant, the setup/update hooks here do not receive a
+/// renderer or input handle.
 pub struct App<State: 'static = ()> {
+    /// The ECS world holding all entities, components and resources.
     pub world: World,
+    /// The system schedule executed every update step.
     pub schedule: Schedule,
     setup_fn: Option<Box<dyn FnOnce(&mut World) -> State + 'static>>,
     update_fn: Option<Box<dyn FnMut(&mut World, &mut State, f32)>>, // dt
     runner: Option<Box<dyn FnOnce(App<State>)>>,
+}
+
+impl<State: 'static> std::fmt::Debug for App<State> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("App")
+            .field("setup_fn", &self.setup_fn.as_ref().map(|_| "<closure>"))
+            .field("update_fn", &self.update_fn.as_ref().map(|_| "<closure>"))
+            .field("runner", &self.runner.as_ref().map(|_| "<closure>"))
+            .finish_non_exhaustive()
+    }
 }
 
 impl<State: 'static> App<State> {

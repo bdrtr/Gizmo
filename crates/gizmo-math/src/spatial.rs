@@ -14,11 +14,13 @@ pub struct SpatialVector {
 }
 
 impl SpatialVector {
+    /// The zero spatial vector (both angular and linear parts are zero).
     pub const ZERO: Self = Self {
         w: Vec3::ZERO,
         v: Vec3::ZERO,
     };
 
+    /// Creates a spatial vector from an angular part `w` and a linear part `v`.
     pub fn new(w: Vec3, v: Vec3) -> Self {
         Self { w, v }
     }
@@ -96,6 +98,7 @@ pub struct SpatialMatrix {
 }
 
 impl SpatialMatrix {
+    /// The zero 6x6 spatial matrix (all four 3x3 blocks are zero).
     pub const ZERO: Self = Self {
         m00: Mat3::ZERO,
         m01: Mat3::ZERO,
@@ -103,6 +106,7 @@ impl SpatialMatrix {
         m11: Mat3::ZERO,
     };
 
+    /// Multiplies this 6x6 spatial matrix by a spatial vector.
     pub fn mul_vec(self, v: SpatialVector) -> SpatialVector {
         SpatialVector {
             w: self.m00 * v.w + self.m01 * v.v,
@@ -110,6 +114,7 @@ impl SpatialMatrix {
         }
     }
 
+    /// Scales every block of the spatial matrix by `scalar`.
     pub fn mul_scalar(self, scalar: f32) -> Self {
         Self {
             m00: self.m00 * scalar,
@@ -154,6 +159,8 @@ pub struct SpatialInertia {
 }
 
 impl SpatialInertia {
+    /// Creates a spatial inertia from a mass, a rotational inertia tensor, and a
+    /// center-of-mass offset relative to the origin.
     pub fn new(mass: f32, rot_inertia: Mat3, com_offset: Vec3) -> Self {
         Self {
             rot: rot_inertia,
@@ -162,6 +169,7 @@ impl SpatialInertia {
         }
     }
 
+    /// Creates a spatial inertia with a zero center-of-mass offset.
     pub fn from_mass_inertia(mass: f32, inertia: Mat3) -> Self {
         Self {
             rot: inertia,

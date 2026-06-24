@@ -1,8 +1,11 @@
 use glam::{Quat, Vec3, Vec3A};
 
-#[derive(Debug, Clone, Copy)]
+/// A 3D ray with an origin and a normalized direction.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Ray {
+    /// World-space starting point of the ray.
     pub origin: Vec3A,
+    /// Unit-length direction the ray travels along.
     pub direction: Vec3A, // Normalize edilmiş olmalı
 }
 

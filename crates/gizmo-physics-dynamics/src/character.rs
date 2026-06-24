@@ -5,6 +5,12 @@ use gizmo_physics_core::raycast::{Ray, Raycast};
 use gizmo_core::entity::Entity;
 use gizmo_math::Vec3;
 
+/// Advances a kinematic character controller by one fixed step.
+///
+/// Resolves ground detection, gravity, slope movement, wall sliding and step
+/// climbing, mutating `transform` and `vel` in place. `colliders` must contain
+/// all scene colliders to test against; the entry whose entity equals `_entity`
+/// (the character itself) is skipped automatically.
 pub fn update_character(
     _entity: Entity,
     kcc: &mut CharacterController,

@@ -1,10 +1,11 @@
-use gizmo_core::World;
-
-pub type SerializeFn = Box<dyn Fn(&World, u32) -> Option<String> + Send + Sync>;
-pub type DeserializeFn = Box<dyn Fn(&mut World, u32, &String) + Send + Sync>;
-
+/// Type alias for the [component registry](gizmo_core::registry::ComponentRegistry)
+/// used to (de)serialize scene components.
 pub type SceneRegistry = gizmo_core::registry::ComponentRegistry;
 
+/// Builds a [`SceneRegistry`] pre-populated with the engine's built-in
+/// serializable/reflectable components (transforms, physics bodies, colliders,
+/// hitboxes, scripts, ...). This is the registry the editor and runtime use for
+/// scene save/load and snapshot capture/restore.
 pub fn default_scene_registry() -> SceneRegistry {
     let mut reg = SceneRegistry::new();
 

@@ -8,11 +8,13 @@ pub const CHUNK_LOAD_RADIUS: i32 = 2; // Oyuncunun etrafındaki 5x5'lik grid yü
 pub type ChunkCoord = (i32, i32);
 
 /// Hangi Entity'nin hangi Chunk'a ait olduğunu tutan Bileşen (Component)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ChunkEntity {
     pub coord: ChunkCoord,
 }
 
 /// Tüm harita yükleme/silme işlemlerini yöneten Sistem Kaynağı (Resource)
+#[derive(Debug, Clone)]
 pub struct ChunkManager {
     /// O an RAM'de yüklü olan Chunk'ların koordinatları
     pub active_chunks: HashSet<ChunkCoord>,

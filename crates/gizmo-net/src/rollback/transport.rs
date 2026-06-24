@@ -3,8 +3,11 @@ use std::io::ErrorKind;
 use super::packet::NetworkPacket;
 
 /// Native (Masaüstü) ortamlar için Non-Blocking UDP haberleşme katmanı.
+#[derive(Debug)]
 pub struct UdpTransport {
     socket: UdpSocket,
+    /// Address of the peer; set explicitly via [`UdpTransport::set_remote`] or learned from
+    /// the first received packet.
     pub remote_addr: Option<SocketAddr>,
 }
 

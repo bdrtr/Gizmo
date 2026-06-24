@@ -54,7 +54,7 @@ pub enum EditorMode {
 }
 
 // --- Alt Durum Yapilari ---
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct CameraState {
     pub look_delta: Option<gizmo_math::Vec2>,
     pub pan_delta: Option<gizmo_math::Vec2>,
@@ -66,6 +66,7 @@ pub struct CameraState {
     pub bookmarks: [Option<(gizmo_math::Vec3, f32, f32)>; 10],
 }
 
+#[derive(Debug)]
 pub struct BuildState {
     pub request: bool,
     pub target: BuildTarget,
@@ -87,6 +88,7 @@ impl Default for BuildState {
     }
 }
 
+#[derive(Debug)]
 pub struct AssetBrowserState {
     pub filter: String,
     pub root: String,
@@ -110,7 +112,7 @@ impl Default for AssetBrowserState {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct SceneState {
     pub save_request: Option<String>,
     pub load_request: Option<String>,
@@ -122,7 +124,7 @@ pub struct SceneState {
         std::collections::HashMap<gizmo_core::entity::Entity, gizmo_physics_core::Transform>,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct SelectionState {
     pub entities: std::collections::HashSet<gizmo_core::entity::Entity>,
     pub primary: Option<gizmo_core::entity::Entity>,
@@ -131,7 +133,7 @@ pub struct SelectionState {
     pub rubber_band_request: Option<(gizmo_math::Vec2, gizmo_math::Vec2)>,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ScriptEditorState {
     pub open: bool,
     pub active_path: Option<String>,
@@ -220,6 +222,7 @@ impl Default for PostProcessSettings {
 
 /// Dövüş oyunu HUD durumu — game_view.rs tarafından okunur,
 /// simulation loop tarafından yazılır.
+#[derive(Debug)]
 pub struct FightHudState {
     pub active: bool,
     pub p1_name: String,

@@ -130,37 +130,41 @@ PlayAnimation {
 }
 
 
-/// Thread-local komut kuyruğu (Lua callback'leri içinden erişilebilir)
+/// Thread-safe queue of pending [`ScriptCommand`]s, accessible from Lua callbacks.
+///
+/// Lua callbacks cannot mutate the `World` directly, so they push commands here;
+/// the engine later drains and applies them at a controlled point in the frame.
+#[derive(Debug, Default)]
 pub struct CommandQueue {
+    /// Pending commands, guarded by a mutex so Lua callbacks can push concurrently.
     pub commands: Mutex<Vec<ScriptCommand>>,
 }
 
 impl CommandQueue {
+    /// Creates an empty command queue.
     pub fn new() -> Self {
         Self {
             commands: Mutex::new(Vec::new()),
         }
     }
 
+    /// Appends a command to the queue.
     pub fn push(&self, cmd: ScriptCommand) {
         self.commands.lock().unwrap().push(cmd);
     }
 
+    /// Removes and returns all currently queued commands, leaving the queue empty.
     pub fn drain(&self) -> Vec<ScriptCommand> {
         self.commands.lock().unwrap().drain(..).collect()
     }
 
+    /// Returns `true` if no commands are currently queued.
     pub fn is_empty(&self) -> bool {
         self.commands.lock().unwrap().is_empty()
     }
 
+    /// Returns the number of currently queued commands.
     pub fn len(&self) -> usize {
         self.commands.lock().unwrap().len()
-    }
-}
-
-impl Default for CommandQueue {
-    fn default() -> Self {
-        Self::new()
     }
 }

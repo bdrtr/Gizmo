@@ -5,6 +5,7 @@ use glam::{Mat4, Vec3A, Vec4};
 // Intersection result
 // ---------------------------------------------------------------------------
 
+/// Result of classifying a volume against a frustum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Intersection {
     /// Completely outside the frustum — safe to cull.
@@ -21,7 +22,7 @@ pub enum Intersection {
 
 /// A normalized half-space plane: `normal · X + distance = 0`.
 /// Points where `normal · X + distance > 0` are on the "positive" side.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Plane {
     /// Unit-length outward normal.
     pub normal: Vec3A,
@@ -88,7 +89,7 @@ impl Plane {
 ///
 /// NDC convention: WGPU / Vulkan / DX12 (Z ∈ [0, 1]).
 /// For OpenGL (Z ∈ [−1, 1]) swap the near-plane extraction (see comments).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Frustum {
     /// `[left, right, bottom, top, near, far]` — all outward-facing.
     pub planes: [Plane; 6],

@@ -6,13 +6,18 @@
 
 use std::collections::VecDeque;
 
+/// A timestamped transform sample received from the server, used as an interpolation keyframe.
 #[derive(Debug, Clone)]
 pub struct TransformSnapshot {
+    /// Server timestamp (seconds) this sample is valid for.
     pub time: f64,
+    /// World-space position `[x, y, z]`.
     pub position: [f32; 3],
     pub rotation: [f32; 4], // Quaternion (x, y, z, w)
 }
 
+/// Buffers server snapshots and produces smoothed transforms by interpolating slightly in the past.
+#[derive(Debug, Clone)]
 pub struct SnapshotInterpolator {
     buffer: VecDeque<TransformSnapshot>,
     /// İstemci gösteriminde bırakılacak gecikme süresi (Saniye)
@@ -21,6 +26,7 @@ pub struct SnapshotInterpolator {
 }
 
 impl SnapshotInterpolator {
+    /// Creates an interpolator with the given render delay in milliseconds.
     pub fn new(interpolation_delay_ms: f64) -> Self {
         Self {
             buffer: VecDeque::new(),
