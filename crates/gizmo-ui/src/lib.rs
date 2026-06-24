@@ -1,3 +1,13 @@
+//! A small flexbox/grid UI layer for the Gizmo engine.
+//!
+//! `gizmo-ui` builds on [`taffy`] for layout and integrates with the Gizmo ECS.
+//! UI elements are entities carrying components such as [`Style`] (layout),
+//! [`Node`] (computed geometry), [`BackgroundColor`] and [`Interaction`].
+//! Spawn them via the [`NodeBundle`] and [`ButtonBundle`] bundles.
+//!
+//! Add [`UiPlugin`] to an `App` to register the components and run the layout
+//! and interaction systems each frame. Common types are re-exported from the
+//! [`prelude`] module.
 pub mod components;
 pub mod layout;
 pub mod system;
@@ -10,6 +20,8 @@ pub use components::*;
 pub use bundles::*;
 pub use layout::*;
 
+/// Plugin that registers the UI components and schedules the layout and
+/// interaction systems.
 pub struct UiPlugin;
 
 impl<State: 'static> Plugin<State> for UiPlugin {
@@ -36,6 +48,8 @@ impl<State: 'static> Plugin<State> for UiPlugin {
     }
 }
 
+/// Re-exports of the most commonly used UI types, including the relevant
+/// `taffy` style and geometry items.
 pub mod prelude {
     pub use crate::{
         components::{Style, Node, Interaction, BackgroundColor, UiRoot},

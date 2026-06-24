@@ -219,7 +219,7 @@ impl Default for VehicleTuning {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VehicleController {
     pub wheels: Vec<Wheel>,
     pub tuning: VehicleTuning,
@@ -314,6 +314,13 @@ impl VehicleController {
 // ARAÇ GÜNCELLEME FONKSİYONU
 // ============================================================
 
+/// Advances a vehicle by one fixed step.
+///
+/// Runs the drivetrain, aerodynamics, Ackermann steering, suspension raycasts and
+/// combined-slip tire forces, mutating the rigid body and velocity in place.
+/// `all_colliders` must contain every scene collider (static and dynamic); the
+/// entry matching `vehicle_entity` is ignored so the vehicle does not raycast
+/// against itself.
 pub fn update_vehicle(
     vehicle_entity: Entity,
     vehicle: &mut VehicleController,

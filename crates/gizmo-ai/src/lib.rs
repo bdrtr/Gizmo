@@ -1,3 +1,23 @@
+//! AI subsystems for the Gizmo game engine.
+//!
+//! This crate provides the decision-making and navigation building blocks used by
+//! ECS-driven agents:
+//!
+//! - [`behavior_tree`]: composable behavior trees (sequence, selector, inverter,
+//!   action and condition nodes) plus a system that ticks them.
+//! - [`goap`]: goal-oriented action planning (GOAP).
+//! - [`utility_ai`]: utility-based decision making with scoring curves.
+//! - [`steering`]: steering and flocking forces (seek, arrive, obstacle
+//!   avoidance, separation, cohesion, alignment) for boid-like movement.
+//! - [`pathfinding`]: A* grid pathfinding.
+//! - [`navmesh`]: navigation-mesh construction and querying.
+//! - [`components`] and [`system`]: ECS components and systems that wire
+//!   navigation into the engine's world.
+//!
+//! Most of the crate is pure Rust built on [`gizmo_math`] vectors, keeping the
+//! API lightweight. The [`prelude`] module re-exports the most commonly used
+//! items for convenient glob imports.
+
 pub mod behavior_tree;
 pub mod components;
 pub mod goap;

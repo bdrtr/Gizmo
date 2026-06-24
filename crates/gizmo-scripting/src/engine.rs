@@ -22,11 +22,32 @@ pub struct ScriptEngine {
     loaded_scripts: HashMap<String, (String, RegistryKey)>,
     command_queue: Arc<CommandQueue>,
     elapsed_time: f32,
+    /// Log messages emitted from Lua (`print`), stored as `(level, message)` pairs.
     pub log_queue: Arc<std::sync::Mutex<Vec<(String, String)>>>, // (Level, Message)
 }
 
 unsafe impl Send for ScriptEngine {}
 unsafe impl Sync for ScriptEngine {}
+
+// `Lua` does not implement `Debug`, so the engine provides a manual summary that
+// omits the VM internals while still surfacing useful state.
+impl std::fmt::Debug for ScriptEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScriptEngine")
+            .field("lua", &"<Lua VM>")
+            .field("loaded_scripts", &self.loaded_scripts.keys())
+            .field("elapsed_time", &self.elapsed_time)
+            .field(
+                "queued_commands",
+                &self.command_queue.len(),
+            )
+            .field(
+                "queued_logs",
+                &self.log_queue.lock().map(|q| q.len()).unwrap_or(0),
+            )
+            .finish()
+    }
+}
 
 /// ECS Componenti: Varlığın üzerine hangi Lua script'inin takılı olduğunu tutar
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

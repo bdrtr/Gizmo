@@ -5,8 +5,11 @@ use std::error::Error;
 use std::net::UdpSocket;
 use std::time::{Duration, SystemTime};
 
+/// A renet-based client: bundles the [`RenetClient`] with its netcode transport.
 pub struct NetworkClient {
+    /// The underlying renet client (message queues, connection state).
     pub client: RenetClient,
+    /// The netcode UDP transport driving the connection.
     pub transport: NetcodeClientTransport,
 }
 
@@ -38,6 +41,7 @@ impl NetworkClient {
         Ok(Self { client, transport })
     }
 
+    /// Advances the transport by `dt_secs`, processing incoming packets. Call once per frame.
     pub fn update(&mut self, dt_secs: f64) {
         let dt = Duration::from_secs_f64(dt_secs);
         if let Err(e) = self.transport.update(dt, &mut self.client) {
@@ -45,6 +49,7 @@ impl NetworkClient {
         }
     }
 
+    /// Flushes queued messages out over the network. Call after enqueuing this frame's messages.
     pub fn send_packets(&mut self) {
         if let Err(e) = self.transport.send_packets(&mut self.client) {
             tracing::warn!("İstemci paket gönderimi başarısız: {e}");

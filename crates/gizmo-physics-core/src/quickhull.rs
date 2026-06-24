@@ -36,6 +36,9 @@ impl HullFace {
     }
 }
 
+/// A computed 3D convex hull: a set of vertices and the triangular faces
+/// (indices into `vertices`) that bound the hull.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ConvexHull {
     pub vertices: Vec<Vec3>,
     pub faces: Vec<[u32; 3]>,

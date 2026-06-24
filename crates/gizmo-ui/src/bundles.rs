@@ -1,9 +1,13 @@
 use crate::components::{Style, Node, BackgroundColor, Interaction};
 
+/// Bundle for a plain, non-interactive UI element.
 #[derive(Default)]
 pub struct NodeBundle {
+    /// Layout style of the element.
     pub style: Style,
+    /// Computed layout geometry of the element.
     pub node: Node,
+    /// Fill color of the element.
     pub background_color: BackgroundColor,
 }
 
@@ -34,11 +38,16 @@ impl gizmo_core::component::Bundle for NodeBundle {
     }
 }
 
+/// Bundle for an interactive button UI element, adding an [`Interaction`] state.
 #[derive(Default)]
 pub struct ButtonBundle {
+    /// Layout style of the element.
     pub style: Style,
+    /// Computed layout geometry of the element.
     pub node: Node,
+    /// Fill color of the element.
     pub background_color: BackgroundColor,
+    /// Current pointer interaction state of the element.
     pub interaction: Interaction,
 }
 

@@ -11,10 +11,12 @@ pub type ContextScorer<T> = Arc<dyn Fn(&T) -> f32 + Send + Sync>;
 
 /// Eğri değerlendirme arayüzü (Normalize edilmiş 0-1 değerini, 0-1 arası fayda skoruna dönüştürür)
 pub trait UtilityCurve: Send + Sync {
+    /// Maps a normalized input `x` (0..=1) to a utility score (0..=1).
     fn evaluate(&self, x: f32) -> f32;
 }
 
 /// Basit Doğrusal Eğri (y = m*x + b)
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LinearCurve {
     pub m: f32,
     pub b: f32,
@@ -33,6 +35,7 @@ impl UtilityCurve for LinearCurve {
 }
 
 /// Lojistik (Sigmoid) Eğri — S şeklinde geçişler için (örn: can %50'nin altına inince aciliyetin hızla artması)
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LogisticCurve {
     pub k: f32, // Eğimi (dikliği) belirler
     pub c: f32, // Orta noktayı (x eksenindeki kayma) belirler

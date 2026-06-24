@@ -1,12 +1,18 @@
-//! Gizmo Editor — Egui tabanlı sahne editörü
+//! Gizmo Editor — an `egui`-based scene editor for the Gizmo engine.
 //!
-//! ## Paneller
-//! - **Toolbar** — Üst çubuk: Save/Load, Play/Pause, Gizmo modu
-//! - **Hierarchy** — Sol panel: Entity ağacı
-//! - **Inspector** — Sağ panel: Component düzenleyici
-//! - **Asset Browser** — Alt panel: Dosya gezgini
-//! - **Scene View** — Orta panel: 3 Boyutlu sahne penceresi
-//! - **Game View** — Oyunu oynarkenki pencere
+//! This crate provides the editor UI built on top of `egui`/`egui_dock`,
+//! rendered with `wgpu`. Editor-wide state lives in
+//! [`EditorState`](editor_state::EditorState) and the windowing/render
+//! integration in [`EditorContext`](gui::EditorContext). The whole UI is
+//! drawn each frame by [`draw_editor`].
+//!
+//! ## Panels
+//! - **Toolbar** — top bar: Save/Load, Play/Pause, gizmo mode
+//! - **Hierarchy** — left panel: entity tree
+//! - **Inspector** — right panel: component editor
+//! - **Asset Browser** — bottom panel: file browser
+//! - **Scene View** — center panel: 3D scene viewport
+//! - **Game View** — runtime/play viewport
 
 pub mod asset_browser;
 pub mod console;
@@ -28,8 +34,14 @@ pub use gui::EditorContext;
 use egui_dock::{DockArea, TabViewer};
 use gizmo_core::World;
 
+/// Bridges the dockable [`EditorTab`]s to their per-panel UI drawing code.
+///
+/// Implements [`egui_dock::TabViewer`] so [`egui_dock::DockArea`] can render
+/// each tab using the shared [`World`] and mutable [`EditorState`].
 pub struct EditorTabViewer<'a> {
+    /// The ECS world the panels read entity/component data from.
     pub world: &'a World,
+    /// Mutable editor-wide state shared across all panels.
     pub state: &'a mut EditorState,
 }
 
@@ -65,7 +77,10 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
     }
 }
 
-/// Tüm editör panellerini tek çağrıyla çizer
+/// Draws the whole editor (all panels and global shortcuts) for one frame.
+///
+/// Call this once per frame inside the `egui` run closure, passing the active
+/// [`egui::Context`], the ECS [`World`], and the mutable [`EditorState`].
 pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) {
     // ==== Global Klavye Kısayolları (Sadece text alanları odakta değilken) ====
     if !ctx.wants_keyboard_input() {

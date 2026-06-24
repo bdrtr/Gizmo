@@ -12,6 +12,7 @@ use std::collections::HashMap;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Tek bir fizik adası — birbirine temas eden dinamik cisimler
+#[derive(Debug, Clone, PartialEq)]
 pub struct Island {
     /// Bu island'a ait manifold indisleri (orijinal Vec'teki)
     pub manifold_indices: Vec<usize>,
@@ -23,6 +24,7 @@ pub struct Island {
 // IslandManager
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Copy, Default)]
 pub struct IslandManager;
 
 impl IslandManager {

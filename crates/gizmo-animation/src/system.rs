@@ -8,6 +8,9 @@ use gizmo_physics_core::Transform;
 use crate::player::AnimationPlayer;
 use crate::clip::InterpolatedValue;
 
+/// ECS system that advances every [`AnimationPlayer`], resolves track targets by
+/// name within each player's hierarchy, and applies sampled values to the
+/// targeted [`Transform`]s.
 pub fn animation_system(
     time: Res<Time>,
     entities: Res<Entities>,
@@ -60,7 +63,7 @@ pub fn animation_system(
                             let entity = Entity::new(current, gen);
                             player.target_entities.insert(name.0.clone(), entity);
                             
-                            // Target entity'ye Animated marker component'ini ekle!
+                            // Insert the Animated marker component onto the target entity.
                             commands.entity(entity).insert(crate::player::Animated);
                         }
                     }

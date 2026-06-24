@@ -1,14 +1,20 @@
 use gizmo_math::Vec3;
 
-#[derive(Debug, Clone)]
+/// A single particle (mass point) in the cloth simulation.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ClothNode {
+    /// Current world-space position.
     pub position: Vec3,
+    /// Position at the previous sub-step (used for implicit velocity in XPBD).
     pub prev_position: Vec3,
+    /// Mass of this node; `0.0` means the node is pinned (immovable).
     pub mass: f32,
+    /// Inverse mass (`1/mass`); `0.0` for pinned nodes.
     pub inv_mass: f32,
 }
 
-#[derive(Debug, Clone, Copy)]
+/// A distance (stretch/bend/shear) constraint between two cloth nodes, solved with XPBD.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DistanceConstraint {
     pub node_a: usize,
     pub node_b: usize,
@@ -17,15 +23,25 @@ pub struct DistanceConstraint {
     pub lambda: f32,     // Accumulated XPBD multiplier
 }
 
-#[derive(Debug, Clone)]
+/// A cloth sheet simulated with Extended Position Based Dynamics (XPBD).
+///
+/// Built as a regular grid of [`ClothNode`]s linked by structural, bend and shear
+/// [`DistanceConstraint`]s. Step the simulation with [`Cloth::step`].
+#[derive(Debug, Clone, PartialEq)]
 pub struct Cloth {
+    /// All particles of the cloth, laid out row-major (`idx = y * width + x`).
     pub nodes: Vec<ClothNode>,
+    /// Distance constraints connecting the nodes.
     pub constraints: Vec<DistanceConstraint>,
+    /// Collision thickness against the floor plane (`y = thickness`).
     pub thickness: f32,
+    /// Horizontal friction applied on floor contact, in `[0, 1]`.
     pub friction: f32,
 }
 
 impl Cloth {
+    /// Builds a `width` x `height` grid of nodes spaced `spacing` units apart in the
+    /// XY plane, each with mass `mass_per_node` (`0.0` makes a node pinned).
     pub fn new(width: usize, height: usize, spacing: f32, mass_per_node: f32) -> Self {
         let mut nodes = Vec::with_capacity(width * height);
         let mut constraints = Vec::new();
@@ -115,6 +131,7 @@ impl Cloth {
         }
     }
 
+    /// Pins the node at `idx` so it becomes immovable (no-op if out of range).
     pub fn pin_node(&mut self, idx: usize) {
         if idx < self.nodes.len() {
             self.nodes[idx].inv_mass = 0.0;
@@ -122,7 +139,8 @@ impl Cloth {
         }
     }
 
-    /// XPBD step
+    /// Advances the cloth by one XPBD timestep of length `dt` (seconds), applying
+    /// `gravity` (units/s²) and dividing the step into `sub_steps` solver iterations.
     pub fn step(&mut self, dt: f32, gravity: Vec3, sub_steps: usize) {
         let sub_dt = dt / (sub_steps as f32);
         let sub_dt2 = sub_dt * sub_dt;

@@ -15,7 +15,7 @@ struct SsaoKernel {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SsaoParams {
     pub strength: f32,
     _pad: [f32; 3],

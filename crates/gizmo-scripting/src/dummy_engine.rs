@@ -4,8 +4,10 @@ use gizmo_core::World;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+#[derive(Debug)]
 pub struct ScriptEngine {
     command_queue: Arc<CommandQueue>,
+    /// Log messages emitted from Lua, stored as `(level, message)` pairs.
     pub log_queue: Arc<Mutex<Vec<(String, String)>>>,
 }
 

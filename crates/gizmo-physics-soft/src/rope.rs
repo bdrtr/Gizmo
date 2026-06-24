@@ -1,7 +1,7 @@
 use gizmo_math::Vec3;
 
 /// Represents a single particle in the rope or chain.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RopeNode {
     pub position: Vec3,
     pub prev_position: Vec3,
@@ -11,7 +11,7 @@ pub struct RopeNode {
 }
 
 /// A rope or chain simulated using Position Based Dynamics (PBD).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Rope {
     pub nodes: Vec<RopeNode>,
     pub link_length: f32,

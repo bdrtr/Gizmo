@@ -4,13 +4,17 @@ use serde::{Deserialize, Serialize};
 /// Çoğu dövüş ve fizik oyununda 32-bit veya 64-bit bir maske (bitmask) tüm tuşlara yeter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct PlayerInput {
+    /// Simulation tick this input belongs to.
     pub tick: u64,
+    /// Bitmask of pressed buttons.
     pub buttons: u32,
     pub joystick_x: i8, // -127 to 127
+    /// Vertical analog-stick axis, range -127..=127.
     pub joystick_y: i8,
 }
 
 impl PlayerInput {
+    /// Returns a neutral (no buttons, centered stick) input for the given tick.
     pub fn empty(tick: u64) -> Self {
         Self {
             tick,
@@ -22,7 +26,9 @@ impl PlayerInput {
 }
 
 /// Her bir oyuncunun uzak ve yerel (local) girdilerini sakladığı dairesel tampon.
+#[derive(Debug, Clone)]
 pub struct InputBuffer {
+    /// Id of the player this buffer stores inputs for.
     pub player_id: u32,
     buffer: Vec<Option<PlayerInput>>,
     capacity: usize,
@@ -31,6 +37,7 @@ pub struct InputBuffer {
 }
 
 impl InputBuffer {
+    /// Creates a ring buffer holding up to `capacity` recent inputs for `player_id`.
     pub fn new(player_id: u32, capacity: usize) -> Self {
         Self {
             player_id,
@@ -40,6 +47,7 @@ impl InputBuffer {
         }
     }
 
+    /// Stores an input at its tick slot and advances `last_confirmed_tick` if it is newer.
     pub fn insert(&mut self, input: PlayerInput) {
         let index = (input.tick as usize) % self.capacity;
         self.buffer[index] = Some(input);

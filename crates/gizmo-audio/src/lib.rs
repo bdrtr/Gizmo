@@ -1,3 +1,18 @@
+//! `gizmo-audio` is the audio subsystem of the Gizmo engine.
+//!
+//! It is a thin, [`rodio`]-backed layer that exposes a small public surface:
+//!
+//! - [`AudioSource`] — an ECS component describing a 2D or 3D playable sound.
+//! - [`AudioManager`] — a resource that loads sounds into memory and plays,
+//!   updates and stops both global (stereo) and 3D spatial sinks.
+//! - [`AudioError`] — the error type returned when loading sounds fails.
+//!
+//! Sounds are decoded from in-memory byte buffers (loaded once via
+//! [`AudioManager::load_sound`]) to avoid per-play disk I/O. Spatial playback
+//! tracks emitter and listener (ear) positions and attenuates volume by
+//! distance. No `rodio` types appear in the public API, keeping the dependency
+//! contract internal.
+
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source, SpatialSink};
 use std::collections::HashMap;
 use std::fs::File;
@@ -7,9 +22,12 @@ use std::sync::Arc;
 
 // ======================== ERRORS ========================
 
+/// Errors that can occur while loading a sound into the [`AudioManager`].
 #[derive(Debug)]
 pub enum AudioError {
+    /// An I/O error occurred while reading the sound file.
     Io(std::io::Error),
+    /// The requested sound file could not be found at the given path.
     NotFound(String),
 }
 
@@ -26,15 +44,22 @@ impl std::error::Error for AudioError {}
 
 // ======================== ECS COMPONENT ========================
 
-/// 3D veya 2D oynatılabilecek ses kaynağı bileşeni (ECS için)
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+/// ECS component for a sound source that can be played in 2D or 3D.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AudioSource {
+    /// Name of the loaded sound to play (see [`AudioManager::load_sound`]).
     pub sound_name: String,
+    /// Whether the sound should be played as a 3D spatial source.
     pub is_3d: bool,
+    /// Playback volume multiplier (1.0 = original volume).
     pub volume: f32,
+    /// Playback pitch/speed multiplier (1.0 = original pitch).
     pub pitch: f32,
+    /// Whether the sound should loop indefinitely.
     pub loop_sound: bool,
-    pub max_distance: f32, // Sesin zayıflayarak tamamen kısılacağı mesafe limiti
+    /// Distance at which the sound is fully attenuated (silent).
+    pub max_distance: f32,
+    /// Internal id of the active sink playing this source, if any.
     pub _internal_sink_id: Option<u64>,
 }
 
@@ -45,6 +70,7 @@ impl Default for AudioSource {
 }
 
 impl AudioSource {
+    /// Creates a new [`AudioSource`] for the sound with the given name.
     pub fn new(name: &str) -> Self {
         Self {
             sound_name: name.to_string(),
@@ -57,11 +83,13 @@ impl AudioSource {
         }
     }
 
+    /// Sets whether the sound loops, returning the modified source.
     pub fn with_loop(mut self, l: bool) -> Self {
         self.loop_sound = l;
         self
     }
 
+    /// Sets the attenuation distance, returning the modified source.
     pub fn with_max_distance(mut self, dist: f32) -> Self {
         self.max_distance = dist;
         self
@@ -70,6 +98,8 @@ impl AudioSource {
 
 // ======================== AUDIO MANAGER ========================
 
+/// Resource that owns the audio output device and manages loaded sounds and
+/// active playback sinks (both global and 3D spatial).
 pub struct AudioManager {
     // OutputStream is kept alive so audio actually plays
     _stream: OutputStream,
@@ -84,7 +114,21 @@ pub struct AudioManager {
     next_sink_id: u64,
 }
 
+impl std::fmt::Debug for AudioManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AudioManager")
+            .field("loaded_sounds", &self.sound_buffers.len())
+            .field("active_spatial_sinks", &self.active_spatial_sinks.len())
+            .field("active_sinks", &self.active_sinks.len())
+            .field("next_sink_id", &self.next_sink_id)
+            .finish_non_exhaustive()
+    }
+}
+
 impl AudioManager {
+    /// Creates a new audio manager bound to the default output device.
+    ///
+    /// Returns `None` if no audio device is available.
     pub fn new() -> Option<Self> {
         match OutputStream::try_default() {
             Ok((stream, stream_handle)) => {
@@ -210,6 +254,8 @@ impl AudioManager {
 
     // ========== ECS SINK GÜNCELLEMELERİ ==========
 
+    /// Updates an active spatial sink's emitter/ear positions and recomputes
+    /// its volume based on distance attenuation and `base_volume`.
     pub fn update_spatial_sink(
         &mut self,
         id: u64,
@@ -244,6 +290,7 @@ impl AudioManager {
         }
     }
 
+    /// Sets the volume of the active sink with the given id.
     pub fn set_volume(&mut self, id: u64, volume: f32) {
         if let Some(sink) = self.active_spatial_sinks.get(&id) {
             sink.set_volume(volume);
@@ -252,6 +299,7 @@ impl AudioManager {
         }
     }
 
+    /// Sets the pitch/playback speed of the active sink with the given id.
     pub fn set_pitch(&mut self, id: u64, pitch: f32) {
         if let Some(sink) = self.active_spatial_sinks.get(&id) {
             sink.set_speed(pitch);
@@ -260,6 +308,7 @@ impl AudioManager {
         }
     }
 
+    /// Stops the active sink with the given id.
     pub fn stop(&mut self, id: u64) {
         if let Some(sink) = self.active_spatial_sinks.get(&id) {
             sink.stop();
@@ -268,6 +317,7 @@ impl AudioManager {
         }
     }
 
+    /// Pauses the active sink with the given id.
     pub fn pause(&mut self, id: u64) {
         if let Some(sink) = self.active_spatial_sinks.get(&id) {
             sink.pause();
@@ -276,6 +326,7 @@ impl AudioManager {
         }
     }
 
+    /// Resumes the (paused) active sink with the given id.
     pub fn resume(&mut self, id: u64) {
         if let Some(sink) = self.active_spatial_sinks.get(&id) {
             sink.play();
@@ -290,6 +341,7 @@ impl AudioManager {
         self.active_sinks.retain(|_, sink| !sink.empty());
     }
 
+    /// Returns whether the sink with the given id is currently playing.
     pub fn is_playing(&self, id: u64) -> bool {
         if let Some(sink) = self.active_spatial_sinks.get(&id) {
             !sink.empty() && !sink.is_paused()

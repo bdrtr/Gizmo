@@ -1,3 +1,31 @@
+//! # gizmo-core
+//!
+//! The core of the Gizmo game engine: a pure-Rust, archetype-based Entity
+//! Component System (ECS) together with the scheduler that drives it.
+//!
+//! ## Overview
+//!
+//! - [`World`] is the central container holding all entities, components and
+//!   resources.
+//! - An [`Entity`] is a lightweight, generational handle. Data lives in
+//!   [`Component`]s stored column-wise inside [`Archetype`]s for cache-friendly
+//!   iteration.
+//! - [`Query`] borrows components in bulk for reading or mutation, while
+//!   [`Res`]/[`ResMut`] borrow global resources.
+//! - [`System`]s are ordinary functions turned into systems via [`IntoSystem`];
+//!   they are grouped into [`Phase`]s and run by a [`Schedule`] which resolves
+//!   parallelism from the access patterns of each system.
+//! - [`Commands`] queue deferred, structural changes (spawn/despawn, add/remove
+//!   component) that are applied after a system finishes.
+//!
+//! ## Usage
+//!
+//! Most users pull in the common types through the prelude:
+//!
+//! ```no_run
+//! use gizmo_core::prelude::*;
+//! ```
+
 // ──── Modüller (alfabetik) ────
 pub mod archetype;
 pub mod asset;

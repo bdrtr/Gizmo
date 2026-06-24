@@ -2,6 +2,7 @@ use gizmo_math::Vec3;
 
 use gizmo_physics_rigid::joints::JointType;
 
+/// Identifies a bone within a humanoid ragdoll skeleton.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RagdollBoneType {
     Head,
@@ -17,6 +18,9 @@ pub enum RagdollBoneType {
     RightLowerLeg,
 }
 
+/// Definition of a single ragdoll bone: its shape, mass and the joint that
+/// connects it to its parent.
+#[derive(Debug, Clone)]
 pub struct RagdollBoneDef {
     pub bone_type: RagdollBoneType,
     pub parent_type: Option<RagdollBoneType>,
@@ -31,6 +35,9 @@ pub struct RagdollBoneDef {
     pub limits: Option<(f32, f32)>,
 }
 
+/// Builder that accumulates [`RagdollBoneDef`]s and resolves root world
+/// positions when [`RagdollBuilder::build`] is called.
+#[derive(Debug, Clone)]
 pub struct RagdollBuilder {
     bones: Vec<RagdollBoneDef>,
     root_pos: Vec3,

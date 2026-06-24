@@ -152,7 +152,7 @@ impl PhysicsMaterial {
 }
 
 /// İki malzemenin birleşiminden elde edilen temas parametreleri
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct CombinedMaterial {
     pub static_friction: f32,
     pub dynamic_friction: f32,

@@ -6,16 +6,16 @@ use std::fs;
 use gizmo_core::component::{Children, Parent};
 use std::collections::HashMap;
 
-/// Tam sahne verisi — tüm entity'ler ve bileşenleri
-#[derive(Serialize, Deserialize, Clone)]
+/// Full scene data — all entities together with their components.
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SceneData {
     pub entities: Vec<EntityData>,
     #[serde(default)]
     pub joints: Vec<gizmo_physics_rigid::joints::Joint>,
 }
 
-/// Prefab verisi — Tıpkı SceneData gibi ama kök entity'si var
-#[derive(Serialize, Deserialize, Clone)]
+/// Prefab data — like [`SceneData`] but anchored to a root entity.
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PrefabData {
     pub root_id: u32,
     pub entities: Vec<EntityData>,
@@ -23,8 +23,8 @@ pub struct PrefabData {
     pub joints: Vec<gizmo_physics_rigid::joints::Joint>,
 }
 
-/// Tek bir entity'nin serileştirilebilir verisi
-#[derive(Serialize, Deserialize, Clone)]
+/// Serializable data for a single entity.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct EntityData {
     pub original_id: u32,
     pub name: Option<String>,
@@ -36,8 +36,8 @@ pub struct EntityData {
     pub components: std::collections::BTreeMap<String, String>,
 }
 
-/// Material serileştirme verisi
-#[derive(Serialize, Deserialize, Clone)]
+/// Serializable material data.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct MaterialData {
     pub albedo: [f32; 4],
     pub roughness: f32,

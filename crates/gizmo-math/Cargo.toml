@@ -13,7 +13,6 @@ bevy_math = "0.15"
 getrandom = { version = "0.2", features = ["js"] }
 glam = { version = "=0.29.3", features = ["serde", "bytemuck", "rand"] }
 serde = { version = "1.0.228", features = ["derive"] }
-tracing = "0.1.44"
 
 [dev-dependencies]
 criterion = "0.5.1"

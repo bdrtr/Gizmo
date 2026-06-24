@@ -3,17 +3,24 @@ use super::snapshot::{PhysicsStateSnapshot, RollbackBuffer};
 use gizmo_core::World;
 
 /// Oyundaki tüm ağ trafiği, tahminler ve rollback süreçlerini yöneten ana sistem.
+#[derive(Debug, Clone)]
 pub struct RollbackManager {
+    /// Tick currently being simulated.
     pub current_tick: u64,
+    /// Highest tick reached so far.
     pub latest_tick: u64,
+    /// Ring buffer of past physics snapshots used to roll back.
     pub state_buffer: RollbackBuffer,
+    /// Per-player input buffers, keyed by player id.
     pub input_buffers: std::collections::HashMap<u32, InputBuffer>,
-    
+
     // Geçmişte yanlış tahmin edilen ve düzeltilmesi gereken en eski tick
+    /// Oldest tick whose prediction diverged and must be re-simulated, if any.
     pub rollback_target_tick: Option<u64>,
 }
 
 impl RollbackManager {
+    /// Creates a manager whose snapshot history holds `capacity` ticks.
     pub fn new(capacity: usize) -> Self {
         Self {
             current_tick: 0,
@@ -24,6 +31,7 @@ impl RollbackManager {
         }
     }
 
+    /// Registers a player and allocates an input buffer of `buffer_capacity` ticks for them.
     pub fn register_player(&mut self, player_id: u32, buffer_capacity: usize) {
         self.input_buffers.insert(player_id, InputBuffer::new(player_id, buffer_capacity));
     }

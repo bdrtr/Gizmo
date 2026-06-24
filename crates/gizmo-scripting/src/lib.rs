@@ -1,22 +1,27 @@
-//! Gizmo Scripting — Lua tabanlı oyun mantığı scriptleme sistemi
+//! Gizmo Scripting — a Lua-based game-logic scripting layer for the Gizmo engine.
 //!
-//! ## Kullanım
+//! Scripts run inside a sandboxed [`mlua`] Lua 5.4 VM. Because Lua callbacks
+//! cannot borrow and mutate the ECS `World` directly, they enqueue changes as
+//! [`ScriptCommand`]s into a [`CommandQueue`]; the [`ScriptEngine`] later drains
+//! and applies those commands at a controlled point in the frame.
+//!
+//! ## Usage
 //! ```rust,ignore
 //! let mut script_engine = ScriptEngine::new().unwrap();
 //! script_engine.load_script("scripts/player.lua").unwrap();
 //!
-//! // Her frame:
+//! // Each frame:
 //! script_engine.update(&world, &input, dt).unwrap();
 //! script_engine.flush_commands(&mut world);
 //! ```
 //!
-//! ## Lua API
-//! - `entity` — Position, rotation, scale, velocity okuma/yazma, spawn/destroy
-//! - `input` — Tuş ve fare durumu sorgulama
-//! - `physics` — Kuvvet/impuls uygulama
-//! - `scene` — Sahne kaydetme/yükleme, entity arama
-//! - `audio` — 2D/3D ses çalma
-//! - `time` — Delta time, elapsed, FPS
+//! ## Lua API surface
+//! - `entity` — read/write position, rotation, scale, velocity; spawn/destroy
+//! - `input` — query key and mouse state
+//! - `physics` — apply forces and impulses
+//! - `scene` — save/load scenes, look up entities
+//! - `audio` — play 2D/3D sounds
+//! - `time` — delta time, elapsed time, FPS
 
 pub mod api_ai;
 pub mod api_audio;

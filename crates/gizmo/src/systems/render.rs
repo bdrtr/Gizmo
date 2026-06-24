@@ -8,7 +8,7 @@ use crate::renderer::{
 use bytemuck;
 use wgpu;
 
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WireframeConfig {
     pub global: bool,
 }
@@ -33,7 +33,7 @@ pub fn clear_render_cache() {
     });
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DrawItem {
     vbuf: std::sync::Arc<wgpu::Buffer>,
     vertex_count: u32,

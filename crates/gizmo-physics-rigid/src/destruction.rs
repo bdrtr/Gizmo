@@ -1,6 +1,7 @@
 use crate::world::PhysicsWorld;
 
 /// The DestructionSystem handles runtime breaking of objects based on impacts.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DestructionSystem {
     pub impact_threshold: f32,
 }

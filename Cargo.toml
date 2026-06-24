@@ -14,7 +14,9 @@ authors = ["Bedir"]
 description = "A custom ECS and physics engine aimed for realistic simulations."
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-repository = "https://git.bedirkaraabali.com/bdrtr/Yelbegen-engine"
+repository = "https://github.com/bdrtr/Gizmo"
+keywords = ["game-engine", "ecs", "physics", "simulation", "gamedev"]
+categories = ["game-engines"]
 
 # Bağımlılıkları tek bir yerden yönetmek için (Inherited Dependencies)
 [workspace.dependencies]

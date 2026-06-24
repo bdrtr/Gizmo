@@ -7,6 +7,7 @@ use gizmo_math::{Quat, Vec3};
 /// Velocity is updated first (with forces & damping), then position is
 /// integrated from the new velocity.  This order gives better energy
 /// conservation than explicit Euler at essentially no extra cost.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Integrator {
     pub gravity: Vec3,
 }

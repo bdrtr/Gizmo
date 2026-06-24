@@ -1,3 +1,11 @@
+//! Gizmo Studio: the standalone editor application for the Gizmo game engine.
+//!
+//! This is a binary crate (not a published library). It boots an [`gizmo::App`]
+//! window, wires the engine's setup/update/UI/render hooks, and renders the
+//! egui-based editor on top of the live scene. Run it with `cargo run -p
+//! gizmo-studio`; the `editor`, `scene`, `audio` and `scripting` engine
+//! features are enabled by default.
+
 use gizmo::editor::EditorState;
 use gizmo::prelude::*;
 

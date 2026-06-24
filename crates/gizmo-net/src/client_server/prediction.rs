@@ -9,10 +9,14 @@ use std::collections::VecDeque;
 /// İstemcinin öngördüğü yerel durum (Fizik motoru üzerinde anlık uygulanacak)
 #[derive(Debug, Clone)]
 pub struct PredictedState {
+    /// Predicted world-space position `[x, y, z]`.
     pub position: [f32; 3],
+    /// Predicted linear velocity `[x, y, z]`.
     pub velocity: [f32; 3],
 }
 
+/// Tracks unacknowledged inputs so the client can reconcile against authoritative server state.
+#[derive(Debug, Clone)]
 pub struct ClientPredictor {
     /// Sunucuya gönderilmiş ama henüz sunucudan onayı (ACK) gelmemiş girdiler
     pub pending_inputs: VecDeque<PlayerInput>,
@@ -27,6 +31,7 @@ impl Default for ClientPredictor {
 }
 
 impl ClientPredictor {
+    /// Creates an empty predictor starting at tick 0.
     pub fn new() -> Self {
         Self {
             pending_inputs: VecDeque::new(),

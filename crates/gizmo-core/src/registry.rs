@@ -32,6 +32,7 @@ pub type InsertReflectFn = fn(
 ) -> Result<(), String>;
 
 /// ECS tabanlı opsiyonel reflection yeteneklerini taşıyan serileştirme yapısı
+#[derive(Debug, Clone)]
 pub struct TypeRegistration {
     pub type_id: TypeId,
     pub name: String,

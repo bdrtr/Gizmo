@@ -4,14 +4,22 @@ use egui_winit::State;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
+/// Owns the `egui` runtime, window-input integration and `wgpu` renderer
+/// used to draw the editor overlay on top of the engine's frame.
 pub struct EditorContext {
+    /// The shared `egui` context driving the immediate-mode UI.
     pub context: Context,
+    /// `egui_winit` platform state translating window events into egui input.
     pub state: State,
+    /// `egui_wgpu` renderer that paints the tessellated UI into a wgpu pass.
     pub renderer: Renderer,
+    /// Number of frames rendered so far (used for debug labels).
     pub frame_count: usize,
 }
 
 impl EditorContext {
+    /// Creates a new editor context for the given `wgpu` device, surface
+    /// format and window, applying the default dark theme.
     pub fn new(
         device: &wgpu::Device,
         output_format: wgpu::TextureFormat,
@@ -89,11 +97,14 @@ impl EditorContext {
         self.context.set_style(style);
     }
 
+    /// Forwards a window event to egui; returns `true` if egui consumed it.
     pub fn handle_event(&mut self, window: &Window, event: &WindowEvent) -> bool {
         let response = self.state.on_window_event(window, event);
         response.consumed
     }
 
+    /// Runs one egui frame, invoking `ui_fn` to build the UI, and returns the
+    /// resulting [`egui::FullOutput`] to be passed to [`Self::render`].
     pub fn run<F>(&mut self, window: &Window, ui_fn: F) -> egui::FullOutput
     where
         F: FnOnce(&Context),
@@ -104,6 +115,8 @@ impl EditorContext {
         self.context.end_frame()
     }
 
+    /// Paints the editor UI as an overlay on top of the already-rendered
+    /// engine frame, using the output produced by [`Self::run`].
     // Oyun Çizildikten SONRA bu fonksiyon ekrana Overlay UI çizdirecek!
     pub fn render(
         &mut self,

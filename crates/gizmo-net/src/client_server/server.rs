@@ -5,8 +5,11 @@ use std::error::Error;
 use std::net::UdpSocket;
 use std::time::{Duration, SystemTime};
 
+/// A renet-based authoritative server: bundles the [`RenetServer`] with its netcode transport.
 pub struct NetworkServer {
+    /// The underlying renet server (per-client message queues, connection state).
     pub server: RenetServer,
+    /// The netcode UDP transport accepting and driving client connections.
     pub transport: NetcodeServerTransport,
 }
 
@@ -35,6 +38,7 @@ impl NetworkServer {
         Ok(Self { server, transport })
     }
 
+    /// Advances the transport by `dt_secs`, processing incoming client packets. Call once per tick.
     pub fn update(&mut self, dt_secs: f64) {
         let dt = Duration::from_secs_f64(dt_secs);
         // Geçici bir transport hatası tüm sunucu döngüsünü düşürmemeli.
@@ -43,6 +47,7 @@ impl NetworkServer {
         }
     }
 
+    /// Flushes queued per-client messages out over the network. Call at the end of each tick.
     pub fn send_packets(&mut self) {
         self.transport.send_packets(&mut self.server);
     }

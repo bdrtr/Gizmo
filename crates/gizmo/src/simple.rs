@@ -11,6 +11,7 @@ use std::f32::consts::{FRAC_PI_2, PI};
 use crate::math::{Quat, Vec3, Vec4};
 use crate::systems;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SimpleSceneState {
     pub camera_speed: f32,
     pub camera_pitch: f32,

@@ -125,6 +125,12 @@ impl From<crate::world::ResourceFetchError> for SystemParamFetchError {
     }
 }
 
+/// A value that a system can request as a parameter (e.g. [`Query`](crate::Query),
+/// [`Res`], [`ResMut`]).
+///
+/// Implementors describe how to fetch their value from the [`World`] and which
+/// component/resource accesses they require, allowing the scheduler to run
+/// non-conflicting systems in parallel.
 pub trait SystemParam {
     type Item<'w>;
     fn fetch<'w>(world: &'w World, dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError>;
@@ -215,6 +221,8 @@ impl<Q: crate::query::WorldQuery + 'static> SystemParam for crate::query::Query<
 // INTO SYSTEM — FONKSİYONLARDAN SİSTEME DÖNÜŞÜM (MAKRO İLE)
 // ==============================================================
 
+/// Converts a value (typically a plain function whose arguments implement
+/// [`SystemParam`]) into a boxed [`System`] that the scheduler can run.
 pub trait IntoSystem<Params> {
     fn into_system(self) -> Box<dyn System>;
 }
@@ -594,6 +602,9 @@ impl SystemConfig {
     }
 }
 
+/// Turns a system into a [`SystemConfig`], the builder used to attach ordering
+/// constraints (labels, `before`/`after`, system sets) and a [`Phase`] before
+/// adding it to a [`Schedule`].
 pub trait IntoSystemConfig<Params> {
     fn into_config(self) -> SystemConfig;
 

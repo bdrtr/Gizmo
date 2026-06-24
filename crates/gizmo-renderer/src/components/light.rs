@@ -1,6 +1,6 @@
 use gizmo_math::Vec3;
 
-#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PointLight {
     pub color: Vec3,
     pub intensity: f32,
@@ -25,7 +25,7 @@ pub enum LightRole {
     Generic,
 }
 
-#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DirectionalLight {
     pub color: Vec3,
     pub intensity: f32,
@@ -43,7 +43,7 @@ impl DirectionalLight {
     }
 }
 
-#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpotLight {
     pub color: Vec3,
     pub intensity: f32,

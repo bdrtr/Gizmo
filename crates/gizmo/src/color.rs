@@ -100,6 +100,13 @@ impl Color {
     }
 }
 
+impl Default for Color {
+    /// Varsayılan renk: opak beyaz (`Color::WHITE`).
+    fn default() -> Self {
+        Color::WHITE
+    }
+}
+
 impl From<Color> for Vec4 {
     fn from(c: Color) -> Vec4 {
         c.0

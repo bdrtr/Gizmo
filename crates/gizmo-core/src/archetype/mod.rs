@@ -40,6 +40,7 @@ impl EntityLocation {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ArchetypeEdge {
     /// Bu component tipi eklenince hedef archetype
     pub add: Option<u32>,

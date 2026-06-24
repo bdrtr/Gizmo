@@ -1,6 +1,10 @@
 use gizmo_core::cvar::{CVarRegistry, DevConsoleState};
 use gizmo_core::world::World;
 
+/// Renders the in-engine developer console overlay.
+///
+/// Toggled with the backtick/tilde key, this displays the cvar registry and
+/// console state stored in `world` on top of the current egui frame.
 pub fn ui_dev_console(world: &mut World, ctx: &egui::Context, input: &gizmo_core::input::Input) {
     // Tilde tuşuna (Esc'nin altındaki tuş) basılınca konsolu aç/kapat.
     // Winit'te bu Backquote olarak geçiyor.

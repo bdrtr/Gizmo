@@ -3,11 +3,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
+/// Wire-level protocol version; client and server must agree on this to connect.
 pub const PROTOCOL_ID: u64 = 7;
 
+/// Position + rotation of a single networked entity, sent for interpolation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransformData {
+    /// World-space position `[x, y, z]`.
     pub position: [f32; 3],
+    /// Orientation quaternion `[x, y, z, w]`.
     pub rotation: [f32; 4],
 }
 
@@ -26,17 +30,24 @@ pub struct PlayerInput {
     pub dt: f32,
 }
 
+/// Messages sent from a client to the server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClientMessage {
+    /// A single tick's player input.
     Input(PlayerInput),
 }
 
+/// Messages sent from the server to clients.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ServerMessage {
+    /// A player joined the session.
     PlayerConnected {
+        /// Renet client id of the player that connected.
         client_id: u64,
     },
+    /// A player left the session.
     PlayerDisconnected {
+        /// Renet client id of the player that disconnected.
         client_id: u64,
     },
     /// Tüm istemcilere yayınlanan (broadcast) ortak dünya durumu — interpolasyon için.
@@ -53,8 +64,11 @@ pub enum ServerMessage {
     },
 }
 
+/// Network channels the server sends on.
 pub enum ServerChannel {
+    /// Reliable, ordered delivery (e.g. connect/disconnect events).
     Reliable,
+    /// Unreliable delivery (e.g. frequent world-state updates).
     Unreliable,
 }
 
@@ -67,7 +81,9 @@ impl From<ServerChannel> for u8 {
     }
 }
 
+/// Network channels the client sends on.
 pub enum ClientChannel {
+    /// Player commands / inputs.
     Command,
 }
 
@@ -79,6 +95,7 @@ impl From<ClientChannel> for u8 {
     }
 }
 
+/// Builds the renet [`ConnectionConfig`] shared by client and server (channels + bandwidth).
 pub fn connection_config() -> ConnectionConfig {
     ConnectionConfig {
         available_bytes_per_tick: 1024 * 1024,

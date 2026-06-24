@@ -19,6 +19,7 @@ impl std::fmt::Display for CVarValue {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct CVar {
     pub name: String,
     pub description: String,
@@ -26,13 +27,14 @@ pub struct CVar {
     pub default_value: CVarValue,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Default)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct DevConsoleState {
     pub is_open: bool,
     pub input_buffer: String,
     pub output_log: Vec<String>,
 }
 
+#[derive(Debug)]
 pub struct CVarRegistry {
     pub cvars: HashMap<String, CVar>,
     pub command_history: Vec<String>,

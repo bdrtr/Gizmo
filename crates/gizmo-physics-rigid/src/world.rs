@@ -75,7 +75,7 @@ pub enum Weather {
 
 
 /// A compact snapshot of the physics state for rewinding
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PhysicsStateSnapshot {
     pub transforms: Vec<Transform>,
     pub velocities: Vec<Velocity>,
@@ -154,7 +154,7 @@ impl Default for PhysicsWorld {
 /// `accumulator`. Bunlar olmadan restore sonrası çözücü farklı warm-start'la yakınsar →
 /// rollback re-simülasyonu kesintisiz simülasyondan SAPAR. (entities/colliders/
 /// entity_index_map rollback penceresinde DEĞİŞMEZ varsayılır — ekleme/silme yok.)
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct WorldSnapshot {
     transforms: Vec<Transform>,
     velocities: Vec<crate::components::Velocity>,
