@@ -360,6 +360,7 @@ pub fn draw_ai_section(
                         gizmo_ai::components::NavAgentState::Moving => "Hareket Ediyor",
                         gizmo_ai::components::NavAgentState::Reached => "Ulaştı",
                         gizmo_ai::components::NavAgentState::Stuck => "Sıkıştı",
+                        _ => "Bilinmiyor",
                     };
                     ui.label(format!("Durum: {}", state_str));
 

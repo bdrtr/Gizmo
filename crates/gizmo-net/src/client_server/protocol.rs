@@ -32,6 +32,7 @@ pub struct PlayerInput {
 
 /// Messages sent from a client to the server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ClientMessage {
     /// A single tick's player input.
     Input(PlayerInput),
@@ -39,6 +40,7 @@ pub enum ClientMessage {
 
 /// Messages sent from the server to clients.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ServerMessage {
     /// A player joined the session.
     PlayerConnected {
@@ -65,6 +67,7 @@ pub enum ServerMessage {
 }
 
 /// Network channels the server sends on.
+#[non_exhaustive]
 pub enum ServerChannel {
     /// Reliable, ordered delivery (e.g. connect/disconnect events).
     Reliable,
@@ -82,6 +85,7 @@ impl From<ServerChannel> for u8 {
 }
 
 /// Network channels the client sends on.
+#[non_exhaustive]
 pub enum ClientChannel {
     /// Player commands / inputs.
     Command,

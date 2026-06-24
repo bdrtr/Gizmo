@@ -17,7 +17,8 @@ use web_time::Instant;
 use std::time::Instant;
 
 /// Tek bir entity'nin in-memory yedeği
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct EntitySnapshot {
     pub entity_id: u32,
     pub name: Option<String>,
@@ -26,6 +27,7 @@ pub struct EntitySnapshot {
 
 /// Tüm sahnenin in-memory snapshot'ı
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SceneSnapshot {
     pub entities: Vec<EntitySnapshot>,
     pub timestamp: Instant,
@@ -206,7 +208,8 @@ impl SceneSnapshot {
 }
 
 /// Geri yükleme sonucu istatistikleri
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct RestoreResult {
     pub despawned: u32,
     pub restored: u32,

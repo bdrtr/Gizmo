@@ -30,7 +30,8 @@ impl Script {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct ScriptContext {
     pub entity_id: u32,
     pub dt: f32,

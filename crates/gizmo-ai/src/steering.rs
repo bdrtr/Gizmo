@@ -182,6 +182,7 @@ pub fn alignment(
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct SteeringWeights {
     pub seek: f32,
     pub arrive: f32,

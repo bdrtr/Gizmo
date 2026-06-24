@@ -296,6 +296,9 @@ pub fn draw_joint_section(
                                         ui.horizontal(|ui| { ui.label("Açı (Radyan):"); ui.add(egui::DragValue::new(&mut ball.cone_limit_angle).speed(0.01)); });
                                     }
                                 }
+                                _ => {
+                                    ui.label("Desteklenmeyen bağlantı tipi");
+                                }
                             }
                         });
                     }

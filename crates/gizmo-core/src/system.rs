@@ -114,6 +114,7 @@ pub trait System: Send + Sync {
 use crate::world::{ResourceReadGuard, ResourceWriteGuard};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SystemParamFetchError {
     Resource(crate::world::ResourceFetchError),
     QueryError,

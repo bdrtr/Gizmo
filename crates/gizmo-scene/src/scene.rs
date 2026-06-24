@@ -7,7 +7,8 @@ use gizmo_core::component::{Children, Parent};
 use std::collections::HashMap;
 
 /// Full scene data — all entities together with their components.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[non_exhaustive]
 pub struct SceneData {
     pub entities: Vec<EntityData>,
     #[serde(default)]
@@ -15,7 +16,8 @@ pub struct SceneData {
 }
 
 /// Prefab data — like [`SceneData`] but anchored to a root entity.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[non_exhaustive]
 pub struct PrefabData {
     pub root_id: u32,
     pub entities: Vec<EntityData>,
@@ -24,7 +26,8 @@ pub struct PrefabData {
 }
 
 /// Serializable data for a single entity.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[non_exhaustive]
 pub struct EntityData {
     pub original_id: u32,
     pub name: Option<String>,
@@ -38,6 +41,7 @@ pub struct EntityData {
 
 /// Serializable material data.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[non_exhaustive]
 pub struct MaterialData {
     pub albedo: [f32; 4],
     pub roughness: f32,
@@ -457,17 +461,8 @@ mod tests {
         let ent1 = world.spawn();
         let ent2 = world.spawn();
 
-        let joint = Joint {
-            entity_a: ent1,
-            entity_b: ent2,
-            local_anchor_a: gizmo_math::Vec3::ZERO,
-            local_anchor_b: gizmo_math::Vec3::ZERO,
-            break_force: 1000.0,
-            break_torque: 1000.0,
-            is_broken: false,
-            collision_enabled: false,
-            data: gizmo_physics_rigid::joints::data::JointData::Fixed,
-        };
+        let joint = Joint::fixed(ent1, ent2, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO)
+            .with_break_force(1000.0, 1000.0);
 
         let prefab_data = PrefabData {
             root_id: ent1.id(),

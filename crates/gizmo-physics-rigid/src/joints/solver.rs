@@ -4,6 +4,7 @@ use crate::components::{RigidBody, Velocity};
 use gizmo_math::Vec3;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct JointSolver {
     pub iterations: usize,
     pub max_correction_speed: f32,

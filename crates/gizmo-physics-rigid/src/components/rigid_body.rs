@@ -349,10 +349,7 @@ impl RigidBody {
                 let mut total_vol = 0.0;
                 let mut vols = Vec::with_capacity(shapes.len());
                 for (_, sub_shape) in shapes {
-                    let temp_col = Collider {
-                        shape: (**sub_shape).clone(),
-                        ..Default::default()
-                    };
+                    let temp_col = Collider::from_shape((**sub_shape).clone());
                     let v = temp_col.volume();
                     vols.push(v);
                     total_vol += v;
@@ -376,10 +373,7 @@ impl RigidBody {
                             mass: mass_i,
                             ..Default::default()
                         };
-                        let temp_col = Collider {
-                            shape: (**sub_shape).clone(),
-                            ..Default::default()
-                        };
+                        let temp_col = Collider::from_shape((**sub_shape).clone());
                         temp_rb.update_inertia_from_collider(&temp_col);
 
                         let d = local_t.position - self.center_of_mass;
@@ -421,13 +415,10 @@ mod tests {
             Vec3::new(2.0, 1.0, 3.0),
             Vec3::new(-2.0, 1.0, 3.0),
         ];
-        let hull_col = Collider {
-            shape: ColliderShape::ConvexHull(ConvexHullShape {
-                vertices: Arc::new(verts),
-                faces: Arc::new(vec![]),
-            }),
-            ..Default::default()
-        };
+        let hull_col = Collider::from_shape(ColliderShape::ConvexHull(ConvexHullShape {
+            vertices: Arc::new(verts),
+            faces: Arc::new(vec![]),
+        }));
 
         let mut rb_hull = RigidBody::new(8.0, 0.5, 0.5, true);
         rb_hull.update_inertia_from_collider(&hull_col);

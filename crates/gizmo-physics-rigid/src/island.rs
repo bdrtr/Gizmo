@@ -165,6 +165,7 @@ impl IslandManager {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Default, Clone)]
+#[non_exhaustive]
 pub struct PhysicsMetrics {
     pub broadphase_ms: f32,
     pub narrowphase_ms: f32,

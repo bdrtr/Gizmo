@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use super::{CollisionLayer, PhysicsMaterial, Transform};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Collider {
     pub shape: ColliderShape,
     pub is_trigger: bool,
@@ -23,6 +24,20 @@ impl Default for Collider {
 }
 
 impl Collider {
+    /// Build a collider from a raw [`ColliderShape`], using the default
+    /// material and collision layer with `is_trigger = false`.
+    ///
+    /// This is the canonical constructor for turning a bare shape into a
+    /// [`Collider`]: the struct is `#[non_exhaustive]`, so it cannot be built
+    /// with a struct literal from outside this crate. Combine with the
+    /// `with_*` builder methods to override defaults.
+    pub fn from_shape(shape: ColliderShape) -> Self {
+        Self {
+            shape,
+            ..Default::default()
+        }
+    }
+
     /// Calculate AABB for this collider at given transform
     pub fn compute_aabb(&self, position: Vec3, rotation: Quat) -> gizmo_math::Aabb {
         match &self.shape {
@@ -227,6 +242,11 @@ impl Collider {
     }
 }
 
+// NOT `#[non_exhaustive]`: the engine's own crates (gizmo-physics-rigid) match
+// this exhaustively to compute inertia / AABB / narrowphase dispatch. Adding a
+// new collider shape is inherently a breaking change (it needs solver support),
+// so a major version bump is appropriate — and exhaustive matching lets the
+// compiler flag every site that must handle the new shape.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ColliderShape {
     Sphere(SphereShape),

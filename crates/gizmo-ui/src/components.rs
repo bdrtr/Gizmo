@@ -52,6 +52,7 @@ impl Default for Node {
 /// interaction system.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[derive(Default)]
+#[non_exhaustive]
 pub enum Interaction {
     /// The pointer is neither over nor pressing the element.
     #[default]

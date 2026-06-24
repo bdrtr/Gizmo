@@ -59,15 +59,12 @@ pub fn handle_scene_operations(
                 }
                 "AudioSource" => world.add_component(
                     ent,
-                    gizmo::prelude::AudioSource {
-                        sound_name: "".to_string(),
-                        is_3d: true,
-                        max_distance: 100.0,
-                        volume: 1.0,
-                        pitch: 1.0,
-                        loop_sound: false,
-                        _internal_sink_id: None,
-                    },
+                    // `AudioSource::new("")` already yields these exact defaults
+                    // (is_3d=true, max_distance=100.0, volume=1.0, pitch=1.0,
+                    // loop_sound=false, _internal_sink_id=None); switched from an
+                    // exhaustive struct literal because AudioSource is now
+                    // #[non_exhaustive] and can no longer be built cross-crate.
+                    gizmo::prelude::AudioSource::new(""),
                 ),
                 "Terrain" => {
                     world.add_component(

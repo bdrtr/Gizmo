@@ -90,6 +90,7 @@ pub struct NavMesh {
 
 /// NavMesh oluşturma konfigürasyonu
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct NavMeshConfig {
     pub cell_size: f32,
     pub agent_height: f32,
@@ -596,6 +597,7 @@ impl NavMesh {
 
 /// NavMesh istatistikleri
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct NavMeshStats {
     pub polygon_count: usize,
     pub total_area: f32,

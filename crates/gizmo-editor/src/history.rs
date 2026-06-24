@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 
 /// Editör içinde yapılan geri alınabilir tekil bir işlem
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum EditorAction {
     /// Objenin veya objelerin taşıma, dönme veya ölçeklenme değerlerinin değişmesi
     TransformsChanged {
@@ -23,6 +24,7 @@ pub enum EditorAction {
 }
 
 /// Yapılan eylemlerin kaydını tutan History yöneticisi.
+#[non_exhaustive]
 pub struct History {
     undo_stack: VecDeque<EditorAction>,
     redo_stack: VecDeque<EditorAction>,

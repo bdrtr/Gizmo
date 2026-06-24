@@ -58,6 +58,7 @@ impl GoapState {
 
 /// Ajanın yapabileceği tek bir aksiyon
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct GoapAction {
     pub name: String,
     pub cost: f32,
@@ -88,6 +89,7 @@ impl GoapAction {
 
 /// Ajanın ulaşmaya çalıştığı bir hedef
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct GoapGoal {
     pub name: String,
     pub priority: f32,

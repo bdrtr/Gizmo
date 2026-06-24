@@ -20,6 +20,7 @@ impl PointLight {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum LightRole {
     Sun,
     Generic,

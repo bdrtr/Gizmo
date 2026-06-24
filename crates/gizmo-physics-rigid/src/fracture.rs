@@ -329,17 +329,12 @@ pub fn generate_fracture_chunks(
 
         // Create convex hull collider
         let hull = gizmo_physics_core::quickhull::compute_convex_hull(&chunk.vertices);
-        let collider = gizmo_physics_core::Collider {
-            shape: gizmo_physics_core::ColliderShape::ConvexHull(
-                gizmo_physics_core::ConvexHullShape {
-                    vertices: std::sync::Arc::new(hull.vertices),
-                    faces: std::sync::Arc::new(hull.faces),
-                },
-            ),
-            is_trigger: false,
-            material: gizmo_physics_core::PhysicsMaterial::default(),
-            collision_layer: gizmo_physics_core::CollisionLayer::default(),
-        };
+        let collider = gizmo_physics_core::Collider::from_shape(
+            gizmo_physics_core::ColliderShape::ConvexHull(gizmo_physics_core::ConvexHullShape {
+                vertices: std::sync::Arc::new(hull.vertices),
+                faces: std::sync::Arc::new(hull.faces),
+            }),
+        );
 
         rb.update_inertia_from_collider(&collider);
 
@@ -444,17 +439,12 @@ impl PreFracturedCache {
             }
 
             let hull = gizmo_physics_core::quickhull::compute_convex_hull(&chunk.vertices);
-            let collider = gizmo_physics_core::Collider {
-                shape: gizmo_physics_core::ColliderShape::ConvexHull(
-                    gizmo_physics_core::ConvexHullShape {
-                        vertices: std::sync::Arc::new(hull.vertices),
-                        faces: std::sync::Arc::new(hull.faces),
-                    },
-                ),
-                is_trigger: false,
-                material: gizmo_physics_core::PhysicsMaterial::default(),
-                collision_layer: gizmo_physics_core::CollisionLayer::default(),
-            };
+            let collider = gizmo_physics_core::Collider::from_shape(
+                gizmo_physics_core::ColliderShape::ConvexHull(gizmo_physics_core::ConvexHullShape {
+                    vertices: std::sync::Arc::new(hull.vertices),
+                    faces: std::sync::Arc::new(hull.faces),
+                }),
+            );
 
             rb.update_inertia_from_collider(&collider);
 

@@ -5,6 +5,7 @@ use crate::math::Vec3;
 
 /// Gizmo Engine Fizik Eklentisi (Plugin).
 /// Eklendiğinde fizik dünyasını (PhysicsWorld) başlatır.
+#[non_exhaustive]
 pub struct PhysicsPlugin {
     pub gravity: Vec3,
 }
@@ -14,6 +15,19 @@ impl Default for PhysicsPlugin {
         Self {
             gravity: Vec3::new(0.0, -9.81, 0.0),
         }
+    }
+}
+
+impl PhysicsPlugin {
+    /// Varsayılan yerçekimi ile yeni bir PhysicsPlugin oluşturur.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Yerçekimi vektörünü ayarlar (zincirlenebilir).
+    pub fn with_gravity(mut self, gravity: Vec3) -> Self {
+        self.gravity = gravity;
+        self
     }
 }
 

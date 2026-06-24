@@ -12,6 +12,7 @@ use gizmo_core::entity::Entity;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum ZoneShape {
     Box {
         min: gizmo_math::Vec3,
@@ -42,11 +43,26 @@ impl ZoneShape {
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct GravityField {
     pub shape: ZoneShape,
     pub gravity: gizmo_math::Vec3,
     pub falloff_radius: f32, // If > 0, gravity drops off
     pub priority: i32,
+}
+
+impl Default for GravityField {
+    fn default() -> Self {
+        Self {
+            shape: ZoneShape::Sphere {
+                center: gizmo_math::Vec3::ZERO,
+                radius: 1.0,
+            },
+            gravity: gizmo_math::Vec3::new(0.0, -9.81, 0.0),
+            falloff_radius: 0.0,
+            priority: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -58,6 +74,21 @@ pub struct FluidZone {
     pub quadratic_drag: f32, // fallback quadratic drag
 }
 
+impl Default for FluidZone {
+    fn default() -> Self {
+        Self {
+            shape: ZoneShape::Sphere {
+                center: gizmo_math::Vec3::ZERO,
+                radius: 1.0,
+            },
+            density: 1000.0,
+            viscosity: 1.0,
+            linear_drag: 0.0,
+            quadratic_drag: 0.0,
+        }
+    }
+}
+
 /// Sabit iç fizik frekansı (Hz) - 240Hz (Sub-stepping ile mükemmel çarpışma tespiti)
 const PHYSICS_HZ: f32 = 240.0;
 const FIXED_DT: f32 = 1.0 / PHYSICS_HZ;
@@ -66,6 +97,7 @@ const MAX_SUBSTEPS: u32 = 64; // Increased from 8 to support larger DTs without 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[derive(Default)]
+#[non_exhaustive]
 pub enum Weather {
     #[default]
     Sunny,

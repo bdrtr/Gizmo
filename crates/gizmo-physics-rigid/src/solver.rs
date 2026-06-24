@@ -16,6 +16,7 @@ use gizmo_physics_core::ContactManifold;
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct ConstraintSolver {
     /// PGS iterasyon sayısı (daha fazla = daha stabil, daha yavaş)
     pub iterations: usize,

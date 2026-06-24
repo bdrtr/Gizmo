@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct EditorPrefs {
     pub camera_speed: f32,
     pub camera_focus_distance: f32,

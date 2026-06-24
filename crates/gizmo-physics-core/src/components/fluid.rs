@@ -1,6 +1,7 @@
 use gizmo_math::Vec3;
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct FluidSimulation {
     pub target_density: f32,
     pub pressure_multiplier: f32,

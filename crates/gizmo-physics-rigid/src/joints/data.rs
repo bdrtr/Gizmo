@@ -3,6 +3,7 @@ use gizmo_math::{Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Joint {
     pub entity_a: Entity,
     pub entity_b: Entity,
@@ -17,6 +18,7 @@ pub struct Joint {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum JointData {
     Fixed,
     Hinge(HingeJointData),
@@ -26,6 +28,7 @@ pub enum JointData {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum JointType {
     Fixed,
     Hinge,
@@ -34,7 +37,8 @@ pub enum JointType {
     Spring,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub struct HingeJointData {
     pub axis: Vec3,
     pub use_limits: bool,
@@ -47,7 +51,8 @@ pub struct HingeJointData {
     pub current_angle: f32,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub struct BallSocketJointData {
     pub use_cone_limit: bool,
     pub cone_limit_angle: f32,
@@ -55,7 +60,8 @@ pub struct BallSocketJointData {
     pub initial_relative_rotation: Option<Quat>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub struct SliderJointData {
     pub axis: Vec3,
     pub use_limits: bool,
@@ -70,7 +76,8 @@ pub struct SliderJointData {
     pub initial_relative_rotation: Option<Quat>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub struct SpringJointData {
     pub rest_length: f32,
     pub stiffness: f32,
