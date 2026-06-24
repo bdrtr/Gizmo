@@ -4,7 +4,7 @@
 > Bu belge canlıdır — madde tamamlandıkça `[x]` işaretle, **Durum** bölümünü güncelle.
 
 ## Durum
-- **Şu anki aşama:** Faz 0–1, **Faz 2 (determinizm)** ve **Faz 4 TAMAMLANDI** — solver kalite turu, CCD, joint kütüphanesi, materyal combine, **TGS Soft çözücü**, **islands & sleeping hardening**, **geniş-sahne perf profili**, ve **determinizm: aynı-platform replay/rollback kararı + state_hash API + süreçler-arası test** kapandı. Sıradaki: Faz 3 (netcode client — artık state_hash hazır) / Faz 5 (renderer-WASM/editor) / Faz 6 (API 1.0).
+- **Şu anki aşama:** Faz 0–4 TAMAMLANDI — solver kalite turu, CCD, joint, materyal combine, **TGS Soft**, **islands & sleeping**, **geniş-sahne perf**, **determinizm (state_hash + süreçler-arası test)**, ve **Faz 3 P2P rollback netcode (snapshot/restore + RollbackSession + Transport + gerçek-UDP client, lag/jitter/loss yakınsama testli)** kapandı. Sıradaki: Faz 5 (renderer-WASM/editor) / Faz 6 (API kararlılığı + 1.0; rb.friction API kararı burada).
 - **İlerleme:** ECS+çekirdek fizik (9 bug), vehicle, soft-body, fracture, multibody/ABA, EPA, CCD, joints — denetlendi+düzeltildi. **TGS Soft (Box2D v3 Soft Step) uygulandı → n≥16 yüksek-enerji yığın çökmesi (SI'nin temel sınırı) çözüldü.** **538 test yeşil**, CI clippy temiz, determinizm 3/3 hash eşleşiyor (AAC365945335779E).
 - **Faz 1 yeni kapsam (2026-06-15):** broad-phase DIFFERENTIAL test (BVH pairs = brute-force, margin=0 birebir + şişman-margin soundness), joint property (ball-socket yakınsama + zincir kararlılığı), gearbox index-güvenliği property (Faz 0 panik regresyonu), soft-body property (cloth/rope pinned + FEM sıkışma-geri-kazanımı/J-cutoff regresyonu), fracture property (voronoi determinizm + chunk geçerliliği), N-kutu SOAK (10sn kararlılık) + GOLDEN (zeminde dengelenen kutu) regresyon.
 - **Sıradaki:** Faz 1 kalanı (benchmark regresyon takibi) VEYA Faz 2 (determinizm kararı) / Faz 3 (netcode client).
@@ -129,7 +129,7 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
 
 ---
 
-## Faz 3 — Netcode Olgunlaştırma  (rollback çekirdeği ✅; transport katmanı kaldı)
+## Faz 3 — Netcode Olgunlaştırma  ✅ (P2P rollback tam; renet client-server opsiyonel)
 
 - [x] **Rollback'i deterministik fizikle ENTEGRE ET** (Faz 2'ye bağlıydı) — `PhysicsWorld::
       snapshot()/restore_snapshot()` (`world.rs`, `WorldSnapshot`): rollback için TAM iç durum
@@ -143,13 +143,19 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
       her girdi LAG=5 tick geç öğrenilir (en kötü hal → her tick rollback), yanlış-tahmin
       düzeltilir, döngü sonu kalan girdiler toplu teslim + son rollback. Peer "ground truth"
       peer'e YAKINSAR (state_hash eşit) = senkron. GGPO rollback döngüsü deterministik çalışıyor.
-- [ ] Gerçek **istemci binary'si** (transport katmanı): `NetworkClient` + `ClientPredictor` +
-      `SnapshotInterpolator` + UDP `InputAck`/`WorldStateUpdate` döngüsü. Kütüphane parçaları
-      (`rollback/{manager,transport,packet,input_buffer}`) + artık deterministik snapshot var;
-      uçtan uca UDP client + ECS `RollbackManager`'ı `PhysicsWorld::snapshot` ile köprüleme kaldı.
+- [x] **Uçtan uca P2P rollback client** (transport katmanı) — `Transport` trait (`rollback/
+      session.rs`): gerçek `UdpTransport` + test `LoopbackTransport` (lag + paket-kaybı sim) aynı
+      kodu paylaşır. **`RollbackSession<T>`**: PhysicsWorld-native GGPO döngüsü (resend penceresiyle
+      paket-kaybına dayanıklı; yanlış-tahminde deterministik snapshot ile rollback+resim).
+      `examples/p2p_rollback_test.rs` ESKİ ECS manuel döngüden (warm-start kayıplı) yeni
+      RollbackSession + gerçek UDP'ye yeniden yazıldı (çalışan istemci; iki süreç localhost'ta
+      onaylı geçmişte senkron — doğrulandı). NOT (ileri/opsiyonel): renet client-server backend
+      (NetworkClient/ClientPredictor/SnapshotInterpolator) ayrı bir mimari olarak duruyor;
+      P2P-rollback yolu bu projenin determinizm temeliyle tam entegre.
 
-**Çıkış kriteri:** iki client gerçekçi ağ koşullarında senkron kalıyor → SİMÜLE testte KARŞILANDI
-(deterministik rollback + lag/jitter/loss yakınsama); gerçek-UDP uçtan uca client kaldı.
+**Çıkış kriteri:** iki client gerçekçi ağ koşullarında senkron kalıyor → KARŞILANDI
+(`two_peers_converge_under_lag_and_packet_loss`: lag+kayıp altında state_hash-eşit yakınsama;
+gerçek-UDP örnek onaylı geçmişte senkron).
 
 ---
 
