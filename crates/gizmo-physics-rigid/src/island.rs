@@ -100,13 +100,24 @@ impl IslandManager {
             groups.entry(root).or_default().push(i);
         }
 
-        groups
+        // DETERMINIZM: `groups` bir HashMap; `into_values()` sırası süreçten sürece
+        // değişir (hash randomization). Island'lar arası çözüm sırası bundan etkilenmesin
+        // diye her island'ın indislerini sırala + island'ları en küçük indise göre sırala.
+        // (Island'lar AYRIK olduğundan fizik sonucu sıradan bağımsız; bu, süreçler-arası
+        // tutarlı sıra/warm-start eşlemesi ve tekrarlanabilir hata ayıklama içindir.)
+        let mut islands: Vec<Island> = groups
             .into_values()
-            .map(|indices| Island {
-                manifold_indices: indices,
-                sleeping: false,
+            .map(|mut indices| {
+                indices.sort_unstable();
+                Island {
+                    manifold_indices: indices,
+                    sleeping: false,
+                }
             })
-            .collect()
+            .collect();
+        islands
+            .sort_unstable_by_key(|isl| isl.manifold_indices.first().copied().unwrap_or(usize::MAX));
+        islands
     }
 
     /// Manifoldları island gruplarına göre böl — her island kendi manifold Vec'ine sahip

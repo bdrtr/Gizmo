@@ -221,7 +221,21 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
       (stress testi joint kullanmıyor). NOT (ileri): Fixed weld velocity-lock'tur (pozisyon-bias yok);
       sürekli ağır yükte mikro-drift olabilir — gerekirse initial-relative-rotation saklayıp Baumgarte
       eklenir (Faz 6 polish).
-- [ ] Islands & sleeping sağlamlaştırma (Faz 0 uyku bug'ı sonrası).
+- [x] **Islands & sleeping sağlamlaştırma** — DENETLENDİ (3 paralel subagent) + 5 gerçek bug
+      DÜZELTİLDİ (her biri regresyon testiyle, `tests/sleeping.rs`). **ASIL bug — ada-uyumsuz
+      uyku:** per-body uyku + island-wake birlikte ping-pong KİLİDİ yapıyordu → dinlenen bir
+      yığın (|v|=0 olsa bile) ASLA uyumuyordu (bir kutu uyur uymaz ada hâlâ "uyanık" komşu
+      içerdiğinden `wake_updates` onu geri uyandırıyordu). Çözüm (`pipeline.rs`): "çöz" kapısı
+      (`island_active`: uyanık dinamik/hareketli kinematik) ile "uyandır" kapısı (`island_has_mover`:
+      yalnız eşik ÜSTÜ hızlı/`!can_sleep`) AYRILDI → ada topluca uyuyabilir; gerçek hareketli
+      (düşen kutu vb.) yine uyandırır. **+ apply_impulse/apply_force** `&mut RigidBody` alıp
+      `wake_up()` çağırır (eskiden `&` → uyuyan cisme impuls SESSİZCE yutuluyordu). **+ joint-coupled
+      wake** (pipeline joints öncesi: bir ucu hareketli eklemin uyuyan dinamik ucu uyandırılır;
+      joint_solver `&[RigidBody]` ile uyandıramıyordu). **+ island inşa SIRASI deterministik**
+      (`island.rs`: HashMap `into_values` süreç-bağlı → min-indise göre sıralanır). Doğrulama:
+      workspace **543 test yeşil**, CI clippy exit 0, determinizm 3/3 (yeni hash 9ED99A65E026DD68 —
+      cisimler artık uyuduğundan). NOT: `should_sleep`/`Island.sleeping` hâlâ ölü kod (zararsız,
+      ileride island-seviye uyku için bırakıldı).
 - [ ] Geniş sahne performans profili (mimalloc/archetype cache locality doğrulama).
 
 ---

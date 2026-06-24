@@ -436,26 +436,36 @@ impl PhysicsWorld {
         &self.trigger_events
     }
 
-    /// Apply an impulse to a body at a point
+    /// Apply an impulse to a body at a point.
+    ///
+    /// `rb` alınır `&mut` çünkü uyuyan bir cisme impuls uygulamak onu UYANDIRMALIDIR;
+    /// aksi halde hız değişir ama `is_sleeping` true kalır → position_integration cismi
+    /// atlar ve impuls SESSİZCE YUTULUR (cisim hiç hareket etmez).
     pub fn apply_impulse(
         &self,
-        rb: &RigidBody,
+        rb: &mut RigidBody,
         transform: &Transform,
         vel: &mut Velocity,
         impulse: gizmo_math::Vec3,
         point: gizmo_math::Vec3,
     ) {
+        if rb.is_dynamic() {
+            rb.wake_up();
+        }
         Integrator::apply_impulse_at_point(rb, transform, vel, impulse, point);
     }
 
-    /// Apply a force to a body
+    /// Apply a force to a body. `rb` `&mut` — uyuyan cismi uyandırır (bkz. apply_impulse).
     pub fn apply_force(
         &self,
-        rb: &RigidBody,
+        rb: &mut RigidBody,
         vel: &mut Velocity,
         force: gizmo_math::Vec3,
         dt: f32,
     ) {
+        if rb.is_dynamic() {
+            rb.wake_up();
+        }
         Integrator::apply_force(rb, vel, force, dt);
     }
 

@@ -488,21 +488,44 @@ impl PhysicsWorld {
                     // sayılıyordu; hareket eden bir kinematik platformun üstündeki uyuyan
                     // dinamik cisim hiç uyandırılmıyor, içinden geçiliyordu.) Mover varsa
                     // aşağıdaki wake_updates döngüsü adadaki uyuyan dinamikleri uyandırır.
-                    let island_awake = island_manifolds.iter().any(|m| {
+                    // İki AYRI kavram:
+                    //  • island_active — bu adayı ÇÖZ müyüz? Herhangi uyanık dinamik VEYA
+                    //    hareketli kinematik varsa (yerleşmekte olan ada çözülmeye devam eder).
+                    //  • island_has_mover — uyuyan üyeleri UYANDIRIR mıyız? Yalnızca GERÇEK bir
+                    //    hareketli (uyku eşiğinin ÜSTÜNDE hızlı dinamik VEYA hareketli kinematik)
+                    //    varsa. Eskiden bu ayrım yoktu: uyanık-ama-yerleşen bir komşu (eşik altı)
+                    //    "awake" sayılıp uyuyan komşusunu geri uyandırıyordu → ada ASLA topluca
+                    //    uyuyamıyordu (ping-pong; |v|=0 olsa bile). Bu ada-uyumsuzluğu bug'ı.
+                    let kinematic_moving = |i: usize| -> bool {
+                        rigid_bodies[i].is_kinematic()
+                            && (velocities[i].linear.length_squared() > 1e-8
+                                || velocities[i].angular.length_squared() > 1e-8)
+                    };
+                    let island_active = island_manifolds.iter().any(|m| {
                         [m.entity_a, m.entity_b].iter().any(|&e| {
                             entity_map.get(&e.id()).is_some_and(|&i| {
-                                let rb = &rigid_bodies[i];
-                                (rb.is_dynamic() && !rb.is_sleeping)
-                                    || (rb.is_kinematic()
-                                        && (velocities[i].linear.length_squared() > 1e-8
-                                            || velocities[i].angular.length_squared() > 1e-8))
+                                (rigid_bodies[i].is_dynamic() && !rigid_bodies[i].is_sleeping)
+                                    || kinematic_moving(i)
                             })
                         })
                     });
 
-                    if !island_awake {
+                    if !island_active {
                         return (Vec::new(), island_manifolds, Vec::new(), Vec::new(), Vec::new());
                     }
+
+                    // Gerçek hareketli: eşik üstü hızlı uyanık dinamik VEYA hareketli kinematik.
+                    let island_has_mover = island_manifolds.iter().any(|m| {
+                        [m.entity_a, m.entity_b].iter().any(|&e| {
+                            entity_map.get(&e.id()).is_some_and(|&i| {
+                                let rb = &rigid_bodies[i];
+                                (rb.is_dynamic()
+                                    && !rb.is_sleeping
+                                    && !rb.can_sleep(&velocities[i]))
+                                    || kinematic_moving(i)
+                            })
+                        })
+                    });
 
                     // Collect island indices and bodies that need waking.
                     let mut island_indices = std::collections::HashSet::new();
@@ -512,7 +535,12 @@ impl PhysicsWorld {
                         for &e in &[m.entity_a, m.entity_b] {
                             if let Some(&idx) = entity_map.get(&e.id()) {
                                 island_indices.insert(idx);
-                                if rigid_bodies[idx].is_dynamic() && rigid_bodies[idx].is_sleeping {
+                                // Uyuyanı YALNIZ gerçek bir hareketli varsa uyandır (yerleşen
+                                // komşu uyuyanı geri uyandırmasın → ada topluca uyuyabilsin).
+                                if island_has_mover
+                                    && rigid_bodies[idx].is_dynamic()
+                                    && rigid_bodies[idx].is_sleeping
+                                {
                                     wake_updates.push(e);
                                 }
                             }
@@ -667,6 +695,35 @@ impl PhysicsWorld {
 
         // ── Joints ────────────────────────────────────────────────────────
         if !self.joints.is_empty() {
+            // Joint-coupled uyandırma: joint_solver `&[RigidBody]` alır → uyuyan bir cismi
+            // uyandıramaz; ucu hareketli bir eklemin diğer (uyuyan) ucunun hızını sessizce
+            // değiştirir ama is_sleeping'i bırakır → position_integration onu atlar, eklem
+            // düzeltmesi YUTULUR (mekanizma kopuk görünür). Çözüm: bir ucu "mover" (uyanık-
+            // dinamik VEYA hareketli-kinematik) olan her eklemin uyuyan dinamik ucunu çöz
+            // ÖNCESİ uyandır. İki uç da uykudaysa mekanizma dinlenmededir → dokunma.
+            for ji in 0..self.joints.len() {
+                if self.joints[ji].is_broken {
+                    continue;
+                }
+                let ia = self.entity_index_map.get(&self.joints[ji].entity_a.id()).copied();
+                let ib = self.entity_index_map.get(&self.joints[ji].entity_b.id()).copied();
+                if let (Some(ia), Some(ib)) = (ia, ib) {
+                    let mover = |idx: usize| -> bool {
+                        let rb = &self.rigid_bodies[idx];
+                        (rb.is_dynamic() && !rb.is_sleeping)
+                            || (rb.is_kinematic()
+                                && (self.velocities[idx].linear.length_squared() > 1e-8
+                                    || self.velocities[idx].angular.length_squared() > 1e-8))
+                    };
+                    let (a_mover, b_mover) = (mover(ia), mover(ib));
+                    if a_mover && self.rigid_bodies[ib].is_dynamic() && self.rigid_bodies[ib].is_sleeping {
+                        self.rigid_bodies[ib].wake_up();
+                    }
+                    if b_mover && self.rigid_bodies[ia].is_dynamic() && self.rigid_bodies[ia].is_sleeping {
+                        self.rigid_bodies[ia].wake_up();
+                    }
+                }
+            }
             self.joint_solver.solve_joints(
                 &mut self.joints,
                 &self.entity_index_map,
