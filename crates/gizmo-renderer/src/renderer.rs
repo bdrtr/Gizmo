@@ -340,8 +340,10 @@ impl Renderer {
                                 required_features: wgpu::Features::empty(),
                                 required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
                                 label: None,
+                                experimental_features: wgpu::ExperimentalFeatures::default(),
+                                memory_hints: wgpu::MemoryHints::default(),
+                                trace: wgpu::Trace::Off,
                             },
-                            None,
                         )
                         .await
                     {
@@ -354,8 +356,10 @@ impl Renderer {
                                         required_features: wgpu::Features::empty(),
                                         required_limits: wgpu::Limits::default(),
                                         label: None,
+                                        experimental_features: wgpu::ExperimentalFeatures::default(),
+                                        memory_hints: wgpu::MemoryHints::default(),
+                                        trace: wgpu::Trace::Off,
                                     },
-                                    None,
                                 )
                                 .await
                                 .unwrap_or_else(|e3| {
