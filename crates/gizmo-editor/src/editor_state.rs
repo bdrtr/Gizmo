@@ -486,11 +486,11 @@ impl EditorState {
 
 pub fn open_tab(&mut self, tab: EditorTab) {
         if let Some(index) = self.dock_state.find_tab(&tab) {
-            self.dock_state.set_active_tab(index);
+            let _ = self.dock_state.set_active_tab(index);
         } else {
             self.dock_state.push_to_first_leaf(tab.clone());
             if let Some(index) = self.dock_state.find_tab(&tab) {
-                self.dock_state.set_active_tab(index);
+                let _ = self.dock_state.set_active_tab(index);
             }
         }
     }

@@ -1150,7 +1150,10 @@ mod tests {
         pollster::block_on(async {
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
                 backends: wgpu::Backends::all(),
-                ..Default::default()
+                flags: wgpu::InstanceFlags::default(),
+                memory_budget_thresholds: Default::default(),
+                backend_options: Default::default(),
+                display: None,
             });
 
             let adapter = instance
@@ -1162,8 +1165,8 @@ mod tests {
                 .await;
 
             let adapter = match adapter {
-                Some(a) => a,
-                None => {
+                Ok(a) => a,
+                Err(_) => {
                     tracing::info!(
                         "No suitable GPU adapter found for headless test. Skipping wgpu test."
                     );
@@ -1172,14 +1175,14 @@ mod tests {
             };
 
             let (device, queue) = adapter
-                .request_device(
-                    &wgpu::DeviceDescriptor {
-                        required_features: wgpu::Features::empty(),
-                        required_limits: wgpu::Limits::downlevel_defaults(),
-                        label: None,
-                    },
-                    None,
-                )
+                .request_device(&wgpu::DeviceDescriptor {
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::downlevel_defaults(),
+                    label: None,
+                    experimental_features: wgpu::ExperimentalFeatures::default(),
+                    memory_hints: wgpu::MemoryHints::default(),
+                    trace: wgpu::Trace::Off,
+                })
                 .await
                 .unwrap();
 
@@ -1213,7 +1216,10 @@ mod tests {
                 mip_level_count,
             );
 
-            device.poll(wgpu::PollType::Wait);
+            let _ = device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
         });
     }
 }

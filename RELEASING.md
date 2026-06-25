@@ -220,7 +220,19 @@ private; callers use `len`/`is_empty`/`push`/`first`/`iter`/`as_slice`, `Index`,
 `IntoIterator` (by value and by ref), and `FromIterator`. `arrayvec` is no longer
 in the public API and was dropped as a direct dep of `gizmo-physics-rigid`.
 
-### (c) Upgrade `wgpu` / `winit` / `egui` to current — **XL** — *Stage B 1.0 blocker*
+### (c) Upgrade `wgpu` / `winit` / `egui` to current — **XL** — ✅ **DONE (2026-06-25, branch `upgrade/graphics-stack`)**
+
+Done: **wgpu 0.20→29, winit 0.29→0.30, egui 0.28→0.34** (+ `egui-wgpu`/`egui-winit`
+0.34, `egui_dock` 0.13→0.19, `transform-gizmo-egui` 0.3→0.9). Full workspace builds
+(+`--all-features`), 552 tests pass, CI clippy green on nightly+stable, determinism
+3/3 unchanged, a real windowed run works, MSRV raised 1.89→**1.92** (egui floor). See
+[`docs/graphics-upgrade-plan.md`](docs/graphics-upgrade-plan.md) for the matrix,
+per-dependency cheatsheet, and reusable recipes. **This unblocks the entire Stage B
+1.0.** (winit's deprecated `run`/`create_window` were used as a bridge to avoid a
+full `ApplicationHandler` rewrite; egui/winit deprecation warnings are silenced with
+documented crate-level `#![allow(deprecated)]` — migrating them is follow-up polish.)
+
+<details><summary>Original scope notes</summary>
 
 Move `wgpu 0.20 → current`, `winit 0.29 → current`, `egui 0.28 → current`
 (and the egui ecosystem crates: `egui-winit`, `egui-wgpu`, `egui_dock 0.13`,
@@ -230,6 +242,8 @@ the event-loop/`ApplicationHandler` model; `egui 0.28 → current` ripples throu
 the entire editor. This is the single largest piece of work and the gate for the
 **entire Stage B 1.0** (renderer, window, editor, ui, app, scripting, facade).
 Until it lands, Stage B stays `0.x` (which is fine — see §3).
+
+</details>
 
 ### (d) `get_` getter rename + visibility narrowing — **M** — ⚠️ **getter rename DONE (2026-06-25); visibility narrowing assessed** (audit blocker #3)
 

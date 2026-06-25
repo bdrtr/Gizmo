@@ -1,3 +1,4 @@
+#![allow(deprecated)] // §4c graphics upgrade: egui 0.34 / winit 0.30 deprecations (all functional) — migrate as follow-up
 use gizmo::prelude::*;
 
 struct FluidDemo {
@@ -336,6 +337,7 @@ fn fluid_only_render_pass(
             label: Some("Clear Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &renderer.post.hdr_texture_view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -357,6 +359,7 @@ fn fluid_only_render_pass(
             }),
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
     }
 
@@ -415,6 +418,7 @@ fn fluid_only_render_pass(
             label: Some("Debug Gizmo Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &renderer.post.hdr_texture_view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load,
@@ -431,6 +435,7 @@ fn fluid_only_render_pass(
             }),
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
 
         // Gizmo debug hatları (tank sınırları)

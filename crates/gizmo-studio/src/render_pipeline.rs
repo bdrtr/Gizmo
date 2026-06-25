@@ -593,6 +593,7 @@ pub fn execute_render_pipeline(
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
+            multiview_mask: None,
             });
 
             shadow_pass.set_pipeline(&renderer.scene.shadow_pipeline);
@@ -609,7 +610,7 @@ pub fn execute_render_pipeline(
                     &renderer.scene.shadow_pass_bind_groups[cascade_i],
                     &[],
                 );
-                shadow_pass.set_bind_group(1, &batch.skeleton_bg, &[]);
+                shadow_pass.set_bind_group(1, &*batch.skeleton_bg, &[]);
                 shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
                 shadow_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
                 shadow_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
@@ -622,6 +623,7 @@ pub fn execute_render_pipeline(
                 label: Some("Main Render Pass (HDR)"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &renderer.post.hdr_texture_view, // Artık ekran yerine HDR texture'a çiziyoruz!
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         // Linear space 0.035 ~= sRGB 0.22 (Blender dark grey) after Gamma Correction / HDR
@@ -644,6 +646,7 @@ pub fn execute_render_pipeline(
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
+            multiview_mask: None,
             });
 
             render_pass.set_pipeline(&renderer.scene.render_pipeline);
@@ -659,9 +662,9 @@ pub fn execute_render_pipeline(
                     std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
 
                 render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
-                render_pass.set_bind_group(1, &batch.bind_group, &[]);
+                render_pass.set_bind_group(1, &*batch.bind_group, &[]);
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-                render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
+                render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
                 render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
                 render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
@@ -684,9 +687,9 @@ pub fn execute_render_pipeline(
                     std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
 
                 render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
-                render_pass.set_bind_group(1, &batch.bind_group, &[]);
+                render_pass.set_bind_group(1, &*batch.bind_group, &[]);
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-                render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
+                render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
                 render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
                 render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
@@ -710,9 +713,9 @@ pub fn execute_render_pipeline(
                     std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
 
                 render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
-                render_pass.set_bind_group(1, &batch.bind_group, &[]);
+                render_pass.set_bind_group(1, &*batch.bind_group, &[]);
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]); // sky.wgsl içinde boş da olsa bağlı kalması gerek
-                render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
+                render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
                 render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
                 render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
@@ -731,9 +734,9 @@ pub fn execute_render_pipeline(
                     std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
 
                 render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
-                render_pass.set_bind_group(1, &batch.bind_group, &[]);
+                render_pass.set_bind_group(1, &*batch.bind_group, &[]);
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-                render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
+                render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
                 render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
                 render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
@@ -756,9 +759,9 @@ pub fn execute_render_pipeline(
                         std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
 
                     render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
-                    render_pass.set_bind_group(1, &batch.bind_group, &[]);
+                    render_pass.set_bind_group(1, &*batch.bind_group, &[]);
                     render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-                    render_pass.set_bind_group(3, &batch.skeleton_bg, &[]);
+                    render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
                     render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
                     render_pass.set_vertex_buffer(0, batch.vbuf.slice(..));
                     render_pass.draw(0..batch.vertex_count, batch.start_instance..safe_end);
@@ -818,6 +821,7 @@ pub fn execute_render_pipeline(
             label: Some("Clear Swapchain Background Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -827,6 +831,7 @@ pub fn execute_render_pipeline(
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         &target.0.view
     } else {

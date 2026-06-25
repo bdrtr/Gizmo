@@ -415,10 +415,10 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("FEM Render Pipeline Layout"),
                 bind_group_layouts: &[
-                    &renderer.scene.global_bind_group_layout,
-                    &fem_bind_group_layout,
+                    Some(&renderer.scene.global_bind_group_layout),
+                    Some(&fem_bind_group_layout),
                 ],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
 
     let fem_render_pipeline =
@@ -429,13 +429,13 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
                 layout: Some(&render_pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &render_shader,
-                    entry_point: "vs_main",
+                    entry_point: Some("vs_main"),
                     compilation_options: Default::default(),
                     buffers: &[], // We fetch from storage buffer instead
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &render_shader,
-                    entry_point: "fs_main",
+                    entry_point: Some("fs_main"),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: renderer.config.format,
@@ -451,13 +451,14 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: true,
-                    depth_compare: wgpu::CompareFunction::Less,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
                     stencil: wgpu::StencilState::default(),
                     bias: wgpu::DepthBiasState::default(),
                 }),
                 multisample: wgpu::MultisampleState::default(),
-                multiview: None,
+                multiview_mask: None,
+            cache: None,
             });
 
     world.insert_resource(asset_manager);
@@ -563,6 +564,7 @@ fn render(
             label: Some("FEM Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load,
@@ -579,6 +581,7 @@ fn render(
             }),
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
 
         rpass.set_pipeline(&state.fem_render_pipeline);
