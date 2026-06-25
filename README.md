@@ -6,7 +6,7 @@
   [![Crates.io](https://img.shields.io/crates/v/gizmo-engine.svg)](https://crates.io/crates/gizmo-engine)
   [![Docs.rs](https://img.shields.io/docsrs/gizmo-engine.svg)](https://docs.rs/gizmo-engine)
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-  [![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
+  [![Rust](https://img.shields.io/badge/Rust-1.92%2B-orange.svg)](https://www.rust-lang.org/)
 </div>
 
 <br/>
@@ -29,57 +29,46 @@ Gizmo Engine is a high-performance, data-driven, and fully modular game developm
 
 ## 🚀 Quickstart
 
-Gizmo Engine is designed to be highly modular and ergonomic. Here is a minimal "Hello World" example demonstrating how to spawn a rotating 3D cube.
+Gizmo Engine is designed to be highly modular and ergonomic. Here is a minimal
+example — the default `bevy_3d_scene` demo — that opens a window and renders a lit
+3D scene (a ground disc, a cube, a directional light, and a camera) using the
+high-level `SimpleApp` API.
 
 ```rust
 use gizmo::prelude::*;
+use gizmo::math::Vec3;
+use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 
 fn main() {
-    App::new()
-        .add_plugins(DefaultPlugins)
-        .add_startup_system(setup_scene)
-        .add_system(rotate_cube)
-        .run();
-}
+    gizmo::app::App::<SimpleSceneState>::new("Gizmo Engine - 3D Scene", 1280, 720)
+        .with_simple_scene(|scene, state| {
+            // Circular ground disc.
+            scene.spawn_ground(4.0);
 
-fn setup_scene(
-    mut commands: Commands, 
-    mut meshes: ResMut<Assets<Mesh>>, 
-    mut materials: ResMut<Assets<StandardMaterial>>
-) {
-    // Spawn Camera
-    commands.spawn(Camera3dBundle {
-        transform: Transform::from_xyz(0.0, 5.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
-        ..Default::default()
-    });
+            // A cube sitting on the ground.
+            scene.spawn_cube(Vec3::new(0.0, 0.5, 0.0), 1.0, Vec3::new(0.20, 0.28, 1.0));
 
-    // Spawn Light
-    commands.spawn(DirectionalLightBundle {
-        transform: Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4)),
-        ..Default::default()
-    });
+            // A directional light.
+            let light = scene.world.spawn();
+            DirectionalLightBundle {
+                rotation: Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4)
+                    * Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
+                intensity: 1.8,
+                ..Default::default()
+            }
+            .apply(scene.world, light);
 
-    // Spawn Cube
-    commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
-            material: materials.add(Color::rgb(0.8, 0.2, 0.3).into()),
-            transform: Transform::from_xyz(0.0, 0.0, 0.0),
-            ..Default::default()
-        },
-        RotatingComponent,
-    ));
-}
-
-#[derive(Component)]
-struct RotatingComponent;
-
-fn rotate_cube(time: Res<Time>, mut query: Query<&mut Transform, With<RotatingComponent>>) {
-    for mut transform in query.iter_mut() {
-        transform.rotate_y(1.0 * time.delta_seconds());
-    }
+            // A camera looking at the origin.
+            scene.spawn_camera(state, Vec3::new(-2.5, 4.5, 9.0), Vec3::ZERO);
+        })
+        .run()
+        .expect("failed to run the app");
 }
 ```
+
+> The full source is [`demo/src/bin/bevy_3d_scene.rs`](demo/src/bin/bevy_3d_scene.rs).
+> For lower-level control, drop down to `App`, `Plugin`, `Commands`, `Query`,
+> `Res`/`ResMut`, and the `*Bundle` types in [`gizmo::prelude`](crates/gizmo/src/prelude.rs).
 
 ## 📦 Workspace Architecture
 
