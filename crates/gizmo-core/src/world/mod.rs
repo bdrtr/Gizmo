@@ -821,7 +821,7 @@ impl World {
     }
 
     /// Entity üzerindeki tüm bileşenlerin TypeId'lerini döndürür.
-    pub fn get_entity_component_types(&self, entity: Entity) -> Vec<TypeId> {
+    pub fn entity_component_types(&self, entity: Entity) -> Vec<TypeId> {
         if !self.is_alive(entity) {
             return Vec::new();
         }
