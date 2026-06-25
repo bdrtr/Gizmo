@@ -595,6 +595,7 @@ pub fn default_render_pass(
             }),
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         shadow_pass.set_pipeline(&renderer.scene.shadow_pipeline);
         shadow_pass.set_bind_group(0, &renderer.scene.shadow_pass_bind_groups[i], &[]);
@@ -607,7 +608,7 @@ pub fn default_render_pass(
                 .skeleton_bind_group
                 .as_ref()
                 .unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
-            shadow_pass.set_bind_group(1, skel_bg, &[]);
+            shadow_pass.set_bind_group(1, skel_bg.as_ref(), &[]);
             shadow_pass.set_vertex_buffer(0, item.vbuf.slice(..));
             shadow_pass.draw(
                 0..item.vertex_count,
@@ -631,6 +632,7 @@ pub fn default_render_pass(
             }),
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         // We reuse the directional shadow pipeline because it only does position transformation
         shadow_pass.set_pipeline(&renderer.scene.shadow_pipeline);
@@ -642,7 +644,7 @@ pub fn default_render_pass(
                 .skeleton_bind_group
                 .as_ref()
                 .unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
-            shadow_pass.set_bind_group(1, skel_bg, &[]);
+            shadow_pass.set_bind_group(1, skel_bg.as_ref(), &[]);
             shadow_pass.set_vertex_buffer(0, item.vbuf.slice(..));
             shadow_pass.draw(
                 0..item.vertex_count,
@@ -667,6 +669,7 @@ pub fn default_render_pass(
             }),
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         z_pass.set_pipeline(&def.z_prepass_pipeline);
         z_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
@@ -680,8 +683,8 @@ pub fn default_render_pass(
                 .skeleton_bind_group
                 .as_ref()
                 .unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
-            z_pass.set_bind_group(3, skel_bg, &[]);
-            z_pass.set_bind_group(1, &item.bind_group, &[]);
+            z_pass.set_bind_group(3, skel_bg.as_ref(), &[]);
+            z_pass.set_bind_group(1, &*item.bind_group, &[]);
             z_pass.set_vertex_buffer(0, item.vbuf.slice(..));
             z_pass.draw(
                 0..item.vertex_count,
@@ -697,6 +700,7 @@ pub fn default_render_pass(
             color_attachments: &[
                 Some(wgpu::RenderPassColorAttachment {
                     view: &def.albedo_metallic_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -705,6 +709,7 @@ pub fn default_render_pass(
                 }),
                 Some(wgpu::RenderPassColorAttachment {
                     view: &def.normal_roughness_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -713,6 +718,7 @@ pub fn default_render_pass(
                 }),
                 Some(wgpu::RenderPassColorAttachment {
                     view: &def.world_position_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -721,6 +727,7 @@ pub fn default_render_pass(
                 }),
                 Some(wgpu::RenderPassColorAttachment {
                     view: &def.world_tangent_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -738,6 +745,7 @@ pub fn default_render_pass(
             }),
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         gbuf_pass.set_pipeline(&def.gbuffer_pipeline);
         gbuf_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
@@ -751,8 +759,8 @@ pub fn default_render_pass(
                 .skeleton_bind_group
                 .as_ref()
                 .unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
-            gbuf_pass.set_bind_group(3, skel_bg, &[]);
-            gbuf_pass.set_bind_group(1, &item.bind_group, &[]);
+            gbuf_pass.set_bind_group(3, skel_bg.as_ref(), &[]);
+            gbuf_pass.set_bind_group(1, &*item.bind_group, &[]);
             gbuf_pass.set_vertex_buffer(0, item.vbuf.slice(..));
             gbuf_pass.draw(
                 0..item.vertex_count,
@@ -802,6 +810,7 @@ pub fn default_render_pass(
                 label: Some("Decal Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &def.albedo_metallic_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
@@ -811,6 +820,7 @@ pub fn default_render_pass(
                 depth_stencil_attachment: None, // No depth testing needed
                 timestamp_writes: None,
                 occlusion_query_set: None,
+            multiview_mask: None,
             });
 
             decal_pass.set_pipeline(&decal_state.pipeline);
@@ -820,7 +830,7 @@ pub fn default_render_pass(
 
             for (i, bind_group) in decal_draws.iter().enumerate() {
                 let offset = (i * 256) as u32;
-                decal_pass.set_bind_group(2, bind_group, &[]);
+                decal_pass.set_bind_group(2, bind_group.as_ref(), &[]);
                 decal_pass.set_bind_group(3, &decal_state.decal_uniform_bg, &[offset]);
                 decal_pass.draw(0..36, 0..1);
             }
@@ -833,6 +843,7 @@ pub fn default_render_pass(
             label: Some("Deferred Lighting Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &renderer.post.hdr_texture_view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.4, g: 0.6, b: 0.9, a: 1.0 }),
@@ -842,6 +853,7 @@ pub fn default_render_pass(
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         light_pass.set_pipeline(&def.lighting_pipeline);
         light_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
@@ -856,6 +868,7 @@ pub fn default_render_pass(
             label: Some("SSAO Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &ssao.ao_view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
@@ -865,6 +878,7 @@ pub fn default_render_pass(
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         pass.set_pipeline(&ssao.ssao_pipeline);
         pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
@@ -878,6 +892,7 @@ pub fn default_render_pass(
             label: Some("SSAO Blur Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &ssao.ao_blurred_view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
@@ -887,6 +902,7 @@ pub fn default_render_pass(
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         pass.set_pipeline(&ssao.blur_pipeline);
         pass.set_bind_group(0, &ssao.blur_bind_group, &[]);
@@ -899,6 +915,7 @@ pub fn default_render_pass(
             label: Some("SSAO Apply Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &renderer.post.hdr_texture_view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load,
@@ -908,6 +925,7 @@ pub fn default_render_pass(
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         pass.set_pipeline(&ssao.apply_pipeline);
         pass.set_bind_group(0, &ssao.apply_bind_group, &[]);
@@ -935,6 +953,7 @@ pub fn default_render_pass(
             label: Some("Default Engine Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &renderer.post.hdr_texture_view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: hdr_load,
@@ -951,6 +970,7 @@ pub fn default_render_pass(
             }),
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
         render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
@@ -982,8 +1002,8 @@ pub fn default_render_pass(
                     &renderer.scene.render_pipeline
                 };
                 render_pass.set_pipeline(pipeline);
-                render_pass.set_bind_group(1, &item.bind_group, &[]);
-                render_pass.set_bind_group(3, skel_bg, &[]);
+                render_pass.set_bind_group(1, &*item.bind_group, &[]);
+                render_pass.set_bind_group(3, skel_bg.as_ref(), &[]);
                 render_pass.set_vertex_buffer(0, item.vbuf.slice(..));
                 render_pass.draw(
                     0..item.vertex_count,
@@ -993,8 +1013,8 @@ pub fn default_render_pass(
 
             if draw_wire {
                 render_pass.set_pipeline(&renderer.scene.wireframe_pipeline);
-                render_pass.set_bind_group(1, &item.bind_group, &[]);
-                render_pass.set_bind_group(3, skel_bg, &[]);
+                render_pass.set_bind_group(1, &*item.bind_group, &[]);
+                render_pass.set_bind_group(3, skel_bg.as_ref(), &[]);
                 render_pass.set_vertex_buffer(0, item.vbuf.slice(..));
                 render_pass.draw(
                     0..item.vertex_count,
@@ -1049,6 +1069,7 @@ pub fn default_render_pass(
                 label: Some("SSR Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &ssr.ssr_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -1058,6 +1079,7 @@ pub fn default_render_pass(
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+            multiview_mask: None,
             });
             pass.set_pipeline(&ssr.ssr_pipeline);
             pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
@@ -1071,6 +1093,7 @@ pub fn default_render_pass(
                 label: Some("SSR Apply Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &renderer.post.hdr_texture_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
@@ -1080,6 +1103,7 @@ pub fn default_render_pass(
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+            multiview_mask: None,
             });
             pass.set_pipeline(&ssr.apply_pipeline);
             pass.set_bind_group(0, &ssr.apply_bind_group, &[]);
@@ -1095,6 +1119,7 @@ pub fn default_render_pass(
                 label: Some("SSGI Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &ssgi.ssgi_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -1104,6 +1129,7 @@ pub fn default_render_pass(
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+            multiview_mask: None,
             });
             pass.set_pipeline(&ssgi.ssgi_pipeline);
             pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
@@ -1117,6 +1143,7 @@ pub fn default_render_pass(
                 label: Some("SSGI Blur Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &ssgi.ssgi_blurred_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -1126,6 +1153,7 @@ pub fn default_render_pass(
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+            multiview_mask: None,
             });
             pass.set_pipeline(&ssgi.blur_pipeline);
             pass.set_bind_group(0, &ssgi.blur_bind_group, &[]);
@@ -1138,6 +1166,7 @@ pub fn default_render_pass(
                 label: Some("SSGI Apply Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &renderer.post.hdr_texture_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
@@ -1147,6 +1176,7 @@ pub fn default_render_pass(
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+            multiview_mask: None,
             });
             pass.set_pipeline(&ssgi.apply_pipeline);
             pass.set_bind_group(0, &ssgi.apply_bind_group, &[]);
@@ -1162,6 +1192,7 @@ pub fn default_render_pass(
                 label: Some("Volumetric Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &vol.volumetric_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -1171,6 +1202,7 @@ pub fn default_render_pass(
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+            multiview_mask: None,
             });
             pass.set_pipeline(&vol.volumetric_pipeline);
             pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
@@ -1185,6 +1217,7 @@ pub fn default_render_pass(
                 label: Some("Volumetric Apply Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &renderer.post.hdr_texture_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
@@ -1194,6 +1227,7 @@ pub fn default_render_pass(
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+            multiview_mask: None,
             });
             pass.set_pipeline(&vol.apply_pipeline);
             pass.set_bind_group(0, &vol.apply_bind_group, &[]);
@@ -1209,6 +1243,7 @@ pub fn default_render_pass(
                 label: Some("TAA Resolve Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: output_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -1218,6 +1253,7 @@ pub fn default_render_pass(
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+            multiview_mask: None,
             });
             pass.set_pipeline(&taa.resolve_pipeline);
             pass.set_bind_group(0, resolve_bg, &[]);
@@ -1233,6 +1269,7 @@ pub fn default_render_pass(
                 label: Some("TAA Blit Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &renderer.post.hdr_texture_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -1242,6 +1279,7 @@ pub fn default_render_pass(
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+            multiview_mask: None,
             });
             pass.set_pipeline(&taa.blit_pipeline);
             pass.set_bind_group(0, &taa.empty_bg, &[]);
@@ -1258,6 +1296,7 @@ pub fn default_render_pass(
                 label: Some("Gizmo Render Pass (Post-TAA)"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &renderer.post.hdr_texture_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load, // Keep TAA-stabilized geometry scene
@@ -1274,6 +1313,7 @@ pub fn default_render_pass(
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
+            multiview_mask: None,
             });
             debug_renderer.render(
                 &mut pass,

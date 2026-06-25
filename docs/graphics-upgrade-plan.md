@@ -1,7 +1,24 @@
 # Graphics stack upgrade — `wgpu`/`winit`/`egui` (RELEASING §4c)
 
-**Status: IN PROGRESS on branch `upgrade/graphics-stack` (not on `main`).** This is
-the single Stage B 1.0 blocker (RELEASING.md §4c) — an **XL, multi-session** effort.
+**Status: ✅ COMPLETE on branch `upgrade/graphics-stack` (2026-06-25).** The entire
+graphics stack now runs on **wgpu 29 / winit 0.30 / egui 0.34**. Full verification:
+`cargo build --workspace` + `--all-features` (0 errors), `cargo test --workspace`
+(**552 passed, 0 failed**), CI clippy on nightly + **stable** (`-D warnings`, exit 0),
+determinism 3/3 (`598E315D0E7499FF`, unchanged), MSRV **1.92** verified (egui 0.34
+floor — raised from 1.89), and a **real windowed run** (`bevy_3d_scene`/`car_demo`
+open a window and run the render loop for 6s+ with no functional panic on DISPLAY=:1).
+This resolves the single Stage B 1.0 blocker (RELEASING.md §4c).
+
+> **Key decision that avoided a huge refactor:** winit 0.30 keeps a *deprecated*
+> `EventLoop::run(closure)` + `EventLoop::create_window`, so `gizmo-app`'s ~600-line
+> closure event loop did **not** need the full `ApplicationHandler` rewrite — only
+> `WindowBuilder`→`WindowAttributes` + `event_loop.create_window` + the
+> `get_current_texture()`→`CurrentSurfaceTexture` match. The deprecated path is
+> bridged with crate-level `#![allow(deprecated)]` (documented; egui/winit
+> deprecations are all functional — migrating them is follow-up polish).
+
+This was the single Stage B 1.0 blocker (RELEASING.md §4c) — an XL effort, done in
+one pass via the cheatsheet (§5b) + reusable sed/perl recipes below.
 This doc records the resolved version matrix, the quantified break surface, the
 execution order, and the per-dependency migration notes, so the work can proceed
 crate-by-crate without re-discovering the landscape each time.
@@ -170,7 +187,22 @@ adapter/InstanceDescriptor in `renderer.rs`.
 - **REMAINING: `gizmo-app` (~6 errors but structural — see below), facade
   `gizmo` + `demo`/`cradle`/`gizmo-studio`, then a real windowed run.**
 
-### `gizmo-app` remaining work (the last structural piece)
+### ✅ `gizmo-app` + facade + binaries (DONE)
+- **`gizmo-app`** (windowed.rs): `WindowBuilder`→`WindowAttributes` +
+  `event_loop.create_window` (deprecated bridge), `get_current_texture()` match →
+  `CurrentSurfaceTexture::{Success,Suboptimal}(t)` / `Outdated` / other.
+- **`gizmo` facade** (systems/render.rs): the §5b recipes + `set_bind_group`'s 2nd
+  arg now `impl Into<Option<&BindGroup>>` — `&BindGroup` works as-is; `&Arc<BindGroup>`
+  args need a deref (`&*x` for `Arc` fields, `.as_ref()` for `&Arc` locals).
+- **`demo`/`cradle`/`gizmo-studio`** binaries: same recipes across their custom GPU
+  code, plus `#![allow(deprecated)]` on egui-using bins.
+- **Test-only GPU helpers** (`#[cfg(test)]` in renderer): same Instance/adapter/device
+  recipes + `push_error_scope` now returns an `ErrorScopeGuard` → `scope.pop().await`.
+- **naga 29 is stricter**: `deferred_lighting.wgsl`'s `textureSampleLevel` on a
+  `texture_depth_2d_array` needed an **i32** exact level (`0i`, not `0.0`) — caught by
+  the `core_shaders_compile` test.
+
+### (historical) `gizmo-app` structural option (not taken)
 `gizmo-app/src/windowed.rs` uses the **winit 0.29 closure event loop** with the
 window created *before* the loop (`WindowBuilder::new()...build(&event_loop)` at
 ~L305/L346) and all init (`Renderer`, `setup_fn`, `EditorContext`) in

@@ -1,3 +1,4 @@
+#![allow(deprecated)] // §4c graphics upgrade: egui 0.34 / winit 0.30 deprecations (all functional) — migrate as follow-up
 //! Gizmo Editor — an `egui`-based scene editor for the Gizmo engine.
 //!
 //! This crate provides the editor UI built on top of `egui`/`egui_dock`,

@@ -10,10 +10,11 @@ members = [
 [workspace.package]
 version = "0.1.7"
 edition = "2021"
-# Minimum Supported Rust Version. Empirically verified: 1.85 fails (locked deps
-# `wide 1.2`/`safe_arch 1.0` require 1.89), 1.89 builds the full workspace clean.
-# Enforced by the `msrv` CI job. Raising this is a semver-minor for consumers.
-rust-version = "1.89"
+# Minimum Supported Rust Version. Empirically verified (`cargo +1.92.0 check
+# --workspace` passes). Floor is set by `egui 0.34` (and its `ecolor`/`egui-wgpu`/
+# `egui-winit`), which require rustc 1.92 — the §4c graphics upgrade raised this
+# from 1.89. Enforced by the `msrv` CI job. Raising this is a semver-minor.
+rust-version = "1.92"
 authors = ["Bedir"]
 description = "A custom ECS and physics engine aimed for realistic simulations."
 license = "MIT OR Apache-2.0"

@@ -1,3 +1,4 @@
+#![allow(deprecated)] // §4c graphics upgrade: egui 0.34 / winit 0.30 deprecations (all functional) — migrate as follow-up
 //! Gizmo Studio: the standalone editor application for the Gizmo game engine.
 //!
 //! This is a binary crate (not a published library). It boots an [`gizmo::App`]

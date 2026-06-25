@@ -947,9 +947,12 @@ mod tests {
         pollster::block_on(async {
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
                 backends: wgpu::Backends::all(),
-                ..Default::default()
+                flags: wgpu::InstanceFlags::default(),
+                memory_budget_thresholds: Default::default(),
+                backend_options: Default::default(),
+                display: None,
             });
-            let Some(adapter) = instance
+            let Ok(adapter) = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
                     power_preference: wgpu::PowerPreference::LowPower,
                     ..Default::default()
@@ -960,17 +963,14 @@ mod tests {
                 return;
             };
             let Ok((device, _queue)) = adapter
-                .request_device(
-                    &wgpu::DeviceDescriptor {
-                        // shader.wgsl group(4) kullanıyor → renderer'ın gerçek limitiyle eşle.
-                        required_limits: wgpu::Limits {
-                            max_bind_groups: 6,
-                            ..wgpu::Limits::default()
-                        },
-                        ..Default::default()
+                .request_device(&wgpu::DeviceDescriptor {
+                    // shader.wgsl group(4) kullanıyor → renderer'ın gerçek limitiyle eşle.
+                    required_limits: wgpu::Limits {
+                        max_bind_groups: 6,
+                        ..wgpu::Limits::default()
                     },
-                    None,
-                )
+                    ..Default::default()
+                })
                 .await
             else {
                 return;
@@ -1007,12 +1007,12 @@ mod tests {
 
             let mut failures: Vec<String> = Vec::new();
             for (name, src) in shaders {
-                device.push_error_scope(wgpu::ErrorFilter::Validation);
+                let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
                 let _module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some(name),
                     source: wgpu::ShaderSource::Wgsl((*src).into()),
                 });
-                if let Some(err) = device.pop_error_scope().await {
+                if let Some(err) = scope.pop().await {
                     failures.push(format!("{name}: {err:?}"));
                 }
             }
@@ -1029,7 +1029,10 @@ mod tests {
         pollster::block_on(async {
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
                 backends: wgpu::Backends::all(),
-                ..Default::default()
+                flags: wgpu::InstanceFlags::default(),
+                memory_budget_thresholds: Default::default(),
+                backend_options: Default::default(),
+                display: None,
             });
 
             let adapter = instance
@@ -1040,8 +1043,8 @@ mod tests {
                 .await;
 
             let adapter = match adapter {
-                Some(a) => a,
-                None => {
+                Ok(a) => a,
+                Err(_) => {
                     tracing::info!(
                         "No suitable GPU adapter found for headless test. Skipping wgpu test."
                     );
@@ -1059,17 +1062,17 @@ mod tests {
             }
 
             let (device, _) = adapter
-                .request_device(
-                    &wgpu::DeviceDescriptor {
-                        required_features: wgpu::Features::POLYGON_MODE_LINE,
-                        required_limits: wgpu::Limits {
-                            max_bind_groups: 6,
-                            ..wgpu::Limits::default()
-                        },
-                        label: None,
+                .request_device(&wgpu::DeviceDescriptor {
+                    required_features: wgpu::Features::POLYGON_MODE_LINE,
+                    required_limits: wgpu::Limits {
+                        max_bind_groups: 6,
+                        ..wgpu::Limits::default()
                     },
-                    None,
-                )
+                    label: None,
+                    experimental_features: wgpu::ExperimentalFeatures::default(),
+                    memory_hints: wgpu::MemoryHints::default(),
+                    trace: wgpu::Trace::Off,
+                })
                 .await
                 .unwrap();
 

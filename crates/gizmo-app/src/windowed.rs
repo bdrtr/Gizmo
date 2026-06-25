@@ -8,7 +8,7 @@ use std::sync::Arc;
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
-    window::WindowBuilder,
+    window::WindowAttributes,
 };
 
 // setup_panic_hook ve Plugin lib.rs ve plugin.rs'ye taşındı.
@@ -302,7 +302,7 @@ impl<State: 'static> App<State> {
         }
 
         let event_loop = EventLoop::new().map_err(crate::AppError::EventLoopCreation)?;
-        let mut builder = WindowBuilder::new()
+        let mut builder = WindowAttributes::default()
             .with_title(&self.window_title)
             .with_inner_size(winit::dpi::LogicalSize::new(
                 self.window_size.0,
@@ -312,7 +312,7 @@ impl<State: 'static> App<State> {
         #[cfg(target_arch = "wasm32")]
         {
             use wasm_bindgen::JsCast;
-            use winit::platform::web::WindowBuilderExtWebSys;
+            use winit::platform::web::WindowAttributesExtWebSys;
             // Canvas'ı body'ye ekle ve boyutu ayarla
             let canvas = web_sys::window()
                 .and_then(|win| win.document())
@@ -344,8 +344,8 @@ impl<State: 'static> App<State> {
         }
 
         let window = Arc::new(
-            builder
-                .build(&event_loop)
+            event_loop
+                .create_window(builder)
                 .map_err(crate::AppError::WindowCreation)?,
         );
 
@@ -1126,16 +1126,17 @@ impl<State: 'static> App<State> {
                             let mut renderer = self.world.remove_resource::<Renderer>().unwrap();
 
                             let output = match renderer.surface.get_current_texture() {
-                                Ok(texture) => texture,
-                                Err(wgpu::SurfaceError::Outdated) => {
+                                wgpu::CurrentSurfaceTexture::Success(texture)
+                                | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+                                wgpu::CurrentSurfaceTexture::Outdated => {
                                     self.world.insert_resource(renderer);
                                     if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                         profiler.end_scope("render");
                                     }
                                     return;
                                 }
-                                Err(e) => {
-                                    tracing::error!("Surface hatasi: {:?}", e);
+                                other => {
+                                    tracing::error!("Surface hatasi: {:?}", other);
                                     self.world.insert_resource(renderer);
                                     if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                         profiler.end_scope("render");

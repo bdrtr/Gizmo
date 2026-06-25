@@ -368,7 +368,7 @@ fn search_blockers(
     for (var x = -search_radius; x <= search_radius; x++) {
         for (var y = -search_radius; y <= search_radius; y++) {
             let offset = vec2<f32>(f32(x), f32(y)) * step;
-            let sample_depth = textureSampleLevel(t_shadow, s_gbuf, shadow_uv + offset, ci, 0.0);
+            let sample_depth = textureSampleLevel(t_shadow, s_gbuf, shadow_uv + offset, ci, 0i);
             
             if (sample_depth < receiver_depth) {
                 num_blockers += 1.0;
