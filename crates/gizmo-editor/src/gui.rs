@@ -39,10 +39,20 @@ impl EditorContext {
             viewport_id,
             window,
             Some(window.scale_factor() as f32),
-            None,
+            None, // theme (egui-winit 0.34)
+            None, // max_texture_side
         );
 
-        let renderer = Renderer::new(device, output_format, None, sample_count);
+        let renderer = Renderer::new(
+            device,
+            output_format,
+            egui_wgpu::RendererOptions {
+                msaa_samples: sample_count,
+                depth_stencil_format: None,
+                dithering: true,
+                predictable_texture_filtering: false,
+            },
+        );
 
         let ctx = Self {
             context,
@@ -58,14 +68,14 @@ impl EditorContext {
         let mut visuals = egui::Visuals::dark();
         
         // Modern, sleek rounding
-        let widget_rounding = egui::Rounding::same(6.0);
-        visuals.window_rounding = egui::Rounding::same(10.0);
-        visuals.menu_rounding = egui::Rounding::same(8.0);
-        visuals.widgets.noninteractive.rounding = widget_rounding;
-        visuals.widgets.inactive.rounding = widget_rounding;
-        visuals.widgets.hovered.rounding = widget_rounding;
-        visuals.widgets.active.rounding = widget_rounding;
-        visuals.widgets.open.rounding = widget_rounding;
+        let widget_rounding = egui::CornerRadius::same(6);
+        visuals.window_corner_radius = egui::CornerRadius::same(10);
+        visuals.menu_corner_radius = egui::CornerRadius::same(8);
+        visuals.widgets.noninteractive.corner_radius = widget_rounding;
+        visuals.widgets.inactive.corner_radius = widget_rounding;
+        visuals.widgets.hovered.corner_radius = widget_rounding;
+        visuals.widgets.active.corner_radius = widget_rounding;
+        visuals.widgets.open.corner_radius = widget_rounding;
 
         // Modern Dark Colors (similar to Unreal Engine / VS Code)
         visuals.window_fill = egui::Color32::from_rgb(28, 28, 30); // Deep dark gray
@@ -91,7 +101,7 @@ impl EditorContext {
         let mut style = (*self.context.style()).clone();
         style.spacing.item_spacing = egui::vec2(10.0, 8.0);
         style.spacing.button_padding = egui::vec2(12.0, 6.0);
-        style.spacing.window_margin = egui::Margin::same(12.0);
+        style.spacing.window_margin = egui::Margin::same(12);
         style.spacing.interact_size = egui::vec2(40.0, 24.0); // Make clickable areas taller
         
         self.context.set_style(style);
@@ -151,20 +161,25 @@ impl EditorContext {
 
         // -- EGUI ÇİZİCİSİNİ AKTİFLEŞTİR: Motorun Pass'inin Üzerine Ek Çizim Yapar --
         {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(&format!("Egui Render Pass #{}", self.frame_count)),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load, // Önceki çizimleri SİLME, ÜZERİNE Bindir!
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
+            let mut render_pass = encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some(&format!("Egui Render Pass #{}", self.frame_count)),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load, // Önceki çizimleri SİLME, ÜZERİNE Bindir!
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                })
+                // egui-wgpu 0.34's `render` wants a `RenderPass<'static>`.
+                .forget_lifetime();
 
             self.renderer
                 .render(&mut render_pass, &paint_jobs, &screen_descriptor);

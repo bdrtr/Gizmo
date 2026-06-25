@@ -108,7 +108,7 @@ fn draw_engine_logs(ui: &mut egui::Ui, state: &mut EditorState) {
                     
                     let frame = egui::Frame::none()
                         .fill(bg_color)
-                        .inner_margin(egui::Margin::symmetric(4.0, 2.0));
+                        .inner_margin(egui::Margin::symmetric(4, 2));
                         
                     let response = frame.show(ui, |ui| {
                         ui.set_width(ui.available_width());
@@ -117,7 +117,7 @@ fn draw_engine_logs(ui: &mut egui::Ui, state: &mut EditorState) {
 
                     let interact_response = ui.interact(response.rect, response.id.with("interact"), egui::Sense::click());
                     if interact_response.clicked() {
-                        ui.output_mut(|o| o.copied_text = text.clone());
+                        ui.output_mut(|o| o.commands.push(egui::OutputCommand::CopyText(text.clone())));
                     }
                     interact_response.on_hover_text("Tıkla: Panoya kopyala");
                 }

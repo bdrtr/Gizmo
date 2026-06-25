@@ -104,7 +104,7 @@ pub fn draw_material_section(
                                 }
                         }
 
-                        ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0_f32, stroke_color));
+                        ui.painter().rect_stroke(rect, 2, egui::Stroke::new(1.0_f32, stroke_color), egui::StrokeKind::Inside);
                         let text_pos = rect.left_center() + egui::vec2(8.0, 0.0);
                         
                         if let Some(src) = &mat.texture_source {
