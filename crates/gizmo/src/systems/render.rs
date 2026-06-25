@@ -114,9 +114,17 @@ pub fn default_render_pass(
     let cameras = world.borrow::<Camera>();
     let transforms = world.borrow::<gizmo_physics_core::components::GlobalTransform>();
     {
-        // TODO: Aktif kamera için `ActiveCamera` tarzı bir marker bileşeni kullanılmalı.
-        // ECS array sırası stabil değildir. Şimdilik geçici çözüm olarak ilki alınıyor.
-        if let Some((active_cam, _)) = cameras.iter().next() {
+        // Pick the camera flagged `primary` — the convention maintained by
+        // `spawn_camera`/`CameraBundle` (which keep a single primary) and used by
+        // the audio listener. Fall back to the first camera if none is marked.
+        // This makes selection deterministic instead of depending on the
+        // (unstable) ECS iteration order.
+        let active_cam = cameras
+            .iter()
+            .find(|(_, c)| c.primary)
+            .or_else(|| cameras.iter().next())
+            .map(|(id, _)| id);
+        if let Some(active_cam) = active_cam {
             if let (Some(cam), Some(trans)) = (cameras.get(active_cam), transforms.get(active_cam))
             {
                 let (_, _, pos) = trans.matrix.to_scale_rotation_translation();
