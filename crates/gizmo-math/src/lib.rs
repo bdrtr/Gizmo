@@ -29,9 +29,10 @@ pub mod frustum;
 pub mod ray;
 pub mod spatial;
 
-/// The engine's vector-math vocabulary, re-exported from `glam` (see the
-/// crate-level "Public dependency" note). `bevy_math` re-uses these exact
-/// `glam` types, so this is the single source of truth.
+/// The engine's vector-math vocabulary, re-exported **directly from `glam`**
+/// (see the crate-level "Public dependency" note). This is the single source of
+/// truth: `gizmo-math` does not depend on `bevy_math` for these types, so no
+/// `bevy_reflect` is pulled into the Stage A production dependency tree.
 pub use glam::{EulerRot, Mat3, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 
 pub use aabb::Aabb;
