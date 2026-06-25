@@ -29,7 +29,10 @@ breaking `0.x` bump.
   `PhysicsMaterial` (combined per contact), so setting them on the body did
   nothing — the editor inspector even exposed two no-op sliders. Configure
   contact friction/restitution on the collider material instead. Determinism is
-  unchanged (proof the fields never affected the simulation).
+  unchanged (proof the fields never affected the simulation). The scripting layer
+  followed suit: the Lua `physics.add_rigidbody(id, mass, use_gravity)` binding
+  and `ScriptCommand::AddRigidBody` dropped their (ignored) `restitution`/
+  `friction` parameters.
 - **Graphics stack upgraded** across the Stage B crates: `wgpu 0.20 → 29`,
   `winit 0.29 → 0.30`, `egui 0.28 → 0.34` (plus `egui-wgpu`/`egui-winit` `0.34`,
   `egui_dock 0.13 → 0.19`, `transform-gizmo-egui 0.3 → 0.9`). Public `wgpu`/

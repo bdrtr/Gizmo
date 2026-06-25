@@ -395,11 +395,6 @@ impl ScriptEngine {
                 ScriptCommand::AddRigidBody {
                     id,
                     mass,
-                    // Contact friction/restitution come from the collider material
-                    // now, not the body. These command fields are accepted but
-                    // ignored (TODO: drop them from the ScriptCommand API).
-                    restitution: _,
-                    friction: _,
                     use_gravity,
                 } => {
                     let entity = world.reconstruct_entity(id);

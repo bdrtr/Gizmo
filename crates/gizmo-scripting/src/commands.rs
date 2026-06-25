@@ -24,8 +24,6 @@ pub enum ScriptCommand {
     AddRigidBody {
         id: u32,
         mass: f32,
-        restitution: f32,
-        friction: f32,
         use_gravity: bool,
     },
     AddBoxCollider {
