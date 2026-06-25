@@ -1,4 +1,3 @@
-#![allow(deprecated)] // §4c graphics upgrade: egui 0.34 / winit 0.30 deprecations (all functional) — migrate as follow-up
 //! Gizmo Editor — an `egui`-based scene editor for the Gizmo engine.
 //!
 //! This crate provides the editor UI built on top of `egui`/`egui_dock`,
@@ -86,7 +85,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
 /// [`egui::Context`], the ECS [`World`], and the mutable [`EditorState`].
 pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) {
     // ==== Global Klavye Kısayolları (Sadece text alanları odakta değilken) ====
-    if !ctx.wants_keyboard_input() {
+    if !ctx.egui_wants_keyboard_input() {
         ctx.input(|i| {
             if i.key_pressed(egui::Key::Q) { state.gizmo_mode = GizmoMode::Select; }
             if i.key_pressed(egui::Key::W) { state.gizmo_mode = GizmoMode::Translate; }
@@ -153,9 +152,12 @@ pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) 
         }
     }
 
-    // 1. Status Bar (En altta)
-    egui::TopBottomPanel::bottom("status_bar")
-        .exact_height(24.0)
+    // 1. Status Bar (En altta) — see `toolbar.rs` for why the top-level
+    // `Panel::show(ctx)` is intentionally kept and deprecation-scoped here
+    // (egui 0.34 moved toward a root-`Ui` composition model).
+    #[allow(deprecated)]
+    egui::Panel::bottom("status_bar")
+        .exact_size(24.0)
         .show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.label(egui::RichText::new(&state.status_message).weak().small());
@@ -175,7 +177,7 @@ pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) 
 
     let mut viewer = EditorTabViewer { world, state };
 
-    let mut dock_style = egui_dock::Style::from_egui(ctx.style().as_ref());
+    let mut dock_style = egui_dock::Style::from_egui(ctx.global_style().as_ref());
     dock_style.separator.width = 2.0;
     dock_style.separator.color_idle = egui::Color32::from_rgb(20, 20, 22);
     dock_style.separator.color_hovered = egui::Color32::from_rgb(64, 120, 240);
@@ -188,6 +190,10 @@ pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) 
     dock_style.tab.active.text_color = egui::Color32::WHITE;
     dock_style.tab.inactive.text_color = egui::Color32::from_rgb(150, 150, 150);
 
+    // egui_dock 0.19 deprecated `DockArea::show(ctx)` in favor of the eframe
+    // `App::ui` (`show_inside`) path; Gizmo drives egui directly without eframe,
+    // so the context-level show is intentionally kept and scoped here.
+    #[allow(deprecated)]
     DockArea::new(&mut dock_state)
         .style(dock_style)
         .show(ctx, &mut viewer);

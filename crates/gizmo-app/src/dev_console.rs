@@ -34,19 +34,19 @@ pub fn ui_dev_console(world: &mut World, ctx: &egui::Context, input: &gizmo_core
     // Konsol penceresi ekranın üstünde, yarı saydam, animasyonlu inecek şekilde tasarlanır
     let window = egui::Window::new("Gizmo Developer Console")
         .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 0.0))
-        .default_width(ctx.screen_rect().width())
+        .default_width(ctx.content_rect().width())
         .fixed_pos(egui::pos2(0.0, 0.0))
         .collapsible(false)
         .title_bar(false)
         .resizable(false)
-        .frame(egui::Frame::window(&ctx.style()).fill(egui::Color32::from_black_alpha(200)));
+        .frame(egui::Frame::window(&ctx.global_style()).fill(egui::Color32::from_black_alpha(200)));
 
     window.show(ctx, |ui| {
         ui.add_space(5.0);
 
         // Logların görünümü
         egui::ScrollArea::vertical()
-            .max_height(ctx.screen_rect().height() * 0.4) // Ekranın %40'ı kadar kaplar
+            .max_height(ctx.content_rect().height() * 0.4) // Ekranın %40'ı kadar kaplar
             .stick_to_bottom(true)
             .show(ui, |ui| {
                 if let Some(state) = world.get_resource::<DevConsoleState>() {

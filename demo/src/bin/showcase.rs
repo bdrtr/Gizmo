@@ -1,4 +1,3 @@
-#![allow(deprecated)] // §4c graphics upgrade: egui 0.34 / winit 0.30 deprecations (all functional) — migrate as follow-up
 use gizmo::prelude::*;
 use gizmo::renderer::asset::AssetManager;
 use gizmo::renderer::components::{Decal, DirectionalLight, MeshRenderer};
@@ -518,7 +517,7 @@ fn main() {
                 .title_bar(false)
                 .resizable(false)
                 .frame(
-                    gizmo::egui::Frame::window(&ctx.style())
+                    gizmo::egui::Frame::window(&ctx.global_style())
                         .fill(gizmo::egui::Color32::from_black_alpha(200)),
                 )
                 .show(ctx, |ui| {
@@ -620,7 +619,7 @@ fn main() {
                 });
 
             // Ekranın ortasına crosshair (Hedef Göstergesi) çiz
-            let screen_rect = ctx.screen_rect();
+            let screen_rect = ctx.content_rect();
             let center = screen_rect.center();
 
             let painter = ctx.layer_painter(gizmo::egui::LayerId::new(

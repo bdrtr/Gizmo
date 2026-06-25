@@ -10,8 +10,13 @@ use std::time::Instant;
 
 /// Toolbar panelini çizer
 pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
-    egui::TopBottomPanel::top("toolbar_panel")
-        .exact_height(36.0)
+    // egui 0.34 soft-deprecated top-level `Panel::show(ctx)` in favor of a
+    // root-`Ui` composition model (`show_inside`). Gizmo composes its panels
+    // directly on the `Context` (it does not use eframe's `App::ui`), so the
+    // top-level show is intentionally kept and the deprecation scoped here.
+    #[allow(deprecated)]
+    egui::Panel::top("toolbar_panel")
+        .exact_size(36.0)
         .show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
@@ -151,7 +156,7 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                 ui.label("Araç:");
 
                 // Q-W-E-R Kısayolları (Sadece yazı yazılmıyorken çalışır)
-                if !ui.ctx().wants_keyboard_input() {
+                if !ui.ctx().egui_wants_keyboard_input() {
                     if ui.input(|i| i.key_pressed(egui::Key::Q)) { state.gizmo_mode = GizmoMode::Select; }
                     if ui.input(|i| i.key_pressed(egui::Key::W)) { state.gizmo_mode = GizmoMode::Translate; }
                     if ui.input(|i| i.key_pressed(egui::Key::E)) { state.gizmo_mode = GizmoMode::Rotate; }
@@ -178,7 +183,7 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                 ui.separator();
 
                 // === SHADING MODE ===
-                egui::ComboBox::from_id_source("shading_mode")
+                egui::ComboBox::from_id_salt("shading_mode")
                     .selected_text(match state.shading_mode {
                         0 => "💡 Lit",
                         1 => "🎨 Normals",
@@ -233,11 +238,11 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                         if let Err(e) = state.save_layout() {
                             state.log_error(&format!("Layout kaydedilemedi: {}", e));
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("♻ Varsayılan Düzene Dön").clicked() {
                         state.reset_layout();
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
 
@@ -306,7 +311,7 @@ pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
                         BuildTarget::Windows => "🪟 Windows",
                         BuildTarget::MacOs => "🍎 macOS",
                     };
-                    egui::ComboBox::from_id_source(egui::Id::new("build_target_combo"))
+                    egui::ComboBox::from_id_salt(egui::Id::new("build_target_combo"))
                         .selected_text(target_label)
                         .width(105.0)
                         .show_ui(ui, |ui| {

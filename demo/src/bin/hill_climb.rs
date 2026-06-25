@@ -1,4 +1,3 @@
-#![allow(deprecated)] // §4c graphics upgrade: egui 0.34 / winit 0.30 deprecations (all functional) — migrate as follow-up
 use gizmo::physics::components::{Collider, RigidBody, Transform, Velocity};
 use gizmo::physics::world::PhysicsWorld;
 use gizmo::prelude::*;

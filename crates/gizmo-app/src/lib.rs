@@ -1,4 +1,3 @@
-#![allow(deprecated)] // §4c graphics upgrade: egui 0.34 / winit 0.30 deprecations (all functional) — migrate as follow-up
 //! Application skeleton for the Gizmo engine.
 //!
 //! This crate provides the top-level [`App`] builder that wires together the

@@ -36,7 +36,7 @@ pub fn draw_animation_player_section(
                         anim_name = clip.name.clone();
                     }
                     
-                    egui::ComboBox::from_id_source(format!("anim_select_{}", entity_id.id()))
+                    egui::ComboBox::from_id_salt(format!("anim_select_{}", entity_id.id()))
                         .selected_text(anim_name)
                         .show_ui(ui, |ui| {
                             for i in 0..num_anims {

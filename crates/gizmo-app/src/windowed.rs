@@ -343,6 +343,11 @@ impl<State: 'static> App<State> {
             }
         }
 
+        // winit 0.30 deprecated `EventLoop::create_window` (and the closure-based
+        // `run` below) in favor of the `ApplicationHandler`/`run_app` model.
+        // Migrating Gizmo's closure event loop to ApplicationHandler is a separate
+        // refactor; the functional deprecated bridge is intentionally scoped here.
+        #[allow(deprecated)]
         let window = Arc::new(
             event_loop
                 .create_window(builder)
@@ -436,6 +441,10 @@ impl<State: 'static> App<State> {
         let mut last_frame_time = web_time::Instant::now();
         let mut light_time = 0.0;
 
+        // winit 0.30 deprecated the closure-based `EventLoop::run` in favor of
+        // `ApplicationHandler`/`run_app` (see the `create_window` note above).
+        // The deprecated bridge is functional and intentionally scoped here.
+        #[allow(deprecated)]
         event_loop
             .run(move |event, current_window| {
                 current_window.set_control_flow(ControlFlow::Poll);

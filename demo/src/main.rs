@@ -1,4 +1,3 @@
-#![allow(deprecated)] // §4c graphics upgrade: egui 0.34 / winit 0.30 deprecations (all functional) — migrate as follow-up
 use gizmo::physics::components::{RigidBody, Velocity};
 use gizmo::prelude::*;
 use gizmo::renderer::asset::AssetManager;
@@ -130,7 +129,7 @@ fn main() {
                 .title_bar(false)
                 .resizable(false)
                 .frame(
-                    gizmo::egui::Frame::window(&ctx.style())
+                    gizmo::egui::Frame::window(&ctx.global_style())
                         .fill(gizmo::egui::Color32::from_black_alpha(150)),
                 )
                 .show(ctx, |ui| {

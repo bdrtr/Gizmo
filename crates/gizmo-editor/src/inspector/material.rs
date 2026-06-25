@@ -24,7 +24,7 @@ pub fn draw_material_section(
                             ui.label(egui::RichText::new("Shader Mode:").strong());
                             
                             let mut current_type = mat.material_type;
-                            egui::ComboBox::from_id_source(format!("mat_type_{}", entity_id.id()))
+                            egui::ComboBox::from_id_salt(format!("mat_type_{}", entity_id.id()))
                                 .selected_text(format!("{:?}", current_type))
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(&mut current_type, gizmo_renderer::components::MaterialType::Pbr, "PBR (Physically Based)");
