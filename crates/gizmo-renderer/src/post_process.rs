@@ -256,7 +256,7 @@ fn build_post_pipelines(
 ) {
     let extract_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Bloom Extract Pipeline Layout"),
-        bind_group_layouts: &[post_bgl, blur_bgl, post_params_bgl],
+        bind_group_layouts: &[Some(post_bgl), Some(blur_bgl), Some(post_params_bgl)],
         immediate_size: 0,
     });
     let bloom_extract_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -264,13 +264,13 @@ fn build_post_pipelines(
         layout: Some(&extract_layout),
         vertex: wgpu::VertexState {
             module: post_shader,
-            entry_point: "vs_fullscreen",
+            entry_point: Some("vs_fullscreen"),
             compilation_options: Default::default(),
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
             module: post_shader,
-            entry_point: "fs_bright_extract",
+            entry_point: Some("fs_bright_extract"),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba16Float,
@@ -285,11 +285,12 @@ fn build_post_pipelines(
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
+            cache: None,
     });
 
     let blur_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Bloom Blur Pipeline Layout"),
-        bind_group_layouts: &[post_bgl, blur_bgl],
+        bind_group_layouts: &[Some(post_bgl), Some(blur_bgl)],
         immediate_size: 0,
     });
     let bloom_blur_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -297,13 +298,13 @@ fn build_post_pipelines(
         layout: Some(&blur_layout),
         vertex: wgpu::VertexState {
             module: post_shader,
-            entry_point: "vs_fullscreen",
+            entry_point: Some("vs_fullscreen"),
             compilation_options: Default::default(),
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
             module: post_shader,
-            entry_point: "fs_blur",
+            entry_point: Some("fs_blur"),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba16Float,
@@ -318,11 +319,12 @@ fn build_post_pipelines(
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
+            cache: None,
     });
 
     let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Composite Pipeline Layout"),
-        bind_group_layouts: &[post_bgl, composite_bloom_bgl, post_params_bgl],
+        bind_group_layouts: &[Some(post_bgl), Some(composite_bloom_bgl), Some(post_params_bgl)],
         immediate_size: 0,
     });
     let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -330,13 +332,13 @@ fn build_post_pipelines(
         layout: Some(&composite_layout),
         vertex: wgpu::VertexState {
             module: post_shader,
-            entry_point: "vs_fullscreen",
+            entry_point: Some("vs_fullscreen"),
             compilation_options: Default::default(),
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
             module: post_shader,
-            entry_point: "fs_composite",
+            entry_point: Some("fs_composite"),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: surface_format,
@@ -351,6 +353,7 @@ fn build_post_pipelines(
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
+            cache: None,
     });
 
     (
@@ -531,6 +534,7 @@ pub fn run_post_processing(
             label: Some("Bloom Extract Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &renderer.post.bloom_extract_texture_view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -553,6 +557,7 @@ pub fn run_post_processing(
             label: Some("Bloom Blur Horizontal"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &renderer.post.bloom_blur_texture_view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -574,6 +579,7 @@ pub fn run_post_processing(
             label: Some("Bloom Blur Vertical"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &renderer.post.bloom_extract_texture_view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -594,6 +600,7 @@ pub fn run_post_processing(
             label: Some("Composite + Tone Mapping Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: output_view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),

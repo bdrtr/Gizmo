@@ -229,9 +229,9 @@ impl VolumetricState {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("volumetric_layout"),
             bind_group_layouts: &[
-                &scene.global_bind_group_layout, // Group 0
-                &scene.shadow_bind_group_layout, // Group 1 (Shadow Maps)
-                bgl,                             // Group 2
+                Some(&scene.global_bind_group_layout), // Group 0
+                Some(&scene.shadow_bind_group_layout), // Group 1 (Shadow Maps)
+                Some(bgl),                             // Group 2
             ],
             immediate_size: 0,
         });
@@ -240,13 +240,13 @@ impl VolumetricState {
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba16Float,
@@ -262,6 +262,7 @@ impl VolumetricState {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
+            cache: None,
         })
     }
 
@@ -277,7 +278,7 @@ impl VolumetricState {
         );
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("volumetric_apply_layout"),
-            bind_group_layouts: &[bgl],
+            bind_group_layouts: &[Some(bgl)],
             immediate_size: 0,
         });
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -285,13 +286,13 @@ impl VolumetricState {
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba16Float,
@@ -315,6 +316,7 @@ impl VolumetricState {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
+            cache: None,
         })
     }
 }

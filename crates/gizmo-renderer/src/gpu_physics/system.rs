@@ -328,7 +328,7 @@ impl GpuPhysicsSystem {
                 });
                 let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("Debug Compute Layout"),
-                    bind_group_layouts: &[&device.create_bind_group_layout(
+                    bind_group_layouts: &[Some(&device.create_bind_group_layout(
                         &wgpu::BindGroupLayoutDescriptor {
                             entries: &[
                                 wgpu::BindGroupLayoutEntry {
@@ -384,15 +384,16 @@ impl GpuPhysicsSystem {
                             ],
                             label: Some("debug_compute_layout_inner"),
                         },
-                    )],
+                    ))],
                     immediate_size: 0,
                 });
                 device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                     label: Some("Physics Debug Compute"),
                     layout: Some(&layout),
                     module: &shader,
-                    entry_point: "generate_debug_lines",
+                    entry_point: Some("generate_debug_lines"),
                     compilation_options: Default::default(),
+                    cache: None,
                 })
             },
             debug_render_pipeline: {
@@ -404,7 +405,7 @@ impl GpuPhysicsSystem {
                 });
                 let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("Debug Render Layout"),
-                    bind_group_layouts: &[global_bind_group_layout],
+                    bind_group_layouts: &[Some(global_bind_group_layout)],
                     immediate_size: 0,
                 });
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -412,13 +413,13 @@ impl GpuPhysicsSystem {
                     layout: Some(&layout),
                     vertex: wgpu::VertexState {
                         module: &shader,
-                        entry_point: "vs_debug",
+                        entry_point: Some("vs_debug"),
                         compilation_options: Default::default(),
                         buffers: &[DebugVertex::desc()],
                     },
                     fragment: Some(wgpu::FragmentState {
                         module: &shader,
-                        entry_point: "fs_debug",
+                        entry_point: Some("fs_debug"),
                         compilation_options: Default::default(),
                         targets: &[Some(wgpu::ColorTargetState {
                             format: output_format,
@@ -432,13 +433,14 @@ impl GpuPhysicsSystem {
                     },
                     depth_stencil: Some(wgpu::DepthStencilState {
                         format: depth_format,
-                        depth_write_enabled: false,
-                        depth_compare: wgpu::CompareFunction::LessEqual,
+                        depth_write_enabled: Some(false),
+                        depth_compare: Some(wgpu::CompareFunction::LessEqual),
                         stencil: wgpu::StencilState::default(),
                         bias: wgpu::DepthBiasState::default(),
                     }),
                     multisample: wgpu::MultisampleState::default(),
                     multiview_mask: None,
+            cache: None,
                 })
             },
             debug_max_lines: 32768,
@@ -754,7 +756,7 @@ impl GpuPhysicsSystem {
             });
         }
 
-        device.poll(wgpu::PollType::Poll);
+        let _ = device.poll(wgpu::PollType::Poll);
 
         if self.readback_state.load(Ordering::SeqCst) == 3 {
             let slice = self.readback_buffer.slice(..);

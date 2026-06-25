@@ -16,7 +16,7 @@ const SAMPLER_LINEAR_REPEAT: wgpu::SamplerDescriptor<'static> = wgpu::SamplerDes
     address_mode_w: wgpu::AddressMode::Repeat,
     mag_filter: wgpu::FilterMode::Linear,
     min_filter: wgpu::FilterMode::Linear,
-    mipmap_filter: wgpu::FilterMode::Nearest, // single mip — must be Nearest
+    mipmap_filter: wgpu::MipmapFilterMode::Nearest, // single mip — must be Nearest
     lod_min_clamp: 0.0,
     lod_max_clamp: 0.0,
     compare: None,
@@ -32,7 +32,7 @@ const SAMPLER_NEAREST_REPEAT: wgpu::SamplerDescriptor<'static> = wgpu::SamplerDe
     address_mode_w: wgpu::AddressMode::Repeat,
     mag_filter: wgpu::FilterMode::Nearest,
     min_filter: wgpu::FilterMode::Nearest,
-    mipmap_filter: wgpu::FilterMode::Nearest,
+    mipmap_filter: wgpu::MipmapFilterMode::Nearest,
     lod_min_clamp: 0.0,
     lod_max_clamp: 0.0,
     compare: None,

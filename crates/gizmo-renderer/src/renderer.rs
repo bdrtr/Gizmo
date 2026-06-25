@@ -208,13 +208,16 @@ impl Renderer {
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends,
-            ..Default::default()
+            flags: wgpu::InstanceFlags::default(),
+            memory_budget_thresholds: Default::default(),
+            backend_options: Default::default(),
+            display: None,
         });
 
         // Enumerate available adapters for diagnostic info
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let adapters = instance.enumerate_adapters(backends);
+            let adapters = instance.enumerate_adapters(backends).await;
             log::info!("[Renderer] {} adapter bulundu", adapters.len());
             for (i, a) in adapters.iter().enumerate() {
                 let info = a.get_info();
@@ -243,7 +246,7 @@ impl Renderer {
             .await;
 
         let adapter = match adapter {
-            Some(a) => {
+            Ok(a) => {
                 let info = a.get_info();
                 log::info!(
                     "[Renderer] Adapter bulundu: {} ({:?})",
@@ -252,7 +255,7 @@ impl Renderer {
                 );
                 a
             }
-            None => {
+            Err(_) => {
                 log::warn!(
                     "[Renderer] Surface uyumlu adapter bulunamadı, surface'siz deneniyor..."
                 );
@@ -265,7 +268,7 @@ impl Renderer {
                     })
                     .await
                 {
-                    Some(a) => {
+                    Ok(a) => {
                         let info = a.get_info();
                         log::info!(
                             "[Renderer] Surface'siz adapter bulundu: {} ({:?})",
@@ -274,7 +277,7 @@ impl Renderer {
                         );
                         a
                     }
-                    None => {
+                    Err(_) => {
                         log::error!(
                             "[Renderer] Hiçbir adapter bulunamadı! Backends: {:?}",
                             backends
@@ -300,8 +303,10 @@ impl Renderer {
                         ..wgpu::Limits::default()
                     },
                     label: None,
+                    experimental_features: wgpu::ExperimentalFeatures::default(),
+                    memory_hints: wgpu::MemoryHints::default(),
+                    trace: wgpu::Trace::Off,
                 },
-                None,
             )
             .await
             .unwrap();
@@ -319,8 +324,10 @@ impl Renderer {
                         required_features: wgpu::Features::empty(),
                         required_limits: limits.clone(),
                         label: None,
+                        experimental_features: wgpu::ExperimentalFeatures::default(),
+                        memory_hints: wgpu::MemoryHints::default(),
+                        trace: wgpu::Trace::Off,
                     },
-                    None,
                 )
                 .await
             {
@@ -926,7 +933,7 @@ impl Renderer {
             address_mode_w: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -984,13 +991,13 @@ impl Renderer {
             layout: None,
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -1005,6 +1012,7 @@ impl Renderer {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
+            cache: None,
         });
 
         let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -1014,7 +1022,7 @@ impl Renderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
@@ -1028,6 +1036,7 @@ impl Renderer {
                     label: Some(&format!("Mip {}", mip)),
                     format: None,
                     dimension: None,
+                    usage: None,
                     aspect: wgpu::TextureAspect::All,
                     base_mip_level: mip,
                     mip_level_count: Some(1),
@@ -1057,6 +1066,7 @@ impl Renderer {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &views[target_mip],
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -1066,6 +1076,7 @@ impl Renderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             pass.set_pipeline(&pipeline);
             pass.set_bind_group(0, &bind_group, &[]);

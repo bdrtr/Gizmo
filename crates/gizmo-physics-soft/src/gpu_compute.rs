@@ -36,7 +36,7 @@ impl GpuCompute {
                 force_fallback_adapter: false,
             })
             .await
-            .ok_or(crate::SoftBodyError::NoCompatibleAdapter)?;
+            .map_err(|_| crate::SoftBodyError::NoCompatibleAdapter)?;
 
         let (device, queue) = adapter
             .request_device(
@@ -44,8 +44,10 @@ impl GpuCompute {
                     label: Some("Gizmo Physics Compute Device"),
                     required_features: wgpu::Features::empty(),
                     required_limits: wgpu::Limits::default(),
+                    experimental_features: wgpu::ExperimentalFeatures::default(),
+                    memory_hints: wgpu::MemoryHints::default(),
+                    trace: wgpu::Trace::Off,
                 },
-                None,
             )
             .await
             .map_err(|e| crate::SoftBodyError::DeviceRequestFailed(e.to_string()))?;
@@ -120,24 +122,26 @@ impl GpuCompute {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Soft Body Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
         });
 
         let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Soft Body Forces Compute Pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
-            entry_point: "main",
+            entry_point: Some("main"),
             compilation_options: Default::default(),
+            cache: None,
         });
 
         let integrate_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Soft Body Integrate Compute Pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
-            entry_point: "integrate",
+            entry_point: Some("integrate"),
             compilation_options: Default::default(),
+            cache: None,
         });
 
         Ok(Self {
@@ -419,7 +423,10 @@ impl GpuCompute {
 
         let device_clone = self.device.clone();
         std::thread::spawn(move || {
-            device_clone.poll(wgpu::Maintain::Wait);
+            let _ = device_clone.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
         });
 
         if rx.recv().is_err() {

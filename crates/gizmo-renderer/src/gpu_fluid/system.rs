@@ -715,6 +715,7 @@ impl GpuFluidSystem {
                 label: Some("SSFR Depth"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.raw_depth_texture_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -736,6 +737,7 @@ impl GpuFluidSystem {
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             rpass.set_pipeline(&self.pipelines.pipeline_depth);
             rpass.set_bind_group(0, global_scene_bind_group, &[]);
@@ -769,6 +771,7 @@ impl GpuFluidSystem {
                 label: Some("SSFR Thickness"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.thickness_texture_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -778,6 +781,7 @@ impl GpuFluidSystem {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             rpass.set_pipeline(&self.pipelines.pipeline_thickness);
             rpass.set_bind_group(0, global_scene_bind_group, &[]);
@@ -791,6 +795,7 @@ impl GpuFluidSystem {
                 label: Some("SSFR Composite"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
@@ -807,6 +812,7 @@ impl GpuFluidSystem {
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             rpass.set_pipeline(&self.pipelines.pipeline_composite);
             rpass.set_bind_group(0, global_scene_bind_group, &[]);
@@ -820,6 +826,7 @@ impl GpuFluidSystem {
                 label: Some("SSFR Foam/Spray"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load, // Preserve composite result
@@ -836,6 +843,7 @@ impl GpuFluidSystem {
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             rpass.set_pipeline(&self.pipelines.pipeline_foam);
             rpass.set_bind_group(0, global_scene_bind_group, &[]);

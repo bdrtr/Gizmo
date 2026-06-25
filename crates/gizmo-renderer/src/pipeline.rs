@@ -238,6 +238,7 @@ fn build_shadow_resources(
         label: Some("shadow_csm_array_view"),
         format: None,
         dimension: Some(wgpu::TextureViewDimension::D2Array),
+        usage: None,
         aspect: wgpu::TextureAspect::All,
         base_mip_level: 0,
         mip_level_count: None,
@@ -250,6 +251,7 @@ fn build_shadow_resources(
             label: Some(&format!("shadow_cascade_layer_{i}")),
             format: None,
             dimension: Some(wgpu::TextureViewDimension::D2),
+            usage: None,
             aspect: wgpu::TextureAspect::DepthOnly,
             base_mip_level: 0,
             mip_level_count: None,
@@ -264,7 +266,7 @@ fn build_shadow_resources(
         address_mode_w: wgpu::AddressMode::ClampToEdge,
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::FilterMode::Nearest,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
         compare: Some(wgpu::CompareFunction::LessEqual),
         ..Default::default()
     });
@@ -288,6 +290,7 @@ fn build_shadow_resources(
         label: Some("point_shadow_cube_view"),
         format: None,
         dimension: Some(wgpu::TextureViewDimension::Cube),
+        usage: None,
         aspect: wgpu::TextureAspect::DepthOnly,
         base_mip_level: 0,
         mip_level_count: None,
@@ -300,6 +303,7 @@ fn build_shadow_resources(
             label: Some(&format!("point_shadow_face_{i}")),
             format: None,
             dimension: Some(wgpu::TextureViewDimension::D2),
+            usage: None,
             aspect: wgpu::TextureAspect::DepthOnly,
             base_mip_level: 0,
             mip_level_count: None,
@@ -478,11 +482,11 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Render Pipeline Layout"),
         bind_group_layouts: &[
-            layouts.global,   // 0
-            layouts.texture,  // 1
-            layouts.shadow,   // 2
-            layouts.skeleton, // 3
-            layouts.instance, // 4
+            Some(layouts.global),   // 0
+            Some(layouts.texture),  // 1
+            Some(layouts.shadow),   // 2
+            Some(layouts.skeleton), // 3
+            Some(layouts.instance), // 4
         ],
         immediate_size: 0,
     });
@@ -490,10 +494,10 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Render Pipeline Layout"),
         bind_group_layouts: &[
-            layouts.global,   // 0
-            layouts.texture,  // 1
-            layouts.skeleton, // 2
-            layouts.instance, // 3
+            Some(layouts.global),   // 0
+            Some(layouts.texture),  // 1
+            Some(layouts.skeleton), // 2
+            Some(layouts.instance), // 3
         ],
         immediate_size: 0,
     });
@@ -559,13 +563,13 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: sm,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[Vertex::desc()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: sm,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba16Float,
@@ -584,8 +588,8 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: depth_write,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_write_enabled: Some(depth_write),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
@@ -595,6 +599,7 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
                 alpha_to_coverage_enabled: false,
             },
             multiview_mask: None,
+            cache: None,
         })
     };
 
@@ -680,7 +685,7 @@ fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs) -> wgpu::R
     );
     let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Shadow Pipeline Layout"),
-        bind_group_layouts: &[layouts.shadow_pass, layouts.skeleton, layouts.instance],
+        bind_group_layouts: &[Some(layouts.shadow_pass), Some(layouts.skeleton), Some(layouts.instance)],
         immediate_size: 0,
     });
 
@@ -689,7 +694,7 @@ fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs) -> wgpu::R
         layout: Some(&shadow_layout),
         vertex: wgpu::VertexState {
             module: &shadow_shader,
-            entry_point: "vs_main",
+            entry_point: Some("vs_main"),
             compilation_options: Default::default(),
             buffers: &[Vertex::desc()],
         },
@@ -703,8 +708,8 @@ fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs) -> wgpu::R
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::LessEqual,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::LessEqual),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState {
                 constant: 2,
@@ -714,6 +719,7 @@ fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs) -> wgpu::R
         }),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
+            cache: None,
     })
 }
 

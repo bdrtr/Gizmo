@@ -144,4 +144,44 @@ adapter/InstanceDescriptor in `renderer.rs`.
 ## 6. Progress log
 - 2026-06-25: branch created; version matrix bumped + resolved (no conflicts); break
   surface quantified; **`gizmo-window` migrated to winit 0.30 (ApplicationHandler) —
-  green.** Remaining: physics-soft, renderer, app, editor, facade, binaries.
+  green.**
+- 2026-06-25: **`gizmo-renderer` fully migrated to wgpu 29 — green (283 → 0 errors,
+  clippy clean).** Applied the §5b cheatsheet across ~20 files: type renames, the
+  `bind_group_layouts` `Some(..)` wrapping (single-line via sed, multi-line via a
+  perl-slurp pass), `entry_point` → `Some(..)`, `mipmap_filter` `FilterMode` →
+  `MipmapFilterMode`, `depth_write_enabled`/`depth_compare` → `Option`, the
+  `cache`/`depth_slice`/`usage`/`multiview_mask` field additions (anchored seds:
+  `multiview_mask` for render-pipeline cache, `compilation_options`+`})` lookahead for
+  compute cache, `resolve_target` for depth_slice, `TextureViewDescriptor {`-scoped
+  perl for usage), and the `renderer.rs` GPU init (`Instance::new` explicit descriptor,
+  `enumerate_adapters().await`, `request_adapter` now returns `Result` → `Ok/Err`,
+  `request_device` drops its 2nd arg, `DeviceDescriptor` +3 fields).
+- 2026-06-25: **`gizmo-physics-soft` `gpu_physics` migrated to wgpu 29 — green (9 → 0).**
+  Same patterns + `request_adapter` `.ok_or` → `.map_err`, `Maintain::Wait` →
+  `PollType::Wait { submission_index: None, timeout: None }`.
+- **Remaining: `gizmo-app` (winit ApplicationHandler + wgpu surface), `gizmo-editor`
+  (egui 0.34 ecosystem + wgpu), facade + `demo`/`cradle`/`gizmo-studio`, then a real
+  windowed run.**
+
+### Reusable sed/perl recipes (for app/editor/binaries)
+```
+# type renames
+ImageCopyTexture→TexelCopyTextureInfo, ImageDataLayout→TexelCopyBufferLayout, Maintain→PollType
+# pipeline layout
+push_constant_ranges: &[]  →  immediate_size: 0
+bind_group_layouts: &[&a, &b]  →  &[Some(&a), Some(&b)]   (perl-slurp for multi-line blocks)
+# shader stages / pipelines
+entry_point: "x"  →  entry_point: Some("x")
++ cache: None  (render pipeline after multiview:None→multiview_mask:None; compute after compilation_options)
+# depth-stencil
+depth_write_enabled: X → Some(X);  depth_compare: CompareFunction::X → Some(..)
+mipmap_filter: FilterMode:: → MipmapFilterMode::
+# render pass / attachments / views
++ depth_slice: None (color attachment, before resolve_target)
++ multiview_mask: None (render pass, after occlusion_query_set)
++ usage: None (TextureViewDescriptor, before aspect)
+# device/instance/adapter
+Instance::new explicit descriptor (no Default);  request_adapter → Result (Ok/Err, .map_err);
+request_device drops 2nd arg;  DeviceDescriptor += experimental_features/memory_hints/trace;
+PollType::Wait { submission_index: None, timeout: None }
+```
