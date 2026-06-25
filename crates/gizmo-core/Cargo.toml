@@ -16,7 +16,11 @@ readme.workspace = true
 reflect = ["dep:bevy_reflect"]
 
 [dependencies]
-bevy_reflect = { version = "0.15.1", features = ["functions"], optional = true }
+# `glam` feature provides the `Reflect`/`FromReflect`/`Typed` impls for the glam
+# math types (Vec3/Quat/...) that our reflected components embed. It was
+# previously pulled in transitively via `bevy_math`; now that `gizmo-math` no
+# longer depends on `bevy_math`, the `reflect` feature enables it explicitly.
+bevy_reflect = { version = "0.15.1", features = ["functions", "glam"], optional = true }
 crossbeam-queue = "0.3.12"
 rayon = "1.11.0"
 ron = "0.8"

@@ -140,15 +140,20 @@ same `glam` types, so this is the single source of truth. `glam` is on the
 `0.29` line; a `glam` major bump is a deliberate, documented `gizmo-math` bump.
 Recorded as an **official public dependency** in `gizmo-math`'s crate docs.
 
-> **Note — `bevy_math` transitive dependency.** `gizmo-math` also depends on
-> `bevy_math 0.15` (used by its benches and as the re-export origin historically),
-> which transitively pulls `bevy_reflect`. Because `bevy_math::Vec3` *is*
-> `glam::Vec3` (a re-export, not a newtype), the **public type** is `glam`'s, so
-> there is no distinct `bevy_math` type in the public API. But `bevy_reflect`
-> therefore still **compiles** as a transitive dep even with the `reflect`
-> feature off — the feature gate removes it from the public *API*, not from the
-> dependency *tree*. Trimming `bevy_math`/`bevy_picking`/`bevy_mesh` from
-> `gizmo-math` is a separate, optional dependency-hygiene task.
+> **Note — `bevy_math` transitive dependency (RESOLVED 2026-06-25).** Historically
+> `gizmo-math` declared a regular `bevy_math 0.15` dependency (used only as the
+> re-export origin and by its benches), which transitively pulled `bevy_reflect`
+> into the **production** dependency tree even with the `reflect` feature off — the
+> feature gate removed it from the public *API*, not from the dependency *tree*.
+> That regular dependency was **unused in `gizmo-math`'s source** (the math
+> vocabulary already re-exports `glam` directly, §4e), so it has been **removed**.
+> `bevy_math`/`bevy_picking`/`bevy_mesh` remain only as **dev-dependencies** (a
+> comparison baseline for the benches); dev-deps do not propagate to downstream
+> consumers. Verified: `cargo tree -p gizmo-physics-rigid -e no-dev -i bevy_reflect`
+> now matches nothing — `bevy_reflect` is gone from the entire Stage A default
+> production tree. One consequence: the `reflect` feature now enables
+> `bevy_reflect`'s `glam` feature **explicitly** (it was previously satisfied
+> transitively via `bevy_math`).
 
 ### `bevy_reflect` — **sealed behind the `reflect` feature (§4a done)**
 
