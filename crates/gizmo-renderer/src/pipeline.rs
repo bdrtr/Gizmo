@@ -484,7 +484,7 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
             layouts.skeleton, // 3
             layouts.instance, // 4
         ],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
     #[cfg(target_arch = "wasm32")]
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -495,7 +495,7 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
             layouts.skeleton, // 2
             layouts.instance, // 3
         ],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -594,7 +594,7 @@ fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipe
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
-            multiview: None,
+            multiview_mask: None,
         })
     };
 
@@ -681,7 +681,7 @@ fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs) -> wgpu::R
     let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Shadow Pipeline Layout"),
         bind_group_layouts: &[layouts.shadow_pass, layouts.skeleton, layouts.instance],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -713,7 +713,7 @@ fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs) -> wgpu::R
             },
         }),
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
     })
 }
 

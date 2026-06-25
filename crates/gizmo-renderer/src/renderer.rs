@@ -897,14 +897,14 @@ impl Renderer {
             view_formats: &[],
         });
         self.queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             rgba_bytes,
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * width),
                 rows_per_image: Some(height),
@@ -1004,7 +1004,7 @@ impl Renderer {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
         });
 
         let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -1202,7 +1202,7 @@ mod tests {
                 mip_level_count,
             );
 
-            device.poll(wgpu::Maintain::Wait);
+            device.poll(wgpu::PollType::Wait);
         });
     }
 }

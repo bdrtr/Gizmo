@@ -106,6 +106,41 @@ Per crate as it lands, then the whole workspace at the end:
 (stable) + determinism 3/3 + **a real windowed run** (`demo`/`gizmo-studio`) since most
 of this is GPU/window code that headless tests don't cover.
 
+## 5b. wgpu 0.20 → 29 field-change cheatsheet (authoritative, from wgpu-29.0.3 source)
+
+Derived by reading `~/.cargo/.../wgpu-29.0.3` + `wgpu-types-29.0.3`. Apply these
+across all wgpu files (renderer is the bulk; gpu_physics/gpu_fluid/gpu_particles
+under it; physics-soft `gpu_physics`).
+
+**Type renames (done in renderer via sed):**
+- `wgpu::ImageCopyTexture` → `wgpu::TexelCopyTextureInfo`
+- `wgpu::ImageDataLayout` → `wgpu::TexelCopyBufferLayout`
+- `wgpu::Maintain` → `wgpu::PollType` (variants: `Maintain::Wait` → `PollType::Wait`, etc.)
+
+**Struct field changes:**
+- `PipelineLayoutDescriptor`: drop `push_constant_ranges` → add `immediate_size: u32`
+  (renderer uses no push constants → `immediate_size: 0`). **`bind_group_layouts`
+  is now `&[Option<&BindGroupLayout>]`** — wrap every entry: `&[&a, &b]` → `&[Some(&a), Some(&b)]`.
+  (This is the bulk of the "155 mismatched types".)
+- `RenderPipelineDescriptor`: `multiview: None` → `multiview_mask: None` **and add `cache: None`** (last field).
+- `ComputePipelineDescriptor`: **add `cache: None`** (last field, after `compilation_options`).
+- `RenderPassColorAttachment`: **add `depth_slice: None`** (right after `view:`).
+- `RenderPassDescriptor`: **add `multiview_mask: None`** (last field).
+- `TextureViewDescriptor`: **add `usage: None`**.
+- `DeviceDescriptor`: **add `experimental_features: wgpu::ExperimentalFeatures::default()`,
+  `memory_hints: wgpu::MemoryHints::default()`, `trace: wgpu::Trace::Off`** (and
+  `required_features`/`required_limits` stay).
+- `InstanceDescriptor`: no longer `Default` via `..Default::default()` in all spots
+  — construct explicitly (`backends`, `flags`, `memory_budget_thresholds`,
+  `backend_options`, `display`) or use `InstanceDescriptor::default()` where it impls it.
+- Adapter enumeration: `instance.enumerate_adapters(..)`/`request_adapter` now returns
+  a `Future<Output = Vec<Adapter>>` in places — `.await` it (renderer.rs adapter setup).
+
+**Status:** renames + `immediate_size` applied in renderer (283 → 235 errors). Remaining
+in renderer: the `cache`/`depth_slice`/`usage`/`multiview_mask` field additions (~75) and
+the `bind_group_layouts` `Some(..)` wrapping (~155 mismatched), then DeviceDescriptor/
+adapter/InstanceDescriptor in `renderer.rs`.
+
 ## 6. Progress log
 - 2026-06-25: branch created; version matrix bumped + resolved (no conflicts); break
   surface quantified; **`gizmo-window` migrated to winit 0.30 (ApplicationHandler) —

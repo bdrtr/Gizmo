@@ -341,7 +341,7 @@ impl SsgiState {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ssgi_layout"),
             bind_group_layouts: &[&scene.global_bind_group_layout, bgl],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("ssgi_pipeline"),
@@ -369,7 +369,7 @@ impl SsgiState {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
         })
     }
 
@@ -386,7 +386,7 @@ impl SsgiState {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ssgi_blur_layout"),
             bind_group_layouts: &[bgl],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("ssgi_blur_pipeline"),
@@ -414,7 +414,7 @@ impl SsgiState {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
         })
     }
 
@@ -431,7 +431,7 @@ impl SsgiState {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ssgi_apply_layout"),
             bind_group_layouts: &[bgl],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("ssgi_apply_pipeline"),
@@ -466,7 +466,7 @@ impl SsgiState {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
         })
     }
 }

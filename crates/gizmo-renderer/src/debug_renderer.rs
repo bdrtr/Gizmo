@@ -165,7 +165,7 @@ impl GizmoRendererSystem {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Debug Lines Pipeline Layout"),
                 bind_group_layouts: &[global_bind_group_layout],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
 
         let mut desc = wgpu::RenderPipelineDescriptor {
@@ -201,7 +201,7 @@ impl GizmoRendererSystem {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
         };
 
         let pipeline = device.create_render_pipeline(&desc);

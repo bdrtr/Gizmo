@@ -46,7 +46,7 @@ mod tests {
         let (sender, receiver) = std::sync::mpsc::channel();
         buffer_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
 
-        device.poll(wgpu::Maintain::Wait);
+        device.poll(wgpu::PollType::Wait);
         receiver.recv().unwrap().unwrap();
 
         let data = buffer_slice.get_mapped_range();

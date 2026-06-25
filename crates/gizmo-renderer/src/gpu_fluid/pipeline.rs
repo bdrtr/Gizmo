@@ -155,7 +155,7 @@ pub fn create_fluid_pipelines(
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Fluid Compute Pipeline Layout"),
         bind_group_layouts: &[&compute_bind_group_layout],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
 
     let pipeline_clear = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -356,7 +356,7 @@ pub fn create_fluid_pipelines(
     let ssfr_render_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("SSFR Render Layout"),
         bind_group_layouts: &[global_bind_group_layout, &particle_render_bg_layout],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
 
     let pipeline_depth = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -390,7 +390,7 @@ pub fn create_fluid_pipelines(
             bias: wgpu::DepthBiasState::default(),
         }),
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
     });
 
     let pipeline_thickness = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -425,7 +425,7 @@ pub fn create_fluid_pipelines(
         },
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
     });
 
     let pipeline_blur = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -434,7 +434,7 @@ pub fn create_fluid_pipelines(
             &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Blur Layout"),
                 bind_group_layouts: &[&blur_bind_group_layout],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             }),
         ),
         module: &blur_shader,
@@ -448,7 +448,7 @@ pub fn create_fluid_pipelines(
             &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Composite Layout"),
                 bind_group_layouts: &[global_bind_group_layout, &composite_bind_group_layout],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             }),
         ),
         vertex: wgpu::VertexState {
@@ -479,7 +479,7 @@ pub fn create_fluid_pipelines(
             bias: wgpu::DepthBiasState::default(),
         }),
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
     });
 
     // AAA: Foam/Spray render pipeline
@@ -526,7 +526,7 @@ pub fn create_fluid_pipelines(
             bias: wgpu::DepthBiasState::default(),
         }),
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
     });
 
     FluidPipelines {

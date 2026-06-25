@@ -385,7 +385,7 @@ impl GpuPhysicsSystem {
                             label: Some("debug_compute_layout_inner"),
                         },
                     )],
-                    push_constant_ranges: &[],
+                    immediate_size: 0,
                 });
                 device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                     label: Some("Physics Debug Compute"),
@@ -405,7 +405,7 @@ impl GpuPhysicsSystem {
                 let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("Debug Render Layout"),
                     bind_group_layouts: &[global_bind_group_layout],
-                    push_constant_ranges: &[],
+                    immediate_size: 0,
                 });
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: Some("Physics Debug Lines"),
@@ -438,7 +438,7 @@ impl GpuPhysicsSystem {
                         bias: wgpu::DepthBiasState::default(),
                     }),
                     multisample: wgpu::MultisampleState::default(),
-                    multiview: None,
+                    multiview_mask: None,
                 })
             },
             debug_max_lines: 32768,
@@ -754,7 +754,7 @@ impl GpuPhysicsSystem {
             });
         }
 
-        device.poll(wgpu::Maintain::Poll);
+        device.poll(wgpu::PollType::Poll);
 
         if self.readback_state.load(Ordering::SeqCst) == 3 {
             let slice = self.readback_buffer.slice(..);

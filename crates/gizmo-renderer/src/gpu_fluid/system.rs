@@ -690,13 +690,13 @@ impl GpuFluidSystem {
         }
         // Copy the opaque background before rendering fluid on top
         encoder.copy_texture_to_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: target_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &self.opaque_bg_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,

@@ -179,7 +179,7 @@ impl GpuFemSystem {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("FEM Compute Pipeline Layout"),
             bind_group_layouts: &[&compute_bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let pipeline_clear = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

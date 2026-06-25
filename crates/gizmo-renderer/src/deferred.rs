@@ -288,7 +288,7 @@ impl DeferredState {
                 &scene.skeleton_bind_group_layout, // 3: skeleton
                 &scene.instance_bind_group_layout, // 4: instances
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -345,7 +345,7 @@ impl DeferredState {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
         })
     }
 
@@ -369,7 +369,7 @@ impl DeferredState {
                 &scene.skeleton_bind_group_layout, // 3: skeleton
                 &scene.instance_bind_group_layout, // 4: instances
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -396,7 +396,7 @@ impl DeferredState {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
         })
     }
 
@@ -419,7 +419,7 @@ impl DeferredState {
                 &scene.shadow_bind_group_layout, // 1: shadow CSM
                 gbuffer_layout,                  // 2: G-buffers
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -448,7 +448,7 @@ impl DeferredState {
             },
             depth_stencil: None, // no depth write in lighting pass
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
         })
     }
 }
