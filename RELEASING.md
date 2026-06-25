@@ -234,8 +234,22 @@ Done: **wgpu 0.20→29, winit 0.29→0.30, egui 0.28→0.34** (+ `egui-wgpu`/`eg
 [`docs/graphics-upgrade-plan.md`](docs/graphics-upgrade-plan.md) for the matrix,
 per-dependency cheatsheet, and reusable recipes. **This unblocks the entire Stage B
 1.0.** (winit's deprecated `run`/`create_window` were used as a bridge to avoid a
-full `ApplicationHandler` rewrite; egui/winit deprecation warnings are silenced with
-documented crate-level `#![allow(deprecated)]` — migrating them is follow-up polish.)
+full `ApplicationHandler` rewrite.)
+
+> **Deprecation follow-up (2026-06-25, done):** the crate-level
+> `#![allow(deprecated)]` bridges left by the upgrade have been removed. All
+> mechanical egui 0.34 renames were migrated (`close_menu→close`,
+> `from_id_source→from_id_salt`, `Context::{style→global_style, begin_frame→
+> begin_pass, end_frame→end_pass, screen_rect→content_rect, …}`, `Frame::none→
+> new`, `allocate_ui_at_rect→scope_builder`, …), and the egui top-level panel
+> `show(ctx)` pattern was migrated to egui 0.34's root-`Ui` composition
+> (`Ui::new` + `show_inside`) across the editor and studio. The **only**
+> remaining deprecations are two scoped `#[allow(deprecated)]` on winit 0.30's
+> `EventLoop::{run,create_window}` in `gizmo-app/src/windowed.rs`: migrating that
+> ~550-line closure event loop to `ApplicationHandler`/`run_app` is a real XL
+> refactor of the engine's core loop (deliberately deferred — the bridge is fully
+> functional and `gizmo-app` is a Stage B `0.x` crate, so it is not a 1.0
+> blocker).
 
 <details><summary>Original scope notes</summary>
 
