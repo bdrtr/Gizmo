@@ -541,7 +541,7 @@ fn mk_ssao_pipeline(
     );
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("ssao_layout"),
-        bind_group_layouts: &[&scene.global_bind_group_layout, gbuf_bgl],
+        bind_group_layouts: &[Some(&scene.global_bind_group_layout), Some(gbuf_bgl)],
         immediate_size: 0,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -549,13 +549,13 @@ fn mk_ssao_pipeline(
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: "vs_main",
+            entry_point: Some("vs_main"),
             compilation_options: Default::default(),
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: "fs_main",
+            entry_point: Some("fs_main"),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba16Float,
@@ -571,6 +571,7 @@ fn mk_ssao_pipeline(
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
+            cache: None,
     })
 }
 
@@ -583,7 +584,7 @@ fn mk_blur_pipeline(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> wgpu:
     );
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("ssao_blur_layout"),
-        bind_group_layouts: &[bgl],
+        bind_group_layouts: &[Some(bgl)],
         immediate_size: 0,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -591,13 +592,13 @@ fn mk_blur_pipeline(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> wgpu:
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: "vs_main",
+            entry_point: Some("vs_main"),
             compilation_options: Default::default(),
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: "fs_main",
+            entry_point: Some("fs_main"),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba16Float,
@@ -613,6 +614,7 @@ fn mk_blur_pipeline(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> wgpu:
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
+            cache: None,
     })
 }
 
@@ -625,7 +627,7 @@ fn mk_apply_pipeline(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> wgpu
     );
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("ssao_apply_layout"),
-        bind_group_layouts: &[bgl],
+        bind_group_layouts: &[Some(bgl)],
         immediate_size: 0,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -633,13 +635,13 @@ fn mk_apply_pipeline(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> wgpu
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: "vs_main",
+            entry_point: Some("vs_main"),
             compilation_options: Default::default(),
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: "fs_main",
+            entry_point: Some("fs_main"),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba16Float,
@@ -663,5 +665,6 @@ fn mk_apply_pipeline(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> wgpu
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
+            cache: None,
     })
 }

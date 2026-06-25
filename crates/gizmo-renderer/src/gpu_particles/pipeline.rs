@@ -62,7 +62,7 @@ pub fn create_particle_pipelines(
 
     let compute_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Particle Compute Pipeline Layout"),
-        bind_group_layouts: &[&compute_bind_group_layout],
+        bind_group_layouts: &[Some(&compute_bind_group_layout)],
         immediate_size: 0,
     });
 
@@ -70,8 +70,9 @@ pub fn create_particle_pipelines(
         label: Some("Particle Compute Pipeline"),
         layout: Some(&compute_pipeline_layout),
         module: &compute_shader,
-        entry_point: "main",
+        entry_point: Some("main"),
         compilation_options: Default::default(),
+        cache: None,
     });
 
     let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -81,7 +82,7 @@ pub fn create_particle_pipelines(
 
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Particle Render Pipeline Layout"),
-        bind_group_layouts: &[global_bind_group_layout],
+        bind_group_layouts: &[Some(global_bind_group_layout)],
         immediate_size: 0,
     });
 
@@ -90,7 +91,7 @@ pub fn create_particle_pipelines(
         layout: Some(&render_pipeline_layout),
         vertex: wgpu::VertexState {
             module: &render_shader,
-            entry_point: "vs_main",
+            entry_point: Some("vs_main"),
             compilation_options: Default::default(),
             buffers: &[
                 wgpu::VertexBufferLayout {
@@ -103,7 +104,7 @@ pub fn create_particle_pipelines(
         },
         fragment: Some(wgpu::FragmentState {
             module: &render_shader,
-            entry_point: "fs_main",
+            entry_point: Some("fs_main"),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: output_format,
@@ -119,13 +120,14 @@ pub fn create_particle_pipelines(
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: false,
-            depth_compare: wgpu::CompareFunction::Less,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::Less),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
+            cache: None,
     });
 
     ParticlePipelines {

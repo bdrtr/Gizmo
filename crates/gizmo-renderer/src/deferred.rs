@@ -282,11 +282,11 @@ impl DeferredState {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("GBuffer Pipeline Layout"),
             bind_group_layouts: &[
-                &scene.global_bind_group_layout,   // 0: SceneUniforms
-                &scene.texture_bind_group_layout,  // 1: albedo texture
-                &scene.shadow_bind_group_layout, // 2: shadow (unused in G-pass but slot must exist)
-                &scene.skeleton_bind_group_layout, // 3: skeleton
-                &scene.instance_bind_group_layout, // 4: instances
+                Some(&scene.global_bind_group_layout),   // 0: SceneUniforms
+                Some(&scene.texture_bind_group_layout),  // 1: albedo texture
+                Some(&scene.shadow_bind_group_layout), // 2: shadow (unused in G-pass but slot must exist)
+                Some(&scene.skeleton_bind_group_layout), // 3: skeleton
+                Some(&scene.instance_bind_group_layout), // 4: instances
             ],
             immediate_size: 0,
         });
@@ -296,13 +296,13 @@ impl DeferredState {
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[Vertex::desc()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[
                     // RT0: albedo_metallic  Rgba8Unorm
@@ -339,13 +339,14 @@ impl DeferredState {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
+            cache: None,
         })
     }
 
@@ -363,11 +364,11 @@ impl DeferredState {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Z-Prepass Pipeline Layout"),
             bind_group_layouts: &[
-                &scene.global_bind_group_layout,   // 0: SceneUniforms
-                &scene.texture_bind_group_layout, // 1: albedo texture (unused but required by shader layout)
-                &scene.shadow_bind_group_layout,  // 2: shadow
-                &scene.skeleton_bind_group_layout, // 3: skeleton
-                &scene.instance_bind_group_layout, // 4: instances
+                Some(&scene.global_bind_group_layout),   // 0: SceneUniforms
+                Some(&scene.texture_bind_group_layout), // 1: albedo texture (unused but required by shader layout)
+                Some(&scene.shadow_bind_group_layout),  // 2: shadow
+                Some(&scene.skeleton_bind_group_layout), // 3: skeleton
+                Some(&scene.instance_bind_group_layout), // 4: instances
             ],
             immediate_size: 0,
         });
@@ -377,7 +378,7 @@ impl DeferredState {
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[Vertex::desc()],
             },
@@ -390,13 +391,14 @@ impl DeferredState {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
+            cache: None,
         })
     }
 
@@ -415,9 +417,9 @@ impl DeferredState {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Deferred Lighting Layout"),
             bind_group_layouts: &[
-                &scene.global_bind_group_layout, // 0: SceneUniforms
-                &scene.shadow_bind_group_layout, // 1: shadow CSM
-                gbuffer_layout,                  // 2: G-buffers
+                Some(&scene.global_bind_group_layout), // 0: SceneUniforms
+                Some(&scene.shadow_bind_group_layout), // 1: shadow CSM
+                Some(gbuffer_layout),                  // 2: G-buffers
             ],
             immediate_size: 0,
         });
@@ -427,13 +429,13 @@ impl DeferredState {
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[], // fullscreen triangle — no vertex buffer
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba16Float,
@@ -449,6 +451,7 @@ impl DeferredState {
             depth_stencil: None, // no depth write in lighting pass
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
+            cache: None,
         })
     }
 }

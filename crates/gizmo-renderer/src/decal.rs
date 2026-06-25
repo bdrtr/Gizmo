@@ -72,10 +72,10 @@ impl DecalState {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Decal Pipeline Layout"),
             bind_group_layouts: &[
-                &scene.global_bind_group_layout,  // 0
-                &world_pos_bgl,                   // 1
-                &scene.texture_bind_group_layout, // 2
-                &decal_uniform_bgl,               // 3
+                Some(&scene.global_bind_group_layout),  // 0
+                Some(&world_pos_bgl),                   // 1
+                Some(&scene.texture_bind_group_layout), // 2
+                Some(&decal_uniform_bgl),               // 3
             ],
             immediate_size: 0,
         });
@@ -85,7 +85,7 @@ impl DecalState {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
@@ -95,7 +95,7 @@ impl DecalState {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[
                     // Albedo blending!
@@ -118,6 +118,7 @@ impl DecalState {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
+            cache: None,
         });
 
         // Unit cube from -0.5 to 0.5

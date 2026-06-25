@@ -127,8 +127,8 @@ impl GpuCullState {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("gpu_cull_layout"),
             bind_group_layouts: &[
-                &scene.global_bind_group_layout, // group 0: SceneUniforms (view_proj)
-                &bgl,                            // group 1: bounds + indirect + params
+                Some(&scene.global_bind_group_layout), // group 0: SceneUniforms (view_proj)
+                Some(&bgl),                            // group 1: bounds + indirect + params
             ],
             immediate_size: 0,
         });
@@ -137,8 +137,9 @@ impl GpuCullState {
             label: Some("gpu_cull_pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
-            entry_point: "main",
+            entry_point: Some("main"),
             compilation_options: Default::default(),
+            cache: None,
         });
 
         Self {

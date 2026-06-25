@@ -164,7 +164,7 @@ impl GizmoRendererSystem {
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Debug Lines Pipeline Layout"),
-                bind_group_layouts: &[global_bind_group_layout],
+                bind_group_layouts: &[Some(global_bind_group_layout)],
                 immediate_size: 0,
             });
 
@@ -173,13 +173,13 @@ impl GizmoRendererSystem {
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[GpuGizmoVertex::desc()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: output_format,
@@ -195,13 +195,14 @@ impl GizmoRendererSystem {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: depth_format,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always, // Unconditionally pass depth testing for all gizmos
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always), // Unconditionally pass depth testing for all gizmos
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
+            cache: None,
         };
 
         let pipeline = device.create_render_pipeline(&desc);
@@ -209,8 +210,8 @@ impl GizmoRendererSystem {
         // Variant without depth testing (to overlay unconditionally)
         desc.depth_stencil = Some(wgpu::DepthStencilState {
             format: depth_format,
-            depth_write_enabled: false,
-            depth_compare: wgpu::CompareFunction::Always,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::Always),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         });

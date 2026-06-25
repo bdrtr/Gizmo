@@ -167,7 +167,7 @@ pub fn create_physics_pipelines(
 
     let compute_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Physics Compute Pipeline Layout"),
-        bind_group_layouts: &[&compute_bind_group_layout],
+        bind_group_layouts: &[Some(&compute_bind_group_layout)],
         immediate_size: 0,
     });
 
@@ -175,43 +175,49 @@ pub fn create_physics_pipelines(
         label: Some("Physics Clear"),
         layout: Some(&compute_pipeline_layout),
         module: &compute_shader,
-        entry_point: "clear_grid",
+        entry_point: Some("clear_grid"),
         compilation_options: Default::default(),
+        cache: None,
     });
     let pipeline_build = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("Physics Build"),
         layout: Some(&compute_pipeline_layout),
         module: &compute_shader,
-        entry_point: "build_grid",
+        entry_point: Some("build_grid"),
         compilation_options: Default::default(),
+        cache: None,
     });
     let pipeline_narrowphase = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("Physics Narrowphase"),
         layout: Some(&compute_pipeline_layout),
         module: &compute_shader,
-        entry_point: "narrowphase",
+        entry_point: Some("narrowphase"),
         compilation_options: Default::default(),
+        cache: None,
     });
     let pipeline_solve = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("Physics Solve"),
         layout: Some(&compute_pipeline_layout),
         module: &compute_shader,
-        entry_point: "solve_collisions_safe",
+        entry_point: Some("solve_collisions_safe"),
         compilation_options: Default::default(),
+        cache: None,
     });
     let pipeline_integrate = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("Physics Integrate"),
         layout: Some(&compute_pipeline_layout),
         module: &compute_shader,
-        entry_point: "integrate",
+        entry_point: Some("integrate"),
         compilation_options: Default::default(),
+        cache: None,
     });
     let pipeline_solve_joints = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("Physics Solve Joints"),
         layout: Some(&compute_pipeline_layout),
         module: &compute_shader,
-        entry_point: "solve_joints",
+        entry_point: Some("solve_joints"),
         compilation_options: Default::default(),
+        cache: None,
     });
 
     let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -221,7 +227,7 @@ pub fn create_physics_pipelines(
 
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Physics Render Pipeline Layout"),
-        bind_group_layouts: &[global_bind_group_layout],
+        bind_group_layouts: &[Some(global_bind_group_layout)],
         immediate_size: 0,
     });
 
@@ -230,13 +236,13 @@ pub fn create_physics_pipelines(
         layout: Some(&render_pipeline_layout),
         vertex: wgpu::VertexState {
             module: &render_shader,
-            entry_point: "vs_main",
+            entry_point: Some("vs_main"),
             compilation_options: Default::default(),
             buffers: &[Vertex::desc(), GpuBox::desc()],
         },
         fragment: Some(wgpu::FragmentState {
             module: &render_shader,
-            entry_point: "fs_main",
+            entry_point: Some("fs_main"),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: output_format,
@@ -252,13 +258,14 @@ pub fn create_physics_pipelines(
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: depth_format,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Less,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
+            cache: None,
     });
 
     let culling_bind_group_layout =
@@ -338,7 +345,7 @@ pub fn create_physics_pipelines(
 
     let culling_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Physics Culling Pipeline Layout"),
-        bind_group_layouts: &[global_bind_group_layout, &culling_bind_group_layout],
+        bind_group_layouts: &[Some(global_bind_group_layout), Some(&culling_bind_group_layout)],
         immediate_size: 0,
     });
 
@@ -346,8 +353,9 @@ pub fn create_physics_pipelines(
         label: Some("Physics Culling Pipeline"),
         layout: Some(&culling_pipeline_layout),
         module: &culling_shader,
-        entry_point: "cull_main",
+        entry_point: Some("cull_main"),
         compilation_options: Default::default(),
+        cache: None,
     });
 
     PhysicsPipelines {

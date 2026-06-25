@@ -454,7 +454,7 @@ fn mk_resolve_pipeline(
     );
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("taa_resolve_layout"),
-        bind_group_layouts: &[resolve_bgl],
+        bind_group_layouts: &[Some(resolve_bgl)],
         immediate_size: 0,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -462,13 +462,13 @@ fn mk_resolve_pipeline(
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: "vs_main",
+            entry_point: Some("vs_main"),
             compilation_options: Default::default(),
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: "fs_resolve",
+            entry_point: Some("fs_resolve"),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba16Float,
@@ -484,6 +484,7 @@ fn mk_resolve_pipeline(
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
+            cache: None,
     })
 }
 
@@ -500,7 +501,7 @@ fn mk_blit_pipeline(
     );
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("taa_blit_layout"),
-        bind_group_layouts: &[empty_bgl, blit_bgl],
+        bind_group_layouts: &[Some(empty_bgl), Some(blit_bgl)],
         immediate_size: 0,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -508,13 +509,13 @@ fn mk_blit_pipeline(
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: "vs_main",
+            entry_point: Some("vs_main"),
             compilation_options: Default::default(),
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: "fs_blit",
+            entry_point: Some("fs_blit"),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba16Float,
@@ -530,5 +531,6 @@ fn mk_blit_pipeline(
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
+            cache: None,
     })
 }

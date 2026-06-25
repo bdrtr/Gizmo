@@ -178,7 +178,7 @@ impl GpuFemSystem {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("FEM Compute Pipeline Layout"),
-            bind_group_layouts: &[&compute_bind_group_layout],
+            bind_group_layouts: &[Some(&compute_bind_group_layout)],
             immediate_size: 0,
         });
 
@@ -186,24 +186,27 @@ impl GpuFemSystem {
             label: Some("FEM Clear Forces"),
             layout: Some(&pipeline_layout),
             module: &compute_shader,
-            entry_point: "clear_forces",
+            entry_point: Some("clear_forces"),
             compilation_options: Default::default(),
+            cache: None,
         });
 
         let pipeline_stress = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("FEM Compute Stress"),
             layout: Some(&pipeline_layout),
             module: &compute_shader,
-            entry_point: "compute_stress",
+            entry_point: Some("compute_stress"),
             compilation_options: Default::default(),
+            cache: None,
         });
 
         let pipeline_integrate = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("FEM Integrate"),
             layout: Some(&pipeline_layout),
             module: &compute_shader,
-            entry_point: "integrate",
+            entry_point: Some("integrate"),
             compilation_options: Default::default(),
+            cache: None,
         });
 
         Self {
