@@ -130,7 +130,7 @@ impl FluidSystem {
     }
 
     /// Brute-force komşu arama (test referansı)
-    pub fn get_neighbors(&self, i: usize) -> Vec<usize> {
+    pub fn neighbors(&self, i: usize) -> Vec<usize> {
         let pi = &self.particles[i];
         let h_sq = self.config.smoothing_radius * self.config.smoothing_radius;
         (0..self.particles.len())
@@ -144,7 +144,7 @@ impl FluidSystem {
         let pi = &self.particles[i];
         let h = self.config.smoothing_radius;
         let mut density = pi.mass * w_poly6(0.0, h);
-        for &j in &self.get_neighbors(i) {
+        for &j in &self.neighbors(i) {
             let r_sq = (pi.position - self.particles[j].position).length_squared();
             density += self.particles[j].mass * w_poly6(r_sq, h);
         }
@@ -161,7 +161,7 @@ impl FluidSystem {
         let pi = &self.particles[i];
         let h = self.config.smoothing_radius;
         let mut force = Vec3::ZERO;
-        for &j in &self.get_neighbors(i) {
+        for &j in &self.neighbors(i) {
             let pj = &self.particles[j];
             let r = pi.position - pj.position;
             let r_len = r.length().max(1e-6);
@@ -176,7 +176,7 @@ impl FluidSystem {
         let pi = &self.particles[i];
         let h = self.config.smoothing_radius;
         let mut force = Vec3::ZERO;
-        for &j in &self.get_neighbors(i) {
+        for &j in &self.neighbors(i) {
             let pj = &self.particles[j];
             let r_len = (pi.position - pj.position).length().max(1e-6);
             let lap = laplacian_w_viscosity(r_len, h);
@@ -189,7 +189,7 @@ impl FluidSystem {
         let pi = &self.particles[i];
         let h = self.config.smoothing_radius;
         let mut force = Vec3::ZERO;
-        for &j in &self.get_neighbors(i) {
+        for &j in &self.neighbors(i) {
             let pj = &self.particles[j];
             let r = pi.position - pj.position;
             let r_len = r.length().max(1e-6);
@@ -709,7 +709,7 @@ mod tests {
             Particle::new(2, Vec3::new(0.5, 0.0, 0.0), 0.01), // p3: h dışında
         ]);
 
-        let neighbors = sys.get_neighbors(0); // p1'in komşuları
+        let neighbors = sys.neighbors(0); // p1'in komşuları
         let found_p2 = neighbors.contains(&1);
         let found_p3 = neighbors.contains(&2);
 

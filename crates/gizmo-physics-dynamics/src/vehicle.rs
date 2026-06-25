@@ -272,7 +272,7 @@ impl VehicleController {
     }
 
     /// Motor tork eğrisi — parametrik çan eğrisi
-    pub fn get_engine_torque(&self) -> f32 {
+    pub fn engine_torque(&self) -> f32 {
         let t = &self.tuning;
         let ratio = (self.engine_rpm - t.idle_rpm).max(0.0) / (t.max_rpm - t.idle_rpm).max(1.0);
         let curve = (1.0 - (ratio - 0.4).powi(2) * 2.5).clamp(0.05, 1.0);
@@ -382,7 +382,7 @@ pub fn update_vehicle(
     vehicle.engine_rpm =
         (wheel_rpm * total_ratio.abs()).clamp(vehicle.tuning.idle_rpm, vehicle.tuning.max_rpm);
 
-    let engine_torque = vehicle.get_engine_torque();
+    let engine_torque = vehicle.engine_torque();
     // Geri viteste tork yönü ters
     let torque_sign = if total_ratio < 0.0 { -1.0 } else { 1.0 };
     let drive_torque_total = engine_torque * total_ratio.abs() * torque_sign;

@@ -32,7 +32,7 @@ static GLOBAL_LOGS: Mutex<Vec<LogEntry>> = Mutex::new(Vec::new());
 static LOG_VERSION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Logların değişip değişmediğini anlamak için versiyon numarası döner
-pub fn get_log_version() -> usize {
+pub fn log_version() -> usize {
     LOG_VERSION.load(std::sync::atomic::Ordering::Relaxed)
 }
 

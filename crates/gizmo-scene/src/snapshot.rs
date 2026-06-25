@@ -63,7 +63,7 @@ impl SceneSnapshot {
             let mut components = std::collections::BTreeMap::new();
             
             let entity = gizmo_core::entity::Entity::new(id, 0);
-            let types = world.get_entity_component_types(entity);
+            let types = world.entity_component_types(entity);
             for type_id in types {
                 if let Some(reg) = registry.get_registration(type_id) {
                     if let Some(ptr) = world.get_component_ptr(entity, type_id) {

@@ -376,13 +376,25 @@ gerçek-UDP örnek onaylı geçmişte senkron).
       feature testi + reflect-feature testleri + CI clippy (stable, default+reflect)
       + determinizm 3/3 (`598E315D0E7499FF`, fizik DEĞİŞMEDİ) + MSRV 1.89 build.
 
+### (d) get_ rename TAMAM (2026-06-25, Bevy-konvansiyonuyla kapsamlandı)
+- [x] **(d) `get_` rename (C-GETTER)** — **M**. KRİTİK nüans: motor Bevy'i model
+      alıyor, Bevy `get_`'i FALLIBLE erişimciler için tutar (`get_resource`→Option
+      vs `resource()`→panik). `get_*`'ların çoğu Option/Result dönüyor veya
+      collection `get`/`get_mut` → **kasıtlı, korundu** (get_resource ×173,
+      get_entity ×41 dahil). Yalnız gerçek infallible düz-değer getter'ları
+      yeniden adlandırıldı: get_neighbors/get_entity_component_types/get_log_version/
+      get_engine_torque/get_entity_names → get_'siz. Saf rename, 552 test+clippy+
+      determinizm (hash değişmedi) doğruladı.
+- [~] **Görünürlük daraltma** — gizmo-animation→gizmo-app daraltması YAPILAMADI:
+      `gizmo_app::Plugin`/`App`'i implement ediyor (load-bearing); Plugin/App'i
+      çekirdek crate'e çıkarmak ayrı mimari iş → gizmo-animation Stage B'de kaldı.
+      Geniş `pub` daraltması = ince denetim takibi (ertelendi).
+
 ### Kalan 1.0 blokerleri (bkz. `RELEASING.md` §4 kontrol listesi)
 - [ ] **(c) `wgpu`/`winit`/`egui` güncel sürüme yükseltme** — *Stage B 1.0
       blokeri* — **XL**. `wgpu 0.20→güncel`, `winit 0.29→güncel`,
       `egui 0.28→güncel` (+ egui ekosistemi). Tüm grafik katmanı + `gizmo`
       facade buna bağlı.
-- [ ] **(d) `get_` rename (C-GETTER) + görünürlük daraltma** — should-do — **M**.
-      Stage A'nın kalan tek maddesi (mekanik ama geniş çağrı-yeri churn'ü).
 - [ ] **Not (gizmo-math bağımlılık hijyeni, opsiyonel):** gizmo-math `bevy_math`/
       `bevy_picking`/`bevy_mesh` dep'leri `bevy_reflect`'i transitif çekiyor;
       public tip glam olduğundan API sızıntısı yok ama dep ağacından çıkarmak

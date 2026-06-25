@@ -406,7 +406,7 @@ pub fn draw_reflection_section(
     ];
 
     if let Some(registry) = world.get_resource::<gizmo_core::ComponentRegistry>() {
-        let types = world.get_entity_component_types(entity_id);
+        let types = world.entity_component_types(entity_id);
 
         for tid in types {
             if let Some(reg) = registry.get_registration(tid) {

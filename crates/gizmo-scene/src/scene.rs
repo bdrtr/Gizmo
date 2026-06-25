@@ -124,7 +124,7 @@ impl SceneData {
 
             let mut dynamic_components = std::collections::BTreeMap::new();
 
-            let types = world.get_entity_component_types(entity);
+            let types = world.entity_component_types(entity);
             for type_id in types {
                 if let Some(reg) = registry.get_registration(type_id) {
                     if let Some(ptr) = world.get_component_ptr(entity, type_id) {
@@ -380,7 +380,7 @@ impl SceneData {
     }
 
     /// Entity listesini döndürür (Lua API'si için)
-    pub fn get_entity_names(world: &World) -> Vec<(u32, String)> {
+    pub fn entity_names(world: &World) -> Vec<(u32, String)> {
         let mut result = Vec::new();
         let names = world.borrow::<EntityName>();
         for (entity_id, _) in names.iter() {

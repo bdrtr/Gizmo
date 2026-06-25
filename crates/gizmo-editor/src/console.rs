@@ -16,7 +16,7 @@ pub fn ui_console(ui: &mut egui::Ui, state: &mut EditorState) {
 }
 
 fn draw_engine_logs(ui: &mut egui::Ui, state: &mut EditorState) {
-    let current_version = logger::get_log_version();
+    let current_version = logger::log_version();
     let mut filter_changed = false;
 
     // Top Bar UI

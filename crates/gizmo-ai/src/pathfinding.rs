@@ -68,7 +68,7 @@ impl NavGrid {
     }
 
     // Yalnızca X,Z düzleminde Dört yön hareket algılayan komşuluk.
-    pub fn get_neighbors(&self, pos: GridPos) -> Vec<GridPos> {
+    pub fn neighbors(&self, pos: GridPos) -> Vec<GridPos> {
         let mut neighbors = Vec::with_capacity(8);
         let dirs = [(1, 0), (-1, 0), (0, 1), (0, -1)];
         let diagonals = [(1, 1), (-1, -1), (-1, 1), (1, -1)];
@@ -244,7 +244,7 @@ impl NavGrid {
 
             let curr_g = *g_score.get(&current).unwrap_or(&u32::MAX);
 
-            for neighbor in self.get_neighbors(current) {
+            for neighbor in self.neighbors(current) {
                 // Çaprazlar 14, düzler 10 birim maliyet.
                 let move_cost = if neighbor.x != current.x && neighbor.z != current.z {
                     14

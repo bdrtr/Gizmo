@@ -11,10 +11,14 @@ is declared and CI-gated (§4f). What remains for Stage A is the mechanical
 **staged** path to 1.0 instead of a single lock-step release.
 
 > **Progress (2026-06-25 Stage-A-sealing pass):** §4(a) reflect-gating,
-> §4(b) arrayvec newtype, §4(e) glam public-dep doc, and §4(f) MSRV are **done**
-> and verified (full workspace: 552 tests, `--all-features`, both feature
-> configs, CI clippy on stable, determinism 3/3 unchanged, MSRV 1.89 build).
-> Remaining Stage A item: §4(d). Remaining Stage B blocker: §4(c).
+> §4(b) arrayvec newtype, §4(e) glam public-dep doc, §4(f) MSRV, and the §4(d)
+> **getter rename** are **done** and verified (full workspace: 552 tests,
+> `--all-features`, both feature configs, CI clippy on stable, determinism 3/3
+> unchanged, MSRV 1.89 build). §4(d)'s rename was deliberately scoped by the Bevy
+> `get_`-=-fallible convention (most `get_*` are intentional; see §4d). §4(d)'s
+> visibility-narrowing of `gizmo-animation` is **deferred** (load-bearing
+> `gizmo_app::Plugin`/`App` dep — needs an architectural extraction). Remaining
+> Stage B blocker: §4(c) graphics upgrade.
 
 This is a strategy document, not a promise of dates. It records *why* the version
 plan is what it is, *which* crates can ship 1.0 first, *what* the external-type
@@ -227,14 +231,31 @@ the entire editor. This is the single largest piece of work and the gate for the
 **entire Stage B 1.0** (renderer, window, editor, ui, app, scripting, facade).
 Until it lands, Stage B stays `0.x` (which is fine — see §3).
 
-### (d) `get_` getter rename + visibility narrowing — **M** — *should-do, polish* (audit blocker #3)
+### (d) `get_` getter rename + visibility narrowing — **M** — ⚠️ **getter rename DONE (2026-06-25); visibility narrowing assessed** (audit blocker #3)
 
-Rename `get_*` accessors to drop the prefix per Rust API guideline C-GETTER, and
-narrow the remaining over-broad `pub` items flagged by the audit (including
-narrowing `gizmo-animation`'s dependency on `gizmo-app` down to the core crates
-it actually uses, which promotes it from Stage B to Stage A). Breaking but
-mechanical; do it in the same release as (a)/(b) so all Stage A breakage lands
-at once.
+**Getter rename — done, but scoped by the Bevy convention.** The naive reading of
+C-GETTER ("drop every `get_`") is **wrong** for this engine: Gizmo deliberately
+models Bevy, and Bevy keeps `get_` for **fallible** accessors (`get_resource` →
+`Option`, vs `resource()` which panics). Auditing the return types shows the vast
+majority of Gizmo's `get_*` (`get_resource`/`get_resource_mut` (173 call sites),
+`get_entity` (41), `get_component_ptr`, `get_column`, `get_name`, `get_type_id`,
+`get_registration`, `get_contact`, …) return `Option`/`Result` or are
+collection-style `get`/`get_mut` — these are **idiomatic and kept**. Only the
+genuinely **infallible plain-value getters** violated C-GETTER and were renamed:
+`get_neighbors → neighbors`, `get_entity_component_types → entity_component_types`,
+`get_log_version → log_version`, `get_engine_torque → engine_torque`,
+`get_entity_names → entity_names`. (`get_or_predict` is a fallback combinator and
+`get_logs` is a closure-scoped accessor — both kept.) Pure renames; verified by
+552 tests + clippy + determinism (hash unchanged).
+
+**Visibility narrowing — assessed, mostly deferred.** The headline item
+(narrowing `gizmo-animation`'s `gizmo-app` dependency to promote it to Stage A) is
+**not feasible as polish**: `gizmo-animation` implements `gizmo_app::Plugin<State>`
+on `gizmo_app::App<State>`, so the dependency is load-bearing. Promoting it would
+require extracting the `Plugin`/`App` abstraction down into a core crate — a real
+architectural change, out of scope here. `gizmo-animation` therefore **stays
+Stage B** until that extraction happens. Broader `pub`-tightening from the audit
+raw output remains as fine-grained follow-up.
 
 ### (e) Document `glam` as an official public dependency — **S** — ✅ **DONE (2026-06-25)**
 
@@ -309,9 +330,10 @@ Gizmo is **not 1.0-ready**, but the path is clear and staged, and most of Stage 
 is now sealed:
 
 1. ✅ Seal `bevy_reflect` (§4a), ✅ `arrayvec` (§4b), ✅ document `glam` (§4e),
-   ✅ set MSRV (§4f) — **done 2026-06-25, fully verified**. Remaining: rename
-   getters (§4d, M). Then **Stage A core ships 1.0** (math, ECS, physics, scene,
-   net, audio, AI).
+   ✅ set MSRV (§4f), ✅ getter rename (§4d, Bevy-scoped) — **done 2026-06-25,
+   fully verified**. Remaining Stage A polish: audit `pub`-tightening + the
+   `gizmo-animation`→Stage A extraction (§4d, deferred). Then **Stage A core
+   ships 1.0** (math, ECS, physics, scene, net, audio, AI).
 2. Upgrade `wgpu`/`winit`/`egui` (§4c, XL) → **Stage B graphics + `gizmo` facade
    ship 1.0** later.
 
