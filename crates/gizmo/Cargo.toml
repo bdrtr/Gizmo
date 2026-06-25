@@ -45,8 +45,8 @@ gizmo-scripting = { path = "../gizmo-scripting", optional = true , version = "0.
 gizmo-scene = { path = "../gizmo-scene", optional = true , version = "0.1.7" }
 gizmo-ui = { path = "../gizmo-ui", optional = true, version = "0.1.7" }
 winit = { workspace = true, optional = true }
-wgpu = { version = "0.20", optional = true }
-egui = { version = "0.28", optional = true }
+wgpu = { version = "29", optional = true }
+egui = { version = "0.34", optional = true }
 bytemuck = { version = "1", optional = true }
 gizmo-editor = { path = "../gizmo-editor", optional = true , version = "0.1.7" }
 tracing = "0.1.44"

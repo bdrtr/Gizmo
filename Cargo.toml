@@ -24,6 +24,6 @@ categories = ["game-engines"]
 
 # Bağımlılıkları tek bir yerden yönetmek için (Inherited Dependencies)
 [workspace.dependencies]
-winit = "0.29"
+winit = "0.30"
 mimalloc = { version = "0.1", default-features = false }
 proptest = "1"

@@ -8,10 +8,11 @@
 //! see the `gizmo-app` crate instead.
 
 use winit::{
+    application::ApplicationHandler,
     error::{EventLoopError, OsError},
-    event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
-    window::{Window, WindowBuilder},
+    event::WindowEvent,
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    window::{Window, WindowId},
 };
 
 /// Errors that can occur while creating or running an [`AppWindow`].
@@ -77,16 +78,26 @@ impl AppWindow {
     ///
     /// Returns [`WindowError::Os`] if the underlying platform window cannot
     /// be created.
+    /// Creates a new window on the given **active** event loop.
+    ///
+    /// Since winit 0.30, OS windows can only be created once the event loop is
+    /// active (i.e. from inside [`ApplicationHandler::resumed`]), so this takes
+    /// an [`ActiveEventLoop`] rather than the `EventLoop` itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WindowError::Os`] if the underlying platform window cannot
+    /// be created.
     pub fn new(
         title: &str,
         width: u32,
         height: u32,
-        event_loop: &EventLoop<()>,
+        event_loop: &ActiveEventLoop,
     ) -> Result<Self, WindowError> {
-        let window = WindowBuilder::new()
+        let attributes = Window::default_attributes()
             .with_title(title)
-            .with_inner_size(winit::dpi::LogicalSize::new(width, height))
-            .build(event_loop)?;
+            .with_inner_size(winit::dpi::LogicalSize::new(width, height));
+        let window = event_loop.create_window(attributes)?;
 
         Ok(Self { window })
     }
@@ -110,27 +121,74 @@ impl AppWindow {
 /// created.
 pub fn run_window(title: &str, width: u32, height: u32) -> Result<(), WindowError> {
     let event_loop = EventLoop::new()?;
-    let _app = AppWindow::new(title, width, height, &event_loop)?;
-
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    tracing::info!(
-        "{} {}x{} çözünürlüğünde başlatıldı. Ekranda bir pencere görmelisin!",
-        title, width, height
-    );
+    let mut app = WindowApp {
+        title: title.to_string(),
+        width,
+        height,
+        window: None,
+        deferred_error: None,
+    };
+    event_loop.run_app(&mut app)?;
 
-    event_loop.run(move |event, elwt| {
-        match event {
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                ..
-            } => elwt.exit(),
-            Event::AboutToWait => {
-                // Her frame'de yapılacak işler...
-            }
-            _ => (),
-        }
-    })?;
-
+    // Surface a window-creation failure that happened inside `resumed`.
+    if let Some(err) = app.deferred_error {
+        return Err(err);
+    }
     Ok(())
+}
+
+/// Minimal [`ApplicationHandler`] backing [`run_window`].
+///
+/// Since winit 0.30 the event loop is driven through this trait rather than a
+/// closure: the window is created in [`resumed`](ApplicationHandler::resumed)
+/// (the first point at which an [`ActiveEventLoop`] is available) and events
+/// are dispatched through [`window_event`](ApplicationHandler::window_event).
+struct WindowApp {
+    title: String,
+    width: u32,
+    height: u32,
+    window: Option<AppWindow>,
+    /// A window-creation error captured in `resumed`, surfaced by `run_window`
+    /// after the loop exits (the trait methods cannot return `Result`).
+    deferred_error: Option<WindowError>,
+}
+
+impl ApplicationHandler for WindowApp {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+        match AppWindow::new(&self.title, self.width, self.height, event_loop) {
+            Ok(window) => {
+                tracing::info!(
+                    "{} {}x{} çözünürlüğünde başlatıldı. Ekranda bir pencere görmelisin!",
+                    self.title,
+                    self.width,
+                    self.height
+                );
+                self.window = Some(window);
+            }
+            Err(err) => {
+                self.deferred_error = Some(err);
+                event_loop.exit();
+            }
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        if let WindowEvent::CloseRequested = event {
+            event_loop.exit();
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        // Her frame'de yapılacak işler...
+    }
 }

@@ -14,7 +14,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-wgpu = { version = "0.20", features = ["fragile-send-sync-non-atomic-wasm", "webgl"] }
+wgpu = { version = "29", features = ["fragile-send-sync-non-atomic-wasm", "webgl"] }
 log = "0.4"
 pollster = "0.3"
 winit = { workspace = true }
