@@ -159,9 +159,34 @@ adapter/InstanceDescriptor in `renderer.rs`.
 - 2026-06-25: **`gizmo-physics-soft` `gpu_physics` migrated to wgpu 29 — green (9 → 0).**
   Same patterns + `request_adapter` `.ok_or` → `.map_err`, `Maintain::Wait` →
   `PollType::Wait { submission_index: None, timeout: None }`.
-- **Remaining: `gizmo-app` (winit ApplicationHandler + wgpu surface), `gizmo-editor`
-  (egui 0.34 ecosystem + wgpu), facade + `demo`/`cradle`/`gizmo-studio`, then a real
-  windowed run.**
+- 2026-06-25: **`gizmo-editor` fully migrated to egui 0.34 — green (0 errors).**
+  Mechanical egui renames (Rounding→CornerRadius + `same` f32→u8, `*_rounding`→
+  `*_corner_radius`, `Margin` f32→i8, `raw_scroll_delta`→`smooth_scroll_delta`)
+  + structural: `State::new` +theme arg, `Renderer::new`→`RendererOptions`,
+  `render` wants `RenderPass<'static>` (`begin_render_pass().forget_lifetime()`),
+  `PlatformOutput.copied_text`→`commands.push(OutputCommand::CopyText)`, Painter
+  `rect_stroke`/`rect` +`StrokeKind` arg + corner radius f32→int. (47 deprecation
+  warnings remain — non-blocking.)
+- **REMAINING: `gizmo-app` (~6 errors but structural — see below), facade
+  `gizmo` + `demo`/`cradle`/`gizmo-studio`, then a real windowed run.**
+
+### `gizmo-app` remaining work (the last structural piece)
+`gizmo-app/src/windowed.rs` uses the **winit 0.29 closure event loop** with the
+window created *before* the loop (`WindowBuilder::new()...build(&event_loop)` at
+~L305/L346) and all init (`Renderer`, `setup_fn`, `EditorContext`) in
+`run_internal` *before* `event_loop.run(closure)` (~L440, a ~600-line closure).
+winit 0.30 forbids creating a window outside an active loop, so this needs an
+**`ApplicationHandler` conversion**: move window creation + all init into
+`resumed(&mut self, &ActiveEventLoop)` (guarded by an `Option`/`initialized` flag),
+and split the closure's `match event { Event::WindowEvent{..} => .., Event::AboutToWait => .. }`
+into the `window_event(..)` / `about_to_wait(..)` trait methods, then call
+`event_loop.run_app(&mut handler)`. Plus the contained wgpu change:
+`surface.get_current_texture()` now returns the enum **`wgpu::SurfaceTexture` via
+`CurrentSurfaceTexture`** (not `Result<_, SurfaceError>`; `wgpu::SurfaceError` is
+gone) — rewrite the `match ... { Ok(t) => .., Err(SurfaceError::Outdated) => .., Err(e) => .. }`
+(~L1128) to match `CurrentSurfaceTexture` variants (success carrying the texture +
+`Timeout`/`Outdated`/`Lost`). This is runtime-critical (the main loop) — do it
+carefully and verify with a real windowed run, not just `cargo check`.
 
 ### Reusable sed/perl recipes (for app/editor/binaries)
 ```
