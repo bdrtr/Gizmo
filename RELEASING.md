@@ -1,10 +1,20 @@
 # Releasing Gizmo — crates.io 1.0 Strategy
 
-Status: **NOT 1.0-ready.** The engine has completed a multi-round 1.0-readiness
-audit (205 findings, 26 blockers) and four hardening rounds, but the public API
-of the graphics layer still re-exports pre-1.0 external types, and the core still
-leaks `bevy_reflect` through its serialization derives. This document defines a
+Status: **NOT 1.0-ready, but the Stage A core blockers are now sealed.** The
+engine completed a multi-round 1.0-readiness audit (205 findings, 26 blockers)
+and the hardening rounds. As of the Stage-A-sealing pass (2026-06-25), the core
+no longer leaks `bevy_reflect` (§4a) or `arrayvec` (§4b) through its public API,
+`glam` is documented as an official public dependency (§4e), and a verified MSRV
+is declared and CI-gated (§4f). What remains for Stage A is the mechanical
+`get_`-getter rename (§4d); Stage B (graphics) still re-exports pre-1.0 `wgpu`/
+`winit`/`egui` by design (§3) until the upgrade in §4c. This document defines a
 **staged** path to 1.0 instead of a single lock-step release.
+
+> **Progress (2026-06-25 Stage-A-sealing pass):** §4(a) reflect-gating,
+> §4(b) arrayvec newtype, §4(e) glam public-dep doc, and §4(f) MSRV are **done**
+> and verified (full workspace: 552 tests, `--all-features`, both feature
+> configs, CI clippy on stable, determinism 3/3 unchanged, MSRV 1.89 build).
+> Remaining Stage A item: §4(d). Remaining Stage B blocker: §4(c).
 
 This is a strategy document, not a promise of dates. It records *why* the version
 plan is what it is, *which* crates can ship 1.0 first, *what* the external-type
@@ -115,21 +125,38 @@ is pinned to Stage B by transitivity.
 Gizmo deliberately exposes some third-party types in its public API. This is a
 **design choice**, not an accident, and it is bounded:
 
-### `glam` — permanent, intentional (Stage A)
+### `glam` — permanent, intentional (Stage A) — **documented (§4e done)**
 
 `gizmo-math` re-exports `glam` (`Vec3`, `Quat`, `Mat4`, …) as the engine's vector
 math vocabulary. This is intentional and permanent: forcing callers through
-newtype wrappers around `glam` would add zero value and break ergonomics.
-`glam` is pinned to `=0.29.3` so a 1.0 of `gizmo-math` ties to an exact, audited
-`glam`. A `glam` major bump becomes a deliberate, documented `gizmo-math` bump.
-This is recorded as an **official public dependency** (§4(e)).
+newtype wrappers around `glam` would add zero value and break ergonomics. The
+re-export now goes **directly through `glam`** (`pub use glam::{…}` in
+`gizmo-math/src/lib.rs`), not via `bevy_math` — `bevy_math` re-uses the exact
+same `glam` types, so this is the single source of truth. `glam` is on the
+`0.29` line; a `glam` major bump is a deliberate, documented `gizmo-math` bump.
+Recorded as an **official public dependency** in `gizmo-math`'s crate docs.
 
-### `bevy_reflect` — to be sealed before Stage A 1.0
+> **Note — `bevy_math` transitive dependency.** `gizmo-math` also depends on
+> `bevy_math 0.15` (used by its benches and as the re-export origin historically),
+> which transitively pulls `bevy_reflect`. Because `bevy_math::Vec3` *is*
+> `glam::Vec3` (a re-export, not a newtype), the **public type** is `glam`'s, so
+> there is no distinct `bevy_math` type in the public API. But `bevy_reflect`
+> therefore still **compiles** as a transitive dep even with the `reflect`
+> feature off — the feature gate removes it from the public *API*, not from the
+> dependency *tree*. Trimming `bevy_math`/`bevy_picking`/`bevy_mesh` from
+> `gizmo-math` is a separate, optional dependency-hygiene task.
 
-`bevy_reflect 0.15` is currently public (via `#[derive(Reflect)]` on core
-components, used by scene serialization). It is **not** an intentional permanent
-public dependency. Before Stage A goes 1.0 it must be moved behind a workspace
-`reflect` feature so it is not part of the unconditional public API (§4(a)).
+### `bevy_reflect` — **sealed behind the `reflect` feature (§4a done)**
+
+`bevy_reflect 0.15` was public (via `#[derive(Reflect)]` on core components +
+the `ComponentRegistry` reflect fields, used by scene serialization). It is now
+gated behind a workspace-wide, **off-by-default** `reflect` feature across
+`gizmo-core`, `gizmo-physics-core`, `gizmo-physics-rigid`, and `gizmo-scene`. With
+the default feature set, none of these crates mention `bevy_reflect` in their
+public API; scene save/load + snapshot fall back to plain `serde` (every gated
+component derives `Serialize`/`Deserialize`, so the fallback is fully functional
+and round-trip-tested). When `reflect` is on, the typed reflect (de)serializers
+are used as before.
 
 ### `wgpu` / `winit` / `egui` — intentional, but only safe while 0.x (Stage B)
 
@@ -158,25 +185,36 @@ a feature whose semver cost is deferred by keeping those crates pre-1.0.
 In priority order. Effort: **S** (hours), **M** (a day), **L** (multi-day,
 risky), **XL** (large, multi-day, high API churn).
 
-### (a) Gate `bevy_reflect` behind a workspace `reflect` feature — **L** — *Stage A 1.0 blocker* (audit blocker #1)
+### (a) Gate `bevy_reflect` behind a workspace `reflect` feature — **L** — ✅ **DONE (2026-06-25)** (audit blocker #1)
 
-`bevy_reflect 0.15` is load-bearing in the `Reflect` derives on `Transform`,
+`bevy_reflect 0.15` was load-bearing in the `Reflect` derives on `Transform`,
 `RigidBody`, `Velocity`, etc. in `gizmo-core`, `gizmo-physics-core`,
-`gizmo-physics-rigid`, and `gizmo-scene`, and drives scene serialization. Move it
-behind a single, workspace-wide `reflect` feature so that the default public API
-of the Stage A crates does **not** mention `bevy_reflect`. Risky because the
-derives are spread across four crates and scene save/load depends on them; the
-feature must be coherent across the whole Stage A set (a partial gate breaks
-serialization). This is the gate that unblocks the entire Stage A 1.0.
+`gizmo-physics-rigid`, and `gizmo-scene`, and drove scene serialization. It is now
+behind a single, **off-by-default** workspace `reflect` feature so the default
+public API of the Stage A crates does **not** mention `bevy_reflect`.
+Implementation:
+- Each crate makes `bevy_reflect` an `optional` dep with a `reflect` feature that
+  chains down the dependency graph (`gizmo-scene/reflect` →
+  `gizmo-physics-rigid/reflect` → `gizmo-physics-core/reflect` →
+  `gizmo-core/reflect`).
+- Derives use `#[cfg_attr(feature = "reflect", derive(Reflect))]` /
+  `#[cfg_attr(feature = "reflect", reflect(ignore))]`; the `ComponentRegistry`
+  reflect fields/methods (`reflect_registry`, `get_reflect_ptr_fn`,
+  `insert_reflect_fn`, `register_reflect`, `InsertReflectFn`) and the
+  `pub use bevy_reflect` re-exports are `#[cfg(feature = "reflect")]`.
+- Scene's `serde_bridge` module centralizes the reflect-vs-`serde` cfg in one
+  place; `default_scene_registry` registers components via `register_reflect`
+  (reflect on) or `register_serializable` (reflect off). Both paths are
+  round-trip-tested (`scene_save_load_roundtrip…`, snapshot round-trip).
 
-### (b) Replace the `arrayvec` leak with an opaque newtype — **M** — *Stage A 1.0 blocker* (audit blocker #2)
+### (b) Replace the `arrayvec` leak with an opaque newtype — **M** — ✅ **DONE (2026-06-25)** (audit blocker #2)
 
-`gizmo-physics-core` exposes `arrayvec::ArrayVec` via
-`CollisionEvent.contact_points` (and `gizmo-physics-rigid` re-exports it).
-Wrap it in an opaque `ContactPoints` newtype that exposes only what callers need
-(`len`, `iter`, indexing, `IntoIterator`) so `arrayvec` is an implementation
-detail. Lower risk than (a) but still breaking for anyone reading
-`contact_points` today.
+`gizmo-physics-core` exposed `arrayvec::ArrayVec` via
+`CollisionEvent.contact_points`. It is now an opaque `ContactPoints` newtype
+(`gizmo_physics_core::collision::ContactPoints`) whose backing `arrayvec` is
+private; callers use `len`/`is_empty`/`push`/`first`/`iter`/`as_slice`, `Index`,
+`IntoIterator` (by value and by ref), and `FromIterator`. `arrayvec` is no longer
+in the public API and was dropped as a direct dep of `gizmo-physics-rigid`.
 
 ### (c) Upgrade `wgpu` / `winit` / `egui` to current — **XL** — *Stage B 1.0 blocker*
 
@@ -198,19 +236,21 @@ it actually uses, which promotes it from Stage B to Stage A). Breaking but
 mechanical; do it in the same release as (a)/(b) so all Stage A breakage lands
 at once.
 
-### (e) Document `glam` as an official public dependency — **S** — *Stage A 1.0 requirement*
+### (e) Document `glam` as an official public dependency — **S** — ✅ **DONE (2026-06-25)**
 
-Record in `gizmo-math`'s crate docs and this file that `glam` (`=0.29.3`) is a
-**public** dependency: a `glam` major version is part of `gizmo-math`'s semver
-contract. Add the standard "public dependency" note so downstream users know a
-`glam` bump may be breaking. Required before Stage A 1.0 so the contract is
-explicit, not implied.
+`gizmo-math`'s crate docs now declare `glam` (`0.29` line) a **public**
+dependency, and the re-export was switched to go directly through `glam`
+(`pub use glam::{…}`) instead of `bevy_math`. See §3 (incl. the `bevy_math`
+transitive-dependency note).
 
-### (f) Set and document an MSRV — **S** — *1.0 requirement*
+### (f) Set and document an MSRV — **S** — ✅ **DONE (2026-06-25)**
 
-Pick a Minimum Supported Rust Version, set `rust-version` in
-`[workspace.package]`, and add it to CI as a build gate. A 1.0 without a declared
-MSRV is incomplete; do this before either stage tags 1.0.
+`rust-version = "1.89"` is set in `[workspace.package]` and gated by a new CI
+`msrv` job (`dtolnay/rust-toolchain@1.89.0` → `cargo check --workspace`).
+**The MSRV was determined empirically, not assumed:** 1.82 fails (a transitive
+`crypto-common 0.2.1` needs `edition2024` → 1.85), 1.85 fails (locked `wide 1.2`
+/ `safe_arch 1.0` need 1.89), and 1.89 builds the full workspace clean. The
+naive "bevy 0.15 ⇒ 1.82" floor is **wrong** for the current lock file.
 
 ### Sequencing
 
@@ -265,13 +305,15 @@ the corrected topological order (foundations first, facade last) is:
 
 ## TL;DR
 
-Gizmo is **not 1.0-ready**, but the path is clear and staged:
+Gizmo is **not 1.0-ready**, but the path is clear and staged, and most of Stage A
+is now sealed:
 
-1. Seal `bevy_reflect` (L) + `arrayvec` (M), document `glam` (S), rename getters
-   (M), set MSRV (S) → **Stage A core ships 1.0** (math, ECS, physics, scene,
+1. ✅ Seal `bevy_reflect` (§4a), ✅ `arrayvec` (§4b), ✅ document `glam` (§4e),
+   ✅ set MSRV (§4f) — **done 2026-06-25, fully verified**. Remaining: rename
+   getters (§4d, M). Then **Stage A core ships 1.0** (math, ECS, physics, scene,
    net, audio, AI).
-2. Upgrade `wgpu`/`winit`/`egui` (XL) → **Stage B graphics + `gizmo` facade ship
-   1.0** later.
+2. Upgrade `wgpu`/`winit`/`egui` (§4c, XL) → **Stage B graphics + `gizmo` facade
+   ship 1.0** later.
 
 Until Stage B's upgrade lands, the graphics crates stay on `0.x` **by design**,
 where re-exporting pre-1.0 `wgpu`/`winit`/`egui` costs no semver promise.

@@ -8,6 +8,18 @@ description.workspace = true
 license.workspace = true
 repository.workspace = true
 readme.workspace = true
+[features]
+# Optional `bevy_reflect`-based scene (de)serialization. OFF by default: the
+# scene save/load + snapshot paths fall back to plain `serde` so `bevy_reflect`
+# is absent from the public API at 1.0. When ON, reflect-registered components
+# round-trip through `bevy_reflect`'s typed (de)serializers.
+reflect = [
+    "dep:bevy_reflect",
+    "gizmo-core/reflect",
+    "gizmo-physics-core/reflect",
+    "gizmo-physics-rigid/reflect",
+]
+
 [dependencies]
 gizmo-core = { path = "../gizmo-core" , version = "0.1.7" }
 gizmo-math = { path = "../gizmo-math" , version = "0.1.7" }
@@ -16,7 +28,7 @@ gizmo-physics-rigid = { path = "../gizmo-physics-rigid" , version = "0.1.7" }
 serde = { version = "1.0", features = ["derive"] }
 ron = "0.12.1"
 tracing = "0.1.44"
-bevy_reflect = "0.15.1"
+bevy_reflect = { version = "0.15.1", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 gizmo-scripting = { path = "../gizmo-scripting" , version = "0.1.7" }

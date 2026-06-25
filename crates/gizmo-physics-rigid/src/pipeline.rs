@@ -9,7 +9,7 @@ use crate::{
     components::Velocity,
     world::{PhysicsWorld, ZoneShape},
 };
-use gizmo_physics_core::{CollisionEvent, CollisionEventType, ContactManifold, TriggerEvent};
+use gizmo_physics_core::{CollisionEvent, CollisionEventType, ContactManifold, ContactPoints, TriggerEvent};
 use gizmo_physics_core::narrowphase::NarrowPhase;
 use gizmo_core::entity::Entity;
 use gizmo_math::Vec3;
@@ -486,7 +486,7 @@ impl PhysicsWorld {
                     entity_a: pair.0,
                     entity_b: pair.1,
                     event_type: CollisionEventType::Ended,
-                    contact_points: arrayvec::ArrayVec::new(),
+                    contact_points: ContactPoints::new(),
                 });
             }
         }
@@ -720,7 +720,7 @@ impl PhysicsWorld {
 
                 // Update solved contact points on the matching collision event.
                 for manifold in island_manifolds {
-                    let solved: arrayvec::ArrayVec<_, 4> =
+                    let solved: ContactPoints =
                         manifold.contacts.iter().copied().take(4).collect();
 
                     // Try both orderings (broadphase may report either).

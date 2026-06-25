@@ -84,8 +84,11 @@ pub mod prelude {
         Query, Res, ResMut, Schedule, StorageView, StorageViewMut, System, SystemConfig,
         SystemParam, Time, WindowInfo, World,
     };
+    #[cfg(feature = "reflect")]
     pub use bevy_reflect::Reflect;
 }
 pub mod state;
 
+/// Re-export of `bevy_reflect`, available only with the `reflect` feature.
+#[cfg(feature = "reflect")]
 pub use bevy_reflect as reflect;

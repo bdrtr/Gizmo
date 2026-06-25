@@ -14,6 +14,7 @@
 pub mod error;
 pub mod registry;
 pub mod scene;
+mod serde_bridge;
 pub mod snapshot;
 
 /// Re-export of [`error::SceneError`].

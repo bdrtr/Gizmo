@@ -76,7 +76,7 @@ impl DestructionSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gizmo_physics_core::{CollisionEvent, CollisionEventType, ContactPoint};
+    use gizmo_physics_core::{CollisionEvent, CollisionEventType, ContactPoint, ContactPoints};
     use crate::components::RigidBody;
     use gizmo_core::entity::Entity;
     use gizmo_math::Vec3;
@@ -122,7 +122,7 @@ mod tests {
             entity_a: Entity::new(1, 0),
             entity_b: Entity::new(2, 0),
             event_type: CollisionEventType::Started,
-            contact_points: arrayvec::ArrayVec::new(),
+            contact_points: ContactPoints::new(),
         };
 
         event.contact_points.push(ContactPoint {
@@ -155,7 +155,7 @@ mod tests {
             entity_a: Entity::new(1, 0),
             entity_b: Entity::new(2, 0),
             event_type: CollisionEventType::Persisting,
-            contact_points: arrayvec::ArrayVec::new(),
+            contact_points: ContactPoints::new(),
         };
 
         event.contact_points.push(ContactPoint {
@@ -197,7 +197,7 @@ mod tests {
             entity_a: e3,
             entity_b: Entity::new(99, 0), // doesn't exist, will be ignored
             event_type: CollisionEventType::Started,
-            contact_points: arrayvec::ArrayVec::new(),
+            contact_points: ContactPoints::new(),
         };
 
         event.contact_points.push(ContactPoint {

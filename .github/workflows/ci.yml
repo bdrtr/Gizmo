@@ -63,6 +63,32 @@ jobs:
           cargo clippy --workspace -- -D warnings \
             -A clippy::too_many_arguments -A clippy::type_complexity
 
+  # ── Optional features: the `reflect` path must build + test (ubuntu only) ──
+  features:
+    name: Features (reflect)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+      - name: Test Stage A crates with `reflect`
+        run: cargo test -p gizmo-core -p gizmo-physics-core -p gizmo-physics-rigid -p gizmo-scene --features reflect
+
+  # ── MSRV gate: workspace must build on the declared rust-version (1.89) ────
+  msrv:
+    name: MSRV (1.89)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89.0
+      - name: Install Linux dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+      - name: Check (workspace, MSRV toolchain)
+        run: cargo check --workspace
+
   # ── Determinism & stability: 3× tower collapse, hashes must match ─────────
   determinism:
     name: Determinism & Stability

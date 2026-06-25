@@ -1,22 +1,25 @@
 use gizmo_math::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "reflect")]
 use bevy_reflect::Reflect;
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Reflect)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "reflect", derive(Reflect))]
 pub struct TransformData {
     pub position: Vec3,
     pub rotation: Quat,
     pub scale: Vec3,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Reflect)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "reflect", derive(Reflect))]
 #[serde(from = "TransformData")]
 pub struct Transform {
     pub position: Vec3,
     pub rotation: Quat,
     pub scale: Vec3,
     #[serde(skip)]
-    #[reflect(ignore)]
+    #[cfg_attr(feature = "reflect", reflect(ignore))]
     pub local_matrix: Mat4,
 }
 

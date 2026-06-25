@@ -33,7 +33,7 @@ pub use broadphase::SpatialHash;
 pub use gizmo_math::Aabb;
 
 pub use collision::{
-    CollisionEvent, CollisionEventType, ContactManifold, ContactPoint, TriggerEvent, FractureEvent
+    CollisionEvent, CollisionEventType, ContactManifold, ContactPoint, ContactPoints, TriggerEvent, FractureEvent
 };
 pub use components::{
     Collider, ColliderShape, CollisionLayer, CombineMode, ConvexHullShape, PhysicsMaterial,
