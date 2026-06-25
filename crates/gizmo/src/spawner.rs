@@ -333,7 +333,7 @@ impl<'a> Commands<'a> {
             }
         }
         let mut rb = if mass > 0.0 {
-            RigidBody::new(mass, 0.3, 0.5, true)
+            RigidBody::new(mass, true)
         } else {
             RigidBody::new_static()
         };
@@ -367,7 +367,7 @@ impl<'a> Commands<'a> {
         let mat = Material::new(bg).with_unlit(color.to_vec4());
         let id = spawn_mesh_entity(self.world, pos, mesh, mat);
         let mut rb = if mass > 0.0 {
-            RigidBody::new(mass, 0.3, 0.5, true)
+            RigidBody::new(mass, true)
         } else {
             RigidBody::new_static()
         };

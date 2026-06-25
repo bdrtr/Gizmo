@@ -29,7 +29,7 @@ fn run_simulation_and_get_hash() -> u64 {
                 let box_entity = Entity::new(entity_id, 0);
                 entity_id += 1;
                 
-                let mut box_rb = RigidBody::new(1.0, 0.2, 0.5, true);
+                let mut box_rb = RigidBody::new(1.0, true);
                 // Jitter'ı test etmek için hafif uyandırma verelim
                 box_rb.wake_up();
                 

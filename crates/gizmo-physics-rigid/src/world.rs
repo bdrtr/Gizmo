@@ -839,7 +839,7 @@ mod tests {
         let half_size = box_size / 2.0;
 
         for i in 1..=box_count {
-            let mut rb = RigidBody::new(1.0, 0.5, 0.5, true);
+            let mut rb = RigidBody::new(1.0, true);
             rb.wake_up(); // Uyumasını engelle ki solver test edilsin
             
             let y_pos = half_size + (i - 1) as f32 * box_size;
@@ -908,7 +908,7 @@ mod tests {
 
         // Mermi (CCD açık): r=0.2, saniyede 1200 m (mach ~3.5). Bir karede (1/60 s)
         // 20 m yol alır; duvar 0.2 m → CCD olmadan kesin tünelleme olurdu.
-        let mut bullet_rb = RigidBody::new(1.0, 0.0, 0.0, false);
+        let mut bullet_rb = RigidBody::new(1.0, false);
         bullet_rb.ccd_enabled = true;
         bullet_rb.wake_up();
         world.add_body(
@@ -981,7 +981,7 @@ mod tests {
             gcol,
         );
 
-        let mut rb = RigidBody::new(1.0, 0.0, 0.0, true);
+        let mut rb = RigidBody::new(1.0, true);
         rb.wake_up();
         let mut col = Collider::box_collider(Vec3::splat(0.5));
         col.material = PhysicsMaterial {
@@ -1042,7 +1042,7 @@ mod tests {
         );
 
         let mut make_box = |id: u32, z: f32, fric: f32| {
-            let mut rb = RigidBody::new(1.0, 0.0, 0.0, true);
+            let mut rb = RigidBody::new(1.0, true);
             rb.wake_up();
             let mut col = Collider::box_collider(Vec3::splat(0.5));
             col.material = PhysicsMaterial {
@@ -1094,7 +1094,6 @@ mod tests {
 
         // --- Zemin ---
         let mut ground_rb = RigidBody::new_static();
-        ground_rb.friction = 0.8;
         ground_rb.wake_up();
         world.add_body(
             Entity::new(0, 0),
@@ -1106,7 +1105,7 @@ mod tests {
 
         // --- Şasi (Chassis) ---
         // 1000 kg, sürtünme önemsiz, dinamik
-        let mut chassis_rb = RigidBody::new(1000.0, 0.1, 0.5, true);
+        let mut chassis_rb = RigidBody::new(1000.0, true);
         chassis_rb.wake_up();
         let chassis_col = Collider::box_collider(Vec3::new(1.0, 0.5, 2.0)); // Genişlik 2, Yükseklik 1, Uzunluk 4 (Yarıçaplar)
         chassis_rb.update_inertia_from_collider(&chassis_col);
@@ -1122,7 +1121,7 @@ mod tests {
 
         // Tekerlek Şablonu
         let wheel_radius = 0.5;
-        let mut wheel_rb = RigidBody::new(50.0, 0.1, 0.9, true); // Yüksek kütle (50kg) ve yüksek sürtünme (0.9)
+        let mut wheel_rb = RigidBody::new(50.0, true); // Yüksek kütle (50kg) ve yüksek sürtünme (0.9)
         wheel_rb.wake_up();
         let wheel_col = Collider::sphere(wheel_radius);
         wheel_rb.update_inertia_from_collider(&wheel_col);
@@ -1215,7 +1214,6 @@ mod tests {
         world.integrator.gravity = Vec3::new(0.0, -10.0, 0.0);
 
         let mut ground = RigidBody::new_static();
-        ground.friction = 0.9;
         ground.wake_up();
         world.add_body(
             Entity::new(0, 0),
@@ -1226,7 +1224,7 @@ mod tests {
         );
 
         // Diyagonal kayan kutu (vx = vz); dönmeyi kilitle → saf öteleme sürtünmesi.
-        let mut rb = RigidBody::new(1.0, 0.0, 0.9, true);
+        let mut rb = RigidBody::new(1.0, true);
         rb.lock_rotation_x = true;
         rb.lock_rotation_y = true;
         rb.lock_rotation_z = true;
@@ -1274,8 +1272,7 @@ mod tests {
         world.integrator.gravity = Vec3::new(0.0, -10.0, 0.0);
 
         // Kinematik platform: merkez 0, üst yüz +0.5.
-        let mut plat = RigidBody::new_kinematic();
-        plat.friction = 1.0;
+        let plat = RigidBody::new_kinematic();
         world.add_body(
             Entity::new(0, 0),
             plat,
@@ -1285,7 +1282,7 @@ mod tests {
         );
 
         // Üstünde dinamik kutu: merkez 1.0, alt 0.5 = platform üstü.
-        let mut box_rb = RigidBody::new(1.0, 0.0, 1.0, true);
+        let mut box_rb = RigidBody::new(1.0, true);
         box_rb.lock_rotation_x = true;
         box_rb.lock_rotation_y = true;
         box_rb.lock_rotation_z = true;

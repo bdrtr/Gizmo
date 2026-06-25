@@ -23,7 +23,7 @@ pub fn handle_scene_operations(
                 "Transform" => world.add_component(ent, Transform::new(Vec3::ZERO)),
                 "Velocity" => world.add_component(ent, gizmo::physics::Velocity::new(Vec3::ZERO)),
                 "RigidBody" => {
-                    world.add_component(ent, gizmo::physics::RigidBody::new(1.0, 0.5, 0.5, true))
+                    world.add_component(ent, gizmo::physics::RigidBody::new(1.0, true))
                 }
                 "Collider" => world.add_component(
                     ent,

@@ -30,7 +30,7 @@ fn build_scene() -> PhysicsWorld {
     let mut id = 1u32;
     for x in 0..4 {
         for ly in 0..3 {
-            let mut rb = RigidBody::new(1.0, 0.2, 0.6, true);
+            let mut rb = RigidBody::new(1.0, true);
             rb.wake_up();
             let col = Collider::box_collider(Vec3::splat(0.5));
             rb.update_inertia_from_collider(&col);

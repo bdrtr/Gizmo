@@ -22,6 +22,14 @@ breaking `0.x` bump.
 
 ### Changed (breaking)
 
+- **`RigidBody` lost its `friction` and `restitution` fields**, and
+  `RigidBody::new` is now `new(mass, use_gravity)` (was
+  `new(mass, restitution, friction, use_gravity)`). These fields were **dead**:
+  the contact solver always sourced friction/restitution from the colliders'
+  `PhysicsMaterial` (combined per contact), so setting them on the body did
+  nothing — the editor inspector even exposed two no-op sliders. Configure
+  contact friction/restitution on the collider material instead. Determinism is
+  unchanged (proof the fields never affected the simulation).
 - **Graphics stack upgraded** across the Stage B crates: `wgpu 0.20 → 29`,
   `winit 0.29 → 0.30`, `egui 0.28 → 0.34` (plus `egui-wgpu`/`egui-winit` `0.34`,
   `egui_dock 0.13 → 0.19`, `transform-gizmo-egui 0.3 → 0.9`). Public `wgpu`/

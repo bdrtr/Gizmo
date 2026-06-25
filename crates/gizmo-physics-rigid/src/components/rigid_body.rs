@@ -19,8 +19,6 @@ pub enum BodyType {
 pub struct RigidBody {
     pub body_type: BodyType,
     pub mass: f32,
-    pub restitution: f32,
-    pub friction: f32,
     pub linear_damping: f32,
     pub angular_damping: f32,
     pub use_gravity: bool,
@@ -45,8 +43,6 @@ impl Default for RigidBody {
         Self {
             body_type: BodyType::Dynamic,
             mass: 1.0,
-            restitution: 0.5,
-            friction: 0.5,
             linear_damping: 0.01,
             angular_damping: 0.05,
             use_gravity: true,
@@ -69,11 +65,13 @@ impl Default for RigidBody {
 }
 
 impl RigidBody {
-    pub fn new(mass: f32, restitution: f32, friction: f32, use_gravity: bool) -> Self {
+    /// Creates a dynamic body of the given `mass`. Contact **friction** and
+    /// **restitution** are NOT stored on the body — they are taken from the
+    /// colliders' [`PhysicsMaterial`](gizmo_physics_core::PhysicsMaterial)
+    /// (combined per contact), so configure them there.
+    pub fn new(mass: f32, use_gravity: bool) -> Self {
         Self {
             mass,
-            restitution,
-            friction,
             use_gravity,
             ..Default::default()
         }
@@ -83,8 +81,6 @@ impl RigidBody {
         Self {
             body_type: BodyType::Static,
             mass: 0.0,
-            restitution: 0.0,
-            friction: 1.0,
             linear_damping: 0.0,
             angular_damping: 0.0,
             use_gravity: false,
@@ -104,8 +100,6 @@ impl RigidBody {
         Self {
             body_type: BodyType::Kinematic,
             mass: 0.0,
-            restitution: 0.0,
-            friction: 0.5,
             linear_damping: 0.0,
             angular_damping: 0.0,
             use_gravity: false,
@@ -423,11 +417,11 @@ mod tests {
             faces: Arc::new(vec![]),
         }));
 
-        let mut rb_hull = RigidBody::new(8.0, 0.5, 0.5, true);
+        let mut rb_hull = RigidBody::new(8.0, true);
         rb_hull.update_inertia_from_collider(&hull_col);
 
         // Aynı boyutlu kutu ataletiyle eşleşmeli.
-        let mut rb_box = RigidBody::new(8.0, 0.5, 0.5, true);
+        let mut rb_box = RigidBody::new(8.0, true);
         rb_box.calculate_box_inertia(4.0, 2.0, 6.0);
         assert!(
             (rb_hull.local_inertia - rb_box.local_inertia).length() < 1e-3,
@@ -437,7 +431,7 @@ mod tests {
         );
 
         // ve 1×1×1'den belirgin farklı olmalı.
-        let mut rb_unit = RigidBody::new(8.0, 0.5, 0.5, true);
+        let mut rb_unit = RigidBody::new(8.0, true);
         rb_unit.calculate_box_inertia(1.0, 1.0, 1.0);
         assert!(
             (rb_hull.local_inertia - rb_unit.local_inertia).length() > 1e-3,

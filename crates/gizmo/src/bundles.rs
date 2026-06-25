@@ -300,7 +300,7 @@ pub struct RigidBodyBundle {
 impl RigidBodyBundle {
     pub fn dynamic(mass: f32) -> Self {
         Self {
-            rigid_body: RigidBody::new(mass, 0.5, 0.5, true),
+            rigid_body: RigidBody::new(mass, true),
             ..Default::default()
         }
     }

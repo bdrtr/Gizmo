@@ -24,7 +24,7 @@ fn add_ground(world: &mut PhysicsWorld) {
 }
 
 fn add_box(world: &mut PhysicsWorld, id: u32, pos: Vec3) {
-    let mut rb = RigidBody::new(1.0, 0.0, 0.6, true);
+    let mut rb = RigidBody::new(1.0, true);
     rb.wake_up();
     let col = Collider::box_collider(Vec3::splat(0.5));
     rb.update_inertia_from_collider(&col);
@@ -37,7 +37,7 @@ fn apply_impulse_wakes_sleeping_body() {
     // (Eski hata: apply_impulse `&RigidBody` alıyordu → uyandıramıyor → is_sleeping
     //  true kalıyor → position_integration cismi atlıyor → impuls SESSİZCE yutuluyor.)
     let world = PhysicsWorld::new();
-    let mut rb = RigidBody::new(1.0, 0.0, 0.5, true);
+    let mut rb = RigidBody::new(1.0, true);
     rb.is_sleeping = true;
     rb.sleep_counter = 100;
     let t = Transform::new(Vec3::ZERO);
@@ -52,7 +52,7 @@ fn apply_impulse_wakes_sleeping_body() {
 #[test]
 fn apply_force_wakes_sleeping_body() {
     let world = PhysicsWorld::new();
-    let mut rb = RigidBody::new(1.0, 0.0, 0.5, true);
+    let mut rb = RigidBody::new(1.0, true);
     rb.is_sleeping = true;
     rb.sleep_counter = 100;
     let mut v = Velocity::default();

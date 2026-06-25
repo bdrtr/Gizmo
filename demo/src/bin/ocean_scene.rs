@@ -117,8 +117,6 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         RigidBody {
             body_type: gizmo::physics::components::BodyType::Static,
             mass: 0.0,
-            restitution: 0.3,
-            friction: 0.9,
             ..Default::default()
         },
     );
@@ -145,7 +143,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         );
         world.add_component(box_ent, MeshRenderer::new());
         world.add_component(box_ent, Collider::box_collider(Vec3::new(0.5, 0.5, 0.5)));
-        world.add_component(box_ent, RigidBody::new(500.0, 0.3, 0.8, true)); // Ahşap yoğunluğu
+        world.add_component(box_ent, RigidBody::new(500.0, true)); // Ahşap yoğunluğu
         world.add_component(box_ent, Velocity::default());
     }
 
@@ -184,7 +182,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     world.add_component(p1, metal_mat.clone());
     world.add_component(p1, MeshRenderer::new());
     world.add_component(p1, Collider::box_collider(Vec3::new(1.0, 10.0, 1.0)));
-    world.add_component(p1, RigidBody::new(0.0, 0.1, 0.5, false));
+    world.add_component(p1, RigidBody::new(0.0, false));
 
     let p2 = world.spawn();
     world.add_component(
@@ -195,7 +193,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     world.add_component(p2, metal_mat.clone());
     world.add_component(p2, MeshRenderer::new());
     world.add_component(p2, Collider::box_collider(Vec3::new(1.0, 10.0, 1.0)));
-    world.add_component(p2, RigidBody::new(0.0, 0.1, 0.5, false));
+    world.add_component(p2, RigidBody::new(0.0, false));
 
     // 2. Köprü Tahtaları (Dinamik - Joints)
     let num_planks = 14;
@@ -224,7 +222,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
             plank,
             Collider::box_collider(Vec3::new(plank_width, plank_height, plank_depth)),
         );
-        world.add_component(plank, RigidBody::new(10.0, 0.1, 0.8, true));
+        world.add_component(plank, RigidBody::new(10.0, true));
         world.add_component(plank, Velocity::default());
         world.add_component(plank, Destructible);
 
@@ -371,7 +369,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
         );
         world.add_component(
             box_ent,
-            gizmo::physics::components::RigidBody::new(500.0, 0.3, 0.8, true),
+            gizmo::physics::components::RigidBody::new(500.0, true),
         ); // Ahşap (Yoğunluğu sudan az, yüzer)
         world.add_component(
             box_ent,
@@ -397,7 +395,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
         );
         world.add_component(
             sphere_ent,
-            gizmo::physics::components::RigidBody::new(5000.0, 0.1, 0.2, true),
+            gizmo::physics::components::RigidBody::new(5000.0, true),
         ); // Metal (Çok ağır, hemen batar)
         world.add_component(
             sphere_ent,
@@ -540,7 +538,7 @@ fn render(
                 world.add_component(chunk_ent, mat.clone());
                 world.add_component(chunk_ent, gizmo::renderer::components::MeshRenderer::new());
                 world.add_component(chunk_ent, Collider::sphere(approx_radius));
-                world.add_component(chunk_ent, RigidBody::new(5.0, 0.2, 0.6, true));
+                world.add_component(chunk_ent, RigidBody::new(5.0, true));
 
                 // Parçaların merkeze göre dışa doğru patlaması için ufak şok dalgası ekle
                 let mut explosion_vel = vel;

@@ -970,7 +970,7 @@ mod tests {
         let solver = JointSolver::default();
 
         let body = || {
-            let mut rb = RigidBody::new(1.0, 0.0, 0.5, false);
+            let mut rb = RigidBody::new(1.0, false);
             rb.local_inertia = Vec3::new(2.0, 5.0, 8.0); // anizotropik atalet
             rb
         };

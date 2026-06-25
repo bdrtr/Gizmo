@@ -277,7 +277,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Cradl
         world.add_component(ball, Material::new(ball_tex).with_pbr(color, 1.0, 0.0));
         world.add_component(ball, MeshRenderer::new());
 
-        let mut rb = RigidBody::new(BALL_MASS, 1.0, 0.0, true);
+        let mut rb = RigidBody::new(BALL_MASS, true);
         rb.ccd_enabled = false; // Sürekli çarpışma denetimi (CCD) kısıtlamaları (joints) bozabilir. Bu senaryoda gerek yok.
         rb.calculate_sphere_inertia(BALL_RADIUS);
         world.add_component(ball, rb);

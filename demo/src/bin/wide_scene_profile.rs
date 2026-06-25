@@ -52,7 +52,7 @@ fn main() {
                 let px = (x as f32 - side as f32 / 2.0) * spacing;
                 let pz = (z as f32 - side as f32 / 2.0) * spacing;
                 let py = half + ly as f32 * (2.0 * half); // tam temas, düşüş yok
-                let mut rb = RigidBody::new(1.0, 0.0, 0.6, true);
+                let mut rb = RigidBody::new(1.0, true);
                 rb.wake_up();
                 let col = Collider::box_collider(Vec3::splat(half));
                 rb.update_inertia_from_collider(&col);

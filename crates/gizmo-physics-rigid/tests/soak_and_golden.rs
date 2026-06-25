@@ -16,7 +16,6 @@ use gizmo_physics_rigid::{PhysicsWorld, RigidBody, Velocity};
 
 fn add_ground(world: &mut PhysicsWorld) {
     let mut ground = RigidBody::new_static();
-    ground.friction = 0.8;
     ground.wake_up();
     world.add_body(
         Entity::new(0, 0),
@@ -28,7 +27,7 @@ fn add_ground(world: &mut PhysicsWorld) {
 }
 
 fn add_box(world: &mut PhysicsWorld, id: u32, pos: Vec3, half: f32) {
-    let mut rb = RigidBody::new(1.0, 0.0, 0.6, true);
+    let mut rb = RigidBody::new(1.0, true);
     rb.wake_up();
     let col = Collider::box_collider(Vec3::splat(half));
     rb.update_inertia_from_collider(&col);
@@ -188,7 +187,7 @@ fn soak_tall_stack_n16_stays_upright() {
     let gap = 0.1; // her kutu mükemmel temasın 0.1 m üstünde → düşüp çarpar
     for i in 0..n {
         let y = half + i as f32 * (2.0 * half + gap);
-        let mut rb = RigidBody::new(1.0, 0.0, 0.6, true);
+        let mut rb = RigidBody::new(1.0, true);
         rb.wake_up();
         let col = Collider::box_collider(Vec3::splat(half)).with_material(no_bounce);
         rb.update_inertia_from_collider(&col);

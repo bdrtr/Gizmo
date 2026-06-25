@@ -121,7 +121,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     );
     world.add_component(pendulum, MeshRenderer::new());
     world.add_component(pendulum, Collider::box_collider(Vec3::new(1.0, 5.0, 1.0)));
-    world.add_component(pendulum, RigidBody::new(10.0, 0.2, 0.5, true));
+    world.add_component(pendulum, RigidBody::new(10.0, true));
     world.add_component(pendulum, Velocity::default());
 
     let mut hinge = Joint::hinge(
@@ -172,7 +172,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         );
         world.add_component(link_ent, MeshRenderer::new());
         world.add_component(link_ent, Collider::box_collider(Vec3::new(1.0, 1.0, 1.0)));
-        world.add_component(link_ent, RigidBody::new(2.0, 0.1, 0.5, true));
+        world.add_component(link_ent, RigidBody::new(2.0, true));
         world.add_component(link_ent, Velocity::default());
 
         let local_anchor_a = Vec3::new(0.0, -0.5, 0.0);
@@ -221,7 +221,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         slider_plat,
         Collider::box_collider(Vec3::new(2.0, 0.25, 1.0)),
     );
-    world.add_component(slider_plat, RigidBody::new(20.0, 0.1, 0.5, true));
+    world.add_component(slider_plat, RigidBody::new(20.0, true));
     world.add_component(slider_plat, Velocity::default());
 
     let mut slider_joint = Joint::slider(
@@ -259,7 +259,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         world.add_component(box_ent, MeshRenderer::new());
         world.add_component(box_ent, Collider::box_collider(Vec3::new(1.0, 1.0, 1.0)));
         // Yoğunluk suya göre ayarlandı, mass = 500.0 (ahşap yoğunluğu) ile suda gerçekçi yüzecek
-        world.add_component(box_ent, RigidBody::new(500.0, 0.3, 0.8, true));
+        world.add_component(box_ent, RigidBody::new(500.0, true));
         world.add_component(box_ent, Velocity::default());
     }
 

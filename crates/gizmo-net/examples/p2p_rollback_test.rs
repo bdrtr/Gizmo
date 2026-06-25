@@ -46,7 +46,7 @@ fn build_scene() -> PhysicsWorld {
         Collider::box_collider(Vec3::new(20.0, 1.0, 20.0)),
     );
     for id in 1..=2u32 {
-        let mut rb = RigidBody::new(1.0, 0.1, 0.6, true);
+        let mut rb = RigidBody::new(1.0, true);
         rb.wake_up();
         let col = Collider::box_collider(Vec3::splat(0.5));
         rb.update_inertia_from_collider(&col);
