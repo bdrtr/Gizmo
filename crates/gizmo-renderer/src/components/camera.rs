@@ -1,5 +1,17 @@
 use gizmo_math::Vec3;
 
+/// How a [`Camera`] projects the scene onto the screen.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub enum ProjectionMode {
+    /// Perspective projection (the default), using the camera's `fov`.
+    #[default]
+    Perspective,
+    /// Orthographic projection. `height` is the vertical extent of the view
+    /// volume in world units; the width is derived from the aspect ratio.
+    Orthographic { height: f32 },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Camera {
     pub fov: f32,
@@ -9,6 +21,10 @@ pub struct Camera {
     pub pitch: f32,
     pub exposure: f32, // Fiziksel kamera pozlaması (EV tabanlı veya doğrudan çarpan)
     pub primary: bool,
+    /// Perspective (default) or orthographic projection. `#[serde(default)]` keeps
+    /// scenes saved before this field was added loading as perspective.
+    #[serde(default)]
+    pub projection: ProjectionMode,
 }
 
 impl Camera {
@@ -37,7 +53,20 @@ impl Camera {
             pitch,
             exposure: 1.0, // Varsayılan pozlama 1.0
             primary,
+            projection: ProjectionMode::Perspective,
         }
+    }
+
+    /// Toggles between perspective and orthographic projection. When switching to
+    /// orthographic, the vertical extent is chosen so the framing roughly matches
+    /// the current perspective `fov` at the given `distance` from the camera.
+    pub fn toggle_projection(&mut self, distance: f32) {
+        self.projection = match self.projection {
+            ProjectionMode::Perspective => ProjectionMode::Orthographic {
+                height: 2.0 * distance.abs().max(0.001) * (self.fov * 0.5).tan(),
+            },
+            ProjectionMode::Orthographic { .. } => ProjectionMode::Perspective,
+        };
     }
 
     /// Fazla birikmeyi önlemek icin acilari temizler (yaw mod TAU, pitch clamp)
@@ -50,7 +79,18 @@ impl Camera {
     }
 
     pub fn get_projection(&self, aspect: f32) -> gizmo_math::Mat4 {
-        gizmo_math::Mat4::perspective_rh(self.fov, aspect, self.near, self.far)
+        match self.projection {
+            ProjectionMode::Perspective => {
+                gizmo_math::Mat4::perspective_rh(self.fov, aspect, self.near, self.far)
+            }
+            ProjectionMode::Orthographic { height } => {
+                let half_h = (height * 0.5).max(0.001);
+                let half_w = half_h * aspect.max(0.001);
+                gizmo_math::Mat4::orthographic_rh(
+                    -half_w, half_w, -half_h, half_h, self.near, self.far,
+                )
+            }
+        }
     }
 
     pub fn get_view(&self, position: Vec3) -> gizmo_math::Mat4 {

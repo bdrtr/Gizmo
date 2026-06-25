@@ -223,9 +223,18 @@ pub fn handle_editor_shortcuts(
         focus_on_selection(world, editor_state, state);
     }
 
-    // Numpad 5 → Ortho/Perspektif Geçiş (henüz tam implement değil, ileride)
-    // TODO: Camera component'ine ortho modu ekle
-    // if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Numpad5 as u32) { ... }
+    // Numpad 5 → Ortho/Perspektif geçişi (Blender tarzı)
+    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Numpad5 as u32) {
+        let cam_mut = world.borrow_mut::<gizmo::renderer::components::Camera>();
+        if let Some(mut cam) = cam_mut.get_mut(state.editor_camera) {
+            cam.toggle_projection(editor_state.prefs.camera_focus_distance.max(1.0));
+            let mode = match cam.projection {
+                gizmo::renderer::components::ProjectionMode::Orthographic { .. } => "Ortografik",
+                _ => "Perspektif",
+            };
+            editor_state.status_message = format!("📐 Kamera: {} (Numpad5)", mode);
+        }
+    }
 
     // Escape → Seçimi temizle
     if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Escape as u32)
