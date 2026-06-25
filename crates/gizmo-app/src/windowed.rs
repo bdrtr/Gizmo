@@ -344,9 +344,19 @@ impl<State: 'static> App<State> {
         }
 
         // winit 0.30 deprecated `EventLoop::create_window` (and the closure-based
-        // `run` below) in favor of the `ApplicationHandler`/`run_app` model.
-        // Migrating Gizmo's closure event loop to ApplicationHandler is a separate
-        // refactor; the functional deprecated bridge is intentionally scoped here.
+        // `run` below) in favor of the `ApplicationHandler`/`run_app` model, where
+        // the window is created in `resumed(&ActiveEventLoop)`.
+        //
+        // DELIBERATELY KEPT (assessed 2026-06-25, not a stale TODO): migrating
+        // `run_internal`'s ~550-line closure event loop to `ApplicationHandler`
+        // means moving the window + async GPU init into a sync `resumed`
+        // (`pollster::block_on`), hoisting all per-frame state into an
+        // Option-initialized handler struct, and reconstructing a `winit::Event`
+        // for the public `input_fn(&Event)` hook. The deprecated bridge is fully
+        // functional in winit 0.30 (kept on purpose by winit), and this is not a
+        // 1.0 blocker: `gizmo-app` is a Stage B `0.x` crate (RELEASING §2/§4c).
+        // The win32/wasm cfg branches here cannot be verified in CI (the wasm
+        // target does not build yet), so a silent rewrite would be unprovable.
         #[allow(deprecated)]
         let window = Arc::new(
             event_loop
@@ -442,8 +452,10 @@ impl<State: 'static> App<State> {
         let mut light_time = 0.0;
 
         // winit 0.30 deprecated the closure-based `EventLoop::run` in favor of
-        // `ApplicationHandler`/`run_app` (see the `create_window` note above).
-        // The deprecated bridge is functional and intentionally scoped here.
+        // `ApplicationHandler`/`run_app` — deliberately kept; see the detailed
+        // rationale on the `create_window` call above (this ~550-line closure is
+        // exactly the event loop that would move into the handler's
+        // `window_event`/`about_to_wait`).
         #[allow(deprecated)]
         event_loop
             .run(move |event, current_window| {
