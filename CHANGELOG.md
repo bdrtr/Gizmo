@@ -4,20 +4,21 @@ All notable changes to the Gizmo engine are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-> **Versioning note (staged 1.0).** Gizmo is moving to a *staged* version model
-> (see [`RELEASING.md`](RELEASING.md)). The dependency-light **Stage A** core
-> (`gizmo-math`, `gizmo-core`, the `gizmo-physics-*` crates, `gizmo-scene`,
-> `gizmo-net`, `gizmo-audio`, `gizmo-ai`) targets `1.0`; the graphics /
-> integration **Stage B** crates (`gizmo-renderer`, `gizmo-window`,
-> `gizmo-editor`, `gizmo-ui`, `gizmo-app`, `gizmo-scripting`, `gizmo-animation`,
-> and the `gizmo` facade) stay on `0.x` by design while they re-export
-> pre-`1.0` `wgpu`/`winit`/`egui`. The two groups therefore no longer share a
-> single workspace version.
+> **Versioning note.** `0.2.0` ships the whole workspace at one uniform `0.x`
+> version on purpose: it bundles the large 1.0-readiness effort and the breaking
+> graphics-stack upgrade, but **defers the hard `1.0` promise** to gain soak time
+> on the new `wgpu`/`winit`/`egui` stack. The *staged* `1.0` model — promoting the
+> dependency-light **Stage A** core (`gizmo-math`, `gizmo-core`, the
+> `gizmo-physics-*` crates, `gizmo-scene`, `gizmo-net`, `gizmo-audio`, `gizmo-ai`)
+> to `1.x` while the graphics/integration **Stage B** crates stay on `0.y` — is
+> documented in [`RELEASING.md`](RELEASING.md) and remains the planned path for a
+> later release.
 
-## [Unreleased]
+## [0.2.0] — 2026-06-25
 
-This is the first release since `0.1.7` and gathers the entire 1.0-readiness
-effort (audit + hardening rounds) and the graphics-stack upgrade.
+The first release since `0.1.7`. It gathers the entire 1.0-readiness effort
+(audit + hardening rounds) and the graphics-stack upgrade, shipped as a single
+breaking `0.x` bump.
 
 ### Changed (breaking)
 
@@ -97,5 +98,5 @@ Initial published series (`0.1.x`) on crates.io: the ECS, math, physics
 (rigid/soft/dynamics), renderer, editor/studio, audio, AI, scripting, and
 client-server netcode that make up the engine. See the git history for details.
 
-[Unreleased]: https://github.com/bdrtr/Gizmo/compare/v0.1.7...HEAD
+[0.2.0]: https://github.com/bdrtr/Gizmo/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/bdrtr/Gizmo/releases/tag/v0.1.7

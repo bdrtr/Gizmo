@@ -12,7 +12,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-gizmo-app = { version = "0.1.7", path = "../gizmo-app", default-features = false }
-gizmo-core = { version = "0.1.7", path = "../gizmo-core" }
-gizmo-math = { path = "../gizmo-math", version = "0.1.7" }
+gizmo-app = { version = "0.2.0", path = "../gizmo-app", default-features = false }
+gizmo-core = { version = "0.2.0", path = "../gizmo-core" }
+gizmo-math = { path = "../gizmo-math", version = "0.2.0" }
 taffy = "0.10.1"

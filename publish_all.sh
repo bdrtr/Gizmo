@@ -2,10 +2,12 @@
 # Publish the Gizmo workspace crates to crates.io in dependency (topological)
 # order, so each crate's path-deps already exist on the registry when it ships.
 #
-# STAGED VERSIONS: crates no longer share one workspace version. The Stage A core
-# is on the `1.x` line and the Stage B graphics/integration crates stay on `0.y`
-# (see RELEASING.md). This script therefore reads each crate's own version from
-# its Cargo.toml instead of assuming a single uniform version.
+# VERSIONS: the workspace currently ships at one uniform `0.x` version (0.2.0).
+# A later release will adopt the STAGED model (Stage A core on `1.x`, Stage B
+# graphics/integration on `0.y`; see RELEASING.md), at which point crates will no
+# longer share a version. This script is already staged-ready: it reads each
+# crate's own version from its Cargo.toml instead of assuming a uniform version,
+# and the [A]/[B] tags below mark the eventual stage split.
 #
 # Usage:
 #   ./publish_all.sh            # real publish
