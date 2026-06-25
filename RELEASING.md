@@ -94,7 +94,7 @@ resolved. **Ext-type leak** = pre-1.0 external types in the *public* API.
 | `gizmo-net` | A | ✅ After core stages | none of its own | none |
 | `gizmo-audio` | A | ✅ After core stages | none of its own | none |
 | `gizmo-ai` | A | ✅ After core stages | none of its own | none |
-| `gizmo-animation` | A* | ⚠️ depends on `gizmo-app` | inherits Stage B via `gizmo-app` | (transitive) |
+| `gizmo-animation` | A | ✅ Yes (now) | none — `gizmo-app` is now an off-by-default `app` feature | none (default); `gizmo-app` only with `app` |
 | `gizmo-ui` | B | ❌ No | depends on `gizmo-app` (Stage B) | (transitive `wgpu`/`winit`/`egui`) |
 | `gizmo-renderer` | B | ❌ No | `wgpu`/`winit` upgrade | `wgpu 0.20`, `winit 0.29` |
 | `gizmo-window` | B | ❌ No | `winit` upgrade | `winit 0.29` |
@@ -288,23 +288,20 @@ genuinely **infallible plain-value getters** violated C-GETTER and were renamed:
 `get_logs` is a closure-scoped accessor — both kept.) Pure renames; verified by
 552 tests + clippy + determinism (hash unchanged).
 
-**Visibility narrowing — assessed, mostly deferred.** The headline item
-(narrowing `gizmo-animation`'s `gizmo-app` dependency to promote it to Stage A) is
-**not feasible as polish**: `gizmo-animation` implements `gizmo_app::Plugin<State>`
-on `gizmo_app::App<State>`, so the dependency is load-bearing. Promoting it would
-require extracting the `Plugin`/`App` abstraction down into a core crate — a real
-architectural change that would break the `Plugin` trait signature for *every*
-implementor (`AssetPlugin`, `AnimationPlugin`, and any user plugins). It is also
-**moot until the staged 1.0 is actually pursued**: `0.2.0` shipped the whole
-workspace at one uniform `0.x` version (the staged split is deferred — see §1), so
-`gizmo-animation` being Stage A vs Stage B changes nothing today. **Decision
-(2026-06-25): deliberately deferred** — not worth a breaking architectural change
-for a benefit that only materializes at the (deferred) staged 1.0. The lightest
-path when it *is* pursued: gate `AnimationPlugin` (the sole `gizmo-app` user)
-behind a default-off `app` feature so the crate's default public API is
-Stage-A-clean, rather than relocating `Plugin`/`App`. `gizmo-animation` therefore
-**stays Stage B** for now. Broader `pub`-tightening from the audit
-raw output remains as fine-grained follow-up.
+**Visibility narrowing — `gizmo-animation` promoted to Stage A (DONE 2026-06-25).**
+The headline item — getting `gizmo-animation` off `gizmo-app` so it can be a Stage
+A 1.0 candidate — is **done**, via the lightweight path (not a `Plugin`/`App`
+relocation, which would break the `Plugin` trait for *every* implementor). The
+`gizmo-app`-based `AnimationPlugin` (its **sole** `gizmo-app` user, and unused
+anywhere in the workspace) is now gated behind an **off-by-default `app` feature**;
+the registration logic moved to a dependency-light free function
+`gizmo_animation::register(world, schedule)` that needs only `gizmo-core`. By
+default `gizmo-animation`'s tree no longer contains `gizmo-app`/`winit`/`wgpu`
+(verified: `cargo tree -p gizmo-animation -e no-dev -i gizmo-app` matches nothing),
+so it can honor a Stage A 1.0 promise. The `gizmo` facade's `animation` feature
+enables `gizmo-animation/app`, so `AnimationPlugin` stays available through the
+facade. Broader `pub`-tightening from the audit raw output remains as
+fine-grained follow-up.
 
 ### (g) WebAssembly (WASM) build — **L** — ⏸️ **Deferred (environment-blocked, not a 1.0 blocker)**
 
