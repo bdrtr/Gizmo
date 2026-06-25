@@ -7,8 +7,16 @@ description.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# OFF by default so the crate's default public API is dependency-light (Stage A:
+# only gizmo-core/math/physics-core). With `app`, the `gizmo-app`-based
+# `AnimationPlugin` convenience wrapper is compiled in. The dependency-light
+# `register(world, schedule)` entry point is always available.
+default = []
+app = ["dep:gizmo-app"]
+
 [dependencies]
-gizmo-app = { version = "0.2.0", path = "../gizmo-app", default-features = false }
+gizmo-app = { version = "0.2.0", path = "../gizmo-app", default-features = false, optional = true }
 gizmo-core = { version = "0.2.0", path = "../gizmo-core" }
 gizmo-math = { version = "0.2.0", path = "../gizmo-math" }
 gizmo-physics-core = { version = "0.2.0", path = "../gizmo-physics-core" }
