@@ -23,7 +23,7 @@ Gizmo Engine is a high-performance, data-driven, and fully modular game developm
   - GJK/EPA Narrow-Phase for accurate collision detection (Convex Hulls, Capsules, Polygons).
   - FEM (Finite Element Method) Soft-Body Physics for hyper-realistic deformation and stress-tensor calculations.
   - Sequential Impulse Solvers with advanced Coulomb Friction and Moment of Inertia.
-- **WGPU-Based Rendering:** A robust graphics pipeline supporting Vulkan, Metal, DX12, and **WebAssembly (WASM)**. Features Instanced Rendering, GLTF PBR Materials, Dynamic Shadows (CSM), SSAO, Bloom, and Deferred Shading.
+- **WGPU-Based Rendering:** A robust graphics pipeline targeting Vulkan, Metal, and DX12. Features Instanced Rendering, GLTF PBR Materials, Dynamic Shadows (CSM), SSAO, Bloom, and Deferred Shading. *(The renderer is built on `wgpu`, which also targets WebGPU/WASM; a full WebAssembly build of the engine is a work in progress — see [`RELEASING.md`](RELEASING.md).)*
 - **In-Game Editor:** Built-in `egui` tooling with a dynamic scene hierarchy, real-time inspector, and modular prefab architecture.
 - **Spatial Audio:** RAM-cached, 3D spatial audio engine with distance attenuation and Doppler effect support.
 
