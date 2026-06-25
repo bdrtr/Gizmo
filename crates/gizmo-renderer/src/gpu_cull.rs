@@ -130,7 +130,7 @@ impl GpuCullState {
                 &scene.global_bind_group_layout, // group 0: SceneUniforms (view_proj)
                 &bgl,                            // group 1: bounds + indirect + params
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let cull_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

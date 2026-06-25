@@ -284,7 +284,7 @@ fn build_noise_texture(
     queue.write_texture(
         tex.as_image_copy(),
         &raw,
-        wgpu::ImageDataLayout {
+        wgpu::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(NOISE_SIZE * 4),
             rows_per_image: None,
@@ -542,7 +542,7 @@ fn mk_ssao_pipeline(
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("ssao_layout"),
         bind_group_layouts: &[&scene.global_bind_group_layout, gbuf_bgl],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("ssao_pipeline"),
@@ -570,7 +570,7 @@ fn mk_ssao_pipeline(
         },
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
     })
 }
 
@@ -584,7 +584,7 @@ fn mk_blur_pipeline(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> wgpu:
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("ssao_blur_layout"),
         bind_group_layouts: &[bgl],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("ssao_blur_pipeline"),
@@ -612,7 +612,7 @@ fn mk_blur_pipeline(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> wgpu:
         },
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
     })
 }
 
@@ -626,7 +626,7 @@ fn mk_apply_pipeline(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> wgpu
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("ssao_apply_layout"),
         bind_group_layouts: &[bgl],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("ssao_apply_pipeline"),
@@ -662,6 +662,6 @@ fn mk_apply_pipeline(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> wgpu
         },
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
     })
 }

@@ -168,7 +168,7 @@ pub fn create_physics_pipelines(
     let compute_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Physics Compute Pipeline Layout"),
         bind_group_layouts: &[&compute_bind_group_layout],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
 
     let pipeline_clear = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -222,7 +222,7 @@ pub fn create_physics_pipelines(
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Physics Render Pipeline Layout"),
         bind_group_layouts: &[global_bind_group_layout],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
 
     let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -258,7 +258,7 @@ pub fn create_physics_pipelines(
             bias: wgpu::DepthBiasState::default(),
         }),
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
     });
 
     let culling_bind_group_layout =
@@ -339,7 +339,7 @@ pub fn create_physics_pipelines(
     let culling_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Physics Culling Pipeline Layout"),
         bind_group_layouts: &[global_bind_group_layout, &culling_bind_group_layout],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
 
     let pipeline_culling = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

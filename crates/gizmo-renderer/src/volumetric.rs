@@ -233,7 +233,7 @@ impl VolumetricState {
                 &scene.shadow_bind_group_layout, // Group 1 (Shadow Maps)
                 bgl,                             // Group 2
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("volumetric_pipeline"),
@@ -261,7 +261,7 @@ impl VolumetricState {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
         })
     }
 
@@ -278,7 +278,7 @@ impl VolumetricState {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("volumetric_apply_layout"),
             bind_group_layouts: &[bgl],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("volumetric_apply_pipeline"),
@@ -314,7 +314,7 @@ impl VolumetricState {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
         })
     }
 }

@@ -455,7 +455,7 @@ fn mk_resolve_pipeline(
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("taa_resolve_layout"),
         bind_group_layouts: &[resolve_bgl],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("taa_resolve_pipeline"),
@@ -483,7 +483,7 @@ fn mk_resolve_pipeline(
         },
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
     })
 }
 
@@ -501,7 +501,7 @@ fn mk_blit_pipeline(
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("taa_blit_layout"),
         bind_group_layouts: &[empty_bgl, blit_bgl],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("taa_blit_pipeline"),
@@ -529,6 +529,6 @@ fn mk_blit_pipeline(
         },
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
     })
 }

@@ -77,7 +77,7 @@ impl DecalState {
                 &scene.texture_bind_group_layout, // 2
                 &decal_uniform_bgl,               // 3
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -117,7 +117,7 @@ impl DecalState {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
         });
 
         // Unit cube from -0.5 to 0.5

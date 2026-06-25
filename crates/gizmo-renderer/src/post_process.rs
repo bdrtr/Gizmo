@@ -257,7 +257,7 @@ fn build_post_pipelines(
     let extract_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Bloom Extract Pipeline Layout"),
         bind_group_layouts: &[post_bgl, blur_bgl, post_params_bgl],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
     let bloom_extract_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Bloom Extract Pipeline"),
@@ -284,13 +284,13 @@ fn build_post_pipelines(
         },
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
     });
 
     let blur_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Bloom Blur Pipeline Layout"),
         bind_group_layouts: &[post_bgl, blur_bgl],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
     let bloom_blur_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Bloom Blur Pipeline"),
@@ -317,13 +317,13 @@ fn build_post_pipelines(
         },
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
     });
 
     let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Composite Pipeline Layout"),
         bind_group_layouts: &[post_bgl, composite_bloom_bgl, post_params_bgl],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
     let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Composite Pipeline"),
@@ -350,7 +350,7 @@ fn build_post_pipelines(
         },
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
     });
 
     (
