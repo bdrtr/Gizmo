@@ -233,23 +233,30 @@ Done: **wgpu 0.20→29, winit 0.29→0.30, egui 0.28→0.34** (+ `egui-wgpu`/`eg
 3/3 unchanged, a real windowed run works, MSRV raised 1.89→**1.92** (egui floor). See
 [`docs/graphics-upgrade-plan.md`](docs/graphics-upgrade-plan.md) for the matrix,
 per-dependency cheatsheet, and reusable recipes. **This unblocks the entire Stage B
-1.0.** (winit's deprecated `run`/`create_window` were used as a bridge to avoid a
-full `ApplicationHandler` rewrite.)
+1.0.** (the upgrade first used winit's deprecated `run`/`create_window` as a
+bridge; that bridge has since been fully migrated to `ApplicationHandler` — see
+below.)
 
-> **Deprecation follow-up (2026-06-25, done):** the crate-level
-> `#![allow(deprecated)]` bridges left by the upgrade have been removed. All
-> mechanical egui 0.34 renames were migrated (`close_menu→close`,
-> `from_id_source→from_id_salt`, `Context::{style→global_style, begin_frame→
-> begin_pass, end_frame→end_pass, screen_rect→content_rect, …}`, `Frame::none→
-> new`, `allocate_ui_at_rect→scope_builder`, …), and the egui top-level panel
-> `show(ctx)` pattern was migrated to egui 0.34's root-`Ui` composition
-> (`Ui::new` + `show_inside`) across the editor and studio. The **only**
-> remaining deprecations are two scoped `#[allow(deprecated)]` on winit 0.30's
-> `EventLoop::{run,create_window}` in `gizmo-app/src/windowed.rs`: migrating that
-> ~550-line closure event loop to `ApplicationHandler`/`run_app` is a real XL
-> refactor of the engine's core loop (deliberately deferred — the bridge is fully
-> functional and `gizmo-app` is a Stage B `0.x` crate, so it is not a 1.0
-> blocker).
+> **Deprecation follow-up (2026-06-25, DONE — the codebase is now
+> deprecation-clean):** the crate-level `#![allow(deprecated)]` bridges left by
+> the upgrade have been removed, and **every** Gizmo-owned deprecation is
+> migrated (workspace-wide `--force-warn deprecated` reports none). This covered:
+> - All mechanical egui 0.34 renames (`close_menu→close`,
+>   `from_id_source→from_id_salt`, `Context::{style→global_style, begin_frame→
+>   begin_pass, end_frame→end_pass, screen_rect→content_rect, …}`, `Frame::none→
+>   new`, `allocate_ui_at_rect→scope_builder`, …).
+> - The egui top-level panel `show(ctx)` pattern → egui 0.34 root-`Ui`
+>   composition (`Ui::new` + `show_inside`) across the editor and studio.
+> - **winit 0.30 `EventLoop::{run,create_window}` → `ApplicationHandler`/
+>   `run_app`** in `gizmo-app/src/windowed.rs`: the window is now created lazily
+>   in `resumed` (`ActiveEventLoop::create_window`), the ~550-line event loop is
+>   driven via `window_event`/`about_to_wait`/`device_event` (each reconstructs a
+>   `winit::Event` and dispatches to a unified `handle_event`, preserving the
+>   `input_fn(&Event)` hook contract), and the async GPU/editor init runs in
+>   `resumed` via `pollster::block_on`. Verified: full build, 552 tests, CI clippy
+>   `-D warnings`, determinism unchanged, and real windowed runs of `gizmo-studio`
+>   + `bevy_3d_scene`. (The wasm `resumed` branch is a stub — it is part of the
+>   separate, deferred WASM port, which does not build in this environment.)
 
 <details><summary>Original scope notes</summary>
 

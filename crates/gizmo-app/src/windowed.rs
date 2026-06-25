@@ -6,9 +6,10 @@ use gizmo_renderer::renderer::Renderer;
 use gizmo_renderer::RenderContext;
 use std::sync::Arc;
 use winit::{
-    event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
-    window::WindowAttributes,
+    application::ApplicationHandler,
+    event::{DeviceEvent, DeviceId, Event, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    window::{WindowAttributes, WindowId},
 };
 
 // setup_panic_hook ve Plugin lib.rs ve plugin.rs'ye taşındı.
@@ -85,6 +86,18 @@ pub struct App<State: 'static = ()> {
     playback_frame_index: usize,
     runner: Option<Box<dyn FnOnce(App<State>)>>,
     embedded_assets: std::collections::HashMap<String, std::borrow::Cow<'static, [u8]>>,
+
+    // ── winit 0.30 `ApplicationHandler` runtime state ──
+    // The window + GPU/editor/user-state are created lazily in `resumed` (the
+    // window is only available from `&ActiveEventLoop` there), then driven by the
+    // `window_event`/`about_to_wait`/`device_event` handlers. All `None`/default
+    // until the first `resumed`.
+    window_attributes: Option<WindowAttributes>,
+    window: Option<Arc<winit::window::Window>>,
+    editor: Option<EditorContext>,
+    app_state: Option<State>,
+    last_frame_time: Option<std::time::Instant>,
+    light_time: f32,
 }
 
 impl<State: 'static> std::fmt::Debug for App<State> {
@@ -138,6 +151,12 @@ impl<State: 'static> App<State> {
             playback_frame_index: 0,
             runner: None,
             embedded_assets: std::collections::HashMap::new(),
+            window_attributes: None,
+            window: None,
+            editor: None,
+            app_state: None,
+            last_frame_time: None,
+            light_time: 0.0,
         };
         app = app.add_plugin(AssetPlugin);
         app
@@ -343,48 +362,28 @@ impl<State: 'static> App<State> {
             }
         }
 
-        // winit 0.30 deprecated `EventLoop::create_window` (and the closure-based
-        // `run` below) in favor of the `ApplicationHandler`/`run_app` model, where
-        // the window is created in `resumed(&ActiveEventLoop)`.
-        //
-        // DELIBERATELY KEPT (assessed 2026-06-25, not a stale TODO): migrating
-        // `run_internal`'s ~550-line closure event loop to `ApplicationHandler`
-        // means moving the window + async GPU init into a sync `resumed`
-        // (`pollster::block_on`), hoisting all per-frame state into an
-        // Option-initialized handler struct, and reconstructing a `winit::Event`
-        // for the public `input_fn(&Event)` hook. The deprecated bridge is fully
-        // functional in winit 0.30 (kept on purpose by winit), and this is not a
-        // 1.0 blocker: `gizmo-app` is a Stage B `0.x` crate (RELEASING §2/§4c).
-        // The win32/wasm cfg branches here cannot be verified in CI (the wasm
-        // target does not build yet), so a silent rewrite would be unprovable.
-        #[allow(deprecated)]
-        let window = Arc::new(
-            event_loop
-                .create_window(builder)
-                .map_err(crate::AppError::WindowCreation)?,
-        );
+        // winit 0.30: the window is created lazily in `ApplicationHandler::resumed`
+        // (the only place a `&ActiveEventLoop` — and thus the non-deprecated
+        // `create_window` — is available). Stash the attributes for `resumed`,
+        // then drive the loop with `run_app`.
+        self.window_attributes = Some(builder);
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            pollster::block_on(self.run_internal(event_loop, window))
+            event_loop.run_app(&mut self).map_err(crate::AppError::EventLoop)
         }
         #[cfg(target_arch = "wasm32")]
         {
-            // On wasm the event loop is driven asynchronously and cannot
-            // propagate a terminal error back to the caller; spawn it and
-            // report success for the setup phase.
-            wasm_bindgen_futures::spawn_local(async move {
-                if let Err(e) = self.run_internal(event_loop, window).await {
-                    tracing::error!("App event loop error: {}", e);
-                }
-            });
+            use winit::platform::web::EventLoopExtWebSys;
+            event_loop.spawn_app(self);
             Ok(())
         }
     }
 
-    async fn run_internal(
-        mut self,
-        event_loop: EventLoop<()>,
+    /// Build the renderer, user state, and editor once the window exists (called
+    /// from `resumed`). Stores the resulting runtime into `self`.
+    async fn initialize(
+        &mut self,
         window: Arc<winit::window::Window>,
     ) -> Result<(), crate::AppError> {
         // Initialize Core Dev Console Systems BEFORE setup so setup can register cvars
@@ -402,7 +401,7 @@ impl<State: 'static> App<State> {
             std::mem::take(&mut self.embedded_assets);
         self.world.insert_resource(renderer);
 
-        let mut state = if let Some(setup) = self.setup_fn.take() {
+        let state = if let Some(setup) = self.setup_fn.take() {
             let r = self
                 .world
                 .remove_resource::<Renderer>()
@@ -440,25 +439,47 @@ impl<State: 'static> App<State> {
             }
         }
 
-        let mut editor = {
+        let editor = {
             let r = self.world.get_resource::<Renderer>().unwrap();
             EditorContext::new(&r.device, r.config.format, &window, 1)
         };
 
-        #[cfg(not(target_arch = "wasm32"))]
-        let mut last_frame_time = std::time::Instant::now();
-        #[cfg(target_arch = "wasm32")]
-        let mut last_frame_time = web_time::Instant::now();
-        let mut light_time = 0.0;
+        self.app_state = Some(state);
+        self.editor = Some(editor);
+        self.window = Some(window);
+        self.last_frame_time = Some(std::time::Instant::now());
+        self.light_time = 0.0;
+        Ok(())
+    }
 
-        // winit 0.30 deprecated the closure-based `EventLoop::run` in favor of
-        // `ApplicationHandler`/`run_app` — deliberately kept; see the detailed
-        // rationale on the `create_window` call above (this ~550-line closure is
-        // exactly the event loop that would move into the handler's
-        // `window_event`/`about_to_wait`).
-        #[allow(deprecated)]
-        event_loop
-            .run(move |event, current_window| {
+    /// The unified per-event handler — the old `EventLoop::run` closure body,
+    /// reconstructed as a method so `ApplicationHandler` can drive it. Each event
+    /// type reconstructs a `winit::Event<()>` and dispatches here, so the original
+    /// control flow (and the `input_fn(&Event)` hook contract) is preserved.
+    fn handle_event(&mut self, event: Event<()>, current_window: &ActiveEventLoop) {
+        // Reconstruct what the old `move` closure captured. `editor`/`state` are
+        // taken out of `self` so the `editor.run(|ctx| … &mut self.world …)`
+        // closure can borrow `self`'s other fields disjointly; they (and the
+        // frame timers) are restored at every exit — including the two early
+        // `return`s in the redraw path.
+        let window = match self.window.clone() {
+            Some(w) => w,
+            None => return,
+        };
+        let mut editor = match self.editor.take() {
+            Some(e) => e,
+            None => return,
+        };
+        let mut state = match self.app_state.take() {
+            Some(s) => s,
+            None => return,
+        };
+        let mut last_frame_time = self
+            .last_frame_time
+            .unwrap_or_else(std::time::Instant::now);
+        let mut light_time = self.light_time;
+
+        {
                 current_window.set_control_flow(ControlFlow::Poll);
 
                 let mut consumes_input = false;
@@ -1158,6 +1179,10 @@ impl<State: 'static> App<State> {
                                     if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                         profiler.end_scope("render");
                                     }
+                                    self.editor = Some(editor);
+                                    self.app_state = Some(state);
+                                    self.last_frame_time = Some(last_frame_time);
+                                    self.light_time = light_time;
                                     return;
                                 }
                                 other => {
@@ -1166,6 +1191,10 @@ impl<State: 'static> App<State> {
                                     if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                         profiler.end_scope("render");
                                     }
+                                    self.editor = Some(editor);
+                                    self.app_state = Some(state);
+                                    self.last_frame_time = Some(last_frame_time);
+                                    self.light_time = light_time;
                                     return;
                                 }
                             };
@@ -1237,9 +1266,71 @@ impl<State: 'static> App<State> {
                     }
                     _ => {}
                 }
-            })
-            .map_err(crate::AppError::EventLoop)?;
+            }
 
-        Ok(())
+            // Put the runtime back for the next event.
+            self.editor = Some(editor);
+            self.app_state = Some(state);
+            self.last_frame_time = Some(last_frame_time);
+            self.light_time = light_time;
+    }
+}
+
+impl<State: 'static> ApplicationHandler for App<State> {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        // `resumed` can fire more than once (e.g. on mobile); only build the
+        // window + runtime the first time.
+        if self.window.is_some() {
+            return;
+        }
+        let attrs = match self.window_attributes.take() {
+            Some(a) => a,
+            None => return,
+        };
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(e) => {
+                tracing::error!("Window creation failed: {}", e);
+                event_loop.exit();
+                return;
+            }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Err(e) = pollster::block_on(self.initialize(window)) {
+                tracing::error!("App initialization failed: {}", e);
+                event_loop.exit();
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // The renderer init is async and wasm cannot block in `resumed`;
+            // wiring this up is part of the separate, deferred WASM port (this
+            // branch is not built in CI).
+            let _ = window;
+            tracing::error!("wasm: windowed init is part of the deferred WASM port");
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        self.handle_event(Event::WindowEvent { window_id, event }, event_loop);
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.handle_event(Event::AboutToWait, event_loop);
+    }
+
+    fn device_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        self.handle_event(Event::DeviceEvent { device_id, event }, event_loop);
     }
 }
