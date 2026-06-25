@@ -14,9 +14,9 @@ gpu_physics = ["wgpu", "bytemuck", "pollster"]
 
 [dependencies]
 rayon = "1.11.0"
-gizmo-core = { path = "../gizmo-core", version = "0.1.7" }
-gizmo-math = { path = "../gizmo-math", version = "0.1.7" }
-gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.1.7" }
+gizmo-core = { path = "../gizmo-core", version = "0.2.0" }
+gizmo-math = { path = "../gizmo-math", version = "0.2.0" }
+gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.2.0" }
 wgpu = { version = "29", optional = true }
 bytemuck = { version = "1.14", features = ["derive"], optional = true }
 pollster = { version = "0.3", optional = true }

@@ -16,9 +16,9 @@ reflect = ["dep:bevy_reflect", "gizmo-physics-core/reflect", "gizmo-core/reflect
 [dependencies]
 rayon = "1.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
-gizmo-core = { path = "../gizmo-core", version = "0.1.7" }
-gizmo-math = { path = "../gizmo-math", version = "0.1.7" }
-gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.1.7" }
+gizmo-core = { path = "../gizmo-core", version = "0.2.0" }
+gizmo-math = { path = "../gizmo-math", version = "0.2.0" }
+gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.2.0" }
 wide = "1.2.0"
 rand = "0.10.1"
 dashmap = "5.5"

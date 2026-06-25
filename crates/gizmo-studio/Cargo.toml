@@ -15,7 +15,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-gizmo = { package = "gizmo-engine", path = "../gizmo", features = ["editor", "scene", "audio", "scripting"] , version = "0.1.7" }
+gizmo = { package = "gizmo-engine", path = "../gizmo", features = ["editor", "scene", "audio", "scripting"] , version = "0.2.0" }
 rand = "0.9.0"
 mimalloc = { workspace = true }
 tracing = "0.1.44"
