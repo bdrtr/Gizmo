@@ -293,9 +293,32 @@ genuinely **infallible plain-value getters** violated C-GETTER and were renamed:
 **not feasible as polish**: `gizmo-animation` implements `gizmo_app::Plugin<State>`
 on `gizmo_app::App<State>`, so the dependency is load-bearing. Promoting it would
 require extracting the `Plugin`/`App` abstraction down into a core crate — a real
-architectural change, out of scope here. `gizmo-animation` therefore **stays
-Stage B** until that extraction happens. Broader `pub`-tightening from the audit
+architectural change that would break the `Plugin` trait signature for *every*
+implementor (`AssetPlugin`, `AnimationPlugin`, and any user plugins). It is also
+**moot until the staged 1.0 is actually pursued**: `0.2.0` shipped the whole
+workspace at one uniform `0.x` version (the staged split is deferred — see §1), so
+`gizmo-animation` being Stage A vs Stage B changes nothing today. **Decision
+(2026-06-25): deliberately deferred** — not worth a breaking architectural change
+for a benefit that only materializes at the (deferred) staged 1.0. The lightest
+path when it *is* pursued: gate `AnimationPlugin` (the sole `gizmo-app` user)
+behind a default-off `app` feature so the crate's default public API is
+Stage-A-clean, rather than relocating `Plugin`/`App`. `gizmo-animation` therefore
+**stays Stage B** for now. Broader `pub`-tightening from the audit
 raw output remains as fine-grained follow-up.
+
+### (g) WebAssembly (WASM) build — **L** — ⏸️ **Deferred (environment-blocked, not a 1.0 blocker)**
+
+The engine does **not** build for `wasm32-unknown-unknown` today. Verified
+2026-06-25: even `gizmo-core` fails to compile (a transitive `uuid` needs a
+wasm randomness feature; per earlier audit, `getrandom`/`rand`, `rayon` in
+`gizmo-physics-rigid`, `std::time::Instant`, and `std::net` in `gizmo-net` are
+further blockers). A full WASM port is a separate `time`/`thread`/`rng`/`net`
+platform-abstraction effort, and — critically — **cannot be verified in this CI
+environment** (the target does not compile), so it is not attempted as part of
+the hardening rounds. It is **not a 1.0 blocker**: the native engine is the
+shipping target. The renderer's `wgpu` backend already supports WebGPU/WASM; only
+the engine-wide build is gated. (The `ApplicationHandler::resumed` wasm branch in
+`gizmo-app` is a stub for the same reason.)
 
 ### (e) Document `glam` as an official public dependency — **S** — ✅ **DONE (2026-06-25)**
 
