@@ -106,7 +106,7 @@ fn draw_engine_logs(ui: &mut egui::Ui, state: &mut EditorState) {
 
                     let text = format!("[{}] {} {}", log.timestamp, icon, log.message);
                     
-                    let frame = egui::Frame::none()
+                    let frame = egui::Frame::new()
                         .fill(bg_color)
                         .inner_margin(egui::Margin::symmetric(4, 2));
                         

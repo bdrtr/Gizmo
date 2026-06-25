@@ -98,13 +98,13 @@ impl EditorContext {
         self.context.set_visuals(visuals);
 
         // Improve spacing and padding for a less cluttered look
-        let mut style = (*self.context.style()).clone();
+        let mut style = (*self.context.global_style()).clone();
         style.spacing.item_spacing = egui::vec2(10.0, 8.0);
         style.spacing.button_padding = egui::vec2(12.0, 6.0);
         style.spacing.window_margin = egui::Margin::same(12);
         style.spacing.interact_size = egui::vec2(40.0, 24.0); // Make clickable areas taller
         
-        self.context.set_style(style);
+        self.context.set_global_style(style);
     }
 
     /// Forwards a window event to egui; returns `true` if egui consumed it.
@@ -120,9 +120,9 @@ impl EditorContext {
         F: FnOnce(&Context),
     {
         let raw_input = self.state.take_egui_input(window);
-        self.context.begin_frame(raw_input);
+        self.context.begin_pass(raw_input);
         ui_fn(&self.context);
-        self.context.end_frame()
+        self.context.end_pass()
     }
 
     /// Paints the editor UI as an overlay on top of the already-rendered

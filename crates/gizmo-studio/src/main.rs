@@ -1,4 +1,3 @@
-#![allow(deprecated)] // §4c graphics upgrade: egui 0.34 / winit 0.30 deprecations (all functional) — migrate as follow-up
 //! Gizmo Studio: the standalone editor application for the Gizmo game engine.
 //!
 //! This is a binary crate (not a published library). It boots an [`gizmo::App`]
@@ -43,6 +42,10 @@ fn main() {
     app = app.set_ui(|world, _state, ctx| {
         // Draw the editor filling the screen
         if let Some(mut editor_state) = world.get_resource_mut::<EditorState>() {
+            // egui 0.34 soft-deprecated top-level `CentralPanel::show(ctx)` in
+            // favor of a root-`Ui` composition model; Gizmo drives egui directly
+            // (no eframe), so the context-level show is kept and scoped here.
+            #[allow(deprecated)]
             gizmo::egui::CentralPanel::default().show(ctx, |_ui| {
                 gizmo::editor::draw_editor(ctx, world, &mut editor_state);
             });

@@ -51,49 +51,49 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         ui.menu_button("➕ Boş Obje", |ui| {
             if ui.button("📦 Boş Entity").clicked() {
                 state.spawn_request = Some("Empty".to_string());
-                ui.close_menu();
+                ui.close();
             }
             if ui.button("📂 Grup (Klasör)").clicked() {
                 state.spawn_request = Some("Group".to_string());
-                ui.close_menu();
+                ui.close();
             }
         });
         ui.menu_button("🔶 3D Primitif", |ui| {
             if ui.button("📦 Küp (Cube)").clicked() {
                 state.spawn_request = Some("Cube".to_string());
-                ui.close_menu();
+                ui.close();
             }
             if ui.button("🔴 Küre (Sphere)").clicked() {
                 state.spawn_request = Some("Sphere".to_string());
-                ui.close_menu();
+                ui.close();
             }
             if ui.button("▬ Düzlem (Plane)").clicked() {
                 state.spawn_request = Some("Plane".to_string());
-                ui.close_menu();
+                ui.close();
             }
             if ui.button("🔵 Silindir (Cylinder)").clicked() {
                 state.spawn_request = Some("Cylinder".to_string());
-                ui.close_menu();
+                ui.close();
             }
             if ui.button("💊 Kapsül (Capsule)").clicked() {
                 state.spawn_request = Some("Capsule".to_string());
-                ui.close_menu();
+                ui.close();
             }
         });
         ui.menu_button("💡 Işık & Kamera", |ui| {
             if ui.button("💡 Nokta Işığı (Point Light)").clicked() {
                 state.spawn_request = Some("PointLight".to_string());
-                ui.close_menu();
+                ui.close();
             }
             if ui.button("📷 Kamera (Camera)").clicked() {
                 state.spawn_request = Some("Camera".to_string());
-                ui.close_menu();
+                ui.close();
             }
         });
         ui.menu_button("✨ Efekt", |ui| {
             if ui.button("✨ Particle Emitter").clicked() {
                 state.spawn_request = Some("ParticleEmitter".to_string());
-                ui.close_menu();
+                ui.close();
             }
         });
         ui.separator();
@@ -109,7 +109,7 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
                     mem.data
                         .remove::<gizmo_core::entity::Entity>(egui::Id::new("dragged_ent"))
                 });
-                ui.close_menu();
+                ui.close();
             }
         }
     });
@@ -314,7 +314,7 @@ fn draw_entity_node(
             };
             if ui.button(hide_text).clicked() {
                 state.toggle_visibility_requests.push(entity);
-                ui.close_menu();
+                ui.close();
             }
 
             ui.separator();
@@ -322,12 +322,12 @@ fn draw_entity_node(
             // === DÜZENLEME ===
             if ui.button("📑 Çoğalt (Ctrl+D)").clicked() {
                 state.duplicate_requests.push(entity);
-                ui.close_menu();
+                ui.close();
             }
 
             if ui.button("🗑 Sil (Delete)").clicked() {
                 state.despawn_requests.push(entity);
-                ui.close_menu();
+                ui.close();
             }
 
             ui.separator();
@@ -339,7 +339,7 @@ fn draw_entity_node(
                 // spawn sonrası reparent yapılacak → spawn_request işlenirken
                 // parent'ı ayarlamak için pending_child_parent kullanılacak
                 state.pending_child_parent = Some(entity);
-                ui.close_menu();
+                ui.close();
             }
 
             // Dövüş oyunu kısayolları
@@ -347,21 +347,21 @@ fn draw_entity_node(
                 state.spawn_request = Some("Empty".to_string());
                 state.pending_child_parent = Some(entity);
                 state.pending_child_components.push("Hitbox".to_string());
-                ui.close_menu();
+                ui.close();
             }
 
             if ui.button("🛡 Hurtbox Ekle (Çocuk)").clicked() {
                 state.spawn_request = Some("Empty".to_string());
                 state.pending_child_parent = Some(entity);
                 state.pending_child_components.push("Hurtbox".to_string());
-                ui.close_menu();
+                ui.close();
             }
 
             ui.separator();
 
             if ui.button("🔗 Kökten Ayır (Unparent)").clicked() {
                 state.unparent_request = Some(entity);
-                ui.close_menu();
+                ui.close();
             }
 
             // Seçili birden fazla obje varsa gruplama butonu
@@ -369,7 +369,7 @@ fn draw_entity_node(
                 && ui.button("📂 Seçilileri Grupla").clicked() {
                     // Boş bir parent entity oluştur, sonra seçili objeleri ona bağla
                     state.spawn_request = Some("Group".to_string());
-                    ui.close_menu();
+                    ui.close();
                 }
 
             ui.separator();
@@ -381,7 +381,7 @@ fn draw_entity_node(
                     entity_name.replace(" ", "_")
                 );
                 state.prefab_save_request = Some((entity, path));
-                ui.close_menu();
+                ui.close();
             }
         });
     };

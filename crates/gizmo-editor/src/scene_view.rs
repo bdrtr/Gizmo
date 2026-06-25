@@ -18,7 +18,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
         );
         ui.painter().add(mesh);
     } else {
-        ui.allocate_ui_at_rect(rect, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.centered_and_justified(|ui| {
                 ui.label(
                     egui::RichText::new("Gizmo Scene View")
@@ -425,7 +425,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
     }
 
     // F (Focus) Kamera Odaklanması
-    if !ui.ctx().wants_keyboard_input() && ui.input(|i| i.key_pressed(egui::Key::F)) {
+    if !ui.ctx().egui_wants_keyboard_input() && ui.input(|i| i.key_pressed(egui::Key::F)) {
         if let Some(entity) = state.selection.primary {
             let transforms = world.borrow::<gizmo_physics_core::Transform>();
             if let Some(t) = transforms.get(entity.id()) {

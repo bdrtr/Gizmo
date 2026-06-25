@@ -1,4 +1,3 @@
-#![allow(deprecated)] // §4c graphics upgrade: egui 0.34 / winit 0.30 deprecations (all functional) — migrate as follow-up
 use gizmo::prelude::*;
 use gizmo::math::{Vec3, Vec4, Quat};
 use gizmo::renderer::asset::AssetManager;
@@ -350,7 +349,7 @@ fn main() {
 
                     ui.separator();
                     ui.label("G-Buffer Visualizer:");
-                    gizmo::egui::ComboBox::from_id_source("shading_mode")
+                    gizmo::egui::ComboBox::from_id_salt("shading_mode")
                         .selected_text(match renderer.shading_mode {
                             0 => "💡 Full PBR (Lit)",
                             1 => "🎨 Normals View",
@@ -377,7 +376,7 @@ fn main() {
 
                     ui.horizontal(|ui| {
                         ui.label("Base Preset:");
-                        gizmo::egui::ComboBox::from_id_source("env_preset")
+                        gizmo::egui::ComboBox::from_id_salt("env_preset")
                             .selected_text(match lighting_settings.preset {
                                 0 => "🌇 Sunset Gold",
                                 1 => "🏢 Studio Neutral",
@@ -395,7 +394,7 @@ fn main() {
 
                     ui.horizontal(|ui| {
                         ui.label("Target Preset:");
-                        gizmo::egui::ComboBox::from_id_source("env_preset_2")
+                        gizmo::egui::ComboBox::from_id_salt("env_preset_2")
                             .selected_text(match lighting_settings.preset_2 {
                                 0 => "🌇 Sunset Gold",
                                 1 => "🏢 Studio Neutral",

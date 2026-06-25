@@ -257,19 +257,19 @@ let mut finished = false;
                     response.context_menu(|ui| {
                         if is_model && ui.button("⚙️ Sahneye Ekle").clicked() {
                             state.spawn_asset_request = Some(path_str.clone());
-                            ui.close_menu();
+                            ui.close();
                         }
                         if is_prefab && ui.button("⚙️ Prefab Olarak Ekle").clicked() {
                             state.prefab_load_request = Some((path_str.clone(), None, None));
-                            ui.close_menu();
+                            ui.close();
                         }
                         if is_scene && ui.button("📂 Bu Sahneyi Yükle").clicked() {
                             state.scene.load_request = Some(path_str.clone());
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("📋 Yolu Kopyala").clicked() {
                             ui.output_mut(|o| o.commands.push(egui::OutputCommand::CopyText(path_str.clone())));
-                            ui.close_menu();
+                            ui.close();
                         }
                     });
                 });

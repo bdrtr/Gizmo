@@ -1,4 +1,3 @@
-#![allow(deprecated)] // §4c graphics upgrade: egui 0.34 / winit 0.30 deprecations (all functional) — migrate as follow-up
 use std::f32::consts::{FRAC_PI_2, PI};
 use gizmo::prelude::*;
 use gizmo::simple::{SceneBuilder, SimpleSceneState};

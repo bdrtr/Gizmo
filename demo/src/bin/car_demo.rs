@@ -1,4 +1,3 @@
-#![allow(deprecated)] // §4c graphics upgrade: egui 0.34 / winit 0.30 deprecations (all functional) — migrate as follow-up
 use gizmo::app::App;
 use gizmo::core::input::Input;
 use gizmo::core::world::World;
