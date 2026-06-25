@@ -128,7 +128,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                 i.pointer.latest_pos(),
                 i.pointer.any_released(),
                 i.modifiers.alt,
-                i.raw_scroll_delta.y,
+                i.smooth_scroll_delta.y,
                 i.pointer.press_origin(),
                 i.pointer.press_origin(), // Sadece tuple uyumluluğu için
             )
@@ -417,9 +417,10 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
             egui::Rect::from_two_pos(egui::pos2(start.x, start.y), egui::pos2(curr.x, curr.y));
         ui.painter().rect(
             rect,
-            0.0,
+            0,
             egui::Color32::from_white_alpha(30),
             egui::Stroke::new(1.0_f32, egui::Color32::WHITE),
+            egui::StrokeKind::Inside,
         );
     }
 

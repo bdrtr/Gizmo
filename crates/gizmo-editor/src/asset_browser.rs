@@ -268,7 +268,7 @@ let mut finished = false;
                             ui.close_menu();
                         }
                         if ui.button("📋 Yolu Kopyala").clicked() {
-                            ui.output_mut(|o| o.copied_text = path_str.clone());
+                            ui.output_mut(|o| o.commands.push(egui::OutputCommand::CopyText(path_str.clone())));
                             ui.close_menu();
                         }
                     });
