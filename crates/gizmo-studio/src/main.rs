@@ -42,13 +42,18 @@ fn main() {
     app = app.set_ui(|world, _state, ctx| {
         // Draw the editor filling the screen
         if let Some(mut editor_state) = world.get_resource_mut::<EditorState>() {
-            // egui 0.34 soft-deprecated top-level `CentralPanel::show(ctx)` in
-            // favor of a root-`Ui` composition model; Gizmo drives egui directly
-            // (no eframe), so the context-level show is kept and scoped here.
-            #[allow(deprecated)]
-            gizmo::egui::CentralPanel::default().show(ctx, |_ui| {
-                gizmo::editor::draw_editor(ctx, world, &mut editor_state);
-            });
+            // egui 0.34 root-`Ui` composition (replaces the deprecated top-level
+            // `CentralPanel::show(ctx)`): build a full-viewport background `Ui` and
+            // let the editor compose its panels into it via `show_inside`.
+            let mut root = gizmo::egui::Ui::new(
+                ctx.clone(),
+                gizmo::egui::Id::new("gizmo_editor_root"),
+                gizmo::egui::UiBuilder::new()
+                    .layer_id(gizmo::egui::LayerId::background())
+                    .max_rect(ctx.content_rect()),
+            );
+            root.set_clip_rect(ctx.content_rect());
+            gizmo::editor::draw_editor(&mut root, world, &mut editor_state);
         }
     });
 

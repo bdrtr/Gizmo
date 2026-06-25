@@ -81,9 +81,12 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
 
 /// Draws the whole editor (all panels and global shortcuts) for one frame.
 ///
-/// Call this once per frame inside the `egui` run closure, passing the active
-/// [`egui::Context`], the ECS [`World`], and the mutable [`EditorState`].
-pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) {
+/// Call this once per frame, passing a full-viewport root [`egui::Ui`] (built by
+/// the host on the background layer — see `gizmo-studio`), the ECS [`World`], and
+/// the mutable [`EditorState`]. The editor composes its panels into the root `Ui`
+/// via `show_inside` (egui 0.34's root-`Ui` composition model).
+pub fn draw_editor(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
+    let ctx = ui.ctx().clone();
     // ==== Global Klavye Kısayolları (Sadece text alanları odakta değilken) ====
     if !ctx.egui_wants_keyboard_input() {
         ctx.input(|i| {
@@ -152,13 +155,11 @@ pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) 
         }
     }
 
-    // 1. Status Bar (En altta) — see `toolbar.rs` for why the top-level
-    // `Panel::show(ctx)` is intentionally kept and deprecation-scoped here
-    // (egui 0.34 moved toward a root-`Ui` composition model).
-    #[allow(deprecated)]
+    // 1. Status Bar (En altta) — composed into the root `Ui`; `show_inside`
+    // shrinks the root cursor from the bottom so the dock fills the remainder.
     egui::Panel::bottom("status_bar")
         .exact_size(24.0)
-        .show(ctx, |ui| {
+        .show_inside(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.label(egui::RichText::new(&state.status_message).weak().small());
             });
@@ -166,7 +167,7 @@ pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) 
 
     // 2. Toolbar (en üstte kalmaya devam etmeli, dock'un dışında)
     if state.show_toolbar {
-        toolbar::draw_toolbar(ctx, state);
+        toolbar::draw_toolbar(ui, state);
     }
 
     // Kamera çizim durumları dock içerisinde güncellenecek, frame sonunda/başında başka yerde sıfırlanmalıdır veya flag kilitlenmelidir.
@@ -190,13 +191,11 @@ pub fn draw_editor(ctx: &egui::Context, world: &World, state: &mut EditorState) 
     dock_style.tab.active.text_color = egui::Color32::WHITE;
     dock_style.tab.inactive.text_color = egui::Color32::from_rgb(150, 150, 150);
 
-    // egui_dock 0.19 deprecated `DockArea::show(ctx)` in favor of the eframe
-    // `App::ui` (`show_inside`) path; Gizmo drives egui directly without eframe,
-    // so the context-level show is intentionally kept and scoped here.
-    #[allow(deprecated)]
+    // Dock fills the central region left by the panels above (egui_dock 0.19
+    // `show_inside`, composed into the same root `Ui`).
     DockArea::new(&mut dock_state)
         .style(dock_style)
-        .show(ctx, &mut viewer);
+        .show_inside(ui, &mut viewer);
 
 viewer.state.dock_state = dock_state;
 
