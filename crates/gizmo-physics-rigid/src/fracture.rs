@@ -295,13 +295,9 @@ pub fn generate_fracture_chunks(
             0.1
         };
 
-        // Create new rigid body
-        let mut rb = crate::components::RigidBody::new(
-            mass,
-            original_body.restitution,
-            original_body.friction,
-            original_body.use_gravity,
-        );
+        // Create new rigid body. Friction/restitution live on the collider
+        // material, not the body, so fragments inherit them via their colliders.
+        let mut rb = crate::components::RigidBody::new(mass, original_body.use_gravity);
         rb.center_of_mass = chunk.center_of_mass;
 
         // Inherit exact same velocity + explosion force away from impact point
@@ -411,12 +407,7 @@ impl PreFracturedCache {
                 0.1
             };
 
-            let mut rb = crate::components::RigidBody::new(
-                mass,
-                original_body.restitution,
-                original_body.friction,
-                original_body.use_gravity,
-            );
+            let mut rb = crate::components::RigidBody::new(mass, original_body.use_gravity);
             rb.center_of_mass = chunk.center_of_mass;
 
             let mut vel = *original_velocity;
@@ -501,7 +492,7 @@ mod tests {
         cache.cache.insert(e, vec![big, tiny]);
 
         let tr = Transform::new(Vec3::ZERO);
-        let body = RigidBody::new(10.0, 0.5, 0.5, true);
+        let body = RigidBody::new(10.0, true);
         let out = cache
             .get_fracture_chunks(e, &tr, &body, &Velocity::default(), Vec3::new(0.0, 5.0, 0.0), 1.0e6)
             .unwrap();

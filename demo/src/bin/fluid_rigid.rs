@@ -111,7 +111,7 @@ fn main() {
             let ground = world.spawn();
             world.add_component(ground, Transform::new(Vec3::new(0.0, 0.0, 0.0)));
             world.add_component(ground, Collider::box_collider(Vec3::new(2.5, 0.1, 2.5))); // Su tankının altı
-            world.add_component(ground, RigidBody::new(0.0, 0.5, 0.5, false));
+            world.add_component(ground, RigidBody::new(0.0, false));
 
             // Havada dönen/sallanan birkaç küp ekleyelim
             for i in 0..5 {
@@ -121,7 +121,7 @@ fn main() {
                     Transform::new(Vec3::new(0.0, 2.0 + (i as f32) * 1.5, 0.0)),
                 );
                 world.add_component(box_ent, Collider::box_collider(Vec3::new(0.3, 0.3, 0.3)));
-                world.add_component(box_ent, RigidBody::new(1.0, 0.5, 0.5, true));
+                world.add_component(box_ent, RigidBody::new(1.0, true));
             }
 
             state

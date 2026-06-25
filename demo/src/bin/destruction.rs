@@ -245,7 +245,7 @@ fn run() {
                     world.add_component(e, state.default_mat.clone().unwrap());
                     world.add_component(e, gizmo::renderer::components::MeshRenderer::new());
 
-                    let mut rb = RigidBody::new(5.0, 0.5, 0.5, true);
+                    let mut rb = RigidBody::new(5.0, true);
                     rb.is_sleeping = false;
                     world.add_component(e, rb);
                     world.add_component(e, Collider::aabb(half_extents));

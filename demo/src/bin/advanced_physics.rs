@@ -123,7 +123,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
             );
             world.add_component(brick, MeshRenderer::new());
             world.add_component(brick, Collider::box_collider(Vec3::new(0.5, 0.5, 0.5)));
-            world.add_component(brick, RigidBody::new(10.0, 0.1, 0.5, true));
+            world.add_component(brick, RigidBody::new(10.0, true));
             world.add_component(brick, Velocity::default());
             // Add GhostTrail for debugging
             world.add_component(
@@ -178,7 +178,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
             ),
         );
         // Lower restitution to prevent chaotic bouncing and joint solver explosions
-        world.add_component(limb, RigidBody::new(5.0, 0.5, 0.1, true));
+        world.add_component(limb, RigidBody::new(5.0, true));
         world.add_component(limb, Velocity::default());
 
         if let Some(parent) = prev_ent {

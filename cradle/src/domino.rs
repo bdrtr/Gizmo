@@ -188,7 +188,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
         world.add_component(domino, domino_mesh.clone());
         world.add_component(domino, MeshRenderer::new());
 
-        let mut rb = RigidBody::new(0.5, 0.1, 0.3, true);
+        let mut rb = RigidBody::new(0.5, true);
         rb.calculate_box_inertia(dx * 2.0, dy * 2.0, dz * 2.0);
         world.add_component(domino, rb);
         world.add_component(domino, Collider::box_collider(Vec3::new(dx, dy, dz)));
@@ -209,7 +209,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
     );
     world.add_component(heavy_ball, MeshRenderer::new());
 
-    let mut ball_rb = RigidBody::new(50.0, 0.2, 0.5, true);
+    let mut ball_rb = RigidBody::new(50.0, true);
     let r = 0.5;
     let inertia = (2.0 / 5.0) * ball_rb.mass * (r * r);
     ball_rb.local_inertia = Vec3::new(inertia, inertia, inertia);

@@ -363,7 +363,7 @@ fn shatter_entity(
         new_vel.linear += outward * 2.0 + impact_direction * 5.0; // Explosion effect
 
         let chunk_collider = Collider::sphere(radius).with_material(collider.material);
-        let mut rb = RigidBody::new(chunk.volume * collider.material.density, 0.0, 0.0, true);
+        let mut rb = RigidBody::new(chunk.volume * collider.material.density, true);
         rb.update_inertia_from_collider(&chunk_collider);
 
         commands

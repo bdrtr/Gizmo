@@ -45,7 +45,7 @@ fn arb_body() -> impl Strategy<Value = BodySpec> {
 fn build_world(specs: &[BodySpec]) -> PhysicsWorld {
     let mut world = PhysicsWorld::new();
     for (i, s) in specs.iter().enumerate() {
-        let mut rb = RigidBody::new(1.0, 0.3, 0.5, true);
+        let mut rb = RigidBody::new(1.0, true);
         rb.wake_up();
         world.add_body(
             Entity::new(i as u32 + 1, 0),
@@ -121,7 +121,7 @@ proptest! {
         let steps = 50;
         let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
 
-        let mut rb = RigidBody::new(1.0, 0.0, 0.0, false);
+        let mut rb = RigidBody::new(1.0, false);
         rb.linear_damping = 0.0;
         rb.angular_damping = 0.0;
         rb.wake_up();
@@ -159,7 +159,7 @@ proptest! {
         let dt = 1.0 / 60.0;
         let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
 
-        let mut rb = RigidBody::new(1.0, 0.0, 0.0, false);
+        let mut rb = RigidBody::new(1.0, false);
         rb.wake_up();
         let mut vel = Velocity::new(Vec3::new(vx, vy, vz));
         vel.angular = Vec3::new(wx, wy, wz);
@@ -211,7 +211,7 @@ proptest! {
         );
 
         // Düşen küre.
-        let mut rb = RigidBody::new(1.0, 0.1, 0.5, true);
+        let mut rb = RigidBody::new(1.0, true);
         rb.wake_up();
         world.add_body(
             Entity::new(2, 0),

@@ -49,7 +49,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> VehicleState {
         ground,
         Collider::box_collider(Vec3::new(2000.0, 1.0, 2000.0)),
     );
-    world.add_component(ground, RigidBody::new(0.0, 0.1, 0.8, false));
+    world.add_component(ground, RigidBody::new(0.0, false));
     world.add_component(ground, Velocity::default());
 
     // --- ATLAMA RAMPASI (JUMP RAMP) ---
@@ -62,7 +62,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> VehicleState {
     world.add_component(ramp, ground_mat.clone());
     world.add_component(ramp, MeshRenderer::new());
     world.add_component(ramp, Collider::box_collider(Vec3::new(8.0, 0.5, 15.0)));
-    world.add_component(ramp, RigidBody::new(0.0, 0.1, 0.8, false));
+    world.add_component(ramp, RigidBody::new(0.0, false));
     world.add_component(ramp, Velocity::default());
 
     // --- FİZİKSEL ARAÇ (RAYCAST VEHICLE) ---
@@ -81,7 +81,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> VehicleState {
     world.add_component(car_ent, car_mat);
     world.add_component(car_ent, MeshRenderer::new());
     let car_col = Collider::box_collider(Vec3::new(car_w, car_h, car_l));
-    let mut car_rb = RigidBody::new(800.0, 0.1, 0.5, true);
+    let mut car_rb = RigidBody::new(800.0, true);
     car_rb.update_inertia_from_collider(&car_col);
 
     world.add_component(car_ent, car_col);
@@ -154,7 +154,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> VehicleState {
             world.add_component(b, b_mat);
             world.add_component(b, MeshRenderer::new());
             let b_col = Collider::box_collider(Vec3::splat(0.5));
-            let mut b_rb = RigidBody::new(20.0, 0.1, 0.8, true);
+            let mut b_rb = RigidBody::new(20.0, true);
             b_rb.update_inertia_from_collider(&b_col);
 
             world.add_component(b, b_col);

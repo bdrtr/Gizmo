@@ -500,8 +500,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
     );
     world.add_component(ground, MeshRenderer::new());
 
-    let mut ground_rb = RigidBody::new_static();
-    ground_rb.friction = 0.8;
+    let ground_rb = RigidBody::new_static();
     world.add_component(ground, ground_rb);
     world.add_component(ground, Velocity::default());
     world.add_component(
@@ -613,7 +612,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
     }
 
     // RigidBody ayarlamaları
-    let mut chassis_rb = RigidBody::new(config.chassis_mass, 0.1, config.friction, true);
+    let mut chassis_rb = RigidBody::new(config.chassis_mass, true);
     chassis_rb.linear_damping = config.linear_damping; // Asfalt sürtünmesini hissettirmek için sönümlemeyi artırdık
     chassis_rb.angular_damping = config.angular_damping; // Araba dönerken daha rahat kaysın / savrulsun
     chassis_rb.calculate_box_inertia(2.0, 1.0, 4.0);

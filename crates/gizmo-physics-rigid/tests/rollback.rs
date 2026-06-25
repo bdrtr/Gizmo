@@ -29,7 +29,7 @@ fn build_scene() -> PhysicsWorld {
     // Kontrollü kutu (girdi alır) + temas/warm-start için komşular.
     let mut id = 1u32;
     for x in 0..4 {
-        let mut rb = RigidBody::new(1.0, 0.1, 0.6, true);
+        let mut rb = RigidBody::new(1.0, true);
         rb.wake_up();
         let col = Collider::box_collider(Vec3::splat(0.5));
         rb.update_inertia_from_collider(&col);

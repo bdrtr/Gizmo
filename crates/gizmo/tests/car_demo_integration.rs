@@ -23,7 +23,7 @@ fn car_demo_full_frame() {
     let chassis = world.spawn();
     world.add_component(chassis, Transform { position: Vec3::new(0.0, 1.0, 0.0), ..Default::default() });
     world.add_component(chassis, GlobalTransform::default());
-    world.add_component(chassis, RigidBody::new(200.0, 0.1, 0.8, true));
+    world.add_component(chassis, RigidBody::new(200.0, true));
     world.add_component(chassis, Velocity::default());
     world.add_component(chassis, Collider::box_collider(Vec3::new(1.0, 1.0, 1.0)));
 

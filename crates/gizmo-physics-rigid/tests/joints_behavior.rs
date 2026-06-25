@@ -19,7 +19,7 @@ fn anchor(world: &mut PhysicsWorld, id: u32, pos: Vec3) {
     world.add_body(Entity::new(id, 0), rb, Transform::new(pos), Velocity::default(), Collider::sphere(0.2));
 }
 fn dyn_box(world: &mut PhysicsWorld, id: u32, pos: Vec3, lin: Vec3, ang: Vec3, gravity: bool) {
-    let mut rb = RigidBody::new(1.0, 0.0, 0.0, gravity);
+    let mut rb = RigidBody::new(1.0, gravity);
     rb.wake_up();
     let col = Collider::box_collider(Vec3::splat(0.3));
     rb.update_inertia_from_collider(&col);

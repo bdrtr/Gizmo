@@ -42,7 +42,7 @@ fn wall_world(half_thick: f32) -> PhysicsWorld {
 
 /// Append a CCD sphere "bullet" with the given id, position, velocity and radius.
 fn add_bullet(world: &mut PhysicsWorld, id: u32, pos: Vec3, vel: Vec3, radius: f32) {
-    let mut rb = RigidBody::new(1.0, 0.0, 0.0, false);
+    let mut rb = RigidBody::new(1.0, false);
     rb.ccd_enabled = true;
     rb.wake_up();
     world.add_body(
@@ -163,7 +163,6 @@ fn ccd_body_settles_on_ground_like_discrete() {
     world.integrator.gravity = Vec3::new(0.0, -9.81, 0.0);
 
     let mut ground = RigidBody::new_static();
-    ground.friction = 0.8;
     ground.wake_up();
     world.add_body(
         Entity::new(0, 0),
@@ -173,7 +172,7 @@ fn ccd_body_settles_on_ground_like_discrete() {
         Collider::box_collider(Vec3::new(20.0, 1.0, 20.0)),
     );
 
-    let mut rb = RigidBody::new(1.0, 0.0, 0.5, true);
+    let mut rb = RigidBody::new(1.0, true);
     rb.ccd_enabled = true;
     rb.wake_up();
     world.add_body(

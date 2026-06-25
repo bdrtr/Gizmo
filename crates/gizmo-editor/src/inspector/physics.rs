@@ -81,22 +81,9 @@ pub fn draw_rigidbody_section(
                                 .range(0.0..=100000.0),
                         );
                     });
-                    ui.horizontal(|ui| {
-                        ui.label("Sekme:");
-                        ui.add(
-                            egui::DragValue::new(&mut rb.restitution)
-                                .speed(0.01)
-                                .range(0.0..=1.0),
-                        );
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Sürtünme:");
-                        ui.add(
-                            egui::DragValue::new(&mut rb.friction)
-                                .speed(0.01)
-                                .range(0.0..=2.0),
-                        );
-                    });
+                    // Sekme (restitution) ve sürtünme (friction) artık cisimde
+                    // DEĞİL, çarpışan collider'ların PhysicsMaterial'ında tutulur
+                    // (temas başına birleştirilir) → o yüzden buradan kaldırıldı.
                     ui.checkbox(&mut rb.use_gravity, "Yerçekimi");
                     ui.checkbox(&mut rb.ccd_enabled, "CCD (Hızlı Obje)");
 

@@ -239,7 +239,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
         );
         world.add_component(entity, MeshRenderer::new());
 
-        let mut rb = RigidBody::new(DOMINO_MASS, 0.05, 0.6, true);
+        let mut rb = RigidBody::new(DOMINO_MASS, true);
         rb.ccd_enabled = false;
         rb.is_sleeping = true; // Başlangıçta uyku — sadece çarpışma gelince uyanır
         rb.calculate_box_inertia(HX * 2.0, HY * 2.0, HZ * 2.0);
@@ -278,7 +278,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
     );
     world.add_component(ball, MeshRenderer::new());
 
-    let mut ball_rb = RigidBody::new(BALL_MASS, 0.5, 0.3, true);
+    let mut ball_rb = RigidBody::new(BALL_MASS, true);
     ball_rb.ccd_enabled = true;
     ball_rb.is_sleeping = true; // Space'e basılana kadar uyku
     ball_rb.calculate_sphere_inertia(BALL_RADIUS);

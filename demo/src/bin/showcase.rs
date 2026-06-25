@@ -197,11 +197,11 @@ fn main() {
             );
             world.add_component(pillar, MeshRenderer::new());
             world.add_component(pillar, Collider::box_collider(Vec3::new(1.0, 5.0, 1.0)));
-            world.add_component(pillar, RigidBody::new(0.0, 0.5, 0.5, false));
+            world.add_component(pillar, RigidBody::new(0.0, false));
 
             // GPU Physics için Zemin
             world.add_component(ground, Collider::box_collider(Vec3::new(100.0, 0.1, 100.0)));
-            world.add_component(ground, RigidBody::new(0.0, 0.5, 0.5, false));
+            world.add_component(ground, RigidBody::new(0.0, false));
 
             // --- 500 GPU Physics Küpü (Lavın İçinden Dökülen Taşlar) ---
             use rand::Rng;
@@ -222,7 +222,7 @@ fn main() {
                 );
                 world.add_component(box_ent, MeshRenderer::new());
                 world.add_component(box_ent, Collider::box_collider(Vec3::new(0.25, 0.25, 0.25)));
-                world.add_component(box_ent, RigidBody::new(1.0, 0.5, 0.5, true));
+                world.add_component(box_ent, RigidBody::new(1.0, true));
             }
 
             // --- Dinamik Nokta Işıklar (Point Lights) ---
@@ -469,7 +469,7 @@ fn main() {
                 }
                 world.add_component(bullet, MeshRenderer::new());
                 world.add_component(bullet, Collider::box_collider(Vec3::new(0.25, 0.25, 0.25)));
-                let rb = RigidBody::new(5.0, 0.5, 0.5, true);
+                let rb = RigidBody::new(5.0, true);
                 let speed = 40.0;
                 let velocity = fwd * speed;
                 let vel_comp = gizmo::physics::Velocity {

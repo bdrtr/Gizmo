@@ -185,7 +185,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         world.add_component(bx, MeshRenderer::new());
 
         let col = Collider::box_collider(Vec3::splat(box_size * 0.5));
-        let mut rb = RigidBody::new(30.0, 0.0, 0.8, true); // 30kg, 0 bounce, high friction
+        let mut rb = RigidBody::new(30.0, true); // 30kg, 0 bounce, high friction
         rb.linear_damping = 2.0; // High air resistance so they don't fly to infinity
         rb.angular_damping = 2.0;
         rb.update_inertia_from_collider(&col);
@@ -278,7 +278,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         // Not adding mesh because gizmo_physics debug lines will draw the convex hull!
         // We will just let physics debug rendering draw it in pink!
         world.add_component(rock, Collider::convex_hull(&points));
-        world.add_component(rock, RigidBody::new(100.0, 0.3, 0.8, true));
+        world.add_component(rock, RigidBody::new(100.0, true));
         world.add_component(rock, Velocity::default());
     }
 
@@ -305,7 +305,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     world.add_component(chassis, MeshRenderer::new());
 
     let car_col = Collider::box_collider(car_half_extents);
-    let mut chassis_rb = RigidBody::new(1500.0, 0.1, 0.5, true);
+    let mut chassis_rb = RigidBody::new(1500.0, true);
     chassis_rb.update_inertia_from_collider(&car_col);
     chassis_rb.center_of_mass = Vec3::new(0.0, -0.4, 0.0); // Ağırlık merkezini yere yaklaştır (ters takla atmasın)
     chassis_rb.ccd_enabled = false;

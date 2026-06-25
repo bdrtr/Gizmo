@@ -28,7 +28,7 @@ fn main() {
     for x in 0..6 {
         for z in 0..6 {
             for ly in 0..2 {
-                let mut rb = RigidBody::new(1.0, 0.2, 0.6, true);
+                let mut rb = RigidBody::new(1.0, true);
                 rb.wake_up();
                 let col = Collider::box_collider(Vec3::splat(0.5));
                 rb.update_inertia_from_collider(&col);

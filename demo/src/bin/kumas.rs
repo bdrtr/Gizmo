@@ -100,7 +100,7 @@ fn main() {
                     world.add_component(entity, Transform::new(pos));
                     world.add_component(
                         entity,
-                        RigidBody::new(if is_pinned { 0.0 } else { particle_mass }, 0.1, 0.5, true),
+                        RigidBody::new(if is_pinned { 0.0 } else { particle_mass }, true),
                     );
                     world.add_component(entity, Velocity::default());
                     world.add_component(entity, Collider::box_collider(Vec3::splat(spacing * 0.4)));

@@ -16,7 +16,7 @@ use gizmo_physics_rigid::{Joint, PhysicsWorld, RigidBody, Velocity};
 use proptest::prelude::*;
 
 fn dynamic_body(pos: Vec3, use_gravity: bool) -> (RigidBody, Transform, Velocity, Collider) {
-    let mut rb = RigidBody::new(1.0, 0.0, 0.3, use_gravity);
+    let mut rb = RigidBody::new(1.0, use_gravity);
     rb.wake_up();
     (
         rb,
