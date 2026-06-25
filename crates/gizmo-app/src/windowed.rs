@@ -1128,7 +1128,11 @@ impl<State: 'static> App<State> {
                             let output = match renderer.surface.get_current_texture() {
                                 wgpu::CurrentSurfaceTexture::Success(texture)
                                 | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
-                                wgpu::CurrentSurfaceTexture::Outdated => {
+                                // Transient, non-error states (window resized/minimized/occluded
+                                // or a timed-out acquire) — silently skip this frame.
+                                wgpu::CurrentSurfaceTexture::Outdated
+                                | wgpu::CurrentSurfaceTexture::Occluded
+                                | wgpu::CurrentSurfaceTexture::Timeout => {
                                     self.world.insert_resource(renderer);
                                     if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                         profiler.end_scope("render");
