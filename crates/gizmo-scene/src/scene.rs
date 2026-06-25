@@ -123,25 +123,15 @@ impl SceneData {
             let parent_id = parents.get(id).map(|p| p.0);
 
             let mut dynamic_components = std::collections::BTreeMap::new();
-            
+
             let types = world.get_entity_component_types(entity);
             for type_id in types {
                 if let Some(reg) = registry.get_registration(type_id) {
-                    if let (Some(ptr), Some(get_reflect_ptr)) = (world.get_component_ptr(entity, type_id), reg.get_reflect_ptr_fn) {
-                        let reflect_ptr = get_reflect_ptr(ptr);
-                        let reflect_val = unsafe { &*reflect_ptr };
-                        
-                        let type_reg = registry.reflect_registry.get(type_id);
-                        if let Some(_type_registration) = type_reg {
-                            let serializer = bevy_reflect::serde::TypedReflectSerializer::new(reflect_val, &registry.reflect_registry);
-                            if let Ok(string_repr) = ron::ser::to_string(&serializer) {
-                                dynamic_components.insert(reg.name.clone(), string_repr);
-                            }
-                        } else if let Some(ser_fn) = reg.serialize_fn {
-                            // Fallback to legacy serialization
-                            if let Ok(string_repr) = ser_fn(ptr) {
-                                dynamic_components.insert(reg.name.clone(), string_repr);
-                            }
+                    if let Some(ptr) = world.get_component_ptr(entity, type_id) {
+                        if let Some(string_repr) =
+                            crate::serde_bridge::serialize_component(registry, reg, type_id, ptr)
+                        {
+                            dynamic_components.insert(reg.name.clone(), string_repr);
                         }
                     }
                 }
@@ -230,23 +220,10 @@ impl SceneData {
             for (comp_name, comp_val) in &data.components {
                 if let Some(type_id) = registry.get_type_id(comp_name) {
                     if let Some(reg) = registry.get_registration(type_id) {
-                        if let Some(type_reg) = registry.reflect_registry.get(type_id) {
-                            // Use Bevy Reflect deserialization
-                            let deserializer = bevy_reflect::serde::TypedReflectDeserializer::new(type_reg, &registry.reflect_registry);
-                            if let Ok(mut de) = ron::de::Deserializer::from_str(comp_val) {
-                                if let Ok(reflect_val) = serde::de::DeserializeSeed::deserialize(deserializer, &mut de) {
-                                    if let Some(insert_fn) = reg.insert_reflect_fn {
-                                        if let Err(e) = insert_fn(world, entity, &*reflect_val) {
-                                            tracing::error!("Failed to insert reflect component {}: {}", comp_name, e);
-                                        }
-                                    }
-                                }
-                            }
-                        } else if let Some(deserialize_fn) = reg.deserialize_fn {
-                            // Fallback to legacy deserialization
-                            if let Err(e) = deserialize_fn(world, entity, comp_val) {
-                                tracing::error!("Failed to deserialize component {}: {}", comp_name, e);
-                            }
+                        if let Err(e) = crate::serde_bridge::deserialize_component(
+                            world, entity, registry, reg, type_id, comp_val,
+                        ) {
+                            tracing::error!("Failed to deserialize component {}: {}", comp_name, e);
                         }
                     }
                 }
@@ -461,13 +438,12 @@ mod tests {
     // yüklendiğinde isim + bileşen değerleri + hiyerarşi KORUNMALI (round-trip sadakati).
     #[test]
     fn scene_save_load_roundtrip_preserves_components_and_hierarchy() {
-        use gizmo_core::registry::ComponentRegistry;
         use gizmo_physics_core::components::Transform;
         use gizmo_math::Vec3;
 
-        // Reflect bileşenlerini kaydet (save reflect ile serileştirir, load reflect ile geri yükler).
-        let mut registry = ComponentRegistry::new();
-        registry.register_reflect::<Transform>("Transform");
+        // Gerçek registry ile (reflect AÇIK ise reflect serileştirmesi, KAPALI ise serde
+        // fallback — her iki yolda da Transform değerleri round-trip'te korunmalı).
+        let registry = crate::registry::default_scene_registry();
 
         // Kaynak dünya: isimli ebeveyn + çocuk, bilinen Transform değerleriyle.
         let mut world = World::new();

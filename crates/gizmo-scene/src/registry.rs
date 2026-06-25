@@ -9,9 +9,24 @@ pub type SceneRegistry = gizmo_core::registry::ComponentRegistry;
 pub fn default_scene_registry() -> SceneRegistry {
     let mut reg = SceneRegistry::new();
 
-    reg.register_reflect::<gizmo_physics_core::Transform>("Transform");
-    reg.register_reflect::<gizmo_physics_rigid::components::Velocity>("Velocity");
-    reg.register_reflect::<gizmo_physics_rigid::components::RigidBody>("RigidBody");
+    // Transform/Velocity/RigidBody round-trip through `bevy_reflect` when the
+    // `reflect` feature is on, and through plain `serde` otherwise. Both crates
+    // derive `Serialize`/`Deserialize`, so the fallback is fully functional.
+    #[cfg(feature = "reflect")]
+    {
+        reg.register_reflect::<gizmo_physics_core::Transform>("Transform");
+        reg.register_reflect::<gizmo_physics_rigid::components::Velocity>("Velocity");
+        reg.register_reflect::<gizmo_physics_rigid::components::RigidBody>("RigidBody");
+    }
+    #[cfg(not(feature = "reflect"))]
+    {
+        reg.register_serializable::<gizmo_physics_core::Transform>("Transform")
+            .expect("built-in component 'Transform' registration must not conflict");
+        reg.register_serializable::<gizmo_physics_rigid::components::Velocity>("Velocity")
+            .expect("built-in component 'Velocity' registration must not conflict");
+        reg.register_serializable::<gizmo_physics_rigid::components::RigidBody>("RigidBody")
+            .expect("built-in component 'RigidBody' registration must not conflict");
+    }
     // Collider has not been migrated to Reflect yet, use legacy serializable
     reg.register_serializable::<gizmo_physics_core::Collider>("Collider")
         .expect("built-in component 'Collider' registration must not conflict");

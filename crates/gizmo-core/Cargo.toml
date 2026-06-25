@@ -8,8 +8,15 @@ license.workspace = true
 repository.workspace = true
 readme.workspace = true
 
+[features]
+# Optional `bevy_reflect` integration. When OFF (the default), `bevy_reflect`
+# does not appear anywhere in this crate's public API — a hard requirement for a
+# stable 1.0 surface. When ON, components can be registered for reflection-based
+# (de)serialization via `ComponentRegistry::register_reflect`.
+reflect = ["dep:bevy_reflect"]
+
 [dependencies]
-bevy_reflect = { version = "0.15.1", features = ["functions"] }
+bevy_reflect = { version = "0.15.1", features = ["functions"], optional = true }
 crossbeam-queue = "0.3.12"
 rayon = "1.11.0"
 ron = "0.8"
@@ -36,18 +43,22 @@ harness = false
 [[bench]]
 name = "reflect_bench"
 harness = false
+required-features = ["reflect"]
 
 [[bench]]
 name = "map_bench"
 harness = false
+required-features = ["reflect"]
 
 [[bench]]
 name = "path_bench"
 harness = false
+required-features = ["reflect"]
 
 [[bench]]
 name = "struct_bench"
 harness = false
+required-features = ["reflect"]
 
 [[bench]]
 name = "par_iter_bench"

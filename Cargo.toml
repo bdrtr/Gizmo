@@ -10,6 +10,10 @@ members = [
 [workspace.package]
 version = "0.1.7"
 edition = "2021"
+# Minimum Supported Rust Version. Empirically verified: 1.85 fails (locked deps
+# `wide 1.2`/`safe_arch 1.0` require 1.89), 1.89 builds the full workspace clean.
+# Enforced by the `msrv` CI job. Raising this is a semver-minor for consumers.
+rust-version = "1.89"
 authors = ["Bedir"]
 description = "A custom ECS and physics engine aimed for realistic simulations."
 license = "MIT OR Apache-2.0"

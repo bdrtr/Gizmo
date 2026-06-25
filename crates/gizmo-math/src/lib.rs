@@ -10,6 +10,18 @@
 //!
 //! Normal matrisi hesaplamaları için yapılandırılmış `Mat3`, ve 3B uzay sınırları
 //! hesaplamaları için boyut optimize edilmiş `Aabb`, `Frustum`, `Ray` yapıları barındırır.
+//!
+//! ## Public dependency: `glam`
+//!
+//! This crate **re-exports `glam`** ([`Vec2`], [`Vec3`], [`Vec3A`], [`Vec4`],
+//! [`Mat3`], [`Mat4`], [`Quat`], [`EulerRot`]) as the engine-wide vector-math
+//! vocabulary. `glam` is therefore an **official, intentional public dependency**:
+//! these types appear directly in the public API of every Gizmo crate that does
+//! math, and forcing callers through newtype wrappers would add no value.
+//!
+//! Consequence for semver: a `glam` **major** version bump is a breaking change
+//! for `gizmo-math` (and thus a deliberate, documented `gizmo-math` bump).
+//! Currently pinned to the `0.29` line.
 
 pub mod aabb;
 pub mod fixed;
@@ -17,9 +29,10 @@ pub mod frustum;
 pub mod ray;
 pub mod spatial;
 
-// Geriye dönük uyumluluk veya ekstra yardımcı metodlar için pub modüller kalsın
-// ama custom tipleri glam ile değiştiriyoruz.
-pub use bevy_math::{EulerRot, Mat3, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
+/// The engine's vector-math vocabulary, re-exported from `glam` (see the
+/// crate-level "Public dependency" note). `bevy_math` re-uses these exact
+/// `glam` types, so this is the single source of truth.
+pub use glam::{EulerRot, Mat3, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 
 pub use aabb::Aabb;
 pub use fixed::{Fp32, FpVec3};

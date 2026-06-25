@@ -31,6 +31,106 @@ pub struct ContactPoint {
 }
 
 // ============================================================================
+//  ContactPoints
+// ============================================================================
+
+/// An opaque, fixed-capacity collection of the solved contact points carried by
+/// a [`CollisionEvent`] (at most [`CAPACITY`](Self::CAPACITY)).
+///
+/// The backing storage is a stack-allocated inline array (no heap allocation).
+/// The concrete container type is an **implementation detail** and is
+/// deliberately *not* part of the public API, so it can change without a
+/// breaking release. Interact with it through the inherent methods,
+/// `IntoIterator` (by value or by reference), `FromIterator`, or indexing.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ContactPoints(arrayvec::ArrayVec<ContactPoint, 4>);
+
+impl ContactPoints {
+    /// Maximum number of contact points an event can hold.
+    pub const CAPACITY: usize = 4;
+
+    /// Create an empty set.
+    #[inline]
+    pub fn new() -> Self {
+        Self(arrayvec::ArrayVec::new())
+    }
+
+    /// Number of contact points currently stored.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns `true` if there are no contact points.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Append a contact point. Silently ignored when already at
+    /// [`CAPACITY`](Self::CAPACITY) points.
+    #[inline]
+    pub fn push(&mut self, contact: ContactPoint) {
+        let _ = self.0.try_push(contact);
+    }
+
+    /// The first contact point, if any.
+    #[inline]
+    pub fn first(&self) -> Option<&ContactPoint> {
+        self.0.first()
+    }
+
+    /// Iterate over the contact points by reference.
+    #[inline]
+    pub fn iter(&self) -> std::slice::Iter<'_, ContactPoint> {
+        self.0.iter()
+    }
+
+    /// View the contact points as a slice.
+    #[inline]
+    pub fn as_slice(&self) -> &[ContactPoint] {
+        &self.0
+    }
+}
+
+impl std::ops::Index<usize> for ContactPoints {
+    type Output = ContactPoint;
+    #[inline]
+    fn index(&self, index: usize) -> &ContactPoint {
+        &self.0[index]
+    }
+}
+
+impl<'a> IntoIterator for &'a ContactPoints {
+    type Item = &'a ContactPoint;
+    type IntoIter = std::slice::Iter<'a, ContactPoint>;
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl IntoIterator for ContactPoints {
+    type Item = ContactPoint;
+    type IntoIter = arrayvec::IntoIter<ContactPoint, 4>;
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl FromIterator<ContactPoint> for ContactPoints {
+    #[inline]
+    fn from_iter<I: IntoIterator<Item = ContactPoint>>(iter: I) -> Self {
+        let mut out = arrayvec::ArrayVec::new();
+        for contact in iter.into_iter().take(Self::CAPACITY) {
+            out.push(contact);
+        }
+        Self(out)
+    }
+}
+
+// ============================================================================
 //  ContactManifold
 // ============================================================================
 
@@ -243,7 +343,7 @@ pub struct CollisionEvent {
     pub entity_b: Entity,
     pub event_type: CollisionEventType,
     /// Solved contact points (populated after constraint resolution).
-    pub contact_points: arrayvec::ArrayVec<ContactPoint, 4>,
+    pub contact_points: ContactPoints,
 }
 
 /// Emitted for trigger (non-solid) collider overlaps.

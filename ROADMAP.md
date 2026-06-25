@@ -356,20 +356,37 @@ gerçek-UDP örnek onaylı geçmişte senkron).
 - [x] Hepsi build + `--all-features` + 552 test + clippy(`-D warnings`) yeşil,
       `main`'de.
 
-### Kalan 1.0 blokerleri (bkz. `RELEASING.md` §4 kontrol listesi)
-- [ ] **(a) `bevy_reflect` 'reflect' feature-gating** — *Stage A 1.0 blokeri,
+### Stage-A-sealing turu (2026-06-25) — (a)+(b)+(e)+(f) TAMAM
+- [x] **(a) `bevy_reflect` 'reflect' feature-gating** — *Stage A 1.0 blokeri,
       denetim blokeri #1* — **L**. `Transform`/`RigidBody`/`Velocity` derive'ları
-      (core/physics-core/physics-rigid/scene) tek workspace `reflect` feature'ı
-      arkasına.
-- [ ] **(b) `arrayvec` opak newtype** — *Stage A 1.0 blokeri, #2* — **M**.
-      `physics-core` `CollisionEvent.contact_points`.
+      (core/physics-core/physics-rigid/scene) `#[cfg_attr]` ile **off-by-default**
+      workspace `reflect` feature'ı arkasında; scene `serde_bridge` ile reflect↔
+      serde fallback (her iki yol round-trip testli). Default API'de artık
+      `bevy_reflect` yok.
+- [x] **(b) `arrayvec` opak newtype** — *Stage A 1.0 blokeri, #2* — **M**.
+      `CollisionEvent.contact_points` artık opak `ContactPoints`; `arrayvec`
+      public API'den çıktı, physics-rigid direkt dep'ten kaldırıldı.
+- [x] **(e) `glam`'i resmi public dep olarak belgele** — **S**. `gizmo-math`
+      artık doğrudan `pub use glam::{…}` (bevy_math yerine) + crate doc'unda
+      public-dep notu.
+- [x] **(f) MSRV belirle** — **S**. `rust-version = "1.89"` (ampirik doğrulandı:
+      1.82/1.85 başarısız, 1.89 yeşil) + CI `msrv` job. Ek: CI `features` job
+      (reflect-ON Stage A testleri).
+- [x] Doğrulama: build (default + `--all-features`) + 552 test + gizmo-net
+      feature testi + reflect-feature testleri + CI clippy (stable, default+reflect)
+      + determinizm 3/3 (`598E315D0E7499FF`, fizik DEĞİŞMEDİ) + MSRV 1.89 build.
+
+### Kalan 1.0 blokerleri (bkz. `RELEASING.md` §4 kontrol listesi)
 - [ ] **(c) `wgpu`/`winit`/`egui` güncel sürüme yükseltme** — *Stage B 1.0
       blokeri* — **XL**. `wgpu 0.20→güncel`, `winit 0.29→güncel`,
       `egui 0.28→güncel` (+ egui ekosistemi). Tüm grafik katmanı + `gizmo`
       facade buna bağlı.
 - [ ] **(d) `get_` rename (C-GETTER) + görünürlük daraltma** — should-do — **M**.
-- [ ] **(e) `glam`'i resmi public dep olarak belgele** — Stage A 1.0 gereği — **S**.
-- [ ] **(f) MSRV belirle** (`rust-version` + CI gate) — 1.0 gereği — **S**.
+      Stage A'nın kalan tek maddesi (mekanik ama geniş çağrı-yeri churn'ü).
+- [ ] **Not (gizmo-math bağımlılık hijyeni, opsiyonel):** gizmo-math `bevy_math`/
+      `bevy_picking`/`bevy_mesh` dep'leri `bevy_reflect`'i transitif çekiyor;
+      public tip glam olduğundan API sızıntısı yok ama dep ağacından çıkarmak
+      ayrı iş (bkz. RELEASING.md §3 notu).
 
 ### Yayın mekaniği
 - [ ] Kademeli sürümler tek-workspace-versiyon varsayımını kırar: Stage A `1.x`,

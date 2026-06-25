@@ -8,6 +8,11 @@ license.workspace = true
 repository.workspace = true
 readme.workspace = true
 
+[features]
+# Optional `bevy_reflect` integration (see `gizmo-core`'s `reflect` feature).
+# OFF by default so `bevy_reflect` is absent from the public API at 1.0.
+reflect = ["dep:bevy_reflect", "gizmo-physics-core/reflect", "gizmo-core/reflect"]
+
 [dependencies]
 rayon = "1.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -15,13 +20,12 @@ gizmo-core = { path = "../gizmo-core", version = "0.1.7" }
 gizmo-math = { path = "../gizmo-math", version = "0.1.7" }
 gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.1.7" }
 wide = "1.2.0"
-arrayvec = "0.7.6"
 rand = "0.10.1"
 dashmap = "5.5"
 crossbeam-queue = "0.3"
 tracing = "0.1.44"
 serde_json = "1.0"
-bevy_reflect = "0.15.1"
+bevy_reflect = { version = "0.15.1", optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

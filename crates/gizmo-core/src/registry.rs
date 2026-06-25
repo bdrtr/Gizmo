@@ -69,6 +69,9 @@ pub type GetJsonFn = fn(*const u8) -> Result<serde_json::Value, String>;
 pub type SetJsonFn =
     fn(&mut crate::world::World, crate::entity::Entity, serde_json::Value) -> Result<(), String>;
 /// Type alias for reflection-based component insertion function pointers.
+///
+/// Only present when the `reflect` feature is enabled.
+#[cfg(feature = "reflect")]
 pub type InsertReflectFn = fn(
     &mut crate::world::World,
     crate::entity::Entity,
@@ -84,7 +87,11 @@ pub struct TypeRegistration {
     pub deserialize_fn: Option<DeserializeFn>,
     pub get_json_fn: Option<GetJsonFn>,
     pub set_json_fn: Option<SetJsonFn>,
+    /// Reflection accessor — only present with the `reflect` feature.
+    #[cfg(feature = "reflect")]
     pub get_reflect_ptr_fn: Option<fn(*const u8) -> *const dyn bevy_reflect::Reflect>,
+    /// Reflection-based insertion — only present with the `reflect` feature.
+    #[cfg(feature = "reflect")]
     pub insert_reflect_fn: Option<InsertReflectFn>,
 }
 
@@ -97,7 +104,8 @@ pub struct ComponentRegistry {
     name_to_type: BTreeMap<String, TypeId>,
     /// TypeId → Reflection & Serialization Kaydı
     type_to_reg: BTreeMap<TypeId, TypeRegistration>,
-    /// Bevy Reflect tabanlı tip kayıtları (gizmo-reflect)
+    /// Bevy Reflect tabanlı tip kayıtları — only present with the `reflect` feature.
+    #[cfg(feature = "reflect")]
     pub reflect_registry: bevy_reflect::TypeRegistry,
 }
 
@@ -106,6 +114,7 @@ impl ComponentRegistry {
         Self {
             name_to_type: BTreeMap::new(),
             type_to_reg: BTreeMap::new(),
+            #[cfg(feature = "reflect")]
             reflect_registry: bevy_reflect::TypeRegistry::default(),
         }
     }
@@ -147,7 +156,9 @@ impl ComponentRegistry {
                 deserialize_fn: None,
                 get_json_fn: None,
                 set_json_fn: None,
+                #[cfg(feature = "reflect")]
                 get_reflect_ptr_fn: None,
+                #[cfg(feature = "reflect")]
                 insert_reflect_fn: None,
             },
         );
@@ -155,6 +166,9 @@ impl ComponentRegistry {
     }
 
     /// Yeni bir component tipini isme göre ve Reflection (serde) yeteneği ile kaydet.
+    ///
+    /// Only available with the `reflect` feature.
+    #[cfg(feature = "reflect")]
     pub fn register_reflect<T: bevy_reflect::Reflect + bevy_reflect::FromReflect + bevy_reflect::GetTypeRegistration + crate::component::Component + Clone + 'static>(&mut self, name: &str) {
         self.reflect_registry.register::<T>();
         let type_id = TypeId::of::<T>();
@@ -258,7 +272,9 @@ impl ComponentRegistry {
                 deserialize_fn: Some(deserialize_fn),
                 get_json_fn: Some(get_json_fn),
                 set_json_fn: Some(set_json_fn),
+                #[cfg(feature = "reflect")]
                 get_reflect_ptr_fn: None,
+                #[cfg(feature = "reflect")]
                 insert_reflect_fn: None,
             },
         );
@@ -474,7 +490,7 @@ mod tests {
         let mut reg = ComponentRegistry::new();
         reg.register::<Transform>("Transform").unwrap();
         reg.unregister::<Transform>();
-        reg.register::<Transform>("NewTransform"); // Farklı isimle tekrar kayıt — artık sorunsuz
+        reg.register::<Transform>("NewTransform").unwrap(); // Farklı isimle tekrar kayıt — artık sorunsuz
         assert_eq!(reg.get_name::<Transform>(), Some("NewTransform"));
     }
 }
