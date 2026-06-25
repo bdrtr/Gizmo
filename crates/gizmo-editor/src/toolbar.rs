@@ -9,15 +9,10 @@ use web_time::Instant;
 use std::time::Instant;
 
 /// Toolbar panelini çizer
-pub fn draw_toolbar(ctx: &egui::Context, state: &mut EditorState) {
-    // egui 0.34 soft-deprecated top-level `Panel::show(ctx)` in favor of a
-    // root-`Ui` composition model (`show_inside`). Gizmo composes its panels
-    // directly on the `Context` (it does not use eframe's `App::ui`), so the
-    // top-level show is intentionally kept and the deprecation scoped here.
-    #[allow(deprecated)]
+pub fn draw_toolbar(ui: &mut egui::Ui, state: &mut EditorState) {
     egui::Panel::top("toolbar_panel")
         .exact_size(36.0)
-        .show(ctx, |ui| {
+        .show_inside(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
 
