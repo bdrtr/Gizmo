@@ -106,6 +106,10 @@ cargo run --release -p demo --bin fluid_rigid
 
 > **Note:** Due to the extreme scale of the broad-phase and narrow-phase physics computations, compiling without `--release` will cause a severe CPU bottleneck. Always use the release profile for optimal performance.
 
+> **Upgrading from `0.1.x`?** `0.2.0` is a breaking release (graphics-stack
+> upgrade + API hardening). See the [migration guide](docs/migration-0.1-to-0.2.md)
+> and the [`CHANGELOG`](CHANGELOG.md).
+
 ## 📄 License
 
 Gizmo Engine is free, open source, and dual-licensed under the MIT and Apache 2.0 licenses.

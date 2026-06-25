@@ -18,7 +18,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 The first release since `0.1.7`. It gathers the entire 1.0-readiness effort
 (audit + hardening rounds) and the graphics-stack upgrade, shipped as a single
-breaking `0.x` bump.
+breaking `0.x` bump. **Upgrading from `0.1.x`? See the
+[migration guide](docs/migration-0.1-to-0.2.md).**
 
 ### Changed (breaking)
 
