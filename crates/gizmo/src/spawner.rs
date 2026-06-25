@@ -179,6 +179,7 @@ impl<'a> Commands<'a> {
                 pitch: 0.0,
                 exposure: 1.0,
                 primary: true,
+                projection: Default::default(),
             },
         );
         EntityBuilder {
@@ -214,6 +215,7 @@ impl<'a> Commands<'a> {
                 pitch: 0.0,
                 exposure: 1.0,
                 primary: true,
+                projection: Default::default(),
             },
         );
         EntityBuilder {
