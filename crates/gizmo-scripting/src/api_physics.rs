@@ -41,19 +41,12 @@ pub fn register_physics_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
         physics_table.set(
             "add_rigidbody",
             lua.create_function(
-                move |_,
-                      (id, mass, restitution, friction, use_gravity): (
-                    u32,
-                    f32,
-                    f32,
-                    f32,
-                    bool,
-                )| {
+                // Contact friction/restitution live on the collider material, not
+                // the body, so `add_rigidbody` no longer takes them.
+                move |_, (id, mass, use_gravity): (u32, f32, bool)| {
                     cq.push(ScriptCommand::AddRigidBody {
                         id,
                         mass,
-                        restitution,
-                        friction,
                         use_gravity,
                     });
                     Ok(())
