@@ -471,13 +471,13 @@ ScriptCommand::SetEntityName(id, name) => {
                     }
                 }
 ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
-                    let players = world.borrow_mut::<gizmo_renderer::components::AnimationPlayer>();
+                    let players = world.borrow_mut::<gizmo_animation::skeletal::AnimationPlayer>();
                     if let Some(mut player) = players.get_mut(id) {
                         player.play_animation_by_name(&name, blend, loop_anim);
                     }
                 }
                 ScriptCommand::SetAnimationSpeed(id, speed) => {
-                    let players = world.borrow_mut::<gizmo_renderer::components::AnimationPlayer>();
+                    let players = world.borrow_mut::<gizmo_animation::skeletal::AnimationPlayer>();
                     if let Some(mut player) = players.get_mut(id) {
                         player.speed = speed;
                     }

@@ -1,6 +1,6 @@
 use super::decode_obj_vertices_for_async;
 use super::error::AssetError;
-use crate::animation::{AnimationClip, Keyframe, SkeletonHierarchy, SkeletonJoint, Track};
+use gizmo_animation::skeletal::{AnimationClip, Keyframe, SkeletonHierarchy, SkeletonJoint, Track};
 use crate::components::{Material, Mesh};
 use crate::renderer::Vertex;
 use gizmo_math::{Quat, Vec3};
@@ -674,12 +674,12 @@ fn parse_animations(
 
                 let interp = match channel.sampler().interpolation() {
                     gltf::animation::Interpolation::Step => {
-                        crate::animation::InterpolationMode::Step
+                        gizmo_animation::skeletal::InterpolationMode::Step
                     }
                     gltf::animation::Interpolation::CubicSpline => {
-                        crate::animation::InterpolationMode::CubicSpline
+                        gizmo_animation::skeletal::InterpolationMode::CubicSpline
                     }
-                    _ => crate::animation::InterpolationMode::Linear,
+                    _ => gizmo_animation::skeletal::InterpolationMode::Linear,
                 };
 
                 let outputs = match reader.read_outputs() {
