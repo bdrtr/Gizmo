@@ -21,7 +21,7 @@ impl HierarchyExt for World {
         if let Some(children_ptr) = self.get_component_ptr(entity, std::any::TypeId::of::<Children>()) {
             let children = unsafe { &*(children_ptr as *const Children) };
             for &child_id in &children.0 {
-                if let Some(child_entity) = self.reconstruct_entity(child_id) {
+                if let Some(child_entity) = self.entity(child_id) {
                     children_to_despawn.push(child_entity);
                 }
             }
@@ -30,7 +30,7 @@ impl HierarchyExt for World {
         // Remove child from parent's list if it has a Parent
         if let Some(parent_ptr) = self.get_component_ptr(entity, std::any::TypeId::of::<Parent>()) {
             let parent_id = unsafe { (*(parent_ptr as *const Parent)).0 };
-            if let Some(parent_entity) = self.reconstruct_entity(parent_id) {
+            if let Some(parent_entity) = self.entity(parent_id) {
                 self.remove_child(parent_entity, entity);
             }
         }
@@ -48,7 +48,7 @@ impl HierarchyExt for World {
         if let Some(parent_ptr) = self.get_component_ptr(child, std::any::TypeId::of::<Parent>()) {
             let old_parent_id = unsafe { (*(parent_ptr as *const Parent)).0 };
             if old_parent_id != parent.id() {
-                if let Some(old_parent) = self.reconstruct_entity(old_parent_id) {
+                if let Some(old_parent) = self.entity(old_parent_id) {
                     self.remove_child(old_parent, child);
                 }
             }
