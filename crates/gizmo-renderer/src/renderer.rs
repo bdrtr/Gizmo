@@ -390,6 +390,22 @@ impl Renderer {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
+
+        Self::finish_construction(device, queue, surface, config, size)
+    }
+
+    /// Surface-agnostic tail of construction: configures the surface, builds the
+    /// depth texture, all pipelines, post-process and GPU subsystems, then
+    /// assembles the `Renderer`. Shared by `new` (windowed) and the forthcoming
+    /// headless path so subsystem init order is identical regardless of how the
+    /// surface/device were acquired.
+    fn finish_construction(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        surface: wgpu::Surface<'static>,
+        config: wgpu::SurfaceConfiguration,
+        size: winit::dpi::PhysicalSize<u32>,
+    ) -> Self {
         surface.configure(&device, &config);
 
         let depth_texture_view = Self::create_depth_texture(&device, config.width, config.height);
@@ -397,7 +413,7 @@ impl Renderer {
         let scene = crate::pipeline::build_scene_pipelines(&device);
         let post_res = crate::post_process::build_post_process_resources(
             &device,
-            surface_format,
+            config.format,
             config.width,
             config.height,
             &depth_texture_view,
