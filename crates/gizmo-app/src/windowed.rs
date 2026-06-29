@@ -437,10 +437,12 @@ impl<State: 'static> App<State> {
                 let _dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
 
                 {
+                    let mut registry = gizmo_scene::registry::default_scene_registry();
+                    gizmo_scripting::register_script_components(&mut registry);
                     if let Err(e) = gizmo_scene::scene::SceneData::load_into(
                         &scene_path,
                         &mut self.world,
-                        &gizmo_scene::registry::default_scene_registry(),
+                        &registry,
                     ) {
                         tracing::error!("[App::run] Sahne yüklenemedi '{}': {}", scene_path, e);
                     }
@@ -892,7 +894,8 @@ impl<State: 'static> App<State> {
 
                             // 3. Save
                             if let Some(ref path) = save_req {
-                                let registry = gizmo_scene::registry::default_scene_registry();
+                                let mut registry = gizmo_scene::registry::default_scene_registry();
+                                gizmo_scripting::register_script_components(&mut registry);
                                 match gizmo_scene::scene::SceneData::save(
                                     &self.world,
                                     path,
@@ -948,7 +951,8 @@ impl<State: 'static> App<State> {
                                     let r = self.world.remove_resource::<Renderer>().unwrap();
                                     let dummy_rgba = [255u8, 255, 255, 255];
                                     let _dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
-                                    let registry = gizmo_scene::registry::default_scene_registry();
+                                    let mut registry = gizmo_scene::registry::default_scene_registry();
+                                    gizmo_scripting::register_script_components(&mut registry);
                                     let ok = gizmo_scene::scene::SceneData::load_into(
                                         path,
                                         &mut self.world,
