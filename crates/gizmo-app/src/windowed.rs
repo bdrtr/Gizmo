@@ -98,6 +98,10 @@ pub struct App<State: 'static = ()> {
     app_state: Option<State>,
     last_frame_time: Option<std::time::Instant>,
     light_time: f32,
+    /// Set by `resumed` when lazy initialization (renderer build / setup hook)
+    /// fails, so `run` can propagate the `AppError` instead of returning `Ok(())`
+    /// after the event loop exits (`resumed` itself returns `()`).
+    init_error: Option<crate::AppError>,
 }
 
 impl<State: 'static> std::fmt::Debug for App<State> {
@@ -157,6 +161,7 @@ impl<State: 'static> App<State> {
             app_state: None,
             last_frame_time: None,
             light_time: 0.0,
+            init_error: None,
         };
         app = app.add_plugin(AssetPlugin);
         app
@@ -370,7 +375,16 @@ impl<State: 'static> App<State> {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            event_loop.run_app(&mut self).map_err(crate::AppError::EventLoop)
+            event_loop
+                .run_app(&mut self)
+                .map_err(crate::AppError::EventLoop)?;
+            // `resumed` returns `()`, so a lazy-init failure can't propagate through
+            // `run_app`. Surface it here so `run` honors its documented AppError
+            // contract (e.g. missing setup hook, renderer build failure).
+            if let Some(e) = self.init_error.take() {
+                return Err(e);
+            }
+            Ok(())
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -1299,6 +1313,10 @@ impl<State: 'static> ApplicationHandler for App<State> {
         {
             if let Err(e) = pollster::block_on(self.initialize(window)) {
                 tracing::error!("App initialization failed: {}", e);
+                // Stash it so `run`/`run_default` can return the error after the
+                // loop exits — otherwise a missing setup hook / renderer failure
+                // would be silently swallowed and `run` would return `Ok(())`.
+                self.init_error = Some(e);
                 event_loop.exit();
             }
         }
