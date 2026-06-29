@@ -1509,4 +1509,34 @@ mod tests {
             "Added<Pos> okuyucu, Mut<Pos> yazıcı ile paralel çalıştırılamaz olmalı (data race)"
         );
     }
+
+    // REGRESYON (audit round 2): `Or<Changed<A>, Changed<B>>` operandlarının erişimini
+    // PROPAGATE etmeli — yoksa Or hiçbir şey bildirmez ve zamanlayıcı onu bir Mut<A>/Mut<B>
+    // yazıcısıyla aynı paralel batch'e koyabilir (round-1 data-race sınıfının tekrarı).
+    #[test]
+    fn or_propagates_operand_access() {
+        use crate::query::{Changed, Mut, Or, Query};
+
+        #[derive(Clone)]
+        struct A(#[allow(dead_code)] f32);
+        impl crate::component::Component for A {}
+        #[derive(Clone)]
+        struct B(#[allow(dead_code)] f32);
+        impl crate::component::Component for B {}
+
+        let mut or_info = AccessInfo::new();
+        <Query<'static, Or<Changed<A>, Changed<B>>> as SystemParam>::get_access_info(&mut or_info);
+        assert!(
+            or_info.component_reads.contains(&TypeId::of::<A>())
+                && or_info.component_reads.contains(&TypeId::of::<B>()),
+            "Or<Changed<A>,Changed<B>> hem A hem B'yi READ olarak bildirmeli"
+        );
+
+        let mut writer_a = AccessInfo::new();
+        <Query<'static, Mut<A>> as SystemParam>::get_access_info(&mut writer_a);
+        assert!(
+            !or_info.is_compatible_with(&writer_a),
+            "Or<Changed<A>,..> okuyucu, Mut<A> yazıcı ile paralel çalışamaz olmalı (data race)"
+        );
+    }
 }

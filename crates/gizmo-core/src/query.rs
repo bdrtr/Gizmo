@@ -230,6 +230,17 @@ pub trait WorldQuery: sealed::SealedQuery {
     /// # Safety
     /// `len` değeri archetype'ın eleman sayısını aşmamalıdır.
     unsafe fn get_slice<'w>(fetch: Self::Fetch<'w>, len: usize) -> Self::Slice<'w>;
+
+    /// Bu query satır-başı (`filter_row`) daraltma GEREKTİRİYOR mu — yani
+    /// `matches_archetype` bilinçli olarak GENİŞ mi ve gerçek test `filter_row`'da mı?
+    /// SparseSet `With`/`Without` (matches her arketipte true) ile `Changed`/`Added`/`Or`
+    /// (doğası gereği satır-başı) için `true`. `iter_chunks` arketipin TÜM bitişik
+    /// dilimini döndürdüğünden bu filtreleri ONURLANDIRAMAZ → bu tür query'leri reddeder
+    /// (bkz. [`Query::iter_chunks`]). Tablo `With`/`Without` için `false` (matches_archetype
+    /// yeterli) → onlarla chunk iterasyonu güvenli.
+    fn has_row_filter() -> bool {
+        false
+    }
 }
 
 // =========================================================================
@@ -288,7 +299,20 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
 
     /// Salt-okunur SIMD-dostu chunk iterasyonu (`&[T]` döndürür). Değişiklik tespitini
     /// (change detection) ETKİLEMEZ — bileşenleri okumak için kullanın.
+    ///
+    /// # Panics
+    /// Satır-başı filtre GEREKTİREN bir query'de (SparseSet `With`/`Without`,
+    /// `Changed`/`Added`, `Or`) panikler: chunk iterasyonu arketipin TÜM bitişik dilimini
+    /// döndürür, bu filtreler ise satır-başı seçer (bkz. [`WorldQuery::has_row_filter`]).
+    /// Sessizce filtrelenmemiş sonuç döndürmek yerine yüksek sesle reddeder — bunun yerine
+    /// [`Query::iter`]/[`Query::iter_mut`] kullanın. (Tablo `With`/`Without` güvenlidir.)
     pub fn iter_chunks<'a>(&'a self) -> QueryChunksIter<'a, 'w, Q> {
+        assert!(
+            !Q::has_row_filter(),
+            "iter_chunks does not support per-row-filtered queries \
+             (sparse With/Without, Changed, Added, Or) — they need per-row narrowing that \
+             a contiguous chunk cannot express; use iter()/iter_mut() instead"
+        );
         QueryChunksIter {
             world: self.world,
             archetype_indices: &self.matching_archetypes,
@@ -679,6 +703,10 @@ impl<T: crate::component::Component> WorldQuery for Changed<T> {
     unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize, _entity_id: u32) -> Self::Item<'w> {}
 
     unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {}
+
+    fn has_row_filter() -> bool {
+        true // change-tick test lives entirely in filter_row
+    }
 }
 
 pub struct Added<T>(PhantomData<T>);
@@ -725,6 +753,10 @@ impl<T: crate::component::Component> WorldQuery for Added<T> {
     unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize, _entity_id: u32) -> Self::Item<'w> {}
 
     unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {}
+
+    fn has_row_filter() -> bool {
+        true // added-tick test lives entirely in filter_row
+    }
 }
 
 macro_rules! impl_query_tuple {
@@ -757,6 +789,9 @@ macro_rules! impl_query_tuple {
             unsafe fn get_slice<'w>(fetch: Self::Fetch<'w>, len: usize) -> Self::Slice<'w> {
                 let ($($t,)*) = fetch;
                 ($($t::get_slice($t, len),)*)
+            }
+            fn has_row_filter() -> bool {
+                $($t::has_row_filter() ||)* false
             }
         }
     };
@@ -816,6 +851,11 @@ impl<T: crate::component::Component> WorldQuery for With<T> {
     }
     unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize, _entity_id: u32) -> Self::Item<'w> {}
     unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {}
+
+    fn has_row_filter() -> bool {
+        // Sparse `With` matches every archetype; the presence test is in filter_row.
+        T::storage_type() == crate::component::StorageType::SparseSet
+    }
 }
 
 pub struct Without<T>(PhantomData<T>);
@@ -856,6 +896,11 @@ impl<T: crate::component::Component> WorldQuery for Without<T> {
     }
     unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize, _entity_id: u32) -> Self::Item<'w> {}
     unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {}
+
+    fn has_row_filter() -> bool {
+        // Sparse `Without` matches every archetype; the absence test is in filter_row.
+        T::storage_type() == crate::component::StorageType::SparseSet
+    }
 }
 
 pub struct Or<T1, T2>(PhantomData<(T1, T2)>);
@@ -863,25 +908,58 @@ pub struct Or<T1, T2>(PhantomData<(T1, T2)>);
 impl<T1: WorldQuery, T2: WorldQuery> sealed::SealedQuery for Or<T1, T2> {}
 impl<T1: WorldQuery, T2: WorldQuery> WorldQuery for Or<T1, T2> {
     type StaticType = Or<T1::StaticType, T2::StaticType>;
-    type Fetch<'w> = ();
+    // Each operand's fetch (or `None` when that operand doesn't apply to this archetype).
+    // `Or` is a FILTER, so it carries no data — but it must keep the operand fetches so
+    // it can evaluate their per-row `filter_row` (the part the old `()` Fetch dropped).
+    type Fetch<'w> = (Option<T1::Fetch<'w>>, Option<T2::Fetch<'w>>);
     type Item<'w> = ();
     type Slice<'w> = ();
 
-    unsafe fn fetch_raw<'w>(_world: &'w World, _arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
-        Some(())
+    unsafe fn fetch_raw<'w>(world: &'w World, arch: &Archetype, tick: u32) -> Option<Self::Fetch<'w>> {
+        // Fetch each operand only where it applies; `matches_archetype` gates which
+        // operand can contribute, and a `Some` fetch is the per-archetype proof of that.
+        let f1 = if T1::matches_archetype(arch) {
+            T1::fetch_raw(world, arch, tick)
+        } else {
+            None
+        };
+        let f2 = if T2::matches_archetype(arch) {
+            T2::fetch_raw(world, arch, tick)
+        } else {
+            None
+        };
+        Some((f1, f2))
     }
 
-    fn check_aliasing(_types: &mut Vec<(TypeId, bool)>) {}
+    fn check_aliasing(types: &mut Vec<(TypeId, bool)>) {
+        // Propagate operand access — otherwise `Or<Changed<A>, Changed<B>>` would declare
+        // NOTHING and the scheduler could race a `Mut` writer (the round-1 bug class).
+        T1::check_aliasing(types);
+        T2::check_aliasing(types);
+    }
 
     fn matches_archetype(arch: &Archetype) -> bool {
         T1::matches_archetype(arch) || T2::matches_archetype(arch)
     }
 
-    unsafe fn filter_row<'w>(_fetch: Self::Fetch<'w>, _row: usize, _entity_id: u32, _tick: u32) -> bool {
-        true
+    unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, row: usize, entity_id: u32, tick: u32) -> bool {
+        // A row passes `Or` if EITHER applicable operand accepts it. `matches_archetype`
+        // alone is not enough: sparse `With` matches every archetype and Changed/Added do
+        // their whole test here, so the per-row `filter_row` MUST be consulted.
+        let a = fetch
+            .0
+            .is_some_and(|f| T1::filter_row(f, row, entity_id, tick));
+        let b = fetch
+            .1
+            .is_some_and(|f| T2::filter_row(f, row, entity_id, tick));
+        a || b
     }
     unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize, _entity_id: u32) -> Self::Item<'w> {}
     unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {}
+
+    fn has_row_filter() -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
