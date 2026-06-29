@@ -101,8 +101,6 @@ impl SceneData {
         let parents = world.borrow::<Parent>();
 
         for &id in &entity_ids {
-            let entity = gizmo_core::entity::Entity::new(id, 0); // Using generation 0 for lookup
-
             let name = names.get(id).map(|n| n.0.clone());
 
             // Gizmo Studio'nun içsel araçlarını kaydetme
@@ -124,14 +122,22 @@ impl SceneData {
 
             let mut dynamic_components = std::collections::BTreeMap::new();
 
-            let types = world.entity_component_types(entity);
-            for type_id in types {
-                if let Some(reg) = registry.get_registration(type_id) {
-                    if let Some(ptr) = world.get_component_ptr(entity, type_id) {
-                        if let Some(string_repr) =
-                            crate::serde_bridge::serialize_component(registry, reg, type_id, ptr)
-                        {
-                            dynamic_components.insert(reg.name.clone(), string_repr);
+            // Entity'nin GERÇEK generation'ı ile lookup yap. Sabit `Entity::new(id, 0)`,
+            // id slotu yeniden kullanılmış (despawn→spawn, generation ≥ 1) entity'lerde
+            // `entity_component_types`'ın `is_alive` generation kontrolünü geçemez →
+            // dinamik bileşenler (Transform, RigidBody, Collider…) diske kaydedilirken
+            // sessizce kaybolurdu. Name/Mesh/Material/Parent raw-id ile okunduğu için
+            // etkilenmez.
+            if let Some(entity) = world.reconstruct_entity(id) {
+                let types = world.entity_component_types(entity);
+                for type_id in types {
+                    if let Some(reg) = registry.get_registration(type_id) {
+                        if let Some(ptr) = world.get_component_ptr(entity, type_id) {
+                            if let Some(string_repr) =
+                                crate::serde_bridge::serialize_component(registry, reg, type_id, ptr)
+                            {
+                                dynamic_components.insert(reg.name.clone(), string_repr);
+                            }
                         }
                     }
                 }
@@ -492,5 +498,56 @@ mod tests {
             let parents = loaded.borrow::<Parent>();
             assert_eq!(parents.get(c).map(|x| x.0), Some(p), "ebeveyn-çocuk ilişkisi round-trip'te bozuldu");
         }
+    }
+
+    // REGRESYON (audit 2026-06-29): id slotu yeniden kullanılmış (despawn→spawn,
+    // generation ≥ 1) bir entity'nin dinamik bileşenleri sahne diske kaydedilirken
+    // kaybolmamalı. Eski kod `Entity::new(id, 0)` ile lookup yaptığından
+    // `entity_component_types`'ın `is_alive` generation kontrolü başarısız olur,
+    // boş döner ve Transform sessizce düşerdi. Name/Mesh/Material/Parent raw-id ile
+    // okunduğu için hayatta kalırdı → kısmi, sinsi bozulma.
+    #[test]
+    fn save_preserves_components_for_recycled_id_entity() {
+        use gizmo_physics_core::components::Transform;
+        use gizmo_math::Vec3;
+
+        let registry = crate::registry::default_scene_registry();
+        let mut world = World::new();
+
+        // id 0'ı yak → sonraki spawn onu generation 1 ile geri kullanır.
+        let burned = world.spawn();
+        let burned_id = burned.id();
+        world.despawn(burned);
+
+        let e = world.spawn();
+        assert_eq!(e.id(), burned_id, "ön koşul: id yeniden kullanılmalı");
+        assert_ne!(e.generation(), 0, "ön koşul: recycled entity generation ≥ 1");
+        world.add_component(e, EntityName::new("Recycled"));
+        world.add_component(e, Transform::new(Vec3::new(7.0, 8.0, 9.0)));
+
+        let path = std::env::temp_dir()
+            .join("gizmo_scene_recycled_id_test.ron")
+            .to_string_lossy()
+            .into_owned();
+        SceneData::save(&world, &path, &registry).expect("save başarısız");
+
+        let mut loaded = World::new();
+        SceneData::load_into(&path, &mut loaded, &registry).expect("load başarısız");
+        let _ = std::fs::remove_file(&path);
+
+        let id = {
+            let names = loaded.borrow::<EntityName>();
+            loaded
+                .iter_alive_entities()
+                .into_iter()
+                .map(|x| x.id())
+                .find(|&id| names.get(id).map(|n| n.0.as_str()) == Some("Recycled"))
+                .expect("Recycled entity yüklenmedi")
+        };
+        let ts = loaded.borrow::<Transform>();
+        let t = ts
+            .get(id)
+            .expect("recycled-id entity'nin Transform'ı kaydedilirken DÜŞTÜ (generation-0 lookup bug)");
+        assert_eq!(t.position, Vec3::new(7.0, 8.0, 9.0), "Transform değeri korunmadı");
     }
 }
