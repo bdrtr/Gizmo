@@ -43,7 +43,12 @@ pub struct DrawItem {
     skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     is_transparent: bool,
     first_instance: u32,
+    /// Total instances in this batch's contiguous range: camera-visible ones FIRST,
+    /// then shadow-only casters (outside the camera frustum but inside a cascade's light
+    /// frustum). Shadow passes draw the whole range; main passes draw only `camera_count`.
     instance_count: u32,
+    /// Number of leading instances visible to the CAMERA (== the old camera-culled set).
+    camera_count: u32,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -62,6 +67,9 @@ pub(crate) struct BatchData {
     skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     is_transparent: bool,
     instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
+    /// Casters outside the camera frustum but inside a shadow cascade's light frustum —
+    /// must be drawn into the shadow maps so off-screen objects still cast visible shadows.
+    shadow_instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
 }
 
 /// Bevy'nin DefaultPlugins davranisini taklit eden, sadece modelleri
@@ -346,8 +354,12 @@ pub fn default_render_pass(
 
     // Get or create RenderCache
     let frustum = crate::math::Frustum::from_matrix(&unjittered_view_proj);
+    // Per-cascade LIGHT frusta — shadow casters are culled against these, NOT the camera
+    // frustum, so objects outside the view that cast shadows INTO it aren't dropped.
+    let cascade_frusta: [crate::math::Frustum; 4] =
+        cascade_vp.map(|m| crate::math::Frustum::from_matrix(&m));
 
-    let draw_items = RENDER_CACHE.with(|rc| {
+    let (draw_items, uploaded_instances) = RENDER_CACHE.with(|rc| {
         let mut cache = rc.borrow_mut();
         
         // Clear instances but keep allocations
@@ -387,8 +399,25 @@ pub fn default_render_pass(
                 let sz = model.z_axis.truncate().length();
                 let world_r = local_r * sx.max(sy).max(sz);
 
-                if !frustum.intersects_sphere(world_c, world_r) {
-                    continue;
+                // Camera culling decides the MAIN passes (unchanged). But a shadow CASTER
+                // outside the camera frustum can still cast a shadow into view, so keep it
+                // if it falls in any cascade's LIGHT frustum — drawn into the shadow maps
+                // only (main passes use `camera_count`, shadow passes the full range).
+                let camera_visible = frustum.intersects_sphere(world_c, world_r);
+                let is_caster = !(matches!(
+                    $mat.material_type,
+                    crate::renderer::components::MaterialType::Unlit
+                        | crate::renderer::components::MaterialType::Skybox
+                ) || $mat.is_transparent
+                    || $mat.albedo.w < 0.99);
+                if !camera_visible {
+                    if !is_caster
+                        || !cascade_frusta
+                            .iter()
+                            .any(|f| f.intersects_sphere(world_c, world_r))
+                    {
+                        continue;
+                    }
                 }
 
                 // Auto-LOD (Level of Detail) Seçimi
@@ -442,8 +471,14 @@ pub fn default_render_pass(
                     skeleton_bind_group: skel_bg,
                     is_transparent: $mat.is_transparent || $mat.albedo.w < 0.99,
                     instances: Vec::new(),
+                    shadow_instances: Vec::new(),
                 });
-                batch.instances.push(instance_data);
+                if camera_visible {
+                    batch.instances.push(instance_data);
+                } else {
+                    // Off-screen caster kept above for shadow maps only.
+                    batch.shadow_instances.push(instance_data);
+                }
             };
         }
 
@@ -472,11 +507,17 @@ pub fn default_render_pass(
         let mut local_draw_items: Vec<DrawItem> = std::mem::take(&mut cache.draw_items);
 
         for batch in cache.batches.values() {
-            if batch.instances.is_empty() { continue; }
+            if batch.instances.is_empty() && batch.shadow_instances.is_empty() {
+                continue;
+            }
             let first_instance = local_instances.len() as u32;
-            let instance_count = batch.instances.len() as u32;
+            // Camera-visible instances FIRST (so `camera_count` == the old culled set),
+            // then shadow-only casters — both contiguous under one DrawItem range.
+            let camera_count = batch.instances.len() as u32;
             local_instances.extend(&batch.instances);
-            
+            local_instances.extend(&batch.shadow_instances);
+            let instance_count = camera_count + batch.shadow_instances.len() as u32;
+
             local_draw_items.push(DrawItem {
                 vbuf: batch.vbuf.clone(),
                 vertex_count: batch.vertex_count,
@@ -487,6 +528,7 @@ pub fn default_render_pass(
                 is_transparent: batch.is_transparent,
                 first_instance,
                 instance_count,
+                camera_count,
             });
         }
         
@@ -509,8 +551,10 @@ pub fn default_render_pass(
             );
         }
         
-        // Pass draw_items to rendering logic by cloning the small struct (Arc clones are cheap)
-        cache.draw_items.clone()
+        // Pass draw_items to rendering logic by cloning the small struct (Arc clones are cheap).
+        // Also return how many instances actually made it into the GPU buffer so draw ranges
+        // can be clamped (shadow casters increase the count → guard against capacity truncation).
+        (cache.draw_items.clone(), instances_slice.len() as u32)
     });
     // CPU Batched Instancing replaces GPU cull for draw_items
 
@@ -637,7 +681,12 @@ pub fn default_render_pass(
             shadow_pass.set_vertex_buffer(0, item.vbuf.slice(..));
             shadow_pass.draw(
                 0..item.vertex_count,
-                item.first_instance..(item.first_instance + item.instance_count),
+                // Shadow passes draw the FULL range (camera-visible + off-screen casters),
+                // clamped to what was uploaded.
+                item.first_instance
+                    ..(item.first_instance + item.instance_count)
+                        .min(uploaded_instances)
+                        .max(item.first_instance),
             );
         }
     }
@@ -673,7 +722,12 @@ pub fn default_render_pass(
             shadow_pass.set_vertex_buffer(0, item.vbuf.slice(..));
             shadow_pass.draw(
                 0..item.vertex_count,
-                item.first_instance..(item.first_instance + item.instance_count),
+                // Shadow passes draw the FULL range (camera-visible + off-screen casters),
+                // clamped to what was uploaded.
+                item.first_instance
+                    ..(item.first_instance + item.instance_count)
+                        .min(uploaded_instances)
+                        .max(item.first_instance),
             );
         }
     }
@@ -713,7 +767,11 @@ pub fn default_render_pass(
             z_pass.set_vertex_buffer(0, item.vbuf.slice(..));
             z_pass.draw(
                 0..item.vertex_count,
-                item.first_instance..(item.first_instance + item.instance_count),
+                // Main pass: camera-visible instances only.
+                item.first_instance
+                    ..(item.first_instance + item.camera_count)
+                        .min(uploaded_instances)
+                        .max(item.first_instance),
             );
         }
     }
@@ -789,7 +847,11 @@ pub fn default_render_pass(
             gbuf_pass.set_vertex_buffer(0, item.vbuf.slice(..));
             gbuf_pass.draw(
                 0..item.vertex_count,
-                item.first_instance..(item.first_instance + item.instance_count),
+                // Main pass: camera-visible instances only.
+                item.first_instance
+                    ..(item.first_instance + item.camera_count)
+                        .min(uploaded_instances)
+                        .max(item.first_instance),
             );
         }
     }
@@ -1032,7 +1094,11 @@ pub fn default_render_pass(
                 render_pass.set_vertex_buffer(0, item.vbuf.slice(..));
                 render_pass.draw(
                     0..item.vertex_count,
-                    item.first_instance..(item.first_instance + item.instance_count),
+                    // Main pass: camera-visible instances only.
+                    item.first_instance
+                        ..(item.first_instance + item.camera_count)
+                            .min(uploaded_instances)
+                            .max(item.first_instance),
                 );
             }
 
@@ -1043,7 +1109,11 @@ pub fn default_render_pass(
                 render_pass.set_vertex_buffer(0, item.vbuf.slice(..));
                 render_pass.draw(
                     0..item.vertex_count,
-                    item.first_instance..(item.first_instance + item.instance_count),
+                    // Main pass: camera-visible instances only.
+                    item.first_instance
+                        ..(item.first_instance + item.camera_count)
+                            .min(uploaded_instances)
+                            .max(item.first_instance),
                 );
             }
         }

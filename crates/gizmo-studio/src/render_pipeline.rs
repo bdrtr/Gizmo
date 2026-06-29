@@ -14,6 +14,9 @@ struct BatchData {
     bind_group: std::sync::Arc<wgpu::BindGroup>,
     skeleton_bg: std::sync::Arc<wgpu::BindGroup>,
     instances: Vec<gizmo::renderer::InstanceRaw>,
+    /// Casters outside the camera frustum but inside a shadow cascade's light frustum —
+    /// drawn into the shadow maps only so off-screen objects still cast visible shadows.
+    shadow_instances: Vec<gizmo::renderer::InstanceRaw>,
     is_skybox: bool,
     is_grid: bool,
 }
@@ -24,7 +27,11 @@ struct FlatBatchData {
     bind_group: std::sync::Arc<wgpu::BindGroup>,
     skeleton_bg: std::sync::Arc<wgpu::BindGroup>,
     start_instance: u32,
+    /// End of the CAMERA-visible range (main passes draw `start..end_instance`).
     end_instance: u32,
+    /// End of the full range incl. off-screen shadow casters (shadow pass draws
+    /// `start..shadow_end_instance`). Equals `end_instance` when there are none.
+    shadow_end_instance: u32,
     is_transparent: bool,
     is_double_sided: bool,
     is_skybox: bool,
@@ -284,6 +291,12 @@ pub fn execute_render_pipeline(
     // Frustum Culling için her zaman Game Camera'yı kullanalım (Edit modunda da culling test edebilmek için)
     let culling_frustum = game_frustum.unwrap_or(frustum);
 
+    // Per-cascade LIGHT frusta — shadow casters are culled against these (not the camera
+    // frustum), so off-screen objects that cast shadows INTO view aren't dropped.
+    let cascade_frusta: [gizmo::renderer::Frustum; 4] = std::array::from_fn(|i| {
+        gizmo::renderer::Frustum::from_matrix(&Mat4::from_cols_array_2d(&light_view_proj_cascades[i]))
+    });
+
     let mut debug_aabbs = Vec::new();
 
     CACHE.with(|cache_ref| {
@@ -335,9 +348,27 @@ pub fn execute_render_pipeline(
                 let center_mat = Mat4::from_translation(mesh.center_offset);
                 let model = global_model * center_mat;
 
-                // Frustum Culling (AABB vs view-projection frustum)
-                if !gizmo::renderer::visible_in_frustum(&culling_frustum, &model, mesh.bounds) {
-                    continue;
+                // Frustum Culling (AABB vs view-projection frustum). Camera visibility
+                // drives the MAIN passes (unchanged). A shadow CASTER outside the camera
+                // frustum is still kept if it falls in any cascade's LIGHT frustum, so it
+                // casts a shadow into view (drawn into shadow maps only — see below).
+                let camera_visible =
+                    gizmo::renderer::visible_in_frustum(&culling_frustum, &model, mesh.bounds);
+                if !camera_visible {
+                    let is_caster = !mat.is_transparent
+                        && !matches!(
+                            mat.material_type,
+                            gizmo::renderer::components::MaterialType::Skybox
+                                | gizmo::renderer::components::MaterialType::Grid
+                                | gizmo::renderer::components::MaterialType::Unlit
+                        );
+                    if !is_caster
+                        || !cascade_frusta
+                            .iter()
+                            .any(|f| gizmo::renderer::visible_in_frustum(f, &model, mesh.bounds))
+                    {
+                        continue;
+                    }
                 }
 
                 // Culling'i geçen objelerin Bounding Box'larını debug çizimi için kaydet
@@ -404,13 +435,19 @@ pub fn execute_render_pipeline(
                         bind_group: mat.bind_group.clone(),
                         skeleton_bg: skel_bg,
                         instances: vec_pool.pop().unwrap_or_else(|| Vec::with_capacity(32)),
+                        shadow_instances: Vec::new(),
                         is_skybox: mat.material_type
                             == gizmo::renderer::components::MaterialType::Skybox,
                         is_grid: mat.material_type
                             == gizmo::renderer::components::MaterialType::Grid,
                     });
 
-                batch.instances.push(instance_data);
+                if camera_visible {
+                    batch.instances.push(instance_data);
+                } else {
+                    // Off-screen caster kept above for shadow maps only.
+                    batch.shadow_instances.push(instance_data);
+                }
             }
         }
 
@@ -438,9 +475,13 @@ pub fn execute_render_pipeline(
                     }
 
                     let start = all_inst.len() as u32;
+                    // Camera-visible instances FIRST (main passes draw up to end_instance),
+                    // then off-screen shadow casters (shadow pass draws up to shadow_end_instance).
                     let count = batch.instances.len() as u32;
                     all_inst.append(&mut batch.instances);
                     vec_pool.push(batch.instances); // Empty vec with capacity is pushed back!
+                    let shadow_count = batch.shadow_instances.len() as u32;
+                    all_inst.append(&mut batch.shadow_instances);
 
                     flat_b.push(FlatBatchData {
                         vbuf: batch.vbuf,
@@ -449,6 +490,7 @@ pub fn execute_render_pipeline(
                         skeleton_bg: batch.skeleton_bg,
                         start_instance: start,
                         end_instance: start + count,
+                        shadow_end_instance: start + count + shadow_count,
                         is_transparent,
                         is_double_sided,
                         is_skybox: batch.is_skybox,
@@ -608,8 +650,11 @@ pub fn execute_render_pipeline(
                 if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                     continue;
                 }
-                let safe_end =
-                    std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
+                // Shadow pass draws the FULL range (camera-visible + off-screen casters).
+                let safe_end = std::cmp::min(
+                    batch.shadow_end_instance,
+                    renderer.scene.instance_capacity as u32,
+                );
 
                 shadow_pass.set_bind_group(
                     0,
