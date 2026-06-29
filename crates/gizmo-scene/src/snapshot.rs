@@ -61,8 +61,13 @@ impl SceneSnapshot {
 
             // Registry üzerinden tüm dinamik bileşenleri RON AST'sine dönüştür
             let mut components = std::collections::BTreeMap::new();
-            
-            let entity = gizmo_core::entity::Entity::new(id, 0);
+
+            // `ent`'in GERÇEK generation'ını kullan. `Entity::new(id, 0)` ile sabit
+            // generation-0 lookup'ı, id slotu yeniden kullanılmış (despawn→spawn,
+            // generation ≥ 1) her entity için `is_alive` kontrolünü geçemez →
+            // `entity_component_types` boş döner ve TÜM dinamik bileşenler (Transform,
+            // RigidBody, Collider…) sessizce kaybolurdu.
+            let entity = ent;
             let types = world.entity_component_types(entity);
             for type_id in types {
                 if let Some(reg) = registry.get_registration(type_id) {
@@ -259,5 +264,38 @@ mod tests {
         let restored_name = names.get(alive[0].id());
         assert!(restored_name.is_some());
         assert_eq!(restored_name.unwrap().0, "TestCube");
+    }
+
+    // REGRESYON (audit 2026-06-29): id slotu yeniden kullanılmış entity'lerin
+    // (despawn→spawn, generation ≥ 1) dinamik bileşenleri capture'da kaybolmamalı.
+    // Eski kod `Entity::new(id, 0)` ile lookup yaptığından `entity_component_types`'ın
+    // generation kontrolü başarısız olur, boş döner ve Transform sessizce düşerdi
+    // (editör Play→Stop akışında fizik/transform kaybı).
+    #[test]
+    fn capture_preserves_components_for_recycled_id_entity() {
+        let mut world = World::new();
+        let registry = crate::registry::default_scene_registry();
+        let protected = std::collections::HashSet::new();
+
+        // id 0'ı yak → sonraki spawn onu generation 1 ile geri kullanır.
+        let burned = world.spawn();
+        let burned_id = burned.id();
+        world.despawn(burned);
+
+        let ent = world.spawn();
+        assert_eq!(ent.id(), burned_id, "ön koşul: id yeniden kullanılmalı");
+        assert_ne!(ent.generation(), 0, "ön koşul: recycled entity generation ≥ 1");
+        world.add_component(ent, gizmo_core::EntityName::new("Recycled"));
+        world.add_component(
+            ent,
+            gizmo_physics_core::Transform::new(gizmo_math::Vec3::new(7.0, 8.0, 9.0)),
+        );
+
+        let snapshot = SceneSnapshot::capture(&world, &registry, &protected);
+        assert_eq!(snapshot.entity_count(), 1);
+        assert!(
+            snapshot.entities[0].components.contains_key("Transform"),
+            "recycled-id entity'nin Transform'ı capture'da DÜŞTÜ (generation-0 lookup bug)"
+        );
     }
 }
