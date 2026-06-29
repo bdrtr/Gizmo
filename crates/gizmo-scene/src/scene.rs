@@ -128,7 +128,7 @@ impl SceneData {
             // dinamik bileşenler (Transform, RigidBody, Collider…) diske kaydedilirken
             // sessizce kaybolurdu. Name/Mesh/Material/Parent raw-id ile okunduğu için
             // etkilenmez.
-            if let Some(entity) = world.reconstruct_entity(id) {
+            if let Some(entity) = world.entity(id) {
                 let types = world.entity_component_types(entity);
                 for type_id in types {
                     if let Some(reg) = registry.get_registration(type_id) {

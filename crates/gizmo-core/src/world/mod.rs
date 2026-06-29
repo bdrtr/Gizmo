@@ -215,7 +215,7 @@ impl World {
 
             // Propagate to parent
             if let Some(parent_ptr) = self.get_component_ptr(current_entity, TypeId::of::<Parent>()) {
-                current_entity = self.reconstruct_entity(unsafe { (*(parent_ptr as *const Parent)).0 }).unwrap();
+                current_entity = self.entity(unsafe { (*(parent_ptr as *const Parent)).0 }).unwrap();
             } else {
                 break;
             }
@@ -857,8 +857,14 @@ impl World {
         Some(unsafe { col.get_mut_ptr(loc.row as usize) })
     }
 
-    /// Entity ID'sinden geçerli nesneyi tekrar yapılandırır
-    pub fn reconstruct_entity(&self, id: u32) -> Option<Entity> {
+    /// The canonical way to turn a raw `u32` id into a live [`Entity`] handle with its
+    /// CURRENT generation. Returns `None` if no live entity occupies that id slot.
+    ///
+    /// Prefer this over fabricating `Entity::new(id, 0)`: the generation-checked APIs
+    /// (`is_alive`, `entity_component_types`, `get_entity`, …) reject a gen-0 handle once
+    /// the id slot has been recycled (despawn→spawn bumps the generation), which silently
+    /// loses data / points at the wrong entity. This was the root of several audit bugs.
+    pub fn entity(&self, id: u32) -> Option<Entity> {
         if id as usize >= self.entity_locations.len() || !self.entity_locations[id as usize].is_valid() {
             return None;
         }
@@ -868,6 +874,12 @@ impl World {
             return None;
         }
         Some(Entity::new(id, state.generations[id as usize]))
+    }
+
+    /// Deprecated alias for [`World::entity`].
+    #[deprecated(note = "renamed to `World::entity`")]
+    pub fn reconstruct_entity(&self, id: u32) -> Option<Entity> {
+        self.entity(id)
     }
 
     /// Sistemden component silme

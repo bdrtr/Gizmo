@@ -19,7 +19,15 @@ impl Entity {
     /// `Option<Entity>` yerine kullanılabilir (ergonomi ve cache dostu).
     pub const INVALID: Self = Self(u64::MAX);
 
-    /// Yeni bir Entity oluşturur.
+    /// Builds an `Entity` handle from an explicit `id` + `generation`.
+    ///
+    /// FOOTGUN: if you only have a raw `id` (e.g. from the UI, a script, or a saved
+    /// reference) do NOT fabricate `Entity::new(id, 0)` to call a generation-checked API
+    /// (`World::is_alive`/`entity_component_types`/`get_entity`, queries): once the id slot
+    /// has been recycled (despawn→spawn bumps the generation) that gen-0 handle is stale
+    /// and silently misses / mis-targets. Use [`World::entity(id)`](crate::World::entity),
+    /// which reconstructs the CURRENT generation. `new` is for deserialization and tests
+    /// where the generation is known, or for purely id-keyed internal addressing.
     #[inline]
     pub fn new(id: u32, generation: u32) -> Self {
         Self(((generation as u64) << 32) | id as u64)
