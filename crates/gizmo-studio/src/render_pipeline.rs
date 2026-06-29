@@ -221,10 +221,16 @@ pub fn execute_render_pipeline(
         }
     }
 
+    // z = elapsed time for fluid caustics/wave animation (fluid_composite.wgsl reads it);
+    // was hardcoded 0.0 → frozen water (same bug as the gizmo runtime path).
+    let elapsed_time = world
+        .get_resource::<gizmo::core::time::Time>()
+        .map(|t| t.elapsed() as f32)
+        .unwrap_or(0.0);
     let cascade_params = [
         cam_near,
         1.0 / gizmo::renderer::SHADOW_MAP_RES as f32,
-        0.0,
+        elapsed_time,
         0.0,
     ];
     let camera_forward_u = [cam_forward.x, cam_forward.y, cam_forward.z, 0.0];
