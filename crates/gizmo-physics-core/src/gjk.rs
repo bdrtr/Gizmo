@@ -138,29 +138,80 @@ impl Gjk {
         let mut closest_point = p;
         let mut min_dist_sq = p.length_squared();
 
+        // ROBUSTNESS (audit 2026-06-29): a high-aspect-ratio shape (e.g. a thin box —
+        // a tiny face next to huge side extents) makes the support jump between far
+        // corners, so the simplex reduction can degenerate: `closest_point_on_simplex`
+        // can return a NaN barycentre, a spurious near-origin point (→ a false "0 gap /
+        // intersecting"), or bounce back to a far corner. Trusting the final simplex
+        // state then yields a wildly wrong distance (observed: 14 m for a true 0.01 m
+        // gap), which let a Mach-scale CCD bullet tunnel a thick wall.
+        //
+        // Two independent, always-valid quantities make this robust:
+        //   • best_point/best_sq — the smallest *positive* separation actually seen
+        //     (an upper bound on the true distance; never corrupted by a later NaN);
+        //   • lb_max — the largest duality lower bound `a·closest_hat` (the true distance
+        //     is never below it). The result is `max(best, lb_max)`, so a spurious
+        //     collapse to ~0 cannot report contact when the shapes are demonstrably apart.
+        let mut best_point = closest_point;
+        let mut best_sq = if min_dist_sq > 1e-10 {
+            min_dist_sq
+        } else {
+            f32::INFINITY
+        };
+        let mut lb_max = 0.0f32;
+        let mut stalls = 0u32;
+
         for _ in 0..32 {
-            if min_dist_sq < 1e-8 {
-                return Some((0.0, Vec3::X)); // Intersecting, use fallback normal
-            }
-
             direction = -closest_point;
-            let a = support(direction.normalize());
+            let dir_n = direction.normalize();
+            if !dir_n.is_finite() {
+                break; // closest degenerated to ~origin / NaN — keep the best so far
+            }
+            let a = support(dir_n);
 
-            // Convergence check: how much closer can we get in this direction?
+            // Duality lower bound: the true distance is never less than how far the
+            // support reaches toward the origin. `direction` has magnitude
+            // `current_dist`, so `-a·direction/current_dist == a·closest_hat`.
             let current_dist = min_dist_sq.sqrt();
             let lower_bound = -a.dot(direction) / current_dist;
-            if current_dist - lower_bound < 0.0001 {
+            if lower_bound > lb_max {
+                lb_max = lower_bound;
+            }
+            // Convergence (relative + absolute — an absolute-only threshold never trips
+            // for shapes whose support is imprecise at this scale, e.g. large extents).
+            if current_dist - lower_bound < 1e-4 * current_dist.max(1.0) + 1e-6 {
                 break;
             }
 
             simplex.push(a);
             closest_point = Self::closest_point_on_simplex(&mut simplex);
             min_dist_sq = closest_point.length_squared();
+
+            if !min_dist_sq.is_finite() || min_dist_sq < 1e-8 {
+                // Degenerate reduction OR (genuine) origin enclosure — either way stop;
+                // `best_sq`/`lb_max` below resolve which it actually was.
+                break;
+            }
+            if min_dist_sq + 1e-10 < best_sq {
+                best_sq = min_dist_sq;
+                best_point = closest_point;
+                stalls = 0;
+            } else {
+                // No real progress; cycling between far support corners → stop.
+                stalls += 1;
+                if stalls >= 2 {
+                    break;
+                }
+            }
         }
 
-        let dist = min_dist_sq.sqrt();
-        let normal = if dist > 1e-6 {
-            closest_point / dist
+        let dist = if best_sq.is_finite() {
+            best_sq.sqrt().max(lb_max.max(0.0))
+        } else {
+            lb_max.max(0.0)
+        };
+        let normal = if dist > 1e-6 && best_point.length_squared() > 1e-12 {
+            best_point.normalize()
         } else {
             Vec3::X
         };
