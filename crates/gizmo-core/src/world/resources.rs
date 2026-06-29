@@ -1,5 +1,7 @@
+use super::World;
 use std::any::TypeId;
 use std::marker::PhantomData;
+use std::sync::RwLock;
 use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +53,143 @@ impl<'a, T: 'static> std::ops::Deref for ResourceWriteGuard<'a, T> {
 impl<'a, T: 'static> std::ops::DerefMut for ResourceWriteGuard<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.guard.downcast_mut::<T>().unwrap()
+    }
+}
+
+impl World {
+    // ==========================================================
+    // RESOURCE SİSTEMİ (GLOBAL VERİLER)
+    // ==========================================================
+
+    /// Sisteme global bir Resource ekler veya üzerine yazar.
+    pub fn insert_resource<T: Send + Sync + 'static>(&mut self, resource: T) {
+        let type_id = TypeId::of::<T>();
+        self.resources
+            .insert(type_id, RwLock::new(Box::new(resource)));
+    }
+
+    /// Global bir Resource'u okumak için çağrılır (Immutable Borrow)
+    pub fn get_resource<T: 'static>(&self) -> Option<ResourceReadGuard<'_, T>> {
+        self.try_get_resource::<T>().ok()
+    }
+
+    /// Global bir Resource'u değiştirmek için çağrılır (Mutable Borrow)
+    pub fn get_resource_mut<T: 'static>(&self) -> Option<ResourceWriteGuard<'_, T>> {
+        self.try_get_resource_mut::<T>().ok()
+    }
+
+    /// `get_resource` ile aynı işlev, ama hata sebebini `Result` ile taşır.
+    pub fn try_get_resource<T: 'static>(
+        &self,
+    ) -> Result<ResourceReadGuard<'_, T>, ResourceFetchError> {
+        let type_id = TypeId::of::<T>();
+        let storage = self
+            .resources
+            .get(&type_id)
+            .ok_or(ResourceFetchError::NotFound(type_id))?;
+        let guard = storage
+            .try_read()
+            .map_err(|_| ResourceFetchError::BorrowConflict(type_id))?;
+        Ok(ResourceReadGuard {
+            guard,
+            _marker: PhantomData,
+        })
+    }
+
+    /// `get_resource_mut` ile aynı işlev, ama hata sebebini `Result` ile taşır.
+    pub fn try_get_resource_mut<T: 'static>(
+        &self,
+    ) -> Result<ResourceWriteGuard<'_, T>, ResourceFetchError> {
+        let type_id = TypeId::of::<T>();
+        let storage = self
+            .resources
+            .get(&type_id)
+            .ok_or(ResourceFetchError::NotFound(type_id))?;
+        let guard = storage
+            .try_write()
+            .map_err(|_| ResourceFetchError::BorrowConflict(type_id))?;
+        Ok(ResourceWriteGuard {
+            guard,
+            _marker: PhantomData,
+        })
+    }
+
+    /// Global bir Resource yoksa Default olarak oluşturur, ardından Mutable Borrow döndürür.
+    /// World mutable borrow gerektirir, böylece hashmap'e güvenle kayıt yapılabilir.
+    pub fn get_resource_mut_or_default<T: Default + Send + Sync + 'static>(
+        &mut self,
+    ) -> ResourceWriteGuard<'_, T> {
+        let type_id = TypeId::of::<T>();
+        self.resources
+            .entry(type_id)
+            .or_insert_with(|| RwLock::new(Box::new(T::default())));
+
+        let storage = self
+            .resources
+            .get(&type_id)
+            .expect("resource just inserted");
+        // Poison kurtarma: bir resource kullanıcısı panikleyip kilidi
+        // zehirlese bile motor çalışmaya devam etsin (imza değişmez).
+        let guard = storage.write().unwrap_or_else(|e| e.into_inner());
+        ResourceWriteGuard {
+            guard,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Global bir Resource'u ECS'ten tamamen çıkartır ve sahipliğini döndürür
+    pub fn remove_resource<T: 'static>(&mut self) -> Option<T> {
+        let type_id = TypeId::of::<T>();
+        let cell = self.resources.remove(&type_id)?;
+        let boxed_any = cell.into_inner().ok()?;
+        match boxed_any.downcast::<T>() {
+            Ok(boxed_t) => Some(*boxed_t),
+            Err(_) => None,
+        }
+    }
+
+    /// Bir resource'u geçici olarak world'den çıkarıp closure'a geçirir ve sonra geri koyar.
+    /// Bu, resource'un içindeyken `&mut World` kullanmanız gerektiğinde borrow checker'ı
+    /// mutlu etmenin en temiz yoludur (Bevy'deki `resource_scope` benzeri).
+    ///
+    /// # Örnek
+    /// ```ignore
+    /// world.resource_scope::<PoolManager, ()>(|world, pool| {
+    ///     pool.instantiate(world, "enemy");
+    /// });
+    /// ```
+    pub fn resource_scope<T: Send + Sync + 'static, U, F>(&mut self, f: F) -> Option<U>
+    where
+        F: FnOnce(&mut World, &mut T) -> U,
+    {
+        let resource = self.remove_resource::<T>()?;
+
+        // Panic güvenliği: Closure panic yaparsa bile resource geri yerleştirilir.
+        // Drop guard, stack unwind sırasında resource'u tekrar world'e koyar.
+        struct Guard<'a, T: Send + Sync + 'static> {
+            world: *mut World,
+            resource: Option<T>,
+            _marker: std::marker::PhantomData<&'a mut World>,
+        }
+        impl<'a, T: Send + Sync + 'static> Drop for Guard<'a, T> {
+            fn drop(&mut self) {
+                if let Some(resource) = self.resource.take() {
+                    // SAFETY: self.world is valid for the lifetime of the Guard.
+                    unsafe { &mut *self.world }.insert_resource(resource);
+                }
+            }
+        }
+
+        let mut guard = Guard::<T> {
+            world: self as *mut World,
+            resource: Some(resource),
+            _marker: std::marker::PhantomData,
+        };
+
+        let result = f(self, guard.resource.as_mut().unwrap());
+
+        // Normal dönüş: guard.drop() resource'u geri koyacak.
+        Some(result)
     }
 }
 
