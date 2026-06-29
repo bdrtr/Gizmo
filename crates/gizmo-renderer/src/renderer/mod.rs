@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use wgpu::{util::DeviceExt, Device, Queue, Surface, SurfaceConfiguration};
+use wgpu::{Device, Queue, Surface, SurfaceConfiguration};
 use winit::window::Window;
 
 pub use crate::gpu_types::{
@@ -7,6 +7,11 @@ pub use crate::gpu_types::{
 };
 pub use crate::pipeline::SceneState;
 pub use crate::post_process::PostProcessState;
+
+// Cohesive helper groups, split out for navigability (no logic change).
+// Each module holds `impl Renderer` blocks (private-field access preserved).
+mod assets;
+mod textures;
 
 // ============================================================
 //  RenderContext — wgpu detaylarını kullanıcıdan gizler
@@ -820,126 +825,6 @@ impl Renderer {
         }
     }
 
-    // ==========================================================
-    //  Kolaylık Metodları — Asset Oluşturma
-    //  Kullanıcı `AssetManager` oluşturmak zorunda kalmadan
-    //  doğrudan `renderer.create_cube()` gibi çağırabilir.
-    // ==========================================================
-
-    /// Küp mesh oluşturur.
-    pub fn create_cube(&self) -> crate::components::Mesh {
-        crate::asset::AssetManager::create_cube(&self.device)
-    }
-
-    /// Küre mesh oluşturur.
-    pub fn create_sphere(&self, radius: f32, stacks: u32, slices: u32) -> crate::components::Mesh {
-        crate::asset::AssetManager::create_sphere(&self.device, radius, stacks, slices)
-    }
-
-    /// Düzlem mesh oluşturur.
-    pub fn create_plane(&self, size: f32) -> crate::components::Mesh {
-        crate::asset::AssetManager::create_plane(&self.device, size)
-    }
-
-    /// Dama dokusu (checkerboard) oluşturur — test materyalleri için idealdir.
-    /// Cache'lenir: aynı doku tekrar oluşturulmaz.
-    pub fn create_checkerboard_texture(&self) -> Arc<wgpu::BindGroup> {
-        self.asset_manager
-            .write()
-            .unwrap()
-            .create_checkerboard_texture(
-                &self.device,
-                &self.queue,
-                &self.scene.texture_bind_group_layout,
-            )
-    }
-
-    /// Düz beyaz doku — varsayılan materyal için.
-    /// Cache'lenir: aynı doku tekrar oluşturulmaz.
-    pub fn create_white_texture(&self) -> Arc<wgpu::BindGroup> {
-        self.asset_manager.write().unwrap().create_white_texture(
-            &self.device,
-            &self.queue,
-            &self.scene.texture_bind_group_layout,
-        )
-    }
-
-    /// Diskten doku yükler (BC7 pipeline dahil).
-    /// Cache'lenir: aynı dosya yolu tekrar yüklenmez.
-    pub fn load_texture(
-        &self,
-        path: &str,
-    ) -> Result<Arc<wgpu::BindGroup>, crate::asset::AssetError> {
-        self.asset_manager.write().unwrap().load_material_texture(
-            &self.device,
-            &self.queue,
-            &self.scene.texture_bind_group_layout,
-            path,
-        )
-    }
-
-    /// Diskten bir GLTF (veya GLB) modelini senkron olarak yükler.
-    pub fn load_gltf(
-        &self,
-        path: &str,
-    ) -> Result<crate::asset::loaders::GltfSceneAsset, crate::asset::AssetError> {
-        let white_tex = self.create_white_texture();
-        self.asset_manager.write().unwrap().load_gltf_scene(
-            &self.device,
-            &self.queue,
-            &self.scene.texture_bind_group_layout,
-            white_tex,
-            path,
-        )
-    }
-
-    pub fn create_skeleton(
-        &self,
-        hierarchy: std::sync::Arc<gizmo_animation::skeletal::SkeletonHierarchy>,
-    ) -> crate::components::Skeleton {
-        use wgpu::util::DeviceExt;
-
-        // İlk local_poses'u her kemiğin orijinal local_bind_transform'undan al.
-        let local_poses: Vec<gizmo_math::Mat4> = hierarchy
-            .joints
-            .iter()
-            .map(|j| j.local_bind_transform)
-            .collect();
-
-        // Global matrislerden doğru joint_matrices hesapla (bind-pose)
-        let global_matrices = hierarchy.calculate_global_matrices(&local_poses);
-        let mut joint_matrices = vec![gizmo_math::Mat4::IDENTITY; 128];
-        for (i, joint) in hierarchy.joints.iter().enumerate() {
-            if i < 128 {
-                joint_matrices[i] = global_matrices[i] * joint.inverse_bind_matrix;
-            }
-        }
-
-        let buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Skeleton Joint Buffer"),
-                contents: bytemuck::cast_slice(&joint_matrices),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Skeleton Bind Group"),
-            layout: &self.scene.skeleton_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
-        });
-
-        crate::components::Skeleton::new(
-            std::sync::Arc::new(bind_group),
-            std::sync::Arc::new(buffer),
-            hierarchy,
-            local_poses,
-        )
-    }
-
     pub fn run_post_processing(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -965,83 +850,6 @@ impl Renderer {
         );
     }
 
-    pub fn create_mesh(&self, vertices: &[Vertex]) -> wgpu::Buffer {
-        self.device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Mesh Vertex Buffer"),
-                contents: bytemuck::cast_slice(vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            })
-    }
-
-    pub fn create_texture(&self, rgba_bytes: &[u8], width: u32, height: u32) -> wgpu::BindGroup {
-        let mip_level_count = width.max(height).ilog2() + 1;
-        let size = wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        };
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Game Texture"),
-            size,
-            mip_level_count,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            rgba_bytes,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * width),
-                rows_per_image: Some(height),
-            },
-            size,
-        );
-
-        Self::generate_mipmaps(
-            &self.device,
-            &self.queue,
-            &texture,
-            wgpu::TextureFormat::Rgba8UnormSrgb,
-            mip_level_count,
-        );
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            ..Default::default()
-        });
-        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &self.scene.texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-            label: Some("texture_bind_group"),
-        })
-    }
-
     fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Depth Texture"),
@@ -1058,122 +866,6 @@ impl Renderer {
             view_formats: &[],
         });
         tex.create_view(&wgpu::TextureViewDescriptor::default())
-    }
-
-    fn generate_mipmaps(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        texture: &wgpu::Texture,
-        format: wgpu::TextureFormat,
-        mip_level_count: u32,
-    ) {
-        if mip_level_count <= 1 {
-            return;
-        }
-
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Mipmap Blit Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mipmap.wgsl").into()),
-        });
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Mipmap Blit Pipeline"),
-            layout: None,
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        let bind_group_layout = pipeline.get_bind_group_layout(0);
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Mipmap Encoder"),
-        });
-
-        let views: Vec<wgpu::TextureView> = (0..mip_level_count)
-            .map(|mip| {
-                texture.create_view(&wgpu::TextureViewDescriptor {
-                    label: Some(&format!("Mip {}", mip)),
-                    format: None,
-                    dimension: None,
-                    usage: None,
-                    aspect: wgpu::TextureAspect::All,
-                    base_mip_level: mip,
-                    mip_level_count: Some(1),
-                    base_array_layer: 0,
-                    array_layer_count: None,
-                })
-            })
-            .collect();
-
-        for target_mip in 1..mip_level_count as usize {
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&views[target_mip - 1]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                ],
-                label: None,
-            });
-
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &views[target_mip],
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        queue.submit(Some(encoder.finish()));
     }
 }
 
