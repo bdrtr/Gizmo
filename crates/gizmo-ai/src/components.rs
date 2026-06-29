@@ -60,6 +60,14 @@ impl NavAgent {
         self.current_path_index = 0;
     }
 
+    /// Stops the agent: clears the destination AND the current path. Clearing only the
+    /// path (see [`clear_path`]) leaves `target` set, so the navigation system just
+    /// recomputes the path and keeps moving — use this to actually halt the agent.
+    pub fn clear_target(&mut self) {
+        self.target = None;
+        self.clear_path();
+    }
+
     pub fn current_waypoint(&self) -> Option<&Vec3> {
         self.path.get(self.current_path_index)
     }
@@ -93,3 +101,34 @@ impl Default for NavAgent {
 }
 
 gizmo_core::impl_component!(NavAgent);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // REGRESYON (audit round 2): ai.clear_target() hem hedefi hem path'i temizlemeli.
+    // Sadece path temizlenirse target durur, ai_navigation_system yeniden hesaplayıp
+    // ajanı yürütmeye devam eder.
+    #[test]
+    fn clear_target_clears_both_target_and_path() {
+        let mut a = NavAgent::default();
+        a.set_target(Vec3::new(5.0, 0.0, 0.0));
+        a.set_path(vec![Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0)]);
+        assert!(a.target.is_some() && a.path_len() > 0);
+
+        a.clear_target();
+        assert!(a.target.is_none(), "clear_target hedefi temizlemeli");
+        assert_eq!(a.path_len(), 0, "clear_target path'i de temizlemeli");
+    }
+
+    #[test]
+    fn clear_path_keeps_target() {
+        // Ayrımı belgeler: clear_path tek başına ajanı durdurmaz (target kalır).
+        let mut a = NavAgent::default();
+        a.set_target(Vec3::new(5.0, 0.0, 0.0));
+        a.set_path(vec![Vec3::ZERO]);
+        a.clear_path();
+        assert!(a.target.is_some(), "clear_path target'ı temizlememeli");
+        assert_eq!(a.path_len(), 0);
+    }
+}
