@@ -158,7 +158,7 @@ pub fn render_studio(
         let protected_ids = collect_protected_ids(world, state.editor_camera);
         let snapshot = gizmo::scene::SceneSnapshot::capture(
             world,
-            &gizmo::scene::registry::default_scene_registry(),
+            &gizmo::full_scene_registry(),
             &protected_ids,
         );
 
@@ -185,7 +185,7 @@ pub fn render_studio(
             let protected_ids = collect_protected_ids(world, state.editor_camera);
             let result = snapshot.restore(
                 world,
-                &gizmo::scene::registry::default_scene_registry(),
+                &gizmo::full_scene_registry(),
                 &protected_ids,
             );
             if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
@@ -203,7 +203,7 @@ pub fn render_studio(
 
     if let Some(path) = save_req {
         let _ =
-            gizmo::scene::SceneData::save(world, &path, &gizmo::scene::registry::default_scene_registry());
+            gizmo::scene::SceneData::save(world, &path, &gizmo::full_scene_registry());
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             ed.log_info("Sahne kaydedildi.");
         }
@@ -225,7 +225,7 @@ pub fn render_studio(
         let load_result = gizmo::scene::SceneData::load_into(
             &path,
             world,
-            &gizmo::scene::registry::default_scene_registry(),
+            &gizmo::full_scene_registry(),
         );
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             ed.clear_selection();
@@ -241,7 +241,7 @@ pub fn render_studio(
             world,
             ent_id.id(),
             &path,
-            &gizmo::scene::registry::default_scene_registry(),
+            &gizmo::full_scene_registry(),
         );
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             ed.log_info("Prefab kaydedildi.");
@@ -253,7 +253,7 @@ pub fn render_studio(
             &path,
             parent.map(|p| p.id()),
             world,
-            &gizmo::scene::registry::default_scene_registry(),
+            &gizmo::full_scene_registry(),
         );
 
         // Prefab spawn pozisyonunu (Asset browser'dan drop edilmişse) uygula
@@ -292,14 +292,14 @@ pub fn render_studio(
             world,
             ent_id.id(),
             &temp_path,
-            &gizmo::scene::registry::default_scene_registry(),
+            &gizmo::full_scene_registry(),
         );
 
         let root_res = gizmo::scene::SceneData::load_prefab(
             &temp_path,
             None,
             world,
-            &gizmo::scene::registry::default_scene_registry(),
+            &gizmo::full_scene_registry(),
         );
         if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
             ed.log_info("Obje çoğaltıldı.");

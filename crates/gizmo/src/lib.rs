@@ -79,6 +79,20 @@ pub use gizmo_scene as scene;
 #[cfg(feature = "scene")]
 pub use gizmo_scene::ron;
 
+/// A [`scene::registry::SceneRegistry`] pre-populated with the engine's built-in
+/// components **and** the scripting layer's `Script` component.
+///
+/// `gizmo-scene` intentionally does not depend on `gizmo-scripting` (so scene
+/// save/load stays GPU-free), and therefore its
+/// [`scene::registry::default_scene_registry`] omits `Script`. Use this facade
+/// helper when you want scenes that round-trip script components.
+#[cfg(all(feature = "scene", feature = "scripting"))]
+pub fn full_scene_registry() -> scene::registry::SceneRegistry {
+    let mut reg = scene::registry::default_scene_registry();
+    scripting::register_script_components(&mut reg);
+    reg
+}
+
 #[cfg(feature = "ui")]
 pub use gizmo_ui as ui;
 

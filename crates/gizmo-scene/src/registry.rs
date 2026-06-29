@@ -37,9 +37,10 @@ pub fn default_scene_registry() -> SceneRegistry {
     reg.register_serializable::<gizmo_physics_core::components::FighterController>("FighterController")
         .expect("built-in component 'FighterController' registration must not conflict");
 
-    #[cfg(not(target_arch = "wasm32"))]
-    reg.register_serializable::<gizmo_scripting::Script>("Script")
-        .expect("built-in component 'Script' registration must not conflict");
-
+    // NOTE: scripting's `Script` component is registered separately by the layer
+    // that owns both scenes and scripting (app / editor / facade), via
+    // `gizmo_scripting::register_script_components`. This keeps `gizmo-scene` free
+    // of a dependency on `gizmo-scripting` (and thus on the renderer it pulls in),
+    // so scene save/load works in a GPU-free / headless build.
     reg
 }
