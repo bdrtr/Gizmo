@@ -40,9 +40,51 @@ pub use fixed::{Fp32, FpVec3};
 pub use frustum::{Frustum, Intersection, Plane};
 pub use ray::Ray;
 
+/// Below this magnitude a denominator is treated as zero (degenerate) by [`safe_recip`].
+pub const DEGENERATE_EPS: f32 = 1e-20;
+
+/// Guarded reciprocal-divide for geometry code. Returns `Some(num / den)` when `den` is
+/// safely non-zero, or `None` when `|den| < DEGENERATE_EPS` (a degenerate configuration —
+/// collinear/coplanar simplex, zero-area triangle, parallel axes). Use it instead of a
+/// bare `num / den` so a degenerate input yields a handled `None` rather than a NaN/inf
+/// that silently poisons everything downstream (the GJK distance bug class).
+#[inline]
+pub fn safe_recip(num: f32, den: f32) -> Option<f32> {
+    if den.abs() < DEGENERATE_EPS {
+        None
+    } else {
+        Some(num / den)
+    }
+}
+
+/// Normalizes `v`, returning `fallback` when `v` is too short to have a stable direction
+/// (degenerate / zero vector). A guarded wrapper over glam's `try_normalize` so callers
+/// don't reinvent the zero-length check (and never emit a NaN direction).
+#[inline]
+pub fn safe_normalize_or(v: Vec3, fallback: Vec3) -> Vec3 {
+    v.try_normalize().unwrap_or(fallback)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn safe_recip_guards_degenerate_denominator() {
+        assert_eq!(safe_recip(1.0, 4.0), Some(0.25));
+        assert_eq!(safe_recip(1.0, 0.0), None);
+        assert_eq!(safe_recip(1.0, DEGENERATE_EPS * 0.5), None); // below threshold → None
+        // never produces a non-finite result
+        assert!(safe_recip(1.0, f32::MIN_POSITIVE).map_or(true, |r| r.is_finite()));
+    }
+
+    #[test]
+    fn safe_normalize_or_handles_zero_vector() {
+        let n = safe_normalize_or(Vec3::ZERO, Vec3::X);
+        assert_eq!(n, Vec3::X, "zero vector must use the fallback, not NaN");
+        let n2 = safe_normalize_or(Vec3::new(0.0, 3.0, 0.0), Vec3::X);
+        assert!((n2 - Vec3::Y).length() < 1e-6);
+    }
 
     #[test]
     fn ray_intersects_aabb_inside_frustum() {

@@ -290,10 +290,14 @@ impl Gjk {
                     return b + (c - b) * w;
                 }
 
-                let denom = 1.0 / (va + vb + vc);
-                let v = vb * denom;
-                let w = vc * denom;
-                a + ab * v + ac * w
+                // Guarded barycentric: a collinear/zero-area triangle makes (va+vb+vc)≈0,
+                // and a bare `1.0/0.0` would return a NaN closest point that poisons the
+                // GJK distance search. Fall back to the newest vertex (a finite, valid
+                // point) — `Gjk::distance` keeps the best iterate, so this stays correct.
+                match gizmo_math::safe_recip(1.0, va + vb + vc) {
+                    Some(denom) => a + ab * (vb * denom) + ac * (vc * denom),
+                    None => a,
+                }
             }
             4 => {
                 let d = simplex[0];
