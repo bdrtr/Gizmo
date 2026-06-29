@@ -1185,7 +1185,11 @@ impl<State: 'static> App<State> {
                             }
                             let mut renderer = self.world.remove_resource::<Renderer>().unwrap();
 
-                            let output = match renderer.surface.get_current_texture() {
+                            let surface = renderer
+                                .surface
+                                .as_ref()
+                                .expect("windowed render path requires a surface");
+                            let output = match surface.get_current_texture() {
                                 wgpu::CurrentSurfaceTexture::Success(texture)
                                 | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
                                 // Transient, non-error states (window resized/minimized/occluded

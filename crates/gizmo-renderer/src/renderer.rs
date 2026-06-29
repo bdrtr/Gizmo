@@ -86,7 +86,9 @@ impl<'a> RenderContext<'a> {
 
 pub struct Renderer {
     // === TEMEL WGPU KAYNAKLARI ===
-    pub surface: Surface<'static>,
+    /// `None` in headless/offscreen mode (constructed via [`Renderer::new_headless`]);
+    /// `Some` on the windowed path. Frame acquisition/present must handle both.
+    pub surface: Option<Surface<'static>>,
     pub device: Device,
     pub queue: Queue,
     pub config: SurfaceConfiguration,
@@ -391,7 +393,71 @@ impl Renderer {
             desired_maximum_frame_latency: 2,
         };
 
-        Self::finish_construction(device, queue, surface, config, size)
+        Self::finish_construction(device, queue, Some(surface), config, size)
+    }
+
+    /// Constructs a Renderer with **no window/surface** — every render target is an
+    /// offscreen texture. Enables headless GPU servers, CI rendering and
+    /// deterministic render harnesses. Shares [`Renderer::finish_construction`] with
+    /// the windowed [`Renderer::new`], so every GPU subsystem initialises identically.
+    ///
+    /// `format` defaults to `Rgba8UnormSrgb` when `None`.
+    pub async fn new_headless(width: u32, height: u32, format: Option<wgpu::TextureFormat>) -> Self {
+        let width = width.max(1);
+        let height = height.max(1);
+
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            flags: wgpu::InstanceFlags::default(),
+            memory_budget_thresholds: Default::default(),
+            backend_options: Default::default(),
+            display: None,
+        });
+
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::default(),
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })
+            .await
+            .expect("Headless Renderer: hiçbir GPU adapter bulunamadı");
+
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                required_features: wgpu::Features::POLYGON_MODE_LINE,
+                required_limits: wgpu::Limits {
+                    max_bind_groups: 6,
+                    max_storage_buffers_per_shader_stage: 8,
+                    max_storage_buffer_binding_size: 256 << 20,
+                    ..wgpu::Limits::default()
+                },
+                label: None,
+                experimental_features: wgpu::ExperimentalFeatures::default(),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: wgpu::Trace::Off,
+            })
+            .await
+            .expect("Headless Renderer: request_device başarısız");
+
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            format: format.unwrap_or(wgpu::TextureFormat::Rgba8UnormSrgb),
+            width,
+            height,
+            present_mode: wgpu::PresentMode::AutoNoVsync,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+
+        Self::finish_construction(
+            device,
+            queue,
+            None,
+            config,
+            winit::dpi::PhysicalSize::new(width, height),
+        )
     }
 
     /// Surface-agnostic tail of construction: configures the surface, builds the
@@ -402,11 +468,13 @@ impl Renderer {
     fn finish_construction(
         device: wgpu::Device,
         queue: wgpu::Queue,
-        surface: wgpu::Surface<'static>,
+        surface: Option<wgpu::Surface<'static>>,
         config: wgpu::SurfaceConfiguration,
         size: winit::dpi::PhysicalSize<u32>,
     ) -> Self {
-        surface.configure(&device, &config);
+        if let Some(ref surface) = surface {
+            surface.configure(&device, &config);
+        }
 
         let depth_texture_view = Self::create_depth_texture(&device, config.width, config.height);
 
@@ -660,7 +728,9 @@ impl Renderer {
             self.size = new_size;
             self.config.width = new_size.width;
             self.config.height = new_size.height;
-            self.surface.configure(&self.device, &self.config);
+            if let Some(ref surface) = self.surface {
+                surface.configure(&self.device, &self.config);
+            }
 
             self.depth_texture_view =
                 Self::create_depth_texture(&self.device, new_size.width, new_size.height);
@@ -1240,6 +1310,112 @@ mod tests {
                 submission_index: None,
                 timeout: None,
             });
+        });
+    }
+
+    #[test]
+    fn new_headless_builds_all_subsystems_and_renders_offscreen() {
+        pollster::block_on(async {
+            // Builds the FULL renderer (pipelines, post-process, deferred, ssao/ssr/ssgi,
+            // gpu particle/physics/fluid) with NO window/surface — the headless path.
+            let renderer = Renderer::new_headless(64, 64, None).await;
+            assert!(
+                renderer.surface.is_none(),
+                "headless renderer must have no surface"
+            );
+            assert_eq!((renderer.config.width, renderer.config.height), (64, 64));
+
+            let device = &renderer.device;
+            let queue = &renderer.queue;
+
+            // Clear an offscreen target to a known colour, then read the first pixel back.
+            let target = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("headless-test-target"),
+                size: wgpu::Extent3d {
+                    width: 64,
+                    height: 64,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            {
+                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("headless-clear"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.0,
+                                g: 1.0,
+                                b: 0.0,
+                                a: 1.0,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+            }
+
+            // 64 * 4 = 256 bytes/row → already 256-aligned, no padding arithmetic.
+            let staging = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("headless-readback"),
+                size: 64 * 64 * 4,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &target,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &staging,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(64 * 4),
+                        rows_per_image: Some(64),
+                    },
+                },
+                wgpu::Extent3d {
+                    width: 64,
+                    height: 64,
+                    depth_or_array_layers: 1,
+                },
+            );
+            queue.submit(Some(encoder.finish()));
+
+            let slice = staging.slice(..);
+            let (sender, receiver) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
+            let _ = device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+            receiver.recv().unwrap().unwrap();
+
+            let data = slice.get_mapped_range();
+            assert_eq!(
+                &data[0..4],
+                &[0u8, 255, 0, 255],
+                "offscreen clear colour must read back as green"
+            );
         });
     }
 }
