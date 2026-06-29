@@ -621,6 +621,135 @@ fn check(tid: TypeId, is_mut: bool, types: &mut Vec<(TypeId, bool)>) {
     types.push((tid, is_mut));
 }
 
+/// Archetype-level match shared by every component-keyed filter. SparseSet storage is
+/// stored outside archetypes, so `matches_archetype` is intentionally WIDE there (every
+/// archetype; the real per-row test lives in `filter_row`). For Table storage it matches
+/// on presence: `want_present` is `true` for `With`/`Changed`/`Added`/`&T`, `false` for
+/// `Without`. Centralizing this kills the copy-pasted `if sparse {true} else {has}` that
+/// diverged across impls (the round-1/2 sibling-divergence bug class).
+#[inline]
+fn arch_matches<T: crate::component::Component>(arch: &Archetype, want_present: bool) -> bool {
+    if T::storage_type() == crate::component::StorageType::SparseSet {
+        true
+    } else {
+        arch.has_component(TypeId::of::<T>()) == want_present
+    }
+}
+
+/// Generates the `WorldQuery` impl for a change-detection filter (`Changed`/`Added`).
+/// They differ ONLY in which `ComponentTicks` field they read, so they share one body —
+/// adding a new tick filter can't forget `check_aliasing` (the data-race guard) or
+/// `has_row_filter` (the iter_chunks guard).
+macro_rules! impl_tick_filter {
+    ($(#[$meta:meta])* $name:ident, $field:ident) => {
+        $(#[$meta])*
+        pub struct $name<T>(PhantomData<T>);
+
+        impl<T: crate::component::Component> sealed::SealedQuery for $name<T> {}
+        impl<T: crate::component::Component> WorldQuery for $name<T> {
+            type StaticType = $name<T>;
+            // (table ticks ptr, or the sparse set ptr for SparseSet storage)
+            type Fetch<'w> = (
+                *const crate::archetype::ComponentTicks,
+                Option<*const crate::archetype::sparse_set::ComponentSparseSet>,
+            );
+            type Item<'w> = ();
+            type Slice<'w> = ();
+
+            unsafe fn fetch_raw<'w>(world: &'w World, arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
+                if T::storage_type() == crate::component::StorageType::SparseSet {
+                    let set = world.sparse_sets.get(&TypeId::of::<T>())?;
+                    Some((std::ptr::null(), Some(set as *const _)))
+                } else {
+                    let col = arch.get_column(TypeId::of::<T>())?;
+                    Some((col.ticks_ptr(), None))
+                }
+            }
+
+            fn check_aliasing(types: &mut Vec<(TypeId, bool)>) {
+                // Tick filters READ T's ComponentTicks — the same memory `Mut<T>` writes in
+                // deref_mut. Declare a READ so the scheduler can't co-batch a `Mut<T>` writer
+                // (unsynchronized read+write = data race).
+                check(TypeId::of::<T>(), false, types);
+            }
+
+            fn matches_archetype(arch: &Archetype) -> bool {
+                arch_matches::<T>(arch, true)
+            }
+
+            unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, row: usize, entity_id: u32, tick: u32) -> bool {
+                // `tick` = change_ref_tick (last run); rows stamped after it match.
+                if let Some(set_ptr) = fetch.1 {
+                    (*set_ptr).ticks_for(entity_id).is_some_and(|t| t.$field > tick)
+                } else {
+                    (*fetch.0.add(row)).$field > tick
+                }
+            }
+
+            unsafe fn get_item<'w>(_f: Self::Fetch<'w>, _r: usize, _e: u32) -> Self::Item<'w> {}
+            unsafe fn get_slice<'w>(_f: Self::Fetch<'w>, _l: usize) -> Self::Slice<'w> {}
+
+            fn has_row_filter() -> bool {
+                true // the tick test lives entirely in filter_row
+            }
+        }
+    };
+}
+
+/// Generates the `WorldQuery` impl for a presence filter (`With`/`Without`). They differ
+/// ONLY by the `$present` polarity, so one body guarantees they stay in lockstep — the
+/// sparse per-row check, `matches_archetype`, and `has_row_filter` can't diverge.
+macro_rules! impl_presence_filter {
+    ($(#[$meta:meta])* $name:ident, $present:expr) => {
+        $(#[$meta])*
+        pub struct $name<T>(PhantomData<T>);
+
+        impl<T: crate::component::Component> sealed::SealedQuery for $name<T> {}
+        impl<T: crate::component::Component> WorldQuery for $name<T> {
+            type StaticType = $name<T>;
+            // (is_sparse, sparse set ptr). Table storage is always `(false, None)`.
+            type Fetch<'w> = (
+                bool,
+                Option<*const crate::archetype::sparse_set::ComponentSparseSet>,
+            );
+            type Item<'w> = ();
+            type Slice<'w> = ();
+
+            unsafe fn fetch_raw<'w>(world: &'w World, _arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
+                if T::storage_type() == crate::component::StorageType::SparseSet {
+                    Some((true, world.sparse_sets.get(&TypeId::of::<T>()).map(|s| s as *const _)))
+                } else {
+                    Some((false, None))
+                }
+            }
+
+            fn check_aliasing(_types: &mut Vec<(TypeId, bool)>) {}
+
+            fn matches_archetype(arch: &Archetype) -> bool {
+                arch_matches::<T>(arch, $present)
+            }
+
+            unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, _row: usize, entity_id: u32, _tick: u32) -> bool {
+                // Table: matches_archetype already selected by presence → always true.
+                // Sparse: matches_archetype is wide → test actual presence per row.
+                match fetch {
+                    (false, _) => true,
+                    (true, Some(set_ptr)) => (*set_ptr).contains(entity_id) == $present,
+                    (true, None) => !$present, // no sparse set yet → nobody has the component
+                }
+            }
+
+            unsafe fn get_item<'w>(_f: Self::Fetch<'w>, _r: usize, _e: u32) -> Self::Item<'w> {}
+            unsafe fn get_slice<'w>(_f: Self::Fetch<'w>, _l: usize) -> Self::Slice<'w> {}
+
+            fn has_row_filter() -> bool {
+                // Sparse needs the per-row presence test; table is archetype-level only.
+                T::storage_type() == crate::component::StorageType::SparseSet
+            }
+        }
+    };
+}
+
 impl<T0: FetchComponent> sealed::SealedQuery for T0 where T0::Component: crate::component::Component {}
 impl<T0: FetchComponent> WorldQuery for T0 where T0::Component: crate::component::Component {
     type StaticType = T0::Component;
@@ -635,7 +764,7 @@ impl<T0: FetchComponent> WorldQuery for T0 where T0::Component: crate::component
         check(TypeId::of::<T0::Component>(), T0::IS_MUT, types);
     }
     fn matches_archetype(arch: &Archetype) -> bool {
-        if <T0::Component as crate::component::Component>::storage_type() == crate::component::StorageType::SparseSet { true } else { arch.has_component(TypeId::of::<T0::Component>()) }
+        arch_matches::<T0::Component>(arch, true)
     }
 
     unsafe fn get_item<'w>(fetch: Self::Fetch<'w>, row: usize, entity_id: u32) -> Self::Item<'w> {
@@ -654,110 +783,18 @@ impl<T0: FetchComponent> WorldQuery for T0 where T0::Component: crate::component
     }
 }
 
-pub struct Changed<T>(PhantomData<T>);
+impl_tick_filter!(
+    /// Filter matching only entities whose `T` changed since the system last ran
+    /// (`deref_mut` on `Mut<T>` stamps the change tick). Use as a query operand.
+    Changed,
+    changed
+);
 
-impl<T: crate::component::Component> sealed::SealedQuery for Changed<T> {}
-impl<T: crate::component::Component> WorldQuery for Changed<T> {
-    type StaticType = Changed<T>;
-    // (tablo ticks pointer'ı, SparseSet ise set pointer'ı)
-    type Fetch<'w> = (
-        *const crate::archetype::ComponentTicks,
-        Option<*const crate::archetype::sparse_set::ComponentSparseSet>,
-    );
-    type Item<'w> = ();
-    type Slice<'w> = ();
-
-    unsafe fn fetch_raw<'w>(world: &'w World, arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
-        if T::storage_type() == crate::component::StorageType::SparseSet {
-            let set = world.sparse_sets.get(&TypeId::of::<T>())?;
-            Some((std::ptr::null(), Some(set as *const _)))
-        } else {
-            let col = arch.get_column(TypeId::of::<T>())?;
-            Some((col.ticks_ptr(), None))
-        }
-    }
-
-    fn check_aliasing(types: &mut Vec<(TypeId, bool)>) {
-        // `Changed<T>` filtresi T'nin `ComponentTicks` belleğini OKUR; aynı bellek
-        // `Mut<T>`'nin `deref_mut`'unda YAZILIR. Erişimi bildirmezsek zamanlayıcı bir
-        // `Query<Changed<T>>` sistemini bir `Query<Mut<T>>` yazıcısıyla aynı paralel
-        // batch'e koyabilir → ticks üzerinde senkronize-olmayan eşzamanlı oku/yaz (data
-        // race / UB). T'yi READ olarak bildir; böylece çakışma tespit edilir.
-        check(TypeId::of::<T>(), false, types);
-    }
-
-    fn matches_archetype(arch: &Archetype) -> bool {
-        if T::storage_type() == crate::component::StorageType::SparseSet { true } else { arch.has_component(TypeId::of::<T>()) }
-    }
-
-    unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, row: usize, entity_id: u32, tick: u32) -> bool {
-        // `tick` = change_ref_tick (son çalıştırma); referanstan SONRA değişenler eşlenir.
-        if let Some(set_ptr) = fetch.1 {
-            // SparseSet: entity'nin saklanan tick'ini ara (eskiden her zaman true idi).
-            (*set_ptr).ticks_for(entity_id).is_some_and(|t| t.changed > tick)
-        } else {
-            (*fetch.0.add(row)).changed > tick
-        }
-    }
-
-    unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize, _entity_id: u32) -> Self::Item<'w> {}
-
-    unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {}
-
-    fn has_row_filter() -> bool {
-        true // change-tick test lives entirely in filter_row
-    }
-}
-
-pub struct Added<T>(PhantomData<T>);
-
-impl<T: crate::component::Component> sealed::SealedQuery for Added<T> {}
-impl<T: crate::component::Component> WorldQuery for Added<T> {
-    type StaticType = Added<T>;
-    type Fetch<'w> = (
-        *const crate::archetype::ComponentTicks,
-        Option<*const crate::archetype::sparse_set::ComponentSparseSet>,
-    );
-    type Item<'w> = ();
-    type Slice<'w> = ();
-
-    unsafe fn fetch_raw<'w>(world: &'w World, arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
-        if T::storage_type() == crate::component::StorageType::SparseSet {
-            let set = world.sparse_sets.get(&TypeId::of::<T>())?;
-            Some((std::ptr::null(), Some(set as *const _)))
-        } else {
-            let col = arch.get_column(TypeId::of::<T>())?;
-            Some((col.ticks_ptr(), None))
-        }
-    }
-
-    fn check_aliasing(types: &mut Vec<(TypeId, bool)>) {
-        // `Added<T>` de T'nin `ComponentTicks`'ini OKUR (bkz. `Changed`); `Mut<T>`
-        // yazıcısıyla aynı batch'e düşmemesi için T'yi READ olarak bildir.
-        check(TypeId::of::<T>(), false, types);
-    }
-
-    fn matches_archetype(arch: &Archetype) -> bool {
-        if T::storage_type() == crate::component::StorageType::SparseSet { true } else { arch.has_component(TypeId::of::<T>()) }
-    }
-
-    unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, row: usize, entity_id: u32, tick: u32) -> bool {
-        // change_ref_tick'ten sonra eklenenleri eşler (bkz. Changed).
-        if let Some(set_ptr) = fetch.1 {
-            (*set_ptr).ticks_for(entity_id).is_some_and(|t| t.added > tick)
-        } else {
-            (*fetch.0.add(row)).added > tick
-        }
-    }
-
-    unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize, _entity_id: u32) -> Self::Item<'w> {}
-
-    unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {}
-
-    fn has_row_filter() -> bool {
-        true // added-tick test lives entirely in filter_row
-    }
-}
+impl_tick_filter!(
+    /// Filter matching only entities to which `T` was added since the system last ran.
+    Added,
+    added
+);
 
 macro_rules! impl_query_tuple {
     ($($t:ident),*) => {
@@ -813,95 +850,17 @@ impl_query_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11);
 // ADVANCED QUERY FILTERS
 // =========================================================================
 
-pub struct With<T>(PhantomData<T>);
+impl_presence_filter!(
+    /// Filter matching entities that HAVE `T` (without borrowing it). Use as a query operand.
+    With,
+    true
+);
 
-impl<T: crate::component::Component> sealed::SealedQuery for With<T> {}
-impl<T: crate::component::Component> WorldQuery for With<T> {
-    type StaticType = With<T>;
-    // (is_sparse, SparseSet ise set pointer'ı). Table'da daima `(false, None)`.
-    type Fetch<'w> = (
-        bool,
-        Option<*const crate::archetype::sparse_set::ComponentSparseSet>,
-    );
-    type Item<'w> = ();
-    type Slice<'w> = ();
-
-    unsafe fn fetch_raw<'w>(world: &'w World, _arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
-        if T::storage_type() == crate::component::StorageType::SparseSet {
-            Some((true, world.sparse_sets.get(&TypeId::of::<T>()).map(|s| s as *const _)))
-        } else {
-            Some((false, None))
-        }
-    }
-
-    fn check_aliasing(_types: &mut Vec<(TypeId, bool)>) {}
-
-    fn matches_archetype(arch: &Archetype) -> bool {
-        if T::storage_type() == crate::component::StorageType::SparseSet { true } else { arch.has_component(TypeId::of::<T>()) }
-    }
-
-    unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, _row: usize, entity_id: u32, _tick: u32) -> bool {
-        // Table: matches_archetype zaten bileşeni İÇEREN arketipleri seçti → daima true.
-        // SparseSet: matches_archetype genişti → entity gerçekten taşıyor mu, kontrol et.
-        match fetch {
-            (false, _) => true,
-            (true, Some(set_ptr)) => (*set_ptr).contains(entity_id),
-            (true, None) => false, // sparse set hiç oluşmamış → kimsede bileşen yok
-        }
-    }
-    unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize, _entity_id: u32) -> Self::Item<'w> {}
-    unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {}
-
-    fn has_row_filter() -> bool {
-        // Sparse `With` matches every archetype; the presence test is in filter_row.
-        T::storage_type() == crate::component::StorageType::SparseSet
-    }
-}
-
-pub struct Without<T>(PhantomData<T>);
-
-impl<T: crate::component::Component> sealed::SealedQuery for Without<T> {}
-impl<T: crate::component::Component> WorldQuery for Without<T> {
-    type StaticType = Without<T>;
-    // (is_sparse, SparseSet ise set pointer'ı). Table'da daima `(false, None)`.
-    type Fetch<'w> = (
-        bool,
-        Option<*const crate::archetype::sparse_set::ComponentSparseSet>,
-    );
-    type Item<'w> = ();
-    type Slice<'w> = ();
-
-    unsafe fn fetch_raw<'w>(world: &'w World, _arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
-        if T::storage_type() == crate::component::StorageType::SparseSet {
-            Some((true, world.sparse_sets.get(&TypeId::of::<T>()).map(|s| s as *const _)))
-        } else {
-            Some((false, None))
-        }
-    }
-
-    fn check_aliasing(_types: &mut Vec<(TypeId, bool)>) {}
-
-    fn matches_archetype(arch: &Archetype) -> bool {
-        if T::storage_type() == crate::component::StorageType::SparseSet { true } else { !arch.has_component(TypeId::of::<T>()) }
-    }
-
-    unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, _row: usize, entity_id: u32, _tick: u32) -> bool {
-        // Table: matches_archetype zaten bileşeni İÇERMEYEN arketipleri seçti → daima true.
-        // SparseSet: matches_archetype genişti → entity bileşeni taşımıyorsa eşle.
-        match fetch {
-            (false, _) => true,
-            (true, Some(set_ptr)) => !(*set_ptr).contains(entity_id),
-            (true, None) => true, // sparse set hiç oluşmamış → herkes "without"
-        }
-    }
-    unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize, _entity_id: u32) -> Self::Item<'w> {}
-    unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {}
-
-    fn has_row_filter() -> bool {
-        // Sparse `Without` matches every archetype; the absence test is in filter_row.
-        T::storage_type() == crate::component::StorageType::SparseSet
-    }
-}
+impl_presence_filter!(
+    /// Filter matching entities that do NOT have `T`. Use as a query operand.
+    Without,
+    false
+);
 
 pub struct Or<T1, T2>(PhantomData<(T1, T2)>);
 
