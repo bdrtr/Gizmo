@@ -119,7 +119,8 @@ pub struct SceneUniforms {
     pub cascade_splits: [f32; 4],
     /// xyz = normalized camera forward in world space (for view-depth cascade selection).
     pub camera_forward: [f32; 4],
-    /// x = camera z_near, y = 1 / shadow map resolution (PCF texel size), zw unused.
+    /// x = camera z_near, y = 1 / shadow map resolution (PCF texel size),
+    /// z = elapsed time in seconds (fluid caustics/wave animation), w unused.
     pub cascade_params: [f32; 4],
     pub num_lights: u32,
     pub exposure: f32,

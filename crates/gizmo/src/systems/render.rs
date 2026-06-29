@@ -109,6 +109,11 @@ pub fn default_render_pass(
     gpu_physics_readback_system(world, renderer);
 
     let mut cam_exposure = 1.0;
+    // Shadow cascades must follow the ACTIVE camera's near/far/fov, not hardcoded values
+    // (otherwise splits/cascade matrices are wrong for any non-default camera).
+    let mut cam_near = 0.1f32;
+    let mut cam_far = 2000.0f32;
+    let mut cam_fov = std::f32::consts::FRAC_PI_4;
 
     // KAMERALARI BUL VE MATRIX YARAT
     let cameras = world.borrow::<Camera>();
@@ -133,6 +138,9 @@ pub fn default_render_pass(
                 cam_pos = pos;
                 cam_forward = cam.get_front();
                 cam_exposure = cam.exposure;
+                cam_near = cam.near;
+                cam_far = cam.far;
+                cam_fov = cam.fov;
             }
         }
     }
@@ -180,13 +188,16 @@ pub fn default_render_pass(
         }
     }
 
-    let cascade_splits = [20.0f32, 80.0, 250.0, 2000.0];
+    // Derive splits from the actual camera near/far (was hardcoded [20,80,250,2000],
+    // which mismatched any camera whose far ≠ 2000 → fragments past the last split fell
+    // into a cascade whose ortho matrix didn't cover them). Mirrors the studio path.
+    let cascade_splits = crate::renderer::cascade_split_distances(cam_near, cam_far, 0.75);
     let cascade_vp = crate::renderer::directional_cascade_view_projs(
         cam_pos,
         cam_forward,
         aspect,
-        std::f32::consts::FRAC_PI_4,
-        0.1,
+        cam_fov,
+        cam_near,
         &cascade_splits,
         sun_dir,
         crate::renderer::SHADOW_MAP_RES,
@@ -276,6 +287,12 @@ pub fn default_render_pass(
     }
 
 
+    // Elapsed time drives fluid caustics/wave animation in fluid_composite.wgsl
+    // (it reads cascade_params.z); this slot was hardcoded to 0.0 → frozen water.
+    let elapsed_time = world
+        .get_resource::<gizmo_core::time::Time>()
+        .map(|t| t.elapsed() as f32)
+        .unwrap_or(0.0);
     let scene_uniform_data = crate::renderer::gpu_types::SceneUniforms {
         view_proj: view_proj.to_cols_array_2d(),
         camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
@@ -285,7 +302,7 @@ pub fn default_render_pass(
         light_view_proj: light_view_projs,
         cascade_splits,
         camera_forward: [cam_forward.x, cam_forward.y, cam_forward.z, 0.0],
-        cascade_params: [0.1, 1.0 / crate::renderer::SHADOW_MAP_RES as f32, 0.0, 0.0],
+        cascade_params: [0.1, 1.0 / crate::renderer::SHADOW_MAP_RES as f32, elapsed_time, 0.0],
         num_lights,
         exposure: cam_exposure,
         _pre_align_pad: [0; 2],
