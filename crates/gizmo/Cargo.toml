@@ -27,7 +27,7 @@ physics = ["gizmo-app/physics", "dep:gizmo-physics-core", "dep:gizmo-physics-rig
 physics-dynamics = ["dep:gizmo-physics-dynamics"]
 physics-soft = ["dep:gizmo-physics-soft"]
 ui = ["dep:gizmo-ui"]
-animation = ["dep:gizmo-animation", "gizmo-animation/app"]
+animation = ["dep:gizmo-animation"]
 
 [dependencies]
 gizmo-core = { path = "../gizmo-core" , version = "0.2.0" }

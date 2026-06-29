@@ -809,7 +809,7 @@ impl Renderer {
 
     pub fn create_skeleton(
         &self,
-        hierarchy: std::sync::Arc<crate::animation::SkeletonHierarchy>,
+        hierarchy: std::sync::Arc<gizmo_animation::skeletal::SkeletonHierarchy>,
     ) -> crate::components::Skeleton {
         use wgpu::util::DeviceExt;
 

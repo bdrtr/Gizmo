@@ -9,14 +9,18 @@ repository.workspace = true
 
 [features]
 # OFF by default so the crate's default public API is dependency-light (Stage A:
-# only gizmo-core/math/physics-core). With `app`, the `gizmo-app`-based
-# `AnimationPlugin` convenience wrapper is compiled in. The dependency-light
+# only gizmo-core/math/physics-core). The dependency-light
 # `register(world, schedule)` entry point is always available.
+#
+# NOTE: the former `app` feature (which pulled in `gizmo-app` for the
+# `AnimationPlugin` convenience wrapper) has been removed: `gizmo-renderer` now
+# depends on this crate for the pure-data skeletal-animation types, and a
+# `gizmo-animation -> gizmo-app -> gizmo-renderer -> gizmo-animation` package
+# cycle is rejected by Cargo. Register the animation system via `register(...)`.
 default = []
-app = ["dep:gizmo-app"]
 
 [dependencies]
-gizmo-app = { version = "0.2.0", path = "../gizmo-app", default-features = false, optional = true }
 gizmo-core = { version = "0.2.0", path = "../gizmo-core" }
 gizmo-math = { version = "0.2.0", path = "../gizmo-math" }
 gizmo-physics-core = { version = "0.2.0", path = "../gizmo-physics-core" }
+serde = { version = "1", features = ["derive"] }

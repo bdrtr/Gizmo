@@ -22,8 +22,6 @@
 //!
 //! Implementation: [`frustum_cull`] re-exports [`Frustum`] and helpers from `gizmo-math`.
 
-pub mod animation;
-pub mod animation_state_machine;
 pub mod asset;
 pub mod async_assets;
 pub mod components;
@@ -54,12 +52,14 @@ pub mod asset_loading;
 pub use frustum_cull::{visible_in_frustum, Frustum};
 pub use web_profile::{PostProcessLevel, ShadowQuality, WebProfile};
 
-pub use animation::{AnimationClip, Keyframe, SkeletonHierarchy, SkeletonJoint, Track};
-pub use animation_state_machine::{
-    ActiveBlend, AnimationState, AnimationStateMachine, AnimationTransition,
+pub use gizmo_animation::skeletal::{
+    ActiveBlend, AnimationClip, AnimationPlayer, AnimationState, AnimationStateMachine,
+    AnimationTransition, BoneAttachment, InterpolationMode, Keyframe, SkeletonHierarchy,
+    SkeletonJoint, Track,
 };
 pub mod animation_system;
-pub use animation_system::{animation_state_machine_update_system, animation_update_system, decompose_mat4};
+pub use animation_system::{animation_state_machine_update_system, animation_update_system};
+pub use gizmo_animation::skeletal::decompose_mat4;
 pub use asset::{
     decode_obj_vertices_for_async, decode_rgba_image_file, AssetError, AssetManager, GltfNodeData,
     ObjIndexKind,

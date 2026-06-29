@@ -1,4 +1,4 @@
-use crate::animation::AnimationClip;
+use super::clip::AnimationClip;
 use std::sync::Arc;
 
 /// A single state in the animation state machine — names one clip.
