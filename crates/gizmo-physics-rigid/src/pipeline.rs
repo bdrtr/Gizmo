@@ -833,4 +833,113 @@ impl PhysicsWorld {
                 }
             })
     }
+
+    /// CCD backstop — runs right after position integration.
+    ///
+    /// The speculative-contact path lets a CCD body close the gap to an obstacle and
+    /// stop one frame later, but it relies on the GJK separation distance being
+    /// accurate at near-contact. Against **thin** geometry (a box whose face is tiny
+    /// next to its other extents) the GJK distance can degenerate to a far corner, so
+    /// the speculative contact bails and a Mach-scale body sails straight through.
+    ///
+    /// This pass is a robust geometric guard: for any CCD body that travelled farther
+    /// than its own radius this substep (i.e. fast enough that discrete detection could
+    /// miss it), sweep its centre against each static / sleeping collider's AABB
+    /// inflated by the body's half-extents. If the swept segment enters one, the body
+    /// is clamped a hair short of that face and its inward velocity is removed.
+    ///
+    /// Deliberately scoped: slow / resting bodies (`travel <= radius`) are left
+    /// entirely to the discrete + speculative path, so ordinary contacts and resting
+    /// stacks are byte-for-byte unchanged; two fast *dynamic* bodies remain the
+    /// documented out-of-scope case (handled, imperfectly, by the speculative path).
+    pub(crate) fn ccd_resolve_step(&mut self, dt: f32) {
+        use gizmo_math::{Aabb, Vec3};
+        use gizmo_physics_core::raycast::{Ray, Raycast};
+        const SKIN: f32 = 0.01;
+
+        let n = self.entities.len();
+        for i in 0..n {
+            let rb_i = &self.rigid_bodies[i];
+            if !rb_i.ccd_enabled || !rb_i.is_dynamic() || rb_i.is_sleeping {
+                continue;
+            }
+            let vel = self.velocities[i].linear;
+            let delta = vel * dt;
+            let travel = delta.length();
+            if travel < 1e-5 {
+                continue;
+            }
+            // Own half-extents; only engage once the body outruns discrete detection.
+            let self_aabb = self.colliders[i].compute_aabb(Vec3::ZERO, self.transforms[i].rotation);
+            let half = (Vec3::from(self_aabb.max) - Vec3::from(self_aabb.min)) * 0.5;
+            let min_half = half.x.min(half.y).min(half.z).max(1e-4);
+            if travel <= min_half {
+                continue;
+            }
+            let dir = delta / travel;
+            let new_pos = self.transforms[i].position;
+            let old_pos = new_pos - delta;
+
+            let mut best_toi = f32::INFINITY;
+            let mut best_normal = Vec3::ZERO;
+            for j in 0..n {
+                if j == i {
+                    continue;
+                }
+                // Only against bodies that hold their ground: static or sleeping.
+                let rb_j = &self.rigid_bodies[j];
+                if (rb_j.is_dynamic() && !rb_j.is_sleeping) || self.colliders[j].is_trigger {
+                    continue;
+                }
+                let other = self.colliders[j]
+                    .compute_aabb(self.transforms[j].position, self.transforms[j].rotation);
+                let infl = Aabb::new(Vec3::from(other.min) - half, Vec3::from(other.max) + half);
+                // Already overlapping at the start of the substep ⇒ leave it to the
+                // discrete solver (this guard is only for clean pass-through).
+                if infl.contains_point(old_pos) {
+                    continue;
+                }
+                let ray = Ray::new(old_pos, dir);
+                if let Some(t) = Raycast::ray_aabb(&ray, &infl) {
+                    if (0.0..=travel).contains(&t) && t < best_toi {
+                        best_toi = t;
+                        best_normal = Self::aabb_face_normal(&infl, old_pos + dir * t);
+                    }
+                }
+            }
+
+            if best_toi.is_finite() {
+                self.transforms[i].position = old_pos + dir * (best_toi - SKIN).max(0.0);
+                let vn = self.velocities[i].linear.dot(best_normal);
+                if vn < 0.0 {
+                    self.velocities[i].linear -= best_normal * vn;
+                }
+            }
+        }
+    }
+
+    /// Outward normal of the AABB face nearest to `hit` (a point on its surface).
+    fn aabb_face_normal(aabb: &gizmo_math::Aabb, hit: Vec3) -> Vec3 {
+        let min = Vec3::from(aabb.min);
+        let max = Vec3::from(aabb.max);
+        let dmin = (hit - min).abs();
+        let dmax = (hit - max).abs();
+        let faces = [
+            (dmin.x, Vec3::new(-1.0, 0.0, 0.0)),
+            (dmax.x, Vec3::new(1.0, 0.0, 0.0)),
+            (dmin.y, Vec3::new(0.0, -1.0, 0.0)),
+            (dmax.y, Vec3::new(0.0, 1.0, 0.0)),
+            (dmin.z, Vec3::new(0.0, 0.0, -1.0)),
+            (dmax.z, Vec3::new(0.0, 0.0, 1.0)),
+        ];
+        let mut best = f32::INFINITY;
+        let mut normal = Vec3::X;
+        for (d, nrm) in faces {
+            if d < best {
+                best = d;
+                normal = nrm;
+            }
+        }
+        normal
+    }
 }
