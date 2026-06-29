@@ -14,37 +14,49 @@ pub mod system;
 pub mod interaction;
 pub mod bundles;
 
-use gizmo_app::{App, Plugin};
-use gizmo_core::system::IntoSystemConfig;
+use gizmo_core::system::{IntoSystemConfig, Schedule};
+use gizmo_core::world::World;
 pub use components::*;
 pub use bundles::*;
 pub use layout::*;
 
+/// Registers the UI components + [`UiContext`] resource and schedules the layout
+/// and interaction systems on a [`World`]/[`Schedule`] directly.
+///
+/// This is the **dependency-light** entry point — it needs only `gizmo-core`, so
+/// `gizmo-ui` works as a pure ECS-UI layer without `gizmo-app`. The `app`-feature
+/// [`UiPlugin`] is a thin wrapper over this.
+pub fn register(world: &mut World, schedule: &mut Schedule) {
+    world.register_component_type::<Style>();
+    world.register_component_type::<Node>();
+    world.register_component_type::<Interaction>();
+    world.register_component_type::<BackgroundColor>();
+    world.register_component_type::<UiRoot>();
+
+    world.insert_resource(UiContext::new());
+
+    schedule.add_di_system(
+        system::ui_layout_system
+            .into_config()
+            .label("ui_layout"),
+    );
+    schedule.add_di_system(
+        interaction::ui_interaction_system
+            .into_config()
+            .label("ui_interaction")
+            .after("ui_layout"),
+    );
+}
+
 /// Plugin that registers the UI components and schedules the layout and
-/// interaction systems.
+/// interaction systems (via [`register`]). Requires the `app` feature.
+#[cfg(feature = "app")]
 pub struct UiPlugin;
 
-impl<State: 'static> Plugin<State> for UiPlugin {
-    fn build(&self, app: &mut App<State>) {
-        app.world.register_component_type::<Style>();
-        app.world.register_component_type::<Node>();
-        app.world.register_component_type::<Interaction>();
-        app.world.register_component_type::<BackgroundColor>();
-        app.world.register_component_type::<UiRoot>();
-
-        app.world.insert_resource(UiContext::new());
-
-        app.schedule.add_di_system(
-            system::ui_layout_system
-                .into_config()
-                .label("ui_layout"),
-        );
-        app.schedule.add_di_system(
-            interaction::ui_interaction_system
-                .into_config()
-                .label("ui_interaction")
-                .after("ui_layout"),
-        );
+#[cfg(feature = "app")]
+impl<State: 'static> gizmo_app::Plugin<State> for UiPlugin {
+    fn build(&self, app: &mut gizmo_app::App<State>) {
+        register(&mut app.world, &mut app.schedule);
     }
 }
 
@@ -54,8 +66,9 @@ pub mod prelude {
     pub use crate::{
         components::{Style, Node, Interaction, BackgroundColor, UiRoot},
         bundles::{NodeBundle, ButtonBundle},
-        UiPlugin,
     };
+    #[cfg(feature = "app")]
+    pub use crate::UiPlugin;
     pub use taffy::style::*;
     pub use taffy::geometry::*;
 }

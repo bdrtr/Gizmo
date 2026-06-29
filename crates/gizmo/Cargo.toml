@@ -26,7 +26,7 @@ scene = ["dep:gizmo-scene", "gizmo-app/scene"]
 physics = ["gizmo-app/physics", "dep:gizmo-physics-core", "dep:gizmo-physics-rigid"]
 physics-dynamics = ["dep:gizmo-physics-dynamics"]
 physics-soft = ["dep:gizmo-physics-soft"]
-ui = ["dep:gizmo-ui"]
+ui = ["dep:gizmo-ui", "gizmo-ui/app"]
 animation = ["dep:gizmo-animation"]
 
 [dependencies]
