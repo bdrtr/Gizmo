@@ -176,7 +176,10 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
                     let up = rot * gizmo::math::Vec3::new(0.0, 1.0, 0.0);
                     let right = rot * gizmo::math::Vec3::new(1.0, 0.0, 0.0);
                     
-                    let is_selected = editor_state.selection.entities.contains(&gizmo::core::entity::Entity::new(entity_id, 0));
+                    // Match by id, generation-independent. The selection set holds
+                    // FULL-generation entities, so `contains(Entity::new(id, 0))` silently
+                    // missed any entity whose id slot had been recycled (generation ≥ 1).
+                    let is_selected = editor_state.selection.entities.iter().any(|e| e.id() == entity_id);
                     let color = if is_selected { [1.0, 1.0, 0.0, 1.0] } else { [0.8, 0.8, 0.8, 1.0] }; // Seçiliyse sarı, değilse gri
                     
                     // Kamera Gövdesi (Küçük bir kutu)
@@ -257,7 +260,10 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
                     let right = rot * gizmo::math::Vec3::new(1.0, 0.0, 0.0);
                     let up = rot * gizmo::math::Vec3::new(0.0, 1.0, 0.0);
                     
-                    let is_selected = editor_state.selection.entities.contains(&gizmo::core::entity::Entity::new(entity_id, 0));
+                    // Match by id, generation-independent. The selection set holds
+                    // FULL-generation entities, so `contains(Entity::new(id, 0))` silently
+                    // missed any entity whose id slot had been recycled (generation ≥ 1).
+                    let is_selected = editor_state.selection.entities.iter().any(|e| e.id() == entity_id);
                     let color = if is_selected { [1.0, 1.0, 0.0, 1.0] } else { [light.color.x, light.color.y, light.color.z, 1.0] };
                     
                     // Güneş ikonu (Merkezden çıkan ışınlar)
@@ -278,7 +284,10 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
                 if let (Some(light), Some(gt)) = (point_lights.get(entity_id), global_transforms.get(entity_id)) {
                     let (pos, _rot, _scale) = gizmo::renderer::decompose_mat4(gt.matrix);
                     
-                    let is_selected = editor_state.selection.entities.contains(&gizmo::core::entity::Entity::new(entity_id, 0));
+                    // Match by id, generation-independent. The selection set holds
+                    // FULL-generation entities, so `contains(Entity::new(id, 0))` silently
+                    // missed any entity whose id slot had been recycled (generation ≥ 1).
+                    let is_selected = editor_state.selection.entities.iter().any(|e| e.id() == entity_id);
                     let color = if is_selected { [1.0, 1.0, 0.0, 1.0] } else { [light.color.x, light.color.y, light.color.z, 1.0] };
                     
                     // Ampul ikonu (küçük küre / çapraz çizgiler)
