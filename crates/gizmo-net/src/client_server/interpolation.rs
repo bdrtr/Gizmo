@@ -93,12 +93,21 @@ impl SnapshotInterpolator {
                     s1.position[2] + (s2.position[2] - s1.position[2]) * t,
                 ];
 
-                // Slerp veya basit Nlerp (Rotation) için yaklaşım (Nlerp performansı iyidir)
+                // Nlerp (Rotation). KRİTİK: `q` ve `-q` AYNI yönelimi temsil eder, bu yüzden
+                // ardışık iki snapshot rutin olarak ZIT yarıkürelerde gelir. Yarıküreyi
+                // hizalamadan (dot < 0 iken birini negatiflemeden) lerp UZUN yoldan gider ve
+                // sıfır-norm quaternion'a yaklaşır → uzak oyuncunun yönelimi yanlış yöne
+                // döner / sıçrar. dot işaretine göre s2'yi s1 ile aynı yarıküreye çek.
+                let dot = s1.rotation[0] * s2.rotation[0]
+                    + s1.rotation[1] * s2.rotation[1]
+                    + s1.rotation[2] * s2.rotation[2]
+                    + s1.rotation[3] * s2.rotation[3];
+                let sign = if dot < 0.0 { -1.0 } else { 1.0 };
                 let mut rot = [
-                    s1.rotation[0] + (s2.rotation[0] - s1.rotation[0]) * t,
-                    s1.rotation[1] + (s2.rotation[1] - s1.rotation[1]) * t,
-                    s1.rotation[2] + (s2.rotation[2] - s1.rotation[2]) * t,
-                    s1.rotation[3] + (s2.rotation[3] - s1.rotation[3]) * t,
+                    s1.rotation[0] + (s2.rotation[0] * sign - s1.rotation[0]) * t,
+                    s1.rotation[1] + (s2.rotation[1] * sign - s1.rotation[1]) * t,
+                    s1.rotation[2] + (s2.rotation[2] * sign - s1.rotation[2]) * t,
+                    s1.rotation[3] + (s2.rotation[3] * sign - s1.rotation[3]) * t,
                 ];
 
                 // Normalize Quaternion
@@ -147,6 +156,24 @@ mod tests {
         // render_time = 0.5 → tam orta nokta
         let (pos, _rot) = interp.get_interpolated_transform(0.5).unwrap();
         assert!((pos[0] - 5.0).abs() < 1e-5, "beklenen 5.0, gelen {}", pos[0]);
+    }
+
+    // REGRESYON (audit round 2): ardışık snapshot'lar zıt yarıkürelerde (q vs -q)
+    // geldiğinde Nlerp KISA yoldan gitmeli. s2, 90°-Y dönüşünün NEGATİF quaternion'u
+    // olarak gelir (aynı yönelim); düzeltme olmadan lerp uzun yoldan ~135°'ye gider.
+    #[test]
+    fn nlerp_takes_short_way_across_opposite_hemispheres() {
+        let mut interp = SnapshotInterpolator::new(0.0);
+        // s1 = identity. s2 = 90° about Y, stored as its NEGATED quaternion.
+        let h = std::f32::consts::FRAC_1_SQRT_2; // sin45 = cos45 ≈ 0.7071
+        interp.add_snapshot(0.0, [0.0; 3], [0.0, 0.0, 0.0, 1.0]);
+        interp.add_snapshot(1.0, [0.0; 3], [0.0, -h, 0.0, -h]); // == +Y 90°, opposite hemisphere
+
+        let (_pos, rot) = interp.get_interpolated_transform(0.5).unwrap();
+        // Short way to halfway (45° about +Y): w ≈ cos22.5 ≈ 0.924, y ≈ sin22.5 ≈ 0.383.
+        // The old long-way bug gave w ≈ 0.383 (≈135°) — discriminating.
+        assert!(rot[3] > 0.9, "took the long way: w = {} (expected ≈0.924)", rot[3]);
+        assert!(rot[1] > 0.3, "wrong rotation axis sign: y = {}", rot[1]);
     }
 
     #[test]
