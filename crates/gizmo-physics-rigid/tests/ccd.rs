@@ -192,6 +192,34 @@ fn ccd_body_settles_on_ground_like_discrete() {
     assert!(v < 0.2, "CCD sphere never came to rest: |v| = {v}");
 }
 
+/// Regression (audit 2026-06-29): a Mach-scale bullet starting far from a *thick*
+/// wall used to tunnel. The speculative contact closes most of the gap but leaves
+/// the bullet at ~1800 m/s; the next sub-step's GJK separation distance degenerated
+/// to a far box corner (thin-face aspect ratio), so the speculative contact bailed
+/// and the still-fast bullet sailed straight through. The CCD geometric backstop
+/// (`ccd_resolve_step`) now clamps it. This is the exact shrunk proptest case, pinned
+/// as a deterministic test so it survives independently of the proptest seed file.
+#[test]
+fn ccd_far_start_thick_wall_does_not_tunnel() {
+    let half_thick = 0.299_569_7;
+    let mut world = wall_world(half_thick);
+    add_bullet(
+        &mut world,
+        1,
+        Vec3::new(-8.0, 0.0, 0.0),
+        Vec3::new(2336.5244, 0.0, 0.0),
+        0.099_517_87,
+    );
+    for _ in 0..480 {
+        let _ = world.step(DT);
+        let x = world.transforms[1].position.x;
+        assert!(x < half_thick, "tunnelled: centre crossed the far face, x = {x}");
+    }
+    // Comes to rest on the near side (stopped by the wall, not lodged through).
+    let x = world.transforms[1].position.x;
+    assert!(x < -half_thick, "should rest on the near side of the wall, got x = {x}");
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(48))]
 

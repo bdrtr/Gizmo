@@ -563,6 +563,10 @@ impl PhysicsWorld {
         // 5-6. Pozisyon entegrasyonu ve uyku durumu
         let t4 = std::time::Instant::now();
         self.position_integration_step(dt)?;
+        // CCD geometrik güvencesi: ince geometriye karşı speculative GJK mesafesi
+        // dejenere olduğunda hızlı bir cismin tünellemesini engelle (yalnız hızlı CCD
+        // cisimlerini etkiler; yavaş/dinlenen cisimler dokunulmaz → determinizm nötr).
+        self.ccd_resolve_step(dt);
         self.metrics.integration_ms += ms(t4);
 
         // Energy Conservation Check: Validate energy bounds (Zero-cost in release mode)
