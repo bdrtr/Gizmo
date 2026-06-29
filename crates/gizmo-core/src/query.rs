@@ -653,7 +653,14 @@ impl<T: crate::component::Component> WorldQuery for Changed<T> {
         }
     }
 
-    fn check_aliasing(_types: &mut Vec<(TypeId, bool)>) {}
+    fn check_aliasing(types: &mut Vec<(TypeId, bool)>) {
+        // `Changed<T>` filtresi T'nin `ComponentTicks` belleğini OKUR; aynı bellek
+        // `Mut<T>`'nin `deref_mut`'unda YAZILIR. Erişimi bildirmezsek zamanlayıcı bir
+        // `Query<Changed<T>>` sistemini bir `Query<Mut<T>>` yazıcısıyla aynı paralel
+        // batch'e koyabilir → ticks üzerinde senkronize-olmayan eşzamanlı oku/yaz (data
+        // race / UB). T'yi READ olarak bildir; böylece çakışma tespit edilir.
+        check(TypeId::of::<T>(), false, types);
+    }
 
     fn matches_archetype(arch: &Archetype) -> bool {
         if T::storage_type() == crate::component::StorageType::SparseSet { true } else { arch.has_component(TypeId::of::<T>()) }
@@ -696,7 +703,11 @@ impl<T: crate::component::Component> WorldQuery for Added<T> {
         }
     }
 
-    fn check_aliasing(_types: &mut Vec<(TypeId, bool)>) {}
+    fn check_aliasing(types: &mut Vec<(TypeId, bool)>) {
+        // `Added<T>` de T'nin `ComponentTicks`'ini OKUR (bkz. `Changed`); `Mut<T>`
+        // yazıcısıyla aynı batch'e düşmemesi için T'yi READ olarak bildir.
+        check(TypeId::of::<T>(), false, types);
+    }
 
     fn matches_archetype(arch: &Archetype) -> bool {
         if T::storage_type() == crate::component::StorageType::SparseSet { true } else { arch.has_component(TypeId::of::<T>()) }

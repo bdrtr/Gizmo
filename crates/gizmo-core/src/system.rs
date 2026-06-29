@@ -1465,4 +1465,48 @@ mod tests {
         b.component_writes.push(TypeId::of::<CompB>());
         assert!(a.is_compatible_with(&b));
     }
+
+    // REGRESYON (audit 2026-06-29): `Changed<T>`/`Added<T>` filtreleri T'nin
+    // `ComponentTicks` belleğini OKUR; aynı bellek `Mut<T>`'nin `deref_mut`'unda
+    // YAZILIR. Eskiden `check_aliasing` HİÇBİR erişim bildirmediğinden zamanlayıcı bir
+    // `Query<Changed<T>>` sistemini bir `Query<Mut<T>>` yazıcısıyla aynı paralel batch'e
+    // koyabiliyordu (is_compatible_with == true) → ticks üzerinde data race / UB.
+    #[test]
+    fn changed_and_added_declare_read_conflicting_with_mut_writer() {
+        use crate::query::{Added, Changed, Mut, Query};
+
+        #[derive(Clone)]
+        struct Pos(#[allow(dead_code)] f32);
+        impl crate::component::Component for Pos {}
+
+        let pos = TypeId::of::<Pos>();
+
+        let mut changed_info = AccessInfo::new();
+        <Query<'static, Changed<Pos>> as SystemParam>::get_access_info(&mut changed_info);
+        assert!(
+            changed_info.component_reads.contains(&pos),
+            "Changed<Pos> Pos'u READ olarak bildirmeli (ticks'i okuyor)"
+        );
+
+        let mut added_info = AccessInfo::new();
+        <Query<'static, Added<Pos>> as SystemParam>::get_access_info(&mut added_info);
+        assert!(
+            added_info.component_reads.contains(&pos),
+            "Added<Pos> Pos'u READ olarak bildirmeli"
+        );
+
+        let mut mut_info = AccessInfo::new();
+        <Query<'static, Mut<Pos>> as SystemParam>::get_access_info(&mut mut_info);
+        assert!(mut_info.component_writes.contains(&pos));
+
+        // İkisi de Mut<Pos> yazıcısıyla AYNI paralel batch'e konulamamalı.
+        assert!(
+            !changed_info.is_compatible_with(&mut_info),
+            "Changed<Pos> okuyucu, Mut<Pos> yazıcı ile paralel çalıştırılamaz olmalı (data race)"
+        );
+        assert!(
+            !added_info.is_compatible_with(&mut_info),
+            "Added<Pos> okuyucu, Mut<Pos> yazıcı ile paralel çalıştırılamaz olmalı (data race)"
+        );
+    }
 }
