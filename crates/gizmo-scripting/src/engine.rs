@@ -494,10 +494,12 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
                         agent.set_target(target);
                     }
                 }
-ScriptCommand::ClearAiTarget(id) => {
+                ScriptCommand::ClearAiTarget(id) => {
                     let agents = world.borrow_mut::<gizmo_ai::components::NavAgent>();
                     if let Some(mut agent) = agents.get_mut(id) {
-                        agent.clear_path();
+                        // Must clear the TARGET, not just the path — clearing only the path
+                        // leaves target set, so ai_navigation_system recomputes and keeps going.
+                        agent.clear_target();
                     }
                 }
                 ScriptCommand::SetFighterMove { id, name, startup, active, recovery, damage } => {
