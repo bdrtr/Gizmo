@@ -47,6 +47,22 @@ pub trait FetchComponent: sealed::SealedFetch {
     /// # Safety
     /// `len` değeri archetype'ın eleman sayısını aşmamalıdır.
     unsafe fn get_slice<'w>(fetch: Self::Fetch<'w>, len: usize) -> Self::Slice<'w>;
+
+    /// `entity_id`'in bu bileşeni gerçekten taşıyıp taşımadığını döndürür.
+    ///
+    /// `Table` depolamada bu DAİMA `true`'dur: `matches_archetype` zaten iterasyonu
+    /// bileşeni içeren arketiplere kısıtlamıştır. `SparseSet` depolamada ise
+    /// `matches_archetype` bilinçli olarak GENİŞTİR (her arketip için `true` döner),
+    /// bu yüzden satır-başı varlık kontrolü BURADA yapılmalıdır — aksi halde `get_item`,
+    /// bileşeni OLMAYAN entity'ler için sparse set'i sınır-dışı indeksler (güvenli koddan
+    /// ulaşılabilen panik veya — tombstone slot'unda — release derlemede UB).
+    ///
+    /// # Safety
+    /// `fetch`, iterlenen dünya için `fetch_raw`'dan gelmelidir.
+    unsafe fn contains_entity<'w>(fetch: Self::Fetch<'w>, entity_id: u32) -> bool {
+        let _ = (fetch, entity_id);
+        true
+    }
 }
 
 impl<T: crate::component::Component> sealed::SealedFetch for &T {}
@@ -83,6 +99,13 @@ impl<T: crate::component::Component> FetchComponent for &T {
             panic!("Cannot use iter_chunks with SparseSet components");
         }
         std::slice::from_raw_parts(fetch.0 as *const T, len)
+    }
+
+    unsafe fn contains_entity<'w>(fetch: Self::Fetch<'w>, entity_id: u32) -> bool {
+        match fetch.1 {
+            Some(set_ptr) => (*set_ptr).contains(entity_id),
+            None => true,
+        }
     }
 }
 
@@ -154,6 +177,13 @@ impl<T: crate::component::Component> FetchComponent for Mut<'_, T> {
                 ticks: &mut *ticks_ptr.add(row),
                 current_tick: system_tick,
             }
+        }
+    }
+
+    unsafe fn contains_entity<'w>(fetch: Self::Fetch<'w>, entity_id: u32) -> bool {
+        match fetch.3 {
+            Some(set_ptr) => (*set_ptr).contains(entity_id),
+            None => true,
         }
     }
 
@@ -588,8 +618,11 @@ impl<T0: FetchComponent> WorldQuery for T0 where T0::Component: crate::component
         T0::get_item(fetch, row, entity_id)
     }
 
-    unsafe fn filter_row<'w>(_fetch: Self::Fetch<'w>, _row: usize, _entity_id: u32, _tick: u32) -> bool {
-        true
+    unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, _row: usize, entity_id: u32, _tick: u32) -> bool {
+        // SparseSet bileşenleri için `matches_archetype` her arketipte `true` döndüğünden
+        // satır-başı varlık kontrolü ŞART (yoksa get_item sparse set'i sınır-dışı indeksler).
+        // Table depolamada `contains_entity` daima `true`.
+        T0::contains_entity(fetch, entity_id)
     }
 
     unsafe fn get_slice<'w>(fetch: Self::Fetch<'w>, len: usize) -> Self::Slice<'w> {
@@ -739,12 +772,20 @@ pub struct With<T>(PhantomData<T>);
 impl<T: crate::component::Component> sealed::SealedQuery for With<T> {}
 impl<T: crate::component::Component> WorldQuery for With<T> {
     type StaticType = With<T>;
-    type Fetch<'w> = ();
+    // (is_sparse, SparseSet ise set pointer'ı). Table'da daima `(false, None)`.
+    type Fetch<'w> = (
+        bool,
+        Option<*const crate::archetype::sparse_set::ComponentSparseSet>,
+    );
     type Item<'w> = ();
     type Slice<'w> = ();
 
-    unsafe fn fetch_raw<'w>(_world: &'w World, _arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
-        Some(())
+    unsafe fn fetch_raw<'w>(world: &'w World, _arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
+        if T::storage_type() == crate::component::StorageType::SparseSet {
+            Some((true, world.sparse_sets.get(&TypeId::of::<T>()).map(|s| s as *const _)))
+        } else {
+            Some((false, None))
+        }
     }
 
     fn check_aliasing(_types: &mut Vec<(TypeId, bool)>) {}
@@ -753,8 +794,14 @@ impl<T: crate::component::Component> WorldQuery for With<T> {
         if T::storage_type() == crate::component::StorageType::SparseSet { true } else { arch.has_component(TypeId::of::<T>()) }
     }
 
-    unsafe fn filter_row<'w>(_fetch: Self::Fetch<'w>, _row: usize, _entity_id: u32, _tick: u32) -> bool {
-        true
+    unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, _row: usize, entity_id: u32, _tick: u32) -> bool {
+        // Table: matches_archetype zaten bileşeni İÇEREN arketipleri seçti → daima true.
+        // SparseSet: matches_archetype genişti → entity gerçekten taşıyor mu, kontrol et.
+        match fetch {
+            (false, _) => true,
+            (true, Some(set_ptr)) => (*set_ptr).contains(entity_id),
+            (true, None) => false, // sparse set hiç oluşmamış → kimsede bileşen yok
+        }
     }
     unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize, _entity_id: u32) -> Self::Item<'w> {}
     unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {}
@@ -765,12 +812,20 @@ pub struct Without<T>(PhantomData<T>);
 impl<T: crate::component::Component> sealed::SealedQuery for Without<T> {}
 impl<T: crate::component::Component> WorldQuery for Without<T> {
     type StaticType = Without<T>;
-    type Fetch<'w> = ();
+    // (is_sparse, SparseSet ise set pointer'ı). Table'da daima `(false, None)`.
+    type Fetch<'w> = (
+        bool,
+        Option<*const crate::archetype::sparse_set::ComponentSparseSet>,
+    );
     type Item<'w> = ();
     type Slice<'w> = ();
 
-    unsafe fn fetch_raw<'w>(_world: &'w World, _arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
-        Some(())
+    unsafe fn fetch_raw<'w>(world: &'w World, _arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
+        if T::storage_type() == crate::component::StorageType::SparseSet {
+            Some((true, world.sparse_sets.get(&TypeId::of::<T>()).map(|s| s as *const _)))
+        } else {
+            Some((false, None))
+        }
     }
 
     fn check_aliasing(_types: &mut Vec<(TypeId, bool)>) {}
@@ -779,8 +834,14 @@ impl<T: crate::component::Component> WorldQuery for Without<T> {
         if T::storage_type() == crate::component::StorageType::SparseSet { true } else { !arch.has_component(TypeId::of::<T>()) }
     }
 
-    unsafe fn filter_row<'w>(_fetch: Self::Fetch<'w>, _row: usize, _entity_id: u32, _tick: u32) -> bool {
-        true
+    unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, _row: usize, entity_id: u32, _tick: u32) -> bool {
+        // Table: matches_archetype zaten bileşeni İÇERMEYEN arketipleri seçti → daima true.
+        // SparseSet: matches_archetype genişti → entity bileşeni taşımıyorsa eşle.
+        match fetch {
+            (false, _) => true,
+            (true, Some(set_ptr)) => !(*set_ptr).contains(entity_id),
+            (true, None) => true, // sparse set hiç oluşmamış → herkes "without"
+        }
     }
     unsafe fn get_item<'w>(_fetch: Self::Fetch<'w>, _row: usize, _entity_id: u32) -> Self::Item<'w> {}
     unsafe fn get_slice<'w>(_fetch: Self::Fetch<'w>, _len: usize) -> Self::Slice<'w> {}
