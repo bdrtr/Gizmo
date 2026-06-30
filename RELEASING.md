@@ -84,13 +84,13 @@ resolved. **Ext-type leak** = pre-1.0 external types in the *public* API.
 
 | Crate | Stage | 1.0-ready? | Blocker | Ext-type in public API |
 |---|---|---|---|---|
-| `gizmo-math` | A | ✅ Yes (now) | none — `glam` is an intentional public dep (§3) | `glam 0.29` (pinned `=0.29.3`, documented public dep) |
+| `gizmo-math` | A | ✅ Yes (now) | none — `glam` is an intentional public dep (§3) | `glam` (caret `0.29` line, documented public dep) |
 | `gizmo-core` | A | ⚠️ After reflect-gating | `bevy_reflect 0.15` in derives | `bevy_reflect` |
 | `gizmo-physics-core` | A | ⚠️ After reflect + arrayvec | `bevy_reflect` + `arrayvec` leak | `bevy_reflect`, `arrayvec` (`CollisionEvent.contact_points`) |
 | `gizmo-physics-rigid` | A | ⚠️ After reflect + arrayvec | `bevy_reflect` + `arrayvec` (via physics-core) | `bevy_reflect`, `arrayvec` |
 | `gizmo-physics-dynamics` | A | ✅ After core stages | none of its own (no ext leak) | none |
 | `gizmo-physics-soft` | A | ✅ After core stages | `wgpu` only behind opt-in `gpu_physics` feature (off by default) | `wgpu 0.20` (feature-gated, not default) |
-| `gizmo-scene` | A | ⚠️ After reflect-gating | `bevy_reflect 0.15` (serialization) | `bevy_reflect` |
+| `gizmo-scene` | A | ⚠️ After reflect-gating | `bevy_reflect 0.15` (serialization) | `bevy_reflect`; `ron` (`SceneError` exposes `ron::error::SpannedError`/`ron::Error`; documented public dep, §3) |
 | `gizmo-net` | A | ✅ After core stages | none of its own | none |
 | `gizmo-audio` | A | ✅ After core stages | none of its own | none |
 | `gizmo-ai` | A | ✅ After core stages | none of its own | none |
@@ -326,12 +326,13 @@ transitive-dependency note).
 
 ### (f) Set and document an MSRV — **S** — ✅ **DONE (2026-06-25)**
 
-`rust-version = "1.89"` is set in `[workspace.package]` and gated by a new CI
-`msrv` job (`dtolnay/rust-toolchain@1.89.0` → `cargo check --workspace`).
-**The MSRV was determined empirically, not assumed:** 1.82 fails (a transitive
-`crypto-common 0.2.1` needs `edition2024` → 1.85), 1.85 fails (locked `wide 1.2`
-/ `safe_arch 1.0` need 1.89), and 1.89 builds the full workspace clean. The
-naive "bevy 0.15 ⇒ 1.82" floor is **wrong** for the current lock file.
+`rust-version = "1.92"` is set in `[workspace.package]` and gated by a CI
+`msrv` job (`dtolnay/rust-toolchain@1.92.0` → `cargo check --workspace`).
+**The floor was determined empirically, not assumed:** the pre-graphics-upgrade
+stack bottomed out at 1.89 (1.82 fails — a transitive `crypto-common 0.2.1` needs
+`edition2024` → 1.85; 1.85 fails — locked `wide 1.2` / `safe_arch 1.0` need 1.89),
+and the §4c graphics upgrade then raised it to **1.92** (egui 0.34's floor). The
+naive "bevy 0.15 ⇒ 1.82" guess is **wrong** for the current lock file.
 
 ### Sequencing
 
