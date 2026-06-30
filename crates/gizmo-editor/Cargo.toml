@@ -14,11 +14,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-winit = { workspace = true }
-wgpu = "29"
 egui = "0.34"
-egui-winit = { version = "0.34", default-features = false, features = ["links"] }
-egui-wgpu = "0.34"
 gizmo-core = { path = "../gizmo-core" , version = "0.2.0" }
 gizmo-math = { path = "../gizmo-math" , version = "0.2.0" }
 gizmo-physics-core = { path = "../gizmo-physics-core" , version = "0.2.0" }

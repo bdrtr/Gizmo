@@ -2,9 +2,10 @@
 //!
 //! This crate provides the editor UI built on top of `egui`/`egui_dock`,
 //! rendered with `wgpu`. Editor-wide state lives in
-//! [`EditorState`](editor_state::EditorState) and the windowing/render
-//! integration in [`EditorContext`](gui::EditorContext). The whole UI is
-//! drawn each frame by [`draw_editor`].
+//! [`EditorState`](editor_state::EditorState). The whole UI is drawn each
+//! frame by [`draw_editor`]. The window/egui runtime that hosts the editor
+//! overlay (`EguiContext`) lives in the `gizmo-app` crate behind its `egui`
+//! feature, so it can also back non-editor in-game HUDs.
 //!
 //! ## Panels
 //! - **Toolbar** — top bar: Save/Load, Play/Pause, gizmo mode
@@ -19,7 +20,6 @@ pub mod console;
 pub mod editor_state;
 pub mod error;
 pub mod game_view;
-pub mod gui;
 pub mod hierarchy;
 pub mod history;
 pub mod inspector;
@@ -31,7 +31,6 @@ pub mod windows;
 
 pub use editor_state::{BuildTarget, EditorMode, EditorState, EditorTab, GizmoMode};
 pub use error::EditorError;
-pub use gui::EditorContext;
 
 use egui_dock::{DockArea, TabViewer};
 use gizmo_core::World;

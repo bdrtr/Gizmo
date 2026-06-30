@@ -23,8 +23,15 @@
 //! Builder methods are typically chained, ending with `run`, in the order
 //! `new` -> `set_setup` -> `set_update` -> optional render/UI hooks -> `run`.
 
-#[cfg(feature = "editor")]
+#[cfg(feature = "egui")]
 pub mod dev_console;
+/// Generic immediate-mode overlay UI runtime (egui integration).
+#[cfg(feature = "egui")]
+pub mod egui_ctx;
+/// Per-frame editor integration (scene/game RTT + scene save/load), kept out of
+/// the windowed event loop.
+#[cfg(feature = "editor")]
+pub mod editor_runtime;
 pub mod plugin;
 
 pub use plugin::Plugin;
