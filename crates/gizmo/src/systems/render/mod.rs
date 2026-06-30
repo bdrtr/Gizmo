@@ -689,3 +689,152 @@ impl<'a> RenderContextExt for crate::renderer::RenderContext<'a> {
 }
 
 mod passes;
+
+/// Golden render test: drive the REAL [`default_render_pass`] over a minimal scene
+/// (one lit cube + a camera + a sun) into an offscreen target and assert that geometry
+/// actually reaches the framebuffer — a sizeable central region must differ from the
+/// background. Unlike the renderer's clear-colour readback test, this exercises the full
+/// pipeline (cull → batch → shadow/deferred/forward → post), so a regression in the
+/// pass-recording split (or any pass) that drops geometry fails here instead of slipping
+/// past CI. Needs a GPU adapter; runs in GPU-backed CI/dev.
+#[cfg(test)]
+mod golden_render_tests {
+    use super::default_render_pass;
+    use crate::bundles::{CameraBundle, DirectionalLightBundle};
+    use crate::core::World;
+    use crate::math::{Vec3, Vec4};
+    use crate::physics::components::{GlobalTransform, Transform};
+    use crate::renderer::asset::AssetManager;
+    use crate::renderer::components::{Material, MeshRenderer};
+    use crate::renderer::Renderer;
+
+    #[test]
+    fn default_render_pass_draws_a_cube_distinct_from_background() {
+        pollster::block_on(async {
+            const W: u32 = 128;
+            const H: u32 = 128;
+            const BPP: u32 = 4; // every surface format used here is 4 bytes/pixel
+
+            let mut renderer = Renderer::new_headless(W, H, None).await;
+            let mut asset_manager = AssetManager::new();
+            let mut world = World::new();
+
+            // --- one cube at the origin (create_cube spans -1..1 → size 2) ---
+            let mesh = AssetManager::create_cube(&renderer.device);
+            let tex = asset_manager.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let mat = Material::new(tex).with_pbr(Vec4::new(0.9, 0.15, 0.15, 1.0), 0.0, 1.0);
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::ZERO));
+            world.add_component(cube, GlobalTransform::default()); // identity → cube at origin
+            world.add_component(cube, mesh);
+            world.add_component(cube, mat);
+            world.add_component(cube, MeshRenderer::new());
+
+            // --- camera on -X looking toward +X (yaw 0 → front = +X), framing the cube ---
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(-6.0, 0.0, 0.0),
+                yaw: 0.0,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            // --- a sun so the cube is lit (role = Sun by default) ---
+            world.spawn_bundle(DirectionalLightBundle::default());
+
+            // --- run the REAL pipeline into an offscreen target ---
+            let format = renderer.config.format;
+            let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("golden-target"),
+                size: wgpu::Extent3d {
+                    width: W,
+                    height: H,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+            let mut encoder = renderer
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+            default_render_pass(&mut world, &mut encoder, &view, &mut renderer);
+
+            // --- copy the result out (W*BPP = 512 → already 256-aligned) ---
+            let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("golden-readback"),
+                size: (W * H * BPP) as u64,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &target,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &staging,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(W * BPP),
+                        rows_per_image: Some(H),
+                    },
+                },
+                wgpu::Extent3d {
+                    width: W,
+                    height: H,
+                    depth_or_array_layers: 1,
+                },
+            );
+            renderer.queue.submit(Some(encoder.finish()));
+
+            let slice = staging.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
+            let _ = renderer.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+            rx.recv().unwrap().unwrap();
+            let data = slice.get_mapped_range();
+
+            let px = |x: u32, y: u32| -> [u8; 4] {
+                let i = ((y * W + x) * BPP) as usize;
+                [data[i], data[i + 1], data[i + 2], data[i + 3]]
+            };
+            let background = px(2, 2); // a corner — the cube never reaches here
+            let centre = px(W / 2, H / 2);
+            assert_ne!(
+                centre, background,
+                "centre pixel equals the corner/background — default_render_pass drew no geometry"
+            );
+
+            // the cube should cover a sizeable central region, not a stray pixel
+            let mut differing = 0u32;
+            for y in 0..H {
+                for x in 0..W {
+                    if px(x, y) != background {
+                        differing += 1;
+                    }
+                }
+            }
+            let frac = differing as f32 / (W * H) as f32;
+            assert!(
+                frac > 0.05,
+                "only {:.1}% of pixels differ from the background; the lit cube should fill a \
+                 sizeable central region (regression dropping geometry?)",
+                frac * 100.0
+            );
+        });
+    }
+}
