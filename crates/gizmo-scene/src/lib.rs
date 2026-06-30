@@ -23,4 +23,9 @@ pub use error::SceneError;
 pub use registry::SceneRegistry;
 pub use scene::{EntityData, MaterialData, SceneData};
 pub use snapshot::SceneSnapshot;
+/// `ron` is a deliberate, intentional **public dependency**: the scene file format is
+/// RON and [`SceneError`] exposes `ron::error::SpannedError` / `ron::Error` in its public
+/// API. As with `glam` in `gizmo-math`, a `ron` major-version bump is therefore a breaking
+/// change to this crate's public API and is treated as a breaking `gizmo-scene` bump for
+/// semver. (`ron` is currently a `0.x` crate; this is tracked in RELEASING.md §3.)
 pub use ron;
