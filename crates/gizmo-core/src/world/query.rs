@@ -15,6 +15,39 @@ impl World {
     ///
     /// Bu ayrım, denetimin "tek en zayıf noktası" olan dual-`Mut` aliasing UB'sini **güvenli
     /// koddan ULAŞILAMAZ** kılar: `&World`'ten mutable query yalnızca `unsafe` ile alınır.
+    ///
+    /// # Examples
+    /// Shared reads compose freely:
+    /// ```
+    /// use gizmo_core::prelude::*;
+    /// #[derive(Clone)]
+    /// struct Position { x: f32 }
+    /// gizmo_core::impl_component!(Position);
+    ///
+    /// let mut world = World::new();
+    /// world.register_component_type::<Position>();
+    /// let e = world.spawn();
+    /// world.add_component(e, Position { x: 1.0 });
+    ///
+    /// let r1 = world.query::<&Position>().unwrap();
+    /// let r2 = world.query::<&Position>().unwrap(); // any number may coexist
+    /// assert_eq!(r1.get(e.id()).unwrap().x, 1.0);
+    /// assert_eq!(r2.get(e.id()).unwrap().x, 1.0);
+    /// ```
+    ///
+    /// A *mutable* query can NOT be built through `query` — `Mut<T>` is not
+    /// [`ReadOnlyQuery`](crate::query::ReadOnlyQuery), so the dual-`Mut` UB is unreachable
+    /// from safe code (use [`World::query_mut`] instead):
+    /// ```compile_fail
+    /// use gizmo_core::prelude::*;
+    /// #[derive(Clone)]
+    /// struct Position { x: f32 }
+    /// gizmo_core::impl_component!(Position);
+    ///
+    /// let world = World::new();
+    /// // error[E0277]: `Mut<Position>: ReadOnlyQuery` is not satisfied
+    /// let _q = world.query::<Mut<Position>>();
+    /// ```
     pub fn query<'w, Q: crate::query::ReadOnlyQuery>(
         &'w self,
     ) -> Option<crate::query::Query<'w, Q>> {
@@ -28,6 +61,68 @@ impl World {
     ///
     /// World'e özel erişimi olan uygulama kodu (oyun döngüsü, editör, exclusive sistemler)
     /// için tercih edilen mutable giriş noktasıdır.
+    ///
+    /// # Examples
+    /// ```
+    /// use gizmo_core::prelude::*;
+    /// #[derive(Clone)]
+    /// struct Position { x: f32 }
+    /// gizmo_core::impl_component!(Position);
+    ///
+    /// let mut world = World::new();
+    /// world.register_component_type::<Position>();
+    /// let e = world.spawn();
+    /// world.add_component(e, Position { x: 1.0 });
+    ///
+    /// {
+    ///     let mut q = world.query_mut::<Mut<Position>>().unwrap();
+    ///     for (_id, mut p) in q.iter_mut() { p.x += 1.0; }
+    /// }
+    /// assert_eq!(world.query::<&Position>().unwrap().get(e.id()).unwrap().x, 2.0);
+    /// ```
+    ///
+    /// Two simultaneous mutable queries can't exist — each ties up `&mut World`, so the
+    /// dual-`Mut` aliasing is rejected at compile time:
+    /// ```compile_fail
+    /// use gizmo_core::prelude::*;
+    /// #[derive(Clone)]
+    /// struct Position { x: f32 }
+    /// gizmo_core::impl_component!(Position);
+    ///
+    /// let mut world = World::new();
+    /// let q1 = world.query_mut::<Mut<Position>>();
+    /// let q2 = world.query_mut::<Mut<Position>>(); // second &mut World — E0499
+    /// let _ = (q1, q2);
+    /// ```
+    ///
+    /// Likewise, two live mutable views from ONE query can't coexist (`get_mut` borrows the
+    /// query exclusively):
+    /// ```compile_fail
+    /// use gizmo_core::prelude::*;
+    /// #[derive(Clone)]
+    /// struct Position { x: f32 }
+    /// gizmo_core::impl_component!(Position);
+    ///
+    /// let mut world = World::new();
+    /// world.register_component_type::<Position>();
+    /// let mut q = world.query_mut::<Mut<Position>>().unwrap();
+    /// let a = q.get_mut(0);
+    /// let b = q.get_mut(0); // second &mut borrow of `q` — E0499
+    /// let _ = (a, b);
+    /// ```
+    ///
+    /// The shared accessors (`iter`/`get`/…) are gated to read-only queries, so a mutable
+    /// query can't hand out an aliasable shared iterator either — use `iter_mut`:
+    /// ```compile_fail
+    /// use gizmo_core::prelude::*;
+    /// #[derive(Clone)]
+    /// struct Position { x: f32 }
+    /// gizmo_core::impl_component!(Position);
+    ///
+    /// let mut world = World::new();
+    /// let q = world.query_mut::<Mut<Position>>().unwrap();
+    /// let _it = q.iter(); // `iter` requires `Q: ReadOnlyQuery`; Mut<Position> isn't — E0599
+    /// ```
     pub fn query_mut<'w, Q: crate::query::WorldQuery>(
         &'w mut self,
     ) -> Option<crate::query::Query<'w, Q>> {
