@@ -153,7 +153,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     // Normally you'd spawn entities dynamically using the builder, but since the builder just creates defs,
     // we'll manually create some connected limbs for demo
 
-    let mut prev_ent = None;
+    let mut prev_ent: Option<gizmo::core::Entity> = None;
     for i in 0..4 {
         let limb = world.spawn();
         let pos = Vec3::new(5.0, 8.0 - (i as f32) * 1.2, 0.0);
@@ -183,8 +183,8 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
 
         if let Some(parent) = prev_ent {
             let fixed = Joint::fixed(
-                parent,
-                limb,
+                gizmo::physics::BodyHandle::from_id(parent.id()),
+                gizmo::physics::BodyHandle::from_id(limb.id()),
                 Vec3::new(0.0, -0.6, 0.0),
                 Vec3::new(0.0, 0.6, 0.0),
             )

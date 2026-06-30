@@ -202,9 +202,12 @@ pub fn draw_joint_section(
 ) {
     let physics_world_res = world.try_get_resource_mut::<gizmo_physics_rigid::world::PhysicsWorld>();
     if let Ok(mut physics_world) = physics_world_res {
+        // Physics keys joints by body id (the opaque BodyHandle); map the selected
+        // ECS entity into that handle space once for comparisons and construction.
+        let body_id = gizmo_physics_rigid::BodyHandle::from_id(entity_id.id());
         let mut has_joints = false;
         for joint in &physics_world.joints {
-            if joint.entity_a == entity_id || joint.entity_b == entity_id {
+            if joint.entity_a == body_id || joint.entity_b == body_id {
                 has_joints = true;
                 break;
             }
@@ -218,7 +221,7 @@ pub fn draw_joint_section(
                     let mut remove_joint = false;
                     let joint = &mut physics_world.joints[i];
 
-                    if joint.entity_a == entity_id || joint.entity_b == entity_id {
+                    if joint.entity_a == body_id || joint.entity_b == body_id {
                         ui.group(|ui| {
                             ui.horizontal(|ui| {
                                 ui.label(egui::RichText::new(format!("Tip: {}", joint.joint_type())).strong());
@@ -227,7 +230,7 @@ pub fn draw_joint_section(
                                 }
                             });
 
-                            let other_id = if joint.entity_a == entity_id { joint.entity_b.id() } else { joint.entity_a.id() };
+                            let other_id = if joint.entity_a == body_id { joint.entity_b.id() } else { joint.entity_a.id() };
                             ui.label(format!("Bağlı Obje: [{}]", other_id));
 
                             ui.horizontal(|ui| {
@@ -335,14 +338,14 @@ pub fn draw_joint_section(
 
                 if ui.button("Ekle").clicked() {
                     if let Ok(target_id) = target_id_str.parse::<u32>() {
-                        let target_entity = gizmo_core::entity::Entity::new(target_id, 0); // Varsayılan generation 0
+                        let target_body = gizmo_physics_rigid::BodyHandle::from_id(target_id);
                         let new_joint = match type_idx {
-                            0 => gizmo_physics_rigid::joints::Joint::fixed(entity_id, target_entity, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO),
-                            1 => gizmo_physics_rigid::joints::Joint::hinge(entity_id, target_entity, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::Y),
-                            2 => gizmo_physics_rigid::joints::Joint::ball_socket(entity_id, target_entity, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO),
-                            3 => gizmo_physics_rigid::joints::Joint::slider(entity_id, target_entity, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::Y),
-                            4 => gizmo_physics_rigid::joints::Joint::spring(entity_id, target_entity, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO, 1.0, 10.0, 1.0),
-                            _ => gizmo_physics_rigid::joints::Joint::fixed(entity_id, target_entity, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO),
+                            0 => gizmo_physics_rigid::joints::Joint::fixed(body_id, target_body, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO),
+                            1 => gizmo_physics_rigid::joints::Joint::hinge(body_id, target_body, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::Y),
+                            2 => gizmo_physics_rigid::joints::Joint::ball_socket(body_id, target_body, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO),
+                            3 => gizmo_physics_rigid::joints::Joint::slider(body_id, target_body, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::Y),
+                            4 => gizmo_physics_rigid::joints::Joint::spring(body_id, target_body, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO, 1.0, 10.0, 1.0),
+                            _ => gizmo_physics_rigid::joints::Joint::fixed(body_id, target_body, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO),
                         };
                         physics_world.joints.push(new_joint);
                     }

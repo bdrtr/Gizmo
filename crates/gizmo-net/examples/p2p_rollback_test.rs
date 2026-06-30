@@ -17,7 +17,7 @@
 //!
 //! Argümanlar: <local_port> <remote_port> <local_player_id (0|1)>
 
-use gizmo_core::entity::Entity;
+use gizmo_physics_rigid::BodyHandle;
 use gizmo_math::Vec3;
 use gizmo_net::rollback::{ApplyInput, PlayerInput, RollbackSession, UdpTransport};
 use gizmo_physics_core::components::{Collider, Transform};
@@ -39,7 +39,7 @@ fn build_scene() -> PhysicsWorld {
     let mut g = RigidBody::new_static();
     g.wake_up();
     w.add_body(
-        Entity::new(0, 0),
+        BodyHandle::from_id(0),
         g,
         Transform::new(Vec3::new(0.0, -1.0, 0.0)),
         Velocity::default(),
@@ -51,7 +51,7 @@ fn build_scene() -> PhysicsWorld {
         let col = Collider::box_collider(Vec3::splat(0.5));
         rb.update_inertia_from_collider(&col);
         w.add_body(
-            Entity::new(id, 0),
+            BodyHandle::from_id(id),
             rb,
             Transform::new(Vec3::new(id as f32 * 1.5 - 1.5, 0.5, 0.0)),
             Velocity::default(),

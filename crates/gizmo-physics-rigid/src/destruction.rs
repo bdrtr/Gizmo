@@ -38,7 +38,7 @@ impl DestructionSystem {
                     }
                 }
 
-                // Entity A
+                // BodyHandle A
                 if let Some(&idx_a) = world.entity_index_map.get(&event.entity_a.id()) {
                     let rb_a = &world.rigid_bodies[idx_a];
                     // Eğer per-object threshold yoksa, sistem genel (impact_threshold) değerini minimum olarak kullan
@@ -53,7 +53,7 @@ impl DestructionSystem {
                     }
                 }
 
-                // Entity B
+                // BodyHandle B
                 if let Some(&idx_b) = world.entity_index_map.get(&event.entity_b.id()) {
                     let rb_b = &world.rigid_bodies[idx_b];
                     let threshold_b = rb_b.fracture_threshold.unwrap_or(self.impact_threshold);
@@ -78,13 +78,13 @@ mod tests {
     use super::*;
     use gizmo_physics_core::{CollisionEvent, CollisionEventType, ContactPoint, ContactPoints};
     use crate::components::RigidBody;
-    use gizmo_core::entity::Entity;
+    use gizmo_physics_core::BodyHandle;
     use gizmo_math::Vec3;
 
     fn setup_world() -> PhysicsWorld {
         let mut world = PhysicsWorld::new();
-        let e1 = Entity::new(1, 0);
-        let e2 = Entity::new(2, 0);
+        let e1 = BodyHandle::from_id(1);
+        let e2 = BodyHandle::from_id(2);
 
         let mut rb1 = RigidBody::default();
         rb1.fracture_threshold = Some(10.0);
@@ -119,8 +119,8 @@ mod tests {
         let system = DestructionSystem::new(50.0);
 
         let mut event = CollisionEvent {
-            entity_a: Entity::new(1, 0),
-            entity_b: Entity::new(2, 0),
+            entity_a: BodyHandle::from_id(1),
+            entity_b: BodyHandle::from_id(2),
             event_type: CollisionEventType::Started,
             contact_points: ContactPoints::new(),
         };
@@ -152,8 +152,8 @@ mod tests {
         let system = DestructionSystem::new(50.0);
 
         let mut event = CollisionEvent {
-            entity_a: Entity::new(1, 0),
-            entity_b: Entity::new(2, 0),
+            entity_a: BodyHandle::from_id(1),
+            entity_b: BodyHandle::from_id(2),
             event_type: CollisionEventType::Persisting,
             contact_points: ContactPoints::new(),
         };
@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn test_destruction_fallback_threshold() {
         let mut world = PhysicsWorld::new();
-        let e3 = Entity::new(3, 0);
+        let e3 = BodyHandle::from_id(3);
         let rb3 = RigidBody::default(); // fracture_threshold is None
         use crate::components::Velocity;
         use gizmo_physics_core::{Collider, Transform};
@@ -195,7 +195,7 @@ mod tests {
 
         let mut event = CollisionEvent {
             entity_a: e3,
-            entity_b: Entity::new(99, 0), // doesn't exist, will be ignored
+            entity_b: BodyHandle::from_id(99), // doesn't exist, will be ignored
             event_type: CollisionEventType::Started,
             contact_points: ContactPoints::new(),
         };

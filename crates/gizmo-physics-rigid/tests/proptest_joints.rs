@@ -9,7 +9,7 @@
 //! Bu testler Faz 0'da düzeltilen eklem-efektif-kütle / Fixed-eklem-zincir
 //! buglarının regresyonunu rastgele konfigürasyonlarda yakalar.
 
-use gizmo_core::entity::Entity;
+use gizmo_physics_core::BodyHandle;
 use gizmo_math::Vec3;
 use gizmo_physics_core::{Collider, Transform};
 use gizmo_physics_rigid::{Joint, PhysicsWorld, RigidBody, Velocity};
@@ -41,8 +41,8 @@ proptest! {
         prop_assume!(offset.length() > 0.5); // anlamlı bir başlangıç ayrımı
 
         let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
-        let a = Entity::new(1, 0);
-        let b = Entity::new(2, 0);
+        let a = BodyHandle::from_id(1);
+        let b = BodyHandle::from_id(2);
         let (rb_a, t_a, v_a, c_a) = dynamic_body(Vec3::ZERO, false);
         let (rb_b, t_b, v_b, c_b) = dynamic_body(offset, false);
         world.add_body(a, rb_a, t_a, v_a, c_a);
@@ -75,7 +75,7 @@ proptest! {
         let mut world = PhysicsWorld::new(); // varsayılan yerçekimi
 
         // Tavan: statik.
-        let ceiling = Entity::new(0, 0);
+        let ceiling = BodyHandle::from_id(0);
         let mut ceil_rb = RigidBody::new_static();
         ceil_rb.wake_up();
         world.add_body(
@@ -89,7 +89,7 @@ proptest! {
         // Sarkan zincir.
         let mut prev = ceiling;
         for i in 0..n {
-            let e = Entity::new(i as u32 + 1, 0);
+            let e = BodyHandle::from_id(i as u32 + 1);
             let pos = Vec3::new(0.0, 4.0 - i as f32, 0.0);
             let (rb, t, v, c) = dynamic_body(pos, true);
             world.add_body(e, rb, t, v, c);

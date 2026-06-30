@@ -15,7 +15,7 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use gizmo::core::entity::Entity;
+use gizmo::physics::BodyHandle;
 use gizmo::math::Vec3;
 use gizmo::physics::components::{Collider, RigidBody, Transform, Velocity};
 use gizmo::physics::world::PhysicsWorld;
@@ -33,7 +33,7 @@ fn main() {
     let mut ground = RigidBody::new_static();
     ground.wake_up();
     world.add_body(
-        Entity::new(0, 0),
+        BodyHandle::from_id(0),
         ground,
         Transform::new(Vec3::new(0.0, -1.0, 0.0)),
         Velocity::default(),
@@ -57,7 +57,7 @@ fn main() {
                 let col = Collider::box_collider(Vec3::splat(half));
                 rb.update_inertia_from_collider(&col);
                 world.add_body(
-                    Entity::new(id, 0),
+                    BodyHandle::from_id(id),
                     rb,
                     Transform::new(Vec3::new(px, py, pz)),
                     Velocity::default(),

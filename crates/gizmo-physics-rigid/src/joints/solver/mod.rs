@@ -271,12 +271,12 @@ mod joint_types;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gizmo_core::entity::Entity;
+    use gizmo_physics_core::BodyHandle;
 
     #[test]
     fn test_joint_creation() {
-        let e1 = Entity::new(1, 0);
-        let e2 = Entity::new(2, 0);
+        let e1 = BodyHandle::from_id(1);
+        let e2 = BodyHandle::from_id(2);
         let joint = Joint::fixed(e1, e2, Vec3::ZERO, Vec3::ZERO);
         assert_eq!(joint.joint_type(), "Fixed");
         assert!(!joint.is_broken);
@@ -284,8 +284,8 @@ mod tests {
 
     #[test]
     fn test_hinge_joint() {
-        let e1 = Entity::new(1, 0);
-        let e2 = Entity::new(2, 0);
+        let e1 = BodyHandle::from_id(1);
+        let e2 = BodyHandle::from_id(2);
         let joint = Joint::hinge(e1, e2, Vec3::ZERO, Vec3::ZERO, Vec3::Y);
         assert_eq!(joint.joint_type(), "Hinge");
         if let JointData::Hinge(data) = joint.data {
@@ -297,8 +297,8 @@ mod tests {
 
     #[test]
     fn test_spring_joint() {
-        let e1 = Entity::new(1, 0);
-        let e2 = Entity::new(2, 0);
+        let e1 = BodyHandle::from_id(1);
+        let e2 = BodyHandle::from_id(2);
         let joint = Joint::spring(e1, e2, Vec3::ZERO, Vec3::ZERO, 1.0, 100.0, 10.0);
         if let JointData::Spring(data) = joint.data {
             assert_eq!(data.stiffness, 100.0);

@@ -153,14 +153,14 @@ mod tests {
 
         let mut physics_world = PhysicsWorld::new();
         physics_world.trigger_events.push(TriggerEvent {
-            trigger_entity: ent1,
-            other_entity: ent2,
+            trigger_entity: gizmo_physics_core::BodyHandle::from_id(ent1.id()),
+            other_entity: gizmo_physics_core::BodyHandle::from_id(ent2.id()),
             event_type: CollisionEventType::Started,
         });
 
         physics_world.collision_events.push(CollisionEvent {
-            entity_a: ent1,
-            entity_b: ent2,
+            entity_a: gizmo_physics_core::BodyHandle::from_id(ent1.id()),
+            entity_b: gizmo_physics_core::BodyHandle::from_id(ent2.id()),
             event_type: CollisionEventType::Started,
             contact_points: Default::default(),
         });

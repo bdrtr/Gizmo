@@ -9,7 +9,7 @@
 //!     soğurur (cross-platform bit-exact GARANTİ EDİLMEZ — bkz. docs/determinism.md),
 //!     ama davranış-bozucu bir regresyonu yakalar.
 
-use gizmo_core::entity::Entity;
+use gizmo_physics_core::BodyHandle;
 use gizmo_math::Vec3;
 use gizmo_physics_core::{Collider, PhysicsMaterial, Transform};
 use gizmo_physics_rigid::{PhysicsWorld, RigidBody, Velocity};
@@ -18,7 +18,7 @@ fn add_ground(world: &mut PhysicsWorld) {
     let mut ground = RigidBody::new_static();
     ground.wake_up();
     world.add_body(
-        Entity::new(0, 0),
+        BodyHandle::from_id(0),
         ground,
         Transform::new(Vec3::new(0.0, -1.0, 0.0)), // üst yüzey y = 0
         Velocity::default(),
@@ -32,7 +32,7 @@ fn add_box(world: &mut PhysicsWorld, id: u32, pos: Vec3, half: f32) {
     let col = Collider::box_collider(Vec3::splat(half));
     rb.update_inertia_from_collider(&col);
     world.add_body(
-        Entity::new(id, 0),
+        BodyHandle::from_id(id),
         rb,
         Transform::new(pos),
         Velocity::default(),
@@ -192,7 +192,7 @@ fn soak_tall_stack_n16_stays_upright() {
         let col = Collider::box_collider(Vec3::splat(half)).with_material(no_bounce);
         rb.update_inertia_from_collider(&col);
         world.add_body(
-            Entity::new(i as u32 + 1, 0),
+            BodyHandle::from_id(i as u32 + 1),
             rb,
             Transform::new(Vec3::new(0.0, y, 0.0)),
             Velocity::default(),

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use gizmo_physics_core::BodyHandle;
 
 pub struct GpuCompute {
     pub device: Arc<wgpu::Device>,
@@ -165,12 +166,12 @@ impl GpuCompute {
     pub fn step_soft_bodies(
         &mut self,
         soft_bodies: &mut [(
-            gizmo_core::entity::Entity,
+            BodyHandle,
             crate::soft_body::SoftBodyMesh,
             gizmo_physics_core::components::Transform,
         )],
         rigid_colliders: &[(
-            gizmo_core::entity::Entity,
+            BodyHandle,
             gizmo_physics_core::components::Transform,
             gizmo_physics_core::components::Collider,
         )],

@@ -7,7 +7,7 @@
 //!   2) lag/jitter/paket-kaybı altında bir peer, geç gelen girdileri rollback ederek
 //!      "ground truth" peer'e YAKINSAR (state_hash eşitliği = senkron) — exit kriteri.
 
-use gizmo_core::entity::Entity;
+use gizmo_physics_core::BodyHandle;
 use gizmo_math::Vec3;
 use gizmo_physics_core::{Collider, Transform};
 use gizmo_physics_rigid::{PhysicsWorld, RigidBody, Velocity};
@@ -20,7 +20,7 @@ fn build_scene() -> PhysicsWorld {
     let mut ground = RigidBody::new_static();
     ground.wake_up();
     world.add_body(
-        Entity::new(0, 0),
+        BodyHandle::from_id(0),
         ground,
         Transform::new(Vec3::new(0.0, -1.0, 0.0)),
         Velocity::default(),
@@ -34,7 +34,7 @@ fn build_scene() -> PhysicsWorld {
         let col = Collider::box_collider(Vec3::splat(0.5));
         rb.update_inertia_from_collider(&col);
         world.add_body(
-            Entity::new(id, 0),
+            BodyHandle::from_id(id),
             rb,
             Transform::new(Vec3::new(x as f32 * 1.02 - 1.5, 0.5, 0.0)),
             Velocity::default(),

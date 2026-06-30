@@ -10,7 +10,7 @@
 //! Cross-platform bit-exact KAPSAM DIŞI (sim f32/glam; bkz docs/determinism.md). Süreçler-
 //! arası determinizm `demo/tests/cross_process_determinism.rs` ile ayrıca doğrulanır.
 
-use gizmo_core::entity::Entity;
+use gizmo_physics_core::BodyHandle;
 use gizmo_math::Vec3;
 use gizmo_physics_core::{Collider, Transform};
 use gizmo_physics_rigid::{PhysicsWorld, RigidBody, Velocity};
@@ -20,7 +20,7 @@ fn build_scene() -> PhysicsWorld {
     let mut ground = RigidBody::new_static();
     ground.wake_up();
     world.add_body(
-        Entity::new(0, 0),
+        BodyHandle::from_id(0),
         ground,
         Transform::new(Vec3::new(0.0, -1.0, 0.0)),
         Velocity::default(),
@@ -37,7 +37,7 @@ fn build_scene() -> PhysicsWorld {
             let px = (x as f32 - 1.5) * 1.05;
             let py = 0.5 + ly as f32 * 1.1 + 0.05;
             world.add_body(
-                Entity::new(id, 0),
+                BodyHandle::from_id(id),
                 rb,
                 Transform::new(Vec3::new(px, py, 0.0)),
                 Velocity::default(),

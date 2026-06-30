@@ -618,7 +618,7 @@ impl std::fmt::Display for NavMeshStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gizmo_core::entity::Entity;
+    use gizmo_physics_rigid::BodyHandle;
     use gizmo_physics_core::components::Collider;
     use gizmo_physics_rigid::{RigidBody, Velocity};
 
@@ -627,7 +627,7 @@ mod tests {
 
         // Zemin
         world.add_body(
-            Entity::new(1, 0),
+            BodyHandle::from_id(1),
             RigidBody::new_static(),
             gizmo_physics_core::Transform::new(Vec3::new(0.0, 0.0, 0.0)),
             Velocity::default(),
@@ -636,7 +636,7 @@ mod tests {
 
         // Engel
         world.add_body(
-            Entity::new(2, 0),
+            BodyHandle::from_id(2),
             RigidBody::new_static(),
             gizmo_physics_core::Transform::new(Vec3::new(5.0, 1.0, 0.0)),
             Velocity::default(),

@@ -1,5 +1,6 @@
 use crate::components::{RigidBody, Velocity};
 use gizmo_physics_core::components::Transform;
+use gizmo_physics_core::BodyHandle;
 use gizmo_math::{Quat, Vec3};
 
 /// Semi-implicit Euler physics integrator.
@@ -36,7 +37,7 @@ impl Integrator {
     /// any mutation so the caller receives the body in its pre-error state.
     pub fn integrate_velocities(
         &self,
-        entity: gizmo_core::entity::Entity,
+        entity: BodyHandle,
         rb: &mut RigidBody,
         rotation: Quat,
         vel: &mut Velocity,
@@ -105,7 +106,7 @@ impl Integrator {
         let speed_sq = vel.linear.length_squared();
         if speed_sq > 1_000_000.0 {
             tracing::warn!(
-                "Entity {:?} is moving at {:.1} m/s — tunneling / explosion risk.",
+                "BodyHandle {:?} is moving at {:.1} m/s — tunneling / explosion risk.",
                 entity,
                 speed_sq.sqrt(),
             );
@@ -128,7 +129,7 @@ impl Integrator {
     /// Euler-angle approaches suffer from.
     pub fn integrate_positions(
         &self,
-        entity: gizmo_core::entity::Entity,
+        entity: BodyHandle,
         rb: &RigidBody,
         transform: &mut Transform,
         vel: &Velocity,
@@ -182,7 +183,7 @@ impl Integrator {
     /// Convenience: velocity integration followed by position integration.
     pub fn integrate(
         &self,
-        entity: gizmo_core::entity::Entity,
+        entity: BodyHandle,
         rb: &mut RigidBody,
         transform: &mut Transform,
         vel: &mut Velocity,
@@ -268,8 +269,8 @@ impl Integrator {
 mod tests {
     use super::*;
 
-    fn make_entity(id: u32) -> gizmo_core::entity::Entity {
-        gizmo_core::entity::Entity::new(id, 0)
+    fn make_entity(id: u32) -> BodyHandle {
+        BodyHandle::from_id(id)
     }
 
     // ------------------------------------------------------------------ //

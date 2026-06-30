@@ -28,27 +28,27 @@ impl SpatialHash {
         self.tree.clear();
     }
 
-    pub fn insert(&mut self, entity: Entity, aabb: Aabb) {
+    pub fn insert(&mut self, entity: BodyHandle, aabb: Aabb) {
         self.tree.insert(entity, aabb);
     }
 
-    pub fn update(&mut self, entity: Entity, aabb: Aabb) {
+    pub fn update(&mut self, entity: BodyHandle, aabb: Aabb) {
         self.tree.insert(entity, aabb);
     }
 
-    pub fn remove(&mut self, entity: Entity) {
+    pub fn remove(&mut self, entity: BodyHandle) {
         self.tree.remove(entity);
     }
 
-    pub fn query_pairs(&self) -> Vec<(Entity, Entity)> {
+    pub fn query_pairs(&self) -> Vec<(BodyHandle, BodyHandle)> {
         self.tree.query_pairs()
     }
 
-    pub fn query_aabb(&self, aabb: Aabb) -> Vec<Entity> {
+    pub fn query_aabb(&self, aabb: Aabb) -> Vec<BodyHandle> {
         self.tree.query_aabb(&aabb)
     }
 
-    pub fn query_point(&self, point: Vec3, radius: f32) -> Vec<Entity> {
+    pub fn query_point(&self, point: Vec3, radius: f32) -> Vec<BodyHandle> {
         let aabb = Aabb {
             min: Vec3::new(point.x - radius, point.y - radius, point.z - radius).into(),
             max: Vec3::new(point.x + radius, point.y + radius, point.z + radius).into(),
@@ -56,7 +56,7 @@ impl SpatialHash {
         self.tree.query_aabb(&aabb)
     }
 
-    pub fn query_ray(&self, origin: Vec3, dir: Vec3, max_t: f32) -> Vec<(Entity, f32)> {
+    pub fn query_ray(&self, origin: Vec3, dir: Vec3, max_t: f32) -> Vec<(BodyHandle, f32)> {
         self.tree.query_ray(origin, dir, max_t)
     }
 }

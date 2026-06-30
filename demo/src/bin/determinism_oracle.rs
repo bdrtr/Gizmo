@@ -5,7 +5,7 @@
 //!
 //! Sahne KÜÇÜK tutulur (debug'da hızlı): temas/island/uyku yollarını uyaracak kadar kutu.
 
-use gizmo::core::entity::Entity;
+use gizmo::physics::BodyHandle;
 use gizmo::math::Vec3;
 use gizmo::physics::components::{Collider, RigidBody, Transform, Velocity};
 use gizmo::physics::world::PhysicsWorld;
@@ -16,7 +16,7 @@ fn main() {
     let mut ground = RigidBody::new_static();
     ground.wake_up();
     world.add_body(
-        Entity::new(0, 0),
+        BodyHandle::from_id(0),
         ground,
         Transform::new(Vec3::new(0.0, -1.0, 0.0)),
         Velocity::default(),
@@ -36,7 +36,7 @@ fn main() {
                 let pz = (z as f32 - 2.5) * 1.1;
                 let py = 0.5 + ly as f32 * 1.1 + 0.05;
                 world.add_body(
-                    Entity::new(id, 0),
+                    BodyHandle::from_id(id),
                     rb,
                     Transform::new(Vec3::new(px, py, pz)),
                     Velocity::default(),

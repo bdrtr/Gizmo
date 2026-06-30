@@ -5,7 +5,6 @@ use gizmo::math::{Quat, Vec3, Vec4};
 use gizmo::physics::components::{Collider, GlobalTransform, RigidBody, Velocity, Vehicle, Wheel};
 use gizmo::physics::world::PhysicsWorld;
 use gizmo::physics::Transform;
-use gizmo::prelude::*;
 use gizmo::renderer::asset::AssetManager;
 use gizmo::renderer::components::{Camera, DirectionalLight, Material, MeshRenderer};
 use gizmo::egui;
@@ -510,7 +509,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
     world.add_component(ground, gizmo::physics::components::PhysicsMaterial::ASPHALT);
     
     phys_world.add_body(
-        Entity::new(ground.id(), 0),
+        gizmo::physics::BodyHandle::from_id(ground.id()),
         ground_rb,
         Transform::new(Vec3::ZERO),
         Velocity::default(),
@@ -527,7 +526,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
     world.add_component(ice, Collider::box_collider(Vec3::new(20.0, 0.05, 20.0)));
     world.add_component(ice, gizmo::physics::components::PhysicsMaterial::ICE);
     phys_world.add_body(
-        Entity::new(ice.id(), 0),
+        gizmo::physics::BodyHandle::from_id(ice.id()),
         RigidBody::new_static(),
         Transform::new(Vec3::new(40.0, 0.01, 0.0)),
         Velocity::default(),
@@ -544,7 +543,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
     world.add_component(sand, Collider::box_collider(Vec3::new(20.0, 0.05, 20.0)));
     world.add_component(sand, gizmo::physics::components::PhysicsMaterial::SAND);
     phys_world.add_body(
-        Entity::new(sand.id(), 0),
+        gizmo::physics::BodyHandle::from_id(sand.id()),
         RigidBody::new_static(),
         Transform::new(Vec3::new(-40.0, 0.01, 0.0)),
         Velocity::default(),
@@ -552,7 +551,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
     );
 
     phys_world.add_body(
-        Entity::new(ground.id(), 0),
+        gizmo::physics::BodyHandle::from_id(ground.id()),
         ground_rb,
         Transform::new(Vec3::ZERO),
         Velocity::default(),
@@ -681,7 +680,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
     );
 
     phys_world.add_body(
-        Entity::new(chassis_entity.id(), 0),
+        gizmo::physics::BodyHandle::from_id(chassis_entity.id()),
         chassis_rb,
         Transform::new(chassis_pos),
         Velocity::default(),

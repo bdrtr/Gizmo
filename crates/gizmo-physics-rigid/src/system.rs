@@ -1,4 +1,4 @@
-use gizmo_physics_core::{Collider, Transform};
+use gizmo_physics_core::{BodyHandle, Collider, Transform};
 use crate::components::{RigidBody, Velocity};use crate::world::PhysicsWorld;
 use gizmo_core::entity::Entity;
 use gizmo_core::query::Mut;
@@ -102,7 +102,9 @@ pub fn physics_step_system(world: &World, dt: f32) {
     } {
         for (id, (rb, transform, vel, _, _)) in query.iter_mut() {
             if let Some(final_collider) = compound_shapes_map.remove(&id) {
-                rigid_bodies.push((Entity::new(id, 0), *rb, *transform, *vel, final_collider));
+                // Bridge: ECS entity id -> opaque physics BodyHandle (generation is
+                // unused by physics; bodies are keyed by id only).
+                rigid_bodies.push((BodyHandle::from_id(id), *rb, *transform, *vel, final_collider));
             }
         }
     } else {
@@ -282,7 +284,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
             // get_entity: çarpışma olayı despawn edilmiş bir entity'ye işaret edebilir;
             // generation kontrolü yeniden kullanılan slota yanlış yazmayı engeller.
             if let Some((mut breakable, transform, collider, vel, _)) =
-                query.get_mut_entity(event.entity_a)
+                query.get_mut_entity(Entity::new(event.entity_a.id(), 0))
             {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
                     breakable.current_health -= max_impulse;
@@ -291,7 +293,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
                         shattered.insert(event.entity_a.id());
                         shatter_entity(
                             &mut commands,
-                            event.entity_a,
+                            Entity::new(event.entity_a.id(), 0),
                             &breakable,
                             transform,
                             collider,
@@ -307,7 +309,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
         // Check Entity B
         if !shattered.contains(&event.entity_b.id()) {
             if let Some((mut breakable, transform, collider, vel, _)) =
-                query.get_mut_entity(event.entity_b)
+                query.get_mut_entity(Entity::new(event.entity_b.id(), 0))
             {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
                     breakable.current_health -= max_impulse;
@@ -316,7 +318,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
                         shattered.insert(event.entity_b.id());
                         shatter_entity(
                             &mut commands,
-                            event.entity_b,
+                            Entity::new(event.entity_b.id(), 0),
                             &breakable,
                             transform,
                             collider,

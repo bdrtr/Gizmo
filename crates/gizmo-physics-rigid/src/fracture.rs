@@ -1,4 +1,5 @@
 use gizmo_math::Vec3;
+use gizmo_physics_core::BodyHandle;
 use rand::{rngs::StdRng, RngExt, SeedableRng};
 
 /// Patlama hız değişimi (force/mass) üst sınırı. İnce kıymık parçalar çok küçük kütleye
@@ -351,8 +352,8 @@ pub fn generate_fracture_chunks(
 /// Ideal for AAA games where destruction must not drop frames.
 #[derive(Default)]
 pub struct PreFracturedCache {
-    /// Maps an Entity ID to its pre-calculated fracture data
-    pub cache: std::collections::HashMap<gizmo_core::entity::Entity, Vec<ProceduralChunk>>,
+    /// Maps an BodyHandle ID to its pre-calculated fracture data
+    pub cache: std::collections::HashMap<BodyHandle, Vec<ProceduralChunk>>,
 }
 
 impl PreFracturedCache {
@@ -366,7 +367,7 @@ impl PreFracturedCache {
     /// This should be called during a loading screen.
     pub fn pre_fracture(
         &mut self,
-        entity: gizmo_core::entity::Entity,
+        entity: BodyHandle,
         extents: Vec3,
         num_pieces: u32,
         seed: u64,
@@ -379,7 +380,7 @@ impl PreFracturedCache {
     /// If not in cache, optionally falls back to runtime calculation.
     pub fn get_fracture_chunks(
         &self,
-        entity: gizmo_core::entity::Entity,
+        entity: BodyHandle,
         original_transform: &gizmo_physics_core::Transform,
         original_body: &crate::components::RigidBody,
         original_velocity: &crate::components::Velocity,
@@ -457,7 +458,7 @@ impl PreFracturedCache {
 mod tests {
     use super::*;
     use crate::components::{RigidBody, Velocity};
-    use gizmo_core::entity::Entity;
+    use gizmo_physics_core::BodyHandle;
     use gizmo_physics_core::Transform;
 
     /// İnce kıymık (çok küçük hacim/kütle) parçalar, büyük çarpma kuvvetinde bile
@@ -488,7 +489,7 @@ mod tests {
         };
 
         let mut cache = PreFracturedCache::new();
-        let e = Entity::new(1, 0);
+        let e = BodyHandle::from_id(1);
         cache.cache.insert(e, vec![big, tiny]);
 
         let tr = Transform::new(Vec3::ZERO);

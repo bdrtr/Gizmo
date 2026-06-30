@@ -1,19 +1,19 @@
-use gizmo_core::entity::Entity;
+use crate::BodyHandle;
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum GizmoError {
     CollisionOverflow { count: usize, limit: usize },
-    NaNVelocity(Entity),
-    NaNPosition(Entity),
+    NaNVelocity(BodyHandle),
+    NaNPosition(BodyHandle),
     InvalidConstraint(String),
-    DivideByZero(Entity),
-    TunnelingDetected(Entity),
+    DivideByZero(BodyHandle),
+    TunnelingDetected(BodyHandle),
     BvhBuildFailed,
-    JointEntityNotFound(Entity),
+    JointEntityNotFound(BodyHandle),
     InvalidShapeData(String),
-    SleepStateCorrupted(Entity),
+    SleepStateCorrupted(BodyHandle),
 }
 
 impl fmt::Display for GizmoError {
