@@ -6,7 +6,7 @@ use crate::{
 };
 use gizmo_physics_core::broadphase::SpatialHash;
 use gizmo_physics_core::components::{Collider, Transform};
-use gizmo_core::entity::Entity;
+use gizmo_physics_core::BodyHandle;
 
 use std::collections::HashMap;
 
@@ -64,7 +64,7 @@ impl PhysicsWorld {
 
     pub fn add_body(
         &mut self,
-        entity: Entity,
+        entity: BodyHandle,
         rb: RigidBody,
         t: Transform,
         v: Velocity,
@@ -105,7 +105,7 @@ impl PhysicsWorld {
 
     pub fn sync_bodies<'a>(
         &mut self,
-        incoming_bodies: impl Iterator<Item = &'a (Entity, RigidBody, Transform, Velocity, Collider)>,
+        incoming_bodies: impl Iterator<Item = &'a (BodyHandle, RigidBody, Transform, Velocity, Collider)>,
     ) {
         let mut active_ids = std::collections::HashSet::new();
 

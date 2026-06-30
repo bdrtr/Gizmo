@@ -10,7 +10,7 @@
 //!
 //! Bir invariant kırılırsa proptest minimal karşı-örneğe shrink eder.
 
-use gizmo_core::entity::Entity;
+use gizmo_physics_core::BodyHandle;
 use gizmo_math::Vec3;
 use gizmo_physics_core::{Collider, Transform};
 use gizmo_physics_rigid::{PhysicsWorld, RigidBody, Velocity};
@@ -48,7 +48,7 @@ fn build_world(specs: &[BodySpec]) -> PhysicsWorld {
         let mut rb = RigidBody::new(1.0, true);
         rb.wake_up();
         world.add_body(
-            Entity::new(i as u32 + 1, 0),
+            BodyHandle::from_id(i as u32 + 1),
             rb,
             Transform::new(s.pos),
             Velocity::new(s.vel),
@@ -127,7 +127,7 @@ proptest! {
         rb.wake_up();
         let p0 = Vec3::new(0.0, 0.0, 0.0);
         world.add_body(
-            Entity::new(1, 0),
+            BodyHandle::from_id(1),
             rb,
             Transform::new(p0),
             Velocity::new(v0),
@@ -164,7 +164,7 @@ proptest! {
         let mut vel = Velocity::new(Vec3::new(vx, vy, vz));
         vel.angular = Vec3::new(wx, wy, wz);
         world.add_body(
-            Entity::new(1, 0),
+            BodyHandle::from_id(1),
             rb,
             Transform::new(Vec3::ZERO),
             vel,
@@ -203,7 +203,7 @@ proptest! {
         let mut ground = RigidBody::new_static();
         ground.wake_up();
         world.add_body(
-            Entity::new(1, 0),
+            BodyHandle::from_id(1),
             ground,
             Transform::new(Vec3::new(0.0, -1.0, 0.0)),
             Velocity::default(),
@@ -214,7 +214,7 @@ proptest! {
         let mut rb = RigidBody::new(1.0, true);
         rb.wake_up();
         world.add_body(
-            Entity::new(2, 0),
+            BodyHandle::from_id(2),
             rb,
             Transform::new(Vec3::new(0.0, drop_h + radius, 0.0)),
             Velocity::default(),

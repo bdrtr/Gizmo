@@ -1,4 +1,4 @@
-use gizmo::core::entity::Entity;
+use gizmo::physics::BodyHandle;
 use gizmo::math::Vec3;
 use gizmo::physics::components::{Collider, RigidBody, Transform, Velocity};
 use gizmo::physics::world::PhysicsWorld;
@@ -9,7 +9,7 @@ fn run_simulation_and_get_hash() -> u64 {
     let mut world = PhysicsWorld::new();
     
     // Zemin
-    let ground_entity = Entity::new(0, 0);
+    let ground_entity = BodyHandle::from_id(0);
     let ground_rb = RigidBody::new_static();
     let ground_transform = Transform::new(Vec3::new(0.0, -1.0, 0.0));
     let ground_vel = Velocity::default();
@@ -26,7 +26,7 @@ fn run_simulation_and_get_hash() -> u64 {
     for y in 0..tower_height {
         for x in 0..tower_width {
             for z in 0..tower_depth {
-                let box_entity = Entity::new(entity_id, 0);
+                let box_entity = BodyHandle::from_id(entity_id);
                 entity_id += 1;
                 
                 let mut box_rb = RigidBody::new(1.0, true);

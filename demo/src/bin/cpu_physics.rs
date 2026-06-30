@@ -125,8 +125,8 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     world.add_component(pendulum, Velocity::default());
 
     let mut hinge = Joint::hinge(
-        ceiling,
-        pendulum,
+        gizmo::physics::BodyHandle::from_id(ceiling.id()),
+        gizmo::physics::BodyHandle::from_id(pendulum.id()),
         Vec3::new(0.0, -0.25, 0.0), // ceiling local anchor (alt yüzeyi)
         Vec3::new(0.0, 2.5, 0.0),   // pendulum local anchor (üst yüzeyi)
         Vec3::new(0.0, 0.0, 1.0),   // Z ekseni etrafında dönsün
@@ -178,7 +178,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         let local_anchor_a = Vec3::new(0.0, -0.5, 0.0);
         let local_anchor_b = Vec3::new(0.0, 0.5, 0.0);
 
-        let mut ball_joint = Joint::ball_socket(prev_ent, link_ent, local_anchor_a, local_anchor_b);
+        let mut ball_joint = Joint::ball_socket(gizmo::physics::BodyHandle::from_id(prev_ent.id()), gizmo::physics::BodyHandle::from_id(link_ent.id()), local_anchor_a, local_anchor_b);
         if let gizmo::physics::joints::JointData::BallSocket(ref mut data) = ball_joint.data {
             data.use_cone_limit = true;
             data.cone_limit_angle = PI / 4.0; // 45 derece limit
@@ -225,8 +225,8 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     world.add_component(slider_plat, Velocity::default());
 
     let mut slider_joint = Joint::slider(
-        slider_base,
-        slider_plat,
+        gizmo::physics::BodyHandle::from_id(slider_base.id()),
+        gizmo::physics::BodyHandle::from_id(slider_plat.id()),
         Vec3::ZERO,
         Vec3::ZERO,
         Vec3::new(1.0, 0.0, 0.0), // X ekseninde kayar

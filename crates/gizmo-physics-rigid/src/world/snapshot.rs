@@ -35,7 +35,7 @@ impl PhysicsWorld {
     /// GARANTİ EDİLMEZ (sim f32/glam üzerinde; bkz. `docs/determinism.md`).
     pub fn state_hash(&self) -> u64 {
         use std::hash::Hasher;
-        // Entity id'sine göre sabit sıra (dizi/ekleme sırasından bağımsız).
+        // BodyHandle id'sine göre sabit sıra (dizi/ekleme sırasından bağımsız).
         let mut order: Vec<usize> = (0..self.entities.len()).collect();
         order.sort_by_key(|&i| self.entities[i].id());
 

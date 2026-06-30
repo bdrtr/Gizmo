@@ -4,7 +4,7 @@
 /// Birbirinden bağımsız island'lar PhysicsWorld tarafında Rayon ile paralel çözülür.
 /// Hareketsiz island'lar sleeping'e alınarak tamamen atlanır.
 use gizmo_physics_core::ContactManifold;
-use gizmo_core::entity::Entity;
+use gizmo_physics_core::BodyHandle;
 use std::collections::HashMap;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -34,7 +34,7 @@ impl IslandManager {
     /// Algoritma: Union-Find (path compression + rank)
     pub fn build_islands(
         manifolds: &[ContactManifold],
-        entity_is_dynamic: &impl Fn(Entity) -> bool,
+        entity_is_dynamic: &impl Fn(BodyHandle) -> bool,
     ) -> Vec<Island> {
         if manifolds.is_empty() {
             return Vec::new();
@@ -207,11 +207,11 @@ impl PhysicsMetrics {
 mod tests {
     use super::*;
     use gizmo_physics_core::{ContactManifold, ContactPoint};
-    use gizmo_core::entity::Entity;
+    use gizmo_physics_core::BodyHandle;
     use gizmo_math::Vec3;
 
     fn make_manifold(ea: u32, eb: u32) -> ContactManifold {
-        let mut m = ContactManifold::new(Entity::new(ea, 0), Entity::new(eb, 0));
+        let mut m = ContactManifold::new(BodyHandle::from_id(ea), BodyHandle::from_id(eb));
         m.contacts.push(ContactPoint {
             point: Vec3::ZERO,
             normal: Vec3::Y,
@@ -228,7 +228,7 @@ mod tests {
     fn test_single_island() {
         // A-B ve B-C → tek island
         let manifolds = vec![make_manifold(1, 2), make_manifold(2, 3)];
-        let is_dyn = |e: Entity| e.id() != 0;
+        let is_dyn = |e: BodyHandle| e.id() != 0;
         let islands = IslandManager::build_islands(&manifolds, &is_dyn);
         assert_eq!(islands.len(), 1, "A-B and B-C should form one island");
         assert_eq!(islands[0].manifold_indices.len(), 2);
@@ -238,14 +238,14 @@ mod tests {
     fn test_two_islands() {
         // A-B ve C-D → iki ayrı island
         let manifolds = vec![make_manifold(1, 2), make_manifold(3, 4)];
-        let is_dyn = |e: Entity| e.id() != 0;
+        let is_dyn = |e: BodyHandle| e.id() != 0;
         let islands = IslandManager::build_islands(&manifolds, &is_dyn);
         assert_eq!(islands.len(), 2, "A-B and C-D should form two islands");
     }
 
     #[test]
     fn test_empty_manifolds() {
-        let is_dyn = |_: Entity| true;
+        let is_dyn = |_: BodyHandle| true;
         let islands = IslandManager::build_islands(&[], &is_dyn);
         assert!(islands.is_empty());
     }

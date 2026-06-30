@@ -4,6 +4,7 @@ use gizmo_core::world::World;
 use gizmo_math::Vec3;
 use gizmo_physics_core::raycast::Ray;
 use gizmo_physics_core::Transform;
+use gizmo_physics_core::BodyHandle;
 
 #[tracing::instrument(skip_all, name = "physics_vehicle_system")]
 pub fn physics_vehicle_system(world: &World, dt: f32) {
@@ -110,7 +111,7 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
 
                 if let Some(hit) = hit_opt {
                     // Only consider it a ground hit if it's not the chassis itself
-                    if hit.entity != gizmo_core::Entity::new(id, 0) {
+                    if hit.entity != BodyHandle::from_id(id) {
                         wheel.is_grounded = true;
                         wheel.contact_point = hit.point;
                         wheel.contact_normal = hit.normal;

@@ -6,7 +6,7 @@
 //!  * island inşa sırası DETERMINISTIK (en küçük manifold indisine göre sıralı),
 //!  * uyuyan yığının üstüne düşen cisim yığını uyandırıp ÜSTÜNDE durmalı (tünelleme yok).
 
-use gizmo_core::entity::Entity;
+use gizmo_physics_core::BodyHandle;
 use gizmo_math::Vec3;
 use gizmo_physics_core::{Collider, ContactManifold, ContactPoint, Transform};
 use gizmo_physics_rigid::{IslandManager, Joint, PhysicsWorld, RigidBody, Velocity};
@@ -15,7 +15,7 @@ fn add_ground(world: &mut PhysicsWorld) {
     let mut ground = RigidBody::new_static();
     ground.wake_up();
     world.add_body(
-        Entity::new(0, 0),
+        BodyHandle::from_id(0),
         ground,
         Transform::new(Vec3::new(0.0, -1.0, 0.0)),
         Velocity::default(),
@@ -28,7 +28,7 @@ fn add_box(world: &mut PhysicsWorld, id: u32, pos: Vec3) {
     rb.wake_up();
     let col = Collider::box_collider(Vec3::splat(0.5));
     rb.update_inertia_from_collider(&col);
-    world.add_body(Entity::new(id, 0), rb, Transform::new(pos), Velocity::default(), col);
+    world.add_body(BodyHandle::from_id(id), rb, Transform::new(pos), Velocity::default(), col);
 }
 
 #[test]
@@ -73,8 +73,8 @@ fn joint_couples_wake_to_sleeping_body() {
     add_box(&mut world, 1, Vec3::new(0.0, 0.0, 0.0)); // index 0
     add_box(&mut world, 2, Vec3::new(1.5, 0.0, 0.0)); // index 1 (uzak → temas yok)
     world.joints.push(Joint::fixed(
-        Entity::new(1, 0),
-        Entity::new(2, 0),
+        BodyHandle::from_id(1),
+        BodyHandle::from_id(2),
         Vec3::new(1.5, 0.0, 0.0),
         Vec3::ZERO,
     ));
@@ -107,7 +107,7 @@ fn island_build_order_is_deterministic_sorted() {
     // build_islands çıktısı, island'ların en küçük manifold indisine göre SIRALI olmalı
     // (HashMap into_values süreç-bağlı sıradan bağımsız determinizm).
     let mk = |ea: u32, eb: u32| -> ContactManifold {
-        let mut m = ContactManifold::new(Entity::new(ea, 0), Entity::new(eb, 0));
+        let mut m = ContactManifold::new(BodyHandle::from_id(ea), BodyHandle::from_id(eb));
         m.contacts.push(ContactPoint {
             point: Vec3::ZERO,
             normal: Vec3::Y,
@@ -121,7 +121,7 @@ fn island_build_order_is_deterministic_sorted() {
     };
     // 3 ayrı island: {0:(1-2)} {1:(3-4)} {2:(5-6)} — karışık entity id'leriyle.
     let manifolds = vec![mk(1, 2), mk(3, 4), mk(5, 6)];
-    let is_dyn = |e: Entity| e.id() != 0;
+    let is_dyn = |e: BodyHandle| e.id() != 0;
     let islands = IslandManager::build_islands(&manifolds, &is_dyn);
     assert_eq!(islands.len(), 3);
     // Her island tek manifold; sıra 0,1,2 olmalı (min-index artan).

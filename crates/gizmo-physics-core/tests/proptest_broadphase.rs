@@ -16,7 +16,7 @@
 //!
 //! Bir çift kaçarsa proptest girdiyi otomatik küçültüp minimal karşı-örneği verir.
 
-use gizmo_core::entity::Entity;
+use gizmo_physics_core::BodyHandle;
 use gizmo_math::{Aabb, Vec3};
 use gizmo_physics_core::broadphase::DynamicAabbTree;
 use proptest::prelude::*;
@@ -77,7 +77,7 @@ proptest! {
     fn query_pairs_exact_match_brute_force(boxes in arb_boxes()) {
         let mut tree = DynamicAabbTree::new().with_fat_margin(0.0);
         for (i, b) in boxes.iter().enumerate() {
-            tree.insert(Entity::new(i as u32, 0), aabb_of(b));
+            tree.insert(BodyHandle::from_id(i as u32), aabb_of(b));
         }
         let from_tree = tree_pairs(&tree);
         let from_brute = brute_force_pairs(&boxes);
@@ -93,7 +93,7 @@ proptest! {
     fn fat_query_pairs_superset_of_brute_force(boxes in arb_boxes()) {
         let mut tree = DynamicAabbTree::new(); // default fat_margin = 0.1
         for (i, b) in boxes.iter().enumerate() {
-            tree.insert(Entity::new(i as u32, 0), aabb_of(b));
+            tree.insert(BodyHandle::from_id(i as u32), aabb_of(b));
         }
         let from_tree = tree_pairs(&tree);
         let from_brute = brute_force_pairs(&boxes);
@@ -110,7 +110,7 @@ proptest! {
     fn query_pairs_no_self_no_duplicate(boxes in arb_boxes()) {
         let mut tree = DynamicAabbTree::new().with_fat_margin(0.0);
         for (i, b) in boxes.iter().enumerate() {
-            tree.insert(Entity::new(i as u32, 0), aabb_of(b));
+            tree.insert(BodyHandle::from_id(i as u32), aabb_of(b));
         }
         let raw = tree.query_pairs();
         let mut seen = HashSet::new();

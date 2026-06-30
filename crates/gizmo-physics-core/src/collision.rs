@@ -1,4 +1,4 @@
-use gizmo_core::entity::Entity;
+use crate::BodyHandle;
 use gizmo_math::Vec3;
 
 // ============================================================================
@@ -153,8 +153,8 @@ impl FromIterator<ContactPoint> for ContactPoints {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct ContactManifold {
-    pub entity_a: Entity,
-    pub entity_b: Entity,
+    pub entity_a: BodyHandle,
+    pub entity_b: BodyHandle,
     /// At most 4 contact points.
     pub contacts: Vec<ContactPoint>,
     /// Combined dynamic friction coefficient (geometric mean of both materials).
@@ -171,7 +171,7 @@ pub struct ContactManifold {
 impl ContactManifold {
     /// Create a new manifold.  Entity order is normalised (lower id → entity_a)
     /// so that cache lookups with either ordering always hit.
-    pub fn new(entity_a: Entity, entity_b: Entity) -> Self {
+    pub fn new(entity_a: BodyHandle, entity_b: BodyHandle) -> Self {
         let (entity_a, entity_b) = if entity_a.id() <= entity_b.id() {
             (entity_a, entity_b)
         } else {
@@ -339,8 +339,8 @@ pub enum CollisionEventType {
 /// Emitted every physics step for each solid collision pair.
 #[derive(Debug, Clone)]
 pub struct CollisionEvent {
-    pub entity_a: Entity,
-    pub entity_b: Entity,
+    pub entity_a: BodyHandle,
+    pub entity_b: BodyHandle,
     pub event_type: CollisionEventType,
     /// Solved contact points (populated after constraint resolution).
     pub contact_points: ContactPoints,
@@ -350,15 +350,15 @@ pub struct CollisionEvent {
 #[derive(Debug, Clone)]
 pub struct TriggerEvent {
     /// The entity whose collider has `is_trigger = true`.
-    pub trigger_entity: Entity,
-    pub other_entity: Entity,
+    pub trigger_entity: BodyHandle,
+    pub other_entity: BodyHandle,
     pub event_type: CollisionEventType,
 }
 
 /// Emitted when a rigid body's fracture threshold is exceeded.
 #[derive(Debug, Clone, Copy)]
 pub struct FractureEvent {
-    pub entity: Entity,
+    pub entity: BodyHandle,
     pub impact_point: Vec3,
     pub impact_force: f32,
 }
@@ -371,8 +371,8 @@ pub struct FractureEvent {
 mod tests {
     use super::*;
 
-    fn make_entity(id: u32) -> Entity {
-        Entity::new(id, 0)
+    fn make_entity(id: u32) -> BodyHandle {
+        BodyHandle::from_id(id)
     }
 
     fn pt(x: f32, y: f32, pen: f32) -> ContactPoint {

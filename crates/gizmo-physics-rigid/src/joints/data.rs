@@ -1,12 +1,12 @@
-use gizmo_core::Entity;
+use gizmo_physics_core::BodyHandle;
 use gizmo_math::{Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Joint {
-    pub entity_a: Entity,
-    pub entity_b: Entity,
+    pub entity_a: BodyHandle,
+    pub entity_b: BodyHandle,
     pub local_anchor_a: Vec3,
     pub local_anchor_b: Vec3,
     pub break_force: f32,
@@ -98,8 +98,8 @@ impl Joint {
     }
 
     pub fn fixed(
-        entity_a: Entity,
-        entity_b: Entity,
+        entity_a: BodyHandle,
+        entity_b: BodyHandle,
         local_anchor_a: Vec3,
         local_anchor_b: Vec3,
     ) -> Self {
@@ -121,8 +121,8 @@ impl Joint {
     }
 
     pub fn hinge(
-        entity_a: Entity,
-        entity_b: Entity,
+        entity_a: BodyHandle,
+        entity_b: BodyHandle,
         local_anchor_a: Vec3,
         local_anchor_b: Vec3,
         axis: Vec3,
@@ -159,8 +159,8 @@ impl Joint {
     }
 
     pub fn ball_socket(
-        entity_a: Entity,
-        entity_b: Entity,
+        entity_a: BodyHandle,
+        entity_b: BodyHandle,
         local_anchor_a: Vec3,
         local_anchor_b: Vec3,
     ) -> Self {
@@ -186,8 +186,8 @@ impl Joint {
     }
 
     pub fn slider(
-        entity_a: Entity,
-        entity_b: Entity,
+        entity_a: BodyHandle,
+        entity_b: BodyHandle,
         local_anchor_a: Vec3,
         local_anchor_b: Vec3,
         axis: Vec3,
@@ -225,8 +225,8 @@ impl Joint {
     }
 
     pub fn spring(
-        entity_a: Entity,
-        entity_b: Entity,
+        entity_a: BodyHandle,
+        entity_b: BodyHandle,
         local_anchor_a: Vec3,
         local_anchor_b: Vec3,
         rest_length: f32,

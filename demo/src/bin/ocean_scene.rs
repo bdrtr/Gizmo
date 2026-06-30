@@ -247,8 +247,8 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         };
 
         let joint = gizmo::physics::joints::Joint::hinge(
-            ent_a,
-            ent_b,
+            gizmo::physics::BodyHandle::from_id(ent_a.id()),
+            gizmo::physics::BodyHandle::from_id(ent_b.id()),
             anchor_a,
             anchor_b,
             Vec3::new(0.0, 0.0, 1.0), // Z ekseninde salınım

@@ -195,7 +195,7 @@ impl<T: Transport> RollbackSession<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gizmo_core::entity::Entity;
+    use gizmo_physics_rigid::BodyHandle;
     use gizmo_math::Vec3;
     use gizmo_physics_core::{Collider, Transform};
     use gizmo_physics_rigid::{PhysicsWorld, RigidBody, Velocity};
@@ -212,14 +212,14 @@ mod tests {
         let mut w = PhysicsWorld::new();
         let mut g = RigidBody::new_static();
         g.wake_up();
-        w.add_body(Entity::new(0, 0), g, Transform::new(Vec3::new(0.0, -1.0, 0.0)),
+        w.add_body(BodyHandle::from_id(0), g, Transform::new(Vec3::new(0.0, -1.0, 0.0)),
             Velocity::default(), Collider::box_collider(Vec3::new(20.0, 1.0, 20.0)));
         for id in 1..=3u32 {
             let mut rb = RigidBody::new(1.0, true);
             rb.wake_up();
             let col = Collider::box_collider(Vec3::splat(0.5));
             rb.update_inertia_from_collider(&col);
-            w.add_body(Entity::new(id, 0), rb,
+            w.add_body(BodyHandle::from_id(id), rb,
                 Transform::new(Vec3::new(id as f32 * 1.02 - 1.5, 0.5, 0.0)),
                 Velocity::default(), col);
         }

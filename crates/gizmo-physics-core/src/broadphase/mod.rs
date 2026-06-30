@@ -20,7 +20,7 @@
 /// FIX-7  find_best_sibling: inherited_cost hesabında yanlış node SA kullanılıyordu
 /// FIX-8  remove_leaf → free_node çağrısı parent'ı serbest bırakıyordu ama
 ///         parent'ın entity/aabb alanları temizlenmiyordu → free_node düzeltildi
-use gizmo_core::entity::Entity;
+use crate::BodyHandle;
 use gizmo_math::{Aabb, Vec3};
 use std::collections::HashMap;
 
@@ -205,8 +205,8 @@ pub use spatial_hash::SpatialHash;
 mod tests {
     use super::*;
 
-    fn make_entity(id: u32) -> Entity {
-        Entity::new(id, 0)
+    fn make_entity(id: u32) -> BodyHandle {
+        BodyHandle::from_id(id)
     }
 
     fn make_aabb(cx: f32, cy: f32, cz: f32, r: f32) -> Aabb {

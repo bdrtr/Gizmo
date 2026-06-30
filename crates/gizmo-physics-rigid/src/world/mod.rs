@@ -6,7 +6,7 @@ use crate::{
 use gizmo_physics_core::broadphase::SpatialHash;
 use gizmo_physics_core::{CollisionEvent, ContactManifold, TriggerEvent};
 use gizmo_physics_core::components::{Collider, Transform};
-use gizmo_core::entity::Entity;
+use gizmo_physics_core::BodyHandle;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -192,7 +192,7 @@ pub struct PhysicsWorld {
     pub fluid_zones: Vec<FluidZone>,
 
     #[serde(skip)]
-    pub(crate) contact_cache: HashMap<(Entity, Entity), (bool, Option<ContactManifold>)>,
+    pub(crate) contact_cache: HashMap<(BodyHandle, BodyHandle), (bool, Option<ContactManifold>)>,
 
     pub accumulator: f32,
     pub render_alpha: f32,
@@ -201,7 +201,7 @@ pub struct PhysicsWorld {
     pub metrics: crate::island::PhysicsMetrics,
 
     // SoA (Structure of Arrays) Memory Layout
-    pub entities: Vec<Entity>,
+    pub entities: Vec<BodyHandle>,
     pub rigid_bodies: Vec<RigidBody>,
     pub transforms: Vec<Transform>,
     pub velocities: Vec<Velocity>,
@@ -220,7 +220,7 @@ pub struct PhysicsWorld {
     pub max_history_frames: usize,
 
     #[serde(skip)]
-    pub watchlist: std::collections::HashSet<Entity>,
+    pub watchlist: std::collections::HashSet<BodyHandle>,
 }
 
 impl Default for PhysicsWorld {
@@ -242,6 +242,6 @@ pub struct WorldSnapshot {
     transforms: Vec<Transform>,
     velocities: Vec<crate::components::Velocity>,
     rigid_bodies: Vec<crate::components::RigidBody>,
-    contact_cache: HashMap<(gizmo_core::entity::Entity, gizmo_core::entity::Entity), (bool, Option<ContactManifold>)>,
+    contact_cache: HashMap<(BodyHandle, BodyHandle), (bool, Option<ContactManifold>)>,
     accumulator: f32,
 }

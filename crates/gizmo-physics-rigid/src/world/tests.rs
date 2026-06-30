@@ -1,5 +1,5 @@
 use super::*;
-use gizmo_core::entity::Entity;
+use gizmo_physics_core::BodyHandle;
 use gizmo_math::Vec3;
 
 #[test]
@@ -12,7 +12,7 @@ fn test_physics_world_creation() {
 fn test_physics_step() {
     let mut world = PhysicsWorld::new();
 
-    let entity = Entity::new(1, 0);
+    let entity = BodyHandle::from_id(1);
     let rb = RigidBody::default();
     let transform = Transform::new(Vec3::new(0.0, 10.0, 0.0));
     let vel = Velocity::default();
@@ -40,7 +40,7 @@ fn test_high_stack_stability() {
     ground_rb.body_type = crate::components::rigid_body::BodyType::Static;
     ground_rb.wake_up();
     world.add_body(
-        Entity::new(0, 0),
+        BodyHandle::from_id(0),
         ground_rb,
         Transform::new(Vec3::new(0.0, -0.5, 0.0)),
         Velocity::default(),
@@ -59,7 +59,7 @@ fn test_high_stack_stability() {
         let y_pos = half_size + (i - 1) as f32 * box_size;
 
         world.add_body(
-            Entity::new(i, 0),
+            BodyHandle::from_id(i),
             rb,
             Transform::new(Vec3::new(0.0, y_pos, 0.0)),
             Velocity::default(),
@@ -77,7 +77,7 @@ fn test_high_stack_stability() {
 
     // Kule yıkılmamış olmalı (X ve Z ekseninde çok kaymamış olmalı)
     // En üstteki kutunun durumuna bakalım
-    let top_box_idx = box_count as usize; // Entity ID starts from 1 for boxes, so idx is `box_count` because ground is 0
+    let top_box_idx = box_count as usize; // BodyHandle ID starts from 1 for boxes, so idx is `box_count` because ground is 0
     let top_box_pos = world.transforms[top_box_idx].position;
 
     // Akademik limitler: 10 saniye boyunca dik durmalı, yana yatmamalı
@@ -113,7 +113,7 @@ fn test_ccd_tunneling_prevention() {
     let mut wall_rb = RigidBody::new_static();
     wall_rb.wake_up();
     world.add_body(
-        Entity::new(0, 0),
+        BodyHandle::from_id(0),
         wall_rb,
         Transform::new(Vec3::ZERO),
         Velocity::default(),
@@ -126,7 +126,7 @@ fn test_ccd_tunneling_prevention() {
     bullet_rb.ccd_enabled = true;
     bullet_rb.wake_up();
     world.add_body(
-        Entity::new(1, 0),
+        BodyHandle::from_id(1),
         bullet_rb,
         Transform::new(Vec3::new(-5.0, 0.0, 0.0)),
         Velocity::new(Vec3::new(1200.0, 0.0, 0.0)),
@@ -188,7 +188,7 @@ fn test_material_combine_modes_respected() {
         ..PhysicsMaterial::default()
     };
     world.add_body(
-        Entity::new(0, 0),
+        BodyHandle::from_id(0),
         ground,
         Transform::new(Vec3::new(0.0, -0.5, 0.0)),
         Velocity::default(),
@@ -206,7 +206,7 @@ fn test_material_combine_modes_respected() {
     };
     rb.update_inertia_from_collider(&col);
     world.add_body(
-        Entity::new(1, 0),
+        BodyHandle::from_id(1),
         rb,
         Transform::new(Vec3::new(0.0, 0.5, 0.0)),
         Velocity::new(Vec3::new(10.0, 0.0, 0.0)),
@@ -248,7 +248,7 @@ fn test_coulomb_friction_and_sleeping() {
         ..PhysicsMaterial::default()
     };
     world.add_body(
-        Entity::new(0, 0),
+        BodyHandle::from_id(0),
         ground_rb,
         Transform::new(Vec3::new(0.0, -0.5, 0.0)),
         Velocity::default(),
@@ -266,7 +266,7 @@ fn test_coulomb_friction_and_sleeping() {
         };
         rb.update_inertia_from_collider(&col);
         world.add_body(
-            Entity::new(id, 0),
+            BodyHandle::from_id(id),
             rb,
             Transform::new(Vec3::new(0.0, 0.5, z)),
             Velocity::new(Vec3::new(10.0, 0.0, 0.0)),
@@ -310,7 +310,7 @@ fn test_car_simulation() {
     let mut ground_rb = RigidBody::new_static();
     ground_rb.wake_up();
     world.add_body(
-        Entity::new(0, 0),
+        BodyHandle::from_id(0),
         ground_rb,
         Transform::new(Vec3::new(0.0, -0.5, 0.0)),
         Velocity::default(),
@@ -323,7 +323,7 @@ fn test_car_simulation() {
     chassis_rb.wake_up();
     let chassis_col = Collider::box_collider(Vec3::new(1.0, 0.5, 2.0)); // Genişlik 2, Yükseklik 1, Uzunluk 4 (Yarıçaplar)
     chassis_rb.update_inertia_from_collider(&chassis_col);
-    let chassis_entity = Entity::new(1, 0);
+    let chassis_entity = BodyHandle::from_id(1);
     let chassis_pos = Vec3::new(0.0, 1.5, 0.0);
     world.add_body(
         chassis_entity,
@@ -350,7 +350,7 @@ fn test_car_simulation() {
     let mut wheel_entities = Vec::new();
 
     for (i, offset) in wheel_offsets.iter().enumerate() {
-        let wheel_entity = Entity::new(2 + i as u32, 0);
+        let wheel_entity = BodyHandle::from_id(2 + i as u32);
         wheel_entities.push(wheel_entity);
 
         world.add_body(
@@ -430,7 +430,7 @@ fn friction_decelerates_diagonal_slide_symmetrically() {
     let mut ground = RigidBody::new_static();
     ground.wake_up();
     world.add_body(
-        Entity::new(0, 0),
+        BodyHandle::from_id(0),
         ground,
         Transform::new(Vec3::new(0.0, -0.5, 0.0)),
         Velocity::default(),
@@ -446,7 +446,7 @@ fn friction_decelerates_diagonal_slide_symmetrically() {
     let col = Collider::box_collider(Vec3::new(0.5, 0.5, 0.5));
     rb.update_inertia_from_collider(&col);
     world.add_body(
-        Entity::new(1, 0),
+        BodyHandle::from_id(1),
         rb,
         Transform::new(Vec3::new(0.0, 0.5, 0.0)),
         Velocity::new(Vec3::new(3.0, 0.0, 3.0)),
@@ -488,7 +488,7 @@ fn moving_kinematic_platform_wakes_sleeping_body() {
     // Kinematik platform: merkez 0, üst yüz +0.5.
     let plat = RigidBody::new_kinematic();
     world.add_body(
-        Entity::new(0, 0),
+        BodyHandle::from_id(0),
         plat,
         Transform::new(Vec3::new(0.0, 0.0, 0.0)),
         Velocity::default(),
@@ -504,7 +504,7 @@ fn moving_kinematic_platform_wakes_sleeping_body() {
     let col = Collider::box_collider(Vec3::new(0.5, 0.5, 0.5));
     box_rb.update_inertia_from_collider(&col);
     world.add_body(
-        Entity::new(1, 0),
+        BodyHandle::from_id(1),
         box_rb,
         Transform::new(Vec3::new(0.0, 1.0, 0.0)),
         Velocity::default(),

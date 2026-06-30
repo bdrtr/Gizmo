@@ -6,7 +6,7 @@ struct Node {
     parent: usize,
     left: usize,
     right: usize,
-    entity: Option<Entity>, // Sadece yaprak node'larda dolu
+    entity: Option<BodyHandle>, // Sadece yaprak node'larda dolu
     height: i32,            // -1 = boş/serbest
 }
 
@@ -108,7 +108,7 @@ impl DynamicAabbTree {
 
     // ── Ekleme / Güncelleme ──────────────────────────────────────────────────
 
-    pub fn insert(&mut self, entity: Entity, aabb: Aabb) {
+    pub fn insert(&mut self, entity: BodyHandle, aabb: Aabb) {
         // FIX-1: tight AABB hâlâ fat AABB içindeyse rebuild'den kaçın
         // Skalar karşılaştırma — Vec3A cmpge/cmple trait sorununu önler
         if let Some(&node_idx) = self.entity_map.get(&entity.id()) {
@@ -132,7 +132,7 @@ impl DynamicAabbTree {
         self.entity_map.insert(entity.id(), leaf);
     }
 
-    pub fn remove(&mut self, entity: Entity) {
+    pub fn remove(&mut self, entity: BodyHandle) {
         if let Some(leaf) = self.entity_map.remove(&entity.id()) {
             self.tight_aabbs.remove(&entity.id());
             self.remove_leaf(leaf);
@@ -401,7 +401,7 @@ impl DynamicAabbTree {
     /// Tüm olası çarpışma çiftlerini döndür.
     /// FIX-2: Dual-tree descent ile garantili duplicate-free, self-pair yok.
     /// Algoritma: her internal node için sol ve sağ alt ağaçları birbirine karşı test et.
-    pub fn query_pairs(&self) -> Vec<(Entity, Entity)> {
+    pub fn query_pairs(&self) -> Vec<(BodyHandle, BodyHandle)> {
         let mut pairs = Vec::new();
         if self.root == NULL || self.nodes[self.root].is_leaf() {
             return pairs;
@@ -475,7 +475,7 @@ impl DynamicAabbTree {
 
     /// Her internal node'un sol ve sağ çocuklarını birbirine karşı test et
     /// (aynı subtree içindeki çiftler için)
-    fn collect_internal_pairs(&self, pairs: &mut Vec<(Entity, Entity)>) {
+    fn collect_internal_pairs(&self, pairs: &mut Vec<(BodyHandle, BodyHandle)>) {
         if self.root == NULL {
             return;
         }
@@ -493,7 +493,7 @@ impl DynamicAabbTree {
         }
     }
 
-    fn descent_pair(&self, a: usize, b: usize, pairs: &mut Vec<(Entity, Entity)>) {
+    fn descent_pair(&self, a: usize, b: usize, pairs: &mut Vec<(BodyHandle, BodyHandle)>) {
         if a == NULL || b == NULL {
             return;
         }
@@ -538,7 +538,7 @@ impl DynamicAabbTree {
     }
 
     /// Verilen AABB ile örtüşen tüm entity'leri döndür
-    pub fn query_aabb(&self, aabb: &Aabb) -> Vec<Entity> {
+    pub fn query_aabb(&self, aabb: &Aabb) -> Vec<BodyHandle> {
         let mut result = Vec::new();
         if self.root == NULL {
             return result;
@@ -563,7 +563,7 @@ impl DynamicAabbTree {
     }
 
     /// Ray ile kesişen entity'leri t değerine göre sıralı döndür
-    pub fn query_ray(&self, origin: Vec3, dir: Vec3, max_t: f32) -> Vec<(Entity, f32)> {
+    pub fn query_ray(&self, origin: Vec3, dir: Vec3, max_t: f32) -> Vec<(BodyHandle, f32)> {
         let mut result = Vec::new();
         if self.root == NULL {
             return result;

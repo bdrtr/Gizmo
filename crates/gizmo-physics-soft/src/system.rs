@@ -1,6 +1,6 @@
 use gizmo_core::world::World;
 use gizmo_math::Vec3;
-use gizmo_physics_core::{Collider, Transform};
+use gizmo_physics_core::{BodyHandle, Collider, Transform};
 use crate::{SoftBodyMesh, cloth::Cloth, rope::Rope};
 
 /// Soft-body integratörleri büyük `dt`'de (kare sıçraması/hitch) patlar (FEM
@@ -23,7 +23,8 @@ pub fn soft_body_step_system(world: &World, dt: f32, gravity: Vec3) {
             // Panik koruması: entity sorgu ile get_entity arasında despawn edilmiş
             // olabilir (yarış/tutarsızlık) → unwrap yerine bu collider'ı sessizce atla.
             if let Some(entity) = world.get_entity(e) {
-                rigid_colliders.push((entity, *trans, col.clone()));
+                // Bridge: ECS entity -> opaque physics BodyHandle (id only).
+                rigid_colliders.push((BodyHandle::from_id(entity.id()), *trans, col.clone()));
             }
         }
     }

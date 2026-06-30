@@ -2,7 +2,7 @@ use gizmo_physics_core::{Collider, Transform, ColliderShape};
 use gizmo_physics_core::components::CharacterController;
 use gizmo_physics_rigid::components::Velocity;
 use gizmo_physics_core::raycast::{Ray, Raycast};
-use gizmo_core::entity::Entity;
+use gizmo_physics_core::BodyHandle;
 use gizmo_math::Vec3;
 
 /// Advances a kinematic character controller by one fixed step.
@@ -12,12 +12,12 @@ use gizmo_math::Vec3;
 /// all scene colliders to test against; the entry whose entity equals `_entity`
 /// (the character itself) is skipped automatically.
 pub fn update_character(
-    _entity: Entity,
+    _entity: BodyHandle,
     kcc: &mut CharacterController,
     transform: &mut Transform,
     vel: &mut Velocity,
     collider: &Collider,
-    colliders: &[(Entity, Transform, Collider)],
+    colliders: &[(BodyHandle, Transform, Collider)],
     dt: f32,
 ) {
     // Determine size from collider

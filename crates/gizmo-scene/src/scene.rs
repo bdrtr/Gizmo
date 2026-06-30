@@ -187,8 +187,8 @@ impl SceneData {
         if let Ok(mut physics_world) = world.try_get_resource_mut::<gizmo_physics_rigid::world::PhysicsWorld>() {
             for mut joint in scene.joints {
                 if let (Some(&new_a), Some(&new_b)) = (id_map.get(&joint.entity_a.id()), id_map.get(&joint.entity_b.id())) {
-                    joint.entity_a = gizmo_core::entity::Entity::new(new_a, 0);
-                    joint.entity_b = gizmo_core::entity::Entity::new(new_b, 0);
+                    joint.entity_a = gizmo_physics_rigid::BodyHandle::from_id(new_a);
+                    joint.entity_b = gizmo_physics_rigid::BodyHandle::from_id(new_b);
                     physics_world.joints.push(joint);
                 }
             }
@@ -374,8 +374,8 @@ impl SceneData {
         if let Ok(mut physics_world) = world.try_get_resource_mut::<gizmo_physics_rigid::world::PhysicsWorld>() {
             for mut joint in prefab.joints {
                 if let (Some(&new_a), Some(&new_b)) = (id_map.get(&joint.entity_a.id()), id_map.get(&joint.entity_b.id())) {
-                    joint.entity_a = gizmo_core::entity::Entity::new(new_a, 0);
-                    joint.entity_b = gizmo_core::entity::Entity::new(new_b, 0);
+                    joint.entity_a = gizmo_physics_rigid::BodyHandle::from_id(new_a);
+                    joint.entity_b = gizmo_physics_rigid::BodyHandle::from_id(new_b);
                     physics_world.joints.push(joint);
                 }
             }
@@ -423,8 +423,13 @@ mod tests {
         let ent1 = world.spawn();
         let ent2 = world.spawn();
 
-        let joint = Joint::fixed(ent1, ent2, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO)
-            .with_break_force(1000.0, 1000.0);
+        let joint = Joint::fixed(
+            gizmo_physics_rigid::BodyHandle::from_id(ent1.id()),
+            gizmo_physics_rigid::BodyHandle::from_id(ent2.id()),
+            gizmo_math::Vec3::ZERO,
+            gizmo_math::Vec3::ZERO,
+        )
+        .with_break_force(1000.0, 1000.0);
 
         let prefab_data = PrefabData {
             root_id: ent1.id(),

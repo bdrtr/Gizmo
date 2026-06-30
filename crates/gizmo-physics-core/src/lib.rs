@@ -18,6 +18,7 @@
 //! Most fallible operations return [`Result`] with [`GizmoError`] or
 //! [`Option`], so the public surface avoids panicking on bad input.
 
+pub mod body;
 pub mod broadphase;
 pub mod bvh;
 pub mod collision;
@@ -29,6 +30,7 @@ pub mod quickhull;
 pub mod raycast;
 pub mod shape;
 
+pub use body::BodyHandle;
 pub use broadphase::SpatialHash;
 pub use gizmo_math::Aabb;
 

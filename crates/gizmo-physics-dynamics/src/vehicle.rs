@@ -1,7 +1,7 @@
 use gizmo_physics_core::{Collider, Transform};
 use gizmo_physics_rigid::components::{RigidBody, Velocity};
 use gizmo_physics_core::raycast::{Ray, Raycast, RaycastHit};
-use gizmo_core::entity::Entity;
+use gizmo_physics_core::BodyHandle;
 use gizmo_math::{Quat, Vec3};
 
 // ============================================================
@@ -327,12 +327,12 @@ impl VehicleController {
 /// entry matching `vehicle_entity` is ignored so the vehicle does not raycast
 /// against itself.
 pub fn update_vehicle(
-    vehicle_entity: Entity,
+    vehicle_entity: BodyHandle,
     vehicle: &mut VehicleController,
     vehicle_rb: &mut RigidBody,
     vehicle_transform: &Transform,
     vehicle_vel: &mut Velocity,
-    all_colliders: &[(Entity, Transform, Collider)],
+    all_colliders: &[(BodyHandle, Transform, Collider)],
     dt: f32,
 ) {
     if vehicle_rb.is_static() {

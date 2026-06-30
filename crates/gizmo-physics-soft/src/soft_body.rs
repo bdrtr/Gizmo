@@ -1,4 +1,5 @@
 use gizmo_math::{Mat3, Vec3};
+use gizmo_physics_core::BodyHandle;
 
 /// Represents a single vertex/node in the FEM soft body mesh.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -75,7 +76,7 @@ pub fn resolve_node_collision(
     mut velocity: Vec3,
     dt: f32,
     rigid_colliders: &[(
-        gizmo_core::entity::Entity,
+        BodyHandle,
         gizmo_physics_core::Transform,
         gizmo_physics_core::Collider,
     )],
@@ -201,7 +202,7 @@ impl SoftBodyMesh {
         dt: f32,
         gravity: Vec3,
         rigid_colliders: &[(
-            gizmo_core::entity::Entity,
+            BodyHandle,
             gizmo_physics_core::Transform,
             gizmo_physics_core::Collider,
         )],

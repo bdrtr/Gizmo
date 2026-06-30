@@ -11,7 +11,7 @@ use crate::{
 };
 use gizmo_physics_core::{CollisionEvent, CollisionEventType, ContactManifold, ContactPoints, TriggerEvent};
 use gizmo_physics_core::narrowphase::NarrowPhase;
-use gizmo_core::entity::Entity;
+use gizmo_physics_core::BodyHandle;
 use gizmo_math::Vec3;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -193,7 +193,7 @@ impl PhysicsWorld {
         // ÜRETEMEZ → pahalı narrowphase ATLANIR. Cache aşağıda KORUNUR (yoksa ended-
         // collision wake sahte tetiklenir). En az biri aktifse normal narrowphase çalışır
         // (temas + wake yakalanır), böylece düşen/itilen cisim uyuyan komşuyu uyandırır.
-        let is_active_body = |e: Entity| -> bool {
+        let is_active_body = |e: BodyHandle| -> bool {
             match entity_map.get(&e.id()) {
                 Some(&i) => {
                     let rb = &self.rigid_bodies[i];
@@ -205,8 +205,8 @@ impl PhysicsWorld {
                 None => true, // rigid değil (soft cisim) → aktif say (ayrı yol işler)
             }
         };
-        let mut dormant_pairs: Vec<(Entity, Entity)> = Vec::new();
-        let active_pairs: Vec<(Entity, Entity)> = potential_pairs
+        let mut dormant_pairs: Vec<(BodyHandle, BodyHandle)> = Vec::new();
+        let active_pairs: Vec<(BodyHandle, BodyHandle)> = potential_pairs
             .into_iter()
             .filter(|&(a, b)| {
                 if !is_active_body(a) && !is_active_body(b) {
@@ -222,8 +222,8 @@ impl PhysicsWorld {
         // Each entry: (entity_a, entity_b, contacts, is_trigger_a, is_trigger_b,
         //              mat_a, mat_b, is_soft_pair)
         type NpResult = (
-            Entity,
-            Entity,
+            BodyHandle,
+            BodyHandle,
             Vec<gizmo_physics_core::ContactPoint>,
             bool,
             bool,
@@ -508,7 +508,7 @@ impl PhysicsWorld {
 
         // ── Collision constraints ─────────────────────────────────────────
         if !manifolds.is_empty() {
-            let is_dynamic = |entity: Entity| -> bool {
+            let is_dynamic = |entity: BodyHandle| -> bool {
                 entity_map
                     .get(&entity.id())
                     .is_some_and(|&idx| self.rigid_bodies[idx].is_dynamic())
@@ -524,11 +524,11 @@ impl PhysicsWorld {
             let entities_arr = &self.entities;
 
             type IslandResult = (
-                Vec<(Entity, Velocity)>,      // velocity updates
+                Vec<(BodyHandle, Velocity)>,      // velocity updates
                 Vec<ContactManifold>,         // solved manifolds (warm-start data)
-                Vec<Entity>,                  // entities to wake up
+                Vec<BodyHandle>,                  // entities to wake up
                 Vec<gizmo_physics_core::FractureEvent>,
-                Vec<(Entity, Vec3, Vec3)>,    // split-impulse position corrections (Δlin, Δscaled-axis)
+                Vec<(BodyHandle, Vec3, Vec3)>,    // split-impulse position corrections (Δlin, Δscaled-axis)
             );
 
             let results: Vec<IslandResult> = island_groups
@@ -686,7 +686,7 @@ impl PhysicsWorld {
 
             // Write-back: velocities, wake-ups, fractures, warm-start data.
             // Build a lookup from entity pair → event index for O(1) updates.
-            let event_index: HashMap<(Entity, Entity), usize> = self
+            let event_index: HashMap<(BodyHandle, BodyHandle), usize> = self
                 .collision_events
                 .iter()
                 .enumerate()

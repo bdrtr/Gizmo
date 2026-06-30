@@ -1,5 +1,5 @@
 use crate::components::{ColliderShape, Transform};
-use gizmo_core::entity::Entity;
+use crate::BodyHandle;
 use gizmo_math::Aabb;
 use gizmo_math::Vec3;
 
@@ -34,7 +34,7 @@ impl Ray {
 /// Result of a raycast hit
 #[derive(Debug, Clone, Copy)]
 pub struct RaycastHit {
-    pub entity: Entity,
+    pub entity: BodyHandle,
     pub point: Vec3,
     pub normal: Vec3,
     pub distance: f32,

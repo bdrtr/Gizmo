@@ -14,7 +14,7 @@
 //! Together these are *discriminating*: removing CCD makes the bullet tunnel
 //! (peak x ≫ 0); the old freeze-bug makes it rest ~5 m short of the wall.
 
-use gizmo_core::entity::Entity;
+use gizmo_physics_core::BodyHandle;
 use gizmo_math::Vec3;
 use gizmo_physics_core::{Collider, Transform};
 use gizmo_physics_rigid::{PhysicsWorld, RigidBody, Velocity};
@@ -31,7 +31,7 @@ fn wall_world(half_thick: f32) -> PhysicsWorld {
     let mut wall = RigidBody::new_static();
     wall.wake_up();
     world.add_body(
-        Entity::new(0, 0),
+        BodyHandle::from_id(0),
         wall,
         Transform::new(Vec3::ZERO),
         Velocity::default(),
@@ -46,7 +46,7 @@ fn add_bullet(world: &mut PhysicsWorld, id: u32, pos: Vec3, vel: Vec3, radius: f
     rb.ccd_enabled = true;
     rb.wake_up();
     world.add_body(
-        Entity::new(id, 0),
+        BodyHandle::from_id(id),
         rb,
         Transform::new(pos),
         Velocity::new(vel),
@@ -165,7 +165,7 @@ fn ccd_body_settles_on_ground_like_discrete() {
     let mut ground = RigidBody::new_static();
     ground.wake_up();
     world.add_body(
-        Entity::new(0, 0),
+        BodyHandle::from_id(0),
         ground,
         Transform::new(Vec3::new(0.0, -1.0, 0.0)), // top surface at y = 0
         Velocity::default(),
@@ -176,7 +176,7 @@ fn ccd_body_settles_on_ground_like_discrete() {
     rb.ccd_enabled = true;
     rb.wake_up();
     world.add_body(
-        Entity::new(1, 0),
+        BodyHandle::from_id(1),
         rb,
         Transform::new(Vec3::new(0.0, 3.0, 0.0)),
         Velocity::default(),

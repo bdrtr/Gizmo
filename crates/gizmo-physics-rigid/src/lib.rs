@@ -51,6 +51,7 @@ pub mod system;
 pub mod vehicle;
 pub mod world;
 
+pub use gizmo_physics_core::BodyHandle;
 pub use components::{Breakable, Explosion, RigidBody, Velocity, BodyType, Vehicle, Wheel};
 pub use destruction::*;
 pub use fracture::{generate_fracture_chunks, voronoi_shatter, PreFracturedCache};
