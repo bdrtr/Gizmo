@@ -98,7 +98,7 @@ impl<T: crate::component::Component> FetchComponent for &T {
 ///
 /// **Aliasing:** `world.query::<Mut<T>>()` / [`World::borrow_mut`](crate::world::World::borrow_mut)
 /// `&self`'ten `&mut T` verir; aynı `T` için iki *canlı* `Mut` query'si (veya bir `Mut`
-/// + bir `&T`) UB'dir. Çağıran sözleşmesi ve güvenli alternatifler için
+/// ile bir `&T`) aynı anda UB'dir. Çağıran sözleşmesi ve güvenli alternatifler için
 /// [`World::query`](crate::world::World::query) aliasing bölümüne bakın.
 pub struct Mut<'a, T: 'static> {
     value: &'a mut T,
