@@ -22,6 +22,7 @@ pub use iter::{QueryChunksIter, QueryIter};
 mod sealed {
     pub trait SealedFetch {}
     pub trait SealedQuery {}
+    pub trait SealedReadOnly {}
 }
 
 // =========================================================================
@@ -65,6 +66,25 @@ pub trait WorldQuery: sealed::SealedQuery {
 }
 
 // =========================================================================
+// READ-ONLY QUERY MARKER
+// =========================================================================
+//
+// Marks queries that yield ONLY shared (`&T`) access — never `&mut T`. Such a query
+// is sound to construct and iterate from a shared `&World`: any number can coexist
+// because no `&mut T` ever escapes. `Mut<T>` is deliberately NOT `ReadOnlyQuery`.
+//
+// This is what makes the safe entry points sound:
+// - [`World::query`](crate::world::World::query) bounds `Q: ReadOnlyQuery`, so a
+//   mutable query can never be built from `&World` in safe code (the dual-`Mut` UB).
+// - [`Query`] gates its `&self` accessors (`iter`/`get`/`iter_chunks`/`par_for_each`)
+//   behind `ReadOnlyQuery`; mutable access goes through the `&mut self` variants, so
+//   two live `&mut T` to the same storage are impossible without `unsafe`.
+//
+// Sealed: only this crate implements it (a wrong impl on a `Mut`-bearing query would
+// reopen the hole), and the supertrait `WorldQuery` keeps it inside the sealed DSL.
+pub trait ReadOnlyQuery: WorldQuery + sealed::SealedReadOnly {}
+
+// =========================================================================
 // QUERY STRUCT
 // =========================================================================
 
@@ -75,7 +95,7 @@ pub struct Query<'w, Q: WorldQuery + ?Sized> {
 }
 
 impl<'w, Q: WorldQuery> Query<'w, Q> {
-    pub fn new(world: &'w World) -> Option<Self> {
+    pub(crate) fn new(world: &'w World) -> Option<Self> {
         let mut used_types = Vec::new();
         Q::check_aliasing(&mut used_types);
         let matching = world
@@ -88,7 +108,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         })
     }
 
-    pub fn new_cached(world: &'w mut World) -> Option<Self> {
+    pub(crate) fn new_cached(world: &'w mut World) -> Option<Self> {
         let mut used_types = Vec::new();
         Q::check_aliasing(&mut used_types);
         let matching = world
@@ -102,7 +122,14 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         })
     }
 
-    pub fn iter<'a>(&'a self) -> QueryIter<'a, 'w, Q> {
+    // ── PRIVATE primitives ────────────────────────────────────────────────
+    // The actual fetch logic, callable from `&self`. The PUBLIC `&self` wrappers
+    // bound `Q: ReadOnlyQuery` (so a mutable `Q` can never yield `&mut T` from a
+    // shared borrow), while the `&mut self` wrappers tie the returned items to the
+    // exclusive borrow (so two live `&mut T` from one query are impossible). Keeping
+    // these private is what makes the gating airtight.
+
+    fn iter_inner<'a>(&'a self) -> QueryIter<'a, 'w, Q> {
         QueryIter {
             world: self.world,
             archetype_indices: &self.matching_archetypes,
@@ -114,20 +141,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         }
     }
 
-    pub fn iter_mut<'a>(&'a mut self) -> QueryIter<'a, 'w, Q> {
-        self.iter()
-    }
-
-    /// Salt-okunur SIMD-dostu chunk iterasyonu (`&[T]` döndürür). Değişiklik tespitini
-    /// (change detection) ETKİLEMEZ — bileşenleri okumak için kullanın.
-    ///
-    /// # Panics
-    /// Satır-başı filtre GEREKTİREN bir query'de (SparseSet `With`/`Without`,
-    /// `Changed`/`Added`, `Or`) panikler: chunk iterasyonu arketipin TÜM bitişik dilimini
-    /// döndürür, bu filtreler ise satır-başı seçer (bkz. [`WorldQuery::has_row_filter`]).
-    /// Sessizce filtrelenmemiş sonuç döndürmek yerine yüksek sesle reddeder — bunun yerine
-    /// [`Query::iter`]/[`Query::iter_mut`] kullanın. (Tablo `With`/`Without` güvenlidir.)
-    pub fn iter_chunks<'a>(&'a self) -> QueryChunksIter<'a, 'w, Q> {
+    fn iter_chunks_inner<'a>(&'a self) -> QueryChunksIter<'a, 'w, Q> {
         assert!(
             !Q::has_row_filter(),
             "iter_chunks does not support per-row-filtered queries \
@@ -142,26 +156,8 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         }
     }
 
-    /// **Toplu (bulk) yazma** için mutable chunk iterasyonu (`&mut [T]` döndürür).
-    ///
-    /// Ham bir dilim verdiği için hangi elemanların yazıldığını izleyemez; bu yüzden
-    /// **verilen tüm satırları temkinli (conservative) olarak "changed" işaretler.**
-    /// Bu, gerçek bir değişikliği asla KAÇIRMAZ (change detection için güvenli taraf),
-    /// ama yalnızca bir kısmını yazarsanız yazılmayanları da "changed" gösterir
-    /// (false positive). Doğru aracı seçin:
-    /// - Sadece okuyacaksanız → [`Query::iter_chunks`] (işaretlemez).
-    /// - Bir kısmını hassas işaretleyerek yazacaksanız → `iter_mut` (eleman başına `Mut`).
-    /// - Hepsini yazacaksanız → bu metot (hepsini işaretlemek zaten doğru).
-    pub fn iter_chunks_mut<'a>(&'a mut self) -> QueryChunksIter<'a, 'w, Q> {
-        self.iter_chunks()
-    }
-
-    /// Ham `u32` id ile erişim. **DİKKAT: generation kontrolü YAPMAZ.** Despawn edilip
-    /// slotu yeniden kullanılan bir id verilirse, o slottaki YENİ entity'nin verisi
-    /// döner (use-after-free benzeri sessiz hata). Elinizde bir [`Entity`] handle'ı varsa
-    /// [`Query::get_entity`] kullanın — o, generation'ı doğrular.
     #[inline]
-    pub fn get(&self, entity_id: u32) -> Option<Q::Item<'_>> {
+    fn get_inner<'a>(&'a self, entity_id: u32) -> Option<Q::Item<'a>> {
         let loc = self.world.entity_location(entity_id);
         if !loc.is_valid() {
             return None;
@@ -176,59 +172,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         }
     }
 
-    /// Ham `u32` id ile mutable erişim — generation kontrolü yapmaz (bkz. [`Query::get`]).
-    #[inline]
-    pub fn get_mut(&self, entity_id: u32) -> Option<Q::Item<'_>> {
-        self.get(entity_id)
-    }
-
-    /// Generation-doğrulamalı erişim: `entity` artık canlı değilse (despawn edilmiş veya
-    /// slotu başka bir entity'ye verilmiş) `None` döner. Stale-handle ile yanlış entity'nin
-    /// verisini okumayı engeller. Elinizde bir [`Entity`] handle'ı varsa bunu tercih edin.
-    #[inline]
-    pub fn get_entity(&self, entity: Entity) -> Option<Q::Item<'_>> {
-        if !self.world.is_alive(entity) {
-            return None;
-        }
-        self.get(entity.id())
-    }
-
-    /// Generation-doğrulamalı mutable erişim (bkz. [`Query::get_entity`]).
-    #[inline]
-    pub fn get_mut_entity(&self, entity: Entity) -> Option<Q::Item<'_>> {
-        self.get_entity(entity)
-    }
-
-    #[inline]
-    pub fn entity_count(&self) -> usize {
-        self.matching_archetypes
-            .iter()
-            .map(|&idx| self.world.archetype_index.archetypes[idx].len())
-            .sum()
-    }
-
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.entity_count()
-    }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.entity_count() == 0
-    }
-
-    /// Belirli bir entity'nin bu query'ye ait olup olmadığını kontrol eder.
-    #[inline]
-    pub fn contains(&self, entity_id: u32) -> bool {
-        self.get(entity_id).is_some()
-    }
-
-    pub fn entities<'a>(&'a self) -> impl Iterator<Item = u32> + 'a {
-        self.iter().map(|(id, _)| id)
-    }
-
-    /// İş parçacığı havuzu (Work-Stealing) ile çalışan lock-free paralel iterasyon
-    pub fn par_for_each<F>(&self, func: F)
+    fn par_inner<F>(&self, func: F)
     where
         F: Fn((u32, Q::Item<'_>)) + Send + Sync,
     {
@@ -272,11 +216,134 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         });
     }
 
+    // ── MUTABLE accessors (available for every `Q`) ───────────────────────
+    // Each ties its result to the EXCLUSIVE `&mut self` borrow, so two live mutable
+    // views from one query can't coexist. Combined with `query_mut`/`query_unchecked`
+    // gating creation, this closes the dual-`Mut` aliasing hole for safe code.
+
+    /// Eleman-başına `Mut<T>` veren mutable iterasyon. `&mut self` aldığından aynı query
+    /// üzerinde ikinci bir canlı mutable iterasyon derleme zamanında engellenir.
+    pub fn iter_mut<'a>(&'a mut self) -> QueryIter<'a, 'w, Q> {
+        self.iter_inner()
+    }
+
+    /// **Toplu (bulk) yazma** için mutable chunk iterasyonu (`&mut [T]` döndürür).
+    ///
+    /// Ham bir dilim verdiği için hangi elemanların yazıldığını izleyemez; bu yüzden
+    /// **verilen tüm satırları temkinli (conservative) olarak "changed" işaretler.**
+    /// Bu, gerçek bir değişikliği asla KAÇIRMAZ (change detection için güvenli taraf),
+    /// ama yalnızca bir kısmını yazarsanız yazılmayanları da "changed" gösterir
+    /// (false positive). Doğru aracı seçin:
+    /// - Sadece okuyacaksanız → [`Query::iter_chunks`] (işaretlemez).
+    /// - Bir kısmını hassas işaretleyerek yazacaksanız → `iter_mut` (eleman başına `Mut`).
+    /// - Hepsini yazacaksanız → bu metot (hepsini işaretlemek zaten doğru).
+    pub fn iter_chunks_mut<'a>(&'a mut self) -> QueryChunksIter<'a, 'w, Q> {
+        self.iter_chunks_inner()
+    }
+
+    /// Ham `u32` id ile mutable erişim — generation kontrolü yapmaz (bkz. [`Query::get`]).
+    /// `&mut self` aldığından dönen `Mut` query'yi özel olarak ödünç alır; aynı anda ikinci
+    /// bir `get_mut`/`iter_mut` derlenmez.
+    #[inline]
+    pub fn get_mut(&mut self, entity_id: u32) -> Option<Q::Item<'_>> {
+        self.get_inner(entity_id)
+    }
+
+    /// Generation-doğrulamalı mutable erişim (bkz. [`Query::get_entity`]).
+    #[inline]
+    pub fn get_mut_entity(&mut self, entity: Entity) -> Option<Q::Item<'_>> {
+        if !self.world.is_alive(entity) {
+            return None;
+        }
+        self.get_inner(entity.id())
+    }
+
+    /// İş parçacığı havuzu (Work-Stealing) ile çalışan lock-free paralel mutable iterasyon.
     pub fn par_for_each_mut<F>(&mut self, func: F)
     where
         F: Fn((u32, Q::Item<'_>)) + Send + Sync,
     {
-        self.par_for_each(func);
+        self.par_inner(func);
+    }
+
+    // ── Metadata (no component access → always `&self`) ───────────────────
+
+    #[inline]
+    pub fn entity_count(&self) -> usize {
+        self.matching_archetypes
+            .iter()
+            .map(|&idx| self.world.archetype_index.archetypes[idx].len())
+            .sum()
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.entity_count()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.entity_count() == 0
+    }
+}
+
+// ── READ-ONLY accessors (only for queries that never yield `&mut T`) ──────
+// Sound from a shared `&self` because `Q: ReadOnlyQuery` guarantees `Q::Item` is a
+// shared borrow — any number may coexist.
+impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
+    pub fn iter<'a>(&'a self) -> QueryIter<'a, 'w, Q> {
+        self.iter_inner()
+    }
+
+    /// Salt-okunur SIMD-dostu chunk iterasyonu (`&[T]` döndürür). Değişiklik tespitini
+    /// (change detection) ETKİLEMEZ — bileşenleri okumak için kullanın.
+    ///
+    /// # Panics
+    /// Satır-başı filtre GEREKTİREN bir query'de (SparseSet `With`/`Without`,
+    /// `Changed`/`Added`, `Or`) panikler: chunk iterasyonu arketipin TÜM bitişik dilimini
+    /// döndürür, bu filtreler ise satır-başı seçer (bkz. [`WorldQuery::has_row_filter`]).
+    /// Sessizce filtrelenmemiş sonuç döndürmek yerine yüksek sesle reddeder — bunun yerine
+    /// [`Query::iter`]/[`Query::iter_mut`] kullanın. (Tablo `With`/`Without` güvenlidir.)
+    pub fn iter_chunks<'a>(&'a self) -> QueryChunksIter<'a, 'w, Q> {
+        self.iter_chunks_inner()
+    }
+
+    /// Ham `u32` id ile erişim. **DİKKAT: generation kontrolü YAPMAZ.** Despawn edilip
+    /// slotu yeniden kullanılan bir id verilirse, o slottaki YENİ entity'nin verisi
+    /// döner (use-after-free benzeri sessiz hata). Elinizde bir [`Entity`] handle'ı varsa
+    /// [`Query::get_entity`] kullanın — o, generation'ı doğrular.
+    #[inline]
+    pub fn get(&self, entity_id: u32) -> Option<Q::Item<'_>> {
+        self.get_inner(entity_id)
+    }
+
+    /// Generation-doğrulamalı erişim: `entity` artık canlı değilse (despawn edilmiş veya
+    /// slotu başka bir entity'ye verilmiş) `None` döner. Stale-handle ile yanlış entity'nin
+    /// verisini okumayı engeller. Elinizde bir [`Entity`] handle'ı varsa bunu tercih edin.
+    #[inline]
+    pub fn get_entity(&self, entity: Entity) -> Option<Q::Item<'_>> {
+        if !self.world.is_alive(entity) {
+            return None;
+        }
+        self.get_inner(entity.id())
+    }
+
+    /// Belirli bir entity'nin bu query'ye ait olup olmadığını kontrol eder.
+    #[inline]
+    pub fn contains(&self, entity_id: u32) -> bool {
+        self.get_inner(entity_id).is_some()
+    }
+
+    pub fn entities<'a>(&'a self) -> impl Iterator<Item = u32> + 'a {
+        self.iter_inner().map(|(id, _)| id)
+    }
+
+    /// İş parçacığı havuzu (Work-Stealing) ile çalışan lock-free paralel iterasyon
+    pub fn par_for_each<F>(&self, func: F)
+    where
+        F: Fn((u32, Q::Item<'_>)) + Send + Sync,
+    {
+        self.par_inner(func);
     }
 }
 
@@ -337,6 +404,9 @@ macro_rules! impl_tick_filter {
         pub struct $name<T>(PhantomData<T>);
 
         impl<T: crate::component::Component> sealed::SealedQuery for $name<T> {}
+        // Tick filters carry no data (`Item = ()`) → read-only.
+        impl<T: crate::component::Component> sealed::SealedReadOnly for $name<T> {}
+        impl<T: crate::component::Component> ReadOnlyQuery for $name<T> {}
         impl<T: crate::component::Component> WorldQuery for $name<T> {
             type StaticType = $name<T>;
             // (table ticks ptr, or the sparse set ptr for SparseSet storage)
@@ -396,6 +466,9 @@ macro_rules! impl_presence_filter {
         pub struct $name<T>(PhantomData<T>);
 
         impl<T: crate::component::Component> sealed::SealedQuery for $name<T> {}
+        // Presence filters carry no data (`Item = ()`) → read-only.
+        impl<T: crate::component::Component> sealed::SealedReadOnly for $name<T> {}
+        impl<T: crate::component::Component> ReadOnlyQuery for $name<T> {}
         impl<T: crate::component::Component> WorldQuery for $name<T> {
             type StaticType = $name<T>;
             // (is_sparse, sparse set ptr). Table storage is always `(false, None)`.
@@ -474,6 +547,11 @@ impl<T0: FetchComponent> WorldQuery for T0 where T0::Component: crate::component
     }
 }
 
+// `&T` yields shared access only → read-only. `Mut<T>` (also a `FetchComponent`) is
+// pointedly excluded: no `SealedReadOnly`/`ReadOnlyQuery` impl exists for it.
+impl<T: crate::component::Component> sealed::SealedReadOnly for &T {}
+impl<T: crate::component::Component> ReadOnlyQuery for &T {}
+
 impl_tick_filter!(
     /// Filter matching only entities whose `T` changed since the system last ran
     /// (`deref_mut` on `Mut<T>` stamps the change tick). Use as a query operand.
@@ -490,6 +568,9 @@ impl_tick_filter!(
 macro_rules! impl_query_tuple {
     ($($t:ident),*) => {
         impl<$($t: WorldQuery),*> sealed::SealedQuery for ($($t,)*) {}
+        // A tuple is read-only iff EVERY element is read-only.
+        impl<$($t: ReadOnlyQuery),*> sealed::SealedReadOnly for ($($t,)*) {}
+        impl<$($t: ReadOnlyQuery),*> ReadOnlyQuery for ($($t,)*) {}
         #[allow(non_snake_case)]
         impl<$($t: WorldQuery),*> WorldQuery for ($($t,)*) {
             type StaticType = ($($t::StaticType,)*);
@@ -556,6 +637,9 @@ impl_presence_filter!(
 pub struct Or<T1, T2>(PhantomData<(T1, T2)>);
 
 impl<T1: WorldQuery, T2: WorldQuery> sealed::SealedQuery for Or<T1, T2> {}
+// `Or` is itself a no-data filter; it's read-only when both operands are.
+impl<T1: ReadOnlyQuery, T2: ReadOnlyQuery> sealed::SealedReadOnly for Or<T1, T2> {}
+impl<T1: ReadOnlyQuery, T2: ReadOnlyQuery> ReadOnlyQuery for Or<T1, T2> {}
 impl<T1: WorldQuery, T2: WorldQuery> WorldQuery for Or<T1, T2> {
     type StaticType = Or<T1::StaticType, T2::StaticType>;
     // Each operand's fetch (or `None` when that operand doesn't apply to this archetype).
@@ -682,7 +766,7 @@ mod tests {
         world.add_component(e, Velocity { x: 0.0, y: 0.0 });
 
         // Farklı tipler — Query oluşturulabilmeli
-        let q = world.query::<(Mut<Position>, Mut<Velocity>)>();
+        let q = world.query_mut::<(Mut<Position>, Mut<Velocity>)>();
         assert!(q.is_some());
     }
 
@@ -711,7 +795,7 @@ mod tests {
 
         // Frame 2 içinde mutasyon → Changed yeniden 1 olmalı.
         {
-            let mut q = world.query::<Mut<Position>>().unwrap();
+            let mut q = world.query_mut::<Mut<Position>>().unwrap();
             for (_id, mut p) in q.iter_mut() {
                 p.x += 1.0;
             }
@@ -764,7 +848,7 @@ mod tests {
 
         // Chunked mutable yazma.
         {
-            let mut q = world.query::<Mut<Position>>().unwrap();
+            let mut q = world.query_mut::<Mut<Position>>().unwrap();
             for (_ids, slice) in q.iter_chunks_mut() {
                 for p in slice.iter_mut() {
                     p.x += 10.0;
@@ -807,7 +891,7 @@ mod tests {
 
         // Frame 2 içinde mutasyon → Changed yeniden tetiklenmeli.
         {
-            let mut q = world.query::<Mut<SparseComp>>().unwrap();
+            let mut q = world.query_mut::<Mut<SparseComp>>().unwrap();
             for (_id, mut c) in q.iter_mut() {
                 c.0 += 10;
             }

@@ -347,7 +347,7 @@ pub fn gpu_physics_readback_system(world: &mut crate::core::World, renderer: &Re
     if let Some(physics) = &renderer.gpu_physics {
         if let Some(gpu_data) = physics.poll_readback_data(&renderer.device) {
             if let Some(mut q) =
-                world.query::<(gizmo_core::prelude::Mut<Transform>, &GpuPhysicsLink, &gizmo_physics_core::Collider)>()
+                world.query_mut::<(gizmo_core::prelude::Mut<Transform>, &GpuPhysicsLink, &gizmo_physics_core::Collider)>()
             {
                 for (_, (mut trans, link, col)) in q.iter_mut() {
                     let idx = link.id as usize;

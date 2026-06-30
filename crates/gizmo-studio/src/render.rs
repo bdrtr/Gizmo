@@ -259,7 +259,7 @@ pub fn render_studio(
         // Prefab spawn pozisyonunu (Asset browser'dan drop edilmişse) uygula
         if let (Ok(Some(root_id)), Some(pos)) = (&loaded_root, target_pos) {
             let root_id = *root_id;
-            let transforms = world.borrow_mut::<gizmo::physics::components::Transform>();
+            let mut transforms = world.borrow_mut::<gizmo::physics::components::Transform>();
             {
                 if let Some(mut t) = transforms.get_mut(root_id) {
                     t.position = pos;

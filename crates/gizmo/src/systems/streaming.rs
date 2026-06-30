@@ -19,18 +19,16 @@ pub fn texture_streaming_system(world: &mut World, cam_pos: Vec3) {
         return;
     };
 
+    let entities: Vec<u32> = world.borrow::<Material>().entities().collect();
     let transforms = world.borrow::<Transform>();
-    let materials = world.borrow_mut::<Material>();
+    // SAFETY: exclusive `&mut World`; Material is a distinct component type from the
+    // read-only Transform/IsHidden queries, so this mutable query never aliases them.
+    let mut materials = unsafe { world.borrow_mut_unchecked::<Material>() };
     let hidden = world.borrow::<gizmo_core::component::IsHidden>();
 
     // VRAM kilitlenmesini engellemek için her frame max yükleme limiti (Agresif Streaming)
     let mut requests_this_frame = 0;
     const MAX_REQUESTS_PER_FRAME: usize = 3;
-
-    let mut entities = Vec::new();
-    for (e, _) in materials.iter() {
-        entities.push(e);
-    }
 
     // Tüm materyalleri döngüye al
     for e in entities {

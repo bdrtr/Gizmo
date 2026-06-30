@@ -12,7 +12,8 @@ pub fn draw_material_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let materials = world.borrow_mut::<Material>();
+    // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
+    let mut materials = unsafe { world.borrow_mut_unchecked::<Material>() };
     {
         if let Some(mut mat) = materials.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("🎨 Material Properties")

@@ -12,7 +12,8 @@ pub fn draw_velocity_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let velocities = world.borrow_mut::<Velocity>();
+    // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
+    let mut velocities = unsafe { world.borrow_mut_unchecked::<Velocity>() };
     {
         if let Some(mut v) = velocities.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("💨 Velocity")
@@ -67,7 +68,8 @@ pub fn draw_rigidbody_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let rigidbodies = world.borrow_mut::<RigidBody>();
+    // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
+    let mut rigidbodies = unsafe { world.borrow_mut_unchecked::<RigidBody>() };
     {
         if let Some(mut rb) = rigidbodies.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("⚙️ RigidBody")
@@ -110,7 +112,8 @@ pub fn draw_collider_section(
     entity_id: gizmo_core::entity::Entity,
     _state: &mut EditorState,
 ) {
-    let colliders = world.borrow_mut::<Collider>();
+    // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
+    let mut colliders = unsafe { world.borrow_mut_unchecked::<Collider>() };
     {
         if let Some(mut collider) = colliders.get_mut(entity_id.id()) {
             egui::CollapsingHeader::new("🛡️ Collider")

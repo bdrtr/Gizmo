@@ -17,7 +17,7 @@ Gizmo Engine is a high-performance, data-driven, and fully modular game developm
 
 ## ✨ Features
 
-- **Archetype-based ECS:** A columnar, data-driven Entity Component System powered by `mimalloc`. Built for maximum cache locality and lock-free concurrency, easily scaling to tens of thousands of entities.
+- **Archetype-based ECS:** A columnar, data-driven Entity Component System powered by `mimalloc`. Built for maximum cache locality and lock-free concurrency, easily scaling to tens of thousands of entities. Component access goes through a borrow-checked query API — shared reads via `World::query` (read-only), exclusive mutation via `World::query_mut`/`borrow_mut` — so two aliasing `&mut` views can never be created from safe code.
 - **Custom Vectorial Physics Engine:** Built from scratch using purely mathematical vectors. Features include:
   - Sweep and Prune (SAP) Broad-Phase with Rayon multi-threading.
   - GJK/EPA Narrow-Phase for accurate collision detection (Convex Hulls, Capsules, Polygons).

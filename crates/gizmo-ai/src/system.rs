@@ -42,14 +42,14 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
         None => return,
     };
 
-    let agents = world.borrow_mut::<NavAgent>();
-    let transforms = world.borrow::<Transform>();
-    let velocities = world.borrow_mut::<Velocity>();
+    let agent_entities: Vec<u32> = world.borrow::<NavAgent>().entities().collect();
 
-    let mut agent_entities: Vec<u32> = Vec::with_capacity(agents.len());
-    for (id, _) in agents.iter() {
-        agent_entities.push(id);
-    }
+    // SAFETY: ai_navigation_system runs as a scheduled system; the scheduler guarantees no
+    // other system mutably aliases NavAgent/Velocity while it runs. NavAgent and Velocity are
+    // distinct component types, so their storages never overlap with each other either.
+    let mut agents = unsafe { world.borrow_mut_unchecked::<NavAgent>() };
+    let transforms = world.borrow::<Transform>();
+    let mut velocities = unsafe { world.borrow_mut_unchecked::<Velocity>() };
 
     // Iterasyon
     for &e in &agent_entities {

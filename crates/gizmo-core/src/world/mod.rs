@@ -418,7 +418,7 @@ mod tests {
         let e2 = world.spawn(); world.add_component(e2, TestCompI32(2));
         
         // Query ile tüm i32'leri iki katına çıkar
-        if let Some(mut q) = world.query::<crate::query::Mut<TestCompI32>>() {
+        if let Some(mut q) = world.query_mut::<crate::query::Mut<TestCompI32>>() {
             for (_, mut val) in q.iter_mut() {
                 val.0 *= 2;
             }

@@ -59,7 +59,9 @@ pub use hierarchy::HierarchyExt;
 pub use input::{ActionMap, Input, InputBinding};
 pub use pool::{PoolManager, Pooled};
 pub use profiler::FrameProfiler;
-pub use query::{Changed, FetchComponent, Mut, Or, Query, With, Without, WorldQuery};
+pub use query::{
+    Changed, FetchComponent, Mut, Or, Query, ReadOnlyQuery, With, Without, WorldQuery,
+};
 pub use registry::{ComponentRegistry, RegistryError};
 pub use state::{in_state, State};
 
@@ -81,8 +83,8 @@ pub mod prelude {
         ActionMap, Bundle, Changed, CommandQueue, Commands, Component, Entity, EntityName,
         EventReader, EventWriter, Events, FrameProfiler, Input, InputBinding, IntoSystem,
         IntoSystemConfig, IsHidden, IsDeleted, Mut, Phase, PhysicsTime, PoolManager, Pooled, PrefabRequest,
-        Query, Res, ResMut, Schedule, StorageView, StorageViewMut, System, SystemConfig,
-        SystemParam, Time, WindowInfo, World,
+        Query, ReadOnlyQuery, Res, ResMut, Schedule, StorageView, StorageViewMut, System,
+        SystemConfig, SystemParam, Time, WindowInfo, World,
     };
     #[cfg(feature = "reflect")]
     pub use bevy_reflect::Reflect;

@@ -229,10 +229,11 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
         (state.camera.view, state.camera.proj)
     {
         if !state.selection.entities.is_empty() {
-            let transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
+            // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
+            let mut transforms = unsafe { world.borrow_mut_unchecked::<gizmo_physics_core::Transform>() };
             
             let primary_id = state.selection.primary.unwrap_or_else(|| *state.selection.entities.iter().next().unwrap());
-            if transforms.get(primary_id.id()).is_some() {
+            if transforms.get_mut(primary_id.id()).is_some() {
                 
                 use transform_gizmo_egui::prelude::*;
                 use transform_gizmo_egui::math::Transform as GizmoTransform;
@@ -311,7 +312,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                 let mut selected_ids = Vec::new();
 
                 for &id in state.selection.entities.iter() {
-                    if let Some(t) = transforms.get(id.id()).map(|t| *t) {
+                    if let Some(t) = transforms.get_mut(id.id()).map(|t| *t) {
                         let translation = transform_gizmo_egui::mint::Vector3 { x: t.position.x as f64, y: t.position.y as f64, z: t.position.z as f64 };
                         let rotation = transform_gizmo_egui::mint::Quaternion { v: transform_gizmo_egui::mint::Vector3 { x: t.rotation.x as f64, y: t.rotation.y as f64, z: t.rotation.z as f64 }, s: t.rotation.w as f64 };
                         let scale = transform_gizmo_egui::mint::Vector3 { x: t.scale.x as f64, y: t.scale.y as f64, z: t.scale.z as f64 };
@@ -331,7 +332,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                         // Undo (Geri Al) için harekete başlarken ilk değerleri sakla
                         if state.scene.gizmo_original_transforms.is_empty() {
                             for &id in &selected_ids {
-                                if let Some(t) = transforms.get(id).map(|t| *t) {
+                                if let Some(t) = transforms.get_mut(id).map(|t| *t) {
                                     state.scene.gizmo_original_transforms.insert(gizmo_core::entity::Entity::new(id, 0), t);
                                 }
                             }
@@ -355,7 +356,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                         // Fare bırakıldı (Sürükleme bitti), tüm değişiklikleri History'ye bas
                         let mut changes = Vec::new();
                         for (entity, old_t) in state.scene.gizmo_original_transforms.drain() {
-                            if let Some(new_t) = transforms.get(entity.id()).map(|t| *t) {
+                            if let Some(new_t) = transforms.get_mut(entity.id()).map(|t| *t) {
                                 if old_t != new_t {
                                     changes.push((entity, old_t, new_t));
                                 }

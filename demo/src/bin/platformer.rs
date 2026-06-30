@@ -169,7 +169,7 @@ fn update(
 ) {
     // 1. Hareketli Platformlar
     for (_id, (mut p_trans, mut p_vel, mut plat)) in world
-        .query::<(
+        .query_mut::<(
             gizmo::core::query::Mut<Transform>,
             gizmo::core::query::Mut<Velocity>,
             gizmo::core::query::Mut<MovingPlatform>,
@@ -259,7 +259,7 @@ fn update(
 
     // 4. Kamerayı Oyuncuya Takip Ettir
     let cam_pos = player_pos - forward * 8.0 + Vec3::new(0.0, 2.0, 0.0);
-    if let Some(mut q) = world.query::<(
+    if let Some(mut q) = world.query_mut::<(
         gizmo::core::query::Mut<Transform>,
         gizmo::core::query::Mut<Camera>,
     )>() {

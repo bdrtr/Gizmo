@@ -232,10 +232,10 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &gizmo::c
     };
 
     // ECS VehicleController'a girdileri aktar
-    if let Some(q_v) =
-        world.query::<gizmo::core::query::Mut<gizmo::physics::vehicle::VehicleController>>()
+    if let Some(mut q_v) =
+        world.query_mut::<gizmo::core::query::Mut<gizmo::physics::vehicle::VehicleController>>()
     {
-        if let Some(mut vehicle) = q_v.get(state.car_entity.id()) {
+        if let Some(mut vehicle) = q_v.get_mut(state.car_entity.id()) {
             vehicle.throttle_input = throttle;
             vehicle.brake_input = brake;
             vehicle.steering_input = steering;
@@ -249,8 +249,8 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &gizmo::c
     // Kasa durumunu oku
     let mut car_pos = Vec3::ZERO;
     let mut car_rot = Quat::IDENTITY;
-    if let Some(q) = world.query::<gizmo::core::query::Mut<Transform>>() {
-        if let Some(t) = q.get(state.car_entity.id()) {
+    if let Some(mut q) = world.query_mut::<gizmo::core::query::Mut<Transform>>() {
+        if let Some(t) = q.get_mut(state.car_entity.id()) {
             car_pos = t.position;
             car_rot = t.rotation;
         }
@@ -260,10 +260,10 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &gizmo::c
     let mut wheel_positions = [Vec3::ZERO; 4];
     let mut wheel_rotations = [Quat::IDENTITY; 4];
 
-    if let Some(q_v) =
-        world.query::<gizmo::core::query::Mut<gizmo::physics::vehicle::VehicleController>>()
+    if let Some(mut q_v) =
+        world.query_mut::<gizmo::core::query::Mut<gizmo::physics::vehicle::VehicleController>>()
     {
-        if let Some(vehicle) = q_v.get(state.car_entity.id()) {
+        if let Some(vehicle) = q_v.get_mut(state.car_entity.id()) {
             for i in 0..4 {
                 let wheel = &vehicle.wheels[i];
                 let anchor_world = car_pos + car_rot.mul_vec3(wheel.attachment_local_pos);
@@ -277,9 +277,9 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &gizmo::c
         }
     }
 
-    if let Some(q) = world.query::<gizmo::core::query::Mut<Transform>>() {
+    if let Some(mut q) = world.query_mut::<gizmo::core::query::Mut<Transform>>() {
         for i in 0..4 {
-            if let Some(mut wt) = q.get(state.wheel_entities[i].id()) {
+            if let Some(mut wt) = q.get_mut(state.wheel_entities[i].id()) {
                 wt.set_position(wheel_positions[i]);
                 wt.set_rotation(wheel_rotations[i]);
             }
@@ -299,7 +299,7 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &gizmo::c
     let offset = rot.mul_vec3(Vec3::new(0.0, 0.0, -10.0)); // Arkasında dur
     state.camera_pos = car_pos + Vec3::new(0.0, 4.0, 0.0) + offset;
 
-    if let Some(mut q) = world.query::<(
+    if let Some(mut q) = world.query_mut::<(
         gizmo::core::query::Mut<Transform>,
         gizmo::core::query::Mut<Camera>,
     )>() {
@@ -313,10 +313,10 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &gizmo::c
 
     // Debug (R tuşuna basınca anlık fizik durumu konsola basar)
     if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyR as u32) {
-        if let Some(q_v) =
-            world.query::<gizmo::core::query::Mut<gizmo::physics::vehicle::VehicleController>>()
+        if let Some(mut q_v) =
+            world.query_mut::<gizmo::core::query::Mut<gizmo::physics::vehicle::VehicleController>>()
         {
-            if let Some(v) = q_v.get(state.car_entity.id()) {
+            if let Some(v) = q_v.get_mut(state.car_entity.id()) {
                 println!(
                     "[Vehicle] Speed: {:.1} km/h | RPM: {:.0} | Gear: {} | Thr: {:.2} | Rev: {}",
                     v.current_speed_kmh,
@@ -358,10 +358,10 @@ fn ui(world: &mut World, state: &mut VehicleState, ctx: &gizmo::egui::Context) {
         ms_per_phase = phys_world.metrics.solver_ms;
     }
 
-    if let Some(q_v) =
-        world.query::<gizmo::core::query::Mut<gizmo::physics::vehicle::VehicleController>>()
+    if let Some(mut q_v) =
+        world.query_mut::<gizmo::core::query::Mut<gizmo::physics::vehicle::VehicleController>>()
     {
-        if let Some(v) = q_v.get(state.car_entity.id()) {
+        if let Some(v) = q_v.get_mut(state.car_entity.id()) {
             speed_kmh = v.current_speed_kmh;
             rpm = v.engine_rpm;
             gear = v.current_gear;
