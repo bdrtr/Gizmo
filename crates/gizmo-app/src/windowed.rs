@@ -437,6 +437,7 @@ impl<State: 'static> App<State> {
             return Err(crate::AppError::MissingSetup);
         };
 
+        #[cfg(feature = "scene")]
         if let Some(scene_path) = self.initial_scene.take() {
             if let Some(asset_manager) = self
                 .world
@@ -761,6 +762,7 @@ impl<State: 'static> App<State> {
                                     let target_tick = rm.as_ref().unwrap().latest_tick;
                                     
                                     // Desync'i temizlemek için fiziği World'den zorla kopyalattır
+                                    #[cfg(feature = "physics")]
                                     if let Some(mut pw) = self.world.get_resource_mut::<gizmo_physics_rigid::world::PhysicsWorld>() {
                                         pw.clear_bodies();
                                     }
@@ -876,6 +878,7 @@ impl<State: 'static> App<State> {
                             }
 
                             // --- DYNAMIC FRACTURE & PARTICLE INTEGRATION ---
+                            #[cfg(feature = "physics")]
                             if let Some(physics_world) =
                                 self.world
                                     .get_resource::<gizmo_physics_rigid::world::PhysicsWorld>()
