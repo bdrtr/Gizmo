@@ -123,7 +123,7 @@ mod tests {
 
         // Frame 1: Objeyi hareket ettir (Simülasyon adımı)
         {
-            let transforms = world.borrow_mut::<Transform>();
+            let mut transforms = world.borrow_mut::<Transform>();
             if let Some(mut trans) = transforms.get_mut(ent.id()) {
                 trans.position.x += 1.0; // pozisyon 11.0 oldu
             }

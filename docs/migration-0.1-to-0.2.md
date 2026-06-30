@@ -166,6 +166,39 @@ unchanged; `glam` is documented as an official public dependency on the `0.29`
 line. As a bonus, `bevy_reflect` no longer compiles in the Stage A dependency
 tree by default.
 
+## 11. ECS query API: mutable queries need `query_mut` (`&mut World`)
+
+`World::query::<Q>(&self)` used to accept a *mutable* query (`Q = Mut<T>`) from a
+shared `&World`. Two such queries (or `Mut<T>` + `&T`) could then hand out two
+`&mut T` to the same component storage — a soundness hole reachable from safe
+code. `World::query` is now bounded to **read-only** queries, and mutation goes
+through dedicated entry points:
+
+| Before (`0.1.x`)                       | After (`0.2.0`)                                            |
+| -------------------------------------- | --------------------------------------------------------- |
+| `world.query::<&T>()`                  | `world.query::<&T>()` *(unchanged — read-only)*           |
+| `world.query::<Mut<T>>()`              | `world.query_mut::<Mut<T>>()` *(needs `&mut World`)*       |
+| `world.borrow_mut::<T>()` (`&World`)   | `world.borrow_mut::<T>()` *(now takes `&mut World`)*       |
+| `q.iter()` / `q.get()` on a `Mut` query | `q.iter_mut()` / `q.get_mut()`                            |
+
+`query`/`borrow` accept any `Q: ReadOnlyQuery` (`&T`, `With`/`Without`/`Changed`/
+`Added`, `Or`, and tuples of those). On a `Query`, the shared accessors
+(`iter`, `get`, `iter_chunks`, `par_for_each`, `entities`, `contains`) require
+`ReadOnlyQuery`; the `*_mut` variants take `&mut self`.
+
+If you write a custom system that receives a shared `&World` (e.g. a manual
+`System::run(&World)` impl) and must build a mutable query, use the documented
+escape hatch:
+
+```rust
+// SAFETY: the scheduler guarantees disjoint mutable access for co-batched systems.
+let mut q = unsafe { world.query_unchecked::<Mut<Transform>>() }.unwrap();
+for (_id, mut t) in q.iter_mut() { /* ... */ }
+```
+
+The closure-based `Query<…>` system parameter is unaffected — it is built for you
+with the access already validated. Runtime behavior is unchanged.
+
 ---
 
 ## Still on `0.1.x`?
@@ -174,4 +207,4 @@ The `0.1.x` series stays available on crates.io. `0.2.0` is a clean break; there
 is no compatibility shim. If you only use the **Stage A** core (ECS + math +
 physics + scene + net + audio + AI), most of the above (§2, §8) does not apply to
 you — the main changes are §3 (reflect feature), §5 (Result returns), §6 (getter
-names), and §7 (RigidBody).
+names), §7 (RigidBody), and §11 (query API).

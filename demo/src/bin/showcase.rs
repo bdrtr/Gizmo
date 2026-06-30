@@ -440,7 +440,7 @@ fn main() {
             }
 
             {
-                let trans = world.borrow_mut::<Transform>();
+                let mut trans = world.borrow_mut::<Transform>();
                 if let Some(mut t) = trans.get_mut(state.cam_id) {
                     t.position = state.cam_pos;
                     t.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
@@ -505,7 +505,7 @@ fn main() {
             // Gravity Gun / Kavrama Mekaniği (E Tuşu)
             state.request_grab = input.is_key_pressed(KeyCode::KeyE as u32);
 
-            let cams = world.borrow_mut::<Camera>();
+            let mut cams = world.borrow_mut::<Camera>();
             if let Some(mut c) = cams.get_mut(state.cam_id) {
                 c.yaw = state.cam_yaw;
                 c.pitch = state.cam_pitch;

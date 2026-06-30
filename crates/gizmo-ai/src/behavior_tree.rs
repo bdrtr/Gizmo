@@ -211,7 +211,7 @@ impl BehaviorTree {
 /// The System that ticks all BehaviorTrees
 pub fn behavior_tree_system(world: &mut World, dt: f32) {
     let entities: Vec<u32> = {
-        let trees = world.borrow_mut::<BehaviorTree>();
+        let trees = world.borrow::<BehaviorTree>();
         trees.entities().collect()
     };
 

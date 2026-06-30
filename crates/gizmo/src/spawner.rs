@@ -160,7 +160,7 @@ impl<'a> Commands<'a> {
     /// Birincil (primary) 3D perspektif kamera spawn eder.
     /// `yaw = -π/2` (−X'e bakıyor), `pitch = 0` (düz).
     pub fn spawn_camera(&mut self, pos: Vec3) -> EntityBuilder<'_, 'a> {
-        if let Some(mut cameras) = self.world.query::<gizmo_core::prelude::Mut<Camera>>() {
+        if let Some(mut cameras) = self.world.query_mut::<gizmo_core::prelude::Mut<Camera>>() {
             for (_, mut c) in cameras.iter_mut() {
                 c.primary = false;
             }
@@ -196,7 +196,7 @@ impl<'a> Commands<'a> {
         near: f32,
         far: f32,
     ) -> EntityBuilder<'_, 'a> {
-        if let Some(mut cameras) = self.world.query::<gizmo_core::prelude::Mut<Camera>>() {
+        if let Some(mut cameras) = self.world.query_mut::<gizmo_core::prelude::Mut<Camera>>() {
             for (_, mut c) in cameras.iter_mut() {
                 c.primary = false;
             }
@@ -328,7 +328,7 @@ impl<'a> Commands<'a> {
         let id = spawn_mesh_entity(self.world, pos, mesh, mat);
         // Scale'i half_extents ile eşleştir
         {
-            let trans_store = self.world.borrow_mut::<Transform>();
+            let mut trans_store = self.world.borrow_mut::<Transform>();
             if let Some(mut trans) = trans_store.get_mut(id.id()) {
                 trans.scale = half_extents * 2.0;
                 trans.update_local_matrix();
@@ -718,7 +718,7 @@ fn spawn_gltf_node_flat(
     world.add_component(entity, Children(Vec::new()));
 
     {
-        let ch_store = world.borrow_mut::<Children>();
+        let mut ch_store = world.borrow_mut::<Children>();
         // Safe to push since entity just spawned and didn't trigger any complex re-borrow updates
         if let Some(mut parent_ch) = ch_store.get_mut(parent_id) {
             parent_ch.0.push(entity.id());
@@ -800,7 +800,7 @@ fn spawn_gltf_node_flat(
     // Pulling borrow_mut OUTSIDE the loop avoiding multiple overlapping mutable queries
     if !newly_added_prims.is_empty() {
         {
-            let ch_store = world.borrow_mut::<Children>();
+            let mut ch_store = world.borrow_mut::<Children>();
             if let Some(mut parent_ch) = ch_store.get_mut(entity.id()) {
                 parent_ch.0.extend(newly_added_prims);
             }
@@ -871,7 +871,7 @@ impl WorldExt for World {
         };
         if let Some(target_id) = target {
             if let Some(mut transforms) =
-                self.query::<gizmo_core::prelude::Mut<gizmo_physics_core::Transform>>()
+                self.query_mut::<gizmo_core::prelude::Mut<gizmo_physics_core::Transform>>()
             {
                 for (tid, mut trans) in transforms.iter_mut() {
                     if tid == target_id {
@@ -910,7 +910,7 @@ impl WorldExt for World {
         };
         if let Some(target_id) = target {
             {
-                let storage = self.borrow_mut::<T>();
+                let mut storage = self.borrow_mut::<T>();
                 if let Some(mut comp) = storage.get_mut(target_id) {
                     f(&mut *comp);
                 }

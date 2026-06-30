@@ -23,6 +23,24 @@ breaking `0.x` bump. **Upgrading from `0.1.x`? See the
 
 ### Changed (breaking)
 
+- **ECS query API split along the safe/unsafe boundary (closes a soundness hole).**
+  `World::query::<Q>(&self)` previously accepted a *mutable* query (`Q = Mut<T>`)
+  from a shared `&World`, so two live `Mut<T>` queries (or `Mut<T>` + `&T`) could
+  alias the same storage — reachable from **safe code**, with no panic. The query
+  surface is now:
+  - `World::query::<Q: ReadOnlyQuery>(&self)` — **read-only** (`&T`, `With`/
+    `Without`/`Changed`/`Added`, `Or`, and tuples of those).
+  - `World::query_mut::<Q>(&mut self)` / `World::borrow_mut::<T>(&mut self)` —
+    safe **mutable** access (requires `&mut World`).
+  - `unsafe World::query_unchecked::<Q>(&self)` / `borrow_mut_unchecked::<T>` —
+    escape hatch for code that only holds `&World` (e.g. inside the parallel
+    scheduler's `System::run(&World)`), with a documented `# Safety` contract.
+
+  Migrate by replacing `world.query::<Mut<T>>()` with `world.query_mut::<Mut<T>>()`
+  (`borrow_mut` now needs `&mut World`); pure-read call sites are unchanged. On a
+  `Query`, `iter`/`get`/`iter_chunks`/`par_for_each`/`entities`/`contains` are
+  read-only; use `iter_mut`/`get_mut`/`iter_chunks_mut`/`par_for_each_mut` for
+  mutation. Behavior is unchanged (determinism hash identical).
 - **`RigidBody` lost its `friction` and `restitution` fields**, and
   `RigidBody::new` is now `new(mass, use_gravity)` (was
   `new(mass, restitution, friction, use_gravity)`). These fields were **dead**:

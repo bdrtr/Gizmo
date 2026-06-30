@@ -84,9 +84,11 @@ impl PhysicsStateSnapshot {
         use gizmo_physics_rigid::components::velocity::Velocity;
         use gizmo_physics_rigid::components::rigid_body::RigidBody;
 
-        let transforms = world.borrow_mut::<Transform>();
-        let velocities = world.borrow_mut::<Velocity>();
-        let rigid_bodies = world.borrow_mut::<RigidBody>();
+        // SAFETY: exclusive `&mut World`; Transform/Velocity/RigidBody are distinct component
+        // types, so these three mutable queries never alias the same storage.
+        let mut transforms = unsafe { world.borrow_mut_unchecked::<Transform>() };
+        let mut velocities = unsafe { world.borrow_mut_unchecked::<Velocity>() };
+        let mut rigid_bodies = unsafe { world.borrow_mut_unchecked::<RigidBody>() };
 
         for state in &self.states {
             let id = state.entity.id();

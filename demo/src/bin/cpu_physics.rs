@@ -337,7 +337,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
     let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
     let mut cam_pos = Vec3::ZERO;
 
-    if let Some(mut q) = world.query::<(
+    if let Some(mut q) = world.query_mut::<(
         gizmo::core::query::Mut<Transform>,
         gizmo::core::query::Mut<Camera>,
     )>() {
@@ -405,8 +405,9 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
             let ray = gizmo::physics::raycast::Ray::new(cam_pos, cam_forward);
 
             if let Some(hit) = phys.raycast(&ray, 50.0) {
-                if let Some(q) = world.query::<(gizmo::core::query::Mut<Velocity>, &RigidBody)>() {
-                    if let Some((mut vel, rb)) = q.get(hit.entity.id()) {
+                // SAFETY: single-threaded demo; Velocity (component) is disjoint from the held PhysicsWorld resource guard.
+                if let Some(mut q) = unsafe { world.query_unchecked::<(gizmo::core::query::Mut<Velocity>, &RigidBody)>() } {
+                    if let Some((mut vel, rb)) = q.get_mut(hit.entity.id()) {
                         if rb.is_dynamic() {
                             vel.linear += cam_forward * 20.0; // İleri fırlat
                         }

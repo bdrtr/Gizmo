@@ -11,8 +11,9 @@ pub fn draw_transform_section(
     entity_id: gizmo_core::entity::Entity,
     state: &mut EditorState,
 ) {
-    let transforms = world.borrow_mut::<Transform>();
-    let old_t = transforms.get(entity_id.id()).map(|t| *t);
+    // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
+    let mut transforms = unsafe { world.borrow_mut_unchecked::<Transform>() };
+    let old_t = transforms.get_mut(entity_id.id()).map(|t| *t);
     
     // Pointer status check for Drag operations
     let pointer_down = ui.input(|i| i.pointer.any_down());
@@ -67,7 +68,7 @@ pub fn draw_transform_section(
         if pointer_down && changed && state.inspector_drag_original_transforms.is_empty() {
             // Sürükleme (drag) işlemi başladı, asıl transformları yedekle
             for &ent in state.selection.entities.iter() {
-                if let Some(original_t) = transforms.get(ent.id()).map(|t| *t) {
+                if let Some(original_t) = transforms.get_mut(ent.id()).map(|t| *t) {
                     state.inspector_drag_original_transforms.insert(ent, original_t);
                 }
             }
@@ -75,7 +76,7 @@ pub fn draw_transform_section(
             // Fare bırakıldı, değişiklikleri kaydet
             let mut undo_changes = Vec::new();
             for (ent, old_transform) in state.inspector_drag_original_transforms.drain() {
-                if let Some(new_transform) = transforms.get(ent.id()).map(|t| *t) {
+                if let Some(new_transform) = transforms.get_mut(ent.id()).map(|t| *t) {
                     if old_transform != new_transform {
                         undo_changes.push((ent, old_transform, new_transform));
                     }
@@ -107,7 +108,7 @@ pub fn draw_transform_section(
     // Çoklu seçim (Multi-Object Editing) Delta Uygulaması
     if changed && state.selection.entities.len() > 1 {
         if let Some(old) = old_t {
-            if let Some(new_t) = transforms.get(entity_id.id()).map(|t| *t) {
+            if let Some(new_t) = transforms.get_mut(entity_id.id()).map(|t| *t) {
                 let delta_pos = new_t.position - old.position;
                 let delta_rot = new_t.rotation * old.rotation.inverse();
                 let delta_scale = gizmo_math::Vec3::new(

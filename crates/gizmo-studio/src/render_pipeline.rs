@@ -540,7 +540,18 @@ pub fn execute_render_pipeline(
             gpu_particles.update_params(&renderer.queue, delta_time);
 
             // --- YENİ PARTİCÜL SPAWNLAMA (CPU -> GPU) ---
-            let emitters = world.borrow_mut::<gizmo::renderer::components::ParticleEmitter>();
+            // Collect emitter entities up front through a read borrow that is dropped at the
+            // end of this statement, so the mutable ParticleEmitter query below never coexists
+            // with a same-type read borrow.
+            let emitter_entities: Vec<u32> = world
+                .borrow::<gizmo::renderer::components::ParticleEmitter>()
+                .entities()
+                .collect();
+            // SAFETY: exclusive `&mut World`; ParticleEmitter is a distinct component type from
+            // the read-only Transform query below, and the read borrow above is already dropped,
+            // so this mutable query never aliases another live access to the same storage.
+            let mut emitters =
+                unsafe { world.borrow_mut_unchecked::<gizmo::renderer::components::ParticleEmitter>() };
             {
                 let transforms = world.borrow::<Transform>();
                 {
@@ -548,7 +559,6 @@ pub fn execute_render_pipeline(
                     let mut rng = rand::rng();
                     let mut all_new_particles = Vec::new();
 
-                    let emitter_entities: Vec<u32> = emitters.iter().map(|(id, _)| id).collect();
                     for e_id in emitter_entities {
                         if let Some(mut emitter) = emitters.get_mut(e_id) {
                             if !emitter.is_active || emitter.spawn_rate <= 0.0 {

@@ -131,7 +131,13 @@ impl<Q: crate::query::WorldQuery + 'static> sealed::Sealed for crate::query::Que
 impl<Q: crate::query::WorldQuery + 'static> SystemParam for crate::query::Query<'static, Q> {
     type Item<'w> = crate::query::Query<'w, Q>;
     fn fetch<'w>(world: &'w World, _dt: f32) -> Result<Self::Item<'w>, SystemParamFetchError> {
-        if let Some(query) = world.query::<Q>() {
+        // SAFETY: the scheduler validates that co-batched systems have disjoint component
+        // access (`AccessInfo`/`is_compatible_with`) before running them in parallel, and
+        // runs `is_exclusive` systems alone. So while this system's `Query` is live, no
+        // other query mutably aliases the same components. This is the documented contract
+        // of `query_unchecked` — the safe `query`/`query_mut` split can't express it because
+        // a system only ever holds a shared `&World`.
+        if let Some(query) = unsafe { world.query_unchecked::<Q>() } {
             Ok(query)
         } else {
             Err(SystemParamFetchError::QueryError)

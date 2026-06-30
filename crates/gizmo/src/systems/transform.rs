@@ -10,7 +10,11 @@ impl gizmo_core::system::System for TransformSyncSystem {
     }
 
     fn run(&mut self, world: &gizmo_core::world::World, _dt: f32) {
-        if let Some(mut transforms) = world.query::<gizmo_core::query::Mut<gizmo_physics_core::Transform>>() {
+        // SAFETY: scheduled system; the scheduler guarantees no other system mutably
+        // aliases Transform while this runs (see `World::query_unchecked`).
+        if let Some(mut transforms) = unsafe {
+            world.query_unchecked::<gizmo_core::query::Mut<gizmo_physics_core::Transform>>()
+        } {
             for (_, mut trans) in transforms.iter_mut() {
                 trans.update_local_matrix();
             }
@@ -29,11 +33,14 @@ impl gizmo_core::system::System for TransformPropagateSystem {
 
     fn run(&mut self, world: &gizmo_core::world::World, _dt: f32) {
         // Query to get root transforms (no Parent)
-        let root_query = world.query::<(
-            &gizmo_physics_core::Transform,
-            gizmo_core::query::Mut<gizmo_physics_core::components::GlobalTransform>,
-            gizmo_core::query::Without<gizmo_core::component::Parent>,
-        )>();
+        // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
+        let root_query = unsafe {
+            world.query_unchecked::<(
+                &gizmo_physics_core::Transform,
+                gizmo_core::query::Mut<gizmo_physics_core::components::GlobalTransform>,
+                gizmo_core::query::Without<gizmo_core::component::Parent>,
+            )>()
+        };
 
         let mut queue = Vec::new();
 
@@ -53,7 +60,10 @@ impl gizmo_core::system::System for TransformPropagateSystem {
 
         // Processing children (we need random access, so we do individual queries)
         let mut local_query = world.query::<&gizmo_physics_core::Transform>();
-        let mut global_query = world.query::<gizmo_core::query::Mut<gizmo_physics_core::components::GlobalTransform>>();
+        // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
+        let mut global_query = unsafe {
+            world.query_unchecked::<gizmo_core::query::Mut<gizmo_physics_core::components::GlobalTransform>>()
+        };
         let mut children_query = world.query::<&gizmo_core::component::Children>();
 
         let mut head = 0;
@@ -62,7 +72,7 @@ impl gizmo_core::system::System for TransformPropagateSystem {
             head += 1;
 
             if let (Some(lq), Some(gq)) = (&mut local_query, &mut global_query) {
-                if let (Some(local), Some(mut global)) = (lq.get(current_id), gq.get(current_id)) {
+                if let (Some(local), Some(mut global)) = (lq.get(current_id), gq.get_mut(current_id)) {
                     global.matrix = parent_matrix * local.local_matrix;
 
                     if let Some(cq) = &mut children_query {
@@ -90,14 +100,17 @@ impl gizmo_core::system::System for BoneAttachmentSystem {
     fn run(&mut self, world: &gizmo_core::world::World, _dt: f32) {
         if let Some(query) = world.query::<&gizmo_renderer::components::BoneAttachment>() {
             let mut skeletons = world.query::<&gizmo_renderer::components::Skeleton>();
-            let mut transforms = world.query::<gizmo_core::query::Mut<gizmo_physics_core::Transform>>();
-            
+            // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
+            let mut transforms = unsafe {
+                world.query_unchecked::<gizmo_core::query::Mut<gizmo_physics_core::Transform>>()
+            };
+
             for (id, attachment) in query.iter() {
                 if let Some(sq) = &mut skeletons {
                     if let Some(skeleton) = sq.get(attachment.target_entity.id()) {
                         if let Some(global_matrix) = skeleton.global_poses.get(attachment.bone_index) {
                             if let Some(tq) = &mut transforms {
-                                if let Some(mut trans) = tq.get(id) {
+                                if let Some(mut trans) = tq.get_mut(id) {
                                     let final_mat = *global_matrix * attachment.offset;
                                     let (t, r, s) = gizmo_renderer::decompose_mat4(final_mat);
                                     trans.position = t;

@@ -243,7 +243,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
     let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
     let mut cam_pos = Vec3::ZERO;
 
-    if let Some(mut q) = world.query::<(
+    if let Some(mut q) = world.query_mut::<(
         gizmo::core::query::Mut<Transform>,
         gizmo::core::query::Mut<Camera>,
     )>() {
@@ -338,10 +338,10 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
 
     // 1. Compute and update vectors (v, a, f) and draw them
     if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
-        if let Some(mut q) =
-            world.query::<(gizmo::core::query::Mut<Velocity>, &Transform, &RigidBody)>()
+        if let Some(q) =
+            world.query::<(&Velocity, &Transform, &RigidBody)>()
         {
-            for (_, (vel, trans, _rb)) in q.iter_mut() {
+            for (_, (vel, trans, _rb)) in q.iter() {
                 // Draw Velocity (Green)
                 gizmos.draw_line(
                     trans.position,
@@ -352,9 +352,10 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
         }
 
         // 2. Draw Ghosting (İz Bırakma)
-        if let Some(mut q) =
-            world.query::<(gizmo::core::query::Mut<GhostTrail>, &Transform, &Collider)>()
-        {
+        // SAFETY: single-threaded demo; GhostTrail (component) is disjoint from the held Gizmos resource guard.
+        if let Some(mut q) = unsafe {
+            world.query_unchecked::<(gizmo::core::query::Mut<GhostTrail>, &Transform, &Collider)>()
+        } {
             for (_, (mut ghost, trans, col)) in q.iter_mut() {
                 // Store current frame
                 ghost.history.push_front(*trans);
@@ -441,7 +442,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
 
         let mut node_idx = 0;
         if let Some(mut q) =
-            world.query::<(gizmo::core::query::Mut<Transform>, &gizmo::core::EntityName)>()
+            world.query_mut::<(gizmo::core::query::Mut<Transform>, &gizmo::core::EntityName)>()
         {
             for (_, (mut trans, name)) in q.iter_mut() {
                 if name.0 == "RopeNode" && node_idx < rope.nodes.len() {

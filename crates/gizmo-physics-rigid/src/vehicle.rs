@@ -18,13 +18,16 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
 
     let materials = world.borrow::<gizmo_physics_core::components::PhysicsMaterial>();
 
-    if let Some(mut query) = world.query::<(
-        &Transform,
-        gizmo_core::query::Mut<RigidBody>,
-        gizmo_core::query::Mut<Velocity>,
-        gizmo_core::query::Mut<Vehicle>,
-        gizmo_core::query::Without<gizmo_core::component::IsDeleted>,
-    )>() {
+    // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
+    if let Some(mut query) = unsafe {
+        world.query_unchecked::<(
+            &Transform,
+            gizmo_core::query::Mut<RigidBody>,
+            gizmo_core::query::Mut<Velocity>,
+            gizmo_core::query::Mut<Vehicle>,
+            gizmo_core::query::Without<gizmo_core::component::IsDeleted>,
+        )>()
+    } {
         for (id, (transform, mut rb, mut vel, mut vehicle, _)) in query.iter_mut() {
             // Wake up rigid body if vehicle inputs are active
             if vehicle.current_throttle.abs() > 0.01 || vehicle.current_steer.abs() > 0.01 {

@@ -175,8 +175,8 @@ fn bench_heavy_compute(c: &mut Criterion) {
 
     c.bench_function("heavy_compute_par", |b| {
         b.iter(|| {
-            let query = world.query::<(Mut<Position>, Mut<Transform>)>().unwrap();
-            query.par_for_each(|(_id, (mut pos, mut mat))| {
+            let mut query = world.query_mut::<(Mut<Position>, Mut<Transform>)>().unwrap();
+            query.par_for_each_mut(|(_id, (mut pos, mut mat))| {
                 for _ in 0..100 {
                     // simulate inverse matrix
                     mat.0.0[0] *= 0.99;
@@ -246,7 +246,7 @@ fn bench_fragmented_iteration(c: &mut Criterion) {
     spawn_variants!(world; C90, C91, C92, C93, C94, C95, C96, C97, C98, C99);
 
     // Warm up the query cache
-    let mut query = world.query::<Mut<Data>>().unwrap();
+    let mut query = world.query_mut::<Mut<Data>>().unwrap();
     query.iter_mut().for_each(|_| {});
 
     c.bench_function("fragmented_iteration", |b| {
@@ -294,7 +294,7 @@ fn bench_wide_iteration(c: &mut Criterion) {
 
     create_entities!(world; A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z);
 
-    let mut query = world.query::<(
+    let mut query = world.query_mut::<(
         Mut<WideData<0>>,
         Mut<WideData<1>>,
         Mut<WideData<2>>,
@@ -369,7 +369,7 @@ fn bench_fragmented_wide_iteration(c: &mut Criterion) {
     create_noise_entities!(world; C80, C81, C82, C83, C84, C85, C86, C87, C88, C89);
     create_noise_entities!(world; C90, C91, C92, C93, C94, C95, C96, C97, C98, C99);
 
-    let mut query = world.query::<(
+    let mut query = world.query_mut::<(
         Mut<WideData<0>>,
         Mut<WideData<1>>,
         Mut<WideData<2>>,
@@ -416,7 +416,7 @@ fn bench_simple_iter(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query::<(&Velocity, Mut<Position>)>().unwrap();
+    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>().unwrap();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("simple_iter", |b| {
@@ -442,7 +442,7 @@ fn bench_contiguous_iter(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query::<(&Velocity, Mut<Position>)>().unwrap();
+    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>().unwrap();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("contiguous_iter", |b| {
@@ -476,7 +476,7 @@ fn bench_contiguous_iter_avx2(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query::<(&Velocity, Mut<Position>)>().unwrap();
+    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>().unwrap();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     #[target_feature(enable = "avx2")]
@@ -513,7 +513,7 @@ fn bench_for_each_iter(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query::<(&Velocity, Mut<Position>)>().unwrap();
+    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>().unwrap();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("for_each_iter", |b| {
@@ -545,7 +545,7 @@ fn bench_cache_locality_loss(c: &mut Criterion) {
         world.despawn(e);
     }
 
-    let mut query = world.query::<(Mut<A>, &B)>().unwrap();
+    let mut query = world.query_mut::<(Mut<A>, &B)>().unwrap();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("cache_locality_loss", |b| {
@@ -581,7 +581,7 @@ fn bench_sparse_iter(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query::<(&SparseVel, Mut<SparsePos>)>().unwrap();
+    let mut query = world.query_mut::<(&SparseVel, Mut<SparsePos>)>().unwrap();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("sparse_iter", |b| {
@@ -623,7 +623,7 @@ fn bench_wide_simple_iter(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query::<(
+    let mut query = world.query_mut::<(
         &Vel<0>,
         Mut<Pos<0>>,
         &Vel<1>,
@@ -698,7 +698,7 @@ fn bench_wide_sparse_iter(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query::<(
+    let mut query = world.query_mut::<(
         &SparseVelWide<0>,
         Mut<SparsePosWide<0>>,
         &SparseVelWide<1>,
@@ -752,7 +752,7 @@ fn bench_bypass_change_detection(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query::<(&Velocity, Mut<Position>)>().unwrap();
+    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>().unwrap();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("bypass_change_detection", |b| {
@@ -779,7 +779,7 @@ fn bench_sparse_simple_iter(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query::<(&SparseVel, Mut<SparsePos>)>().unwrap();
+    let mut query = world.query_mut::<(&SparseVel, Mut<SparsePos>)>().unwrap();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("sparse_simple_iter", |b| {
@@ -846,7 +846,7 @@ fn bench_wide_sparse_simple_iter(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query::<(
+    let mut query = world.query_mut::<(
         &SparseVelWide<0>,
         Mut<SparsePosWide<0>>,
         &SparseVelWide<1>,
@@ -906,7 +906,7 @@ fn bench_par_cache_locality_loss(c: &mut Criterion) {
         world.despawn(e);
     }
 
-    let mut query = world.query::<(Mut<A>, &B)>().unwrap();
+    let mut query = world.query_mut::<(Mut<A>, &B)>().unwrap();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("par_cache_locality_loss", |b| {
@@ -2519,11 +2519,11 @@ pub fn query_get_components_mut_2(criterion: &mut Criterion) {
 
     for entity_count in RANGE.map(|i| i * 10_000) {
         group.bench_function(format!("2_components_{entity_count}_entities"), |bencher| {
-            let (world, entities) = setup_wide::<(WideTable<0>, WideTable<1>)>(entity_count);
-            let query = world.query::<(Mut<WideTable<0>>, Mut<WideTable<1>>)>().unwrap();
+            let (mut world, entities) = setup_wide::<(WideTable<0>, WideTable<1>)>(entity_count);
+            let mut query = world.query_mut::<(Mut<WideTable<0>>, Mut<WideTable<1>>)>().unwrap();
             bencher.iter(|| {
                 for entity in &entities {
-                    assert!(query.get(entity.id()).is_some());
+                    assert!(query.get_mut(entity.id()).is_some());
                 }
             });
         });
@@ -2539,11 +2539,11 @@ pub fn query_get_components_mut_5(criterion: &mut Criterion) {
 
     for entity_count in RANGE.map(|i| i * 10_000) {
         group.bench_function(format!("5_components_{entity_count}_entities"), |bencher| {
-            let (world, entities) = setup_wide::<(WideTable<0>, WideTable<1>, WideTable<2>, WideTable<3>, WideTable<4>)>(entity_count);
-            let query = world.query::<(Mut<WideTable<0>>, Mut<WideTable<1>>, Mut<WideTable<2>>, Mut<WideTable<3>>, Mut<WideTable<4>>)>().unwrap();
+            let (mut world, entities) = setup_wide::<(WideTable<0>, WideTable<1>, WideTable<2>, WideTable<3>, WideTable<4>)>(entity_count);
+            let mut query = world.query_mut::<(Mut<WideTable<0>>, Mut<WideTable<1>>, Mut<WideTable<2>>, Mut<WideTable<3>>, Mut<WideTable<4>>)>().unwrap();
             bencher.iter(|| {
                 for entity in &entities {
-                    assert!(query.get(entity.id()).is_some());
+                    assert!(query.get_mut(entity.id()).is_some());
                 }
             });
         });
@@ -2559,11 +2559,11 @@ pub fn query_get_components_mut_10(criterion: &mut Criterion) {
 
     for entity_count in RANGE.map(|i| i * 10_000) {
         group.bench_function(format!("10_components_{entity_count}_entities"), |bencher| {
-            let (world, entities) = setup_wide::<(WideTable<0>, WideTable<1>, WideTable<2>, WideTable<3>, WideTable<4>, WideTable<5>, WideTable<6>, WideTable<7>, WideTable<8>, WideTable<9>)>(entity_count);
-            let query = world.query::<(Mut<WideTable<0>>, Mut<WideTable<1>>, Mut<WideTable<2>>, Mut<WideTable<3>>, Mut<WideTable<4>>, Mut<WideTable<5>>, Mut<WideTable<6>>, Mut<WideTable<7>>, Mut<WideTable<8>>, Mut<WideTable<9>>)>().unwrap();
+            let (mut world, entities) = setup_wide::<(WideTable<0>, WideTable<1>, WideTable<2>, WideTable<3>, WideTable<4>, WideTable<5>, WideTable<6>, WideTable<7>, WideTable<8>, WideTable<9>)>(entity_count);
+            let mut query = world.query_mut::<(Mut<WideTable<0>>, Mut<WideTable<1>>, Mut<WideTable<2>>, Mut<WideTable<3>>, Mut<WideTable<4>>, Mut<WideTable<5>>, Mut<WideTable<6>>, Mut<WideTable<7>>, Mut<WideTable<8>>, Mut<WideTable<9>>)>().unwrap();
             bencher.iter(|| {
                 for entity in &entities {
-                    assert!(query.get(entity.id()).is_some());
+                    assert!(query.get_mut(entity.id()).is_some());
                 }
             });
         });
@@ -2625,7 +2625,7 @@ fn all_changed_detection_generic<T: Component + Default + Clone>(
                     let mut world = World::new();
                     let entities: Vec<_> = world.spawn_batch(std::iter::repeat_n((T::default(),), entity_count as usize)).collect();
                     world.increment_tick();
-                    let mut query_mut = world.query::<gizmo_core::query::Mut<T>>().unwrap();
+                    let mut query_mut = world.query_mut::<gizmo_core::query::Mut<T>>().unwrap();
                     for (_id, mut component) in query_mut.iter_mut() {
                         // writing to Mut<T> triggers Changed tick internally! Wait, Gizmo's `Mut` doesn't automatically trigger Changed tick.
                         // Wait, does it? Let's assume the user has a bench_modify trait, but we can just do mutable access or manually update ticks.
@@ -2797,7 +2797,7 @@ fn multiple_archetype_none_changed_detection_generic<T: Component + Default + Cl
                     add_archetypes_entities::<T>(&mut world, archetype_count, entity_count);
                     world.increment_tick();
                     
-                    let query_mut = world.query::<(
+                    let query_mut = world.query_mut::<(
                         gizmo_core::query::Mut<ArchetypeData<0>>,
                         gizmo_core::query::Mut<ArchetypeData<1>>,
                         gizmo_core::query::Mut<ArchetypeData<2>>,

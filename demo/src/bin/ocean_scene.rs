@@ -281,7 +281,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
 
     let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
 
-    if let Some(mut q) = world.query::<(
+    if let Some(mut q) = world.query_mut::<(
         gizmo::core::query::Mut<Transform>,
         gizmo::core::query::Mut<Camera>,
     )>() {
@@ -344,7 +344,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
         }
     }
 
-    if let Some(mut q) = world.query::<gizmo::core::query::Mut<Transform>>() {
+    if let Some(mut q) = world.query_mut::<gizmo::core::query::Mut<Transform>>() {
         // Güneş rotasyonu (Gündüz/Gece döngüsü)
         if let Some((_, mut trans)) = q.iter_mut().find(|(e, _)| *e == state.sun_entity.id()) {
             let sun_speed = 0.2; // Zamanın hızı
@@ -409,7 +409,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
         let explosion_radius = 25.0;
         let explosion_force = 20000.0; // Güçlü bir şok dalgası
 
-        if let Some(mut rbs) = world.query::<(
+        if let Some(mut rbs) = world.query_mut::<(
             gizmo::core::query::Mut<Transform>,
             gizmo::core::query::Mut<gizmo::physics::components::RigidBody>,
             gizmo::core::query::Mut<gizmo::physics::components::Velocity>,
@@ -436,11 +436,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
     // X Tuşu: Cam Gibi Parçalama (Fracture)
     if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyX as u32) {
         let mut queue = world.get_resource_mut::<FractureQueue>().unwrap();
-        if let Some(mut q) = world.query::<(
-            gizmo::core::query::Mut<Transform>,
-            gizmo::core::query::Mut<Destructible>,
-        )>() {
-            for (ent_id, _) in q.iter_mut() {
+        if let Some(q) = world.query::<(&Transform, &Destructible)>() {
+            for (ent_id, _) in q.iter() {
                 queue.entities.push(ent_id);
             }
         }
@@ -468,7 +465,7 @@ fn render(
     if !to_fracture.is_empty() {
         let mut fracture_data = Vec::new();
 
-        if let Some(mut q) = world.query::<(
+        if let Some(mut q) = world.query_mut::<(
             gizmo::core::query::Mut<Transform>,
             gizmo::core::query::Mut<gizmo::renderer::components::Material>,
             gizmo::core::query::Mut<Velocity>,

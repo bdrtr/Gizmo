@@ -1,7 +1,7 @@
 use gizmo_physics_core::{Collider, Transform};
 use crate::components::{RigidBody, Velocity};use crate::world::PhysicsWorld;
 use gizmo_core::entity::Entity;
-use gizmo_core::query::{Mut, Query};
+use gizmo_core::query::Mut;
 use gizmo_core::world::World;
 
 /// Exclusive system that updates the entire physics simulation.
@@ -89,13 +89,17 @@ pub fn physics_step_system(world: &World, dt: f32) {
 
     // 3. Query Rigid Bodies (Write Locks)
     let mut rigid_bodies = Vec::new();
-    if let Some(mut query) = world.query::<(
-        Mut<RigidBody>,
-        Mut<Transform>,
-        Mut<Velocity>,
-        gizmo_core::query::Without<gizmo_core::pool::Pooled>,
-        gizmo_core::query::Without<gizmo_core::component::IsDeleted>,
-    )>() {
+    // SAFETY: physics_step_system runs as a scheduled system; the scheduler guarantees
+    // no other system mutably aliases these components while it runs (see `query_unchecked`).
+    if let Some(mut query) = unsafe {
+        world.query_unchecked::<(
+            Mut<RigidBody>,
+            Mut<Transform>,
+            Mut<Velocity>,
+            gizmo_core::query::Without<gizmo_core::pool::Pooled>,
+            gizmo_core::query::Without<gizmo_core::component::IsDeleted>,
+        )>()
+    } {
         for (id, (rb, transform, vel, _, _)) in query.iter_mut() {
             if let Some(final_collider) = compound_shapes_map.remove(&id) {
                 rigid_bodies.push((Entity::new(id, 0), *rb, *transform, *vel, final_collider));
@@ -137,14 +141,17 @@ pub fn physics_step_system(world: &World, dt: f32) {
 
     // 5. Write back to ECS (Rigid Bodies)
     if !rigid_bodies.is_empty() {
-        if let Some(query) = world.query::<(
-            Mut<RigidBody>,
-            Mut<Transform>,
-            Mut<Velocity>,
-            gizmo_core::query::Without<gizmo_core::pool::Pooled>,
-        )>() {
+        // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
+        if let Some(mut query) = unsafe {
+            world.query_unchecked::<(
+                Mut<RigidBody>,
+                Mut<Transform>,
+                Mut<Velocity>,
+                gizmo_core::query::Without<gizmo_core::pool::Pooled>,
+            )>()
+        } {
             for (entity, rb, transform, vel, _collider) in rigid_bodies {
-                if let Some((mut ecs_rb, mut ecs_trans, mut ecs_vel, _)) = query.get(entity.id()) {
+                if let Some((mut ecs_rb, mut ecs_trans, mut ecs_vel, _)) = query.get_mut(entity.id()) {
                     *ecs_rb = rb;
                     *ecs_trans = transform;
                     *ecs_vel = vel;
@@ -201,14 +208,17 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
 
     let mut shattered = std::collections::HashSet::new();
 
-    let query_opt = Query::<(
-        gizmo_core::query::Mut<Breakable>,
-        &Transform,
-        &Collider,
-        &Velocity,
-        gizmo_core::query::Without<gizmo_core::pool::Pooled>,
-    )>::new(world);
-    let query = match query_opt {
+    // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
+    let query_opt = unsafe {
+        world.query_unchecked::<(
+            gizmo_core::query::Mut<Breakable>,
+            &Transform,
+            &Collider,
+            &Velocity,
+            gizmo_core::query::Without<gizmo_core::pool::Pooled>,
+        )>()
+    };
+    let mut query = match query_opt {
         Some(q) => q,
         None => return,
     };
@@ -272,7 +282,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
             // get_entity: çarpışma olayı despawn edilmiş bir entity'ye işaret edebilir;
             // generation kontrolü yeniden kullanılan slota yanlış yazmayı engeller.
             if let Some((mut breakable, transform, collider, vel, _)) =
-                query.get_entity(event.entity_a)
+                query.get_mut_entity(event.entity_a)
             {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
                     breakable.current_health -= max_impulse;
@@ -297,7 +307,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
         // Check Entity B
         if !shattered.contains(&event.entity_b.id()) {
             if let Some((mut breakable, transform, collider, vel, _)) =
-                query.get_entity(event.entity_b)
+                query.get_mut_entity(event.entity_b)
             {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
                     breakable.current_health -= max_impulse;
@@ -387,11 +397,11 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
         Err(_) => return,
     };
 
-    let explosion_query_opt = Query::<(
+    let explosion_query_opt = world.query::<(
         &Explosion,
         &Transform,
         gizmo_core::query::Without<gizmo_core::pool::Pooled>,
-    )>::new(world);
+    )>();
     let mut active_explosions = Vec::new();
 
     if let Some(exp_query) = &explosion_query_opt {
@@ -429,16 +439,19 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     };
 
     // Check for Breakables that should shatter
-    let breakable_query_opt = Query::<(
-        gizmo_core::query::Mut<crate::components::Breakable>,
-        &Transform,
-        &Collider,
-        &Velocity,
-        gizmo_core::query::Without<gizmo_core::pool::Pooled>,
-    )>::new(world);
-    if let Some(breakable_query) = &breakable_query_opt {
+    // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
+    let mut breakable_query_opt = unsafe {
+        world.query_unchecked::<(
+            gizmo_core::query::Mut<crate::components::Breakable>,
+            &Transform,
+            &Collider,
+            &Velocity,
+            gizmo_core::query::Without<gizmo_core::pool::Pooled>,
+        )>()
+    };
+    if let Some(breakable_query) = &mut breakable_query_opt {
         for (_exp_entity, explosion, exp_pos) in &active_explosions {
-            for (id, (mut breakable, transform, collider, vel, _)) in breakable_query.iter() {
+            for (id, (mut breakable, transform, collider, vel, _)) in breakable_query.iter_mut() {
                 if breakable.is_broken || shattered.contains(&id) {
                     continue;
                 }
@@ -478,15 +491,18 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     }
 
     // Apply to Rigid Bodies
-    let rb_query_opt = Query::<(
-        Mut<RigidBody>,
-        &Transform,
-        Mut<Velocity>,
-        gizmo_core::query::Without<gizmo_core::pool::Pooled>,
-    )>::new(world);
-    if let Some(rb_query) = &rb_query_opt {
+    // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
+    let mut rb_query_opt = unsafe {
+        world.query_unchecked::<(
+            Mut<RigidBody>,
+            &Transform,
+            Mut<Velocity>,
+            gizmo_core::query::Without<gizmo_core::pool::Pooled>,
+        )>()
+    };
+    if let Some(rb_query) = &mut rb_query_opt {
         for (_exp_entity, explosion, exp_pos) in &active_explosions {
-            for (id, (rb, transform, mut vel, _)) in rb_query.iter() {
+            for (id, (rb, transform, mut vel, _)) in rb_query.iter_mut() {
                 if !rb.is_dynamic() || shattered.contains(&id) {
                     continue;
                 }

@@ -257,7 +257,7 @@ fn update(world: &mut World, state: &mut KccState, _dt: f32, input: &gizmo::core
     // Camera is now placed at the character's head level, acting like an FPS camera
     let cam_pos = char_pos + Vec3::new(0.0, 0.8, 0.0);
 
-    if let Some(mut q) = world.query::<(
+    if let Some(mut q) = world.query_mut::<(
         gizmo::core::query::Mut<Transform>,
         gizmo::core::query::Mut<Camera>,
     )>() {

@@ -144,7 +144,7 @@ fn main() {
             }
 
             {
-                let vehicle_store = world.borrow_mut::<Vehicle>();
+                let mut vehicle_store = world.borrow_mut::<Vehicle>();
                 if let Some(mut vehicle) = vehicle_store.get_mut(state.chassis_id) {
                     vehicle.current_throttle = throttle;
                     vehicle.current_brake = brake;
@@ -180,8 +180,8 @@ fn main() {
                         phys_world.velocities[rb_idx] = Velocity::default();
                     }
                 }
-                let transforms = world.borrow_mut::<Transform>();
-                let velocities = world.borrow_mut::<Velocity>();
+                let mut transforms = unsafe { world.borrow_mut_unchecked::<Transform>() }; // SAFETY: distinct component types
+                let mut velocities = unsafe { world.borrow_mut_unchecked::<Velocity>() };
                 if let Some(mut t) = transforms.get_mut(state.chassis_id) {
                     *t = Transform::new(Vec3::new(0.0, 1.5, 0.0));
                 }
@@ -219,7 +219,7 @@ fn main() {
             let steer_quat = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), state.steer_angle * 0.5);
 
             {
-                let ecs_transforms = world.borrow_mut::<Transform>();
+                let mut ecs_transforms = world.borrow_mut::<Transform>();
                 // Tekerlekleri animate et
                 if let Some(id) = state.wheel_fl {
                     if let Some(mut t) = ecs_transforms.get_mut(id) {
@@ -270,7 +270,7 @@ fn main() {
                 }
 
                 // 2. Yaz (Mutable Borrow)
-                let transforms = world.borrow_mut::<Transform>();
+                let mut transforms = world.borrow_mut::<Transform>();
                 
                 if let Some(pos) = bl_pos {
                     if let Some(&skid_id) = state.skid_pool.get(state.skid_idx) {
@@ -428,7 +428,7 @@ fn main() {
                         
                         // Update Ground Material Color
                         if let Some(gid) = state.ground_id {
-                            let materials = world.borrow_mut::<Material>();
+                            let mut materials = world.borrow_mut::<Material>();
                             if let Some(mut mat) = materials.get_mut(gid) {
                                 match state.weather_idx {
                                     0 => { // Sunny
@@ -604,7 +604,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
     
     // Modelin scale'ini ayarlayalım (Kenney modelleri bazen küçük gelebiliyor)
     {
-        let transforms = world.borrow_mut::<Transform>();
+        let mut transforms = world.borrow_mut::<Transform>();
         if let Some(mut t) = transforms.get_mut(chassis_entity.id()) {
             t.scale = Vec3::splat(2.0); // 5.0 çok büyük gelmişti
             t.update_local_matrix();
@@ -769,9 +769,9 @@ fn update_camera(world: &mut World, state: &mut CarDemoState, input: &Input, _dt
     // Kamera entity'sini güncelle (hem Transform, hem Camera, hem GlobalTransform)
     {
         let cam_id = state.camera_entity_id;
-        let transforms = world.borrow_mut::<Transform>();
-        let globals = world.borrow_mut::<GlobalTransform>();
-        let cameras = world.borrow_mut::<Camera>();
+        let mut transforms = unsafe { world.borrow_mut_unchecked::<Transform>() }; // SAFETY: distinct component types
+        let mut globals = unsafe { world.borrow_mut_unchecked::<GlobalTransform>() };
+        let mut cameras = unsafe { world.borrow_mut_unchecked::<Camera>() };
 
         if let Some(mut t) = transforms.get_mut(cam_id) {
             t.position = state.cam_pos;

@@ -265,7 +265,7 @@ fn run() {
                     };
 
                     // Velocitiy üzerine yaz
-                    let vel_store = world.borrow_mut::<gizmo::physics::components::Velocity>();
+                    let mut vel_store = world.borrow_mut::<gizmo::physics::components::Velocity>();
                     if let Some(mut v) = vel_store.get_mut(ball_id.id()) {
                         v.linear = vel;
                     }

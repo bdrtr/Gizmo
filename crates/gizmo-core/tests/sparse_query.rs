@@ -51,7 +51,7 @@ fn bare_mut_query_skips_entities_without_sparse_component() {
     world.add_component(b, Tableish(99));
 
     {
-        let mut q = world.query::<Mut<SparseTag>>().expect("query");
+        let mut q = world.query_mut::<Mut<SparseTag>>().expect("query");
         for (_id, mut c) in q.iter_mut() {
             c.0 += 1;
         }

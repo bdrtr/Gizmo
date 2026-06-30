@@ -29,7 +29,7 @@ pub fn soft_body_step_system(world: &World, dt: f32, gravity: Vec3) {
     }
 
     // 2. Query and step all SoftBodyMesh components
-    if let Some(mut q) = world.query::<gizmo_core::query::Mut<SoftBodyMesh>>() {
+    if let Some(mut q) = unsafe { world.query_unchecked::<gizmo_core::query::Mut<SoftBodyMesh>>() } {
         for (_, mut soft_body) in q.iter_mut() {
             soft_body.step(dt, gravity, &rigid_colliders);
         }
@@ -44,7 +44,7 @@ pub fn cloth_step_system(world: &World, dt: f32, gravity: Vec3) {
     // Determine a fixed number of XPBD substeps for stability
     let sub_steps = 10;
     
-    if let Some(mut q) = world.query::<gizmo_core::query::Mut<Cloth>>() {
+    if let Some(mut q) = unsafe { world.query_unchecked::<gizmo_core::query::Mut<Cloth>>() } {
         for (_, mut cloth) in q.iter_mut() {
             cloth.step(dt, gravity, sub_steps);
         }
@@ -56,7 +56,7 @@ pub fn cloth_step_system(world: &World, dt: f32, gravity: Vec3) {
 #[tracing::instrument(skip_all, name = "rope_step_system")]
 pub fn rope_step_system(world: &World, dt: f32, gravity: Vec3) {
     let dt = dt.min(MAX_SOFT_DT);
-    if let Some(mut q) = world.query::<gizmo_core::query::Mut<Rope>>() {
+    if let Some(mut q) = unsafe { world.query_unchecked::<gizmo_core::query::Mut<Rope>>() } {
         for (_, mut rope) in q.iter_mut() {
             rope.step(dt, gravity);
         }

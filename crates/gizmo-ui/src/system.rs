@@ -12,7 +12,7 @@ pub fn ui_layout_system(
     styles: Query<&Style>,
     parents: Query<&Parent>,
     children: Query<&Children>,
-    nodes: Query<Mut<Node>>,
+    mut nodes: Query<Mut<Node>>,
 ) {
     let mut current_entities = std::collections::HashSet::new();
 

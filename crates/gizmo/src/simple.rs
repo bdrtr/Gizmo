@@ -414,7 +414,7 @@ impl SimpleAppExt for App<SimpleSceneState> {
                 state.camera_pos += cam_move.normalize() * speed * dt;
             }
 
-            if let Some(mut q) = world.query::<(
+            if let Some(mut q) = world.query_mut::<(
                 crate::core::query::Mut<Transform>,
                 crate::core::query::Mut<Camera>,
             )>() {

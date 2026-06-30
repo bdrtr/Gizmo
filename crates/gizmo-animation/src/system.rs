@@ -18,7 +18,7 @@ pub fn animation_system(
     mut players: Query<Mut<AnimationPlayer>>,
     names: Query<&EntityName>,
     children: Query<&Children>,
-    transforms: Query<(Mut<Transform>, gizmo_core::query::With<crate::player::Animated>)>,
+    mut transforms: Query<(Mut<Transform>, gizmo_core::query::With<crate::player::Animated>)>,
 ) {
     let dt = time.dt();
 

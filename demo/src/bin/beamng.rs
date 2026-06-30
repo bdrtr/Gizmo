@@ -521,7 +521,7 @@ fn update(world: &mut World, state: &mut BeamNGState, dt: f32, input: &gizmo::co
         state.camera_pos += cam_move.normalize() * speed * dt;
     }
 
-    if let Some(mut q) = world.query::<(
+    if let Some(mut q) = world.query_mut::<(
         gizmo::core::query::Mut<gizmo::physics::components::Transform>,
         gizmo::core::query::Mut<gizmo::renderer::components::Camera>,
     )>() {

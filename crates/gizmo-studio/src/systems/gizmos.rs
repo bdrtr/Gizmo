@@ -148,7 +148,7 @@ let pending_assets = world.get_resource::<DebugAssets>().map(|a| (a.cube.clone()
             };
 
             if has_children_comp {
-                let children_storage = world.borrow_mut::<gizmo::core::component::Children>();
+                let mut children_storage = world.borrow_mut::<gizmo::core::component::Children>();
                 if let Some(mut ch) = children_storage.get_mut(parent_id) {
                     ch.0.push(gizmo_ent.id());
                 }

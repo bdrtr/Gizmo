@@ -683,8 +683,8 @@ fn animate_lights(
     state: Res<DemoState>,
     lighting_settings: Res<LightingSettings>,
     mut renderer: ResMut<gizmo::renderer::Renderer>,
-    q_dir: Query<(Mut<Transform>, Mut<DirectionalLight>)>,
-    q_point: Query<(Mut<Transform>, Mut<PointLight>)>,
+    mut q_dir: Query<(Mut<Transform>, Mut<DirectionalLight>)>,
+    mut q_point: Query<(Mut<Transform>, Mut<PointLight>)>,
     time: Res<Time>,
 ) {
     let t = time.elapsed() as f32;

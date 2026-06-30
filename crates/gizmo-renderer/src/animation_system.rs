@@ -9,10 +9,12 @@ use std::sync::Arc;
 // ── Simple AnimationPlayer update ────────────────────────────────────────────
 
 pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) {
-    let players = world.borrow_mut::<AnimationPlayer>();
-    let skeletons = world.borrow_mut::<Skeleton>();
+    let entities: Vec<u32> = world.borrow::<AnimationPlayer>().entities().collect();
+    // SAFETY: exclusive `&mut World`; AnimationPlayer and Skeleton are distinct component
+    // types, so these two mutable queries never alias the same storage.
+    let mut players = unsafe { world.borrow_mut_unchecked::<AnimationPlayer>() };
+    let mut skeletons = unsafe { world.borrow_mut_unchecked::<Skeleton>() };
     {
-        let entities: Vec<u32> = players.entities().collect();
         for entity in entities {
             let mut player = match players.get_mut(entity) {
                 Some(p) => p,
@@ -92,10 +94,11 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
 // ── AnimationStateMachine update ─────────────────────────────────────────────
 
 pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) {
-    let machines = world.borrow_mut::<AnimationStateMachine>();
-    let skeletons = world.borrow_mut::<Skeleton>();
-
-    let entities: Vec<u32> = machines.entities().collect();
+    let entities: Vec<u32> = world.borrow::<AnimationStateMachine>().entities().collect();
+    // SAFETY: exclusive `&mut World`; AnimationStateMachine and Skeleton are distinct
+    // component types, so these two mutable queries never alias the same storage.
+    let mut machines = unsafe { world.borrow_mut_unchecked::<AnimationStateMachine>() };
+    let mut skeletons = unsafe { world.borrow_mut_unchecked::<Skeleton>() };
     for entity in entities {
         let mut machine_mut = match machines.get_mut(entity) {
             Some(m) => m,

@@ -100,7 +100,7 @@ fn main() {
             );
 
             if let Some(clones) = world.clone_entity(template.id(), 100_000 - 1) {
-                let handles = world.borrow_mut::<gizmo::renderer::components::FluidHandle>();
+                let mut handles = world.borrow_mut::<gizmo::renderer::components::FluidHandle>();
                 for (i, clone_ent) in clones.into_iter().enumerate() {
                     if let Some(mut h) = handles.get_mut(clone_ent.id()) {
                         h.gpu_index = (i + 1) as u32;

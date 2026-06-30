@@ -225,7 +225,7 @@ pub fn handle_editor_shortcuts(
 
     // Numpad 5 → Ortho/Perspektif geçişi (Blender tarzı)
     if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Numpad5 as u32) {
-        let cam_mut = world.borrow_mut::<gizmo::renderer::components::Camera>();
+        let mut cam_mut = world.borrow_mut::<gizmo::renderer::components::Camera>();
         if let Some(mut cam) = cam_mut.get_mut(state.editor_camera) {
             cam.toggle_projection(editor_state.prefs.camera_focus_distance.max(1.0));
             let mode = match cam.projection {
@@ -272,8 +272,9 @@ fn focus_on_selection(
         let target_pos = center_pos / count;
         drop(transforms);
 
-        let t_mut = world.borrow_mut::<Transform>();
-        let cam_mut = world.borrow_mut::<gizmo::renderer::components::Camera>();
+        // SAFETY: exclusive `&mut World`; Transform and Camera are distinct component types.
+        let mut t_mut = unsafe { world.borrow_mut_unchecked::<Transform>() };
+        let mut cam_mut = unsafe { world.borrow_mut_unchecked::<gizmo::renderer::components::Camera>() };
         if let (Some(mut cam_t), Some(cam)) = (
             t_mut.get_mut(state.editor_camera),
             cam_mut.get_mut(state.editor_camera),
