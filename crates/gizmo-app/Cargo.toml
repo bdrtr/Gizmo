@@ -32,6 +32,8 @@ winit = { version = "0.30", optional = true }
 wgpu = { version = "29", features = ["fragile-send-sync-non-atomic-wasm", "webgl"], optional = true }
 pollster = { version = "0.3", optional = true }
 egui = { version = "0.34", optional = true }
+egui-winit = { version = "0.34", default-features = false, features = ["links"], optional = true }
+egui-wgpu = { version = "0.34", optional = true }
 image = { version = "0.25", optional = true }
 
 [features]
@@ -42,7 +44,14 @@ window = ["dep:winit"]
 render = ["dep:wgpu", "dep:gizmo-renderer", "dep:pollster", "dep:image", "window"]
 audio = ["dep:gizmo-audio"]
 physics = ["dep:gizmo-physics-core", "dep:gizmo-physics-rigid"]
-editor = ["dep:gizmo-editor", "dep:egui", "render"]
+# `egui` is the immediate-mode overlay UI layer (the egui runtime + `set_ui`
+# hook + dev console). It does NOT pull in the editor crate, so a game can use
+# an egui HUD without the full editor.
+egui = ["dep:egui", "dep:egui-winit", "dep:egui-wgpu", "render"]
+# `editor` is the full in-engine editor (EditorState, scene/game viewport RTT
+# management, scene save/load). It is layered on top of `egui`, and needs
+# `scene` for its save/load request handling.
+editor = ["egui", "scene", "dep:gizmo-editor"]
 scene = ["dep:gizmo-scene", "dep:gizmo-scripting"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

@@ -20,7 +20,11 @@ network = ["dep:gizmo-net", "gizmo-app/network"]
 window = ["gizmo-app/window", "dep:winit", "dep:gizmo-window"]
 render = ["gizmo-app/render", "dep:gizmo-renderer", "dep:wgpu", "dep:bytemuck", "window"]
 audio = ["dep:gizmo-audio", "gizmo-app/audio"]
-editor = ["dep:gizmo-editor", "dep:egui", "gizmo-app/editor", "render"]
+# Immediate-mode overlay UI (egui runtime + `set_ui` hook + dev console),
+# usable for in-game HUDs without the full editor.
+egui = ["dep:egui", "gizmo-app/egui", "render"]
+# The full in-engine editor, layered on top of `egui` and `scene`.
+editor = ["egui", "scene", "dep:gizmo-editor", "gizmo-app/editor"]
 scripting = ["dep:gizmo-scripting"]
 scene = ["dep:gizmo-scene", "gizmo-app/scene"]
 physics = ["gizmo-app/physics", "dep:gizmo-physics-core", "dep:gizmo-physics-rigid"]

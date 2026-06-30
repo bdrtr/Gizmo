@@ -1,7 +1,9 @@
+#[cfg(feature = "egui")]
 use crate::dev_console;
+#[cfg(feature = "egui")]
+use crate::egui_ctx::EguiContext;
 use gizmo_core::system::Schedule;
 use gizmo_core::world::World;
-use gizmo_editor::gui::EditorContext;
 use gizmo_renderer::renderer::Renderer;
 use gizmo_renderer::RenderContext;
 use std::sync::Arc;
@@ -39,9 +41,9 @@ impl<State: 'static> super::Plugin<State> for AssetPlugin {
 ///
 /// Typical usage chains the builder methods and ends with [`App::run`]:
 /// the conventional order is `new` -> `set_setup` -> `set_update` ->
-/// (`set_render` / `set_simple_render` / `set_ui`) -> `run`. The render and
-/// UI hooks are only meaningful when the corresponding `render` / `editor`
-/// features are enabled.
+/// (`set_render` / `set_simple_render` / `set_ui`) -> `run`. The render hooks
+/// require the `render` feature; the `set_ui` overlay hook requires the `egui`
+/// feature (also pulled in by `editor`).
 ///
 /// This windowed variant is exported when the `window` feature is enabled.
 /// With the feature disabled, a different, headless `App` type is exported
@@ -70,7 +72,8 @@ pub struct App<State: 'static = ()> {
     >, // light_time
     simple_render_fn: Option<Box<dyn for<'a> FnMut(&mut World, &State, &mut RenderContext<'a>)>>,
     input_fn: Option<Box<dyn FnMut(&mut World, &mut State, &winit::event::Event<()>) -> bool>>, // Input handler
-    ui_fn: Option<Box<dyn FnMut(&mut World, &mut State, &egui::Context)>>, // Editor UI handler
+    #[cfg(feature = "egui")]
+    ui_fn: Option<Box<dyn FnMut(&mut World, &mut State, &egui::Context)>>, // Overlay UI handler
     /// Current keyboard/mouse input state, updated from window events.
     pub input: gizmo_core::input::Input,
     #[allow(clippy::type_complexity)]
@@ -94,7 +97,8 @@ pub struct App<State: 'static = ()> {
     // until the first `resumed`.
     window_attributes: Option<WindowAttributes>,
     window: Option<Arc<winit::window::Window>>,
-    editor: Option<EditorContext>,
+    #[cfg(feature = "egui")]
+    editor: Option<EguiContext>,
     app_state: Option<State>,
     last_frame_time: Option<std::time::Instant>,
     light_time: f32,
@@ -106,8 +110,8 @@ pub struct App<State: 'static = ()> {
 
 impl<State: 'static> std::fmt::Debug for App<State> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("App")
-            .field("window_title", &self.window_title)
+        let mut ds = f.debug_struct("App");
+        ds.field("window_title", &self.window_title)
             .field("window_size", &self.window_size)
             .field("setup_fn", &self.setup_fn.as_ref().map(|_| "<closure>"))
             .field("update_fn", &self.update_fn.as_ref().map(|_| "<closure>"))
@@ -116,9 +120,10 @@ impl<State: 'static> std::fmt::Debug for App<State> {
                 "simple_render_fn",
                 &self.simple_render_fn.as_ref().map(|_| "<closure>"),
             )
-            .field("input_fn", &self.input_fn.as_ref().map(|_| "<closure>"))
-            .field("ui_fn", &self.ui_fn.as_ref().map(|_| "<closure>"))
-            .field("event_updaters", &self.event_updaters.len())
+            .field("input_fn", &self.input_fn.as_ref().map(|_| "<closure>"));
+        #[cfg(feature = "egui")]
+        ds.field("ui_fn", &self.ui_fn.as_ref().map(|_| "<closure>"));
+        ds.field("event_updaters", &self.event_updaters.len())
             .field("initial_scene", &self.initial_scene)
             .field("window_icon", &self.window_icon.map(|b| b.len()))
             .field("record_mode", &self.record_mode)
@@ -143,6 +148,7 @@ impl<State: 'static> App<State> {
             render_fn: None,
             simple_render_fn: None,
             input_fn: None,
+            #[cfg(feature = "egui")]
             ui_fn: None,
             input: gizmo_core::input::Input::new(),
             event_updaters: Vec::new(),
@@ -157,6 +163,7 @@ impl<State: 'static> App<State> {
             embedded_assets: std::collections::HashMap::new(),
             window_attributes: None,
             window: None,
+            #[cfg(feature = "egui")]
             editor: None,
             app_state: None,
             last_frame_time: None,
@@ -269,6 +276,9 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// Sets the immediate-mode overlay UI hook (egui). Only available with the
+    /// `egui` feature.
+    #[cfg(feature = "egui")]
     pub fn set_ui<F>(mut self, f: F) -> Self
     where
         F: FnMut(&mut World, &mut State, &egui::Context) + 'static,
@@ -455,13 +465,16 @@ impl<State: 'static> App<State> {
             }
         }
 
-        let editor = {
-            let r = self.world.get_resource::<Renderer>().unwrap();
-            EditorContext::new(&r.device, r.config.format, &window, 1)
-        };
+        #[cfg(feature = "egui")]
+        {
+            let editor = {
+                let r = self.world.get_resource::<Renderer>().unwrap();
+                EguiContext::new(&r.device, r.config.format, &window, 1)
+            };
+            self.editor = Some(editor);
+        }
 
         self.app_state = Some(state);
-        self.editor = Some(editor);
         self.window = Some(window);
         self.last_frame_time = Some(std::time::Instant::now());
         self.light_time = 0.0;
@@ -482,6 +495,7 @@ impl<State: 'static> App<State> {
             Some(w) => w,
             None => return,
         };
+        #[cfg(feature = "egui")]
         let mut editor = match self.editor.take() {
             Some(e) => e,
             None => return,
@@ -498,18 +512,23 @@ impl<State: 'static> App<State> {
         {
                 current_window.set_control_flow(ControlFlow::Poll);
 
-                let mut consumes_input = false;
-
                 // UI Entegrasyonu: Winit Olaylarını EGUI'ye Gönder
-                if let Event::WindowEvent {
+                #[cfg(feature = "egui")]
+                let consumes_input = if let Event::WindowEvent {
                     ref event,
                     window_id,
                 } = event
                 {
                     if window_id == window.id() {
-                        consumes_input = editor.handle_event(&window, event);
+                        editor.handle_event(&window, event)
+                    } else {
+                        false
                     }
-                }
+                } else {
+                    false
+                };
+                #[cfg(not(feature = "egui"))]
+                let consumes_input = false;
 
                 // Eğer UI girdiyi yakalamadıysa Kullanıcı Input Hook'a Yolla
                 if !consumes_input {
@@ -666,7 +685,8 @@ impl<State: 'static> App<State> {
 
                             light_time += dt;
 
-                            // Update
+                            // Update — run one egui frame (overlay UI + dev console).
+                            #[cfg(feature = "egui")]
                             let full_output = editor.run(&window, |ctx| {
                                 if let Some(ui_hk) = self.ui_fn.as_mut() {
                                     ui_hk(&mut self.world, &mut state, ctx);
@@ -676,302 +696,15 @@ impl<State: 'static> App<State> {
                                 dev_console::ui_dev_console(&mut self.world, ctx, &self.input);
                             });
 
-                            // --- Scene View RTT (Render To Texture) YÖNETİMİ ---
-                            if self
-                                .world
-                                .get_resource::<gizmo_editor::EditorState>()
-                                .is_some()
+                            // Editor viewport render targets + scene save/load
+                            // requests (reads/mutates EditorState).
+                            #[cfg(feature = "editor")]
                             {
-                                let mut ed_state_ref = self
-                                    .world
-                                    .get_resource_mut::<gizmo_editor::EditorState>()
-                                    .unwrap();
-                                let (rw, rh) = {
-                                    let r = self.world.get_resource::<Renderer>().unwrap();
-                                    (r.size.width, r.size.height)
-                                };
-                                let scene_w = ed_state_ref
-                                    .scene_view_size
-                                    .map(|s| s.x as u32)
-                                    .unwrap_or(rw);
-                                let scene_h = ed_state_ref
-                                    .scene_view_size
-                                    .map(|s| s.y as u32)
-                                    .unwrap_or(rh);
-                                let game_w = ed_state_ref
-                                    .game_view_size
-                                    .map(|s| s.x as u32)
-                                    .unwrap_or(rw);
-                                let game_h = ed_state_ref
-                                    .game_view_size
-                                    .map(|s| s.y as u32)
-                                    .unwrap_or(rh);
-
-                                let mut new_scene_target = None;
-                                let mut new_game_target = None;
-
-                                // Scene View RTT
-                                let mut needs_recreate_scene = false;
-                                if let Some(target) = self
-                                    .world
-                                    .get_resource::<gizmo_renderer::components::EditorRenderTarget>(
-                                ) {
-                                    if target.0.width != scene_w || target.0.height != scene_h {
-                                        needs_recreate_scene = true;
-                                    }
-                                } else {
-                                    needs_recreate_scene = true;
-                                }
-
-                                if needs_recreate_scene && scene_w > 0 && scene_h > 0 {
-                                    if let Some(old_id) = ed_state_ref.scene_texture_id {
-                                        editor.renderer.free_texture(&old_id);
-                                    }
-                                    let tex_id;
-                                    {
-                                        let r = self.world.get_resource::<Renderer>().unwrap();
-                                        let texture =
-                                            r.device.create_texture(&wgpu::TextureDescriptor {
-                                                label: Some("Editor RTT"),
-                                                size: wgpu::Extent3d {
-                                                    width: scene_w,
-                                                    height: scene_h,
-                                                    depth_or_array_layers: 1,
-                                                },
-                                                mip_level_count: 1,
-                                                sample_count: 1,
-                                                dimension: wgpu::TextureDimension::D2,
-                                                format: r.config.format,
-                                                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                                                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                                                view_formats: &[],
-                                            });
-                                        let view = texture
-                                            .create_view(&wgpu::TextureViewDescriptor::default());
-                                        tex_id = Some(editor.renderer.register_native_texture(
-                                            &r.device,
-                                            &view,
-                                            wgpu::FilterMode::Linear,
-                                        ));
-                                        new_scene_target =
-                                            Some((std::sync::Arc::new(view), scene_w, scene_h));
-                                    }
-                                    ed_state_ref.scene_texture_id = tex_id;
-                                }
-
-                                // Game View RTT
-                                let mut needs_recreate_game = false;
-                                if let Some(target) = self
-                                    .world
-                                    .get_resource::<gizmo_renderer::components::GameRenderTarget>(
-                                ) {
-                                    if target.0.width != game_w || target.0.height != game_h {
-                                        needs_recreate_game = true;
-                                    }
-                                } else {
-                                    needs_recreate_game = true;
-                                }
-
-                                if needs_recreate_game && game_w > 0 && game_h > 0 {
-                                    if let Some(old_id) = ed_state_ref.game_texture_id {
-                                        editor.renderer.free_texture(&old_id);
-                                    }
-                                    let tex_id;
-                                    {
-                                        let r = self.world.get_resource::<Renderer>().unwrap();
-                                        let texture =
-                                            r.device.create_texture(&wgpu::TextureDescriptor {
-                                                label: Some("Game RTT"),
-                                                size: wgpu::Extent3d {
-                                                    width: game_w,
-                                                    height: game_h,
-                                                    depth_or_array_layers: 1,
-                                                },
-                                                mip_level_count: 1,
-                                                sample_count: 1,
-                                                dimension: wgpu::TextureDimension::D2,
-                                                format: r.config.format,
-                                                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                                                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                                                view_formats: &[],
-                                            });
-                                        let view = texture
-                                            .create_view(&wgpu::TextureViewDescriptor::default());
-                                        tex_id = Some(editor.renderer.register_native_texture(
-                                            &r.device,
-                                            &view,
-                                            wgpu::FilterMode::Linear,
-                                        ));
-                                        new_game_target =
-                                            Some((std::sync::Arc::new(view), game_w, game_h));
-                                    }
-                                    ed_state_ref.game_texture_id = tex_id;
-                                }
-
-                                drop(ed_state_ref);
-
-                                if let Some((view, w, h)) = new_scene_target {
-                                    self.world.insert_resource(
-                                        gizmo_renderer::components::EditorRenderTarget(
-                                            gizmo_renderer::components::RenderTarget {
-                                                view,
-                                                width: w,
-                                                height: h,
-                                            },
-                                        ),
-                                    );
-                                }
-                                if let Some((view, w, h)) = new_game_target {
-                                    self.world.insert_resource(
-                                        gizmo_renderer::components::GameRenderTarget(
-                                            gizmo_renderer::components::RenderTarget {
-                                                view,
-                                                width: w,
-                                                height: h,
-                                            },
-                                        ),
-                                    );
-                                }
-                            }
-
-                            // --- EDITOR SCENE REQUESTS ---
-                            // 1. Poll the file-dialog channel and promote result to save/load request.
-                            let maybe_dialog_result = {
-                                let mut st =
-                                    self.world.get_resource_mut::<gizmo_editor::EditorState>();
-                                if let Some(ref mut ed) = st {
-                                    if let Some(rx_mutex) = ed.pending_dialog_rx.take() {
-                                        match rx_mutex.into_inner() {
-                                            Ok(rx) => match rx.try_recv() {
-                                                Ok((is_save, Some(path))) => {
-                                                    Some((is_save, Some(path)))
-                                                }
-                                                Ok((_, None)) => None, // dialog dismissed
-                                                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                                                    // still waiting — put it back
-                                                    ed.pending_dialog_rx =
-                                                        Some(std::sync::Mutex::new(rx));
-                                                    None
-                                                }
-                                                Err(_) => None,
-                                            },
-                                            Err(_) => None,
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            };
-                            if let Some((is_save, Some(path))) = maybe_dialog_result {
-                                if let Some(mut ed) =
-                                    self.world.get_resource_mut::<gizmo_editor::EditorState>()
-                                {
-                                    ed.scene_path = path.clone();
-                                    if is_save {
-                                        ed.scene.save_request = Some(path);
-                                    } else {
-                                        ed.scene.load_request = Some(path);
-                                    }
-                                }
-                            }
-
-                            // 2. Extract requests before borrowing world mutably.
-                            let (save_req, load_req, clear_req) = {
-                                if let Some(mut ed) =
-                                    self.world.get_resource_mut::<gizmo_editor::EditorState>()
-                                {
-                                    (
-                                        ed.scene.save_request.take(),
-                                        ed.scene.load_request.take(),
-                                        std::mem::replace(&mut ed.scene.clear_request, false),
-                                    )
-                                } else {
-                                    (None, None, false)
-                                }
-                            };
-
-                            // 3. Save
-                            if let Some(ref path) = save_req {
-                                let mut registry = gizmo_scene::registry::default_scene_registry();
-                                gizmo_scripting::register_script_components(&mut registry);
-                                match gizmo_scene::scene::SceneData::save(
-                                    &self.world,
-                                    path,
-                                    &registry,
-                                ) {
-                                    Ok(()) => {
-                                        if let Some(mut ed) = self
-                                            .world
-                                            .get_resource_mut::<gizmo_editor::EditorState>()
-                                        {
-                                            ed.has_unsaved_changes = false;
-                                            ed.status_message = format!("Kaydedildi: {}", path);
-                                        }
-                                    }
-                                    Err(e) => tracing::error!("[App] Sahne kayıt hatası: {}", e),
-                                }
-                            }
-
-                            // 4. Clear + Load
-                            if clear_req || load_req.is_some() {
-                                let editor_entities: std::collections::HashSet<u32> = {
-                                    let names = self.world.borrow::<gizmo_core::EntityName>();
-                                    names
-                                        .iter()
-                                        .filter_map(|(id, _)| {
-                                            names.get(id).and_then(|n| {
-                                                if n.0.starts_with("Editor ")
-                                                    || n.0 == "Highlight Box"
-                                                {
-                                                    Some(id)
-                                                } else {
-                                                    None
-                                                }
-                                            })
-                                        })
-                                        .collect()
-                                };
-                                let to_despawn: Vec<_> = self
-                                    .world
-                                    .iter_alive_entities()
-                                    .into_iter()
-                                    .filter(|e| !editor_entities.contains(&e.id()))
-                                    .collect();
-                                for e in to_despawn {
-                                    self.world.despawn(e);
-                                }
-                            }
-                            if let Some(ref path) = load_req {
-                                if let Some(asset_manager) =
-                                    self.world
-                                        .remove_resource::<gizmo_renderer::asset::AssetManager>()
-                                {
-                                    let r = self.world.remove_resource::<Renderer>().unwrap();
-                                    let dummy_rgba = [255u8, 255, 255, 255];
-                                    let _dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
-                                    let mut registry = gizmo_scene::registry::default_scene_registry();
-                                    gizmo_scripting::register_script_components(&mut registry);
-                                    let ok = gizmo_scene::scene::SceneData::load_into(
-                                        path,
-                                        &mut self.world,
-                                        &registry,
-                                    )
-                                    .is_ok();
-                                    self.world.insert_resource(r);
-                                    self.world.insert_resource(asset_manager);
-                                    if let Some(mut ed) =
-                                        self.world.get_resource_mut::<gizmo_editor::EditorState>()
-                                    {
-                                        ed.status_message = if ok {
-                                            format!("Yüklendi: {}", path)
-                                        } else {
-                                            format!("Sahne yüklenemedi: {}", path)
-                                        };
-                                        ed.has_unsaved_changes = false;
-                                    }
-                                }
+                                crate::editor_runtime::sync_render_targets(
+                                    &mut self.world,
+                                    &mut editor,
+                                );
+                                crate::editor_runtime::process_scene_requests(&mut self.world);
                             }
 
                             // ECS Sistemlerini Çalıştırmadan önce DI için Core Resource'ları Güncelle
@@ -1201,7 +934,10 @@ impl<State: 'static> App<State> {
                                     if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                         profiler.end_scope("render");
                                     }
-                                    self.editor = Some(editor);
+                                    #[cfg(feature = "egui")]
+                                    {
+                                        self.editor = Some(editor);
+                                    }
                                     self.app_state = Some(state);
                                     self.last_frame_time = Some(last_frame_time);
                                     self.light_time = light_time;
@@ -1213,7 +949,10 @@ impl<State: 'static> App<State> {
                                     if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                         profiler.end_scope("render");
                                     }
-                                    self.editor = Some(editor);
+                                    #[cfg(feature = "egui")]
+                                    {
+                                        self.editor = Some(editor);
+                                    }
                                     self.app_state = Some(state);
                                     self.last_frame_time = Some(last_frame_time);
                                     self.light_time = light_time;
@@ -1251,14 +990,17 @@ impl<State: 'static> App<State> {
                                 s_render(&mut self.world, &state, &mut ctx);
                             }
 
-                            editor.render(
-                                &window,
-                                &renderer.device,
-                                &renderer.queue,
-                                &mut encoder,
-                                &view,
-                                full_output,
-                            );
+                            #[cfg(feature = "egui")]
+                            {
+                                editor.render(
+                                    &window,
+                                    &renderer.device,
+                                    &renderer.queue,
+                                    &mut encoder,
+                                    &view,
+                                    full_output,
+                                );
+                            }
 
                             renderer.queue.submit(std::iter::once(encoder.finish()));
                             output.present();
@@ -1291,7 +1033,10 @@ impl<State: 'static> App<State> {
             }
 
             // Put the runtime back for the next event.
-            self.editor = Some(editor);
+            #[cfg(feature = "egui")]
+            {
+                self.editor = Some(editor);
+            }
             self.app_state = Some(state);
             self.last_frame_time = Some(last_frame_time);
             self.light_time = light_time;

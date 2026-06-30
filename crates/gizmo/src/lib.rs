@@ -113,8 +113,9 @@ pub use gizmo_core::gizmo_log;
 pub use bytemuck;
 
 /// 1.0 kontratı: bu dış grafik tipi bilinçli olarak public API'nin parçasıdır;
-/// sürümü renderer crate'inin semver'ine bağlıdır.
-#[cfg(feature = "editor")]
+/// sürümü ilgili UI crate'inin semver'ine bağlıdır. `egui` feature'ı ile
+/// (overlay UI / editör) açılır.
+#[cfg(feature = "egui")]
 pub use egui;
 
 /// 1.0 kontratı: bu dış grafik tipi bilinçli olarak public API'nin parçasıdır;
