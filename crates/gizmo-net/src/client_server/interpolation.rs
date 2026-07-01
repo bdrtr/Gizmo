@@ -34,17 +34,41 @@ impl SnapshotInterpolator {
         }
     }
 
-    /// Sunucudan yeni bir durum geldiğinde tampona ekler
+    /// Sunucudan yeni bir durum geldiğinde tampona ekler.
+    ///
+    /// `get_interpolated_transform`'daki tarama, tampon **zaman-artan** sıralı olduğunu
+    /// varsayar (S1.time <= render_time <= S2.time'ı saran ikiliyi soldan sağa bulur).
+    /// Ağ paketleri sırasız gelebileceğinden (jitter/yeniden-sıralama), burada sıralı
+    /// konuma ekleyerek bu değişmezi (invariant) her zaman koruruz. Aksi halde
+    /// `buffer = [{5.0}, {3.0}]` gibi bir durumda tarama yanlış ikiliyi seçip
+    /// interpolasyon yerine tek (gelecek) snapshot'ı döndürürdü.
     pub fn add_snapshot(&mut self, time: f64, position: [f32; 3], rotation: [f32; 4]) {
-        self.buffer.push_back(TransformSnapshot {
+        let snapshot = TransformSnapshot {
             time,
             position,
             rotation,
-        });
+        };
 
-        // Tampon çok büyürse eskileri temizle (Örn: 2 saniyeden eskiler çöp)
+        // Yaygın (sıralı) durum hızlı yol: en yeni örnek genelde en büyük zamandır.
+        if self.buffer.back().is_none_or(|last| time >= last.time) {
+            self.buffer.push_back(snapshot);
+        } else {
+            // Sırasız geldi: zaman-artan sırayı koruyacak konuma ekle.
+            let insert_at = self
+                .buffer
+                .iter()
+                .position(|s| s.time > time)
+                .unwrap_or(self.buffer.len());
+            self.buffer.insert(insert_at, snapshot);
+        }
+
+        // Tampon çok büyürse eskileri temizle (Örn: 2 saniyeden eskiler çöp).
+        // Referans olarak eklenen `time`'ı değil, tampondaki EN YENİ zamanı (artık
+        // sıralı olduğundan `back`) kullan; böylece sırasız gelen eski bir örnek
+        // budama eşiğini yanlış hesaplamaz.
+        let newest = self.buffer.back().map_or(time, |s| s.time);
         while let Some(oldest) = self.buffer.front() {
-            if time - oldest.time > 2.0 {
+            if newest - oldest.time > 2.0 {
                 self.buffer.pop_front();
             } else {
                 break;
@@ -174,6 +198,26 @@ mod tests {
         // The old long-way bug gave w ≈ 0.383 (≈135°) — discriminating.
         assert!(rot[3] > 0.9, "took the long way: w = {} (expected ≈0.924)", rot[3]);
         assert!(rot[1] > 0.3, "wrong rotation axis sign: y = {}", rot[1]);
+    }
+
+    // REGRESYON (bulgu 32): snapshot'lar sırasız gelirse (jitter/yeniden-sıralama)
+    // tampon zaman-artan kalmalı, böylece render_time'ı saran ikili doğru bulunur.
+    // Düzeltme öncesi buffer=[{5.0},{3.0}] olurdu ve render_time=4.0 için tarama
+    // interpolasyon yerine tek (gelecek) snapshot'ı döndürürdü.
+    #[test]
+    fn interpolates_when_snapshots_arrive_out_of_order() {
+        let mut interp = SnapshotInterpolator::new(0.0);
+        // Önce gelecek örnek (5.0), sonra geçmiş örnek (3.0) gelir.
+        interp.add_snapshot(5.0, [50.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        interp.add_snapshot(3.0, [30.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+
+        // render_time = 4.0 → 3.0 ve 5.0 arası tam orta nokta (x = 40.0).
+        let (pos, _rot) = interp.get_interpolated_transform(4.0).unwrap();
+        assert!(
+            (pos[0] - 40.0).abs() < 1e-5,
+            "sırasız gelen snapshot'lar arasında interpolasyon başarısız: beklenen 40.0, gelen {}",
+            pos[0]
+        );
     }
 
     #[test]
