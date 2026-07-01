@@ -61,7 +61,10 @@ impl Fp32 {
 
     #[inline]
     pub fn abs(self) -> Self {
-        Self(self.0.abs())
+        // `i32::abs` is UB at i32::MIN (debug panic / wraps to a still-negative value in
+        // release). `Fp32::MIN.abs()` is publicly reachable, so saturate to keep the
+        // module's no-panic, always-non-negative contract (abs(MIN) == MAX).
+        Self(self.0.saturating_abs())
     }
 
     /// Bit-exact Karekök (Sqrt) - Newton-Raphson veya Integer Sqrt algoritması
@@ -177,7 +180,9 @@ impl Neg for Fp32 {
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
-        Self(-self.0)
+        // Saturating negation: `-i32::MIN` overflows (debug panic / wraps). Keeps the
+        // module's no-panic saturating contract consistent with Add/Sub/Mul/Div.
+        Self(self.0.saturating_neg())
     }
 }
 
@@ -437,6 +442,16 @@ mod tests {
         assert!(fp_approx(Fp32::from_f32(-5.0).abs(), 5.0));
         assert!(fp_approx(Fp32::from_f32(5.0).abs(), 5.0));
         assert!(fp_approx(Fp32::ZERO.abs(), 0.0));
+    }
+
+    #[test]
+    fn fp32_abs_neg_saturate_at_min() {
+        // Regression: `i32::MIN.abs()` / `-i32::MIN` overflow (debug panic, or a still-negative
+        // value in release). Fp32::MIN is a public const, so both must saturate to keep the
+        // module's no-panic, always-non-negative contract.
+        assert_eq!(Fp32::MIN.abs(), Fp32::MAX);
+        assert!(Fp32::MIN.abs().0 >= 0, "abs() must never be negative");
+        assert_eq!(-Fp32::MIN, Fp32::MAX);
     }
 
     // =======================================================================
