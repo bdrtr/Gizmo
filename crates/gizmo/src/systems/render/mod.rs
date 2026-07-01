@@ -710,6 +710,13 @@ mod golden_render_tests {
 
     #[test]
     fn default_render_pass_draws_a_cube_distinct_from_background() {
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!(
+                "skipping default_render_pass_draws_a_cube_distinct_from_background: \
+                 no GPU adapter available (headless render requires a GPU)"
+            );
+            return;
+        }
         pollster::block_on(async {
             const W: u32 = 128;
             const H: u32 = 128;
