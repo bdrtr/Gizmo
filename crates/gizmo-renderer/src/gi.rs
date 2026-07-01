@@ -284,9 +284,12 @@ impl ProbeGrid {
         let iy = (fy as u32).min(self.resolution[1].saturating_sub(2));
         let iz = (fz as u32).min(self.resolution[2].saturating_sub(2));
 
-        let tx = fx - ix as f32;
-        let ty = fy - iy as f32;
-        let tz = fz - iz as f32;
+        // Clamp interpolation weights to [0,1]. For queries outside the probe
+        // grid, `fx - ix` can exceed 1.0 (e.g. fx=1.3 with ix clamped to 0),
+        // which would extrapolate instead of clamping at the boundary.
+        let tx = (fx - ix as f32).clamp(0.0, 1.0);
+        let ty = (fy - iy as f32).clamp(0.0, 1.0);
+        let tz = (fz - iz as f32).clamp(0.0, 1.0);
 
         // 8 köşe probe'u oku
         let idx = |x: u32, y: u32, z: u32| -> usize {
@@ -408,6 +411,42 @@ mod tests {
 
         let mid = a.lerp(&b, 0.5);
         assert!((mid.l0.x - 1.0).abs() < 0.001, "Lerp ortası 1.0 olmalı");
+    }
+
+    #[test]
+    fn test_sample_out_of_bounds_clamps_no_extrapolation() {
+        // 1x1x1 cell grid; two probes per axis at cell centers.
+        let mut grid = ProbeGrid::new(
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(2.0, 2.0, 2.0),
+            [2, 2, 2],
+        );
+        // Ramp l0.x by x-index: probes at x=0 get 0.0, at x=1 get 1.0. A correctly
+        // clamped trilinear sample can never exceed the max probe value of 1.0.
+        let res = grid.resolution;
+        for z in 0..res[2] {
+            for y in 0..res[1] {
+                for x in 0..res[0] {
+                    let i = (z * res[1] * res[0] + y * res[0] + x) as usize;
+                    grid.probes[i].coeffs.l0 = Vec3::new(x as f32, 0.0, 0.0);
+                }
+            }
+        }
+
+        // Sample far outside the grid max. Before the clamp fix, the fractional
+        // coordinate tx exceeded 1.0 and trilinear interpolation extrapolated,
+        // pushing l0.x above the max probe value of 1.0.
+        let sampled = grid.sample(Vec3::new(100.0, 100.0, 100.0));
+        assert!(
+            sampled.l0.x <= 1.0 + 1e-4,
+            "Out-of-bounds sample must clamp, not extrapolate; got {}",
+            sampled.l0.x
+        );
+        assert!(
+            (sampled.l0.x - 1.0).abs() < 1e-4,
+            "Out-of-bounds sample must clamp to boundary value 1.0, got {}",
+            sampled.l0.x
+        );
     }
 
     #[test]

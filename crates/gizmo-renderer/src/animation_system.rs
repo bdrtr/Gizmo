@@ -99,6 +99,19 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
 
 // ── AnimationStateMachine update ─────────────────────────────────────────────
 
+/// Normalize an animation clip time into `[0, duration)`.
+///
+/// Looping clips use `rem_euclid` so negative times (reverse playback, speed < 0)
+/// wrap back into range — plain `%` preserves the dividend's sign and would leave
+/// the sampler evaluating at negative times. Non-looping clips clamp into range.
+fn normalize_anim_time(time: f32, duration: f32, looped: bool) -> f32 {
+    if looped && duration > 0.0 {
+        time.rem_euclid(duration)
+    } else {
+        time.clamp(0.0, duration.max(0.0))
+    }
+}
+
 pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) {
     let entities: Vec<u32> = world.borrow::<AnimationStateMachine>().entities().collect();
     // SAFETY: exclusive `&mut World`; AnimationStateMachine and Skeleton are distinct
@@ -128,15 +141,11 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
 
         let clip_duration = machine.current_clip_duration();
         let looped = machine.is_current_looped();
+        // Capture completion BEFORE normalization wraps the time back into range,
+        // so exit-time transitions still fire on the frame the clip finishes.
         let clip_finished = machine.current_time >= clip_duration;
 
-        if clip_finished {
-            if looped && clip_duration > 0.0 {
-                machine.current_time %= clip_duration;
-            } else {
-                machine.current_time = clip_duration;
-            }
-        }
+        machine.current_time = normalize_anim_time(machine.current_time, clip_duration, looped);
 
         if let Some(ref mut blend) = machine.active_blend {
             let to_speed = blend.to_speed;
@@ -149,13 +158,7 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
                 .map(|c| c.duration)
                 .unwrap_or(1.0);
             let to_looped = blend.to_looped;
-            if blend.to_time >= to_clip_duration {
-                if to_looped && to_clip_duration > 0.0 {
-                    blend.to_time %= to_clip_duration;
-                } else {
-                    blend.to_time = to_clip_duration;
-                }
-            }
+            blend.to_time = normalize_anim_time(blend.to_time, to_clip_duration, to_looped);
         }
 
         // --- Evaluate pending triggers and exit-time transitions ---
@@ -271,3 +274,40 @@ fn upload_skin_matrices(skeleton: &mut Skeleton, queue: &wgpu::Queue) {
 }
 
 // find_joint_for_node artik kullanilmiyor
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_anim_time;
+
+    #[test]
+    fn looped_negative_time_wraps_forward() {
+        // Reverse playback drove time just below 0; rem_euclid wraps it near the
+        // clip end instead of leaving it negative (which `%` would do).
+        let wrapped = normalize_anim_time(-0.1, 5.0, true);
+        assert!(
+            (wrapped - 4.9).abs() < 1e-5,
+            "expected ~4.9, got {wrapped}"
+        );
+        assert!(wrapped >= 0.0, "wrapped time must be non-negative");
+    }
+
+    #[test]
+    fn looped_forward_overflow_wraps() {
+        let wrapped = normalize_anim_time(5.2, 5.0, true);
+        assert!((wrapped - 0.2).abs() < 1e-5, "expected ~0.2, got {wrapped}");
+    }
+
+    #[test]
+    fn non_looped_clamps_both_ends() {
+        assert_eq!(normalize_anim_time(-1.0, 5.0, false), 0.0);
+        assert_eq!(normalize_anim_time(7.0, 5.0, false), 5.0);
+        assert_eq!(normalize_anim_time(2.0, 5.0, false), 2.0);
+    }
+
+    #[test]
+    fn zero_duration_is_safe() {
+        // rem_euclid path is skipped for duration == 0; clamp keeps it at 0.
+        assert_eq!(normalize_anim_time(1.0, 0.0, true), 0.0);
+        assert_eq!(normalize_anim_time(-1.0, 0.0, false), 0.0);
+    }
+}
