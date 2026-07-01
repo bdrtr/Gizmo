@@ -471,6 +471,13 @@ mod tests {
 
     #[test]
     fn new_headless_builds_all_subsystems_and_renders_offscreen() {
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!(
+                "skipping new_headless_builds_all_subsystems_and_renders_offscreen: \
+                 no GPU adapter available (headless render requires a GPU)"
+            );
+            return;
+        }
         pollster::block_on(async {
             // Builds the FULL renderer (pipelines, post-process, deferred, ssao/ssr/ssgi,
             // gpu particle/physics/fluid) with NO window/surface — the headless path.

@@ -220,6 +220,30 @@ impl Renderer {
         Self::finish_construction(device, queue, Some(surface), config, size)
     }
 
+    /// Probes whether a GPU adapter is available for headless rendering.
+    ///
+    /// Unlike [`Renderer::new_headless`] — which panics when no adapter can be
+    /// acquired (the correct fail-fast contract for a real headless render) — this
+    /// never panics. It lets GPU-dependent tests skip gracefully on machines with
+    /// no GPU (e.g. CI runners) instead of aborting the whole test binary.
+    pub async fn headless_adapter_available() -> bool {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            flags: wgpu::InstanceFlags::default(),
+            memory_budget_thresholds: Default::default(),
+            backend_options: Default::default(),
+            display: None,
+        });
+        instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::default(),
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })
+            .await
+            .is_ok()
+    }
+
     /// Constructs a Renderer with **no window/surface** — every render target is an
     /// offscreen texture. Enables headless GPU servers, CI rendering and
     /// deterministic render harnesses. Shares [`Renderer::finish_construction`] with
