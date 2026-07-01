@@ -137,6 +137,11 @@ impl World {
             let set = self.sparse_sets.entry(type_id).or_insert_with(|| {
                 crate::archetype::sparse_set::ComponentSparseSet::new(info)
             });
+            // Overwrite vs. new insert: fire on_add ONLY when the entity did not already
+            // have the component, matching the Table-storage path below (overwrite → on_set
+            // only). Previously SparseSet unconditionally fired on_add, so re-adding a
+            // SparseSet component double-fired Insert observers — storage-dependent behavior.
+            let existed = set.contains(eid);
             let ptr = &component as *const T as *const u8;
             // SAFETY: `ptr`, set'in `info.layout`'u ile birebir eşleşen `T` bileşenini gösterir;
             // sahiplik set'e devredilir ve aşağıda `forget` ile çift-drop engellenir.
@@ -144,7 +149,9 @@ impl World {
             std::mem::forget(component);
 
             self.run_hooks(type_id, |h, w| {
-                for hook in &mut h.on_add { hook(w, entity); }
+                if !existed {
+                    for hook in &mut h.on_add { hook(w, entity); }
+                }
                 for hook in &mut h.on_set { hook(w, entity); }
             });
             return;
@@ -394,7 +401,11 @@ impl World {
                 for e in &group_entities {
                     let row = self.entity_locations[e.id() as usize].row as usize;
                     unsafe {
-                        std::ptr::write(col.get_ptr(row) as *mut T, component.clone());
+                        // Same-archetype overwrite: the slot already holds a live `T`.
+                        // Assignment (`*ptr = ..`) drops the old value; `ptr::write` would
+                        // leak it for any `T: Drop` (e.g. String/Vec/Handle re-asserted each
+                        // frame → unbounded heap growth). Mirrors `add_component`'s path.
+                        *(col.get_ptr(row) as *mut T) = component.clone();
                         col.ticks_ptr_mut().add(row).write(crate::archetype::ComponentTicks::new(self.tick));
                     }
                 }

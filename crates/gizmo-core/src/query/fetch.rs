@@ -151,14 +151,21 @@ impl<T: crate::component::Component> FetchComponent for Mut<'_, T> {
     unsafe fn get_item<'w>(fetch: Self::Fetch<'w>, row: usize, entity_id: u32) -> Self::Item<'w> {
         let (data_ptr, ticks_ptr, system_tick, set_opt) = fetch;
         if let Some(set_ptr) = set_opt {
-            let set = &mut *set_ptr;
-            // Get index of entity in dense array to access ticks
+            // SHARED `&*set_ptr` (not `&mut`). `par_for_each_mut` runs archetype/row tasks in
+            // parallel; every entity lives in exactly one dense row, so the rows written are
+            // disjoint across tasks. Forming an exclusive `&mut *set_ptr` per task would be
+            // instant aliasing UB (many live `&mut ComponentSparseSet`) — a real data race
+            // reachable from 100% safe code (`query_mut::<Mut<Sparse>>().par_for_each_mut`).
+            // BlobVec::get_unchecked_mut takes `&self` (interior mutability) and Vec::as_ptr
+            // gives the ticks base, so we reach the disjoint element through a shared ref only.
+            let set = &*set_ptr;
             let e = entity_id as usize;
             let dense_row = set.sparse[e] as usize;
             let ptr = set.dense.get_unchecked_mut(dense_row) as *mut T;
+            let ticks_ptr = set.ticks.as_ptr().add(dense_row) as *mut crate::archetype::ComponentTicks;
             Mut {
                 value: &mut *ptr,
-                ticks: &mut set.ticks[dense_row],
+                ticks: &mut *ticks_ptr,
                 current_tick: system_tick,
             }
         } else {
