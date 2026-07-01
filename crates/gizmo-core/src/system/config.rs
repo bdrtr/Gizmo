@@ -95,9 +95,15 @@ impl SystemConfig {
     where
         F: FnMut(&World) -> bool + Send + Sync + 'static,
     {
+        // Opaque world-closure form: its SystemParam access can't be inferred, so mark the
+        // conditional system exclusive (its own batch) — conservative but sound. The typed
+        // `run_if_sys`/`IntoCondition` path infers precise, parallelizable condition access.
+        let mut condition_access = AccessInfo::new();
+        condition_access.is_exclusive = true;
         self.system = Box::new(ConditionalSystem {
             inner: self.system,
             condition: Box::new(condition),
+            condition_access,
         });
         self
     }

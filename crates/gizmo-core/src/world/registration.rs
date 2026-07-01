@@ -92,7 +92,14 @@ impl World {
 
             // Propagate to parent
             if let Some(parent_ptr) = self.get_component_ptr(current_entity, TypeId::of::<Parent>()) {
-                current_entity = self.entity(unsafe { (*(parent_ptr as *const Parent)).0 }).unwrap();
+                // `Parent` stores a bare id with no generation; a plain `despawn(parent)`
+                // (not despawn_recursive) leaves children with a dangling `Parent(id)`.
+                // Resolve it safely — a dead id stops propagation instead of panicking.
+                let parent_id = unsafe { (*(parent_ptr as *const Parent)).0 };
+                match self.entity(parent_id) {
+                    Some(e) => current_entity = e,
+                    None => break,
+                }
             } else {
                 break;
             }

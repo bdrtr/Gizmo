@@ -7,6 +7,12 @@ use crate::world::World;
 
 pub trait IntoCondition<Params> {
     fn into_condition(self) -> Box<dyn FnMut(&World) -> bool + Send + Sync>;
+    /// World access performed by the condition's own SystemParams. The scheduler must
+    /// include this in its disjointness check: a `run_if(|r: Res<Score>| ..)` condition
+    /// reads `Score` at run time, so it must conflict with a `ResMut<Score>` writer (and a
+    /// `Query<&Pos>` condition with a `Query<Mut<Pos>>` writer) — otherwise they co-batch
+    /// and run in parallel over a shared `&World`, racing on the resource/component.
+    fn condition_access() -> AccessInfo;
 }
 
 impl<F> IntoCondition<()> for F
@@ -15,6 +21,10 @@ where
 {
     fn into_condition(mut self) -> Box<dyn FnMut(&World) -> bool + Send + Sync> {
         Box::new(move |_world| self())
+    }
+    fn condition_access() -> AccessInfo {
+        // A parameter-less condition touches no world state.
+        AccessInfo::new()
     }
 }
 
@@ -31,6 +41,11 @@ macro_rules! impl_into_condition {
                     $(let $P = $P::fetch(world, 0.0).unwrap();)+
                     (self)($($P),+)
                 })
+            }
+            fn condition_access() -> AccessInfo {
+                let mut info = AccessInfo::new();
+                $($P::get_access_info(&mut info);)+
+                info
             }
         }
     };
@@ -49,9 +64,11 @@ pub trait SystemExtRunIf {
 
 impl SystemExtRunIf for Box<dyn System> {
     fn run_if_sys<ParamC, Cond: IntoCondition<ParamC>>(self, cond: Cond) -> Box<dyn System> {
+        let condition_access = Cond::condition_access();
         Box::new(ConditionalSystem {
             inner: self,
             condition: cond.into_condition(),
+            condition_access,
         })
     }
 }
@@ -59,6 +76,8 @@ impl SystemExtRunIf for Box<dyn System> {
 pub struct ConditionalSystem {
     pub(crate) inner: Box<dyn System>,
     pub(crate) condition: Box<dyn FnMut(&World) -> bool + Send + Sync>,
+    /// Access the run-condition performs (see [`IntoCondition::condition_access`]).
+    pub(crate) condition_access: AccessInfo,
 }
 
 impl System for ConditionalSystem {
@@ -68,7 +87,16 @@ impl System for ConditionalSystem {
         }
     }
     fn access_info(&self) -> AccessInfo {
-        self.inner.access_info()
+        // Union the inner system's access with the CONDITION's access, so the batcher
+        // never co-schedules a condition that reads state with a system that writes it.
+        let mut info = self.inner.access_info();
+        let c = &self.condition_access;
+        info.component_reads.extend(c.component_reads.iter().copied());
+        info.component_writes.extend(c.component_writes.iter().copied());
+        info.resource_reads.extend(c.resource_reads.iter().copied());
+        info.resource_writes.extend(c.resource_writes.iter().copied());
+        info.is_exclusive |= c.is_exclusive;
+        info
     }
 }
 
