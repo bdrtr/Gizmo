@@ -43,6 +43,7 @@ proptest = { workspace = true }
 [[bench]]
 name = "ecs_bench"
 harness = false
+path = "benches/ecs_bench/main.rs"
 
 [[bench]]
 name = "reflect_bench"
