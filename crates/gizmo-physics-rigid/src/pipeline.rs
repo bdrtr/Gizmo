@@ -13,7 +13,10 @@ use gizmo_physics_core::{CollisionEvent, CollisionEventType, ContactManifold, Co
 use gizmo_physics_core::narrowphase::NarrowPhase;
 use gizmo_physics_core::BodyHandle;
 use gizmo_math::Vec3;
+#[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use crate::parallel_compat::*;
 use std::collections::HashMap;
 
 impl PhysicsWorld {

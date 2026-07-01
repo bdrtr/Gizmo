@@ -176,7 +176,10 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     where
         F: Fn((u32, Q::Item<'_>)) + Send + Sync,
     {
+        #[cfg(not(target_arch = "wasm32"))]
         use rayon::prelude::*;
+        #[cfg(target_arch = "wasm32")]
+        use crate::parallel_compat::*;
 
         // Pointer taşıyıcı wrapper — Güvenlidir çünkü Query::new() check_aliasing yapmıştır
         #[derive(Copy, Clone)]

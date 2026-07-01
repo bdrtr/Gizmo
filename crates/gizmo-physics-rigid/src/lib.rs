@@ -38,6 +38,9 @@
 //! - [`vehicle`], [`multibody`], [`system`], [`world`] — vehicle dynamics,
 //!   articulated bodies, ECS systems and the world container.
 
+// Sequential fallback for rayon on wasm (no OS threads); native uses rayon.
+#[cfg(target_arch = "wasm32")]
+mod parallel_compat;
 pub mod components;
 pub mod multibody;
 pub mod destruction;

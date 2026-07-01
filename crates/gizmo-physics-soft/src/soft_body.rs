@@ -210,7 +210,10 @@ impl SoftBodyMesh {
         let mut forces: Vec<Vec3> = self.nodes.iter().map(|n| gravity * n.mass).collect();
 
         // 1. Calculate and accumulate internal elastic forces from all tetrahedra in PARALLEL
+        #[cfg(not(target_arch = "wasm32"))]
         use rayon::prelude::*;
+        #[cfg(target_arch = "wasm32")]
+        use crate::parallel_compat::*;
 
         let positions: Vec<Vec3> = self.nodes.iter().map(|n| n.position).collect();
         // Yalnızca gerçekten dejenere/ters (J ≤ eps) elemanlar atlanır — NaN/tekillik

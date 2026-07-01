@@ -27,6 +27,9 @@
 //! ```
 
 // ──── Modüller (alfabetik) ────
+// Sequential fallback for rayon on wasm (no OS threads); native uses rayon.
+#[cfg(target_arch = "wasm32")]
+mod parallel_compat;
 pub mod archetype;
 pub mod asset;
 pub mod commands;

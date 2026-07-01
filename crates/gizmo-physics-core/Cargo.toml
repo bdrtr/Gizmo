@@ -14,7 +14,6 @@ readme.workspace = true
 reflect = ["dep:bevy_reflect", "gizmo-core/reflect"]
 
 [dependencies]
-rayon = "1.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
 gizmo-core = { path = "../gizmo-core", version = "0.2.0" }
 gizmo-math = { path = "../gizmo-math", version = "0.2.0" }

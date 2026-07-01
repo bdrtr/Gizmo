@@ -303,19 +303,34 @@ enables `gizmo-animation/app`, so `AnimationPlugin` stays available through the
 facade. Broader `pub`-tightening from the audit raw output remains as
 fine-grained follow-up.
 
-### (g) WebAssembly (WASM) build — **L** — ⏸️ **Deferred (environment-blocked, not a 1.0 blocker)**
+### (g) WebAssembly (WASM) build — **L** — 🟡 **Simulation core DONE (2026-07-01); renderer/windowing/net deferred**
 
-The engine does **not** build for `wasm32-unknown-unknown` today. Verified
-2026-06-25: even `gizmo-core` fails to compile (a transitive `uuid` needs a
-wasm randomness feature; per earlier audit, `getrandom`/`rand`, `rayon` in
-`gizmo-physics-rigid`, `std::time::Instant`, and `std::net` in `gizmo-net` are
-further blockers). A full WASM port is a separate `time`/`thread`/`rng`/`net`
-platform-abstraction effort, and — critically — **cannot be verified in this CI
-environment** (the target does not compile), so it is not attempted as part of
-the hardening rounds. It is **not a 1.0 blocker**: the native engine is the
-shipping target. The renderer's `wgpu` backend already supports WebGPU/WASM; only
-the engine-wide build is gated. (The `ApplicationHandler::resumed` wasm branch in
-`gizmo-app` is a stub for the same reason.)
+The **deterministic simulation core now compiles to `wasm32-unknown-unknown`** and
+is CI-verifiable (`cargo build --target wasm32-unknown-unknown -p <crate>`):
+`gizmo-math`, `gizmo-core`, `gizmo-physics-core`, `gizmo-physics-rigid`,
+`gizmo-physics-soft`, `gizmo-ai`, `gizmo-animation`, `gizmo-scene`. This is the
+part worth running in a browser (headless sim, in-browser rollback netcode logic,
+deterministic replay). What was needed — each change keeps the **native build
+byte-identical** (determinism hash unchanged, full test suite green):
+
+- **`rayon`** is target-gated to non-wasm; wasm uses an internal `parallel_compat`
+  shim (`par_iter`/`par_iter_mut`/`into_par_iter` → std iterators, `with_min_len`
+  a no-op). Order-preserving, so behaviour- and determinism-neutral. (The unused
+  `rayon` dep was dropped from `gizmo-physics-core`.)
+- **`uuid`** gains the `js` feature and the `rand 0.10 → getrandom 0.4` chain the
+  `wasm_js` feature, paired with `--cfg getrandom_backend="wasm_js"` (scoped to
+  wasm32 in `.cargo/config.toml`).
+- **`std::time::Instant`** → `web_time::Instant` on wasm (physics `step.rs`
+  metrics; timing never feeds the sim). Other time sites were already `#[cfg]`-split.
+- **`std::thread::scope`** in `gizmo-ai` pathfinding gets a single-threaded wasm
+  fallback (native threaded path untouched).
+
+**Still deferred (needs real web backends, not just cfg fixes):** the renderer
+(`wgpu` WebGPU surface + async device init), windowing (`winit` web
+`ApplicationHandler`), audio (web-audio), and `gizmo-net` (`std::net` UDP →
+WebSocket/WebTransport). The `ApplicationHandler::resumed` wasm branch in
+`gizmo-app` remains a stub for that reason. Not a 1.0 blocker: the native engine
+is the shipping target.
 
 ### (e) Document `glam` as an official public dependency — **S** — ✅ **DONE (2026-06-25)**
 
