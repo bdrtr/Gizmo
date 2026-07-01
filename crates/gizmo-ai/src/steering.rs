@@ -73,16 +73,22 @@ pub fn avoid_obstacles(
         let dist = diff.length();
 
         if dist > f32::EPSILON && dist < obs_radius {
-            // Engele yaklaşıldıkça kaçış kuvveti artar
-            let force = diff.normalize() / dist;
+            // Engele yaklaşıldıkça kaçış kuvveti artar (ters-kare yasası ile yakınlık ölçeklenir)
+            let force = diff / (dist * dist);
             desired_velocity += force;
             count += 1;
         }
     }
 
     if count > 0 {
-        // Ortalamaya bölmek yönü bozmaz ama length()'i bozar. normalize() ederek saf yönü yakalarız.
-        desired_velocity = desired_velocity.normalize_or_zero() * max_speed;
+        // Biriken kuvvet hem yön hem yakınlık büyüklüğünü taşır; yönü normalize edip
+        // büyüklüğü max_speed'e ORANTILI ölçekleyerek yakınlık bilgisini koruyoruz.
+        let raw = desired_velocity.length();
+        if raw > f32::EPSILON {
+            // raw büyüdükçe (engel yakınlaştıkça) istenen kaçış hızı max_speed'e kadar artar.
+            let scaled_speed = raw.min(1.0) * max_speed;
+            desired_velocity = (desired_velocity / raw) * scaled_speed;
+        }
         let steering = desired_velocity - current_vel;
         return clamp_force(steering, max_force);
     }
@@ -107,14 +113,20 @@ pub fn separate(
         let dist = diff.length();
 
         if dist > f32::EPSILON && dist < separation_radius {
-            let force = diff.normalize() / dist;
+            // Ters-kare yasası: komşu yakınlaştıkça itme büyüklüğü artar.
+            let force = diff / (dist * dist);
             desired_velocity += force;
             count += 1;
         }
     }
 
     if count > 0 {
-        desired_velocity = desired_velocity.normalize_or_zero() * max_speed;
+        // Yönü koru, büyüklüğü yakınlığa ORANTILI olarak max_speed'e kadar ölçekle.
+        let raw = desired_velocity.length();
+        if raw > f32::EPSILON {
+            let scaled_speed = raw.min(1.0) * max_speed;
+            desired_velocity = (desired_velocity / raw) * scaled_speed;
+        }
         let steering = desired_velocity - current_vel;
         return clamp_force(steering, max_force);
     }
@@ -267,4 +279,76 @@ pub fn combined_steering(
     }
 
     clamp_force(total_force, max_force)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gizmo_math::Vec3;
+
+    /// Zero başlangıç hızıyla üretilen steering büyüklüğü, arzu edilen kaçış
+    /// hızının büyüklüğüne eşittir; bu yüzden farklı mesafeler farklı büyüklük vermelidir.
+    #[test]
+    fn avoid_obstacles_scales_with_proximity() {
+        let obs = Vec3::ZERO;
+        let radius = 4.0;
+        let max_speed = 10.0;
+        let max_force = 1000.0; // clamp devreye girmesin
+
+        // Yakın ajan (dist=1) ile uzak ajan (dist=3) aynı engelden kaçıyor.
+        let near = avoid_obstacles(
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::ZERO,
+            &[(obs, radius)],
+            max_speed,
+            max_force,
+        );
+        let far = avoid_obstacles(
+            Vec3::new(3.0, 0.0, 0.0),
+            Vec3::ZERO,
+            &[(obs, radius)],
+            max_speed,
+            max_force,
+        );
+
+        // Yakın ajan kesinlikle daha güçlü itilmeli (eski kod eşit büyüklük veriyordu).
+        assert!(
+            near.length() > far.length() + 1.0,
+            "yakın={} uzak={} yakınlık ölçeklemesi kaybolmuş",
+            near.length(),
+            far.length()
+        );
+    }
+
+    #[test]
+    fn separate_scales_with_proximity() {
+        let separation_radius = 1.5;
+        let max_speed = 10.0;
+        let max_force = 1000.0;
+
+        // Çok yakın komşu (dist=0.5) ile daha uzak komşu (dist=1.4).
+        let near = separate(
+            Vec3::ZERO,
+            Vec3::ZERO,
+            &[Vec3::new(0.5, 0.0, 0.0)],
+            separation_radius,
+            max_speed,
+            max_force,
+        );
+        let far = separate(
+            Vec3::ZERO,
+            Vec3::ZERO,
+            &[Vec3::new(1.4, 0.0, 0.0)],
+            separation_radius,
+            max_speed,
+            max_force,
+        );
+
+        assert!(
+            near.length() > far.length() + 1.0,
+            "yakın={} uzak={} ayrılma yakınlık ölçeklemesi kaybolmuş",
+            near.length(),
+            far.length()
+        );
+    }
 }
