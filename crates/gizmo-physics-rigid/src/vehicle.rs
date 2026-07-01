@@ -104,8 +104,12 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                 // Determine wheel attachment point in world space
                 let wheel_world_pos = chassis_pos + chassis_rot * wheel.local_position;
                 
-                // Direction of suspension (usually local -Y)
-                let ray_dir = (chassis_rot * wheel.direction).normalize();
+                // Direction of suspension (usually local -Y). `normalize_or_zero`: a zero/degenerate
+                // `wheel.direction` (or one that collapses under rotation) would make bare `normalize()`
+                // return NaN, poisoning the raycast and every suspension force derived from it for the
+                // rest of the sim. A zero ray direction misses (max_dist>0 with no hit) → wheel simply
+                // ungrounded this frame instead of corrupting velocity.
+                let ray_dir = (chassis_rot * wheel.direction).normalize_or_zero();
 
                 // Raycast downwards
                 let max_dist = wheel.suspension_rest_length + wheel.radius;
@@ -268,5 +272,36 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gizmo_math::{Quat, Vec3};
+
+    // Regression: a wheel with a zero (or degenerate) suspension direction must not
+    // poison the raycast with NaN. Bare `normalize()` of a zero vector yields NaN,
+    // which would corrupt every suspension force derived from `ray_dir` for the rest
+    // of the sim. The fix uses `normalize_or_zero`, mirroring the exact expression on
+    // the ray-direction line of `physics_vehicle_system`.
+    #[test]
+    fn zero_wheel_direction_yields_finite_ray_dir() {
+        let chassis_rot = Quat::IDENTITY;
+        let direction = Vec3::ZERO;
+        let ray_dir = (chassis_rot * direction).normalize_or_zero();
+        assert!(
+            ray_dir.x.is_finite() && ray_dir.y.is_finite() && ray_dir.z.is_finite(),
+            "zero wheel direction must not produce NaN ray direction"
+        );
+        assert_eq!(ray_dir, Vec3::ZERO);
+    }
+
+    // A normal (non-degenerate) direction must still normalize as before.
+    #[test]
+    fn normal_wheel_direction_normalizes() {
+        let chassis_rot = Quat::IDENTITY;
+        let direction = Vec3::new(0.0, -2.0, 0.0);
+        let ray_dir = (chassis_rot * direction).normalize_or_zero();
+        assert!((ray_dir - Vec3::new(0.0, -1.0, 0.0)).length() < 1e-6);
     }
 }

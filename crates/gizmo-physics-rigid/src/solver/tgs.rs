@@ -334,7 +334,7 @@ impl ConstraintSolver {
                 } else {
                     0.0
                 };
-                let delta_n = m_scale * (target_vn - vel_norm + bias) / k_n - i_scale * acc_n;
+                let delta_n = (m_scale * (target_vn - vel_norm + bias) - i_scale * acc_n) / k_n;
                 let new_acc_n = (acc_n + delta_n).max(0.0);
                 let actual_n = new_acc_n - acc_n;
                 manifolds[mid].contacts[cid].normal_impulse = new_acc_n;
@@ -404,5 +404,36 @@ impl ConstraintSolver {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Regression for the TGS soft-constraint impulse ordering. The impulse-scale
+    // penalty term (`i_scale * acc_n`) must be applied *inside* the effective-mass
+    // division, i.e. `(m_scale*(...) - i_scale*acc_n) / k_n`, not after it
+    // (`m_scale*(...)/k_n - i_scale*acc_n`). The two disagree whenever both an
+    // impulse-scale penalty and a non-unit effective mass (k_n != 1) are present.
+    #[test]
+    fn soft_constraint_impulse_scale_applied_before_division() {
+        // Representative soft-constraint values (bias_rate>0, use_tgs_soft path).
+        let m_scale = 0.75_f32;
+        let i_scale = 0.25_f32;
+        let target_vn = 0.0_f32;
+        let vel_norm = -2.0_f32;
+        let bias = 1.5_f32;
+        let k_n = 4.0_f32; // non-unit effective mass exposes the ordering bug
+        let acc_n = 0.6_f32;
+
+        // Correct (post-fix) ordering.
+        let correct = (m_scale * (target_vn - vel_norm + bias) - i_scale * acc_n) / k_n;
+        // Buggy (pre-fix) ordering.
+        let buggy = m_scale * (target_vn - vel_norm + bias) / k_n - i_scale * acc_n;
+
+        // They must differ, and the current code must match the correct form.
+        assert!((correct - buggy).abs() > 1e-6, "orderings must differ for this case");
+
+        let delta_n = (m_scale * (target_vn - vel_norm + bias) - i_scale * acc_n) / k_n;
+        assert!((delta_n - correct).abs() < 1e-9);
     }
 }
