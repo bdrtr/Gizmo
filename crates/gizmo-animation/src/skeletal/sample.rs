@@ -42,8 +42,12 @@ pub fn evaluate_clip(
         if let Some(joint_idx) = get_joint_idx(track.target_node, &track.target_node_name) {
             if let Some(v) = track.get_interpolated(time, |a: Vec3, b: Vec3, t| a.lerp(b, t)) {
                 // Sadece Hips (kök) kemiğinin hareketine izin ver, diğerlerini yoksay. Mixamo animasyonlarında root motion buradadır.
-                let is_hips = track.target_node_name.as_deref().is_some_and(|n| n.contains("Hips"))
-                    || track.target_node == 66;
+                // Kök tespiti yalnızca isim tabanlıdır: hard-coded bir düğüm indeksi (eskiden 66),
+                // Hips'i farklı indekste olan iskeletlerde root motion'ı sessizce bozuyordu.
+                let is_hips = track
+                    .target_node_name
+                    .as_deref()
+                    .is_some_and(|n| n.contains("Hips"));
                 if is_hips {
                     changes[joint_idx].0 = Some(v);
                 }
@@ -113,4 +117,82 @@ pub fn decompose_mat4(m: Mat4) -> (Vec3, Quat, Vec3) {
     );
     let r = Quat::from_mat4(&r_mat).normalize();
     (t, r, scale)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::skeletal::keyframe::{InterpolationMode, Keyframe, Track};
+    use crate::skeletal::skeleton::{SkeletonHierarchy, SkeletonJoint};
+
+    fn make_joint(name: &str, node_index: usize) -> SkeletonJoint {
+        SkeletonJoint {
+            name: name.into(),
+            node_index,
+            inverse_bind_matrix: Mat4::IDENTITY,
+            parent_index: None,
+            local_bind_transform: Mat4::IDENTITY,
+            bind_translation: Vec3::ZERO,
+            bind_rotation: Quat::IDENTITY,
+            bind_scale: Vec3::ONE,
+        }
+    }
+
+    fn translation_track(target_node: usize, name: Option<&str>, value: Vec3) -> Track<Vec3> {
+        Track {
+            target_node,
+            target_node_name: name.map(|s| s.to_string()),
+            interpolation: InterpolationMode::Linear,
+            keyframes: vec![Keyframe { time: 0.0, value }],
+        }
+    }
+
+    #[test]
+    fn root_motion_applies_to_hips_regardless_of_node_index() {
+        // Hips is NOT at the old hard-coded index 66; root motion must still apply.
+        let hierarchy = SkeletonHierarchy {
+            joints: vec![make_joint("mixamorig:Hips", 15)],
+            root_transform: Mat4::IDENTITY,
+        };
+        let motion = Vec3::new(0.0, 0.0, 5.0);
+        let clip = AnimationClip {
+            name: "walk".into(),
+            duration: 1.0,
+            translations: vec![translation_track(15, Some("mixamorig:Hips"), motion)],
+            rotations: vec![],
+            scales: vec![],
+        };
+        let poses = evaluate_clip(&clip, 0.0, &hierarchy);
+        assert!(
+            (poses[0].0 - motion).length() < 0.001,
+            "Hips root motion should apply based on the name, got {:?}",
+            poses[0].0
+        );
+    }
+
+    #[test]
+    fn root_motion_ignored_for_non_hips_bones() {
+        // A non-Hips translation track must be ignored (bind translation kept),
+        // and it must NOT be resurrected just because target_node == 66.
+        let bind = Vec3::new(1.0, 2.0, 3.0);
+        let mut joint = make_joint("LeftFoot", 66);
+        joint.bind_translation = bind;
+        let hierarchy = SkeletonHierarchy {
+            joints: vec![joint],
+            root_transform: Mat4::IDENTITY,
+        };
+        let clip = AnimationClip {
+            name: "walk".into(),
+            duration: 1.0,
+            translations: vec![translation_track(66, Some("LeftFoot"), Vec3::new(9.0, 9.0, 9.0))],
+            rotations: vec![],
+            scales: vec![],
+        };
+        let poses = evaluate_clip(&clip, 0.0, &hierarchy);
+        assert!(
+            (poses[0].0 - bind).length() < 0.001,
+            "Non-Hips translation must be ignored even at node index 66, got {:?}",
+            poses[0].0
+        );
+    }
 }
