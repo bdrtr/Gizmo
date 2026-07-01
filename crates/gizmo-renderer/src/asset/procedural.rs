@@ -149,14 +149,17 @@ impl super::AssetManager {
             let v2_top = [p2[0], half_d, p2[1]];
             let v2_bot = [p2[0], -half_d, p2[1]];
 
-            // Side (CCW from outside)
+            // Side quad, wound CCW as seen from OUTSIDE (the +`normal` side). The previous
+            // winding gave a geometric face normal opposite to the declared `normal`
+            // (geo·declared = −2h·(dx²+dz²) < 0), so the sides were back-face culled and
+            // rendered inside-out. Swapping the 2nd/3rd vertex of each triangle fixes it.
             vertices.push(Vertex { position: v1_top, normal, tex_coords: [0.0, 0.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: v1_bot, normal, tex_coords: [0.0, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
             vertices.push(Vertex { position: v2_bot, normal, tex_coords: [1.0, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: v1_bot, normal, tex_coords: [0.0, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
 
             vertices.push(Vertex { position: v1_top, normal, tex_coords: [0.0, 0.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
-            vertices.push(Vertex { position: v2_bot, normal, tex_coords: [1.0, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
             vertices.push(Vertex { position: v2_top, normal, tex_coords: [1.0, 0.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
+            vertices.push(Vertex { position: v2_bot, normal, tex_coords: [1.0, 1.0], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
 
             // Top Cap (Triangulate via center, CCW from above)
             vertices.push(Vertex { position: [cx, half_d, cy], normal: [0.0, 1.0, 0.0], tex_coords: [0.5, 0.5], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
