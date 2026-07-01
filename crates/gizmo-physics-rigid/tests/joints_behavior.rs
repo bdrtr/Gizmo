@@ -139,6 +139,29 @@ fn ballsocket_cone_limit_clamps_swing() {
 }
 
 #[test]
+fn ballsocket_cone_limit_clamps_large_angle() {
+    // Regression: the cone limit compared the saturating chord `2·|sin(θ/2)|` (max 2.0)
+    // against a radian limit, so every limit ≥ 2 rad — including the constructor default π —
+    // was silently inert. Here the limit is 2.618 rad (150°): the body must clamp near it,
+    // not swing freely to ~π. (Old buggy code lets it reach ~π ≈ 3.14.)
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+    anchor(&mut world, 1, Vec3::ZERO);
+    dyn_box(&mut world, 2, Vec3::new(0.5, 0.0, 0.0), Vec3::ZERO, Vec3::new(4.0, 0.0, 0.0), false);
+    let mut j = Joint::ball_socket(BodyHandle::from_id(1), BodyHandle::from_id(2), Vec3::new(0.5, 0.0, 0.0), Vec3::ZERO);
+    if let JointData::BallSocket(ref mut d) = j.data {
+        d.use_cone_limit = true;
+        d.cone_limit_angle = 2.618;
+    }
+    world.joints.push(j);
+    let mut max_swing = 0f32;
+    for _ in 0..240 { world.step(1.0 / 60.0).ok(); max_swing = max_swing.max(quat_angle(world.transforms[1].rotation)); }
+    assert!(
+        max_swing > 1.5 && max_swing < 2.95,
+        "cone limit at 2.618 rad must clamp the swing (got {max_swing}); the old bug let it reach ~π"
+    );
+}
+
+#[test]
 fn spring_settles_at_rest_length() {
     let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
     dyn_box(&mut world, 1, Vec3::new(-2.0, 0.0, 0.0), Vec3::ZERO, Vec3::ZERO, false);
