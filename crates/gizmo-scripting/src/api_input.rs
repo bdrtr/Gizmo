@@ -39,7 +39,7 @@ pub fn register_input_api(lua: &Lua) -> Result<(), LuaError> {
             ["5"] = 34, ["6"] = 35, ["7"] = 36, ["8"] = 37,
             ["9"] = 38, ["0"] = 39,
             i = 12, j = 13, k = 14, l = 15,
-            b = 5, n = 17, m = 16,
+            b = 5, n = 18, m = 16,
         }
         
         function input.is_pressed(key_name)
@@ -123,4 +123,39 @@ pub fn update_input_api(lua: &Lua, input: &Input) -> Result<(), LuaError> {
     )?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: 'n' ve 'w' aynı keycode'a (17) eşlenmemeli.
+    /// Sadece 'w' basılıyken input.is_pressed("n") false dönmeli.
+    #[test]
+    fn n_and_w_keys_do_not_collide() {
+        let lua = Lua::new();
+        register_input_api(&lua).unwrap();
+
+        // Yalnızca keycode 17 (w) basılı olarak işaretle.
+        lua.load(
+            r#"
+            input._keys = { [17] = true }
+            assert(input.is_pressed("w") == true, "w basılı olmalı")
+            assert(input.is_pressed("n") == false, "n basılı OLMAMALI (w ile çakışma)")
+            "#,
+        )
+        .exec()
+        .unwrap();
+
+        // Ayrıca 'n' kendi keycode'unda çalışmalı.
+        lua.load(
+            r#"
+            input._keys = { [18] = true }
+            assert(input.is_pressed("n") == true, "n kendi keycode'unda basılı olmalı")
+            assert(input.is_pressed("w") == false, "w basılı OLMAMALI")
+            "#,
+        )
+        .exec()
+        .unwrap();
+    }
 }

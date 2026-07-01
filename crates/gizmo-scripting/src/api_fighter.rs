@@ -87,7 +87,7 @@ pub fn register_fighter_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
                     if combo_idx == 0 then
                         return true
                     end
-                elseif gap_counter > max_gap then
+                elseif gap_counter >= max_gap then
                     return false
                 else
                     gap_counter = gap_counter + 1
@@ -141,4 +141,53 @@ pub fn update_fighter_read_api(lua: &Lua, world: &World) -> Result<(), LuaError>
     fighter_table.set("_is_locked", is_locked)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::CommandQueue;
+
+    /// Belirtilen frame indekslerinde `input` tuşunu just_pressed olarak
+    /// işaretleyen bir buffer'ı Lua'ya kuran yardımcı ve check_combo sonucu.
+    fn run_combo(setup: &str) -> bool {
+        let lua = Lua::new();
+        register_fighter_api(&lua, Arc::new(CommandQueue::new())).unwrap();
+        lua.load(setup).exec().unwrap();
+        lua.load("return fighter.check_combo(1, combo, max_gap)")
+            .eval()
+            .unwrap()
+    }
+
+    /// Regression: max_gap=2 tam olarak 2 frame boşluğa izin vermeli.
+    /// 'b' bulunduktan sonra 2 boş frame + 'a' => kabul.
+    /// 3 boş frame => ret.
+    #[test]
+    fn combo_gap_boundary_is_exact() {
+        // Buffer ileri taranır; önce combo'nun son elemanı ('b') aranır.
+        // frame1='b', frame2/3 boş, frame4='a' -> 2 boşluk, kabul edilmeli.
+        let accepted = run_combo(
+            r#"
+            combo = { "a", "b" }
+            max_gap = 2
+            local function f(k) return { just_pressed = k and { [k] = true } or {} } end
+            fighter._buffers[1] = { f("b"), f(nil), f(nil), f("a") }
+            "#,
+        );
+        assert!(accepted, "2 frame boşluk max_gap=2 için kabul edilmeli");
+
+        // frame1='b', frame2/3/4 boş, frame5='a' -> 3 boşluk, reddedilmeli.
+        let rejected = run_combo(
+            r#"
+            combo = { "a", "b" }
+            max_gap = 2
+            local function f(k) return { just_pressed = k and { [k] = true } or {} } end
+            fighter._buffers[1] = { f("b"), f(nil), f(nil), f(nil), f("a") }
+            "#,
+        );
+        assert!(
+            !rejected,
+            "3 frame boşluk max_gap=2 için REDDEDİLMELİ (off-by-one)"
+        );
+    }
 }
