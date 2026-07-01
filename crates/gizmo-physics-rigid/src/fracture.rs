@@ -57,6 +57,12 @@ fn compute_convex_volume(vertices: &[Vec3], indices: &[u32]) -> f32 {
 }
 
 pub fn voronoi_shatter(extents: Vec3, num_pieces: u32, seed: u64) -> Vec<ProceduralChunk> {
+    // A degenerate half-extent (0 or negative — e.g. a thin panel/floor tile authored as a
+    // zero-thickness box) would make `rng.random_range(-e..e)` sample an empty range, which
+    // is an unconditional panic in rand 0.10 (fires in release too), crashing the physics
+    // step mid-shatter. Floor each axis to a small positive extent — same `.max(1e-3)` idiom
+    // used for volume/radius elsewhere in this module.
+    let extents = extents.abs().max(Vec3::splat(1e-3));
     let mut rng = StdRng::seed_from_u64(seed);
 
     // 1. Generate seeds
@@ -460,6 +466,19 @@ mod tests {
     use crate::components::{RigidBody, Velocity};
     use gizmo_physics_core::BodyHandle;
     use gizmo_physics_core::Transform;
+
+    #[test]
+    fn voronoi_shatter_does_not_panic_on_degenerate_extents() {
+        // Regression: a thin/flat breakable (a zero or negative half-extent) made
+        // `rng.random_range(-e..e)` sample an empty range, an unconditional panic in rand
+        // 0.10 that crashed the physics step. Degenerate extents must be floored, not panic.
+        let flat = voronoi_shatter(Vec3::new(1.0, 0.0, 1.0), 6, 42);
+        assert!(!flat.is_empty(), "flat box should still produce chunks");
+        let neg = voronoi_shatter(Vec3::new(-1.0, 0.5, 0.0), 4, 7);
+        assert!(!neg.is_empty(), "negative/zero extents must be handled, not panic");
+        // Sanity: a normal box still shatters.
+        assert!(!voronoi_shatter(Vec3::splat(1.0), 8, 1).is_empty());
+    }
 
     /// İnce kıymık (çok küçük hacim/kütle) parçalar, büyük çarpma kuvvetinde bile
     /// makul hızda fırlatılmalı — `force/mass` patlaması MAX_EXPLOSION_DV ile kırpılır.

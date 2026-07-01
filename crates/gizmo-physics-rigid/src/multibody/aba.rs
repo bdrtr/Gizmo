@@ -74,12 +74,17 @@ pub fn compute_aba(tree: &mut ArticulatedTree, gravity: Vec3) {
             // → Fixed eklem çocuğun kütlesini/bias'ını TAMAMEN düşürüp zinciri koparıyordu.)
             let (ia_eff, pa_eff) = if d_val > 1e-6 {
                 let u_outer = u_vec.outer_product(u_vec).mul_scalar(1.0 / d_val);
-                (
-                    tree.links[i].i_a - u_outer,
-                    tree.links[i].p_a
-                        + tree.links[i].i_a.mul_vec(tree.links[i].c)
-                        + u_vec * (u / d_val),
-                )
+                // Projected articulated inertia I^a = I^A − U D⁻¹ Uᵀ. The bias-force
+                // velocity-product term must use the PROJECTED inertia (Featherstone
+                // RBDA eq. 7.44: p^a = p^A + I^a·c + U D⁻¹ u), NOT the raw I^A — using
+                // the raw inertia here corrupts Coriolis/centrifugal coupling for any
+                // joint with non-zero velocity (zero-velocity states are unaffected
+                // because c = v × v_J = 0 there, which is why existing q̇=0 tests miss it).
+                let ia_eff = tree.links[i].i_a - u_outer;
+                let pa_eff = tree.links[i].p_a
+                    + ia_eff.mul_vec(tree.links[i].c)
+                    + u_vec * (u / d_val);
+                (ia_eff, pa_eff)
             } else {
                 (
                     tree.links[i].i_a,

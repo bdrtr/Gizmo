@@ -93,19 +93,31 @@ impl JointSolver {
         // solver runs every sub-step before integration, so no relative rotation
         // accumulates; the joint stays welded.
         if matches!(joint.data, JointData::Fixed) {
+            let mut total_ang_impulse = 0.0;
             for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
-                self.apply_angular_constraint(
-                    rigid_bodies,
-                    transforms,
-                    velocities,
-                    idx_a,
-                    idx_b,
-                    axis,
-                    0.0,
-                    dt,
-                    f32::NEG_INFINITY,
-                    f32::INFINITY,
-                );
+                total_ang_impulse += self
+                    .apply_angular_constraint(
+                        rigid_bodies,
+                        transforms,
+                        velocities,
+                        idx_a,
+                        idx_b,
+                        axis,
+                        0.0,
+                        dt,
+                        f32::NEG_INFINITY,
+                        f32::INFINITY,
+                    )
+                    .abs();
+            }
+            // Break the weld under excessive torsional load. The hinge/ball-socket/slider
+            // solvers all honor break_torque, but the Fixed angular lock previously
+            // discarded every lambda, so a Fixed joint could never break no matter how small
+            // break_torque was (the with_break_force(force, torque) API silently no-op'd its
+            // torque argument). Checked outside the linear-error gate so a perfectly-pinned
+            // weld — which carries its whole reaction through this angular lock — still breaks.
+            if total_ang_impulse / dt > joint.break_torque {
+                joint.is_broken = true;
             }
         }
     }
@@ -316,20 +328,25 @@ impl JointSolver {
         // Compute the "swing" rotation of B away from its initial orientation (in A's frame)
         let swing_quat = initial_rot.inverse() * relative_rot;
 
-        // Small-angle: angular error ≈ 2 * quat.xyz (when w ≥ 0)
+        // Angular-error DIRECTION from the small-angle approximation (2·quat.xyz).
         let swing_err_local = if swing_quat.w >= 0.0 {
             Vec3::new(swing_quat.x, swing_quat.y, swing_quat.z) * 2.0
         } else {
             -Vec3::new(swing_quat.x, swing_quat.y, swing_quat.z) * 2.0
         };
 
-        let swing_angle = swing_err_local.length();
-        if swing_angle <= data.cone_limit_angle || swing_angle < 1e-6 {
+        // TRUE swing angle in radians. `swing_err_local.length()` = 2·|sin(θ/2)| saturates
+        // at 2.0, so comparing it directly against a *radian* cone limit silently disabled
+        // every limit ≥ 2 rad — including the ball_socket constructor default of π. Compare
+        // the actual angle θ = 2·acos(|w|) instead; keep the chord vector for the direction.
+        let swing_mag = swing_err_local.length();
+        let swing_angle = 2.0 * swing_quat.w.abs().clamp(0.0, 1.0).acos();
+        if swing_angle <= data.cone_limit_angle || swing_mag < 1e-6 {
             return;
         }
 
         let excess = swing_angle - data.cone_limit_angle;
-        let swing_dir_local = swing_err_local / swing_angle;
+        let swing_dir_local = swing_err_local / swing_mag;
 
         // Convert error direction to world space
         let swing_dir_world = transforms[idx_a].rotation * swing_dir_local;

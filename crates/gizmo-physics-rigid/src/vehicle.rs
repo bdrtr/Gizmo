@@ -93,6 +93,13 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
             // Tekerlek başına kütle payı (eskiden 4 tekerleğe sabit `mass*0.25` varsayılıyordu).
             let per_wheel_mass = rb.mass / (vehicle.wheels.len().max(1) as f32);
 
+            // `engine_power` is the TOTAL engine output; the drive block runs per wheel, so
+            // it must be split across the driven wheels (mirrors per_wheel_mass and the arcade
+            // update_vehicle's drive_torque/rear_count). Applying full output on every drive
+            // wheel multiplied total traction by the drive-wheel count (a 4WD car accelerated
+            // ~4× a 1WD car with identical engine_power).
+            let drive_count = vehicle.wheels.iter().filter(|w| w.is_drive).count().max(1) as f32;
+
             for wheel in &mut vehicle.wheels {
                 // Determine wheel attachment point in world space
                 let wheel_world_pos = chassis_pos + chassis_rot * wheel.local_position;
@@ -145,9 +152,12 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                         let mut right = chassis_rot * Vec3::new(1.0, 0.0, 0.0);
                         let mut forward = chassis_rot * Vec3::new(0.0, 0.0, 1.0);
                         
-                        // Project vectors onto the ground plane so the car doesn't fly like an airplane
-                        right = (right - wheel.contact_normal * right.dot(wheel.contact_normal)).normalize();
-                        forward = (forward - wheel.contact_normal * forward.dot(wheel.contact_normal)).normalize();
+                        // Project vectors onto the ground plane so the car doesn't fly like an airplane.
+                        // `normalize_or_zero`: if an axis is (nearly) parallel to the contact normal
+                        // the projection collapses to ~zero and bare `normalize()` would yield NaN,
+                        // poisoning velocity for the rest of the sim. Zero = no force this frame instead.
+                        right = (right - wheel.contact_normal * right.dot(wheel.contact_normal)).normalize_or_zero();
+                        forward = (forward - wheel.contact_normal * forward.dot(wheel.contact_normal)).normalize_or_zero();
                         
                         if wheel.is_steering {
                             let steer_rot = gizmo_math::Quat::from_axis_angle(wheel.contact_normal, current_steer);
@@ -228,7 +238,7 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                             let lat_used = actual_lat_impulse_mag.abs();
                             let max_long_impulse =
                                 (max_tire_impulse * max_tire_impulse - lat_used * lat_used).max(0.0).sqrt();
-                            let desired_drive_impulse = current_throttle * engine_power * dt;
+                            let desired_drive_impulse = current_throttle * engine_power * dt / drive_count;
                             let drive_mag = desired_drive_impulse.clamp(-max_long_impulse, max_long_impulse);
                             let drive_impulse = forward * drive_mag;
                             vel.linear += drive_impulse * rb.inv_mass();
