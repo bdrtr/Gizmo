@@ -342,7 +342,10 @@ impl Schedule {
 
     /// Batch listesini çalıştırır (faz-içi veya legacy).
     fn run_batches(batches: &mut [SystemBatch], world: &mut World, dt: f32) {
+        #[cfg(not(target_arch = "wasm32"))]
         use rayon::prelude::*;
+        #[cfg(target_arch = "wasm32")]
+        use crate::parallel_compat::*;
 
         for batch in batches.iter_mut() {
             batch.systems.par_iter_mut().for_each(|system| {

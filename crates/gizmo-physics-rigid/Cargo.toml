@@ -14,7 +14,6 @@ readme.workspace = true
 reflect = ["dep:bevy_reflect", "gizmo-physics-core/reflect", "gizmo-core/reflect"]
 
 [dependencies]
-rayon = "1.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
 gizmo-core = { path = "../gizmo-core", version = "0.2.0" }
 gizmo-math = { path = "../gizmo-math", version = "0.2.0" }
@@ -30,5 +29,12 @@ bevy_reflect = { version = "0.15.1", features = ["glam"], optional = true }
 [dev-dependencies]
 proptest = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# rayon needs OS threads → native only; wasm uses `parallel_compat` (sequential).
+rayon = "1.11.0"
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-time = "0.2"
+# `rand` 0.10 pulls getrandom 0.4, which needs an explicit wasm backend feature
+# (paired with the `getrandom_backend="wasm_js"` cfg in .cargo/config.toml).
+getrandom = { version = "0.4", features = ["wasm_js"] }

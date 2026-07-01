@@ -318,13 +318,19 @@ gerçek-UDP örnek onaylı geçmişte senkron).
       ile düzeltildi (ssgi.wgsl). SSAO/SSR/TAA/FXAA/volumetric/blur/apply pasları temiz (depth/pozisyon
       reconstruction, reprojection, tonemap-tek-sRGB doğru). 25 standalone render/post shader artık
       `core_shaders_compile` testinde naga ile doğrulanıyor. KALAN: compute/fluid shader'ları.
-- [~] WASM hedefini uçtan uca doğrula — DURUM SAPTANDI (büyük iş, scope'landı). `wasm32-unknown-
-      unknown` target kurulu ama `cargo build --target wasm32` ÇEKİRDEK crate'lerde bile KIRIK:
-      (1) `getrandom` (transitif, rand üzerinden) wasm32'de `--cfg getrandom_backend="wasm_js"` +
-      getrandom `wasm_js` feature ister; (2) `gizmo-physics-rigid` `rayon` (paralel solver/broadphase)
-      + `std::time::Instant` kullanır → wasm'de thread yok (wasm-bindgen-rayon ya da tek-thread fallback
-      gerekir) ve Instant backend'siz panikler; (3) netcode `std::net` (UDP) wasm'de yok. → Tam WASM
-      = platform-soyutlama turu (time/thread/rng/net cfg'leri); ayrı kapsamlı iş olarak işaretlendi.
+- [~] WASM hedefi — **SİMÜLASYON ÇEKİRDEĞİ ✅ (2026-07-01), renderer/pencere/net ERTELENDİ.**
+      Deterministik sim çekirdeği artık `wasm32-unknown-unknown`'a derleniyor + CI'da doğrulanabilir
+      (`cargo build --target wasm32-unknown-unknown -p <crate>`): gizmo-math/core/physics-core/
+      physics-rigid/physics-soft/ai/animation/scene (8 crate, 0 uyarı). Çözülen bloker'lar (hepsi
+      **native'i BİT-AYNI** tutuyor — determinizm hash 57FA0A2E8313B7A2 değişmedi, tüm testler yeşil):
+      (1) `rayon` non-wasm'e target-gate'lendi + wasm'de `parallel_compat` sıralı shim (sıra korunur →
+      davranış/determinizm nötr); physics-core'un kullanılmayan rayon dep'i silindi. (2) `uuid` js +
+      `rand 0.10→getrandom 0.4` wasm_js feature + `.cargo/config.toml`'da `getrandom_backend="wasm_js"`
+      cfg (wasm32-scoped). (3) physics `step.rs` `std::time::Instant`→`web_time::Instant` (wasm); diğer
+      time siteleri zaten cfg-ayrık. (4) `gizmo-ai` pathfinding `std::thread::scope`→wasm'de tek-thread
+      fallback (native threaded yol dokunulmadı). **ERTELENEN (gerçek web backend gerekir, cfg değil):**
+      renderer (wgpu WebGPU surface + async device), pencere (winit web ApplicationHandler), audio
+      (web-audio), gizmo-net (`std::net` UDP → WebSocket/WebTransport).
 - [x] **Editor/studio sahne kaydet/yükle GÜVENİLİRLİĞİ** — round-trip regresyon testi
       (`scene.rs::scene_save_load_roundtrip_preserves_components_and_hierarchy`): isimli ebeveyn+çocuk
       + Transform değerleriyle dünya RON'a KAYDEDİLİP TAZE dünyaya YÜKLENİNCE bileşen değerleri

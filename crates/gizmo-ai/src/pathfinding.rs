@@ -106,47 +106,79 @@ impl NavGrid {
             }
         };
 
-        let chunk_size = (physics.entities.len() / 8).max(1);
+        // Native: fan the AABB→grid rasterisation out across OS threads.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let chunk_size = (physics.entities.len() / 8).max(1);
 
-        self.obstacles = std::thread::scope(|s| {
-            let mut handles = Vec::new();
+            self.obstacles = std::thread::scope(|s| {
+                let mut handles = Vec::new();
 
-            let mut start = 0;
-            while start < physics.entities.len() {
-                let end = (start + chunk_size).min(physics.entities.len());
-                handles.push(s.spawn(move || {
-                    let mut local_obs = HashSet::new();
-                    for i in start..end {
-                        let rb = &physics.rigid_bodies[i];
-                        if rb.body_type == gizmo_physics_rigid::components::BodyType::Dynamic {
-                            continue;
-                        }
-                        let transform = &physics.transforms[i];
-                        let collider = &physics.colliders[i];
+                let mut start = 0;
+                while start < physics.entities.len() {
+                    let end = (start + chunk_size).min(physics.entities.len());
+                    handles.push(s.spawn(move || {
+                        let mut local_obs = HashSet::new();
+                        for i in start..end {
+                            let rb = &physics.rigid_bodies[i];
+                            if rb.body_type == gizmo_physics_rigid::components::BodyType::Dynamic {
+                                continue;
+                            }
+                            let transform = &physics.transforms[i];
+                            let collider = &physics.colliders[i];
 
-                        let aabb = collider.compute_aabb(transform.position, transform.rotation);
-                        let min_grid = world_to_grid_fn(aabb.min.into());
-                        let max_grid = world_to_grid_fn(aabb.max.into());
+                            let aabb =
+                                collider.compute_aabb(transform.position, transform.rotation);
+                            let min_grid = world_to_grid_fn(aabb.min.into());
+                            let max_grid = world_to_grid_fn(aabb.max.into());
 
-                        for x in min_grid.x..=max_grid.x {
-                            for y in min_grid.y..=max_grid.y {
-                                for z in min_grid.z..=max_grid.z {
-                                    local_obs.insert(GridPos::new(x, y, z));
+                            for x in min_grid.x..=max_grid.x {
+                                for y in min_grid.y..=max_grid.y {
+                                    for z in min_grid.z..=max_grid.z {
+                                        local_obs.insert(GridPos::new(x, y, z));
+                                    }
                                 }
                             }
                         }
-                    }
-                    local_obs
-                }));
-                start = end;
-            }
+                        local_obs
+                    }));
+                    start = end;
+                }
 
+                let mut combined = HashSet::new();
+                for handle in handles {
+                    combined.extend(handle.join().unwrap());
+                }
+                combined
+            });
+        }
+
+        // wasm32 has no OS threads → rasterise the obstacle grid single-threaded.
+        #[cfg(target_arch = "wasm32")]
+        {
             let mut combined = HashSet::new();
-            for handle in handles {
-                combined.extend(handle.join().unwrap());
+            for i in 0..physics.entities.len() {
+                let rb = &physics.rigid_bodies[i];
+                if rb.body_type == gizmo_physics_rigid::components::BodyType::Dynamic {
+                    continue;
+                }
+                let transform = &physics.transforms[i];
+                let collider = &physics.colliders[i];
+
+                let aabb = collider.compute_aabb(transform.position, transform.rotation);
+                let min_grid = world_to_grid_fn(aabb.min.into());
+                let max_grid = world_to_grid_fn(aabb.max.into());
+
+                for x in min_grid.x..=max_grid.x {
+                    for y in min_grid.y..=max_grid.y {
+                        for z in min_grid.z..=max_grid.z {
+                            combined.insert(GridPos::new(x, y, z));
+                        }
+                    }
+                }
             }
-            combined
-        });
+            self.obstacles = combined;
+        }
 
         self.needs_rebuild = false;
     }

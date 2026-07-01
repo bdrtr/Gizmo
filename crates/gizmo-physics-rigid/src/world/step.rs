@@ -1,6 +1,14 @@
 use super::{PhysicsWorld, PhysicsStateSnapshot, FIXED_DT, MAX_SUBSTEPS};
 use gizmo_physics_core::{CollisionEvent, TriggerEvent};
 
+// PhysicsMetrics per-phase timing. `std::time::Instant::now()` panics on wasm
+// (no clock backend); `web_time::Instant` bridges to the browser clock. Timing
+// never feeds the simulation result → determinism-neutral on both targets.
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+
 impl PhysicsWorld {
     /// Ana fizik adımı — sabit 120Hz sub-stepping ile
     /// Render dt'yi (değişken) sabit iç fizik dt'ye dönüştürür.
@@ -106,33 +114,33 @@ impl PhysicsWorld {
         // Aşama-başına zamanlama (PhysicsMetrics — profilleme). Instant::now() ~birkaç ns
         // olduğundan ms-ölçekli fizik yanında ihmal edilebilir; simülasyon SONUCUNU
         // etkilemez (determinizm pozisyon/hızdan; metrik ayrı) → hash değişmez.
-        let ms = |t: std::time::Instant| t.elapsed().as_secs_f32() * 1000.0;
+        let ms = |t: Instant| t.elapsed().as_secs_f32() * 1000.0;
 
         // 0-1. Yerçekimi, sıvı bölgeleri, hız entegrasyonu
-        let t0 = std::time::Instant::now();
+        let t0 = Instant::now();
         self.velocity_integration_step(dt)?;
         self.metrics.integration_ms += ms(t0);
 
         // 1.5-1.6 Yumuşak cisim ve sıvı simülasyonu
 
         // 2. Broadphase — uzamsal hash güncelleme
-        let t1 = std::time::Instant::now();
+        let t1 = Instant::now();
         self.broadphase_step(dt);
         self.metrics.broadphase_ms += ms(t1);
 
         // 3. Narrowphase — çarpışma tespiti ve olayları
-        let t2 = std::time::Instant::now();
+        let t2 = Instant::now();
         let manifolds = self.narrowphase_and_collision_step(dt);
         self.metrics.narrowphase_ms += ms(t2);
         self.metrics.contact_count += manifolds.iter().map(|m| m.contacts.len()).sum::<usize>();
 
         // 4-4.5 Kısıt çözücü (çarpışma + eklem)
-        let t3 = std::time::Instant::now();
+        let t3 = Instant::now();
         self.constraint_solve_step(manifolds, dt);
         self.metrics.solver_ms += ms(t3);
 
         // 5-6. Pozisyon entegrasyonu ve uyku durumu
-        let t4 = std::time::Instant::now();
+        let t4 = Instant::now();
         self.position_integration_step(dt)?;
         // CCD geometrik güvencesi: ince geometriye karşı speculative GJK mesafesi
         // dejenere olduğunda hızlı bir cismin tünellemesini engelle (yalnız hızlı CCD

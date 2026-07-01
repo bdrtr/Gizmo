@@ -22,7 +22,6 @@ reflect = ["dep:bevy_reflect"]
 # longer depends on `bevy_math`, the `reflect` feature enables it explicitly.
 bevy_reflect = { version = "0.15.1", features = ["functions", "glam"], optional = true }
 crossbeam-queue = "0.3.12"
-rayon = "1.11.0"
 ron = "0.8"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
@@ -32,6 +31,8 @@ uuid = { version = "1.23.0", features = ["v4", "serde"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 chrono = "0.4.44"
+# rayon needs OS threads → native only; wasm uses `parallel_compat` (sequential).
+rayon = "1.11.0"
 
 [dev-dependencies]
 chacha20 = "0.10.0"
@@ -71,3 +72,6 @@ harness = false
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-time = "0.2"
+# uuid v4 needs a randomness source on wasm; the `js` feature routes it through
+# the browser crypto API. Unions with the base ["v4", "serde"] features.
+uuid = { version = "1.23.0", features = ["js"] }

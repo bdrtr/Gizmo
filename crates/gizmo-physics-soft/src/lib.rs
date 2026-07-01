@@ -14,6 +14,9 @@
 //! Enabling the optional `gpu_physics` feature adds a WGPU compute path for the FEM
 //! soft body via the `gpu_compute` module.
 
+// Sequential fallback for rayon on wasm (no OS threads); native uses rayon.
+#[cfg(target_arch = "wasm32")]
+mod parallel_compat;
 pub mod cloth;
 pub mod error;
 #[cfg(feature = "gpu_physics")]
