@@ -20,6 +20,16 @@ pub struct BlobVec {
 unsafe impl Send for BlobVec {}
 unsafe impl Sync for BlobVec {}
 
+/// `item_size * count` çarpımını taşma güvenli şekilde bir `Layout`'a dönüştürür.
+///
+/// Çarpım `usize`'ı taşarsa veya `isize::MAX`'ı aşarsa (ki bu Rust'ın izin verdiği
+/// azami tahsis boyutudur), sarma/panik yerine `None` döner.
+#[inline]
+fn checked_array_layout(item_size: usize, count: usize, align: usize) -> Option<Layout> {
+    let total = item_size.checked_mul(count)?;
+    Layout::from_size_align(total, align).ok()
+}
+
 impl BlobVec {
     /// Yeni boş BlobVec oluşturur.
     ///
@@ -268,8 +278,8 @@ impl BlobVec {
         }
 
         let new_layout =
-            Layout::from_size_align(item_size * new_capacity, self.item_layout.align())
-                .expect("BlobVec::grow: Layout overflow");
+            checked_array_layout(item_size, new_capacity, self.item_layout.align())
+                .expect("BlobVec::grow: Layout overflow (allocation too large)");
 
         let new_data = if self.capacity == 0 {
             // İlk tahsis
@@ -277,7 +287,7 @@ impl BlobVec {
         } else {
             // Yeniden tahsis
             let old_layout =
-                Layout::from_size_align(item_size * self.capacity, self.item_layout.align())
+                checked_array_layout(item_size, self.capacity, self.item_layout.align())
                     .expect("BlobVec::grow: Old layout overflow");
             unsafe { alloc::realloc(self.data.as_ptr(), old_layout, new_layout.size()) }
         };
@@ -300,18 +310,18 @@ impl BlobVec {
         if self.len == 0 {
             // Tamamen boşalt, belleği dealloc yap.
             let old_layout =
-                Layout::from_size_align(item_size * self.capacity, self.item_layout.align())
-                    .unwrap();
+                checked_array_layout(item_size, self.capacity, self.item_layout.align())
+                    .expect("BlobVec::shrink_to_fit: Layout overflow");
             unsafe { alloc::dealloc(self.data.as_ptr(), old_layout) };
             self.data = NonNull::dangling();
             self.capacity = 0;
             return;
         }
 
-        let new_layout =
-            Layout::from_size_align(item_size * self.len, self.item_layout.align()).unwrap();
-        let old_layout =
-            Layout::from_size_align(item_size * self.capacity, self.item_layout.align()).unwrap();
+        let new_layout = checked_array_layout(item_size, self.len, self.item_layout.align())
+            .expect("BlobVec::shrink_to_fit: Layout overflow");
+        let old_layout = checked_array_layout(item_size, self.capacity, self.item_layout.align())
+            .expect("BlobVec::shrink_to_fit: Layout overflow");
 
         let new_data = unsafe { alloc::realloc(self.data.as_ptr(), old_layout, new_layout.size()) };
         self.data =
@@ -341,7 +351,7 @@ impl Drop for BlobVec {
         let item_size = self.item_layout.size();
         if item_size > 0 && self.capacity > 0 {
             let layout =
-                Layout::from_size_align(item_size * self.capacity, self.item_layout.align())
+                checked_array_layout(item_size, self.capacity, self.item_layout.align())
                     .expect("BlobVec::drop: Layout error");
             unsafe {
                 alloc::dealloc(self.data.as_ptr(), layout);
@@ -411,6 +421,20 @@ mod tests {
         assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 1);
         drop(vec);
         assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn checked_array_layout_detects_overflow() {
+        // item_size * count taşarsa None dönmeli (panik yerine).
+        let item_size = 1000usize;
+        let count = usize::MAX / 500 + 1; // 1000 * count sarar
+        assert!(checked_array_layout(item_size, count, 8).is_none());
+
+        // isize::MAX üstü de reddedilmeli (Layout::from_size_align kuralı).
+        assert!(checked_array_layout(2, (isize::MAX as usize / 2) + 1, 1).is_none());
+
+        // Makul boyutlar geçerli Layout üretmeli.
+        assert!(checked_array_layout(16, 8, 8).is_some());
     }
 
     #[test]
