@@ -814,7 +814,13 @@ fn parse_skeletons(
                 .joints()
                 .enumerate()
                 .map(|(bone_idx, joint_node)| {
-                    let inverse_bind_matrix = gizmo_math::Mat4::from_cols_array_2d(&ibm[bone_idx]);
+                    // Fall back to IDENTITY when the glTF file has fewer
+                    // inverse_bind_matrices than joints (malformed/truncated data),
+                    // rather than panicking on an out-of-bounds index.
+                    let inverse_bind_matrix = ibm
+                        .get(bone_idx)
+                        .map(gizmo_math::Mat4::from_cols_array_2d)
+                        .unwrap_or(gizmo_math::Mat4::IDENTITY);
 
                     let parent_index = node_parents
                         .get(&joint_node.index())

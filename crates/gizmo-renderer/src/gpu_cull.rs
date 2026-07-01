@@ -162,7 +162,7 @@ impl GpuCullState {
         if bounds.is_empty() {
             return;
         }
-        let count = bounds.len().min(self.capacity as usize);
+        let count = clamped_draw_count(bounds.len(), draw_args.len(), self.capacity);
         queue.write_buffer(
             &self.mesh_bounds_buffer,
             0,
@@ -206,5 +206,32 @@ impl GpuCullState {
     /// Byte offset into `indirect_buffer` for draw item `i`.
     pub fn indirect_offset(i: usize) -> wgpu::BufferAddress {
         (i * std::mem::size_of::<DrawIndirectArgs>()) as wgpu::BufferAddress
+    }
+}
+
+/// Instances safe to upload in `prepare`: no more than the shortest of the bounds
+/// slice, the draw-args slice, and the GPU buffer capacity, so neither
+/// `bounds[..count]` nor `draw_args[..count]` can ever slice out of bounds when
+/// the caller passes mismatched lengths.
+fn clamped_draw_count(bounds_len: usize, draw_args_len: usize, capacity: u32) -> usize {
+    bounds_len.min(draw_args_len).min(capacity as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamped_draw_count;
+
+    #[test]
+    fn clamped_draw_count_never_exceeds_shortest_input() {
+        // Mismatched bounds/draw_args lengths must clamp to the shorter, so slicing
+        // `bounds[..count]` / `draw_args[..count]` cannot panic.
+        assert_eq!(clamped_draw_count(10, 3, 100), 3);
+        assert_eq!(clamped_draw_count(3, 10, 100), 3);
+        // Capacity is the binding constraint.
+        assert_eq!(clamped_draw_count(10, 10, 4), 4);
+        // Everything equal.
+        assert_eq!(clamped_draw_count(5, 5, 5), 5);
+        // Zero capacity uploads nothing.
+        assert_eq!(clamped_draw_count(10, 10, 0), 0);
     }
 }
