@@ -124,8 +124,11 @@ pub fn update_character(
                 desired_move = desired_move.normalize() * kcc.target_velocity.length();
             }
         } else {
-            // Sliding down steep slope using new slope_slide_speed
-            let slide_dir = Vec3::new(ground_normal.x, 0.0, ground_normal.z).normalize_or_zero();
+            // Sliding down steep slope using new slope_slide_speed.
+            // Project the downward (gravity) direction onto the slope plane to get the
+            // true downslope direction, rather than the horizontal component of the normal.
+            let down = Vec3::new(0.0, -1.0, 0.0);
+            let slide_dir = (down - ground_normal * down.dot(ground_normal)).normalize_or_zero();
             desired_move += slide_dir * kcc.slope_slide_speed;
         }
     }
@@ -236,4 +239,48 @@ pub fn update_character(
     }
 
     transform.position = current_pos;
+}
+
+#[cfg(test)]
+mod tests {
+    use gizmo_math::Vec3;
+
+    /// Reproduces the downslope-direction computation used when sliding down a
+    /// too-steep slope (see `update_character_controller`).
+    fn downslope_dir(ground_normal: Vec3) -> Vec3 {
+        let down = Vec3::new(0.0, -1.0, 0.0);
+        (down - ground_normal * down.dot(ground_normal)).normalize_or_zero()
+    }
+
+    #[test]
+    fn slide_direction_points_downhill_not_sideways() {
+        // 60-degree slope: normal tilted in +x. normalize([0.5, 0.866, 0]).
+        let ground_normal = Vec3::new(0.5, 0.866, 0.0).normalize();
+        let slide_dir = downslope_dir(ground_normal);
+
+        // Correct downslope has a NEGATIVE y component (points downward along the
+        // slope) and no z drift for an x-tilted normal.
+        assert!(
+            slide_dir.y < -0.1,
+            "slide direction must descend, got y={}",
+            slide_dir.y
+        );
+        assert!(slide_dir.z.abs() < 1e-5, "no lateral z drift, got z={}", slide_dir.z);
+        assert!(slide_dir.x > 0.0, "should slide toward +x (downhill), got x={}", slide_dir.x);
+
+        // The slide direction must lie in the slope plane (perpendicular to normal).
+        assert!(
+            slide_dir.dot(ground_normal).abs() < 1e-5,
+            "slide dir must be tangent to the slope, dot={}",
+            slide_dir.dot(ground_normal)
+        );
+
+        // Regression guard against the old bug, which used the horizontal
+        // projection of the normal: normalize([0.5, 0, 0]) = [1, 0, 0].
+        let old_buggy = Vec3::new(ground_normal.x, 0.0, ground_normal.z).normalize_or_zero();
+        assert!(
+            (slide_dir - old_buggy).length() > 0.1,
+            "fixed slide dir must differ from the old horizontal-normal projection"
+        );
+    }
 }
