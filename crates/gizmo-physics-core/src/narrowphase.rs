@@ -545,16 +545,17 @@ fn clip_box_box(
             |(bi, bv), (i, v)| if v > bv { (i, v) } else { (bi, bv) },
         );
 
-    let face_axis = ref_axes[face_idx];
-    // Choose the outward-facing direction of the reference face.
-    let face_dir = if face_axis.dot(normal) > 0.0 {
-        face_axis
-    } else {
-        -face_axis
-    };
-
-    // Plane equation for the reference face: p · face_dir = ref_face_d
-    let ref_face_d = (ref_pos + face_dir * ref_h_arr[face_idx]).dot(face_dir);
+    // Reference-box support (farthest extent) along the CONTACT NORMAL. Each contact is
+    // tagged with `normal` and the solver applies `penetration` along `normal`, so depth
+    // must be measured along `normal` too. When the reference face axis diverges from the
+    // normal (rotated boxes — is_face_axis admits up to 45°), the old `.dot(face_dir)` at the
+    // face centre over/under-reported depth and gave asymmetric depths across a flat face →
+    // spurious torque or unresolved overlap. The box's support along the normal (all three
+    // axes' projections, not just the face axis) makes each contact's depth the true MTV.
+    let ref_face_d = ref_pos.dot(normal)
+        + ref_axes[0].dot(normal).abs() * ref_h_arr[0]
+        + ref_axes[1].dot(normal).abs() * ref_h_arr[1]
+        + ref_axes[2].dot(normal).abs() * ref_h_arr[2];
 
     // Tangent axes and their half-extents for the 4 side-slab clipping planes.
     let t0 = ref_axes[(face_idx + 1) % 3];
@@ -568,8 +569,8 @@ fn clip_box_box(
     let contacts: Vec<ContactPoint> = box_corners(inc_pos, inc_rot, inc_h)
         .iter()
         .filter_map(|&corner| {
-            // 1. Corner must be on or behind the reference face.
-            let signed_depth = ref_face_d - corner.dot(face_dir);
+            // 1. Corner must be on or behind the reference face (depth along `normal`).
+            let signed_depth = ref_face_d - corner.dot(normal);
             if signed_depth <= 0.0 {
                 return None;
             } // in front of reference face
@@ -780,6 +781,43 @@ mod tests {
         assert!(
             contacts.len() <= 4,
             "manifold must not exceed 4 contact points"
+        );
+    }
+
+    #[test]
+    fn box_box_rotated_penetration_along_normal_equals_mtv() {
+        // Regression: contact depth must be measured along the CONTACT NORMAL, not the
+        // reference-face axis. Box A rotated 30° about Y (half 1,1,1) at origin; axis-aligned
+        // Box B (half 1,1,1) at (1.2,0,0). True MTV along X ≈ 1.16603. The old
+        // depth-along-face-axis code reported 1.327/1.327/0.327/0.327 — a +14% overshoot on
+        // two points and asymmetric depths across a symmetric flat contact (→ spurious torque).
+        let rot = Quat::from_rotation_y(std::f32::consts::FRAC_PI_6); // 30°
+        let contacts = NarrowPhase::box_box(
+            Vec3::ZERO,
+            rot,
+            Vec3::splat(1.0),
+            Vec3::new(1.2, 0.0, 0.0),
+            Quat::IDENTITY,
+            Vec3::splat(1.0),
+        );
+        assert!(!contacts.is_empty(), "rotated overlapping boxes must collide");
+        let expected_mtv = 1.166_f32;
+        let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+        for c in &contacts {
+            lo = lo.min(c.penetration);
+            hi = hi.max(c.penetration);
+            assert!(
+                (c.penetration - expected_mtv).abs() < 0.02,
+                "penetration {} must equal the true MTV {} (measured along the contact normal)",
+                c.penetration,
+                expected_mtv,
+            );
+        }
+        // Depths across a coplanar face-face manifold must be uniform (no phantom torque).
+        assert!(
+            hi - lo < 0.02,
+            "manifold depths must be uniform across a flat contact, spread was {}",
+            hi - lo
         );
     }
 
