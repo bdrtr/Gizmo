@@ -328,12 +328,8 @@ pub fn build_ray(
     let proj = cam.get_projection(aspect);
     let inv_vp = (proj * view).inverse();
 
-    // WGPU: Z=0 yakın düzlem, Z=1 uzak düzlem
-    let near = inv_vp.project_point3(gizmo::math::Vec3::new(ndc_x, ndc_y, 0.0));
-    let far = inv_vp.project_point3(gizmo::math::Vec3::new(ndc_x, ndc_y, 1.0));
-
-    Some(Ray {
-        origin: near.into(),
-        direction: (far - near).normalize().into(),
-    })
+    // WGPU: Z=0 yakın düzlem, Z=1 uzak düzlem. Ray::from_ndc kanonik guard'lı
+    // yolu kullanır: tekil VP-inverse veya dejenere (far==near) yön ham
+    // .normalize() ile NaN üretmek yerine güvenli varsayılana düşer.
+    Some(Ray::from_ndc(gizmo::math::Vec2::new(ndc_x, ndc_y), inv_vp))
 }

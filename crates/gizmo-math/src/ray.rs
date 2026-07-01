@@ -1,7 +1,12 @@
 use glam::{Quat, Vec3, Vec3A};
 
 /// A 3D ray with an origin and a normalized direction.
+///
+/// `#[non_exhaustive]` forbids struct-literal construction from other crates, so
+/// external callers must go through [`Ray::new`] / [`Ray::from_ndc`], which
+/// enforce the normalized-direction invariant. Fields stay public for reading.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct Ray {
     /// World-space starting point of the ray.
     pub origin: Vec3A,
@@ -32,18 +37,44 @@ impl Ray {
         let near_ndc = glam::Vec4::new(ndc.x, ndc.y, 0.0, 1.0);
         let far_ndc = glam::Vec4::new(ndc.x, ndc.y, 1.0, 1.0);
 
-        let mut near_world = view_proj_inv * near_ndc;
-        debug_assert!(near_world.w.abs() > 1e-10, "Ray::from_ndc: degenerate near w (singular VP inverse?)");
-        near_world /= near_world.w;
-        
-        let mut far_world = view_proj_inv * far_ndc;
-        debug_assert!(far_world.w.abs() > 1e-10, "Ray::from_ndc: degenerate far w (singular VP inverse?)");
-        far_world /= far_world.w;
+        // debug_assert! release'de derlenip kaybolur; tekil (singular) VP-inverse
+        // veya sıfır w bileşeni sessizce Inf/NaN üretirdi. Runtime guard ile
+        // dejenere w tespit edip güvenli bir varsayılan Ray'e (+Z) düşüyoruz.
+        let near_world = view_proj_inv * near_ndc;
+        let far_world = view_proj_inv * far_ndc;
+
+        let fallback = || Self::new(Vec3::ZERO, Vec3::Z);
+
+        if near_world.w.abs() < 1e-10 || !near_world.w.is_finite() {
+            return fallback();
+        }
+        if far_world.w.abs() < 1e-10 || !far_world.w.is_finite() {
+            return fallback();
+        }
+
+        let near_world = near_world / near_world.w;
+        let far_world = far_world / far_world.w;
 
         let origin = near_world.truncate();
-        let direction = (far_world.truncate() - origin).normalize();
+        // near == far (ör. dejenere ortografik projeksiyon) durumunda yön sıfır
+        // vektör olur; bare normalize() NaN üretir → safe_normalize_or ile +Z'ye düş.
+        let direction = crate::safe_normalize_or(far_world.truncate() - origin, Vec3::Z);
 
         Self::new(origin, direction)
+    }
+
+    /// Ray'in dokümante edilen değişmezini (invariant) sağlayıp sağlamadığını
+    /// doğrular: yön birim uzunlukta ve tüm bileşenler sonlu (NaN/Inf değil).
+    ///
+    /// Alanlar `pub` olduğundan çağıranlar `Ray { .. }` struct literaliyle
+    /// [`Ray::new`]/[`Ray::from_ndc`] guard'larını atlayarak geçersiz (sıfır/
+    /// normalize-edilmemiş/NaN yönlü) bir Ray kurabilir. Böyle bir Ray'e
+    /// güvenmeden önce bu kontrolle doğrulanabilir.
+    #[inline]
+    pub fn is_valid(self) -> bool {
+        self.origin.is_finite()
+            && self.direction.is_finite()
+            && (self.direction.length_squared() - 1.0).abs() < 1e-4
     }
 
     /// Işının uzayda `t` uzaklığındaki ulaştığı (çarpıştığı) kesin noktayı hesaplar.
@@ -259,5 +290,52 @@ mod tests {
         assert!((ray_center.direction.z - (-1.0)).abs() < 1e-5);
         assert!(ray_center.direction.x.abs() < 1e-5);
         assert!(ray_center.direction.y.abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_ray_from_ndc_singular_matrix_is_finite() {
+        // Tekil (singular) VP-inverse: w bileşeni sıfır → release'de eskiden
+        // Inf/NaN üretirdi. Runtime guard artık güvenli varsayılan Ray döndürmeli.
+        let ray = Ray::from_ndc(glam::Vec2::new(0.0, 0.0), glam::Mat4::ZERO);
+        assert!(ray.origin.is_finite());
+        assert!(ray.direction.is_finite());
+        // Yön birim uzunlukta olmalı (NaN/sıfır değil).
+        assert!((ray.direction.length() - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_ray_from_ndc_degenerate_direction_is_finite() {
+        // near ve far dünya noktaları çakışırsa (far - near) == 0 → bare normalize()
+        // NaN üretir. Böyle bir matris kurgulayalım: her iki NDC de aynı noktaya gitsin.
+        // w'yi geçerli tutup xyz'yi sabitleyen bir matris (son satır [0,0,0,1],
+        // ilk üç satır sıfır) origin=(0,0,0), far=(0,0,0) verir → yön sıfır.
+        let m = glam::Mat4::from_cols(
+            glam::Vec4::ZERO,
+            glam::Vec4::ZERO,
+            glam::Vec4::ZERO,
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+        );
+        let ray = Ray::from_ndc(glam::Vec2::new(0.3, -0.4), m);
+        assert!(ray.direction.is_finite());
+        assert!((ray.direction.length() - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_ray_is_valid_detects_bypassed_invariant() {
+        // Constructor guard'larını atlayan struct literali → geçersiz Ray.
+        let bad = Ray {
+            origin: Vec3A::ZERO,
+            direction: Vec3A::ZERO,
+        };
+        assert!(!bad.is_valid());
+
+        let nan = Ray {
+            origin: Vec3A::ZERO,
+            direction: Vec3A::splat(f32::NAN),
+        };
+        assert!(!nan.is_valid());
+
+        // new()/from_ndc() ile kurulan Ray her zaman geçerli olmalı.
+        assert!(Ray::new(Vec3::ZERO, Vec3::new(0.0, 0.0, 2.0)).is_valid());
     }
 }

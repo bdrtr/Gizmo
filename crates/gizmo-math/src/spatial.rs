@@ -186,11 +186,12 @@ impl SpatialInertia {
         let com_cross_v = self.com.cross(v.v);
         let com_cross_w = self.com.cross(v.w);
 
+        // Parallel-axis (Steiner) düzeltmesini KOŞULSUZ uygula: com == 0 iken
+        // com.cross(com_cross_w) zaten sıfırdır, dolayısıyla ek terim no-op olur.
+        // Eşik karşılaştırması (com.length_squared() > 1e-12) platforma göre farklı
+        // değerlendirilip determinizmi bozuyordu ve to_matrix() ile tutarsızdı.
         let mut force_w = self.rot.mul_vec3(v.w) + com_cross_v * self.mass;
-        // Parallel axis theorem correction if COM offset is non-zero
-        if self.com.length_squared() > 1e-12 {
-            force_w -= self.com.cross(com_cross_w) * self.mass;
-        }
+        force_w -= self.com.cross(com_cross_w) * self.mass;
 
         let force_v = v.v * self.mass - com_cross_w * self.mass;
 
@@ -494,6 +495,34 @@ mod tests {
             vec3_approx(result_direct.v, result_matrix.v),
             "mul_vec.v = {:?}, to_matrix().mul_vec.v = {:?}",
             result_direct.v, result_matrix.v
+        );
+    }
+
+    #[test]
+    fn spatial_inertia_mul_vec_matches_to_matrix_tiny_com() {
+        // Regresyon: com.length_squared() eski 1e-12 eşiğinin ALTINDA ama sıfır
+        // değil. Eskiden mul_vec() Steiner düzeltmesini atlayıp to_matrix() ile
+        // (ve platformlar arası) tutarsız/deterministik-olmayan sonuç üretiyordu.
+        // Artık her iki yol da düzeltmeyi KOŞULSUZ uyguladığı için mul_vec() ile
+        // elle-düzeltilmiş referans BİT-AYNI olmalı.
+        let tiny = 5.0e-7_f32; // length_squared() (splat) = 7.5e-13 < 1e-12
+        let com = Vec3::splat(tiny);
+        let mass = 1.0e10_f32; // düzeltme terimini gözle görülür kılan büyük kütle
+        let rot = Mat3::from_diagonal(Vec3::new(2.0, 4.0, 6.0));
+        let si = SpatialInertia::new(mass, rot, com);
+        let vel = SpatialVector::new(Vec3::new(1.0, -0.5, 0.8), Vec3::new(-0.2, 0.7, -0.4));
+
+        // Referans: düzeltme HER ZAMAN uygulanır (koşulsuz).
+        let com_cross_v = com.cross(vel.v);
+        let com_cross_w = com.cross(vel.w);
+        let expected_w =
+            rot.mul_vec3(vel.w) + com_cross_v * mass - com.cross(com_cross_w) * mass;
+
+        let result_direct = si.mul_vec(vel);
+        // Bit-aynı olmalı: aynı işlem sırası.
+        assert_eq!(
+            result_direct.w, expected_w,
+            "mul_vec düzeltmeyi koşulsuz uygulamalı (tiny-com)"
         );
     }
 
