@@ -366,8 +366,13 @@ impl SceneData {
                     .get(p_id)
                     .map(|c| c.0.clone())
                     .unwrap_or_default();
-                children_list.push(new_r);
-                world.add_component(p_ent, Children(children_list));
+                // Idempotent: `instantiate_entities` may already have linked the root into
+                // the parent's Children when it set the root's Parent(p_id). Pushing again
+                // duplicated the child. Only add if not already present.
+                if !children_list.contains(&new_r) {
+                    children_list.push(new_r);
+                    world.add_component(p_ent, Children(children_list));
+                }
             }
         }
 
