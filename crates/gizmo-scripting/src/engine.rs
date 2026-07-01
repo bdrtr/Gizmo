@@ -370,6 +370,22 @@ impl ScriptEngine {
                         if rb.mass > 0.0 {
                             let accel = force * (1.0 / rb.mass);
                             drop(rbs);
+                            // RigidBody var ama Velocity yoksa sıfır hızla oluştur ki
+                            // kuvvet sessizce kaybolmasın.
+                            if world
+                                .borrow::<gizmo_physics_rigid::components::Velocity>()
+                                .get(id)
+                                .is_none()
+                            {
+                                if let Some(e) = world.entity(id) {
+                                    world.add_component(
+                                        e,
+                                        gizmo_physics_rigid::components::Velocity::new(
+                                            gizmo_math::Vec3::ZERO,
+                                        ),
+                                    );
+                                }
+                            }
                             let mut vels =
                                 world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
                             if let Some(mut v) = vels.get_mut(id) {
@@ -384,6 +400,22 @@ impl ScriptEngine {
                         if rb.mass > 0.0 {
                             let delta_v = impulse * (1.0 / rb.mass);
                             drop(rbs);
+                            // RigidBody var ama Velocity yoksa sıfır hızla oluştur ki
+                            // impuls sessizce kaybolmasın.
+                            if world
+                                .borrow::<gizmo_physics_rigid::components::Velocity>()
+                                .get(id)
+                                .is_none()
+                            {
+                                if let Some(e) = world.entity(id) {
+                                    world.add_component(
+                                        e,
+                                        gizmo_physics_rigid::components::Velocity::new(
+                                            gizmo_math::Vec3::ZERO,
+                                        ),
+                                    );
+                                }
+                            }
                             let mut vels =
                                 world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
                             if let Some(mut v) = vels.get_mut(id) {
@@ -672,3 +704,62 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
 }
 
 gizmo_core::impl_component!(Script);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gizmo_math::Vec3;
+    use gizmo_physics_rigid::components::{RigidBody, Velocity};
+
+    /// Regression: RigidBody var ama Velocity yoksa ApplyForce sessizce
+    /// kaybolmamalı; Velocity oluşturulup ivme uygulanmalı.
+    #[test]
+    fn apply_force_creates_velocity_when_missing() {
+        let engine = ScriptEngine::new().unwrap();
+        let mut world = World::new();
+
+        let entity = world.spawn();
+        world.add_component(entity, RigidBody::new(2.0, false));
+        // Kasıtlı olarak Velocity EKLENMEDİ.
+        assert!(world.borrow::<Velocity>().get(entity.id()).is_none());
+
+        engine
+            .command_queue()
+            .push(ScriptCommand::ApplyForce(entity.id(), Vec3::new(4.0, 0.0, 0.0)));
+
+        let dt = 0.5_f32;
+        engine.flush_commands(&mut world, dt);
+
+        let vels = world.borrow::<Velocity>();
+        let v = vels
+            .get(entity.id())
+            .expect("Velocity ApplyForce tarafından oluşturulmalıydı");
+        // accel = force/mass = 4/2 = 2; dv = accel*dt = 2*0.5 = 1.0
+        assert!((v.linear.x - 1.0).abs() < 1e-5, "x hızı yanlış: {}", v.linear.x);
+    }
+
+    /// Regression: RigidBody var ama Velocity yoksa ApplyImpulse sessizce
+    /// kaybolmamalı; Velocity oluşturulup delta-v uygulanmalı.
+    #[test]
+    fn apply_impulse_creates_velocity_when_missing() {
+        let engine = ScriptEngine::new().unwrap();
+        let mut world = World::new();
+
+        let entity = world.spawn();
+        world.add_component(entity, RigidBody::new(2.0, false));
+        assert!(world.borrow::<Velocity>().get(entity.id()).is_none());
+
+        engine
+            .command_queue()
+            .push(ScriptCommand::ApplyImpulse(entity.id(), Vec3::new(6.0, 0.0, 0.0)));
+
+        engine.flush_commands(&mut world, 0.016);
+
+        let vels = world.borrow::<Velocity>();
+        let v = vels
+            .get(entity.id())
+            .expect("Velocity ApplyImpulse tarafından oluşturulmalıydı");
+        // dv = impulse/mass = 6/2 = 3.0 (dt'den bağımsız)
+        assert!((v.linear.x - 3.0).abs() < 1e-5, "x hızı yanlış: {}", v.linear.x);
+    }
+}
