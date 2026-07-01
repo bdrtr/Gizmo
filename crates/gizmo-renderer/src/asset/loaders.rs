@@ -689,13 +689,18 @@ fn parse_animations(
 
                 match outputs {
                     gltf::animation::util::ReadOutputs::Translations(tr) => {
+                        // CubicSpline outputs 3 values per keyframe [inTangent, value,
+                        // outTangent] (3× the sample count); take the value (index 1). Zipping
+                        // the raw 3n output against the n `times` mis-paired tangents as values.
+                        let vals: Vec<[f32; 3]> = tr.collect();
+                        let (stride, off) = if matches!(interp, gizmo_animation::skeletal::InterpolationMode::CubicSpline) { (3usize, 1usize) } else { (1usize, 0usize) };
                         let keyframes = times
                             .iter()
-                            .zip(tr)
-                            .map(|(&t, v)| Keyframe {
+                            .enumerate()
+                            .filter_map(|(i, &t)| vals.get(i * stride + off).map(|v| Keyframe {
                                 time: t,
                                 value: Vec3::new(v[0], v[1], v[2]),
-                            })
+                            }))
                             .collect();
                         translations.push(Track {
                             target_node,
@@ -705,13 +710,16 @@ fn parse_animations(
                         });
                     }
                     gltf::animation::util::ReadOutputs::Rotations(rt) => {
+                        // CubicSpline: 3 quats per keyframe [inTangent, value, outTangent].
+                        let vals: Vec<[f32; 4]> = rt.into_f32().collect();
+                        let (stride, off) = if matches!(interp, gizmo_animation::skeletal::InterpolationMode::CubicSpline) { (3usize, 1usize) } else { (1usize, 0usize) };
                         let keyframes = times
                             .iter()
-                            .zip(rt.into_f32())
-                            .map(|(&t, v)| Keyframe {
+                            .enumerate()
+                            .filter_map(|(i, &t)| vals.get(i * stride + off).map(|v| Keyframe {
                                 time: t,
                                 value: Quat::from_xyzw(v[0], v[1], v[2], v[3]),
-                            })
+                            }))
                             .collect();
                         rotations.push(Track {
                             target_node,
@@ -721,13 +729,16 @@ fn parse_animations(
                         });
                     }
                     gltf::animation::util::ReadOutputs::Scales(sc) => {
+                        // CubicSpline: 3 values per keyframe [inTangent, value, outTangent].
+                        let vals: Vec<[f32; 3]> = sc.collect();
+                        let (stride, off) = if matches!(interp, gizmo_animation::skeletal::InterpolationMode::CubicSpline) { (3usize, 1usize) } else { (1usize, 0usize) };
                         let keyframes = times
                             .iter()
-                            .zip(sc)
-                            .map(|(&t, v)| Keyframe {
+                            .enumerate()
+                            .filter_map(|(i, &t)| vals.get(i * stride + off).map(|v| Keyframe {
                                 time: t,
                                 value: Vec3::new(v[0], v[1], v[2]),
-                            })
+                            }))
                             .collect();
                         scales.push(Track {
                             target_node,
