@@ -128,20 +128,7 @@ impl Gjk {
     /// Barycentric coordinates of point p projected onto triangle (a, b, c).
     /// Returns None if the triangle is degenerate.
     fn barycentric_coords(a: Vec3, b: Vec3, c: Vec3, p: Vec3) -> Option<(f32, f32, f32)> {
-        let ab = b - a;
-        let ac = c - a;
-
-        let d3 = ab.dot(b - a); // = ab·ab
-        let d4 = ac.dot(b - a);
-        let d5 = ab.dot(c - a);
-        let d6 = ac.dot(c - a); // = ac·ac
-
-        let denom = d3 * d6 - d4 * d5;
-        if denom.abs() < 1e-8 {
-            return None; // Degenerate triangle
-        }
-
-        // Correct standard formula using Cramer's rule
+        // Standard barycentric formula using Cramer's rule.
         let ab = b - a;
         let ac = c - a;
         let ap = p - a;
@@ -223,4 +210,40 @@ impl Gjk {
         }
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression for finding 35: `barycentric_coords` used to compute a first,
+    // discarded set of dot products (with an incorrect denominator based on the wrong
+    // vectors) before recomputing the real Cramer's-rule solution. With the dead block
+    // removed the standard formula must still produce correct, verifiable coordinates.
+
+    #[test]
+    fn barycentric_coords_recovers_known_point() {
+        let a = Vec3::new(0.0, 0.0, 0.0);
+        let b = Vec3::new(1.0, 0.0, 0.0);
+        let c = Vec3::new(0.0, 1.0, 0.0);
+
+        // Interior point reconstructed from known weights must round-trip.
+        let (eu, ev, ew) = (0.5, 0.3, 0.2);
+        let p = a * eu + b * ev + c * ew;
+
+        let (u, v, w) = Gjk::barycentric_coords(a, b, c, p).expect("non-degenerate triangle");
+        assert!((u - eu).abs() < 1e-5, "u={u}");
+        assert!((v - ev).abs() < 1e-5, "v={v}");
+        assert!((w - ew).abs() < 1e-5, "w={w}");
+        assert!((u + v + w - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn barycentric_coords_rejects_degenerate_triangle() {
+        // Collinear (zero-area) triangle → None, not a NaN-laden coordinate triple.
+        let a = Vec3::new(0.0, 0.0, 0.0);
+        let b = Vec3::new(1.0, 0.0, 0.0);
+        let c = Vec3::new(2.0, 0.0, 0.0);
+        assert!(Gjk::barycentric_coords(a, b, c, Vec3::new(0.5, 0.0, 0.0)).is_none());
+    }
 }

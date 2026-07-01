@@ -198,23 +198,40 @@ impl Gjk {
 
                 let vc = d1 * d4 - d3 * d2;
                 if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
-                    let v = d1 / (d1 - d3);
-                    *simplex = vec![b, a];
-                    return a + ab * v;
+                    // Guard `d1 / (d1 - d3)`: when d1 == d3 == 0 the edge collapses and a
+                    // bare divide yields NaN. Fall back to the newest vertex `a`.
+                    match gizmo_math::safe_recip(d1, d1 - d3) {
+                        Some(v) => {
+                            *simplex = vec![b, a];
+                            return a + ab * v;
+                        }
+                        None => return a,
+                    }
                 }
 
                 let vb = d5 * d2 - d1 * d6;
                 if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
-                    let w = d2 / (d2 - d6);
-                    *simplex = vec![c, a];
-                    return a + ac * w;
+                    // Guard `d2 / (d2 - d6)` against the d2 == d6 == 0 degenerate edge.
+                    match gizmo_math::safe_recip(d2, d2 - d6) {
+                        Some(w) => {
+                            *simplex = vec![c, a];
+                            return a + ac * w;
+                        }
+                        None => return a,
+                    }
                 }
 
                 let va = d3 * d6 - d5 * d4;
                 if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
-                    let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-                    *simplex = vec![c, b];
-                    return b + (c - b) * w;
+                    // Guard `(d4 - d3) / ((d4 - d3) + (d5 - d6))`: when both terms are zero
+                    // the edge bc collapses. Fall back to the newest vertex `a`.
+                    match gizmo_math::safe_recip(d4 - d3, (d4 - d3) + (d5 - d6)) {
+                        Some(w) => {
+                            *simplex = vec![c, b];
+                            return b + (c - b) * w;
+                        }
+                        None => return a,
+                    }
                 }
 
                 // Guarded barycentric: a collinear/zero-area triangle makes (va+vb+vc)≈0,
@@ -545,4 +562,64 @@ impl Gjk {
         true
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression for findings 6/7/8: degenerate triangle simplices whose edge-reduction
+    // denominators collapse to 0 used to produce a `0/0 = NaN` (or `Inf`) closest point.
+    // The `safe_recip` guards must yield a finite fallback instead.
+
+    #[test]
+    fn closest_point_edge_ac_degenerate_is_finite() {
+        // a == b at (1,0,0), c at (0,1,0). Triangle stored as [c, b, a].
+        // Reaches the `vc <= 0 && d1 >= 0 && d3 <= 0` branch with d1 == d3 == 0
+        // (finding 6): `d1 / (d1 - d3)` would be 0/0 without the guard.
+        let mut simplex = vec![
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        ];
+        let cp = Gjk::closest_point_on_simplex(&mut simplex);
+        assert!(cp.is_finite(), "closest point must be finite, got {cp:?}");
+    }
+
+    #[test]
+    fn closest_point_collinear_triangle_is_finite() {
+        // Zero-area (collinear) triangle: every edge-reduction denominator and the
+        // fall-through barycentric denominator degenerate. All guards (findings 6/7/8
+        // and the pre-existing line-224 guard) must cooperate to keep the result finite
+        // rather than emitting a NaN/Inf that poisons the GJK distance search.
+        for coords in [
+            [
+                Vec3::new(2.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(3.0, 0.0, 0.0),
+            ],
+            [
+                Vec3::new(0.0, -1.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(0.0, 2.0, 0.0),
+            ],
+        ] {
+            let mut simplex = coords.to_vec();
+            let cp = Gjk::closest_point_on_simplex(&mut simplex);
+            assert!(cp.is_finite(), "closest point must be finite, got {cp:?}");
+        }
+    }
+
+    #[test]
+    fn closest_point_coincident_triangle_is_finite() {
+        // All three vertices coincident: the most degenerate triangle possible. Every
+        // divisor in the reduction is zero; the guards must still yield a finite point.
+        let mut simplex = vec![
+            Vec3::new(1.0, 2.0, 3.0),
+            Vec3::new(1.0, 2.0, 3.0),
+            Vec3::new(1.0, 2.0, 3.0),
+        ];
+        let cp = Gjk::closest_point_on_simplex(&mut simplex);
+        assert!(cp.is_finite(), "closest point must be finite, got {cp:?}");
+    }
 }

@@ -20,11 +20,30 @@ pub struct BvhTree {
     pub nodes: Vec<BvhNode>,
 }
 
+/// Triangle count for `index_count` indices, or `None` when it exceeds `u32::MAX`.
+///
+/// `tri_count` / `first_tri_index` are `u32`; an index count above `u32::MAX`
+/// would silently truncate when cast and corrupt the BVH, so the build must
+/// reject it instead.
+fn checked_tri_count(index_count: usize) -> Option<u32> {
+    if index_count > u32::MAX as usize {
+        None
+    } else {
+        Some((index_count / 3) as u32)
+    }
+}
+
 impl BvhTree {
     pub fn build(vertices: &[Vec3], indices: &mut [u32]) -> Result<Self, crate::error::GizmoError> {
         if indices.is_empty() {
             return Ok(Self::default());
         }
+
+        // Reject meshes so large that the triangle count would overflow u32 (the type used
+        // for `tri_count` / `first_tri_index`), which would silently truncate and corrupt the
+        // BVH allocation and bounds computation.
+        let tri_count =
+            checked_tri_count(indices.len()).ok_or(crate::error::GizmoError::BvhBuildFailed)?;
 
         // Validate indices to prevent out of bounds panics
         for &idx in indices.iter() {
@@ -32,8 +51,6 @@ impl BvhTree {
                 return Err(crate::error::GizmoError::BvhBuildFailed);
             }
         }
-
-        let tri_count = (indices.len() / 3) as u32;
         let mut nodes = Vec::with_capacity((tri_count * 2) as usize);
 
         // Root node
@@ -231,5 +248,35 @@ impl BvhTree {
 
         self.subdivide(left_child_idx, vertices, indices, depth + 1);
         self.subdivide(right_child_idx, vertices, indices, depth + 1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checked_tri_count_rejects_u32_overflow() {
+        // One index past u32::MAX must be rejected rather than truncating.
+        assert_eq!(checked_tri_count(u32::MAX as usize + 1), None);
+        // The boundary itself and normal sizes are accepted.
+        assert_eq!(checked_tri_count(u32::MAX as usize), Some(u32::MAX / 3));
+        assert_eq!(checked_tri_count(9), Some(3));
+        assert_eq!(checked_tri_count(0), Some(0));
+    }
+
+    #[test]
+    fn build_rejects_out_of_range_index() {
+        // Index references a vertex that does not exist -> error, not a panic.
+        let verts = [Vec3::ZERO, Vec3::X, Vec3::Y];
+        let mut indices = [0u32, 1, 5]; // 5 is out of range
+        assert!(BvhTree::build(&verts, &mut indices).is_err());
+    }
+
+    #[test]
+    fn build_empty_is_ok() {
+        let verts: [Vec3; 0] = [];
+        let mut indices: [u32; 0] = [];
+        assert!(BvhTree::build(&verts, &mut indices).is_ok());
     }
 }
