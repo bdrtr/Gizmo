@@ -204,10 +204,15 @@ impl Cloth {
                     continue;
                 }
                 if node.position.y < self.thickness {
+                    // Capture the true predicted impact velocity BEFORE clamping the
+                    // position: computing it from the clamped position would understate
+                    // the vertical impact speed, corrupting friction/`prev_position`
+                    // reconstruction and injecting a wrong impulse next frame.
+                    let mut vel = (node.position - node.prev_position) / sub_dt;
+
                     node.position.y = self.thickness;
 
                     // Simple friction: damp horizontal velocity when touching ground.
-                    let mut vel = (node.position - node.prev_position) / sub_dt;
                     vel.x *= 1.0 - self.friction;
                     vel.z *= 1.0 - self.friction;
                     // Aşağı yönlü hızı koru-MA: zemine doğru momentum biriktirmek
@@ -221,3 +226,58 @@ impl Cloth {
 }
 
 impl gizmo_core::Component for Cloth {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Zemine çarpan bir düğümün çarpma hızı, pozisyon zemine KENETLENMEDEN ÖNCE
+    /// hesaplanmalı. Kenetlenmiş pozisyondan hesaplanırsa (bug) düğüm zaten zeminin
+    /// altındayken sahte bir YUKARI yönlü dikey hız üretilir: kenetlenmiş y (thickness)
+    /// önceki (daha da alçak) y'den büyük olduğu için `(clamped.y - prev.y)/dt > 0`.
+    /// Bu, `prev_position`'ı yanlış kurar ve bir sonraki karede yanlış (yukarı) impuls
+    /// enjekte eder.
+    ///
+    /// Kurulum: düğümü zaten zeminin ALTINA yerleştir (prev ve tahmini konum ikisi de
+    /// thickness'ın altında, aşağı yönlü hareket). Doğru davranışta yakalanan gerçek
+    /// hız aşağı yönlü (< 0) olup `vel.y.max(0.0)` ile SIFIRLANIR → yeniden kurulan
+    /// prev_position.y == thickness. Buggy davranışta ise pozitif bir dikey hız kalır
+    /// → prev_position.y < thickness olur.
+    #[test]
+    fn floor_collision_uses_pre_clamp_velocity() {
+        let sub_dt = 1.0 / 60.0;
+        let mut cloth = Cloth::new(1, 1, 1.0, 1.0);
+        cloth.thickness = 0.02;
+        cloth.friction = 0.0; // Yalnızca dikey davranışı izole et.
+
+        // Düğüm zaten zeminin altında ve aşağı doğru hareket ediyor.
+        // Predict adımının (yerçekimsiz, sönümlü) düğümü yine zeminin altında
+        // bırakacağı bir konfigürasyon seç.
+        cloth.nodes[0].prev_position = Vec3::new(0.0, -0.5, 0.0);
+        cloth.nodes[0].position = Vec3::new(0.0, -0.6, 0.0);
+
+        cloth.step(1.0 / 60.0, Vec3::ZERO, 1);
+
+        let node = cloth.nodes[0];
+        assert!(
+            (node.position.y - cloth.thickness).abs() < 1e-6,
+            "pozisyon zemine kenetlenmeli"
+        );
+        // Doğru fix ile: gerçek (aşağı yönlü) hız yakalanıp sıfırlandığı için
+        // prev_position.y tam olarak thickness olur. Buggy kodda kenetlenmiş
+        // konumdan hesaplanan pozitif dikey hız prev_position.y'yi thickness'ın
+        // ALTINA çeker.
+        assert!(
+            (node.prev_position.y - cloth.thickness).abs() < 1e-6,
+            "prev_position.y kenetlenmiş y'ye eşit olmalı (sahte yukarı hız yok): {}",
+            node.prev_position.y
+        );
+        let reconstructed_vel = (node.position - node.prev_position) / sub_dt;
+        assert!(reconstructed_vel.is_finite());
+        assert!(
+            reconstructed_vel.y.abs() < 1e-6,
+            "dikey hız sıfırlanmalı (sahte yukarı impuls yok): {}",
+            reconstructed_vel.y
+        );
+    }
+}

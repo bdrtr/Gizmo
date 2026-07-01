@@ -24,6 +24,15 @@ pub enum SoftBodyError {
     /// Young's modulus was not a finite, strictly-positive value.
     InvalidYoungsModulus { value: f32 },
 
+    /// A tetrahedral element was (near-)degenerate: its rest volume is not a
+    /// finite, strictly-positive value above the acceptance epsilon.
+    ///
+    /// Such elements have a singular reference shape matrix (`Dm`), so the
+    /// deformation gradient and the derived elastic forces are undefined
+    /// (near-zero stiffness / NaN propagation). `volume` is the offending rest
+    /// volume that was computed.
+    DegenerateTetrahedron { volume: f32 },
+
     /// The flattened GPU node offset overflowed `u32` (too many nodes across
     /// all soft bodies in a single step).
     NodeOffsetOverflow,
@@ -49,6 +58,10 @@ impl std::fmt::Display for SoftBodyError {
             SoftBodyError::InvalidYoungsModulus { value } => write!(
                 f,
                 "invalid Young's modulus {value} (must be finite and > 0)"
+            ),
+            SoftBodyError::DegenerateTetrahedron { volume } => write!(
+                f,
+                "degenerate tetrahedral element (rest volume {volume} must be finite and > 0)"
             ),
             SoftBodyError::NodeOffsetOverflow => {
                 write!(f, "soft body node offset overflowed u32 (too many nodes)")

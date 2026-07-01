@@ -188,6 +188,18 @@ impl SoftBodyMesh {
 
         let (inv_rest_matrix, rest_volume) = Tetrahedron::calculate_rest_data(p0, p1, p2, p3);
 
+        // Reject (near-)degenerate tetrahedra at construction (fail-fast): a
+        // near-zero rest volume means the four nodes are (nearly) coplanar, so
+        // `Dm` is singular, `inv_rest_matrix` is undefined, and the derived
+        // elastic forces would be near-zero / NaN — the element would never
+        // recover from compression. Only well-conditioned elements are stored.
+        const MIN_REST_VOLUME: f32 = 1e-6;
+        if rest_volume <= MIN_REST_VOLUME || rest_volume.is_nan() || !inv_rest_matrix.is_finite() {
+            return Err(crate::SoftBodyError::DegenerateTetrahedron {
+                volume: rest_volume,
+            });
+        }
+
         self.elements.push(Tetrahedron {
             node_indices: [i0, i1, i2, i3],
             rest_volume,
@@ -269,7 +281,11 @@ impl SoftBodyMesh {
 
         // 2. Integrate velocities and positions
         for (i, node) in self.nodes.iter_mut().enumerate() {
-            if node.is_fixed {
+            // Skip pinned nodes and any node with non-positive / non-finite mass:
+            // dividing `forces[i] / node.mass` by `mass <= 0` yields Inf/NaN that
+            // then poisons velocity and position forever. Such a node behaves as
+            // if it were fixed (immovable) rather than exploding the sim.
+            if node.is_fixed || node.mass <= 0.0 || node.mass.is_nan() {
                 continue;
             }
 
@@ -331,5 +347,57 @@ mod tests {
             assert!(node.position.is_finite(), "pozisyon NaN/Inf olmamalı");
             assert!(node.velocity.is_finite(), "hız NaN/Inf olmamalı");
         }
+    }
+
+    /// Kütlesi 0 (ve is_fixed=false) bir düğüm eskiden `forces/mass` = Inf/NaN
+    /// üretip tüm simülasyonu zehirliyordu. Artık böyle düğüm sabit gibi atlanır.
+    #[test]
+    fn zero_mass_node_does_not_poison_simulation() {
+        let mut sb = SoftBodyMesh::new(1000.0, 0.3).expect("valid material params");
+        // Kütlesiz (0.0) düğüm — pinlenmemiş.
+        let zero_idx = sb.add_node(Vec3::new(0.5, 2.0, 0.5), 0.0) as usize;
+        // Normal kütleli düğümler.
+        sb.add_node(Vec3::X, 1.0);
+        sb.add_node(Vec3::Y, 1.0);
+        sb.add_node(Vec3::Z, 1.0);
+
+        for _ in 0..30 {
+            sb.step(1.0 / 240.0, Vec3::new(0.0, -9.81, 0.0), &[]);
+        }
+
+        for node in &sb.nodes {
+            assert!(
+                node.position.is_finite(),
+                "kütlesiz düğüm Inf/NaN yaymamalı: {:?}",
+                node.position
+            );
+            assert!(node.velocity.is_finite(), "hız Inf/NaN olmamalı");
+        }
+        // Kütlesiz düğüm hareket etmemeli (sabit gibi davranmalı).
+        assert_eq!(sb.nodes[zero_idx].position, Vec3::new(0.5, 2.0, 0.5));
+        assert_eq!(sb.nodes[zero_idx].velocity, Vec3::ZERO);
+    }
+
+    /// Dört (neredeyse) düzlemsel düğümle oluşturulan dejenere bir tetrahedron
+    /// rest_volume ≈ 0 verir; artık `add_element` bunu reddetmeli.
+    #[test]
+    fn degenerate_tetrahedron_is_rejected() {
+        let mut sb = SoftBodyMesh::new(1000.0, 0.3).expect("valid material params");
+        // Dört düğüm de z=0 düzleminde → koplanar → hacim ≈ 0.
+        sb.add_node(Vec3::new(0.0, 0.0, 0.0), 1.0);
+        sb.add_node(Vec3::new(1.0, 0.0, 0.0), 1.0);
+        sb.add_node(Vec3::new(0.0, 1.0, 0.0), 1.0);
+        sb.add_node(Vec3::new(1.0, 1.0, 0.0), 1.0);
+
+        let result = sb.add_element(0, 1, 2, 3);
+        assert!(
+            matches!(
+                result,
+                Err(crate::SoftBodyError::DegenerateTetrahedron { .. })
+            ),
+            "koplanar (dejenere) tetrahedron reddedilmeli, ama: {result:?}"
+        );
+        // Reddedilen eleman eklenmemeli.
+        assert!(sb.elements.is_empty());
     }
 }
