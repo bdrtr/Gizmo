@@ -51,8 +51,7 @@ proptest! {
         g in 1.0f32..20.0,
         q in (std::f32::consts::PI / 6.0)..(5.0 * std::f32::consts::PI / 6.0),
     ) {
-        let mut tree = ArticulatedTree::default();
-        tree.is_fixed_base = true;
+        let mut tree = ArticulatedTree { is_fixed_base: true, ..Default::default() };
         tree.links.push(link(
             usize::MAX,
             JointType::Revolute(Vec3::Z),
@@ -86,8 +85,7 @@ proptest! {
         let axis = axis_raw.normalize();
         let gravity = Vec3::new(gx, gy, gz);
 
-        let mut tree = ArticulatedTree::default();
-        tree.is_fixed_base = true;
+        let mut tree = ArticulatedTree { is_fixed_base: true, ..Default::default() };
         tree.links.push(link(
             usize::MAX,
             JointType::Prismatic(axis),
@@ -118,8 +116,7 @@ proptest! {
         let mut s = seed | 1;
         let mut next = || { s = s.wrapping_mul(6364136223846793005).wrapping_add(1); ((s >> 33) as f32 / (1u64 << 31) as f32) - 1.0 };
 
-        let mut tree = ArticulatedTree::default();
-        tree.is_fixed_base = true;
+        let mut tree = ArticulatedTree { is_fixed_base: true, ..Default::default() };
         for i in 0..n {
             let parent = if i == 0 { usize::MAX } else { i - 1 };
             let axis = Vec3::new(next(), next(), next());

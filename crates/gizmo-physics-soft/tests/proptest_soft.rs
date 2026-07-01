@@ -124,8 +124,8 @@ proptest! {
         sb.nodes[3].position = rest[3];
         sb.add_element(0, 1, 2, 3).expect("valid node indices");
         // Şimdi sıkıştır.
-        for i in 0..4 {
-            sb.nodes[i].position = compressed[i];
+        for (node, &c) in sb.nodes.iter_mut().zip(compressed.iter()) {
+            node.position = c;
         }
 
         let v_compressed = tet_volume(compressed);

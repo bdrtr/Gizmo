@@ -144,6 +144,7 @@ pub fn compute_aba(tree: &mut ArticulatedTree, gravity: Vec3) {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)] // testlerde Default sonrası alan atama okunabilirlik için
 mod tests {
     use super::*;
     use crate::multibody::{ArticulatedLink, JointType};

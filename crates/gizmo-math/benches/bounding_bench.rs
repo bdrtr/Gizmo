@@ -1,6 +1,5 @@
 use bevy_math::{
     bounding::{Aabb3d, BoundingSphere, BoundingVolume},
-    prelude::*,
     Vec3, Vec3A, Quat, Isometry3d,
 };
 use core::hint::black_box;

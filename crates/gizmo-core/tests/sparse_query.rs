@@ -7,6 +7,7 @@
 //!     indeksliyordu → güvenli koddan PANİK (veya tombstone slot'ta release'de UB).
 //!   - `With<T>`: bileşeni olmayan entity'leri de eşliyordu (yanlış sonuç).
 //!   - `Without<T>`: bileşeni OLAN entity'leri de eşliyordu (yanlış sonuç).
+//!
 //! Bu testler, motorun kendi bileşenleri Table kullandığından, latent ama güvenli-koddan
 //! ulaşılabilen public-API hatasını tetikler.
 

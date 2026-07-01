@@ -37,6 +37,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[derive(Clone)]
+    #[allow(dead_code)]
     struct Health(f32);
 
     #[derive(Clone)]

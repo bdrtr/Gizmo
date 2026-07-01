@@ -116,9 +116,9 @@ fn few_changed_detection_generic<T: Component + Default + Clone>(
                     let mut rng = chacha20::ChaCha8Rng::seed_from_u64(42);
                     entities.shuffle(&mut rng);
 
-                    for i in 0..amount_to_modify {
+                    for entity in entities.iter().take(amount_to_modify) {
                         // Trigger change
-                        let _ = world.query_entity_mut::<gizmo_core::query::Mut<T>>(entities[i].id());
+                        let _ = world.query_entity_mut::<gizmo_core::query::Mut<T>>(entity.id());
                     }
                     (world, entities)
                 },

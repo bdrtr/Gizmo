@@ -1,3 +1,7 @@
+// Benchmark payload structs legitimately carry fields that are only written
+// (never read) to model realistic component sizes; suppress dead_code crate-wide.
+#![allow(dead_code)]
+
 use criterion::{criterion_group, criterion_main};
 
 mod common;

@@ -16,6 +16,7 @@ mod query;
 mod snapshot;
 mod step;
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)] // testlerde Default sonrası alan atama okunabilirlik için
 mod tests;
 
 /// Errors that can occur while writing a physics-world diagnostic snapshot

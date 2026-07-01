@@ -24,7 +24,7 @@ mod winding_tests {
     /// Bir non-indexed üçgen listesinin sarım + normal geçerliliğini doğrula.
     fn assert_outward(name: &str, verts: &[Vertex]) {
         assert!(
-            !verts.is_empty() && verts.len() % 3 == 0,
+            !verts.is_empty() && verts.len().is_multiple_of(3),
             "{name}: vertex sayısı pozitif ve 3'ün katı olmalı, {}",
             verts.len()
         );
