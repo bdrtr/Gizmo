@@ -32,18 +32,33 @@ impl SkeletonHierarchy {
         let mut roots = Vec::new();
 
         for (i, joint) in self.joints.iter().enumerate() {
-            if let Some(parent_idx) = joint.parent_index {
-                children_map[parent_idx].push(i);
-            } else {
-                roots.push(i);
+            match joint.parent_index {
+                // Bounds-check the parent index: a bogus parent_index (>= joints.len())
+                // must not panic on the children_map index. Treat such joints as roots
+                // so the pose is still produced instead of aborting the frame.
+                Some(parent_idx) if parent_idx < self.joints.len() => {
+                    children_map[parent_idx].push(i);
+                }
+                Some(_parent_idx) => {
+                    // Out-of-range parent: treat as a root rather than panicking.
+                    roots.push(i);
+                }
+                None => {
+                    roots.push(i);
+                }
             }
         }
 
         let mut queue = roots;
         while let Some(node) = queue.pop() {
             let local_mat = local_poses[node];
-            let global_mat = if let Some(parent_idx) = self.joints[node].parent_index {
-                globals[parent_idx].unwrap() * local_mat
+            let global_mat = if let Some(parent_idx) = self.joints[node]
+                .parent_index
+                .filter(|&p| p < self.joints.len())
+            {
+                // Parent is guaranteed processed before its child by the BFS order;
+                // fall back to identity if that invariant is somehow violated.
+                globals[parent_idx].unwrap_or(Mat4::IDENTITY) * local_mat
             } else {
                 // Kök kemikler için Armature transform'unu uygula
                 self.root_transform * local_mat
@@ -147,6 +162,29 @@ mod tests {
         let right_pos = Vec3::new(globals[2].w_axis.x, globals[2].w_axis.y, globals[2].w_axis.z);
         assert!((left_pos - Vec3::new(-1.0, 1.0, 0.0)).length() < 0.001);
         assert!((right_pos - Vec3::new(1.0, 1.0, 0.0)).length() < 0.001);
+    }
+
+    #[test]
+    fn test_skeleton_invalid_parent_index_does_not_panic() {
+        // A joint with an out-of-range parent_index (safe-code constructible) must
+        // not cause an out-of-bounds panic; it is treated as a root instead.
+        let hierarchy = SkeletonHierarchy {
+            joints: vec![
+                make_joint("root", 0, None),
+                make_joint("bad", 1, Some(99)), // 99 >= joints.len()
+            ],
+            root_transform: Mat4::IDENTITY,
+        };
+        let local_poses = vec![
+            Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0)),
+            Mat4::from_translation(Vec3::new(0.0, 2.0, 0.0)),
+        ];
+        // Would panic before the bounds check was added.
+        let globals = hierarchy.calculate_global_matrices(&local_poses);
+        assert_eq!(globals.len(), 2);
+        // The bad joint is treated as a root => root_transform (identity) * local.
+        let bad_pos = Vec3::new(globals[1].w_axis.x, globals[1].w_axis.y, globals[1].w_axis.z);
+        assert!((bad_pos - Vec3::new(0.0, 2.0, 0.0)).length() < 0.001);
     }
 
     #[test]

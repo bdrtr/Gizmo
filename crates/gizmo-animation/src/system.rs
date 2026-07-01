@@ -32,18 +32,10 @@ pub fn animation_system(
             None => continue,
         };
 
-        // Advance time
-        player.elapsed_time += dt * player.speed;
-        let duration = clip.duration();
-
-        if player.looping {
-            if duration > 0.0 {
-                player.elapsed_time %= duration;
-            }
-        } else if player.elapsed_time > duration {
-            player.elapsed_time = duration;
-            player.playing = false;
-        }
+        // Advance time. `advance` guards against a non-finite speed (NaN/Inf)
+        // poisoning elapsed_time, wraps when looping, and stops exactly at the
+        // clip end (`>=`) when not. Unit-tested in `player.rs`.
+        player.advance(dt, clip.duration());
 
         // Resolve targets if necessary
         // A simple heuristic: if cached map is empty but there are tracks, we need to resolve.
