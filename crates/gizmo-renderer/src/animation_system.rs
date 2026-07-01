@@ -38,13 +38,19 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
                 }
             };
 
-            player.current_time = player.current_time.max(0.0) + dt * player.speed;
-            if player.current_time > anim.duration {
-                if player.loop_anim && anim.duration > 0.0 {
-                    player.current_time %= anim.duration;
+            // Advance FIRST, then normalize. Clamping to `.max(0.0)` *before* adding
+            // `dt*speed` pinned reverse playback (speed < 0) at frame 0 forever. rem_euclid
+            // wraps negative times back into [0, duration) so a looping clip plays backward;
+            // non-looping clips clamp into range. Forward playback is unchanged (t % dur).
+            player.current_time += dt * player.speed;
+            if anim.duration > 0.0 {
+                if player.loop_anim {
+                    player.current_time = player.current_time.rem_euclid(anim.duration);
                 } else {
-                    player.current_time = anim.duration;
+                    player.current_time = player.current_time.clamp(0.0, anim.duration);
                 }
+            } else {
+                player.current_time = player.current_time.max(0.0);
             }
 
             let poses_trs = evaluate_clip(anim, player.current_time, &skeleton.hierarchy);
