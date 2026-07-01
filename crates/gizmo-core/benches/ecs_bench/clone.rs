@@ -52,7 +52,7 @@ fn clone_hierarchy_recursive(world: &mut World, source_id: u32) -> Option<gizmo_
     let cloned_parent = cloned_entities[0];
 
     let mut children_to_clone = Vec::new();
-    let source_entity = world.reconstruct_entity(source_id)?;
+    let source_entity = world.entity(source_id)?;
     if let Some(children_ptr) = world.get_component_ptr(source_entity, core::any::TypeId::of::<Children>()) {
         let children = unsafe { &*(children_ptr as *const Children) };
         children_to_clone = children.0.clone();

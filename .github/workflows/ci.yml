@@ -58,9 +58,14 @@ jobs:
       # imzalarını struct'a sarmadan refactor edilemez, ayrı bir iş. Tek meşru
       # `needless_range_loop` istisnası (determinizm-kritik PGS solver) global
       # `-A` yerine solver.rs'te yerel `#[allow]` + gerekçeyle dokümante edildi.
-      - name: Clippy (-D warnings, ratcheted)
+      #
+      # 2026-07-01: `--all-features --all-targets`'a sıkılaştırıldı — test + bench
+      # + tüm-feature yüzeyi de artık kapının içinde (önceki test/bench backlog'u
+      # temizlendi: benchmark payload'larına dosya-içi dead_code allow, test
+      # modüllerine hedefli field_reassign allow, gerisi gerçek düzeltme).
+      - name: Clippy (-D warnings, ratcheted, all-features + all-targets)
         run: |
-          cargo clippy --workspace -- -D warnings \
+          cargo clippy --workspace --all-features --all-targets -- -D warnings \
             -A clippy::too_many_arguments -A clippy::type_complexity
 
   # ── Optional features: the `reflect` path must build + test (ubuntu only) ──

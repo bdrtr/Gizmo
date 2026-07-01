@@ -94,6 +94,7 @@ impl RollbackManager {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)] // testlerde Default sonrası alan atama okunabilirlik için
 mod tests {
     use super::*;
     use crate::rollback::input_buffer::PlayerInput;

@@ -185,6 +185,7 @@ impl FluidSystem {
         force * self.config.viscosity
     }
 
+    #[allow(dead_code)] // WIP test yardımcı fonksiyonu; henüz çağrılmıyor
     pub fn compute_surface_tension_force(&self, i: usize) -> Vec3 {
         let pi = &self.particles[i];
         let h = self.config.smoothing_radius;

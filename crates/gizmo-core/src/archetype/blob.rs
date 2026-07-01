@@ -415,7 +415,9 @@ mod tests {
 
     #[test]
     fn blobvec_no_drop_for_copy_types() {
-        let _vec = BlobVec::new(Layout::new::<u32>(), None);
-        assert!(true); // derlenmesi yeterli değil, Miri ile çalıştır
+        let vec = BlobVec::new(Layout::new::<u32>(), None);
+        // Bu testin amacı sadece Copy tipler için drop fn'in None olduğunu
+        // derleme zamanında doğrulamak; gerçek davranış Miri ile çalıştırılmalı.
+        let _ = &vec;
     }
 }

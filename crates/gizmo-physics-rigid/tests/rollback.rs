@@ -27,8 +27,8 @@ fn build_scene() -> PhysicsWorld {
         Collider::box_collider(Vec3::new(20.0, 1.0, 20.0)),
     );
     // Kontrollü kutu (girdi alır) + temas/warm-start için komşular.
-    let mut id = 1u32;
-    for x in 0..4 {
+    for x in 0u32..4 {
+        let id = x + 1;
         let mut rb = RigidBody::new(1.0, true);
         rb.wake_up();
         let col = Collider::box_collider(Vec3::splat(0.5));
@@ -40,7 +40,6 @@ fn build_scene() -> PhysicsWorld {
             Velocity::default(),
             col,
         );
-        id += 1;
     }
     world
 }
@@ -141,6 +140,8 @@ fn rollback_netcode_converges_under_lag_jitter_loss() {
                     known[it] = truth_in;
                     // Rollback: it'in başına dön, it..t arası kesinleşmiş girdilerle resim.
                     peer.restore_snapshot(&snaps[it]);
+                    // rt bir tick numarası: hem known[rt] indeksi hem advance()'e argüman.
+                    #[allow(clippy::needless_range_loop)]
                     for rt in it..t {
                         advance(&mut peer, &mut snaps, rt, known[rt]);
                     }
@@ -155,6 +156,8 @@ fn rollback_netcode_converges_under_lag_jitter_loss() {
     // Hepsini teslim al + en erken kesinleşmemiş tick'ten son bir rollback + resim.
     let earliest = N - LAG;
     let mut need_rollback = false;
+    // it bir tick numarası: hem known[it] indeksi hem input_at()'e argüman.
+    #[allow(clippy::needless_range_loop)]
     for it in earliest..N {
         let truth_in = input_at(it);
         if known[it] != truth_in {
@@ -164,6 +167,8 @@ fn rollback_netcode_converges_under_lag_jitter_loss() {
     }
     if need_rollback {
         peer.restore_snapshot(&snaps[earliest]);
+        // rt bir tick numarası: hem known[rt] indeksi hem advance()'e argüman.
+        #[allow(clippy::needless_range_loop)]
         for rt in earliest..N {
             advance(&mut peer, &mut snaps, rt, known[rt]);
         }

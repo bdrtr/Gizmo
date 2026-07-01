@@ -330,6 +330,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)] // 3.14 burada rastgele bir yuvarlak test girdisi, PI değil
     fn fp32_from_f32_roundtrip() {
         for val in [0.0f32, 1.0, -1.0, 0.5, -0.25, 3.14, 100.75] {
             let fp = Fp32::from_f32(val);
@@ -417,6 +418,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)] // 3.14 burada rastgele bir yuvarlak test girdisi, PI değil
     fn fp32_neg() {
         let a = Fp32::from_f32(3.14);
         assert!(fp_approx(-a, -3.14));

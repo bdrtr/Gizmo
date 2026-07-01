@@ -340,7 +340,7 @@ fn test_car_simulation() {
     let wheel_col = Collider::sphere(wheel_radius);
     wheel_rb.update_inertia_from_collider(&wheel_col);
 
-    let wheel_offsets = vec![
+    let wheel_offsets = [
         Vec3::new(-1.2, -0.2, 1.5),  // Sol Ön
         Vec3::new(1.2, -0.2, 1.5),   // Sağ Ön
         Vec3::new(-1.2, -0.2, -1.5), // Sol Arka

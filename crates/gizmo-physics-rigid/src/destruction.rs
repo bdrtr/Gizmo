@@ -74,6 +74,7 @@ impl DestructionSystem {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)] // testlerde Default sonrası alan atama okunabilirlik için
 mod tests {
     use super::*;
     use gizmo_physics_core::{CollisionEvent, CollisionEventType, ContactPoint, ContactPoints};

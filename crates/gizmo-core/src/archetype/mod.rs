@@ -360,9 +360,9 @@ impl Archetype {
 #[cfg(test)]
 mod tests {
     use crate::component::Component;
-    #[derive(Clone, Copy)] struct F32Comp(f32); impl Component for F32Comp {}
-    #[derive(Clone, Copy)] struct U32Comp(u32); impl Component for U32Comp {}
-    #[derive(Clone)] struct StringComp(String); impl Component for StringComp {}
+    #[derive(Clone, Copy)] #[allow(dead_code)] struct F32Comp(f32); impl Component for F32Comp {}
+    #[derive(Clone, Copy)] #[allow(dead_code)] struct U32Comp(u32); impl Component for U32Comp {}
+    #[derive(Clone)] #[allow(dead_code)] struct StringComp(String); impl Component for StringComp {}
     use super::*;
     use std::alloc::Layout;
     use std::ptr;

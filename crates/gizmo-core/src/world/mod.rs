@@ -376,14 +376,17 @@ mod tests {
     #[test]
     fn query_finds_matching_archetypes() {
         #[derive(Clone)]
+        #[allow(dead_code)]
         struct TestCompI32(i32);
         impl crate::component::Component for TestCompI32 {}
 
         #[derive(Clone)]
+        #[allow(dead_code)]
         struct TestCompF32(f32);
         impl crate::component::Component for TestCompF32 {}
 
         #[derive(Clone)]
+        #[allow(dead_code)]
         struct TestCompBool(bool);
         impl crate::component::Component for TestCompBool {}
 
@@ -463,9 +466,11 @@ mod tests {
     #[test]
     fn spawn_despawn_10k_entities_archetype_stability() {
         #[derive(Clone)]
+        #[allow(dead_code)]
         struct CompA(i32);
         impl crate::component::Component for CompA {}
         #[derive(Clone)]
+        #[allow(dead_code)]
         struct CompB(f32);
         impl crate::component::Component for CompB {}
 

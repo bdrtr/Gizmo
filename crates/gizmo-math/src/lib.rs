@@ -75,7 +75,7 @@ mod tests {
         assert_eq!(safe_recip(1.0, 0.0), None);
         assert_eq!(safe_recip(1.0, DEGENERATE_EPS * 0.5), None); // below threshold → None
         // never produces a non-finite result
-        assert!(safe_recip(1.0, f32::MIN_POSITIVE).map_or(true, |r| r.is_finite()));
+        assert!(safe_recip(1.0, f32::MIN_POSITIVE).is_none_or(|r| r.is_finite()));
     }
 
     #[test]

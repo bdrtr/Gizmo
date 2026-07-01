@@ -193,8 +193,7 @@ impl World {
     }
 }
 
-/// Sıfır allocation ile yaşayan entity'ler üzerinde iterasyon yapan iterator.
-
+// Sıfır allocation ile yaşayan entity'ler üzerinde iterasyon yapan iterator.
 #[cfg(test)]
 mod tests {
     use crate::impl_component;
