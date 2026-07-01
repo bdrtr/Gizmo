@@ -229,8 +229,10 @@ pub fn handle_simulation(
                             // Look-at: Yaw/Pitch hesapla
                             if let Some(mut cam) = cameras.get_mut(cam_entity_id) {
                                 let dir = (look_target - t.position).normalize();
-                                cam.yaw = dir.x.atan2(dir.z);
-                                cam.pitch = (-dir.y).asin();
+                                // Invert Camera::get_front(): fx = cos(yaw)cos(pitch),
+                                // fy = sin(pitch), fz = sin(yaw)cos(pitch)
+                                cam.yaw = dir.z.atan2(dir.x);
+                                cam.pitch = dir.y.asin();
                             }
 
                             t.update_local_matrix();
