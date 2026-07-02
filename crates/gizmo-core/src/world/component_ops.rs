@@ -1,5 +1,5 @@
 use super::World;
-use crate::archetype::{Archetype, ComponentInfo, EntityLocation};
+use crate::archetype::{ComponentInfo, EntityLocation};
 use crate::component::Component;
 use crate::entity::Entity;
 
@@ -56,10 +56,18 @@ impl World {
         }
 
         let old_loc = self.entity_locations[eid as usize];
-        let (new_row, moved_eid) = unsafe {
-            let old_arch_ptr = &mut self.archetype_index.archetypes[old_arch_id] as *mut crate::archetype::Archetype;
-            let target_arch_ptr = &mut self.archetype_index.archetypes[target_arch_id] as *mut crate::archetype::Archetype;
-            (&mut *old_arch_ptr).move_entity_to(old_loc.row as usize, &mut *target_arch_ptr)
+        let (new_row, moved_eid) = {
+            // İki archetype'ı FARKLI indekslerden disjoint ödünç al. Aynı Vec'ten
+            // iki `&mut ...[i] as *mut` almak, ikinci retag ile ilk pointer'ın
+            // provenance'ını geçersiz kılıp onu kullanınca UB üretiyordu (Miri
+            // Stacked Borrows). `get_disjoint_mut` aliasing'siz iki &mut verir.
+            let [old_arch, target_arch] = self
+                .archetype_index
+                .archetypes
+                .get_disjoint_mut([old_arch_id, target_arch_id])
+                .expect("old and target archetype indices are distinct and in bounds");
+            // SAFETY: move_entity_to raw sütun kopyaları yapar; ödünçler disjoint.
+            unsafe { old_arch.move_entity_to(old_loc.row as usize, target_arch) }
         };
 
         if let Some(moved) = moved_eid {
@@ -109,10 +117,18 @@ impl World {
         if old_arch_id == target_arch_id { return; }
 
         let old_loc = self.entity_locations[eid as usize];
-        let (new_row, moved_eid) = unsafe {
-            let old_arch_ptr = &mut self.archetype_index.archetypes[old_arch_id] as *mut crate::archetype::Archetype;
-            let target_arch_ptr = &mut self.archetype_index.archetypes[target_arch_id] as *mut crate::archetype::Archetype;
-            (&mut *old_arch_ptr).move_entity_to(old_loc.row as usize, &mut *target_arch_ptr)
+        let (new_row, moved_eid) = {
+            // İki archetype'ı FARKLI indekslerden disjoint ödünç al. Aynı Vec'ten
+            // iki `&mut ...[i] as *mut` almak, ikinci retag ile ilk pointer'ın
+            // provenance'ını geçersiz kılıp onu kullanınca UB üretiyordu (Miri
+            // Stacked Borrows). `get_disjoint_mut` aliasing'siz iki &mut verir.
+            let [old_arch, target_arch] = self
+                .archetype_index
+                .archetypes
+                .get_disjoint_mut([old_arch_id, target_arch_id])
+                .expect("old and target archetype indices are distinct and in bounds");
+            // SAFETY: move_entity_to raw sütun kopyaları yapar; ödünçler disjoint.
+            unsafe { old_arch.move_entity_to(old_loc.row as usize, target_arch) }
         };
 
         if let Some(moved) = moved_eid {
@@ -213,13 +229,19 @@ impl World {
             old_loc.row as usize,
         );
 
-        let (new_row, moved_eid) = unsafe {
-            // Raw pointer ile iki archetype'ı ödünç alıyoruz (farklı indeksler olduğu garantidir)
-            let old_arch_ptr = &mut self.archetype_index.archetypes[old_arch_id] as *mut Archetype;
-            let target_arch_ptr =
-                &mut self.archetype_index.archetypes[target_arch_id] as *mut Archetype;
-
-            (&mut *old_arch_ptr).move_entity_to(old_row, &mut *target_arch_ptr)
+        // İki archetype'ı FARKLI indekslerden disjoint olarak ödünç al. Önceki hal
+        // aynı Vec'ten iki `&mut ...[i] as *mut` alıyordu; ikinci retag ilk
+        // pointer'ın provenance'ını geçersiz kılıp onu kullanınca UB üretiyordu
+        // (Miri Stacked Borrows ihlali). `get_disjoint_mut` iki ayrı indekse
+        // aliasing'siz `&mut` verir — unsafe'e gerek yok.
+        let (new_row, moved_eid) = {
+            let [old_arch, target_arch] = self
+                .archetype_index
+                .archetypes
+                .get_disjoint_mut([old_arch_id, target_arch_id])
+                .expect("old and target archetype indices must be distinct and in bounds");
+            // SAFETY: move_entity_to raw sütun kopyaları yapar; ödünçler disjoint.
+            unsafe { old_arch.move_entity_to(old_row, target_arch) }
         };
 
         if let Some(moved) = moved_eid {
@@ -326,13 +348,16 @@ impl World {
             return; // Zaten yok
         }
 
-        // 2. Migration
-        let (new_row, moved_eid) = unsafe {
-            let old_arch_ptr = &mut self.archetype_index.archetypes[old_loc.archetype_id as usize]
-                as *mut Archetype;
-            let target_arch_ptr =
-                &mut self.archetype_index.archetypes[target_arch_id] as *mut Archetype;
-            (&mut *old_arch_ptr).move_entity_to(old_loc.row as usize, &mut *target_arch_ptr)
+        // 2. Migration — iki archetype'ı FARKLI indekslerden disjoint ödünç al
+        // (aynı Vec'ten iki `&mut ... as *mut` = geçersiz-kılınan-provenance UB'si).
+        let (new_row, moved_eid) = {
+            let [old_arch, target_arch] = self
+                .archetype_index
+                .archetypes
+                .get_disjoint_mut([old_loc.archetype_id as usize, target_arch_id])
+                .expect("old and target archetype indices are distinct and in bounds");
+            // SAFETY: move_entity_to raw sütun kopyaları yapar; ödünçler disjoint.
+            unsafe { old_arch.move_entity_to(old_loc.row as usize, target_arch) }
         };
 
         if let Some(moved) = moved_eid {
@@ -424,10 +449,15 @@ impl World {
                 let old_loc = self.entity_locations[eid as usize];
                 let old_row = old_loc.row as usize;
 
-                let (new_row, moved_eid) = unsafe {
-                    let old_arch_ptr = &mut self.archetype_index.archetypes[source_arch_id as usize] as *mut Archetype;
-                    let target_arch_ptr = &mut self.archetype_index.archetypes[target_arch_id] as *mut Archetype;
-                    (&mut *old_arch_ptr).move_entity_to(old_row, &mut *target_arch_ptr)
+                // Disjoint ödünç (source != target, yukarıda 422'de guard'landı).
+                let (new_row, moved_eid) = {
+                    let [old_arch, target_arch] = self
+                        .archetype_index
+                        .archetypes
+                        .get_disjoint_mut([source_arch_id as usize, target_arch_id])
+                        .expect("source and target archetype indices are distinct and in bounds");
+                    // SAFETY: move_entity_to raw sütun kopyaları yapar; ödünçler disjoint.
+                    unsafe { old_arch.move_entity_to(old_row, target_arch) }
                 };
 
                 if let Some(moved) = moved_eid {
@@ -495,10 +525,15 @@ impl World {
                 let eid = e.id();
                 let old_loc = self.entity_locations[eid as usize];
 
-                let (new_row, moved_eid) = unsafe {
-                    let old_arch_ptr = &mut self.archetype_index.archetypes[source_arch_id as usize] as *mut Archetype;
-                    let target_arch_ptr = &mut self.archetype_index.archetypes[target_arch_id] as *mut Archetype;
-                    (&mut *old_arch_ptr).move_entity_to(old_loc.row as usize, &mut *target_arch_ptr)
+                // Disjoint ödünç (source != target, yukarıda 520'de guard'landı).
+                let (new_row, moved_eid) = {
+                    let [old_arch, target_arch] = self
+                        .archetype_index
+                        .archetypes
+                        .get_disjoint_mut([source_arch_id as usize, target_arch_id])
+                        .expect("source and target archetype indices are distinct and in bounds");
+                    // SAFETY: move_entity_to raw sütun kopyaları yapar; ödünçler disjoint.
+                    unsafe { old_arch.move_entity_to(old_loc.row as usize, target_arch) }
                 };
 
                 if let Some(moved) = moved_eid {
@@ -518,5 +553,54 @@ impl World {
                 }
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::component::Component;
+    use crate::world::World;
+
+    #[derive(Clone, PartialEq, Debug)]
+    struct Pos(i32);
+    impl Component for Pos {}
+    #[derive(Clone, PartialEq, Debug)]
+    struct Vel(i32);
+    impl Component for Vel {}
+
+    /// Migrating an entity between archetypes needs mutable access to two distinct
+    /// archetypes stored in the same `Vec`. The old code took two
+    /// `&mut archetypes[i] as *mut` — the second retag invalidated the first
+    /// pointer's provenance, so using it was aliasing UB (caught by Miri). The fix
+    /// uses `get_disjoint_mut`. This test drives the swap-remove `moved_eid`
+    /// relocation path and must stay green under `cargo miri test` (see the Miri
+    /// CI job) to fence the invariant.
+    #[test]
+    fn archetype_migration_preserves_all_components() {
+        let mut world = World::new();
+        let e0 = world.spawn();
+        world.add_component(e0, Pos(0));
+        let e1 = world.spawn();
+        world.add_component(e1, Pos(1));
+        let e2 = world.spawn();
+        world.add_component(e2, Pos(2));
+
+        // All three share archetype {Pos}. Adding Vel to the MIDDLE entity migrates
+        // e1 to {Pos,Vel}; e2 swap-fills e1's vacated row in {Pos} (moved_eid path).
+        world.add_component(e1, Vel(10));
+
+        assert_eq!(world.borrow::<Pos>().get(e0.id()).unwrap().0, 0);
+        assert_eq!(world.borrow::<Pos>().get(e1.id()).unwrap().0, 1);
+        assert_eq!(world.borrow::<Pos>().get(e2.id()).unwrap().0, 2);
+        assert_eq!(world.borrow::<Vel>().get(e1.id()).unwrap().0, 10);
+        assert!(world.borrow::<Vel>().get(e0.id()).is_none());
+        assert!(world.borrow::<Vel>().get(e2.id()).is_none());
+
+        // Remove Vel → e1 migrates back to {Pos}; every entity's data stays intact.
+        world.remove_component::<Vel>(e1);
+        assert_eq!(world.borrow::<Pos>().get(e0.id()).unwrap().0, 0);
+        assert_eq!(world.borrow::<Pos>().get(e1.id()).unwrap().0, 1);
+        assert_eq!(world.borrow::<Pos>().get(e2.id()).unwrap().0, 2);
+        assert!(world.borrow::<Vel>().get(e1.id()).is_none());
     }
 }
