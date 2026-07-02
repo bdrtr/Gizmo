@@ -9,20 +9,56 @@
     canvas { display: block; outline: none; }
     #boot {
       position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-      color: #8b949e; font: 14px system-ui, sans-serif; pointer-events: none;
+      padding: 1rem; text-align: center; color: #8b949e;
+      font: 14px system-ui, sans-serif; pointer-events: none; white-space: pre-line;
     }
+    #boot.err { color: #f85149; }
   </style>
 </head>
 <body>
   <div id="boot">Gizmo Engine yükleniyor… (WebGPU gerektirir)</div>
   <script type="module">
-    import init from './pkg/demo_web.js';
-    try {
-      await init();
-      document.getElementById('boot').remove();
-    } catch (e) {
-      document.getElementById('boot').textContent = 'Başlatılamadı: ' + e;
-      console.error(e);
+    const boot = document.getElementById('boot');
+    const fail = (msg) => {
+      // Sadece ilk hata gösterilir; sonrakiler bastırılır (panik ardıl olayları).
+      if (boot.classList.contains('err')) return;
+      boot.classList.add('err');
+      boot.textContent = 'Başlatılamadı.\n' + msg +
+        '\n\nWebGPU destekli güncel bir tarayıcı (Chrome/Edge) gerekir.';
+    };
+
+    // Motorun async WebGPU init'i wasm-bindgen start() DÖNDÜKTEN SONRA,
+    // spawn_local içinde koşar ve başarısızlıkta PANİKLER (adapter/device yok).
+    // O panik burada bir uncaught 'error'/'unhandledrejection' olarak yüzer —
+    // await init()'in try/catch'i onu YAKALAMAZ. Bu yüzden global dinleyiciler:
+    window.addEventListener('error', (e) => fail(e.message || String(e.error || e)));
+    window.addEventListener('unhandledrejection', (e) => fail(String(e.reason)));
+
+    if (!navigator.gpu) {
+      fail('Tarayıcıda WebGPU (navigator.gpu) yok.');
+    } else {
+      try {
+        const { default: init } = await import('./pkg/demo_web.js');
+        await init();
+        // init() çözülmesi renderer'ın HAZIR olduğu anlamına GELMEZ (async GPU
+        // init hâlâ sürüyor olabilir). Canvas motor tarafından eklenene kadar
+        // "yükleniyor" mesajını tut; canvas belirince ilk kare geldi demektir.
+        const start = performance.now();
+        const waitCanvas = () => {
+          if (boot.classList.contains('err')) return; // hata baskın
+          const cv = document.querySelector('canvas');
+          if (cv && cv.width > 1 && cv.height > 1) {
+            boot.remove();
+          } else if (performance.now() - start > 15000) {
+            fail('Render 15 sn içinde başlamadı (WebGPU adapter alınamadı olabilir).');
+          } else {
+            requestAnimationFrame(waitCanvas);
+          }
+        };
+        requestAnimationFrame(waitCanvas);
+      } catch (e) {
+        fail(String(e));
+      }
     }
   </script>
 </body>

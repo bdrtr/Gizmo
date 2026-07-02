@@ -240,6 +240,9 @@ impl<State: 'static> ApplicationHandler for App<State> {
             Ok(w) => Arc::new(w),
             Err(e) => {
                 tracing::error!("Window creation failed: {}", e);
+                // `run`/`run_default`'ın belgeli hata sözleşmesini onurlandır:
+                // aksi halde pencere kurulamayınca run() yine de Ok(()) dönerdi.
+                self.init_error = Some(crate::AppError::WindowCreation(e));
                 event_loop.exit();
                 return;
             }

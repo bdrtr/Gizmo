@@ -1,6 +1,8 @@
 # Rust / Cargo
 /target
-Cargo.lock
+# Cargo.lock IS committed: this workspace ships binaries (demo, server, cradle,
+# demo-web) and a browser build verified against a specific dependency graph, so
+# CI and contributors must resolve the same versions (built with `--locked`).
 
 # OS artifacts
 .DS_Store

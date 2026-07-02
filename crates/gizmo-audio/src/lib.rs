@@ -142,6 +142,18 @@ pub struct AudioManager {
     next_sink_id: u64,
 }
 
+// SAFETY: wasm32'de (atomics/paylaşımlı-bellek OLMADAN) yürütme tek thread'dir —
+// bir değer başka bir thread'e fiilen taşınamayacağı için bu impl'ler
+// gözlemlenemez; cpal'ın WebAudio tipleri yalnızca ham JS handle'ları taşıdığı
+// için !Send'dir. wgpu'nun `fragile-send-sync-non-atomic-wasm` deseninin
+// birebir karşılığı. `not(target_feature = "atomics")` koşulu bilinçli: wasm
+// threads etkinleştirilirse impl kaybolur ve World-resource kullanımı derleme
+// hatasıyla yeniden değerlendirmeye zorlar (sessiz unsoundness yerine).
+#[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+unsafe impl Send for AudioManager {}
+#[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+unsafe impl Sync for AudioManager {}
+
 impl std::fmt::Debug for AudioManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AudioManager")
@@ -155,6 +167,14 @@ impl std::fmt::Debug for AudioManager {
 
 impl AudioManager {
     /// Creates a new audio manager bound to the default output device.
+    ///
+    /// # Web (WASM) note
+    ///
+    /// On `wasm32` the backend is the browser's `AudioContext` (via cpal's
+    /// WebAudio backend). Browsers suspend an `AudioContext` created before a
+    /// user gesture (autoplay policy): construct the `AudioManager` from an
+    /// input handler (first click/keypress) rather than at startup, or the
+    /// sinks will play silently.
     ///
     /// # Errors
     ///
@@ -188,6 +208,18 @@ impl AudioManager {
         file.read_to_end(&mut buffer).map_err(AudioError::Io)?;
         self.sound_buffers.insert(name.to_string(), buffer.into());
         Ok(())
+    }
+
+    /// Registers an already-decoded-from-disk (or embedded / fetched) sound
+    /// buffer under `name`. The bytes must be a complete audio file in a
+    /// format rodio can decode (WAV/OGG/FLAC/MP3), exactly as
+    /// [`load_sound`](Self::load_sound) would have read from disk.
+    ///
+    /// This is the loading path for targets without a filesystem (WASM, where
+    /// assets arrive via `fetch`/`include_bytes!`) and for games that embed
+    /// audio in the binary.
+    pub fn load_sound_bytes(&mut self, name: &str, bytes: impl Into<Arc<[u8]>>) {
+        self.sound_buffers.insert(name.to_string(), bytes.into());
     }
 
     /// Update çağrıldığında biten sesleri temizler

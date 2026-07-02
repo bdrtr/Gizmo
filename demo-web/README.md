@@ -8,8 +8,17 @@ ground disk so the live simulation loop is visible.
 ## Requirements
 
 - The `wasm32-unknown-unknown` Rust target (`rustup target add wasm32-unknown-unknown`)
-- `wasm-bindgen-cli` matching the workspace's `wasm-bindgen` version
-  (`cargo install wasm-bindgen-cli --version <version>`)
+- `wasm-bindgen-cli` **at exactly the version this workspace resolves `wasm-bindgen`
+  to** — the bindgen format is version-locked, so a mismatch fails with a clear
+  "schema version" error. Find the resolved version and install the matching CLI:
+
+  ```sh
+  # exact version from the committed lockfile
+  cargo metadata --format-version 1 \
+    | grep -o '"wasm-bindgen@[0-9.]*"' | head -1
+  # e.g. wasm-bindgen@0.2.126 → install the matching CLI:
+  cargo install wasm-bindgen-cli --version 0.2.126
+  ```
 - A WebGPU-capable browser (Chrome/Edge stable, Firefox behind a flag)
 
 ## Build & run
@@ -26,7 +35,8 @@ python3 -m http.server -d demo-web 8080
 ```
 
 Controls: hold right mouse button + move to look, `WASD` to move, `Shift` for
-speed.
+speed. Left-click starts the browser `AudioContext` and plays a beep (autoplay
+policy requires a user gesture, so audio can only begin after the first click).
 
 ## What the web build does differently
 

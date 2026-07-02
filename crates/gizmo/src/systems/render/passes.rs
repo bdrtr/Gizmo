@@ -473,6 +473,18 @@ pub(super) fn record_forward_and_fluid(
                 draw_solid = true;
             }
 
+            // Main pass: yalnız kamera-görünür instance'lar. camera_count==0 ise
+            // (tüm batch shadow-only / kamera-dışı) aralık BOŞ olur — 0-instance
+            // draw'ı hem boşa komut, hem tarayıcıda "instance count of 0 is
+            // unusual" uyarısı üretir → tamamen atla.
+            let inst_start = item.first_instance;
+            let inst_end = (item.first_instance + item.camera_count)
+                .min(uploaded_instances)
+                .max(item.first_instance);
+            if inst_end <= inst_start {
+                continue;
+            }
+
             let skel_bg = item
                 .skeleton_bind_group
                 .as_ref()
@@ -492,14 +504,7 @@ pub(super) fn record_forward_and_fluid(
                 render_pass.set_bind_group(1, &*item.bind_group, &[]);
                 render_pass.set_bind_group(BG_SKELETON, skel_bg.as_ref(), &[]);
                 render_pass.set_vertex_buffer(0, item.vbuf.slice(..));
-                render_pass.draw(
-                    0..item.vertex_count,
-                    // Main pass: camera-visible instances only.
-                    item.first_instance
-                        ..(item.first_instance + item.camera_count)
-                            .min(uploaded_instances)
-                            .max(item.first_instance),
-                );
+                render_pass.draw(0..item.vertex_count, inst_start..inst_end);
             }
 
             if draw_wire {
@@ -507,14 +512,7 @@ pub(super) fn record_forward_and_fluid(
                 render_pass.set_bind_group(1, &*item.bind_group, &[]);
                 render_pass.set_bind_group(BG_SKELETON, skel_bg.as_ref(), &[]);
                 render_pass.set_vertex_buffer(0, item.vbuf.slice(..));
-                render_pass.draw(
-                    0..item.vertex_count,
-                    // Main pass: camera-visible instances only.
-                    item.first_instance
-                        ..(item.first_instance + item.camera_count)
-                            .min(uploaded_instances)
-                            .max(item.first_instance),
-                );
+                render_pass.draw(0..item.vertex_count, inst_start..inst_end);
             }
         }
 

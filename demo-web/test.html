@@ -11,19 +11,39 @@
   const report = (obj) =>
     fetch('/report?r=' + encodeURIComponent(JSON.stringify(obj))).catch(() => {});
   window.addEventListener('error', (e) => report({ fatal: String(e.message) }));
+  window.addEventListener('unhandledrejection', (e) => report({ fatal: String(e.reason) }));
 
   try {
-    if (!navigator.gpu) { report({ fatal: 'no webgpu' }); }
+    if (!navigator.gpu) { report({ fatal: 'no webgpu' }); throw new Error('no webgpu'); }
     const { default: init } = await import('./pkg/demo_web.js');
     await init();
     report({ boot: 'ok' });
 
     // Motor kendi canvas'ını body'ye ekler; kareleri rAF ile say, sonra
-    // canvas'ı 2D'ye kopyalayıp piksel istatistiği çıkar.
-    let frames = 0;
+    // canvas'ı 2D'ye kopyalayıp piksel istatistiği çıkar. Canvas async GPU
+    // init'ten sonra belirir → önce onu bekle (aksi halde 90 kare boş geçip
+    // "hazır" gibi görünebilir), ancak makine yavaşsa süresiz bekleme.
+    let frames = 0, waited = 0;
     const t0 = performance.now();
     const tick = () => {
+      if (!document.querySelector('canvas')) {
+        if (++waited > 600) { report({ fatal: 'canvas 10sn icinde olusmadi' }); return; }
+        requestAnimationFrame(tick);
+        return;
+      }
       frames++;
+      // 30. karede canvas'a sentetik sol tık: demo'nun jest-tetiklemeli
+      // WebAudio yolunu (AudioManager + beep) sürer. Headless koşuda
+      // --autoplay-policy=no-user-gesture-required ile ses gerçekten başlar;
+      // sonuç konsol logundan ("[demo-web] audio: ...") okunur.
+      if (frames === 30) {
+        const cv = document.querySelector('canvas');
+        if (cv) {
+          const opts = { bubbles: true, cancelable: true, pointerId: 1, button: 0, buttons: 1, clientX: 320, clientY: 180 };
+          cv.dispatchEvent(new PointerEvent('pointerdown', opts));
+          cv.dispatchEvent(new PointerEvent('pointerup', { ...opts, buttons: 0 }));
+        }
+      }
       if (frames < 90) { requestAnimationFrame(tick); return; }
       const canvas = document.querySelector('canvas');
       if (!canvas) { report({ fatal: 'no canvas' }); return; }

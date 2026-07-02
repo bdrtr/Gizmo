@@ -65,6 +65,45 @@ mod web {
 
                 scene.spawn_camera(state, Vec3::new(-2.5, 4.5, 9.0), Vec3::ZERO);
             })
+            // Web audio: tarayıcı autoplay politikası AudioContext'in bir
+            // KULLANICI JESTİ içinde kurulmasını ister — AudioManager bu yüzden
+            // setup'ta değil, ilk sol tıkta (jest handler'ı) yaratılır; sonraki
+            // tıklar aynı manager'dan beep çalar (WebAudio kanıtı).
+            .set_input(|world, _state, event| {
+                use gizmo::winit::event::{ElementState, Event, MouseButton, WindowEvent};
+                if let Event::WindowEvent {
+                    event:
+                        WindowEvent::MouseInput {
+                            state: ElementState::Pressed,
+                            button: MouseButton::Left,
+                            ..
+                        },
+                    ..
+                } = event
+                {
+                    if world.get_resource::<gizmo::audio::AudioManager>().is_none() {
+                        match gizmo::audio::AudioManager::new() {
+                            Ok(mut am) => {
+                                am.load_sound_bytes(
+                                    "beep",
+                                    &include_bytes!("../assets/beep.wav")[..],
+                                );
+                                match am.play("beep") {
+                                    Ok(_) => log::info!("[demo-web] audio: beep çalıyor (WebAudio aktif)"),
+                                    Err(e) => log::warn!("[demo-web] audio: play başarısız: {e}"),
+                                }
+                                world.insert_resource(am);
+                            }
+                            Err(e) => log::warn!("[demo-web] audio: AudioManager kurulamadı: {e}"),
+                        }
+                    } else if let Some(mut am) =
+                        world.get_resource_mut::<gizmo::audio::AudioManager>()
+                    {
+                        let _ = am.play("beep");
+                    }
+                }
+                false
+            })
             .run()
             .expect("gizmo web demo başlatılamadı");
     }

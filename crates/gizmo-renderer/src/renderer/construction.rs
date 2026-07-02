@@ -1,28 +1,36 @@
 use super::*;
 
+/// Web'de dahili render çözünürlüğü üst sınırı. 4K/Retina canvas'larda tam
+/// çözünürlükte render performansı katlederdi; aspect'i koruyarak buna caplenir
+/// ve sonuç CSS ile tekrar %100'e ölçeklenir (kasıtlı kalite/performans dengesi).
+/// **Native'de no-op** (verbatim döner) — sadece wasm hedefinde etkindir.
+///
+/// `Renderer::new` VE `Renderer::resize` bu tek fonksiyondan geçer; yoksa ilk
+/// `Resized` olayı (tarayıcı canvas'ı büyüdüğünde) cap'i sessizce delerdi.
+pub(crate) fn cap_web_render_size(
+    mut size: winit::dpi::PhysicalSize<u32>,
+) -> winit::dpi::PhysicalSize<u32> {
+    // Boş boyut (WASM'da canvas 0x0 olabilir) → en az 1x1 garanti (native'de de güvenli).
+    if size.width == 0 || size.height == 0 {
+        size = winit::dpi::PhysicalSize::new(1280, 720);
+    }
+    #[cfg(target_arch = "wasm32")]
+    if size.width > 640 || size.height > 360 {
+        let aspect = size.width as f32 / size.height as f32;
+        if aspect > 1.0 {
+            size.width = 640;
+            size.height = ((640.0 / aspect) as u32).max(1);
+        } else {
+            size.height = 360;
+            size.width = ((360.0 * aspect) as u32).max(1);
+        }
+    }
+    size
+}
+
 impl Renderer {
     pub async fn new(window: Arc<Window>) -> Self {
-        let mut size = window.inner_size();
-        // WASM'da canvas boyutu 0x0 olabilir, en az 1x1 garanti et
-        if size.width == 0 || size.height == 0 {
-            size = winit::dpi::PhysicalSize::new(1280, 720);
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            // Web'de 4K/Retina ekranlarda devasa çözünürlükler performansı katleder.
-            // Internal rendering çözünürlüğünü 1280x720'ye (veya aspect ratio'ya göre) caple.
-            if size.width > 640 || size.height > 360 {
-                let aspect = size.width as f32 / size.height as f32;
-                if aspect > 1.0 {
-                    size.width = 640;
-                    size.height = (640.0 / aspect) as u32;
-                } else {
-                    size.height = 360;
-                    size.width = (360.0 * aspect) as u32;
-                }
-            }
-        }
+        let size = cap_web_render_size(window.inner_size());
 
         #[cfg(target_arch = "wasm32")]
         let backends = wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL;
