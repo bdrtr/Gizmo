@@ -40,3 +40,6 @@ assets/*.crdownload
 .env.local
 .env.development
 .env.production
+
+# wasm-bindgen output (demo-web packaging artifact; rebuilt from source)
+demo-web/pkg/

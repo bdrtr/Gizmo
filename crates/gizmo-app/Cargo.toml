@@ -24,9 +24,6 @@ gizmo-renderer = { path = "../gizmo-renderer" , version = "0.2.0", optional = tr
 gizmo-audio = { path = "../gizmo-audio" , version = "0.2.0", optional = true }
 gizmo-editor = { path = "../gizmo-editor" , version = "0.2.0", optional = true }
 gizmo-scene = { path = "../gizmo-scene" , version = "0.2.0", optional = true }
-# Pulled in by `scene` so the runtime can register the `Script` scene component
-# (gizmo-scene itself no longer depends on scripting — keeps scene GPU-free).
-gizmo-scripting = { path = "../gizmo-scripting" , version = "0.2.0", optional = true }
 gizmo-net = { path = "../gizmo-net", version = "0.2.0", optional = true, default-features = false }
 winit = { version = "0.30", optional = true }
 wgpu = { version = "29", features = ["fragile-send-sync-non-atomic-wasm", "webgl"], optional = true }
@@ -57,6 +54,13 @@ scene = ["dep:gizmo-scene", "dep:gizmo-scripting"]
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = "0.17.2"
 backtrace = "0.3.76"
+# Pulled in by `scene` so the runtime can register the `Script` scene component
+# (gizmo-scene itself no longer depends on scripting — keeps scene GPU-free).
+# Target-gated: mlua (C Lua) cannot build for wasm32-unknown-unknown, so on the
+# web the `scene` feature loads scenes without Script components (scripting is
+# part of the deferred web backlog). `dep:gizmo-scripting` in the `scene`
+# feature is a no-op on wasm32.
+gizmo-scripting = { path = "../gizmo-scripting" , version = "0.2.0", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

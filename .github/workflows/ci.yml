@@ -107,12 +107,15 @@ jobs:
       - name: Headless stress test (200-box tower, 3 runs, hash match)
         run: cargo run --release -p demo --bin headless_stress_test
 
-  # ── WASM: the deterministic simulation core must compile to wasm32 ─────────
-  # Locks the browser-target build of math/core/physics/ai/animation/scene.
-  # Renderer/windowing/audio/net wasm backends are deferred (see RELEASING §4g),
-  # so they are intentionally NOT part of this gate.
+  # ── WASM: the sim core AND the browser graphics stack must compile to wasm32 ─
+  # Locks (a) the deterministic simulation core (math/core/physics/ai/animation/
+  # scene), and (b) the WebGPU browser stack: renderer, windowed app runtime and
+  # the `demo-web` browser demo (facade with the web feature subset — audio,
+  # network, editor and scripting stay native-only for now, see RELEASING §4g).
+  # `demo-web` was verified end-to-end in headless Chrome (WebGPU adapter,
+  # 90 rendered frames, scene pixels) on 2026-07-02; this gate keeps it building.
   wasm:
-    name: WASM sim-core (wasm32-unknown-unknown)
+    name: WASM (wasm32-unknown-unknown)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -125,6 +128,12 @@ jobs:
           cargo build --target wasm32-unknown-unknown \
             -p gizmo-math -p gizmo-core -p gizmo-physics-core -p gizmo-physics-rigid \
             -p gizmo-physics-soft -p gizmo-ai -p gizmo-animation -p gizmo-scene
+      - name: Build browser graphics stack for wasm32 (renderer + app + facade)
+        run: |
+          cargo build --target wasm32-unknown-unknown -p gizmo-renderer
+          cargo build --target wasm32-unknown-unknown -p gizmo-app \
+            --no-default-features --features render,physics,scene
+          cargo build --target wasm32-unknown-unknown -p demo-web
 
   # ── Miri: the ECS unsafe surface must be free of undefined behaviour ───────
   # Runs the pointer/aliasing-heavy gizmo-core modules under Miri (Tree Borrows).

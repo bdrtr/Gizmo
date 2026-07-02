@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<!-- Headless doğrulama koşum sayfası (CI/manuel): motoru başlatır, 90 kare
+     sayar, canvas piksellerini örnekleyip sonucu /report?r=… beacon'ıyla
+     sunucu loguna yazar. Üretim sayfası index.html'dir. -->
+<html lang="tr">
+<head><meta charset="utf-8"><title>Gizmo Web Demo — test harness</title>
+<style>html,body{margin:0;height:100%;background:#0d1117}canvas{display:block}</style>
+</head>
+<body>
+<script type="module">
+  const report = (obj) =>
+    fetch('/report?r=' + encodeURIComponent(JSON.stringify(obj))).catch(() => {});
+  window.addEventListener('error', (e) => report({ fatal: String(e.message) }));
+
+  try {
+    if (!navigator.gpu) { report({ fatal: 'no webgpu' }); }
+    const { default: init } = await import('./pkg/demo_web.js');
+    await init();
+    report({ boot: 'ok' });
+
+    // Motor kendi canvas'ını body'ye ekler; kareleri rAF ile say, sonra
+    // canvas'ı 2D'ye kopyalayıp piksel istatistiği çıkar.
+    let frames = 0;
+    const t0 = performance.now();
+    const tick = () => {
+      frames++;
+      if (frames < 90) { requestAnimationFrame(tick); return; }
+      const canvas = document.querySelector('canvas');
+      if (!canvas) { report({ fatal: 'no canvas' }); return; }
+      const w = canvas.width, h = canvas.height;
+      const c2 = document.createElement('canvas');
+      c2.width = w; c2.height = h;
+      const ctx = c2.getContext('2d');
+      ctx.drawImage(canvas, 0, 0);
+      const px = ctx.getImageData(0, 0, w, h).data;
+      const colors = new Set();
+      let nonZero = 0;
+      for (let i = 0; i < px.length; i += 16 * 4) { // her 16. piksel
+        const r = px[i], g = px[i + 1], b = px[i + 2];
+        if (r + g + b > 12) nonZero++;
+        colors.add((r >> 4) + '.' + (g >> 4) + '.' + (b >> 4));
+      }
+      report({
+        frames,
+        elapsed_ms: Math.round(performance.now() - t0),
+        canvas: w + 'x' + h,
+        sampled: px.length / (16 * 4) | 0,
+        non_black: nonZero,
+        distinct_colors: colors.size,
+      });
+    };
+    requestAnimationFrame(tick);
+  } catch (e) {
+    report({ fatal: String(e) });
+  }
+</script>
+</body>
+</html>

@@ -4,6 +4,7 @@ members = [
     "crates/*",
     "server",
     "demo",
+    "demo-web",
     "cradle",
 ]
 

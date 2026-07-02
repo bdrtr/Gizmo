@@ -1,0 +1,30 @@
+[package]
+name = "demo-web"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+# cdylib: wasm-bindgen girdi formatı; rlib: native workspace build'inin
+# (cargo build/test --workspace) crate'i sorunsuz derlemesi için.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Web feature alt-kümesi: audio (cpal), network (std::net UDP), editor (rfd
+# dosya diyaloğu) ve scripting (mlua/C) web backend'i gelene dek kapalı.
+gizmo = { package = "gizmo-engine", path = "../crates/gizmo", default-features = false, features = [
+    "window",
+    "render",
+    "physics",
+    "physics-dynamics",
+    "physics-soft",
+    "scene",
+    "animation",
+    "ui",
+] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"

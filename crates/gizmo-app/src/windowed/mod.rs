@@ -16,6 +16,23 @@ use winit::{
 
 // setup_panic_hook ve Plugin lib.rs ve plugin.rs'ye taşındı.
 
+// Frame timing clock: `std::time::Instant` panics on wasm32-unknown-unknown,
+// so the browser build swaps in `web_time::Instant` (same API, backed by
+// `performance.now()`). Native stays on `std` — zero behavior change.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use std::time::Instant as FrameInstant;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use web_time::Instant as FrameInstant;
+
+/// WASM: `resumed` içinde başlatılan async GPU init'in el-değiştirme durumu.
+/// Tek-thread'li web ortamında `Rc<RefCell<…>>` yeterli; `spawn_local` future'ı
+/// renderer'ı slota bırakıp `request_redraw` ile event loop'u uyandırır.
+#[cfg(target_arch = "wasm32")]
+struct PendingWebInit {
+    window: Arc<winit::window::Window>,
+    renderer_slot: std::rc::Rc<std::cell::RefCell<Option<Renderer>>>,
+}
+
 /// Plugin that registers the default renderer asset collections
 /// (`Assets<Mesh>` and `Assets<Material>`) into the [`App`]'s world.
 ///
@@ -100,7 +117,12 @@ pub struct App<State: 'static = ()> {
     #[cfg(feature = "egui")]
     editor: Option<EguiContext>,
     app_state: Option<State>,
-    last_frame_time: Option<std::time::Instant>,
+    /// WASM: `resumed` bloklayamaz — `Renderer::new` (async WebGPU init)
+    /// `spawn_local`'da koşar, sonucu bu slot üzerinden ilk uyanışta
+    /// `finish_initialize`'a teslim edilir.
+    #[cfg(target_arch = "wasm32")]
+    pending_web_init: Option<PendingWebInit>,
+    last_frame_time: Option<FrameInstant>,
     light_time: f32,
     /// Set by `resumed` when lazy initialization (renderer build / setup hook)
     /// fails, so `run` can propagate the `AppError` instead of returning `Ok(())`
