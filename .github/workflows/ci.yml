@@ -125,3 +125,30 @@ jobs:
           cargo build --target wasm32-unknown-unknown \
             -p gizmo-math -p gizmo-core -p gizmo-physics-core -p gizmo-physics-rigid \
             -p gizmo-physics-soft -p gizmo-ai -p gizmo-animation -p gizmo-scene
+
+  # ── Miri: the ECS unsafe surface must be free of undefined behaviour ───────
+  # Runs the pointer/aliasing-heavy gizmo-core modules under Miri (Tree Borrows).
+  # This fences the archetype-migration disjoint-borrow invariant: taking two
+  # `&mut archetypes[i] as *mut` at once was aliasing UB — the fix uses
+  # `get_disjoint_mut`, and these tests exercise every migration/swap-remove path.
+  # The parallel scheduler is excluded on purpose: its crossbeam-epoch dependency
+  # only trips the *experimental* Stacked Borrows model and is not gizmo code.
+  miri:
+    name: Miri (ECS soundness)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+      - name: Miri test (ECS unsafe surface, Tree Borrows)
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-tree-borrows -Zmiri-ignore-leaks"
+        run: |
+          cargo miri test -p gizmo-core --lib world::component_ops
+          cargo miri test -p gizmo-core --lib commands::
+          cargo miri test -p gizmo-core --lib archetype::tests
+          cargo miri test -p gizmo-core --lib archetype::blob
+          cargo miri test -p gizmo-core --lib query::tests
+          cargo miri test -p gizmo-core --lib hierarchy::tests
