@@ -46,6 +46,8 @@ pub struct DrawItem {
     /// Total instances in this batch's contiguous range: camera-visible ones FIRST,
     /// then shadow-only casters (outside the camera frustum but inside a cascade's light
     /// frustum). Shadow passes draw the whole range; main passes draw only `camera_count`.
+    /// (Yalnız shadow geçitleri okur — web'de gölge yok, alan orada ölü.)
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     instance_count: u32,
     /// Number of leading instances visible to the CAMERA (== the old camera-culled set).
     camera_count: u32,
@@ -649,6 +651,9 @@ pub fn default_render_pass(
         }
     }
 
+    // Web şemasında gölge yok (4-grup limiti, forward shader'dan shadow örneklemesi
+    // `load_shader_web` ile sökülür) — depth-only CSM/point geçitleri boşa GPU olur.
+    #[cfg(not(target_arch = "wasm32"))]
     passes::record_shadow_passes(encoder, renderer, &draw_items, uploaded_instances);
     passes::record_deferred_geometry(encoder, renderer, world, &draw_items, uploaded_instances);
     passes::record_ssao(encoder, renderer);

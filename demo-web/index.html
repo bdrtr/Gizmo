@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <title>Gizmo Engine — Web Demo</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #0d1117; overflow: hidden; }
+    /* Motor canvas'ı body'ye kendisi ekler ve %100 boyutlandırır. */
+    canvas { display: block; outline: none; }
+    #boot {
+      position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+      color: #8b949e; font: 14px system-ui, sans-serif; pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="boot">Gizmo Engine yükleniyor… (WebGPU gerektirir)</div>
+  <script type="module">
+    import init from './pkg/demo_web.js';
+    try {
+      await init();
+      document.getElementById('boot').remove();
+    } catch (e) {
+      document.getElementById('boot').textContent = 'Başlatılamadı: ' + e;
+      console.error(e);
+    }
+  </script>
+</body>
+</html>

@@ -255,8 +255,8 @@ below.)
 >   `input_fn(&Event)` hook contract), and the async GPU/editor init runs in
 >   `resumed` via `pollster::block_on`. Verified: full build, 552 tests, CI clippy
 >   `-D warnings`, determinism unchanged, and real windowed runs of `gizmo-studio`
->   + `bevy_3d_scene`. (The wasm `resumed` branch is a stub — it is part of the
->   separate, deferred WASM port, which does not build in this environment.)
+>   + `bevy_3d_scene`. (The wasm `resumed` branch was a stub at the time; it was
+>   implemented on 2026-07-02 via `spawn_local` + `PendingWebInit` — see §4g.)
 
 <details><summary>Original scope notes</summary>
 
@@ -303,7 +303,7 @@ enables `gizmo-animation/app`, so `AnimationPlugin` stays available through the
 facade. Broader `pub`-tightening from the audit raw output remains as
 fine-grained follow-up.
 
-### (g) WebAssembly (WASM) build — **L** — 🟡 **Simulation core DONE (2026-07-01); renderer/windowing/net deferred**
+### (g) WebAssembly (WASM) build — **L** — 🟢 **Sim core + renderer + windowing DONE (2026-07-02); audio/net/scripting deferred**
 
 The **deterministic simulation core now compiles to `wasm32-unknown-unknown`** and
 is CI-verifiable (`cargo build --target wasm32-unknown-unknown -p <crate>`):
@@ -325,12 +325,34 @@ byte-identical** (determinism hash unchanged, full test suite green):
 - **`std::thread::scope`** in `gizmo-ai` pathfinding gets a single-threaded wasm
   fallback (native threaded path untouched).
 
-**Still deferred (needs real web backends, not just cfg fixes):** the renderer
-(`wgpu` WebGPU surface + async device init), windowing (`winit` web
-`ApplicationHandler`), audio (web-audio), and `gizmo-net` (`std::net` UDP →
-WebSocket/WebTransport). The `ApplicationHandler::resumed` wasm branch in
-`gizmo-app` remains a stub for that reason. Not a 1.0 blocker: the native engine
-is the shipping target.
+**Browser rendering shipped (2026-07-02): the engine runs in a browser via
+WebGPU.** `gizmo-renderer`, `gizmo-app` (`render,physics,scene`) and the facade
+(web feature subset: `window,render,physics,physics-dynamics,physics-soft,scene,
+animation,ui`) all build for wasm32, and the **`demo-web/`** crate (wasm-bindgen
+`cdylib` + `index.html`) was verified end-to-end in headless Chrome: a
+BrowserWebGpu adapter, 90 rendered frames, canvas pixel analysis showing a live
+scene (69 distinct colors), zero validation errors, physics cubes falling in the
+screenshot. Key pieces:
+
+- `gizmo-app`'s wasm `resumed` is no longer a stub: `Renderer::new` (async WebGPU
+  adapter/device requests) runs in `wasm_bindgen_futures::spawn_local`; the built
+  renderer is handed to the shared synchronous `finish_initialize` through a
+  `PendingWebInit` slot on the next event-loop wakeup (the native path block_ons
+  the same `finish_initialize`).
+- The browser WebGPU bind-group cap (`maxBindGroups = 4`, verified empirically
+  against Chrome) is handled by the pre-existing web pipeline scheme: shadows are
+  dropped, `load_shader_web` strips shadow sampling and remaps group indices, and
+  the facade's forward pass now binds `BG_SKELETON`/`BG_INSTANCE` per-target and
+  skips the shadow passes on wasm.
+- `gizmo-scripting` (mlua — C Lua, cannot target wasm32) is target-gated to
+  non-wasm, so the `scene` feature works on the web without Script components.
+- The CI `wasm` job builds the graphics stack + `demo-web` in addition to the
+  sim core.
+
+**Still deferred (needs real web backends, not just cfg fixes):** audio
+(web-audio), `gizmo-net` (`std::net` UDP → WebSocket/WebTransport), scripting
+(a Lua VM that targets wasm), and the editor on the web (rfd file dialogs).
+Not 1.0 blockers: the native engine is the shipping target.
 
 ### (e) Document `glam` as an official public dependency — **S** — ✅ **DONE (2026-06-25)**
 

@@ -1,5 +1,6 @@
 use gizmo_math::Vec3;
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use wgpu::util::DeviceExt;
 
 #[derive(Clone)]
@@ -21,6 +22,9 @@ impl Mesh {
     /// Yeni bir `Mesh` bileşeni oluşturur.
     /// `vertices` dizisi üzerinden otomatik olarak `vertex_count` ve `bounds` hesaplanır.
     /// Hata durumlarında boş bir mesh oluşturmak için `Mesh::empty()` kullanılmalıdır.
+    // WASM: meshopt LOD üretimi native-only cfg'li — `device` ve `mut`'lar orada
+    // kullanılmadığından hedefli allow (native lint gücü korunur).
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables, unused_mut))]
     pub fn new(
         device: &wgpu::Device,
         vbuf: Arc<wgpu::Buffer>,

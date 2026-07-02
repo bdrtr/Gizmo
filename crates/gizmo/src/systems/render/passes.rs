@@ -3,6 +3,21 @@ use super::*;
 // default_render_pass'ten çıkarılan render geçişleri (Tier 3 round-2: mega-fn
 // bölmesi). Hepsi yan-etki-only: encoder'a komut kaydeder, çıktı döndürmez.
 
+// Forward pipeline bind-group indeksleri hedefe göre değişir: tarayıcı WebGPU
+// maxBindGroups=4 olduğundan web şemasında shadow grubu atılır ve skeleton /
+// instance bir kayar (bkz. gizmo_renderer::pipeline shaders.rs `load_shader_web`).
+//   Native: 0=global 1=texture 2=shadow 3=skeleton 4=instance
+//   WASM:   0=global 1=texture 2=skeleton 3=instance
+#[cfg(not(target_arch = "wasm32"))]
+const BG_SKELETON: u32 = 3;
+#[cfg(not(target_arch = "wasm32"))]
+const BG_INSTANCE: u32 = 4;
+#[cfg(target_arch = "wasm32")]
+const BG_SKELETON: u32 = 2;
+#[cfg(target_arch = "wasm32")]
+const BG_INSTANCE: u32 = 3;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn record_shadow_passes(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &Renderer,
@@ -443,8 +458,10 @@ pub(super) fn record_forward_and_fluid(
             multiview_mask: None,
         });
         render_pass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+        // Web şemasında shadow grubu pipeline layout'unda yok (4-grup limiti).
+        #[cfg(not(target_arch = "wasm32"))]
         render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-        render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+        render_pass.set_bind_group(BG_INSTANCE, &renderer.scene.instance_bind_group, &[]);
 
         let show_wireframes = world.get_resource::<WireframeConfig>().map(|c| c.global).unwrap_or(false);
 
@@ -473,7 +490,7 @@ pub(super) fn record_forward_and_fluid(
                 };
                 render_pass.set_pipeline(pipeline);
                 render_pass.set_bind_group(1, &*item.bind_group, &[]);
-                render_pass.set_bind_group(3, skel_bg.as_ref(), &[]);
+                render_pass.set_bind_group(BG_SKELETON, skel_bg.as_ref(), &[]);
                 render_pass.set_vertex_buffer(0, item.vbuf.slice(..));
                 render_pass.draw(
                     0..item.vertex_count,
@@ -488,7 +505,7 @@ pub(super) fn record_forward_and_fluid(
             if draw_wire {
                 render_pass.set_pipeline(&renderer.scene.wireframe_pipeline);
                 render_pass.set_bind_group(1, &*item.bind_group, &[]);
-                render_pass.set_bind_group(3, skel_bg.as_ref(), &[]);
+                render_pass.set_bind_group(BG_SKELETON, skel_bg.as_ref(), &[]);
                 render_pass.set_vertex_buffer(0, item.vbuf.slice(..));
                 render_pass.draw(
                     0..item.vertex_count,

@@ -214,6 +214,7 @@ pub fn process_scene_requests(world: &mut World) {
     // 3. Save
     if let Some(ref path) = save_req {
         let mut registry = gizmo_scene::registry::default_scene_registry();
+        #[cfg(not(target_arch = "wasm32"))]
         gizmo_scripting::register_script_components(&mut registry);
         match gizmo_scene::scene::SceneData::save(world, path, &registry) {
             Ok(()) => {
@@ -260,6 +261,7 @@ pub fn process_scene_requests(world: &mut World) {
             let dummy_rgba = [255u8, 255, 255, 255];
             let _dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
             let mut registry = gizmo_scene::registry::default_scene_registry();
+            #[cfg(not(target_arch = "wasm32"))]
             gizmo_scripting::register_script_components(&mut registry);
             let ok = gizmo_scene::scene::SceneData::load_into(path, world, &registry).is_ok();
             world.insert_resource(r);

@@ -26,7 +26,7 @@ impl<State: 'static> App<State> {
         };
         let mut last_frame_time = self
             .last_frame_time
-            .unwrap_or_else(std::time::Instant::now);
+            .unwrap_or_else(super::FrameInstant::now);
         let mut light_time = self.light_time;
 
         {
@@ -175,10 +175,7 @@ impl<State: 'static> App<State> {
                             _ => {}
                         }
                         if let WindowEvent::RedrawRequested = event {
-                            #[cfg(not(target_arch = "wasm32"))]
-                            let now = std::time::Instant::now();
-                            #[cfg(target_arch = "wasm32")]
-                            let now = web_time::Instant::now();
+                            let now = super::FrameInstant::now();
                             let mut dt = now.duration_since(last_frame_time).as_secs_f32();
                             dt = dt.min(0.05); // Güvenlik çemberi: Frame takılırsa 50ms'den fazla zıplamayacak, yerçekiminden düşme engellenecek.
                             last_frame_time = now;

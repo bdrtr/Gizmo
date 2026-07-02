@@ -3,6 +3,7 @@
 //! — call [`AsyncAssetLoader::drain_completed`] each frame and then upload via `AssetManager`.
 
 use crate::asset::error::AssetError;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::asset::{decode_obj_vertices_for_async, decode_rgba_image_file};
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
@@ -57,6 +58,9 @@ pub struct CompletedAsyncLoads {
     pub gltf_errors: Vec<GltfImportError>,
 }
 
+// WASM: istekler spawn_local fetch yoluna gider — Job kanalı yalnız native
+// worker thread'i besler (hedefli allow, native lint gücü korunur).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 enum Job {
     Texture { request_path: String },
     Obj { path: String },
@@ -92,6 +96,7 @@ enum WorkerMsg {
 }
 
 struct LoaderShared {
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     job_tx: SyncSender<Job>,
     result_rx: Receiver<WorkerMsg>,
     /// Original request path (as passed to `request_texture_reload`) → entities
@@ -115,7 +120,9 @@ impl AsyncAssetLoader {
         let (job_tx, job_rx) = mpsc::sync_channel::<Job>(64);
         let (result_tx, result_rx) = mpsc::channel::<WorkerMsg>();
 
+        #[cfg(not(target_arch = "wasm32"))]
         let worker_job_rx = job_rx;
+        #[cfg(not(target_arch = "wasm32"))]
         let worker_result_tx = result_tx.clone();
         #[cfg(not(target_arch = "wasm32"))]
         let _worker = Some(
@@ -157,7 +164,13 @@ impl AsyncAssetLoader {
         );
 
         #[cfg(target_arch = "wasm32")]
-        let _worker = None;
+        let _worker = {
+            // No worker thread on the web: requests go through
+            // `wasm_bindgen_futures::spawn_local` fetch paths instead, so the
+            // job channel's receive end is intentionally dropped here.
+            drop(job_rx);
+            None
+        };
 
         Self {
             shared: Arc::new(Mutex::new(LoaderShared {
@@ -471,7 +484,12 @@ async fn fetch_and_decode_obj_wasm(
             let idx = raw_idx as usize;
             let pos_base = idx * 3;
             if pos_base + 2 >= m.positions.len() {
-                return Err(format!("OBJ ({path}): position index out of range"));
+                return Err(AssetError::ObjIndexOutOfRange {
+                    path: std::path::PathBuf::from(path),
+                    kind: crate::asset::ObjIndexKind::Position,
+                    index: idx,
+                    len: m.positions.len() / 3,
+                });
             }
             let position = [
                 m.positions[pos_base],

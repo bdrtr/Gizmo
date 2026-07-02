@@ -102,9 +102,22 @@ impl<State: 'static> App<State> {
 
     /// Build the renderer, user state, and editor once the window exists (called
     /// from `resumed`). Stores the resulting runtime into `self`.
+    #[cfg(not(target_arch = "wasm32"))]
     async fn initialize(
         &mut self,
         window: Arc<winit::window::Window>,
+    ) -> Result<(), crate::AppError> {
+        let renderer = Renderer::new(window.clone()).await;
+        self.finish_initialize(window, renderer)
+    }
+
+    /// The synchronous tail of initialization, shared by the native path
+    /// (`initialize`, via `pollster::block_on`) and the web path (the renderer
+    /// arrives later from a `spawn_local` future — see `try_finish_web_init`).
+    fn finish_initialize(
+        &mut self,
+        window: Arc<winit::window::Window>,
+        renderer: Renderer,
     ) -> Result<(), crate::AppError> {
         // Initialize Core Dev Console Systems BEFORE setup so setup can register cvars
         self.world
@@ -116,7 +129,6 @@ impl<State: 'static> App<State> {
         });
 
         // Renderer Resource oluştur ve World'e ekle
-        let renderer = Renderer::new(window.clone()).await;
         renderer.asset_manager.write().unwrap().embedded_assets =
             std::mem::take(&mut self.embedded_assets);
         self.world.insert_resource(renderer);
@@ -144,7 +156,11 @@ impl<State: 'static> App<State> {
                 let _dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
 
                 {
+                    // wasm32: gizmo-scripting (mlua) web'de derlenmez — sahneler
+                    // Script bileşeni kaydı olmadan yüklenir (web scripting ertelendi).
+                    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
                     let mut registry = gizmo_scene::registry::default_scene_registry();
+                    #[cfg(not(target_arch = "wasm32"))]
                     gizmo_scripting::register_script_components(&mut registry);
                     if let Err(e) = gizmo_scene::scene::SceneData::load_into(
                         &scene_path,
@@ -173,9 +189,39 @@ impl<State: 'static> App<State> {
 
         self.app_state = Some(state);
         self.window = Some(window);
-        self.last_frame_time = Some(std::time::Instant::now());
+        self.last_frame_time = Some(super::FrameInstant::now());
         self.light_time = 0.0;
         Ok(())
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl<State: 'static> App<State> {
+    /// Web: `resumed`'da başlatılan async renderer init'i tamamlandıysa kalan
+    /// senkron kurulumu koşar. Renderer henüz hazır değilse hiçbir şey yapmaz
+    /// (init bitene dek `handle_event` `self.window == None` ile erken döner).
+    fn try_finish_web_init(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            self.pending_web_init = None;
+            return;
+        }
+        let Some(pending) = self.pending_web_init.as_ref() else {
+            return;
+        };
+        let Some(renderer) = pending.renderer_slot.borrow_mut().take() else {
+            return;
+        };
+        let window = pending.window.clone();
+        self.pending_web_init = None;
+        if let Err(e) = self.finish_initialize(window.clone(), renderer) {
+            tracing::error!("App initialization failed: {}", e);
+            self.init_error = Some(e);
+            event_loop.exit();
+            return;
+        }
+        // İlk kareyi tetikle — web'de sonraki kareler RedrawRequested
+        // zincirinden akar.
+        window.request_redraw();
     }
 }
 
@@ -211,11 +257,22 @@ impl<State: 'static> ApplicationHandler for App<State> {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            // The renderer init is async and wasm cannot block in `resumed`;
-            // wiring this up is part of the separate, deferred WASM port (this
-            // branch is not built in CI).
-            let _ = window;
-            tracing::error!("wasm: windowed init is part of the deferred WASM port");
+            // Web: `resumed` bloklayamaz. Async WebGPU init'i (adapter/device
+            // istekleri) `spawn_local`'a at; renderer hazır olunca slota konur
+            // ve `request_redraw` event loop'u uyandırır — ilk window_event /
+            // about_to_wait `try_finish_web_init` ile kalan senkron kurulumu
+            // (setup hook, sahne, egui) tamamlar.
+            let slot: std::rc::Rc<std::cell::RefCell<Option<Renderer>>> =
+                std::rc::Rc::new(std::cell::RefCell::new(None));
+            self.pending_web_init = Some(super::PendingWebInit {
+                window: window.clone(),
+                renderer_slot: slot.clone(),
+            });
+            wasm_bindgen_futures::spawn_local(async move {
+                let renderer = Renderer::new(window.clone()).await;
+                *slot.borrow_mut() = Some(renderer);
+                window.request_redraw();
+            });
         }
     }
 
@@ -225,10 +282,14 @@ impl<State: 'static> ApplicationHandler for App<State> {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        #[cfg(target_arch = "wasm32")]
+        self.try_finish_web_init(event_loop);
         self.handle_event(Event::WindowEvent { window_id, event }, event_loop);
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(target_arch = "wasm32")]
+        self.try_finish_web_init(event_loop);
         self.handle_event(Event::AboutToWait, event_loop);
     }
 

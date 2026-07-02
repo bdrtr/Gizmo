@@ -87,6 +87,15 @@ breaking `0.x` bump. **Upgrading from `0.1.x`? See the
 
 ### Added
 
+- **The engine now runs in the browser (WebGPU/WASM).** `gizmo-renderer`,
+  `gizmo-app` and the facade build for `wasm32-unknown-unknown` with a web
+  feature subset, using a reduced 4-bind-group forward pipeline (browser
+  `maxBindGroups = 4`; shadows/deferred/compute disabled on wasm). The new
+  `demo-web/` crate (wasm-bindgen + `index.html`) shows a live physics scene in
+  the browser and was verified end-to-end in headless Chrome. `gizmo-app`'s wasm
+  `resumed` implements the async WebGPU init via `spawn_local`; `gizmo-scripting`
+  (mlua) is target-gated to native, and the CI `wasm` job now also builds the
+  graphics stack. Audio/networking/scripting remain native-only (RELEASING §4g).
 - Deterministic same-platform **rollback netcode** (`gizmo-net`, `rollback`
   feature): `PhysicsWorld::snapshot`/`restore_snapshot` (full internal state incl.
   contact warm-start), a `Transport` trait with real-UDP and loopback impls, and

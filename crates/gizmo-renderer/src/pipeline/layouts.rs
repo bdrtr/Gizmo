@@ -134,6 +134,8 @@ pub(super) fn build_layouts(device: &wgpu::Device) -> Layouts {
 
 pub(super) struct LayoutRefs<'a> {
     pub(super) global: &'a wgpu::BindGroupLayout,
+    // WASM pipeline layout'u shadow grubunu kullanmaz (4-grup şeması).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) shadow: &'a wgpu::BindGroupLayout,
     pub(super) shadow_pass: &'a wgpu::BindGroupLayout,
     pub(super) texture: &'a wgpu::BindGroupLayout,

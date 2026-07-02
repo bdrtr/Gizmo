@@ -388,6 +388,9 @@ fn create_post_sampler(device: &wgpu::Device) -> wgpu::Sampler {
     })
 }
 
+// WASM: composite-bloom bind group'un depth girdisi native dalında — `depth_view`
+// web'de kullanılmaz (hedefli allow, native lint gücü korunur).
+#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
 pub fn create_post_textures(
     device: &wgpu::Device,
     post_bgl: &wgpu::BindGroupLayout,

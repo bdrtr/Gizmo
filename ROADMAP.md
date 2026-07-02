@@ -329,8 +329,23 @@ gerçek-UDP örnek onaylı geçmişte senkron).
       cfg (wasm32-scoped). (3) physics `step.rs` `std::time::Instant`→`web_time::Instant` (wasm); diğer
       time siteleri zaten cfg-ayrık. (4) `gizmo-ai` pathfinding `std::thread::scope`→wasm'de tek-thread
       fallback (native threaded yol dokunulmadı). **ERTELENEN (gerçek web backend gerekir, cfg değil):**
-      renderer (wgpu WebGPU surface + async device), pencere (winit web ApplicationHandler), audio
-      (web-audio), gizmo-net (`std::net` UDP → WebSocket/WebTransport).
+      audio (web-audio), gizmo-net (`std::net` UDP → WebSocket/WebTransport), scripting (mlua/C Lua).
+      **RENDERER + PENCERE ✅ (2026-07-02) — MOTOR TARAYICIDA ÇALIŞIYOR.** `gizmo-renderer` +
+      `gizmo-app` (render,physics,scene) + facade (`gizmo-engine` web feature alt-kümesi:
+      window,render,physics,physics-dynamics,physics-soft,scene,animation,ui) wasm32'ye derleniyor;
+      **`demo-web/`** (wasm-bindgen cdylib + index.html) headless Chrome'da **uçtan uca doğrulandı**:
+      BrowserWebGpu adapter, 90 kare render, canvas piksel analizi 69 farklı renk (canlı sahne),
+      sıfır validation hatası, düşen fizik küpleri ekran görüntüsünde havada. Yapılanlar:
+      (1) `gizmo-app` wasm `resumed` async init — `Renderer::new` (async WebGPU adapter/device)
+      `spawn_local`'da, sonuç `PendingWebInit` slotuyla ilk uyanışta `finish_initialize`'a teslim
+      (native `pollster` yolu aynı `finish_initialize`'ı paylaşır). (2) `gizmo-scripting` (mlua)
+      non-wasm'e target-gate'lendi — `scene` feature web'de Script bileşeni kaydı olmadan çalışır.
+      (3) Facade forward geçidi web 4-grup şemasına uyarlandı (tarayıcı WebGPU maxBindGroups=4,
+      ampirik doğrulandı): BG_SKELETON/BG_INSTANCE cfg sabitleri, gölge geçitleri + gölge bind'i
+      web'de atlanır (`load_shader_web` shadow örneklemesini shader'dan zaten söküyor, eski web
+      hazırlığı). (4) Küçük düzeltmeler: async_assets wasm OBJ yolu `AssetError` döndürür, tüm
+      wasm-cfg uyarıları hedefli allow/cfg ile sıfırlandı. CI `wasm` job'ı artık grafik yığınını +
+      `demo-web`'i de derliyor. Native BİT-AYNI: 552+ test yeşil, determinizm hash değişmedi.
 - [x] **Editor/studio sahne kaydet/yükle GÜVENİLİRLİĞİ** — round-trip regresyon testi
       (`scene.rs::scene_save_load_roundtrip_preserves_components_and_hierarchy`): isimli ebeveyn+çocuk
       + Transform değerleriyle dünya RON'a KAYDEDİLİP TAZE dünyaya YÜKLENİNCE bileşen değerleri

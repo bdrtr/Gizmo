@@ -31,6 +31,8 @@ impl<State: 'static> App<State> {
             #[cfg(feature = "egui")]
             editor: None,
             app_state: None,
+            #[cfg(target_arch = "wasm32")]
+            pending_web_init: None,
             last_frame_time: None,
             light_time: 0.0,
             init_error: None,
