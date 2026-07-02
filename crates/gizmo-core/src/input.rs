@@ -100,6 +100,24 @@ impl Input {
         // else: fast-tap — begin_frame()'de silinecek
     }
 
+    /// Basılı tüm tuş ve fare düğmelerini bırakılmış sayar (odak kaybı için).
+    ///
+    /// Pencere/canvas odağı kaybettiğinde (Alt-Tab, tarayıcı sekmesi değişimi)
+    /// işletim sistemi artık key-up olayı GÖNDERMEZ → o an basılı olan tuşlar
+    /// sonsuza dek "basılı" kalır ve kamera/karakter kayıp gider. Bu, tüm
+    /// basılı durumları temizler; hâlâ fiziksel olarak basılı bir tuş, odak
+    /// geri gelince yeni bir key-down ile yeniden kaydolur.
+    pub fn release_all(&mut self) {
+        for k in self.keys_pressed.drain() {
+            self.keys_just_released.insert(k);
+        }
+        for b in self.mouse_buttons_pressed.drain() {
+            self.mouse_buttons_just_released.insert(b);
+        }
+        self.mouse_delta = (0.0, 0.0);
+        self.mouse_scroll_delta = 0.0;
+    }
+
     /// Tuş şu an basılı mı? (sürekli kontrol)
     #[inline]
     pub fn is_key_pressed(&self, key: u32) -> bool {
@@ -457,6 +475,30 @@ mod tests {
         assert_eq!(input.mouse_delta(), (0.0, 0.0));
         // Pozisyon korunmalı
         assert_eq!(input.mouse_position(), (100.0, 200.0));
+    }
+
+    // ──── Odak Kaybı (release_all) Testleri ────
+
+    #[test]
+    fn test_release_all_clears_held_keys_and_buttons() {
+        let mut input = Input::new();
+        input.on_key_pressed(65); // 'A' basılı tutuluyor
+        input.on_key_pressed(87); // 'W' basılı tutuluyor
+        input.on_mouse_button_pressed(1);
+        input.on_mouse_moved(10.0, 10.0);
+        input.begin_frame(); // just_pressed temizlenir, pressed KALIR
+        assert!(input.is_key_pressed(65));
+        assert!(input.is_key_pressed(87));
+        assert!(input.is_mouse_button_pressed(1));
+
+        // Odak kaybı: OS artık key-up göndermez → release_all hepsini bırakmalı.
+        input.release_all();
+        assert!(!input.is_key_pressed(65), "A odak kaybından sonra hâlâ basılı");
+        assert!(!input.is_key_pressed(87), "W odak kaybından sonra hâlâ basılı");
+        assert!(!input.is_mouse_button_pressed(1));
+        assert_eq!(input.mouse_delta(), (0.0, 0.0));
+        // Bırakma bu frame'de just_released olarak görünür (temiz kenar).
+        assert!(input.is_key_just_released(65));
     }
 
     // ──── Scroll Testleri ────

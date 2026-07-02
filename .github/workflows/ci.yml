@@ -27,11 +27,11 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --workspace --verbose
+        run: cargo build --locked --workspace --verbose
       - name: Test (workspace, default features)
-        run: cargo test --workspace --verbose
+        run: cargo test --locked --workspace --verbose
       - name: Test gizmo-net (feature-gated backends)
-        run: cargo test -p gizmo-net --features client-server,rollback
+        run: cargo test --locked -p gizmo-net --features client-server,rollback
 
   # ── Lint: rustfmt (report-only) + clippy (-D warnings, ratcheted) ─────────
   lint:
@@ -65,7 +65,7 @@ jobs:
       # modüllerine hedefli field_reassign allow, gerisi gerçek düzeltme).
       - name: Clippy (-D warnings, ratcheted, all-features + all-targets)
         run: |
-          cargo clippy --workspace --all-features --all-targets -- -D warnings \
+          cargo clippy --locked --workspace --all-features --all-targets -- -D warnings \
             -A clippy::too_many_arguments -A clippy::type_complexity
 
   # ── Optional features: the `reflect` path must build + test (ubuntu only) ──
@@ -79,7 +79,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
       - uses: Swatinem/rust-cache@v2
       - name: Test Stage A crates with `reflect`
-        run: cargo test -p gizmo-core -p gizmo-physics-core -p gizmo-physics-rigid -p gizmo-scene --features reflect
+        run: cargo test --locked -p gizmo-core -p gizmo-physics-core -p gizmo-physics-rigid -p gizmo-scene --features reflect
 
   # ── MSRV gate: workspace must build on the declared rust-version (1.92) ────
   msrv:
@@ -92,7 +92,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
       - uses: Swatinem/rust-cache@v2
       - name: Check (workspace, MSRV toolchain)
-        run: cargo check --workspace
+        run: cargo check --locked --workspace
 
   # ── Determinism & stability: 3× tower collapse, hashes must match ─────────
   determinism:
@@ -105,7 +105,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
       - uses: Swatinem/rust-cache@v2
       - name: Headless stress test (200-box tower, 3 runs, hash match)
-        run: cargo run --release -p demo --bin headless_stress_test
+        run: cargo run --locked --release -p demo --bin headless_stress_test
 
   # ── WASM: the sim core AND the browser graphics stack must compile to wasm32 ─
   # Locks (a) the deterministic simulation core (math/core/physics/ai/animation/
@@ -125,15 +125,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build simulation core for wasm32
         run: |
-          cargo build --target wasm32-unknown-unknown \
+          cargo build --locked --target wasm32-unknown-unknown \
             -p gizmo-math -p gizmo-core -p gizmo-physics-core -p gizmo-physics-rigid \
             -p gizmo-physics-soft -p gizmo-ai -p gizmo-animation -p gizmo-scene
       - name: Build browser graphics stack for wasm32 (renderer + app + facade)
         run: |
-          cargo build --target wasm32-unknown-unknown -p gizmo-renderer
-          cargo build --target wasm32-unknown-unknown -p gizmo-app \
+          cargo build --locked --target wasm32-unknown-unknown -p gizmo-renderer
+          cargo build --locked --target wasm32-unknown-unknown -p gizmo-app \
             --no-default-features --features render,physics,scene
-          cargo build --target wasm32-unknown-unknown -p demo-web
+          cargo build --locked --target wasm32-unknown-unknown -p demo-web
 
   # ── Miri: the ECS unsafe surface must be free of undefined behaviour ───────
   # Runs the pointer/aliasing-heavy gizmo-core modules under Miri (Tree Borrows).

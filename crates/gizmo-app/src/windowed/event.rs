@@ -77,16 +77,21 @@ impl<State: 'static> App<State> {
                                 current_window.exit();
                             }
                             WindowEvent::Resized(physical_size) => {
-                                {
+                                // resize() web'de boyutu 640x360'a caplayabilir; WindowInfo'yu
+                                // ham fiziksel boyuttan DEĞİL, renderer'ın gerçek (caplenmiş)
+                                // boyutundan besle ki kamera aspect'i / picking math'i
+                                // surface'le tutarlı kalsın.
+                                let effective = {
                                     let mut r = self.world.get_resource_mut::<Renderer>().unwrap();
                                     r.resize(*physical_size);
-                                }
+                                    r.size
+                                };
                                 let mut win_info = self
                                     .world
                                     .get_resource_mut_or_default::<gizmo_core::window::WindowInfo>(
                                     );
-                                win_info.width = physical_size.width as f32;
-                                win_info.height = physical_size.height as f32;
+                                win_info.width = effective.width as f32;
+                                win_info.height = effective.height as f32;
                             }
                             WindowEvent::KeyboardInput {
                                 event: kb_event, ..
@@ -171,6 +176,12 @@ impl<State: 'static> App<State> {
                             WindowEvent::CursorMoved { position, .. } => {
                                 self.input
                                     .on_mouse_moved(position.x as f32, position.y as f32);
+                            }
+                            // Odak kaybında (Alt-Tab / tarayıcı sekme değişimi) basılı
+                            // tuşları bırak — yoksa OS key-up göndermez ve tuşlar
+                            // sonsuza dek "basılı" kalıp kamerayı kaydırır.
+                            WindowEvent::Focused(false) => {
+                                self.input.release_all();
                             }
                             _ => {}
                         }

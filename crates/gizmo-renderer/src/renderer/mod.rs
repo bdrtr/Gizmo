@@ -193,6 +193,12 @@ impl Renderer {
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+        // Web'de dahili render çözünürlüğünü aynı cap'ten geçir (native no-op).
+        // Bu olmadan ilk `Resized` olayı — tarayıcı canvas'ı CSS %100 ile
+        // pencereye büyüdüğünde — surface + tüm post-process zincirini tam
+        // fiziksel çözünürlükte yeniden kurup `Renderer::new`'daki 640x360
+        // perf cap'ini sessizce delerdi.
+        let new_size = crate::renderer::construction::cap_web_render_size(new_size);
         if new_size.width > 0 && new_size.height > 0 {
             self.size = new_size;
             self.config.width = new_size.width;
