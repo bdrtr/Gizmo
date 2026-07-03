@@ -359,13 +359,21 @@ impl World {
         if !self.is_alive(entity) {
             return Vec::new();
         }
+        let mut types = Vec::new();
         if let Some(&loc) = self.entity_locations.get(entity.id() as usize) {
             if loc.is_valid() {
                 let arch = &self.archetype_index.archetypes[loc.archetype_id as usize];
-                return arch.component_types();
+                types = arch.component_types();
             }
         }
-        Vec::new()
+        // Include SparseSet components the entity holds — they aren't archetype
+        // columns, so callers (reflection, scene save) would otherwise miss them.
+        for (tid, set) in &self.sparse_sets {
+            if set.contains(entity.id()) {
+                types.push(*tid);
+            }
+        }
+        types
     }
 
     /// The canonical way to turn a raw `u32` id into a live [`Entity`] handle with its

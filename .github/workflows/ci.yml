@@ -180,6 +180,7 @@ jobs:
           cargo miri test -p gizmo-core --lib archetype::blob
           cargo miri test -p gizmo-core --lib query::tests
           cargo miri test -p gizmo-core --lib hierarchy::tests
-          # SparseSet lifecycle: clone_entry's manual alloc/clone_fn/insert and the
-          # despawn/bundle sparse routing (world::tests::*_sparse_components).
-          cargo miri test -p gizmo-core --lib sparse_components
+          # SparseSet lifecycle: clone_entry's manual alloc/clone_fn/insert, the
+          # despawn/bundle sparse routing, and type-erased sparse ptr access
+          # (world::tests::*sparse*).
+          cargo miri test -p gizmo-core --lib sparse
