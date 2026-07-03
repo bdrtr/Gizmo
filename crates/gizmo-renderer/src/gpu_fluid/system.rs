@@ -33,6 +33,206 @@ pub struct GpuFluidSystem {
     pub opaque_bg_texture_view: wgpu::TextureView,
 }
 
+/// All screen-space-fluid-rendering (SSFR) resources whose size depends on the
+/// render target. Recreated on window resize so the fluid always matches the
+/// swapchain (previously created once in `new` and never rebuilt → the fluid was
+/// confined to a stale sub-rectangle after any resize).
+struct SsfrSized {
+    depth_texture_view: wgpu::TextureView,
+    raw_depth_texture: wgpu::Texture,
+    raw_depth_texture_view: wgpu::TextureView,
+    blur_texture_view: wgpu::TextureView,
+    thickness_texture_view: wgpu::TextureView,
+    opaque_bg_texture: wgpu::Texture,
+    opaque_bg_texture_view: wgpu::TextureView,
+    ssfr_particle_bg: wgpu::BindGroup,
+    ssfr_blur_x_bg: wgpu::BindGroup,
+    ssfr_blur_y_bg: wgpu::BindGroup,
+    ssfr_composite_bg: wgpu::BindGroup,
+}
+
+fn create_ssfr_sized(
+    device: &wgpu::Device,
+    pipelines: &FluidPipelines,
+    particles_buffer: &wgpu::Buffer,
+    output_format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+) -> SsfrSized {
+    let extent = wgpu::Extent3d {
+        width,
+        height,
+        depth_or_array_layers: 1,
+    };
+    let make_tex = |label: &str, format: wgpu::TextureFormat, usage: wgpu::TextureUsages| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        })
+    };
+
+    let depth_texture = make_tex(
+        "SSFR Depth Texture",
+        wgpu::TextureFormat::Depth32Float,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+    );
+    let depth_texture_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let raw_depth_texture = make_tex(
+        "SSFR Raw Depth Color Texture",
+        wgpu::TextureFormat::Rgba16Float,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+    );
+    let raw_depth_texture_view =
+        raw_depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let blur_texture = make_tex(
+        "SSFR Blur Texture",
+        wgpu::TextureFormat::Rgba16Float,
+        wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+    );
+    let blur_texture_view = blur_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let thickness_texture = make_tex(
+        "SSFR Thickness Texture",
+        wgpu::TextureFormat::R16Float,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+    );
+    let thickness_texture_view =
+        thickness_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let blur_temp_texture = make_tex(
+        "SSFR Blur Temp Texture",
+        wgpu::TextureFormat::Rgba16Float,
+        wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+    );
+    let blur_temp_texture_view =
+        blur_temp_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let opaque_bg_texture = make_tex(
+        "Opaque Background Texture",
+        output_format,
+        wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+    );
+    let opaque_bg_texture_view =
+        opaque_bg_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    // Blur direction/radius params (size-independent, but recreated with the
+    // bind groups they feed for simplicity).
+    let blur_params_buffer_x = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Blur Params X"),
+        contents: bytemuck::cast_slice(&[1u32, 0u32, 16u32, 1.0f32.to_bits()]),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+    let blur_params_buffer_y = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Blur Params Y"),
+        contents: bytemuck::cast_slice(&[0u32, 1u32, 16u32, 1.0f32.to_bits()]),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Nearest,
+        min_filter: wgpu::FilterMode::Nearest,
+        ..Default::default()
+    });
+
+    let ssfr_particle_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("SSFR Particle BG"),
+        layout: &pipelines.particle_render_bg_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 1,
+            resource: particles_buffer.as_entire_binding(),
+        }],
+    });
+
+    let ssfr_blur_x_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("SSFR Blur X BG"),
+        layout: &pipelines.blur_bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&raw_depth_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&blur_temp_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: blur_params_buffer_x.as_entire_binding(),
+            },
+        ],
+    });
+
+    let ssfr_blur_y_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("SSFR Blur Y BG"),
+        layout: &pipelines.blur_bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&blur_temp_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&blur_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: blur_params_buffer_y.as_entire_binding(),
+            },
+        ],
+    });
+
+    let ssfr_composite_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("SSFR Composite BG"),
+        layout: &pipelines.composite_bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&blur_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(&thickness_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(&opaque_bg_texture_view),
+            },
+        ],
+    });
+
+    SsfrSized {
+        depth_texture_view,
+        raw_depth_texture,
+        raw_depth_texture_view,
+        blur_texture_view,
+        thickness_texture_view,
+        opaque_bg_texture,
+        opaque_bg_texture_view,
+        ssfr_particle_bg,
+        ssfr_blur_x_bg,
+        ssfr_blur_y_bg,
+        ssfr_composite_bg,
+    }
+}
+
 impl GpuFluidSystem {
     pub fn new(
         device: &wgpu::Device,
@@ -225,209 +425,14 @@ impl GpuFluidSystem {
         );
 
         // SSFR Textures & Bindings
-        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("SSFR Depth Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let depth_texture_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let raw_depth_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("SSFR Raw Depth Color Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let raw_depth_texture_view =
-            raw_depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let blur_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("SSFR Blur Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let blur_texture_view = blur_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let thickness_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("SSFR Thickness Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R16Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let thickness_texture_view =
-            thickness_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let blur_temp_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("SSFR Blur Temp Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let blur_temp_texture_view =
-            blur_temp_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let blur_params_buffer_x = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Blur Params X"),
-            contents: bytemuck::cast_slice(&[1u32, 0u32, 16u32, 1.0f32.to_bits()]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let blur_params_buffer_y = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Blur Params Y"),
-            contents: bytemuck::cast_slice(&[0u32, 1u32, 16u32, 1.0f32.to_bits()]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let ssfr_particle_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("SSFR Particle BG"),
-            layout: &pipelines.particle_render_bg_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 1,
-                resource: particles_buffer.as_entire_binding(),
-            }],
-        });
-
-        let ssfr_blur_x_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("SSFR Blur X BG"),
-            layout: &pipelines.blur_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&raw_depth_texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&blur_temp_texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: blur_params_buffer_x.as_entire_binding(),
-                },
-            ],
-        });
-
-        let ssfr_blur_y_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("SSFR Blur Y BG"),
-            layout: &pipelines.blur_bind_group_layout,
-            entries: &[
-                // We must sample from blur_temp_texture_view. Wait, fluid_blur expects depth format?
-                // No, fluid_blur expects a texture_2d<f32>. depth_texture_view is Depth32Float.
-                // Wait! Can we sample from R32Float in WGSL using texture_2d<f32>? YES!
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&blur_temp_texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&blur_texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: blur_params_buffer_y.as_entire_binding(),
-                },
-            ],
-        });
-
-        let opaque_bg_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Opaque Background Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: output_format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let opaque_bg_texture_view =
-            opaque_bg_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            ..Default::default()
-        });
-        let _linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-
-        let ssfr_composite_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("SSFR Composite BG"),
-            layout: &pipelines.composite_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&blur_texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&thickness_texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&opaque_bg_texture_view),
-                },
-            ],
-        });
+        let ssfr = create_ssfr_sized(
+            device,
+            &pipelines,
+            &particles_buffer,
+            output_format,
+            width,
+            height,
+        );
 
         Self {
             num_particles,
@@ -442,18 +447,53 @@ impl GpuFluidSystem {
             mesh_vertices,
             index_count: 0,
             vertex_count: sphere_mesh.vertex_count,
-            ssfr_particle_bg,
-            ssfr_blur_x_bg,
-            ssfr_blur_y_bg,
-            ssfr_composite_bg,
-            depth_texture_view,
-            raw_depth_texture,
-            raw_depth_texture_view,
-            blur_texture_view,
-            thickness_texture_view,
-            opaque_bg_texture,
-            opaque_bg_texture_view,
+            ssfr_particle_bg: ssfr.ssfr_particle_bg,
+            ssfr_blur_x_bg: ssfr.ssfr_blur_x_bg,
+            ssfr_blur_y_bg: ssfr.ssfr_blur_y_bg,
+            ssfr_composite_bg: ssfr.ssfr_composite_bg,
+            depth_texture_view: ssfr.depth_texture_view,
+            raw_depth_texture: ssfr.raw_depth_texture,
+            raw_depth_texture_view: ssfr.raw_depth_texture_view,
+            blur_texture_view: ssfr.blur_texture_view,
+            thickness_texture_view: ssfr.thickness_texture_view,
+            opaque_bg_texture: ssfr.opaque_bg_texture,
+            opaque_bg_texture_view: ssfr.opaque_bg_texture_view,
         }
+    }
+
+    /// Recreate the size-dependent SSFR render targets after a window resize.
+    /// Without this the fluid's depth/thickness/blur/background textures keep
+    /// their original dimensions and the fluid renders into a stale sub-rectangle
+    /// (or the composite copy uses the wrong extent) once the window changes size.
+    pub fn resize(
+        &mut self,
+        device: &wgpu::Device,
+        output_format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+    ) {
+        if width == 0 || height == 0 {
+            return;
+        }
+        let ssfr = create_ssfr_sized(
+            device,
+            &self.pipelines,
+            &self.particles_buffer,
+            output_format,
+            width,
+            height,
+        );
+        self.ssfr_particle_bg = ssfr.ssfr_particle_bg;
+        self.ssfr_blur_x_bg = ssfr.ssfr_blur_x_bg;
+        self.ssfr_blur_y_bg = ssfr.ssfr_blur_y_bg;
+        self.ssfr_composite_bg = ssfr.ssfr_composite_bg;
+        self.depth_texture_view = ssfr.depth_texture_view;
+        self.raw_depth_texture = ssfr.raw_depth_texture;
+        self.raw_depth_texture_view = ssfr.raw_depth_texture_view;
+        self.blur_texture_view = ssfr.blur_texture_view;
+        self.thickness_texture_view = ssfr.thickness_texture_view;
+        self.opaque_bg_texture = ssfr.opaque_bg_texture;
+        self.opaque_bg_texture_view = ssfr.opaque_bg_texture_view;
     }
 
     pub fn update_colliders_count(&self, queue: &wgpu::Queue, count: u32) {
@@ -1083,6 +1123,55 @@ mod gpu_dispatch_tests {
             assert_eq!(
                 params_words[7], active,
                 "compute_pass must sync params.num_particles (offset 28) to the active LOD count"
+            );
+        });
+    }
+
+    // Regression: the SSFR render targets were created once in `new` and never
+    // rebuilt, so after a window resize the fluid rendered into a stale-sized
+    // sub-rectangle. `resize` must recreate them at the new dimensions.
+    #[test]
+    fn test_resize_recreates_ssfr_textures() {
+        pollster::block_on(async {
+            let Some((device, queue)) = setup_headless_gpu().await else {
+                tracing::info!("Skipping GPU test: no wgpu adapter found");
+                return;
+            };
+            let global_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("test_fluid_global_layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+            let fmt = wgpu::TextureFormat::Rgba16Float;
+            let mut system = GpuFluidSystem::new(&device, &queue, 256, &global_layout, fmt, 256, 256);
+            assert_eq!(
+                (system.raw_depth_texture.width(), system.raw_depth_texture.height()),
+                (256, 256)
+            );
+            assert_eq!(
+                (system.opaque_bg_texture.width(), system.opaque_bg_texture.height()),
+                (256, 256)
+            );
+
+            system.resize(&device, fmt, 512, 384);
+
+            assert_eq!(
+                (system.raw_depth_texture.width(), system.raw_depth_texture.height()),
+                (512, 384),
+                "resize must recreate raw_depth_texture at the new size"
+            );
+            assert_eq!(
+                (system.opaque_bg_texture.width(), system.opaque_bg_texture.height()),
+                (512, 384),
+                "resize must recreate opaque_bg_texture at the new size"
             );
         });
     }
