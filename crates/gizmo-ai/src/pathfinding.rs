@@ -301,3 +301,109 @@ impl NavGrid {
         None // Yol bulunamadı
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // cell_size 1.0 → cell (x,z) center is world (x+0.5, y+0.5, z+0.5).
+    fn center(x: i32, z: i32) -> Vec3 {
+        Vec3::new(x as f32 + 0.5, 0.5, z as f32 + 0.5)
+    }
+
+    // Verify a returned path is actually walkable & connected: every waypoint is a
+    // walkable cell, consecutive cells are 4/8-neighbours, and it ends at `end`.
+    fn assert_valid_path(grid: &NavGrid, start: GridPos, end: GridPos, path: &[Vec3]) {
+        assert!(!path.is_empty(), "path should have at least the destination");
+        let cells: Vec<GridPos> = path.iter().map(|w| grid.world_to_grid(*w)).collect();
+        assert_eq!(*cells.last().unwrap(), end, "path must end at the destination");
+        let mut prev = start;
+        for &c in &cells {
+            assert!(grid.is_walkable(c), "path steps onto a non-walkable cell {c:?}");
+            let dx = (c.x - prev.x).abs();
+            let dz = (c.z - prev.z).abs();
+            assert!(
+                dx <= 1 && dz <= 1 && (dx + dz) > 0,
+                "path step {prev:?} -> {c:?} is not a single-cell move"
+            );
+            prev = c;
+        }
+    }
+
+    #[test]
+    fn straight_path_is_optimal_length() {
+        let grid = NavGrid::new(1.0, 20, 20);
+        let path = grid.find_path(center(0, 5), center(5, 5)).expect("path exists");
+        // 5 cells east, no diagonals needed → exactly 5 steps (start excluded).
+        assert_eq!(path.len(), 5, "straight path should be 5 steps, got {}", path.len());
+        assert_valid_path(&grid, GridPos::new(0, 0, 5), GridPos::new(5, 0, 5), &path);
+    }
+
+    #[test]
+    fn diagonal_path_is_optimal_length() {
+        let grid = NavGrid::new(1.0, 20, 20);
+        let path = grid.find_path(center(0, 0), center(5, 5)).expect("path exists");
+        // Pure diagonal → 5 diagonal steps.
+        assert_eq!(path.len(), 5, "diagonal path should be 5 steps, got {}", path.len());
+        assert_valid_path(&grid, GridPos::new(0, 0, 0), GridPos::new(5, 0, 5), &path);
+    }
+
+    #[test]
+    fn path_routes_around_a_wall() {
+        let mut grid = NavGrid::new(1.0, 20, 20);
+        // Vertical wall at x=3 blocking z=0..=8, leaving a gap at z=9.
+        for z in 0..=8 {
+            grid.obstacles.insert(GridPos::new(3, 0, z));
+        }
+        let start = GridPos::new(1, 0, 4);
+        let end = GridPos::new(6, 0, 4);
+        let path = grid.find_path(center(1, 4), center(6, 4)).expect("path around wall exists");
+        assert_valid_path(&grid, start, end, &path);
+        // The path must never step on the wall.
+        for w in &path {
+            assert!(grid.world_to_grid(*w).x != 3 || grid.world_to_grid(*w).z > 8);
+        }
+    }
+
+    #[test]
+    fn unreachable_target_returns_none() {
+        let mut grid = NavGrid::new(1.0, 20, 20);
+        // Fully wall off the target cell (5,5) on all 8 sides.
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                if dx == 0 && dz == 0 {
+                    continue;
+                }
+                grid.obstacles.insert(GridPos::new(5 + dx, 0, 5 + dz));
+            }
+        }
+        assert!(
+            grid.find_path(center(0, 0), center(5, 5)).is_none(),
+            "a fully-walled target must be unreachable"
+        );
+    }
+
+    #[test]
+    fn diagonal_does_not_cut_corners() {
+        let mut grid = NavGrid::new(1.0, 20, 20);
+        // Obstacles at (1,0) and (0,1): the diagonal (0,0)->(1,1) would clip the
+        // corner between them and must be forbidden.
+        grid.obstacles.insert(GridPos::new(1, 0, 0));
+        grid.obstacles.insert(GridPos::new(0, 0, 1));
+        let n = grid.neighbors(GridPos::new(0, 0, 0));
+        assert!(
+            !n.contains(&GridPos::new(1, 0, 1)),
+            "diagonal move must be blocked when both flanking cells are obstacles"
+        );
+    }
+
+    #[test]
+    fn start_or_end_in_obstacle_returns_none() {
+        let mut grid = NavGrid::new(1.0, 20, 20);
+        grid.obstacles.insert(GridPos::new(5, 0, 5));
+        assert!(grid.find_path(center(0, 0), center(5, 5)).is_none(), "end in wall");
+        assert!(grid.find_path(center(5, 5), center(0, 0)).is_none(), "start in wall");
+        // Out-of-bounds target too.
+        assert!(grid.find_path(center(0, 0), center(50, 50)).is_none(), "end out of bounds");
+    }
+}

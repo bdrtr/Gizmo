@@ -24,7 +24,8 @@ use std::time::Instant;
 pub struct NavPoly {
     /// Bu polygon'un benzersiz kimliği
     pub id: u32,
-    /// Polygon köşeleri (saat yönünde, düz yüzey varsayımıyla)
+    /// Polygon köşeleri (üretilen mesh CCW/saat-yönü-tersi sarar, düz yüzey
+    /// varsayımıyla; `contains_point_xz` her iki winding'i de doğru işler).
     pub vertices: Vec<Vec3>,
     /// Polygon merkez noktası (ağırlık merkezi)
     pub center: Vec3,
@@ -44,12 +45,27 @@ impl NavPoly {
             return false;
         }
 
+        // Convex containment that works for EITHER winding: the point must lie on
+        // the same side of every edge, i.e. all edge cross products share a sign
+        // (zeros = on the edge line, treated as inside). The mesh emits CCW quads,
+        // but the old `cross < 0 => outside` test silently failed for a CW polygon
+        // (every interior point looked outside) — and the NavPoly doc even claimed
+        // CW, so a caller following it would have been bitten.
+        let mut sign = 0i32;
         for i in 0..n {
             let a = self.vertices[i];
             let b = self.vertices[(i + 1) % n];
             let cross = (b.x - a.x) * (point.z - a.z) - (b.z - a.z) * (point.x - a.x);
-            if cross < 0.0 {
-                return false;
+            if cross > 0.0 {
+                if sign < 0 {
+                    return false;
+                }
+                sign = 1;
+            } else if cross < 0.0 {
+                if sign > 0 {
+                    return false;
+                }
+                sign = -1;
             }
         }
         true
@@ -697,5 +713,40 @@ mod tests {
         // Açık alandaki bir nokta bir polygon'a düşmeli
         let poly = mesh.find_polygon(Vec3::new(-5.0, 0.0, -5.0));
         assert!(poly.is_some(), "Polygon bulunmalı");
+    }
+
+    fn unit_square(vertices: Vec<Vec3>) -> NavPoly {
+        NavPoly {
+            id: 0,
+            vertices,
+            center: Vec3::new(0.5, 0.0, 0.5),
+            neighbors: Vec::new(),
+            normal: Vec3::new(0.0, 1.0, 0.0),
+            area: 1.0,
+        }
+    }
+
+    // contains_point_xz must work for BOTH windings. The old CCW-only test
+    // reported every interior point of a CW polygon as outside (and the NavPoly
+    // doc claimed CW), so find_polygon would silently fall back to nearest-center.
+    #[test]
+    fn contains_point_xz_is_winding_agnostic() {
+        let inside = Vec3::new(0.5, 0.0, 0.5);
+        let outside = Vec3::new(1.5, 0.0, 0.5);
+        let corners = [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 1.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        ];
+        let ccw = unit_square(corners.to_vec());
+        let mut cw_v = corners.to_vec();
+        cw_v.reverse();
+        let cw = unit_square(cw_v);
+
+        assert!(ccw.contains_point_xz(inside), "CCW: interior point inside");
+        assert!(!ccw.contains_point_xz(outside), "CCW: exterior point outside");
+        assert!(cw.contains_point_xz(inside), "CW: interior point must be inside too");
+        assert!(!cw.contains_point_xz(outside), "CW: exterior point outside");
     }
 }
