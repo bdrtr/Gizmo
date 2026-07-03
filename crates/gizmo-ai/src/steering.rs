@@ -351,4 +351,67 @@ mod tests {
             far.length()
         );
     }
+
+    // Degenerate inputs (agent on its target, coincident neighbours, opposing
+    // velocities, zero radii) must never produce NaN/inf — a steering force feeds
+    // straight into physics integration, where one NaN corrupts the whole sim.
+    #[test]
+    fn degenerate_inputs_never_produce_nan() {
+        let finite = |v: Vec3, what: &str| {
+            assert!(
+                v.x.is_finite() && v.y.is_finite() && v.z.is_finite(),
+                "{what} produced a non-finite force: {v:?}"
+            );
+        };
+
+        // Agent exactly on its target.
+        finite(seek(Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, 10.0, 100.0), "seek@target");
+        finite(arrive(Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, 10.0, 100.0, 5.0), "arrive@target");
+        // arrive with a zero slowing radius (no divide-by-zero).
+        finite(arrive(Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, 10.0, 100.0, 0.0), "arrive/zero-radius");
+
+        // Obstacle / neighbour coincident with the agent (dist == 0).
+        finite(
+            avoid_obstacles(Vec3::ZERO, Vec3::ZERO, &[(Vec3::ZERO, 4.0)], 10.0, 100.0),
+            "avoid@obstacle",
+        );
+        finite(
+            separate(Vec3::ZERO, Vec3::ZERO, &[Vec3::ZERO], 2.0, 10.0, 100.0),
+            "separate@coincident",
+        );
+        finite(
+            cohesion(Vec3::ZERO, Vec3::ZERO, &[Vec3::ZERO], 5.0, 10.0, 100.0),
+            "cohesion@coincident",
+        );
+
+        // Alignment where neighbour velocities cancel to zero.
+        finite(
+            alignment(
+                Vec3::ZERO,
+                Vec3::ZERO,
+                &[(Vec3::new(1.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)),
+                  (Vec3::new(-1.0, 0.0, 0.0), Vec3::new(-1.0, 0.0, 0.0))],
+                5.0,
+                10.0,
+                100.0,
+            ),
+            "alignment/opposing",
+        );
+
+        // Everything degenerate at once through the combined entry point.
+        finite(
+            combined_steering(
+                Vec3::ZERO,
+                Vec3::ZERO,
+                Some(Vec3::ZERO),
+                &[(Vec3::ZERO, 4.0)],
+                &[(Vec3::ZERO, Vec3::ZERO)],
+                &SteeringWeights::default(),
+                10.0,
+                100.0,
+                (2.0, 5.0, 5.0),
+            ),
+            "combined/all-degenerate",
+        );
+    }
 }
