@@ -118,6 +118,20 @@ impl World {
             // doğru archetype'a ekledi. on_spawn boş archetype'a (0) tekrar eklerdi.
         }
 
+        // batch_clone_row only cloned archetype (table) columns. Deep-clone the
+        // source's SparseSet components into every clone too, otherwise clones
+        // silently lack them.
+        let sparse_types: Vec<std::any::TypeId> = self.sparse_sets.keys().copied().collect();
+        for tid in sparse_types {
+            if let Some(set) = self.sparse_sets.get_mut(&tid) {
+                if set.contains(source_id) {
+                    for &new_id in &new_eids {
+                        set.clone_entry(source_id, new_id, tick);
+                    }
+                }
+            }
+        }
+
         Some(new_entities)
     }
 
@@ -246,6 +260,27 @@ impl World {
                         // Kayan entity'nin location bilgisini güncelle
                         self.entity_locations[moved_eid as usize].row = loc.row;
                     }
+                }
+            }
+
+            // SparseSet components live outside the archetype, so the swap-remove
+            // above never touched them. Remove the entity from every sparse set
+            // (firing on_remove) BEFORE the id is freed — otherwise the component
+            // leaks and, since sets are keyed by raw id, a reused id inherits the
+            // dead entity's stale value.
+            let sparse_types: Vec<std::any::TypeId> =
+                self.sparse_sets.keys().copied().collect();
+            for tid in sparse_types {
+                let removed = self
+                    .sparse_sets
+                    .get_mut(&tid)
+                    .is_some_and(|set| set.remove(id));
+                if removed {
+                    self.run_hooks(tid, |h, w| {
+                        for hook in &mut h.on_remove {
+                            hook(w, e);
+                        }
+                    });
                 }
             }
 

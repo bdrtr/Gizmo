@@ -437,6 +437,76 @@ mod tests {
         );
     }
 
+    // Regression: despawn swap-removed the entity from its archetype but never
+    // touched `sparse_sets` — so a SparseSet component leaked and, because the set
+    // is keyed by raw entity id, a REUSED id inherited the dead entity's stale
+    // component.
+    #[test]
+    fn despawn_clears_sparse_components() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct SparseC(i32);
+        impl crate::component::Component for SparseC {
+            fn storage_type() -> crate::component::StorageType {
+                crate::component::StorageType::SparseSet
+            }
+        }
+
+        let mut world = World::new();
+        world.register_component_type::<SparseC>();
+
+        let e = world.spawn();
+        world.add_component(e, SparseC(5));
+        world.despawn(e);
+
+        // No SparseC must survive the despawn (leak)...
+        assert_eq!(
+            world.query::<&SparseC>().unwrap().iter().count(),
+            0,
+            "despawn leaked a sparse component"
+        );
+        // ...and a reused id must not inherit it (stale data).
+        let e2 = world.spawn();
+        assert!(
+            world.query_entity::<&SparseC>(e2.id()).is_none(),
+            "reused entity id inherited a stale sparse component from the despawned entity"
+        );
+    }
+
+    // Regression: clone_entity (prefab splice) clones archetype/table columns via
+    // batch_clone_row but never copied SparseSet components, so clones silently
+    // lacked the source's sparse components.
+    #[test]
+    fn clone_entity_copies_sparse_components() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct TableC(i32);
+        impl crate::component::Component for TableC {}
+        #[derive(Clone, Debug, PartialEq)]
+        struct SparseC(i32);
+        impl crate::component::Component for SparseC {
+            fn storage_type() -> crate::component::StorageType {
+                crate::component::StorageType::SparseSet
+            }
+        }
+
+        let mut world = World::new();
+        world.register_component_type::<TableC>();
+        world.register_component_type::<SparseC>();
+
+        let src = world.spawn();
+        world.add_component(src, TableC(1));
+        world.add_component(src, SparseC(2));
+
+        let clones = world.clone_entity(src.id(), 3).expect("clone_entity");
+        assert_eq!(clones.len(), 3);
+        for c in &clones {
+            assert_eq!(
+                world.query_entity::<&SparseC>(c.id()).map(|s| s.0),
+                Some(2),
+                "clone is missing the source's sparse component"
+            );
+        }
+    }
+
     #[test]
     fn add_same_component_overwrites() {
         #[derive(Clone, Debug, PartialEq)]
