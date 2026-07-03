@@ -333,6 +333,44 @@ mod tests {
         assert_eq!(bf.iter().count(), n, "column/entities tutarsızlığı");
     }
 
+    // Regression: spawn_batch's fast path wrote every bundle straight into
+    // archetype columns, but SparseSet components have no column — so the 2nd+
+    // entity panicked ("Component column missing in Archetype"). A bundle with a
+    // sparse component must now route every entity's sparse component into the
+    // sparse set (spawn_batch falls back to per-entity spawn_bundle).
+    #[test]
+    fn spawn_batch_routes_sparse_components() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct TableC(i32);
+        impl crate::component::Component for TableC {}
+        #[derive(Clone, Debug, PartialEq)]
+        struct SparseC(i32);
+        impl crate::component::Component for SparseC {
+            fn storage_type() -> crate::component::StorageType {
+                crate::component::StorageType::SparseSet
+            }
+        }
+
+        let mut world = World::new();
+        world.register_component_type::<TableC>();
+        world.register_component_type::<SparseC>();
+
+        let n = 50usize;
+        let bundles = (0..n).map(|i| (TableC(i as i32), SparseC(i as i32 * 2)));
+        let ents: Vec<_> = world.spawn_batch(bundles).collect();
+        assert_eq!(ents.len(), n);
+
+        // Every entity must have BOTH the table and the sparse component, and the
+        // sparse one must carry the right value (routed, not lost/panicked).
+        let mut query = world.query_mut::<(&TableC, &SparseC)>().unwrap();
+        let mut count = 0;
+        for (_id, (t, s)) in query.iter_mut() {
+            assert_eq!(s.0, t.0 * 2, "sparse component value mismatch");
+            count += 1;
+        }
+        assert_eq!(count, n, "all entities must have both components");
+    }
+
     #[test]
     fn add_same_component_overwrites() {
         #[derive(Clone, Debug, PartialEq)]

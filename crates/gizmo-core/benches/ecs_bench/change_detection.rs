@@ -156,7 +156,15 @@ fn none_changed_detection_generic<T: Component + Default + Clone>(
                 || {
                     let mut world = World::new();
                     let entities: Vec<_> = world.spawn_batch(std::iter::repeat_n((T::default(),), entity_count as usize)).collect();
-                    world.increment_tick();
+                    // Advance the change-detection FRAME (not just the raw tick):
+                    // spawned components are stamped `changed` at the spawn tick, so
+                    // to make them "before this frame" the reference tick must move
+                    // to (at least) the spawn tick. `increment_tick` leaves
+                    // `change_ref_tick` at 0, so a Changed<T> query would still
+                    // report every just-spawned entity — begin_change_frame is what
+                    // a real frame boundary uses.
+                    let spawn_tick = world.tick;
+                    world.begin_change_frame(spawn_tick);
                     (world, entities)
                 },
                 |(world, _)| {
@@ -221,7 +229,13 @@ fn multiple_archetype_none_changed_detection_generic<T: Component + Default + Cl
                 || {
                     let mut world = World::new();
                     add_archetypes_entities::<T>(&mut world, archetype_count, entity_count);
-                    world.increment_tick();
+                    // Advance the change-detection frame past the spawn tick so
+                    // `Changed<T>` counts only post-frame changes (see
+                    // none_changed_detection_generic). The ArchetypeData mutation
+                    // below then stamps a later tick, but it targets other
+                    // components, so Changed<T> must still be 0.
+                    let spawn_tick = world.tick;
+                    world.begin_change_frame(spawn_tick);
 
                     let query_mut = world.query_mut::<(
                         gizmo_core::query::Mut<ArchetypeData<0>>,
