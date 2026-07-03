@@ -507,6 +507,48 @@ mod tests {
         }
     }
 
+    // Regression: the type-erased accessors used by reflection / scene
+    // serialization only looked at archetype columns, so SparseSet components
+    // were invisible — entity_component_types omitted them and get_component_ptr
+    // returned None, silently dropping them from saved scenes.
+    #[test]
+    fn type_erased_access_includes_sparse() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct TableC(i32);
+        impl crate::component::Component for TableC {}
+        #[derive(Clone, Debug, PartialEq)]
+        struct SparseC(i32);
+        impl crate::component::Component for SparseC {
+            fn storage_type() -> crate::component::StorageType {
+                crate::component::StorageType::SparseSet
+            }
+        }
+
+        let mut world = World::new();
+        world.register_component_type::<TableC>();
+        world.register_component_type::<SparseC>();
+
+        let e = world.spawn();
+        world.add_component(e, TableC(1));
+        world.add_component(e, SparseC(42));
+
+        let types = world.entity_component_types(e);
+        assert!(
+            types.contains(&std::any::TypeId::of::<TableC>()),
+            "entity_component_types missed the table component"
+        );
+        assert!(
+            types.contains(&std::any::TypeId::of::<SparseC>()),
+            "entity_component_types missed the sparse component"
+        );
+
+        let ptr = world
+            .get_component_ptr(e, std::any::TypeId::of::<SparseC>())
+            .expect("get_component_ptr returned None for a sparse component");
+        let val = unsafe { &*(ptr as *const SparseC) };
+        assert_eq!(val.0, 42, "get_component_ptr read the wrong sparse value");
+    }
+
     #[test]
     fn add_same_component_overwrites() {
         #[derive(Clone, Debug, PartialEq)]

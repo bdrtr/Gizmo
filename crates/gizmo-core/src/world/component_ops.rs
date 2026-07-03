@@ -327,6 +327,13 @@ impl World {
 
     /// Raw Component Pointer alma (Reflection/Editor için)
     pub fn get_component_ptr(&self, entity: Entity, type_id: TypeId) -> Option<*const u8> {
+        // SparseSet components live outside the archetype — otherwise type-erased
+        // access (reflection, scene serialization) can't see them.
+        if let Some(set) = self.sparse_sets.get(&type_id) {
+            if let Some(p) = set.get_ptr(entity.id()) {
+                return Some(p);
+            }
+        }
         let loc = self.entity_locations.get(entity.id() as usize).copied()?;
         if !loc.is_valid() {
             return None;
@@ -338,6 +345,11 @@ impl World {
 
     /// Mut mutable Component pointer alma (HierarchyExt vs için)
     pub fn get_component_mut_ptr(&mut self, entity: Entity, type_id: TypeId) -> Option<*mut u8> {
+        if let Some(set) = self.sparse_sets.get_mut(&type_id) {
+            if let Some(p) = set.get_ptr_mut(entity.id()) {
+                return Some(p);
+            }
+        }
         let loc = self.entity_locations.get(entity.id() as usize).copied()?;
         if !loc.is_valid() {
             return None;
