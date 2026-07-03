@@ -292,6 +292,13 @@ impl Renderer {
             if let Some(ref mut fxaa) = self.fxaa {
                 fxaa.resize(&self.device, &self.queue, self.config.format, new_size.width, new_size.height);
             }
+            // GPU fluid SSFR render targets. Previously never rebuilt, so after any
+            // resize the fluid rendered into a stale sub-rectangle / the composite
+            // copied the wrong extent. Fluid composites into the HDR target.
+            let fluid_fmt = self.post.hdr_texture.format();
+            if let Some(ref mut fluid) = self.gpu_fluid {
+                fluid.resize(&self.device, fluid_fmt, new_size.width, new_size.height);
+            }
         }
     }
 

@@ -76,7 +76,7 @@ fn cull_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     );
     
     var in_frustum = true;
-    
+
     // Check if ALL corners are outside one of the 6 frustum planes
     var out_left = true;
     var out_right = true;
@@ -84,17 +84,23 @@ fn cull_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var out_top = true;
     var out_near = true;
     var out_far = true;
-    
+    // The clip-space plane test `x >= -w` etc. is only valid for w > 0. A corner
+    // with w <= 0 is at/behind the camera and flips every inequality, which can
+    // make a box that straddles the near plane test as fully-outside and get
+    // wrongly culled. Track it and treat such boxes as visible (conservative:
+    // never cull geometry in front of the camera; at worst a fully-behind box is
+    // kept and clipped when drawn).
+    var any_behind = false;
+
     for (var i = 0; i < 8; i++) {
         let rotated_corner = rotate_vector_by_quat(corners[i], rot);
         let world_pos = rotated_corner + pos;
         let clip_pos = scene.view_proj * vec4<f32>(world_pos, 1.0);
-        
-        let w = clip_pos.w; // or abs(clip_pos.w) ? Actually depending on near plane w might be complex, but usually w > 0.
-        // If w < 0, it means it's behind the camera. WGPU uses 0 to 1 for Z.
-        // It's safer to just let triangle clipping handle near plane, but checking is good.
-        
-        // Is it inside?
+
+        let w = clip_pos.w;
+        if (w <= 0.0) { any_behind = true; }
+
+        // Is it inside? (only meaningful for w > 0)
         if (clip_pos.x >= -w) { out_left = false; }
         if (clip_pos.x <= w) { out_right = false; }
         if (clip_pos.y >= -w) { out_bottom = false; }
@@ -102,9 +108,12 @@ fn cull_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (clip_pos.z >= 0.0) { out_near = false; }
         if (clip_pos.z <= w) { out_far = false; }
     }
-    
+
     if (out_left || out_right || out_bottom || out_top || out_near || out_far) {
         in_frustum = false;
+    }
+    if (any_behind) {
+        in_frustum = true;
     }
     
     if (in_frustum) {

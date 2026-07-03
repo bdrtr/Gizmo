@@ -343,10 +343,15 @@ gerçek-UDP örnek onaylı geçmişte senkron).
       (dünya/statik sentinel) korumasız `boxes[MAX]` indeksliyordu (debug + solver; solver latent —
       joints hiç dispatch edilmiyor) → sentinel guard. **(C3)** FEM i32 fixed-point akümülatörü sert
       malzemede taşabiliyordu (`i32()` UB) → `enc()` cast-öncesi clamp (aralık-içi bit-aynı, savunmacı).
-      **Ertelenen (bug ama ayrı iş, dokümante):** (A3) fluid SSFR textureları resize'da yeniden
-      oluşturulmuyor (pencere büyütülünce fluid alt-dikdörtgene sıkışır — renderer resize işi);
-      (D2) parçacık ring-buffer'ı LOD-kırpılmış kuyruğa spawn edebilir (uzak kamerada); (B3)
-      physics_culling negatif-w köşe yanlış sınıflandırma (yalnız görsel cull, sim'i etkilemez).
+      **İkinci tur — A3+B3 de kapatıldı (2026-07-03):** (A3) fluid SSFR textureları (depth/
+      thickness/blur/opaque-bg, 6 texture + 3 bind group) `create_ssfr_sized` yardımcısına çıkarıldı
+      → `GpuFluidSystem::resize` + `Renderer::resize`'a bağlandı (eskiden bir kez kurulup yeniden
+      oluşturulmuyordu → pencere büyüyünce fluid eski-boyut alt-dikdörtgene sıkışıyordu); resize
+      testiyle kilitli. (B3) physics_culling `w<=0` (kamera-arkası) köşe → muhafazakâr "görünür say"
+      guard'ı (clip-space düzlem testi yalnız w>0'da geçerli; görünür kutuyu yanlış cull etmeyi önler).
+      **Kalan ertelenen:** (D2) parçacık ring-buffer'ı LOD-kırpılmış kuyruğa spawn edebilir (uzak
+      kamerada birkaç parçacık görünmez) — LOD şemasında tasarım kararı (parçacık LOD'unu tümden
+      kaldırmak vs. spawn'ı active-pencereye modlamak), temiz bir bug fix değil, ayrı iş.
 - [~] WASM hedefi — **SİMÜLASYON ÇEKİRDEĞİ ✅ (2026-07-01), renderer/pencere/net ERTELENDİ.**
       Deterministik sim çekirdeği artık `wasm32-unknown-unknown`'a derleniyor + CI'da doğrulanabilir
       (`cargo build --target wasm32-unknown-unknown -p <crate>`): gizmo-math/core/physics-core/
