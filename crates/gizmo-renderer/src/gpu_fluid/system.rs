@@ -178,7 +178,9 @@ impl GpuFluidSystem {
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Fluid Params Buffer"),
             contents: bytemuck::cast_slice(&[params]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::UNIFORM
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC, // readback (debug/tests)
         });
 
         // Initialize Colliders buffer
@@ -532,7 +534,7 @@ impl GpuFluidSystem {
     pub fn compute_pass(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        _queue: &wgpu::Queue,
+        queue: &wgpu::Queue,
         update_grid: bool,
         active_particles: u32,
     ) {
@@ -540,6 +542,20 @@ impl GpuFluidSystem {
             return;
         }
         let workgroups_parts = active_particles.div_ceil(64);
+
+        // Keep the shader's `num_particles` guard (params offset 28) in sync with
+        // the active LOD set. It is otherwise never updated, so under LOD < 1.0 the
+        // hash pass (dispatched over `num_elements`) treats particles in
+        // [active, N) as REAL and inserts them into the grid, but `grid_offsets`
+        // only runs over `active` — so those particles get no cell offsets and are
+        // silently dropped from every neighbor scan (density/lambda/viscosity),
+        // corrupting incompressibility. Writing `active` here makes exactly the
+        // active set be hashed, integrated, and offset-mapped as one population.
+        queue.write_buffer(
+            &self.params_buffer,
+            28,
+            bytemuck::cast_slice(&[active_particles]),
+        );
 
         // 1. PBF PREDICT PASS
         {
@@ -962,4 +978,112 @@ fn alloc_sphere_verts(radius: f32, stacks: u32, slices: u32) -> Vec<Vertex> {
         }
     }
     vertices
+}
+
+#[cfg(test)]
+mod gpu_dispatch_tests {
+    use super::*;
+
+    async fn setup_headless_gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            flags: wgpu::InstanceFlags::default(),
+            memory_budget_thresholds: Default::default(),
+            backend_options: Default::default(),
+            display: None,
+        });
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })
+            .await
+            .ok()?;
+        adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .ok()
+    }
+
+    async fn read_u32s(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer) -> Vec<u32> {
+        let size = buffer.size();
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Test Staging Buffer"),
+            size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, size);
+        queue.submit(Some(encoder.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        rx.recv().unwrap().unwrap();
+        let data = slice.get_mapped_range();
+        let out = bytemuck::cast_slice(&data).to_vec();
+        drop(data);
+        staging.unmap();
+        out
+    }
+
+    // Regression: `params.num_particles` (params offset 28) was never updated at
+    // runtime, so under LOD < 1.0 the hash pass treated particles in [active, N)
+    // as REAL and inserted them into the neighbor grid, while grid_offsets ran
+    // over only `active` — silently dropping those particles from every neighbor
+    // scan. compute_pass must now write the active count so the hashed set and the
+    // offset-mapped set are one population.
+    #[test]
+    fn test_compute_pass_syncs_active_particle_count() {
+        pollster::block_on(async {
+            let Some((device, queue)) = setup_headless_gpu().await else {
+                tracing::info!("Skipping GPU test: no wgpu adapter found");
+                return;
+            };
+            let global_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("test_fluid_global_layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
+            let n = 1024u32;
+            let system = GpuFluidSystem::new(
+                &device,
+                &queue,
+                n,
+                &global_layout,
+                wgpu::TextureFormat::Rgba16Float,
+                256,
+                256,
+            );
+
+            // Reduced active count (as the render loop passes under LOD < 1.0).
+            let active = 300u32;
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            system.compute_pass(&mut encoder, &queue, true, active);
+            queue.submit(Some(encoder.finish()));
+
+            // params.num_particles lives at byte offset 28 == u32 index 7.
+            let params_words = read_u32s(&device, &queue, &system.params_buffer).await;
+            assert_eq!(
+                params_words[7], active,
+                "compute_pass must sync params.num_particles (offset 28) to the active LOD count"
+            );
+        });
+    }
 }

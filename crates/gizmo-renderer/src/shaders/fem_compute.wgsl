@@ -40,7 +40,13 @@ struct GpuCollider {
 @group(0) @binding(2) var<storage, read> elements: array<Tetrahedron>;
 @group(0) @binding(3) var<storage, read> colliders: array<GpuCollider>;
 
-
+// Encode a force component into the fixed-point i32 accumulator, clamping to just
+// inside the i32 range first. WGSL i32() of an out-of-range float is undefined and
+// the accumulator saturates near ±2.1e9, so an unclamped stiff-material force could
+// wrap it (flipping sign, injecting energy). In-range values are bit-identical.
+fn enc(value: f32, scale: f32) -> i32 {
+    return i32(clamp(value * scale, -2.0e9, 2.0e9));
+}
 
 // Pass 1: Clear forces
 @compute @workgroup_size(256)
@@ -50,14 +56,10 @@ fn clear_forces(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Yalnızca dış kuvvetleri sıfırla (gravity ekle)
     let gravity_force = params.gravity.xyz * nodes[idx].position_mass.w;
-    
-    let fx_i = i32(gravity_force.x * 100000.0);
-    let fy_i = i32(gravity_force.y * 100000.0);
-    let fz_i = i32(gravity_force.z * 100000.0);
-    
-    atomicStore(&nodes[idx].force_x, fx_i);
-    atomicStore(&nodes[idx].force_y, fy_i);
-    atomicStore(&nodes[idx].force_z, fz_i);
+
+    atomicStore(&nodes[idx].force_x, enc(gravity_force.x, 100000.0));
+    atomicStore(&nodes[idx].force_y, enc(gravity_force.y, 100000.0));
+    atomicStore(&nodes[idx].force_z, enc(gravity_force.z, 100000.0));
 }
 
 // Pass 2: Calculate Piola-Kirchhoff Stress & Apply Element Forces
@@ -106,18 +108,23 @@ fn compute_stress(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let c2 = F[2];
     
     let J = dot(c0, cross(c1, c2)); // Volume change ratio
-    let J_clamped = max(J, 0.01); // Prevent inversion singularity
-    
+    // Sign-PRESERVING clamp away from the singular J=0. `max(J, 0.01)` used to
+    // force J positive, which flipped the sign of F^-T = cofactor(F)/J for
+    // inverted (J < 0) elements, so their Piola stress pushed the wrong way and
+    // they could never un-invert. Keep |J| >= 0.01 but preserve the sign.
+    let J_safe = select(min(J, -0.01), max(J, 0.01), J >= 0.0);
+
     // F^-T is exactly Cofactor(F) / J
     let F_inv_T = mat3x3<f32>(
         cross(c1, c2),
         cross(c2, c0),
         cross(c0, c1)
-    ) * (1.0 / J_clamped);
-    
+    ) * (1.0 / J_safe);
+
     // 1st Piola-Kirchhoff Stress Tensor (P)
     // P = mu * (F - F^-T) + lambda * ln(J) * F^-T
-    let ln_J = log(J_clamped);
+    // ln|J| (abs) keeps the volumetric term defined for inverted elements.
+    let ln_J = log(abs(J_safe));
     let P = params.properties.y * (F - F_inv_T) + (params.properties.z * ln_J) * F_inv_T;
     
     // Element Force Matrix (H = -V0 * P * Dm^-T)
@@ -131,24 +138,29 @@ fn compute_stress(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // f0 = -(f1 + f2 + f3) to maintain equilibrium
     let f0 = -(f1 + f2 + f3);
     
-    // Write forces back to nodes using atomic operations
+    // Write forces back to nodes using atomic operations.
+    // The forces are accumulated in a fixed-point i32 (scale 1e5). WGSL i32() of
+    // an out-of-range float is undefined, and the accumulator saturates near
+    // ±2.1e9, so a stiff material / large deformation could wrap it — flipping the
+    // force sign and injecting energy. `enc()` clamps to just inside i32 range
+    // before the cast; in-range forces are unaffected (bit-identical).
     let force_scale = 100000.0;
-    
-    atomicAdd(&nodes[i0].force_x, i32(f0.x * force_scale));
-    atomicAdd(&nodes[i0].force_y, i32(f0.y * force_scale));
-    atomicAdd(&nodes[i0].force_z, i32(f0.z * force_scale));
-    
-    atomicAdd(&nodes[i1].force_x, i32(f1.x * force_scale));
-    atomicAdd(&nodes[i1].force_y, i32(f1.y * force_scale));
-    atomicAdd(&nodes[i1].force_z, i32(f1.z * force_scale));
-    
-    atomicAdd(&nodes[i2].force_x, i32(f2.x * force_scale));
-    atomicAdd(&nodes[i2].force_y, i32(f2.y * force_scale));
-    atomicAdd(&nodes[i2].force_z, i32(f2.z * force_scale));
-    
-    atomicAdd(&nodes[i3].force_x, i32(f3.x * force_scale));
-    atomicAdd(&nodes[i3].force_y, i32(f3.y * force_scale));
-    atomicAdd(&nodes[i3].force_z, i32(f3.z * force_scale));
+
+    atomicAdd(&nodes[i0].force_x, enc(f0.x, force_scale));
+    atomicAdd(&nodes[i0].force_y, enc(f0.y, force_scale));
+    atomicAdd(&nodes[i0].force_z, enc(f0.z, force_scale));
+
+    atomicAdd(&nodes[i1].force_x, enc(f1.x, force_scale));
+    atomicAdd(&nodes[i1].force_y, enc(f1.y, force_scale));
+    atomicAdd(&nodes[i1].force_z, enc(f1.z, force_scale));
+
+    atomicAdd(&nodes[i2].force_x, enc(f2.x, force_scale));
+    atomicAdd(&nodes[i2].force_y, enc(f2.y, force_scale));
+    atomicAdd(&nodes[i2].force_z, enc(f2.z, force_scale));
+
+    atomicAdd(&nodes[i3].force_x, enc(f3.x, force_scale));
+    atomicAdd(&nodes[i3].force_y, enc(f3.y, force_scale));
+    atomicAdd(&nodes[i3].force_z, enc(f3.z, force_scale));
 }
 
 // Pass 3: Integration (Symplectic Euler)

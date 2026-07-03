@@ -71,10 +71,16 @@ fn rotate_vec(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {
 }
 
 fn emit_line(start: vec3<f32>, end: vec3<f32>, color: u32) {
+    let max_vertices = 65536u;  // 32768 lines * 2 == debug_lines capacity
     let vi = atomicAdd(&line_count, 2u); // 2 vertices per line
-    let max_vertices = 65536u;  // 32768 lines * 2
-    if (vi >= max_vertices) { return; }
-    
+    if (vi >= max_vertices) {
+        // Over capacity: undo the reservation so `line_count` (which is also the
+        // indirect draw's vertex_count) never grows past the vertex buffer size.
+        // Otherwise draw_indirect fetches vertices beyond debug_lines' end.
+        atomicSub(&line_count, 2u);
+        return;
+    }
+
     debug_lines[vi] = DebugVertex(start, color);
     debug_lines[vi + 1u] = DebugVertex(end, color);
 }
@@ -149,10 +155,21 @@ fn generate_debug_lines(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if ((joint.flags & 1u) == 0u) { return; } // Inactive
         
         let body_a = boxes[joint.body_a];
-        let body_b = boxes[joint.body_b];
-        
         let world_a = body_a.position + rotate_vec(joint.anchor_a, body_a.rotation);
-        let world_b = body_b.position + rotate_vec(joint.anchor_b, body_b.rotation);
+
+        // body_b == u32::MAX is the documented world/static sentinel (types.rs);
+        // indexing boxes[u32::MAX] is out of bounds. Treat anchor_b as a world-space
+        // point in that case instead of reading a phantom body.
+        var world_b: vec3<f32>;
+        var body_b_pos: vec3<f32>;
+        if (joint.body_b == 0xFFFFFFFFu) {
+            world_b = joint.anchor_b;
+            body_b_pos = joint.anchor_b;
+        } else {
+            let body_b = boxes[joint.body_b];
+            world_b = body_b.position + rotate_vec(joint.anchor_b, body_b.rotation);
+            body_b_pos = body_b.position;
+        }
         
         // Joint tipi renkleri
         var color = pack_color(0.0, 1.0, 0.3, 0.9); // Yeşil — Ball
@@ -171,7 +188,7 @@ fn generate_debug_lines(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Anchor → anchor bağlantı çizgisi
         emit_line(world_a, world_b, color);
         // Anchor → body merkez çizgisi
-        emit_line(world_b, body_b.position, color);
+        emit_line(world_b, body_b_pos, color);
         
         // Hinge: eksen yönü gösterimi
         if (joint.joint_type == 1u) {

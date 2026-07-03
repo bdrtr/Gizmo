@@ -1,11 +1,12 @@
 // ---- Helpers ----
 fn get_cell_coord(pos: vec3<f32>) -> vec3<i32> {
     let local_pos = pos - params.bounds_min;
-    return vec3<i32>(
-        i32(local_pos.x / params.cell_size),
-        i32(local_pos.y / params.cell_size),
-        i32(local_pos.z / params.cell_size)
-    );
+    // floor (not trunc-toward-zero): a coordinate in [-cell_size, 0) must map to
+    // cell -1 (→ rejected by get_cell_index), not cell 0. `i32()` truncates toward
+    // zero, which would fold particles just below bounds_min into the boundary
+    // cell and make them spurious same-cell neighbors. For pos >= bounds_min this
+    // is identical to the previous cast.
+    return vec3<i32>(floor(local_pos / params.cell_size));
 }
 
 fn get_cell_index(coord: vec3<i32>) -> i32 {

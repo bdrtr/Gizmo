@@ -317,7 +317,36 @@ gerçek-UDP örnek onaylı geçmişte senkron).
       normallerde `up`=(1,0,0) paralel olup `cross=0` → NaN tangent → kara SSGI; `abs(normal.y)>0.999`
       ile düzeltildi (ssgi.wgsl). SSAO/SSR/TAA/FXAA/volumetric/blur/apply pasları temiz (depth/pozisyon
       reconstruction, reprojection, tonemap-tek-sRGB doğru). 25 standalone render/post shader artık
-      `core_shaders_compile` testinde naga ile doğrulanıyor. KALAN: compute/fluid shader'ları.
+      `core_shaders_compile` testinde naga ile doğrulanıyor. **COMPUTE/FLUID SHADER DENETİMİ
+      TAMAM (2026-07-03, 4 paralel subagent + elle koda-karşı doğrulama):** 9 compute shader
+      (fluid_compute/fluid_blur/spatial_hash, physics_compute/physics_culling/physics_debug,
+      fem_compute, particle_compute, mesh_cull) + CPU-tarafı dispatch/bind-group/std430 layout'ları
+      tarandı. Hepsi gpu_physics/gpu_fluid/gpu_particles olarak CANLI dispatch ediliyor. **Düzeltilen
+      gerçek bug'lar (8, hepsi naga-valide; 4'ü ayırt edici regresyon testiyle kilitli):**
+      **(B1, HIGH)** `box_contacts` storage buffer'ı eleman-başına 16 B eksik ayrılıyordu —
+      WGSL std430'da `BoxContacts` stride'ı 352 B (yorum 336 hesaplamış; `count`→`_pad` 12 B ve
+      `neighbors`→`normals` vec4-hizalama 4 B boşlukları atlanmış) → `max_boxes*336`'da yüksek-indeksli
+      cisimler OOB indekslenip temas manifoldu alamıyor (içiçe geçme/tünelleme). Fix: `GpuBoxContacts`
+      std430-sadık mirror struct + `size_of` ile boyutlandırma + size testi. **(D1, HIGH, canlı)**
+      `spawn_explosion` parçacıkları `life == max_life` ile üretiyordu → compute/render shader
+      `life >= max_life`'ı ölü saydığından her kırılma/çarpma toz patlaması GÖRÜNMEZ+hareketsiz;
+      fix `life: 0.0` + GPU testi (bir adımda yaş ilerliyor). **(A1/A2, HIGH, LOD)** fluid
+      `params.num_particles` çalışma zamanında hiç güncellenmiyordu → LOD<1.0'da hash-pass [active,N)
+      parçacıklarını grid'e "gerçek" olarak sokuyor ama grid_offsets yalnız `active` yazıyor →
+      aradakiler komşu taramasından sessizce düşüyor (yoğunluk/sıkışamazlık bozuluyor); fix
+      `compute_pass` her kare `active`'i offset 28'e yazıyor + GPU dispatch testi. **(C4)** FEM
+      ters-eleman (det F<0) işleme: `max(J,0.01)` J'yi pozitife zorluyordu → F^-T=cofactor/J'nin
+      işaretini ters çeviriyordu; işaret-koruyan clamp + `ln|J|` + ters-eleman testi. **(A4)**
+      spatial_hash negatif koordinat `i32()` sıfıra-truncate → `floor()` (sınır-altı parçacıklar
+      hücre-0'a katlanmıyor). **(C1)** debug çizgi sayacı kapasiteyi aşınca indirect-draw vertex_count
+      buffer'ı aşıyordu → atomicSub ile rezervasyon geri-alımı. **(C2/B2)** joint `body_b==u32::MAX`
+      (dünya/statik sentinel) korumasız `boxes[MAX]` indeksliyordu (debug + solver; solver latent —
+      joints hiç dispatch edilmiyor) → sentinel guard. **(C3)** FEM i32 fixed-point akümülatörü sert
+      malzemede taşabiliyordu (`i32()` UB) → `enc()` cast-öncesi clamp (aralık-içi bit-aynı, savunmacı).
+      **Ertelenen (bug ama ayrı iş, dokümante):** (A3) fluid SSFR textureları resize'da yeniden
+      oluşturulmuyor (pencere büyütülünce fluid alt-dikdörtgene sıkışır — renderer resize işi);
+      (D2) parçacık ring-buffer'ı LOD-kırpılmış kuyruğa spawn edebilir (uzak kamerada); (B3)
+      physics_culling negatif-w köşe yanlış sınıflandırma (yalnız görsel cull, sim'i etkilemez).
 - [~] WASM hedefi — **SİMÜLASYON ÇEKİRDEĞİ ✅ (2026-07-01), renderer/pencere/net ERTELENDİ.**
       Deterministik sim çekirdeği artık `wasm32-unknown-unknown`'a derleniyor + CI'da doğrulanabilir
       (`cargo build --target wasm32-unknown-unknown -p <crate>`): gizmo-math/core/physics-core/

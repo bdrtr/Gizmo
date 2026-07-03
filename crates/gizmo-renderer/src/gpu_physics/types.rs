@@ -242,3 +242,34 @@ pub struct DebugParams {
     pub show_wireframes: u32, // bit0=boxes, bit1=joints, bit2=velocity
     pub _pad: u32,
 }
+
+/// CPU-side mirror of the WGSL `BoxContacts` struct (physics_compute.wgsl), used
+/// ONLY to size `box_contacts_buffer` via `size_of` — the compute shader owns all
+/// field semantics; the CPU never reads these bytes field-by-field.
+///
+/// The layout MUST match WGSL std430 exactly, because the shader indexes
+/// `box_contacts[idx]` with the std430 element stride. Walking std430 offsets:
+///   count            u32               @0
+///   (implicit pad to align vec3<u32>)  @4..16
+///   _pad             vec3<u32>          @16..28
+///   neighbors        array<u32,8>       @28..60
+///   (implicit pad to align vec4<f32>)  @60..64   ← the 16-byte alignment gap
+///   normals          array<vec4<f32>,8> @64..192
+///   accum_impulse    array<vec4<f32>,8> @192..320
+///   is_active        array<u32,8>       @320..352
+/// → stride **352 bytes**, NOT 336. The old hand-computed `336` literal omitted
+/// both alignment gaps, under-allocating the buffer by 16 B/box; boxes past
+/// `floor(size / 352)` then indexed out of bounds and silently received no
+/// contact manifold (they interpenetrated / tunnelled).
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GpuBoxContacts {
+    pub count: u32,
+    pub _pad_count: [u32; 3], // @4  implicit std430 pad (count → _pad)
+    pub _pad: [u32; 3],       // @16 WGSL `_pad: vec3<u32>`
+    pub neighbors: [u32; 8],  // @28
+    pub _pad_align: u32,      // @60 implicit std430 pad (neighbors → normals)
+    pub normals: [[f32; 4]; 8], // @64
+    pub accum_impulse: [[f32; 4]; 8], // @192
+    pub is_active: [u32; 8],  // @320 .. 352
+}
