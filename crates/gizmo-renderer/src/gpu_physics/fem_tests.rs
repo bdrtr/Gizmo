@@ -339,4 +339,115 @@ mod tests {
             );
         });
     }
+
+    // Regression for the box_contacts under-allocation (physics_compute.wgsl
+    // `BoxContacts`). The WGSL std430 element stride is 352 bytes, not 336 — the
+    // 4-byte alignment gap before `normals` (array<vec4<f32>,8>) and the 12-byte
+    // gap after `count` were previously omitted, under-allocating the buffer by
+    // 16 B/box so high-index bodies indexed out of bounds and got no contacts.
+    #[test]
+    fn test_box_contacts_std430_size() {
+        assert_eq!(
+            std::mem::size_of::<crate::gpu_physics::types::GpuBoxContacts>(),
+            352,
+            "BoxContacts std430 stride must be 352 bytes (16-byte alignment for the \
+             vec4 arrays); a smaller value under-allocates box_contacts_buffer"
+        );
+    }
+
+    // Regression for the FEM inversion (det F < 0) handling. The old code clamped
+    // J with `max(J, 0.01)` — forcing it positive — which flipped the sign (and
+    // 100x-inflated the magnitude) of F^-T = cofactor(F)/J for inverted elements,
+    // so the Piola stress pointed the wrong way and overflowed the fixed-point
+    // accumulator. The sign-preserving clamp keeps F^-T correctly oriented.
+    #[test]
+    fn test_fem_inverted_element_signed_stress() {
+        pollster::block_on(async {
+            let Some((device, queue)) = setup_headless_gpu().await else {
+                tracing::info!("Skipping GPU test: no wgpu adapter found");
+                return;
+            };
+
+            // Same rest tet as test_fem_compute_stress (Dm = I) but node 1 is
+            // pushed to x = -0.5, INVERTING the element (F = diag(-0.5, 1, 1),
+            // J = -0.5 < 0).
+            let nodes = vec![
+                GpuSoftBodyNode {
+                    position_mass: [0.0, 0.0, 0.0, 1.0],
+                    velocity_fixed: [0.0; 4],
+                    forces: [0; 4],
+                },
+                GpuSoftBodyNode {
+                    position_mass: [-0.5, 0.0, 0.0, 1.0],
+                    velocity_fixed: [0.0; 4],
+                    forces: [0; 4],
+                },
+                GpuSoftBodyNode {
+                    position_mass: [0.0, 1.0, 0.0, 1.0],
+                    velocity_fixed: [0.0; 4],
+                    forces: [0; 4],
+                },
+                GpuSoftBodyNode {
+                    position_mass: [0.0, 0.0, 1.0, 1.0],
+                    velocity_fixed: [0.0; 4],
+                    forces: [0; 4],
+                },
+            ];
+            let elements = vec![GpuTetrahedron {
+                indices: [0, 1, 2, 3],
+                inv_rest_col0: [1.0, 0.0, 0.0, 0.0],
+                inv_rest_col1: [0.0, 1.0, 0.0, 0.0],
+                inv_rest_col2: [0.0, 0.0, 1.0, 0.0],
+                rest_volume_pad: [1.0 / 6.0, 0.0, 0.0, 0.0],
+            }];
+            let params = GpuFemParams {
+                properties: [0.1, 1000.0, 1000.0, 1.0], // dt, mu, lambda, damping
+                gravity: [0.0, 0.0, 0.0, 0.0],
+                counts: [4, 1, 0, 0],
+            };
+
+            let fem_system = GpuFemSystem::new(&device, &nodes, &elements, &[], &params);
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            {
+                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: None,
+                    timestamp_writes: None,
+                });
+                cpass.set_bind_group(0, &fem_system.compute_bind_group, &[]);
+                cpass.set_pipeline(&fem_system.pipeline_stress);
+                cpass.dispatch_workgroups(1, 1, 1);
+            }
+            queue.submit(Some(encoder.finish()));
+
+            let result: Vec<GpuSoftBodyNode> =
+                read_buffer(&device, &queue, &fem_system.nodes_buffer).await;
+
+            let f1_x = result[1].forces[0];
+            // With the correct signed-J, F^-T = diag(-2,1,1) and the node-1 force
+            // is small and NEGATIVE-x (~ -481 N → ~-4.8e7 encoded). The old
+            // positive clamp produced F^-T = cofactor/0.01, giving f1_x ≈ +93500 N
+            // (→ +9.35e9, which overflowed the i32 to a large POSITIVE saturated
+            // value). So the SIGN cleanly discriminates the fix.
+            assert!(
+                f1_x < 0,
+                "inverted element: node-1 force_x must be negative with signed-J \
+                 (got {}); a positive value means the old max(J,0.01) sign flip",
+                f1_x
+            );
+            // And every force stays comfortably inside the i32 fixed-point range —
+            // the old /0.01 blow-up saturated it.
+            for (n, node) in result.iter().enumerate() {
+                for (c, &f) in node.forces.iter().enumerate() {
+                    assert!(
+                        f.abs() < 1_000_000_000,
+                        "force[{}][{}] = {} should be bounded (no /0.01 blow-up)",
+                        n,
+                        c,
+                        f
+                    );
+                }
+            }
+        });
+    }
 }

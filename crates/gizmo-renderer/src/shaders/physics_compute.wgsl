@@ -877,7 +877,11 @@ fn solve_joints(@builtin(global_invocation_id) global_id: vec3<u32>) {
     for (var j = 0u; j < params.num_joints; j++) {
         let joint = joints[j];
         if ((joint.flags & 1u) == 0u) { continue; } // Inactive
-        
+        // World/static anchors (body_* == u32::MAX, see types.rs GpuJoint::body_b)
+        // are not yet supported by this solver — handling them needs infinite-mass
+        // treatment for the world body. Skip them so we never read boxes[u32::MAX].
+        if (joint.body_a == 0xFFFFFFFFu || joint.body_b == 0xFFFFFFFFu) { continue; }
+
         let is_a = (joint.body_a == body_idx);
         let is_b = (joint.body_b == body_idx);
         if (!is_a && !is_b) { continue; }

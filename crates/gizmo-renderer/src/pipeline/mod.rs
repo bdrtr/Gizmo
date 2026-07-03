@@ -373,6 +373,14 @@ mod tests {
                 ("decal.wgsl", include_str!("../shaders/decal.wgsl")),
                 ("debug_lines.wgsl", include_str!("../shaders/debug_lines.wgsl")),
                 ("mipmap.wgsl", include_str!("../shaders/mipmap.wgsl")),
+                // Self-contained compute shaders (own bindings inline). The fluid
+                // shaders (spatial_hash/fluid_compute) share bindings via
+                // fluid_bindings.wgsl so they are validated by the gpu_fluid
+                // dispatch test instead; fem_compute/particle_compute by their own
+                // GPU tests.
+                ("physics_compute.wgsl", include_str!("../shaders/physics_compute.wgsl")),
+                ("physics_culling.wgsl", include_str!("../shaders/physics_culling.wgsl")),
+                ("physics_debug.wgsl", include_str!("../shaders/physics_debug.wgsl")),
             ];
 
             let mut failures: Vec<String> = Vec::new();

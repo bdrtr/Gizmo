@@ -225,10 +225,13 @@ impl GpuPhysicsSystem {
             mapped_at_creation: false,
         });
 
-        // 336 bytes per box (4 count, 12 pad, 32 neighbors, 128 normals, 128 accum_impulse, 32 is_active)
+        // 352 bytes per box under std430 (see `GpuBoxContacts` for the offset
+        // walk). Driven by `size_of` so the CPU allocation and the shader's
+        // std430 element stride can never drift apart again.
         let box_contacts_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("GPU Physics Box Contacts Cache"),
-            size: (max_boxes as wgpu::BufferAddress) * 336,
+            size: (max_boxes as wgpu::BufferAddress)
+                * std::mem::size_of::<GpuBoxContacts>() as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });

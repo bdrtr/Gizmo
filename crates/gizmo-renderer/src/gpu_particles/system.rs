@@ -39,7 +39,8 @@ impl GpuParticleSystem {
             contents: bytemuck::cast_slice(&initial_particles),
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::VERTEX
-                | wgpu::BufferUsages::COPY_DST,
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC, // readback (debug/tests)
         });
 
         let params = ParticleSimParams {
@@ -176,7 +177,12 @@ impl GpuParticleSystem {
 
             new_particles.push(GpuParticle {
                 position: center,
-                life,
+                // `life` is an AGE that starts at 0 and grows toward `max_life`;
+                // the compute/render shaders treat `life >= max_life` as dead.
+                // Spawning with `life == max_life` makes every particle born dead
+                // (never integrated, never drawn), so explosion/dust bursts were
+                // completely invisible. Start the age at 0.
+                life: 0.0,
                 velocity: [vx, vy, vz],
                 max_life: life,
                 color: base_color,
@@ -186,5 +192,134 @@ impl GpuParticleSystem {
             });
         }
         self.spawn_particles(queue, &new_particles);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gpu_particles::types::GpuParticle;
+
+    async fn setup_headless_gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            flags: wgpu::InstanceFlags::default(),
+            memory_budget_thresholds: Default::default(),
+            backend_options: Default::default(),
+            display: None,
+        });
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })
+            .await
+            .ok()?;
+        adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .ok()
+    }
+
+    async fn read_buffer<T: bytemuck::Pod>(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        buffer: &wgpu::Buffer,
+    ) -> Vec<T> {
+        let size = buffer.size();
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Test Staging Buffer"),
+            size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, size);
+        queue.submit(Some(encoder.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        rx.recv().unwrap().unwrap();
+        let data = slice.get_mapped_range();
+        let out = bytemuck::cast_slice(&data).to_vec();
+        drop(data);
+        staging.unmap();
+        out
+    }
+
+    fn dummy_global_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        // Matches particle_render.wgsl @group(0): a single uniform buffer.
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("test_particle_global_layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        })
+    }
+
+    // Regression: spawn_explosion used to write `life == max_life`, so every
+    // spawned particle was born dead — the compute/render shaders treat
+    // `life >= max_life` as dead, so impact/fracture dust bursts were invisible
+    // and never integrated. A born-alive particle must (a) satisfy life<max_life
+    // and (b) have its age advanced by a compute step (the dead branch would
+    // leave it untouched).
+    #[test]
+    fn test_spawn_explosion_particles_are_born_alive() {
+        pollster::block_on(async {
+            let Some((device, queue)) = setup_headless_gpu().await else {
+                tracing::info!("Skipping GPU test: no wgpu adapter found");
+                return;
+            };
+            let layout = dummy_global_layout(&device);
+            let system =
+                GpuParticleSystem::new(&device, 64, &layout, wgpu::TextureFormat::Rgba8UnormSrgb);
+
+            // Explosion fills the ring buffer starting at head 0 → indices [0, 8).
+            system.spawn_explosion(&queue, [0.0, 10.0, 0.0], 8, [1.0, 1.0, 1.0, 1.0], 2.0);
+            let before: Vec<GpuParticle> =
+                read_buffer(&device, &queue, &system.particles_buffer).await;
+            for (i, p) in before.iter().take(8).enumerate() {
+                assert!(
+                    p.life < p.max_life,
+                    "spawned particle {} born dead: life={} max_life={}",
+                    i,
+                    p.life,
+                    p.max_life
+                );
+            }
+
+            // One compute step must advance the age of the (live) spawned particles.
+            // With the old life==max_life bug the shader's dead branch returns
+            // immediately and life would be unchanged — a clean discriminator.
+            system.update_params(&queue, 1.0 / 60.0);
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            system.compute_pass(&mut encoder, 64);
+            queue.submit(Some(encoder.finish()));
+            let after: Vec<GpuParticle> =
+                read_buffer(&device, &queue, &system.particles_buffer).await;
+            for i in 0..8 {
+                assert!(
+                    after[i].life > before[i].life,
+                    "particle {} did not integrate (age {} -> {}); born-dead?",
+                    i,
+                    before[i].life,
+                    after[i].life
+                );
+            }
+        });
     }
 }
