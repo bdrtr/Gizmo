@@ -166,3 +166,37 @@ impl<T> UtilityBrain<T> {
         best_action.map(|name| (name, best_score))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_brain_decides_nothing() {
+        let brain: UtilityBrain<f32> = UtilityBrain::new();
+        assert!(brain.decide(&1.0).is_none());
+    }
+
+    #[test]
+    fn decide_picks_the_highest_scoring_action() {
+        // No considerations → an action evaluates to its (clamped) base_score.
+        let brain = UtilityBrain::new()
+            .add_action(UtilityAction::<f32>::new("low", 0.3))
+            .add_action(UtilityAction::<f32>::new("high", 0.8));
+        let (name, score) = brain.decide(&0.0).expect("a decision");
+        assert_eq!(name, "high");
+        assert!((score - 0.8).abs() < 1e-6, "score {score}");
+    }
+
+    #[test]
+    fn a_vetoing_consideration_zeroes_the_action() {
+        // A consideration that scores 0 vetoes the whole (multiplicative) action,
+        // so a lone vetoed action leaves the brain with nothing to pick.
+        let scorer: ContextScorer<f32> = Arc::new(|_: &f32| 0.0);
+        let cons = UtilityConsideration::new(scorer, Box::new(LinearCurve::new(1.0, 0.0)), 1.0);
+        let action = UtilityAction::<f32>::new("vetoed", 1.0).add_consideration(cons);
+        assert_eq!(action.evaluate(&0.0), 0.0, "veto must zero the action score");
+        let brain = UtilityBrain::new().add_action(action);
+        assert!(brain.decide(&0.0).is_none(), "a fully-vetoed action must not be chosen");
+    }
+}

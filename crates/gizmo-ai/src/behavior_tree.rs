@@ -230,3 +230,95 @@ pub fn behavior_tree_system(world: &mut World, dt: f32) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    fn leaf(status: BtStatus) -> Box<dyn BtNode> {
+        Box::new(Action::new(move |_, _, _| status))
+    }
+
+    fn tick(node: &mut dyn BtNode) -> BtStatus {
+        let mut w = World::new();
+        node.tick(0, &mut w, 0.0)
+    }
+
+    #[test]
+    fn sequence_succeeds_only_when_all_children_succeed() {
+        assert_eq!(
+            tick(&mut Sequence::new(vec![leaf(BtStatus::Success), leaf(BtStatus::Success)])),
+            BtStatus::Success
+        );
+        assert_eq!(
+            tick(&mut Sequence::new(vec![leaf(BtStatus::Success), leaf(BtStatus::Failure)])),
+            BtStatus::Failure
+        );
+        // Vacuous: an empty sequence succeeds.
+        assert_eq!(tick(&mut Sequence::new(vec![])), BtStatus::Success);
+    }
+
+    #[test]
+    fn selector_succeeds_on_first_success_else_fails() {
+        assert_eq!(
+            tick(&mut Selector::new(vec![leaf(BtStatus::Failure), leaf(BtStatus::Success)])),
+            BtStatus::Success
+        );
+        assert_eq!(
+            tick(&mut Selector::new(vec![leaf(BtStatus::Failure), leaf(BtStatus::Failure)])),
+            BtStatus::Failure
+        );
+        // Empty selector fails (no fallback succeeded).
+        assert_eq!(tick(&mut Selector::new(vec![])), BtStatus::Failure);
+    }
+
+    #[test]
+    fn inverter_flips_success_and_failure_but_not_running() {
+        assert_eq!(tick(&mut Inverter::new(leaf(BtStatus::Success))), BtStatus::Failure);
+        assert_eq!(tick(&mut Inverter::new(leaf(BtStatus::Failure))), BtStatus::Success);
+        assert_eq!(tick(&mut Inverter::new(leaf(BtStatus::Running))), BtStatus::Running);
+    }
+
+    #[test]
+    fn empty_behavior_tree_ticks_to_failure() {
+        let mut w = World::new();
+        let mut bt = BehaviorTree { root: None };
+        assert_eq!(bt.tick(0, &mut w, 0.0), BtStatus::Failure);
+        // Clone yields an empty tree (documented), which also ticks to Failure.
+        let mut cloned = bt.clone();
+        assert_eq!(cloned.tick(0, &mut w, 0.0), BtStatus::Failure);
+    }
+
+    #[test]
+    fn sequence_resumes_at_running_child_without_reticking_earlier_ones() {
+        // child0 succeeds (count its ticks); child1 runs on the first tick, then
+        // succeeds. The memory sequence must NOT re-tick child0 on resume.
+        let c0 = Arc::new(AtomicUsize::new(0));
+        let c0c = c0.clone();
+        let child0 = Box::new(Action::new(move |_, _, _| {
+            c0c.fetch_add(1, Ordering::SeqCst);
+            BtStatus::Success
+        }));
+        let mut runs = 0u32;
+        let child1 = Box::new(Action::new(move |_, _, _| {
+            runs += 1;
+            if runs == 1 {
+                BtStatus::Running
+            } else {
+                BtStatus::Success
+            }
+        }));
+        let mut seq = Sequence::new(vec![child0, child1]);
+        let mut w = World::new();
+
+        assert_eq!(seq.tick(0, &mut w, 0.0), BtStatus::Running, "first tick: child1 is running");
+        assert_eq!(seq.tick(0, &mut w, 0.0), BtStatus::Success, "second tick: child1 completes");
+        assert_eq!(
+            c0.load(Ordering::SeqCst),
+            1,
+            "memory sequence re-ticked an already-succeeded child on resume"
+        );
+    }
+}
