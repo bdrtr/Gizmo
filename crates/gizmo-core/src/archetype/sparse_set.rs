@@ -124,4 +124,39 @@ impl ComponentSparseSet {
         }
         unsafe { Some(self.dense.get_unchecked_mut(self.sparse[e] as usize)) }
     }
+
+    /// Deep-clone the component stored for `src` into `dst` (both entity ids),
+    /// using the component's `clone_fn`. Returns `false` if `src` has no entry or
+    /// the component is not `Clone`. Used by `World::clone_entity` (prefab splice),
+    /// which otherwise only clones archetype (table) columns.
+    pub fn clone_entry(&mut self, src: u32, dst: u32, tick: u32) -> bool {
+        let Some(clone_fn) = self.info.clone_fn else {
+            return false;
+        };
+        let Some(src_ptr) = self.get_ptr(src) else {
+            return false;
+        };
+        let layout = self.info.layout;
+        // Clone src into a temp buffer, then hand it to `insert`, which memcpys
+        // the bytes and takes ownership — so the buffer is freed WITHOUT dropping
+        // the moved-out value (mirrors the mem::forget-after-raw-insert pattern).
+        // src_ptr points into `dense`; it is consumed by clone_fn BEFORE insert
+        // may reallocate `dense`, so it never dangles.
+        unsafe {
+            if layout.size() == 0 {
+                let z = std::ptr::NonNull::<u8>::dangling().as_ptr();
+                clone_fn(src_ptr, z, 1);
+                self.insert(dst, z, tick);
+            } else {
+                let tmp = std::alloc::alloc(layout);
+                if tmp.is_null() {
+                    std::alloc::handle_alloc_error(layout);
+                }
+                clone_fn(src_ptr, tmp, 1);
+                self.insert(dst, tmp, tick);
+                std::alloc::dealloc(tmp, layout);
+            }
+        }
+        true
+    }
 }
