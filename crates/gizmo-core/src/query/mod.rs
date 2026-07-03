@@ -902,4 +902,74 @@ mod tests {
         assert_eq!(world.query::<Changed<SparseComp>>().unwrap().iter().count(), 1);
         assert_eq!(world.query::<&SparseComp>().unwrap().get(e.id()).map(|c| c.0), Some(11));
     }
+
+    // Sparse queries match EVERY archetype at the archetype level (data lives
+    // outside archetypes) and narrow per-row in filter_row. This exercises that
+    // narrowing with MIXED presence — some entities have the sparse component,
+    // some don't — which the single-entity tests and the all-uniform benches
+    // never cover. A narrowing bug would leak component-less entities (or read a
+    // non-existent sparse slot).
+    #[test]
+    fn sparse_query_mixed_presence_narrows_correctly() {
+        use crate::component::{Component, StorageType};
+        #[derive(Clone, Debug, PartialEq)]
+        struct TableC(i32);
+        impl Component for TableC {}
+        #[derive(Clone, Debug, PartialEq)]
+        struct SparseC(i32);
+        impl Component for SparseC {
+            fn storage_type() -> StorageType {
+                StorageType::SparseSet
+            }
+        }
+
+        let mut world = crate::World::new();
+        world.register_component_type::<TableC>();
+        world.register_component_type::<SparseC>();
+
+        // 3 entities with TableC + SparseC, 2 with only TableC.
+        for i in 0..3 {
+            let e = world.spawn();
+            world.add_component(e, TableC(i));
+            world.add_component(e, SparseC(i * 10));
+        }
+        let mut table_only = Vec::new();
+        for i in 3..5 {
+            let e = world.spawn();
+            world.add_component(e, TableC(i));
+            table_only.push(e);
+        }
+
+        // &SparseC must yield exactly the 3 holders with the right values.
+        {
+            let q = world.query::<&SparseC>().unwrap();
+            let mut vals: Vec<i32> = q.iter().map(|(_id, s)| s.0).collect();
+            vals.sort();
+            assert_eq!(vals, vec![0, 10, 20], "sparse query leaked/dropped rows under mixed presence");
+        }
+        // (&TableC, &SparseC): only the 3 with both.
+        assert_eq!(
+            world.query::<(&TableC, &SparseC)>().unwrap().iter().count(),
+            3,
+            "table+sparse tuple query miscounted"
+        );
+        // With<SparseC> keeps 3; Without<SparseC> keeps the 2 table-only.
+        assert_eq!(
+            world.query::<(&TableC, With<SparseC>)>().unwrap().iter().count(),
+            3,
+            "With<Sparse> miscounted"
+        );
+        assert_eq!(
+            world.query::<(&TableC, Without<SparseC>)>().unwrap().iter().count(),
+            2,
+            "Without<Sparse> miscounted"
+        );
+        // Random access: table-only entities must report no SparseC.
+        for e in &table_only {
+            assert!(
+                world.query::<&SparseC>().unwrap().get(e.id()).is_none(),
+                "get() returned a sparse component for an entity that lacks it"
+            );
+        }
+    }
 }
