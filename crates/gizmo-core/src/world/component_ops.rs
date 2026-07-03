@@ -12,11 +12,24 @@ impl World {
         let eid = entity.id();
         let infos = B::get_infos();
 
+        // The block-move fast path below writes every component into an archetype
+        // column, which has no home for SparseSet components (they live in
+        // `sparse_sets`). If the bundle carries any sparse component, route the
+        // whole bundle through `apply` — per-component `add_component`, which
+        // places each component in its correct storage. All-table bundles keep the
+        // single-migration fast path.
+        if infos
+            .iter()
+            .any(|i| i.storage_type == crate::component::StorageType::SparseSet)
+        {
+            bundle.apply(self, entity);
+            return;
+        }
+
         for info in &infos {
             self.component_infos.entry(info.type_id).or_insert_with(|| *info);
         }
 
-        // Şimdilik SparseSet desteklemiyor (bundle içi SparseSet olursa ayrıştırmak zor, future work)
         // Table bazlı block move:
         let old_arch_id = match self.archetype_index.entity_archetype.get(&eid) {
             Some(&id) => id,
@@ -88,6 +101,26 @@ impl World {
         if !self.is_alive(entity) { return; }
         let eid = entity.id();
         let infos = B::get_infos();
+
+        // SparseSet components live in `sparse_sets`, not archetype columns, so the
+        // block-move below never touches them — remove them explicitly (mirrors
+        // remove_component's sparse branch, on_remove hooks included).
+        for info in &infos {
+            if info.storage_type == crate::component::StorageType::SparseSet {
+                let removed = self
+                    .sparse_sets
+                    .get_mut(&info.type_id)
+                    .is_some_and(|set| set.remove(eid));
+                if removed {
+                    let tid = info.type_id;
+                    self.run_hooks(tid, |h, w| {
+                        for hook in &mut h.on_remove {
+                            hook(w, entity);
+                        }
+                    });
+                }
+            }
+        }
 
         let old_arch_id = match self.archetype_index.entity_archetype.get(&eid) {
             Some(&id) => id,

@@ -371,6 +371,72 @@ mod tests {
         assert_eq!(count, n, "all entities must have both components");
     }
 
+    // Regression: add_bundle built the archetype signature from ALL component
+    // types (including SparseSet ones) and wrote them all into archetype columns,
+    // so a sparse component in the bundle was silently stored as a table column
+    // instead of in `sparse_sets` — invisible to sparse-storage queries.
+    #[test]
+    fn add_bundle_routes_sparse_components() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct TableC(i32);
+        impl crate::component::Component for TableC {}
+        #[derive(Clone, Debug, PartialEq)]
+        struct SparseC(i32);
+        impl crate::component::Component for SparseC {
+            fn storage_type() -> crate::component::StorageType {
+                crate::component::StorageType::SparseSet
+            }
+        }
+
+        let mut world = World::new();
+        world.register_component_type::<TableC>();
+        world.register_component_type::<SparseC>();
+
+        let e = world.spawn();
+        world.add_bundle(e, (TableC(7), SparseC(9)));
+
+        // The sparse component must be reachable through a sparse-storage query.
+        let mut query = world.query_mut::<(&TableC, &SparseC)>().unwrap();
+        let mut found = None;
+        for (_id, (t, s)) in query.iter_mut() {
+            found = Some((t.0, s.0));
+        }
+        assert_eq!(found, Some((7, 9)), "add_bundle must route the sparse component");
+    }
+
+    // Regression: remove_bundle only rearranged archetype (table) columns; a
+    // SparseSet component in the bundle was never removed from `sparse_sets`, so
+    // it leaked (stayed queryable after removal).
+    #[test]
+    fn remove_bundle_removes_sparse_components() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct TableC(i32);
+        impl crate::component::Component for TableC {}
+        #[derive(Clone, Debug, PartialEq)]
+        struct SparseC(i32);
+        impl crate::component::Component for SparseC {
+            fn storage_type() -> crate::component::StorageType {
+                crate::component::StorageType::SparseSet
+            }
+        }
+
+        let mut world = World::new();
+        world.register_component_type::<TableC>();
+        world.register_component_type::<SparseC>();
+
+        let e = world.spawn();
+        world.add_component(e, TableC(1));
+        world.add_component(e, SparseC(2)); // correctly in the sparse set
+        world.remove_bundle::<(TableC, SparseC)>(e);
+
+        let query = world.query::<&SparseC>().unwrap();
+        assert_eq!(
+            query.iter().count(),
+            0,
+            "remove_bundle must also remove the sparse component from its set"
+        );
+    }
+
     #[test]
     fn add_same_component_overwrites() {
         #[derive(Clone, Debug, PartialEq)]
