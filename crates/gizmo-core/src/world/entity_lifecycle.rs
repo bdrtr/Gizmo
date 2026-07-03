@@ -126,6 +126,20 @@ impl World {
         I: IntoIterator,
         I::Item: crate::component::Bundle,
     {
+        // Fast path below writes each bundle straight into archetype columns via
+        // `write_to_archetype`, which has no column for SparseSet-storage
+        // components (they live in `sparse_sets`, not the archetype). If the
+        // bundle contains any sparse component, fall back to per-entity
+        // `spawn_bundle`, which routes every component through `add_component`
+        // (sparse-aware). All-table bundles keep the O(1) archetype-reuse path.
+        let has_sparse = <I::Item as crate::component::Bundle>::get_infos()
+            .iter()
+            .any(|info| info.storage_type == crate::component::StorageType::SparseSet);
+        if has_sparse {
+            let entities: Vec<Entity> = iter.into_iter().map(|b| self.spawn_bundle(b)).collect();
+            return entities.into_iter();
+        }
+
         let mut iter = iter.into_iter();
         let mut entities = Vec::new();
 

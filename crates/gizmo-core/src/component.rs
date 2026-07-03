@@ -142,7 +142,16 @@ impl<T: Component> Bundle for T {
     }
 
     unsafe fn write_to_archetype(self, arch: &mut crate::archetype::Archetype, row: usize, tick: u32) {
-        let col = arch.get_column_mut(std::any::TypeId::of::<T>()).expect("Component column missing in Archetype");
+        let col = arch.get_column_mut(std::any::TypeId::of::<T>()).unwrap_or_else(|| {
+            panic!(
+                "Component column for `{}` missing in Archetype. The bundle fast-path \
+                 (write_to_archetype) only handles Table-storage components; SparseSet \
+                 components must be routed via World::add_component. spawn_batch already \
+                 falls back for sparse bundles — reaching here means another bundle path \
+                 wrote a sparse component into the archetype.",
+                std::any::type_name::<T>()
+            )
+        });
         if col.len() <= row {
             col.push_raw(&self as *const _ as *const u8, tick);
             std::mem::forget(self);

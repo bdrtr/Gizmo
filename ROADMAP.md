@@ -7,7 +7,9 @@
 - **Şu anki aşama:** Faz 0–4 TAMAMLANDI — solver kalite turu, CCD, joint, materyal combine, **TGS Soft**, **islands & sleeping**, **geniş-sahne perf**, **determinizm (state_hash + süreçler-arası test)**, ve **Faz 3 P2P rollback netcode (snapshot/restore + RollbackSession + Transport + gerçek-UDP client, lag/jitter/loss yakınsama testli)** kapandı. Sıradaki: Faz 5 (renderer-WASM/editor) / Faz 6 (API kararlılığı + 1.0; rb.friction API kararı burada).
 - **İlerleme:** ECS+çekirdek fizik (9 bug), vehicle, soft-body, fracture, multibody/ABA, EPA, CCD, joints — denetlendi+düzeltildi. **TGS Soft (Box2D v3 Soft Step) uygulandı → n≥16 yüksek-enerji yığın çökmesi (SI'nin temel sınırı) çözüldü.** **538 test yeşil**, CI clippy temiz, determinizm 3/3 hash eşleşiyor (AAC365945335779E).
 - **Faz 1 yeni kapsam (2026-06-15):** broad-phase DIFFERENTIAL test (BVH pairs = brute-force, margin=0 birebir + şişman-margin soundness), joint property (ball-socket yakınsama + zincir kararlılığı), gearbox index-güvenliği property (Faz 0 panik regresyonu), soft-body property (cloth/rope pinned + FEM sıkışma-geri-kazanımı/J-cutoff regresyonu), fracture property (voronoi determinizm + chunk geçerliliği), N-kutu SOAK (10sn kararlılık) + GOLDEN (zeminde dengelenen kutu) regresyon.
-- **Sıradaki:** Faz 1 kalanı (benchmark regresyon takibi) VEYA Faz 2 (determinizm kararı) / Faz 3 (netcode client).
+- **Sıradaki:** **Faz 0–5 + Faz 1 (benchmark CI dahil) TAMAM.** Grafik yükseltmesi
+      (wgpu 23/winit 0.30/egui 0.34, Faz 6(c)) de yapıldı. Kalan: Faz 6 yayın mekaniği
+      (kademeli sürüm, CHANGELOG, Stage A 1.0) + opsiyonel gizmo-net WASM.
 
 İlke: **önce doğruluk, sonra kapsam.** Bir fizik motoru ancak çekirdeği güvenilirse
 production-ready olur. Önce bilinen/şüpheli bug'lar ve test altyapısı; özellik eklemek sonra.
@@ -104,7 +106,23 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
       zeminde y≈0.5'e, |v|<0.1, yanal<0.05 ile dengelenir (toleranslar cross-platform f32 sapmasını
       soğurur). + `headless_stress_test` (2000-kutu kule) 3-koşu hash eşleşmesiyle determinizmi kilitliyor.
 - [x] **CI matrisi** — `.github/workflows/ci.yml`: test (ubuntu/macos/windows × `cargo test --workspace` + gizmo-net feature'lı), lint (rustfmt report-only + `clippy -D warnings` RATCHET — mevcut 17 lint `-A` ile grandfather'lı, yenisi kırar), determinism (headless tower stress). clippy backlog'u TEMİZLENDİ (2026-06-12): `-A` muafiyet listesi 17→2 (kalan `too_many_arguments`/`type_complexity` mimari); 2 gerçek bug yakalandı (lines_filter_map_ok, ölü recursion param). rustfmt tam uyum sonra blocking yapılacak.
-- [ ] **Benchmark regresyon takibi** — criterion sonuçlarını CI'da izle.
+- [x] **Benchmark regresyon takibi** — criterion sonuçlarını CI'da izle. **YAPILDI
+      (2026-07-03):** CI'ye `benchmarks` job'ı eklendi — `cargo bench --workspace
+      --benches -- --test` her benchmark'ı criterion'ın **test modunda BİR KEZ**
+      koşar (yavaş zamanlama-ölçümü yok → CI-donanımı gürültüsüne dayanıklı;
+      derleme-rot + çalışma-zamanı panik/assertion yakalar; `--all-targets` clippy
+      zaten derliyordu, bu ÇALIŞTIRMAYI da ekler). **Gate ilk koşuda 3 gerçek sorun
+      yakaladı:** (1) **motor bug'ı** — `spawn_batch` SparseSet bileşen içeren
+      bundle'da 2. entity'de panikliyordu (`write_to_archetype`'ın arketip-sütun
+      hızlı yolu sparse'ı yönlendirmez); fix: bundle'da sparse varsa entity-başına
+      `spawn_bundle`'a düş (all-table'da O(1) hızlı yol korunur) + regresyon testi +
+      eyleme-dönük panik mesajı. (2)+(3) **iki bench bug'ı** — `none_changed_detection`
+      + `multiple_archetype_none_changed`, değişiklik-frame'ini `increment_tick()` ile
+      ilerletmeye çalışıyordu ama o `change_ref_tick`'i taşımaz → `Changed<T>` tüm
+      taze-spawn'ları raporlayıp `assert_eq!(0,count)`'u kırıyordu; `begin_change_frame`
+      (gerçek frame-sınırı primitifi) ile düzeltildi. **Not:** tam zamanlama-regresyonu
+      (critcmp/baseline) CI donanımında gürültülü → kasıtlı kapsam dışı; bu gate
+      "bench'ler derlenir VE panik/assertion'sız koşar" garantisidir.
 
 **Çıkış kriteri:** yeşil CI, anlamlı kapsam, regresyonlar otomatik yakalanıyor.
 
@@ -446,10 +464,14 @@ gerçek-UDP örnek onaylı geçmişte senkron).
       Geniş `pub` daraltması = ince denetim takibi (ertelendi).
 
 ### Kalan 1.0 blokerleri (bkz. `RELEASING.md` §4 kontrol listesi)
-- [ ] **(c) `wgpu`/`winit`/`egui` güncel sürüme yükseltme** — *Stage B 1.0
-      blokeri* — **XL**. `wgpu 0.20→güncel`, `winit 0.29→güncel`,
-      `egui 0.28→güncel` (+ egui ekosistemi). Tüm grafik katmanı + `gizmo`
-      facade buna bağlı.
+- [x] **(c) `wgpu`/`winit`/`egui` güncel sürüme yükseltme** — *Stage B 1.0
+      blokeri* — **YAPILDI.** Grafik yığını güncel sürümlere taşındı: **`wgpu`
+      0.20→`23.0.1`**, **`winit` 0.29→`0.30.13`**, **`egui` 0.28→`0.34.3`**
+      (+ `egui-wgpu`/`egui-winit`/`naga 23`). MSRV bunun için `1.89→1.92`'ye
+      çıktı (egui 0.34 tabanı). Tüm grafik katmanı + `gizmo` facade + editör/studio
+      derleniyor; workspace testleri + wasm grafik yığını + determinizm yeşil.
+      (Bu madde eskiden "XL Stage B blokeri" olarak açıktı; taşıma tamamlanmış,
+      yalnız kontrol listesi güncellenmemişti.)
 - [ ] **Not (gizmo-math bağımlılık hijyeni, opsiyonel):** gizmo-math `bevy_math`/
       `bevy_picking`/`bevy_mesh` dep'leri `bevy_reflect`'i transitif çekiyor;
       public tip glam olduğundan API sızıntısı yok ama dep ağacından çıkarmak

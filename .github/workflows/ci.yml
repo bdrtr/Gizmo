@@ -107,6 +107,25 @@ jobs:
       - name: Headless stress test (200-box tower, 3 runs, hash match)
         run: cargo run --locked --release -p demo --bin headless_stress_test
 
+  # ── Benchmarks: run every criterion bench ONCE (test mode) ────────────────
+  # `cargo bench -- --test` executes each benchmark a single time instead of the
+  # slow timing loop — CI-hardware-noise-proof, and it catches what a compile
+  # check can't: runtime panics and broken bench assertions. (This gate first
+  # surfaced a real engine bug — spawn_batch panicking on SparseSet bundles.)
+  # Full timing-regression comparison (critcmp/baselines) is intentionally out of
+  # scope: too noisy on shared CI runners.
+  benchmarks:
+    name: Benchmarks (run-once smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+      - name: Run all benchmarks once (criterion --test)
+        run: cargo bench --locked --workspace --benches -- --test
+
   # ── WASM: the sim core AND the browser graphics stack must compile to wasm32 ─
   # Locks (a) the deterministic simulation core (math/core/physics/ai/animation/
   # scene), and (b) the WebGPU browser stack: renderer, windowed app runtime and
