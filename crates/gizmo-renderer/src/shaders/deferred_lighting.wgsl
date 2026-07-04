@@ -393,10 +393,18 @@ fn filter_pcss(
     let avg_blocker_depth = blockers.y / num_blockers;
 
     // (receiver - blocker) / blocker * light_size
-    let light_size = 0.015;
+    // The sun is nearly a point source at infinity → small angular size → crisp
+    // shadows that only soften with distance from the caster. 0.015 modelled a
+    // large area light (a soft, unrealistic blob); 0.004 keeps contact-hardening
+    // but a sun-like edge.
+    let light_size = 0.004;
     let penumbra = (receiver_depth - avg_blocker_depth) / max(avg_blocker_depth, 0.0001) * light_size;
 
-    let filter_radius = clamp(penumbra, texel * 1.0, texel * 10.0);
+    // Crisp sun shadow: keep the PCF radius near one texel — just enough to
+    // anti-alias the shadow-map edge (no blocky stair-stepping), not so much that
+    // it turns soft/mushy. The higher SHADOW_MAP_RES (3072) makes one texel small
+    // on screen, so a ~1-texel filter reads as a sharp, straight edge.
+    let filter_radius = clamp(penumbra, texel * 0.6, texel * 1.2);
 
     var shadow_sum = 0.0;
     let grid_size = 2;
@@ -579,7 +587,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         let view_depth = dot(world_pos - scene.camera_pos.xyz, scene.camera_forward.xyz);
         let ci         = select_cascade(view_depth);
         
-        let offset_pos = world_pos + N * 0.015;
+        let offset_pos = world_pos + N * 0.0018;
         let light_clip = scene.light_view_proj[ci] * vec4<f32>(offset_pos, 1.0);
         
         let light_ndc  = light_clip.xyz / light_clip.w;
@@ -588,10 +596,12 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 &&
             shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 && light_ndc.z <= 1.0) {
             let slope  = 1.0 - max(dot(N, normalize(-scene.sun_direction.xyz)), 0.0);
-            var bias   = max(0.0002 * slope, 0.00003);
-            if (N.y > 0.99) {
-                bias = max(bias, 0.005);
-            }
+            // Normal-offset shadows (offset_pos = world_pos + N*0.015 above) already
+            // push the sample off the surface, so the depth bias stays small. The old
+            // flat-ground floor `if (N.y > 0.99) { bias = max(bias, 0.005); }` was a
+            // 50x over-correction that peter-panned the shadow off the caster's base —
+            // and since the ground receives most shadows, that detachment was glaring.
+            let bias   = max(0.0002 * slope, 0.00003);
             let texel  = scene.cascade_params.y;
             shadow_visibility = filter_pcss(shadow_uv, light_ndc.z, ci, bias, texel);
         }

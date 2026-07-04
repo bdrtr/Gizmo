@@ -554,17 +554,30 @@ impl Renderer {
             asset_manager: std::sync::RwLock::new(crate::asset::AssetManager::new()),
             web_profile: crate::web_profile::WebProfile::auto(),
             shading_mode: 0,
-            environment_preset: 0,
+            // Studio Neutral (1), not Sunset Gold (0): the saturated-orange sunset
+            // was the default for EVERY scene, tinting the sky orange and washing
+            // albedo warm (a blue cube read as pink). Neutral shows true colours by
+            // default; scenes wanting a mood set the preset explicitly.
+            environment_preset: 1,
             environment_preset_2: 0,
             environment_blend_t: 0.0,
             bloom_intensity: 0.8,
             bloom_threshold: 0.85,
             exposure: 1.15,
-            dof_enabled: true,
-            dof_focus_dist: 4.5, // 4.5 meters (fits our lamp setup)
-            dof_focus_range: 2.0, // 2.0 meters focus range
-            dof_blur_size: 4.0, // Beautiful smooth blur
-            chromatic_aberration: 0.15, // Cinematic soft fringe
+            // Depth of field is an opt-in artistic effect, not a default: with it
+            // ON, any scene whose subject isn't near `dof_focus_dist` (4.5 m) is
+            // uniformly blurred — e.g. bevy_3d_scene's camera sits ~10 m out, so
+            // the whole frame was smeared. Off by default; scenes enable it and
+            // set the focus distance themselves.
+            dof_enabled: false,
+            dof_focus_dist: 4.5,
+            dof_focus_range: 2.0,
+            dof_blur_size: 4.0,
+            // Off by default: chromatic aberration splits the R/B channels at every
+            // high-contrast edge, so plain geometry (e.g. the ground plane against
+            // the sky) got out-of-place red/blue fringes. Opt-in artistic effect,
+            // like DoF — scenes that want the cinematic look set it themselves.
+            chromatic_aberration: 0.0,
             film_grain_intensity: 0.03, // Photographic film grain
             point_shadows_enabled: false,
         }
