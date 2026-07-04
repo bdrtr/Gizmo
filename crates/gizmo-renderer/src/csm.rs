@@ -7,8 +7,10 @@ use gizmo_math::{Mat4, Vec3, Vec4};
 /// Must match `texture_depth_2d_array` layer count and `SceneUniforms.light_view_proj` length.
 pub const CASCADE_COUNT: usize = 4;
 
-/// Resolution (width = height) of each cascade depth map.
-pub const SHADOW_MAP_RES: u32 = 2048;
+/// Resolution (width = height) of each cascade depth map. 3072 (was 2048) so a
+/// crisp ~1-texel PCF edge doesn't read as blocky on close-up geometry; the extra
+/// VRAM (4 × 3072² × Depth32 ≈ 302 MB) is acceptable on a modern GPU.
+pub const SHADOW_MAP_RES: u32 = 3072;
 
 /// Logarithmic-linear split distances in **world units** along `cam_forward` from `cam_pos`.
 /// `splits[i]` is the far distance of cascade `i` (inclusive range `[prev, splits[i]]`).
