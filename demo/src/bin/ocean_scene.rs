@@ -549,6 +549,8 @@ fn render(
     // Sıvı ve Fizik Çarpışmalarını GPU'ya eşitleden çıkar
     renderer.gpu_physics = None;
 
+    // This scene IS the fluid ocean → opt into GPU fluid rendering (off by default).
+    renderer.fluid_enabled = true;
     // CPU objelerini render et
     gizmo::systems::default_render_pass(world, encoder, view, renderer);
 }
