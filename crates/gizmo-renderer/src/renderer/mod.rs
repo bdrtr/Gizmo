@@ -166,6 +166,12 @@ pub struct Renderer {
     pub chromatic_aberration: f32,
     pub film_grain_intensity: f32,
     pub point_shadows_enabled: bool,
+    /// Whether the GPU SPH fluid "ocean" is simulated and composited this frame.
+    /// A renderer always allocates a 100k-particle fluid system, but its water
+    /// surface must NOT render over every scene — only scenes that actually want
+    /// fluid opt in (`ocean_scene`, `fluid_rigid`, …). Off by default so a plain
+    /// scene isn't covered by a stray mottled water surface.
+    pub fluid_enabled: bool,
 }
 
 impl Renderer {

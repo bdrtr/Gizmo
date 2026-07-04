@@ -230,6 +230,7 @@ fn main() {
             // Veya gizmo_renderer içindeki num_colliders'ı okuyup yazarız.
             // En temizi update_parameters cagrisini modify etmek.
 
+            renderer.fluid_enabled = true; // fluid demo → opt into GPU fluid (off by default)
             gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
         .run()

@@ -580,6 +580,10 @@ impl Renderer {
             chromatic_aberration: 0.0,
             film_grain_intensity: 0.03, // Photographic film grain
             point_shadows_enabled: false,
+            // The 100k-particle fluid system above is allocated but idle: its SSFR
+            // water surface only composites when a scene opts in. Otherwise every
+            // non-fluid scene got a stray mottled ocean drawn over it.
+            fluid_enabled: false,
         }
     }
 }

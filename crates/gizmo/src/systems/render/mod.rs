@@ -569,10 +569,17 @@ pub fn default_render_pass(
         physics.cull_pass(encoder, &renderer.scene.global_bind_group);
     }
 
-    // Compute LOD (Level of Detail) Scaling
+    // Compute LOD (Level of Detail) Scaling.
+    // `fluid_lod == 0` disables the fluid entirely (both `compute_pass` and
+    // `render_ssfr` early-return on a zero active count), so a scene that hasn't
+    // opted into fluid never simulates or composites the default 100k-particle
+    // ocean — previously its SSFR water surface rendered over every scene as a
+    // mottled overlay that read like broken shadows.
     let fluid_pos = Vec3::new(0.0, 5.0, 0.0);
     let dist_to_fluid = (cam_pos - fluid_pos).length();
-    let fluid_lod = if dist_to_fluid < 40.0 {
+    let fluid_lod = if !renderer.fluid_enabled {
+        0.0
+    } else if dist_to_fluid < 40.0 {
         1.0
     } else if dist_to_fluid < 80.0 {
         0.5
