@@ -293,6 +293,24 @@ gerçek-UDP örnek onaylı geçmişte senkron).
       yerleşmiş sahnede aşama dağılımı solver %41 / narrowphase %30 / broadphase %24. Archetype
       bitişik-kolon ECS + mimalloc ile geniş sahne ms-ölçekli. Doğrulama: workspace 543 test
       yeşil, CI clippy exit 0, determinizm 3/3 (yeni hash 598E315D0E7499FF). **Faz 4 TAMAM.**
+- [x] **Kinematik karakter denetleyici (KCC) + araç Ackermann denetimi** (2026-07-04,
+      2 paralel subagent + elle doğrulama) — az test edilmiş `gizmo-physics-dynamics`
+      (character.rs/vehicle.rs, 1386 LOC / yalnız 3 test) tarandı. **2 gerçek bug +
+      ayırt edici regresyon testleri:** (1) **KCC basamak-tırmanma ileri-taşması**
+      (`character.rs`): başarılı step'ten sonra `final_delta` tam uzunlukta kalıyordu →
+      bir sonraki sweep iterasyonu (yükselen gövde artık duvarı temizlediğinden) tüm
+      delta'yı YENİDEN uyguluyor, karakteri basamak başına ~2×'e kadar ileri fırlatıyordu;
+      fix: step sonrası `final_delta`'yı kalan mesafeye (`move_dir·move_dist·(1−min_t)`)
+      indir. Test `step_climb_does_not_overshoot_forward` (fix'siz taşma 0.045 > 0.025).
+      (2) **Araç Ackermann iç/dış tekerlek TERS** (`vehicle.rs`): yarım-iz işareti tersti,
+      iç tekerlek (dönüş merkezine yakın) DIŞ tekerlekten AZ dönüyordu (ters-Ackermann;
+      +Y up/−Z forward/+X right konvansiyonu izlendi, sol=iç sol-dönüşte). Geometri saf
+      `ackermann_steering_angle` yardımcısına çıkarıldı + işaret düzeltildi + test
+      `ackermann_inner_wheel_steers_more_than_outer` (her iki dönüş yönü). **Bilinen sınır
+      (kasıtlı DÜZELTİLMEDİ):** araç zemin-etkisi (`vehicle.rs` ~430) `height_above_ground`
+      süspansiyon BAĞLANTI noktasından ölçüyor (şasi tabanı değil, dinlenmede ~0.85 m) →
+      `ground_effect_height`(0.15)'in hep üstünde → ge_factor daima 1.0 = ölü özellik;
+      doğru referans ayarlanmış downforce davranışını değiştireceğinden kod içi NOT'landı.
 
 ---
 
@@ -404,6 +422,16 @@ gerçek-UDP örnek onaylı geçmişte senkron).
       (reflect serialize↔deserialize) + ebeveyn-çocuk hiyerarşisi (id remap) KORUNUYOR. Save/load
       sistemi (registry + bevy_reflect) sağlam çıktı. (Prefab join serileştirme zaten test'liydi.)
       KALAN (ileri): inspector UI güvenilirliği (gizmo-studio, GUI — otomatik test zor).
+- [x] **Prefab kaydet/yükle hiyerarşi sağlamlaştırma** (2026-07-04, subagent + elle) —
+      `gizmo-scene` prefab yolunda 2 hiyerarşi-bozan bug + round-trip testi: (1) **çıplak
+      grup kökü DÜŞÜYORDU** — yalnız `Children` taşıyan (isim/mesh/dinamik-bileşen yok)
+      prefab kökü `serialize_entities` skip-filter'ine takılıp diske yazılmıyordu →
+      `load_prefab` `root_id`'yi haritalayamıyor, kök hiç spawn edilmiyor, alt-ağaç
+      koparak öksüz kalıyordu; fix: kökü `save_prefab`'te zorla dahil et. (2) **çözülemeyen
+      ebeveyn ÖKSÜZ kalıyordu** — `instantiate_entities`'te `parent_id` kayıtlı sette
+      yoksa `root_parent` fallback'i erişilemezdi (else dalı `if let Some(parent_id)`
+      dışındaydı) → entity ne (kayıp) ebeveyne ne host'a bağlanıyordu; fix: çözülemeyince
+      `root_parent`'a düş. Ayırt edici test `prefab_roundtrip_keeps_bare_group_root_and_children`.
 
 ---
 

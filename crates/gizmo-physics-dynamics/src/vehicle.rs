@@ -319,6 +319,32 @@ impl VehicleController {
 // ARAÇ GÜNCELLEME FONKSİYONU
 // ============================================================
 
+/// Per-wheel Ackermann steering angle.
+///
+/// `turn_radius = wheelbase / tan(steer_angle)` is *signed*: with `+Y` up, `-Z`
+/// forward and `+X` right, a positive `steer_angle` steers the wheels left, giving
+/// a positive `turn_radius` and putting the turn centre on the car's left, so the
+/// **left** wheel is the inner one. The inner wheel traces the smaller radius
+/// (`turn_radius - track/2`) and therefore steers *more*; the outer wheel uses
+/// `turn_radius + track/2`. Beyond a near-straight threshold the nominal angle is
+/// returned unchanged.
+#[inline]
+fn ackermann_steering_angle(
+    steer_angle: f32,
+    turn_radius: f32,
+    wheelbase: f32,
+    track_width: f32,
+    is_left: bool,
+) -> f32 {
+    if turn_radius.abs() < 1e4 {
+        // Inner wheel (left on a left turn) subtracts half-track → tighter angle.
+        let sign = if is_left { -1.0 } else { 1.0 };
+        (wheelbase / (turn_radius + sign * track_width * 0.5)).atan()
+    } else {
+        steer_angle
+    }
+}
+
 /// Advances a vehicle by one fixed step.
 ///
 /// Runs the drivetrain, aerodynamics, Ackermann steering, suspension raycasts and
@@ -401,7 +427,13 @@ pub fn update_vehicle(
     let a = &vehicle.tuning.aero;
     let q = 0.5 * AIR_DENSITY * spd_sq; // dinamik basınç
 
-    // Zemin etkisi: alçak araçlarda downforce artar
+    // Zemin etkisi: alçak araçlarda downforce artar.
+    // NOT (bilinen sınır): `hit.distance - 0.5` süspansiyon BAĞLANTI noktasından
+    // zemine olan mesafedir (≈ süspansiyon boyu + tekerlek yarıçapı, dinlenmede
+    // ~0.85 m), şasi taban yüksekliği DEĞİL. Bu her zaman `ground_effect_height`
+    // (0.15) üstünde kaldığından ge_factor pratikte hep 1.0 = etki uyuyor. Doğru
+    // referansı bağlamak (şasi taban clearance'ı) ayarlanmış downforce davranışını
+    // değiştireceğinden kasıtlı olarak bu tura dahil edilmedi (tuning kararı).
     let height_above_ground = vehicle
         .wheels
         .iter()
@@ -517,13 +549,13 @@ pub fn update_vehicle(
 
         // Ackermann açısı (ön tekerlek)
         if wheel.axle_type == Axle::Front {
-            let sign = if wheel.is_left { 1.0 } else { -1.0 };
-            wheel.steering_angle = if turn_radius.abs() < 1e4 {
-                (vehicle.tuning.wheelbase / (turn_radius + sign * vehicle.tuning.track_width * 0.5))
-                    .atan()
-            } else {
-                steer_angle
-            };
+            wheel.steering_angle = ackermann_steering_angle(
+                steer_angle,
+                turn_radius,
+                vehicle.tuning.wheelbase,
+                vehicle.tuning.track_width,
+                wheel.is_left,
+            );
         }
 
         // Tork dağıtımı (RWD)
@@ -776,6 +808,36 @@ fn apply_force_at_point(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ackermann geometry: the inner wheel (nearer the turn centre) must steer
+    /// more sharply than the outer wheel, for turns in both directions. The old
+    /// code had the inner/outer half-track sign flipped (reverse-Ackermann), so
+    /// the inner wheel came out *shallower* — this asserts the corrected mapping.
+    #[test]
+    fn ackermann_inner_wheel_steers_more_than_outer() {
+        let wheelbase = 2.8_f32;
+        let track = 1.6_f32;
+
+        // Left turn: positive steer → positive turn radius → left wheel is inner.
+        let steer = 0.3_f32;
+        let turn_radius = wheelbase / steer.tan();
+        let left = ackermann_steering_angle(steer, turn_radius, wheelbase, track, true);
+        let right = ackermann_steering_angle(steer, turn_radius, wheelbase, track, false);
+        assert!(
+            left > right,
+            "left(inner) {left} must steer more than right(outer) {right} on a left turn"
+        );
+
+        // Right turn: mirror — right wheel is inner and steers more (in magnitude).
+        let steer = -0.3_f32;
+        let turn_radius = wheelbase / steer.tan();
+        let left = ackermann_steering_angle(steer, turn_radius, wheelbase, track, true);
+        let right = ackermann_steering_angle(steer, turn_radius, wheelbase, track, false);
+        assert!(
+            right.abs() > left.abs(),
+            "right(inner) {right} must steer more than left(outer) {left} on a right turn"
+        );
+    }
 
     #[test]
     fn test_suspension_spring_and_damper_math() {

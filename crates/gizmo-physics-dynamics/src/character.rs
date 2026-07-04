@@ -221,7 +221,17 @@ pub fn update_character(
                 }
             }
 
-            if !stepped {
+            if stepped {
+                // We climbed onto the ledge and already advanced up to the wall
+                // base (`move_dist * min_t`). Reduce `final_delta` to the *remaining*
+                // movement so the next sweep iteration carries us forward onto the
+                // ledge without re-applying the whole delta. Without this the loop
+                // would run again with the full (unchanged) `final_delta` and, now
+                // that the raised body clears the wall, add another full `move_dist`
+                // — making the character lurch forward by up to ~2× its intended
+                // speed every time it steps up.
+                final_delta = move_dir * (move_dist * (1.0 - min_t)).max(0.0);
+            } else {
                 current_pos += move_dir * (move_dist * min_t).max(0.0);
 
                 let remaining_dist = move_dist * (1.0 - min_t);
@@ -243,7 +253,75 @@ pub fn update_character(
 
 #[cfg(test)]
 mod tests {
+    use super::update_character;
     use gizmo_math::Vec3;
+    use gizmo_physics_core::components::CharacterController;
+    use gizmo_physics_core::{BodyHandle, BoxShape, Collider, ColliderShape, Transform};
+    use gizmo_physics_rigid::components::Velocity;
+
+    fn box_collider(hx: f32, hy: f32, hz: f32) -> Collider {
+        Collider::from_shape(ColliderShape::Box(BoxShape {
+            half_extents: Vec3::new(hx, hy, hz),
+        }))
+    }
+
+    /// A grounded character that climbs a small step must not advance forward by
+    /// more than its intended per-frame distance (`speed * dt`). The old code left
+    /// `final_delta` at its full length after a step, so the next sweep iteration —
+    /// now clearing the raised wall — re-applied the whole delta, lurching the
+    /// character forward by up to ~2× its speed on every stair. Discriminating:
+    /// reverting the step-branch `final_delta` reduction makes this fail.
+    #[test]
+    fn step_climb_does_not_overshoot_forward() {
+        let entity = BodyHandle::from_id(0);
+
+        // Thin character so the low horizontal sweep ray sits near the feet and can
+        // actually hit a short step: box half-extents (0.1, 0.9, 0.1) → radius 0.1,
+        // height 1.8. At rest its centre sits at y = height/2 = 0.9 above ground.
+        let collider = box_collider(0.1, 0.9, 0.1);
+
+        // Flat ground with its top surface at y = 0, and a 0.15-high step whose
+        // vertical face is at x = 1.0 (climbable: 0.15 < step_height 0.3, and the
+        // step top 0.15 > radius 0.1 so the lowest sweep ray hits its face).
+        let ground = box_collider(50.0, 0.5, 50.0);
+        let step = box_collider(25.0, 0.075, 50.0);
+        let colliders = vec![
+            (BodyHandle::from_id(1), Transform::new(Vec3::new(0.0, -0.5, 0.0)), ground),
+            (BodyHandle::from_id(2), Transform::new(Vec3::new(26.0, 0.075, 0.0)), step),
+        ];
+
+        // Start just short of the step face so a single frame's move reaches it.
+        let start = Vec3::new(0.88, 0.9, 0.0);
+        let mut transform = Transform::new(start);
+        let mut vel = Velocity::new(Vec3::ZERO);
+
+        let speed = 2.0;
+        let dt = 0.0125; // move_dist = 0.025, wall is 0.02 ahead → step is hit
+        let mut kcc = CharacterController {
+            target_velocity: Vec3::new(speed, 0.0, 0.0),
+            is_grounded: true,
+            ..Default::default()
+        };
+
+        update_character(entity, &mut kcc, &mut transform, &mut vel, &collider, &colliders, dt);
+
+        let advanced = transform.position.x - start.x;
+        let intended = speed * dt;
+
+        // The step must actually have been climbed (otherwise the test is vacuous).
+        assert!(
+            transform.position.y > start.y + 0.01,
+            "character should have stepped up onto the ledge, y {} -> {}",
+            start.y,
+            transform.position.y
+        );
+        // And it must not have lurched past its intended per-frame distance.
+        assert!(
+            advanced <= intended * 1.2,
+            "step-up overshoot: advanced {advanced} > intended {intended} (×1.2 tol)"
+        );
+        assert!(advanced > 0.0, "character should still move forward, got {advanced}");
+    }
 
     /// Reproduces the downslope-direction computation used when sliding down a
     /// too-steep slope (see `update_character_controller`).
