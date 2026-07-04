@@ -249,14 +249,15 @@ impl SceneData {
                 });
             }
 
-            let mut resolved_parent = None;
-            if let Some(orig_parent) = data.parent_id {
-                if let Some(&p_id) = id_map.get(&orig_parent) {
-                    resolved_parent = Some(p_id);
-                }
-            } else {
-                resolved_parent = root_parent;
-            }
+            // Resolve the parent to a freshly-spawned id. If `parent_id` names an
+            // entity that isn't in the saved set (e.g. a prefab whose bare root was
+            // filtered out, or a scene child of an editor-only parent), fall back to
+            // `root_parent` instead of silently orphaning the entity — previously the
+            // `else` fallback was skipped whenever `parent_id` was `Some` but unresolved.
+            let resolved_parent = data
+                .parent_id
+                .and_then(|orig_parent| id_map.get(&orig_parent).copied())
+                .or(root_parent);
 
             if let Some(p_id) = resolved_parent {
                 world.add_component(entity, Parent(p_id));
@@ -308,6 +309,25 @@ impl SceneData {
         }
 
         let mut entities_data = Self::serialize_entities(world, ids_to_save.clone(), registry);
+
+        // A "bare" root (e.g. an empty group/pivot node carrying only a `Children`
+        // component, with no name/mesh/material/dynamic components) is dropped by the
+        // skip-filter in `serialize_entities`. Force it back in so the prefab root
+        // always exists on reload — otherwise `load_prefab` can't map `root_id`, the
+        // root is never spawned, and its whole subtree detaches.
+        if !entities_data
+            .iter()
+            .any(|d| d.original_id == root_entity_id)
+        {
+            entities_data.push(EntityData {
+                original_id: root_entity_id,
+                name: None,
+                mesh_source: None,
+                material_source: None,
+                parent_id: None,
+                components: std::collections::BTreeMap::new(),
+            });
+        }
 
         if let Some(root_data) = entities_data
             .iter_mut()
@@ -508,6 +528,69 @@ mod tests {
             let parents = loaded.borrow::<Parent>();
             assert_eq!(parents.get(c).map(|x| x.0), Some(p), "ebeveyn-çocuk ilişkisi round-trip'te bozuldu");
         }
+    }
+
+    // REGRESYON: "çıplak" bir grup/pivot kök (yalnız `Children`, isim/mesh/dinamik
+    // bileşen yok) prefab olarak kaydedilip yüklendiğinde kök + tüm alt-ağaç KORUNMALI.
+    // Eski kodda serialize_entities çıplak kökü atlıyor, load_prefab `root_id`'yi
+    // haritalayamıyor → kök hiç spawn edilmiyor, çocuklar da öksüz kalıyordu.
+    #[test]
+    fn prefab_roundtrip_keeps_bare_group_root_and_children() {
+        let registry = crate::registry::default_scene_registry();
+
+        let mut world = World::new();
+        // Çıplak grup kökü: yalnızca Children (isim/Transform/mesh YOK → skip-filter'e takılır).
+        let root = world.spawn();
+        let a = world.spawn();
+        let b = world.spawn();
+        world.add_component(a, EntityName::new("A"));
+        world.add_component(a, Parent(root.id()));
+        world.add_component(b, EntityName::new("B"));
+        world.add_component(b, Parent(root.id()));
+        world.add_component(root, Children(vec![a.id(), b.id()]));
+
+        let path = std::env::temp_dir()
+            .join("gizmo_prefab_bare_root_test.ron")
+            .to_string_lossy()
+            .into_owned();
+        SceneData::save_prefab(&world, root.id(), &path, &registry).expect("save_prefab başarısız");
+
+        // Taze dünyaya bir host altına yükle.
+        let mut loaded = World::new();
+        let host = loaded.spawn();
+        let new_root = SceneData::load_prefab(&path, Some(host.id()), &mut loaded, &registry)
+            .expect("load_prefab başarısız");
+        let _ = std::fs::remove_file(&path);
+
+        // Kök round-trip'te var olmalı (fix'ten önce düşüyordu → None).
+        let new_root = new_root.expect("prefab kökü reload sonrası var olmalı");
+
+        let find = |w: &World, want: &str| -> Option<u32> {
+            let names = w.borrow::<EntityName>();
+            w.iter_alive_entities()
+                .into_iter()
+                .map(|e| e.id())
+                .find(|&id| names.get(id).map(|n| n.0.as_str()) == Some(want))
+        };
+        let a2 = find(&loaded, "A").expect("çocuk A yüklenmedi");
+        let b2 = find(&loaded, "B").expect("çocuk B yüklenmedi");
+
+        let parents = loaded.borrow::<Parent>();
+        assert_eq!(
+            parents.get(a2).map(|x| x.0),
+            Some(new_root),
+            "A prefab köküne bağlı kalmalı (öksüz kalmamalı)"
+        );
+        assert_eq!(
+            parents.get(b2).map(|x| x.0),
+            Some(new_root),
+            "B prefab köküne bağlı kalmalı"
+        );
+        assert_eq!(
+            parents.get(new_root).map(|x| x.0),
+            Some(host.id()),
+            "prefab kökü istenen host'a bağlanmalı"
+        );
     }
 
     // REGRESYON (audit 2026-06-29): id slotu yeniden kullanılmış (despawn→spawn,
