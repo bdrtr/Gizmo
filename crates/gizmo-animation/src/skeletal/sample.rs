@@ -32,10 +32,17 @@ pub fn evaluate_clip(
                 return Some(idx);
             }
         }
-        if target_node_name.is_none() && target_node < hierarchy.joints.len() {
-            return Some(target_node);
-        }
-        None
+        // Fallback: `target_node` is the GLTF *global node index* (channel.target().
+        // node().index()), NOT a bone index. Map it to the bone that was built from that
+        // node — joints record their source `node_index` exactly for this. The old code
+        // used `target_node` directly as a bone index (and only if it happened to be <
+        // joint count), which silently mis-targeted or dropped the track whenever the
+        // armature wasn't the first nodes in the document (common in Blender exports).
+        // This also now recovers a track whose name was present but didn't match a joint.
+        hierarchy
+            .joints
+            .iter()
+            .position(|j| j.node_index == target_node)
     };
 
     for track in &clip.translations {
@@ -193,6 +200,47 @@ mod tests {
             (poses[0].0 - bind).length() < 0.001,
             "Non-Hips translation must be ignored even at node index 66, got {:?}",
             poses[0].0
+        );
+    }
+
+    // Regression: a nameless animation channel carries the GLTF *global node index*,
+    // which is NOT a bone index. When the armature isn't the first nodes in the
+    // document (typical Blender export) the old fallback (`target_node < joint_count`)
+    // dropped or mis-targeted the track. The fix maps the node index to the bone built
+    // from that node via `joint.node_index`.
+    #[test]
+    fn nameless_track_maps_gltf_node_index_to_the_right_bone() {
+        // Bone 0 was built from node 20, bone 1 from node 22 (node indices ≠ bone indices).
+        let hierarchy = SkeletonHierarchy {
+            joints: vec![make_joint("Root", 20), make_joint("Arm", 22)],
+            root_transform: Mat4::IDENTITY,
+        };
+        let rot = Quat::from_rotation_y(1.0);
+        let clip = AnimationClip {
+            name: "a".into(),
+            duration: 1.0,
+            translations: vec![],
+            rotations: vec![Track {
+                target_node: 22,       // GLTF node index of "Arm"
+                target_node_name: None, // nameless → exercises the node-index fallback
+                interpolation: InterpolationMode::Linear,
+                keyframes: vec![Keyframe { time: 0.0, value: rot }],
+            }],
+            scales: vec![],
+        };
+        let poses = evaluate_clip(&clip, 0.0, &hierarchy);
+        // Old fallback: `target_node (22) < joints.len() (2)` == false → track dropped →
+        // bone 1 would stay at bind (identity). The fix applies it to bone 1 (node 22).
+        assert!(
+            poses[1].1.dot(rot).abs() > 0.999,
+            "nameless track must rotate the bone built from node 22, got {:?}",
+            poses[1].1
+        );
+        // Bone 0 (node 20) was not targeted → stays at bind rotation (identity).
+        assert!(
+            poses[0].1.dot(Quat::IDENTITY).abs() > 0.999,
+            "untargeted bone must keep its bind rotation, got {:?}",
+            poses[0].1
         );
     }
 }
