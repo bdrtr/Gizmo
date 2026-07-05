@@ -194,24 +194,13 @@ pub fn default_render_pass(
     let sun_dir = scene_lights.sun_dir;
     let sun_col = scene_lights.sun_col;
 
-    // Derive splits from the actual camera near/far (was hardcoded [20,80,250,2000],
-    // which mismatched any camera whose far ≠ 2000 → fragments past the last split fell
-    // into a cascade whose ortho matrix didn't cover them). Mirrors the studio path.
-    // Cascades cover only the near shadow range, NOT the camera's full (often huge)
-    // far plane — otherwise cascade 0 stretches tens of units and nearby objects get
-    // a handful of shadow texels (blocky, blurry shadows). See `SHADOW_DISTANCE`.
-    let shadow_far = cam_far.min(crate::renderer::SHADOW_DISTANCE);
-    let cascade_splits = crate::renderer::cascade_split_distances(cam_near, shadow_far, 0.75);
-    let cascade_vp = crate::renderer::directional_cascade_view_projs(
-        cam_pos,
-        cam_forward,
-        aspect,
-        cam_fov,
-        cam_near,
-        &cascade_splits,
-        sun_dir,
-        crate::renderer::SHADOW_MAP_RES,
-    );
+    // Directional shadow cascades via the shared orchestration helper (SHADOW_DISTANCE
+    // cap + CASCADE_LAMBDA + cascade math), so the game and studio paths can't drift on
+    // shadow setup. The game always casts from the sun; the studio has its own fallback.
+    let cascades =
+        crate::renderer::compute_directional_cascades(cam_pos, cam_forward, aspect, cam_fov, cam_near, cam_far, sun_dir);
+    let cascade_splits = cascades.splits;
+    let cascade_vp = cascades.view_projs;
     let light_view_projs: [[[f32; 4]; 4]; 4] = cascade_vp.map(|m| m.to_cols_array_2d());
 
     // Dinamik ışıklar (point + spot) shared helper'dan geldi.
