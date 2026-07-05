@@ -214,113 +214,6 @@ impl EditorState {
         }
     }
 
-    pub fn is_tab_open(&self, tab: &EditorTab) -> bool {
-        self.dock_state.iter_all_tabs().any(|node| node.1 == tab)
-    }
-
-    pub fn toggle_tab(&mut self, tab: EditorTab) {
-        if let Some(index) = self.dock_state.find_tab(&tab) {
-            self.dock_state.remove_tab(index);
-        } else {
-            self.dock_state.push_to_first_leaf(tab);
-        }
-    }
-
-pub fn open_tab(&mut self, tab: EditorTab) {
-        if let Some(index) = self.dock_state.find_tab(&tab) {
-            let _ = self.dock_state.set_active_tab(index);
-        } else {
-            self.dock_state.push_to_first_leaf(tab.clone());
-            if let Some(index) = self.dock_state.find_tab(&tab) {
-                let _ = self.dock_state.set_active_tab(index);
-            }
-        }
-    }
-    // --- Selection API ---
-    pub fn is_selected(&self, id: gizmo_core::entity::Entity) -> bool {
-        self.selection.entities.contains(&id)
-    }
-
-    pub fn select_exclusive(&mut self, id: gizmo_core::entity::Entity) {
-        self.selection.entities.clear();
-        self.selection.entities.insert(id);
-        self.selection.primary = Some(id);
-    }
-
-    pub fn toggle_selection(&mut self, id: gizmo_core::entity::Entity) {
-        if self.selection.entities.contains(&id) {
-            self.selection.entities.remove(&id);
-            if self.selection.primary == Some(id) {
-                self.selection.primary = self.selection.entities.iter().next().copied();
-            }
-        } else {
-            self.selection.entities.insert(id);
-            self.selection.primary = Some(id);
-        }
-    }
-
-    pub fn unselect_entity(&mut self, id: gizmo_core::entity::Entity) {
-        if self.selection.entities.contains(&id) {
-            self.selection.entities.remove(&id);
-            if self.selection.primary == Some(id) {
-                self.selection.primary = self.selection.entities.iter().next().copied();
-            }
-        }
-    }
-
-    pub fn clear_selection(&mut self) {
-        self.selection.entities.clear();
-        self.selection.primary = None;
-        self.selection.rubber_band_start = None;
-        self.selection.rubber_band_current = None;
-        self.selection.rubber_band_request = None;
-        self.scene.gizmo_original_transforms.clear();
-    }
-
-    /// Play/Stop geçişi yapar.
-    /// Edit → Play: Sahne snapshot'ı alınması için `play_start_request` set edilir.
-    /// Play veya Paused → Edit: Sahne geri yüklenmesi için `play_stop_request` set edilir.
-    pub fn toggle_play(&mut self) {
-        self.mode = match self.mode {
-            EditorMode::Edit => {
-                self.play_start_request = true;
-                self.open_tab(EditorTab::GameView);
-                EditorMode::Play
-            }
-            EditorMode::Play | EditorMode::Paused => {
-                self.play_stop_request = true;
-                self.open_tab(EditorTab::SceneView);
-                EditorMode::Edit
-            }
-        };
-    }
-
-    pub fn toggle_pause(&mut self) {
-        self.mode = match self.mode {
-            EditorMode::Play => EditorMode::Paused,
-            EditorMode::Paused => EditorMode::Play,
-            other => other,
-        };
-    }
-
-    /// Oyun aktif olarak çalışıyor mu? (Sadece Play, Paused değil)
-    pub fn is_playing(&self) -> bool {
-        self.mode == EditorMode::Play
-    }
-
-    /// Oyun oturumu aktif mi? (Play veya Paused — snapshot hâlâ hayatta)
-    pub fn is_in_play_session(&self) -> bool {
-        matches!(self.mode, EditorMode::Play | EditorMode::Paused)
-    }
-
-    pub fn is_editing(&self) -> bool {
-        self.mode == EditorMode::Edit
-    }
-
-    pub fn is_paused(&self) -> bool {
-        self.mode == EditorMode::Paused
-    }
-
     // --- Post-Process Validation ---
     /// Post-process değerlerini güvenli aralıklara sıkıştırır.
     /// Render pipeline'a geçmeden önce çağrılmalıdır.
@@ -331,67 +224,14 @@ pub fn open_tab(&mut self, tab: EditorTab) {
         self.post_process.vignette = self.post_process.vignette.clamp(0.0, 1.0);
         self.post_process.chromatic_aberration = self.post_process.chromatic_aberration.clamp(0.0, 0.1);
     }
-
-    pub fn reset_layout(&mut self) {
-        self.dock_state = create_default_dock_state();
-    }
-
-    pub fn log_info(&mut self, msg: &str) {
-        gizmo_core::logger::log_message(
-            gizmo_core::logger::LogLevel::Info,
-            msg.to_string(),
-            file!(),
-            line!(),
-        );
-    }
-
-    pub fn log_warning(&mut self, msg: &str) {
-        gizmo_core::logger::log_message(
-            gizmo_core::logger::LogLevel::Warning,
-            msg.to_string(),
-            file!(),
-            line!(),
-        );
-    }
-
-    pub fn log_error(&mut self, msg: &str) {
-        gizmo_core::logger::log_message(
-            gizmo_core::logger::LogLevel::Error,
-            msg.to_string(),
-            file!(),
-            line!(),
-        );
-        self.last_error = Some(msg.to_string());
-    }
-
-    pub fn save_layout(&mut self) -> Result<(), crate::error::EditorError> {
-        let json = serde_json::to_string(&self.dock_state)?;
-        std::fs::write("editor_layout.json", json).map_err(|source| {
-            crate::error::EditorError::Io {
-                context: "layout yazılamadı: editor_layout.json".to_string(),
-                source,
-            }
-        })?;
-        self.log_info("Pencere düzeni başarıyla kaydedildi.");
-        Ok(())
-    }
-
-    pub fn load_layout() -> Option<egui_dock::DockState<EditorTab>> {
-        if let Ok(content) = std::fs::read_to_string("editor_layout.json") {
-            if let Ok(dock) = serde_json::from_str(&content) {
-                return Some(dock);
-            } else {
-                gizmo_core::logger::log_message(
-                    gizmo_core::logger::LogLevel::Error,
-                    "editor_layout.json parse hatasi!".to_string(),
-                    file!(),
-                    line!(),
-                );
-            }
-        }
-        None
-    }
 }
+
+// EditorState'in impl'i domain'lere göre bölündü (god-object → kohezyonlu modüller).
+// Struct + alanlar + new() + validate_post_process burada; metodlar kardeş modüllerde.
+mod console;
+mod layout;
+mod play_mode;
+mod selection;
 
 impl Default for EditorState {
     fn default() -> Self {
