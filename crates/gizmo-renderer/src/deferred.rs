@@ -1,6 +1,20 @@
 use crate::gpu_types::Vertex;
 use crate::pipeline::{load_shader, SceneState};
 
+// Single source of truth for the deferred G-buffer render-target formats.
+//
+// These are a TIGHT coupling, not a style preference: the G-buffer textures and
+// *every* pipeline that renders into them (the geometry pass here, plus decals,
+// forward blends, etc.) must declare an identical `ColorTargetState.format`, or
+// wgpu aborts the whole frame with a validation error the instant that pipeline
+// is drawn. A stray `Rgba16Float` on the decal pipeline caused exactly that
+// crash (see decal.rs). Reference these constants instead of the raw literals so
+// the formats can never silently drift apart again.
+pub const GBUFFER_ALBEDO_METALLIC_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+pub const GBUFFER_NORMAL_ROUGHNESS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+pub const GBUFFER_WORLD_POSITION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+pub const GBUFFER_WORLD_TANGENT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
 /// G-Buffer textures, pipelines and bind groups for the deferred rendering path.
 pub struct DeferredState {
     // G-buffer colour targets
@@ -159,10 +173,10 @@ impl DeferredState {
             (t, v)
         };
 
-        let (a, av) = mk("gbuf_albedo_metallic", wgpu::TextureFormat::Rgba8Unorm);
-        let (n, nv) = mk("gbuf_normal_roughness", wgpu::TextureFormat::Rgba16Float);
-        let (p, pv) = mk("gbuf_world_position", wgpu::TextureFormat::Rgba16Float);
-        let (t, tv) = mk("gbuf_world_tangent", wgpu::TextureFormat::Rgba16Float);
+        let (a, av) = mk("gbuf_albedo_metallic", GBUFFER_ALBEDO_METALLIC_FORMAT);
+        let (n, nv) = mk("gbuf_normal_roughness", GBUFFER_NORMAL_ROUGHNESS_FORMAT);
+        let (p, pv) = mk("gbuf_world_position", GBUFFER_WORLD_POSITION_FORMAT);
+        let (t, tv) = mk("gbuf_world_tangent", GBUFFER_WORLD_TANGENT_FORMAT);
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -305,27 +319,27 @@ impl DeferredState {
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[
-                    // RT0: albedo_metallic  Rgba8Unorm
+                    // RT0: albedo_metallic
                     Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        format: GBUFFER_ALBEDO_METALLIC_FORMAT,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
-                    // RT1: normal_roughness Rgba16Float
+                    // RT1: normal_roughness
                     Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba16Float,
+                        format: GBUFFER_NORMAL_ROUGHNESS_FORMAT,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
-                    // RT2: world_position   Rgba16Float
+                    // RT2: world_position
                     Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba16Float,
+                        format: GBUFFER_WORLD_POSITION_FORMAT,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
-                    // RT3: world_tangent    Rgba16Float
+                    // RT3: world_tangent
                     Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba16Float,
+                        format: GBUFFER_WORLD_TANGENT_FORMAT,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     }),

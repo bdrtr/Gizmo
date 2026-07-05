@@ -78,7 +78,10 @@ pub use csm::{
 };
 pub use debug_renderer::{GizmoRendererSystem, Gizmos};
 pub use decal::DecalState;
-pub use deferred::DeferredState;
+pub use deferred::{
+    DeferredState, GBUFFER_ALBEDO_METALLIC_FORMAT, GBUFFER_NORMAL_ROUGHNESS_FORMAT,
+    GBUFFER_WORLD_POSITION_FORMAT, GBUFFER_WORLD_TANGENT_FORMAT,
+};
 pub use gi::{LightProbe, ProbeGrid, SHCoeffs};
 pub use gpu_cull::{DrawIndirectArgs, GpuCullState, MeshBoundsRaw};
 pub use gpu_types::{
