@@ -310,24 +310,23 @@ pub fn execute_render_pipeline(
                 // drives the MAIN passes (unchanged). A shadow CASTER outside the camera
                 // frustum is still kept if it falls in any cascade's LIGHT frustum, so it
                 // casts a shadow into view (drawn into shadow maps only — see below).
-                let camera_visible =
-                    gizmo::renderer::visible_in_frustum(&culling_frustum, &model, mesh.bounds);
-                if !camera_visible {
-                    let is_caster = !mat.is_transparent
-                        && !matches!(
-                            mat.material_type,
-                            gizmo::renderer::components::MaterialType::Skybox
-                                | gizmo::renderer::components::MaterialType::Grid
-                                | gizmo::renderer::components::MaterialType::Unlit
-                        );
-                    if !is_caster
-                        || !cascade_frusta
-                            .iter()
-                            .any(|f| gizmo::renderer::visible_in_frustum(f, &model, mesh.bounds))
-                    {
-                        continue;
-                    }
-                }
+                // Shared with the game path so the cull test + caster predicate stay in
+                // lockstep (camera-visible → main passes; off-screen caster inside a
+                // cascade → shadow maps only; else skip). Culls against the game camera
+                // in edit mode (culling_frustum).
+                let camera_visible = match gizmo::renderer::classify_visibility(
+                    &culling_frustum,
+                    &cascade_frusta,
+                    &model,
+                    mesh.bounds,
+                    mat.material_type,
+                    mat.is_transparent,
+                    mat.albedo.w,
+                ) {
+                    gizmo::renderer::Visibility::Culled => continue,
+                    gizmo::renderer::Visibility::Camera => true,
+                    gizmo::renderer::Visibility::ShadowOnly => false,
+                };
 
                 // Culling'i geçen objelerin Bounding Box'larını debug çizimi için kaydet.
                 // Skybox ve Grid'i hariç tut: bounds'ları tüm sahneyi sardığı için
