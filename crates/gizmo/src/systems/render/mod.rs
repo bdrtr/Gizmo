@@ -127,7 +127,8 @@ pub fn default_render_pass(
 
     // KAMERALARI BUL VE MATRIX YARAT
     let cameras = world.borrow::<Camera>();
-    let transforms = world.borrow::<gizmo_physics_core::components::GlobalTransform>();
+    let global_transforms = world.borrow::<gizmo_physics_core::components::GlobalTransform>();
+    let local_transforms = world.borrow::<gizmo_physics_core::components::Transform>();
     {
         // Pick the camera flagged `primary` — the convention maintained by
         // `spawn_camera`/`CameraBundle` (which keep a single primary) and used by
@@ -140,9 +141,21 @@ pub fn default_render_pass(
             .or_else(|| cameras.iter().next())
             .map(|(id, _)| id);
         if let Some(active_cam) = active_cam {
-            if let (Some(cam), Some(trans)) = (cameras.get(active_cam), transforms.get(active_cam))
-            {
-                let (_, _, pos) = trans.matrix.to_scale_rotation_translation();
+            if let Some(cam) = cameras.get(active_cam) {
+                // Camera world position: prefer a synced GlobalTransform (needed when the
+                // camera is parented), but fall back to the camera's own Transform.position
+                // when it has none. Without the fallback a hand-built camera that only got
+                // a Transform + Camera (no GlobalTransform) was silently skipped and the
+                // view stuck at the origin — nothing read the Transform that gameplay/WASD
+                // moved. The transform-propagate system runs in the fixed-step schedule
+                // BEFORE the user update, and a custom App may not register it at all, so
+                // a camera's GlobalTransform is easily missing or a frame stale; the
+                // Transform is written right before render and is always current.
+                let pos = global_transforms
+                    .get(active_cam)
+                    .map(|g| g.matrix.to_scale_rotation_translation().2)
+                    .or_else(|| local_transforms.get(active_cam).map(|t| t.position))
+                    .unwrap_or(Vec3::ZERO);
                 proj = cam.get_projection(aspect);
                 view_mat = cam.get_view(pos);
                 cam_pos = pos;
