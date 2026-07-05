@@ -49,7 +49,7 @@ pub mod volumetric;
 pub mod web_profile;
 pub mod asset_loading;
 
-pub use frustum_cull::{visible_in_frustum, Frustum};
+pub use frustum_cull::{classify_visibility, visible_in_frustum, Frustum, Visibility};
 pub use web_profile::{PostProcessLevel, ShadowQuality, WebProfile};
 
 pub use gizmo_animation::skeletal::{

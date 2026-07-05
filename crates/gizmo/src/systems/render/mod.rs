@@ -344,26 +344,24 @@ pub fn default_render_pass(
                 let sz = model.z_axis.truncate().length();
                 let world_r = local_r * sx.max(sy).max(sz);
 
-                // Camera culling decides the MAIN passes (unchanged). But a shadow CASTER
-                // outside the camera frustum can still cast a shadow into view, so keep it
-                // if it falls in any cascade's LIGHT frustum — drawn into the shadow maps
-                // only (main passes use `camera_count`, shadow passes the full range).
-                let camera_visible = frustum.intersects_sphere(world_c, world_r);
-                let is_caster = !(matches!(
+                // Camera-visible → main passes; an off-screen shadow caster inside a
+                // cascade's light frustum → shadow maps only (main passes use
+                // `camera_count`, shadow passes the full range); otherwise skip. Shared
+                // with the studio path so the cull test + caster predicate can't drift —
+                // now the tighter AABB test (was a bounding sphere here).
+                let camera_visible = match crate::renderer::classify_visibility(
+                    &frustum,
+                    &cascade_frusta,
+                    &model,
+                    $mesh.bounds,
                     $mat.material_type,
-                    crate::renderer::components::MaterialType::Unlit
-                        | crate::renderer::components::MaterialType::Skybox
-                ) || $mat.is_transparent
-                    || $mat.albedo.w < 0.99);
-                if !camera_visible {
-                    if !is_caster
-                        || !cascade_frusta
-                            .iter()
-                            .any(|f| f.intersects_sphere(world_c, world_r))
-                    {
-                        continue;
-                    }
-                }
+                    $mat.is_transparent,
+                    $mat.albedo.w,
+                ) {
+                    crate::renderer::Visibility::Culled => continue,
+                    crate::renderer::Visibility::Camera => true,
+                    crate::renderer::Visibility::ShadowOnly => false,
+                };
 
                 // Auto-LOD (Level of Detail) Seçimi
                 let dist_to_cam = (world_c - cam_pos).length();
