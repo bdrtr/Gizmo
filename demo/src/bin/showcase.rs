@@ -126,6 +126,11 @@ fn main() {
                 ),
             );
             world.add_component(cam_entity, EntityName("Kamera".into()));
+            // The renderer reads the camera's world position from GlobalTransform and
+            // ignores cameras that don't have one (TransformPropagateSystem only syncs
+            // entities that already have it). Without this the camera was stuck at the
+            // default origin — WASD moved a Transform nobody read. (movement fix)
+            world.add_component(cam_entity, GlobalTransform::default());
             game.cam_id = cam_entity.id();
 
             // Güneş (Gün batımı açısı ve rengi)
@@ -439,12 +444,28 @@ fn main() {
                 state.cam_pos.y += state.cam_velocity_y * dt;
             }
 
+            // Drive the camera the way car_demo does (the working reference): update
+            // Transform, push the result straight into GlobalTransform (the renderer
+            // reads position from there, and the propagate system doesn't cover the
+            // camera here), and mirror yaw/pitch into the Camera component (the
+            // renderer takes the view *direction* from there, not the Transform).
             {
-                let mut trans = world.borrow_mut::<Transform>();
-                if let Some(mut t) = trans.get_mut(state.cam_id) {
+                let cam_id = state.cam_id;
+                // SAFETY: Transform / GlobalTransform / Camera are distinct component types.
+                let mut transforms = unsafe { world.borrow_mut_unchecked::<Transform>() };
+                let mut globals = unsafe { world.borrow_mut_unchecked::<GlobalTransform>() };
+                let mut cameras = unsafe { world.borrow_mut_unchecked::<Camera>() };
+                if let Some(mut t) = transforms.get_mut(cam_id) {
                     t.position = state.cam_pos;
                     t.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
                     t.update_local_matrix();
+                    if let Some(mut g) = globals.get_mut(cam_id) {
+                        g.matrix = t.local_matrix;
+                    }
+                }
+                if let Some(mut cam) = cameras.get_mut(cam_id) {
+                    cam.yaw = state.cam_yaw;
+                    cam.pitch = state.cam_pitch;
                 }
             }
 
