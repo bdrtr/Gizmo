@@ -98,9 +98,12 @@ impl DecalState {
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[
-                    // Albedo blending!
+                    // Decals alpha-blend into the albedo G-buffer (deferred RT0), so this
+                    // MUST match that texture's format — `Rgba8Unorm` (see deferred.rs).
+                    // It was `Rgba16Float`, which mismatches the render pass and makes wgpu
+                    // abort with a validation error the moment any decal is drawn.
                     Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba16Float,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
