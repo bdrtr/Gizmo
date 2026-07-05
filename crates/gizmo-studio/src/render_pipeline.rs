@@ -146,45 +146,43 @@ pub fn execute_render_pipeline(
         scene_lights.sun_col.w,
     ];
 
-    let identity_m = Mat4::IDENTITY.to_cols_array_2d();
-    let mut light_view_proj_cascades = [identity_m; 4];
-    let mut cascade_splits = gizmo::renderer::cascade_split_distances(cam_near, cam_far.min(gizmo::renderer::SHADOW_DISTANCE), 0.75);
-
-    if sun_dir[3] > 0.5 {
-        let light_direction = Vec3::new(sun_dir[0], sun_dir[1], sun_dir[2]).normalize();
-        let mats = gizmo::renderer::directional_cascade_view_projs(
-            cam_pos,
-            cam_forward,
-            aspect,
-            cam_fov,
-            cam_near,
-            &cascade_splits,
-            light_direction,
-            gizmo::renderer::SHADOW_MAP_RES,
-        );
-        for i in 0..4 {
-            light_view_proj_cascades[i] = mats[i].to_cols_array_2d();
-        }
+    // Pick the shadow-casting direction: the sun if the scene has one, else fall
+    // back to the first point light aimed at the origin (studio-only fallback — the
+    // game always casts from the sun). Cascade orchestration itself is the shared
+    // helper, so game and studio can't drift on the SHADOW_DISTANCE cap / lambda.
+    let shadow_dir = if sun_dir[3] > 0.5 {
+        Some(Vec3::new(sun_dir[0], sun_dir[1], sun_dir[2]).normalize())
     } else if num_lights > 0 {
         let l_pos = Vec3::new(
             lights_data[0].position[0],
             lights_data[0].position[1],
             lights_data[0].position[2],
         );
-        let toward = (Vec3::ZERO - l_pos).normalize();
-        cascade_splits = gizmo::renderer::cascade_split_distances(cam_near, cam_far.min(gizmo::renderer::SHADOW_DISTANCE), 0.75);
-        let mats = gizmo::renderer::directional_cascade_view_projs(
-            cam_pos,
-            cam_forward,
-            aspect,
-            cam_fov,
-            cam_near,
-            &cascade_splits,
-            toward,
-            gizmo::renderer::SHADOW_MAP_RES,
-        );
-        for i in 0..4 {
-            light_view_proj_cascades[i] = mats[i].to_cols_array_2d();
+        Some((Vec3::ZERO - l_pos).normalize())
+    } else {
+        None
+    };
+
+    let cascades = gizmo::renderer::compute_directional_cascades(
+        cam_pos,
+        cam_forward,
+        aspect,
+        cam_fov,
+        cam_near,
+        cam_far,
+        shadow_dir.unwrap_or(Vec3::new(0.0, -1.0, 0.0)),
+    );
+    let cascade_splits = cascades.splits;
+    let identity_m = Mat4::IDENTITY.to_cols_array_2d();
+    let mut light_view_proj_cascades = [identity_m; 4];
+    // No light → leave cascades at identity (the shared helper still gives correct
+    // splits for the SceneUniforms, but the matrices are unused this frame).
+    if shadow_dir.is_some() {
+        for (dst, src) in light_view_proj_cascades
+            .iter_mut()
+            .zip(cascades.view_projs.iter())
+        {
+            *dst = src.to_cols_array_2d();
         }
     }
 

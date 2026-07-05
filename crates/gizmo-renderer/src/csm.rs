@@ -22,6 +22,50 @@ pub const SHADOW_MAP_RES: u32 = 3072;
 /// camera, giving crisp contact shadows. Fragments past this distance are unshadowed.
 pub const SHADOW_DISTANCE: f32 = 100.0;
 
+/// Blend between logarithmic (1.0) and uniform (0.0) cascade splits. 0.75 leans
+/// logarithmic for denser near-camera texels while keeping the far cascade sane.
+/// Single-sourced so the game and studio renderers can't pick different values.
+pub const CASCADE_LAMBDA: f32 = 0.75;
+
+/// The directional shadow cascades for one frame: the split distances and the
+/// per-cascade light clip matrices, ready to upload.
+pub struct ShadowCascades {
+    pub splits: [f32; CASCADE_COUNT],
+    pub view_projs: [Mat4; CASCADE_COUNT],
+}
+
+/// Compute the directional shadow cascades for a camera + light direction.
+///
+/// Wraps the shared cascade math (`SHADOW_DISTANCE` cap, [`CASCADE_LAMBDA`],
+/// [`cascade_split_distances`], [`directional_cascade_view_projs`]) that the game
+/// and studio render paths both need. The CALLER picks `light_dir` — the game
+/// always uses the sun, the studio falls back to a point light when there's no
+/// sun — so that legitimate difference stays at the call site while the
+/// orchestration lives here once.
+pub fn compute_directional_cascades(
+    cam_pos: Vec3,
+    cam_forward: Vec3,
+    aspect: f32,
+    fov_y: f32,
+    cam_near: f32,
+    cam_far: f32,
+    light_dir: Vec3,
+) -> ShadowCascades {
+    let shadow_far = cam_far.min(SHADOW_DISTANCE);
+    let splits = cascade_split_distances(cam_near, shadow_far, CASCADE_LAMBDA);
+    let view_projs = directional_cascade_view_projs(
+        cam_pos,
+        cam_forward,
+        aspect,
+        fov_y,
+        cam_near,
+        &splits,
+        light_dir,
+        SHADOW_MAP_RES,
+    );
+    ShadowCascades { splits, view_projs }
+}
+
 /// Logarithmic-linear split distances in **world units** along `cam_forward` from `cam_pos`.
 /// `splits[i]` is the far distance of cascade `i` (inclusive range `[prev, splits[i]]`).
 pub fn cascade_split_distances(z_near: f32, z_far: f32, lambda: f32) -> [f32; CASCADE_COUNT] {
