@@ -11,6 +11,8 @@ impl PhysicsWorld {
             rigid_bodies: self.rigid_bodies.clone(),
             contact_cache: self.contact_cache.clone(),
             accumulator: self.accumulator,
+            gravity_fields: self.gravity_fields.clone(),
+            fluid_zones: self.fluid_zones.clone(),
         }
     }
 
@@ -22,6 +24,8 @@ impl PhysicsWorld {
         self.rigid_bodies.clone_from(&snap.rigid_bodies);
         self.contact_cache.clone_from(&snap.contact_cache);
         self.accumulator = snap.accumulator;
+        self.gravity_fields.clone_from(&snap.gravity_fields);
+        self.fluid_zones.clone_from(&snap.fluid_zones);
     }
 
     /// Simülasyon durumunun DETERMINISTIK hash'i — rollback/replay desync tespiti + testler.

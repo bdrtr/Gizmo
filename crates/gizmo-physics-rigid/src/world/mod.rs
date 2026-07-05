@@ -245,4 +245,10 @@ pub struct WorldSnapshot {
     rigid_bodies: Vec<crate::components::RigidBody>,
     contact_cache: HashMap<(BodyHandle, BodyHandle), (bool, Option<ContactManifold>)>,
     accumulator: f32,
+    // Force-field state also feeds `velocity_integration_step`, so it MUST be part of
+    // the rollback snapshot: these are public mutable `Vec`s that gameplay can add to /
+    // clear at runtime, and if one changes inside a rollback window a restore that left
+    // them untouched would resimulate under the wrong forces and diverge.
+    gravity_fields: Vec<GravityField>,
+    fluid_zones: Vec<FluidZone>,
 }
