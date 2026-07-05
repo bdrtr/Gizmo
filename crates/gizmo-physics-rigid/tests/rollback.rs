@@ -180,3 +180,38 @@ fn rollback_netcode_converges_under_lag_jitter_loss() {
         "lag/jitter sonrası peer ground-truth'a YAKINSAMADI → rollback netcode senkron değil"
     );
 }
+
+// Rollback snapshot completeness: force-field state (gravity_fields / fluid_zones)
+// feeds `velocity_integration_step`, so it must be captured and restored. These are
+// public mutable Vecs gameplay can change at runtime; if one is modified inside a
+// rollback window, a restore that ignored it would resimulate under the wrong forces.
+#[test]
+fn snapshot_restores_gravity_and_fluid_zones() {
+    use gizmo_physics_rigid::world::GravityField;
+
+    let mut world = PhysicsWorld::new();
+
+    // Snapshot with ONE gravity field present.
+    world.gravity_fields.push(GravityField::default());
+    let snap = world.snapshot();
+    assert_eq!(world.gravity_fields.len(), 1);
+
+    // Gameplay mutates the force fields AFTER the snapshot (as could happen mid-window):
+    // add a second gravity field and a fluid zone.
+    let mut extra = GravityField::default();
+    extra.gravity = Vec3::new(0.0, 20.0, 0.0); // upward — clearly different sim
+    world.gravity_fields.push(extra);
+    assert_eq!(world.gravity_fields.len(), 2);
+
+    // Rollback must revert the force-field state to exactly the snapshot.
+    world.restore_snapshot(&snap);
+    assert_eq!(
+        world.gravity_fields.len(),
+        1,
+        "restore_snapshot must revert gravity_fields to the snapshot state"
+    );
+    assert!(
+        world.fluid_zones.is_empty(),
+        "restore_snapshot must revert fluid_zones to the snapshot state"
+    );
+}
