@@ -89,11 +89,18 @@ pub fn collect_scene_lights(world: &World) -> SceneLights {
             }
             let Some((pos, rot)) = world_tf(e) else { continue };
             let dir = rot.mul_vec3(Vec3::new(0.0, 0.0, -1.0)).normalize();
+            // The shaders compare the cone against `dot(-L, spot_dir)` (a cosine), so the
+            // cutoffs must be COSINES of the cone angles — every lighting shader documents
+            // `w = inner_cutoff_cos`, `params.x = outer_cutoff_cos`. `SpotLight` stores the
+            // angles in radians (its ctor clamps inner ≤ outer), so convert here. Passing the
+            // raw radians made the cone a hard cut at the wrong angle with no falloff; the
+            // studio path used to `.cos()` these itself, the game path never did (its spots
+            // were broken) — single-sourcing the fix corrects both.
             lights[num_lights] = LightData {
                 position: [pos.x, pos.y, pos.z, light.intensity],
                 color: [light.color.x, light.color.y, light.color.z, light.radius],
-                direction: [dir.x, dir.y, dir.z, light.inner_angle],
-                params: [light.outer_angle, 1.0, 0.0, 0.0], // params.y = 1 → SpotLight
+                direction: [dir.x, dir.y, dir.z, light.inner_angle.cos()],
+                params: [light.outer_angle.cos(), 1.0, 0.0, 0.0], // params.y = 1 → SpotLight
             };
             num_lights += 1;
         }
@@ -122,5 +129,66 @@ pub fn collect_scene_lights(world: &World) -> SceneLights {
         sun_dir,
         sun_col,
         has_sun,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::World;
+    use crate::renderer::components::{PointLight, SpotLight};
+    use gizmo_physics_core::components::GlobalTransform;
+
+    // Regression: the shaders compare the spotlight cone against `dot(-L, spot_dir)`
+    // (a cosine) and every lighting shader documents the cutoffs as cosines, but
+    // `SpotLight` stores the cone half-angles in radians. The game render path fed
+    // the raw radians (broken cone), and unifying light collection briefly spread
+    // that to the studio too; collection must convert the angles to cosines.
+    #[test]
+    fn spotlight_cutoffs_are_stored_as_cosines() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, GlobalTransform::default());
+        // inner_angle = 0.4 rad, outer_angle = 0.6 rad (radians, ctor clamps inner ≤ outer).
+        world.add_component(e, SpotLight::new(Vec3::ONE, 10.0, 30.0, 0.4, 0.6));
+
+        let l = collect_scene_lights(&world);
+        assert_eq!(l.num_lights, 1);
+        let spot = l.lights[0];
+        assert_eq!(spot.params[1], 1.0, "params.y == 1 marks a spot light");
+        assert!(
+            (spot.direction[3] - 0.4_f32.cos()).abs() < 1e-5,
+            "inner cutoff must be cos(inner_angle), got {}",
+            spot.direction[3]
+        );
+        assert!(
+            (spot.params[0] - 0.6_f32.cos()).abs() < 1e-5,
+            "outer cutoff must be cos(outer_angle), got {}",
+            spot.params[0]
+        );
+        // Tighter inner cone → larger cosine, so the falloff (inner - outer) is positive.
+        assert!(spot.direction[3] > spot.params[0]);
+    }
+
+    // Point lights come before spot lights, and a light with only a `Transform`
+    // (no synced `GlobalTransform`) is still collected via the fallback.
+    #[test]
+    fn point_before_spot_and_transform_fallback() {
+        let mut world = World::new();
+        // A point light carrying a GlobalTransform (also registers the component).
+        let p = world.spawn();
+        world.add_component(p, GlobalTransform::default());
+        world.add_component(p, PointLight::new(Vec3::ONE, 5.0, 12.0));
+        // A spot light with ONLY a Transform → must resolve via the Transform fallback.
+        let s = world.spawn();
+        world.add_component(s, Transform::new(Vec3::new(1.0, 2.0, 3.0)));
+        world.add_component(s, SpotLight::new(Vec3::ONE, 7.0, 20.0, 0.3, 0.5));
+
+        let l = collect_scene_lights(&world);
+        assert_eq!(l.num_lights, 2);
+        assert_eq!(l.lights[0].params[1], 0.0, "point light packed first");
+        assert_eq!(l.lights[1].params[1], 1.0, "spot light packed second");
+        // Spot position came from its Transform (GlobalTransform-less) fallback.
+        assert_eq!(l.lights[1].position, [1.0, 2.0, 3.0, 7.0]);
     }
 }
