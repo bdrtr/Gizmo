@@ -207,32 +207,44 @@ impl NarrowPhase {
         // contact normal gets to be the reference).  Threshold of 1/√2 ≈ 0.707
         // correctly handles 45° diagonal contacts; the original 0.9 threshold
         // misclassified many legitimate face contacts as edge-edge.
-        let (ref_pos, ref_rot, ref_h, inc_pos, inc_rot, inc_h) = if is_face_axis(normal, &ax, 0.707)
-        {
-            (pos_a, rot_a, ha, pos_b, rot_b, hb)
-        } else if is_face_axis(normal, &bx, 0.707) {
-            (pos_b, rot_b, hb, pos_a, rot_a, ha)
-        } else {
-            // Edge–edge: choose the box whose local axis is better aligned.
-            let dot_a = ax
-                .iter()
-                .map(|a| a.dot(normal).abs())
-                .fold(0.0f32, f32::max);
-            let dot_b = bx
-                .iter()
-                .map(|b| b.dot(normal).abs())
-                .fold(0.0f32, f32::max);
-            if dot_a >= dot_b {
-                (pos_a, rot_a, ha, pos_b, rot_b, hb)
+        let (ref_pos, ref_rot, ref_h, inc_pos, inc_rot, inc_h, ref_is_a) =
+            if is_face_axis(normal, &ax, 0.707) {
+                (pos_a, rot_a, ha, pos_b, rot_b, hb, true)
+            } else if is_face_axis(normal, &bx, 0.707) {
+                (pos_b, rot_b, hb, pos_a, rot_a, ha, false)
             } else {
-                (pos_b, rot_b, hb, pos_a, rot_a, ha)
-            }
-        };
+                // Edge–edge: choose the box whose local axis is better aligned.
+                let dot_a = ax
+                    .iter()
+                    .map(|a| a.dot(normal).abs())
+                    .fold(0.0f32, f32::max);
+                let dot_b = bx
+                    .iter()
+                    .map(|b| b.dot(normal).abs())
+                    .fold(0.0f32, f32::max);
+                if dot_a >= dot_b {
+                    (pos_a, rot_a, ha, pos_b, rot_b, hb, true)
+                } else {
+                    (pos_b, rot_b, hb, pos_a, rot_a, ha, false)
+                }
+            };
 
-        // Primary clip attempt.
+        // `clip_box_box` measures depth along a normal that must point reference→incident,
+        // but `normal` follows the A→B convention. When B is the reference those are
+        // opposite, so flip the normal going in and flip the contacts back to A→B coming
+        // out. Without this the primary path sampled the reference box's FAR face in
+        // `ref_face_d`, so every penetration came out inflated by ~2·(ref extent) — a
+        // rotated box resting on an axis-aligned one got blown apart by the solver. The
+        // empty-result fallback below already did this flip; the primary path did not.
+        let clip_normal = if ref_is_a { normal } else { -normal };
         let mut contacts = clip_box_box(
-            normal, min_pen, ref_pos, ref_rot, ref_h, inc_pos, inc_rot, inc_h,
+            clip_normal, min_pen, ref_pos, ref_rot, ref_h, inc_pos, inc_rot, inc_h,
         );
+        if !ref_is_a {
+            for c in &mut contacts {
+                c.normal = -c.normal; // restore A→B convention
+            }
+        }
 
         // Fallback: swap reference / incident faces.
         // Sutherland–Hodgman can yield zero points when the incident face is
@@ -240,10 +252,13 @@ impl NarrowPhase {
         // the reference slab bounds.
         if contacts.is_empty() {
             contacts = clip_box_box(
-                -normal, min_pen, inc_pos, inc_rot, inc_h, ref_pos, ref_rot, ref_h,
+                -clip_normal, min_pen, inc_pos, inc_rot, inc_h, ref_pos, ref_rot, ref_h,
             );
-            for c in &mut contacts {
-                c.normal = -c.normal; // restore A→B convention
+            // The swapped clip tags contacts with `-clip_normal`; convert back to A→B.
+            if ref_is_a {
+                for c in &mut contacts {
+                    c.normal = -c.normal;
+                }
             }
         }
 
@@ -609,6 +624,58 @@ mod tests {
         ColliderShape::Box(BoxShape {
             half_extents: Vec3::splat(half),
         })
+    }
+
+    // Regression: when box B is the SAT reference (its axis is more aligned with the
+    // contact normal than any of A's — e.g. a box tilted onto its corner resting on an
+    // axis-aligned box), the A→B normal must be flipped to reference→incident before
+    // clipping. The old primary path passed it unflipped, so `ref_face_d` sampled B's FAR
+    // face and reported a penetration inflated by ~2·hb, which made the solver blow the
+    // pair apart. A contact's penetration can never exceed the boxes' overlap along the
+    // contact normal (the SAT interval overlap) — assert exactly that.
+    #[test]
+    fn box_box_ref_b_penetration_not_inflated() {
+        // Rotate A so its local (1,1,1) body diagonal points along world +X; then all
+        // three of A's world axes sit 54.7° off +X (>45°), so `is_face_axis(normal, A)`
+        // is false and the axis-aligned B becomes the reference face.
+        let diag = Vec3::new(1.0, 1.0, 1.0).normalize();
+        let rot_a = Quat::from_axis_angle(
+            Vec3::new(0.0, 1.0, -1.0).normalize(),
+            diag.dot(Vec3::X).acos(),
+        );
+        let pos_a = Vec3::ZERO;
+        let ha = Vec3::splat(1.0);
+        // B offset along +X so the minimum-overlap (MTV) axis is +X.
+        let pos_b = Vec3::new(2.5, 0.0, 0.0);
+        let rot_b = Quat::IDENTITY;
+        let hb = Vec3::splat(1.0);
+
+        let contacts = NarrowPhase::box_box(pos_a, rot_a, ha, pos_b, rot_b, hb);
+        assert!(!contacts.is_empty(), "overlapping boxes must produce contacts");
+
+        let n = contacts[0].normal;
+        assert!(
+            n.x > 0.99,
+            "expected the +X contact normal that forces the ref=B path, got {n:?}"
+        );
+
+        // SAT interval overlap along the contact normal = A's max extent − B's min extent.
+        let extent = |rot: Quat, h: Vec3| {
+            let a = [rot.mul_vec3(Vec3::X), rot.mul_vec3(Vec3::Y), rot.mul_vec3(Vec3::Z)];
+            a[0].dot(n).abs() * h.x + a[1].dot(n).abs() * h.y + a[2].dot(n).abs() * h.z
+        };
+        let overlap = (pos_a.dot(n) + extent(rot_a, ha)) - (pos_b.dot(n) - extent(rot_b, hb));
+        assert!(overlap > 0.0, "boxes must actually overlap along the normal");
+
+        let max_pen = contacts
+            .iter()
+            .map(|c| c.penetration)
+            .fold(0.0_f32, f32::max);
+        assert!(
+            max_pen <= overlap + 1e-3,
+            "penetration {max_pen} exceeds the SAT overlap {overlap} along the normal \
+             → inflated depth (the ref=B unflipped-normal bug)"
+        );
     }
 
     // ── Sphere–Sphere ─────────────────────────────────────────────────────
