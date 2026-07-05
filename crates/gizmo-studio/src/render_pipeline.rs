@@ -188,7 +188,7 @@ pub fn execute_render_pipeline(
 
     let identity_m = Mat4::IDENTITY.to_cols_array_2d();
     let mut light_view_proj_cascades = [identity_m; 4];
-    let mut cascade_splits = gizmo::renderer::cascade_split_distances(cam_near, cam_far, 0.75);
+    let mut cascade_splits = gizmo::renderer::cascade_split_distances(cam_near, cam_far.min(gizmo::renderer::SHADOW_DISTANCE), 0.75);
 
     if sun_dir[3] > 0.5 {
         let light_direction = Vec3::new(sun_dir[0], sun_dir[1], sun_dir[2]).normalize();
@@ -212,7 +212,7 @@ pub fn execute_render_pipeline(
             lights_data[0].position[2],
         );
         let toward = (Vec3::ZERO - l_pos).normalize();
-        cascade_splits = gizmo::renderer::cascade_split_distances(cam_near, cam_far, 0.75);
+        cascade_splits = gizmo::renderer::cascade_split_distances(cam_near, cam_far.min(gizmo::renderer::SHADOW_DISTANCE), 0.75);
         let mats = gizmo::renderer::directional_cascade_view_projs(
             cam_pos,
             cam_forward,
