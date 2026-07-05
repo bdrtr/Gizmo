@@ -124,67 +124,27 @@ pub fn execute_render_pipeline(
     // Event: Spawning moved to spawner_update_system.
     // Event: Texture Loading moved to main render loop pass before execute_render_pipeline.
 
-    // Işık kaynaklarını topla (Maksimum 10)
-    let mut lights_data = [gizmo::renderer::renderer::LightData {
-        position: [0.0; 4],
-        color: [0.0; 4],
-        direction: [0.0, -1.0, 0.0, 0.0],
-        params: [0.0; 4],
-    }; 10];
-    let mut num_lights = 0;
-
-    if let Some(mut q) = world.query::<(&PointLight, &Transform)>() {
-        for (_e, (l, t)) in q.iter_mut() {
-            if num_lights >= 10 {
-                break;
-            }
-            lights_data[num_lights as usize] = gizmo::renderer::renderer::LightData {
-                position: [t.position.x, t.position.y, t.position.z, l.intensity],
-                color: [l.color.x, l.color.y, l.color.z, l.radius],
-                direction: [0.0, -1.0, 0.0, 0.0],
-                params: [0.0, 0.0, 0.0, 0.0], // light_type=0 -> Point
-            };
-            num_lights += 1;
-        }
-    }
-
-    // --- SpotLight Taraması ---
-    if let Some(mut q) = world.query::<(&gizmo::renderer::SpotLight, &Transform)>() {
-        for (_e, (sl, t)) in q.iter_mut() {
-            if num_lights >= 10 {
-                break;
-            }
-            let fwd = t.rotation.mul_vec3(Vec3::new(0.0, 0.0, -1.0));
-            let inner_cos = sl.inner_angle.cos();
-            let outer_cos = sl.outer_angle.cos();
-            lights_data[num_lights as usize] = gizmo::renderer::renderer::LightData {
-                position: [t.position.x, t.position.y, t.position.z, sl.intensity],
-                color: [sl.color.x, sl.color.y, sl.color.z, sl.radius],
-                direction: [fwd.x, fwd.y, fwd.z, inner_cos],
-                params: [outer_cos, 1.0, 0.0, 0.0], // light_type=1 -> Spot
-            };
-            num_lights += 1;
-        }
-    }
-
-    // --- Directional Light (Güneş) Taraması ---
-    let mut sun_dir = [0.0, -1.0, 0.0, 0.0];
-    let mut sun_col = [0.0, 0.0, 0.0, 0.0];
-
-    if let Some(mut q) =
-        world.query::<(&gizmo::renderer::components::DirectionalLight, &Transform)>()
-    {
-        for (_e, (dl, t)) in q.iter_mut() {
-            if dl.role == gizmo::renderer::components::LightRole::Sun {
-                // Transform'un rotasyonundan ileri vektörü hesapla (Güneşin baktığı yön)
-                // Standartlara göre ışık '-Z' ye bakar
-                let forward = t.rotation.mul_vec3(Vec3::new(0.0, 0.0, -1.0)).normalize();
-                sun_dir = [forward.x, forward.y, forward.z, 1.0]; // w=1.0: güneş tanımlı
-                sun_col = [dl.color.x, dl.color.y, dl.color.z, dl.intensity];
-                break; // Sadece ilk ana güneşi al
-            }
-        }
-    }
+    // Işık kaynakları (point + spot + sun) — game renderer ile ORTAK setup
+    // helper'ından. Eskiden burada elle-yazılmış üç ışık döngüsü vardı (ham
+    // Transform okuyordu → parented ışıklar yanlış yerleşiyordu, mesh'ler ise
+    // GlobalTransform kullanıyordu = tutarsız). Artık iki renderer tek koddan
+    // besleniyor; ışık mantığı bir daha ayrışamaz. sun'ı studio'nun `[f32;4]`
+    // (w = güneş-var-flag) temsiline çeviriyoruz.
+    let scene_lights = gizmo::systems::render::collect_scene_lights(world);
+    let lights_data = scene_lights.lights;
+    let num_lights = scene_lights.num_lights;
+    let sun_dir = [
+        scene_lights.sun_dir.x,
+        scene_lights.sun_dir.y,
+        scene_lights.sun_dir.z,
+        if scene_lights.has_sun { 1.0 } else { 0.0 }, // w=1.0: güneş tanımlı
+    ];
+    let sun_col = [
+        scene_lights.sun_col.x,
+        scene_lights.sun_col.y,
+        scene_lights.sun_col.z,
+        scene_lights.sun_col.w,
+    ];
 
     let identity_m = Mat4::IDENTITY.to_cols_array_2d();
     let mut light_view_proj_cascades = [identity_m; 4];

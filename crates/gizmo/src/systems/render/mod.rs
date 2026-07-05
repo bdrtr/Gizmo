@@ -188,28 +188,11 @@ pub fn default_render_pass(
     let view_proj = proj * view_mat; // jittered — used for SceneUniforms
     let unjittered_view_proj = unjittered_proj * view_mat; // clean    — stored in TaaState for next frame
 
-    let mut sun_dir = gizmo_math::Vec3::new(0.0, -1.0, 0.0);
-    let mut sun_col = gizmo_math::Vec4::new(0.0, 0.0, 0.0, 0.0); // W=0.0 means NO SUN by default!
-    if let Some(q) = world.query::<(
-        &crate::renderer::components::DirectionalLight,
-        &gizmo_physics_core::components::GlobalTransform,
-    )>() {
-        for (_id, (light, transform)) in q.iter() {
-            if light.role == crate::renderer::components::LightRole::Sun {
-                let (_, rot, _) = transform.matrix.to_scale_rotation_translation();
-                sun_dir = rot
-                    .mul_vec3(gizmo_math::Vec3::new(0.0, 0.0, -1.0))
-                    .normalize();
-                sun_col = gizmo_math::Vec4::new(
-                    light.color.x,
-                    light.color.y,
-                    light.color.z,
-                    light.intensity,
-                );
-                break;
-            }
-        }
-    }
+    // Lights (point + spot + sun) — collected via the shared setup helper so the
+    // game and studio renderers can never drift apart on light handling again.
+    let scene_lights = collect_scene_lights(world);
+    let sun_dir = scene_lights.sun_dir;
+    let sun_col = scene_lights.sun_col;
 
     // Derive splits from the actual camera near/far (was hardcoded [20,80,250,2000],
     // which mismatched any camera whose far ≠ 2000 → fragments past the last split fell
@@ -231,55 +214,9 @@ pub fn default_render_pass(
     );
     let light_view_projs: [[[f32; 4]; 4]; 4] = cascade_vp.map(|m| m.to_cols_array_2d());
 
-    // Dinamik Işıkları Bul
-    let mut lights_data = [crate::renderer::gpu_types::LightData {
-        position: [0.0; 4],
-        color: [0.0; 4],
-        direction: [0.0, -1.0, 0.0, 0.0],
-        params: [0.0; 4],
-    }; 10];
-    let mut num_lights = 0;
-
-    if let Some(q) = world.query::<(
-        &crate::renderer::components::PointLight,
-        &gizmo_physics_core::components::GlobalTransform,
-    )>() {
-        for (_id, (light, transform)) in q.iter() {
-            if num_lights >= 10 {
-                break;
-            }
-            let (_, _, pos) = transform.matrix.to_scale_rotation_translation();
-            lights_data[num_lights as usize] = crate::renderer::gpu_types::LightData {
-                position: [pos.x, pos.y, pos.z, light.intensity],
-                color: [light.color.x, light.color.y, light.color.z, light.radius],
-                direction: [0.0, -1.0, 0.0, 0.0],
-                params: [0.0, 0.0, 0.0, 0.0], // y = 0 means PointLight
-            };
-            num_lights += 1;
-        }
-    }
-
-    if let Some(q) = world.query::<(
-        &crate::renderer::components::SpotLight,
-        &gizmo_physics_core::components::GlobalTransform,
-    )>() {
-        for (_id, (light, transform)) in q.iter() {
-            if num_lights >= 10 {
-                break;
-            }
-            let (_, rot, pos) = transform.matrix.to_scale_rotation_translation();
-            let dir = rot
-                .mul_vec3(gizmo_math::Vec3::new(0.0, 0.0, -1.0))
-                .normalize();
-            lights_data[num_lights as usize] = crate::renderer::gpu_types::LightData {
-                position: [pos.x, pos.y, pos.z, light.intensity],
-                color: [light.color.x, light.color.y, light.color.z, light.radius],
-                direction: [dir.x, dir.y, dir.z, light.inner_angle],
-                params: [light.outer_angle, 1.0, 0.0, 0.0], // y = 1 means SpotLight
-            };
-            num_lights += 1;
-        }
-    }
+    // Dinamik ışıklar (point + spot) shared helper'dan geldi.
+    let lights_data = scene_lights.lights;
+    let num_lights = scene_lights.num_lights;
 
     #[allow(unused_assignments)]
     let mut point_light_view_projs = [gizmo_math::Mat4::IDENTITY; 6];
@@ -718,6 +655,9 @@ impl<'a> RenderContextExt for crate::renderer::RenderContext<'a> {
 }
 
 mod passes;
+
+mod shared;
+pub use shared::{collect_scene_lights, SceneLights};
 
 /// Golden render test: drive the REAL [`default_render_pass`] over a minimal scene
 /// (one lit cube + a camera + a sun) into an offscreen target and assert that geometry
