@@ -253,9 +253,14 @@ pub(super) fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs)
             depth_write_enabled: Some(true),
             depth_compare: Some(wgpu::CompareFunction::LessEqual),
             stencil: wgpu::StencilState::default(),
+            // Shadow-map depth bias. Kept low: an aggressive slope_scale shoves the
+            // caster deep into the shadow map and detaches its shadow from the base
+            // (peter-panning — a visible grey gap between a cube and its shadow). The
+            // shader-side normal offset + compare bias handle self-shadow acne, so
+            // this only needs a light touch. (Was 2 / 2.0 → visible gap.)
             bias: wgpu::DepthBiasState {
-                constant: 2,
-                slope_scale: 2.0,
+                constant: 1,
+                slope_scale: 1.0,
                 clamp: 0.0,
             },
         }),

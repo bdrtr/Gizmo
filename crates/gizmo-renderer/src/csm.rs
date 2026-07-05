@@ -12,6 +12,16 @@ pub const CASCADE_COUNT: usize = 4;
 /// VRAM (4 × 3072² × Depth32 ≈ 302 MB) is acceptable on a modern GPU.
 pub const SHADOW_MAP_RES: u32 = 3072;
 
+/// Maximum world distance the cascades cover, independent of the camera's far plane.
+///
+/// The camera far plane is often huge (e.g. 1500) so the sky/horizon isn't clipped,
+/// but shadows only matter near the viewer. Feeding `cam_far` straight into the
+/// cascade split would stretch cascade 0 across ~95 units for a far=1500 camera, so
+/// a nearby object gets a handful of shadow texels and its shadow reads blocky and
+/// blurry. Capping the shadow range packs the cascades onto what's actually near the
+/// camera, giving crisp contact shadows. Fragments past this distance are unshadowed.
+pub const SHADOW_DISTANCE: f32 = 100.0;
+
 /// Logarithmic-linear split distances in **world units** along `cam_forward` from `cam_pos`.
 /// `splits[i]` is the far distance of cascade `i` (inclusive range `[prev, splits[i]]`).
 pub fn cascade_split_distances(z_near: f32, z_far: f32, lambda: f32) -> [f32; CASCADE_COUNT] {

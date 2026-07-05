@@ -73,7 +73,8 @@ pub use components::{
     PointLight, SpotLight, Sprite,
 };
 pub use csm::{
-    cascade_split_distances, directional_cascade_view_projs, CASCADE_COUNT, SHADOW_MAP_RES,
+    cascade_split_distances, directional_cascade_view_projs, CASCADE_COUNT, SHADOW_DISTANCE,
+    SHADOW_MAP_RES,
 };
 pub use debug_renderer::{GizmoRendererSystem, Gizmos};
 pub use decal::DecalState;

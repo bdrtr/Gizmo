@@ -201,7 +201,11 @@ pub fn default_render_pass(
     // Derive splits from the actual camera near/far (was hardcoded [20,80,250,2000],
     // which mismatched any camera whose far ≠ 2000 → fragments past the last split fell
     // into a cascade whose ortho matrix didn't cover them). Mirrors the studio path.
-    let cascade_splits = crate::renderer::cascade_split_distances(cam_near, cam_far, 0.75);
+    // Cascades cover only the near shadow range, NOT the camera's full (often huge)
+    // far plane — otherwise cascade 0 stretches tens of units and nearby objects get
+    // a handful of shadow texels (blocky, blurry shadows). See `SHADOW_DISTANCE`.
+    let shadow_far = cam_far.min(crate::renderer::SHADOW_DISTANCE);
+    let cascade_splits = crate::renderer::cascade_split_distances(cam_near, shadow_far, 0.75);
     let cascade_vp = crate::renderer::directional_cascade_view_projs(
         cam_pos,
         cam_forward,
