@@ -329,8 +329,16 @@ pub fn execute_render_pipeline(
                     }
                 }
 
-                // Culling'i geçen objelerin Bounding Box'larını debug çizimi için kaydet
-                if !is_playing_mode {
+                // Culling'i geçen objelerin Bounding Box'larını debug çizimi için kaydet.
+                // Skybox ve Grid'i hariç tut: bounds'ları tüm sahneyi sardığı için
+                // kırmızı AABB'leri ekranı baştan başa kesen dev çizgiler olarak görünüyordu.
+                if !is_playing_mode
+                    && !matches!(
+                        mat.material_type,
+                        gizmo::renderer::components::MaterialType::Skybox
+                            | gizmo::renderer::components::MaterialType::Grid
+                    )
+                {
                     debug_aabbs.push(mesh.bounds.transform(&model));
                 }
 
