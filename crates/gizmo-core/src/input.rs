@@ -81,6 +81,11 @@ impl Input {
 
     /// Tuş basıldığında çağır (winit KeyCode'un scan code'u)
     pub fn on_key_pressed(&mut self, key: u32) {
+        // Cancel a pending fast-tap deferral: if the key was released and re-pressed
+        // within the SAME frame, `begin_frame` would otherwise honor the earlier
+        // deferred removal and drop a physically-held key (then spuriously re-fire
+        // just_pressed on the next auto-repeat).
+        self.keys_just_released.remove(&key);
         if self.keys_pressed.insert(key) {
             self.keys_just_pressed.insert(key);
         }
@@ -140,6 +145,8 @@ impl Input {
 
     /// Fare butonu basıldığında çağır (0=Left, 1=Right, 2=Middle)
     pub fn on_mouse_button_pressed(&mut self, button: u32) {
+        // See `on_key_pressed`: a re-press cancels a same-frame fast-tap deferral.
+        self.mouse_buttons_just_released.remove(&button);
         if self.mouse_buttons_pressed.insert(button) {
             self.mouse_buttons_just_pressed.insert(button);
         }
@@ -179,6 +186,14 @@ impl Input {
     pub fn on_mouse_moved(&mut self, x: f32, y: f32) {
         self.mouse_delta.0 += x - self.mouse_position.0;
         self.mouse_delta.1 += y - self.mouse_position.1;
+        self.mouse_position = (x, y);
+    }
+
+    /// Fare ekran pozisyonunu günceller — delta BİRİKTİRMEZ.
+    /// `DeviceEvent::MouseMotion` sağlayan platformlarda (masaüstü) delta o kanaldan
+    /// (`on_mouse_delta`) gelir; `CursorMoved` yalnızca mutlak pozisyonu taşımalı,
+    /// aksi halde ikisi birden delta'yı İKİ KEZ sayar (2× fare-bakış hassasiyeti).
+    pub fn set_mouse_position(&mut self, x: f32, y: f32) {
         self.mouse_position = (x, y);
     }
 
@@ -364,6 +379,26 @@ impl Default for ActionMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A held key released and re-pressed within the SAME frame must STAY held.
+    /// The release defers removal to begin_frame (fast-tap protection); without
+    /// cancelling that deferral on the re-press, begin_frame dropped the physically
+    /// held key (and it then spuriously re-fired just_pressed on auto-repeat).
+    #[test]
+    fn fast_tap_release_then_repress_keeps_key_held() {
+        let mut input = Input::new();
+        input.on_key_pressed(5);
+        input.begin_frame(); // 5 is now a plain held key
+        assert!(input.is_key_pressed(5));
+
+        // Same frame: release, then immediately re-press.
+        input.on_key_released(5);
+        input.on_key_pressed(5);
+        input.begin_frame();
+
+        assert!(input.is_key_pressed(5), "re-pressed key must stay held");
+        assert!(!input.is_key_just_pressed(5), "no spurious just_pressed after begin_frame");
+    }
 
     // ──── Fast-Tap Testleri ────
 

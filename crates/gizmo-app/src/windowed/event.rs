@@ -174,8 +174,28 @@ impl<State: 'static> App<State> {
                                 }
                             }
                             WindowEvent::CursorMoved { position, .. } => {
+                                // Desktop: the raw look delta comes from
+                                // DeviceEvent::MouseMotion, so CursorMoved only tracks
+                                // absolute position — accumulating delta here too
+                                // DOUBLE-counted mouse-look (2× sensitivity). wasm has
+                                // no MouseMotion, so there CursorMoved is also the delta
+                                // source (`on_mouse_moved` accumulates it).
+                                #[cfg(not(target_arch = "wasm32"))]
+                                self.input
+                                    .set_mouse_position(position.x as f32, position.y as f32);
+                                #[cfg(target_arch = "wasm32")]
                                 self.input
                                     .on_mouse_moved(position.x as f32, position.y as f32);
+                            }
+                            WindowEvent::MouseWheel { delta, .. } => {
+                                // Scroll was documented public API (Input::mouse_scroll)
+                                // but never wired — no MouseWheel arm existed, so it
+                                // always read 0.0.
+                                let scroll = match delta {
+                                    winit::event::MouseScrollDelta::LineDelta(_, y) => *y,
+                                    winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
+                                };
+                                self.input.on_mouse_scroll(scroll);
                             }
                             // Odak kaybında (Alt-Tab / tarayıcı sekme değişimi) basılı
                             // tuşları bırak — yoksa OS key-up göndermez ve tuşlar
