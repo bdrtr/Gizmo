@@ -233,7 +233,16 @@ impl World {
             self.despawn_hooks.extend(hooks);
 
             let id = e.id();
-            let loc = self.entity_locations[id as usize];
+            // Bounds-safe: an entity RESERVED via `Commands::spawn` (its generation is
+            // already in the allocator, so `is_alive` is true) but not yet flushed has
+            // NO `entity_locations` slot. A raw index would panic; treat a missing slot
+            // as INVALID (mirrors `World::entity`), so we still free the id + clean its
+            // sparse sets below without touching non-existent archetype data.
+            let loc = self
+                .entity_locations
+                .get(id as usize)
+                .copied()
+                .unwrap_or(crate::archetype::EntityLocation::INVALID);
 
             if loc.is_valid() {
                 // Call OnRemove hooks for all currently held components
@@ -292,7 +301,12 @@ impl World {
             }
 
             self.archetype_index.entity_archetype.remove(&id);
-            self.entity_locations[id as usize] = EntityLocation::INVALID;
+            // Guard: a reserved-but-unflushed entity has no `entity_locations` slot
+            // (see the bounds-safe read above); its location is already effectively
+            // INVALID, so there is nothing to clear.
+            if let Some(slot) = self.entity_locations.get_mut(id as usize) {
+                *slot = EntityLocation::INVALID;
+            }
         }
         self.is_despawning = false;
     }
@@ -422,5 +436,29 @@ impl World {
         state
             .next_entity_id
             .saturating_sub(state.free_ids.len() as u32)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn despawn_reserved_but_unflushed_entity_does_not_panic() {
+        let mut world = World::new();
+        // Reserve an id WITHOUT flushing it (this is what `Commands::spawn` does).
+        // `is_alive` is true because the generation is registered in the allocator,
+        // but there is no `entity_locations` slot yet — the old raw index panicked.
+        let reserved = {
+            let entities = world
+                .get_resource::<Entities>()
+                .expect("Entities resource");
+            entities.reserve_entity()
+        };
+        assert!(world.is_alive(reserved), "a reserved entity is considered alive");
+
+        world.despawn(reserved); // must not panic (bounds-safe location lookup)
+
+        assert!(!world.is_alive(reserved), "despawn freed the reserved id");
     }
 }
