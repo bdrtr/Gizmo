@@ -99,6 +99,7 @@ impl SceneData {
         let meshes = world.borrow::<MeshSource>();
         let materials = world.borrow::<MaterialSource>();
         let parents = world.borrow::<Parent>();
+        let children_store = world.borrow::<Children>();
 
         for &id in &entity_ids {
             let name = names.get(id).map(|n| n.0.clone());
@@ -143,11 +144,20 @@ impl SceneData {
                 }
             }
 
+            // Keep a "bare" node that only carries a non-empty `Children` list: it is
+            // a structural group/pivot whose presence keeps its subtree attached on
+            // reload (children resolve their `parent_id` back to it). Dropping it left
+            // the children pointing at a missing id → detached subtree.
+            let is_group_node = children_store
+                .get(id)
+                .is_some_and(|c| !c.0.is_empty());
+
             if name.is_some()
                 || mesh_source.is_some()
                 || material_source.is_some()
                 || parent_id.is_some()
                 || !dynamic_components.is_empty()
+                || is_group_node
             {
                 entities_data.push(EntityData {
                     original_id: id,
@@ -295,6 +305,8 @@ impl SceneData {
         }
 
         let mut ids_to_save = vec![root_entity_id];
+        let mut visited: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        visited.insert(root_entity_id);
         let children_storage = world.borrow::<Children>();
 
         let mut i = 0;
@@ -302,7 +314,14 @@ impl SceneData {
             let current = ids_to_save[i];
             if let Some(children_comp) = children_storage.get(current) {
                 for &child_id in &children_comp.0 {
-                    ids_to_save.push(child_id);
+                    // Guard the BFS with a visited set: a `Children` CYCLE (e.g. the
+                    // studio lets you drag an entity onto its own descendant) would
+                    // otherwise grow `ids_to_save` forever (hang/OOM), and a SHARED
+                    // child on a diamond hierarchy would be emitted twice → duplicate
+                    // `EntityData { original_id }` → clobbered/leaked entities on reload.
+                    if visited.insert(child_id) {
+                        ids_to_save.push(child_id);
+                    }
                 }
             }
             i += 1;
@@ -590,6 +609,117 @@ mod tests {
             parents.get(new_root).map(|x| x.0),
             Some(host.id()),
             "prefab kökü istenen host'a bağlanmalı"
+        );
+    }
+
+    #[test]
+    fn save_prefab_dedups_shared_child_on_diamond_hierarchy() {
+        let registry = crate::registry::default_scene_registry();
+        let mut world = World::new();
+        // Diamond: root -> {A, B}, and BOTH A and B list C as a child.
+        let root = world.spawn();
+        let a = world.spawn();
+        let b = world.spawn();
+        let c = world.spawn();
+        world.add_component(root, EntityName::new("ROOT"));
+        world.add_component(a, EntityName::new("A"));
+        world.add_component(b, EntityName::new("B"));
+        world.add_component(c, EntityName::new("C"));
+        world.add_component(a, Parent(root.id()));
+        world.add_component(b, Parent(root.id()));
+        world.add_component(c, Parent(a.id()));
+        world.add_component(root, Children(vec![a.id(), b.id()]));
+        world.add_component(a, Children(vec![c.id()]));
+        world.add_component(b, Children(vec![c.id()])); // shared child C (diamond)
+
+        let path = std::env::temp_dir()
+            .join("gizmo_prefab_diamond_test.ron")
+            .to_string_lossy()
+            .into_owned();
+        SceneData::save_prefab(&world, root.id(), &path, &registry).expect("save_prefab başarısız");
+
+        let mut loaded = World::new();
+        let host = loaded.spawn();
+        SceneData::load_prefab(&path, Some(host.id()), &mut loaded, &registry)
+            .expect("load_prefab başarısız");
+        let _ = std::fs::remove_file(&path);
+
+        let alive = loaded.iter_alive_entities();
+        let names = loaded.borrow::<EntityName>();
+        // Shared child C must be emitted exactly once — the old BFS pushed it twice
+        // (via A and via B) → two EntityData with the same original_id → one leaked
+        // empty entity on reload.
+        let c_count = alive
+            .iter()
+            .filter(|e| names.get(e.id()).map(|n| n.0.as_str()) == Some("C"))
+            .count();
+        assert_eq!(c_count, 1, "paylaşılan çocuk C tam bir kez görünmeli");
+        // host + ROOT + A + B + C = 5 (eski kod 6. bir boş entity sızdırırdı).
+        assert_eq!(alive.len(), 5, "diamond'da sızan yinelenmiş entity olmamalı");
+    }
+
+    #[test]
+    fn save_prefab_terminates_on_children_cycle() {
+        let registry = crate::registry::default_scene_registry();
+        let mut world = World::new();
+        let root = world.spawn();
+        let x = world.spawn();
+        world.add_component(root, EntityName::new("ROOT"));
+        world.add_component(x, EntityName::new("X"));
+        // `Children` cycle root -> x -> root. The old BFS had no visited set → grew
+        // `ids_to_save` forever (hang/OOM). Completing at all is the assertion.
+        world.add_component(root, Children(vec![x.id()]));
+        world.add_component(x, Children(vec![root.id()]));
+
+        let path = std::env::temp_dir()
+            .join("gizmo_prefab_cycle_test.ron")
+            .to_string_lossy()
+            .into_owned();
+        SceneData::save_prefab(&world, root.id(), &path, &registry)
+            .expect("save_prefab bir döngüde sonlanmalı");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn save_keeps_bare_group_node_so_subtree_stays_attached() {
+        use gizmo_math::Vec3;
+        use gizmo_physics_core::components::Transform;
+
+        let registry = crate::registry::default_scene_registry();
+        let mut world = World::new();
+        // Bare group/pivot node: ONLY a `Children` list (no name/mesh/material/
+        // dynamic component). Its child carries real state + a Parent back to it.
+        let group = world.spawn();
+        let child = world.spawn();
+        world.add_component(child, EntityName::new("CHILD"));
+        world.add_component(child, Transform::new(Vec3::new(1.0, 2.0, 3.0)));
+        world.add_component(child, Parent(group.id()));
+        world.add_component(group, Children(vec![child.id()]));
+
+        let path = std::env::temp_dir()
+            .join("gizmo_scene_bare_group_test.ron")
+            .to_string_lossy()
+            .into_owned();
+        SceneData::save(&world, &path, &registry).expect("save başarısız");
+
+        let mut loaded = World::new();
+        SceneData::load_into(&path, &mut loaded, &registry).expect("load başarısız");
+        let _ = std::fs::remove_file(&path);
+
+        // The child must remain parented — the bare group node was kept, so the
+        // subtree isn't detached. Old skip-filter dropped it → child.parent_id
+        // referenced a missing id → child became a detached root.
+        let names = loaded.borrow::<EntityName>();
+        let child2 = loaded
+            .iter_alive_entities()
+            .into_iter()
+            .find(|e| names.get(e.id()).map(|n| n.0.as_str()) == Some("CHILD"))
+            .expect("çocuk yüklenmedi");
+        drop(names);
+        let parents = loaded.borrow::<Parent>();
+        assert!(
+            parents.get(child2.id()).is_some(),
+            "çocuk, korunan grup node'una bağlı kalmalı (öksüz kalmamalı)"
         );
     }
 
