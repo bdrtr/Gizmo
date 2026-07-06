@@ -177,10 +177,18 @@ impl GoapPlanner {
         // Ziyaret edilen durumların hash'i (state hashable olmalı, basitlik için String representasyonu)
         let mut closed_list = HashSet::new();
 
+        // Use h = 0 (uniform-cost / Dijkstra). The "unsatisfied-condition count"
+        // heuristic (`distance_to`) is INADMISSIBLE — it charges 1.0 per unmet goal
+        // condition, which overestimates whenever an action costs < 1.0 or satisfies
+        // several conditions at once, so A* could commit to a pricier plan and skip
+        // the cheaper one. Combined with the no-revisit `closed_list` (no decrease-key),
+        // that broke the documented "optimal plan" guarantee. With h = 0 the first pop
+        // of a state is always its cheapest, so the closed_list is correct and the plan
+        // is optimal regardless of action costs.
         let start_node = PlanNode {
             state: start_state.clone(),
             g_cost: 0.0,
-            h_cost: start_state.distance_to(goal_state),
+            h_cost: 0.0,
             action: None,
             parent: None,
         };
@@ -223,7 +231,7 @@ impl GoapPlanner {
                     let next_node = PlanNode {
                         state: new_state.clone(),
                         g_cost: current.g_cost + action.cost,
-                        h_cost: new_state.distance_to(goal_state),
+                        h_cost: 0.0, // Dijkstra — see the start node above.
                         action: Some(action.clone()),
                         parent: Some(Box::new(current.clone())),
                     };
@@ -255,6 +263,29 @@ mod tests {
             g = g.add_desired_state(k, *v);
         }
         vec![g]
+    }
+
+    #[test]
+    fn plan_returns_cheapest_path_when_actions_cost_below_one() {
+        let start = state(&[]);
+        let goal = single_goal(&[("g", true)]);
+        let actions = vec![
+            GoapAction::new("direct", 1.0).add_effect("g", true),
+            GoapAction::new("setup", 0.1).add_effect("step", true),
+            GoapAction::new("cheap", 0.1)
+                .add_precondition("step", true)
+                .add_effect("g", true),
+        ];
+        let plan = GoapPlanner::plan(&start, &actions, &goal).expect("a plan exists");
+        let total: f32 = plan.iter().map(|a| a.cost).sum();
+        // Optimal is setup+cheap = 0.2, not the single "direct" action = 1.0. The old
+        // inadmissible count heuristic overestimated the 2-step path (h = 1 for a state
+        // one cheap 0.1 action from the goal) and committed to "direct".
+        assert!(
+            total < 0.5,
+            "expected the cheap ~0.2 plan, got {total}: {:?}",
+            plan.iter().map(|a| a.name.as_str()).collect::<Vec<_>>()
+        );
     }
 
     #[test]
