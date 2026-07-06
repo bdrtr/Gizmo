@@ -124,6 +124,21 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
       (critcmp/baseline) CI donanımında gürültülü → kasıtlı kapsam dışı; bu gate
       "bench'ler derlenir VE panik/assertion'sız koşar" garantisidir.
 
+- [x] **Soundness/tutarlılık bakım turu (2026-07-06, adversarial subagent + Miri):**
+      (1) **SparseSet `Mut<T>` fetch UB (HIGH)** — `query::fetch::fetch_raw` SparseSet yolu
+      `&World`'ü `*mut World`'e cast edip `sparse_sets.get_mut()` çağırıyordu (SharedReadOnly→
+      mutable retag = aliasing UB, `query_mut::<Mut<Sparse>>().iter_mut()` ile GÜVENLİ koddan
+      ulaşılabilir; `par_for_each_mut`'ta gerçek veri yarışı). Fix: paylaşımlı `get()` + set'e
+      `&self` erişim; ayrıca `ComponentSparseSet.ticks` `Vec<ComponentTicks>`→`Vec<UnsafeCell<
+      ComponentTicks>>` (düz Vec `as_ptr(&self)` yalnız-okuma provenance verip `&mut *ticks_ptr`'i
+      ikinci bir latent UB yapıyordu; `dense: BlobVec` zaten ham-pointer'lı içsel-değişebilir).
+      `unsafe impl Send+Sync for ComponentSparseSet`. **Miri (Tree Borrows) ile temiz doğrulandı**
+      (`sparse_set_change_detection_tracks_ticks` + `query::tests` yeşil). (2) **`Fp32::from_i32`
+      wrap→saturate** — `val << SHIFT` |val|≥32768'de sessizce sarıyordu (diğer tüm op saturate
+      ederken; `from_i32(40000)`→negatif); `saturating_mul(ONE_RAW)` + test. (3) broadphase
+      `DynamicAabbTree.tight_aabbs` yazılıp-okunmayan dead-code SİLİNDİ (fat-margin no-rebuild
+      mantığı korundu, broadphase differential proptest yeşil).
+
 **Çıkış kriteri:** yeşil CI, anlamlı kapsam, regresyonlar otomatik yakalanıyor.
 
 ---
@@ -327,9 +342,15 @@ gerçek-UDP örnek onaylı geçmişte senkron).
       birim-normal, dejenere-yok); discriminating (eski winding'de FAIL, düzeltmede PASS) kanıtlandı.
       **Kamera/view-projection + frustum culling DENETLENDİ → temiz** (Gribb-Hartmann plane çıkarımı
       Z∈[0,1] formunda doğru, view matrisi RH look_at, p/n-vertex AABB testi doğru). Animasyon minör
-      bulgular (düzeltilmedi, düşük öncelik): (1) `animation_system.rs` blend sırasında `prev_time += dt`
-      hız çarpanı uygulamıyor (speed≠1'de crossfade yanlış hızda); (2) negatif speed (ters oynatma)
-      `%=` ile sarmıyor (`rem_euclid` gerek). **Asset/glTF/OBJ loader DENETLENDİ (subagent + elle):
+      bulgular **DÜZELTİLDİ** (`animation_system.rs`): (1) negatif speed (ters oynatma) artık
+      `normalize_anim_time` (rem_euclid) ile sarıyor — birincil ve durum-makinesi yollarında;
+      (2) crossfade'de fading-out klip artık player `speed`'iyle ilerliyor + tested `normalize_anim_time`
+      kullanıyor (eski `prev_time += dt` 1× sabitliyor + `%=` negatif zamanı sarmıyordu) — pure
+      `advance_and_sample_prev` yardımcısına çıkarıldı + 3 ayırt edici test. **(3, 2026-07-06)
+      Animasyon durum-makinesi `find_transition` bug'ı DÜZELTİLDİ:** belirli-trigger sorgusu
+      (`Some("jump")`) sıradaki ilk `trigger:None + has_exit_time` auto-geçişe takılıp klip bittiği
+      karede yanlış duruma (idle) atlıyor + oyuncu girdisini yutuyordu → exit-time dalı artık
+      `trigger.is_none()` ile kapılı (state_machine.rs, +4 test). **Asset/glTF/OBJ loader DENETLENDİ (subagent + elle):
       3 bug düzeltildi** — (HIGH) skin joint weight'leri normalize edilmiyordu; shader `Σwᵢ·Mᵢ`'yi
       renormalize etmediğinden 1'e toplanmayan weight'ler (quantization/export) mesh'i ölçekleyip
       bozuyordu → `normalize_skin_weights` (sum>0 iken normalize, `[0,0,0,0]` skinless dokunulmaz;
@@ -432,6 +453,14 @@ gerçek-UDP örnek onaylı geçmişte senkron).
       yoksa `root_parent` fallback'i erişilemezdi (else dalı `if let Some(parent_id)`
       dışındaydı) → entity ne (kayıp) ebeveyne ne host'a bağlanıyordu; fix: çözülemeyince
       `root_parent`'a düş. Ayırt edici test `prefab_roundtrip_keeps_bare_group_root_and_children`.
+- [x] **Studio gölge-geçişi caster filtresi** (2026-07-06) — studio (forward) gölge geçişi
+      `flat_batches`'i FİLTRESİZ çiziyordu; game (deferred) yolu `unlit || is_transparent`
+      atlar ve `classify_visibility` caster yordamı Unlit/Skybox/Grid/transparent'ı hariç tutar.
+      Bu materyallerin KAMERA-görünür instance'ları `[start_instance, end_instance)`'te olduğundan
+      gölge geçişi (`start..shadow_end` çiziyor) onları gölge haritalarına yazıyordu → her zaman
+      var olan editör grid'i zemin-eş-düzlemli öz-gölge akne'si + eklenen skybox tüm sahneyi
+      gölgeliyordu. Fix: shadow loop'ta `is_transparent||is_skybox||is_grid||is_unlit` atla (game
+      yolunu birebir yansıtır); `is_unlit` bayrağı BatchData/FlatBatchData'ya eklendi.
 
 ---
 
