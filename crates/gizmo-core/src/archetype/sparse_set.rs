@@ -1,16 +1,30 @@
 use crate::archetype::blob::BlobVec;
 use crate::archetype::column::ComponentInfo;
 use crate::archetype::ComponentTicks;
+use std::cell::UnsafeCell;
 
 /// Bir SparseSet, bileşen verilerini Entity ID'lerine göre hızlıca dışarıdan yönetmeyi sağlar.
 /// Archetype tablosuna girmeden doğrudan ekleme/silme yapılabilmesi için tasarlanmıştır.
 pub struct ComponentSparseSet {
     pub info: ComponentInfo,
     pub dense: BlobVec,
-    pub ticks: Vec<ComponentTicks>,
+    /// Değişiklik-tespiti tick'leri. `UnsafeCell` ile içsel-değişebilir — tıpkı
+    /// `dense: BlobVec`'in ham-pointer'lı iç değişebilirliği gibi: `Mut<T>` sorgu
+    /// yolu (`query::fetch::get_item`) set'e PAYLAŞIMLI `&self` ile erişip ayrık
+    /// satırları yazar (paralel `par_for_each_mut` için gerekli). Düz `Vec<_>`
+    /// olsaydı `as_ptr(&self)` yalnız-okuma provenance verir → `&mut *ticks_ptr`
+    /// aliasing UB olurdu (güvenli koddan ulaşılabilir). Cell üzerinden yazma sağlam.
+    pub ticks: Vec<UnsafeCell<ComponentTicks>>,
     pub entities: Vec<u32>, // dense row index -> Entity ID
     pub sparse: Vec<u32>,   // Entity ID -> dense row index (Yoksa u32::MAX)
 }
+
+// SAFETY: `BlobVec`/`Archetype` üzerindeki aynı impl'lerle aynı gerekçe. İçsel-
+// değişebilir alanlara (`dense` ham-pointer, `ticks` `UnsafeCell`) yalnız sorgu
+// zamanlayıcısının ayrık-erişim garantisi altında yazılır → iki thread aynı satırı
+// eşzamanlı yazmaz. `UnsafeCell<ComponentTicks>` eklenince otomatik `Sync` düştü.
+unsafe impl Send for ComponentSparseSet {}
+unsafe impl Sync for ComponentSparseSet {}
 
 impl ComponentSparseSet {
     pub fn new(info: ComponentInfo) -> Self {
@@ -49,14 +63,14 @@ impl ComponentSparseSet {
                 }
                 std::ptr::copy_nonoverlapping(data_ptr, slot, self.info.layout.size());
             }
-            self.ticks[row].changed = tick;
+            self.ticks[row].get_mut().changed = tick;
         } else {
             // Yeni satır oluştur
             let row = self.dense.len() as u32;
             unsafe {
                 self.dense.push(data_ptr);
             }
-            self.ticks.push(ComponentTicks::new(tick));
+            self.ticks.push(UnsafeCell::new(ComponentTicks::new(tick)));
             self.entities.push(entity);
             self.sparse[e] = row;
         }
@@ -104,7 +118,13 @@ impl ComponentSparseSet {
         if e >= self.sparse.len() || self.sparse[e] == u32::MAX {
             return None;
         }
-        self.ticks.get(self.sparse[e] as usize)
+        // SAFETY: paylaşımlı okuma. Bu tick hücresine yazma yalnız `&mut self`
+        // metotlarından ya da `get_item`'in ayrık-satır içsel-değişebilir yolundan
+        // gelir; bu erişim `&self` ödünçlediğinden aynı hücreye canlı bir
+        // `&mut ComponentTicks` yoktur.
+        self.ticks
+            .get(self.sparse[e] as usize)
+            .map(|c| unsafe { &*c.get() })
     }
 
     #[inline]
