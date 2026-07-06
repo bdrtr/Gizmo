@@ -58,20 +58,23 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
             let final_trs = if let Some(prev_idx) = player.prev_animation {
                 if player.blend_time < player.blend_duration {
                     player.blend_time += dt;
-                    player.prev_time += dt;
 
-                    let mut prev_time_clamped = player.prev_time;
                     if let Some(prev_anim) = animations.get(prev_idx) {
-                        if prev_time_clamped > prev_anim.duration {
-                            if player.loop_anim && prev_anim.duration > 0.0 {
-                                prev_time_clamped %= prev_anim.duration;
-                            } else {
-                                prev_time_clamped = prev_anim.duration;
-                            }
-                        }
-
+                        // The fading-out clip keeps playing at the player's `speed` —
+                        // a crossfade must not silently reset it to 1× (`+= dt` did) or
+                        // desync from the incoming clip. Normalized identically to the
+                        // primary path so reverse playback (speed < 0) wraps instead of
+                        // sampling at a negative time.
+                        let (speed, looped) = (player.speed, player.loop_anim);
+                        let prev_sample = advance_and_sample_prev(
+                            &mut player.prev_time,
+                            dt,
+                            speed,
+                            prev_anim.duration,
+                            looped,
+                        );
                         let prev_poses_trs =
-                            evaluate_clip(prev_anim, prev_time_clamped, &skeleton.hierarchy);
+                            evaluate_clip(prev_anim, prev_sample, &skeleton.hierarchy);
                         let alpha = (player.blend_time / player.blend_duration).clamp(0.0, 1.0);
                         blend_poses(&prev_poses_trs, &poses_trs, alpha)
                     } else {
@@ -110,6 +113,24 @@ fn normalize_anim_time(time: f32, duration: f32, looped: bool) -> f32 {
     } else {
         time.clamp(0.0, duration.max(0.0))
     }
+}
+
+/// Advance the fading-out ("previous") clip during a crossfade and return the
+/// time to sample it at.
+///
+/// The previous clip keeps advancing at the player's `speed` (a crossfade must
+/// not freeze it or drop it to 1× — plain `+= dt` ignored `speed`), and the
+/// sample time is normalized exactly like the primary clip so looped clips wrap
+/// (including negative times from reverse playback) and others clamp.
+fn advance_and_sample_prev(
+    prev_time: &mut f32,
+    dt: f32,
+    speed: f32,
+    duration: f32,
+    looped: bool,
+) -> f32 {
+    *prev_time += dt * speed;
+    normalize_anim_time(*prev_time, duration, looped)
 }
 
 pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) {
@@ -277,7 +298,39 @@ fn upload_skin_matrices(skeleton: &mut Skeleton, queue: &wgpu::Queue) {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_anim_time;
+    use super::{advance_and_sample_prev, normalize_anim_time};
+
+    #[test]
+    fn crossfade_prev_time_respects_player_speed() {
+        // During a crossfade the fading-out clip must keep the player's speed.
+        // Old `prev_time += dt` advanced it at 1× regardless; at speed 2 the
+        // previous clip should advance twice as fast.
+        let mut prev = 0.0_f32;
+        let sample = advance_and_sample_prev(&mut prev, 0.1, 2.0, 5.0, true);
+        assert!((prev - 0.2).abs() < 1e-6, "prev_time should advance dt*speed, got {prev}");
+        assert!((sample - 0.2).abs() < 1e-6, "sample time got {sample}");
+    }
+
+    #[test]
+    fn crossfade_prev_time_reverse_playback_wraps() {
+        // Reverse playback (speed < 0) drives prev_time below 0; it must wrap
+        // into range for a looped clip, not sample at a negative time (which the
+        // old `%=` clamp branch never handled).
+        let mut prev = 0.05_f32;
+        let sample = advance_and_sample_prev(&mut prev, 0.1, -1.0, 5.0, true);
+        assert!(prev < 0.0, "prev_time accumulates the negative step, got {prev}");
+        assert!((sample - 4.95).abs() < 1e-5, "reverse sample should wrap to ~4.95, got {sample}");
+        assert!(sample >= 0.0);
+    }
+
+    #[test]
+    fn crossfade_prev_time_non_looped_clamps() {
+        // A non-looping previous clip clamps at its end instead of wrapping.
+        let mut prev = 4.9_f32;
+        let sample = advance_and_sample_prev(&mut prev, 0.5, 1.0, 5.0, false);
+        assert_eq!(sample, 5.0, "non-looped prev clamps at duration");
+    }
+
 
     #[test]
     fn looped_negative_time_wraps_forward() {
