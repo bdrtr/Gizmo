@@ -83,9 +83,14 @@ impl History {
                 }
                 EditorAction::EntityDespawned { entity_ids } => {
                     for entity in &entity_ids {
-                        if let Some(ent) = world.get_entity(entity.id()) {
-                            world.remove_component::<gizmo_core::component::IsDeleted>(ent);
-                            world.remove_component::<gizmo_core::component::IsHidden>(ent);
+                        // Resolve generation-safely: `get_entity(id)` looks up a bare
+                        // SLOT and returns whatever entity lives there now, so after the
+                        // GC recycles the slot an undo would mutate a DIFFERENT entity.
+                        // `is_alive` compares the RECORDED generation, so we skip a
+                        // recycled/dead handle instead.
+                        if world.is_alive(*entity) {
+                            world.remove_component::<gizmo_core::component::IsDeleted>(*entity);
+                            world.remove_component::<gizmo_core::component::IsHidden>(*entity);
                         }
                     }
                     self.redo_stack
@@ -93,9 +98,9 @@ impl History {
                 }
                 EditorAction::EntitySpawned { entity_ids } => {
                     for entity in &entity_ids {
-                        if let Some(ent) = world.get_entity(entity.id()) {
-                            world.add_component(ent, gizmo_core::component::IsDeleted);
-                            world.add_component(ent, gizmo_core::component::IsHidden);
+                        if world.is_alive(*entity) {
+                            world.add_component(*entity, gizmo_core::component::IsDeleted);
+                            world.add_component(*entity, gizmo_core::component::IsHidden);
                         }
                     }
                     self.redo_stack
@@ -129,9 +134,11 @@ impl History {
                 }
                 EditorAction::EntityDespawned { entity_ids } => {
                     for entity in &entity_ids {
-                        if let Some(ent) = world.get_entity(entity.id()) {
-                            world.add_component(ent, gizmo_core::component::IsDeleted);
-                            world.add_component(ent, gizmo_core::component::IsHidden);
+                        // Generation-safe (see the undo path): skip a GC-recycled slot
+                        // instead of soft-deleting a different entity now living there.
+                        if world.is_alive(*entity) {
+                            world.add_component(*entity, gizmo_core::component::IsDeleted);
+                            world.add_component(*entity, gizmo_core::component::IsHidden);
                         }
                     }
                     self.undo_stack
@@ -139,9 +146,9 @@ impl History {
                 }
                 EditorAction::EntitySpawned { entity_ids } => {
                     for entity in &entity_ids {
-                        if let Some(ent) = world.get_entity(entity.id()) {
-                            world.remove_component::<gizmo_core::component::IsDeleted>(ent);
-                            world.remove_component::<gizmo_core::component::IsHidden>(ent);
+                        if world.is_alive(*entity) {
+                            world.remove_component::<gizmo_core::component::IsDeleted>(*entity);
+                            world.remove_component::<gizmo_core::component::IsHidden>(*entity);
                         }
                     }
                     self.undo_stack
