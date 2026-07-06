@@ -237,7 +237,12 @@ impl<State: 'static> App<State> {
 
                             // ECS Sistemlerini Çalıştırmadan önce DI için Core Resource'ları Güncelle
                             self.world.insert_resource(self.input.clone());
-                            {
+                            // `sim_dt` = Time'ın `time_scale` ile ölçeklenmiş (ve clamp'lenmiş)
+                            // dt'si → fiziği/ECS'i besler ki `set_time_scale(0.0)` gerçekten
+                            // DURDURSUN, `0.5` ağır çekim yapsın. `time_scale == 1.0` (varsayılan)
+                            // iken `min(dt, max_dt) == dt` olduğundan davranış bit-aynı. Kullanıcı
+                            // update hook'u ham `dt` alır (kamera/UI duraklamada bile akıcı kalsın).
+                            let sim_dt = {
                                 let has_time = self
                                     .world
                                     .get_resource::<gizmo_core::time::Time>()
@@ -248,12 +253,15 @@ impl<State: 'static> App<State> {
                                         .get_resource_mut::<gizmo_core::time::Time>()
                                         .unwrap();
                                     time.update(dt);
+                                    time.dt()
                                 } else {
                                     let mut time = gizmo_core::time::Time::new();
                                     time.update(dt);
+                                    let sim_dt = time.dt();
                                     self.world.insert_resource(time);
+                                    sim_dt
                                 }
-                            }
+                            };
 
                             // ═══ Fixed Timestep Fizik Döngüsü ═══
                             if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
@@ -273,7 +281,7 @@ impl<State: 'static> App<State> {
                                     .world
                                     .get_resource_mut::<gizmo_core::time::PhysicsTime>()
                                     .unwrap();
-                                phys_time.accumulate(dt);
+                                phys_time.accumulate(sim_dt);
                             }
 
                             #[cfg(feature = "network")]
