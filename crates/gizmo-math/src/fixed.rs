@@ -38,7 +38,12 @@ impl Fp32 {
 
     #[inline]
     pub fn from_i32(val: i32) -> Self {
-        Self(val << Self::SHIFT)
+        // Saturating — consistent with `from_f32` and every arithmetic op. Plain
+        // `val << SHIFT` silently WRAPPED for |val| >= 32768 (Q16.16 tops out at
+        // ±32767.99…), turning an out-of-range integer into a wrong-signed value
+        // (e.g. `from_i32(40000)` → -25536) while `from_f32(40000.0)` saturated to
+        // ~32768. `val * ONE_RAW == val << SHIFT` in range; saturates past it.
+        Self(val.saturating_mul(Self::ONE_RAW))
     }
 
     #[inline]
@@ -332,6 +337,20 @@ mod tests {
             let fp = Fp32::from_i32(val);
             assert_eq!(fp.to_i32(), val, "from_i32({val}).to_i32() roundtrip failed");
         }
+    }
+
+    #[test]
+    fn fp32_from_i32_saturates_out_of_range() {
+        // Q16.16 tops out at ±32767.99…; out-of-range ints must SATURATE (like the
+        // other ops), not wrap. Old `val << SHIFT` wrapped `40000` to a negative
+        // value — the classic bug this guards against.
+        assert!(Fp32::from_i32(40000).to_f32() > 32000.0, "must not wrap to negative");
+        assert!(Fp32::from_i32(100000).to_f32() > 32000.0);
+        assert!(Fp32::from_i32(-100000).to_f32() < -32000.0);
+        // In-range values still map exactly (no spurious saturation).
+        assert_eq!(Fp32::from_i32(32767).to_i32(), 32767);
+        // Consistent sign with the float constructor for the same magnitude.
+        assert!(Fp32::from_i32(40000).to_f32().signum() == Fp32::from_f32(40000.0).to_f32().signum());
     }
 
     #[test]
