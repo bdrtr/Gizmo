@@ -138,6 +138,25 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
       ederken; `from_i32(40000)`→negatif); `saturating_mul(ONE_RAW)` + test. (3) broadphase
       `DynamicAabbTree.tight_aabbs` yazılıp-okunmayan dead-code SİLİNDİ (fat-margin no-rebuild
       mantığı korundu, broadphase differential proptest yeşil).
+- [x] **Bakım turu 2. dalga (2026-07-06, 4 alan adversarial: gizmo-app/scene/net/renderer-resize):**
+      (1) **Hiyerarşi cycle sağlamlığı (HIGH×2):** `save_prefab` BFS'i ve `hierarchy.rs
+      despawn_recursive` visited-set'siz `Children` üzerinde dönüyordu → studio reparent (entity'yi
+      kendi torununa sürükleme) veya scene-load'lu `Children` cycle'ında SONSUZ DÖNGÜ/OOM ve STACK
+      OVERFLOW. İkisine de visited-set eklendi; save_prefab'ın aynı fix'i diamond hiyerarşide
+      paylaşılan çocuğun İKİ KEZ serileştirilmesini (reload'da sızan boş entity) de önler. +3+1 test.
+      (2) **Bare grup node öksüzleştirmesi (MED):** serialize skip-filter yalnız `Children` taşıyan
+      yapısal grup node'unu düşürüyordu → alt-ağaç reload'da kopuyordu; non-empty Children taşıyan
+      node artık korunuyor (tam-sahne + prefab). +test. (3) **Netcode ACK wraparound (HIGH):** demo
+      server `input.tick > *entry` düz karşılaştırması tick `u32::MAX→0` sardığında ACK'i sonsuza dek
+      donduruyordu (istemci `reconcile` signed-wraparound kullanırken) → istemci kuyruğu sınırsız
+      büyür; ayrıca disconnect'te ACK girdisi silinmiyordu (client_id reuse'da stale ACK + sınırsız
+      map). Paylaşılan `tick_is_newer` helper'ına çıkarıldı (kütüphane+server tek kaynak) + disconnect
+      remove + wraparound testi. (4) **`Time::time_scale` ölü API (MED):** windowed loop fiziği ham
+      dt ile besliyordu → dökümante `set_time_scale(0.0)` pause / `0.5` slow-mo simülasyonu HİÇ
+      etkilemiyordu; `accumulate` artık scaled `time.dt()` alıyor (scale=1'de bit-aynı; update hook
+      kamera/UI için ham dt kalır). (5) headless loop deferred `Commands` flush'u (0 sistemde
+      uygulanmıyordu). **Renderer resize/kaynak-yaşam-döngüsü ADVERSARIAL TARANDI → 0 bug** (her
+      ekran-boyutlu texture+bind-group resize'da yeniden oluşturuluyor; SSR/SSGI/fluid-SSFR temiz).
 
 **Çıkış kriteri:** yeşil CI, anlamlı kapsam, regresyonlar otomatik yakalanıyor.
 
