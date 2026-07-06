@@ -274,6 +274,12 @@ impl ProbeGrid {
 
     /// Dünya pozisyonundaki noktadan trilineer interpolasyon ile SH değeri okur
     pub fn sample(&self, world_pos: Vec3) -> SHCoeffs {
+        // An empty grid (zero-resolution axis) would make `probes.len() - 1` in the
+        // corner fetch underflow and panic; return a neutral coefficient set instead.
+        if self.probes.is_empty() {
+            return SHCoeffs::default();
+        }
+
         // Grid koordinatlarına dönüştür
         let local = world_pos - self.grid_min;
         let fx = (local.x / self.cell_size.x - 0.5).max(0.0);
