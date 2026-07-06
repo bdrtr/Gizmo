@@ -165,6 +165,20 @@ impl std::fmt::Debug for AudioManager {
     }
 }
 
+/// Clamp a playback-speed/pitch factor to a value that is safe for rodio's `Speed`
+/// filter. A factor of `0.0` (or negative, or NaN) makes rodio compute a source
+/// sample-rate of `(orig_rate * factor) as u32 == 0`, which trips a `from >= 1`
+/// assert inside `SampleRateConverter::new` and PANICS on the cpal audio callback
+/// thread, killing playback. `pitch = 0` is reachable from a scene-authored /
+/// serde-deserialized `AudioSource.pitch` and from the near-field 3D-audio path.
+pub(crate) fn sanitize_playback_speed(pitch: f32) -> f32 {
+    if pitch.is_finite() {
+        pitch.max(0.01)
+    } else {
+        1.0
+    }
+}
+
 impl AudioManager {
     /// Creates a new audio manager bound to the default output device.
     ///
@@ -381,6 +395,7 @@ impl AudioManager {
 
     /// Sets the pitch/playback speed of the active sink with the given id.
     pub fn set_pitch(&mut self, id: u64, pitch: f32) {
+        let pitch = sanitize_playback_speed(pitch);
         if let Some(sink) = self.active_spatial_sinks.get(&id) {
             sink.set_speed(pitch);
         } else if let Some(sink) = self.active_sinks.get(&id) {
@@ -430,6 +445,25 @@ impl AudioManager {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_playback_speed;
+
+    #[test]
+    fn playback_speed_never_reaches_zero() {
+        // 0 / negative / NaN would make rodio's SampleRateConverter assert (from >= 1)
+        // and panic the audio thread. All must clamp to a strictly-positive factor
+        // such that `orig_rate * factor >= 1` for any realistic rate (>= ~100 Hz).
+        assert!(sanitize_playback_speed(0.0) >= 0.01);
+        assert!(sanitize_playback_speed(-2.0) >= 0.01);
+        assert_eq!(sanitize_playback_speed(f32::NAN), 1.0);
+        assert_eq!(sanitize_playback_speed(f32::INFINITY), 1.0);
+        // A normal pitch passes through untouched.
+        assert_eq!(sanitize_playback_speed(1.5), 1.5);
+        assert_eq!(sanitize_playback_speed(0.5), 0.5);
     }
 }
 
