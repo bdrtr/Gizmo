@@ -139,9 +139,16 @@ impl<T: crate::component::Component> FetchComponent for Mut<'_, T> {
 
     unsafe fn fetch_raw<'w>(world: &'w World, arch: &Archetype, system_tick: u32) -> Option<Self::Fetch<'w>> {
         if T::storage_type() == crate::component::StorageType::SparseSet {
-            let world_mut = world as *const World as *mut World;
-            let set = (*world_mut).sparse_sets.get_mut(&TypeId::of::<T>())?;
-            Some((std::ptr::null_mut(), std::ptr::null_mut(), system_tick, Some(set as *mut _)))
+            // SHARED lookup — NOT `&World -> &mut World`. Casting `&World` to
+            // `*mut World` to call `HashMap::get_mut` was aliasing UB (retag from
+            // SharedReadOnly to a mutable permission), reachable from 100% safe
+            // code via `query_mut::<Mut<Sparse>>().iter_mut()`. We only need the
+            // set's address; `get_item` reaches its elements through a shared ref +
+            // interior mutability (BlobVec / `UnsafeCell<ComponentTicks>`), so no
+            // `&mut ComponentSparseSet` is ever formed (that would race under
+            // `par_for_each_mut`).
+            let set = world.sparse_sets.get(&TypeId::of::<T>())?;
+            Some((std::ptr::null_mut(), std::ptr::null_mut(), system_tick, Some(set as *const _ as *mut _)))
         } else {
             let col = arch.get_column_mut(TypeId::of::<T>())?;
             Some((col.data_ptr_mut(), col.ticks_ptr_mut(), system_tick, None))
@@ -162,7 +169,10 @@ impl<T: crate::component::Component> FetchComponent for Mut<'_, T> {
             let e = entity_id as usize;
             let dense_row = set.sparse[e] as usize;
             let ptr = set.dense.get_unchecked_mut(dense_row) as *mut T;
-            let ticks_ptr = set.ticks.as_ptr().add(dense_row) as *mut crate::archetype::ComponentTicks;
+            // `ticks` is `Vec<UnsafeCell<ComponentTicks>>`; `UnsafeCell::get` yields a
+            // write-provenance `*mut` through the shared `&set`, so mutating disjoint
+            // rows from parallel tasks is sound (a raw `Vec::as_ptr` would not be).
+            let ticks_ptr = (*set.ticks.as_ptr().add(dense_row)).get();
             Mut {
                 value: &mut *ptr,
                 ticks: &mut *ticks_ptr,
