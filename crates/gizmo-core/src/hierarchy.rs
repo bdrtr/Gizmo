@@ -12,6 +12,11 @@ pub trait HierarchyExt {
     
     /// Removes a child from a parent entity.
     fn remove_child(&mut self, parent: Entity, child: Entity);
+
+    /// Returns `true` if `ancestor` is an ancestor of `descendant` (walking up the
+    /// `Parent` chain). Cycle-safe: stops if the existing chain already loops.
+    /// Use before reparenting to reject links that would create a hierarchy cycle.
+    fn is_ancestor(&self, ancestor: u32, descendant: u32) -> bool;
 }
 
 impl HierarchyExt for World {
@@ -23,6 +28,14 @@ impl HierarchyExt for World {
     }
 
     fn add_child(&mut self, parent: Entity, child: Entity) {
+        // Refuse a link that would create a `Children` cycle: an entity can't be its
+        // own parent, and `child` must not already be an ancestor of `parent`
+        // (dragging a node onto its own descendant). A cycle hangs transform
+        // propagation / despawn_recursive / scene save.
+        if parent.id() == child.id() || self.is_ancestor(child.id(), parent.id()) {
+            return;
+        }
+
         // Remove from old parent first
         if let Some(parent_ptr) = self.get_component_ptr(child, std::any::TypeId::of::<Parent>()) {
             let old_parent_id = unsafe { (*(parent_ptr as *const Parent)).0 };
@@ -54,6 +67,22 @@ impl HierarchyExt for World {
             let children = unsafe { &mut *(children_ptr as *mut Children) };
             children.0.retain(|&id| id != child.id());
         }
+    }
+
+    fn is_ancestor(&self, ancestor: u32, descendant: u32) -> bool {
+        let parents = self.borrow::<Parent>();
+        let mut visited = std::collections::HashSet::new();
+        let mut current = descendant;
+        // Walk up the Parent chain. `visited` also makes this safe if the existing
+        // hierarchy already contains a cycle (stop instead of looping forever).
+        while visited.insert(current) {
+            match parents.get(current).map(|p| p.0) {
+                Some(pid) if pid == ancestor => return true,
+                Some(pid) => current = pid,
+                None => return false,
+            }
+        }
+        false
     }
 }
 
@@ -174,5 +203,36 @@ mod tests {
         world.despawn_recursive(a);
 
         assert_eq!(world.entity_count(), 0, "both nodes despawn; no infinite recursion");
+    }
+
+    #[test]
+    fn add_child_refuses_cycle_creating_reparent() {
+        let mut world = World::new();
+        let a = world.spawn();
+        let b = world.spawn();
+        let c = world.spawn();
+        world.add_child(a, b); // a -> b
+        world.add_child(b, c); // b -> c  (chain a -> b -> c)
+
+        assert!(world.is_ancestor(a.id(), c.id()), "a is an ancestor of c");
+        assert!(!world.is_ancestor(c.id(), a.id()));
+
+        // Dragging a under its own descendant c would create a cycle → refused.
+        world.add_child(c, a);
+        assert!(
+            world.get_component_ptr(a, std::any::TypeId::of::<Parent>()).is_none(),
+            "cyclic reparent must be refused: a stays a root"
+        );
+        // Self-parenting is also refused.
+        world.add_child(a, a);
+        assert!(
+            world.get_component_ptr(a, std::any::TypeId::of::<Parent>()).is_none(),
+            "self-parent must be refused"
+        );
+
+        // A legitimate reparent still works: d -> a -> b -> c.
+        let d = world.spawn();
+        world.add_child(d, a);
+        assert!(world.is_ancestor(d.id(), c.id()), "valid reparent kept the chain intact");
     }
 }
