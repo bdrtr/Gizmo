@@ -16,31 +16,10 @@ pub trait HierarchyExt {
 
 impl HierarchyExt for World {
     fn despawn_recursive(&mut self, entity: Entity) {
-        let mut children_to_despawn = Vec::new();
-        
-        if let Some(children_ptr) = self.get_component_ptr(entity, std::any::TypeId::of::<Children>()) {
-            let children = unsafe { &*(children_ptr as *const Children) };
-            for &child_id in &children.0 {
-                if let Some(child_entity) = self.entity(child_id) {
-                    children_to_despawn.push(child_entity);
-                }
-            }
-        }
-        
-        // Remove child from parent's list if it has a Parent
-        if let Some(parent_ptr) = self.get_component_ptr(entity, std::any::TypeId::of::<Parent>()) {
-            let parent_id = unsafe { (*(parent_ptr as *const Parent)).0 };
-            if let Some(parent_entity) = self.entity(parent_id) {
-                self.remove_child(parent_entity, entity);
-            }
-        }
-
-        // Recursively despawn children
-        for child in children_to_despawn {
-            self.despawn_recursive(child);
-        }
-        
-        self.despawn(entity);
+        // A `visited` set breaks `Children` cycles (e.g. reparenting an entity onto
+        // its own descendant): without it a cycle recurses forever → stack overflow.
+        let mut visited = std::collections::HashSet::new();
+        despawn_recursive_inner(self, entity, &mut visited);
     }
 
     fn add_child(&mut self, parent: Entity, child: Entity) {
@@ -70,12 +49,48 @@ impl HierarchyExt for World {
 
     fn remove_child(&mut self, parent: Entity, child: Entity) {
         self.remove_component::<Parent>(child);
-        
+
         if let Some(children_ptr) = self.get_component_mut_ptr(parent, std::any::TypeId::of::<Children>()) {
             let children = unsafe { &mut *(children_ptr as *mut Children) };
             children.0.retain(|&id| id != child.id());
         }
     }
+}
+
+/// Recursive worker for [`HierarchyExt::despawn_recursive`]. `visited` tracks
+/// entity ids already handled so a `Children` cycle can't recurse forever.
+fn despawn_recursive_inner(
+    world: &mut World,
+    entity: Entity,
+    visited: &mut std::collections::HashSet<u32>,
+) {
+    if !visited.insert(entity.id()) {
+        return; // already in-flight — a cycle led back here; stop.
+    }
+
+    let mut children_to_despawn = Vec::new();
+    if let Some(children_ptr) = world.get_component_ptr(entity, std::any::TypeId::of::<Children>()) {
+        let children = unsafe { &*(children_ptr as *const Children) };
+        for &child_id in &children.0 {
+            if let Some(child_entity) = world.entity(child_id) {
+                children_to_despawn.push(child_entity);
+            }
+        }
+    }
+
+    // Detach from the (surviving) parent's Children list.
+    if let Some(parent_ptr) = world.get_component_ptr(entity, std::any::TypeId::of::<Parent>()) {
+        let parent_id = unsafe { (*(parent_ptr as *const Parent)).0 };
+        if let Some(parent_entity) = world.entity(parent_id) {
+            world.remove_child(parent_entity, entity);
+        }
+    }
+
+    for child in children_to_despawn {
+        despawn_recursive_inner(world, child, visited);
+    }
+
+    world.despawn(entity);
 }
 
 #[cfg(test)]
@@ -138,8 +153,26 @@ mod tests {
         // Despawn root
         world.despawn_recursive(p1);
 
-        // Entities should be marked for despawn, process them by calling despawn queue? 
+        // Entities should be marked for despawn, process them by calling despawn queue?
         // Wait, despawn is immediate through `entities_to_despawn` loop
         assert_eq!(world.entity_count(), 0);
+    }
+
+    #[test]
+    fn despawn_recursive_survives_children_cycle() {
+        let mut world = World::new();
+        let a = world.spawn();
+        let b = world.spawn();
+        // A `Children` cycle with no matching `Parent` back-edges — reachable from a
+        // loaded scene file or direct component edits, where the per-node parent
+        // detach can't break the loop. The old recursive walk had no visited set and
+        // recursed forever (stack overflow); with the guard it terminates.
+        world.add_component(a, Children(vec![b.id()]));
+        world.add_component(b, Children(vec![a.id()]));
+        assert_eq!(world.entity_count(), 2);
+
+        world.despawn_recursive(a);
+
+        assert_eq!(world.entity_count(), 0, "both nodes despawn; no infinite recursion");
     }
 }
