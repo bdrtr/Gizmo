@@ -119,6 +119,12 @@ impl<State: 'static> App<State> {
 
             self.schedule.run(&mut self.world, dt);
 
+            // Flush deferred commands (Commands/CommandQueue) queued by the update
+            // hook — mirrors the windowed loop. `Schedule::run` only flushes BETWEEN
+            // batches, so with no systems registered nothing would flush and the
+            // update hook's spawns/despawns would never take effect.
+            self.world.apply_commands();
+
             // Simple busy wait or sleep to avoid 100% CPU in headless if not limited
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
