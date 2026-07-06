@@ -42,7 +42,6 @@ pub struct DynamicAabbTree {
     root: usize,
     free_list: usize,
     pub(crate) entity_map: HashMap<u32, usize>,
-    tight_aabbs: HashMap<u32, Aabb>,
     fat_margin: f32,
 }
 
@@ -59,7 +58,6 @@ impl DynamicAabbTree {
             root: NULL,
             free_list: NULL,
             entity_map: HashMap::new(),
-            tight_aabbs: HashMap::new(),
             fat_margin: 0.1,
         }
     }
@@ -74,7 +72,6 @@ impl DynamicAabbTree {
         self.root = NULL;
         self.free_list = NULL;
         self.entity_map.clear();
-        self.tight_aabbs.clear();
     }
 
     pub fn entity_count(&self) -> usize {
@@ -114,13 +111,11 @@ impl DynamicAabbTree {
         if let Some(&node_idx) = self.entity_map.get(&entity.id()) {
             let fat = self.nodes[node_idx].aabb;
             if aabb_contains(&fat, &aabb) {
-                self.tight_aabbs.insert(entity.id(), aabb);
                 return;
             }
             self.remove(entity);
         }
 
-        self.tight_aabbs.insert(entity.id(), aabb);
         let fat_aabb = fatten(&aabb, self.fat_margin);
 
         let leaf = self.alloc_node();
@@ -134,7 +129,6 @@ impl DynamicAabbTree {
 
     pub fn remove(&mut self, entity: BodyHandle) {
         if let Some(leaf) = self.entity_map.remove(&entity.id()) {
-            self.tight_aabbs.remove(&entity.id());
             self.remove_leaf(leaf);
             self.free_node(leaf);
         }
