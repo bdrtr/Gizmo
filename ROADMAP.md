@@ -177,6 +177,29 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
       texture-streaming completion'ları install edilmiyor=`texture_streaming_system` no-op (özellik
       tamamlama + görsel A/B gerektirir, cache-key canonicalize↔normalize follow-on); degenerate
       sıfır-radius kapsül (geçersiz içerik).
+- [x] **Bakım turu 4. dalga (2026-07-06, çok-ajanlı Workflow: 8 alan bul→adversarial-doğrula →
+      14 onaylı bulgu, 10 düzeltildi/4 ertelendi; hepsi koda-karşı elle doğrulandı):** gizmo-ui,
+      gizmo-audio, window+input, gizmo-editor, core-commands/hooks, gizmo-ai, renderer-gi, physics-
+      core-shapes tarandı. **HIGH×5:** (1) **UI Node.position** taffy'nin PARENT-relative location'ını
+      ABSOLUTE olarak yazıyordu → nested widget hit-test/render window köşesine kayıyordu; write-back
+      top-down ata-offset accumulation'a çevrildi. (2) **Fare-bakış 2×** — masaüstünde HEM
+      `CursorMoved→on_mouse_moved` (pos-diff delta) HEM `MouseMotion→on_mouse_delta` (raw) mouse_delta'yı
+      besliyordu; `set_mouse_position` (pos-only) + cfg-gate (wasm hariç MouseMotion tek kaynak). (3)
+      **Audio pitch panik** — `set_pitch(0/neg/NaN)` rodio SampleRateConverter `from>=1` assert'ini
+      tetikleyip audio-thread'i öldürüyordu (scene-authored `AudioSource.pitch=0` erişilebilir);
+      `sanitize_playback_speed` clamp + test. (4) **despawn reserved-entity panik** — `Commands::spawn`
+      ile reserve edilmiş ama flush edilmemiş entity'de `is_alive` true ama `entity_locations` slot yok
+      → 2 ham-index panik (236+304); bounds-safe (World::entity aynası) + test. (5) **Editor undo/redo**
+      `get_entity(id)` bare slot okuyup kayıtlı generation'ı doğrulamıyordu → GC-recycled slot'ta yanlış
+      entity; `is_alive(*entity)` (4 site). **MED×3:** input fast-tap (aynı-frame release+repress tuşu
+      düşürüyordu; on_key/mouse_pressed pending-release'i iptal eder, +test), UI window_size (1280×720
+      sabitti; `Res<WindowInfo>` gerçek boyut), GOAP heuristic (inadmissible count → suboptimal plan;
+      Dijkstra h=0 optimallik + test). **LOW×2:** mouse-scroll wiring (MouseWheel handler yoktu),
+      ProbeGrid empty-grid underflow guard. **ERTELENDİ (dokümante):** component_ops reserved-entity
+      silent-drop (lazy-materialize Commands-flush ile double-flush riski + edge-case), UI z-order tek-
+      kazanan (ZIndex tasarımı gerekir), hook re-entrant same-type (dar + restructure riski), coplanar
+      convex-hull raycast phantom-AABB (degenerate collider, 2D-polygon testi gerekir). NOT: workflow
+      verify-ajanı bir stray `reentrant_hook_probe.rs` bıraktı → SİLİNDİ.
 
 **Çıkış kriteri:** yeşil CI, anlamlı kapsam, regresyonlar otomatik yakalanıyor.
 
