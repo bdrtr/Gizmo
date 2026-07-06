@@ -30,6 +30,20 @@ pub struct PlayerInput {
     pub dt: f32,
 }
 
+/// `candidate` tick'i `reference`'tan KESİN olarak daha yeni mi — `u32` tick
+/// uzayı taştıktan (`u32::MAX -> 0`) sonra bile doğru sıralama için
+/// işaretli-wraparound aritmetiği kullanır.
+///
+/// "Bu tick şundan ileride mi" sorusunun TEK doğruluk kaynağı: hem istemci
+/// reconciliation'ı ([`crate::client_server::prediction::ClientPredictor::reconcile`])
+/// hem de sunucunun per-client ACK defteri bunu kullanır. Düz `>` wraparound'da
+/// desync eder (sunucu ACK'i taşmadan sonra bir daha ilerlemez → istemci kuyruğu
+/// sınırsız büyür), bu yüzden tek yerde tutulur.
+#[inline]
+pub fn tick_is_newer(candidate: u32, reference: u32) -> bool {
+    (candidate.wrapping_sub(reference) as i32) > 0
+}
+
 /// Messages sent from a client to the server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -128,6 +142,21 @@ pub fn connection_config() -> ConnectionConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tick_is_newer_handles_wraparound() {
+        // Normal ordering.
+        assert!(tick_is_newer(1, 0));
+        assert!(!tick_is_newer(0, 0));
+        assert!(!tick_is_newer(0, 1));
+        assert!(tick_is_newer(5000, 4999));
+        // Wraparound: 0 comes right after u32::MAX and must count as newer — a
+        // plain `>` would say `0 > u32::MAX == false` and freeze the ACK forever.
+        assert!(tick_is_newer(0, u32::MAX));
+        assert!(tick_is_newer(5, u32::MAX - 2));
+        assert!(!tick_is_newer(u32::MAX, 0));
+        assert!(!tick_is_newer(u32::MAX - 2, 5));
+    }
 
     #[test]
     fn client_input_roundtrip() {
