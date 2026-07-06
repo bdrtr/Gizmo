@@ -157,6 +157,26 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
       kamera/UI için ham dt kalır). (5) headless loop deferred `Commands` flush'u (0 sistemde
       uygulanmıyordu). **Renderer resize/kaynak-yaşam-döngüsü ADVERSARIAL TARANDI → 0 bug** (her
       ekran-boyutlu texture+bind-group resize'da yeniden oluşturuluyor; SSR/SSGI/fluid-SSFR temiz).
+- [x] **Bakım turu 3. dalga (2026-07-06, 4 alan: gizmo-scripting/physics-soft/physics-dynamics/
+      renderer-asset):** (1) **3. Children-cycle hang'i (HIGH):** `TransformPropagateSystem` (HER
+      FRAME) BFS'i visited-set'siz → cycle'da queue sonsuz büyür=tüm uygulama hang (save_prefab'dan
+      beter). Visited-set + test. **KÖK-NEDEN kapatıldı:** `HierarchyExt::is_ancestor` eklendi +
+      `add_child` ve **studio reparent** artık kendi-torununa/kendine parent yapmayı REDDEDİYOR
+      (cycle kaynakta önlenir + guard'lı traversal'lar zaten dayanıklı). +test. (2) **Karakter
+      duvardan geçiyordu (HIGH):** KCC sweep `actual_d = d − radius >= 0` guard'ı tam temasta
+      (FP'de ~−6e-8) hit'i düşürüp tam delta'yı uyguluyordu → duvarı deliyordu; `d >= 0` + `(d−radius)
+      .max(0)` ile temas/penetrasyon bandı artık bloklar. +test (step_climb korundu). (3) **Soft-body
+      node ≥2 collider'da tünelliyordu (HIGH):** `resolve_node_collision` menzildeki HER collider için
+      position advance ediyordu (bitişik zemin/duvarda ikinci snap geçirtiyordu) → en-yakın-hit seçip
+      tek snap. +test. (4) **Lua `on_update` hook'u hiç çalışmıyordu (MED):** script izole env'e yazar,
+      `update()` globals'tan okuyordu → her yüklü script'in env'inden okunuyor. +test. (5) boş rope
+      `len()−1` underflow guard (LOW). **RENDERER ASSET/MATERIAL/TEXTURE + VEHICLE ADVERSARIAL TARANDI**
+      (alignment/format/mip/channel/index/fallback/vehicle-tire/suspension/engine hepsi temiz).
+      **ATLANAN (dokümante):** scripting stale-id yeniden-kullanılan entity'yi mutasyona uğratır
+      (bare u32 slot-id, generational-handle gerektirir=tasarım; repo 0 .lua); renderer async
+      texture-streaming completion'ları install edilmiyor=`texture_streaming_system` no-op (özellik
+      tamamlama + görsel A/B gerektirir, cache-key canonicalize↔normalize follow-on); degenerate
+      sıfır-radius kapsül (geçersiz içerik).
 
 **Çıkış kriteri:** yeşil CI, anlamlı kapsam, regresyonlar otomatik yakalanıyor.
 
