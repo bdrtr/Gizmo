@@ -166,12 +166,97 @@ impl AnimationStateMachine {
                 }
                 return false;
             }
-            // Auto / exit-time transition
-            if tr.has_exit_time {
+            // Auto / exit-time transition (this transition has no trigger).
+            // Only consider it on an exit-time query (caller passed no trigger);
+            // a *specific* trigger query must never be satisfied by an unrelated
+            // auto-transition just because the clip happens to have finished
+            // (that would silently swallow the player's input and jump to the
+            // wrong state on clip-boundary frames).
+            if trigger.is_none() && tr.has_exit_time {
                 clip_finished
             } else {
                 false
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn machine(transitions: Vec<AnimationTransition>) -> AnimationStateMachine {
+        AnimationStateMachine::new(
+            "run",
+            Arc::from(Vec::<AnimationClip>::new()),
+            vec![],
+            transitions,
+        )
+    }
+
+    fn tr(from: &str, to: &str, trigger: Option<&str>, exit: bool) -> AnimationTransition {
+        AnimationTransition {
+            from: from.into(),
+            to: to.into(),
+            blend_duration: 0.1,
+            trigger: trigger.map(Into::into),
+            has_exit_time: exit,
+        }
+    }
+
+    #[test]
+    fn specific_trigger_not_hijacked_by_exit_time_transition() {
+        // An auto (exit-time) transition ordered BEFORE the trigger transition
+        // must not satisfy a specific trigger query on the frame the clip ends —
+        // otherwise the "jump" input is swallowed and the FSM goes to idle.
+        let m = machine(vec![
+            tr("run", "idle", None, true),           // auto-return when run finishes
+            tr("run", "jump", Some("jump"), false),  // jump on trigger
+        ]);
+        let hit = m
+            .find_transition("run", Some("jump"), true)
+            .expect("jump trigger must resolve");
+        assert_eq!(
+            hit.to, "jump",
+            "specific trigger must win over an unrelated exit-time transition"
+        );
+    }
+
+    #[test]
+    fn exit_time_query_still_matches_auto_transition() {
+        let m = machine(vec![tr("run", "idle", None, true)]);
+        assert_eq!(
+            m.find_transition("run", None, true).map(|t| t.to.as_str()),
+            Some("idle"),
+            "exit-time query fires the auto transition when the clip finished"
+        );
+        assert!(
+            m.find_transition("run", None, false).is_none(),
+            "auto transition must not fire before the clip finishes"
+        );
+    }
+
+    #[test]
+    fn trigger_transitions_ignore_clip_finished_and_unknown_triggers() {
+        let m = machine(vec![tr("run", "jump", Some("jump"), false)]);
+        // A trigger transition never fires on a bare exit-time query...
+        assert!(m.find_transition("run", None, true).is_none());
+        // ...nor for a non-matching trigger.
+        assert!(m.find_transition("run", Some("crouch"), true).is_none());
+        // ...and matches its own trigger regardless of clip_finished.
+        assert_eq!(
+            m.find_transition("run", Some("jump"), false).map(|t| t.to.as_str()),
+            Some("jump")
+        );
+    }
+
+    #[test]
+    fn wildcard_source_matches_any_state() {
+        let m = machine(vec![tr("*", "jump", Some("jump"), false)]);
+        assert_eq!(
+            m.find_transition("anything", Some("jump"), false)
+                .map(|t| t.to.as_str()),
+            Some("jump")
+        );
     }
 }
