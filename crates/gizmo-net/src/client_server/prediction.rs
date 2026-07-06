@@ -3,7 +3,7 @@
 //! İstemcinin (Client) kendi hareketlerini sunucuyu beklemeden anında uygulaması (Prediction)
 //! ve sunucudan gelen kesin (Authoritative) sonuçlara göre gerekirse geçmişe dönüp düzeltmesi (Reconciliation)
 
-use super::protocol::PlayerInput;
+use super::protocol::{tick_is_newer, PlayerInput};
 use std::collections::VecDeque;
 
 /// İstemcinin öngördüğü yerel durum (Fizik motoru üzerinde anlık uygulanacak)
@@ -68,12 +68,10 @@ impl ClientPredictor {
     where
         F: FnMut(&PredictedState, &PlayerInput) -> PredictedState,
     {
-        // 1. Sunucunun onayladığı girdileri kuyruktan sil
-        self.pending_inputs.retain(|input| {
-            // tick wraparound durumlarını handle etmek için geniş mesafe kontrolü
-            let diff = input.tick.wrapping_sub(server_tick) as i32;
-            diff > 0
-        });
+        // 1. Sunucunun onayladığı girdileri kuyruktan sil (yalnız server_tick'ten
+        //    KESİN olarak daha yeni olanlar kalır — wraparound-güvenli, `tick_is_newer`).
+        self.pending_inputs
+            .retain(|input| tick_is_newer(input.tick, server_tick));
 
         // 2. Onaylanmış (Authoritative) durumu al
         let mut corrected_state = server_state;

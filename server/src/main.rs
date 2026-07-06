@@ -2,7 +2,7 @@ use gizmo_core::system::Schedule;
 use gizmo_core::time::Time;
 use gizmo_core::world::World;
 use gizmo_net::client_server::protocol::{
-    ClientChannel, ClientMessage, ServerChannel, ServerMessage, TransformData,
+    tick_is_newer, ClientChannel, ClientMessage, ServerChannel, ServerMessage, TransformData,
 };
 use gizmo_net::client_server::server::NetworkServer;
 use gizmo_physics_core::Transform;
@@ -33,6 +33,14 @@ pub fn server_network_system(world: &World, dt: f32) {
                 }
                 renet::ServerEvent::ClientDisconnected { client_id, .. } => {
                     println!("Client {} düştü!", client_id);
+                    // Drop this client's reconciliation ACK. renet reuses client_ids
+                    // across sessions; a leftover high ACK would make a reconnecting
+                    // client evict all of its own predicted inputs (visible
+                    // rubber-banding), and the map would otherwise grow unbounded for
+                    // the server's lifetime.
+                    if let Some(mut st) = world.get_resource_mut::<ServerNetState>() {
+                        st.last_processed_input.remove(&client_id);
+                    }
                     messages_to_broadcast.push(ServerMessage::PlayerDisconnected { client_id });
                 }
             }
@@ -50,7 +58,10 @@ pub fn server_network_system(world: &World, dt: f32) {
                     // Bu istemciden işlenen son girdi tick'ini ACK olarak kaydet.
                     if let Some(mut st) = world.get_resource_mut::<ServerNetState>() {
                         let entry = st.last_processed_input.entry(client_id).or_insert(0);
-                        if input.tick > *entry {
+                        // Advance with wraparound-safe ordering (mirrors
+                        // ClientPredictor::reconcile); a plain `>` would freeze the
+                        // ACK forever once the client's tick wraps u32::MAX -> 0.
+                        if tick_is_newer(input.tick, *entry) {
                             *entry = input.tick;
                         }
                     }
