@@ -1,5 +1,6 @@
 use gizmo_core::query::{Query, Mut};
-use gizmo_core::system::ResMut;
+use gizmo_core::system::{Res, ResMut};
+use gizmo_core::window::WindowInfo;
 use gizmo_core::component::{Children, Parent};
 use crate::components::{Style, Node};
 use crate::layout::UiContext;
@@ -9,11 +10,15 @@ use taffy::{AvailableSpace, Size};
 /// root, and writes the results back into the [`Node`] components.
 pub fn ui_layout_system(
     mut ctx: ResMut<UiContext>,
+    window: Res<WindowInfo>,
     styles: Query<&Style>,
     parents: Query<&Parent>,
     children: Query<&Children>,
     mut nodes: Query<Mut<Node>>,
 ) {
+    // Track the real (resized) window size so root layout uses the actual available
+    // space instead of the construction-time default (which was never updated).
+    ctx.window_size = gizmo_math::Vec2::new(window.width, window.height);
     let mut current_entities = std::collections::HashSet::new();
 
     // 1. Ensure all entities with a Style have a Taffy node
@@ -98,14 +103,41 @@ pub fn ui_layout_system(
         let _ = ctx.taffy.compute_layout(root_node, available_space);
     }
 
-    // 5. Write back calculated layout to Node components
-    for (entity, _) in styles.iter() {
-        if let Some(&node_id) = ctx.entity_to_node.get(&entity) {
-            if let Ok(layout) = ctx.taffy.layout(node_id) {
-                if let Some(mut node) = nodes.get_mut(entity) {
-                    node.size = gizmo_math::Vec2::new(layout.size.width, layout.size.height);
-                    node.position = gizmo_math::Vec2::new(layout.location.x, layout.location.y);
-                }
+    // 5. Write back ABSOLUTE layout positions. taffy's `layout.location` is
+    //    PARENT-RELATIVE, but `Node.position` is documented (and hit-tested in
+    //    `ui_interaction_system`) as ABSOLUTE window coordinates. Walk each root's
+    //    subtree top-down, accumulating ancestor offsets, so a child laid out at
+    //    parent-offset (10,10) under a root at (500,500) gets Node.position
+    //    (510,510) — not (10,10) (which would hit-test at the window corner).
+    let mut stack: Vec<(u32, gizmo_math::Vec2)> = current_entities
+        .iter()
+        .copied()
+        .filter(|&e| parents.get(e).is_none())
+        .map(|e| (e, gizmo_math::Vec2::ZERO))
+        .collect();
+    let mut visited = std::collections::HashSet::new();
+    while let Some((entity, parent_origin)) = stack.pop() {
+        if !visited.insert(entity) {
+            continue; // guard against a Children cycle
+        }
+        let Some(&node_id) = ctx.entity_to_node.get(&entity) else {
+            continue;
+        };
+        let (size, local) = match ctx.taffy.layout(node_id) {
+            Ok(layout) => (
+                gizmo_math::Vec2::new(layout.size.width, layout.size.height),
+                gizmo_math::Vec2::new(layout.location.x, layout.location.y),
+            ),
+            Err(_) => continue,
+        };
+        let abs = parent_origin + local;
+        if let Some(mut node) = nodes.get_mut(entity) {
+            node.size = size;
+            node.position = abs;
+        }
+        if let Some(children_comp) = children.get(entity) {
+            for &child_id in &children_comp.0 {
+                stack.push((child_id, abs));
             }
         }
     }

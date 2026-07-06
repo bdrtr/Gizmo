@@ -34,6 +34,10 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
     world.register_component_type::<UiRoot>();
 
     world.insert_resource(UiContext::new());
+    // Ensure a WindowInfo exists so `ui_layout_system`'s `Res<WindowInfo>` always
+    // resolves (a missing resource would skip the whole system). Under gizmo-app the
+    // resize handler keeps this up to date; standalone users can set it directly.
+    let _ = world.get_resource_mut_or_default::<gizmo_core::window::WindowInfo>();
 
     schedule.add_di_system(
         system::ui_layout_system
