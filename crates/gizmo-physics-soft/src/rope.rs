@@ -87,7 +87,9 @@ impl Rope {
         let alpha = compliance / (dt * dt);
 
         for _ in 0..self.iterations {
-            for i in 0..(self.nodes.len() - 1) {
+            // `saturating_sub` guards an empty `nodes` (a `pub` field): plain
+            // `len() - 1` underflows to a panic in debug / `usize::MAX` in release.
+            for i in 0..self.nodes.len().saturating_sub(1) {
                 let n1 = self.nodes[i];
                 let n2 = self.nodes[i + 1];
 

@@ -86,22 +86,33 @@ pub fn resolve_node_collision(
     let dist = velocity.length() * dt;
 
     if dist > 1e-5 {
+        // Resolve against the SINGLE nearest hit. The old loop applied the position
+        // snap once PER collider within range, so a node facing two adjacent surfaces
+        // (a tiled floor, a wall meeting a floor) was advanced twice — launching it
+        // straight PAST the geometry instead of stopping at the first surface.
+        let mut nearest: Option<(f32, Vec3)> = None;
         for (_, col_trans, col) in rigid_colliders {
-            if let Some((d, n)) = gizmo_physics_core::raycast::Raycast::ray_shape(&ray, &col.shape, col_trans) {
-                if d <= dist + 0.1 {
-                    let bounce = 0.5;
-                    let friction = 0.8;
-
-                    let vn = velocity.dot(n);
-                    if vn < 0.0 {
-                        let vt = velocity - n * vn;
-                        velocity = vt * (1.0 - friction) - n * (vn * bounce);
-                    }
-
-                    position += ray.direction * (d - 0.1).max(0.0);
-                    collided = true;
+            if let Some((d, n)) =
+                gizmo_physics_core::raycast::Raycast::ray_shape(&ray, &col.shape, col_trans)
+            {
+                if d <= dist + 0.1 && nearest.is_none_or(|(nd, _)| d < nd) {
+                    nearest = Some((d, n));
                 }
             }
+        }
+
+        if let Some((d, n)) = nearest {
+            let bounce = 0.5;
+            let friction = 0.8;
+
+            let vn = velocity.dot(n);
+            if vn < 0.0 {
+                let vt = velocity - n * vn;
+                velocity = vt * (1.0 - friction) - n * (vn * bounce);
+            }
+
+            position += ray.direction * (d - 0.1).max(0.0);
+            collided = true;
         }
     }
 
@@ -399,5 +410,39 @@ mod tests {
         );
         // Reddedilen eleman eklenmemeli.
         assert!(sb.elements.is_empty());
+    }
+
+    /// A node whose sweep ray hits two adjacent colliders (a tiled floor, a wall
+    /// meeting a floor) must stop at the NEAREST surface, not be advanced once per
+    /// collider — the old loop summed the per-collider snaps and launched the node
+    /// clean through the geometry.
+    #[test]
+    fn resolve_node_collision_stops_at_nearest_of_adjacent_colliders() {
+        use gizmo_physics_core::{BodyHandle, BoxShape, Collider, ColliderShape, Transform};
+
+        let node = Vec3::ZERO;
+        let vel = Vec3::new(60.0, 0.0, 0.0); // dist = 60 * (1/60) = 1.0
+        let dt = 1.0 / 60.0;
+        let thin = |cx: f32| {
+            (
+                BodyHandle::from_id(1),
+                Transform::new(Vec3::new(cx, 0.0, 0.0)),
+                Collider::from_shape(ColliderShape::Box(BoxShape {
+                    half_extents: Vec3::new(0.05, 5.0, 5.0),
+                })),
+            )
+        };
+        // Near faces at x = 0.50 and x = 0.60 (both within the dist+0.1 window).
+        let colliders = vec![thin(0.55), thin(0.65)];
+
+        let (pos, _v, hit) = resolve_node_collision(node, vel, dt, &colliders);
+        assert!(hit, "the node should register a collision");
+        // Nearest surface is at x=0.50 → snap to ~0.40. The old per-collider sum
+        // pushed it to ~0.90, past BOTH boxes (which end at x=0.70) — a tunnel.
+        assert!(
+            pos.x < 0.5,
+            "node must stop before the first surface, got x = {} (tunneled through?)",
+            pos.x
+        );
     }
 }
