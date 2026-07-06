@@ -288,17 +288,22 @@ impl ScriptEngine {
         api_physics::update_physics_api(&self.lua, world)
             .map_err(|e| format!("Physics API güncelleme hatası: {}", e))?;
 
-        // 2. on_update callback'ini çağır (varsa)
-        let globals = self.lua.globals();
-        if let Ok(func) = globals.get::<_, LuaFunction>("on_update") {
-            let ctx_table = self.lua.create_table().map_err(|e| e.to_string())?;
-            ctx_table.set("dt", dt).map_err(|e| e.to_string())?;
-            ctx_table
-                .set("elapsed", self.elapsed_time)
-                .map_err(|e| e.to_string())?;
+        // 2. on_update callback'ini çağır — her yüklü script'in KENDİ env'inden.
+        //    Script'ler izole bir env içinde çalıştırıldığından (load_script), top-level
+        //    `function on_update` globals'a DEĞİL o env'e yazılır; globals'tan okumak
+        //    (eski kod) onu ASLA bulamaz → hook sessizce hiç çalışmazdı.
+        let ctx_table = self.lua.create_table().map_err(|e| e.to_string())?;
+        ctx_table.set("dt", dt).map_err(|e| e.to_string())?;
+        ctx_table
+            .set("elapsed", self.elapsed_time)
+            .map_err(|e| e.to_string())?;
 
-            func.call::<_, ()>(ctx_table)
-                .map_err(|e| format!("Lua on_update hatası: {}", e))?;
+        for (path, (_, key)) in &self.loaded_scripts {
+            let env: mlua::Table = self.lua.registry_value(key).map_err(|e| e.to_string())?;
+            if let Ok(func) = env.get::<_, LuaFunction>("on_update") {
+                func.call::<_, ()>(ctx_table.clone())
+                    .map_err(|e| format!("Lua on_update hatası ({}): {}", path, e))?;
+            }
         }
 
         Ok(())
@@ -710,6 +715,34 @@ mod tests {
     use super::*;
     use gizmo_math::Vec3;
     use gizmo_physics_rigid::components::{RigidBody, Velocity};
+
+    /// A top-level `on_update` in a loaded script must fire every frame. It's written
+    /// into the script's isolated env, so the old code that read `on_update` from
+    /// `_G` never found it and the hook was a silent no-op.
+    #[test]
+    fn on_update_hook_fires_from_script_env() {
+        let mut engine = ScriptEngine::new().unwrap();
+        let world = World::new();
+        let input = gizmo_core::input::Input::default();
+
+        let path = std::env::temp_dir()
+            .join("gizmo_on_update_test.lua")
+            .to_string_lossy()
+            .into_owned();
+        std::fs::write(&path, "function on_update(ctx)\n  entity.spawn(\"bullet\", 0, 0, 0)\nend\n")
+            .unwrap();
+        engine.load_script(&path).expect("load_script");
+
+        let before = engine.command_queue().len();
+        engine.update(&world, &input, 1.0 / 60.0).expect("update");
+        let after = engine.command_queue().len();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            after > before,
+            "on_update must run and queue a spawn command (before={before}, after={after})"
+        );
+    }
 
     /// Regression: RigidBody var ama Velocity yoksa ApplyForce sessizce
     /// kaybolmamalı; Velocity oluşturulup ivme uygulanmalı.
