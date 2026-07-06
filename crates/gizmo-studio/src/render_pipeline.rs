@@ -19,6 +19,7 @@ struct BatchData {
     shadow_instances: Vec<gizmo::renderer::InstanceRaw>,
     is_skybox: bool,
     is_grid: bool,
+    is_unlit: bool,
 }
 
 struct FlatBatchData {
@@ -36,6 +37,7 @@ struct FlatBatchData {
     is_double_sided: bool,
     is_skybox: bool,
     is_grid: bool,
+    is_unlit: bool,
 }
 
 struct PipelineCache {
@@ -405,6 +407,8 @@ pub fn execute_render_pipeline(
                             == gizmo::renderer::components::MaterialType::Skybox,
                         is_grid: mat.material_type
                             == gizmo::renderer::components::MaterialType::Grid,
+                        is_unlit: mat.material_type
+                            == gizmo::renderer::components::MaterialType::Unlit,
                     });
 
                 if camera_visible {
@@ -460,6 +464,7 @@ pub fn execute_render_pipeline(
                         is_double_sided,
                         is_skybox: batch.is_skybox,
                         is_grid: batch.is_grid,
+                        is_unlit: batch.is_unlit,
                     });
                 }
             };
@@ -744,6 +749,16 @@ fn record_studio_shadow_passes(
             shadow_pass.set_pipeline(&renderer.scene.shadow_pipeline);
 
             for batch in flat_batches {
+                // Non-casters must not write the shadow maps — matches the game path
+                // (`passes.rs`: skip unlit/transparent) and the `classify_visibility`
+                // caster predicate (excludes Unlit/Skybox/Grid/transparent). Their
+                // CAMERA-VISIBLE instances still live in `[start_instance, end_instance)`
+                // here, so without this filter the editor grid / a skybox / transparent
+                // objects would cast shadows (grid → ground-coplanar self-shadow acne,
+                // skybox → shadows the whole scene).
+                if batch.is_transparent || batch.is_skybox || batch.is_grid || batch.is_unlit {
+                    continue;
+                }
                 if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                     continue;
                 }
