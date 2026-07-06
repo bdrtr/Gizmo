@@ -162,10 +162,18 @@ pub fn update_character(
 
             for (_col_ent, col_trans, col) in &near_colliders {
                 if let Some((d, n)) = Raycast::ray_shape(&move_ray, &col.shape, col_trans) {
-                    let actual_d = d - radius;
-                    if actual_d >= 0.0 && actual_d < move_dist * local_min_t {
-                        local_min_t = actual_d / move_dist;
-                        local_closest_n = n;
+                    // The character's surface sits `radius` ahead of its center. Clamp
+                    // the surface distance to 0 so a contact or slightly-penetrating hit
+                    // (`d - radius <= 0`, common exactly at contact where FP rounding
+                    // makes it a hair negative) still BLOCKS (min_t → 0) instead of being
+                    // rejected by an `actual_d >= 0` test — which let the body walk
+                    // straight through the wall.
+                    if d >= 0.0 {
+                        let actual_d = (d - radius).max(0.0);
+                        if actual_d < move_dist * local_min_t {
+                            local_min_t = actual_d / move_dist;
+                            local_closest_n = n;
+                        }
                     }
                 }
             }
@@ -321,6 +329,47 @@ mod tests {
             "step-up overshoot: advanced {advanced} > intended {intended} (×1.2 tol)"
         );
         assert!(advanced > 0.0, "character should still move forward, got {advanced}");
+    }
+
+    /// A character walking into a solid wall must be stopped at its surface, not let
+    /// through. The old sweep rejected the blocking hit with an `actual_d >= 0.0`
+    /// guard — but `actual_d = d - radius` is ≤ 0 exactly at contact (a hair negative
+    /// under FP rounding), so the hit was dropped and the full delta applied every
+    /// frame, walking the body clean through the wall. Discriminating: reverting to
+    /// the `>= 0.0` guard lets `x` sail past the wall face.
+    #[test]
+    fn character_does_not_walk_through_a_wall() {
+        let entity = BodyHandle::from_id(0);
+        // radius 0.3, height 1.8, centre rests at y = 0.9.
+        let collider = box_collider(0.3, 0.9, 0.3);
+        let ground = box_collider(50.0, 0.5, 50.0);
+        // A 4 m-tall wall whose near face is at x = 2.0 (too tall to step over).
+        let wall = box_collider(0.5, 2.0, 10.0);
+        let colliders = vec![
+            (BodyHandle::from_id(1), Transform::new(Vec3::new(0.0, -0.5, 0.0)), ground),
+            (BodyHandle::from_id(2), Transform::new(Vec3::new(2.5, 1.0, 0.0)), wall),
+        ];
+
+        let mut transform = Transform::new(Vec3::new(1.0, 0.9, 0.0));
+        let mut vel = Velocity::new(Vec3::ZERO);
+        let mut kcc = CharacterController {
+            target_velocity: Vec3::new(3.0, 0.0, 0.0),
+            is_grounded: true,
+            ..Default::default()
+        };
+        let dt = 1.0 / 60.0;
+        // Walk into the wall for two seconds — far more than enough to reach it.
+        for _ in 0..120 {
+            update_character(entity, &mut kcc, &mut transform, &mut vel, &collider, &colliders, dt);
+        }
+
+        // The front surface (centre + radius) must not pass the wall face at x = 2.0,
+        // i.e. centre stays ≲ 1.7. The old code let it run through to x > 5.
+        assert!(
+            transform.position.x <= 1.7 + 0.05,
+            "character walked into/through the wall: centre x = {} (expected ≲ 1.7)",
+            transform.position.x
+        );
     }
 
     /// Reproduces the downslope-direction computation used when sliding down a
