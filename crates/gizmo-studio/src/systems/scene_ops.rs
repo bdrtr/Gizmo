@@ -1,4 +1,5 @@
 use crate::state::{DebugAssets, StudioState};
+use gizmo::core::HierarchyExt;
 use gizmo::editor::EditorState;
 use gizmo::physics::components::Transform;
 use gizmo::prelude::*;
@@ -326,48 +327,59 @@ pub fn handle_scene_operations(
 
     // --- PARENT DEĞİŞTİRME (Reparent) ---
     if let Some((child_id, new_parent_id)) = editor_state.reparent_request.take() {
-        // Eski parent'ı O(1) maliyetle bul
-        let old_parent_id = world
-            .borrow::<gizmo::core::component::Parent>()
-            .get(child_id.id())
-            .map(|c| c.0);
-
-        // Eski parent'ın children listesinden çıkar ve yeni parent'a ekle
+        // Reddet: bir entity'yi kendisine ya da kendi torununa parent yapmak bir
+        // `Children` döngüsü yaratır → cyclic GlobalTransform + (guard'lanmadan önce)
+        // transform-propagation/despawn/save hang'i. `is_ancestor` önerilen parent'ın
+        // ata zincirini gezip child'a ulaşırsa reddeder.
+        if new_parent_id.id() == child_id.id()
+            || world.is_ancestor(child_id.id(), new_parent_id.id())
         {
-            let mut children_comp = world.borrow_mut::<gizmo::core::component::Children>();
-            if let Some(old_pid) = old_parent_id {
-                if let Some(mut ch) = children_comp.get_mut(old_pid) {
-                    ch.0.retain(|&cid| cid != child_id.id());
-                }
-            }
-
-            // Yeni parent'a ekle
-            if let Some(mut ch) = children_comp.get_mut(new_parent_id.id()) {
-                if !ch.0.contains(&child_id.id()) {
-                    ch.0.push(child_id.id());
-                }
-            } else {
-                // Yeni parent'ın henüz Children component'i yok → oluştur
-                drop(children_comp);
-                if let Some(parent_ent) = world.get_entity(new_parent_id.id()) {
-                    world.add_component(
-                        parent_ent,
-                        gizmo::core::component::Children(vec![child_id.id()]),
-                    );
-                }
-            }
-
-        }
-
-        if let Some(child_ent) = world.get_entity(child_id.id()) {
-            world.add_component(
-                child_ent,
-                gizmo::core::component::Parent(new_parent_id.id()),
-            );
             editor_state.log_info(&format!(
-                "Entity {} parent {} olarak ayarlandı.",
-                child_id, new_parent_id
+                "Reparent reddedildi: {child_id} → {new_parent_id} bir hiyerarşi döngüsü oluştururdu."
             ));
+        } else {
+            // Eski parent'ı O(1) maliyetle bul
+            let old_parent_id = world
+                .borrow::<gizmo::core::component::Parent>()
+                .get(child_id.id())
+                .map(|c| c.0);
+
+            // Eski parent'ın children listesinden çıkar ve yeni parent'a ekle
+            {
+                let mut children_comp = world.borrow_mut::<gizmo::core::component::Children>();
+                if let Some(old_pid) = old_parent_id {
+                    if let Some(mut ch) = children_comp.get_mut(old_pid) {
+                        ch.0.retain(|&cid| cid != child_id.id());
+                    }
+                }
+
+                // Yeni parent'a ekle
+                if let Some(mut ch) = children_comp.get_mut(new_parent_id.id()) {
+                    if !ch.0.contains(&child_id.id()) {
+                        ch.0.push(child_id.id());
+                    }
+                } else {
+                    // Yeni parent'ın henüz Children component'i yok → oluştur
+                    drop(children_comp);
+                    if let Some(parent_ent) = world.get_entity(new_parent_id.id()) {
+                        world.add_component(
+                            parent_ent,
+                            gizmo::core::component::Children(vec![child_id.id()]),
+                        );
+                    }
+                }
+            }
+
+            if let Some(child_ent) = world.get_entity(child_id.id()) {
+                world.add_component(
+                    child_ent,
+                    gizmo::core::component::Parent(new_parent_id.id()),
+                );
+                editor_state.log_info(&format!(
+                    "Entity {} parent {} olarak ayarlandı.",
+                    child_id, new_parent_id
+                ));
+            }
         }
     }
 

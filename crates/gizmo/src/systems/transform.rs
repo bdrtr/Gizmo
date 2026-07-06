@@ -43,15 +43,24 @@ impl gizmo_core::system::System for TransformPropagateSystem {
         };
 
         let mut queue = Vec::new();
+        // A `Children` cycle (reachable if the editor reparents an entity onto its own
+        // descendant) would otherwise grow `queue` forever — this system runs EVERY
+        // frame, so a single cyclic edit hangs the whole app. Track visited ids and
+        // never enqueue one twice. For a valid tree this is a no-op (each node has one
+        // parent → is enqueued once).
+        let mut visited: std::collections::HashSet<u32> = std::collections::HashSet::new();
 
         if let Some(mut roots) = root_query {
             let mut children_query = world.query::<&gizmo_core::component::Children>();
             for (id, (local, mut global, _)) in roots.iter_mut() {
                 global.matrix = local.local_matrix;
+                visited.insert(id);
                 if let Some(children_q) = &mut children_query {
                     if let Some(children) = children_q.get(id) {
                         for &child_id in &children.0 {
-                            queue.push((global.matrix, child_id));
+                            if visited.insert(child_id) {
+                                queue.push((global.matrix, child_id));
+                            }
                         }
                     }
                 }
@@ -78,7 +87,9 @@ impl gizmo_core::system::System for TransformPropagateSystem {
                     if let Some(cq) = &mut children_query {
                         if let Some(children) = cq.get(current_id) {
                             for &child_id in &children.0 {
-                                queue.push((global.matrix, child_id));
+                                if visited.insert(child_id) {
+                                    queue.push((global.matrix, child_id));
+                                }
                             }
                         }
                     }
@@ -124,5 +135,34 @@ impl gizmo_core::system::System for BoneAttachmentSystem {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gizmo_core::component::Children;
+    use gizmo_core::system::System;
+    use gizmo_core::world::World;
+    use gizmo_physics_core::components::GlobalTransform;
+    use gizmo_physics_core::Transform;
+
+    #[test]
+    fn transform_propagate_terminates_on_children_cycle() {
+        let mut world = World::new();
+        let a = world.spawn();
+        let b = world.spawn();
+        world.add_component(a, Transform::default());
+        world.add_component(a, GlobalTransform::default());
+        world.add_component(b, Transform::default());
+        world.add_component(b, GlobalTransform::default());
+        // A `Children` cycle with neither node parented (both are propagation roots).
+        // The old BFS had no visited set → its queue grew forever and this per-frame
+        // system hung the whole app. Completing at all is the assertion.
+        world.add_component(a, Children(vec![b.id()]));
+        world.add_component(b, Children(vec![a.id()]));
+
+        let mut sys = TransformPropagateSystem;
+        sys.run(&world, 0.0);
     }
 }
