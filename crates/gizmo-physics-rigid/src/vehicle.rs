@@ -115,13 +115,20 @@ pub fn physics_vehicle_system(world: &World, dt: f32) {
                 let max_dist = wheel.suspension_rest_length + wheel.radius;
                 let ray = Ray::new(wheel_world_pos, ray_dir);
 
-                // Exclude self from raycast
-                let hit_opt = physics_world.raycast(&ray, max_dist);
+                // Exclude self from the sweep: `raycast` returns only the closest hit,
+                // so post-filtering (`hit.entity != self`) would drop it and miss the
+                // ground BEHIND the chassis collider — a wheel hub sitting inside the
+                // chassis box then reported "not grounded" and the car fell through.
+                // `raycast_excluding` skips self during the sweep, so grounding is robust
+                // regardless of where the chassis collider sits relative to the wheels.
+                let hit_opt =
+                    physics_world.raycast_excluding(&ray, max_dist, BodyHandle::from_id(id));
 
                 wheel.is_grounded = false;
 
                 if let Some(hit) = hit_opt {
-                    // Only consider it a ground hit if it's not the chassis itself
+                    // Self already excluded above; the redundant guard is kept as a
+                    // belt-and-braces check (always true here).
                     if hit.entity != BodyHandle::from_id(id) {
                         wheel.is_grounded = true;
                         wheel.contact_point = hit.point;

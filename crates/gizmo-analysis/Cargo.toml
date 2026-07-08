@@ -1,0 +1,37 @@
+[package]
+name = "gizmo-analysis"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Deep observability / analysis module for the Gizmo engine — per-frame metrics, ECS introspection, statistics and trace export so that the smallest detail of a running engine is analyzable."
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+gizmo-core = { path = "../gizmo-core", version = "0.2.0" }
+
+# Optional — subsystem collectors & integrations.
+gizmo-app = { path = "../gizmo-app", version = "0.2.0", optional = true, default-features = false }
+gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.2.0", optional = true }
+tracing = { version = "0.1.44", optional = true }
+tracing-subscriber = { version = "0.3", optional = true, default-features = false, features = ["registry", "std"] }
+egui = { version = "0.34", optional = true }
+
+[features]
+default = []
+# Wire an `AnalysisPlugin` into the App/Plugin schedule (pulls in gizmo-app).
+app = ["dep:gizmo-app"]
+# Collect rigid-body physics metrics from a `PhysicsWorld` resource.
+physics = ["dep:gizmo-physics-rigid"]
+# A `tracing_subscriber::Layer` that captures every engine span automatically.
+trace = ["dep:tracing", "dep:tracing-subscriber"]
+# Live egui analysis panel (`panel::analysis_ui`).
+egui = ["dep:egui"]
+
+[[example]]
+name = "headless_analysis"
+path = "examples/headless_analysis.rs"

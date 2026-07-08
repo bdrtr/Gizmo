@@ -537,3 +537,56 @@ fn moving_kinematic_platform_wakes_sleeping_body() {
         "kutu platformla sürüklenmeli: {x_before} -> {x_after}"
     );
 }
+
+#[test]
+fn raycast_excluding_skips_self_and_finds_ground_behind() {
+    use gizmo_physics_core::raycast::Ray;
+
+    let mut world = PhysicsWorld::new();
+    world.integrator.gravity = Vec3::ZERO; // pozisyonlar sabit kalsın
+
+    // Zemin: üstü y=0'da olan geniş kutu (entity 1).
+    world.add_body(
+        BodyHandle::from_id(1),
+        RigidBody::new_static(),
+        Transform::new(Vec3::new(0.0, -0.5, 0.0)),
+        Velocity::default(),
+        Collider::box_collider(Vec3::new(50.0, 0.5, 50.0)),
+    );
+    // "Şasi": ışın kaynağını (y=2) İÇİNE alan kutu, y 1..3 (entity 2).
+    world.add_body(
+        BodyHandle::from_id(2),
+        RigidBody::new(1.0, true),
+        Transform::new(Vec3::new(0.0, 2.0, 0.0)),
+        Velocity::default(),
+        Collider::box_collider(Vec3::splat(1.0)),
+    );
+    let _ = world.step(1.0 / 60.0); // spatial hash'i doldur
+
+    // Işın kutunun İÇİNDEN (y=2) düz aşağı.
+    let ray = Ray::new(Vec3::new(0.0, 2.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
+
+    // Kendini (kutu=2) dışlayan raycast, ARKADAKİ zemini (entity 1) bulmalı — eski
+    // "en yakın hit + hit.entity != self" deseni burada None/self döndürüp aracı
+    // düşürüyordu.
+    let hit = world
+        .raycast_excluding(&ray, 10.0, BodyHandle::from_id(2))
+        .expect("kendini dışlayınca zemin bulunmalı");
+    assert_eq!(
+        hit.entity,
+        BodyHandle::from_id(1),
+        "self (kutu) atlanıp zemin dönmeli, oldu: {:?}",
+        hit.entity
+    );
+    assert!(
+        hit.point.y.abs() < 1e-3,
+        "zemin teması y=0'da olmalı, oldu: {}",
+        hit.point.y
+    );
+
+    // Karşıtlık: bunun yerine zemini dışlarsak kutu (self) dönmeli → dışlama gerçekten çalışıyor.
+    let hit2 = world
+        .raycast_excluding(&ray, 10.0, BodyHandle::from_id(1))
+        .expect("zemin dışlanınca kutu bulunmalı");
+    assert_eq!(hit2.entity, BodyHandle::from_id(2));
+}

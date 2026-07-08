@@ -614,6 +614,10 @@ pub fn update_vehicle(
     // 6. TEKERLEK DÖNGÜSÜ — 2. geçiş: Kuvvetler + Tekerlek integrasyon
     // --------------------------------------------------------
 
+    // Motor/volan ataleti — sürülen tekerlekte gear² ile yansır (aşağıda). Döngü
+    // içinde `vehicle`'a erişilemez (wheels mutable borrow), o yüzden burada yakala.
+    let flywheel_inertia = vehicle.flywheel_inertia;
+
     for wheel in &mut vehicle.wheels {
         let attach_world = vehicle_transform.position
             + vehicle_transform
@@ -630,6 +634,17 @@ pub fn update_vehicle(
         // = inf/NaN ve tüm simülasyon sessizce bozulur. Epsilon-clamp ile tek
         // noktada koruyarak aşağıdaki tüm bölmeleri (690/693/710/713) güvene al.
         let wheel_inertia = (0.5 * wheel.wheel_mass * wheel.radius.powi(2)).max(1e-6);
+
+        // Sürülen (Rear) tekerlek motora şanzımanla kenetli → motor+volan ataleti
+        // gear² ile YANSIR (I_eff = I_wheel + I_flywheel·ratio²). Bunu katmadan tekerlek
+        // yalnız kendi minik ataletiyle (~0.8) anında redline'a fırlıyordu = kalkışta
+        // patinaj + tüm vitesleri geçme. Yansıyan atalet (düşük viteste ~30 kg·m²) motoru
+        // gerçekçi biçimde kademeli döndürür; yüksek viteste ratio küçülür → daha çevik.
+        let effective_inertia = if wheel.axle_type == Axle::Rear {
+            wheel_inertia + flywheel_inertia * total_ratio * total_ratio
+        } else {
+            wheel_inertia
+        };
 
         if wheel.is_grounded {
             if let Some(hit) = wheel.ground_hit.as_ref() {
@@ -738,11 +753,21 @@ pub fn update_vehicle(
                 // Net tork
                 let net_torque = wheel.drive_torque + effective_brake - reaction_torque;
 
-                // Semi-implicit: önce hızı güncelle, sonra pozisyonu
-                wheel.angular_velocity += (net_torque / wheel_inertia) * dt;
+                // DOĞRUSAL-İMPLİSİT spin güncellemesi. Lastik tepki-torku ω'ya STIFF bağlı:
+                // reaction = final_long·r, final_long ≈ K·slip, slip = (ω·r − v_long)/ref_vel →
+                // ∂reaction/∂ω = K·r²/ref_vel (K = b·c·d·Fz, Pacejka sıfır-slip sertliği). Açık
+                // Euler bunu ω'da açık işlerken düşük-ataletli serbest-yuvarlanan tekerlekte
+                // λ·dt ≫ 2 olup KAOTİK salınıyordu (ön-tekerlek jitter + dönüşte scrub-sürükleme).
+                // Sertliği paydaya ekleyip implisit yapmak koşulsuz kararlı kılar; sürüş/fren
+                // dengesini değiştirmez (yalnız kararlılık).
+                let slip_stiffness =
+                    wheel.pacejka_long.b * wheel.pacejka_long.c * wheel.pacejka_long.d * normal_load;
+                let implicit_inertia =
+                    effective_inertia + slip_stiffness * wheel.radius * wheel.radius * dt / ref_vel;
+                wheel.angular_velocity += (net_torque / implicit_inertia) * dt;
 
                 // Fren kilitleme: abs >= tekerlek hızı değilse sıfırla
-                let max_brake_decel = wheel.brake_torque / wheel_inertia * dt;
+                let max_brake_decel = wheel.brake_torque / effective_inertia * dt;
                 if vehicle.brake_input > 0.01 && wheel.angular_velocity.abs() < max_brake_decel {
                     wheel.angular_velocity = 0.0;
                 }
@@ -759,18 +784,24 @@ pub fn update_vehicle(
 
             let effective_brake = wheel.brake_torque * brake_dir;
             let net_torque = wheel.drive_torque + effective_brake;
-            wheel.angular_velocity += (net_torque / wheel_inertia) * dt;
+            wheel.angular_velocity += (net_torque / effective_inertia) * dt;
 
             // Fren kilitleme: abs >= tekerlek hızı değilse sıfırla
-            let max_brake_decel = wheel.brake_torque / wheel_inertia * dt;
+            let max_brake_decel = wheel.brake_torque / effective_inertia * dt;
             if vehicle.brake_input > 0.01 && wheel.angular_velocity.abs() < max_brake_decel {
                 wheel.angular_velocity = 0.0;
             }
         }
 
-        // dt-doğru sönümleme: (1 - coeff * dt) ≈ exp(-coeff * dt)
-        let damping_coeff = 2.0; // rad/s² / (rad/s)
-        wheel.angular_velocity *= (1.0 - damping_coeff * dt).max(0.0);
+        // Viskoz spin sönümü SADECE havadaki tekerleğe (hava/rulman sürtünmesi serbest
+        // dönen tekerleği yavaşça durdurur). YERDEKİ tekerlekte uygulamak, lastiğin
+        // yuvarlanma-kısıtını korumak için sürekli negatif slip üretip şasiye büyük,
+        // hıza-orantılı FANTOM geri-sürükleme (~600 N/tekerlek) biniyordu → düz/coast
+        // sürüşte ve dönüşte hız kaybı. Yerde: lastik/yuvarlanma zaten yönetir.
+        if !wheel.is_grounded {
+            let damping_coeff = 2.0; // rad/s² / (rad/s)
+            wheel.angular_velocity *= (1.0 - damping_coeff * dt).max(0.0);
+        }
 
         // Çok yavaşsa ve girdi yoksa dur
         if wheel.angular_velocity.abs() < 0.05
@@ -820,6 +851,131 @@ fn apply_force_at_point(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Minimal headless harness: build a 4-wheel VehicleController on flat ground and
+    /// drive `update_vehicle` with a hand-rolled semi-implicit integrator (the ECS
+    /// rigid integrator is not a dep here). Returns the final state after `steps`.
+    fn sim_vehicle(
+        throttle: f32,
+        steer: f32,
+        steps: usize,
+        seed: Option<(RigidBody, Transform, Velocity, VehicleController)>,
+    ) -> (RigidBody, Transform, Velocity, VehicleController) {
+        let veh_id = BodyHandle::from_id(2);
+        let ground_id = BodyHandle::from_id(1);
+        let ground = Collider::box_collider(Vec3::new(200.0, 1.0, 200.0)); // top at y=0
+        let ground_t = Transform::new(Vec3::new(0.0, -1.0, 0.0));
+
+        let (mut rb, mut t, mut vel, mut vc) = seed.unwrap_or_else(|| {
+            let mut rb = RigidBody::new(1200.0, true);
+            rb.calculate_box_inertia(1.4, 0.7, 2.4);
+            rb.center_of_mass = Vec3::new(0.0, 0.2, 0.0);
+            let t = Transform::new(Vec3::new(0.0, 1.0, 0.0)); // start above ground
+            let mut vc = VehicleController::new();
+            for (x, z, front) in [
+                (0.7_f32, 1.0_f32, true),
+                (-0.7, 1.0, true),
+                (0.7, -1.0, false),
+                (-0.7, -1.0, false),
+            ] {
+                vc.add_wheel(Wheel {
+                    attachment_local_pos: Vec3::new(x, 0.2, z),
+                    radius: 0.3,
+                    axle_type: if front { Axle::Front } else { Axle::Rear },
+                    is_left: x > 0.0,
+                    suspension_rest_length: 0.15,
+                    suspension_max_travel: 0.15,
+                    suspension_stiffness: 40000.0,
+                    suspension_damping: 3000.0,
+                    wheel_mass: 25.0,
+                    ..Default::default()
+                });
+            }
+            (rb, t, Velocity::default(), vc)
+        });
+
+        let dt = 1.0 / 60.0;
+        let gravity = Vec3::new(0.0, -9.81, 0.0);
+        let colliders = [
+            (ground_id, ground_t, ground.clone()),
+            (veh_id, t, Collider::box_collider(Vec3::new(0.7, 0.35, 1.4))),
+        ];
+        for _ in 0..steps {
+            vc.throttle_input = throttle.abs();
+            vc.set_reverse(throttle < 0.0);
+            vc.steering_input = steer;
+            vel.linear += gravity * dt; // gravity (rigid integrator would do this)
+            update_vehicle(veh_id, &mut vc, &mut rb, &t, &mut vel, &colliders, dt);
+            // Semi-implicit integrate pose from the mutated velocity.
+            t.position += vel.linear * dt;
+            if vel.angular.length() > 1e-6 {
+                t.rotation = (Quat::from_scaled_axis(vel.angular * dt) * t.rotation).normalize();
+            }
+            assert!(
+                t.position.is_finite() && vel.linear.is_finite() && vel.angular.is_finite(),
+                "vehicle sim produced NaN/Inf"
+            );
+        }
+        (rb, t, vel, vc)
+    }
+
+    /// E2E: the vehicle must SETTLE on the ground (all wheels grounded, sane ride height),
+    /// ACCELERATE under throttle, and — the regression that motivated wiring/fixing the
+    /// model — NOT lose all its speed coasting through a turn (the explicit-Euler spin
+    /// instability + phantom spin-damper drag used to bleed ~70% of speed and oscillate).
+    #[test]
+    fn e2e_vehicle_settles_accelerates_and_holds_speed_in_turn() {
+        // 1. Settle from a drop, no throttle (~2s).
+        let (rb, t, vel, vc) = sim_vehicle(0.0, 0.0, 120, None);
+        let grounded = vc.wheels.iter().filter(|w| w.is_grounded).count();
+        assert_eq!(grounded, 4, "all 4 wheels must ground after settling, got {grounded}");
+        assert!(
+            t.position.y > 0.0 && t.position.y < 0.7,
+            "chassis rests at a sane height, got {}",
+            t.position.y
+        );
+        assert!(vel.linear.length() < 1.0, "settled car should be ~stationary");
+
+        // 2. Full throttle straight (~3s) → must build real speed.
+        let (rb, t, vel, vc) = sim_vehicle(1.0, 0.0, 180, Some((rb, t, vel, vc)));
+        let cruise = vel.linear.length();
+        assert!(cruise > 3.0, "throttle must accelerate the car, got {cruise} m/s");
+        assert!(vc.engine_rpm >= vc.tuning.idle_rpm, "engine rpm must be sane");
+        assert!(
+            vc.wheels.iter().filter(|w| w.is_grounded).count() == 4,
+            "must stay grounded while driving"
+        );
+
+        // 3. Coast (no throttle) + full steer (~2.5s) → speed must NOT collapse.
+        //    Regression guard: before the implicit-spin + damper-gate fixes this lost ~70%.
+        let speed_in = vel.linear.length();
+        let (_rb, _t, vel2, _vc) = sim_vehicle(0.0, 1.0, 150, Some((rb, t, vel, vc)));
+        let speed_out = vel2.linear.length();
+        assert!(
+            speed_out > speed_in * 0.55,
+            "coasting turn must not scrub away most of the speed: {speed_in:.1} -> {speed_out:.1} m/s"
+        );
+    }
+
+    /// Pacejka combined-slip must stay inside the friction circle: the resultant of the
+    /// longitudinal + lateral tire force cannot exceed mu_peak * normal_load.
+    #[test]
+    fn pacejka_combined_respects_friction_circle() {
+        let long = PacejkaParams::default();
+        let lat = PacejkaParams::default();
+        let fz = 3000.0_f32;
+        // Large slip in both axes → both axes saturate; resultant must be clamped.
+        let (fx, fy) = pacejka_combined(&long, &lat, 0.6, 0.6, fz);
+        let mag = (fx * fx + fy * fy).sqrt();
+        let limit = long.d.max(lat.d) * 1.2 * fz;
+        assert!(
+            mag <= limit + 1.0,
+            "combined force {mag} must not exceed friction-circle limit {limit}"
+        );
+        // Zero slip → zero force.
+        let (fx0, fy0) = pacejka_combined(&long, &lat, 0.0, 0.0, fz);
+        assert!(fx0.abs() < 1e-3 && fy0.abs() < 1e-3, "no slip → no force");
+    }
 
     /// Ackermann geometry: the inner wheel (nearer the turn centre) must steer
     /// more sharply than the outer wheel, for turns in both directions. The old

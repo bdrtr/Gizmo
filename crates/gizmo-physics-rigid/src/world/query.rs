@@ -5,6 +5,7 @@ use crate::{
 };
 use gizmo_physics_core::components::Transform;
 use gizmo_physics_core::raycast::{Ray, Raycast, RaycastHit};
+use gizmo_physics_core::BodyHandle;
 
 impl PhysicsWorld {
     /// Apply an impulse to a body at a point.
@@ -55,6 +56,55 @@ impl PhysicsWorld {
                 let collider = &self.colliders[i];
 
                 // Detailed shape test
+                if let Some((distance, normal)) =
+                    Raycast::ray_shape(ray, &collider.shape, transform)
+                {
+                    if distance < closest_distance {
+                        closest_distance = distance;
+                        closest_hit = Some(RaycastHit {
+                            entity,
+                            point: ray.point_at(distance),
+                            normal,
+                            distance,
+                        });
+                    }
+                }
+            }
+        }
+
+        closest_hit
+    }
+
+    /// Perform a raycast, ignoring one body (e.g. a vehicle raycasting its own
+    /// wheels must not hit its own chassis).
+    ///
+    /// [`raycast`](Self::raycast) returns only the CLOSEST hit; a caller that
+    /// wanted to exclude itself by post-filtering (`hit.entity != me`) would drop
+    /// the hit entirely and never see the ground BEHIND its own collider — so a
+    /// wheel ray starting inside/near the chassis collider reported "not grounded"
+    /// and the vehicle fell through. Excluding during the sweep returns the closest
+    /// hit among the *other* bodies, which is the correct ground contact.
+    pub fn raycast_excluding(
+        &self,
+        ray: &Ray,
+        max_distance: f32,
+        exclude: BodyHandle,
+    ) -> Option<RaycastHit> {
+        let mut closest_hit: Option<RaycastHit> = None;
+        let mut closest_distance = max_distance;
+
+        let potential_hits = self
+            .spatial_hash
+            .query_ray(ray.origin, ray.direction, max_distance);
+
+        for (entity, _aabb_t) in potential_hits {
+            if entity == exclude {
+                continue;
+            }
+            if let Some(&i) = self.entity_index_map.get(&entity.id()) {
+                let transform = &self.transforms[i];
+                let collider = &self.colliders[i];
+
                 if let Some((distance, normal)) =
                     Raycast::ray_shape(ray, &collider.shape, transform)
                 {
