@@ -32,6 +32,10 @@ pub mod egui_ctx;
 /// the windowed event loop.
 #[cfg(feature = "editor")]
 pub mod editor_runtime;
+/// High-level gameplay physics systems (vehicle / character controllers) wired
+/// into the app schedule. Requires the `physics` feature.
+#[cfg(feature = "physics")]
+pub mod gameplay;
 pub mod plugin;
 
 pub use plugin::Plugin;
