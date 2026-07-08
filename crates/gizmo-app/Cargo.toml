@@ -20,6 +20,7 @@ tracing = "0.1.44"
 # Optional dependencies
 gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.2.0", optional = true }
 gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.2.0", optional = true }
+gizmo-physics-dynamics = { path = "../gizmo-physics-dynamics", version = "0.2.0", optional = true }
 gizmo-renderer = { path = "../gizmo-renderer" , version = "0.2.0", optional = true }
 gizmo-audio = { path = "../gizmo-audio" , version = "0.2.0", optional = true }
 gizmo-editor = { path = "../gizmo-editor" , version = "0.2.0", optional = true }
@@ -40,7 +41,7 @@ network = ["dep:gizmo-net", "gizmo-net/rollback"]
 window = ["dep:winit"]
 render = ["dep:wgpu", "dep:gizmo-renderer", "dep:pollster", "dep:image", "window"]
 audio = ["dep:gizmo-audio"]
-physics = ["dep:gizmo-physics-core", "dep:gizmo-physics-rigid"]
+physics = ["dep:gizmo-physics-core", "dep:gizmo-physics-rigid", "dep:gizmo-physics-dynamics"]
 # `egui` is the immediate-mode overlay UI layer (the egui runtime + `set_ui`
 # hook + dev console). It does NOT pull in the editor crate, so a game can use
 # an egui HUD without the full editor.
