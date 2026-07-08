@@ -644,31 +644,58 @@ gerçek-UDP örnek onaylı geçmişte senkron).
 > AI 5, render 4, editör 4, altyapı 4, gameplay 4, dinamik/soft-fizik 3, netcode 3).
 > Sıra (etki/çaba + bağımlılık): **M0 → M1 ∥ M2 → M3 ∥ M5 → M4 → M6 → M7.**
 
-### M7.0 — Hemen (ucuz, doğrulanmış açıklar) — çaba: düşük
-- [ ] SSGI apply UV yarı/tam-res uyumsuzluğu — dolaylı ışık sol-üst çeyreğe sıkışıyor (`crates/gizmo-renderer/src/shaders/ssgi_apply.wgsl:12`, `frag_coord/full_res` veya vertex-uv).
-- [ ] Transform undo/redo generation-safe değil — GC-geri-dönüştürülmüş slot yanlış entity'yi bozar; `EntityDespawned` kolundaki gibi `world.is_alive` guard'ı ekle (`crates/gizmo-editor/src/history.rs:75,126`).
-- [ ] Kirli çalışma ağacını topla/commit'le; rustfmt temizliği.
+### M7.0 — Hemen (ucuz, doğrulanmış açıklar) — çaba: düşük  ✅ TAMAM (2026-07-09)
+- [x] SSGI apply UV yarı/tam-res uyumsuzluğu — çözüm zaten `7095ddf` (lighting/naga_oil turu)
+      ile inmişti (vertex-emitted `[0,1]` UV); artık `ssgi_apply_uv_covers_full_frame`
+      regresyon testiyle kilitli (eski `frag_coord/half_res` haritası ~2.0'a taşardı).
+- [x] Transform undo/redo generation-safe — `history.rs` `TransformsChanged` kolu artık
+      Transform borrow'undan ÖNCE `world.is_alive` ile filtreliyor (recycled slot atlanır;
+      `EntityDespawned` kolunun aynası). 3 ayırt edici regresyon testi (eski bare-slot kodunda FAIL).
+- [x] Kirli çalışma ağacı toplandı/commit'lendi (Faz 7 entegrasyon dalı); pre-existing
+      `-D warnings` clippy blocker'ları (gizmo-analysis egui-deprecated + pipeline needless-borrow) temizlendi.
 
-### M7.1 — Materyal & görsel sıçrama — etki: ÇOK YÜKSEK · çaba: orta-yüksek
+### M7.1 — Materyal & görsel sıçrama — etki: ÇOK YÜKSEK · çaba: orta-yüksek  🟢 KISMEN (2026-07-09)
 En büyük görünür kazanç: gerçek dokulu PBR (şu an yalnız base-color + skaler PBR).
-- [ ] G-buffer geometry shader'ı çoklu doku örnekler: **normal map** (TBN zaten döşeli), **metallic-roughness (ARM)**, **emissive**, **AO**.
-- [ ] Materyal-başına doku bind-group'u (veya bindless); `InstanceRaw` skaler PBR → texture set.
-- [ ] GLTF loader'ın PBR metallic-roughness/normal/emissive map'lerini bağla.
-- [ ] (opsiyonel) spot-light gölgesi + ışık limitini artırma ilk adımı.
-- Deliverable: normal/MR/emissive haritalı `material_demo`.
+- [x] G-buffer geometry shader'ı çoklu doku örnekler: **normal map** (Gram-Schmidt TBN × normalScale),
+      **metallic-roughness** (skaler × MR.gb), **emissive**, **AO**. NOT: 4 MRT dolu olduğundan emissive
+      albedo'ya ADDITIVE, AO albedo'ya çarpım (LDR yaklaşımı — gerçek HDR unlit-glow emissive 5. MRT
+      veya lighting-pass girişi ister = gizmo-studio dokunuşu, ertelendi).
+- [x] Materyal-başına 7-binding doku bind-group'u (base/sampler/normal/MR/emissive/AO/params-uniform);
+      `MaterialParams` GPU struct (32B); `MaterialDefaults` paylaşımlı 1×1 fallback (flat-normal + white-linear).
+- [x] GLTF loader normal/MR/emissive/AO map'lerini + faktörleri bağlıyor (per-image sRGB↔linear sınıflandırma).
+- [ ] (opsiyonel) spot-light gölgesi + ışık limiti — YAPILMADI.
+- [~] Deliverable `material_demo`: shader/layout/loader hazır + naga+pipeline testli; GÖRSEL A/B insan
+      gerektirir (normal+MR bir glTF'te gözle doğrulanmalı). KHR_materials_emissive_strength ve per-texture
+      sampler ayarları henüz uygulanmadı.
 
-### M7.2 — Gameplay sistemlerini bağla + car_demo çöz — etki: YÜKSEK · çaba: orta
+### M7.2 — Gameplay sistemlerini bağla + car_demo çöz — etki: YÜKSEK · çaba: orta  🟢 KISMEN (2026-07-09)
 Mevcut derin fiziği (Pacejka lastik, KCC) kullanılabilir kılar.
-- [ ] `VehicleControllerSystem` + `CharacterControllerSystem` → schedule'a kayıtlı ECS sistemleri (şu an elle sürülüyor).
-- [ ] car_demo sürüşü/geometrisi (collider-merkez vs görsel base-origin + süspansiyon rest_length).
-- [ ] Ragdoll runtime: iskelet tanımından body+joint spawn eden sistem → rigid eklemlerine bağla.
-- [ ] ABA multibody + GPU FEM için net karar: motora bağla ya da "deneysel" işaretle (GPU FEM CPU'dan sapmış: damping/floor/J-cutoff senkronla veya kaldır).
-- Deliverable: sürülebilir araç + yürüyen karakter + düşen ragdoll demoları.
+- [x] `vehicle_controller_system` + `character_controller_system` → `Phase::Physics`'te
+      `physics_step_system` ÖNCESİNE kayıtlı ECS sistemleri (`gizmo-physics-dynamics/systems.rs` +
+      `gizmo-app/gameplay.rs::GameplayPhysicsPlugin`). Query deseni `physics_step_system` ile birebir
+      (exclusive-barrier `fn(&World,f32)` + `query_unchecked` + `iter_mut`); component'i olmayan
+      entity'de no-op → determinizm oracle DEĞİŞMEDİ (57FA0A2E8313B7A2).
+- [~] car_demo: main'in GELİŞMİŞ `VehicleController` kurulumu (Pacejka + Ackermann + anti-roll +
+      tork eğrisi, COM/collider süspansiyon-ışını self-hit'e karşı ayarlı) KORUNDU. Sürüş/geometri
+      son doğrulaması hâlâ EKRANDA GÖZLE yapılmalı (gated). *(Not: eski arcade-Vehicle geometri denemesi
+      main'in daha gelişmiş sürümü lehine ELENDİ.)*
+- [x] Ragdoll runtime: `spawn_ragdoll` / `RagdollBuilder::spawn` iskelet tanımından body+capsule+joint
+      spawn edip `PhysicsWorld`'e bağlıyor (humanoid 11 body/10 joint; yerçekiminde NaN'sız düşer, testli).
+- [ ] ABA multibody + GPU FEM kararı — YAPILMADI (deneysel-işaretleme/senkron ayrı iş).
+- [~] Deliverable: yürüyen karakter + düşen ragdoll sistemleri + testleri hazır; sürülebilir araç
+      demosu ekranda doğrulama bekliyor.
 
-### M7.3 — Animasyon olgunlaşması — etki: ORTA-YÜKSEK · çaba: orta
-- [ ] Two-bone IK (+ opsiyonel FABRIK).
-- [ ] Scale track'lerini koru (şu an atılıyor); cubic-spline gerçek tangent.
-- [ ] İki `AnimationPlayer` tipini birleştir; skeletal sampling'i renderer'dan animation crate'ine taşı.
+### M7.3 — Animasyon olgunlaşması — etki: ORTA-YÜKSEK · çaba: orta  🟢 KISMEN (2026-07-09)
+- [x] Two-bone IK (analitik law-of-cosines, `solve_two_bone_ik` + `TwoBoneIkChain` component) +
+      FABRIK (N-kemik iteratif). `register` artık `TwoBoneIkChain`'i de kaydediyor.
+- [x] Scale track'leri korunuyor (`gizmo-animation` sampler'ı Scale'i birinci-sınıf kanal olarak
+      örnekleyip `Transform::scale`'e yazıyor) + Step/Linear/CubicSpline modları + gerçek glTF in/out
+      tangent'li cubic Hermite (bounds-checked, malformed'da linear'e düşer). Ayırt edici testler.
+- [ ] İki `AnimationPlayer` tipini birleştir; skeletal sampling'i renderer'dan animation crate'ine
+      taşı — ERTELENDİ. ⚠️ Bu yüzden `gizmo-animation`'daki scale/cubic iyileştirmeleri, renderer'ın
+      KENDİ skeletal yolu (`gizmo-renderer/src/animation_system.rs:298` scale'i atar, `animation.rs:54`
+      cubic'i linear'e düşürür) hâlâ eskisi olduğundan RENDER EDİLEN iskelete henüz ulaşmıyor
+      (crate-arası birleştirme gerekir).
 
 ### M7.4 — Netcode ürünleştirme — etki: YÜKSEK · çaba: yüksek
 Rollback güçlü; client-server "ürün" değil.
