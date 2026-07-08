@@ -407,7 +407,7 @@ mod tests {
                 let mut variants: Vec<(&str, String)> = Vec::new();
                 if src.contains("#import") || src.contains("#ifdef") || src.contains("#{") {
                     variants.push(("native", shaders::compose_wgsl(src, name, shaders::native_render_defs())));
-                    if web_path.contains(&name) {
+                    if web_path.contains(name) {
                         variants.push(("web", shaders::compose_wgsl(src, name, shaders::web_render_defs())));
                     }
                 } else {

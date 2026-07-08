@@ -345,6 +345,13 @@ mod tests {
     use super::*;
     use crate::Analyzer;
 
+    // NOTE: `Context::run` / `CentralPanel::show` are deprecated in egui 0.34 (in
+    // favour of `run_ui` / `show_inside`), but they still work and are the
+    // simplest way to drive one headless frame in a test. Migrating the egui
+    // API surface is a separate maintenance pass (tracked with the gizmo-analysis
+    // editor-panel work), so we allow the deprecation here rather than risk
+    // changing behaviour in an unrelated test helper.
+    #[allow(deprecated)]
     fn run_panel(analyzer: &Analyzer) {
         let ctx = egui::Context::default();
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
