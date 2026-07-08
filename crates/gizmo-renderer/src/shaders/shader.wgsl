@@ -1,9 +1,11 @@
-struct LightData {
-    position:  vec4<f32>,  // xyz=pos, w=intensity
-    color:     vec4<f32>,  // rgb=color, a=radius
-    direction: vec4<f32>,  // xyz=dir (spot/directional), w=inner_cutoff_cos
-    params:    vec4<f32>,  // x=outer_cutoff_cos, y=light_type (0=point,1=spot,2=dir)
-};
+// SceneUniforms, LightData and the core BRDF (D_GGX/V_SmithJointGGX/F_Schlick/
+// compute_direct_lighting) come from gizmo::common, composed by load_shader_composed
+// (native) / load_shader_composed_web (web). The forward shader diverges from the deferred
+// path only in bind-group layout: WebGPU caps groups at 4, so the CSM shadow group is
+// dropped on web. That divergence is expressed at the SOURCE via `#ifdef SHADOWS` (shadow
+// bindings + PCF block) and `@group(#{SKELETON_GROUP})` / `@group(#{INSTANCE_GROUP})`
+// (3/4 native, 2/3 web) — never by grepping naga's reformatted output.
+#import gizmo::common::{SceneUniforms, compute_direct_lighting}
 
 // Inverse of a 3x3 matrix for correct normal transformation under non-uniform scale
 fn inverse_transpose_3x3(m: mat3x3<f32>) -> mat3x3<f32> {
@@ -19,30 +21,16 @@ fn inverse_transpose_3x3(m: mat3x3<f32>) -> mat3x3<f32> {
     );
 }
 
-struct SceneUniforms {
-    view_proj: mat4x4<f32>,
-    camera_pos: vec4<f32>,
-    sun_direction: vec4<f32>,
-    sun_color: vec4<f32>,
-    lights: array<LightData, 10>,
-    light_view_proj: array<mat4x4<f32>, 4>,
-    cascade_splits: vec4<f32>,
-    camera_forward: vec4<f32>,
-    cascade_params: vec4<f32>,
-    num_lights: u32,
-    _pad_scene: vec3<u32>,
-};
-
-
-
 @group(0) @binding(0)
 var<uniform> scene: SceneUniforms;
 
+#ifdef SHADOWS
 @group(2) @binding(0)
 var t_shadow: texture_depth_2d_array;
 
 @group(2) @binding(1)
 var s_shadow: sampler_comparison;
+#endif
 
 @group(1) @binding(0)
 var t_diffuse: texture_2d<f32>;
@@ -52,7 +40,7 @@ var s_diffuse: sampler;
 struct SkeletonData {
     joints: array<mat4x4<f32>, 128>, // Maksimum 128 kemik destegi
 };
-@group(3) @binding(0)
+@group(#{SKELETON_GROUP}) @binding(0)
 var<uniform> skeleton: SkeletonData;
 
 struct InstanceData {
@@ -64,7 +52,7 @@ struct InstanceData {
     pbr: vec4<f32>,
 };
 
-@group(4) @binding(0)
+@group(#{INSTANCE_GROUP}) @binding(0)
 var<storage, read> instances: array<InstanceData>;
 
 struct VertexInput {
@@ -148,59 +136,8 @@ fn select_cascade(view_depth: f32) -> u32 {
     return 3u;
 }
 
-fn D_GGX(NoH: f32, roughness: f32) -> f32 {
-    let a = roughness * roughness;
-    let a2 = a * a;
-    let denom = NoH * NoH * (a2 - 1.0) + 1.0;
-    return a2 / (3.1415926535 * denom * denom);
-}
-
-fn V_SmithJointGGX(NoV: f32, NoL: f32, roughness: f32) -> f32 {
-    let a = roughness * roughness;
-    let a2 = a * a;
-    let lambdaV = NoL * sqrt(NoV * NoV * (1.0 - a2) + a2);
-    let lambdaL = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);
-    return 0.5 / max(lambdaV + lambdaL, 0.0001);
-}
-
-fn F_Schlick(VoH: f32, f0: vec3<f32>) -> vec3<f32> {
-    return f0 + (vec3<f32>(1.0) - f0) * pow(clamp(1.0 - VoH, 0.0, 1.0), 5.0);
-}
-
-fn compute_direct_lighting(
-    N: vec3<f32>, 
-    V: vec3<f32>, 
-    L: vec3<f32>, 
-    albedo: vec3<f32>, 
-    roughness: f32, 
-    metallic: f32, 
-    f0: vec3<f32>, 
-    light_color: vec3<f32>, 
-    intensity: f32, 
-    atten: f32
-) -> vec3<f32> {
-    let H = normalize(V + L);
-    let NoL = max(dot(N, L), 0.0);
-    let NoV = max(dot(N, V), 0.001);
-    let NoH = max(dot(N, H), 0.0);
-    let VoH = max(dot(V, H), 0.0);
-
-    if (NoL <= 0.0) {
-        return vec3<f32>(0.0);
-    }
-
-    let D = D_GGX(NoH, roughness);
-    let Vis = V_SmithJointGGX(NoV, NoL, roughness);
-    let F = F_Schlick(VoH, f0);
-
-    let kS = F;
-    let kD = (vec3<f32>(1.0) - kS) * (1.0 - metallic);
-
-    let diffuse = kD * albedo * NoL;
-    let specular = D * Vis * F * NoL;
-
-    return (diffuse + specular) * light_color * intensity * atten;
-}
+// D_GGX / V_SmithJointGGX / F_Schlick / compute_direct_lighting are imported from
+// gizmo::common (see the #import at the top). Only forward-specific code stays local.
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -224,6 +161,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // --- CSM Gölge (PCF) --- 
     // textureSampleCompare uniform control flow gerektirir, non-uniform branch'tan önce hesapla
     var shadow_visibility = 1.0;
+#ifdef SHADOWS
     if (scene.sun_direction.w > 0.5) {
         let view_depth = dot(in.world_position - scene.camera_pos.xyz, scene.camera_forward.xyz);
         let ci = select_cascade(view_depth);
@@ -254,6 +192,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             shadow_visibility = pcf_visibility / 9.0;
         }
     }
+#endif
 
     // Eger bu obje 'unlit' ise isiklari es gec
     if (in.inst_pbr.z > 1.5) {

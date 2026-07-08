@@ -1,6 +1,6 @@
 
 use crate::deferred::DeferredState;
-use crate::pipeline::{load_shader, SceneState};
+use crate::pipeline::{load_shader, load_shader_composed, SceneState};
 
 pub struct VolumetricState {
     pub volumetric_texture: wgpu::Texture,
@@ -220,7 +220,7 @@ impl VolumetricState {
         scene: &SceneState,
         bgl: &wgpu::BindGroupLayout,
     ) -> wgpu::RenderPipeline {
-        let shader = load_shader(
+        let shader = load_shader_composed(
             device,
             "demo/assets/shaders/volumetric.wgsl",
             include_str!("shaders/volumetric.wgsl"),

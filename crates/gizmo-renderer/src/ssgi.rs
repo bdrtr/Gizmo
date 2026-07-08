@@ -1,5 +1,5 @@
 use crate::deferred::DeferredState;
-use crate::pipeline::{load_shader, SceneState};
+use crate::pipeline::{load_shader, load_shader_composed, SceneState};
 
 pub struct SsgiState {
     pub ssgi_texture: wgpu::Texture,
@@ -71,6 +71,7 @@ impl SsgiState {
             &deferred.normal_roughness_view,
             &deferred.world_position_view,
             &linear_sampler,
+            &deferred.albedo_metallic_view,
         );
 
         let blur_bind_group = Self::mk_blur_bg(device, &blur_bgl, &ssgi_view, &linear_sampler);
@@ -122,6 +123,7 @@ impl SsgiState {
             &deferred.normal_roughness_view,
             &deferred.world_position_view,
             &self.linear_sampler,
+            &deferred.albedo_metallic_view,
         );
         self.blur_bind_group = Self::mk_blur_bg(device, &self.blur_bgl, &v1, &self.linear_sampler);
         self.apply_bind_group =
@@ -199,6 +201,18 @@ impl SsgiState {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                // binding 4: albedo (RT0.rgb) — receiver surface colour, so gathered GI is
+                // tinted/absorbed by the surface it lands on instead of applied untinted.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -258,6 +272,7 @@ impl SsgiState {
         nrm: &wgpu::TextureView,
         pos: &wgpu::TextureView,
         samp: &wgpu::Sampler,
+        albedo: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ssgi_bg"),
@@ -278,6 +293,10 @@ impl SsgiState {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(samp),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(albedo),
                 },
             ],
         })
@@ -332,7 +351,7 @@ impl SsgiState {
         scene: &SceneState,
         bgl: &wgpu::BindGroupLayout,
     ) -> wgpu::RenderPipeline {
-        let shader = load_shader(
+        let shader = load_shader_composed(
             device,
             "demo/assets/shaders/ssgi.wgsl",
             include_str!("shaders/ssgi.wgsl"),

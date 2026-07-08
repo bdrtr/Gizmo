@@ -1,23 +1,6 @@
-struct LightData {
-    position:  vec4<f32>,  // xyz=pos, w=intensity
-    color:     vec4<f32>,  // rgb=color, a=radius
-    direction: vec4<f32>,  // xyz=dir (spot/directional), w=inner_cutoff_cos
-    params:    vec4<f32>,  // x=outer_cutoff_cos, y=light_type (0=point,1=spot,2=dir)
-};
-
-struct SceneUniforms {
-    view_proj: mat4x4<f32>,
-    camera_pos: vec4<f32>,
-    sun_direction: vec4<f32>,
-    sun_color: vec4<f32>,
-    lights: array<LightData, 10>,
-    light_view_proj: array<mat4x4<f32>, 4>,
-    cascade_splits: vec4<f32>,
-    camera_forward: vec4<f32>,
-    cascade_params: vec4<f32>,
-    num_lights: u32,
-    _pad_scene: vec3<u32>,
-};
+// SceneUniforms from gizmo::common. Shadow group is native-only (#ifdef SHADOWS);
+// skeleton/instance from #{SKELETON_GROUP}/#{INSTANCE_GROUP} (3/4 native, 2/3 web).
+#import gizmo::common::{SceneUniforms}
 
 @group(0) @binding(0)
 var<uniform> scene: SceneUniforms;
@@ -27,14 +10,16 @@ var t_diffuse: texture_2d<f32>;
 @group(1) @binding(1)
 var s_diffuse: sampler;
 
-// Shadow bg
+// Shadow bg — declared to match the native 5-group layout (unused by sky); dropped on web.
+#ifdef SHADOWS
 @group(2) @binding(0) var t_shadow: texture_depth_2d_array;
 @group(2) @binding(1) var s_shadow: sampler_comparison;
+#endif
 
 struct SkeletonData {
     joints: array<mat4x4<f32>, 128>,
 };
-@group(3) @binding(0)
+@group(#{SKELETON_GROUP}) @binding(0)
 var<uniform> skeleton: SkeletonData;
 
 struct InstanceData {
@@ -46,7 +31,7 @@ struct InstanceData {
     pbr: vec4<f32>,
 };
 
-@group(4) @binding(0)
+@group(#{INSTANCE_GROUP}) @binding(0)
 var<storage, read> instances: array<InstanceData>;
 
 struct VertexInput {

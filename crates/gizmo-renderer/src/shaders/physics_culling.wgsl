@@ -1,23 +1,5 @@
-struct LightData {
-    position:  vec4<f32>,
-    color:     vec4<f32>,
-    direction: vec4<f32>,
-    params:    vec4<f32>,
-}
-
-struct SceneUniforms {
-    view_proj: mat4x4<f32>,
-    camera_pos: vec4<f32>,
-    sun_direction: vec4<f32>,
-    sun_color: vec4<f32>,
-    lights: array<LightData, 10>,
-    light_view_proj: array<mat4x4<f32>, 4>,
-    cascade_splits: vec4<f32>,
-    camera_forward: vec4<f32>,
-    cascade_params: vec4<f32>,
-    num_lights: u32,
-    _pad_scene: vec3<u32>,
-}
+// SceneUniforms shared from gizmo::common (composed by load_shader_composed).
+#import gizmo::common::{SceneUniforms}
 
 struct SimParams {
     dt: f32,

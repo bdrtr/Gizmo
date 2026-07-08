@@ -702,7 +702,9 @@ fn main() {
                     dof_focus_dist: state.dof_focus_dist,
                     dof_focus_range: state.dof_focus_range,
                     dof_blur_size: state.dof_blur_size,
-                    _padding: [0.0; 3],
+                    cam_near: 0.1,
+                    cam_far: 2000.0,
+                    _padding: 0.0,
                 },
             );
 

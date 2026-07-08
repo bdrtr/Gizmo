@@ -109,11 +109,11 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     return out;
 }
 
-// G-Buffer output:
+// G-Buffer output (4 MRTs fit the 32 bytes/sample color-attachment budget: 4+8+8+8=28):
 //   RT0  albedo_metallic  Rgba8Unorm   — rgb=albedo,  a=metallic
 //   RT1  normal_roughness Rgba16Float  — rgb=normal,  a=roughness
-//   RT2  world_position   Rgba32Float  — rgb=pos,     a=AO (1.0 default)
-//   RT3  world_tangent    Rgba16Float  — rgb=tangent, a=handedness
+//   RT2  world_position   Rgba16Float  — rgb=pos,     a=written-flag + packed subsurface/anisotropy
+//   RT3  world_tangent    Rgba16Float  — rgb=tangent, a=handedness + packed clear-coat
 struct GBufferOut {
     @location(0) albedo_metallic:  vec4<f32>,
     @location(1) normal_roughness: vec4<f32>,

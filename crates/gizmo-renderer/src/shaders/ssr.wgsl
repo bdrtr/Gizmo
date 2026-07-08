@@ -1,25 +1,6 @@
 // SSR Raymarching Shader
-
-struct SceneUniforms {
-    view_proj:       mat4x4<f32>,
-    camera_pos:      vec4<f32>,
-    sun_direction:   vec4<f32>,
-    sun_color:       vec4<f32>,
-    lights:          array<vec4<f32>, 40>,
-    light_view_proj: array<mat4x4<f32>, 4>,
-    cascade_splits:  vec4<f32>,
-    camera_forward:  vec4<f32>,
-    cascade_params:  vec4<f32>,
-    num_lights: u32,
-    exposure: f32,
-    _pre_align_pad: vec2<u32>,
-    _align_pad: vec3<u32>,
-    environment_blend_t: f32,
-    environment_preset: u32,
-    point_shadows_enabled: u32,
-    environment_preset_2: u32,
-    shading_mode: u32,
-};
+// SceneUniforms shared from gizmo::common (composed by load_shader_composed).
+#import gizmo::common::{SceneUniforms}
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 
@@ -68,8 +49,14 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         current_pos += R * step_size;
         
         let clip_pos = scene.view_proj * vec4(current_pos, 1.0);
+        // Guard the perspective divide: once the ray marches behind the camera clip_pos.w
+        // goes negative, the divide flips signs and a point behind the viewer can fold back
+        // into [-1,1] NDC and register as a false reflection hit.
+        if (clip_pos.w <= 0.0) {
+            break;
+        }
         let ndc = clip_pos.xyz / clip_pos.w;
-        
+
         if (ndc.x < -1.0 || ndc.x > 1.0 || ndc.y < -1.0 || ndc.y > 1.0 || ndc.z < 0.0 || ndc.z > 1.0) {
             break; // Out of screen
         }

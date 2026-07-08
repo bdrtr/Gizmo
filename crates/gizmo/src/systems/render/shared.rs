@@ -33,6 +33,11 @@ pub struct SceneLights {
     /// shader signals "sun present" through `sun_direction.w` (1.0 vs 0.0); this
     /// carries that bit so the studio path stays behaviourally identical.
     pub has_sun: bool,
+    /// Index into `lights` of the point light that owns the single point-shadow cube,
+    /// or `-1` when there is no point light. There is only one point-shadow cubemap, so
+    /// exactly one point light casts; the caller renders that light's cube and the shader
+    /// only samples it for this index (avoids applying one cube to every point light).
+    pub shadow_point_index: i32,
 }
 
 /// Collect the scene's dynamic lights (point + spot, capped at 10) and the sun.
@@ -65,6 +70,8 @@ pub fn collect_scene_lights(world: &World) -> SceneLights {
         params: [0.0; 4],
     }; 10];
     let mut num_lights = 0usize;
+    // The first collected point light owns the single point-shadow cube.
+    let mut shadow_point_index: i32 = -1;
 
     if let Some(q) = world.query::<&PointLight>() {
         for (e, light) in q.iter() {
@@ -72,6 +79,9 @@ pub fn collect_scene_lights(world: &World) -> SceneLights {
                 break;
             }
             let Some((pos, _)) = world_tf(e) else { continue };
+            if shadow_point_index < 0 {
+                shadow_point_index = num_lights as i32;
+            }
             lights[num_lights] = LightData {
                 position: [pos.x, pos.y, pos.z, light.intensity],
                 color: [light.color.x, light.color.y, light.color.z, light.radius],
@@ -129,6 +139,7 @@ pub fn collect_scene_lights(world: &World) -> SceneLights {
         sun_dir,
         sun_col,
         has_sun,
+        shadow_point_index,
     }
 }
 
@@ -190,5 +201,22 @@ mod tests {
         assert_eq!(l.lights[1].params[1], 1.0, "spot light packed second");
         // Spot position came from its Transform (GlobalTransform-less) fallback.
         assert_eq!(l.lights[1].position, [1.0, 2.0, 3.0, 7.0]);
+        // The point light (index 0) owns the single point-shadow cube.
+        assert_eq!(l.shadow_point_index, 0, "first point light is the shadow caster");
+    }
+
+    // With no point light there is no point-shadow caster: the index must be -1 so the
+    // shader (which reads caster_index + 1) sees 0 = "no point shadow this frame" and the
+    // caller skips rendering the cube.
+    #[test]
+    fn no_point_light_has_no_shadow_caster() {
+        let mut world = World::new();
+        let s = world.spawn();
+        world.add_component(s, GlobalTransform::default());
+        world.add_component(s, SpotLight::new(Vec3::ONE, 7.0, 20.0, 0.3, 0.5));
+
+        let l = collect_scene_lights(&world);
+        assert_eq!(l.num_lights, 1);
+        assert_eq!(l.shadow_point_index, -1, "no point light → no point-shadow caster");
     }
 }

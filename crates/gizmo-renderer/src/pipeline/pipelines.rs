@@ -2,8 +2,10 @@
 
 use super::layouts::LayoutRefs;
 use super::shaders::load_shader;
+#[cfg(not(target_arch = "wasm32"))]
+use super::shaders::load_shader_composed;
 #[cfg(target_arch = "wasm32")]
-use super::shaders::load_shader_web;
+use super::shaders::load_shader_composed_web;
 use crate::gpu_types::Vertex;
 
 pub(super) struct CorePipelines {
@@ -45,54 +47,54 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
     });
 
     #[cfg(not(target_arch = "wasm32"))]
-    let shader = load_shader(
+    let shader = load_shader_composed(
         device,
         "demo/assets/shaders/shader.wgsl",
         include_str!("../shaders/shader.wgsl"),
         "Shader",
     );
     #[cfg(target_arch = "wasm32")]
-    let shader = load_shader_web(device, include_str!("../shaders/shader.wgsl"), "Shader");
+    let shader = load_shader_composed_web(device, include_str!("../shaders/shader.wgsl"), "Shader");
 
     #[cfg(not(target_arch = "wasm32"))]
-    let unlit_shader = load_shader(
+    let unlit_shader = load_shader_composed(
         device,
         "demo/assets/shaders/unlit.wgsl",
         include_str!("../shaders/unlit.wgsl"),
         "Unlit Shader",
     );
     #[cfg(target_arch = "wasm32")]
-    let unlit_shader = load_shader_web(device, include_str!("../shaders/unlit.wgsl"), "Unlit Shader");
+    let unlit_shader = load_shader_composed_web(device, include_str!("../shaders/unlit.wgsl"), "Unlit Shader");
 
     #[cfg(not(target_arch = "wasm32"))]
-    let water_shader = load_shader(
+    let water_shader = load_shader_composed(
         device,
         "demo/assets/shaders/water.wgsl",
         include_str!("../shaders/water.wgsl"),
         "Water Shader",
     );
     #[cfg(target_arch = "wasm32")]
-    let water_shader = load_shader_web(device, include_str!("../shaders/water.wgsl"), "Water Shader");
+    let water_shader = load_shader_composed_web(device, include_str!("../shaders/water.wgsl"), "Water Shader");
 
     #[cfg(not(target_arch = "wasm32"))]
-    let sky_shader = load_shader(
+    let sky_shader = load_shader_composed(
         device,
         "demo/assets/shaders/sky.wgsl",
         include_str!("../shaders/sky.wgsl"),
         "Sky Shader",
     );
     #[cfg(target_arch = "wasm32")]
-    let sky_shader = load_shader_web(device, include_str!("../shaders/sky.wgsl"), "Sky Shader");
+    let sky_shader = load_shader_composed_web(device, include_str!("../shaders/sky.wgsl"), "Sky Shader");
 
     #[cfg(not(target_arch = "wasm32"))]
-    let grid_shader = load_shader(
+    let grid_shader = load_shader_composed(
         device,
         "demo/assets/shaders/grid.wgsl",
         include_str!("../shaders/grid.wgsl"),
         "Grid Shader",
     );
     #[cfg(target_arch = "wasm32")]
-    let grid_shader = load_shader_web(device, include_str!("../shaders/grid.wgsl"), "Grid Shader");
+    let grid_shader = load_shader_composed_web(device, include_str!("../shaders/grid.wgsl"), "Grid Shader");
 
     let create_main = |sm: &wgpu::ShaderModule,
                        label: &str,

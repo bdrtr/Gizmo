@@ -1,5 +1,5 @@
 use crate::gpu_types::Vertex;
-use crate::pipeline::{load_shader, SceneState};
+use crate::pipeline::{load_shader, load_shader_composed, SceneState};
 
 // Single source of truth for the deferred G-buffer render-target formats.
 //
@@ -12,6 +12,14 @@ use crate::pipeline::{load_shader, SceneState};
 // the formats can never silently drift apart again.
 pub const GBUFFER_ALBEDO_METALLIC_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 pub const GBUFFER_NORMAL_ROUGHNESS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+// World position is Rgba16Float and CANNOT be upgraded to Rgba32Float: the four G-buffer
+// MRTs share a `max_color_attachment_bytes_per_sample` budget of 32 (the WebGPU-guaranteed
+// limit). Current cost: 4 (albedo Rgba8) + 8 (normal Rgba16F) + 8 (position Rgba16F) +
+// 8 (tangent Rgba16F) = 28 ≤ 32. Rgba32Float position would make it 36 > 32 and wgpu
+// rejects the pipeline. Half-float world position therefore trades some precision far from
+// the origin (shadow swimming, and the packed subsurface+anisotropy in .w can quantise the
+// anisotropy fraction when subsurface > 0) for fitting the budget — a deliberate tradeoff,
+// not an oversight. (The gbuffer.wgsl header comment claiming Rgba32Float was stale.)
 pub const GBUFFER_WORLD_POSITION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const GBUFFER_WORLD_TANGENT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
@@ -421,7 +429,7 @@ impl DeferredState {
         scene: &SceneState,
         gbuffer_layout: &wgpu::BindGroupLayout,
     ) -> wgpu::RenderPipeline {
-        let shader = load_shader(
+        let shader = load_shader_composed(
             device,
             "demo/assets/shaders/deferred_lighting.wgsl",
             include_str!("shaders/deferred_lighting.wgsl"),

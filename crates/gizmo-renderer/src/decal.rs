@@ -1,5 +1,5 @@
 use crate::deferred::DeferredState;
-use crate::pipeline::{load_shader, SceneState};
+use crate::pipeline::{load_shader_composed, SceneState};
 use wgpu::util::DeviceExt;
 
 pub struct DecalState {
@@ -25,7 +25,7 @@ pub struct DecalUniforms {
 
 impl DecalState {
     pub fn new(device: &wgpu::Device, scene: &SceneState, deferred: &DeferredState) -> Self {
-        let shader = load_shader(
+        let shader = load_shader_composed(
             device,
             "crates/gizmo-renderer/src/shaders/decal.wgsl",
             include_str!("shaders/decal.wgsl"),
@@ -105,7 +105,11 @@ impl DecalState {
                     Some(wgpu::ColorTargetState {
                         format: crate::deferred::GBUFFER_ALBEDO_METALLIC_FORMAT,
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
+                        // RGB only: RT0.a is the METALLIC channel, not alpha. Writing the
+                        // decal's coverage/fade into .a (ColorWrites::ALL) alpha-blends it
+                        // into metallic, so a decal on a dielectric surface turned the patch
+                        // dark and metallic. Preserve the underlying metallic.
+                        write_mask: wgpu::ColorWrites::COLOR,
                     }),
                 ],
             }),

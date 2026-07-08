@@ -1,5 +1,5 @@
 use crate::deferred::DeferredState;
-use crate::pipeline::{load_shader, SceneState};
+use crate::pipeline::{load_shader, load_shader_composed, SceneState};
 
 pub struct SsrState {
     pub ssr_texture: wgpu::Texture,
@@ -251,7 +251,7 @@ impl SsrState {
         scene: &SceneState,
         bgl: &wgpu::BindGroupLayout,
     ) -> wgpu::RenderPipeline {
-        let shader = load_shader(
+        let shader = load_shader_composed(
             device,
             "demo/assets/shaders/ssr.wgsl",
             include_str!("shaders/ssr.wgsl"),

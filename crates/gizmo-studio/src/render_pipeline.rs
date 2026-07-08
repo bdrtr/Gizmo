@@ -686,7 +686,9 @@ fn sync_editor_settings(world: &gizmo::core::World, renderer: &mut gizmo::render
         dof_focus_dist: 10.0,
         dof_focus_range: 20.0,
         dof_blur_size: 2.0,
-        _padding: [0.0; 3],
+        cam_near: 0.1,
+        cam_far: 2000.0,
+        _padding: 0.0,
     };
 
     if let Some(ed_state) = world.get_resource::<gizmo::editor::EditorState>() {

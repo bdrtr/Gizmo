@@ -2,10 +2,9 @@
 // Reads world-space bounding spheres, tests against the view-projection frustum,
 // and writes instance_count (0 = culled, 1 = visible) to the indirect draw buffer.
 
-struct SceneUniforms {
-    view_proj: mat4x4<f32>,
-    // remaining fields present in the buffer but unused here
-};
+// SceneUniforms shared from gizmo::common (composed by load_shader_composed). Binds the
+// global 1104-byte uniform buffer; only view_proj is read here.
+#import gizmo::common::{SceneUniforms}
 
 struct MeshBounds {
     world_center: vec3<f32>,

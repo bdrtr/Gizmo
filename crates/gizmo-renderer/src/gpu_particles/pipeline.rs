@@ -75,10 +75,13 @@ pub fn create_particle_pipelines(
         cache: None,
     });
 
-    let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Particle Render Shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/particle_render.wgsl").into()),
-    });
+    // Composed so particle_render.wgsl can `#import gizmo::common::{SceneUniforms}`.
+    let render_shader = crate::pipeline::load_shader_composed(
+        device,
+        "crates/gizmo-renderer/src/shaders/particle_render.wgsl",
+        include_str!("../shaders/particle_render.wgsl"),
+        "Particle Render Shader",
+    );
 
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Particle Render Pipeline Layout"),
