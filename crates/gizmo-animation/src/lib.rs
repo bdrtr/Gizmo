@@ -15,6 +15,7 @@
 //! dependency-light entry point) on a [`World`]/[`Schedule`] directly.
 
 pub mod clip;
+pub mod ik;
 pub mod player;
 pub mod skeletal;
 pub mod system;
@@ -23,14 +24,16 @@ use gizmo_core::system::{IntoSystemConfig, Schedule};
 use gizmo_core::world::World;
 
 /// Registers the animation components ([`player::AnimationPlayer`],
-/// [`player::Animated`]) and schedules [`system::animation_system`] to run before
-/// transform propagation, on a [`World`]/[`Schedule`] directly.
+/// [`player::Animated`], [`ik::TwoBoneIkChain`]) and schedules
+/// [`system::animation_system`] to run before transform propagation, on a
+/// [`World`]/[`Schedule`] directly.
 ///
 /// This is the **dependency-light** entry point — it needs only `gizmo-core`, so
 /// it works without `gizmo-app`.
 pub fn register(world: &mut World, schedule: &mut Schedule) {
     world.register_component_type::<player::AnimationPlayer>();
     world.register_component_type::<player::Animated>();
+    world.register_component_type::<ik::TwoBoneIkChain>();
     schedule.add_di_system(
         system::animation_system
             .into_config()

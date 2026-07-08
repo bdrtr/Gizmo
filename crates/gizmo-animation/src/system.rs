@@ -8,6 +8,18 @@ use gizmo_physics_core::Transform;
 use crate::player::AnimationPlayer;
 use crate::clip::InterpolatedValue;
 
+/// Write a sampled [`InterpolatedValue`] onto a [`Transform`]. Each channel maps
+/// to its own TRS field; scale is applied just like translation and rotation
+/// (dropping it here is the classic "scale animation does nothing" bug).
+pub fn apply_interpolated(transform: &mut Transform, value: InterpolatedValue) {
+    match value {
+        InterpolatedValue::Translation(v) => transform.position = v,
+        InterpolatedValue::Rotation(q) => transform.rotation = q,
+        InterpolatedValue::Scale(s) => transform.scale = s,
+        InterpolatedValue::None => {}
+    }
+}
+
 /// ECS system that advances every [`AnimationPlayer`], resolves track targets by
 /// name within each player's hierarchy, and applies sampled values to the
 /// targeted [`Transform`]s.
@@ -89,20 +101,50 @@ pub fn animation_system(
                 let interpolated = track.sample(player.elapsed_time);
                 
                 if let Some((mut transform, _)) = transforms.get_mut(target_id) {
-                    match interpolated {
-                        InterpolatedValue::Translation(v) => {
-                            transform.position = v;
-                        }
-                        InterpolatedValue::Rotation(q) => {
-                            transform.rotation = q;
-                        }
-                        InterpolatedValue::Scale(s) => {
-                            transform.scale = s;
-                        }
-                        InterpolatedValue::None => {}
-                    }
+                    apply_interpolated(&mut transform, interpolated);
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::clip::{Interpolation, Keyframes, Track};
+    use gizmo_math::Vec3;
+
+    /// End-to-end (sample -> apply) proof that a non-uniform scale track reaches
+    /// the output pose. This FAILS if `apply_interpolated` drops the `Scale`
+    /// channel (the historical "scale tracks ignored" bug).
+    #[test]
+    fn sampled_scale_reaches_transform() {
+        let track = Track::new(
+            "bone",
+            vec![0.0, 1.0],
+            Keyframes::Scale(vec![Vec3::new(1.0, 1.0, 1.0), Vec3::new(2.0, 4.0, 8.0)]),
+        )
+        .expect("valid track")
+        .with_interpolation(Interpolation::Linear);
+
+        let mut transform = Transform::default();
+        assert_eq!(transform.scale, Vec3::ONE, "sanity: starts at unit scale");
+
+        apply_interpolated(&mut transform, track.sample(0.5));
+
+        assert!(
+            (transform.scale - Vec3::new(1.5, 2.5, 4.5)).length() < 1e-4,
+            "non-uniform scale must reach the transform, got {:?}",
+            transform.scale
+        );
+    }
+
+    #[test]
+    fn apply_translation_and_rotation_channels() {
+        let mut t = Transform::default();
+        apply_interpolated(&mut t, InterpolatedValue::Translation(Vec3::new(5.0, 6.0, 7.0)));
+        assert_eq!(t.position, Vec3::new(5.0, 6.0, 7.0));
+        apply_interpolated(&mut t, InterpolatedValue::None);
+        assert_eq!(t.position, Vec3::new(5.0, 6.0, 7.0), "None is a no-op");
     }
 }
