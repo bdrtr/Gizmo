@@ -28,6 +28,14 @@ struct SkeletonData {
     joints: array<mat4x4<f32>, 128>,
 };
 
+// Per-material scalar params (group 1, binding 6). Mirrors `gpu_types::MaterialParams`.
+struct MaterialParams {
+    // xyz = emissive factor (linear), w = normal-map scale.
+    emissive_and_normal_scale: vec4<f32>,
+    // x = occlusion (AO) strength; yzw reserved.
+    occlusion_and_pad: vec4<f32>,
+};
+
 struct InstanceData {
     model_matrix_0: vec4<f32>,
     model_matrix_1: vec4<f32>,
@@ -59,8 +67,13 @@ struct VertexOutput {
 };
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
-@group(1) @binding(0) var t_diffuse: texture_2d<f32>;
-@group(1) @binding(1) var s_diffuse: sampler;
+@group(1) @binding(0) var t_diffuse:  texture_2d<f32>;
+@group(1) @binding(1) var s_diffuse:  sampler;
+@group(1) @binding(2) var t_normal:   texture_2d<f32>;
+@group(1) @binding(3) var t_mr:       texture_2d<f32>;  // g=roughness, b=metallic
+@group(1) @binding(4) var t_emissive: texture_2d<f32>;
+@group(1) @binding(5) var t_ao:       texture_2d<f32>;  // r=occlusion
+@group(1) @binding(6) var<uniform> material: MaterialParams;
 @group(3) @binding(0) var<uniform> skeleton: SkeletonData;
 @group(4) @binding(0) var<storage, read> instances: array<InstanceData>;
 
@@ -130,23 +143,54 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
     let final_alpha = in.inst_albedo.a * tex_color.a;
     // if (final_alpha < 0.5) { discard; }
 
+    // ── Geometric tangent basis (TBN) ─────────────────────────────────────
     var raw_normal = in.normal;
     if (length(raw_normal) < 0.001) { raw_normal = vec3<f32>(0.0, 1.0, 0.0); }
-    let N = normalize(raw_normal);
+    let geo_N = normalize(raw_normal);
 
     var raw_tangent = in.world_tangent.xyz;
     if (length(raw_tangent) < 0.001) {
-        if (abs(N.x) > 0.9) {
-            raw_tangent = cross(vec3<f32>(0.0, 1.0, 0.0), N);
+        if (abs(geo_N.x) > 0.9) {
+            raw_tangent = cross(vec3<f32>(0.0, 1.0, 0.0), geo_N);
         } else {
-            raw_tangent = cross(vec3<f32>(1.0, 0.0, 0.0), N);
+            raw_tangent = cross(vec3<f32>(1.0, 0.0, 0.0), geo_N);
         }
     }
-    let T = normalize(raw_tangent);
+    // Gram-Schmidt re-orthogonalise the tangent against the (interpolated) normal.
+    let T = normalize(raw_tangent - geo_N * dot(geo_N, raw_tangent));
+    let B = cross(geo_N, T) * sign(in.world_tangent.w);
 
-    let albedo   = in.inst_albedo.rgb * tex_color.rgb;
-    let metallic = clamp(in.inst_pbr.y, 0.0, 1.0);
-    let roughness = clamp(in.inst_pbr.x, 0.05, 1.0);
+    // ── Normal map (tangent-space → world) ────────────────────────────────
+    // Flat-default map (0.5,0.5,1.0) → (0,0,1) → geometric normal unchanged.
+    let normal_scale = material.emissive_and_normal_scale.w;
+    var ts_normal = textureSample(t_normal, s_diffuse, in.tex_coords).xyz * 2.0 - 1.0;
+    ts_normal = vec3<f32>(ts_normal.xy * normal_scale, max(ts_normal.z, 1e-4));
+    ts_normal = normalize(ts_normal);
+    let N = normalize(T * ts_normal.x + B * ts_normal.y + geo_N * ts_normal.z);
+
+    // ── Metallic-roughness map (glTF: factor × texture) ───────────────────
+    // White-default map → sampled g=b=1 → scalar factors preserved.
+    let mr = textureSample(t_mr, s_diffuse, in.tex_coords);
+    let roughness = clamp(in.inst_pbr.x * mr.g, 0.05, 1.0);
+    let metallic  = clamp(in.inst_pbr.y * mr.b, 0.0, 1.0);
+
+    // ── Ambient occlusion (glTF: 1 + strength·(ao-1)) ─────────────────────
+    // White-default map (r=1) → ao=1 → no darkening.
+    let ao_strength = material.occlusion_and_pad.x;
+    let ao = 1.0 + ao_strength * (textureSample(t_ao, s_diffuse, in.tex_coords).r - 1.0);
+
+    // ── Emissive (glTF: emissiveFactor × texture) ─────────────────────────
+    // White-default map × zero factor → no emission.
+    let emissive = material.emissive_and_normal_scale.xyz
+                 * textureSample(t_emissive, s_diffuse, in.tex_coords).rgb;
+
+    // Base albedo, modulated by AO, then emissive added.
+    // NOTE (deferred, MRT-budget): the G-buffer has no free channel for AO or
+    // emissive, so AO is folded into albedo and emissive is added to albedo.
+    // Emissive therefore reads as extra diffuse energy (lit + LDR-clamped) rather
+    // than as a true unlit HDR glow — see report for the trade-off.
+    var albedo = in.inst_albedo.rgb * tex_color.rgb;
+    albedo = albedo * ao + emissive;
 
     // Unpack anisotropy, clear_coat, and subsurface from in.inst_pbr.w (packed_params)
     let subsurface_raw = floor(in.inst_pbr.w / 1000000.0) / 100.0;

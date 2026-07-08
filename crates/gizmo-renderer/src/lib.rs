@@ -85,7 +85,8 @@ pub use deferred::{
 pub use gi::{LightProbe, ProbeGrid, SHCoeffs};
 pub use gpu_cull::{DrawIndirectArgs, GpuCullState, MeshBoundsRaw};
 pub use gpu_types::{
-    InstanceRaw, LightData, PostProcessUniforms, SceneUniforms, ShadowVsUniform, Vertex,
+    InstanceRaw, LightData, MaterialParams, PostProcessUniforms, SceneUniforms, ShadowVsUniform,
+    Vertex,
 };
 pub use hot_reload::AssetWatcher;
 pub use pipeline::SceneState;

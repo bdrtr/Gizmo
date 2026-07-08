@@ -161,11 +161,24 @@ impl super::AssetManager {
         images: Vec<gltf::image::Data>,
     ) -> Result<GltfSceneAsset, AssetError> {
         // ── 1. Textures ───────────────────────────────────────────────────
-        let gltf_textures =
-            self.upload_gltf_textures(device, queue, texture_bind_group_layout, file_path, &images);
+        // Classify each image by usage so colour maps (base/emissive) are uploaded
+        // as sRGB while data maps (normal/MR/AO) stay linear, then upload.
+        self.ensure_material_defaults(device, queue);
+        let srgb_flags = classify_gltf_image_srgb(&document, images.len());
+        let gpu_images = upload_gltf_images(device, queue, file_path, &images, &srgb_flags);
 
         // ── 2. Materials ──────────────────────────────────────────────────
-        let gltf_materials = build_gltf_materials(&document, &gltf_textures, &default_tbind);
+        let defaults = self
+            .material_defaults()
+            .expect("material defaults ensured above");
+        let gltf_materials = build_gltf_materials(
+            device,
+            texture_bind_group_layout,
+            &document,
+            &gpu_images,
+            defaults,
+            &default_tbind,
+        );
 
         // ── 3. Node tree ──────────────────────────────────────────────────
         let mut roots = Vec::new();
@@ -206,91 +219,6 @@ impl super::AssetManager {
             animations,
             skeletons,
         })
-    }
-
-    // ── glTF — texture upload ────────────────────────────────────────────────
-
-    fn upload_gltf_textures(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        texture_bind_group_layout: &wgpu::BindGroupLayout,
-        file_path: &str,
-        images: &[gltf::image::Data],
-    ) -> Vec<(Arc<wgpu::BindGroup>, String)> {
-        let mut gltf_textures = Vec::with_capacity(images.len());
-
-        for (i, image) in images.iter().enumerate() {
-            let (width, height) = (image.width, image.height);
-
-            // Convert every format to RGBA8 for uniform GPU handling.
-            let rgba: Vec<u8> = convert_image_to_rgba8(image, i, file_path);
-
-            let texture_size = wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            };
-
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                size: texture_size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                label: Some(&format!("{file_path}_tex_{i}")),
-                view_formats: &[],
-            });
-
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &rgba,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4 * width),
-                    rows_per_image: Some(height),
-                },
-                texture_size,
-            );
-
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-                address_mode_u: wgpu::AddressMode::Repeat,
-                address_mode_v: wgpu::AddressMode::Repeat,
-                address_mode_w: wgpu::AddressMode::Repeat,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::MipmapFilterMode::Linear,
-                ..Default::default()
-            });
-
-            let bg = Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("{file_path}_bg_{i}")),
-                layout: texture_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                ],
-            }));
-
-            let tex_source = format!("gltf_tex_{file_path}_{i}");
-            self.texture_cache.insert(tex_source.clone(), bg.clone());
-            gltf_textures.push((bg, tex_source));
-        }
-
-        gltf_textures
     }
 
     // ── glTF — node parsing ───────────────────────────────────────────────────
@@ -600,26 +528,208 @@ fn compute_flat_normals(vertices: &mut [Vertex]) {
 //  Free helpers — material building
 // ============================================================================
 
+/// A GPU-resident glTF image.  Holds the [`wgpu::Texture`] alongside its view so
+/// the texture outlives every material bind group that references the view.
+struct GpuImage {
+    // Kept alive so views remain valid; not read directly.
+    #[allow(dead_code)]
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
+/// Decide, per image index, whether it must be uploaded as sRGB.
+///
+/// Base-colour and emissive textures are colour data (sRGB); normal,
+/// metallic-roughness and occlusion textures are linear data and must NOT be
+/// gamma-decoded.  An image used as a colour map anywhere wins the sRGB vote.
+fn classify_gltf_image_srgb(document: &gltf::Document, num_images: usize) -> Vec<bool> {
+    let mut is_srgb = vec![false; num_images];
+    let mut mark = |idx: usize| {
+        if idx < is_srgb.len() {
+            is_srgb[idx] = true;
+        }
+    };
+    for material in document.materials() {
+        let pbr = material.pbr_metallic_roughness();
+        if let Some(ti) = pbr.base_color_texture() {
+            mark(ti.texture().source().index());
+        }
+        if let Some(ti) = material.emissive_texture() {
+            mark(ti.texture().source().index());
+        }
+    }
+    is_srgb
+}
+
+/// Upload every glTF image to the GPU with the correct colour space, returning
+/// index-aligned [`GpuImage`]s.
+fn upload_gltf_images(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    file_path: &str,
+    images: &[gltf::image::Data],
+    srgb_flags: &[bool],
+) -> Vec<GpuImage> {
+    let mut out = Vec::with_capacity(images.len());
+
+    for (i, image) in images.iter().enumerate() {
+        let (width, height) = (image.width, image.height);
+        let rgba: Vec<u8> = convert_image_to_rgba8(image, i, file_path);
+
+        let texture_size = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+
+        let format = if srgb_flags.get(i).copied().unwrap_or(true) {
+            wgpu::TextureFormat::Rgba8UnormSrgb
+        } else {
+            wgpu::TextureFormat::Rgba8Unorm
+        };
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            size: texture_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            label: Some(&format!("{file_path}_tex_{i}")),
+            view_formats: &[],
+        });
+
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * width),
+                rows_per_image: Some(height),
+            },
+            texture_size,
+        );
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        out.push(GpuImage { texture, view });
+    }
+
+    out
+}
+
 fn build_gltf_materials(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
     document: &gltf::Document,
-    gltf_textures: &[(Arc<wgpu::BindGroup>, String)],
+    gpu_images: &[GpuImage],
+    defaults: &crate::asset::MaterialDefaults,
     default_tbind: &Arc<wgpu::BindGroup>,
 ) -> Vec<Material> {
+    // Real textures are sampled bilinear + repeating.
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("gltf_material_sampler"),
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        address_mode_w: wgpu::AddressMode::Repeat,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest, // single mip level
+        ..Default::default()
+    });
+
     document
         .materials()
         .map(|material| {
             let pbr = material.pbr_metallic_roughness();
             let base_color = pbr.base_color_factor();
 
-            let mut mat = pbr
+            // Resolve each map's image view (or the neutral default).
+            let base_view = pbr
                 .base_color_texture()
-                .and_then(|ti| gltf_textures.get(ti.texture().source().index()))
-                .map(|(bg, src)| {
-                    let mut m = Material::new(bg.clone());
-                    m.texture_source = Some(src.clone());
-                    m
-                })
-                .unwrap_or_else(|| Material::new(default_tbind.clone()));
+                .and_then(|ti| gpu_images.get(ti.texture().source().index()))
+                .map(|img| &img.view)
+                .unwrap_or(&defaults.white_view);
+            let normal_view = material
+                .normal_texture()
+                .and_then(|nt| gpu_images.get(nt.texture().source().index()))
+                .map(|img| &img.view)
+                .unwrap_or(&defaults.flat_normal_view);
+            let mr_view = pbr
+                .metallic_roughness_texture()
+                .and_then(|ti| gpu_images.get(ti.texture().source().index()))
+                .map(|img| &img.view)
+                .unwrap_or(&defaults.white_view);
+            let emissive_view = material
+                .emissive_texture()
+                .and_then(|ti| gpu_images.get(ti.texture().source().index()))
+                .map(|img| &img.view)
+                .unwrap_or(&defaults.white_view);
+            let ao_view = material
+                .occlusion_texture()
+                .and_then(|ot| gpu_images.get(ot.texture().source().index()))
+                .map(|img| &img.view)
+                .unwrap_or(&defaults.white_view);
+
+            let has_base = pbr.base_color_texture().is_some();
+            let has_any_map = has_base
+                || material.normal_texture().is_some()
+                || pbr.metallic_roughness_texture().is_some()
+                || material.emissive_texture().is_some()
+                || material.occlusion_texture().is_some();
+
+            // Per-material scalar params (glTF factors that modulate the maps).
+            // NOTE: KHR_materials_emissive_strength is not surfaced by the enabled
+            // gltf features, so HDR emissive strength > 1 is not applied here.
+            let emissive = material.emissive_factor();
+            let normal_scale = material.normal_texture().map(|nt| nt.scale()).unwrap_or(1.0);
+            let occlusion_strength = material
+                .occlusion_texture()
+                .map(|ot| ot.strength())
+                .unwrap_or(1.0);
+            let params =
+                crate::gpu_types::MaterialParams::new(emissive, normal_scale, occlusion_strength);
+            let is_default_params =
+                emissive == [0.0, 0.0, 0.0] && normal_scale == 1.0 && occlusion_strength == 1.0;
+
+            // Fast path: no textures and neutral params → reuse the shared white
+            // fallback bind group. Otherwise assemble a dedicated one.
+            let bind_group = if !has_any_map && is_default_params {
+                default_tbind.clone()
+            } else {
+                let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!(
+                        "gltf_material_params_{}",
+                        material.index().unwrap_or(usize::MAX)
+                    )),
+                    contents: bytemuck::cast_slice(&[params]),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+                super::AssetManager::assemble_material_bind_group(
+                    device,
+                    layout,
+                    base_view,
+                    &sampler,
+                    normal_view,
+                    mr_view,
+                    emissive_view,
+                    ao_view,
+                    &params_buffer,
+                    &format!("gltf_material_{}", material.index().unwrap_or(usize::MAX)),
+                )
+            };
+
+            let mut mat = Material::new(bind_group);
+            if has_base {
+                mat.texture_source = Some(format!(
+                    "gltf_tex_base_{}",
+                    material.index().unwrap_or(usize::MAX)
+                ));
+            }
 
             let mat_name = material.name().unwrap_or("").to_lowercase();
             let is_glass = mat_name.contains("glass");
