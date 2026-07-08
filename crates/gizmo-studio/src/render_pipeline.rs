@@ -2,10 +2,21 @@ use crate::StudioState;
 use gizmo::prelude::*;
 use std::cell::RefCell;
 
+// The pointer triple identifies mesh + texture bind group + skeleton, but the
+// texture bind group is cached and SHARED across distinct materials (default
+// white texture, same file), so two materials differing only in material type
+// would collide into one batch and inherit the first-iterated material's
+// `is_skybox`/`is_grid`/`is_unlit`. Those flags gate shadow casting and pass
+// routing (e.g. line ~759 skips unlit/skybox/grid in the shadow pass), so a real
+// PBR object batched under an unlit-first batch would silently stop casting
+// shadows. Keying on the routing flags too keeps them apart.
 type BatchKey = (
     *const wgpu::Buffer,
     *const wgpu::BindGroup,
     *const wgpu::BindGroup,
+    bool, // is_skybox
+    bool, // is_grid
+    bool, // is_unlit
 );
 
 struct BatchData {
@@ -386,6 +397,15 @@ pub fn execute_render_pipeline(
                 let bg_ptr = std::sync::Arc::as_ptr(&mat.bind_group);
                 let skel_ptr = std::sync::Arc::as_ptr(&skel_bg);
 
+                // Routing flags — part of the batch key (see BatchKey docs) so a
+                // shared cached texture bind group can't merge materials that route
+                // or cast shadows differently.
+                let is_skybox =
+                    mat.material_type == gizmo::renderer::components::MaterialType::Skybox;
+                let is_grid = mat.material_type == gizmo::renderer::components::MaterialType::Grid;
+                let is_unlit =
+                    mat.material_type == gizmo::renderer::components::MaterialType::Unlit;
+
                 let batches = if mat.is_transparent {
                     &mut *transparent_batches
                 } else if mat.is_double_sided {
@@ -395,7 +415,7 @@ pub fn execute_render_pipeline(
                 };
 
                 let batch = batches
-                    .entry((vbuf_ptr, bg_ptr, skel_ptr))
+                    .entry((vbuf_ptr, bg_ptr, skel_ptr, is_skybox, is_grid, is_unlit))
                     .or_insert_with(|| BatchData {
                         vbuf: active_mesh.vbuf.clone(),
                         vertex_count: active_mesh.vertex_count,
@@ -403,12 +423,9 @@ pub fn execute_render_pipeline(
                         skeleton_bg: skel_bg,
                         instances: vec_pool.pop().unwrap_or_else(|| Vec::with_capacity(32)),
                         shadow_instances: Vec::new(),
-                        is_skybox: mat.material_type
-                            == gizmo::renderer::components::MaterialType::Skybox,
-                        is_grid: mat.material_type
-                            == gizmo::renderer::components::MaterialType::Grid,
-                        is_unlit: mat.material_type
-                            == gizmo::renderer::components::MaterialType::Unlit,
+                        is_skybox,
+                        is_grid,
+                        is_unlit,
                     });
 
                 if camera_visible {

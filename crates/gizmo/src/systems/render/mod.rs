@@ -53,11 +53,23 @@ pub struct DrawItem {
     camera_count: u32,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct BatchKey {
     vbuf_id: usize,
     mat_id: usize,
     skeleton_id: Option<usize>,
+    // Pass-routing flags MUST be part of the key. `mat_id` is the material's
+    // *texture* bind-group pointer, which the asset manager caches and shares
+    // across distinct materials (e.g. the default white texture, or the same
+    // file). Two materials that differ only in transparency / material type would
+    // otherwise collide into one batch, and the batch would inherit whichever
+    // entity the (unordered) ECS iteration hit first — so a transparent object
+    // could render opaque, or a PBR object route through the unlit path, and
+    // *which* one corrupts flips between frames. Keying on the routing flags keeps
+    // same-routing instances batched while separating ones that render differently.
+    is_transparent: bool,
+    unlit: bool,
+    is_skybox: bool,
 }
 
 pub(crate) struct BatchData {
@@ -397,22 +409,31 @@ pub fn default_render_pass(
                     _padding: packed_params,
                 };
                 let skel_bg = $skeleton.map(|s: &crate::renderer::components::Skeleton| s.bind_group.clone());
-                
+
+                // Compute the pass-routing flags up front so they can be part of the
+                // batch key (see BatchKey docs) — not just read from the first material.
+                let is_skybox = $mat.material_type == crate::renderer::components::MaterialType::Skybox;
+                let unlit = is_skybox
+                    || $mat.material_type == crate::renderer::components::MaterialType::Unlit;
+                let is_transparent = $mat.is_transparent || $mat.albedo.w < 0.99;
+
                 let key = BatchKey {
                     vbuf_id: std::sync::Arc::as_ptr(&active_vbuf) as usize,
                     mat_id: std::sync::Arc::as_ptr(&$mat.bind_group) as usize,
                     skeleton_id: skel_bg.as_ref().map(|bg| std::sync::Arc::as_ptr(bg) as usize),
+                    is_transparent,
+                    unlit,
+                    is_skybox,
                 };
 
                 let batch = cache.batches.entry(key).or_insert_with(|| BatchData {
                     vbuf: active_vbuf.clone(),
                     bind_group: $mat.bind_group.clone(),
                     vertex_count: active_vertex_count,
-                    unlit: $mat.material_type == crate::renderer::components::MaterialType::Unlit
-                        || $mat.material_type == crate::renderer::components::MaterialType::Skybox,
-                    is_skybox: $mat.material_type == crate::renderer::components::MaterialType::Skybox,
+                    unlit,
+                    is_skybox,
                     skeleton_bind_group: skel_bg,
-                    is_transparent: $mat.is_transparent || $mat.albedo.w < 0.99,
+                    is_transparent,
                     instances: Vec::new(),
                     shadow_instances: Vec::new(),
                 });
@@ -653,6 +674,49 @@ pub use shared::{collect_scene_lights, SceneLights};
 /// pipeline (cull → batch → shadow/deferred/forward → post), so a regression in the
 /// pass-recording split (or any pass) that drops geometry fails here instead of slipping
 /// past CI. Needs a GPU adapter; runs in GPU-backed CI/dev.
+#[cfg(test)]
+mod batch_key_tests {
+    use super::BatchKey;
+
+    // Regression: two materials that share a cached texture bind group (same
+    // `mat_id`) and mesh (same `vbuf_id`) but route differently must NOT collide
+    // into one batch — otherwise the batch inherits the first-iterated material's
+    // transparency / lighting classification (a transparent object rendering
+    // opaque, or a PBR object routed through the unlit path). The routing flags
+    // are part of the key precisely to keep these apart while still batching
+    // identical materials together.
+    #[test]
+    fn routing_flags_distinguish_batches_sharing_a_texture() {
+        let base = BatchKey {
+            vbuf_id: 1,
+            mat_id: 42, // same cached texture bind group as the variants below
+            skeleton_id: None,
+            is_transparent: false,
+            unlit: false,
+            is_skybox: false,
+        };
+        let transparent = BatchKey {
+            is_transparent: true,
+            ..base.clone()
+        };
+        let unlit = BatchKey {
+            unlit: true,
+            ..base.clone()
+        };
+        let skybox = BatchKey {
+            is_skybox: true,
+            ..base.clone()
+        };
+
+        assert_ne!(base, transparent, "opaque and transparent must be separate batches");
+        assert_ne!(base, unlit, "PBR and unlit must be separate batches");
+        assert_ne!(base, skybox, "PBR and skybox must be separate batches");
+
+        // Identical routing + shared texture/mesh → same batch (instancing preserved).
+        assert_eq!(base, base.clone(), "identical materials must still batch together");
+    }
+}
+
 #[cfg(test)]
 mod golden_render_tests {
     use super::default_render_pass;
