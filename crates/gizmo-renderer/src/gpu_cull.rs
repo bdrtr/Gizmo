@@ -117,7 +117,7 @@ impl GpuCullState {
             ],
         });
 
-        let shader = crate::pipeline::load_shader(
+        let shader = crate::pipeline::load_shader_composed(
             device,
             "demo/assets/shaders/mesh_cull.wgsl",
             include_str!("shaders/mesh_cull.wgsl"),

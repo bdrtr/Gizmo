@@ -15,6 +15,13 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 wgpu = { version = "29", features = ["fragile-send-sync-non-atomic-wasm", "webgl"] }
+# Shader module composition (#import / #define) so shared structs (SceneUniforms,
+# LightData) and BRDF helpers live in one common.wgsl instead of being hand-copied into
+# 20+ shaders. We compose to a naga::Module then emit WGSL text (wgpu 29 lacks the
+# `naga-ir` feature and the WASM path still post-processes WGSL text), so `naga` is a
+# direct dep pinned to the same 29.x wgpu uses, with the WGSL front/back ends enabled.
+naga_oil = "0.22"
+naga = { version = "29", features = ["wgsl-in", "wgsl-out"] }
 log = "0.4"
 pollster = "0.3"
 winit = { workspace = true }

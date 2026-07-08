@@ -155,7 +155,9 @@ pub fn build_post_process_resources(
             dof_focus_dist: 15.0,
             dof_focus_range: 25.0,
             dof_blur_size: 0.0, // Disable focus depth blur to prevent thin gizmo lines from washing out
-            _padding: [0.0; 3],
+            cam_near: 0.1,
+            cam_far: 2000.0,
+            _padding: 0.0,
         }]),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });

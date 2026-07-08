@@ -2,10 +2,9 @@
 // Reads world-space normals and positions from the G-buffer, samples a
 // hemisphere oriented along the surface normal, and outputs an AO factor.
 
-struct SceneUniforms {
-    view_proj:  mat4x4<f32>,
-    camera_pos: vec4<f32>,
-};
+// SceneUniforms shared from gizmo::common (composed by load_shader_composed). SSAO binds
+// the global uniform (scene.global_bind_group) and reads only view_proj / camera_pos.
+#import gizmo::common::{SceneUniforms}
 
 struct SsaoKernel {
     samples: array<vec4<f32>, 16>,

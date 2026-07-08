@@ -95,7 +95,11 @@ pub struct PostProcessUniforms {
     pub dof_focus_dist: f32,
     pub dof_focus_range: f32,
     pub dof_blur_size: f32,
-    pub _padding: [f32; 3],
+    // Active camera near/far, so DoF depth linearization matches the real projection
+    // instead of hardcoded 0.1/1000 (miscalibrated CoC for any other far plane).
+    pub cam_near: f32,
+    pub cam_far: f32,
+    pub _padding: f32,
 }
 
 /// Uniform block for the shadow pass vertex shader only (one cascade matrix per draw).

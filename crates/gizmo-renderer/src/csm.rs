@@ -172,3 +172,65 @@ pub fn directional_cascade_view_projs(
     }
     mats
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Pure, deterministic, GPU-free coverage of the CSM cascade math (the CPU core of the
+    // directional-shadow path). Complements the headless golden render test, which can't
+    // reliably frame a shadow, and the compose/exposure tests, without any adapter.
+    #[test]
+    fn cascade_splits_are_monotonic_and_bounded() {
+        let splits = cascade_split_distances(0.1, 100.0, CASCADE_LAMBDA);
+        for i in 1..CASCADE_COUNT {
+            assert!(splits[i] > splits[i - 1], "splits must strictly increase: {splits:?}");
+        }
+        assert!(splits[0] > 0.1, "first split must be beyond the near plane: {splits:?}");
+        assert!(
+            (splits[CASCADE_COUNT - 1] - 100.0).abs() < 1e-3,
+            "last split must equal the shadow far distance: {splits:?}"
+        );
+        assert!(splits.iter().all(|s| s.is_finite()), "splits must be finite: {splits:?}");
+    }
+
+    #[test]
+    fn cascade_splits_handle_degenerate_range() {
+        // far <= near must be clamped (near + epsilon), never NaN/inf or a panic.
+        let splits = cascade_split_distances(1.0, 0.5, CASCADE_LAMBDA);
+        assert!(
+            splits.iter().all(|s| s.is_finite()),
+            "degenerate range produced non-finite splits: {splits:?}"
+        );
+        for i in 1..CASCADE_COUNT {
+            assert!(splits[i] >= splits[i - 1], "splits must stay non-decreasing when clamped");
+        }
+    }
+
+    #[test]
+    fn directional_cascades_produce_finite_matrices() {
+        // SHADOW_DISTANCE caps the covered range even for a huge camera far plane.
+        let c = compute_directional_cascades(
+            Vec3::ZERO,
+            Vec3::new(0.0, 0.0, -1.0),
+            16.0 / 9.0,
+            std::f32::consts::FRAC_PI_4,
+            0.1,
+            1500.0,
+            Vec3::new(0.3, -1.0, 0.2),
+        );
+        for (i, m) in c.view_projs.iter().enumerate() {
+            assert!(
+                m.to_cols_array().iter().all(|v| v.is_finite()),
+                "cascade {i} light-view-proj has non-finite entries"
+            );
+        }
+        assert!(c.splits.iter().all(|s| s.is_finite()));
+        // Shadow range is capped at SHADOW_DISTANCE, not the 1500 camera far plane.
+        assert!(
+            c.splits[CASCADE_COUNT - 1] <= SHADOW_DISTANCE + 1e-3,
+            "cascades must not stretch past SHADOW_DISTANCE: {:?}",
+            c.splits
+        );
+    }
+}

@@ -801,7 +801,7 @@ dependencies = [
  "image",
  "js-sys",
  "naga 23.1.0",
- "naga_oil",
+ "naga_oil 0.16.0",
  "nonmax",
  "offset-allocator",
  "send_wrapper",
@@ -1355,6 +1355,17 @@ checksum = "3538270d33cc669650c4b093848450d380def10c331d38c768e34cac80576e6e"
 dependencies = [
  "termcolor",
  "unicode-width 0.1.14",
+]
+
+[[package]]
+name = "codespan-reporting"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe6d2e5af09e8c8ad56c969f2157a3d4238cebc7c55f0a517728c38f7b200f81"
+dependencies = [
+ "serde",
+ "termcolor",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -2589,6 +2600,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gizmo-analysis"
+version = "0.2.0"
+dependencies = [
+ "egui",
+ "gizmo-app",
+ "gizmo-core",
+ "gizmo-physics-rigid",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "gizmo-animation"
 version = "0.2.0"
 dependencies = [
@@ -2697,6 +2720,7 @@ dependencies = [
  "criterion 0.5.1",
  "egui",
  "gizmo-ai",
+ "gizmo-analysis",
  "gizmo-animation",
  "gizmo-app",
  "gizmo-audio",
@@ -2823,6 +2847,8 @@ dependencies = [
  "js-sys",
  "log",
  "meshopt",
+ "naga 29.0.3",
+ "naga_oil 0.22.0",
  "notify",
  "pollster 0.3.0",
  "rand 0.9.4",
@@ -3958,6 +3984,7 @@ dependencies = [
  "log",
  "num-traits",
  "once_cell",
+ "pp-rs",
  "rustc-hash 1.1.0",
  "spirv 0.4.0+sdk-1.4.341.0",
  "thiserror 2.0.18",
@@ -3980,6 +4007,23 @@ dependencies = [
  "regex-syntax",
  "rustc-hash 1.1.0",
  "thiserror 1.0.69",
+ "tracing",
+ "unicode-ident",
+]
+
+[[package]]
+name = "naga_oil"
+version = "0.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "319f03062940ed85c03da020042618356bb8ca5263020322930883b05e30208e"
+dependencies = [
+ "codespan-reporting 0.12.0",
+ "data-encoding",
+ "indexmap",
+ "naga 29.0.3",
+ "regex",
+ "rustc-hash 1.1.0",
+ "thiserror 2.0.18",
  "tracing",
  "unicode-ident",
 ]

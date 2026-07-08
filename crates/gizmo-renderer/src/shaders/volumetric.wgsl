@@ -1,25 +1,7 @@
 // Volumetric Lighting Shader (God Rays)
-
-struct LightData {
-    position:  vec4<f32>,
-    color:     vec4<f32>,
-    direction: vec4<f32>,
-    params:    vec4<f32>,
-};
-
-struct SceneUniforms {
-    view_proj:       mat4x4<f32>,
-    camera_pos:      vec4<f32>,
-    sun_direction:   vec4<f32>,
-    sun_color:       vec4<f32>,
-    lights:          array<LightData, 10>,
-    light_view_proj: array<mat4x4<f32>, 4>,
-    cascade_splits:  vec4<f32>,
-    camera_forward:  vec4<f32>,
-    cascade_params:  vec4<f32>,
-    num_lights: u32,
-    _pad: vec3<u32>,
-};
+// SceneUniforms, LightData and inverse_mat4 come from gizmo::common (composed in by
+// load_shader_composed). Only volumetric-specific helpers stay local.
+#import gizmo::common::{SceneUniforms, LightData, inverse_mat4}
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 
@@ -80,21 +62,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let cam_pos = scene.camera_pos.xyz;
     
     // ── Ray Direction Reconstruction ──
-    let aspect = 1280.0 / 720.0; 
-    let fov_factor = 0.414; // tan(pi/8) approx
-    let ndc = vec2<f32>(in.screen_uv.x * 2.0 - 1.0, (1.0 - in.screen_uv.y) * 2.0 - 1.0);
-    
-    var cam_right = normalize(cross(scene.camera_forward.xyz, vec3<f32>(0.0, 1.0, 0.0)));
-    if (length(cam_right) < 0.001) {
-        cam_right = normalize(cross(scene.camera_forward.xyz, vec3<f32>(0.0, 0.0, 1.0)));
-    }
-    let cam_up = cross(cam_right, scene.camera_forward.xyz);
-    
-    let ray_dir_reconstructed = normalize(
-        scene.camera_forward.xyz +
-        ndc.x * fov_factor * aspect * cam_right +
-        ndc.y * fov_factor * cam_up
-    );
+    // Unproject the pixel through the inverse view-projection instead of assuming a
+    // fixed 1280x720 / 45°-FOV camera. The old hardcoded aspect + fov_factor produced
+    // the wrong world ray on any other resolution or FOV, throwing the sky god-rays off
+    // in the wrong direction — exactly where they are most visible.
+    let ndc = vec2<f32>(in.screen_uv.x * 2.0 - 1.0, 1.0 - in.screen_uv.y * 2.0);
+    let inv_vp = inverse_mat4(scene.view_proj);
+    let near_h = inv_vp * vec4<f32>(ndc, 0.0, 1.0);
+    let near_world = near_h.xyz / near_h.w;
+    let ray_dir_reconstructed = normalize(near_world - cam_pos);
 
     var target_pos = pos_sample.xyz;
     var ray_dir = ray_dir_reconstructed;

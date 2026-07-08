@@ -1,7 +1,7 @@
 use wgpu::util::DeviceExt;
 
 use crate::deferred::DeferredState;
-use crate::pipeline::{load_shader, SceneState};
+use crate::pipeline::{load_shader, load_shader_composed, SceneState};
 
 const KERNEL_SIZE: usize = 16;
 const NOISE_SIZE: u32 = 4;
@@ -533,7 +533,7 @@ fn mk_ssao_pipeline(
     scene: &SceneState,
     gbuf_bgl: &wgpu::BindGroupLayout,
 ) -> wgpu::RenderPipeline {
-    let shader = load_shader(
+    let shader = load_shader_composed(
         device,
         "demo/assets/shaders/ssao.wgsl",
         include_str!("shaders/ssao.wgsl"),

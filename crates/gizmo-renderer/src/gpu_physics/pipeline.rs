@@ -220,10 +220,13 @@ pub fn create_physics_pipelines(
         cache: None,
     });
 
-    let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Physics Render Shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/physics_render.wgsl").into()),
-    });
+    // Composed so physics_render.wgsl can `#import gizmo::common::{SceneUniforms}`.
+    let render_shader = crate::pipeline::load_shader_composed(
+        device,
+        "crates/gizmo-renderer/src/shaders/physics_render.wgsl",
+        include_str!("../shaders/physics_render.wgsl"),
+        "Physics Render Shader",
+    );
 
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Physics Render Pipeline Layout"),
@@ -338,10 +341,13 @@ pub fn create_physics_pipelines(
         label: Some("physics_culling_bind_group"),
     });
 
-    let culling_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Physics Culling Shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/physics_culling.wgsl").into()),
-    });
+    // Composed so physics_culling.wgsl can `#import gizmo::common::{SceneUniforms}`.
+    let culling_shader = crate::pipeline::load_shader_composed(
+        device,
+        "crates/gizmo-renderer/src/shaders/physics_culling.wgsl",
+        include_str!("../shaders/physics_culling.wgsl"),
+        "Physics Culling Shader",
+    );
 
     let culling_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Physics Culling Pipeline Layout"),

@@ -29,3 +29,18 @@ categories = ["game-engines"]
 winit = "0.30"
 mimalloc = { version = "0.1", default-features = false }
 proptest = "1"
+
+# Dev derleme profili. Demo binary'leri bevy/wgpu/egui'nin TAMAMINI statik linkliyor ve
+# tam DWARF debug bilgisi her ~500MB binary'nin ~yarısıydı; ~40 demo × her yeniden-derlemenin
+# target/debug/deps'te biriken eski kopyası target/'ı 600G+'a şişirmişti (ve dev binary'lerinde
+# linker'ı çökertiyordu). Aşağıdaki iki ayar SADECE debug bilgisini etkiler; kod üretimini
+# (yani ÇALIŞMA HIZINI) belirleyen opt-level'a DOKUNULMADI → runtime performansı birebir aynı,
+# derleme/linkleme ise biraz daha hızlı. Tek ödün: debugger'da değişken-seviyesi inceleme.
+[profile.dev]
+# Backtrace/panik için dosya:satır çözümünü korur, değişken-seviyesi DWARF'ı atar (binary'nin
+# en büyük parçası). Bunu bırakmak derlemeyi hafif hızlandırır.
+debug = "line-tables-only"
+# Debug bilgisini binary'ye gömmek yerine ayrı .o dosyalarında tut → linklenen binary çok daha
+# küçük ve linkleme daha hızlı (Linux). (Not: binary'i başka yere taşırsan .o'lar gitmediği için
+# sembolleri kaybeder — yerinde çalıştırmada sorun yok.)
+split-debuginfo = "unpacked"

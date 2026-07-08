@@ -240,9 +240,13 @@ impl ProbeGrid {
                 ..Default::default()
             };
 
-            // Directional lights
+            // Directional lights. `dir` is the light's TRAVEL direction (sun above → -Y),
+            // matching the engine's sun_direction convention. add_directional_light wants the
+            // incident direction (toward the source), so negate — exactly what the point-light
+            // path below already does with `to_light`. Without the negation an overhead sun lit
+            // down-facing normals and left the floor top dark (physically inverted).
             for &(dir, color, intensity) in directional_lights {
-                coeffs.add_directional_light(dir, color * intensity);
+                coeffs.add_directional_light(-dir, color * intensity);
             }
 
             // Point lights (probe'a göre yön ve uzaklık hesapla)
@@ -403,10 +407,18 @@ mod tests {
         // Tüm probe'lar bake edilmiş olmalı
         assert!(grid.probes.iter().all(|p| p.is_baked));
 
-        // Sample al
+        // Sample al. Güneş yukarıdan aşağı (travel = -Y) vurduğuna göre YUKARI bakan yüzey
+        // (güneşe dönük) en aydınlık, aşağı bakan yüzeyden daha parlak olmalı.
         let sampled = grid.sample(Vec3::new(0.0, 2.5, 0.0));
+        let up_irr = sampled.evaluate(Vec3::new(0.0, 1.0, 0.0));
         let down_irr = sampled.evaluate(Vec3::new(0.0, -1.0, 0.0));
-        assert!(down_irr.x > 0.0, "Bake sonrası irradiance pozitif olmalı");
+        assert!(up_irr.x > 0.0, "Bake sonrası yukarı bakan yüzey aydınlık olmalı");
+        assert!(
+            up_irr.x > down_irr.x,
+            "Yukarıdan gelen güneş: yukarı bakan yüzey ({}) aşağıdan ({}) daha aydınlık olmalı",
+            up_irr.x,
+            down_irr.x
+        );
     }
 
     #[test]

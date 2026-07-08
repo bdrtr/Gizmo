@@ -1,23 +1,6 @@
-struct LightData {
-    position:  vec4<f32>,  // xyz=pos, w=intensity
-    color:     vec4<f32>,  // rgb=color, a=radius
-    direction: vec4<f32>,  // xyz=dir (spot/directional), w=inner_cutoff_cos
-    params:    vec4<f32>,  // x=outer_cutoff_cos, y=light_type (0=point,1=spot,2=dir)
-};
-
-struct SceneUniforms {
-    view_proj: mat4x4<f32>,
-    camera_pos: vec4<f32>, // w = light_time (Zaman Degiskeni)
-    sun_direction: vec4<f32>,
-    sun_color: vec4<f32>,
-    lights: array<LightData, 10>,
-    light_view_proj: array<mat4x4<f32>, 4>,
-    cascade_splits: vec4<f32>,
-    camera_forward: vec4<f32>,
-    cascade_params: vec4<f32>,
-    num_lights: u32,
-    _pad_scene: vec3<u32>,
-};
+// SceneUniforms from gizmo::common (camera_pos.w carries light_time). No shadow group;
+// skeleton/instance from #{SKELETON_GROUP}/#{INSTANCE_GROUP} (3/4 native, 2/3 web).
+#import gizmo::common::{SceneUniforms}
 
 @group(0) @binding(0)
 var<uniform> scene: SceneUniforms;
@@ -30,7 +13,7 @@ var s_diffuse: sampler;
 struct SkeletonData {
     joints: array<mat4x4<f32>, 128>, // Maksimum 64 kemik destegi
 };
-@group(3) @binding(0)
+@group(#{SKELETON_GROUP}) @binding(0)
 var<uniform> skeleton: SkeletonData;
 
 struct InstanceRaw {
@@ -42,7 +25,7 @@ struct InstanceRaw {
     pbr: vec4<f32>,
 };
 
-@group(4) @binding(0)
+@group(#{INSTANCE_GROUP}) @binding(0)
 var<storage, read> instances: array<InstanceRaw>;
 
 struct VertexInput {

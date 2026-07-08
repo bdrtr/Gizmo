@@ -96,22 +96,11 @@ pub fn default_render_pass(
     view: &wgpu::TextureView,
     renderer: &mut Renderer,
 ) {
-    // Update post process parameters dynamically from renderer settings!
-    renderer.update_post_process(
-        &renderer.queue,
-        crate::renderer::gpu_types::PostProcessUniforms {
-            bloom_intensity: renderer.bloom_intensity,
-            bloom_threshold: renderer.bloom_threshold,
-            exposure: renderer.exposure,
-            chromatic_aberration: renderer.chromatic_aberration,
-            vignette_intensity: 0.25,
-            film_grain_intensity: renderer.film_grain_intensity,
-            dof_focus_dist: renderer.dof_focus_dist,
-            dof_focus_range: renderer.dof_focus_range,
-            dof_blur_size: if renderer.dof_enabled { renderer.dof_blur_size } else { 0.0 },
-            _padding: [0.0; 3],
-        },
-    );
+    // Post-process params are written AFTER the active camera is resolved (below), so the
+    // single exposure knob can be the camera's exposure — see the update_post_process call
+    // after camera selection. Exposure is applied ONCE here, over the whole composited HDR
+    // (deferred geometry + sky + unlit), instead of being baked per-geometry in the
+    // deferred pass and multiplied again by a separate global knob.
 
     let aspect = if renderer.size.height > 0 {
         renderer.size.width as f32 / renderer.size.height as f32
@@ -180,6 +169,29 @@ pub fn default_render_pass(
         }
     }
 
+    // Update post-process params now that the active camera (hence its exposure) is known.
+    // `exposure` is the SINGLE exposure knob: the camera's exposure, applied once in the
+    // post composite over the entire HDR. (Previously the deferred pass baked cam.exposure
+    // into geometry AND post multiplied by a separate 1.15, which compounded and skipped
+    // sky/unlit; folding both into one post-stage exposure fixes that.)
+    renderer.update_post_process(
+        &renderer.queue,
+        crate::renderer::gpu_types::PostProcessUniforms {
+            bloom_intensity: renderer.bloom_intensity,
+            bloom_threshold: renderer.bloom_threshold,
+            exposure: cam_exposure,
+            chromatic_aberration: renderer.chromatic_aberration,
+            vignette_intensity: 0.25,
+            film_grain_intensity: renderer.film_grain_intensity,
+            dof_focus_dist: renderer.dof_focus_dist,
+            dof_focus_range: renderer.dof_focus_range,
+            dof_blur_size: if renderer.dof_enabled { renderer.dof_blur_size } else { 0.0 },
+            cam_near,
+            cam_far,
+            _padding: 0.0,
+        },
+    );
+
     // Save unjittered projection before applying TAA offset (needed for reprojection next frame).
     let unjittered_proj = proj;
 
@@ -221,33 +233,34 @@ pub fn default_render_pass(
 
     #[allow(unused_assignments)]
     let mut point_light_view_projs = [gizmo_math::Mat4::IDENTITY; 6];
-    if renderer.point_shadows_enabled {
-        if let Some(q) = world.query::<(
-            &crate::renderer::components::PointLight,
-            &gizmo_physics_core::components::GlobalTransform,
-        )>() {
-            if let Some((_id, (_light, transform))) = q.iter().next() {
-                let (_, _, pos) = transform.matrix.to_scale_rotation_translation();
-                let proj = gizmo_math::Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.1, 100.0);
-                point_light_view_projs = [
-                    proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::X, -gizmo_math::Vec3::Y),
-                    proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_X, -gizmo_math::Vec3::Y),
-                    proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::Y, gizmo_math::Vec3::Z),
-                    proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_Y, gizmo_math::Vec3::NEG_Z),
-                    proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::Z, -gizmo_math::Vec3::Y),
-                    proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_Z, -gizmo_math::Vec3::Y),
-                ];
-                
-                for (i, view_proj) in point_light_view_projs.iter().enumerate() {
-                    renderer.queue.write_buffer(
-                        &renderer.scene.point_shadow_uniform_buffers[i],
-                        0,
-                        bytemuck::bytes_of(&crate::renderer::gpu_types::ShadowVsUniform {
-                            light_view_proj: view_proj.to_cols_array_2d(),
-                        }),
-                    );
-                }
-            }
+    // Build the point-shadow cube for the ONE designated caster (shared.rs picks the
+    // first point light). Take its position/radius from the collected light array so the
+    // CPU and the shader agree on which light owns the cube, and so a light with only a
+    // Transform (no GlobalTransform) still casts — matching how it is lit.
+    if renderer.point_shadows_enabled && scene_lights.shadow_point_index >= 0 {
+        let idx = scene_lights.shadow_point_index as usize;
+        let lp = lights_data[idx].position;
+        let pos = gizmo_math::Vec3::new(lp[0], lp[1], lp[2]);
+        // Far plane tracks the light radius (the shader decodes depth with the same far).
+        let radius = lights_data[idx].color[3].max(1.0);
+        let proj = gizmo_math::Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.1, radius);
+        point_light_view_projs = [
+            proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::X, -gizmo_math::Vec3::Y),
+            proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_X, -gizmo_math::Vec3::Y),
+            proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::Y, gizmo_math::Vec3::Z),
+            proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_Y, gizmo_math::Vec3::NEG_Z),
+            proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::Z, -gizmo_math::Vec3::Y),
+            proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_Z, -gizmo_math::Vec3::Y),
+        ];
+
+        for (i, view_proj) in point_light_view_projs.iter().enumerate() {
+            renderer.queue.write_buffer(
+                &renderer.scene.point_shadow_uniform_buffers[i],
+                0,
+                bytemuck::bytes_of(&crate::renderer::gpu_types::ShadowVsUniform {
+                    light_view_proj: view_proj.to_cols_array_2d(),
+                }),
+            );
         }
     }
 
@@ -261,13 +274,24 @@ pub fn default_render_pass(
     let scene_uniform_data = crate::renderer::gpu_types::SceneUniforms {
         view_proj: view_proj.to_cols_array_2d(),
         camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
-        sun_direction: [sun_dir.x, sun_dir.y, sun_dir.z, 1.0],
+        // w = "sun present" flag (1.0 / 0.0). Was hardcoded 1.0, which left the deferred
+        // shader evaluating the sun branch + a full CSM shadow lookup (against cascades
+        // built for a bogus down-vector) even in a scene with no sun. Gate it on has_sun,
+        // exactly like the studio path already does.
+        sun_direction: [sun_dir.x, sun_dir.y, sun_dir.z, if scene_lights.has_sun { 1.0 } else { 0.0 }],
         sun_color: [sun_col.x, sun_col.y, sun_col.z, sun_col.w],
         lights: lights_data,
         light_view_proj: light_view_projs,
         cascade_splits,
         camera_forward: [cam_forward.x, cam_forward.y, cam_forward.z, 0.0],
-        cascade_params: [0.1, 1.0 / crate::renderer::SHADOW_MAP_RES as f32, elapsed_time, 0.0],
+        // w = point-shadow caster index + 1 (0 = none); the deferred shader samples the
+        // single point-shadow cube only for this light.
+        cascade_params: [
+            0.1,
+            1.0 / crate::renderer::SHADOW_MAP_RES as f32,
+            elapsed_time,
+            (scene_lights.shadow_point_index + 1).max(0) as f32,
+        ],
         num_lights,
         exposure: cam_exposure,
         _pre_align_pad: [0; 2],
@@ -319,9 +343,17 @@ pub fn default_render_pass(
     let (draw_items, uploaded_instances) = RENDER_CACHE.with(|rc| {
         let mut cache = rc.borrow_mut();
         
-        // Clear instances but keep allocations
+        // Clear instances but keep allocations.
+        // `shadow_instances` MUST be cleared too: it is appended to every frame for
+        // off-screen shadow casters (line ~444) but the batches HashMap persists across
+        // frames, so leaving it uncleared made it grow without bound. Once the total
+        // instance count crossed `instance_capacity` (8192) the buffer upload truncated
+        // the tail, so batches past the cap silently stopped drawing — meshes vanished
+        // one by one as more frames accumulated ("araç giderek kayboluyor"). Which mesh
+        // dropped first depended on nondeterministic HashMap batch order.
         for batch in cache.batches.values_mut() {
             batch.instances.clear();
+            batch.shadow_instances.clear();
         }
         cache.instances.clear();
         cache.draw_items.clear();
@@ -861,6 +893,120 @@ mod golden_render_tests {
                 "only {:.1}% of pixels differ from the background; the lit cube should fill a \
                  sizeable central region (regression dropping geometry?)",
                 frac * 100.0
+            );
+        });
+    }
+
+    /// Render the standard lit cube at a given camera `exposure` and return the mean of all
+    /// RGB bytes in the frame. Shared by the exposure invariant test below.
+    async fn render_mean_brightness(exposure: f32) -> f32 {
+        const W: u32 = 128;
+        const H: u32 = 128;
+        const BPP: u32 = 4;
+
+        let mut renderer = Renderer::new_headless(W, H, None).await;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+
+        let mesh = AssetManager::create_cube(&renderer.device);
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+        let mat = Material::new(tex).with_pbr(Vec4::new(0.9, 0.15, 0.15, 1.0), 0.0, 1.0);
+        let cube = world.spawn();
+        world.add_component(cube, Transform::new(Vec3::ZERO));
+        world.add_component(cube, GlobalTransform::default());
+        world.add_component(cube, mesh);
+        world.add_component(cube, mat);
+        world.add_component(cube, MeshRenderer::new());
+
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(-6.0, 0.0, 0.0),
+            yaw: 0.0,
+            pitch: 0.0,
+            primary: true,
+            exposure,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+
+        let format = renderer.config.format;
+        let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("exposure-target"),
+            size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = renderer
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        default_render_pass(&mut world, &mut encoder, &view, &mut renderer);
+
+        let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("exposure-readback"),
+            size: (W * H * BPP) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(W * BPP),
+                    rows_per_image: Some(H),
+                },
+            },
+            wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        );
+        renderer.queue.submit(Some(encoder.finish()));
+
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
+        let _ = renderer.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.recv().unwrap().unwrap();
+        let data = slice.get_mapped_range();
+
+        // Mean of R,G,B over the whole frame (alpha excluded).
+        let mut sum = 0u64;
+        for i in (0..(W * H * BPP) as usize).step_by(BPP as usize) {
+            sum += data[i] as u64 + data[i + 1] as u64 + data[i + 2] as u64;
+        }
+        sum as f32 / (W * H * 3) as f32
+    }
+
+    /// Exposure is a SINGLE post-process knob applied over the whole composited HDR (the
+    /// deferred pass no longer bakes it in). This guards that rework: a higher camera exposure
+    /// must brighten the frame. If exposure were detached (or the deferred→post move dropped
+    /// the wiring), the two renders would match and this fails. (Tone-mapping is non-linear so
+    /// we assert monotonic increase, not an exact 2x.)
+    #[test]
+    fn camera_exposure_brightens_the_frame() {
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping camera_exposure_brightens_the_frame: no GPU adapter available");
+            return;
+        }
+        pollster::block_on(async {
+            let dim = render_mean_brightness(1.0).await;
+            let bright = render_mean_brightness(2.0).await;
+            assert!(
+                bright > dim + 1.0,
+                "higher camera exposure must brighten the scene, but exp=1.0 mean={dim:.2} \
+                 vs exp=2.0 mean={bright:.2} (exposure not applied / detached from post?)"
             );
         });
     }

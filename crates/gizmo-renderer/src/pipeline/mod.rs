@@ -9,8 +9,9 @@ mod shaders;
 mod uniforms;
 
 pub use shaders::load_shader;
+pub use shaders::load_shader_composed;
 #[cfg(target_arch = "wasm32")]
-pub use shaders::load_shader_web;
+pub use shaders::load_shader_composed_web;
 
 use layouts::{build_layouts, LayoutRefs};
 use pipelines::{build_core_pipelines, build_shadow_pipeline};
@@ -368,6 +369,7 @@ mod tests {
                 ("sky.wgsl", include_str!("../shaders/sky.wgsl")),
                 ("unlit.wgsl", include_str!("../shaders/unlit.wgsl")),
                 ("grid.wgsl", include_str!("../shaders/grid.wgsl")),
+                ("water.wgsl", include_str!("../shaders/water.wgsl")),
                 ("shadow.wgsl", include_str!("../shaders/shadow.wgsl")),
                 ("point_shadow.wgsl", include_str!("../shaders/point_shadow.wgsl")),
                 ("decal.wgsl", include_str!("../shaders/decal.wgsl")),
@@ -381,17 +383,45 @@ mod tests {
                 ("physics_compute.wgsl", include_str!("../shaders/physics_compute.wgsl")),
                 ("physics_culling.wgsl", include_str!("../shaders/physics_culling.wgsl")),
                 ("physics_debug.wgsl", include_str!("../shaders/physics_debug.wgsl")),
+                // Loaded via create_shader_module in gpu_physics/gpu_particles/gpu_cull (not
+                // in the golden render test's pipelines), so validate their naga_oil
+                // composition here — this test auto-composes any src containing `#import`.
+                ("physics_render.wgsl", include_str!("../shaders/physics_render.wgsl")),
+                ("particle_render.wgsl", include_str!("../shaders/particle_render.wgsl")),
+                ("mesh_cull.wgsl", include_str!("../shaders/mesh_cull.wgsl")),
             ];
+
+            // Shaders that go through the wasm `load_shader_composed_web` path: validate BOTH
+            // the native and web shader-def variants here so the web build (no browser in CI)
+            // is verified — the web variant strips `#ifdef SHADOWS` and remaps
+            // `@group(#{SKELETON_GROUP/INSTANCE_GROUP})`, which is exactly where a bad #ifdef
+            // (e.g. a shadow binding used outside the guard) would surface as an undefined id.
+            let web_path = ["shader.wgsl", "unlit.wgsl", "water.wgsl", "sky.wgsl", "grid.wgsl"];
 
             let mut failures: Vec<String> = Vec::new();
             for (name, src) in shaders {
-                let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-                let _module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some(name),
-                    source: wgpu::ShaderSource::Wgsl((*src).into()),
-                });
-                if let Some(err) = scope.pop().await {
-                    failures.push(format!("{name}: {err:?}"));
+                // Shaders that `#import gizmo::common` (or use `#ifdef`/`#{...}`) are
+                // naga_oil-composed before validation; new migrations are picked up
+                // automatically. Compose under the NATIVE defs, and additionally under the WEB
+                // defs for shaders on the web path.
+                let mut variants: Vec<(&str, String)> = Vec::new();
+                if src.contains("#import") || src.contains("#ifdef") || src.contains("#{") {
+                    variants.push(("native", shaders::compose_wgsl(src, name, shaders::native_render_defs())));
+                    if web_path.contains(&name) {
+                        variants.push(("web", shaders::compose_wgsl(src, name, shaders::web_render_defs())));
+                    }
+                } else {
+                    variants.push(("raw", src.to_string()));
+                }
+                for (variant, final_src) in &variants {
+                    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+                    let _module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some(name),
+                        source: wgpu::ShaderSource::Wgsl(final_src.as_str().into()),
+                    });
+                    if let Some(err) = scope.pop().await {
+                        failures.push(format!("{name} [{variant}]: {err:?}"));
+                    }
                 }
             }
             assert!(

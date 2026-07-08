@@ -31,8 +31,8 @@ struct PostProcessParams {
     dof_focus_dist: f32,
     dof_focus_range: f32,
     dof_blur_size: f32,
-    _padding0: f32,
-    _padding1: f32,
+    cam_near: f32,
+    cam_far: f32,
     _padding2: f32,
 };
 
@@ -123,8 +123,8 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // OpenGL [-1,1] range), so the [0,1] reconstruction must be used:
     //   view_dist = n*f / (f - d*(f - n))   →  d=0 → n, d=1 → f.
     // (The old (2n)/(f+n-d(f-n)) was the OpenGL [-1,1] formula and was wrong here.)
-    let n = 0.1;
-    let f = 1000.0;
+    let n = params.cam_near;
+    let f = params.cam_far;
     let view_dist = (n * f) / (f - depth_val * (f - n));
     
     let coc = clamp(abs(view_dist - params.dof_focus_dist) / params.dof_focus_range, 0.0, 1.0);
