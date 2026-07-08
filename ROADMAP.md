@@ -201,6 +201,34 @@ Denetlenmemiş alt-sistemleri aynı derinlikte tara (her biri ayrı bug-avı tur
       convex-hull raycast phantom-AABB (degenerate collider, 2D-polygon testi gerekir). NOT: workflow
       verify-ajanı bir stray `reentrant_hook_probe.rs` bıraktı → SİLİNDİ.
 
+- [x] **Bakım turu 5. dalga (2026-07-08, 4 az-denetlenmiş alan adversarial subagent + koda-karşı
+      elle doğrulama):** gizmo-math, renderer culling/batching, gizmo-physics-dynamics, gizmo-animation
+      tarandı; 4 CONFIRMED + 1 same-class düzeltildi, hepsi TDD. (1) **animation reverse-playback
+      (HIGH):** isim-tabanlı `AnimationPlayer::advance` döngü zamanını `%=` ile sarıyordu (işareti
+      korur) → ters oynatmada (`speed<0`) `elapsed_time` negatife düşüp sampler pozu sonsuza dek
+      frame 0'a sabitliyordu; non-looping ters ise hiç durmuyordu (`playing` takılı). `rem_euclid` +
+      `speed<0` non-looping-başta-dur; kardeş skeletal fix zaten doğruydu, bu yol atlanmıştı. (2)
+      **render batch-key transparanlık/materyal-tipi çakışması (HIGH):** batch anahtarı materyalin
+      *doku* bind-group'unu (paylaşımlı/cache'li — beyaz doku/aynı dosya) kullandığından yalnız
+      transparanlık/materyal-tipinde ayrışan iki materyal tek batch'e düşüp routing bayraklarını ilk
+      ECS-iterasyonundan alıyordu → şeffaf nesne opak (veya ters) render, PBR unlit yola gidiyor,
+      hangisinin bozulduğu kareler-arası değişiyor (non-det). Oyun yolu `BatchKey`'e
+      `is_transparent`/`unlit`/`is_skybox`; studio anahtarına `is_skybox`/`is_grid`/`is_unlit`
+      (sonuncusu gölge-döküm kapısı → PBR nesne unlit-batch'te sessizce gölge dökmeyi bırakıyordu). (3)
+      **anti-roll bar işareti TERS (MED):** `travel`=sıkışma, pozitif `suspension_force` şasiyi yukarı
+      iter; sol köşe alçakken ARB'nin sola daha çok yukarı-kuvvet vermesi gerekirken kod tersini
+      yapıyordu → `anti_roll_stiffness` artırmak yatmayı *artırıyordu* (pro-roll). `anti_roll_force`
+      saf fonksiyona çıkarıldı (sol `+diff`, sağ `-diff`) + test. (4) **ray-AABB sınır-paralel sahte
+      ıska (LOW ama platforma bağlı):** eksene paralel ışın kaynağı tam min yüzü üstündeyken
+      `0*∞=NaN`, `Vec3A::min/max` (SIMD) yanlış operandı yayıyordu (max yüzü skaler indirgemeyle
+      çalışıyordu → asimetrik); grid/tile/editor seçiminde erişilebilir. Deterministik skaler slab +
+      simetrik test. **ERTELENDİ (dokümante):** animation `decompose_mat4` negatif-scale (ölü kod,
+      `#[allow(dead_code)]`), renderer oyun-yolu instance-buffer büyütmüyor (8192 üstü sessiz drop;
+      studio büyütüyor — bellek-güvenli sınırlama), vehicle tekerlek-spin damping fantom-fren
+      (PLAUSIBLE, rolling-resistance kastı olabilir → kullanıcı kararı), vehicle COM kaldıraç-kolu
+      (latent, `center_of_mass` default ZERO + motor-geneli konvansiyon belirsizliği), vehicle
+      intra-step sıralı hız-mutasyonu (minor simetri kırılımı).
+
 **Çıkış kriteri:** yeşil CI, anlamlı kapsam, regresyonlar otomatik yakalanıyor.
 
 ---
