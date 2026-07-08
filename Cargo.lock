@@ -2637,6 +2637,7 @@ dependencies = [
  "gizmo-math",
  "gizmo-net",
  "gizmo-physics-core",
+ "gizmo-physics-dynamics",
  "gizmo-physics-rigid",
  "gizmo-renderer",
  "gizmo-scene",
