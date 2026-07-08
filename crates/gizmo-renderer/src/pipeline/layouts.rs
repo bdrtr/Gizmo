@@ -72,23 +72,46 @@ pub(super) fn build_layouts(device: &wgpu::Device) -> Layouts {
         }],
     });
 
+    // Per-material texture set (bind group 1). The base-colour texture + sampler
+    // at bindings 0/1 are the original layout; bindings 2..=5 add the textured-PBR
+    // maps (normal, metallic-roughness, emissive, ambient-occlusion) and binding 6
+    // carries the scalar `MaterialParams` (emissive factor, normal scale, AO
+    // strength). Forward/decal shaders that only reference bindings 0/1 remain
+    // valid — wgpu permits a layout with more entries than a shader uses — but
+    // every bind group built against this layout MUST populate all seven entries
+    // (see `AssetManager::assemble_material_bind_group`).
+    let filterable_tex = |binding: u32| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            multisampled: false,
+            view_dimension: wgpu::TextureViewDimension::D2,
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+        },
+        count: None,
+    };
     let texture = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("texture_bind_group_layout"),
         entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    multisampled: false,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                },
-                count: None,
-            },
+            filterable_tex(0), // base colour
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            filterable_tex(2), // normal map
+            filterable_tex(3), // metallic-roughness (ARM/MR)
+            filterable_tex(4), // emissive
+            filterable_tex(5), // ambient occlusion
+            wgpu::BindGroupLayoutEntry {
+                binding: 6,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
                 count: None,
             },
         ],

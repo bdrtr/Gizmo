@@ -148,3 +148,43 @@ pub struct InstanceRaw {
     pub unlit: f32,
     pub _padding: f32,
 }
+
+/// Per-material scalar parameters that accompany the textured-PBR bind group
+/// (group 1, binding 6).  These carry the glTF factors that modulate the
+/// sampled auxiliary maps so that an absent map falls back to the scalar value:
+///
+/// * `emissive` = emissiveFactor (× KHR_materials_emissive_strength) — multiplied
+///   by the (white-default) emissive map, so absent map + zero factor = no emission.
+/// * `normal_scale` = glTF normalTexture.scale — scales the tangent-space XY of the
+///   (flat-default) normal map, so absent map = unperturbed geometric normal.
+/// * `occlusion_strength` = glTF occlusionTexture.strength — lerps the (white-default)
+///   AO map toward 1.0, so absent map = no occlusion.
+///
+/// std140 layout: two 16-byte vec4 slots → 32 bytes total.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub struct MaterialParams {
+    /// xyz = emissive factor (linear), w = normal-map scale.
+    pub emissive_and_normal_scale: [f32; 4],
+    /// x = occlusion (AO) strength; yzw reserved (0.0).
+    pub occlusion_and_pad: [f32; 4],
+}
+
+impl Default for MaterialParams {
+    fn default() -> Self {
+        // Neutral material: no emission, unit normal scale, unit AO strength.
+        Self {
+            emissive_and_normal_scale: [0.0, 0.0, 0.0, 1.0],
+            occlusion_and_pad: [1.0, 0.0, 0.0, 0.0],
+        }
+    }
+}
+
+impl MaterialParams {
+    pub fn new(emissive: [f32; 3], normal_scale: f32, occlusion_strength: f32) -> Self {
+        Self {
+            emissive_and_normal_scale: [emissive[0], emissive[1], emissive[2], normal_scale],
+            occlusion_and_pad: [occlusion_strength, 0.0, 0.0, 0.0],
+        }
+    }
+}
