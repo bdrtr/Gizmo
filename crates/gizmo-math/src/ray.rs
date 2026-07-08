@@ -85,20 +85,49 @@ impl Ray {
 
     /// Bir eksen kısıtlı boundary kutusuyla kesişim testi yapar (Slab Algorithm).
     /// Kesişiyorsa t_near mesafesini döner, kesişmiyorsa None döner.
+    ///
+    /// Eksene paralel bir ışın (bir bileşende `direction == 0`) o eksende ayrıca
+    /// ele alınır: kaynak koordinatı [min, max] aralığının DIŞINDAYSA ıska,
+    /// içindeyse (sınır dahil) o eksen kısıt getirmez. Eski vektörleştirilmiş hal
+    /// `(min - origin) * (1/0)` ile `0 * ∞ = NaN` üretiyordu; `Vec3A::min/max`
+    /// (SIMD) NaN'da yanlış operandı yaydığından ışın min-yüzüne tam değerken
+    /// sahte ıska dönüyor, max-yüzünde ise skaler indirgeme NaN'ı yuttuğu için
+    /// isabet dönüyordu — asimetrik ve platforma bağlı. Skaler slab bunu
+    /// deterministik ve simetrik kılar.
     #[inline]
     pub fn intersect_bounds(self, min: Vec3A, max: Vec3A) -> Option<f32> {
-        let inv_dir = self.direction.recip();
+        let o = [self.origin.x, self.origin.y, self.origin.z];
+        let d = [self.direction.x, self.direction.y, self.direction.z];
+        let mn = [min.x, min.y, min.z];
+        let mx = [max.x, max.y, max.z];
 
-        let t0 = (min - self.origin) * inv_dir;
-        let t1 = (max - self.origin) * inv_dir;
+        let mut tmin = f32::NEG_INFINITY;
+        let mut tmax = f32::INFINITY;
 
-        let tmin_vec = t0.min(t1);
-        let tmax_vec = t0.max(t1);
+        for i in 0..3 {
+            if d[i].abs() < 1e-8 {
+                // Bu eksene paralel: yalnızca kaynak dilimin tamamen dışındaysa ıska.
+                // Sınır üstünde (o == mn ya da o == mx) nokta "içeride" (kapsayıcı),
+                // dolayısıyla bu eksen kısıt getirmez — 0 * ∞ = NaN'dan kaçınılır.
+                if o[i] < mn[i] || o[i] > mx[i] {
+                    return None;
+                }
+            } else {
+                let inv = 1.0 / d[i];
+                let mut t0 = (mn[i] - o[i]) * inv;
+                let mut t1 = (mx[i] - o[i]) * inv;
+                if t0 > t1 {
+                    core::mem::swap(&mut t0, &mut t1);
+                }
+                tmin = tmin.max(t0);
+                tmax = tmax.min(t1);
+                if tmin > tmax {
+                    return None;
+                }
+            }
+        }
 
-        let tmin = tmin_vec.x.max(tmin_vec.y).max(tmin_vec.z);
-        let tmax = tmax_vec.x.min(tmax_vec.y).min(tmax_vec.z);
-
-        if tmin <= tmax && tmax > 0.0 {
+        if tmax > 0.0 {
             Some(if tmin > 0.0 { tmin } else { tmax })
         } else {
             None
@@ -271,6 +300,31 @@ mod tests {
 
         let t_miss = ray_miss.intersect_aabb(aabb);
         assert!(t_miss.is_none());
+    }
+
+    /// Regresyon: eksene paralel bir ışın, kaynağı tam olarak MIN yüzeyi üstündeyken
+    /// isabet etmeli. Eski hal `0 * ∞ = NaN` üretip `Vec3A::min/max` (SIMD) yanlış
+    /// operandı yaydığından sahte ıska dönüyordu (max yüzü ise skaler indirgeme
+    /// NaN'ı yuttuğu için çalışıyordu → asimetri). Min ve max yüzü artık simetrik.
+    #[test]
+    fn test_ray_parallel_grazes_min_and_max_face() {
+        let aabb = crate::aabb::Aabb::new(Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
+
+        // MIN yüzü: X ekseninde paralel (dir X=0), kaynak X = min.x = -1.
+        let ray_min = Ray::new(Vec3::new(-1.0, -5.0, 0.0), Vec3::Y);
+        let t_min = ray_min.intersect_aabb(aabb);
+        assert!(t_min.is_some(), "min yüzeyine değen paralel ışın isabet etmeli");
+        assert!((t_min.unwrap() - 4.0).abs() < 1e-5);
+
+        // MAX yüzü: simetrik olarak kaynak X = max.x = 1 de isabet etmeli.
+        let ray_max = Ray::new(Vec3::new(1.0, -5.0, 0.0), Vec3::Y);
+        let t_max = ray_max.intersect_aabb(aabb);
+        assert!(t_max.is_some(), "max yüzeyine değen paralel ışın isabet etmeli");
+        assert!((t_max.unwrap() - 4.0).abs() < 1e-5);
+
+        // Sınırın hemen dışı (X = -1.001) paralel ışında ıska olmalı.
+        let ray_out = Ray::new(Vec3::new(-1.001, -5.0, 0.0), Vec3::Y);
+        assert!(ray_out.intersect_aabb(aabb).is_none(), "sınır dışı paralel ışın ıska olmalı");
     }
     #[test]
     fn test_ray_from_ndc() {
