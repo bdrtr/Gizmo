@@ -24,22 +24,6 @@ const SAMPLER_LINEAR_REPEAT: wgpu::SamplerDescriptor<'static> = wgpu::SamplerDes
     border_color: None,
 };
 
-/// Point sampler for 1×1 fallback textures — no filtering needed.
-const SAMPLER_NEAREST_REPEAT: wgpu::SamplerDescriptor<'static> = wgpu::SamplerDescriptor {
-    label: Some("nearest_repeat_sampler"),
-    address_mode_u: wgpu::AddressMode::Repeat,
-    address_mode_v: wgpu::AddressMode::Repeat,
-    address_mode_w: wgpu::AddressMode::Repeat,
-    mag_filter: wgpu::FilterMode::Nearest,
-    min_filter: wgpu::FilterMode::Nearest,
-    mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-    lod_min_clamp: 0.0,
-    lod_max_clamp: 0.0,
-    compare: None,
-    anisotropy_clamp: 1,
-    border_color: None,
-};
-
 // ============================================================================
 //  AssetManager — texture methods
 // ============================================================================
@@ -142,7 +126,10 @@ impl super::AssetManager {
             texture_size,
         );
 
-        let bg = self.build_bind_group(device, &texture, layout, &SAMPLER_LINEAR_REPEAT, cache_key);
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&SAMPLER_LINEAR_REPEAT);
+        let bg = self
+            .assemble_single_texture_bind_group(device, queue, layout, &view, &sampler, cache_key);
         self.texture_cache.insert(cache_key.to_string(), bg.clone());
         Ok(bg)
     }
@@ -205,7 +192,24 @@ impl super::AssetManager {
             return cached.clone();
         }
 
-        let bg = self.upload_solid_1x1(device, queue, layout, [255, 255, 255, 255], KEY);
+        // A fully-neutral material: white base + flat normal + white MR/emissive/AO
+        // + default params. Everything sourced from the shared defaults.
+        self.ensure_material_defaults(device, queue);
+        let d = self
+            .material_defaults()
+            .expect("material defaults ensured above");
+        let bg = Self::assemble_material_bind_group(
+            device,
+            layout,
+            &d.white_view,
+            &d.sampler,
+            &d.flat_normal_view,
+            &d.white_view,
+            &d.white_view,
+            &d.white_view,
+            &d.params_buffer,
+            KEY,
+        );
         self.texture_cache.insert(KEY.to_string(), bg.clone());
         bg
     }
@@ -300,84 +304,5 @@ impl super::AssetManager {
         }
 
         decode_rgba_image_file(resolved_path)
-    }
-
-    /// Upload a single RGBA pixel as a 1×1 texture and return its bind group.
-    ///
-    /// Uses the nearest-neighbour sampler — filtering a 1-pixel texture is
-    /// meaningless.
-    fn upload_solid_1x1(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        layout: &wgpu::BindGroupLayout,
-        pixel: [u8; 4],
-        label: &str,
-    ) -> Arc<wgpu::BindGroup> {
-        let size = wgpu::Extent3d {
-            width: 1,
-            height: 1,
-            depth_or_array_layers: 1,
-        };
-
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            label: Some(label),
-            view_formats: &[],
-        });
-
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &pixel,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4),
-                rows_per_image: Some(1),
-            },
-            size,
-        );
-
-        self.build_bind_group(device, &texture, layout, &SAMPLER_NEAREST_REPEAT, label)
-    }
-
-    /// Create a texture view + sampler and assemble a bind group.
-    ///
-    /// Centralises the boilerplate that would otherwise be duplicated in every
-    /// upload path.
-    fn build_bind_group(
-        &self,
-        device: &wgpu::Device,
-        texture: &wgpu::Texture,
-        layout: &wgpu::BindGroupLayout,
-        sampler_desc: &wgpu::SamplerDescriptor,
-        label: &str,
-    ) -> Arc<wgpu::BindGroup> {
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(sampler_desc);
-
-        Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(label),
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        }))
     }
 }

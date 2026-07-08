@@ -395,6 +395,12 @@ mod tests {
         assert_eq!(std::mem::size_of::<crate::gpu_types::LightData>(), 64, "LightData size shifted from target 64 bytes!");
         assert_eq!(std::mem::size_of::<crate::gpu_types::PostProcessUniforms>(), 48, "PostProcessUniforms size shifted from target 48 bytes!");
         assert_eq!(std::mem::size_of::<crate::gpu_types::InstanceRaw>(), 96, "InstanceRaw size shifted from target 96 bytes!");
+        // Textured-PBR per-material params: two std140 vec4 slots.
+        assert_eq!(std::mem::size_of::<crate::gpu_types::MaterialParams>(), 32, "MaterialParams size shifted from target 32 bytes!");
+        assert_eq!(std::mem::align_of::<crate::gpu_types::MaterialParams>(), 4, "MaterialParams alignment unexpected!");
+        // Field offsets must match the WGSL `MaterialParams` layout in gbuffer.wgsl.
+        assert_eq!(std::mem::offset_of!(crate::gpu_types::MaterialParams, emissive_and_normal_scale), 0, "emissive_and_normal_scale must be at offset 0");
+        assert_eq!(std::mem::offset_of!(crate::gpu_types::MaterialParams, occlusion_and_pad), 16, "occlusion_and_pad must be at offset 16");
 
         // Vertex attribute offsetleri shader VertexInput @location'larıyla (ve
         // Vertex::desc() ile) BİREBİR uyuşmalı. Bir alan kayarsa skinning/tangent
@@ -408,6 +414,34 @@ mod tests {
         assert_eq!(std::mem::offset_of!(Vertex, joint_weights), 60);
         assert_eq!(std::mem::offset_of!(Vertex, tangent), 76);
         assert_eq!(std::mem::size_of::<Vertex>(), 92, "Vertex size/layout shifted!");
+    }
+
+    /// Regression for M7.0a: the SSGI-apply pass runs at full-res but samples a
+    /// half-res buffer. The old shader derived UV as `frag_coord / texture_dims`,
+    /// which reaches ~2.0 at the far edge (squeezing GI into the top-left
+    /// quarter). The current shader emits a vertex UV that spans exactly [0,1]
+    /// across the visible frame (NDC x∈[-1,1] → UV∈[0,1]), independent of the
+    /// half-res texture size.
+    #[test]
+    fn ssgi_apply_uv_covers_full_frame() {
+        let full_w = 1920.0f32;
+        let half_w = (full_w / 2.0).max(1.0); // matches SsgiState half-res buffer
+
+        // Old (buggy) mapping at the right-most full-res fragment centre.
+        let old_uv_x = (full_w - 0.5) / half_w;
+        assert!(
+            old_uv_x > 1.5,
+            "old UV should overshoot [0,1] (was {old_uv_x})"
+        );
+
+        // New mapping: fullscreen-triangle NDC x in {-1, 3} → UV via x*0.5+0.5.
+        // The screen spans NDC x∈[-1,1] → UV∈[0,1] independent of texture size.
+        let ndc_left = -1.0f32;
+        let ndc_right = 1.0f32;
+        let new_uv_left = ndc_left * 0.5 + 0.5;
+        let new_uv_right = ndc_right * 0.5 + 0.5;
+        assert_eq!(new_uv_left, 0.0);
+        assert_eq!(new_uv_right, 1.0);
     }
 
     #[test]

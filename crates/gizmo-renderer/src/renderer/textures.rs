@@ -98,6 +98,16 @@ impl Renderer {
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
+        // Fill the auxiliary textured-PBR slots (normal/MR/emissive/AO/params) with
+        // the shared neutral defaults so this bind group matches the 7-entry layout.
+        self.asset_manager
+            .write()
+            .unwrap()
+            .ensure_material_defaults(&self.device, &self.queue);
+        let am = self.asset_manager.read().unwrap();
+        let d = am
+            .material_defaults()
+            .expect("material defaults ensured above");
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &self.scene.texture_bind_group_layout,
             entries: &[
@@ -108,6 +118,26 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&d.flat_normal_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&d.white_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&d.white_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&d.white_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: d.params_buffer.as_entire_binding(),
                 },
             ],
             label: Some("texture_bind_group"),
