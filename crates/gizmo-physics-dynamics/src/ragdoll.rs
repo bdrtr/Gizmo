@@ -1,9 +1,18 @@
+use std::collections::HashMap;
+
 use gizmo_math::Vec3;
 
-use gizmo_physics_rigid::joints::JointType;
+use gizmo_core::entity::Entity;
+use gizmo_core::world::World;
+use gizmo_physics_core::{BodyHandle, Collider, Transform};
+use gizmo_physics_rigid::components::{RigidBody, Velocity};
+use gizmo_physics_rigid::joints::{Joint, JointData, JointType};
+use gizmo_physics_rigid::world::PhysicsWorld;
 
 /// Identifies a bone within a humanoid ragdoll skeleton.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// `Hash` is derived so the type can be used as a `HashMap` key while resolving
+// parent -> child bone world positions in [`spawn_ragdoll`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum RagdollBoneType {
     Head,
@@ -224,5 +233,263 @@ impl RagdollBuilder {
             }
         }
         self.bones
+    }
+
+    /// Convenience: build the definitions and spawn them into `world` in one
+    /// call. See [`spawn_ragdoll`].
+    pub fn spawn(self, world: &mut World) -> RagdollInstance {
+        spawn_ragdoll(world, self.build())
+    }
+}
+
+/// A live, simulatable ragdoll: the spawned rigid-body entities (one per bone)
+/// and the indices of the joints that were pushed into the [`PhysicsWorld`]
+/// resource connecting them.
+#[derive(Debug, Clone, Default)]
+pub struct RagdollInstance {
+    /// `(bone type, spawned entity)` for every bone, in spawn order.
+    pub bones: Vec<(RagdollBoneType, Entity)>,
+    /// Indices into `PhysicsWorld::joints` for the joints this ragdoll created.
+    pub joint_indices: Vec<usize>,
+}
+
+impl RagdollInstance {
+    /// Look up the entity that was spawned for a given bone type.
+    pub fn entity_of(&self, bone_type: RagdollBoneType) -> Option<Entity> {
+        self.bones
+            .iter()
+            .find(|(bt, _)| *bt == bone_type)
+            .map(|(_, e)| *e)
+    }
+
+    /// Number of spawned bones.
+    pub fn bone_count(&self) -> usize {
+        self.bones.len()
+    }
+
+    /// Number of joints created for this ragdoll.
+    pub fn joint_count(&self) -> usize {
+        self.joint_indices.len()
+    }
+}
+
+/// Spawn a runtime, physically-simulated ragdoll from a list of bone
+/// definitions (typically produced by [`RagdollBuilder::build`]).
+///
+/// For every bone this:
+/// 1. spawns an ECS entity carrying `RigidBody` + `Collider` (capsule) +
+///    `Transform` + `Velocity`, so the standard `physics_step_system` picks it
+///    up on the next step, and
+/// 2. for every non-root bone, pushes a [`Joint`] (Fixed / BallSocket / Hinge /
+///    Slider / Spring, per the bone def) into the [`PhysicsWorld`] resource so
+///    the rigid-joint solver actually constrains the skeleton.
+///
+/// Bone world positions are resolved by walking the parent chain
+/// (`world(child) = world(parent) + child.local_pos`); definitions are expected
+/// in topological order (parent before child), which `build()` guarantees.
+///
+/// Joints connecting a parent and its child are created with collision
+/// disabled (the default for [`Joint`]), so adjacent (overlapping) capsules do
+/// not fight the joint constraint.
+///
+/// If no [`PhysicsWorld`] resource is present the bodies are still spawned but
+/// no joints are created (the returned `joint_indices` is empty).
+pub fn spawn_ragdoll(world: &mut World, bones: Vec<RagdollBoneDef>) -> RagdollInstance {
+    let mut instance = RagdollInstance::default();
+
+    // bone type -> (entity, resolved world position)
+    let mut resolved: HashMap<RagdollBoneType, (Entity, Vec3)> = HashMap::new();
+    // Pending joints, resolved after all bodies exist (parent handles are known
+    // by the time a child is processed thanks to topological order).
+    let mut pending_joints: Vec<Joint> = Vec::new();
+
+    for bone in &bones {
+        // Resolve world position by chaining onto the parent (root bones already
+        // carry their absolute position from `build()`).
+        let world_pos = match bone.parent_type {
+            Some(parent) => {
+                let parent_pos = resolved.get(&parent).map(|(_, p)| *p).unwrap_or(Vec3::ZERO);
+                parent_pos + bone.local_pos
+            }
+            None => bone.local_pos,
+        };
+
+        // Capsule body sized from the bone def.
+        let collider = Collider::capsule(bone.radius, (bone.length * 0.5).max(0.01));
+        let mut rb = RigidBody::new(bone.mass.max(0.01), true);
+        rb.update_inertia_from_collider(&collider);
+        rb.wake_up();
+
+        let entity = world.spawn();
+        world.add_component(entity, rb);
+        world.add_component(entity, Transform::new(world_pos));
+        world.add_component(entity, Velocity::default());
+        world.add_component(entity, collider);
+
+        resolved.insert(bone.bone_type, (entity, world_pos));
+        instance.bones.push((bone.bone_type, entity));
+
+        // Build the joint back to the parent.
+        if let Some(parent_type) = bone.parent_type {
+            if let Some((parent_entity, _)) = resolved.get(&parent_type).copied() {
+                pending_joints.push(build_bone_joint(
+                    bone,
+                    BodyHandle::from_id(parent_entity.id()),
+                    BodyHandle::from_id(entity.id()),
+                ));
+            }
+        }
+    }
+
+    // Push joints into the PhysicsWorld resource (persistent — not synced from
+    // the ECS). Record their indices so callers can inspect/break them.
+    if !pending_joints.is_empty() {
+        if let Some(mut physics_world) = world.get_resource_mut::<PhysicsWorld>() {
+            for joint in pending_joints {
+                instance.joint_indices.push(physics_world.joints.len());
+                physics_world.joints.push(joint);
+            }
+        }
+    }
+
+    instance
+}
+
+/// Translate a [`RagdollBoneDef`] joint description into a rigid-solver
+/// [`Joint`] connecting `parent` -> `child`.
+fn build_bone_joint(bone: &RagdollBoneDef, parent: BodyHandle, child: BodyHandle) -> Joint {
+    match bone.joint_type {
+        JointType::Fixed => Joint::fixed(
+            parent,
+            child,
+            bone.local_anchor_parent,
+            bone.local_anchor_child,
+        ),
+        JointType::BallSocket => {
+            let mut joint = Joint::ball_socket(
+                parent,
+                child,
+                bone.local_anchor_parent,
+                bone.local_anchor_child,
+            );
+            if let (JointData::BallSocket(data), Some((lo, hi))) = (&mut joint.data, bone.limits) {
+                data.use_cone_limit = true;
+                data.cone_limit_angle = lo.abs().max(hi.abs());
+            }
+            joint
+        }
+        JointType::Hinge => {
+            let mut joint = Joint::hinge(
+                parent,
+                child,
+                bone.local_anchor_parent,
+                bone.local_anchor_child,
+                bone.joint_axis,
+            );
+            if let (JointData::Hinge(data), Some((lo, hi))) = (&mut joint.data, bone.limits) {
+                data.use_limits = true;
+                data.lower_limit = lo;
+                data.upper_limit = hi;
+            }
+            joint
+        }
+        JointType::Slider => Joint::slider(
+            parent,
+            child,
+            bone.local_anchor_parent,
+            bone.local_anchor_child,
+            bone.joint_axis,
+        ),
+        JointType::Spring => Joint::spring(
+            parent,
+            child,
+            bone.local_anchor_parent,
+            bone.local_anchor_child,
+            bone.local_pos.length(),
+            1000.0,
+            50.0,
+        ),
+        // `JointType` is `#[non_exhaustive]`; fall back to a rigid fixed joint
+        // for any future variant so the skeleton stays connected.
+        _ => Joint::fixed(
+            parent,
+            child,
+            bone.local_anchor_parent,
+            bone.local_anchor_child,
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RagdollBoneType, RagdollBuilder};
+    use gizmo_core::world::World;
+    use gizmo_math::Vec3;
+    use gizmo_physics_core::Transform;
+    use gizmo_physics_rigid::physics_step_system;
+    use gizmo_physics_rigid::world::PhysicsWorld;
+
+    /// A humanoid ragdoll spawns one body per bone (11) and one joint per
+    /// non-root bone (10), and the joints land in the `PhysicsWorld` resource.
+    #[test]
+    fn ragdoll_spawns_expected_body_and_joint_counts() {
+        let mut world = World::new();
+        world.insert_resource(PhysicsWorld::new());
+
+        let mut builder = RagdollBuilder::new(Vec3::new(0.0, 5.0, 0.0));
+        builder.create_humanoid();
+        let instance = builder.spawn(&mut world);
+
+        assert_eq!(instance.bone_count(), 11, "humanoid has 11 bones");
+        assert_eq!(instance.joint_count(), 10, "one joint per non-root bone");
+        assert!(instance.entity_of(RagdollBoneType::Pelvis).is_some());
+        assert!(instance.entity_of(RagdollBoneType::Head).is_some());
+
+        // Joints were actually pushed into the resource.
+        let pw = world.get_resource_mut::<PhysicsWorld>().unwrap();
+        assert_eq!(pw.joints.len(), 10);
+    }
+
+    /// Without a `PhysicsWorld` resource the bodies still spawn but no joints
+    /// are recorded.
+    #[test]
+    fn ragdoll_spawns_bodies_without_physics_world() {
+        let mut world = World::new();
+        let mut builder = RagdollBuilder::new(Vec3::ZERO);
+        builder.create_humanoid();
+        let instance = builder.spawn(&mut world);
+        assert_eq!(instance.bone_count(), 11);
+        assert_eq!(instance.joint_count(), 0);
+    }
+
+    /// A freshly spawned ragdoll falls under gravity without producing NaN/Inf.
+    #[test]
+    fn ragdoll_falls_under_gravity_without_nan() {
+        let mut world = World::new();
+        world.insert_resource(PhysicsWorld::new());
+
+        let mut builder = RagdollBuilder::new(Vec3::new(0.0, 5.0, 0.0));
+        builder.create_humanoid();
+        let instance = builder.spawn(&mut world);
+
+        let pelvis = instance.entity_of(RagdollBoneType::Pelvis).unwrap();
+        let start_y = world.query::<&Transform>().unwrap().get(pelvis.id()).unwrap().position.y;
+
+        let dt = 1.0 / 120.0;
+        for _ in 0..60 {
+            physics_step_system(&world, dt);
+        }
+
+        // Every bone must remain finite.
+        for (_, entity) in &instance.bones {
+            let p = world.query::<&Transform>().unwrap().get(entity.id()).unwrap().position;
+            assert!(p.is_finite(), "ragdoll bone position went non-finite: {p:?}");
+        }
+
+        let end_y = world.query::<&Transform>().unwrap().get(pelvis.id()).unwrap().position.y;
+        assert!(
+            end_y < start_y - 0.05,
+            "ragdoll should fall under gravity: pelvis y {start_y} -> {end_y}"
+        );
     }
 }
