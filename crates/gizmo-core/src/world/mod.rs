@@ -10,11 +10,13 @@ mod component_ops;
 mod entity_lifecycle;
 mod hierarchy_sort;
 pub mod hooks;
+mod introspect;
 mod query;
 mod registration;
 pub mod resources;
 
 pub use self::hooks::*;
+pub use self::introspect::{short_type_name, ArchetypeSummary, ComponentSummary, WorldStats};
 pub use self::resources::*;
 pub use crate::entity::allocator::Entities;
 

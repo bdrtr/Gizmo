@@ -2,7 +2,7 @@ use gizmo::app::App;
 use gizmo::core::input::Input;
 use gizmo::core::world::World;
 use gizmo::math::{Quat, Vec3, Vec4};
-use gizmo::physics::components::{Collider, GlobalTransform, RigidBody, Velocity, Vehicle, Wheel};
+use gizmo::physics::components::{Collider, GlobalTransform, RigidBody, Velocity};
 use gizmo::physics::world::PhysicsWorld;
 use gizmo::physics::Transform;
 use gizmo::renderer::asset::AssetManager;
@@ -29,7 +29,7 @@ pub struct CarConfig {
 impl Default for CarConfig {
     fn default() -> Self {
         Self {
-            engine_power: 3000.0, // Increased slightly since mass is higher
+            engine_power: 800.0, // Gerçekçi güç: gearbox ×10.5 çarpanıyla ~0.5g; yüksek değer aşırı pitch (wheelie/göğe fırlama) yapar
             steer_speed: 6.0,
             steer_auto_return: 15.0,
             steer_max_angle: 1.0,
@@ -39,10 +39,10 @@ impl Default for CarConfig {
             slip_threshold: 6.0,
             drift_grip: 1.0,
             chassis_mass: 1200.0, // Standard car weight
-            linear_damping: 0.9,
+            linear_damping: 0.1, // düşük: direnç vehicle sisteminin rolling-resistance+drag'inden gelir. 0.9 global sönüm terminal hızı ~drive/0.9 ≈ 28 km/h'ye kilitliyordu (motor gücünden bağımsız).
             angular_damping: 1.8,
             friction: 0.8,
-            gravity_y: -20.0, // Stronger gravity to keep it grounded
+            gravity_y: -9.81, // Gerçek-dünya yerçekimi
         }
     }
 }
@@ -116,18 +116,15 @@ fn main() {
         .add_plugin(gizmo::plugins::TransformPlugin)
         .set_setup(setup_scene)
         .set_update(|world, state, dt, input| {
-            let mut throttle = 0.0;
-            let mut brake = 0.0;
+            // W/↑ = ileri gaz, S/↓ = geri vites gazı, Space = fren.
+            let mut throttle: f32 = 0.0;
             if input.is_key_pressed(gizmo::prelude::KeyCode::ArrowUp as u32) || input.is_key_pressed(gizmo::prelude::KeyCode::KeyW as u32) {
                 throttle += 1.0;
             }
             if input.is_key_pressed(gizmo::prelude::KeyCode::ArrowDown as u32) || input.is_key_pressed(gizmo::prelude::KeyCode::KeyS as u32) {
                 throttle -= 1.0;
-                if throttle < 0.0 {
-                    brake = 1.0;
-                    throttle = -0.5;
-                }
             }
+            let brake = if input.is_key_pressed(gizmo::prelude::KeyCode::Space as u32) { 1.0 } else { 0.0 };
 
             let mut is_steering = false;
             if input.is_key_pressed(gizmo::prelude::KeyCode::ArrowLeft as u32) || input.is_key_pressed(gizmo::prelude::KeyCode::KeyA as u32) {
@@ -143,30 +140,34 @@ fn main() {
             }
 
             {
-                let mut vehicle_store = world.borrow_mut::<Vehicle>();
+                let mut vehicle_store = world.borrow_mut::<gizmo::physics::vehicle::VehicleController>();
                 if let Some(mut vehicle) = vehicle_store.get_mut(state.chassis_id) {
-                    vehicle.current_throttle = throttle;
-                    vehicle.current_brake = brake;
-                    vehicle.current_steer = state.steer_angle;
-                    
-                    // Sync from UI
-                    vehicle.engine_power = state.config.engine_power;
-                    vehicle.brake_force = state.config.engine_power * 0.8;
-                    vehicle.downforce_coefficient = 1.5; // High downforce to prevent flying
+                    // Gerçekçi model girdileri: throttle/brake 0..1, steering -1..1, reverse bool.
+                    // S geri vitese alır VE geri gaz verir (eskiden throttle.max(0) ile yutulup
+                    // yalnız fren kalıyordu → geri gitmiyordu).
+                    vehicle.set_reverse(throttle < 0.0);
+                    vehicle.throttle_input = throttle.abs().min(1.0);
+                    vehicle.brake_input = brake;
+                    let max_steer = state.config.steer_max_angle.max(0.01);
+                    vehicle.steering_input = (state.steer_angle / max_steer).clamp(-1.0, 1.0);
 
+                    // T: oto-vites aç/kapa
                     if input.is_key_just_pressed(gizmo::prelude::KeyCode::KeyT as u32) {
-                        vehicle.gearbox.is_automatic = !vehicle.gearbox.is_automatic;
+                        vehicle.auto_shift = !vehicle.auto_shift;
                     }
-
-                    if !vehicle.gearbox.is_automatic {
+                    // Q/E: manuel vites (yalnız oto-vites kapalıyken)
+                    if !vehicle.auto_shift {
+                        let max_gear = vehicle.tuning.gear_ratios.len().saturating_sub(1);
                         if input.is_key_just_pressed(gizmo::prelude::KeyCode::KeyE as u32)
-                            && vehicle.gearbox.current_gear < vehicle.gearbox.gears.len() - 1 {
-                                vehicle.gearbox.current_gear += 1;
-                            }
+                            && vehicle.current_gear < max_gear
+                        {
+                            vehicle.current_gear += 1;
+                        }
                         if input.is_key_just_pressed(gizmo::prelude::KeyCode::KeyQ as u32)
-                            && vehicle.gearbox.current_gear > 0 {
-                                vehicle.gearbox.current_gear -= 1;
-                            }
+                            && vehicle.current_gear > 2
+                        {
+                            vehicle.current_gear -= 1;
+                        }
                     }
                 }
             }
@@ -193,7 +194,7 @@ fn main() {
             let mut physics_dt = dt.min(0.1);
             while physics_dt > 0.0 {
                 let step = physics_dt.min(1.0 / 60.0);
-                gizmo::physics::physics_vehicle_system(world, step);
+                run_vehicle_controllers(world, step);
                 gizmo::physics::physics_step_system(world, step);
                 physics_dt -= step;
             }
@@ -207,7 +208,8 @@ fn main() {
                 let vel_store = world.borrow::<Velocity>();
                 let trans_store = world.borrow::<Transform>();
                 if let (Some(vel), Some(t)) = (vel_store.get(state.chassis_id), trans_store.get(state.chassis_id)) {
-                    let forward = t.rotation * Vec3::new(0.0, 0.0, 1.0);
+                    // VehicleController ileri yönü = -Z (tekerlek spin işareti için).
+                    let forward = t.rotation * Vec3::new(0.0, 0.0, -1.0);
                     car_speed = vel.linear.dot(forward);
                 }
             }
@@ -298,9 +300,10 @@ fn main() {
 
             // Kamera: Arabayı yarış oyunu gibi takip et
             if let Some(t) = world.borrow::<Transform>().get(state.chassis_id) {
-                // Arabanın forward yönü (+Z ekseni)
-                let forward = t.rotation * Vec3::new(0.0, 0.0, 1.0);
-                
+                // Arabanın ileri yönü = VehicleController ile aynı: local -Z. Kamera bunun
+                // ARKASINDA (+Z tarafında) durur → gaz aracı kameradan UZAĞA sürer.
+                let forward = t.rotation * Vec3::new(0.0, 0.0, -1.0);
+
                 // Hedef pozisyon: Arabanın arkasında ve yukarısında
                 let distance = 8.0; // Biraz daha yaklaştırdık (eskiden 10.0 idi)
                 let height = 3.0;
@@ -373,14 +376,23 @@ fn main() {
             egui::Window::new("Car Inspector")
                 .default_pos([10.0, 150.0])
                 .show(ctx, |ui| {
-                    let vehicle_store = world.borrow::<Vehicle>();
+                    let vehicle_store = world.borrow::<gizmo::physics::vehicle::VehicleController>();
                     if let Some(vehicle) = vehicle_store.get(state.chassis_id) {
                         ui.separator();
-                        ui.heading("Gearbox");
-                        let gear_display = if vehicle.gearbox.is_reversing { "R".to_string() } else { (vehicle.gearbox.current_gear + 1).to_string() };
-                        let mode = if vehicle.gearbox.is_automatic { "Auto (Press T to switch)" } else { "Manual (Q/E to shift)" };
-                        ui.label(format!("Gear: {} | Mode: {}", gear_display, mode));
-                        ui.label(format!("Throttle: {:.2} | Brake: {:.2} | Steer: {:.2}", vehicle.current_throttle, vehicle.current_brake, vehicle.current_steer));
+                        ui.heading("Motor & Şanzıman (gerçekçi)");
+                        // gear_ratios: [0]=Geri, [1]=Nötr, [2..]=ileri → gösterim: R / 1..N
+                        let gear_display = if vehicle.reverse_input {
+                            "R".to_string()
+                        } else {
+                            vehicle.current_gear.saturating_sub(1).to_string()
+                        };
+                        let mode = if vehicle.auto_shift { "Auto (T ile değiştir)" } else { "Manual (Q/E)" };
+                        ui.label(format!("Vites: {} | Mod: {}", gear_display, mode));
+                        ui.label(format!("RPM: {:.0} | Hız: {:.1} km/h", vehicle.engine_rpm, vehicle.current_speed_kmh));
+                        ui.label(format!(
+                            "Gaz: {:.2} | Fren: {:.2} | Direksiyon: {:.2}",
+                            vehicle.throttle_input, vehicle.brake_input, vehicle.steering_input
+                        ));
                         ui.separator();
                     }
 
@@ -454,6 +466,83 @@ fn main() {
                         }
                     }
                 });
+
+            // ── 🔬 İNCELEME / ANALİZ MODU ────────────────────────────────────
+            // "Araç neden havada?" — şasi fiziği ile görsel modelin dikey ilişkisini
+            // ve süspansiyon denge yüksekliğini canlı sayılarla gösterir. Fiziği
+            // dondurmak için yukarıdaki 🛠 Gizmo Debugger → "Durdur" + "1 Adım İleri",
+            // çarpışma kutusunu görmek için "Görsel Çarpışma (Debug Draw)".
+            egui::Window::new("🔬 İnceleme / Analiz")
+                .default_pos([10.0, 470.0])
+                .show(ctx, |ui| {
+                    let transforms = world.borrow::<Transform>();
+                    let vehicles = world.borrow::<gizmo::physics::vehicle::VehicleController>();
+
+                    const GROUND_Y: f32 = 0.0;
+                    // Model 2× ölçekte: görsel lastik altı = şasi merkezi + model_min_y(−0.0335)×2.
+                    const TIRE_BOTTOM_OFFSET: f32 = -0.067;
+                    // offset_box(0,0.52,0) half_y 0.22 → collider alt kenarı = cy + 0.30.
+                    const COLLIDER_BOTTOM_OFFSET: f32 = 0.30;
+
+                    if let Some(t) = transforms.get(state.chassis_id) {
+                        let cy = t.position.y;
+                        ui.heading("Şasi (fizik gövdesi)");
+                        ui.label(format!("Merkez Y:            {:>7.3} m", cy));
+                        let tire_bottom = cy + TIRE_BOTTOM_OFFSET;
+                        ui.colored_label(
+                            if tire_bottom.abs() < 0.06 {
+                                egui::Color32::LIGHT_GREEN
+                            } else {
+                                egui::Color32::from_rgb(255, 120, 80)
+                            },
+                            format!("Görsel lastik altı:  {:>7.3} m  (hedef 0)", tire_bottom),
+                        );
+                        ui.label(format!("Collider alt kenarı: {:>7.3} m", cy + COLLIDER_BOTTOM_OFFSET));
+                        ui.label(format!("Zemin Y:             {:>7.3} m", GROUND_Y));
+                        ui.label("Görsel model ölçeği: 2.0×");
+                    }
+
+                    ui.separator();
+                    ui.heading("Tekerlekler (süspansiyon raycast)");
+                    if let Some(v) = vehicles.get(state.chassis_id) {
+                        let names = ["FL", "FR", "BL", "BR"];
+                        let mut grounded_count = 0;
+                        for (i, w) in v.wheels.iter().enumerate() {
+                            let n = names.get(i).copied().unwrap_or("?");
+                            if w.is_grounded { grounded_count += 1; }
+                            let contact_y = w.ground_hit.as_ref().map(|h| h.point.y).unwrap_or(0.0);
+                            ui.label(format!(
+                                "{}: {} | susp_uz {:>5.3} | temas Y {:>6.3}",
+                                n,
+                                if w.is_grounded { "YERDE " } else { "HAVADA" },
+                                w.suspension_length,
+                                contact_y,
+                            ));
+                        }
+                        if let Some(w0) = v.wheels.first() {
+                            let max_dist =
+                                w0.suspension_rest_length + w0.suspension_max_travel + w0.radius;
+                            ui.separator();
+                            ui.label(format!(
+                                "max_dist = rest({:.2}) + travel({:.2}) + r({:.2}) = {:.2} m",
+                                w0.suspension_rest_length, w0.suspension_max_travel, w0.radius, max_dist,
+                            ));
+                            ui.label(format!("yerdeki tekerlek: {}/{}", grounded_count, v.wheels.len()));
+                        }
+                    }
+
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new(
+                            "Fizik tekerlekleri GLB modelinin gerçek göbeklerine hizalandı \
+                             (göbek 0.2152, yarıçap 0.282, rest 0.10) → şasi ~0.09 m'de dengelenip \
+                             görsel lastikler yere değer. Gravity −9.81, COM footprint merkezinde \
+                             (0,0.20,0) → gazda aşırı pitch/fırlama azaltıldı.",
+                        )
+                        .small()
+                        .italics(),
+                    );
+                });
         })
         .set_render(|world, _state, encoder, view, renderer, _light_time| {
             // Bu sahnede sıvı/parçacık/GPU fizik yok — kapat.
@@ -471,6 +560,133 @@ fn main() {
         })
         .run()
         .expect("uygulama çalıştırılamadı");
+}
+
+/// Bir GLB tekerlek düğümünün şasiye göre fizik `local_position`'ını ve `radius`'unu
+/// modelden türetir (elle sayı yerine). `Parent` zincirini yürüyerek local matrisleri
+/// biriktirir → şasinin çocuk-çerçevesindeki konum; `chassis_scale` ile ölçeklenir
+/// (fizik raycast'i scale uygulamaz, bu yüzden ölçek konuma gömülür). Yarıçap tekerlek
+/// mesh'inin (kendi ya da bir çocuk "prim") Y/Z boyutundan alınır. Model isimli tekerlek
+/// içermiyorsa `None` döner → çağıran varsayılana düşer.
+fn derive_wheel(
+    world: &World,
+    chassis_id: u32,
+    chassis_scale: Vec3,
+    name: &str,
+) -> Option<(Vec3, f32)> {
+    // 1. İsimle tekerlek entity'sini bul.
+    let wheel_id = {
+        let names = world.borrow::<gizmo::core::EntityName>();
+        let mut found = None;
+        for (id, n) in names.iter() {
+            if n.0 == name {
+                found = Some(id);
+                break;
+            }
+        }
+        found?
+    };
+
+    // 2. Local matrisleri tekerlekten şasinin doğrudan çocuğuna kadar biriktir.
+    let mut mat = {
+        let ts = world.borrow::<Transform>();
+        ts.get(wheel_id)?.local_matrix
+    };
+    let mut cur = wheel_id;
+    for _ in 0..16 {
+        // döngü-güvenliği
+        let parent = world
+            .borrow::<gizmo::core::component::Parent>()
+            .get(cur)
+            .map(|p| p.0);
+        match parent {
+            Some(p) if p == chassis_id => break,
+            Some(p) => {
+                let p_mat = {
+                    let ts = world.borrow::<Transform>();
+                    ts.get(p).map(|t| t.local_matrix)
+                };
+                match p_mat {
+                    Some(m) => {
+                        mat = m * mat;
+                        cur = p;
+                    }
+                    None => break,
+                }
+            }
+            None => break,
+        }
+    }
+    let local_trans = mat.to_scale_rotation_translation().2;
+    let pos = chassis_scale * local_trans; // bileşen-bileşen; ölçek konuma gömülür
+
+    // 3. Yarıçap: tekerlek mesh'inin (kendi ya da çocuk prim) Y/Z yarı-boyutu × ölçek.
+    let radius = wheel_mesh_radius(world, wheel_id, chassis_scale.y);
+    Some((pos, radius))
+}
+
+/// Tekerlek entity'sinin (ya da bir çocuğunun) Mesh.bounds'undan lastik yarıçapını
+/// kestirir: dönme düzlemindeki (Y/Z) en büyük yarı-boyut × ölçek.
+fn wheel_mesh_radius(world: &World, wheel_id: u32, scale_y: f32) -> f32 {
+    let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
+    let from = |m: &gizmo::renderer::components::Mesh| -> f32 {
+        let y = (m.bounds.max.y - m.bounds.min.y) * 0.5;
+        let z = (m.bounds.max.z - m.bounds.min.z) * 0.5;
+        y.max(z) * scale_y
+    };
+    if let Some(m) = meshes.get(wheel_id) {
+        return from(m);
+    }
+    let kids = world
+        .borrow::<gizmo::core::component::Children>()
+        .get(wheel_id)
+        .map(|c| c.0.clone());
+    if let Some(kids) = kids {
+        for k in kids {
+            if let Some(m) = meshes.get(k) {
+                return from(m);
+            }
+        }
+    }
+    0.3 // makul varsayılan
+}
+
+/// EKSİK MOTOR SİSTEMİ (burada demo-yerel yazıldı): gerçekçi `VehicleController`'ın
+/// fizik fonksiyonu `update_vehicle` motorun HİÇBİR sisteminden çağrılmıyordu (dead-code).
+/// Bu fonksiyon sahnedeki tüm collider'ları toplayıp her araç için raycast+Pacejka+
+/// anti-roll fiziğini çalıştırır. (İleride motora `vehicle_controller_system` olarak terfi.)
+fn run_vehicle_controllers(world: &World, dt: f32) {
+    use gizmo::physics::BodyHandle;
+    // 1. Tüm collider'lar — raycast için sahiplenilmiş anlık görüntü (borrow çakışmasını önler).
+    let mut all: Vec<(BodyHandle, Transform, Collider)> = Vec::new();
+    if let Some(q) = world.query::<(&Transform, &Collider)>() {
+        for (id, (t, c)) in q.iter() {
+            all.push((BodyHandle::from_id(id), *t, c.clone()));
+        }
+    }
+    // 2. Her VehicleController'ı sür (update_vehicle rb/vel'i yerinde değiştirir; self'i dışlar).
+    // SAFETY: physics_vehicle_system ile aynı desen — disjoint bileşen erişimi (RigidBody/
+    // Velocity/VehicleController ayrı tipler), scheduler/demo tek-thread çağırır.
+    if let Some(mut q) = unsafe {
+        world.query_unchecked::<(
+            &Transform,
+            gizmo::core::query::Mut<RigidBody>,
+            gizmo::core::query::Mut<Velocity>,
+            gizmo::core::query::Mut<gizmo::physics::vehicle::VehicleController>,
+        )>()
+    } {
+        for (id, (t, mut rb, mut vel, mut vc)) in q.iter_mut() {
+            gizmo::physics::vehicle::update_vehicle(
+                BodyHandle::from_id(id),
+                &mut vc,
+                &mut rb,
+                t,
+                &mut vel,
+                &all,
+                dt,
+            );
+        }
+    }
 }
 
 fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDemoState {
@@ -610,81 +826,117 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
         }
     }
 
+    // MODELİ ORİJİNE YENİDEN MERKEZLE: raceCarRed GLB kök düğümü
+    // [-0.35, -0.01, -0.65] offset taşıyor → araç şasi orijininden yana/geriye
+    // kayık duruyordu (kamera ve fizik footprint'i orijini takip ettiğinden araç
+    // ekranda ve fizik-görsel hizasında kayıyordu). Doğrudan çocuğun (GLB kökü)
+    // x/z'sini sıfırlayınca tüm gövde+tekerlekler orijine simetrik oturur; böylece
+    // fizik tekerlek local_position'larını (aşağıda) simetrik verebiliriz.
+    {
+        let kids = world
+            .borrow::<gizmo::core::component::Children>()
+            .get(chassis_entity.id())
+            .map(|c| c.0.clone());
+        if let Some(kids) = kids {
+            let mut transforms = world.borrow_mut::<Transform>();
+            for kid in kids {
+                if let Some(mut t) = transforms.get_mut(kid) {
+                    t.position.x = 0.0;
+                    t.position.z = 0.0;
+                    // VehicleController "ileri" = local -Z (Ackermann konvansiyonu), ama Kenney
+                    // modeli +Z'ye bakıyor. Modeli 180° Y çevir → görsel ön -Z olur; X ve Z işaret
+                    // değişip ön/arka + sol/sağ etiketleri VC'nin (-Z ön, +X sağ) tam hizalanır
+                    // (türetilen fizik tekerlekleri de bu rotasyonu içerir).
+                    t.rotation = Quat::from_rotation_y(std::f32::consts::PI) * t.rotation;
+                    t.update_local_matrix();
+                }
+            }
+        }
+    }
+
     // RigidBody ayarlamaları
     let mut chassis_rb = RigidBody::new(config.chassis_mass, true);
     chassis_rb.linear_damping = config.linear_damping; // Asfalt sürtünmesini hissettirmek için sönümlemeyi artırdık
     chassis_rb.angular_damping = config.angular_damping; // Araba dönerken daha rahat kaysın / savrulsun
-    chassis_rb.calculate_box_inertia(2.0, 1.0, 4.0);
-    // Ağırlık merkezini (COM) yere çok daha yakın yapıyoruz (şahlanmayı önlemek için -1.0)
-    chassis_rb.center_of_mass = Vec3::new(0.0, -1.0, 0.0);
+    // Gerçek araç gövde boyutları (model 2× ölçekte ~1.46 × 0.8 × 2.7 m).
+    chassis_rb.calculate_box_inertia(1.46, 0.8, 2.7);
+    // COM tekerlek footprint'inin merkezinde ve makul yükseklikte (yerden ~0.3 m).
+    // Model yeniden merkezlendiği için x/z = 0. Eski -1.0 offset + keyfi geometri,
+    // tahrik kuvvetini COM'un çok altında uygulayıp aşırı pitch (göğe fırlama) yapıyordu.
+    chassis_rb.center_of_mass = Vec3::new(0.0, 0.20, 0.0);
 
     // Araç fiziğinde dönüş süspansiyondan geleceği için kilitleri kaldırıyoruz (Gerçekçi fizik)
     chassis_rb.lock_rotation_x = false;
     chassis_rb.lock_rotation_y = false;
     chassis_rb.lock_rotation_z = false;
     
-    let mut vehicle = Vehicle {
-        engine_power: config.engine_power,
-        brake_force: config.engine_power * 0.8,
-        ..Default::default()
-    };
-    
-    let w_x = 1.0;
-    let w_z = 1.5;
-    let w_y = -0.55; // Kasanın hemen altından başlasın (Çarpışma hatasını önlemek için)
-    
-    // Front Left
-    let wheel_fl = Wheel {
-        local_position: Vec3::new(w_x, w_y, w_z),
-        is_steering: true,
-        is_drive: true,
-        suspension_rest_length: 0.6,
-        ..Default::default()
-    };
-    vehicle.wheels.push(wheel_fl);
+    // GERÇEKÇİ ARAÇ: motorun VehicleController'ı (Pacejka lastik + Ackermann direksiyon
+    // + anti-roll bar + motor tork eğrisi). Arcade Vehicle yerine bunu kullanıyoruz;
+    // fiziği `run_vehicle_controllers` (yukarıda yazdığımız eksik sistem) sürer.
+    let mut vehicle = gizmo::physics::vehicle::VehicleController::new();
 
-    // Front Right
-    let wheel_fr = Wheel {
-        local_position: Vec3::new(-w_x, w_y, w_z),
-        is_steering: true,
-        is_drive: true,
-        suspension_rest_length: 0.6,
-        ..Default::default()
-    };
-    vehicle.wheels.push(wheel_fr);
-
-    // Back Left
-    let wheel_bl = Wheel {
-        local_position: Vec3::new(w_x, w_y, -w_z),
-        is_drive: true,
-        suspension_rest_length: 0.6,
-        ..Default::default()
-    };
-    vehicle.wheels.push(wheel_bl);
-
-    // Back Right
-    let wheel_br = Wheel {
-        local_position: Vec3::new(-w_x, w_y, -w_z),
-        is_drive: true,
-        suspension_rest_length: 0.6,
-        ..Default::default()
-    };
-    vehicle.wheels.push(wheel_br);
+    // ── TEKERLEKLER MODELDEN OTOMATİK TÜRETİLİR ──────────────────────────────
+    // (Aynı model-türetme: GLB isimli düğümleri → konum + yarıçap; başka model de çalışır.)
+    let cs = Vec3::splat(2.0); // chassis (görsel) scale
+    let wheel_names = [
+        "wheelFrontLeft",
+        "wheelFrontRight",
+        "wheelBackLeft",
+        "wheelBackRight",
+    ];
+    for name in wheel_names {
+        let (pos, radius) = derive_wheel(world, chassis_entity.id(), cs, name).unwrap_or_else(|| {
+            let x = if name.contains("Right") { -0.41 } else { 0.41 };
+            let z = if name.contains("Front") { 0.655 } else { -0.947 };
+            (Vec3::new(x, 0.2152, z), 0.282)
+        });
+        let axle = if name.contains("Front") {
+            gizmo::physics::vehicle::Axle::Front
+        } else {
+            gizmo::physics::vehicle::Axle::Rear
+        };
+        vehicle.add_wheel(gizmo::physics::vehicle::Wheel {
+            attachment_local_pos: pos,
+            radius,
+            axle_type: axle,
+            is_left: name.contains("Left"),
+            // Kısa süspansiyon → şasi alçakta oturur, görsel lastikler yere değer.
+            suspension_rest_length: (radius * 0.22).max(0.05),
+            suspension_max_travel: (radius * 0.4).max(0.10),
+            suspension_stiffness: 45000.0,
+            suspension_damping: 3500.0,
+            wheel_mass: 25.0, // makul; spin kararlılığı artık implisit-güncelleme ile sağlanıyor (60 hack'i fantom sürüklemeyi 3×'liyordu)
+            ..Default::default()
+        });
+    }
+    // Ölçek küçük olduğundan wheelbase/track'i türetilen tekerleklerden ayarla.
+    vehicle.tuning.wheelbase = 1.6;
+    vehicle.tuning.track_width = 0.82;
+    // Bu küçük araç + minik lastikler için motor torkunu makul tut: 350 N·m ×gear
+    // lastik tutuşunu kat kat aşıp sürekli patinaj yapıyordu. 150 N·m grippy kalkış verir.
+    vehicle.tuning.max_engine_torque = 450.0;
+    // Tam direksiyon 30°(0.52) hızda sert scrub/yavaşlama yapıyordu → 18°(0.32).
+    vehicle.max_steering_angle = 0.40;
 
     world.add_component(chassis_entity, vehicle);
     world.add_component(chassis_entity, chassis_rb);
     world.add_component(chassis_entity, Velocity::new(Vec3::ZERO));
-    world.add_component(
-        chassis_entity,
-        Collider::box_collider(Vec3::new(1.0, 0.5, 2.0)),
+    // Şasi collider'ı görsel gövdeye oturan, offset'li bir kutu. KRİTİK: alt kenarı
+    // tekerlek göbeklerinin (+0.2152) ÜSTÜNDE (0.52−0.22 = 0.30) tutuldu; yoksa
+    // aşağı bakan süspansiyon ışını collider'ın içinden başlayıp KENDİNİ vururdu
+    // (raycast self-exclusion yapmaz) → tekerlek "yerde değil" sanılıp araç düşerdi.
+    let chassis_collider = Collider::offset_box(
+        Vec3::new(0.0, 0.52, 0.0),
+        Vec3::new(0.73, 0.22, 1.35),
     );
+    world.add_component(chassis_entity, chassis_collider.clone());
 
     phys_world.add_body(
         gizmo::physics::BodyHandle::from_id(chassis_entity.id()),
         chassis_rb,
         Transform::new(chassis_pos),
         Velocity::default(),
-        Collider::box_collider(Vec3::new(1.0, 0.5, 2.0)),
+        chassis_collider,
     );
 
     world.insert_resource(phys_world);

@@ -194,6 +194,10 @@ pub struct ComponentInfo {
     pub drop_fn: Option<unsafe fn(*mut u8)>,
     pub clone_fn: Option<unsafe fn(*const u8, *mut u8, usize)>,
     pub storage_type: StorageType,
+    /// İnsan-okunur tip adı (`std::any::type_name`). Analiz/introspection katmanı
+    /// (gizmo-analysis) archetype tablolarını component adlarıyla raporlayabilsin diye
+    /// kayıt anında yakalanır. TypeId'den sonradan geri elde EDİLEMEZ, bu yüzden burada.
+    pub type_name: &'static str,
 }
 
 impl ComponentInfo {
@@ -201,6 +205,7 @@ impl ComponentInfo {
     pub fn of<T: crate::component::Component>() -> Self {
         Self {
             type_id: TypeId::of::<T>(),
+            type_name: std::any::type_name::<T>(),
             layout: Layout::new::<T>(),
             drop_fn: if std::mem::needs_drop::<T>() {
                 Some(|ptr: *mut u8| unsafe { ptr::drop_in_place(ptr as *mut T) })
@@ -222,6 +227,7 @@ impl ComponentInfo {
     pub fn of_type_id(type_id: TypeId) -> Self {
         Self {
             type_id,
+            type_name: "<unknown>",
             layout: Layout::from_size_align(0, 1).unwrap(), // Geçici, gerçek layout registry'den gelmeli
             drop_fn: None,
             clone_fn: None,

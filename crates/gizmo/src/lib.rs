@@ -46,6 +46,8 @@ pub mod systems;
 
 // === Motor Alt Sistemleri ===
 pub use gizmo_ai as ai;
+#[cfg(feature = "analysis")]
+pub use gizmo_analysis as analysis;
 pub use gizmo_app as app;
 pub use gizmo_core as core;
 pub use gizmo_math as math;

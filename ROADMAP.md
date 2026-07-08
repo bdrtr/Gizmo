@@ -635,6 +635,63 @@ gerçek-UDP örnek onaylı geçmişte senkron).
 
 ---
 
+## Faz 7 — Ürün Katmanı (şipilebilir oyun)
+
+> Faz 0–6 çekirdeği (ECS + fizik + determinizm + test/CI) production seviyesine getirdi.
+> Faz 7'nin teması **"doğru motoru → şipilebilir oyun motoruna" çevirmek**: yeni algoritma
+> değil, mevcut derin parçaları görünür/kullanılabilir/ürün haline getirmek.
+> Kaynak: 2026-07-08 8-alt-sistem kod-temelli değerlendirmesi (olgunluk: ECS 5, rigid-fizik 5,
+> AI 5, render 4, editör 4, altyapı 4, gameplay 4, dinamik/soft-fizik 3, netcode 3).
+> Sıra (etki/çaba + bağımlılık): **M0 → M1 ∥ M2 → M3 ∥ M5 → M4 → M6 → M7.**
+
+### M7.0 — Hemen (ucuz, doğrulanmış açıklar) — çaba: düşük
+- [ ] SSGI apply UV yarı/tam-res uyumsuzluğu — dolaylı ışık sol-üst çeyreğe sıkışıyor (`crates/gizmo-renderer/src/shaders/ssgi_apply.wgsl:12`, `frag_coord/full_res` veya vertex-uv).
+- [ ] Transform undo/redo generation-safe değil — GC-geri-dönüştürülmüş slot yanlış entity'yi bozar; `EntityDespawned` kolundaki gibi `world.is_alive` guard'ı ekle (`crates/gizmo-editor/src/history.rs:75,126`).
+- [ ] Kirli çalışma ağacını topla/commit'le; rustfmt temizliği.
+
+### M7.1 — Materyal & görsel sıçrama — etki: ÇOK YÜKSEK · çaba: orta-yüksek
+En büyük görünür kazanç: gerçek dokulu PBR (şu an yalnız base-color + skaler PBR).
+- [ ] G-buffer geometry shader'ı çoklu doku örnekler: **normal map** (TBN zaten döşeli), **metallic-roughness (ARM)**, **emissive**, **AO**.
+- [ ] Materyal-başına doku bind-group'u (veya bindless); `InstanceRaw` skaler PBR → texture set.
+- [ ] GLTF loader'ın PBR metallic-roughness/normal/emissive map'lerini bağla.
+- [ ] (opsiyonel) spot-light gölgesi + ışık limitini artırma ilk adımı.
+- Deliverable: normal/MR/emissive haritalı `material_demo`.
+
+### M7.2 — Gameplay sistemlerini bağla + car_demo çöz — etki: YÜKSEK · çaba: orta
+Mevcut derin fiziği (Pacejka lastik, KCC) kullanılabilir kılar.
+- [ ] `VehicleControllerSystem` + `CharacterControllerSystem` → schedule'a kayıtlı ECS sistemleri (şu an elle sürülüyor).
+- [ ] car_demo sürüşü/geometrisi (collider-merkez vs görsel base-origin + süspansiyon rest_length).
+- [ ] Ragdoll runtime: iskelet tanımından body+joint spawn eden sistem → rigid eklemlerine bağla.
+- [ ] ABA multibody + GPU FEM için net karar: motora bağla ya da "deneysel" işaretle (GPU FEM CPU'dan sapmış: damping/floor/J-cutoff senkronla veya kaldır).
+- Deliverable: sürülebilir araç + yürüyen karakter + düşen ragdoll demoları.
+
+### M7.3 — Animasyon olgunlaşması — etki: ORTA-YÜKSEK · çaba: orta
+- [ ] Two-bone IK (+ opsiyonel FABRIK).
+- [ ] Scale track'lerini koru (şu an atılıyor); cubic-spline gerçek tangent.
+- [ ] İki `AnimationPlayer` tipini birleştir; skeletal sampling'i renderer'dan animation crate'ine taşı.
+
+### M7.4 — Netcode ürünleştirme — etki: YÜKSEK · çaba: yüksek
+Rollback güçlü; client-server "ürün" değil.
+- [ ] Client-server uçtan uca: gerçek client binary; sunucu authoritative gameplay (entity spawn/replikasyon); `ClientPredictor` + `SnapshotInterpolator`'ı client loop'una bağla.
+- [ ] İki rollback implementasyonunu birleştir (RollbackSession kanonik; ECS RollbackManager kaldır/köprüle).
+- [ ] Cross-platform determinizm (Fp32/Q16.16 sim yolu, opsiyonel feature) → makineler-arası P2P. *Ayrı büyük alt-faz.*
+- [ ] Basit lobby/connect-token + N-oyunculu rollback (input-delay/time-sync).
+
+### M7.5 — Audio & UI cilası — etki: ORTA · çaba: orta-yüksek
+- [ ] Audio: mixer/bus/submix, temel DSP (low-pass/reverb/occlusion), doppler, `AudioSource` ECS sistemi.
+- [ ] UI: font/metin (glyph atlas — şu an metin yok), temel widget seti, z-index + kırpma/kaydırma, renderer entegrasyonu.
+
+### M7.6 — Platform & araç — etki: ORTA · çaba: yüksek
+- [ ] WASM özellik paritesi: tarayıcıda deferred/gölge/compute yolu (bind-group limiti).
+- [ ] Editör: `gizmo-analysis` canlı panelini editöre bağla; `ComponentChanged` undo; script highlighting; WGSL hot-reload; TR/EN i18n.
+- [ ] Birinci-sınıf AssetServer + hot-reload + scene-load'da GPU kaynak restore.
+
+### M7.7 — 1.0 sürüm hijyeni — etki: ORTA · çaba: orta
+- [ ] CI kapıları: rustfmt zorunlu, `missing_docs`+`cargo doc`, coverage (tarpaulin), cargo-deny/audit, physics/renderer benchmark'ları + regresyon takibi.
+- [ ] Staged 1.0 (Stage A çekirdek→1.x, Stage B grafik→0.y) + publish pipeline.
+
+---
+
 ## Çalışma Yöntemi
 - Her madde: **düzelt → regresyon testi yaz → derle/test/clippy → işaretle.**
 - Davranış değiştiren fizik düzeltmelerini `headless_stress_test` + odaklı senaryolarla doğrula.

@@ -22,7 +22,7 @@ render = ["gizmo-app/render", "dep:gizmo-renderer", "dep:wgpu", "dep:bytemuck", 
 audio = ["dep:gizmo-audio", "gizmo-app/audio"]
 # Immediate-mode overlay UI (egui runtime + `set_ui` hook + dev console),
 # usable for in-game HUDs without the full editor.
-egui = ["dep:egui", "gizmo-app/egui", "render"]
+egui = ["dep:egui", "gizmo-app/egui", "render", "gizmo-analysis?/egui"]
 # The full in-engine editor, layered on top of `egui` and `scene`.
 editor = ["egui", "scene", "dep:gizmo-editor", "gizmo-app/editor"]
 scripting = ["dep:gizmo-scripting"]
@@ -32,6 +32,9 @@ physics-dynamics = ["dep:gizmo-physics-dynamics"]
 physics-soft = ["dep:gizmo-physics-soft"]
 ui = ["dep:gizmo-ui", "gizmo-ui/app"]
 animation = ["dep:gizmo-animation"]
+# Derin analiz/observability modülü (per-frame metrik, ECS introspection, trace export).
+# Opt-in — varsayılan yapıyı etkilemez. `physics` collector'ı da dahil eder.
+analysis = ["dep:gizmo-analysis", "gizmo-analysis/app", "gizmo-analysis/physics"]
 
 [dependencies]
 gizmo-core = { path = "../gizmo-core" , version = "0.2.0" }
@@ -43,6 +46,7 @@ gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.2.0", opti
 gizmo-physics-soft = { path = "../gizmo-physics-soft", version = "0.2.0", optional = true }
 gizmo-physics-dynamics = { path = "../gizmo-physics-dynamics", version = "0.2.0", optional = true }
 gizmo-app = { path = "../gizmo-app" , version = "0.2.0", default-features = false }
+gizmo-analysis = { path = "../gizmo-analysis", version = "0.2.0", optional = true, default-features = false }
 gizmo-ai = { path = "../gizmo-ai" , version = "0.2.0" }
 gizmo-audio = { path = "../gizmo-audio", optional = true , version = "0.2.0" }
 gizmo-scripting = { path = "../gizmo-scripting", optional = true , version = "0.2.0" }
