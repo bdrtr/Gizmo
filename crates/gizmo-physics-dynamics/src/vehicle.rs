@@ -352,6 +352,26 @@ fn ackermann_steering_angle(
 /// `all_colliders` must contain every scene collider (static and dynamic); the
 /// entry matching `vehicle_entity` is ignored so the vehicle does not raycast
 /// against itself.
+/// Anti-roll bar (sway bar) corrective vertical force for one wheel on an axle.
+///
+/// `diff = travel_left - travel_right`, where `travel` is suspension
+/// *compression*. A positive `diff` means the left corner is more compressed
+/// (lower) than the right — i.e. the body is rolling toward the left. The
+/// returned value is *added* into `suspension_force`, which pushes the chassis
+/// **up** at that corner. To RESIST the roll, the bar must add up-force on the
+/// lower (more-compressed) corner and remove it from the higher corner, so the
+/// left wheel gets `+diff` and the right `-diff`.
+///
+/// The previous code had both signs flipped (`-diff` on the left, `+diff` on the
+/// right), which *amplified* roll: it pushed the already-high inner corner up and
+/// the already-low outer corner down, so raising `anti_roll_stiffness` — which a
+/// user does to reduce roll — made cornering roll and stability worse.
+#[inline]
+fn anti_roll_force(is_left: bool, diff: f32, stiffness: f32) -> f32 {
+    let signed = if is_left { diff } else { -diff };
+    signed * stiffness
+}
+
 pub fn update_vehicle(
     vehicle_entity: BodyHandle,
     vehicle: &mut VehicleController,
@@ -638,23 +658,15 @@ pub fn update_vehicle(
                     0.0
                 };
 
-                // Anti-roll bar
-                let arb_force = match wheel.axle_type {
-                    Axle::Front => {
-                        if wheel.is_left {
-                            -front_diff
-                        } else {
-                            front_diff
-                        }
-                    }
-                    Axle::Rear => {
-                        if wheel.is_left {
-                            -rear_diff
-                        } else {
-                            rear_diff
-                        }
-                    }
-                } * vehicle.tuning.anti_roll_stiffness;
+                // Anti-roll bar — adds up-force to the more-compressed corner to
+                // resist roll (see `anti_roll_force`; the sign was previously
+                // inverted, amplifying roll).
+                let axle_diff = match wheel.axle_type {
+                    Axle::Front => front_diff,
+                    Axle::Rear => rear_diff,
+                };
+                let arb_force =
+                    anti_roll_force(wheel.is_left, axle_diff, vehicle.tuning.anti_roll_stiffness);
 
                 wheel.suspension_force =
                     (spring_force + damper_force + bump_stop_force + arb_force).max(0.0);
@@ -863,6 +875,37 @@ mod tests {
             total_suspension_force, 5500.0,
             "Total suspension force calculation failed"
         );
+    }
+
+    /// Anti-roll bar must RESIST body roll, not amplify it. With the left corner
+    /// more compressed than the right (`diff > 0` → body rolling left), the bar
+    /// must add up-force to the lower (left) corner and remove it from the higher
+    /// (right) corner. The old code flipped both signs (pro-roll), so `left < 0`
+    /// and `right > 0` — this locks the corrected convention.
+    #[test]
+    fn anti_roll_bar_resists_roll_not_amplifies() {
+        let k = 3000.0;
+        let diff = 0.05; // left suspension 5 cm more compressed than right
+
+        let left = anti_roll_force(true, diff, k);
+        let right = anti_roll_force(false, diff, k);
+
+        assert!(
+            left > 0.0,
+            "ARB must add up-force to the more-compressed (lower) left corner, got {left}"
+        );
+        assert!(
+            right < 0.0,
+            "ARB must remove up-force from the less-compressed (higher) right corner, got {right}"
+        );
+        // A torsion bar transfers load — equal and opposite, zero net vertical force.
+        assert!(
+            (left + right).abs() < 1e-6,
+            "ARB forces must be equal and opposite (load transfer), got {left} and {right}"
+        );
+        // A level car (no compression difference) produces no ARB force.
+        assert_eq!(anti_roll_force(true, 0.0, k), 0.0);
+        assert_eq!(anti_roll_force(false, 0.0, k), 0.0);
     }
 
     #[test]
