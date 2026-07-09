@@ -32,7 +32,7 @@ gizmo-animation = { path = "../gizmo-animation", version = "0.2.0", default-feat
 tobj = "4.0.3"
 image = { version = "0.25", features = ["webp"] }
 serde = { version = "1.0.228", features = ["derive"] }
-gltf = { version = "1.4.1", features = ["import", "extensions", "KHR_materials_emissive_strength"] }
+gltf = { version = "1.4.1", features = ["import", "extensions", "KHR_materials_emissive_strength", "KHR_texture_transform"] }
 notify = "6"
 rand = "0.9.0"
 uuid = { version = "1.23.0", features = ["v4", "serde"] }

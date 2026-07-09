@@ -395,12 +395,13 @@ mod tests {
         assert_eq!(std::mem::size_of::<crate::gpu_types::LightData>(), 64, "LightData size shifted from target 64 bytes!");
         assert_eq!(std::mem::size_of::<crate::gpu_types::PostProcessUniforms>(), 48, "PostProcessUniforms size shifted from target 48 bytes!");
         assert_eq!(std::mem::size_of::<crate::gpu_types::InstanceRaw>(), 96, "InstanceRaw size shifted from target 96 bytes!");
-        // Textured-PBR per-material params: two std140 vec4 slots.
-        assert_eq!(std::mem::size_of::<crate::gpu_types::MaterialParams>(), 32, "MaterialParams size shifted from target 32 bytes!");
+        // Textured-PBR per-material params: three std140 vec4 slots.
+        assert_eq!(std::mem::size_of::<crate::gpu_types::MaterialParams>(), 48, "MaterialParams size shifted from target 48 bytes!");
         assert_eq!(std::mem::align_of::<crate::gpu_types::MaterialParams>(), 4, "MaterialParams alignment unexpected!");
         // Field offsets must match the WGSL `MaterialParams` layout in gbuffer.wgsl.
         assert_eq!(std::mem::offset_of!(crate::gpu_types::MaterialParams, emissive_and_normal_scale), 0, "emissive_and_normal_scale must be at offset 0");
-        assert_eq!(std::mem::offset_of!(crate::gpu_types::MaterialParams, occlusion_and_pad), 16, "occlusion_and_pad must be at offset 16");
+        assert_eq!(std::mem::offset_of!(crate::gpu_types::MaterialParams, occlusion_uv_rot_offset), 16, "occlusion_uv_rot_offset must be at offset 16");
+        assert_eq!(std::mem::offset_of!(crate::gpu_types::MaterialParams, uv_scale), 32, "uv_scale must be at offset 32");
 
         // Vertex attribute offsetleri shader VertexInput @location'larıyla (ve
         // Vertex::desc() ile) BİREBİR uyuşmalı. Bir alan kayarsa skinning/tangent

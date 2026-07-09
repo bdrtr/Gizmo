@@ -32,9 +32,21 @@ struct SkeletonData {
 struct MaterialParams {
     // xyz = emissive factor (linear), w = normal-map scale.
     emissive_and_normal_scale: vec4<f32>,
-    // x = occlusion (AO) strength; yzw reserved.
-    occlusion_and_pad: vec4<f32>,
+    // x = occlusion (AO) strength; y = UV rotation (radians); zw = UV offset.
+    occlusion_uv_rot_offset: vec4<f32>,
+    // xy = UV scale; zw reserved.
+    uv_scale: vec4<f32>,
 };
+
+// KHR_texture_transform: scale, then rotate, then translate the UV
+// (matrix = translation * rotation * scale, per the extension's reference).
+fn apply_uv_transform(uv: vec2<f32>, offset: vec2<f32>, rot: f32, scale: vec2<f32>) -> vec2<f32> {
+    let s = uv * scale;
+    let c = cos(rot);
+    let sn = sin(rot);
+    let rotated = vec2<f32>(c * s.x - sn * s.y, sn * s.x + c * s.y);
+    return rotated + offset;
+}
 
 struct InstanceData {
     model_matrix_0: vec4<f32>,
@@ -139,7 +151,15 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
     // Skip unlit / skybox objects — they are drawn in a forward pass
     if (in.inst_pbr.z > 0.5) { discard; }
 
-    let tex_color   = textureSample(t_diffuse, s_diffuse, in.tex_coords);
+    // KHR_texture_transform: transform the incoming UV once, reuse for every map.
+    let uv = apply_uv_transform(
+        in.tex_coords,
+        material.occlusion_uv_rot_offset.zw,
+        material.occlusion_uv_rot_offset.y,
+        material.uv_scale.xy,
+    );
+
+    let tex_color   = textureSample(t_diffuse, s_diffuse, uv);
     let final_alpha = in.inst_albedo.a * tex_color.a;
     // if (final_alpha < 0.5) { discard; }
 
@@ -163,26 +183,26 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
     // ── Normal map (tangent-space → world) ────────────────────────────────
     // Flat-default map (0.5,0.5,1.0) → (0,0,1) → geometric normal unchanged.
     let normal_scale = material.emissive_and_normal_scale.w;
-    var ts_normal = textureSample(t_normal, s_diffuse, in.tex_coords).xyz * 2.0 - 1.0;
+    var ts_normal = textureSample(t_normal, s_diffuse, uv).xyz * 2.0 - 1.0;
     ts_normal = vec3<f32>(ts_normal.xy * normal_scale, max(ts_normal.z, 1e-4));
     ts_normal = normalize(ts_normal);
     let N = normalize(T * ts_normal.x + B * ts_normal.y + geo_N * ts_normal.z);
 
     // ── Metallic-roughness map (glTF: factor × texture) ───────────────────
     // White-default map → sampled g=b=1 → scalar factors preserved.
-    let mr = textureSample(t_mr, s_diffuse, in.tex_coords);
+    let mr = textureSample(t_mr, s_diffuse, uv);
     let roughness = clamp(in.inst_pbr.x * mr.g, 0.05, 1.0);
     let metallic  = clamp(in.inst_pbr.y * mr.b, 0.0, 1.0);
 
     // ── Ambient occlusion (glTF: 1 + strength·(ao-1)) ─────────────────────
     // White-default map (r=1) → ao=1 → no darkening.
-    let ao_strength = material.occlusion_and_pad.x;
-    let ao = 1.0 + ao_strength * (textureSample(t_ao, s_diffuse, in.tex_coords).r - 1.0);
+    let ao_strength = material.occlusion_uv_rot_offset.x;
+    let ao = 1.0 + ao_strength * (textureSample(t_ao, s_diffuse, uv).r - 1.0);
 
     // ── Emissive (glTF: emissiveFactor × texture) ─────────────────────────
     // White-default map × zero factor → no emission.
     let emissive = material.emissive_and_normal_scale.xyz
-                 * textureSample(t_emissive, s_diffuse, in.tex_coords).rgb;
+                 * textureSample(t_emissive, s_diffuse, uv).rgb;
 
     // Base albedo, modulated by AO, then emissive added.
     // NOTE (deferred, MRT-budget): the G-buffer has no free channel for AO or

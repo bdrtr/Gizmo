@@ -159,32 +159,68 @@ pub struct InstanceRaw {
 ///   (flat-default) normal map, so absent map = unperturbed geometric normal.
 /// * `occlusion_strength` = glTF occlusionTexture.strength — lerps the (white-default)
 ///   AO map toward 1.0, so absent map = no occlusion.
+/// * `uv` = KHR_texture_transform (offset / rotation / scale) applied to the UV
+///   before every map is sampled; identity when the extension is absent.
 ///
-/// std140 layout: two 16-byte vec4 slots → 32 bytes total.
+/// std140 layout: three 16-byte vec4 slots → 48 bytes total.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct MaterialParams {
     /// xyz = emissive factor (linear), w = normal-map scale.
     pub emissive_and_normal_scale: [f32; 4],
-    /// x = occlusion (AO) strength; yzw reserved (0.0).
-    pub occlusion_and_pad: [f32; 4],
+    /// x = occlusion (AO) strength; y = UV rotation (radians); zw = UV offset.
+    pub occlusion_uv_rot_offset: [f32; 4],
+    /// xy = UV scale; zw reserved (0.0).
+    pub uv_scale: [f32; 4],
 }
 
 impl Default for MaterialParams {
     fn default() -> Self {
-        // Neutral material: no emission, unit normal scale, unit AO strength.
+        // Neutral material: no emission, unit normal scale, unit AO strength,
+        // identity UV transform (zero offset, zero rotation, unit scale).
         Self {
             emissive_and_normal_scale: [0.0, 0.0, 0.0, 1.0],
-            occlusion_and_pad: [1.0, 0.0, 0.0, 0.0],
+            occlusion_uv_rot_offset: [1.0, 0.0, 0.0, 0.0],
+            uv_scale: [1.0, 1.0, 0.0, 0.0],
         }
     }
 }
 
 impl MaterialParams {
-    pub fn new(emissive: [f32; 3], normal_scale: f32, occlusion_strength: f32) -> Self {
+    pub fn new(
+        emissive: [f32; 3],
+        normal_scale: f32,
+        occlusion_strength: f32,
+        uv: UvTransform,
+    ) -> Self {
         Self {
             emissive_and_normal_scale: [emissive[0], emissive[1], emissive[2], normal_scale],
-            occlusion_and_pad: [occlusion_strength, 0.0, 0.0, 0.0],
+            occlusion_uv_rot_offset: [occlusion_strength, uv.rotation, uv.offset[0], uv.offset[1]],
+            uv_scale: [uv.scale[0], uv.scale[1], 0.0, 0.0],
         }
+    }
+}
+
+/// A UV-coordinate transform from `KHR_texture_transform` (offset, rotation in
+/// radians, scale). The renderer applies one transform per material (derived
+/// from the base-colour texture) to every map's sampled UV — see
+/// `asset::loaders`. Its [`Default`] is the identity (no transform).
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct UvTransform {
+    pub offset: [f32; 2],
+    pub rotation: f32,
+    pub scale: [f32; 2],
+}
+
+impl Default for UvTransform {
+    fn default() -> Self {
+        Self { offset: [0.0, 0.0], rotation: 0.0, scale: [1.0, 1.0] }
+    }
+}
+
+impl UvTransform {
+    /// True when this transform leaves UVs unchanged (identity).
+    pub fn is_identity(&self) -> bool {
+        self.offset == [0.0, 0.0] && self.rotation == 0.0 && self.scale == [1.0, 1.0]
     }
 }
