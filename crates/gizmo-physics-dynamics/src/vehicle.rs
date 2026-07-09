@@ -42,7 +42,17 @@ impl PacejkaParams {
     /// σ_other = dikey yöndeki normalize kayma miktarı
     fn weighting_lorentzian(&self, sigma_other: f32) -> f32 {
         let k = self.b * sigma_other;
-        1.0 / (1.0 + k * k).sqrt() // Lorentzian scaling
+        // Lorentzian falloff, KİNETİK sürtünme tabanıyla (0.35).
+        // Neden taban: `sigma_other` (özellikle boyuna slip_ratio) SINIRSIZ; patinajda
+        // slip_ratio ~10 olabilir → k=100 → çıplak Lorentzian ≈0.01, yani DÖNEN tekerlek
+        // yanal tutuşunu ~%99 kaybediyordu. Bu, düz tam gazda arka aksın yanal
+        // restoring kuvvetini sıfırlayıp en ufak yük asimetrisinde aracı KENDİLİĞİNDEN
+        // spin ettiriyordu (ve sürtünme çemberinin boş bütçesini hiç kullanmadan). Tam
+        // kayan lastik gerçekte kinetik sürtünmeyle yanal kapasitesinin bir kısmını
+        // korur; tabanı bu artık grip'i modelliyor. Kombine limiti hâlâ aşağıdaki
+        // sürtünme çemberi kırpması belirler (çift-bastırma değil). sigma_other=0 →
+        // taban bağlanmaz (weighting=1) → saf-eksen kuvvet testleri korunur.
+        (1.0 / (1.0 + k * k).sqrt()).max(0.35)
     }
 }
 
@@ -662,7 +672,17 @@ pub fn update_vehicle(
                 } else {
                     wheel.suspension_damping * 2.5 // rebound (daha sert)
                 };
-                let damper_force = damper_coeff * susp_vel;
+                let mut damper_force = damper_coeff * susp_vel;
+                // Rebound damper'ı (2.5×) statik yay yükünü İPTAL etmesin. Açık (explicit)
+                // entegratörde sert rebound damping + aşağıdaki `.max(0.0)` kırpması +
+                // baskı/rebound anahtarlaması, DURAĞAN araçta küçük bir dikey limit-cycle
+                // doğuruyordu: yay pozitif sıkışmada olsa bile (compression>0) rebound
+                // fazında damper yayı tam götürüp `suspension_force`'u 0'a düşürüyordu.
+                // Normal yük 0 → Pacejka lastik kuvveti (∝ Fz) 0 → sürülen tekerlek grip'siz
+                // → tam gazda yerinde patinaj (rpm redline'a fırlar, araç KALKMAZ). Damper'ı
+                // yay kuvvetinin yarısıyla tabanlayarak tekerleğin zemine basılı kalmasını
+                // (Fz>0) garanti et; baskı fazını (pozitif) etkilemez, yalnız rebound'u sınırlar.
+                damper_force = damper_force.max(-spring_force * 0.5);
 
                 // Bump stop: max seyahat sonunda sert non-linear yay
                 let bump_stop_travel = wheel.suspension_max_travel * 0.1;
@@ -765,6 +785,26 @@ pub fn update_vehicle(
                 let implicit_inertia =
                     effective_inertia + slip_stiffness * wheel.radius * wheel.radius * dt / ref_vel;
                 wheel.angular_velocity += (net_torque / implicit_inertia) * dt;
+
+                // --- TRAKSİYON KONTROL (patinaj sınırı) ---
+                // Sürülen tekerleğin drive_torque'u lastik tutuşunun ürettiği reaksiyon
+                // torkunu (≤ μ·Fz·r) kat kat aşabilir → ω dengeye oturmayıp KAÇAR
+                // (ω·r ≫ v_long, gözlemde 109 m/s). Böyle bir slip_ratio sürtünme
+                // çemberini BOYUNA doldurur ve Lorentzian çapraz-ağırlık (gy) yüzünden
+                // lastiğin YANAL tutuşunu ~0'a çeker: sürülen aks yanal kuvvet üretemez,
+                // en küçük yaw bozunumu büyür → araç DÜZ tam gazda kendiliğinden spin
+                // atar (kalkışta da yerinde patinaj). ω'yı hedef slip'e kırpmak boyuna
+                // kuvveti Pacejka tepesi civarında (iyi hızlanma) tutar ama yanal tutuşu
+                // korur (kararlılık). Yalnız TAHRİKLİ tekerlek etkilenir → ön direksiyon
+                // yetkisi ve fren/ABS yolu (drive_torque≈0) değişmez; hız arttıkça
+                // (ref_vel↑) izin verilen ω da büyür → araç normal hızlanır.
+                if wheel.drive_torque.abs() > 1.0 && wheel.radius > 1e-4 {
+                    const TC_TARGET_SLIP: f32 = 0.2; // ~Pacejka tepe slip'i
+                    let spin_margin = TC_TARGET_SLIP * ref_vel;
+                    let hi = (v_long + spin_margin) / wheel.radius;
+                    let lo = (v_long - spin_margin) / wheel.radius;
+                    wheel.angular_velocity = wheel.angular_velocity.clamp(lo, hi);
+                }
 
                 // Fren kilitleme: abs >= tekerlek hızı değilse sıfırla
                 let max_brake_decel = wheel.brake_torque / effective_inertia * dt;
