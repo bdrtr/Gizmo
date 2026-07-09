@@ -651,10 +651,12 @@ fn wheel_mesh_radius(world: &World, wheel_id: u32, scale_y: f32) -> f32 {
     0.3 // makul varsayılan
 }
 
-/// EKSİK MOTOR SİSTEMİ (burada demo-yerel yazıldı): gerçekçi `VehicleController`'ın
-/// fizik fonksiyonu `update_vehicle` motorun HİÇBİR sisteminden çağrılmıyordu (dead-code).
-/// Bu fonksiyon sahnedeki tüm collider'ları toplayıp her araç için raycast+Pacejka+
-/// anti-roll fiziğini çalıştırır. (İleride motora `vehicle_controller_system` olarak terfi.)
+/// Demo-yerel araç sürücüsü. Artık motorda karşılığı VAR: `VehicleController`'ın fizik
+/// fonksiyonu `update_vehicle` M7.2'de `gizmo_physics_dynamics::vehicle_controller_system`
+/// olarak `Phase::Physics`'e kaydedildi (yani ÖLÜ KOD DEĞİL). Bu demo hâlâ kendi yerel
+/// kopyasını çağırıyor; sahnedeki tüm collider'ları toplayıp her araç için raycast+Pacejka+
+/// anti-roll fiziğini çalıştırır. (İleride: bu demo'yu yerel sürücü yerine motor sistemine
+/// bağla — sürüş hissi EKRAN doğrulaması gerektirdiğinden ayrı bir iş olarak ertelendi.)
 fn run_vehicle_controllers(world: &World, dt: f32) {
     use gizmo::physics::BodyHandle;
     // 1. Tüm collider'lar — raycast için sahiplenilmiş anlık görüntü (borrow çakışmasını önler).

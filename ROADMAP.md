@@ -723,19 +723,19 @@ Rollback güçlü; client-server "ürün" değil.
 > yukarıdaki M7.1/M7.2/M7.3 kalemlerinin somutlaştırılmış alt-görevleridir, yeni faz değil.
 
 **Hızlı & kendi kendine yeten (düşük çaba, testle kapanır):**
-- [ ] **Audio tek-atış 3B sonsuz tekrar** — `crates/gizmo/src/systems/audio.rs:74` guard'ı
-      (`_internal_sink_id.is_none() && is_3d`) biten one-shot'ta `:108-110` id'yi `None`'a
-      çekince ertesi frame yeniden çalıyor → `has_played` sentinel'i ekle. AYRICA
-      `audio_spatial_system` hiçbir schedule'a kayıtlı değil (sıfır çağıran) → bağla veya işaretle.
-- [ ] **gizmo-analysis metrik kind-collision** — `crates/gizmo-analysis/src/metrics.rs:198-208`
-      `entry()` mevcut seriyi istenen `kind`'i yok sayarak döndürüyor; aynı ismi gauge+counter
-      enstrümante etmek seriyi sessizce bozuyor → farklı kind'de uyar / ayrı seri aç.
-- [ ] **Scripting negatif/NaN collider boyutu** — `crates/gizmo-scripting/src/api_physics.rs`
-      box/sphere değerlerini clamp'lemiyor → guard ekle (script-typo sertleştirme).
-- [ ] **car_demo bayat yorum** — `demo/src/bin/car_demo.rs:654-657` `update_vehicle`'ı "ölü kod,
-      hiçbir motor sistemi çağırmıyor" diye anlatıyor; artık YANLIŞ (`vehicle_controller_system`
-      kayıtlı). Yorumu düzelt (+ ops.: car_demo'yu yerel `run_vehicle_controllers` yerine motor
-      sistemine bağla).
+- [x] **Audio tek-atış 3B sonsuz tekrar** — ✅ 2026-07-09: `AudioSource`'a `#[serde(skip)] has_played`
+      mandalı eklendi; `audio.rs` guard'ı saf `should_autostart()` predicate'ine çıkarıldı
+      (`is_3d && !has_played && sink.is_none()`), başlatma denemesinde (başarı VE hata) mandal
+      kalkar. `audio_spatial_system` "opt-in" olarak dokümante edildi (DefaultPlugins'e girmez;
+      AudioManager+çıkış cihazı ister). +2 cihaz-bağımsız regresyon testi.
+- [x] **gizmo-analysis metrik kind-collision** — ✅ 2026-07-09: `entry()` artık `Option<&mut>` döndürüyor;
+      ilk kayıtlı kind KAZANIR, uyumsuz kind yazımı DÜŞÜRÜLÜR (seriyi bozmaz) + `trace` feature'ında
+      isim-başına-bir-kez `tracing::warn!`. Steady-state alloc-free hızlı yol korundu. +2 test.
+- [x] **Scripting negatif/NaN collider boyutu** — ✅ 2026-07-09: `sanitize_dim()` (sonlu-değil/≤0 →
+      `MIN_COLLIDER_DIM=1e-4`) box/sphere collider boyutlarına uygulandı. +3 test (Lua'dan negatif/NaN).
+- [x] **car_demo bayat yorum** — ✅ 2026-07-09: yorum gerçeğe güncellendi (`vehicle_controller_system`
+      M7.2'de kayıtlı → ölü-kod DEĞİL). Demo'yu motor sistemine bağlama sürüş-EKRAN-doğrulamasına
+      bağlı olduğundan ayrı iş olarak bırakıldı.
 
 **M7.1 tamamlama (dokulu PBR — görünür kazanç):**
 - [ ] **Dokulu glTF `material_demo` sahnesi/asset'i ekle** — şu an hiçbir demo dokulu glTF
@@ -749,11 +749,14 @@ Rollback güçlü; client-server "ürün" değil.
       sampler (tek paylaşımlı `gltf_material_sampler`; glTF wrap/filter ayarları yok sayılıyor).
 
 **M7.3 tamamlama (EN YÜKSEK ETKİ — iyileştirmeler render'a ulaşsın):**
-- [ ] **İki `AnimationPlayer`'ı birleştir / skeletal sampling'i iyi sampler'a taşı.** IK +
-      scale-track + cubic-Hermite `gizmo-animation` üst seviyeye indi ama RENDER edilen yola
-      ulaşmıyor: gerçek boşluk `crates/gizmo-animation/src/skeletal/sample.rs:74` (scale izlerini
-      TAMAMEN atıyor) + `skeletal/keyframe.rs:52` (cubic→linear düşürüyor). *(NOT: eski
-      `animation_system.rs:298`/`animation.rs:54` breadcrumb'ları BAYAT — kod `skeletal` alt-modülüne taşındı.)*
+- [x] **Render skeletal sampler'ında scale-track + cubic-Hermite** — ✅ 2026-07-09: iki gerçek boşluk
+      RENDER yolunda (`skeletal::sample::evaluate_clip`, renderer `animation_system.rs`'in çağırdığı)
+      kapatıldı: (a) scale izleri artık `changes[joint].2`'ye UYGULANIYOR (squash/stretch/nefes
+      render iskelete ulaşır); (b) gerçek cubic-Hermite (glTF Ek C) — `Keyframe`'e opsiyonel
+      `in_tangent`/`out_tangent` eklendi, loader tangentleri artık SAKLIYOR (eskiden atıyordu),
+      `Track::sample_cubic` + Vec3/Quat Hermite kombinatörleri (tangent yoksa lerp'e düşer).
+      +7 test. NOT: İki AnimationPlayer (clip.rs/system.rs zaten scale'i işliyordu) tam birleştirme
+      HÂLÂ ayrı iş; ama render yolu artık scale+cubic'i doğru örnekliyor. GÖRSEL A/B insan-gated.
 
 **M7.2 kalan karar:**
 - [ ] **ABA multibody + GPU-FEM kararı** — KOD MEVCUT (`crates/gizmo-physics-rigid/src/multibody/aba.rs`

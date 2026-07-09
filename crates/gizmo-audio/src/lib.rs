@@ -89,6 +89,12 @@ pub struct AudioSource {
     pub max_distance: f32,
     /// Internal id of the active sink playing this source, if any.
     pub _internal_sink_id: Option<u64>,
+    /// Latches once this source has been auto-started, so a finished **one-shot** is not
+    /// restarted every frame. (When a one-shot ends the spatial system clears
+    /// `_internal_sink_id`; without this sentinel the auto-start guard would fire again
+    /// next frame → infinite repeat.) Transient runtime state — not persisted.
+    #[serde(skip)]
+    pub has_played: bool,
 }
 
 impl Default for AudioSource {
@@ -108,6 +114,7 @@ impl AudioSource {
             loop_sound: false,
             max_distance: 100.0, // Varsayılan değer
             _internal_sink_id: None,
+            has_played: false,
         }
     }
 
