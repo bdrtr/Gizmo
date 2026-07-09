@@ -717,6 +717,50 @@ Rollback güçlü; client-server "ürün" değil.
 - [ ] CI kapıları: rustfmt zorunlu, `missing_docs`+`cargo doc`, coverage (tarpaulin), cargo-deny/audit, physics/renderer benchmark'ları + regresyon takibi.
 - [ ] Staged 1.0 (Stage A çekirdek→1.x, Stage B grafik→0.y) + publish pipeline.
 
+### Denetim eki (2026-07-09) — kod-doğrulanmış atomik kalemler
+> Kaynak: 5-ajanlık ROADMAP↔kod denetimi (M7.1–M7.3 "kısmi" maddelerinin GERÇEK kalan
+> boşlukları + bug-avı turunun latent bulguları). Hepsi dosya:satır ile sabitlendi. Bunlar
+> yukarıdaki M7.1/M7.2/M7.3 kalemlerinin somutlaştırılmış alt-görevleridir, yeni faz değil.
+
+**Hızlı & kendi kendine yeten (düşük çaba, testle kapanır):**
+- [ ] **Audio tek-atış 3B sonsuz tekrar** — `crates/gizmo/src/systems/audio.rs:74` guard'ı
+      (`_internal_sink_id.is_none() && is_3d`) biten one-shot'ta `:108-110` id'yi `None`'a
+      çekince ertesi frame yeniden çalıyor → `has_played` sentinel'i ekle. AYRICA
+      `audio_spatial_system` hiçbir schedule'a kayıtlı değil (sıfır çağıran) → bağla veya işaretle.
+- [ ] **gizmo-analysis metrik kind-collision** — `crates/gizmo-analysis/src/metrics.rs:198-208`
+      `entry()` mevcut seriyi istenen `kind`'i yok sayarak döndürüyor; aynı ismi gauge+counter
+      enstrümante etmek seriyi sessizce bozuyor → farklı kind'de uyar / ayrı seri aç.
+- [ ] **Scripting negatif/NaN collider boyutu** — `crates/gizmo-scripting/src/api_physics.rs`
+      box/sphere değerlerini clamp'lemiyor → guard ekle (script-typo sertleştirme).
+- [ ] **car_demo bayat yorum** — `demo/src/bin/car_demo.rs:654-657` `update_vehicle`'ı "ölü kod,
+      hiçbir motor sistemi çağırmıyor" diye anlatıyor; artık YANLIŞ (`vehicle_controller_system`
+      kayıtlı). Yorumu düzelt (+ ops.: car_demo'yu yerel `run_vehicle_controllers` yerine motor
+      sistemine bağla).
+
+**M7.1 tamamlama (dokulu PBR — görünür kazanç):**
+- [ ] **Dokulu glTF `material_demo` sahnesi/asset'i ekle** — şu an hiçbir demo dokulu glTF
+      yüklemiyor (`demo/src/bin/bevy_material_demo.rs` yalnız base-color küpleri renklendiriyor);
+      normal/MR/emissive/AO GÖRSEL A/B'si yapılabilecek sahne YOK (deliverable asset eksik).
+- [ ] Spot-light gölgesi + ışık limiti — `deferred_lighting.wgsl` yalnız spot koni-atenüasyonu
+      (`:559-560`) yapıyor, gölge örneklemesi yok.
+- [ ] Gerçek HDR unlit-glow emissive — `gbuffer.wgsl:187-193` şu an additive LDR yaklaşımı
+      (4 MRT dolu); 5. MRT veya lighting-pass girişi ister.
+- [ ] `KHR_materials_emissive_strength` (`loaders.rs:686-687` not: uygulanmıyor) + per-texture
+      sampler (tek paylaşımlı `gltf_material_sampler`; glTF wrap/filter ayarları yok sayılıyor).
+
+**M7.3 tamamlama (EN YÜKSEK ETKİ — iyileştirmeler render'a ulaşsın):**
+- [ ] **İki `AnimationPlayer`'ı birleştir / skeletal sampling'i iyi sampler'a taşı.** IK +
+      scale-track + cubic-Hermite `gizmo-animation` üst seviyeye indi ama RENDER edilen yola
+      ulaşmıyor: gerçek boşluk `crates/gizmo-animation/src/skeletal/sample.rs:74` (scale izlerini
+      TAMAMEN atıyor) + `skeletal/keyframe.rs:52` (cubic→linear düşürüyor). *(NOT: eski
+      `animation_system.rs:298`/`animation.rs:54` breadcrumb'ları BAYAT — kod `skeletal` alt-modülüne taşındı.)*
+
+**M7.2 kalan karar:**
+- [ ] **ABA multibody + GPU-FEM kararı** — KOD MEVCUT (`crates/gizmo-physics-rigid/src/multibody/aba.rs`
+      471 LOC Featherstone + property test; `gpu_physics` feature FEM yolu) ama ana pipeline'a bağlı
+      değil (yalnız kendi testleri çağırıyor) → "motora bağla ya da deneysel işaretle" kararı; kod yazımı değil.
+- [ ] car_demo sürüş/geometri EKRAN doğrulaması (gated — insan gözü gerekir).
+
 ---
 
 ## Çalışma Yöntemi
