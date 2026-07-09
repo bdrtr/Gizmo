@@ -169,8 +169,9 @@ pub fn handle_editor_shortcuts(
     //  TEKİL TUŞLAR (Ctrl/Alt/Shift olmadan)
     // ========================================
 
-    // Sağ tık basılıyken kamera serbest uçuş modu aktif → gizmo modu değiştirme tuşlarını engelle
-    let right_click_held = input.is_mouse_button_pressed(2);
+    // Sağ tık basılıyken kamera serbest uçuş modu aktif → gizmo modu değiştirme tuşlarını engelle.
+    // (mouse::RIGHT = 1; eskiden yanlışlıkla 2 = mouse::MIDDLE kontrol ediliyordu.)
+    let right_click_held = input.is_mouse_button_pressed(gizmo::core::input::mouse::RIGHT);
 
     // Delete → Seçili objeleri sil
     if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Delete as u32) {
