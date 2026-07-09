@@ -7,6 +7,20 @@ use gizmo_math::Vec3;
 use mlua::prelude::*;
 use std::sync::Arc;
 
+/// Bir collider boyutunun alt sınırı. Script'ten gelen negatif/NaN/sonsuz/sıfır değerler
+/// (yazım hatası) bu değere kelepçelenir — dejenere AABB veya GJK'da NaN üretmesinler.
+const MIN_COLLIDER_DIM: f32 = 1e-4;
+
+/// Collider boyutunu güvene al: sonlu ve pozitif değilse küçük pozitif bir extent'e çek.
+/// `NaN`/`-inf`/`inf`/negatif/sıfır hepsi tek dalda `MIN_COLLIDER_DIM`'e düşer.
+fn sanitize_dim(v: f32) -> f32 {
+    if v.is_finite() && v > MIN_COLLIDER_DIM {
+        v
+    } else {
+        MIN_COLLIDER_DIM
+    }
+}
+
 /// Physics API fonksiyonlarını Lua'ya kaydeder
 pub fn register_physics_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result<(), LuaError> {
     let physics_table = lua.create_table()?;
@@ -61,7 +75,12 @@ pub fn register_physics_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
         physics_table.set(
             "add_box_collider",
             lua.create_function(move |_, (id, hx, hy, hz): (u32, f32, f32, f32)| {
-                cq.push(ScriptCommand::AddBoxCollider { id, hx, hy, hz });
+                cq.push(ScriptCommand::AddBoxCollider {
+                    id,
+                    hx: sanitize_dim(hx),
+                    hy: sanitize_dim(hy),
+                    hz: sanitize_dim(hz),
+                });
                 Ok(())
             })?,
         )?;
@@ -72,7 +91,10 @@ pub fn register_physics_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
         physics_table.set(
             "add_sphere_collider",
             lua.create_function(move |_, (id, radius): (u32, f32)| {
-                cq.push(ScriptCommand::AddSphereCollider { id, radius });
+                cq.push(ScriptCommand::AddSphereCollider {
+                    id,
+                    radius: sanitize_dim(radius),
+                });
                 Ok(())
             })?,
         )?;
@@ -179,5 +201,52 @@ mod tests {
         "#;
 
         lua.load(script).exec().unwrap();
+    }
+
+    #[test]
+    fn sanitize_dim_rejects_bad_values() {
+        assert_eq!(sanitize_dim(f32::NAN), MIN_COLLIDER_DIM);
+        assert_eq!(sanitize_dim(f32::INFINITY), MIN_COLLIDER_DIM);
+        assert_eq!(sanitize_dim(f32::NEG_INFINITY), MIN_COLLIDER_DIM);
+        assert_eq!(sanitize_dim(-5.0), MIN_COLLIDER_DIM);
+        assert_eq!(sanitize_dim(0.0), MIN_COLLIDER_DIM);
+        assert_eq!(sanitize_dim(2.5), 2.5); // valid values pass through
+    }
+
+    #[test]
+    fn box_collider_dims_are_sanitized_from_lua() {
+        let lua = Lua::new();
+        let cq = Arc::new(CommandQueue::new());
+        register_physics_api(&lua, cq.clone()).unwrap();
+        // hx negative, hy NaN (0/0), hz valid — script typo hardening.
+        lua.load("physics.add_box_collider(1, -5.0, 0/0, 2.0)").exec().unwrap();
+
+        let cmds = cq.drain();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            ScriptCommand::AddBoxCollider { hx, hy, hz, .. } => {
+                assert!(hx.is_finite() && *hx > 0.0, "negative hx must be clamped, got {hx}");
+                assert!(hy.is_finite() && *hy > 0.0, "NaN hy must be clamped, got {hy}");
+                assert_eq!(*hz, 2.0, "valid hz must pass through untouched");
+            }
+            other => panic!("expected AddBoxCollider, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sphere_collider_radius_is_sanitized_from_lua() {
+        let lua = Lua::new();
+        let cq = Arc::new(CommandQueue::new());
+        register_physics_api(&lua, cq.clone()).unwrap();
+        lua.load("physics.add_sphere_collider(7, -3.0)").exec().unwrap();
+
+        let cmds = cq.drain();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            ScriptCommand::AddSphereCollider { radius, .. } => {
+                assert!(radius.is_finite() && *radius > 0.0, "radius clamped, got {radius}");
+            }
+            other => panic!("expected AddSphereCollider, got {other:?}"),
+        }
     }
 }

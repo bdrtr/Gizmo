@@ -4,12 +4,25 @@ use gizmo_math::Vec3;
 use gizmo_physics_core::Transform;
 use gizmo_physics_rigid::components::Velocity;
 
+/// Bu 3B kaynak bu frame otomatik başlatılmalı mı? Yalnızca henüz otomatik-başlatılmamış
+/// (`!has_played`) ve canlı bir sink'i olmayan 3B kaynaklar için `true`.
+///
+/// `has_played` mandalı KRİTİK: tek-atışlık bir ses bitince sistem `_internal_sink_id`'yi
+/// `None`'a çeker; bu mandal olmadan guard ertesi frame yeniden tetiklenir → sonsuz tekrar.
+fn should_autostart(source: &AudioSource) -> bool {
+    source.is_3d && !source.has_played && source._internal_sink_id.is_none()
+}
+
 /// Gelişmiş 3D Uzamsal Ses (Spatial Audio) ve Doppler Etkisi Sistemi
 ///
 /// Bu sistem her frame çalışır ve:
 /// 1. `AudioSource` bileşenine sahip tüm objelerin 3D pozisyonlarını ses motoruna yollar.
 /// 2. Mesafe tabanlı ses zayıflamasını (Distance Attenuation) uygular.
 /// 3. Hızları (`Velocity`) hesaba katarak Doppler Etkisi (Pitch Shift) hesaplar.
+///
+/// **Opt-in:** `DefaultPlugins` bunu otomatik kaydetmez — çalışması bir `AudioManager`
+/// kaynağı + ses çıkış cihazı gerektirir; her oyun uzamsal ses istemez. Kullanmak için
+/// oyununuzun schedule'ına elle ekleyin, ör. `schedule.add_system(Phase::Update, audio_spatial_system)`.
 pub fn audio_spatial_system(world: &mut World, _dt: f32) {
     let audio_opt = world.get_resource_mut::<AudioManager>();
     let mut audio = match audio_opt {
@@ -71,7 +84,7 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
         };
 
         // Eğer ses henüz çalmıyorsa ve otomatik başlatılacaksa
-        if source._internal_sink_id.is_none() && source.is_3d {
+        if should_autostart(&source) {
             let sink_result = if source.loop_sound {
                 audio.play_3d_looped(
                     &source.sound_name,
@@ -94,9 +107,14 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
                     None
                 }
             };
+            // Denemeyi bir kez yaptık: hem başarıda hem hatada mandalı kaldır. Böylece
+            // biten tek-atış yeniden başlamaz ve eksik/başarısız ses her frame yeniden
+            // denenip log'u doldurmaz.
             source._internal_sink_id = sink_id;
+            source.has_played = true;
             if let Some(mut s) = sources.get_mut(id) {
                 s._internal_sink_id = sink_id;
+                s.has_played = true;
             }
         }
 
@@ -156,5 +174,38 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
                 audio.set_pitch(sink_id, source.pitch);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression: a finished one-shot 3D sound used to auto-restart every frame because the
+    // guard only checked `_internal_sink_id.is_none() && is_3d`, and finishing the sound
+    // cleared the sink id — re-satisfying the guard. `has_played` must latch that off.
+    #[test]
+    fn finished_one_shot_does_not_restart() {
+        let mut s = AudioSource::new("boom"); // is_3d=true, has_played=false, sink=None
+        assert!(should_autostart(&s), "fresh 3D source should auto-start once");
+
+        // Simulate the system starting playback.
+        s.has_played = true;
+        s._internal_sink_id = Some(42);
+        assert!(!should_autostart(&s), "must not restart while playing");
+
+        // One-shot finishes → system clears the sink id.
+        s._internal_sink_id = None;
+        assert!(
+            !should_autostart(&s),
+            "finished one-shot must stay stopped (was the infinite-repeat bug)"
+        );
+    }
+
+    #[test]
+    fn non_3d_source_never_autostarts() {
+        let mut s = AudioSource::new("ui_click");
+        s.is_3d = false;
+        assert!(!should_autostart(&s), "2D sources are not handled by the spatial system");
     }
 }

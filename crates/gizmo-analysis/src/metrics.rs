@@ -6,6 +6,7 @@
 //! kaydet, geçmişi üzerinden trend/tepe (spike) çıkar.
 
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 
 /// Bir metriğin türü — nasıl yorumlanacağını belirler.
@@ -185,6 +186,8 @@ fn percentile(sorted: &[f64], q: f64) -> f64 {
 pub struct MetricStore {
     series: BTreeMap<String, MetricSeries>,
     capacity: usize,
+    /// Names that already emitted a kind-collision warning (warn once, not every frame).
+    warned: HashSet<String>,
 }
 
 impl MetricStore {
@@ -192,34 +195,69 @@ impl MetricStore {
         MetricStore {
             series: BTreeMap::new(),
             capacity: capacity.max(1),
+            warned: HashSet::new(),
         }
     }
 
-    fn entry(&mut self, name: &str, kind: MetricKind) -> &mut MetricSeries {
-        // Var olan anahtar için tahsis yok — steady-state'te tüm anahtarlar mevcut
-        // olduğundan her frame'deki `to_string()` çöpünü atlar.
-        if self.series.contains_key(name) {
-            return self.series.get_mut(name).unwrap();
+    /// Return the mutable series for `name`, creating it with `kind` on first use.
+    ///
+    /// The **first** kind registered for a name wins. Instrumenting the same name with a
+    /// different kind (e.g. `gauge("x")` then `counter_add("x")`) previously reused the
+    /// existing series while ignoring the requested kind, silently corrupting it (a
+    /// counter delta pushed onto a gauge ring, or a gauge write that `end_frame` never
+    /// flushes). We now keep the original kind, drop the mismatched write, and warn once.
+    fn entry(&mut self, name: &str, kind: MetricKind) -> Option<&mut MetricSeries> {
+        // `kind` is Copy, so this read-borrow ends immediately — no alloc on the hot path
+        // where the name already exists with the matching kind (steady state).
+        match self.series.get(name).map(|s| s.kind) {
+            Some(existing) if existing == kind => self.series.get_mut(name),
+            Some(existing) => {
+                if self.warned.insert(name.to_string()) {
+                    Self::warn_kind_collision(name, existing, kind);
+                }
+                None
+            }
+            None => {
+                let cap = self.capacity;
+                Some(
+                    self.series
+                        .entry(name.to_string())
+                        .or_insert_with(|| MetricSeries::new(kind, cap)),
+                )
+            }
         }
-        let cap = self.capacity;
-        self.series
-            .entry(name.to_string())
-            .or_insert_with(|| MetricSeries::new(kind, cap))
+    }
+
+    #[cfg_attr(not(feature = "trace"), allow(unused_variables))]
+    fn warn_kind_collision(name: &str, existing: MetricKind, requested: MetricKind) {
+        #[cfg(feature = "trace")]
+        tracing::warn!(
+            metric = name,
+            existing = existing.as_str(),
+            requested = requested.as_str(),
+            "metrik kind çakışması: ilk kayıtlı kind korunuyor, uyumsuz yazım düşürülüyor"
+        );
     }
 
     /// Counter'a ekle (bu frame'in deltasına birikir).
     pub fn counter_add(&mut self, name: &str, delta: f64) {
-        self.entry(name, MetricKind::Counter).add(delta);
+        if let Some(s) = self.entry(name, MetricKind::Counter) {
+            s.add(delta);
+        }
     }
 
     /// Gauge (anlık değer) yaz.
     pub fn gauge(&mut self, name: &str, value: f64) {
-        self.entry(name, MetricKind::Gauge).set(value);
+        if let Some(s) = self.entry(name, MetricKind::Gauge) {
+            s.set(value);
+        }
     }
 
     /// Sample (ölçüm) kaydet.
     pub fn sample(&mut self, name: &str, value: f64) {
-        self.entry(name, MetricKind::Sample).set(value);
+        if let Some(s) = self.entry(name, MetricKind::Sample) {
+            s.set(value);
+        }
     }
 
     /// Frame sonu — tüm Counter serilerinin deltasını ring'e işler.
@@ -275,6 +313,34 @@ mod tests {
         assert_eq!(s.p50, 30.0);
         assert_eq!(s.last, 50.0);
         assert!((s.p95 - 48.0).abs() < 1e-9); // 0.95*(4)=3.8 → 40 + 0.8*10 = 48
+    }
+
+    #[test]
+    fn kind_collision_keeps_first_kind_and_drops_mismatched_write() {
+        // Reusing a name with a different kind must NOT corrupt the first-registered series.
+        let mut store = MetricStore::new(100);
+        store.gauge("x", 60.0); // registers Gauge, ring = [60]
+        store.counter_add("x", 5.0); // mismatched kind → dropped, series untouched
+        store.end_frame();
+
+        let s = store.get("x").unwrap();
+        assert_eq!(s.kind, MetricKind::Gauge, "first-registered kind must win");
+        assert_eq!(s.values().collect::<Vec<_>>(), vec![60.0], "gauge ring must be intact");
+        assert_eq!(s.total(), 0.0, "counter delta must not leak into the gauge series");
+    }
+
+    #[test]
+    fn kind_collision_symmetric_counter_then_gauge() {
+        let mut store = MetricStore::new(100);
+        store.counter_add("y", 3.0);
+        store.gauge("y", 999.0); // mismatched → dropped
+        store.end_frame();
+
+        let s = store.get("y").unwrap();
+        assert_eq!(s.kind, MetricKind::Counter);
+        assert_eq!(s.total(), 3.0, "counter total preserved");
+        // The dropped gauge write (999.0) must never appear in the ring.
+        assert_eq!(s.values().collect::<Vec<_>>(), vec![3.0]);
     }
 
     #[test]
