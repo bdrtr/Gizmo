@@ -661,12 +661,18 @@ En büyük görünür kazanç: gerçek dokulu PBR (şu an yalnız base-color + s
       albedo'ya ADDITIVE, AO albedo'ya çarpım (LDR yaklaşımı — gerçek HDR unlit-glow emissive 5. MRT
       veya lighting-pass girişi ister = gizmo-studio dokunuşu, ertelendi).
 - [x] Materyal-başına 7-binding doku bind-group'u (base/sampler/normal/MR/emissive/AO/params-uniform);
-      `MaterialParams` GPU struct (32B); `MaterialDefaults` paylaşımlı 1×1 fallback (flat-normal + white-linear).
+      `MaterialParams` GPU struct (48B: emissive/normal_scale + occlusion/UV-rot/UV-offset + UV-scale);
+      `MaterialDefaults` paylaşımlı 1×1 fallback (flat-normal + white-linear).
 - [x] GLTF loader normal/MR/emissive/AO map'lerini + faktörleri bağlıyor (per-image sRGB↔linear sınıflandırma).
+- [x] **`KHR_materials_emissive_strength` + glTF sampler ayarları + `KHR_texture_transform`** — ✅ 2026-07-09b:
+      emissive factor strength ile çarpılıyor; per-materyal sampler wrap/filter'dan türetiliyor; UV
+      transform (offset/rotation/scale) gbuffer'da tüm map'lere uygulanıyor (base-color'dan per-materyal).
+      Hepsi gerçek-glTF-parse birim testli. Bilinen sınır: tek UV kanalı → per-map divergent transform/
+      sampler/texCoord-set base-color'a düşer (dokümante).
 - [ ] (opsiyonel) spot-light gölgesi + ışık limiti — YAPILMADI.
-- [~] Deliverable `material_demo`: shader/layout/loader hazır + naga+pipeline testli; GÖRSEL A/B insan
-      gerektirir (normal+MR bir glTF'te gözle doğrulanmalı). KHR_materials_emissive_strength ve per-texture
-      sampler ayarları henüz uygulanmadı.
+- [~] Deliverable `material_demo`: shader/layout/loader TAM (emissive_strength+sampler+texture_transform
+      dahil) + naga+pipeline testli; GÖRSEL A/B insan gerektirir (normal+MR+UV-tiling bir glTF'te gözle
+      doğrulanmalı) — deliverable dokulu asset hâlâ eksik.
 
 ### M7.2 — Gameplay sistemlerini bağla + car_demo çöz — etki: YÜKSEK · çaba: orta  🟢 KISMEN (2026-07-09)
 Mevcut derin fiziği (Pacejka lastik, KCC) kullanılabilir kılar.
