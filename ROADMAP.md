@@ -691,11 +691,17 @@ Mevcut derin fiziği (Pacejka lastik, KCC) kullanılabilir kılar.
 - [x] Scale track'leri korunuyor (`gizmo-animation` sampler'ı Scale'i birinci-sınıf kanal olarak
       örnekleyip `Transform::scale`'e yazıyor) + Step/Linear/CubicSpline modları + gerçek glTF in/out
       tangent'li cubic Hermite (bounds-checked, malformed'da linear'e düşer). Ayırt edici testler.
-- [ ] İki `AnimationPlayer` tipini birleştir; skeletal sampling'i renderer'dan animation crate'ine
-      taşı — ERTELENDİ. ⚠️ Bu yüzden `gizmo-animation`'daki scale/cubic iyileştirmeleri, renderer'ın
-      KENDİ skeletal yolu (`gizmo-renderer/src/animation_system.rs:298` scale'i atar, `animation.rs:54`
-      cubic'i linear'e düşürür) hâlâ eskisi olduğundan RENDER EDİLEN iskelete henüz ulaşmıyor
-      (crate-arası birleştirme gerekir).
+- [x] **İki `AnimationPlayer` — sampling çekirdeği BİRLEŞTİRİLDİ (2026-07-09b)**. DENETİM BULGUSU:
+      iki player TAM struct-merge'e uygun DEĞİL — `crate::clip`/`player`/`system` (isim-bazlı
+      entity-`Transform` anim) ve `crate::skeletal::*` (GPU-skinning kemik) KASITLI ayrı alt-sistemler
+      (skeletal/mod.rs doc'u: aynı-isimli tür çakışmasını önlemek için). Skeletal sampling ZATEN
+      renderer'dan `gizmo-animation`'a taşınmış (eski `animation_system.rs:298`/`animation.rs:54`
+      izleri BAYAT); scale/cubic iyileştirmeleri `skeletal::sample::evaluate_clip` ile render iskelete
+      ARTIK ULAŞIYOR (3f78015). Kalan GERÇEK sorun = paylaşılan cubic-Hermite matematiğinin İKİ kopyası
+      (transform-track `ik::hermite_*`, skeletal kendi kopyası) → tekrar-diverge riski. ÇÖZÜM: tek
+      kanonik `crate::hermite` modülü (ik'ten çıkarıldı), her iki sampler onu çağırır (+4 direkt test,
+      lib.rs iki-alt-sistem doc'u). Tam clip/track veri-modeli birleştirme KASITLI ayrım nedeniyle
+      YAPILMADI (mimariye aykırı olurdu).
 
 ### M7.4 — Netcode ürünleştirme — etki: YÜKSEK · çaba: yüksek
 Rollback güçlü; client-server "ürün" değil.
