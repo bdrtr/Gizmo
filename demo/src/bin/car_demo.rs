@@ -71,6 +71,8 @@ struct CarDemoState {
     last_skid_time: f32,
     is_drifting: bool,
     show_physics_debug: bool,
+    fps_smooth: f32,
+    phys_accum: f32,
 }
 
 impl CarDemoState {
@@ -99,6 +101,8 @@ impl CarDemoState {
             last_skid_time: 0.0,
             is_drifting: false,
             show_physics_debug: true,
+            fps_smooth: 0.0,
+            phys_accum: 0.0,
         }
     }
 }
@@ -125,6 +129,13 @@ fn main() {
                 throttle -= 1.0;
             }
             let brake = if input.is_key_pressed(gizmo::prelude::KeyCode::Space as u32) { 1.0 } else { 0.0 };
+
+            // FPS (yumuşatılmış). NOT: present_mode AutoNoVsync = FPS sınırsız, sahne yüküyle
+            // dalgalanır; sayının inip çıkması normaldir, hata değil.
+            if dt > 0.0 {
+                let inst = 1.0 / dt;
+                state.fps_smooth = if state.fps_smooth <= 0.0 { inst } else { state.fps_smooth * 0.92 + inst * 0.08 };
+            }
 
             let mut is_steering = false;
             if input.is_key_pressed(gizmo::prelude::KeyCode::ArrowLeft as u32) || input.is_key_pressed(gizmo::prelude::KeyCode::KeyA as u32) {
@@ -190,13 +201,20 @@ fn main() {
                 }
             }
 
-            // Sabit Fizik Adımı (Fixed Timestep) - Titremeyi ve hayalet etkisini çözer
-            let mut physics_dt = dt.min(0.1);
-            while physics_dt > 0.0 {
-                let step = physics_dt.min(1.0 / 60.0);
-                run_vehicle_controllers(world, step);
-                gizmo::physics::physics_step_system(world, step);
-                physics_dt -= step;
+            // GERÇEK Sabit Zaman Adımı (accumulator). ÖNCEDEN `step = dt.min(1/60)` idi:
+            // yüksek fps'de (dt<1/60) fizik HAM DEĞİŞKEN dt ile adımlıyordu. Frame süresi
+            // 2-12 ms arası zıpladığından (uncapped render), sert süspansiyonun (45000 N/m)
+            // açık entegrasyonu her frame farklı dt görüp normal yükü/şasi yüksekliğini
+            // yüksek-frekans SALINDIRIYORDU = hızlandıkça hissedilen TİTREME. Sabit dt ile
+            // adımlamak fiziği frame timing jitter'ından tamamen ayırır → titreme biter.
+            const FIXED_DT: f32 = 1.0 / 240.0;
+            state.phys_accum += dt.min(0.1);
+            let mut steps = 0;
+            while state.phys_accum >= FIXED_DT && steps < 32 {
+                run_vehicle_controllers(world, FIXED_DT);
+                gizmo::physics::physics_step_system(world, FIXED_DT);
+                state.phys_accum -= FIXED_DT;
+                steps += 1;
             }
 
             if state.show_physics_debug {
@@ -333,13 +351,16 @@ fn main() {
             update_camera(world, state, input, dt);
         })
         .set_ui(|world, state, ctx| {
-            let mut speed_kmh = 0.0;
-            if let Some(phys_world) = world.get_resource::<PhysicsWorld>() {
-                if let Some(&idx) = phys_world.entity_index_map.get(&state.chassis_id) {
-                    let vel = phys_world.velocities[idx];
-                    speed_kmh = vel.linear.length() * 3.6; // m/s to km/h
-                }
-            }
+            // Hız göstergesi = İLERİ (longitudinal) yer hızı. ESKİDEN `velocity.linear.length()`
+            // (toplam hız magnitüdü) idi → DİKEY zıplama (spawn/sıçrama) ve YANAL kayma (drift/
+            // spin) hızı şişirip "hızlı değilim ama HUD yüksek/kontrolsüz artıyor" yapıyordu.
+            // VehicleController.current_speed_kmh = v·forward, yalnız ileri bileşen (gerçek
+            // kilometre saati gibi). abs(): geri viteste negatif göstermesin.
+            let speed_kmh = world
+                .borrow::<gizmo::physics::vehicle::VehicleController>()
+                .get(state.chassis_id)
+                .map(|vc| vc.current_speed_kmh.abs())
+                .unwrap_or(0.0);
 
             egui::Area::new(egui::Id::new("hud_area"))
                 .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-40.0, -40.0))
@@ -350,7 +371,17 @@ fn main() {
                             .color(egui::Color32::WHITE)
                             .strong(),
                     );
-                    ui.label(format!("Wheels Found: FL:{} FR:{} BL:{} BR:{}", 
+                    // FPS göstergesi (yeşil>50, sarı 30-50, kırmızı<30). AutoNoVsync olduğu için
+                    // uncapped; sahne yüküyle dalgalanır. Debug build'de release'in ~yarısı olur.
+                    let fps = state.fps_smooth;
+                    let fps_col = if fps >= 50.0 { egui::Color32::from_rgb(80, 220, 100) }
+                        else if fps >= 30.0 { egui::Color32::from_rgb(230, 200, 60) }
+                        else { egui::Color32::from_rgb(230, 90, 90) };
+                    ui.label(
+                        egui::RichText::new(format!("{:.0} FPS  ({:.1} ms)", fps, if fps > 0.0 { 1000.0 / fps } else { 0.0 }))
+                            .size(22.0).color(fps_col).strong(),
+                    );
+                    ui.label(format!("Wheels Found: FL:{} FR:{} BL:{} BR:{}",
                         state.wheel_fl.is_some(), state.wheel_fr.is_some(), 
                         state.wheel_bl.is_some(), state.wheel_br.is_some()));
                 });
