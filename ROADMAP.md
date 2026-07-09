@@ -768,9 +768,14 @@ Rollback güçlü; client-server "ürün" değil.
       HÂLÂ ayrı iş; ama render yolu artık scale+cubic'i doğru örnekliyor. GÖRSEL A/B insan-gated.
 
 **M7.2 kalan karar:**
-- [ ] **ABA multibody + GPU-FEM kararı** — KOD MEVCUT (`crates/gizmo-physics-rigid/src/multibody/aba.rs`
-      471 LOC Featherstone + property test; `gpu_physics` feature FEM yolu) ama ana pipeline'a bağlı
-      değil (yalnız kendi testleri çağırıyor) → "motora bağla ya da deneysel işaretle" kararı; kod yazımı değil.
+- [x] **ABA multibody kararı → DENEYSEL İŞARETLENDİ** — ✅ 2026-07-09: motora tam bağlama
+      (ECS component + zamanlanmış sistem + world-transform export + rigid-body çarpışma kuplajı
+      + floating-base tamamlama) çözülmemiş büyük tasarım olduğundan, `multibody` modülü opt-in
+      `experimental-multibody` feature'ının arkasına alındı (`reflect` deseniyle; default OFF →
+      eksik yüzey 1.0 public API'sinden dışarıda). Modül doc'una dürüst limitasyonlar yazıldı
+      (ECS-entegre değil, çarpışma kuplajı yok, yalnız fixed-base — floating-base ivme geri-yayılımı
+      eksik). Property testleri feature'a gate'lendi + CI "Features" job'ına opt-in test adımı
+      eklendi. NOT: GPU-FEM (`gpu_physics`) kararı ayrı; bu tur yalnız ABA multibody.
 - [ ] car_demo sürüş/geometri EKRAN doğrulaması (gated — insan gözü gerekir).
 
 ---

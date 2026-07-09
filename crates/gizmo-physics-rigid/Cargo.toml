@@ -13,6 +13,14 @@ readme.workspace = true
 # OFF by default so `bevy_reflect` is absent from the public API at 1.0.
 reflect = ["dep:bevy_reflect", "gizmo-physics-core/reflect", "gizmo-core/reflect"]
 
+# Featherstone ABA articulated-body forward dynamics (`multibody` module).
+# EXPERIMENTAL and OFF by default: the solver is a correct fixed-base forward-
+# dynamics kernel (property-tested), but it is NOT wired into the ECS /
+# `PhysicsWorld`, has no collision coupling with rigid bodies, and floating-base
+# integration is incomplete. Kept opt-in so this unfinished surface stays out of
+# the 1.0 public API — same rationale as `reflect`.
+experimental-multibody = []
+
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
 gizmo-core = { path = "../gizmo-core", version = "0.2.0" }

@@ -20,8 +20,9 @@
 //!   contact islands so they can be solved in parallel and put to sleep.
 //! - **[`DestructionSystem`] and fracture utilities** — runtime breaking and
 //!   pre-fractured Voronoi shattering for destructible objects.
-//! - **`multibody`** — Featherstone Articulated Body Algorithm (ABA) for
-//!   reduced-coordinate articulations.
+//! - **`multibody`** *(experimental, `experimental-multibody` feature)* —
+//!   Featherstone Articulated Body Algorithm (ABA) for reduced-coordinate
+//!   articulations. Off by default; see the module docs for its limitations.
 //!
 //! # Determinism
 //!
@@ -35,13 +36,16 @@
 //!   [`Breakable`], [`Explosion`]).
 //! - [`integrator`], [`solver`], [`joints`], [`island`] — the solver stack.
 //! - [`destruction`], [`fracture`] — destruction and shattering.
-//! - [`vehicle`], [`multibody`], [`system`], [`world`] — vehicle dynamics,
-//!   articulated bodies, ECS systems and the world container.
+//! - [`vehicle`], [`system`], [`world`] — vehicle dynamics, ECS systems and the
+//!   world container. (`multibody` is an opt-in experimental module — above.)
 
 // Sequential fallback for rayon on wasm (no OS threads); native uses rayon.
 #[cfg(target_arch = "wasm32")]
 mod parallel_compat;
 pub mod components;
+/// Experimental articulated-body (multibody) dynamics — opt-in, off by default.
+/// See the crate's `experimental-multibody` feature and the module docs.
+#[cfg(feature = "experimental-multibody")]
 pub mod multibody;
 pub mod destruction;
 pub mod fracture;

@@ -80,6 +80,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Test Stage A crates with `reflect`
         run: cargo test --locked -p gizmo-core -p gizmo-physics-core -p gizmo-physics-rigid -p gizmo-scene --features reflect
+      - name: Test experimental multibody (ABA) — opt-in, off by default
+        run: cargo test --locked -p gizmo-physics-rigid --features experimental-multibody
 
   # ── MSRV gate: workspace must build on the declared rust-version (1.92) ────
   msrv:
