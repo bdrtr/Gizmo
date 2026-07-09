@@ -1,3 +1,29 @@
+//! # ⚠️ Experimental — articulated-body (multibody) dynamics
+//!
+//! Featherstone Articulated Body Algorithm (ABA) forward dynamics in reduced
+//! (joint-space) coordinates: an [`ArticulatedTree`] of [`ArticulatedLink`]s
+//! connected by Fixed / Revolute / Prismatic joints, solved with 6D spatial
+//! algebra. [`aba::compute_aba`] fills each link's `q_ddot`, and
+//! [`system::step_articulated_trees`] integrates the joint state.
+//!
+//! **This module is gated behind the `experimental-multibody` feature and is
+//! deliberately absent from the default (1.0) public API.** It is a correct,
+//! property-tested *kernel*, not a finished subsystem. Known limitations:
+//!
+//! - **Not ECS-integrated.** [`ArticulatedTree`] is a plain struct, not a
+//!   component; nothing in [`crate::world::PhysicsWorld`] or the ECS schedule
+//!   steps it. You drive it yourself via [`system::step_articulated_trees`].
+//! - **No collision coupling.** Links do not collide with each other or with
+//!   [`crate::components::RigidBody`] world geometry — pure forward dynamics.
+//! - **Fixed-base only.** Floating-base integration is unfinished: the base
+//!   acceleration is not propagated back from the ABA passes (see
+//!   [`system::step_articulated_trees`]), so `is_fixed_base = false` trees do
+//!   not translate/rotate their root.
+//!
+//! Wiring these into the engine (component + scheduled system + world-transform
+//! export + rigid-body collision coupling + floating base) is tracked as a
+//! larger task in the ROADMAP. Until then it stays opt-in.
+
 #![allow(non_snake_case)]
 
 pub mod aba;

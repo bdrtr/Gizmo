@@ -7,6 +7,11 @@
 //!   * tek revolute sarkaç — q̈ = −m·g·l·sin(q) / (I_zz + m·l²)  (her açıda)
 //!   * tek prismatic eklem — q̈ = gravity·axis  (eğim eksenine yerçekimi izdüşümü)
 //!   * rastgele N-link zincir — q̈ daima sonlu (NaN/Inf üretmez)
+//!
+//! multibody artık opt-in `experimental-multibody` feature'ının arkasında; bu
+//! dosyanın tamamı ona göre gate'li. Çalıştır:
+//! `cargo test -p gizmo-physics-rigid --features experimental-multibody`.
+#![cfg(feature = "experimental-multibody")]
 
 use gizmo_math::spatial::{SpatialInertia, SpatialMatrix, SpatialVector};
 use gizmo_math::{Mat3, Quat, Vec3};
