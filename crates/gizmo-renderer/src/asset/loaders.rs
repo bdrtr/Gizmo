@@ -723,6 +723,29 @@ fn emissive_with_strength(factor: [f32; 3], strength: Option<f32>) -> [f32; 3] {
     [factor[0] * s, factor[1] * s, factor[2] * s]
 }
 
+/// Resolve the `KHR_texture_transform` (UV offset / rotation / scale) for a
+/// material, from its base-colour texture (identity when absent).
+///
+/// The g-buffer applies a single UV transform per material to every map, so we
+/// take the base-colour map's transform — real assets that tile/offset a
+/// material apply the same transform across its maps. A per-map transform on a
+/// non-base map, or a `texCoord` set override, is not represented (single UV
+/// channel); such rare cases fall back to the base-colour transform.
+fn material_uv_transform(material: &gltf::Material) -> crate::gpu_types::UvTransform {
+    match material
+        .pbr_metallic_roughness()
+        .base_color_texture()
+        .and_then(|ti| ti.texture_transform())
+    {
+        Some(tt) => crate::gpu_types::UvTransform {
+            offset: tt.offset(),
+            rotation: tt.rotation(),
+            scale: tt.scale(),
+        },
+        None => crate::gpu_types::UvTransform::default(),
+    }
+}
+
 fn build_gltf_materials(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -800,10 +823,17 @@ fn build_gltf_materials(
                 .occlusion_texture()
                 .map(|ot| ot.strength())
                 .unwrap_or(1.0);
-            let params =
-                crate::gpu_types::MaterialParams::new(emissive, normal_scale, occlusion_strength);
-            let is_default_params =
-                emissive == [0.0, 0.0, 0.0] && normal_scale == 1.0 && occlusion_strength == 1.0;
+            let uv_transform = material_uv_transform(&material);
+            let params = crate::gpu_types::MaterialParams::new(
+                emissive,
+                normal_scale,
+                occlusion_strength,
+                uv_transform,
+            );
+            let is_default_params = emissive == [0.0, 0.0, 0.0]
+                && normal_scale == 1.0
+                && occlusion_strength == 1.0
+                && uv_transform.is_identity();
 
             // Fast path: no textures and neutral params → reuse the shared white
             // fallback bind group. Otherwise assemble a dedicated one.
@@ -1253,5 +1283,65 @@ mod tests {
         assert_eq!(material_sampler_key(&material), SamplerKey::DEFAULT);
         // Absent extension → no strength (folds to factor unchanged).
         assert_eq!(material.emissive_strength(), None);
+    }
+
+    #[test]
+    fn gltf_texture_transform_parsed_and_packed() {
+        // KHR_texture_transform on the base-colour texture: offset/rotation/scale.
+        let json = r#"{
+          "asset": { "version": "2.0" },
+          "extensionsUsed": ["KHR_texture_transform"],
+          "images": [ { "uri": "dummy.png" } ],
+          "samplers": [ {} ],
+          "textures": [ { "sampler": 0, "source": 0 } ],
+          "materials": [
+            {
+              "pbrMetallicRoughness": {
+                "baseColorTexture": {
+                  "index": 0,
+                  "extensions": {
+                    "KHR_texture_transform": {
+                      "offset": [0.1, 0.2],
+                      "rotation": 1.5,
+                      "scale": [2.0, 3.0]
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }"#;
+        let doc = gltf::Gltf::from_slice(json.as_bytes()).expect("parse");
+        let material = doc.materials().next().expect("one material");
+
+        let uv = material_uv_transform(&material);
+        assert_eq!(uv.offset, [0.1, 0.2]);
+        assert!((uv.rotation - 1.5).abs() < 1e-6);
+        assert_eq!(uv.scale, [2.0, 3.0]);
+        assert!(!uv.is_identity());
+
+        // Packed into MaterialParams in the documented slots:
+        // occlusion_uv_rot_offset = [occlusion, rotation, offset.x, offset.y].
+        let params = crate::gpu_types::MaterialParams::new([0.0; 3], 1.0, 1.0, uv);
+        assert_eq!(params.occlusion_uv_rot_offset, [1.0, 1.5, 0.1, 0.2]);
+        assert_eq!(params.uv_scale, [2.0, 3.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn material_without_texture_transform_is_identity() {
+        let json = r#"{
+          "asset": { "version": "2.0" },
+          "images": [ { "uri": "dummy.png" } ],
+          "samplers": [ {} ],
+          "textures": [ { "sampler": 0, "source": 0 } ],
+          "materials": [ { "pbrMetallicRoughness": { "baseColorTexture": { "index": 0 } } } ]
+        }"#;
+        let doc = gltf::Gltf::from_slice(json.as_bytes()).expect("parse");
+        let material = doc.materials().next().expect("one material");
+        assert!(material_uv_transform(&material).is_identity());
+        // Default MaterialParams carries an identity UV (unit scale, zero offset/rot).
+        let d = crate::gpu_types::MaterialParams::default();
+        assert_eq!(d.uv_scale, [1.0, 1.0, 0.0, 0.0]);
+        assert_eq!(d.occlusion_uv_rot_offset, [1.0, 0.0, 0.0, 0.0]);
     }
 }
