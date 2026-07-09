@@ -400,15 +400,26 @@ fn build_bone_joint(bone: &RagdollBoneDef, parent: BodyHandle, child: BodyHandle
             bone.local_anchor_child,
             bone.joint_axis,
         ),
-        JointType::Spring => Joint::spring(
-            parent,
-            child,
-            bone.local_anchor_parent,
-            bone.local_anchor_child,
-            bone.local_pos.length(),
-            1000.0,
-            50.0,
-        ),
+        JointType::Spring => {
+            // Rest length is the ANCHOR-to-anchor separation at the initial pose
+            // (what the spring solver compares `|anchor_b - anchor_a|` against),
+            // NOT the bone centre-to-centre distance. Since
+            // `child_world - parent_world == local_pos`, the anchor gap is
+            // `local_pos + anchor_child - anchor_parent`. Using `local_pos.length()`
+            // made an offset-anchor spring rest at the wrong length (fighting its
+            // own initial pose).
+            let rest_length =
+                (bone.local_pos + bone.local_anchor_child - bone.local_anchor_parent).length();
+            Joint::spring(
+                parent,
+                child,
+                bone.local_anchor_parent,
+                bone.local_anchor_child,
+                rest_length,
+                1000.0,
+                50.0,
+            )
+        }
         // `JointType` is `#[non_exhaustive]`; fall back to a rigid fixed joint
         // for any future variant so the skeleton stays connected.
         _ => Joint::fixed(
@@ -460,6 +471,42 @@ mod tests {
         let instance = builder.spawn(&mut world);
         assert_eq!(instance.bone_count(), 11);
         assert_eq!(instance.joint_count(), 0);
+    }
+
+    /// A Spring-jointed bone must rest at the ANCHOR-to-anchor separation, not
+    /// the bone centre-to-centre distance (which is what the spring solver
+    /// actually compares against). Regression for the old `local_pos.length()`.
+    #[test]
+    fn spring_bone_rest_length_is_anchor_to_anchor() {
+        use super::{build_bone_joint, RagdollBoneDef};
+        use gizmo_physics_core::BodyHandle;
+        use gizmo_physics_rigid::joints::{JointData, JointType};
+
+        let bone = RagdollBoneDef {
+            bone_type: RagdollBoneType::Head,
+            parent_type: Some(RagdollBoneType::Torso),
+            local_pos: Vec3::new(0.0, 0.4, 0.0),
+            radius: 0.1,
+            length: 0.2,
+            mass: 3.0,
+            joint_type: JointType::Spring,
+            local_anchor_parent: Vec3::new(0.0, 0.1, 0.0),
+            local_anchor_child: Vec3::new(0.0, -0.1, 0.0),
+            joint_axis: Vec3::Y,
+            limits: None,
+        };
+        let joint = build_bone_joint(&bone, BodyHandle::from_id(0), BodyHandle::from_id(1));
+        let JointData::Spring(data) = joint.data else {
+            panic!("expected a spring joint");
+        };
+        // Anchor gap = local_pos + anchor_child - anchor_parent
+        //            = (0,0.4,0) + (0,-0.1,0) - (0,0.1,0) = (0,0.2,0) → 0.2.
+        // The old centre-to-centre value would have been |local_pos| = 0.4.
+        assert!(
+            (data.rest_length - 0.2).abs() < 1e-6,
+            "spring rest length must be the 0.2 anchor separation, got {} (0.4 = old centre-to-centre bug)",
+            data.rest_length
+        );
     }
 
     /// A freshly spawned ragdoll falls under gravity without producing NaN/Inf.
