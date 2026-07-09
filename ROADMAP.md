@@ -744,9 +744,18 @@ Rollback güçlü; client-server "ürün" değil.
 - [ ] Spot-light gölgesi + ışık limiti — `deferred_lighting.wgsl` yalnız spot koni-atenüasyonu
       (`:559-560`) yapıyor, gölge örneklemesi yok.
 - [ ] Gerçek HDR unlit-glow emissive — `gbuffer.wgsl:187-193` şu an additive LDR yaklaşımı
-      (4 MRT dolu); 5. MRT veya lighting-pass girişi ister.
-- [ ] `KHR_materials_emissive_strength` (`loaders.rs:686-687` not: uygulanmıyor) + per-texture
-      sampler (tek paylaşımlı `gltf_material_sampler`; glTF wrap/filter ayarları yok sayılıyor).
+      (4 MRT dolu); 5. MRT veya lighting-pass girişi ister. NOT: emissive_strength artık
+      factor'e katlanıyor (aşağı bkz), ama LDR-additive olduğundan strength>1 render-target
+      aralığına kadar parlatır — gerçek unlit HDR bloom hâlâ 5. MRT bekliyor.
+- [x] **`KHR_materials_emissive_strength` + glTF sampler ayarları** — ✅ 2026-07-09:
+      (a) gltf crate'e `KHR_materials_emissive_strength` feature'ı eklendi; `loaders.rs`
+      `emissive_with_strength()` ile emissive factor artık strength skaları ile çarpılıyor
+      (yoksa 1.0). (b) Per-materyal sampler glTF wrap/filter'dan türetiliyor: `SamplerKey`
+      + `material_sampler_key()` (base→normal→MR→emissive→AO öncelikli ilk-tanımlı map'in
+      sampler'ı; g-buffer tek `s_diffuse` paylaştığından materyal başına tek sampler, gerçek
+      exporter'larla uyumlu) + config-başına-tek `wgpu::Sampler` cache. Eski hardcode
+      Repeat/Linear kaldırıldı. +4 test (saf çevirici birim testleri + gerçek glTF JSON
+      parse edip sampler-key & emissive-strength doğrulayan entegrasyon testi, GPU'suz).
 
 **M7.3 tamamlama (EN YÜKSEK ETKİ — iyileştirmeler render'a ulaşsın):**
 - [x] **Render skeletal sampler'ında scale-track + cubic-Hermite** — ✅ 2026-07-09: iki gerçek boşluk
