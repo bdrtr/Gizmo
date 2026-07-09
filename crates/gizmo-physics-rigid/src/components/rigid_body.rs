@@ -299,8 +299,12 @@ impl RigidBody {
 
         let i_y = m_cyl * (r * r) / 2.0 + m_sph * 2.0 * (r * r) / 5.0;
         let i_cyl_xz = m_cyl * (3.0 * r * r + h * h) / 12.0;
-        let i_sph_xz =
-            m_sph * (0.4 * r * r + half_h * half_h + 0.75 * r * half_h + 0.140625 * r * r);
+        // İki yarımküre kabın enine (i_xz) katkısı. Yarımkürenin düz-yüzey
+        // merkezindeki enine ataleti 2/5·m·r²'dir; bunu kapsül merkezine paralel-
+        // eksen ile taşırken yarımküre COM-offset terimi (9/64·r²) SADELEŞİR.
+        // Eski kod ayrıca bir +9/64·r² (=0.140625·r²) ekliyordu → çift sayım
+        // (enine atalet ~%5–35 fazla, kapsül devrilmeye aşırı dirençli).
+        let i_sph_xz = m_sph * (0.4 * r * r + half_h * half_h + 0.75 * r * half_h);
         let i_xz = i_cyl_xz + i_sph_xz;
 
         self.local_inertia = Vec3::new(i_xz, i_y, i_xz);
@@ -436,6 +440,57 @@ mod tests {
         assert!(
             (rb_hull.local_inertia - rb_unit.local_inertia).length() > 1e-3,
             "hull ataleti 1×1×1'den farklı olmalı"
+        );
+    }
+
+    /// Kapsül enine ataleti (i_xz) analitik değerle eşleşmeli. Regresyon: eskiden
+    /// yarımküre paralel-eksen COM-offset terimi (9/64·r² = 0.140625·r²) çift
+    /// sayılıyordu → enine atalet fazla hesaplanıyordu (kapsül devrilmeye aşırı
+    /// dirençliydi). Doğru yarımküre-çifti katkısı: m_sph·(2/5·r² + half_h² +
+    /// 3/4·r·half_h) — fazladan COM-offset terimi YOK.
+    #[test]
+    fn capsule_transverse_inertia_has_no_spurious_com_term() {
+        let r = 0.5_f32;
+        let half_h = 1.0_f32;
+        let mass = 4.0_f32;
+
+        let mut rb = RigidBody::new(mass, true);
+        rb.calculate_capsule_inertia(r, half_h);
+
+        // Kütle, hacme göre silindir ve küre (iki yarımküre) arasında paylaştırılır.
+        let h = half_h * 2.0;
+        let vol_cyl = std::f32::consts::PI * r * r * h;
+        let vol_sph = 4.0 / 3.0 * std::f32::consts::PI * r * r * r;
+        let total = vol_cyl + vol_sph;
+        let m_cyl = mass * vol_cyl / total;
+        let m_sph = mass * vol_sph / total;
+
+        let i_cyl_xz = m_cyl * (3.0 * r * r + h * h) / 12.0;
+        // Analitik olarak doğru katkı (9/64·r² terimi OLMADAN):
+        let correct_i_sph_xz = m_sph * (0.4 * r * r + half_h * half_h + 0.75 * r * half_h);
+        let expected_i_xz = i_cyl_xz + correct_i_sph_xz;
+
+        assert!(
+            (rb.local_inertia.x - expected_i_xz).abs() < 1e-6,
+            "kapsül enine ataleti analitik değerle eşleşmeli: {} vs {}",
+            rb.local_inertia.x,
+            expected_i_xz
+        );
+        assert_eq!(rb.local_inertia.x, rb.local_inertia.z, "i_xz simetrik olmalı");
+
+        // Spin ekseni (i_y) değişmemeli.
+        let expected_i_y = m_cyl * (r * r) / 2.0 + m_sph * 2.0 * (r * r) / 5.0;
+        assert!(
+            (rb.local_inertia.y - expected_i_y).abs() < 1e-6,
+            "kapsül spin ekseni ataleti korunmalı"
+        );
+
+        // Eski (hatalı) formül belirgin şekilde daha büyüktü → yeni değer onun altında.
+        let buggy_i_sph_xz =
+            m_sph * (0.4 * r * r + half_h * half_h + 0.75 * r * half_h + 0.140625 * r * r);
+        assert!(
+            correct_i_sph_xz < buggy_i_sph_xz,
+            "doğru enine atalet eski hatalı değerin altında olmalı"
         );
     }
 }
