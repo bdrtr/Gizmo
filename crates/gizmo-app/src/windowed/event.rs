@@ -142,7 +142,16 @@ impl<State: 'static> App<State> {
 
                                 for code in codes_to_press {
                                     if kb_event.state == winit::event::ElementState::Pressed {
-                                        self.input.on_key_pressed(code);
+                                        // egui bir metin alanına odaklıyken (consumes_input),
+                                        // tuş BASIŞINI motor Input'una besleme — yoksa editör
+                                        // kısayolları (Delete/Ctrl+*/W-E-R) metin yazarken
+                                        // tetiklenir; Delete seçili entity'leri siler (GC sonrası
+                                        // kalıcı veri kaybı). BIRAKMA her zaman işlenir: odak
+                                        // metin kutusuna geçtikten sonra bırakılan bir tuş aksi
+                                        // halde "sonsuza dek basılı" kalırdı.
+                                        if !consumes_input {
+                                            self.input.on_key_pressed(code);
+                                        }
                                     } else {
                                         self.input.on_key_released(code);
                                     }
