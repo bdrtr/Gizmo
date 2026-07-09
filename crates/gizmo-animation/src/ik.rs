@@ -16,7 +16,7 @@
 //! helpers ([`TwoBoneIkResult::upper_dir`], [`TwoBoneIkResult::lower_dir`],
 //! [`TwoBoneIkResult::swing_rotations`]) to make that easy.
 
-use gizmo_math::{Quat, Vec3, Vec4};
+use gizmo_math::{Quat, Vec3};
 
 const EPS: f32 = 1e-6;
 
@@ -242,44 +242,6 @@ impl gizmo_core::component::Component for TwoBoneIkChain {
     fn storage_type() -> gizmo_core::component::StorageType {
         gizmo_core::component::StorageType::Table
     }
-}
-
-/// Component-wise cubic Hermite interpolation for a quaternion, following the
-/// glTF convention (interpolate the four components independently, then
-/// re-normalize). Exposed here because IK results are often blended with sampled
-/// rotations; kept `pub(crate)` for use by the clip sampler.
-pub(crate) fn hermite_quat(p0: Quat, m0: Quat, p1: Quat, m1: Quat, t: f32) -> Quat {
-    let v0 = Vec4::new(p0.x, p0.y, p0.z, p0.w);
-    let t0 = Vec4::new(m0.x, m0.y, m0.z, m0.w);
-    let v1 = Vec4::new(p1.x, p1.y, p1.z, p1.w);
-    let t1 = Vec4::new(m1.x, m1.y, m1.z, m1.w);
-    let out = hermite_vec4(v0, t0, v1, t1, t);
-    Quat::from_xyzw(out.x, out.y, out.z, out.w).normalize()
-}
-
-/// Scalar cubic Hermite basis, applied to a [`Vec4`] (also reused for [`Vec3`]
-/// via a zero `w`). `m0`/`m1` are the already-scaled in/out tangents.
-fn hermite_vec4(p0: Vec4, m0: Vec4, p1: Vec4, m1: Vec4, t: f32) -> Vec4 {
-    let t2 = t * t;
-    let t3 = t2 * t;
-    let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
-    let h10 = t3 - 2.0 * t2 + t;
-    let h01 = -2.0 * t3 + 3.0 * t2;
-    let h11 = t3 - t2;
-    p0 * h00 + m0 * h10 + p1 * h01 + m1 * h11
-}
-
-/// Cubic Hermite interpolation for a [`Vec3`] value. `m0`/`m1` are the
-/// already-scaled in/out tangents. Public within the crate for the sampler.
-pub(crate) fn hermite_vec3(p0: Vec3, m0: Vec3, p1: Vec3, m1: Vec3, t: f32) -> Vec3 {
-    let out = hermite_vec4(
-        Vec4::new(p0.x, p0.y, p0.z, 0.0),
-        Vec4::new(m0.x, m0.y, m0.z, 0.0),
-        Vec4::new(p1.x, p1.y, p1.z, 0.0),
-        Vec4::new(m1.x, m1.y, m1.z, 0.0),
-        t,
-    );
-    Vec3::new(out.x, out.y, out.z)
 }
 
 #[cfg(test)]
