@@ -3,29 +3,18 @@ use super::keyframe::Track;
 use super::skeleton::SkeletonHierarchy;
 use gizmo_math::{Mat4, Quat, Vec3};
 
-/// glTF Appendix C cubic-Hermite basis coefficients for normalized position `s ∈ [0,1]`.
-/// Tangents `m0`/`m1` are per-second and are scaled by the segment duration `dt`.
-#[inline]
-fn hermite_coeffs(s: f32, dt: f32) -> (f32, f32, f32, f32) {
-    let s2 = s * s;
-    let s3 = s2 * s;
-    (
-        2.0 * s3 - 3.0 * s2 + 1.0, // h00 · p0
-        (s3 - 2.0 * s2 + s) * dt,  // h10 · m0 (out-tangent of k)
-        -2.0 * s3 + 3.0 * s2,      // h01 · p1
-        (s3 - s2) * dt,            // h11 · m1 (in-tangent of k+1)
-    )
-}
+// The cubic-Hermite math lives in `crate::hermite` (the single copy shared with
+// the transform-track sampler). These thin adapters keep the `sample_cubic`
+// combiner signature — the glTF per-second tangents `m0`/`m1` scaled by the
+// segment duration `dt`, per glTF Appendix C — and delegate the basis to it.
 
 fn hermite_vec3(p0: Vec3, m0: Vec3, p1: Vec3, m1: Vec3, s: f32, dt: f32) -> Vec3 {
-    let (a, b, c, d) = hermite_coeffs(s, dt);
-    p0 * a + m0 * b + p1 * c + m1 * d
+    crate::hermite::hermite_vec3(p0, m0 * dt, p1, m1 * dt, s)
 }
 
 fn hermite_quat(p0: Quat, m0: Quat, p1: Quat, m1: Quat, s: f32, dt: f32) -> Quat {
-    let (a, b, c, d) = hermite_coeffs(s, dt);
-    // glTF cubic rotations are Hermite-interpolated component-wise, then renormalized.
-    (p0 * a + m0 * b + p1 * c + m1 * d).normalize()
+    let scale = |q: Quat, k: f32| Quat::from_xyzw(q.x * k, q.y * k, q.z * k, q.w * k);
+    crate::hermite::hermite_quat(p0, scale(m0, dt), p1, scale(m1, dt), s)
 }
 
 /// Sample a Vec3 track: true cubic-Hermite for `CubicSpline`, otherwise (or when tangents

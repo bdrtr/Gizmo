@@ -1,6 +1,6 @@
 use gizmo_math::{Quat, Vec3};
 
-use crate::ik::{hermite_quat, hermite_vec3};
+use crate::hermite::{hermite_quat, hermite_vec3};
 
 /// Error returned when constructing a [`Track`] with inconsistent keyframe data.
 ///
