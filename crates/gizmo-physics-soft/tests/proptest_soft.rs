@@ -31,7 +31,7 @@ proptest! {
         let pinned = cloth.nodes[0].position;
 
         for _ in 0..120 {
-            cloth.step(1.0 / 60.0, g, 4);
+            cloth.step(1.0 / 60.0, g, 4, &[]);
         }
 
         prop_assert_eq!(cloth.nodes[0].position, pinned, "pinli cloth düğümü hareket etti");
