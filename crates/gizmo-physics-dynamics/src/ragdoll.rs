@@ -372,9 +372,22 @@ fn build_bone_joint(bone: &RagdollBoneDef, parent: BodyHandle, child: BodyHandle
                 bone.local_anchor_parent,
                 bone.local_anchor_child,
             );
-            if let (JointData::BallSocket(data), Some((lo, hi))) = (&mut joint.data, bone.limits) {
+            if let JointData::BallSocket(data) = &mut joint.data {
+                // Swing cone: use the authored limit if given, else a moderate default so
+                // shoulders/hips/torso/neck cannot hyperextend (they were previously free).
                 data.use_cone_limit = true;
-                data.cone_limit_angle = lo.abs().max(hi.abs());
+                data.cone_limit_angle = bone
+                    .limits
+                    .map(|(lo, hi)| lo.abs().max(hi.abs()))
+                    .unwrap_or(1.2);
+                // Twist limit about the bone axis — stops a limb spinning freely about
+                // itself (the classic cone-twist ragdoll joint).
+                data.use_twist_limit = true;
+                data.twist_axis = bone.joint_axis;
+                data.twist_lower = -0.6;
+                data.twist_upper = 0.6;
+                // Slightly soft limits (CFM) for a natural, springy joint feel.
+                data.compliance = 0.001;
             }
             joint
         }
@@ -473,6 +486,35 @@ mod tests {
         // Joints were actually pushed into the resource.
         let pw = world.get_resource_mut::<PhysicsWorld>().unwrap();
         assert_eq!(pw.joints.len(), 10);
+    }
+
+    /// The humanoid's ball-socket joints (shoulders/hips/torso/neck/head) now carry a
+    /// swing cone AND a twist limit (cone-twist) with soft compliance — so limbs can't
+    /// hyperextend or spin freely about their own axis.
+    #[test]
+    fn humanoid_ballsocket_joints_are_cone_twist_limited() {
+        use gizmo_physics_rigid::JointData;
+        let mut world = World::new();
+        world.insert_resource(PhysicsWorld::new());
+        let mut builder = RagdollBuilder::new(Vec3::new(0.0, 5.0, 0.0));
+        builder.create_humanoid();
+        builder.spawn(&mut world);
+
+        let pw = world.get_resource_mut::<PhysicsWorld>().unwrap();
+        let ball_sockets: Vec<_> = pw
+            .joints
+            .iter()
+            .filter_map(|j| match j.data {
+                JointData::BallSocket(d) => Some(d),
+                _ => None,
+            })
+            .collect();
+        assert!(!ball_sockets.is_empty(), "humanoid should have ball-socket joints");
+        for d in &ball_sockets {
+            assert!(d.use_cone_limit, "ragdoll ball-socket must have a swing cone limit");
+            assert!(d.use_twist_limit, "ragdoll ball-socket must have a twist limit (no free spin)");
+            assert!(d.compliance > 0.0, "ragdoll ball-socket limits should be soft");
+        }
     }
 
     /// Without a `PhysicsWorld` resource the bodies still spawn but no joints
