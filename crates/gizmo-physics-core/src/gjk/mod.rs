@@ -192,6 +192,44 @@ mod tests {
     }
 
     #[test]
+    fn test_conservative_advancement_sphere_sphere_toi() {
+        // First-ever coverage for the exact-TOI primitive (previously dead + untested).
+        // A(r=0.5) at x=-5 moving +10; B(r=0.5) at x=+5 at rest. Surfaces touch when
+        // the centres are r+r=1.0 apart, i.e. after A travels 10-1=9 units at 10 u/s
+        // ⇒ TOI = 0.9 s. Closed-form so a future decision to WIRE this into the CCD
+        // narrowphase rests on a validated primitive, not an assumption.
+        let shape = ColliderShape::Sphere(SphereShape { radius: 0.5 });
+        let hit = Gjk::conservative_advancement(
+            &shape,
+            Vec3::new(-5.0, 0.0, 0.0),
+            Quat::IDENTITY,
+            Vec3::new(10.0, 0.0, 0.0),
+            &shape,
+            Vec3::new(5.0, 0.0, 0.0),
+            Quat::IDENTITY,
+            Vec3::ZERO,
+            2.0,
+        );
+        let (toi, normal) = hit.expect("CA must find the sphere-sphere impact within max_t");
+        assert!((toi - 0.9).abs() < 0.02, "TOI wrong: {toi} (expected ≈ 0.9)");
+        assert!(normal.x.abs() > 0.99, "impact normal must be ±x, got {normal:?}");
+
+        // Separating (moving apart) ⇒ no impact.
+        let miss = Gjk::conservative_advancement(
+            &shape,
+            Vec3::new(-5.0, 0.0, 0.0),
+            Quat::IDENTITY,
+            Vec3::new(-10.0, 0.0, 0.0),
+            &shape,
+            Vec3::new(5.0, 0.0, 0.0),
+            Quat::IDENTITY,
+            Vec3::ZERO,
+            2.0,
+        );
+        assert!(miss.is_none(), "separating spheres must not report an impact");
+    }
+
+    #[test]
     fn test_compute_face_normal_follows_winding_not_origin() {
         // Regression (EPA face orientation): the face normal must come from the
         // stored winding order a→b→c (right-hand rule), NOT from a "point away
