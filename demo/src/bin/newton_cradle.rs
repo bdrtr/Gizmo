@@ -49,6 +49,7 @@ fn elastic() -> PhysicsMaterial {
 /// Statik ön-görünüm kamerası + sürükleme durumu.
 struct Cradle {
     balls: Vec<u32>,
+    ropes: Vec<u32>, // her topa karşılık gelen görsel ip (fiziksiz ince çubuk)
     pivots: Vec<Vec3>,
     cam: Camera,
     cam_pos: Vec3,
@@ -92,6 +93,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
 
     let mut phys = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
     let mut balls = Vec::new();
+    let mut ropes = Vec::new();
     let mut pivots = Vec::new();
 
     for i in 0..N {
@@ -129,13 +131,23 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
             Vec3::new(0.0, L, 0.0),
             Vec3::Z,
         ));
+        // Görsel ip: fiziksiz ince çubuk (pivot↔top). Her kare `update`'te
+        // konumlanır; burada sadece doğuyor. Küp mesh -1..1 → scale.y = uzunluk/2.
+        let rope = world.spawn_bundle((
+            Transform::new(pivot),
+            cube.clone(),
+            Material::new(tex.clone()).with_pbr(Vec4::new(0.05, 0.05, 0.06, 1.0), 0.7, 0.2),
+            MeshRenderer::new(),
+        ));
+
         balls.push(ball.id());
+        ropes.push(rope.id());
         pivots.push(pivot);
     }
 
     world.insert_resource(phys);
     world.insert_resource(assets);
-    Cradle { balls, pivots, cam, cam_pos, dragging: None, target: Vec3::ZERO, target_prev: Vec3::ZERO }
+    Cradle { balls, ropes, pivots, cam, cam_pos, dragging: None, target: Vec3::ZERO, target_prev: Vec3::ZERO }
 }
 
 fn update(world: &mut World, state: &mut Cradle, dt: f32, input: &gizmo::core::input::Input) {
@@ -205,6 +217,27 @@ fn update(world: &mut World, state: &mut Cradle, dt: f32, input: &gizmo::core::i
         }
     }
 
+    // ── Görsel ipleri toplara bağla ──────────────────────────────────────────
+    // Fizik (schedule'da) bu kareden önce koştu → top konumları güncel. İpi
+    // pivot ile topun pivota bakan yüzeyi arasına gerilmiş ince çubuk yap.
+    let centers: Vec<Vec3> = {
+        let ts = world.borrow::<Transform>();
+        state.balls.iter().map(|&b| ts.get(b).map(|t| t.position).unwrap_or(Vec3::ZERO)).collect()
+    };
+    let mut ts = world.borrow_mut::<Transform>();
+    for (i, &rope) in state.ropes.iter().enumerate() {
+        let pivot = state.pivots[i];
+        let seg = pivot - centers[i]; // topun merkezinden pivota
+        let len = (seg.length() - R).max(0.0); // yüzeyden pivota (topun içine girmesin)
+        let dir = seg.normalize_or_zero();
+        let surface = centers[i] + dir * R;
+        if let Some(mut tr) = ts.get_mut(rope) {
+            tr.position = surface + dir * (len * 0.5);
+            tr.rotation = Quat::from_rotation_arc(Vec3::Y, dir);
+            tr.scale = Vec3::new(0.03, len * 0.5, 0.03);
+            tr.update_local_matrix();
+        }
+    }
     // (Eski API-EKSİK #3 DÜZELTİLDİ: fizik artık PhysicsPlugin ile sabit-timestep
     //  schedule'da OTOMATİK adımlanıyor — burada elle adım YOK. Transform→Global
     //  senkronu da render'da otomatik — #6 düzeltildi.)
