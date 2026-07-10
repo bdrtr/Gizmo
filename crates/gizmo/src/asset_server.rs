@@ -9,6 +9,11 @@ pub struct AssetServer {
     _material_paths: std::collections::HashMap<String, Handle<Material>>,
     pub completed_gltfs: Vec<crate::renderer::async_assets::GltfImportCompletion>,
     pub completed_gltf_errors: Vec<crate::renderer::async_assets::GltfImportError>,
+    /// Arka planda decode'u tamamlanan streaming texture'ları. `asset_server_update_system`
+    /// bunları `drain_completed`'dan buraya biriktirir; `TextureStreamingSystem` her frame
+    /// tüketip GPU'ya yükler ve ilgili entity'lerin `Material.bind_group`'unu günceller.
+    /// (Eskiden `completed.textures` sessizce ATILIYORDU → streaming görsel olarak no-op'tu.)
+    pub completed_textures: Vec<crate::renderer::async_assets::TextureReloadCompletion>,
     #[cfg(all(feature = "render", not(target_arch = "wasm32")))]
     pub watcher: Option<crate::renderer::hot_reload::AssetWatcher>,
 }
@@ -30,6 +35,7 @@ impl AssetServer {
             _material_paths: std::collections::HashMap::new(),
             completed_gltfs: Vec::new(),
             completed_gltf_errors: Vec::new(),
+            completed_textures: Vec::new(),
             #[cfg(all(feature = "render", not(target_arch = "wasm32")))]
             watcher,
         }
@@ -72,8 +78,11 @@ pub fn asset_server_update_system(
 
     server.completed_gltfs.extend(completed.gltfs);
     server.completed_gltf_errors.extend(completed.gltf_errors);
+    // Decode'u biten streaming texture'ları SAKLA (eskiden burada atılıyordu → no-op).
+    // `TextureStreamingSystem` bunları GPU'ya yükleyip materyallere uygular.
+    server.completed_textures.extend(completed.textures);
 
-    if completed.objs.is_empty() && completed.textures.is_empty() {
+    if completed.objs.is_empty() {
         return;
     }
 
@@ -107,5 +116,15 @@ impl<State: 'static> crate::app::Plugin<State> for AssetServerPlugin {
     fn build(&self, app: &mut crate::app::App<State>) {
         app.world.insert_resource(AssetServer::new());
         app.schedule.add_di_system(asset_server_update_system);
+        // Distance-based texture streaming: request nearby high-res textures and
+        // upload+apply the ones the worker finished decoding. Runs after the drain
+        // above populated `AssetServer::completed_textures` (a one-frame lag if it
+        // happens to run first is harmless).
+        app.schedule.add_di_system(
+            gizmo_core::system::SystemConfig::new(Box::new(
+                crate::systems::streaming::TextureStreamingSystem,
+            ))
+            .label("texture_streaming"),
+        );
     }
 }
