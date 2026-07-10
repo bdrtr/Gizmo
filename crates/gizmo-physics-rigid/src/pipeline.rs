@@ -152,7 +152,10 @@ impl PhysicsWorld {
             let base_aabb = collider.compute_aabb(transform.position, transform.rotation);
 
             // For CCD bodies sweep the AABB over the full expected travel this frame.
-            let aabb = if rb.ccd_enabled && rb.is_dynamic() && !rb.is_sleeping {
+            // `!is_static()` covers both dynamic AND kinematic movers — new_kinematic()
+            // turns CCD on by default, so a fast scripted platform/blade must be swept
+            // too (testing is_dynamic() here silently dropped every kinematic CCD body).
+            let aabb = if rb.ccd_enabled && !rb.is_static() && !rb.is_sleeping {
                 let sweep_dt = if vel.linear.length() > 100.0 {
                     // High-speed: guarantee at least one full 60 Hz frame is covered.
                     dt.max(1.0 / 60.0)
@@ -863,7 +866,9 @@ impl PhysicsWorld {
         let n = self.entities.len();
         for i in 0..n {
             let rb_i = &self.rigid_bodies[i];
-            if !rb_i.ccd_enabled || !rb_i.is_dynamic() || rb_i.is_sleeping {
+            // `!is_static()` so kinematic CCD movers (new_kinematic ⇒ ccd on) are
+            // also backstopped — testing is_dynamic() left them tunnelling.
+            if !rb_i.ccd_enabled || rb_i.is_static() || rb_i.is_sleeping {
                 continue;
             }
             let vel = self.velocities[i].linear;
@@ -894,6 +899,14 @@ impl PhysicsWorld {
                 if (rb_j.is_dynamic() && !rb_j.is_sleeping) || self.colliders[j].is_trigger {
                     continue;
                 }
+                // Respect collision-layer filtering, exactly like narrowphase — else the
+                // backstop phantom-stops the body against geometry it is masked to pass through.
+                if !self.colliders[i]
+                    .collision_layer
+                    .can_collide_with(&self.colliders[j].collision_layer)
+                {
+                    continue;
+                }
                 let other = self.colliders[j]
                     .compute_aabb(self.transforms[j].position, self.transforms[j].rotation);
                 let infl = Aabb::new(Vec3::from(other.min) - half, Vec3::from(other.max) + half);
@@ -913,6 +926,9 @@ impl PhysicsWorld {
 
             if best_toi.is_finite() {
                 self.transforms[i].position = old_pos + dir * (best_toi - SKIN).max(0.0);
+                // Rebuild the cached local matrix so the clamp is visible to an
+                // end-of-frame snapshot (integrator + split-impulse paths do the same).
+                self.transforms[i].update_local_matrix();
                 let vn = self.velocities[i].linear.dot(best_normal);
                 if vn < 0.0 {
                     self.velocities[i].linear -= best_normal * vn;
