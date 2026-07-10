@@ -21,6 +21,19 @@ pub struct RigidBody {
     pub mass: f32,
     pub linear_damping: f32,
     pub angular_damping: f32,
+    /// Aerodinamik sürükleme katsayısı (Cd). `drag_area` ile birlikte >0 olduğunda
+    /// integrator fiziksel hava direnci uygular: F = ½·ρ·Cd·A·|v|², hıza KARŞI. 0 =
+    /// kapalı (varsayılan). `linear_damping` (hıza-doğrusal exp sönüm) kaba bir proxy
+    /// iken bu gerçekçi v² sürüklemesidir → cisim doğal terminal hıza oturur
+    /// (v_term = √(2·m·g / (ρ·Cd·A))). Hava yoğunluğu `Integrator::air_density`'den.
+    /// `#[serde(default)]`: bu alan eklenmeden önce kaydedilmiş sahneler `0.0` (kapalı)
+    /// olarak yüklenir.
+    #[serde(default)]
+    pub drag_coefficient: f32,
+    /// Sürüklemeye maruz referans (frontal) alan, m². `drag_coefficient` ile birlikte
+    /// >0 olduğunda hava direnci aktif olur.
+    #[serde(default)]
+    pub drag_area: f32,
     pub use_gravity: bool,
     pub is_sleeping: bool,
     pub ccd_enabled: bool,
@@ -45,6 +58,8 @@ impl Default for RigidBody {
             mass: 1.0,
             linear_damping: 0.01,
             angular_damping: 0.05,
+            drag_coefficient: 0.0, // opt-in: 0 = hava direnci kapalı
+            drag_area: 0.0,
             use_gravity: true,
             is_sleeping: false,
             ccd_enabled: false,
@@ -75,6 +90,15 @@ impl RigidBody {
             use_gravity,
             ..Default::default()
         }
+    }
+
+    /// Fiziksel hava direncini açar: F = ½·ρ·Cd·A·|v|² (hıza karşı). `cd` sürükleme
+    /// katsayısı (küre ~0.47, küp ~1.05, akıcı gövde ~0.04), `area` frontal alan (m²).
+    /// Yerçekimi altında cisim doğal terminal hıza oturur. Zincirlenebilir.
+    pub fn with_air_drag(mut self, cd: f32, area: f32) -> Self {
+        self.drag_coefficient = cd.max(0.0);
+        self.drag_area = area.max(0.0);
+        self
     }
 
     pub fn new_static() -> Self {

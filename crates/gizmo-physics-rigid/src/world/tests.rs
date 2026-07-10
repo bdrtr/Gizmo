@@ -29,6 +29,64 @@ fn test_physics_step() {
     assert!(world.transforms[0].position.y < 10.0);
 }
 
+/// Uçtan uca (sync → step → integrate) hava direnci: aynı yükseklikten bırakılan iki
+/// gövdeden ağır drag'lisi çok daha az düşmeli ve analitik terminal hıza oturmalı;
+/// drag'siz olan hızlanmaya devam edip çok daha hızlı olmalı.
+#[test]
+fn air_drag_body_falls_slower_and_reaches_terminal_velocity() {
+    let mut world = PhysicsWorld::new(); // gravity -9.81, air_density 1.225
+
+    // Serbest düşüş (drag yok).
+    let mut free = RigidBody::new(2.0, true);
+    free.linear_damping = 0.0;
+    world.add_body(
+        BodyHandle::from_id(1),
+        free,
+        Transform::new(Vec3::new(0.0, 100.0, 0.0)),
+        Velocity::default(),
+        Collider::sphere(1.0),
+    );
+
+    // Ağır hava direnci (~paraşüt).
+    let (m, cd, area) = (2.0_f32, 1.2_f32, 3.0_f32);
+    let mut dragged = RigidBody::new(m, true).with_air_drag(cd, area);
+    dragged.linear_damping = 0.0;
+    world.add_body(
+        BodyHandle::from_id(2),
+        dragged,
+        Transform::new(Vec3::new(5.0, 100.0, 0.0)),
+        Velocity::default(),
+        Collider::sphere(1.0),
+    );
+
+    for _ in 0..180 {
+        // 3 s
+        let _ = world.step(1.0 / 60.0);
+    }
+
+    let free_y = world.transforms[0].position.y;
+    let drag_y = world.transforms[1].position.y;
+    let free_speed = world.velocities[0].linear.length();
+    let drag_speed = world.velocities[1].linear.length();
+
+    // Drag'li gövde çok daha az düşmeli.
+    assert!(
+        drag_y > free_y + 20.0,
+        "drag'li top serbest düşüşten çok daha az düşmeli: drag_y={drag_y}, free_y={free_y}"
+    );
+    // Drag'li gövde analitik terminal hıza oturmalı: v_term = √(2mg/ρCdA).
+    let v_term = (2.0 * m * 9.81 / (1.225 * cd * area)).sqrt();
+    assert!(
+        (drag_speed - v_term).abs() < v_term * 0.1,
+        "drag hızı terminal {v_term:.2} m/s civarı olmalı, bulundu {drag_speed:.2}"
+    );
+    // Drag'siz gövde hızlanmaya devam eder → drag'liden çok daha hızlı.
+    assert!(
+        free_speed > drag_speed * 3.0,
+        "serbest düşüş ({free_speed:.1}) drag'liden ({drag_speed:.1}) çok daha hızlı olmalı"
+    );
+}
+
 #[test]
 fn test_high_stack_stability() {
     let mut world = PhysicsWorld::new();
