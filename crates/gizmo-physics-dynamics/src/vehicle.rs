@@ -382,6 +382,15 @@ fn anti_roll_force(is_left: bool, diff: f32, stiffness: f32) -> f32 {
     signed * stiffness
 }
 
+/// Ground-effect downforce çarpanı: şasi taban `clearance`'ı (gövde tabanının yere
+/// dikey boşluğu, m) azaldıkça `1.0`'dan `multiplier`'a YUMUŞAK rampa yapar.
+/// `clearance ≥ height` → 1.0 (etki yok); `clearance = 0` → `multiplier`; arası lineer.
+/// Negatif clearance (gövde yerin içinde) `multiplier`'a kırpılır.
+fn ground_effect_factor(clearance: f32, height: f32, multiplier: f32) -> f32 {
+    let t = (1.0 - clearance.max(0.0) / height.max(1e-3)).clamp(0.0, 1.0);
+    1.0 + (multiplier - 1.0) * t
+}
+
 pub fn update_vehicle(
     vehicle_entity: BodyHandle,
     vehicle: &mut VehicleController,
@@ -457,23 +466,30 @@ pub fn update_vehicle(
     let a = &vehicle.tuning.aero;
     let q = 0.5 * AIR_DENSITY * spd_sq; // dinamik basınç
 
-    // Zemin etkisi: alçak araçlarda downforce artar.
-    // NOT (bilinen sınır): `hit.distance - 0.5` süspansiyon BAĞLANTI noktasından
-    // zemine olan mesafedir (≈ süspansiyon boyu + tekerlek yarıçapı, dinlenmede
-    // ~0.85 m), şasi taban yüksekliği DEĞİL. Bu her zaman `ground_effect_height`
-    // (0.15) üstünde kaldığından ge_factor pratikte hep 1.0 = etki uyuyor. Doğru
-    // referansı bağlamak (şasi taban clearance'ı) ayarlanmış downforce davranışını
-    // değiştireceğinden kasıtlı olarak bu tura dahil edilmedi (tuning kararı).
-    let height_above_ground = vehicle
+    // Zemin etkisi: araç gövdesi yere yaklaştıkça downforce artar. Referans = ŞASİ TABAN
+    // clearance'ı: aracın KENDİ collider'ının dünya-AABB tabanı (min.y) ile tekerlek temas
+    // noktası (ground_hit.point.y) arasındaki dikey boşluk. (Eskiden `hit.distance-0.5` =
+    // süspansiyon-bağlantı-to-zemin ≈0.85m kullanılıyordu; bu hep `ground_effect_height`
+    // üstünde kaldığından ge_factor hep 1.0 = etki ÖLÜYDÜ.) Aracın collider'ı `all_colliders`
+    // içinde (raycast'ten self-exclude edilse de erişilebilir). Normal sürüş yüksekliğinde
+    // clearance > ge_height → ge_factor=1.0 (davranış AYNEN korunur); yalnız araç gerçekten
+    // alçaldığında (yük/downforce) yumuşak rampayla artar → doğal, disruption-suz.
+    let ground_contact_y = vehicle
         .wheels
         .iter()
-        .filter(|w| w.is_grounded)
-        .filter_map(|w| w.ground_hit.as_ref().map(|hit| hit.distance - 0.5)) // 0.5 is ray_origin_offset
+        .filter_map(|w| w.ground_hit.as_ref().map(|hit| hit.point.y))
         .fold(f32::MAX, f32::min);
-    let ge_factor = if height_above_ground < a.ground_effect_height {
-        a.ground_effect_multiplier
-    } else {
-        1.0
+    let chassis_floor_y = all_colliders
+        .iter()
+        .find(|(h, _, _)| *h == vehicle_entity)
+        .map(|(_, tr, col)| col.compute_aabb(tr.position, tr.rotation).min.y);
+    let ge_factor = match chassis_floor_y {
+        Some(floor_y) if ground_contact_y.is_finite() => ground_effect_factor(
+            floor_y - ground_contact_y,
+            a.ground_effect_height,
+            a.ground_effect_multiplier,
+        ),
+        _ => 1.0,
     };
 
     let drag_dir = if spd > 0.1 { -v_com / spd } else { Vec3::ZERO };
@@ -995,6 +1011,101 @@ mod tests {
             speed_out > speed_in * 0.55,
             "coasting turn must not scrub away most of the speed: {speed_in:.1} -> {speed_out:.1} m/s"
         );
+    }
+
+    /// Aerodinamik hava direnci = ½·ρ·Cd·A·v², hız yönüne KARŞI. Aracı yüksekte (hiçbir
+    /// tekerlek yere değmez → tek yatay kuvvet aero), gaz KAPALI, bilinen hızda tek adım
+    /// sürüp yatay hız kaybının analitik ½ρCdAv²/m·dt ile eşleştiğini doğrular. Böylece
+    /// drag hem UYGULANIYOR hem DOĞRU formül/işaret/büyüklükte.
+    #[test]
+    fn aero_drag_matches_half_rho_cd_a_v_squared() {
+        const MASS: f32 = 1200.0;
+        const V0: f32 = 50.0; // m/s ileri (-Z)
+        const RHO: f32 = 1.225;
+        let dt = 1.0 / 60.0;
+
+        let veh_id = BodyHandle::from_id(2);
+        let mut rb = RigidBody::new(MASS, true);
+        rb.calculate_box_inertia(1.4, 0.7, 2.4);
+        rb.center_of_mass = Vec3::new(0.0, 0.2, 0.0);
+        let t = Transform::new(Vec3::new(0.0, 100.0, 0.0)); // havada
+        let mut vc = VehicleController::new();
+        for (x, z, front) in [
+            (0.7_f32, 1.0_f32, true),
+            (-0.7, 1.0, true),
+            (0.7, -1.0, false),
+            (-0.7, -1.0, false),
+        ] {
+            vc.add_wheel(Wheel {
+                attachment_local_pos: Vec3::new(x, 0.2, z),
+                radius: 0.3,
+                axle_type: if front { Axle::Front } else { Axle::Rear },
+                is_left: x > 0.0,
+                suspension_rest_length: 0.15,
+                suspension_max_travel: 0.15,
+                ..Default::default()
+            });
+        }
+        // Zemin ÇOK aşağıda → süspansiyon ışını ona ulaşmaz → hiçbir tekerlek grounded olmaz.
+        let colliders = [(
+            BodyHandle::from_id(1),
+            Transform::new(Vec3::new(0.0, -1000.0, 0.0)),
+            Collider::box_collider(Vec3::new(200.0, 1.0, 200.0)),
+        )];
+
+        let mut vel = Velocity::new(Vec3::new(0.0, 0.0, -V0));
+        vc.throttle_input = 0.0;
+        vc.brake_input = 0.0;
+        vc.steering_input = 0.0;
+
+        update_vehicle(veh_id, &mut vc, &mut rb, &t, &mut vel, &colliders, dt);
+
+        // İzolasyon garantisi: airborne → tek yatay kuvvet aero drag.
+        assert!(
+            vc.wheels.iter().all(|w| !w.is_grounded),
+            "araç havada olmalı (hiçbir tekerlek grounded değil)"
+        );
+
+        // Beklenen: F = ½ρ·Cd·A·v² (+Z, yani hareketin tersi); Δv = F·dt/m.
+        let aero = &vc.tuning.aero;
+        let f_drag = 0.5 * RHO * V0 * V0 * aero.drag_coefficient * aero.frontal_area;
+        let expected_dv = f_drag / MASS * dt;
+        let actual_dv = vel.linear.z - (-V0); // -50'den +Z'ye ne kadar arttı (yavaşlama)
+
+        assert!(
+            actual_dv > 0.0,
+            "drag hareketin TERSİNE olmalı (+Z), bulundu Δvz={actual_dv}"
+        );
+        assert!(
+            (actual_dv - expected_dv).abs() < expected_dv * 0.02,
+            "drag Δv {actual_dv:.6} ≈ ½ρCdAv²/m·dt = {expected_dv:.6} olmalı (±%2)"
+        );
+        assert!(
+            vel.linear.length() < V0,
+            "drag toplam hızı düşürmeli: {} < {V0}",
+            vel.linear.length()
+        );
+    }
+
+    /// Ground-effect: downforce yalnız araç GERÇEKTEN alçaldığında artmalı; normal
+    /// sürüş yüksekliğinde etki 1.0 (davranış korunur). Yumuşak, monoton rampa.
+    #[test]
+    fn ground_effect_ramps_downforce_only_when_low() {
+        let (height, mult) = (0.15_f32, 1.8_f32);
+        // Normal ride height (clearance ≥ height) → NO effect (davranış aynen korunur).
+        assert_eq!(ground_effect_factor(0.36, height, mult), 1.0);
+        assert_eq!(ground_effect_factor(height, height, mult), 1.0);
+        // Gövde yere değerken → tam multiplier.
+        assert!((ground_effect_factor(0.0, height, mult) - mult).abs() < 1e-5);
+        // Yarı yükseklik → yumuşak rampanın tam ortası.
+        let mid = ground_effect_factor(height * 0.5, height, mult);
+        assert!((mid - (1.0 + (mult - 1.0) * 0.5)).abs() < 1e-5, "mid={mid}");
+        // Monoton: alçaldıkça downforce artar.
+        assert!(
+            ground_effect_factor(0.05, height, mult) > ground_effect_factor(0.10, height, mult)
+        );
+        // Negatif clearance (gövde yerin içinde) → multiplier'a kırpılır (patlamaz).
+        assert!((ground_effect_factor(-0.1, height, mult) - mult).abs() < 1e-5);
     }
 
     /// Pacejka combined-slip must stay inside the friction circle: the resultant of the
