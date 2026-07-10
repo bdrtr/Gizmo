@@ -96,7 +96,14 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
 
     for i in 0..N {
         let pivot = Vec3::new(start_x + i as f32 * spacing, PIVOT_Y, 0.0);
-        let center = pivot - Vec3::new(0.0, L, 0.0); // hepsi düz aşağı (dinlenme)
+        // Top 0 geri-çekilmiş doğar → AÇILIŞTA salınır (fizik hemen görünür);
+        // gerisi düz aşağı dinlenir. Hinge kısıtı sağlansın diye konum+rotasyon birlikte.
+        let (center, rot) = if i == 0 {
+            let a = 55.0_f32.to_radians();
+            (pivot + L * Vec3::new(-a.sin(), -a.cos(), 0.0), Quat::from_rotation_z(-a))
+        } else {
+            (pivot - Vec3::new(0.0, L, 0.0), Quat::IDENTITY)
+        };
         let color = if i == 0 || i == N - 1 {
             Vec4::new(0.85, 0.15, 0.15, 1.0)
         } else {
@@ -106,7 +113,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
         // (Eski API-EKSİK #1 DÜZELTİLDİ: RigidBodyBundle artık collider'dan ataleti
         // otomatik türetiyor → elle calculate_sphere_inertia gerekmiyor.)
         let ball = world.spawn_bundle((
-            Transform::new(center),
+            Transform::new(center).with_rotation(rot),
             sphere.clone(),
             Material::new(tex.clone()).with_pbr(color, 0.9, 0.2),
             MeshRenderer::new(),
