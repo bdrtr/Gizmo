@@ -11,19 +11,27 @@ use gizmo_math::{Quat, Vec3};
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Integrator {
     pub gravity: Vec3,
+    /// Hava yoğunluğu ρ (kg/m³), aerodinamik sürükleme F = ½·ρ·Cd·A·v² için. Deniz
+    /// seviyesi ~1.225. Sürükleme yalnız gövdenin `drag_coefficient·drag_area > 0` ise
+    /// uygulanır (opt-in, [`RigidBody::with_air_drag`]).
+    pub air_density: f32,
 }
 
 impl Default for Integrator {
     fn default() -> Self {
         Self {
             gravity: Vec3::new(0.0, -9.81, 0.0),
+            air_density: 1.225,
         }
     }
 }
 
 impl Integrator {
     pub fn new(gravity: Vec3) -> Self {
-        Self { gravity }
+        Self {
+            gravity,
+            ..Default::default()
+        }
     }
 
     // ------------------------------------------------------------------ //
@@ -72,6 +80,22 @@ impl Integrator {
             vel.angular += inv_inertia * rb.torque_accumulator * dt;
         }
         rb.clear_forces();
+
+        // ── Aerodynamic drag: F = ½·ρ·Cd·A·|v|², opposing velocity ─────────
+        // Opt-in via `RigidBody::with_air_drag` (Cd·A > 0). Unlike `linear_damping`
+        // (a velocity-LINEAR exponential decay), this is the physical v² drag, so a
+        // falling body settles at a natural terminal speed v_term = √(2·m·g/(ρ·Cd·A)).
+        // Applied semi-implicitly with a per-step clamp so drag can never reverse the
+        // velocity in one frame (Δv ≤ current speed) — unconditionally stable.
+        if inv_mass > 0.0 && rb.drag_coefficient > 0.0 && rb.drag_area > 0.0 {
+            let speed = vel.linear.length();
+            if speed > 1e-5 {
+                let drag_mag =
+                    0.5 * self.air_density * rb.drag_coefficient * rb.drag_area * speed * speed;
+                let dv = (drag_mag * inv_mass * dt).min(speed);
+                vel.linear -= (vel.linear / speed) * dv;
+            }
+        }
 
         // ── Exponential damping ───────────────────────────────────────────
         // exp(-d*dt) keeps energy decay frame-rate independent.
@@ -394,6 +418,65 @@ mod tests {
             vel.linear.x
         );
         assert!(vel.linear.x > 0.0, "velocity must stay positive");
+    }
+
+    /// Aerodinamik hava direnci tek adımda `F = ½·ρ·Cd·A·v²`'yi hıza KARŞI uygular.
+    /// Yerçekimi ve lineer sönüm kapalıyken (izole), hız kaybı analitik Δv = F/m·dt ile
+    /// eşleşmeli.
+    #[test]
+    fn air_drag_matches_half_rho_cd_a_v_squared_one_step() {
+        let integrator = Integrator::default(); // air_density = 1.225
+        let (mass, cd, area, v0) = (2.0_f32, 1.0_f32, 0.5_f32, 20.0_f32);
+        let mut rb = RigidBody::new(mass, false).with_air_drag(cd, area);
+        rb.linear_damping = 0.0; // yalnız drag kalsın
+        rb.wake_up();
+        let mut vel = Velocity::new(Vec3::new(v0, 0.0, 0.0));
+        let dt = 1.0 / 240.0;
+
+        integrator
+            .integrate_velocities(make_entity(2), &mut rb, Quat::IDENTITY, &mut vel, dt)
+            .expect("integration must succeed");
+
+        let f = 0.5 * integrator.air_density * cd * area * v0 * v0;
+        let expected_v = v0 - f / mass * dt;
+        assert!(
+            (vel.linear.x - expected_v).abs() < expected_v * 1e-3,
+            "one-step drag v={} must match ½ρCdAv²/m·dt → {expected_v}",
+            vel.linear.x
+        );
+        assert!(vel.linear.x < v0, "drag must reduce the speed");
+    }
+
+    /// Doğal davranış: yerçekimi + hava direnci altında düşen cisim, serbest düşüşe
+    /// gitmek yerine analitik TERMINAL hıza oturur: v_term = √(2·m·g / (ρ·Cd·A)).
+    #[test]
+    fn air_drag_gives_natural_terminal_velocity() {
+        let integrator = Integrator::default(); // gravity -9.81, air 1.225
+        let (mass, cd, area) = (1.0_f32, 0.47_f32, 0.1_f32); // ~küre
+        let mut rb = RigidBody::new(mass, true).with_air_drag(cd, area);
+        rb.linear_damping = 0.0; // yalnız yerçekimi + gerçek drag
+        rb.wake_up();
+        let mut vel = Velocity::default();
+        let dt = 1.0 / 240.0;
+        for _ in 0..4800 {
+            // ~20 s
+            integrator
+                .integrate_velocities(make_entity(2), &mut rb, Quat::IDENTITY, &mut vel, dt)
+                .expect("integration must succeed");
+        }
+
+        let g = integrator.gravity.length();
+        let v_term = (2.0 * mass * g / (integrator.air_density * cd * area)).sqrt();
+        let speed = vel.linear.length();
+        assert!(
+            (speed - v_term).abs() < v_term * 0.02,
+            "terminal speed {speed} must settle at v_term = √(2mg/ρCdA) = {v_term} (±2%)"
+        );
+        // Guard: without drag, 20 s of free fall would be ~196 m/s; drag caps it.
+        assert!(
+            speed < g * 5.0,
+            "drag must cap the fall far below free-fall speed, got {speed}"
+        );
     }
 
     #[test]
