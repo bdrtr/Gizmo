@@ -39,7 +39,16 @@ impl<State: 'static> Plugin<State> for PhysicsPlugin {
         );
         app.world
             .insert_resource(PhysicsWorld::new().with_gravity(self.gravity));
-        // Not: İleride `physics_step_system` buraya bir sistem (Schedule) olarak eklenebilir.
+        // Run the physics step automatically at the app's fixed timestep (the
+        // `PhysicsTime` accumulator loop that also drives `TransformPlugin`), so
+        // callers don't hand-call `cpu_physics_step_system` every frame. Labelled
+        // so transform systems can order themselves after it if both are added.
+        app.schedule.add_di_system(
+            gizmo_core::system::SystemConfig::new(Box::new(
+                crate::systems::physics::PhysicsStepSystem,
+            ))
+            .label("physics_step"),
+        );
     }
 }
 
