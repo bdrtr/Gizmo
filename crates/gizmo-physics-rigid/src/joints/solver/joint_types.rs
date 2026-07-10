@@ -649,6 +649,139 @@ impl JointSolver {
         }
     }
 
+    /// Force-based per-axis DRIVES for a D6 joint (motor + spring), applied once per step
+    /// next to the other force-based joints. Each enabled drive is a spring-damper pulling
+    /// its DOF toward `target_position`/`target_velocity`, force-limited by `max_force`.
+    /// Reads `initial_relative_rotation` (set by `solve_d6_joint` in the velocity loop).
+    pub(crate) fn solve_d6_drives(
+        &self,
+        joint: &Joint,
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        idx_a: usize,
+        idx_b: usize,
+        dt: f32,
+    ) {
+        let JointData::D6(data) = joint.data else {
+            return;
+        };
+        if !data
+            .linear_drives
+            .iter()
+            .chain(data.angular_drives.iter())
+            .any(|d| d.enabled)
+        {
+            return;
+        }
+
+        let rot_a = transforms[idx_a].rotation;
+        let anchor_a = transforms[idx_a].position + rot_a * joint.local_anchor_a;
+        let anchor_b =
+            transforms[idx_b].position + transforms[idx_b].rotation * joint.local_anchor_b;
+        let r_a = anchor_a - transforms[idx_a].position;
+        let r_b = anchor_b - transforms[idx_b].position;
+        let delta = anchor_b - anchor_a;
+        let unit = [Vec3::X, Vec3::Y, Vec3::Z];
+
+        // ── Linear drives (slider-spring sign: positive impulse reduces the offset) ──
+        for (i, dr) in data.linear_drives.iter().enumerate() {
+            if !dr.enabled {
+                continue;
+            }
+            let axis_w = rot_a * (data.frame * unit[i]);
+            let offset = delta.dot(axis_w);
+            let v_a = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
+            let v_b = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
+            let rel_vel = (v_b - v_a).dot(axis_w);
+            let limit = if dr.max_force > 0.0 { dr.max_force } else { f32::INFINITY };
+            let force = (dr.stiffness * (offset - dr.target_position)
+                + dr.damping * (rel_vel - dr.target_velocity))
+                .clamp(-limit, limit);
+            let impulse_mag = force * dt;
+            if impulse_mag.abs() < 1e-10 {
+                continue;
+            }
+            let impulse = axis_w * impulse_mag;
+            let inv_m_a = rigid_bodies[idx_a].inv_mass();
+            let inv_m_b = rigid_bodies[idx_b].inv_mass();
+            let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
+            let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
+            let dyn_a = rigid_bodies[idx_a].is_dynamic();
+            let dyn_b = rigid_bodies[idx_b].is_dynamic();
+            if idx_a < idx_b {
+                let (l, r) = velocities.split_at_mut(idx_b);
+                if dyn_a {
+                    l[idx_a].linear += impulse * inv_m_a;
+                    l[idx_a].angular += inv_i_a.mul_vec3(r_a.cross(impulse));
+                }
+                if dyn_b {
+                    r[0].linear -= impulse * inv_m_b;
+                    r[0].angular -= inv_i_b.mul_vec3(r_b.cross(impulse));
+                }
+            } else {
+                let (l, r) = velocities.split_at_mut(idx_a);
+                if dyn_b {
+                    l[idx_b].linear -= impulse * inv_m_b;
+                    l[idx_b].angular -= inv_i_b.mul_vec3(r_b.cross(impulse));
+                }
+                if dyn_a {
+                    r[0].linear += impulse * inv_m_a;
+                    r[0].angular += inv_i_a.mul_vec3(r_a.cross(impulse));
+                }
+            }
+        }
+
+        // ── Angular drives (hinge-spring sign: torque restores toward the target angle) ──
+        let Some(initial) = data.initial_relative_rotation else {
+            return;
+        };
+        let relative_rot = rot_a.inverse() * transforms[idx_b].rotation;
+        let swing = initial.inverse() * relative_rot;
+        let q = if swing.w < 0.0 { -swing } else { swing };
+        let rvec = 2.0 * Vec3::new(q.x, q.y, q.z);
+        for (i, dr) in data.angular_drives.iter().enumerate() {
+            if !dr.enabled {
+                continue;
+            }
+            let axis_local = data.frame * unit[i];
+            let angle = rvec.dot(axis_local);
+            let axis_w = rot_a * axis_local;
+            let ang_rel = (velocities[idx_b].angular - velocities[idx_a].angular).dot(axis_w);
+            let limit = if dr.max_force > 0.0 { dr.max_force } else { f32::INFINITY };
+            let torque = (dr.stiffness * (angle - dr.target_position)
+                + dr.damping * (ang_rel - dr.target_velocity))
+                .clamp(-limit, limit);
+            let torque_impulse = -torque * dt;
+            if torque_impulse.abs() < 1e-12 {
+                continue;
+            }
+            let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
+            let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
+            let delta_a = inv_i_a.mul_vec3(axis_w) * torque_impulse;
+            let delta_b = inv_i_b.mul_vec3(axis_w) * torque_impulse;
+            let dyn_a = rigid_bodies[idx_a].is_dynamic();
+            let dyn_b = rigid_bodies[idx_b].is_dynamic();
+            if idx_a < idx_b {
+                let (l, r) = velocities.split_at_mut(idx_b);
+                if dyn_a {
+                    l[idx_a].angular -= delta_a;
+                }
+                if dyn_b {
+                    r[0].angular += delta_b;
+                }
+            } else {
+                let (l, r) = velocities.split_at_mut(idx_a);
+                if dyn_b {
+                    l[idx_b].angular += delta_b;
+                }
+                if dyn_a {
+                    r[0].angular -= delta_a;
+                }
+            }
+        }
+    }
+
     pub(crate) fn solve_slider_joint(
         &self,
         joint: &mut Joint,

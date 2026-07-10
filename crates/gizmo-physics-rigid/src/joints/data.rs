@@ -176,6 +176,21 @@ pub enum D6Motion {
     Limited { lower: f32, upper: f32 },
 }
 
+/// Per-axis DRIVE for a [`D6JointData`]: a spring-damper toward a target that unifies a
+/// motor (`damping` pulls the velocity toward `target_velocity`) and a spring (`stiffness`
+/// pulls the position toward `target_position`), force-limited by `max_force` (≤0 ⇒
+/// unlimited). PhysX-D6-style. `enabled: false` (the default) ⇒ no drive on that axis.
+// Exhaustive (a plain config value users build with a struct literal), like PhysicsMaterial.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct D6Drive {
+    pub enabled: bool,
+    pub stiffness: f32,
+    pub damping: f32,
+    pub target_position: f32,
+    pub target_velocity: f32,
+    pub max_force: f32,
+}
+
 /// Generic 6-DOF (D6) joint: per-axis Lock / Free / Limited over 3 translational + 3
 /// rotational DOFs, in a configurable local frame. Subsumes Fixed (all locked), Slider
 /// (one linear Free/Limited), Hinge (one angular Free/Limited) and hybrids (universal,
@@ -190,6 +205,10 @@ pub struct D6JointData {
     pub linear: [D6Motion; 3],
     /// Rotation modes about the frame's X, Y, Z axes.
     pub angular: [D6Motion; 3],
+    /// Optional spring-damper drives (motor+spring) per translational axis.
+    pub linear_drives: [D6Drive; 3],
+    /// Optional spring-damper drives (motor+spring) per rotational axis.
+    pub angular_drives: [D6Drive; 3],
     /// Inverse stiffness (CFM) for every locked/limited DOF (0 = rigid).
     pub compliance: f32,
     #[serde(default)]
@@ -460,6 +479,8 @@ impl Joint {
                 frame: Quat::IDENTITY,
                 linear: [D6Motion::Locked; 3],
                 angular: [D6Motion::Locked; 3],
+                linear_drives: [D6Drive::default(); 3],
+                angular_drives: [D6Drive::default(); 3],
                 compliance: 0.0,
                 initial_relative_rotation: None,
             }),

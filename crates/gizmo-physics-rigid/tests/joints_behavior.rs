@@ -11,7 +11,7 @@
 use gizmo_physics_core::BodyHandle;
 use gizmo_math::{Quat, Vec3};
 use gizmo_physics_core::{Collider, Transform};
-use gizmo_physics_rigid::{D6Motion, Joint, JointData, PhysicsWorld, RigidBody, Velocity};
+use gizmo_physics_rigid::{D6Drive, D6Motion, Joint, JointData, PhysicsWorld, RigidBody, Velocity};
 
 fn anchor(world: &mut PhysicsWorld, id: u32, pos: Vec3) {
     let mut rb = RigidBody::new_static();
@@ -490,4 +490,32 @@ fn d6_as_slider_frees_one_linear_axis() {
     assert!(p.y.abs() < 0.1, "D6 must lock the Y axis, y={}", p.y);
     assert!(p.z.abs() < 0.1, "D6 must lock the Z axis, z={}", p.z);
     assert!(quat_angle(world.transforms[1].rotation) < 0.15, "D6 all-angular-locked must not rotate");
+}
+
+#[test]
+fn d6_angular_drive_reaches_target_angle() {
+    // A D6 angular drive (spring-damper toward a target) on the free Z axis drives the
+    // body to the target angle and holds it — a per-axis motor/spring on the D6.
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+    anchor(&mut world, 1, Vec3::ZERO);
+    dyn_box(&mut world, 2, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, false);
+    let mut j = Joint::d6(BodyHandle::from_id(1), BodyHandle::from_id(2), Vec3::ZERO, Vec3::ZERO);
+    if let JointData::D6(ref mut d) = j.data {
+        d.angular[2] = D6Motion::Free; // Z rotation free so the drive can turn it
+        d.angular_drives[2] = D6Drive {
+            enabled: true,
+            stiffness: 40.0,
+            damping: 8.0,
+            target_position: 0.8,
+            target_velocity: 0.0,
+            max_force: 500.0,
+        };
+    }
+    world.joints.push(j);
+    for _ in 0..1000 {
+        world.step(1.0 / 240.0).ok();
+    }
+    let q = world.transforms[1].rotation;
+    let angle = 2.0 * q.z.atan2(q.w);
+    assert!((angle - 0.8).abs() < 0.15, "D6 angular drive should reach target 0.8, got {angle}");
 }
