@@ -86,6 +86,41 @@ pub(crate) struct BatchData {
     shadow_instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
 }
 
+/// Guarantee every renderable mesh has a current `GlobalTransform` before the
+/// draw query runs.
+///
+/// The draw query below requires `(&Mesh, &GlobalTransform, &Material)` and reads
+/// the world matrix from `GlobalTransform`, but physics/gameplay write only the
+/// local `Transform`. Without this step a plain `spawn((Transform, Mesh, Material))`
+/// renders nothing (the "empty screen" footgun) and callers had to hand-run the
+/// transform systems each frame. Here we (1) backfill a `GlobalTransform` onto any
+/// mesh that lacks one, then (2) refresh local matrices and propagate them to
+/// `GlobalTransform` — the "update transforms right before the pass" TODO.
+fn ensure_global_transforms(world: &mut World) {
+    use crate::core::query::Without;
+    use crate::core::system::System;
+    use gizmo_physics_core::components::{GlobalTransform, Transform};
+
+    // Collect first: `add_component` is a structural change and can't run while a
+    // query borrow is live.
+    let mut missing = Vec::new();
+    if let Some(q) = world.query::<(&Mesh, &Transform, Without<GlobalTransform>)>() {
+        for (id, _) in q.iter() {
+            missing.push(id);
+        }
+    }
+    for id in missing {
+        if let Some(e) = world.get_entity(id) {
+            world.add_component(e, GlobalTransform::default());
+        }
+    }
+
+    let mut sync = crate::systems::transform::TransformSyncSystem;
+    let mut propagate = crate::systems::transform::TransformPropagateSystem;
+    sync.run(world, 0.0);
+    propagate.run(world, 0.0);
+}
+
 /// Bevy'nin DefaultPlugins davranisini taklit eden, sadece modelleri
 /// isiklandirip hizlica ekrana basmaya yarayan kutudan cikmis Render Motoru.
 /// Yeni acilan `tut` gibi bos projelerde yuzlerce satir kod yazmamak icin kullanilir.
@@ -96,6 +131,14 @@ pub fn default_render_pass(
     view: &wgpu::TextureView,
     renderer: &mut Renderer,
 ) {
+    // Every renderable object needs an up-to-date `GlobalTransform` (the draw query
+    // below requires it, and physics/gameplay only write the local `Transform`).
+    // Realize the long-standing "update_transforms right before the pass" TODO here
+    // so a caller that just spawned `Transform + Mesh + Material` is not silently
+    // culled (the classic "empty screen" footgun) and doesn't have to hand-run the
+    // transform systems every frame.
+    ensure_global_transforms(world);
+
     // Post-process params are written AFTER the active camera is resolved (below), so the
     // single exposure knob can be the camera's exposure — see the update_post_process call
     // after camera selection. Exposure is applied ONCE here, over the whole composited HDR
@@ -786,9 +829,11 @@ mod golden_render_tests {
                 &renderer.scene.texture_bind_group_layout,
             );
             let mat = Material::new(tex).with_pbr(Vec4::new(0.9, 0.15, 0.15, 1.0), 0.0, 1.0);
+            // Deliberately NO GlobalTransform: `default_render_pass` must backfill and
+            // sync it from the Transform (the "spawn Transform+Mesh+Material and it just
+            // renders" contract — regression guard for the empty-screen footgun).
             let cube = world.spawn();
             world.add_component(cube, Transform::new(Vec3::ZERO));
-            world.add_component(cube, GlobalTransform::default()); // identity → cube at origin
             world.add_component(cube, mesh);
             world.add_component(cube, mat);
             world.add_component(cube, MeshRenderer::new());
