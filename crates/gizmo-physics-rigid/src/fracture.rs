@@ -36,24 +36,44 @@ impl MathPlane {
     }
 }
 
-/// Compute the approximate volume of a convex polyhedron defined by its vertices
-/// using signed tetrahedron decomposition relative to the centroid.
-fn compute_convex_volume(vertices: &[Vec3], indices: &[u32]) -> f32 {
-    if indices.len() < 3 {
-        return 0.001;
-    }
-    // Use the centroid as the reference point
-    let centroid =
+/// Volume **and** center-of-mass of a convex polyhedron (closed triangle mesh),
+/// via signed-tetrahedron decomposition relative to the vertex centroid.
+///
+/// The COM returned is the true **volume centroid** (center of mass of a uniform-
+/// density solid), NOT the vertex average. For asymmetric voronoi chunks the two
+/// differ (e.g. a pyramid's mass sits at h/4, not the h/5 vertex mean), and the
+/// vertex average biased the chunk's rotational dynamics. Each triangle `(a,b,c)`
+/// plus the reference point forms a tetrahedron with signed volume `v = a·(b×c)/6`
+/// (relative coords) and centroid `(a+b+c)/4`; the mesh COM is the volume-weighted
+/// mean of the tetra centroids, `Σ v·g / Σ v`. Sign cancels between numerator and
+/// denominator, so winding handedness (as long as it is *consistent*) does not
+/// matter. Volume is `|Σ v|` — unchanged from the previous volume-only routine, so
+/// per-chunk mass distribution is preserved.
+fn compute_convex_mass_props(vertices: &[Vec3], indices: &[u32]) -> (Vec3, f32) {
+    let vertex_centroid =
         vertices.iter().copied().fold(Vec3::ZERO, |a, b| a + b) / vertices.len().max(1) as f32;
-    let mut vol = 0.0f32;
-    // Sum signed tetrahedron volumes for each triangle face
-    for tri in indices.chunks_exact(3) {
-        let a = vertices[tri[0] as usize] - centroid;
-        let b = vertices[tri[1] as usize] - centroid;
-        let c = vertices[tri[2] as usize] - centroid;
-        vol += a.dot(b.cross(c));
+    if indices.len() < 3 {
+        return (vertex_centroid, 0.001);
     }
-    (vol / 6.0).abs().max(0.001)
+    let mut vol6 = 0.0f32; // 6 × signed volume (Σ of triangle a·(b×c))
+    let mut com_acc = Vec3::ZERO; // Σ (a+b+c)·v6_i, relative to vertex_centroid
+    for tri in indices.chunks_exact(3) {
+        let a = vertices[tri[0] as usize] - vertex_centroid;
+        let b = vertices[tri[1] as usize] - vertex_centroid;
+        let c = vertices[tri[2] as usize] - vertex_centroid;
+        let v6 = a.dot(b.cross(c));
+        vol6 += v6;
+        com_acc += (a + b + c) * v6;
+    }
+    let volume = (vol6 / 6.0).abs().max(0.001);
+    // C_rel = Σ(v_i·g_i)/Σ(v_i) = Σ(v6·(a+b+c))/(4·Σv6). Degenerate (near-zero
+    // signed volume, e.g. sliver/coplanar) → fall back to the vertex centroid.
+    let com = if vol6.abs() > 1e-8 {
+        vertex_centroid + com_acc / (4.0 * vol6)
+    } else {
+        vertex_centroid
+    };
+    (com, volume)
 }
 
 pub fn voronoi_shatter(extents: Vec3, num_pieces: u32, seed: u64) -> Vec<ProceduralChunk> {
@@ -160,12 +180,6 @@ pub fn voronoi_shatter(extents: Vec3, num_pieces: u32, seed: u64) -> Vec<Procedu
             continue;
         }
 
-        let mut center = Vec3::ZERO;
-        for &v in &raw_vertices {
-            center += v;
-        }
-        center /= raw_vertices.len() as f32;
-
         out_vertices.clear();
         out_normals.clear();
         out_indices.clear();
@@ -243,12 +257,14 @@ pub fn voronoi_shatter(extents: Vec3, num_pieces: u32, seed: u64) -> Vec<Procedu
             continue;
         }
 
-        let volume = compute_convex_volume(&out_vertices, &out_indices);
+        // True volume centroid (mass center of a uniform solid), not the vertex
+        // average — the mesh is a closed convex polyhedron here.
+        let (center_of_mass, volume) = compute_convex_mass_props(&out_vertices, &out_indices);
         chunks.push(ProceduralChunk {
             vertices: out_vertices.clone(),
             normals: out_normals.clone(),
             indices: out_indices.clone(),
-            center_of_mass: center,
+            center_of_mass,
             volume,
         });
     }
@@ -478,6 +494,62 @@ mod tests {
         assert!(!neg.is_empty(), "negative/zero extents must be handled, not panic");
         // Sanity: a normal box still shatters.
         assert!(!voronoi_shatter(Vec3::splat(1.0), 8, 1).is_empty());
+    }
+
+    /// COM = gerçek HACİM merkezi (düzgün-yoğunluklu katının kütle merkezi), vertex
+    /// ortalaması DEĞİL. Ayırt edici şekil: kare piramit — kütle merkezi tabandan h/4,
+    /// vertex ortalaması ise h/5. Eski kod (vertex-centroid) bu testte FAIL eder.
+    #[test]
+    fn convex_mass_props_returns_volume_centroid_not_vertex_average() {
+        // Taban z=0'da 2×2 kare (alan 4), tepe (0,0,3) → hacim = ⅓·4·3 = 4.
+        let verts = vec![
+            Vec3::new(-1.0, -1.0, 0.0),
+            Vec3::new(1.0, -1.0, 0.0),
+            Vec3::new(1.0, 1.0, 0.0),
+            Vec3::new(-1.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 3.0),
+        ];
+        // Vertex ortalaması = (0,0,0.6); hacim merkezi = (0,0,0.75).
+        let mut tris: Vec<[u32; 3]> = vec![
+            [0, 1, 2],
+            [0, 2, 3], // taban
+            [0, 1, 4],
+            [1, 2, 4],
+            [2, 3, 4],
+            [3, 0, 4], // yan yüzler
+        ];
+        // Fonksiyon TUTARLI sarım ister; her üçgeni dışa-normal olacak şekilde düzelt.
+        let centroid = verts.iter().copied().fold(Vec3::ZERO, |a, b| a + b) / verts.len() as f32;
+        let mut indices = Vec::new();
+        for t in &mut tris {
+            let (a, b, c) = (
+                verts[t[0] as usize],
+                verts[t[1] as usize],
+                verts[t[2] as usize],
+            );
+            let n = (b - a).cross(c - a);
+            let face_center = (a + b + c) / 3.0;
+            if n.dot(face_center - centroid) < 0.0 {
+                t.swap(1, 2);
+            }
+            indices.extend_from_slice(t);
+        }
+
+        let (com, vol) = compute_convex_mass_props(&verts, &indices);
+        assert!((vol - 4.0).abs() < 1e-3, "hacim ~4 olmalı, bulundu {vol}");
+        assert!(
+            com.x.abs() < 1e-4 && com.y.abs() < 1e-4,
+            "simetri: com.xy ≈ 0, bulundu {com:?}"
+        );
+        assert!(
+            (com.z - 0.75).abs() < 1e-3,
+            "hacim merkezi z ≈ 0.75 olmalı (vertex ortalaması 0.6 DEĞİL), bulundu {}",
+            com.z
+        );
+        assert!(
+            (com.z - 0.6).abs() > 0.1,
+            "COM vertex ortalamasından (0.6) belirgin farklı olmalı"
+        );
     }
 
     /// İnce kıymık (çok küçük hacim/kütle) parçalar, büyük çarpma kuvvetinde bile
