@@ -318,7 +318,7 @@ impl JointSolver {
         let JointData::BallSocket(ref mut data) = joint.data else {
             return;
         };
-        if !data.use_cone_limit {
+        if !data.use_cone_limit && !data.use_twist_limit {
             return;
         }
 
@@ -332,47 +332,85 @@ impl JointSolver {
             Some(rot) => rot,
         };
 
-        // Compute the "swing" rotation of B away from its initial orientation (in A's frame)
+        // Rotation of B away from its initial orientation, in A's frame.
         let swing_quat = initial_rot.inverse() * relative_rot;
+        let mut total_ang_impulse = 0.0;
 
-        // Angular-error DIRECTION from the small-angle approximation (2·quat.xyz).
-        let swing_err_local = if swing_quat.w >= 0.0 {
-            Vec3::new(swing_quat.x, swing_quat.y, swing_quat.z) * 2.0
-        } else {
-            -Vec3::new(swing_quat.x, swing_quat.y, swing_quat.z) * 2.0
-        };
-
-        // TRUE swing angle in radians. `swing_err_local.length()` = 2·|sin(θ/2)| saturates
-        // at 2.0, so comparing it directly against a *radian* cone limit silently disabled
-        // every limit ≥ 2 rad — including the ball_socket constructor default of π. Compare
-        // the actual angle θ = 2·acos(|w|) instead; keep the chord vector for the direction.
-        let swing_mag = swing_err_local.length();
-        let swing_angle = 2.0 * swing_quat.w.abs().clamp(0.0, 1.0).acos();
-        if swing_angle <= data.cone_limit_angle || swing_mag < 1e-6 {
-            return;
+        // ── Cone (swing) limit — clamps how far B rotates from its initial pose ──
+        if data.use_cone_limit {
+            // Angular-error DIRECTION from the small-angle approximation (2·quat.xyz).
+            let swing_err_local = if swing_quat.w >= 0.0 {
+                Vec3::new(swing_quat.x, swing_quat.y, swing_quat.z) * 2.0
+            } else {
+                -Vec3::new(swing_quat.x, swing_quat.y, swing_quat.z) * 2.0
+            };
+            // TRUE swing angle θ = 2·acos(|w|) (the chord length saturates at 2.0, so it
+            // cannot be compared to a radian limit directly).
+            let swing_mag = swing_err_local.length();
+            let swing_angle = 2.0 * swing_quat.w.abs().clamp(0.0, 1.0).acos();
+            if swing_angle > data.cone_limit_angle && swing_mag >= 1e-6 {
+                let excess = swing_angle - data.cone_limit_angle;
+                let swing_dir_world = transforms[idx_a].rotation * (swing_err_local / swing_mag);
+                total_ang_impulse += self
+                    .apply_angular_constraint(
+                        rigid_bodies,
+                        transforms,
+                        velocities,
+                        idx_a,
+                        idx_b,
+                        swing_dir_world,
+                        -excess,
+                        dt,
+                        f32::NEG_INFINITY,
+                        0.0,
+                    )
+                    .abs();
+            }
         }
 
-        let excess = swing_angle - data.cone_limit_angle;
-        let swing_dir_local = swing_err_local / swing_mag;
+        // ── Twist (roll) limit — swing-twist decomposition about twist_axis ──
+        // Isolate the roll about `twist_axis`: project the quaternion's vector part onto
+        // the axis; the twist angle is 2·atan2(proj, w). Two-sided clamp like a hinge limit.
+        if data.use_twist_limit && data.twist_axis.length_squared() > 1e-6 {
+            let axis_local = data.twist_axis.normalize();
+            // Canonicalise to w ≥ 0 (a quaternion and its negation are the same rotation).
+            let q = if swing_quat.w < 0.0 { -swing_quat } else { swing_quat };
+            let proj = Vec3::new(q.x, q.y, q.z).dot(axis_local);
+            let twist_angle = 2.0 * proj.atan2(q.w);
+            let axis_world = transforms[idx_a].rotation * axis_local;
+            if twist_angle > data.twist_upper {
+                total_ang_impulse += self
+                    .apply_angular_constraint(
+                        rigid_bodies,
+                        transforms,
+                        velocities,
+                        idx_a,
+                        idx_b,
+                        axis_world,
+                        data.twist_upper - twist_angle, // < 0
+                        dt,
+                        f32::NEG_INFINITY,
+                        0.0,
+                    )
+                    .abs();
+            } else if twist_angle < data.twist_lower {
+                total_ang_impulse += self
+                    .apply_angular_constraint(
+                        rigid_bodies,
+                        transforms,
+                        velocities,
+                        idx_a,
+                        idx_b,
+                        axis_world,
+                        data.twist_lower - twist_angle, // > 0
+                        dt,
+                        0.0,
+                        f32::INFINITY,
+                    )
+                    .abs();
+            }
+        }
 
-        // Convert error direction to world space
-        let swing_dir_world = transforms[idx_a].rotation * swing_dir_local;
-
-        let mut total_ang_impulse = 0.0;
-        total_ang_impulse += self
-            .apply_angular_constraint(
-                rigid_bodies,
-                transforms,
-                velocities,
-                idx_a,
-                idx_b,
-                swing_dir_world,
-                -excess,
-                dt,
-                f32::NEG_INFINITY,
-                0.0,
-            )
-            .abs();
         if total_ang_impulse / dt > joint.break_torque {
             joint.is_broken = true;
         }
@@ -748,6 +786,139 @@ impl JointSolver {
         let dyn_a = rigid_bodies[idx_a].is_dynamic();
         let dyn_b = rigid_bodies[idx_b].is_dynamic();
 
+        if idx_a < idx_b {
+            let (l, r) = velocities.split_at_mut(idx_b);
+            if dyn_a {
+                l[idx_a].linear += impulse * inv_m_a;
+                l[idx_a].angular += inv_i_a.mul_vec3(r_a.cross(impulse));
+            }
+            if dyn_b {
+                r[0].linear -= impulse * inv_m_b;
+                r[0].angular -= inv_i_b.mul_vec3(r_b.cross(impulse));
+            }
+        } else {
+            let (l, r) = velocities.split_at_mut(idx_a);
+            if dyn_b {
+                l[idx_b].linear -= impulse * inv_m_b;
+                l[idx_b].angular -= inv_i_b.mul_vec3(r_b.cross(impulse));
+            }
+            if dyn_a {
+                r[0].linear += impulse * inv_m_a;
+                r[0].angular += inv_i_a.mul_vec3(r_a.cross(impulse));
+            }
+        }
+    }
+
+    /// Torsional spring on a Hinge: a soft restoring torque about the hinge axis toward
+    /// `rest_angle` (stiffness + damping) — self-closing doors, spring flaps, soft ragdoll
+    /// stiffness. Force-based (once per step); reads `current_angle` (updated this step by
+    /// solve_hinge_joint). No-op unless `use_torsional_spring`.
+    pub(crate) fn solve_hinge_spring(
+        &self,
+        joint: &Joint,
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        idx_a: usize,
+        idx_b: usize,
+        dt: f32,
+    ) {
+        let JointData::Hinge(data) = joint.data else {
+            return;
+        };
+        if !data.use_torsional_spring {
+            return;
+        }
+        let axis_w = (transforms[idx_a].rotation * data.axis).normalize_or_zero();
+        if axis_w.length_squared() < 1e-6 {
+            return;
+        }
+        let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
+        let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
+        let rel_ang_vel = (velocities[idx_b].angular - velocities[idx_a].angular).dot(axis_w);
+
+        // Restoring torque toward rest_angle (+ damping). Negative sign so that angle > rest
+        // yields a torque that DECREASES the angle. Sign convention matches the hinge motor:
+        // a positive impulse about axis_w increases the relative angle.
+        let torque_impulse = -(data.torsional_stiffness * (data.current_angle - data.rest_angle)
+            + data.torsional_damping * rel_ang_vel)
+            * dt;
+        if torque_impulse.abs() < 1e-12 {
+            return;
+        }
+        let delta_a = inv_i_a.mul_vec3(axis_w) * torque_impulse;
+        let delta_b = inv_i_b.mul_vec3(axis_w) * torque_impulse;
+        let dyn_a = rigid_bodies[idx_a].is_dynamic();
+        let dyn_b = rigid_bodies[idx_b].is_dynamic();
+        if idx_a < idx_b {
+            let (l, r) = velocities.split_at_mut(idx_b);
+            if dyn_a {
+                l[idx_a].angular -= delta_a;
+            }
+            if dyn_b {
+                r[0].angular += delta_b;
+            }
+        } else {
+            let (l, r) = velocities.split_at_mut(idx_a);
+            if dyn_b {
+                l[idx_b].angular += delta_b;
+            }
+            if dyn_a {
+                r[0].angular -= delta_a;
+            }
+        }
+    }
+
+    /// Suspension spring on a Slider: a soft PD force along the free axis pulling the
+    /// along-axis offset toward `spring_rest_position`. Force-based (runs once per step,
+    /// like Spring); same sign convention — positive impulse reduces the along-axis offset.
+    /// No-op unless `use_spring`. This is the springy-prismatic a shock/suspension needs,
+    /// which the hard-limit + velocity-motor Slider could not express.
+    pub(crate) fn solve_slider_spring(
+        &self,
+        joint: &Joint,
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        idx_a: usize,
+        idx_b: usize,
+        dt: f32,
+    ) {
+        let JointData::Slider(data) = joint.data else {
+            return;
+        };
+        if !data.use_spring {
+            return;
+        }
+
+        let anchor_a =
+            transforms[idx_a].position + transforms[idx_a].rotation * joint.local_anchor_a;
+        let anchor_b =
+            transforms[idx_b].position + transforms[idx_b].rotation * joint.local_anchor_b;
+        let axis_w = (transforms[idx_a].rotation * data.axis).normalize_or_zero();
+        if axis_w.length_squared() < 1e-6 {
+            return;
+        }
+        let along = (anchor_b - anchor_a).dot(axis_w);
+        let r_a = anchor_a - transforms[idx_a].position;
+        let r_b = anchor_b - transforms[idx_b].position;
+        let v_a = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
+        let v_b = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
+        let rel_vel = (v_b - v_a).dot(axis_w);
+
+        let impulse_mag = (data.spring_stiffness * (along - data.spring_rest_position)
+            + data.spring_damping * rel_vel)
+            * dt;
+        if impulse_mag.abs() < 1e-10 {
+            return;
+        }
+        let impulse = axis_w * impulse_mag;
+        let inv_m_a = rigid_bodies[idx_a].inv_mass();
+        let inv_m_b = rigid_bodies[idx_b].inv_mass();
+        let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
+        let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
+        let dyn_a = rigid_bodies[idx_a].is_dynamic();
+        let dyn_b = rigid_bodies[idx_b].is_dynamic();
         if idx_a < idx_b {
             let (l, r) = velocities.split_at_mut(idx_b);
             if dyn_a {

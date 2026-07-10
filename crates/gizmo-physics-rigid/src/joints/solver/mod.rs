@@ -116,7 +116,7 @@ impl JointSolver {
         // Yay kuvveti pozisyona bağlı olduğundan velocity-solver iterasyonları
         // boyunca sabittir; döngü dışında tek sefer uygulanmalıdır.
         for joint in joints.iter_mut() {
-            if joint.is_broken || JointType::from(&joint.data) != JointType::Spring {
+            if joint.is_broken {
                 continue;
             }
             let (Some(idx_a), Some(idx_b)) = (
@@ -128,7 +128,20 @@ impl JointSolver {
             if idx_a == idx_b {
                 continue;
             }
-            self.solve_spring_joint(joint, rigid_bodies, transforms, velocities, idx_a, idx_b, dt);
+            // Force-based contributions: Spring is always force-based; Slider/Hinge carry
+            // optional suspension/torsional springs (the solve_*_spring fns no-op if off).
+            match JointType::from(&joint.data) {
+                JointType::Spring => {
+                    self.solve_spring_joint(joint, rigid_bodies, transforms, velocities, idx_a, idx_b, dt)
+                }
+                JointType::Slider => {
+                    self.solve_slider_spring(joint, rigid_bodies, transforms, velocities, idx_a, idx_b, dt)
+                }
+                JointType::Hinge => {
+                    self.solve_hinge_spring(joint, rigid_bodies, transforms, velocities, idx_a, idx_b, dt)
+                }
+                _ => {}
+            }
         }
     }
 

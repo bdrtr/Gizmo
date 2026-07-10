@@ -321,3 +321,93 @@ fn hinge_servo_reaches_target_angle() {
     };
     assert!((angle - 1.0).abs() < 0.2, "hinge servo should reach target angle 1.0 rad, got {angle}");
 }
+
+#[test]
+fn ball_socket_twist_limit_clamps_roll() {
+    // Cone-twist: a body spun about the twist axis must be stopped at the twist limit
+    // (before this, BallSocket had only a swing/cone limit and rolled freely about its axis).
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+    anchor(&mut world, 1, Vec3::ZERO); // static, transforms[0]
+    dyn_box(&mut world, 2, Vec3::ZERO, Vec3::ZERO, Vec3::new(0.0, 2.0, 0.0), false); // spin about Y
+    let mut j = Joint::ball_socket(BodyHandle::from_id(1), BodyHandle::from_id(2), Vec3::ZERO, Vec3::ZERO);
+    if let JointData::BallSocket(ref mut d) = j.data {
+        d.use_twist_limit = true;
+        d.twist_axis = Vec3::Y;
+        d.twist_lower = -0.3;
+        d.twist_upper = 0.3;
+    }
+    world.joints.push(j);
+    // Track the peak twist: without the limit a +2 rad/s spin would free-run to several
+    // radians; the limit must clamp |twist| at the 0.3 bound (never breach it).
+    let mut max_twist = 0f32;
+    for _ in 0..400 {
+        world.step(1.0 / 240.0).ok();
+        let q = world.transforms[1].rotation; // A static ⇒ B's world rotation is the twist
+        max_twist = max_twist.max((2.0 * q.y.atan2(q.w)).abs());
+    }
+    assert!(max_twist > 0.25, "the twist limit must engage (B rolled to ~0.3), got max {max_twist}");
+    assert!(max_twist < 0.4, "twist must never breach the 0.3 limit (no free-spin), got max {max_twist}");
+}
+
+#[test]
+fn slider_spring_suspends_under_gravity() {
+    // Suspension spring: a body on a vertical spring-slider must settle at the spring/
+    // gravity equilibrium (K·|sag| = mg ⇒ sag ≈ -9.81/200 ≈ -0.049), NOT slide away as it
+    // would with only hard limits + a velocity motor.
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
+    anchor(&mut world, 1, Vec3::ZERO);
+    dyn_box(&mut world, 2, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, true); // gravity on
+    let mut j = Joint::slider(
+        BodyHandle::from_id(1),
+        BodyHandle::from_id(2),
+        Vec3::ZERO,
+        Vec3::ZERO,
+        Vec3::Y,
+    );
+    if let JointData::Slider(ref mut d) = j.data {
+        d.use_spring = true;
+        d.spring_stiffness = 200.0;
+        d.spring_damping = 60.0; // over-damped → settles firmly
+        d.spring_rest_position = 0.0;
+    }
+    world.joints.push(j);
+    for _ in 0..800 {
+        world.step(1.0 / 240.0).ok();
+    }
+    let y = world.transforms[1].position.y;
+    assert!((y - (-0.049)).abs() < 0.05, "spring should suspend at ~-0.049, got y={y}");
+    assert!(world.velocities[1].linear.y.abs() < 0.2, "should have settled, vy={}", world.velocities[1].linear.y);
+}
+
+#[test]
+fn hinge_torsional_spring_returns_to_rest_angle() {
+    // Return-to-center: a torsional spring must drive the hinge to its rest_angle and hold
+    // (self-closing door / spring flap). B starts at angle 0; the spring pulls it to 0.8.
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+    anchor(&mut world, 1, Vec3::ZERO);
+    dyn_box(&mut world, 2, Vec3::new(0.5, 0.0, 0.0), Vec3::ZERO, Vec3::ZERO, false);
+    let mut j = Joint::hinge(
+        BodyHandle::from_id(1),
+        BodyHandle::from_id(2),
+        Vec3::new(0.5, 0.0, 0.0),
+        Vec3::ZERO,
+        Vec3::Z,
+    );
+    if let JointData::Hinge(ref mut d) = j.data {
+        d.use_torsional_spring = true;
+        d.torsional_stiffness = 30.0;
+        d.torsional_damping = 8.0; // over-damped → settles at rest without oscillating
+        d.rest_angle = 0.8;
+    }
+    world.joints.push(j);
+    for _ in 0..800 {
+        world.step(1.0 / 240.0).ok();
+    }
+    let angle = if let JointData::Hinge(d) = world.joints[0].data {
+        d.current_angle
+    } else {
+        0.0
+    };
+    assert!((angle - 0.8).abs() < 0.15, "torsional spring should settle at rest_angle 0.8, got {angle}");
+    assert!(world.velocities[1].angular.z.abs() < 0.3, "should have settled, wz={}", world.velocities[1].angular.z);
+}
