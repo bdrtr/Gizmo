@@ -256,7 +256,14 @@ impl JointSolver {
             let k = axis_w.dot(inv_i_a.mul_vec3(axis_w)) + axis_w.dot(inv_i_b.mul_vec3(axis_w));
             if k > 1e-10 {
                 let rel_vel = (w_b - w_a).dot(axis_w);
-                let vel_err = data.motor_target_velocity - rel_vel;
+                // Servo: turn the angle error into a target velocity (P-control via the
+                // solver's position_bias); force is still capped by motor_max_force below.
+                let target_vel = if data.motor_is_servo {
+                    self.position_bias * (data.motor_target_position - data.current_angle) / dt
+                } else {
+                    data.motor_target_velocity
+                };
+                let vel_err = target_vel - rel_vel;
                 // Step başına toplam motor impulse bütçesini iterasyonlara böl; aksi
                 // halde her iterasyon ayrı sınırlandığından motor ~iterations kat fazla
                 // kuvvet uygulardı.
@@ -612,7 +619,14 @@ impl JointSolver {
             let v_a = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
             let v_b = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
             let rel_vel = (v_b - v_a).dot(axis_w);
-            let vel_err = data.motor_target_velocity - rel_vel;
+            // Servo: drive toward the target position along the axis (P-control via
+            // position_bias), force still capped by motor_max_force.
+            let target_vel = if data.motor_is_servo {
+                self.position_bias * (data.motor_target_position - data.current_position) / dt
+            } else {
+                data.motor_target_velocity
+            };
+            let vel_err = target_vel - rel_vel;
 
             let inv_m_a = rigid_bodies[idx_a].inv_mass();
             let inv_m_b = rigid_bodies[idx_b].inv_mass();
@@ -659,7 +673,7 @@ impl JointSolver {
 
     pub(crate) fn solve_spring_joint(
         &self,
-        joint: &Joint,
+        joint: &mut Joint,
         rigid_bodies: &[RigidBody],
         transforms: &[Transform],
         velocities: &mut [Velocity],
@@ -711,6 +725,14 @@ impl JointSolver {
         } else {
             pull_impulse
         };
+
+        // Breakable: the spring's linear force is |impulse|/dt. Previously missing — a
+        // Spring could never break despite the advertised break_force (an API footgun,
+        // like the old Fixed-torque no-op). Now matches Distance's break handling.
+        if clamped_impulse.abs() / dt > joint.break_force {
+            joint.is_broken = true;
+            return;
+        }
 
         if clamped_impulse.abs() < 1e-10 {
             return;

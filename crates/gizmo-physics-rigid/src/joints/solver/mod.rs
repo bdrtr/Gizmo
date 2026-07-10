@@ -55,8 +55,11 @@ impl JointSolver {
                     continue;
                 }
 
-                match joint.joint_type() {
-                    "Fixed" => self.solve_fixed_joint(
+                // Dispatch on the JointType enum (a Copy value derived from joint.data via
+                // the compile-forced From impl), not the &str — so a new JointData variant
+                // that forgot a solver case is a compile error, not a silent no-op.
+                match JointType::from(&joint.data) {
+                    JointType::Fixed => self.solve_fixed_joint(
                         joint,
                         rigid_bodies,
                         transforms,
@@ -65,7 +68,7 @@ impl JointSolver {
                         idx_b,
                         dt,
                     ),
-                    "Hinge" => self.solve_hinge_joint(
+                    JointType::Hinge => self.solve_hinge_joint(
                         joint,
                         rigid_bodies,
                         transforms,
@@ -74,7 +77,7 @@ impl JointSolver {
                         idx_b,
                         dt,
                     ),
-                    "BallSocket" => self.solve_ball_socket_joint(
+                    JointType::BallSocket => self.solve_ball_socket_joint(
                         joint,
                         rigid_bodies,
                         transforms,
@@ -83,7 +86,7 @@ impl JointSolver {
                         idx_b,
                         dt,
                     ),
-                    "Slider" => self.solve_slider_joint(
+                    JointType::Slider => self.solve_slider_joint(
                         joint,
                         rigid_bodies,
                         transforms,
@@ -92,7 +95,7 @@ impl JointSolver {
                         idx_b,
                         dt,
                     ),
-                    "Distance" => self.solve_distance_joint(
+                    JointType::Distance => self.solve_distance_joint(
                         joint,
                         rigid_bodies,
                         transforms,
@@ -101,11 +104,10 @@ impl JointSolver {
                         idx_b,
                         dt,
                     ),
-                    // Spring kuvvet-tabanlıdır (pozisyona bağlı, hıza değil); iterasyon
-                    // döngüsünün İÇİNDE çalıştırılırsa kuvvet ~iterations kez uygulanırdı.
-                    // Döngü dışında bir kez uygulanır (aşağıya bakınız).
-                    "Spring" => {}
-                    _ => {}
+                    // Spring is force-based (depends on position, not velocity); running it
+                    // inside the iteration loop would apply the force ~iterations times.
+                    // It is applied once per step outside the loop (see below).
+                    JointType::Spring => {}
                 }
             }
         }
@@ -114,7 +116,7 @@ impl JointSolver {
         // Yay kuvveti pozisyona bağlı olduğundan velocity-solver iterasyonları
         // boyunca sabittir; döngü dışında tek sefer uygulanmalıdır.
         for joint in joints.iter_mut() {
-            if joint.is_broken || joint.joint_type() != "Spring" {
+            if joint.is_broken || JointType::from(&joint.data) != JointType::Spring {
                 continue;
             }
             let (Some(idx_a), Some(idx_b)) = (

@@ -420,6 +420,20 @@ fn build_bone_joint(bone: &RagdollBoneDef, parent: BodyHandle, child: BodyHandle
                 50.0,
             )
         }
+        JointType::Distance => {
+            // Rope/distance bone: `limits` = (min, max) separation; default to a rope
+            // whose max is the initial anchor gap so it hangs taut at the rest pose.
+            let rest = (bone.local_pos + bone.local_anchor_child - bone.local_anchor_parent).length();
+            let (min, max) = bone.limits.unwrap_or((0.0, rest));
+            Joint::distance(
+                parent,
+                child,
+                bone.local_anchor_parent,
+                bone.local_anchor_child,
+                min,
+                max,
+            )
+        }
         // `JointType` is `#[non_exhaustive]`; fall back to a rigid fixed joint
         // for any future variant so the skeleton stays connected.
         _ => Joint::fixed(

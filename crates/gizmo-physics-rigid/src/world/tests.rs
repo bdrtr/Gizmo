@@ -372,6 +372,7 @@ fn test_car_simulation() {
             motor_target_velocity: if is_rear { 10.0 } else { 0.0 }, // İleri doğru 10 rad/s
             motor_max_force: if is_rear { 10000.0 } else { 0.0 }, // 10000 N güç
             current_angle: 0.0,
+            ..Default::default()
         };
 
         let joint = Joint {

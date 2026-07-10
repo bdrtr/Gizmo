@@ -240,3 +240,84 @@ fn distance_rigid_rod_holds_exact_length() {
     let dist = (world.transforms[1].position - Vec3::new(0.0, 10.0, 0.0)).length();
     assert!((dist - 2.0).abs() < 0.15, "rigid rod holds length 2 (min=max), dist={dist}");
 }
+
+#[test]
+fn spring_breaks_past_break_force() {
+    // A heavily-stretched stiff spring with a tiny break_force must snap. (Regression:
+    // solve_spring_joint used to never set is_broken, so break_force was a no-op on Spring.)
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+    dyn_box(&mut world, 1, Vec3::new(-2.0, 0.0, 0.0), Vec3::ZERO, Vec3::ZERO, false);
+    dyn_box(&mut world, 2, Vec3::new(2.0, 0.0, 0.0), Vec3::ZERO, Vec3::ZERO, false);
+    // sep 4, rest 0.5, stiffness 100 → force ≈ 350 ≫ break_force 5.
+    let j = Joint::spring(
+        BodyHandle::from_id(1),
+        BodyHandle::from_id(2),
+        Vec3::ZERO,
+        Vec3::ZERO,
+        0.5,
+        100.0,
+        1.0,
+    )
+    .with_break_force(5.0, 5.0);
+    world.joints.push(j);
+    world.step(1.0 / 240.0).ok();
+    assert!(world.joints[0].is_broken, "spring must break when its force exceeds break_force");
+}
+
+#[test]
+fn slider_servo_reaches_target_position() {
+    // Position-servo motor: drive-and-hold a target offset along the slider axis.
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+    anchor(&mut world, 1, Vec3::ZERO); // static, transforms[0]
+    dyn_box(&mut world, 2, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, false); // transforms[1]
+    let mut j = Joint::slider(
+        BodyHandle::from_id(1),
+        BodyHandle::from_id(2),
+        Vec3::ZERO,
+        Vec3::ZERO,
+        Vec3::X,
+    );
+    if let JointData::Slider(ref mut d) = j.data {
+        d.use_motor = true;
+        d.motor_is_servo = true;
+        d.motor_target_position = 3.0;
+        d.motor_max_force = 500.0;
+    }
+    world.joints.push(j);
+    for _ in 0..800 {
+        world.step(1.0 / 240.0).ok();
+    }
+    let x = world.transforms[1].position.x;
+    assert!((x - 3.0).abs() < 0.3, "slider servo should reach & hold target 3.0, got x={x}");
+}
+
+#[test]
+fn hinge_servo_reaches_target_angle() {
+    // Position-servo motor on a hinge: rotate to and hold a target angle.
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+    anchor(&mut world, 1, Vec3::ZERO);
+    dyn_box(&mut world, 2, Vec3::new(1.0, 0.0, 0.0), Vec3::ZERO, Vec3::ZERO, false);
+    let mut j = Joint::hinge(
+        BodyHandle::from_id(1),
+        BodyHandle::from_id(2),
+        Vec3::ZERO,
+        Vec3::new(-1.0, 0.0, 0.0),
+        Vec3::Z,
+    );
+    if let JointData::Hinge(ref mut d) = j.data {
+        d.use_motor = true;
+        d.motor_is_servo = true;
+        d.motor_target_position = 1.0; // 1 rad
+        d.motor_max_force = 500.0;
+    }
+    world.joints.push(j);
+    for _ in 0..1000 {
+        world.step(1.0 / 240.0).ok();
+    }
+    let angle = if let JointData::Hinge(d) = world.joints[0].data {
+        d.current_angle
+    } else {
+        0.0
+    };
+    assert!((angle - 1.0).abs() < 0.2, "hinge servo should reach target angle 1.0 rad, got {angle}");
+}
