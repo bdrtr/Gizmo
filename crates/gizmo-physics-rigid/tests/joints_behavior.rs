@@ -172,3 +172,71 @@ fn spring_settles_at_rest_length() {
     let sep = (world.transforms[0].position - world.transforms[1].position).length();
     assert!((sep - 1.0).abs() < 0.2, "spring did not settle at rest length: {sep}");
 }
+
+fn dyn_ball(world: &mut PhysicsWorld, id: u32, pos: Vec3) {
+    let mut rb = RigidBody::new(1.0, true);
+    rb.wake_up();
+    let col = Collider::sphere(0.1);
+    rb.update_inertia_from_collider(&col);
+    world.add_body(BodyHandle::from_id(id), rb, Transform::new(pos), Velocity::default(), col);
+}
+
+#[test]
+fn rope_is_slack_when_short_and_catches_when_taut() {
+    // Rope length 2; ball starts only 1 m below the anchor → SLACK (dist 1 < 2). A rope
+    // exerts nothing while slack, so the ball must FREE-FALL until it reaches dist 2,
+    // where the rope catches it. (A rigid rod would snap it out to 2 immediately — the
+    // whole point of a rope is that it does not.)
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
+    anchor(&mut world, 1, Vec3::new(0.0, 10.0, 0.0)); // transforms[0]
+    dyn_ball(&mut world, 2, Vec3::new(0.0, 9.0, 0.0)); // transforms[1]
+    world.joints.push(Joint::rope(
+        BodyHandle::from_id(1),
+        BodyHandle::from_id(2),
+        Vec3::ZERO,
+        Vec3::ZERO,
+        2.0,
+    ));
+
+    // Early: still slack ⇒ falling freely below its start, not yet at the rope's reach.
+    for _ in 0..30 {
+        world.step(1.0 / 240.0).ok();
+    }
+    let early = world.transforms[1].position;
+    assert!(early.y < 9.0, "slack rope must let the ball fall, y={}", early.y);
+    assert!(
+        (early - Vec3::new(0.0, 10.0, 0.0)).length() < 2.0,
+        "should still be slack early"
+    );
+
+    // Settle: the rope catches at length 2 and holds it there.
+    for _ in 0..400 {
+        world.step(1.0 / 240.0).ok();
+    }
+    let p = world.transforms[1].position;
+    let dist = (p - Vec3::new(0.0, 10.0, 0.0)).length();
+    assert!((1.9..=2.05).contains(&dist), "rope must catch/hold at length 2, dist={dist}");
+    assert!(p.y < 8.3, "ball must have fallen to ~y=8 (2 below anchor), y={}", p.y);
+}
+
+#[test]
+fn distance_rigid_rod_holds_exact_length() {
+    // min == max == 2 ⇒ rigid rod: a ball starting 1 m below (dist 1 < min) is PUSHED
+    // out to length 2 — unlike a rope, which would leave it slack. Direct contrast.
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
+    anchor(&mut world, 1, Vec3::new(0.0, 10.0, 0.0));
+    dyn_ball(&mut world, 2, Vec3::new(0.0, 9.0, 0.0));
+    world.joints.push(Joint::distance(
+        BodyHandle::from_id(1),
+        BodyHandle::from_id(2),
+        Vec3::ZERO,
+        Vec3::ZERO,
+        2.0,
+        2.0,
+    ));
+    for _ in 0..600 {
+        world.step(1.0 / 240.0).ok();
+    }
+    let dist = (world.transforms[1].position - Vec3::new(0.0, 10.0, 0.0)).length();
+    assert!((dist - 2.0).abs() < 0.15, "rigid rod holds length 2 (min=max), dist={dist}");
+}

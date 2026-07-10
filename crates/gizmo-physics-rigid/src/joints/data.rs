@@ -25,6 +25,7 @@ pub enum JointData {
     BallSocket(BallSocketJointData),
     Slider(SliderJointData),
     Spring(SpringJointData),
+    Distance(DistanceJointData),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +87,18 @@ pub struct SpringJointData {
     pub max_length: Option<f32>,
 }
 
+/// Distance/rope joint: keeps the anchor separation within `[min_length, max_length]`
+/// as a HARD (inequality) constraint — unlike `Spring`, which is a soft force toward a
+/// rest length. A **rope** is `{min: 0, max: L}`: it only pulls when taut (`len > L`)
+/// and is limp when slack (`len < L`), so a released slack body free-falls until the
+/// rope catches it — no rigid-rod snap. A **rigid rod** is `{min: L, max: L}`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+pub struct DistanceJointData {
+    pub min_length: f32,
+    pub max_length: f32,
+}
+
 impl Joint {
     pub fn joint_type(&self) -> &'static str {
         match &self.data {
@@ -94,6 +107,7 @@ impl Joint {
             JointData::BallSocket(_) => "BallSocket",
             JointData::Slider(_) => "Slider",
             JointData::Spring(_) => "Spring",
+            JointData::Distance(_) => "Distance",
         }
     }
 
@@ -254,6 +268,50 @@ impl Joint {
                 max_length: None,
             }),
         }
+    }
+
+    /// Distance joint: constrains the anchor separation to `[min_length, max_length]`
+    /// as a hard inequality. `min == max` ⇒ rigid rod; `min == 0` ⇒ rope (see [`Self::rope`]).
+    pub fn distance(
+        entity_a: BodyHandle,
+        entity_b: BodyHandle,
+        local_anchor_a: Vec3,
+        local_anchor_b: Vec3,
+        min_length: f32,
+        max_length: f32,
+    ) -> Self {
+        debug_assert_ne!(
+            entity_a, entity_b,
+            "Joint: entity_a and entity_b must be different"
+        );
+        Self {
+            entity_a,
+            entity_b,
+            local_anchor_a,
+            local_anchor_b,
+            break_force: f32::INFINITY,
+            break_torque: f32::INFINITY,
+            is_broken: false,
+            collision_enabled: false,
+            data: JointData::Distance(DistanceJointData {
+                min_length: min_length.max(0.0),
+                max_length: max_length.max(min_length.max(0.0)),
+            }),
+        }
+    }
+
+    /// Rope: inextensible but can go slack. The anchors cannot separate beyond `length`
+    /// (pulls when taut), but may come closer (limp when slack) — a released slack body
+    /// free-falls until the rope catches, with no rigid-rod snap. Shorthand for
+    /// `distance(.., 0.0, length)`.
+    pub fn rope(
+        entity_a: BodyHandle,
+        entity_b: BodyHandle,
+        local_anchor_a: Vec3,
+        local_anchor_b: Vec3,
+        length: f32,
+    ) -> Self {
+        Self::distance(entity_a, entity_b, local_anchor_a, local_anchor_b, 0.0, length)
     }
 
     pub fn with_break_force(mut self, force: f32, torque: f32) -> Self {
