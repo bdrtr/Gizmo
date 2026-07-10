@@ -54,8 +54,6 @@ struct Cradle {
     cam: Camera,
     cam_pos: Vec3,
     dragging: Option<usize>, // balls içindeki index
-    target: Vec3,            // son ark hedefi (bırakma hızı için)
-    target_prev: Vec3,
 }
 
 fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
@@ -82,6 +80,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
 
     // (Eski API-EKSİK #6 DÜZELTİLDİ: render artık GlobalTransform'u otomatik
     // backfill+sync ediyor → sadece Transform+Mesh+Material ile spawn yeter.)
+    // Üst kiriş: ipler buraya (üzerindeki sabit pivotlara) rope eklemiyle bağlı.
     let beam = world.spawn_bundle((
         Transform::new(Vec3::new(0.0, PIVOT_Y, 0.0))
             .with_scale(Vec3::new(N as f32 * spacing + 1.0, 0.15, 0.15)),
@@ -98,8 +97,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
 
     for i in 0..N {
         let pivot = Vec3::new(start_x + i as f32 * spacing, PIVOT_Y, 0.0);
-        // Top 0 geri-çekilmiş doğar → AÇILIŞTA salınır (fizik hemen görünür);
-        // gerisi düz aşağı dinlenir. Hinge kısıtı sağlansın diye konum+rotasyon birlikte.
+        // Top 0 geri-çekilmiş doğar (pivottan L uzakta) → AÇILIŞTA salınır.
         let (center, rot) = if i == 0 {
             let a = 55.0_f32.to_radians();
             (pivot + L * Vec3::new(-a.sin(), -a.cos(), 0.0), Quat::from_rotation_z(-a))
@@ -123,13 +121,15 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
                 .with_collider(Collider::sphere(R).with_material(elastic())),
         ));
 
-        // API-EKSİK #2: joint'ler ECS bileşeni değil; PhysicsWorld.joints'e elle push.
-        phys.joints.push(Joint::hinge(
+        // İP EKLEMİ (motorda birinci-sınıf): esnemez ama gevşeyebilir (dist ≤ L).
+        // Ankor A = kiriş üzerindeki pivot, B = top merkezi. Gevşekken serbest düşer,
+        // gerilince yakalar — artık demoda elle konum kırpma HİLESİ yok.
+        phys.joints.push(Joint::rope(
             BodyHandle::from_id(beam.id()),
             BodyHandle::from_id(ball.id()),
             pivot - Vec3::new(0.0, PIVOT_Y, 0.0),
-            Vec3::new(0.0, L, 0.0),
-            Vec3::Z,
+            Vec3::ZERO,
+            L,
         ));
         // Görsel ip: fiziksiz ince çubuk (pivot↔top). Her kare `update`'te
         // konumlanır; burada sadece doğuyor. Küp mesh -1..1 → scale.y = uzunluk/2.
@@ -147,10 +147,10 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
 
     world.insert_resource(phys);
     world.insert_resource(assets);
-    Cradle { balls, ropes, pivots, cam, cam_pos, dragging: None, target: Vec3::ZERO, target_prev: Vec3::ZERO }
+    Cradle { balls, ropes, pivots, cam, cam_pos, dragging: None }
 }
 
-fn update(world: &mut World, state: &mut Cradle, dt: f32, input: &gizmo::core::input::Input) {
+fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &gizmo::core::input::Input) {
     // ── Fare ile sürükle-bırak ───────────────────────────────────────────────
     let viewport = world
         .get_resource::<WindowInfo>()
@@ -170,52 +170,57 @@ fn update(world: &mut World, state: &mut Cradle, dt: f32, input: &gizmo::core::i
             .map(|h| h.entity.id());
         if let Some(idx) = hit_id.and_then(|id| state.balls.iter().position(|&b| b == id)) {
             state.dragging = Some(idx);
-            state.target = world.borrow::<Transform>().get(state.balls[idx]).map(|t| t.position).unwrap_or(Vec3::ZERO);
-            state.target_prev = state.target;
             set_body_type(world, state.balls[idx], BodyType::Kinematic);
         }
     }
 
     if lmb {
-        // Sürükleme: ışını salınım düzlemi (z=0) ile kesiştir, arka (yarıçap L) kilitle.
+        // Sürükleme: ışını salınım düzlemi (z=0) ile kesiştir → fare noktası.
         if let Some(idx) = state.dragging {
             let pivot = state.pivots[idx];
             if rd.z.abs() > 1e-5 {
                 let t = (pivot.z - ro.z) / rd.z;
                 let p = ro + rd * t;
-                let dir = (p - pivot).normalize_or_zero();
-                let dir = if dir.length() > 0.5 { dir } else { Vec3::NEG_Y };
-                let target = pivot + dir * L;
-                let rot = Quat::from_rotation_arc(Vec3::Y, (pivot - target).normalize_or_zero());
-                state.target_prev = state.target;
-                state.target = target;
+                // SERBEST sürükleme: top fareyi düzlemde TAKİP eder (ark'a kilitli DEĞİL)
+                // → ipi pivota kadar büzüştür ya da L'ye kadar ger. Yalnız ip boyunu (L)
+                // AŞMASIN diye mesafeyi ≤ L kırp (gerçek ip esnemez, gevşeyebilir).
+                let from_pivot = p - pivot;
+                let dist = from_pivot.length();
+                let target = if dist > L {
+                    pivot + from_pivot / dist * L
+                } else {
+                    p
+                };
 
                 let id = state.balls[idx];
-                {
-                    let mut ts = world.borrow_mut::<Transform>();
-                    if let Some(mut tr) = ts.get_mut(id) {
-                        tr.position = target;
-                        tr.rotation = rot;
-                        tr.update_local_matrix();
-                    }
-                }
+                // Hedefe SABİT-KAZANÇLI hız servosu ile sür (dt'ye BÖLME YOK). Kinematik
+                // cisim konumu hızından entegre eder → komşularla çarpışıp onları iter
+                // (teleport+v=0 hiçbir çarpışma göremiyordu, içinden geçiyordu). dt'ye
+                // bölmek ~240 kazanç = aşırı sert P-servo → dt tutarsızlığında/0'da
+                // TİTRERDİ; sabit ılımlı kazanç buna bağışık ve pürüzsüz takip eder.
+                let cur = world.borrow::<Transform>().get(id).map(|t| t.position).unwrap_or(target);
+                const DRAG_GAIN: f32 = 18.0;
+                let vel = ((target - cur) * DRAG_GAIN).clamp_length_max(15.0);
                 let mut vs = world.borrow_mut::<Velocity>();
                 if let Some(mut v) = vs.get_mut(id) {
-                    v.linear = Vec3::ZERO;
+                    v.linear = vel;
                     v.angular = Vec3::ZERO;
                 }
             }
         }
     } else if let Some(idx) = state.dragging.take() {
-        // Bırakma: dinamiğe dön, son sürükleme hareketinin hızını ver (fiske).
+        // Bırakma: dinamiğe dön; topun mevcut servo hızı doğal fiske olarak kalır
+        // (ayrı /dt flick hesabı YOK → patlama yok). Güvenlik için hafif sınırla.
         let id = state.balls[idx];
         set_body_type(world, id, BodyType::Dynamic);
-        let flick = ((state.target - state.target_prev) / dt.max(1e-4)).clamp_length_max(12.0);
         let mut vs = world.borrow_mut::<Velocity>();
         if let Some(mut v) = vs.get_mut(id) {
-            v.linear = flick;
+            v.linear = v.linear.clamp_length_max(12.0);
         }
     }
+
+    // (İp fiziği artık motorun `Joint::rope` eklemi tarafından çözülüyor — demoda
+    //  elle konum kırpma yok. Toplar düzlemde simetrik başlar → 2B kalır.)
 
     // ── Görsel ipleri toplara bağla ──────────────────────────────────────────
     // Fizik (schedule'da) bu kareden önce koştu → top konumları güncel. İpi
