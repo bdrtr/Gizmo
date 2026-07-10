@@ -278,6 +278,15 @@ fn narrowphase(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 var swept_hit_normal = vec3<f32>(0.0, 1.0, 0.0);
                 let rel_vel_dt = (other.velocity - me.velocity) * params.dt;
                 
+                // NOT (D3D11/FXC): bu 15-eksenli SAT döngüsü TEK gövdede hem statik
+                // (`sat_overlap`) hem swept (`swept_sat_overlap`) SAT'ı çağırıyordu.
+                // naga WGSL→HLSL çevirisinde FXC bu döngüyü unroll etmeye çalışıp
+                // X3511 ("unrolled loop is too large") veriyordu — FXC'nin unroll boyut
+                // sınırı DÖNGÜ-BAŞINA'dır. İki aşama birbirinden veri-bağımsız (statik SAT
+                // yalnız is_intersecting/min_overlap/hit_normal'ı; swept yalnız
+                // is_swept_intersecting/global_t_*/swept_hit_normal'ı yazar), bu yüzden AYRI
+                // döngülere bölmek her unroll'un boyutunu ~yarıya indirir ve davranışı
+                // BİREBİR korur. (DXC/D3D12 ve Vulkan/Metal zaten etkilenmiyordu.)
                 for(var i = 0u; i < 15u; i++) {
                     var o = 0.0;
                     if (!sat_overlap(axes_to_test[i], me.position, axesA, me.half_extents, other.position, axesB, other.half_extents, &o)) {
@@ -286,6 +295,8 @@ fn narrowphase(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         min_overlap = o;
                         hit_normal = normalize(axes_to_test[i]);
                     }
+                }
+                for(var i = 0u; i < 15u; i++) {
                     if (!swept_sat_overlap(axes_to_test[i], me.position, axesA, me.half_extents, other.position, axesB, other.half_extents, rel_vel_dt, &global_t_first, &global_t_last, &swept_hit_normal)) {
                         is_swept_intersecting = false;
                     }
