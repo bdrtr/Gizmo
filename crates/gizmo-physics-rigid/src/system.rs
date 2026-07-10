@@ -70,16 +70,23 @@ pub fn physics_step_system(world: &World, dt: f32) {
                 }
 
                 // Create a single Collider for this RigidBody
+                // Preserve the authored physics material (restitution / friction /
+                // density) when rebuilding the collider for the solver. `from_shape`
+                // resets it to the default, which silently ignored every custom
+                // collider material set on an ECS entity — e.g. an elastic
+                // (restitution = 1) ball behaved as the default 0.3. Bodies that
+                // never set a custom material are unaffected (still the default).
                 let final_collider = if compound_shapes.is_empty() {
                     Collider::default() // Should technically not be simulated
                 } else if compound_shapes.len() == 1 {
                     // Single collider, avoid nesting in Compound
                     let (_t, s) = compound_shapes.remove(0);
-                    Collider::from_shape(*s)
+                    Collider::from_shape(*s).with_material(col.material)
                 } else {
                     Collider::from_shape(gizmo_physics_core::ColliderShape::Compound(
                         compound_shapes,
                     ))
+                    .with_material(col.material)
                 };
 
                 compound_shapes_map.insert(id, final_collider);
