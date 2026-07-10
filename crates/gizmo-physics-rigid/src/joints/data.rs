@@ -70,6 +70,14 @@ pub struct HingeJointData {
     /// force-limited by `motor_max_force`. When false it is the classic velocity motor.
     pub motor_is_servo: bool,
     pub motor_target_position: f32,
+    /// Torsional spring / return-to-center: a soft restoring torque toward `rest_angle`
+    /// (stiffness + damping) about the hinge axis — self-closing doors, spring flaps, soft
+    /// ragdoll joint stiffness. The angular analogue of the Slider suspension spring;
+    /// force-based (applied once per step).
+    pub use_torsional_spring: bool,
+    pub torsional_stiffness: f32,
+    pub torsional_damping: f32,
+    pub rest_angle: f32,
     #[serde(skip)]
     pub current_angle: f32,
 }
@@ -79,6 +87,14 @@ pub struct HingeJointData {
 pub struct BallSocketJointData {
     pub use_cone_limit: bool,
     pub cone_limit_angle: f32,
+    /// Twist (roll about `twist_axis`) limit — the second half of a cone-twist joint.
+    /// The cone limits SWING (how far the axis tips); this limits TWIST (spin about it),
+    /// so a ragdoll limb no longer spins freely about its own bone. `twist_axis` is in
+    /// A's local frame. Two-sided: `[twist_lower, twist_upper]` (radians).
+    pub use_twist_limit: bool,
+    pub twist_axis: Vec3,
+    pub twist_lower: f32,
+    pub twist_upper: f32,
     #[serde(default)]
     pub initial_relative_rotation: Option<Quat>,
 }
@@ -97,6 +113,13 @@ pub struct SliderJointData {
     /// `motor_target_position` (target offset along the axis) instead of a target velocity.
     pub motor_is_servo: bool,
     pub motor_target_position: f32,
+    /// Suspension spring along the free axis: a soft PD force toward `spring_rest_position`
+    /// (stiffness + damping). This is the canonical shock/suspension/elevator-buffer
+    /// primitive — a springy prismatic, applied once per step (force-based, like Spring).
+    pub use_spring: bool,
+    pub spring_stiffness: f32,
+    pub spring_damping: f32,
+    pub spring_rest_position: f32,
     #[serde(skip)]
     pub current_position: f32,
     #[serde(default)]
@@ -195,6 +218,10 @@ impl Joint {
                 motor_max_force: 0.0,
                 motor_is_servo: false,
                 motor_target_position: 0.0,
+                use_torsional_spring: false,
+                torsional_stiffness: 0.0,
+                torsional_damping: 0.0,
+                rest_angle: 0.0,
                 current_angle: 0.0,
             }),
         }
@@ -222,6 +249,10 @@ impl Joint {
             data: JointData::BallSocket(BallSocketJointData {
                 use_cone_limit: false,
                 cone_limit_angle: std::f32::consts::PI,
+                use_twist_limit: false,
+                twist_axis: Vec3::Y,
+                twist_lower: -std::f32::consts::PI,
+                twist_upper: std::f32::consts::PI,
                 initial_relative_rotation: None,
             }),
         }
@@ -262,6 +293,10 @@ impl Joint {
                 motor_max_force: 0.0,
                 motor_is_servo: false,
                 motor_target_position: 0.0,
+                use_spring: false,
+                spring_stiffness: 0.0,
+                spring_damping: 0.0,
+                spring_rest_position: 0.0,
                 current_position: 0.0,
                 initial_relative_rotation: None,
             }),
