@@ -36,6 +36,23 @@ pub enum JointType {
     BallSocket,
     Slider,
     Spring,
+    Distance,
+}
+
+/// Compile-forced mapping so `JointType` (the authoring descriptor) and `JointData`
+/// (the runtime payload) can never silently drift: adding a `JointData` variant without
+/// a matching `JointType` is a compile error here. Used by the solver dispatch.
+impl From<&JointData> for JointType {
+    fn from(data: &JointData) -> Self {
+        match data {
+            JointData::Fixed => JointType::Fixed,
+            JointData::Hinge(_) => JointType::Hinge,
+            JointData::BallSocket(_) => JointType::BallSocket,
+            JointData::Slider(_) => JointType::Slider,
+            JointData::Spring(_) => JointType::Spring,
+            JointData::Distance(_) => JointType::Distance,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
@@ -48,6 +65,11 @@ pub struct HingeJointData {
     pub use_motor: bool,
     pub motor_target_velocity: f32,
     pub motor_max_force: f32,
+    /// When true (and `use_motor`), the motor is a POSITION SERVO: it drives toward
+    /// `motor_target_position` (target angle, rad) instead of holding a target velocity,
+    /// force-limited by `motor_max_force`. When false it is the classic velocity motor.
+    pub motor_is_servo: bool,
+    pub motor_target_position: f32,
     #[serde(skip)]
     pub current_angle: f32,
 }
@@ -71,6 +93,10 @@ pub struct SliderJointData {
     pub use_motor: bool,
     pub motor_target_velocity: f32,
     pub motor_max_force: f32,
+    /// When true (and `use_motor`), the motor is a POSITION SERVO driving toward
+    /// `motor_target_position` (target offset along the axis) instead of a target velocity.
+    pub motor_is_servo: bool,
+    pub motor_target_position: f32,
     #[serde(skip)]
     pub current_position: f32,
     #[serde(default)]
@@ -167,6 +193,8 @@ impl Joint {
                 use_motor: false,
                 motor_target_velocity: 0.0,
                 motor_max_force: 0.0,
+                motor_is_servo: false,
+                motor_target_position: 0.0,
                 current_angle: 0.0,
             }),
         }
@@ -232,6 +260,8 @@ impl Joint {
                 use_motor: false,
                 motor_target_velocity: 0.0,
                 motor_max_force: 0.0,
+                motor_is_servo: false,
+                motor_target_position: 0.0,
                 current_position: 0.0,
                 initial_relative_rotation: None,
             }),

@@ -323,6 +323,7 @@ pub fn draw_joint_section(
                         2 => "BallSocket (Küresel)",
                         3 => "Slider (Kızak)",
                         4 => "Spring (Yay)",
+                        5 => "Distance/Rope (İp)",
                         _ => "Bilinmeyen",
                     })
                     .show_ui(ui, |ui| {
@@ -331,6 +332,7 @@ pub fn draw_joint_section(
                         ui.selectable_value(&mut type_idx, 2, "BallSocket (Küresel)");
                         ui.selectable_value(&mut type_idx, 3, "Slider (Kızak)");
                         ui.selectable_value(&mut type_idx, 4, "Spring (Yay)");
+                        ui.selectable_value(&mut type_idx, 5, "Distance/Rope (İp)");
                     });
                     
                 ui.data_mut(|d| d.insert_temp(target_id_str_id, target_id_str.clone()));
@@ -345,6 +347,7 @@ pub fn draw_joint_section(
                             2 => gizmo_physics_rigid::joints::Joint::ball_socket(body_id, target_body, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO),
                             3 => gizmo_physics_rigid::joints::Joint::slider(body_id, target_body, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::Y),
                             4 => gizmo_physics_rigid::joints::Joint::spring(body_id, target_body, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO, 1.0, 10.0, 1.0),
+                            5 => gizmo_physics_rigid::joints::Joint::rope(body_id, target_body, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO, 2.0),
                             _ => gizmo_physics_rigid::joints::Joint::fixed(body_id, target_body, gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO),
                         };
                         physics_world.joints.push(new_joint);
