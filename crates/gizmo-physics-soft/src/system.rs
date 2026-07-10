@@ -44,10 +44,20 @@ pub fn cloth_step_system(world: &World, dt: f32, gravity: Vec3) {
     let dt = dt.min(MAX_SOFT_DT);
     // Determine a fixed number of XPBD substeps for stability
     let sub_steps = 10;
-    
+
+    // Collect rigid colliders so the cloth drapes over them (not just the floor).
+    let mut rigid_colliders = Vec::new();
+    if let Some(q) = world.query::<(&Transform, &Collider)>() {
+        for (e, (trans, col)) in q.iter() {
+            if let Some(entity) = world.get_entity(e) {
+                rigid_colliders.push((BodyHandle::from_id(entity.id()), *trans, col.clone()));
+            }
+        }
+    }
+
     if let Some(mut q) = unsafe { world.query_unchecked::<gizmo_core::query::Mut<Cloth>>() } {
         for (_, mut cloth) in q.iter_mut() {
-            cloth.step(dt, gravity, sub_steps);
+            cloth.step(dt, gravity, sub_steps, &rigid_colliders);
         }
     }
 }
