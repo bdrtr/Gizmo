@@ -11,7 +11,7 @@
 use gizmo_physics_core::BodyHandle;
 use gizmo_math::{Quat, Vec3};
 use gizmo_physics_core::{Collider, Transform};
-use gizmo_physics_rigid::{Joint, JointData, PhysicsWorld, RigidBody, Velocity};
+use gizmo_physics_rigid::{D6Motion, Joint, JointData, PhysicsWorld, RigidBody, Velocity};
 
 fn anchor(world: &mut PhysicsWorld, id: u32, pos: Vec3) {
     let mut rb = RigidBody::new_static();
@@ -410,4 +410,84 @@ fn hinge_torsional_spring_returns_to_rest_angle() {
     };
     assert!((angle - 0.8).abs() < 0.15, "torsional spring should settle at rest_angle 0.8, got {angle}");
     assert!(world.velocities[1].angular.z.abs() < 0.3, "should have settled, wz={}", world.velocities[1].angular.z);
+}
+
+#[test]
+fn ball_socket_asymmetric_swing_limits() {
+    // Elliptical/asymmetric cone: the swing about one perpendicular of the twist axis is
+    // tightly limited (0.3) while the other is loose (1.0). Spinning about the tight axis
+    // must clamp near 0.3 — a shoulder/hip range that the single circular cone can't express.
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+    anchor(&mut world, 1, Vec3::ZERO);
+    dyn_box(&mut world, 2, Vec3::ZERO, Vec3::ZERO, Vec3::new(0.0, 0.0, 2.0), false); // spin about Z
+    let mut j = Joint::ball_socket(BodyHandle::from_id(1), BodyHandle::from_id(2), Vec3::ZERO, Vec3::ZERO);
+    if let JointData::BallSocket(ref mut d) = j.data {
+        d.use_swing_limits = true;
+        d.twist_axis = Vec3::Y;
+        d.swing_limit_1 = 0.3; // about one perpendicular of Y (Z-ish) — tight
+        d.swing_limit_2 = 1.0; // about the other (X-ish) — loose
+    }
+    world.joints.push(j);
+    let mut max_z = 0f32;
+    for _ in 0..400 {
+        world.step(1.0 / 240.0).ok();
+        let q = world.transforms[1].rotation;
+        max_z = max_z.max((2.0 * q.z.atan2(q.w)).abs());
+    }
+    assert!(max_z > 0.2, "should swing up to the tight ~0.3 limit, got {max_z}");
+    assert!(max_z < 0.45, "the 0.3 swing limit must clamp (not free-swing), got {max_z}");
+}
+
+#[test]
+fn distance_compliance_makes_rope_stretch() {
+    // Per-joint compliance: a rigid rope (compliance 0) holds its length under a hanging
+    // load; a compliant one (>0) is elastic and stretches — the same primitive, softened.
+    let rope_max = |compliance: f32| -> f32 {
+        let mut world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
+        anchor(&mut world, 1, Vec3::new(0.0, 10.0, 0.0));
+        dyn_ball(&mut world, 2, Vec3::new(0.0, 8.0, 0.0)); // starts taut at length 2
+        let mut j = Joint::rope(
+            BodyHandle::from_id(1),
+            BodyHandle::from_id(2),
+            Vec3::ZERO,
+            Vec3::ZERO,
+            2.0,
+        );
+        if let JointData::Distance(ref mut d) = j.data {
+            d.compliance = compliance;
+        }
+        world.joints.push(j);
+        let mut max_d = 0f32;
+        for _ in 0..600 {
+            world.step(1.0 / 240.0).ok();
+            max_d = max_d.max((world.transforms[1].position - Vec3::new(0.0, 10.0, 0.0)).length());
+        }
+        max_d
+    };
+    let rigid = rope_max(0.0);
+    let elastic = rope_max(0.03);
+    assert!(rigid < 2.15, "rigid rope must hold ~length 2, got {rigid}");
+    assert!(elastic > rigid + 0.15, "compliant rope must stretch under load, rigid={rigid} elastic={elastic}");
+}
+
+#[test]
+fn d6_as_slider_frees_one_linear_axis() {
+    // Configure a generic D6 as a slider: X translation Free, everything else Locked.
+    // A body pushed diagonally must slide along X but be held on Y and Z (and not rotate).
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+    anchor(&mut world, 1, Vec3::ZERO);
+    dyn_box(&mut world, 2, Vec3::ZERO, Vec3::new(3.0, 3.0, 0.0), Vec3::new(0.0, 4.0, 0.0), false);
+    let mut j = Joint::d6(BodyHandle::from_id(1), BodyHandle::from_id(2), Vec3::ZERO, Vec3::ZERO);
+    if let JointData::D6(ref mut d) = j.data {
+        d.linear[0] = D6Motion::Free; // X free ⇒ slider; Y,Z + all angular locked
+    }
+    world.joints.push(j);
+    for _ in 0..240 {
+        world.step(1.0 / 240.0).ok();
+    }
+    let p = world.transforms[1].position;
+    assert!(p.x > 0.5, "D6 must allow sliding along the free X axis, x={}", p.x);
+    assert!(p.y.abs() < 0.1, "D6 must lock the Y axis, y={}", p.y);
+    assert!(p.z.abs() < 0.1, "D6 must lock the Z axis, z={}", p.z);
+    assert!(quat_angle(world.transforms[1].rotation) < 0.15, "D6 all-angular-locked must not rotate");
 }

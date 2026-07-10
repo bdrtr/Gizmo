@@ -318,7 +318,7 @@ impl JointSolver {
         let JointData::BallSocket(ref mut data) = joint.data else {
             return;
         };
-        if !data.use_cone_limit && !data.use_twist_limit {
+        if !data.use_cone_limit && !data.use_twist_limit && !data.use_swing_limits {
             return;
         }
 
@@ -352,7 +352,7 @@ impl JointSolver {
                 let excess = swing_angle - data.cone_limit_angle;
                 let swing_dir_world = transforms[idx_a].rotation * (swing_err_local / swing_mag);
                 total_ang_impulse += self
-                    .apply_angular_constraint(
+                    .apply_angular_constraint_soft(
                         rigid_bodies,
                         transforms,
                         velocities,
@@ -363,6 +363,7 @@ impl JointSolver {
                         dt,
                         f32::NEG_INFINITY,
                         0.0,
+                        data.compliance,
                     )
                     .abs();
             }
@@ -380,7 +381,7 @@ impl JointSolver {
             let axis_world = transforms[idx_a].rotation * axis_local;
             if twist_angle > data.twist_upper {
                 total_ang_impulse += self
-                    .apply_angular_constraint(
+                    .apply_angular_constraint_soft(
                         rigid_bodies,
                         transforms,
                         velocities,
@@ -391,11 +392,12 @@ impl JointSolver {
                         dt,
                         f32::NEG_INFINITY,
                         0.0,
+                        data.compliance,
                     )
                     .abs();
             } else if twist_angle < data.twist_lower {
                 total_ang_impulse += self
-                    .apply_angular_constraint(
+                    .apply_angular_constraint_soft(
                         rigid_bodies,
                         transforms,
                         velocities,
@@ -406,8 +408,57 @@ impl JointSolver {
                         dt,
                         0.0,
                         f32::INFINITY,
+                        data.compliance,
                     )
                     .abs();
+            }
+        }
+
+        // ── Asymmetric per-axis swing limits (about the two perpendiculars of twist_axis) ──
+        // Clamp the swing about each perp independently, so a shoulder/hip can have a
+        // different range in each direction (an elliptical/box cone vs the circular one).
+        if data.use_swing_limits && data.twist_axis.length_squared() > 1e-6 {
+            let axis_local = data.twist_axis.normalize();
+            let (perp1, perp2) = Self::perpendiculars(axis_local);
+            // Swing rotation vector (small-angle: 2·xyz), canonicalised to w ≥ 0.
+            let q = if swing_quat.w < 0.0 { -swing_quat } else { swing_quat };
+            let rvec = 2.0 * Vec3::new(q.x, q.y, q.z);
+            for (perp, limit) in [(perp1, data.swing_limit_1), (perp2, data.swing_limit_2)] {
+                let a = rvec.dot(perp); // swing angle about this perpendicular
+                let perp_world = transforms[idx_a].rotation * perp;
+                if a > limit {
+                    total_ang_impulse += self
+                        .apply_angular_constraint_soft(
+                            rigid_bodies,
+                            transforms,
+                            velocities,
+                            idx_a,
+                            idx_b,
+                            perp_world,
+                            limit - a, // < 0
+                            dt,
+                            f32::NEG_INFINITY,
+                            0.0,
+                            data.compliance,
+                        )
+                        .abs();
+                } else if a < -limit {
+                    total_ang_impulse += self
+                        .apply_angular_constraint_soft(
+                            rigid_bodies,
+                            transforms,
+                            velocities,
+                            idx_a,
+                            idx_b,
+                            perp_world,
+                            -limit - a, // > 0
+                            dt,
+                            0.0,
+                            f32::INFINITY,
+                            data.compliance,
+                        )
+                        .abs();
+                }
             }
         }
 
@@ -452,7 +503,7 @@ impl JointSolver {
         // error = target - current (so a violated UPPER bound gives a negative error,
         // driving a negative — i.e. pulling-together — lambda, exactly like the cone limit).
         let lin_impulse = if length > data.max_length {
-            self.apply_linear_constraint(
+            self.apply_linear_constraint_soft(
                 rigid_bodies,
                 transforms,
                 velocities,
@@ -465,9 +516,10 @@ impl JointSolver {
                 dt,
                 f32::NEG_INFINITY,
                 0.0, // pull only
+                data.compliance, // 0 = rigid rope; >0 = elastic/stretchy
             )
         } else if length < data.min_length {
-            self.apply_linear_constraint(
+            self.apply_linear_constraint_soft(
                 rigid_bodies,
                 transforms,
                 velocities,
@@ -480,12 +532,119 @@ impl JointSolver {
                 dt,
                 0.0, // push only
                 f32::INFINITY,
+                data.compliance,
             )
         } else {
             0.0 // within bounds → free
         };
 
         if lin_impulse.abs() / dt > joint.break_force {
+            joint.is_broken = true;
+        }
+    }
+
+    /// Generic 6-DOF joint: for each of 3 linear + 3 angular DOFs (in the joint `frame`),
+    /// Locked drives the relative motion to zero, Limited clamps it to `[lower, upper]`,
+    /// Free leaves it. Composed entirely from the 1-DOF constraint primitives, so Fixed
+    /// (all locked), Slider (one linear Free) and Hinge (one angular Free) are special cases.
+    /// The angular part uses the small-angle rotation vector (accurate where axes are locked
+    /// near zero; a limited axis is approximate for large ranges).
+    pub(crate) fn solve_d6_joint(
+        &self,
+        joint: &mut Joint,
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        idx_a: usize,
+        idx_b: usize,
+        dt: f32,
+    ) {
+        let (la, lb, break_force, break_torque) = (
+            joint.local_anchor_a,
+            joint.local_anchor_b,
+            joint.break_force,
+            joint.break_torque,
+        );
+        let JointData::D6(ref mut data) = joint.data else {
+            return;
+        };
+        let rot_a = transforms[idx_a].rotation;
+        let anchor_a = transforms[idx_a].position + rot_a * la;
+        let anchor_b = transforms[idx_b].position + transforms[idx_b].rotation * lb;
+        let r_a = anchor_a - transforms[idx_a].position;
+        let r_b = anchor_b - transforms[idx_b].position;
+        let delta = anchor_b - anchor_a; // position error (world)
+        let unit = [Vec3::X, Vec3::Y, Vec3::Z];
+        let compliance = data.compliance;
+
+        // ── Linear DOFs (error convention: target - current = -offset for a lock) ──
+        let mut lin_impulse = 0.0;
+        for (i, mode) in data.linear.iter().enumerate() {
+            let axis_w = rot_a * (data.frame * unit[i]);
+            let offset = delta.dot(axis_w);
+            let (error, lo_clamp, hi_clamp) = match *mode {
+                D6Motion::Free => continue,
+                D6Motion::Locked => (-offset, f32::NEG_INFINITY, f32::INFINITY),
+                D6Motion::Limited { lower, upper } => {
+                    if offset > upper {
+                        (upper - offset, f32::NEG_INFINITY, 0.0)
+                    } else if offset < lower {
+                        (lower - offset, 0.0, f32::INFINITY)
+                    } else {
+                        continue;
+                    }
+                }
+            };
+            lin_impulse += self
+                .apply_linear_constraint_soft(
+                    rigid_bodies, transforms, velocities, idx_a, idx_b, axis_w, r_a, r_b, error,
+                    dt, lo_clamp, hi_clamp, compliance,
+                )
+                .abs();
+        }
+
+        // ── Angular DOFs (small-angle rotation vector projected onto the frame axes) ──
+        let relative_rot = rot_a.inverse() * transforms[idx_b].rotation;
+        let initial = match data.initial_relative_rotation {
+            None => {
+                data.initial_relative_rotation = Some(relative_rot);
+                if lin_impulse / dt > break_force {
+                    joint.is_broken = true;
+                }
+                return;
+            }
+            Some(rot) => rot,
+        };
+        let swing = initial.inverse() * relative_rot;
+        let q = if swing.w < 0.0 { -swing } else { swing };
+        let rvec = 2.0 * Vec3::new(q.x, q.y, q.z);
+        let mut ang_impulse = 0.0;
+        for (i, mode) in data.angular.iter().enumerate() {
+            let axis_local = data.frame * unit[i];
+            let angle = rvec.dot(axis_local);
+            let axis_w = rot_a * axis_local;
+            let (error, lo_clamp, hi_clamp) = match *mode {
+                D6Motion::Free => continue,
+                D6Motion::Locked => (-angle, f32::NEG_INFINITY, f32::INFINITY),
+                D6Motion::Limited { lower, upper } => {
+                    if angle > upper {
+                        (upper - angle, f32::NEG_INFINITY, 0.0)
+                    } else if angle < lower {
+                        (lower - angle, 0.0, f32::INFINITY)
+                    } else {
+                        continue;
+                    }
+                }
+            };
+            ang_impulse += self
+                .apply_angular_constraint_soft(
+                    rigid_bodies, transforms, velocities, idx_a, idx_b, axis_w, error, dt,
+                    lo_clamp, hi_clamp, compliance,
+                )
+                .abs();
+        }
+
+        if lin_impulse / dt > break_force || ang_impulse / dt > break_torque {
             joint.is_broken = true;
         }
     }
