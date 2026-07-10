@@ -251,9 +251,13 @@ fn main() {
 //  #4  İki paralel asset sistemi → `MeshBundle` `Handle<Mesh>` ister ama `AssetManager`
 //      doğrudan `Mesh` döner; uyumsuz.
 //
-//  #5  Restitution yalnız Collider malzemesinde; `RigidBody.restitution` okunmuyor.
-//      AYRICA çözücü restitution'ı yeterince uygulamıyor (elastik çarpışma zayıf,
-//      efektif ~0.1) — CCD/stack için bilinçli ödünler; ayrı bir çözücü işi.
+//  #5  (DÜZELTİLDİ) "Elastik çarpışma zayıf, efektif ~0.1" aslında bir BUG'dı:
+//      ECS→PhysicsWorld gather'ı collider'ı `from_shape` ile yeniden kurup
+//      MALZEMEYİ (restitution/friction/density) düşürüyordu → her özel malzeme
+//      yok sayılıyordu (elastik=1 top, default 0.3 gibi davranıyordu). Gather artık
+//      malzemeyi koruyor; restitution çözücüye ulaşıyor (efektif ~0.7, çalışan
+//      beşik). Kalan not: `RigidBody.restitution` alanı hâlâ okunmuyor (kaynak =
+//      Collider malzemesi) — bu bir tasarım tercihi.
 //
 //  #6  Mesh render için GlobalTransform ŞART + custom App'te propagate ELLE. Mesh
 //      sorgusu `(&Mesh, &GlobalTransform, &Material)` (render/mod.rs) — GlobalTransform
