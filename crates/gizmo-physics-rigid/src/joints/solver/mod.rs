@@ -92,6 +92,15 @@ impl JointSolver {
                         idx_b,
                         dt,
                     ),
+                    "Distance" => self.solve_distance_joint(
+                        joint,
+                        rigid_bodies,
+                        transforms,
+                        velocities,
+                        idx_a,
+                        idx_b,
+                        dt,
+                    ),
                     // Spring kuvvet-tabanlıdır (pozisyona bağlı, hıza değil); iterasyon
                     // döngüsünün İÇİNDE çalıştırılırsa kuvvet ~iterations kez uygulanırdı.
                     // Döngü dışında bir kez uygulanır (aşağıya bakınız).
