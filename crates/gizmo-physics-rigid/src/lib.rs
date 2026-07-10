@@ -65,7 +65,7 @@ pub use fracture::{generate_fracture_chunks, voronoi_shatter, PreFracturedCache}
 pub use integrator::Integrator;
 pub use island::{Island, IslandManager, PhysicsMetrics};
 pub use joints::{
-    BallSocketJointData, D6JointData, D6Motion, DistanceJointData, HingeJointData, Joint,
+    BallSocketJointData, D6Drive, D6JointData, D6Motion, DistanceJointData, HingeJointData, Joint,
     JointData, JointSolver, JointType, SliderJointData, SpringJointData,
 };
 pub use solver::ConstraintSolver;

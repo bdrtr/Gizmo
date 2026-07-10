@@ -149,6 +149,9 @@ impl JointSolver {
                 JointType::Hinge => {
                     self.solve_hinge_spring(joint, rigid_bodies, transforms, velocities, idx_a, idx_b, dt)
                 }
+                JointType::D6 => {
+                    self.solve_d6_drives(joint, rigid_bodies, transforms, velocities, idx_a, idx_b, dt)
+                }
                 _ => {}
             }
         }
