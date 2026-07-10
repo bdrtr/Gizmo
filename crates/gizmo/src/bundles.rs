@@ -312,8 +312,33 @@ impl RigidBodyBundle {
         }
     }
 
+    /// Kinematic body — user-driven motion (moving platforms, scripted blades).
+    /// `new_kinematic` turns CCD on by default, so fast kinematic movers get
+    /// tunnelling prevention without a separate `.with_ccd()`.
+    pub fn kinematic() -> Self {
+        Self {
+            rigid_body: RigidBody::new_kinematic(),
+            ..Default::default()
+        }
+    }
+
     pub fn with_collider(mut self, collider: Collider) -> Self {
         self.collider = collider;
+        self
+    }
+
+    /// Give the body an initial linear velocity (the bundle otherwise spawns at rest).
+    pub fn with_velocity(mut self, linear: Vec3) -> Self {
+        self.velocity = Velocity::new(linear);
+        self
+    }
+
+    /// Enable Continuous Collision Detection: the body is swept against obstacles
+    /// each substep so it can't tunnel through thin/other geometry at high speed.
+    /// Off by default (discrete detection) — turn it on for bullets, fast balls,
+    /// anything that moves more than its own thickness per frame.
+    pub fn with_ccd(mut self) -> Self {
+        self.rigid_body.ccd_enabled = true;
         self
     }
 }
