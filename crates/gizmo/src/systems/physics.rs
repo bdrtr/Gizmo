@@ -466,3 +466,55 @@ pub fn cpu_physics_step_system(world: &crate::core::World, dt: f32) {
         gizmo_physics_soft::system::rope_step_system(world, dt, gravity);
     }
 }
+
+/// Schedulable wrapper around [`cpu_physics_step_system`].
+///
+/// [`crate::plugins::PhysicsPlugin`] adds this to the app schedule so the physics
+/// step runs automatically at the app's **fixed timestep** (the accumulator loop
+/// driven by `PhysicsTime`) — callers no longer hand-call `cpu_physics_step_system`
+/// every frame, and physics gets a stable fixed step for free.
+pub struct PhysicsStepSystem;
+
+impl gizmo_core::system::System for PhysicsStepSystem {
+    fn access_info(&self) -> gizmo_core::system::AccessInfo {
+        let mut info = gizmo_core::system::AccessInfo::new();
+        // Exclusive barrier — mirrors `physics_step_system`'s whole-World access.
+        info.is_exclusive = true;
+        info
+    }
+
+    fn run(&mut self, world: &crate::core::World, dt: f32) {
+        cpu_physics_step_system(world, dt);
+    }
+}
+
+#[cfg(test)]
+mod physics_step_tests {
+    use super::*;
+    use crate::core::World;
+    use gizmo_core::system::System;
+    use gizmo_physics_rigid::components::Velocity;
+    use gizmo_physics_rigid::world::PhysicsWorld;
+
+    #[test]
+    fn physics_step_system_advances_the_world_under_gravity() {
+        // Proves the schedulable wrapper actually steps physics (what PhysicsPlugin
+        // now runs automatically at the fixed timestep).
+        let mut world = World::new();
+        world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+
+        let body = world.spawn();
+        world.add_component(body, Transform::new(Vec3::new(0.0, 10.0, 0.0)));
+        world.add_component(body, RigidBody::new(1.0, true));
+        world.add_component(body, Velocity::default());
+        world.add_component(body, Collider::sphere(0.5));
+
+        let y0 = world.borrow::<Transform>().get(body.id()).unwrap().position.y;
+        let mut sys = PhysicsStepSystem;
+        for _ in 0..30 {
+            sys.run(&world, 1.0 / 60.0);
+        }
+        let y1 = world.borrow::<Transform>().get(body.id()).unwrap().position.y;
+        assert!(y1 < y0 - 0.5, "body must fall under gravity via the scheduled step: {y0} -> {y1}");
+    }
+}
