@@ -324,10 +324,55 @@ impl Bundle for RigidBodyBundle {
     }
 
     unsafe fn write_to_archetype(self, arch: &mut gizmo_core::archetype::Archetype, row: usize, tick: u32) {
-        (self.rigid_body, self.velocity, self.collider).write_to_archetype(arch, row, tick)
+        let mut rb = self.rigid_body;
+        rb.update_inertia_from_collider(&self.collider);
+        (rb, self.velocity, self.collider).write_to_archetype(arch, row, tick)
     }
 
     fn apply(self, world: &mut World, entity: Entity) {
-        (self.rigid_body, self.velocity, self.collider).apply(world, entity)
+        let mut rb = self.rigid_body;
+        // Derive rotational inertia from the collider shape so callers don't have to
+        // remember `calculate_*_inertia` — the default inertia otherwise gives wrong
+        // spin dynamics. No-op for static/kinematic bodies (the calculators guard on
+        // `is_dynamic`), and idempotent if the caller already set a matching inertia.
+        rb.update_inertia_from_collider(&self.collider);
+        (rb, self.velocity, self.collider).apply(world, entity)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rigid_body_bundle_derives_inertia_from_collider() {
+        // Spawn purely via the bundle — no manual calculate_*_inertia.
+        let mut world = World::new();
+        let e = world
+            .spawn_bundle(RigidBodyBundle::dynamic(2.0).with_collider(Collider::sphere(0.5)));
+
+        let rbs = world.borrow::<RigidBody>();
+        let rb = rbs.get(e.id()).expect("rigid body spawned");
+
+        // Solid sphere: I = 0.4·m·r² = 0.4·2·0.25 = 0.2 per axis (calculate_sphere_inertia).
+        assert!(
+            (rb.local_inertia - Vec3::splat(0.2)).length() < 1e-6,
+            "bundle must derive sphere inertia from the collider, got {:?}",
+            rb.local_inertia
+        );
+        // Regression: must NOT be the un-derived default Vec3::splat(1.0).
+        assert!(
+            (rb.local_inertia - Vec3::splat(1.0)).length() > 1e-3,
+            "inertia must be derived, not left at the default"
+        );
+    }
+
+    #[test]
+    fn rigid_body_bundle_static_body_inertia_derivation_is_noop() {
+        // Static bodies must spawn fine; inertia derivation is a no-op for them.
+        let mut world = World::new();
+        let e = world
+            .spawn_bundle(RigidBodyBundle::static_body().with_collider(Collider::sphere(0.5)));
+        assert!(world.borrow::<RigidBody>().get(e.id()).is_some());
     }
 }
