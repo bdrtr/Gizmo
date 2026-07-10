@@ -65,8 +65,8 @@ pub use fracture::{generate_fracture_chunks, voronoi_shatter, PreFracturedCache}
 pub use integrator::Integrator;
 pub use island::{Island, IslandManager, PhysicsMetrics};
 pub use joints::{
-    BallSocketJointData, HingeJointData, Joint, JointData, JointSolver, JointType, SliderJointData,
-    SpringJointData,
+    BallSocketJointData, D6JointData, D6Motion, DistanceJointData, HingeJointData, Joint,
+    JointData, JointSolver, JointType, SliderJointData, SpringJointData,
 };
 pub use solver::ConstraintSolver;
 pub use system::{physics_explosion_system, physics_fracture_system, physics_step_system};

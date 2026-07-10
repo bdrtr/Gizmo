@@ -104,6 +104,15 @@ impl JointSolver {
                         idx_b,
                         dt,
                     ),
+                    JointType::D6 => self.solve_d6_joint(
+                        joint,
+                        rigid_bodies,
+                        transforms,
+                        velocities,
+                        idx_a,
+                        idx_b,
+                        dt,
+                    ),
                     // Spring is force-based (depends on position, not velocity); running it
                     // inside the iteration loop would apply the force ~iterations times.
                     // It is applied once per step outside the loop (see below).
@@ -157,7 +166,7 @@ impl JointSolver {
         (p1, v.cross(p1))
     }
 
-    /// Apply a 1-DOF angular velocity constraint along `direction`.
+    /// Apply a 1-DOF angular velocity constraint along `direction` (hard).
     /// `error` is the positional error in radians (positive = bodies need to rotate apart).
     fn apply_angular_constraint(
         &self,
@@ -171,6 +180,32 @@ impl JointSolver {
         dt: f32,
         lambda_min: f32,
         lambda_max: f32,
+    ) -> f32 {
+        self.apply_angular_constraint_soft(
+            rigid_bodies, transforms, velocities, idx_a, idx_b, direction, error, dt, lambda_min,
+            lambda_max, 0.0,
+        )
+    }
+
+    /// Soft (compliant) form of [`Self::apply_angular_constraint`]. `compliance` ≥ 0 is the
+    /// inverse stiffness (CFM): the effective mass is regularised by `compliance/dt²`, so a
+    /// larger value yields a springier constraint that gives under load (0 = fully rigid,
+    /// identical to the hard path). Lets a specific limit/weld be soft without changing the
+    /// global Baumgarte factor.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_angular_constraint_soft(
+        &self,
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        idx_a: usize,
+        idx_b: usize,
+        direction: Vec3,
+        error: f32,
+        dt: f32,
+        lambda_min: f32,
+        lambda_max: f32,
+        compliance: f32,
     ) -> f32 {
         if direction.length_squared() < 1e-10 {
             return 0.0;
@@ -187,6 +222,7 @@ impl JointSolver {
         if k < 1e-10 {
             return 0.0;
         }
+        let k = k + compliance / (dt * dt); // CFM regularisation (0 ⇒ rigid)
 
         let vel_err = (w_b - w_a).dot(direction);
         let position_bias = (self.position_bias * error / dt)
@@ -216,7 +252,7 @@ impl JointSolver {
         lambda
     }
 
-    /// Apply a 1-DOF linear velocity constraint along `direction` at the anchor points.
+    /// Apply a 1-DOF linear velocity constraint along `direction` at the anchor points (hard).
     fn apply_linear_constraint(
         &self,
         rigid_bodies: &[RigidBody],
@@ -231,6 +267,32 @@ impl JointSolver {
         dt: f32,
         lambda_min: f32,
         lambda_max: f32,
+    ) -> f32 {
+        self.apply_linear_constraint_soft(
+            rigid_bodies, transforms, velocities, idx_a, idx_b, direction, r_a, r_b, error, dt,
+            lambda_min, lambda_max, 0.0,
+        )
+    }
+
+    /// Soft (compliant) form of [`Self::apply_linear_constraint`]. See
+    /// [`Self::apply_angular_constraint_soft`] — `compliance/dt²` regularises the effective
+    /// mass (0 ⇒ rigid).
+    #[allow(clippy::too_many_arguments)]
+    fn apply_linear_constraint_soft(
+        &self,
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        idx_a: usize,
+        idx_b: usize,
+        direction: Vec3,
+        r_a: Vec3,
+        r_b: Vec3,
+        error: f32,
+        dt: f32,
+        lambda_min: f32,
+        lambda_max: f32,
+        compliance: f32,
     ) -> f32 {
         let inv_m_a = rigid_bodies[idx_a].inv_mass();
         let inv_m_b = rigid_bodies[idx_b].inv_mass();
@@ -253,6 +315,7 @@ impl JointSolver {
         if k < 1e-10 {
             return 0.0;
         }
+        let k = k + compliance / (dt * dt); // CFM regularisation (0 ⇒ rigid)
 
         let rel_vel = (v_b - v_a).dot(direction);
         let position_bias = (self.position_bias * error / dt)

@@ -26,6 +26,7 @@ pub enum JointData {
     Slider(SliderJointData),
     Spring(SpringJointData),
     Distance(DistanceJointData),
+    D6(D6JointData),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +38,7 @@ pub enum JointType {
     Slider,
     Spring,
     Distance,
+    D6,
 }
 
 /// Compile-forced mapping so `JointType` (the authoring descriptor) and `JointData`
@@ -51,6 +53,7 @@ impl From<&JointData> for JointType {
             JointData::Slider(_) => JointType::Slider,
             JointData::Spring(_) => JointType::Spring,
             JointData::Distance(_) => JointType::Distance,
+            JointData::D6(_) => JointType::D6,
         }
     }
 }
@@ -95,6 +98,15 @@ pub struct BallSocketJointData {
     pub twist_axis: Vec3,
     pub twist_lower: f32,
     pub twist_upper: f32,
+    /// Asymmetric (per-axis) swing limits: clamp the swing about the two axes perpendicular
+    /// to `twist_axis` independently, so a shoulder/hip can have a different range in each
+    /// direction — unlike the single circular `cone_limit_angle`. Radians about each perp.
+    pub use_swing_limits: bool,
+    pub swing_limit_1: f32,
+    pub swing_limit_2: f32,
+    /// Inverse stiffness (CFM) applied to the cone/twist/swing LIMITS: 0 = hard stop;
+    /// larger = a soft, springy limit that gives under load (natural ragdoll joint feel).
+    pub compliance: f32,
     #[serde(default)]
     pub initial_relative_rotation: Option<Quat>,
 }
@@ -146,6 +158,42 @@ pub struct SpringJointData {
 pub struct DistanceJointData {
     pub min_length: f32,
     pub max_length: f32,
+    /// Inverse stiffness (CFM): 0 = rigid rope/rod (hard bounds); larger = a stretchy,
+    /// elastic rope that gives under load. See the soft constraint primitives.
+    pub compliance: f32,
+}
+
+/// Per-degree-of-freedom mode for the generic 6-DOF ([`D6JointData`]) joint.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+pub enum D6Motion {
+    /// Fully constrained (0 relative motion on this axis) — the Fixed-joint behaviour.
+    #[default]
+    Locked,
+    /// Unconstrained — free to translate/rotate on this axis (Slider/Hinge behaviour).
+    Free,
+    /// Constrained to `[lower, upper]` on this axis (a limited slider/hinge).
+    Limited { lower: f32, upper: f32 },
+}
+
+/// Generic 6-DOF (D6) joint: per-axis Lock / Free / Limited over 3 translational + 3
+/// rotational DOFs, in a configurable local frame. Subsumes Fixed (all locked), Slider
+/// (one linear Free/Limited), Hinge (one angular Free/Limited) and hybrids (universal,
+/// cylindrical, planar) — the modern default joint (PhysX D6 / Rapier GenericJoint).
+/// Pure orchestration of the existing 1-DOF constraint primitives.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+pub struct D6JointData {
+    /// Local frame (in A's space) whose X/Y/Z axes define the six DOFs. Identity = A's axes.
+    pub frame: Quat,
+    /// Translation modes along the frame's X, Y, Z axes.
+    pub linear: [D6Motion; 3],
+    /// Rotation modes about the frame's X, Y, Z axes.
+    pub angular: [D6Motion; 3],
+    /// Inverse stiffness (CFM) for every locked/limited DOF (0 = rigid).
+    pub compliance: f32,
+    #[serde(default)]
+    pub initial_relative_rotation: Option<Quat>,
 }
 
 impl Joint {
@@ -157,6 +205,7 @@ impl Joint {
             JointData::Slider(_) => "Slider",
             JointData::Spring(_) => "Spring",
             JointData::Distance(_) => "Distance",
+            JointData::D6(_) => "D6",
         }
     }
 
@@ -253,6 +302,10 @@ impl Joint {
                 twist_axis: Vec3::Y,
                 twist_lower: -std::f32::consts::PI,
                 twist_upper: std::f32::consts::PI,
+                use_swing_limits: false,
+                swing_limit_1: std::f32::consts::PI,
+                swing_limit_2: std::f32::consts::PI,
+                compliance: 0.0,
                 initial_relative_rotation: None,
             }),
         }
@@ -361,6 +414,7 @@ impl Joint {
             data: JointData::Distance(DistanceJointData {
                 min_length: min_length.max(0.0),
                 max_length: max_length.max(min_length.max(0.0)),
+                compliance: 0.0,
             }),
         }
     }
@@ -377,6 +431,39 @@ impl Joint {
         length: f32,
     ) -> Self {
         Self::distance(entity_a, entity_b, local_anchor_a, local_anchor_b, 0.0, length)
+    }
+
+    /// Generic 6-DOF joint. Starts fully locked (a weld); set `data.linear[i]` /
+    /// `data.angular[i]` to [`D6Motion::Free`]/[`D6Motion::Limited`] to open DOFs — e.g. one
+    /// angular axis Free ⇒ hinge, one linear axis Free ⇒ slider. `frame` (in A's space)
+    /// orients the six axes.
+    pub fn d6(
+        entity_a: BodyHandle,
+        entity_b: BodyHandle,
+        local_anchor_a: Vec3,
+        local_anchor_b: Vec3,
+    ) -> Self {
+        debug_assert_ne!(
+            entity_a, entity_b,
+            "Joint: entity_a and entity_b must be different"
+        );
+        Self {
+            entity_a,
+            entity_b,
+            local_anchor_a,
+            local_anchor_b,
+            break_force: f32::INFINITY,
+            break_torque: f32::INFINITY,
+            is_broken: false,
+            collision_enabled: false,
+            data: JointData::D6(D6JointData {
+                frame: Quat::IDENTITY,
+                linear: [D6Motion::Locked; 3],
+                angular: [D6Motion::Locked; 3],
+                compliance: 0.0,
+                initial_relative_rotation: None,
+            }),
+        }
     }
 
     pub fn with_break_force(mut self, force: f32, torque: f32) -> Self {
