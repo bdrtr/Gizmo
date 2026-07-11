@@ -119,6 +119,35 @@ impl Mesh {
             lod_vertex_counts: Vec::new(),
         }
     }
+
+    /// Keyfi (üçgen-liste) vertex verisinden mesh kurar — vertex buffer'ı oluşturup
+    /// [`Mesh::new`]'e verir. Prosedürel geometri (ör. akış-çizgisi şeritleri, debug
+    /// çizimleri) için kısayol; çağıran wgpu buffer detaylarıyla uğraşmaz.
+    pub fn from_vertices(
+        device: &wgpu::Device,
+        vertices: &[crate::gpu_types::Vertex],
+        source: impl Into<String>,
+    ) -> Self {
+        use wgpu::util::DeviceExt;
+        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ProcMesh VBuf"),
+            contents: bytemuck::cast_slice(vertices),
+            // COPY_DST → içerik her frame güncellenebilir (bkz `update_vertices`).
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+        Mesh::new(device, Arc::new(vbuf), vertices, Vec3::ZERO, source.into())
+    }
+
+    /// Vertex buffer'ının İÇERİĞİNİ yerinde günceller (aynı sayıda vertex; pozisyon/renk/uv
+    /// değişebilir). Prosedürel/animasyonlu geometri için — mesh'i yeniden kurmadan her frame
+    /// yazılabilir. Buffer `COPY_DST` ile kurulmuş olmalı (`from_vertices` öyle kurar) ve
+    /// vertex sayısı DEĞİŞMEMELİ. Not: `bounds`/`vertex_count` güncellenmez (pozisyon aralığı
+    /// aynı kalmalı) ve `>20000` vertex'te LOD buffer'ları güncellenmez.
+    pub fn update_vertices(&self, queue: &wgpu::Queue, vertices: &[crate::gpu_types::Vertex]) {
+        let bytes: &[u8] = bytemuck::cast_slice(vertices);
+        debug_assert!(bytes.len() as u64 <= self.vbuf.size());
+        queue.write_buffer(&self.vbuf, 0, bytes);
+    }
 }
 
 /// Bir entity'nin ekrana çizilebilir bir Mesh olduğunu belirten ECS marker bileşenidir.

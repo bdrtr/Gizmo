@@ -555,6 +555,18 @@ impl<State: 'static> App<State> {
                                     light_time,
                                 );
                                 s_render(&mut self.world, &state, &mut ctx);
+                            } else {
+                                // Hiçbir render hook yok → 3B sahne çizilmez (klasik "siyah
+                                // ekran" tuzağı: egui HUD görünür ama sahne siyah). Bir kez uyar.
+                                use std::sync::atomic::{AtomicBool, Ordering};
+                                static WARNED: AtomicBool = AtomicBool::new(false);
+                                if !WARNED.swap(true, Ordering::Relaxed) {
+                                    tracing::warn!(
+                                        "Render hook ayarlı DEĞİL — 3B sahne çizilmeyecek (ekran \
+                                         siyah kalır). `.with_scene_render()` (manuel App), \
+                                         `.set_render(..)` veya `.with_simple_scene(..)` kullan."
+                                    );
+                                }
                             }
 
                             #[cfg(feature = "egui")]

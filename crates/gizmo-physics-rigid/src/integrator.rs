@@ -15,6 +15,10 @@ pub struct Integrator {
     /// seviyesi ~1.225. Sürükleme yalnız gövdenin `drag_coefficient·drag_area > 0` ise
     /// uygulanır (opt-in, [`RigidBody::with_air_drag`]).
     pub air_density: f32,
+    /// Rüzgar (hava kütlesinin) hızı, m/s. Sürükleme bağıl hıza (v − wind) karşı
+    /// uygulanır → rüzgar tüneli/esinti: durağan cisim bile rüzgar yönünde itilir.
+    /// Varsayılan sıfır (durağan hava).
+    pub wind: Vec3,
 }
 
 impl Default for Integrator {
@@ -22,6 +26,7 @@ impl Default for Integrator {
         Self {
             gravity: Vec3::new(0.0, -9.81, 0.0),
             air_density: 1.225,
+            wind: Vec3::ZERO,
         }
     }
 }
@@ -88,12 +93,16 @@ impl Integrator {
         // Applied semi-implicitly with a per-step clamp so drag can never reverse the
         // velocity in one frame (Δv ≤ current speed) — unconditionally stable.
         if inv_mass > 0.0 && rb.drag_coefficient > 0.0 && rb.drag_area > 0.0 {
-            let speed = vel.linear.length();
+            // Sürükleme, HAVAYA GÖRE bağıl hıza karşıdır: v_rel = v - wind. `wind` sıfırken
+            // (varsayılan) durağan hava = v'ye karşı sürükleme. Rüzgar varsa durağan bir
+            // cisim bile rüzgar yönünde itilir (rüzgar tüneli / esinti).
+            let v_rel = vel.linear - self.wind;
+            let speed = v_rel.length();
             if speed > 1e-5 {
                 let drag_mag =
                     0.5 * self.air_density * rb.drag_coefficient * rb.drag_area * speed * speed;
                 let dv = (drag_mag * inv_mass * dt).min(speed);
-                vel.linear -= (vel.linear / speed) * dv;
+                vel.linear -= (v_rel / speed) * dv;
             }
         }
 
@@ -476,6 +485,41 @@ mod tests {
         assert!(
             speed < g * 5.0,
             "drag must cap the fall far below free-fall speed, got {speed}"
+        );
+    }
+
+    /// Rüzgar (Integrator.wind) durağan bir sürüklemeli cismi rüzgar yönünde iter ve hız
+    /// rüzgar hızına asimptot yapar (drag bağıl hıza v−wind karşı → denge v = wind).
+    #[test]
+    fn wind_pushes_a_stationary_drag_body_toward_wind_speed() {
+        let mut integrator = Integrator::default();
+        integrator.wind = Vec3::new(20.0, 0.0, 0.0); // +X rüzgar
+        integrator.gravity = Vec3::ZERO; // izole: yalnız rüzgar sürüklemesi
+        let mut rb = RigidBody::new(1.0, false).with_air_drag(1.0, 1.0);
+        rb.linear_damping = 0.0;
+        rb.wake_up();
+        let mut vel = Velocity::default(); // durağan başla
+        let dt = 1.0 / 240.0;
+        for _ in 0..2400 {
+            // 10 s
+            integrator
+                .integrate_velocities(make_entity(2), &mut rb, Quat::IDENTITY, &mut vel, dt)
+                .expect("integration must succeed");
+        }
+        assert!(
+            vel.linear.x > 15.0,
+            "rüzgar cismi downwind (+X) itmeli, vx={}",
+            vel.linear.x
+        );
+        assert!(
+            vel.linear.x <= 20.01,
+            "hız rüzgar hızını (20) aşmamalı — asimptot v_wind, vx={}",
+            vel.linear.x
+        );
+        assert!(
+            vel.linear.y.abs() < 1e-3 && vel.linear.z.abs() < 1e-3,
+            "hareket yalnız rüzgar ekseninde olmalı: {:?}",
+            vel.linear
         );
     }
 

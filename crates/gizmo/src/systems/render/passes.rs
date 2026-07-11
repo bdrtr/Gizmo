@@ -527,17 +527,42 @@ pub(super) fn record_forward_and_fluid(
             fluid.render_pass(&mut render_pass, &renderer.scene.global_bind_group);
         }
 
-        // Draw GPU Particles
-        if let Some(particles) = &renderer.gpu_particles {
-            let active_parts = (particles.max_particles as f32 * particle_lod) as u32;
+        // (GPU Particles artık AYRI bir pass'te — aşağıda — soft-particle derinlik örneklemesi için.)
+    }
+
+    // ── GPU Particles (SOFT PARTICLES) ──────────────────────────────────────────
+    // Forward pass'ten AYRI çizilir: parçacık FS'i sahne DERİNLİĞİNİ örneklemeli (geometriye
+    // sert girmesin), ama bir doku aynı pass'te hem depth-attachment hem sampled olamaz.
+    // Bu pass'te depth ATTACHMENT YOK → depth sampled bağlanır; occlusion + yumuşak-kaybolma
+    // FS'te sahne derinliğinden manuel yapılır. Renk hedefi HDR (Load, önceki sonucun üstüne).
+    if let Some(particles) = &renderer.gpu_particles {
+        let active_parts = (particles.max_particles as f32 * particle_lod) as u32;
+        if active_parts > 0 {
+            let depth_bg =
+                particles.create_depth_bind_group(&renderer.device, &renderer.depth_texture_view);
+            let mut ppass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Particle Soft Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &renderer.post.hdr_texture_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
             particles.render_pass(
-                &mut render_pass,
+                &mut ppass,
                 &renderer.scene.global_bind_group,
+                &depth_bg,
                 active_parts,
             );
         }
-
-
     }
 
     if let Some(fluid) = &renderer.gpu_fluid {

@@ -121,6 +121,38 @@ fn ensure_global_transforms(world: &mut World) {
     propagate.run(world, 0.0);
 }
 
+/// Manuel App (`set_setup`/`set_update`/`set_ui`) için TEK-SATIR sahne render kurulumu.
+///
+/// KÖK-TUZAK ÇÖZÜMÜ: manuel App, `set_render` verilmezse 3B sahneyi ÇİZMEZ (egui HUD
+/// görünür ama sahne SİYAH kalır — sessizce). `with_simple_scene` bunu kendi yapar;
+/// manuel App için bu uzantı aynısını tek satırda sağlar (ağır/opsiyonel pass'leri —
+/// SSR/SSGI/volumetric/TAA + GPU sıvı/fizik — kapatarak; GPU parçacık açık kalır).
+///
+/// ```ignore
+/// use gizmo::systems::AppSceneRenderExt;
+/// App::<S>::new(..).add_plugin(TransformPlugin).set_setup(..).set_update(..)
+///     .with_scene_render()   // <- bu olmadan ekran siyah
+///     .run()
+/// ```
+pub trait AppSceneRenderExt {
+    /// Sahneyi [`default_render_pass`] ile çizecek şekilde `set_render`'ı kurar.
+    fn with_scene_render(self) -> Self;
+}
+
+impl<State: 'static> AppSceneRenderExt for gizmo_app::App<State> {
+    fn with_scene_render(self) -> Self {
+        self.set_render(|world, _state, encoder, view, renderer, _light_time| {
+            renderer.gpu_fluid = None;
+            renderer.gpu_physics = None;
+            renderer.ssr = None;
+            renderer.ssgi = None;
+            renderer.volumetric = None;
+            renderer.taa = None;
+            default_render_pass(world, encoder, view, renderer);
+        })
+    }
+}
+
 /// Bevy'nin DefaultPlugins davranisini taklit eden, sadece modelleri
 /// isiklandirip hizlica ekrana basmaya yarayan kutudan cikmis Render Motoru.
 /// Yeni acilan `tut` gibi bos projelerde yuzlerce satir kod yazmamak icin kullanilir.
@@ -646,11 +678,11 @@ pub fn default_render_pass(
     // Gpu Particles Processing
     if let Some(particles) = &renderer.gpu_particles {
         let active_parts = (particles.max_particles as f32 * particle_lod) as u32;
-        let dt = world
+        let (dt, time) = world
             .get_resource::<gizmo_core::time::Time>()
-            .map(|t| t.dt())
-            .unwrap_or(0.016);
-        particles.update_params(&renderer.queue, dt); // Scale based on time_scale
+            .map(|t| (t.dt(), t.elapsed() as f32))
+            .unwrap_or((0.016, 0.0));
+        particles.update_params(&renderer.queue, dt, time); // time → curl-noise evrimi
         particles.compute_pass(encoder, active_parts);
     }
 

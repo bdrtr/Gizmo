@@ -103,6 +103,7 @@ impl PhysicsWorld {
                     let local_integrator = crate::integrator::Integrator {
                         gravity: active_gravity,
                         air_density: self.integrator.air_density,
+                        wind: self.integrator.wind,
                     };
 
                     local_integrator.integrate_velocities(entity, rb, transform.rotation, vel, dt)?;
