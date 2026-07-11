@@ -138,6 +138,41 @@ impl RigidBody {
         self
     }
 
+    /// Lineer + açısal sönümü ayarlar (kaba, hıza-doğrusal enerji kaybı). Gerçekçi
+    /// v² hava direnci için [`with_air_drag`](Self::with_air_drag) kullan. Zincirlenebilir.
+    pub fn with_damping(mut self, linear: f32, angular: f32) -> Self {
+        self.linear_damping = linear.max(0.0);
+        self.angular_damping = angular.max(0.0);
+        self
+    }
+
+    /// Yerçekimini aç/kapat (uçan/asılı cisimler için). Zincirlenebilir.
+    pub fn with_gravity(mut self, enabled: bool) -> Self {
+        self.use_gravity = enabled;
+        self
+    }
+
+    /// Sürekli Çarpışma Tespiti'ni (CCD) açar — hızlı/ince cisimler tünellemez. Zincirlenebilir.
+    pub fn with_ccd(mut self) -> Self {
+        self.ccd_enabled = true;
+        self
+    }
+
+    /// Kütle merkezini (gövde-yerel) ayarlar. Zincirlenebilir.
+    pub fn with_center_of_mass(mut self, com: Vec3) -> Self {
+        self.center_of_mass = com;
+        self
+    }
+
+    /// Üç dönme eksenini de kilitler — cisim devrilmez/dönmez (karakter kapsülü, dik
+    /// duran nesneler). Zincirlenebilir.
+    pub fn lock_rotation(mut self) -> Self {
+        self.lock_rotation_x = true;
+        self.lock_rotation_y = true;
+        self.lock_rotation_z = true;
+        self
+    }
+
     pub fn wake_up(&mut self) {
         self.is_sleeping = false;
         self.sleep_counter = 0;
@@ -424,6 +459,28 @@ mod tests {
     use super::*;
     use gizmo_physics_core::components::collider::ConvexHullShape;
     use std::sync::Arc;
+
+    /// Akıcı builder'lar: alan erişimi yerine tek zincirde yapılandırma.
+    #[test]
+    fn ergonomic_rigid_body_builders() {
+        let rb = RigidBody::new(5.0, true)
+            .with_damping(0.2, 0.4)
+            .with_gravity(false)
+            .with_ccd()
+            .with_center_of_mass(Vec3::new(0.0, 0.3, 0.0))
+            .lock_rotation()
+            .with_air_drag(0.5, 1.2);
+        assert_eq!(rb.linear_damping, 0.2);
+        assert_eq!(rb.angular_damping, 0.4);
+        assert!(!rb.use_gravity);
+        assert!(rb.ccd_enabled);
+        assert_eq!(rb.center_of_mass, Vec3::new(0.0, 0.3, 0.0));
+        assert!(rb.lock_rotation_x && rb.lock_rotation_y && rb.lock_rotation_z);
+        assert_eq!(rb.drag_coefficient, 0.5);
+        assert_eq!(rb.drag_area, 1.2);
+        // Clamp: negatif damping 0'a.
+        assert_eq!(RigidBody::default().with_damping(-1.0, -2.0).linear_damping, 0.0);
+    }
 
     /// ConvexHull ataleti AABB'den türetilmeli (eskiden sabit 1×1×1 idi → fracture
     /// parçaları boyuttan bağımsız aynı atalete sahipti).

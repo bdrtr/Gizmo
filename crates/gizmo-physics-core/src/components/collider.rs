@@ -184,6 +184,21 @@ impl Collider {
         self
     }
 
+    /// Zıplaklık (restitution) kısayolu — tam malzeme kurmadan tek satırda ayarla.
+    /// Örn: `Collider::sphere(0.5).with_restitution(0.9)` (defalarca zıplayan top).
+    pub fn with_restitution(mut self, restitution: f32) -> Self {
+        self.material.restitution = restitution.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Sürtünme kısayolu (statik = dinamik = `friction`).
+    pub fn with_friction(mut self, friction: f32) -> Self {
+        let f = friction.max(0.0);
+        self.material.static_friction = f;
+        self.material.dynamic_friction = f;
+        self
+    }
+
     // Backwards compatibility wrappers
     pub fn aabb(half_extents: Vec3) -> Self {
         Self::box_collider(half_extents)

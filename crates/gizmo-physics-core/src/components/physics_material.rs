@@ -68,6 +68,45 @@ impl Default for PhysicsMaterial {
 }
 
 impl PhysicsMaterial {
+    /// Yalnız zıplaklığı (restitution) verilmiş malzeme kısayolu. `restitution_combine`
+    /// varsayılan `Max` olduğundan bu malzeme, karşı yüzey mat olsa bile zıplar.
+    /// Örn: `Collider::sphere(r).with_material(PhysicsMaterial::bouncy(0.9))`.
+    pub fn bouncy(restitution: f32) -> Self {
+        Self {
+            restitution: restitution.clamp(0.0, 1.0),
+            ..Default::default()
+        }
+    }
+
+    /// Zıplaklığı (0=inelastik, 1=tam elastik) ayarlar. Zincirlenebilir.
+    pub fn with_restitution(mut self, restitution: f32) -> Self {
+        self.restitution = restitution.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Sürtünmeyi ayarlar (statik = dinamik = `friction`). Zincirlenebilir.
+    pub fn with_friction(mut self, friction: f32) -> Self {
+        let f = friction.max(0.0);
+        self.static_friction = f;
+        self.dynamic_friction = f;
+        self
+    }
+
+    /// Sürtünmesiz malzeme kısayolu (buz gibi kaygan; restitution varsayılan).
+    pub fn frictionless() -> Self {
+        Self {
+            static_friction: 0.0,
+            dynamic_friction: 0.0,
+            ..Default::default()
+        }
+    }
+
+    /// Yoğunluğu (kütle/ hacim hesapları için) ayarlar. Zincirlenebilir.
+    pub fn with_density(mut self, density: f32) -> Self {
+        self.density = density.max(0.0);
+        self
+    }
+
     /// İki malzemenin temas özelliklerini birleştir
     pub fn combine(a: &PhysicsMaterial, b: &PhysicsMaterial) -> CombinedMaterial {
         let f_mode = resolve_combine_mode(a.friction_combine, b.friction_combine);
@@ -174,6 +213,30 @@ gizmo_core::impl_component!(PhysicsMaterial);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ergonomic_material_builders() {
+        // `bouncy(e)`: restitution ayarlı, combine=Max (varsayılan) → karşı yüzey mat
+        // olsa bile zıplar.
+        let m = PhysicsMaterial::bouncy(0.9);
+        assert_eq!(m.restitution, 0.9);
+        assert_eq!(m.restitution_combine, CombineMode::Max);
+        // `with_restitution` / `with_friction` zincirlenebilir + clamp'li.
+        let m2 = PhysicsMaterial::default().with_restitution(1.5).with_friction(0.7);
+        assert_eq!(m2.restitution, 1.0, "restitution [0,1] aralığına clamp'lanmalı");
+        assert_eq!(m2.static_friction, 0.7);
+        assert_eq!(m2.dynamic_friction, 0.7);
+        assert_eq!(
+            PhysicsMaterial::default().with_restitution(-0.5).restitution,
+            0.0
+        );
+        // frictionless: sürtünme sıfır.
+        let f = PhysicsMaterial::frictionless();
+        assert_eq!(f.static_friction, 0.0);
+        assert_eq!(f.dynamic_friction, 0.0);
+        // with_density zincirlenebilir.
+        assert_eq!(PhysicsMaterial::default().with_density(3.0).density, 3.0);
+    }
 
     #[test]
     fn test_combine_geometric_mean() {

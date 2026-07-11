@@ -341,6 +341,58 @@ impl RigidBodyBundle {
         self.rigid_body.ccd_enabled = true;
         self
     }
+
+    /// Fiziksel hava direnci (½·ρ·Cd·A·v²) açar → düşen/uçan cisim doğal terminal hıza
+    /// oturur. `cd` sürükleme katsayısı (küre ~0.47, küp ~1.05), `area` frontal alan (m²).
+    /// Örn: `RigidBodyBundle::dynamic(2.0).with_air_drag(0.47, 0.5)`.
+    pub fn with_air_drag(mut self, cd: f32, area: f32) -> Self {
+        self.rigid_body = self.rigid_body.with_air_drag(cd, area);
+        self
+    }
+
+    /// Collider'ın zıplaklığını (restitution) ayarlar.
+    /// Örn: `RigidBodyBundle::dynamic(1.0).with_collider(Collider::sphere(0.5)).with_restitution(0.9)`.
+    pub fn with_restitution(mut self, restitution: f32) -> Self {
+        self.collider = self.collider.with_restitution(restitution);
+        self
+    }
+
+    /// Collider'ın sürtünmesini ayarlar (statik = dinamik).
+    pub fn with_friction(mut self, friction: f32) -> Self {
+        self.collider = self.collider.with_friction(friction);
+        self
+    }
+
+    /// Lineer + açısal sönümü ayarlar (kaba enerji kaybı). Gerçekçi hava direnci için
+    /// `with_air_drag`.
+    pub fn with_damping(mut self, linear: f32, angular: f32) -> Self {
+        self.rigid_body = self.rigid_body.with_damping(linear, angular);
+        self
+    }
+
+    /// Yerçekimini aç/kapat.
+    pub fn with_gravity(mut self, enabled: bool) -> Self {
+        self.rigid_body = self.rigid_body.with_gravity(enabled);
+        self
+    }
+
+    /// Kütle merkezini (gövde-yerel) ayarlar.
+    pub fn with_center_of_mass(mut self, com: Vec3) -> Self {
+        self.rigid_body = self.rigid_body.with_center_of_mass(com);
+        self
+    }
+
+    /// Üç dönme eksenini kilitler — cisim devrilmez (karakter, dik nesneler).
+    pub fn lock_rotation(mut self) -> Self {
+        self.rigid_body = self.rigid_body.lock_rotation();
+        self
+    }
+
+    /// Başlangıç açısal hızı verir (rad/s).
+    pub fn with_angular_velocity(mut self, angular: Vec3) -> Self {
+        self.velocity.angular = angular;
+        self
+    }
 }
 
 impl Bundle for RigidBodyBundle {
@@ -368,6 +420,37 @@ impl Bundle for RigidBodyBundle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ergonomic_collider_and_bundle_builders() {
+        // Collider zıplaklık/sürtünme kısayolları — tam PhysicsMaterial kurmadan.
+        let c = Collider::sphere(0.5).with_restitution(0.9).with_friction(0.3);
+        assert_eq!(c.material.restitution, 0.9);
+        assert_eq!(c.material.static_friction, 0.3);
+        assert_eq!(c.material.dynamic_friction, 0.3);
+
+        // Bundle: collider + hava direnci + zıplaklık TEK zincirde.
+        let b = RigidBodyBundle::dynamic(2.0)
+            .with_collider(Collider::sphere(0.5))
+            .with_air_drag(0.47, 0.8)
+            .with_restitution(0.85);
+        assert_eq!(b.rigid_body.drag_coefficient, 0.47);
+        assert_eq!(b.rigid_body.drag_area, 0.8);
+        assert_eq!(b.collider.material.restitution, 0.85);
+
+        // Genişletilmiş akıcı set: damping + gravity + lock + COM + açısal hız tek zincirde.
+        let b2 = RigidBodyBundle::dynamic(1.0)
+            .with_damping(0.1, 0.2)
+            .with_gravity(false)
+            .lock_rotation()
+            .with_center_of_mass(Vec3::new(0.0, 0.5, 0.0))
+            .with_angular_velocity(Vec3::new(0.0, 3.0, 0.0));
+        assert_eq!(b2.rigid_body.linear_damping, 0.1);
+        assert!(!b2.rigid_body.use_gravity);
+        assert!(b2.rigid_body.lock_rotation_x);
+        assert_eq!(b2.rigid_body.center_of_mass, Vec3::new(0.0, 0.5, 0.0));
+        assert_eq!(b2.velocity.angular, Vec3::new(0.0, 3.0, 0.0));
+    }
 
     #[test]
     fn rigid_body_bundle_derives_inertia_from_collider() {
