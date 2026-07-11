@@ -29,7 +29,7 @@ use gizmo_physics_core::{BodyHandle, Collider, Transform};
 use gizmo_physics_rigid::components::{RigidBody, Velocity};
 
 use crate::character::update_character;
-use crate::vehicle::{update_vehicle, VehicleController};
+use crate::vehicle::{update_vehicle, weather_grip_factor, VehicleController};
 
 /// Snapshot every live `(Transform, Collider)` into an owned buffer so the
 /// controllers can raycast against the scene while we later hold *mutable*
@@ -56,12 +56,20 @@ fn gather_colliders(world: &World) -> Vec<(BodyHandle, Transform, Collider)> {
 /// `VehicleController` component and writes the resulting forces into `Velocity`
 /// (which the rigid physics step then integrates), so this must run *before*
 /// `physics_step_system`.
+#[tracing::instrument(skip_all, name = "vehicle_controller_system")]
 pub fn vehicle_controller_system(world: &World, dt: f32) {
     if dt <= 0.0 {
         return;
     }
 
     let all_colliders = gather_colliders(world);
+
+    // Hava durumu grip çarpanı için sahnenin PhysicsWorld'ünden Weather'ı oku (yoksa Sunny).
+    // Copy değer olarak alınır → aşağıdaki unsafe query'den önce borrow düşer.
+    let weather = world
+        .get_resource::<gizmo_physics_rigid::world::PhysicsWorld>()
+        .map(|w| w.weather)
+        .unwrap_or_default();
 
     // SAFETY: a `fn(&World, f32)` system reports `is_exclusive`, so the scheduler
     // runs it alone — no other query mutably aliases these components while this
@@ -78,6 +86,8 @@ pub fn vehicle_controller_system(world: &World, dt: f32) {
     };
     if let Some(mut query) = query {
         for (id, (mut vehicle, mut rb, transform, mut vel, _)) in query.iter_mut() {
+            // Aquaplaning hıza bağlı → her araç kendi hızıyla değerlendirilir.
+            let wg = weather_grip_factor(weather, vel.linear.length());
             update_vehicle(
                 BodyHandle::from_id(id),
                 &mut vehicle,
@@ -85,6 +95,7 @@ pub fn vehicle_controller_system(world: &World, dt: f32) {
                 transform,
                 &mut vel,
                 &all_colliders,
+                wg,
                 dt,
             );
         }
@@ -99,6 +110,7 @@ pub fn vehicle_controller_system(world: &World, dt: f32) {
 /// integration and writes `Transform`/`Velocity` directly, so KCC entities must
 /// **not** also carry a dynamic `RigidBody` (that would double-integrate
 /// gravity via the rigid step).
+#[tracing::instrument(skip_all, name = "character_controller_system")]
 pub fn character_controller_system(world: &World, dt: f32) {
     if dt <= 0.0 {
         return;
@@ -397,5 +409,51 @@ mod tests {
             baseline, with_systems,
             "gameplay systems must not perturb a plain rigid-body scene"
         );
+    }
+
+    /// Track C wiring: vehicle_controller_system, PhysicsWorld.weather'ı okuyup grip'e uygular.
+    /// Kar (weather_grip 0.3), güneşe göre belirgin daha az ileri mesafe → weather-oku→wg→grip
+    /// zincirini uçtan uca zorlar (tüm eski testler yalnız Sunny idi).
+    #[test]
+    fn snow_weather_reduces_travel_vs_sunny() {
+        use gizmo_physics_rigid::world::Weather;
+        fn run(weather: Weather) -> f32 {
+            let mut world = World::new();
+            let mut pw = PhysicsWorld::new();
+            pw.weather = weather;
+            world.insert_resource(pw);
+            spawn_ground(&mut world);
+            let car = spawn_vehicle(&mut world, 1.0);
+            let start_z = world.query::<&Transform>().unwrap().get(car.id()).unwrap().position.z;
+            let dt = 1.0 / 120.0;
+            for _ in 0..300 {
+                vehicle_controller_system(&world, dt);
+                physics_step_system(&world, dt);
+            }
+            let end_z = world.query::<&Transform>().unwrap().get(car.id()).unwrap().position.z;
+            start_z - end_z // ileri (-Z) kat edilen mesafe
+        }
+        let sunny = run(Weather::Sunny);
+        let snow = run(Weather::Snow);
+        assert!(sunny > 0.2, "sunny'de araç ilerlemeli, Δ {sunny}");
+        assert!(
+            snow < sunny * 0.75,
+            "kar hava PhysicsWorld'den okunup grip'i düşürmeli: sunny Δ{sunny:.2} vs snow Δ{snow:.2}"
+        );
+    }
+
+    /// Track C wiring: PhysicsWorld kaynağı YOKKEN weather unwrap_or_default()=Sunny → panic yok,
+    /// araç normal sürülür (fallback yolu).
+    #[test]
+    fn vehicle_controller_system_ok_without_physics_world_resource() {
+        let mut world = World::new();
+        spawn_ground(&mut world);
+        let car = spawn_vehicle(&mut world, 1.0);
+        let dt = 1.0 / 120.0;
+        for _ in 0..30 {
+            vehicle_controller_system(&world, dt); // yalnız kontrolcü; kuvvetleri Velocity'ye yazar
+        }
+        let v = world.query::<&Velocity>().unwrap().get(car.id()).unwrap().linear;
+        assert!(v.is_finite(), "PhysicsWorld'süz kontrolcü sonlu kalmalı, bulundu {v:?}");
     }
 }

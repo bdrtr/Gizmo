@@ -1,5 +1,7 @@
 use gizmo_physics_core::{Collider, Transform};
+use gizmo_physics_core::components::PhysicsMaterial;
 use gizmo_physics_rigid::components::{RigidBody, Velocity};
+use gizmo_physics_rigid::world::Weather;
 use gizmo_physics_core::raycast::{Ray, Raycast, RaycastHit};
 use gizmo_physics_core::BodyHandle;
 use gizmo_math::{Quat, Vec3};
@@ -100,6 +102,29 @@ pub enum Axle {
     Rear,
 }
 
+/// Tahrik düzeni: motor torku hangi aksa gider ve motor RPM'i hangi tekerleklerden türetilir.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Drivetrain {
+    /// Önden çekiş
+    Fwd,
+    /// Arkadan itiş (varsayılan)
+    Rwd,
+    /// Dört tekerlek
+    Awd,
+}
+
+impl Drivetrain {
+    /// Bu aks tahrik ediliyor mu?
+    #[inline]
+    pub fn drives(self, axle: &Axle) -> bool {
+        match self {
+            Drivetrain::Fwd => *axle == Axle::Front,
+            Drivetrain::Rwd => *axle == Axle::Rear,
+            Drivetrain::Awd => true,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Wheel {
     pub attachment_local_pos: Vec3,
@@ -129,6 +154,10 @@ pub struct Wheel {
     pub rotation_angle: f32,
     pub angular_velocity: f32,
     pub suspension_force: f32,
+    /// Temas edilen zeminin dinamik sürtünmesi (grip çarpanı için). 1. geçiş raycast'inde
+    /// çarpılan collider'ın PhysicsMaterial'ından yakalanır; havadayken ASPHALT'a döner.
+    /// grip_mult = surface_friction / ASPHALT.dynamic_friction → buz/kum/asfalt gerçek tutuş verir.
+    pub surface_friction: f32,
 }
 
 impl Default for Wheel {
@@ -155,6 +184,7 @@ impl Default for Wheel {
             rotation_angle: 0.0,
             angular_velocity: 0.0,
             suspension_force: 0.0,
+            surface_friction: PhysicsMaterial::ASPHALT.dynamic_friction,
         }
     }
 }
@@ -246,8 +276,9 @@ pub struct VehicleController {
 
     pub engine_rpm: f32,
     pub current_speed_kmh: f32,
-    pub engine_angular_vel: f32, // rad/s — şanzıman simülasyonu için
     pub flywheel_inertia: f32,   // kg·m²
+    /// Tahrik düzeni (FWD/RWD/AWD) — tork dağıtımı ve RPM türetimi buna göre.
+    pub drivetrain: Drivetrain,
 }
 
 impl gizmo_core::component::Component for VehicleController {}
@@ -267,8 +298,8 @@ impl Default for VehicleController {
             shift_cooldown: 0.0,
             engine_rpm: 800.0,
             current_speed_kmh: 0.0,
-            engine_angular_vel: 800.0 / 9.549,
             flywheel_inertia: 0.25, // kg·m²
+            drivetrain: Drivetrain::Rwd,
         }
     }
 }
@@ -391,6 +422,29 @@ fn ground_effect_factor(clearance: f32, height: f32, multiplier: f32) -> f32 {
     1.0 + (multiplier - 1.0) * t
 }
 
+/// Hava durumu grip çarpanı — rigid araç sistemindeki mantığın portu (o sistem siliniyor).
+/// Sunny → 1.0, Snow → 0.3, Rain → %50 taban, 20 m/s üstünde su kaymasıyla (aquaplaning)
+/// kademeli düşüş. `speed_mps` aracın hızı (m/s). Sürtünme çemberi limitine çarpan olarak
+/// uygulanır (bkz. update_vehicle 2. geçiş).
+pub fn weather_grip_factor(weather: Weather, speed_mps: f32) -> f32 {
+    match weather {
+        Weather::Sunny => 1.0,
+        Weather::Rain => {
+            if speed_mps > 20.0 {
+                (0.5 - (speed_mps - 20.0) * 0.01).max(0.1)
+            } else {
+                0.5
+            }
+        }
+        Weather::Snow => 0.3,
+        _ => 1.0, // Weather #[non_exhaustive] — bilinmeyen/ileride eklenen → cezasız (tam grip).
+    }
+}
+
+// 8 argüman: all_colliders + weather_grip + dt hepsi per-step ÇEVRE girdisi. CI zaten
+// `too_many_arguments`'ı `-A` ile muaf tutuyor; alternatif küçük bir `VehicleStepCtx` struct'ı
+// (colliders+weather_grip+dt) — ileride çevre girdisi artarsa (rüzgâr, yüzey sıcaklığı) tercih.
+#[allow(clippy::too_many_arguments)]
 pub fn update_vehicle(
     vehicle_entity: BodyHandle,
     vehicle: &mut VehicleController,
@@ -398,6 +452,7 @@ pub fn update_vehicle(
     vehicle_transform: &Transform,
     vehicle_vel: &mut Velocity,
     all_colliders: &[(BodyHandle, Transform, Collider)],
+    weather_grip: f32,
     dt: f32,
 ) {
     if vehicle_rb.is_static() {
@@ -419,6 +474,8 @@ pub fn update_vehicle(
     let forward_speed = v_com.dot(forward);
     vehicle.current_speed_kmh = forward_speed * 3.6;
 
+    let drivetrain = vehicle.drivetrain;
+
     // --------------------------------------------------------
     // 1. GÜÇ AKTARMA ORGANı
     // --------------------------------------------------------
@@ -430,20 +487,20 @@ pub fn update_vehicle(
         .unwrap_or(0.0);
     let total_ratio = gear_ratio * vehicle.tuning.final_drive_ratio;
 
-    // RPM ← arka tekerlek angular_velocity ortalamasından
-    let mut avg_rear_ω = 0.0f32;
-    let mut rear_count = 0.0f32;
+    // RPM ← TAHRİKLİ tekerlek angular_velocity ortalamasından (FWD/RWD/AWD)
+    let mut avg_driven_ω = 0.0f32;
+    let mut driven_count = 0.0f32;
     for w in &vehicle.wheels {
-        if w.axle_type == Axle::Rear {
-            avg_rear_ω += w.angular_velocity;
-            rear_count += 1.0;
+        if drivetrain.drives(&w.axle_type) {
+            avg_driven_ω += w.angular_velocity;
+            driven_count += 1.0;
         }
     }
-    if rear_count > 0.0 {
-        avg_rear_ω /= rear_count;
+    if driven_count > 0.0 {
+        avg_driven_ω /= driven_count;
     }
 
-    let wheel_rpm = avg_rear_ω.abs() * 9.549; // rad/s → rpm
+    let wheel_rpm = avg_driven_ω.abs() * 9.549; // rad/s → rpm
     vehicle.engine_rpm =
         (wheel_rpm * total_ratio.abs()).clamp(vehicle.tuning.idle_rpm, vehicle.tuning.max_rpm);
 
@@ -466,30 +523,28 @@ pub fn update_vehicle(
     let a = &vehicle.tuning.aero;
     let q = 0.5 * AIR_DENSITY * spd_sq; // dinamik basınç
 
-    // Zemin etkisi: araç gövdesi yere yaklaştıkça downforce artar. Referans = ŞASİ TABAN
-    // clearance'ı: aracın KENDİ collider'ının dünya-AABB tabanı (min.y) ile tekerlek temas
-    // noktası (ground_hit.point.y) arasındaki dikey boşluk. (Eskiden `hit.distance-0.5` =
-    // süspansiyon-bağlantı-to-zemin ≈0.85m kullanılıyordu; bu hep `ground_effect_height`
-    // üstünde kaldığından ge_factor hep 1.0 = etki ÖLÜYDÜ.) Aracın collider'ı `all_colliders`
-    // içinde (raycast'ten self-exclude edilse de erişilebilir). Normal sürüş yüksekliğinde
-    // clearance > ge_height → ge_factor=1.0 (davranış AYNEN korunur); yalnız araç gerçekten
-    // alçaldığında (yük/downforce) yumuşak rampayla artar → doğal, disruption-suz.
-    let ground_contact_y = vehicle
-        .wheels
-        .iter()
-        .filter_map(|w| w.ground_hit.as_ref().map(|hit| hit.point.y))
-        .fold(f32::MAX, f32::min);
-    let chassis_floor_y = all_colliders
-        .iter()
-        .find(|(h, _, _)| *h == vehicle_entity)
-        .map(|(_, tr, col)| col.compute_aabb(tr.position, tr.rotation).min.y);
-    let ge_factor = match chassis_floor_y {
-        Some(floor_y) if ground_contact_y.is_finite() => ground_effect_factor(
-            floor_y - ground_contact_y,
-            a.ground_effect_height,
-            a.ground_effect_multiplier,
-        ),
-        _ => 1.0,
+    // Zemin etkisi: araç gövdesi yere yaklaştıkça downforce artar. Referans = SÜSPANSİYON
+    // SIKIŞMASI (gerçek dinamik ride-height). ESKİDEN şasi collider AABB tabanı kullanılıyordu;
+    // o değer collider yarı-yüksekliğine hâkim olup yalnız cm-ölçekte oynadığından ge_factor
+    // collider boyutuna kilitleniyor, yüke DUYARSIZ kalıyordu (ya hep max ya hep 1.0). Süspansiyon
+    // sıkışma oranı (0 = rest, 1 = tam sıkışma) yükü/downforce'u doğrudan yansıtır: araç yüklenip
+    // çöktükçe clearance düşer → ge_factor rampalanır (max_travel'a kırpılı → sınırlı geri besleme).
+    let (sum_frac, n_grounded) = vehicle.wheels.iter().fold((0.0f32, 0.0f32), |(s, n), w| {
+        if w.is_grounded {
+            let travel = (w.suspension_rest_length - w.suspension_length).max(0.0);
+            let frac = (travel / w.suspension_max_travel.max(1e-3)).clamp(0.0, 1.0);
+            (s + frac, n + 1.0)
+        } else {
+            (s, n)
+        }
+    });
+    let ge_factor = if n_grounded > 0.0 {
+        let avg_frac = sum_frac / n_grounded; // 0 (rest) .. 1 (tam sıkışma)
+        // clearance: rest → ge_height (etki yok), tam sıkışma → 0 (max etki)
+        let clearance = a.ground_effect_height * (1.0 - avg_frac);
+        ground_effect_factor(clearance, a.ground_effect_height, a.ground_effect_multiplier)
+    } else {
+        1.0
     };
 
     let drag_dir = if spd > 0.1 { -v_com / spd } else { Vec3::ZERO };
@@ -526,7 +581,7 @@ pub fn update_vehicle(
     // --------------------------------------------------------
     // 4. TEKERLEK DÖNGÜSÜ — 1. geçiş: Raycast + Süspansiyon setup
     // --------------------------------------------------------
-    let rear_count_f = rear_count.max(1.0);
+    let driven_count_f = driven_count.max(1.0);
 
     for wheel in &mut vehicle.wheels {
         let attach_world = vehicle_transform.position
@@ -551,6 +606,9 @@ pub fn update_vehicle(
         // Raycast
         let mut closest_hit: Option<RaycastHit> = None;
         let mut closest_dist = ray_max;
+        // Çarpılan zeminin sürtünmesini de yakala (grip çarpanı için). RaycastHit lastik-agnostik
+        // olduğundan materyali ayrı tut; collider zaten elde → imza/veri değişikliği gerekmez.
+        let mut closest_friction = PhysicsMaterial::ASPHALT.dynamic_friction;
 
         for (other_ent, other_trans, other_col) in all_colliders {
             if *other_ent == vehicle_entity || other_col.is_trigger {
@@ -563,6 +621,7 @@ pub fn update_vehicle(
             if let Some((dist, normal)) = Raycast::ray_shape(&ray, &other_col.shape, other_trans) {
                 if dist < closest_dist {
                     closest_dist = dist;
+                    closest_friction = other_col.material.dynamic_friction;
                     closest_hit = Some(RaycastHit {
                         entity: *other_ent,
                         point: ray.point_at(dist),
@@ -576,6 +635,7 @@ pub fn update_vehicle(
         if let Some(hit) = closest_hit {
             wheel.is_grounded = true;
             wheel.ground_hit = Some(hit);
+            wheel.surface_friction = closest_friction;
 
             // Gerçek mesafe için eklediğimiz offseti çıkarıyoruz
             let actual_dist = closest_dist - ray_origin_offset;
@@ -591,6 +651,7 @@ pub fn update_vehicle(
             wheel.ground_hit = None;
             wheel.suspension_length = wheel.suspension_rest_length;
             wheel.suspension_force = 0.0;
+            wheel.surface_friction = PhysicsMaterial::ASPHALT.dynamic_friction;
         }
 
         // Ackermann açısı (ön tekerlek)
@@ -604,9 +665,9 @@ pub fn update_vehicle(
             );
         }
 
-        // Tork dağıtımı (RWD)
-        wheel.drive_torque = if wheel.axle_type == Axle::Rear {
-            drive_torque_total / rear_count_f
+        // Tork dağıtımı — tahrikli akslar (FWD/RWD/AWD)
+        wheel.drive_torque = if drivetrain.drives(&wheel.axle_type) {
+            drive_torque_total / driven_count_f
         } else {
             0.0
         };
@@ -666,7 +727,7 @@ pub fn update_vehicle(
         // yalnız kendi minik ataletiyle (~0.8) anında redline'a fırlıyordu = kalkışta
         // patinaj + tüm vitesleri geçme. Yansıyan atalet (düşük viteste ~30 kg·m²) motoru
         // gerçekçi biçimde kademeli döndürür; yüksek viteste ratio küçülür → daha çevik.
-        let effective_inertia = if wheel.axle_type == Axle::Rear {
+        let effective_inertia = if drivetrain.drives(&wheel.axle_type) {
             wheel_inertia + flywheel_inertia * total_ratio * total_ratio
         } else {
             wheel_inertia
@@ -760,6 +821,14 @@ pub fn update_vehicle(
                     slip_angle,
                     normal_load,
                 );
+
+                // Yüzey materyali (buz/kum/asfalt) + hava durumu (yağmur/kar) grip çarpanı.
+                // Sürtünme çemberi Pacejka içinde uygulandı; tüm vektörü ölçeklemek yönü korur,
+                // etkin μ'yü orantılı ölçekler (buzda düşük tutuş → redline patinaj vb.).
+                let grip = (wheel.surface_friction / PhysicsMaterial::ASPHALT.dynamic_friction)
+                    * weather_grip;
+                let final_long = final_long * grip;
+                let final_lat = final_lat * grip;
 
                 // Lastik kuvvetini temas noktasından uygula
                 let tire_force = wheel_forward * final_long + wheel_right * final_lat;
@@ -961,7 +1030,7 @@ mod tests {
             vc.set_reverse(throttle < 0.0);
             vc.steering_input = steer;
             vel.linear += gravity * dt; // gravity (rigid integrator would do this)
-            update_vehicle(veh_id, &mut vc, &mut rb, &t, &mut vel, &colliders, dt);
+            update_vehicle(veh_id, &mut vc, &mut rb, &t, &mut vel, &colliders, 1.0, dt);
             // Semi-implicit integrate pose from the mutated velocity.
             t.position += vel.linear * dt;
             if vel.angular.length() > 1e-6 {
@@ -1058,7 +1127,7 @@ mod tests {
         vc.brake_input = 0.0;
         vc.steering_input = 0.0;
 
-        update_vehicle(veh_id, &mut vc, &mut rb, &t, &mut vel, &colliders, dt);
+        update_vehicle(veh_id, &mut vc, &mut rb, &t, &mut vel, &colliders, 1.0, dt);
 
         // İzolasyon garantisi: airborne → tek yatay kuvvet aero drag.
         assert!(
@@ -1253,6 +1322,241 @@ mod tests {
         assert!(
             fy3 > 1000.0,
             "Expected significant lateral force during cornering"
+        );
+    }
+
+    /// Yüzey materyali + hava durumu grip wiring'i (Track C) ve FWD/reverse (Track E) için
+    /// esnek harness: verilen zemin materyali, weather_grip, tahrik düzeni ve aks yerleşimiyle
+    /// aracı düşürüp sürer; sonda ileri (−Z) hızı ve son VehicleController'ı döner.
+    fn sim_forward_speed(
+        throttle: f32,
+        reverse: bool,
+        ground_material: PhysicsMaterial,
+        weather_grip: f32,
+        drivetrain: Drivetrain,
+        all_front: bool,
+        steps: usize,
+    ) -> (f32, VehicleController) {
+        let veh_id = BodyHandle::from_id(2);
+        let ground_id = BodyHandle::from_id(1);
+        let ground =
+            Collider::box_collider(Vec3::new(200.0, 1.0, 200.0)).with_material(ground_material);
+        let ground_t = Transform::new(Vec3::new(0.0, -1.0, 0.0));
+
+        let mut rb = RigidBody::new(1200.0, true);
+        rb.calculate_box_inertia(1.4, 0.7, 2.4);
+        rb.center_of_mass = Vec3::new(0.0, 0.2, 0.0);
+        let mut t = Transform::new(Vec3::new(0.0, 1.0, 0.0));
+        let mut vc = VehicleController::new();
+        vc.drivetrain = drivetrain;
+        for (x, z) in [(0.7_f32, 1.0_f32), (-0.7, 1.0), (0.7, -1.0), (-0.7, -1.0)] {
+            let front = all_front || z > 0.0;
+            vc.add_wheel(Wheel {
+                attachment_local_pos: Vec3::new(x, 0.2, z),
+                radius: 0.3,
+                axle_type: if front { Axle::Front } else { Axle::Rear },
+                is_left: x > 0.0,
+                suspension_rest_length: 0.15,
+                suspension_max_travel: 0.15,
+                suspension_stiffness: 40000.0,
+                suspension_damping: 3000.0,
+                wheel_mass: 25.0,
+                ..Default::default()
+            });
+        }
+        let mut vel = Velocity::default();
+        let dt = 1.0 / 60.0;
+        let gravity = Vec3::new(0.0, -9.81, 0.0);
+        let veh_col = Collider::box_collider(Vec3::new(0.7, 0.35, 1.4));
+
+        for _ in 0..steps {
+            vc.throttle_input = throttle.abs();
+            vc.set_reverse(reverse);
+            vc.steering_input = 0.0;
+            vel.linear += gravity * dt;
+            // Aracın collider'ı GÜNCEL transform ile yeniden kurulur (E2: eskiden harness
+            // bayat spawn transformunu geçiriyordu).
+            let colliders = [
+                (ground_id, ground_t, ground.clone()),
+                (veh_id, t, veh_col.clone()),
+            ];
+            update_vehicle(veh_id, &mut vc, &mut rb, &t, &mut vel, &colliders, weather_grip, dt);
+            t.position += vel.linear * dt;
+            if vel.angular.length() > 1e-6 {
+                t.rotation = (Quat::from_scaled_axis(vel.angular * dt) * t.rotation).normalize();
+            }
+            assert!(
+                t.position.is_finite() && vel.linear.is_finite() && vel.angular.is_finite(),
+                "vehicle sim produced NaN/Inf (material {:?}, wg {weather_grip})",
+                ground_material.dynamic_friction
+            );
+        }
+        let forward = t.rotation.mul_vec3(Vec3::new(0.0, 0.0, -1.0));
+        (vel.linear.dot(forward), vc)
+    }
+
+    /// Track C: yüzey materyali gerçek tutuşu belirler. Buz (μ=0.03) asfalttan (μ=0.65) çok
+    /// daha az hızlanmalı. Eskiden dynamics tire modeli PhysicsMaterial'ı YOK SAYIYORDU.
+    #[test]
+    fn surface_material_scales_tire_grip() {
+        let (asphalt, _) =
+            sim_forward_speed(1.0, false, PhysicsMaterial::ASPHALT, 1.0, Drivetrain::Rwd, false, 300);
+        let (ice, _) =
+            sim_forward_speed(1.0, false, PhysicsMaterial::ICE, 1.0, Drivetrain::Rwd, false, 300);
+        assert!(asphalt > 3.0, "asfaltta hızlanmalı, bulundu {asphalt}");
+        // grip_mult = 0.03/0.65 ≈ 0.046 → fiziksel oran ~20×; eşiği gerçek orana yaklaştır.
+        assert!(
+            ice < asphalt * 0.2,
+            "buz (μ=0.03) asfalttan çok daha az tutmalı: buz {ice} vs asfalt {asphalt}"
+        );
+    }
+
+    /// Track C: hava durumu grip çarpanı gerçekten uygulanır. Snow (weather_grip 0.3) sunny'den
+    /// (1.0) daha az hız üretmeli.
+    #[test]
+    fn weather_grip_reduces_traction() {
+        let (sunny, _) =
+            sim_forward_speed(1.0, false, PhysicsMaterial::ASPHALT, 1.0, Drivetrain::Rwd, false, 300);
+        let (snow, _) =
+            sim_forward_speed(1.0, false, PhysicsMaterial::ASPHALT, 0.3, Drivetrain::Rwd, false, 300);
+        assert!(sunny > 3.0, "sunny'de gerçekten hızlanmalı, bulundu {sunny}");
+        // weather_grip 0.3 → kuvvet 0.3× ölçekleniyor; büyüklüğü de pinle (yalnız < değil).
+        assert!(
+            snow < sunny * 0.7,
+            "kar (weather_grip 0.3) sunny'den belirgin az hız vermeli: kar {snow} vs sunny {sunny}"
+        );
+    }
+
+    /// Track E: FWD (tüm tekerlekler ön aks + Drivetrain::Fwd) hızlanmalı. Eskiden hardcoded
+    /// RWD olduğundan tam-ön yerleşim HİÇ hareket etmiyor, RPM idle'da takılıyordu.
+    #[test]
+    fn fwd_layout_accelerates() {
+        let (fwd, vc) =
+            sim_forward_speed(1.0, false, PhysicsMaterial::ASPHALT, 1.0, Drivetrain::Fwd, true, 300);
+        assert!(fwd > 3.0, "FWD araç hızlanmalı, bulundu {fwd}");
+        assert!(
+            vc.engine_rpm > vc.tuning.idle_rpm,
+            "FWD motor RPM idle üstüne çıkmalı, bulundu {}",
+            vc.engine_rpm
+        );
+    }
+
+    /// Track E: geri vites gerçekten geri (+Z) hareket üretmeli (ileri hız negatif). Reverse
+    /// yolu daha önce test edilmiyordu.
+    #[test]
+    fn reverse_produces_backward_motion() {
+        let (fwd, vc) =
+            sim_forward_speed(1.0, true, PhysicsMaterial::ASPHALT, 1.0, Drivetrain::Rwd, false, 300);
+        assert!(vc.reverse_input, "reverse bayrağı set olmalı");
+        assert!(
+            fwd < -0.5,
+            "geri vites aracı geri (−ileri) götürmeli, ileri hız {fwd} olmalı < -0.5"
+        );
+    }
+
+    /// Track C: weather_grip_factor'ın Weather→grip eşlemesini ve aquaplaning rampasını DOĞRUDAN
+    /// pinle (sim testleri ham skaler geçtiğinden bu fonksiyonu atlıyordu).
+    #[test]
+    fn weather_grip_factor_maps_weather_and_aquaplanes() {
+        assert_eq!(weather_grip_factor(Weather::Sunny, 0.0), 1.0);
+        assert_eq!(weather_grip_factor(Weather::Sunny, 100.0), 1.0);
+        assert_eq!(weather_grip_factor(Weather::Snow, 0.0), 0.3);
+        assert_eq!(weather_grip_factor(Weather::Snow, 100.0), 0.3);
+        // Rain: 20 m/s'ye kadar 0.5 taban; üstünde aquaplaning ile kademeli düşüş, 0.1'e kırpılı.
+        assert_eq!(weather_grip_factor(Weather::Rain, 0.0), 0.5);
+        assert_eq!(weather_grip_factor(Weather::Rain, 20.0), 0.5);
+        assert!((weather_grip_factor(Weather::Rain, 30.0) - 0.4).abs() < 1e-4);
+        // 0.5-0.4≈0.1 tabana kırpılır (float: 0.5-40*0.01 tam 0.1 değil → yaklaşık karşılaştır).
+        assert!((weather_grip_factor(Weather::Rain, 60.0) - 0.1).abs() < 1e-4);
+        assert_eq!(weather_grip_factor(Weather::Rain, 200.0), 0.1); // sert clamp → tam taban
+        // Yağmurda hızla monoton azalmalı.
+        assert!(weather_grip_factor(Weather::Rain, 40.0) < weather_grip_factor(Weather::Rain, 25.0));
+    }
+
+    /// Track E: Drivetrain::drives eşleme tablosu (tork dağıtımı + RPM türetimi buna dayanır).
+    #[test]
+    fn drivetrain_drives_table() {
+        assert!(Drivetrain::Fwd.drives(&Axle::Front) && !Drivetrain::Fwd.drives(&Axle::Rear));
+        assert!(!Drivetrain::Rwd.drives(&Axle::Front) && Drivetrain::Rwd.drives(&Axle::Rear));
+        assert!(Drivetrain::Awd.drives(&Axle::Front) && Drivetrain::Awd.drives(&Axle::Rear));
+    }
+
+    /// Track C: tekerlek havaya kalkınca surface_friction ASPHALT'a resetlenmeli (bayat buz
+    /// değerinin inişte bir frame taşınmasını önler). Grounded'da çarpılan materyalden yakalanır.
+    #[test]
+    fn surface_friction_captures_material_and_resets_when_airborne() {
+        let veh_id = BodyHandle::from_id(2);
+        let ground_id = BodyHandle::from_id(1);
+        let ice =
+            Collider::box_collider(Vec3::new(50.0, 1.0, 50.0)).with_material(PhysicsMaterial::ICE);
+        let ground_t = Transform::new(Vec3::new(0.0, -1.0, 0.0));
+
+        let mut rb = RigidBody::new(1000.0, true);
+        rb.calculate_box_inertia(1.4, 0.7, 2.4);
+        let mut t = Transform::new(Vec3::new(0.0, 0.4, 0.0));
+        let mut vc = VehicleController::new();
+        for (x, z) in [(0.6_f32, 1.0_f32), (-0.6, 1.0), (0.6, -1.0), (-0.6, -1.0)] {
+            vc.add_wheel(Wheel {
+                attachment_local_pos: Vec3::new(x, 0.1, z),
+                radius: 0.3,
+                suspension_rest_length: 0.2,
+                suspension_max_travel: 0.2,
+                ..Default::default()
+            });
+        }
+        let mut vel = Velocity::default();
+        let dt = 1.0 / 60.0;
+        let veh_col = Collider::box_collider(Vec3::new(0.6, 0.35, 1.4));
+
+        // Buz üzerinde grounded → surface_friction = ICE.
+        let colliders = [(ground_id, ground_t, ice.clone()), (veh_id, t, veh_col.clone())];
+        update_vehicle(veh_id, &mut vc, &mut rb, &t, &mut vel, &colliders, 1.0, dt);
+        assert!(vc.wheels.iter().any(|w| w.is_grounded), "araç buzda grounded olmalı");
+        for w in vc.wheels.iter().filter(|w| w.is_grounded) {
+            assert!(
+                (w.surface_friction - PhysicsMaterial::ICE.dynamic_friction).abs() < 1e-4,
+                "buzda grounded → surface_friction=ICE(0.03), bulundu {}",
+                w.surface_friction
+            );
+        }
+
+        // Aracı yukarı taşı → havada; surface_friction ASPHALT'a resetlenmeli.
+        t.position.y = 100.0;
+        let colliders2 = [(ground_id, ground_t, ice.clone()), (veh_id, t, veh_col.clone())];
+        update_vehicle(veh_id, &mut vc, &mut rb, &t, &mut vel, &colliders2, 1.0, dt);
+        for w in &vc.wheels {
+            assert!(!w.is_grounded, "araç havada olmalı");
+            assert!(
+                (w.surface_friction - PhysicsMaterial::ASPHALT.dynamic_friction).abs() < 1e-4,
+                "havada → surface_friction ASPHALT'a resetlenmeli, bulundu {}",
+                w.surface_friction
+            );
+        }
+    }
+
+    /// Track E1: ground-effect artik SUSPANSIYON sikismasindan turetiliyor → downforce YUKE
+    /// DUYARLI. Yuksek hizda aero downforce (lift_coefficient<0) normal yuku ARTIRMALI (dinlenen
+    /// araca gore). Isaret ters cevrilse (downforce yuku azaltsa) bu test duser.
+    #[test]
+    fn ground_effect_downforce_adds_normal_load_at_speed() {
+        let sum_load = |vc: &VehicleController| -> f32 {
+            vc.wheels.iter().map(|w| w.suspension_force).sum()
+        };
+        // 1) Dinlen (3s), grounded taban yuk = agirlik.
+        let (rb, t, vel, vc) = sim_vehicle(0.0, 0.0, 180, None);
+        assert_eq!(vc.wheels.iter().filter(|w| w.is_grounded).count(), 4);
+        let rest_load = sum_load(&vc);
+        assert!(rest_load > 5000.0, "dinlenen araç ağırlığını taşımalı, bulundu {rest_load}");
+
+        // 2) Yuksek ileri hiz (-Z) enjekte et, birkac adim kos → aero downforce suspansiyonu
+        //    daha cok sikistirir, ge_factor rampalanir, normal yuk artar.
+        let mut fast_vel = vel;
+        fast_vel.linear.z = -40.0;
+        let (_rb2, _t2, _vel2, vc_fast) = sim_vehicle(0.0, 0.0, 20, Some((rb, t, fast_vel, vc)));
+        let fast_load = sum_load(&vc_fast);
+        assert!(
+            fast_load > rest_load * 1.05,
+            "yüksek hızda downforce normal yükü ARTIRMALI (ge işaret/yük-duyarlılık): dinlenme {rest_load:.0} → hız {fast_load:.0}"
         );
     }
 }

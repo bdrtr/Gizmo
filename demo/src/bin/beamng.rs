@@ -16,6 +16,14 @@ struct BeamNGState {
     fem_bind_group: wgpu::BindGroup,
     fem_index_buffer: wgpu::Buffer,
     fem_index_count: u32,
+
+    // FPS-bağımsız sim: gerçek dt biriktirilir, substep sayısı ondan türetilir (update'te
+    // hesaplanır, render'da tüketilir). ESKİDEN her frame SABİT 40 substep vardı → sim hızı = FPS.
+    sim_accum: f32,
+    pending_substeps: u32,
+    // R ile başlangıç durumuna sıfırlama (bir-frame bayrağı: update'te set, render'da tüketilir).
+    reset_requested: bool,
+    initial_nodes: Vec<GpuSoftBodyNode>,
 }
 
 fn create_tetra_box(
@@ -109,6 +117,11 @@ fn create_tetra_box(
                     );
 
                     let det = dm.determinant();
+                    // Degenerate tetrahedron (det≈0) → dm.inverse() NaN üretir ve TÜM sim'i zehirler.
+                    // Düzgün ızgarada oluşmaz ama savunmacı guard (0 boyut/çözünürlük verilirse).
+                    if det.abs() < 1e-9 {
+                        continue;
+                    }
                     let volume = (det / 6.0).abs();
                     let inv_dm = dm.inverse();
 
@@ -463,6 +476,11 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
 
     world.insert_resource(asset_manager);
 
+    println!(
+        "BeamNG FEM demo hazır. Kontroller: R = yumuşak gövdeyi sıfırla, sağ-tık = kamera orbit, \
+         WASD/QE = kamera hareket, Shift = hızlı. Sim FPS-bağımsız (substep gerçek dt'den)."
+    );
+
     BeamNGState {
         camera_speed: 15.0,
         camera_pitch: 0.0,
@@ -473,10 +491,29 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
         fem_bind_group,
         fem_index_buffer: index_buffer,
         fem_index_count: index_count,
+        sim_accum: 0.0,
+        pending_substeps: 40,
+        reset_requested: false,
+        initial_nodes: nodes,
     }
 }
 
 fn update(world: &mut World, state: &mut BeamNGState, dt: f32, input: &gizmo::core::input::Input) {
+    // Bir önceki frame'de set edilen reset bayrağı render'da tüketildi → temizle.
+    state.reset_requested = false;
+    // R: yumuşak gövdeyi başlangıç durumuna sıfırla.
+    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyR as u32) {
+        state.reset_requested = true;
+    }
+
+    // FEM substep sayısını GERÇEK dt'den türet (FPS-bağımsız). ESKİDEN her frame sabit 40 substep
+    // × dt=0.0005 = 0.02 s/frame işleniyordu, gerçek frame süresinden bağımsız → sim hızı = FPS.
+    const SUB_DT: f32 = 0.0005; // params.dt ile aynı fiziksel substep
+    state.sim_accum += dt.min(0.1);
+    let n = (state.sim_accum / SUB_DT).floor();
+    state.pending_substeps = (n as u32).min(80); // spiral-of-death guard
+    state.sim_accum -= n * SUB_DT;
+
     if input.is_mouse_button_pressed(1) {
         let delta = input.mouse_delta();
         state.camera_yaw -= delta.0 * 0.005;
@@ -546,9 +583,17 @@ fn render(
     renderer: &mut Renderer,
     _light_time: f32,
 ) {
-    // 1. Run FEM Compute Pass
-    // Run multiple sub-steps for stability
-    for _ in 0..40 {
+    // R ile sıfırlama: başlangıç düğüm-tamponunu GPU'ya geri yaz (pozisyon+hız+kuvvet sıfırlanır).
+    if state.reset_requested {
+        renderer.queue.write_buffer(
+            &state.fem_system.nodes_buffer,
+            0,
+            bytemuck::cast_slice(&state.initial_nodes),
+        );
+    }
+
+    // 1. FEM Compute — substep sayısı update'te GERÇEK dt'den hesaplandı (FPS-bağımsız).
+    for _ in 0..state.pending_substeps {
         state.fem_system.compute_pass(encoder);
     }
 

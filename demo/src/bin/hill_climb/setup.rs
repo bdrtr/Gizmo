@@ -397,6 +397,7 @@ pub(super) fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
 
     DemoState {
         car_entity: chassis,
+        phys_accum: 0.0,
         wheel_entities,
         suspension_entities,
         camera_offset: Vec3::new(0.0, 5.0, 30.0),
