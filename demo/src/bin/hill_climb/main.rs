@@ -7,6 +7,7 @@ struct PendingDecal {
 
 struct DemoState {
     car_entity: gizmo::core::Entity,
+    phys_accum: f32,
     wheel_entities: [gizmo::core::Entity; 4],
     suspension_entities: [gizmo::core::Entity; 4],
     camera_offset: Vec3,

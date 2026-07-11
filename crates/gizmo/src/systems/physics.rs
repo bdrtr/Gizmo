@@ -232,45 +232,8 @@ pub fn physics_debug_system(world: &crate::core::World) {
             }
         }
 
-        // --- Rigid Vehicle (gizmo_physics_rigid) süspansiyon ışını + temas ---
-        // car_demo bu Vehicle bileşenini kullanır (physics-dynamics VehicleController DEĞİL);
-        // 4 tekerlek ışınını, temas noktalarını ve lastik yarıçapını görünür kılar.
-        if let Some(q) = world.query::<(
-            &gizmo_physics_core::Transform,
-            &gizmo_physics_rigid::components::Vehicle,
-        )>() {
-            for (_, (trans, vehicle)) in q.iter() {
-                for wheel in &vehicle.wheels {
-                    let attach_world =
-                        trans.position + trans.rotation.mul_vec3(wheel.local_position);
-                    let ray_dir = trans.rotation.mul_vec3(wheel.direction).normalize();
-                    let ray_end =
-                        attach_world + ray_dir * (wheel.suspension_rest_length + wheel.radius);
-
-                    // Maksimum süspansiyon ışını (Sarı)
-                    gizmos.draw_line(attach_world, ray_end, [1.0, 1.0, 0.0, 1.0]);
-
-                    if wheel.is_grounded {
-                        let cp = wheel.contact_point;
-                        let r = wheel.radius;
-                        let cyan = [0.0, 1.0, 1.0, 1.0];
-
-                        // Temas noktası: lastik yarıçapı boyutlu haç
-                        gizmos.draw_line(cp - Vec3::new(r, 0.0, 0.0), cp + Vec3::new(r, 0.0, 0.0), cyan);
-                        gizmos.draw_line(cp - Vec3::new(0.0, r, 0.0), cp + Vec3::new(0.0, r, 0.0), cyan);
-                        gizmos.draw_line(cp - Vec3::new(0.0, 0.0, r), cp + Vec3::new(0.0, 0.0, r), cyan);
-
-                        // Lastik yarıçapı işareti: temas noktasında r yarım-boyutlu kutu
-                        gizmos.draw_box(cp - Vec3::new(r, r, r), cp + Vec3::new(r, r, r), cyan);
-
-                        // Temas normali (Kırmızı) + tekerlek merkezi çizgisi (Turuncu)
-                        let normal = wheel.contact_normal.normalize();
-                        gizmos.draw_line(cp, cp + normal * r, [1.0, 0.0, 0.0, 1.0]);
-                        gizmos.draw_line(attach_world, cp + normal * r, [1.0, 0.5, 0.0, 1.0]);
-                    }
-                }
-            }
-        }
+        // (Ölü rigid `Vehicle` süspansiyon debug-draw bloğu kaldırıldı — o araç sistemi silindi;
+        // kanonik dynamics `VehicleController` debug-draw'u yukarıda.)
 
         // --- Phase 6.2: Temas Normalleri ve Penetrasyon Derinliği ---
         if let Some(phys_world) = world.get_resource::<gizmo_physics_rigid::world::PhysicsWorld>() {

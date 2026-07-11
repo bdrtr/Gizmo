@@ -64,4 +64,10 @@ pub mod cloth {
 }
 
 pub use system::{physics_fracture_system, physics_explosion_system, physics_step_system};
-pub use gizmo_physics_rigid::vehicle::physics_vehicle_system;
+
+// Gameplay controller systems (Pacejka vehicle + kinematic character). These drive
+// `VehicleController` / `CharacterController` and must run *before* `physics_step_system`
+// so the rigid step integrates the forces they write into `Velocity`. Demos that step
+// physics manually (car_demo, vehicle_scene, hill_climb) call these directly.
+#[cfg(feature = "physics-dynamics")]
+pub use gizmo_physics_dynamics::{character_controller_system, vehicle_controller_system};

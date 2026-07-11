@@ -13,3 +13,4 @@ gizmo-core = { path = "../gizmo-core", version = "0.2.0" }
 gizmo-math = { path = "../gizmo-math", version = "0.2.0" }
 gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.2.0" }
 gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.2.0" }
+tracing = "0.1.44"

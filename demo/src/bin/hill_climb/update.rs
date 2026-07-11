@@ -114,8 +114,21 @@ pub(super) fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &
         }
     }
 
-    // Step physics
-    gizmo::systems::cpu_physics_step_system(world, dt);
+    // Step physics — GERÇEK sabit zaman adımı (accumulator). ESKİDEN yalnız
+    // `cpu_physics_step_system` çağrılıyordu; o VehicleController'ı SÜRMÜYOR → motor torku/
+    // süspansiyon/lastik kuvveti hiç uygulanmıyordu (araç yalnız düşüp air-torque ile dönüyordu).
+    // Artık her sabit adımda önce `vehicle_controller_system` (Pacejka + süspansiyon → Velocity)
+    // sonra fizik adımı çalışır; sabit dt titremeyi de engeller. is_grounded artık gerçek → hava
+    // kontrolü yalnızca havadayken devreye girer.
+    const FIXED_DT: f32 = 1.0 / 240.0;
+    state.phys_accum += dt.min(0.1);
+    let mut steps = 0;
+    while state.phys_accum >= FIXED_DT && steps < 32 {
+        gizmo::physics::vehicle_controller_system(world, FIXED_DT);
+        gizmo::systems::cpu_physics_step_system(world, FIXED_DT);
+        state.phys_accum -= FIXED_DT;
+        steps += 1;
+    }
 
     if state.show_physics_debug {
         gizmo::systems::physics::physics_debug_system(world);

@@ -11,6 +11,7 @@ struct VehicleState {
     camera_yaw: f32,
     camera_pos: Vec3,
     time: f32,
+    phys_accum: f32,
 
     // Vehicle
     car_entity: gizmo::core::Entity,
@@ -198,6 +199,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> VehicleState {
         camera_yaw: 0.0,
         camera_pos: Vec3::new(0.0, 8.0, 15.0),
         time: 0.0,
+        phys_accum: 0.0,
         car_entity: car_ent,
         wheel_entities,
         _wheel_local_pos: wheel_local_pos,
@@ -243,8 +245,20 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &gizmo::c
         }
     }
 
-    // CPU Physics (VehicleController içeride çalışıp kuvvetleri uygulayacak)
-    gizmo::systems::cpu_physics_step_system(world, dt);
+    // GERÇEK sabit zaman adımı (accumulator) — car_demo ile aynı desen. ESKİDEN yalnız
+    // `cpu_physics_step_system` çağrılıyordu; o VehicleController'ı SÜRMÜYOR (yalnız rigid+soft
+    // adımlar) → araç hiç hareket etmiyordu. Artık her sabit adımda önce `vehicle_controller_system`
+    // (Pacejka lastik + süspansiyon kuvvetlerini Velocity'ye yazar) sonra fizik adımı çalışır.
+    // Sabit dt ayrıca sert süspansiyonun frame-jitter'la titremesini engeller.
+    const FIXED_DT: f32 = 1.0 / 240.0;
+    state.phys_accum += dt.min(0.1);
+    let mut steps = 0;
+    while state.phys_accum >= FIXED_DT && steps < 32 {
+        gizmo::physics::vehicle_controller_system(world, FIXED_DT);
+        gizmo::systems::cpu_physics_step_system(world, FIXED_DT);
+        state.phys_accum -= FIXED_DT;
+        steps += 1;
+    }
 
     // Kasa durumunu oku
     let mut car_pos = Vec3::ZERO;

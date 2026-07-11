@@ -10,41 +10,48 @@ use gizmo::renderer::components::{Camera, DirectionalLight, Material, MeshRender
 use gizmo::egui;
 #[derive(Debug, Clone, Copy)]
 pub struct CarConfig {
+    /// → VehicleController.tuning.max_engine_torque (N·m). Slider artık gerçekten motora bağlı.
     pub engine_power: f32,
+    /// → tuning.max_brake_torque (N·m).
+    pub brake_torque: f32,
+    /// → her tekerlek Pacejka peak (d = base_grip / 8; default 8 → d = 1.0).
+    pub base_grip: f32,
+    /// Yanal kayma eşiği (m/s) — üstünde araç "drift" sayılıp skid izi bırakır.
+    pub slip_threshold: f32,
     pub steer_speed: f32,
     pub steer_auto_return: f32,
     pub steer_max_angle: f32,
-    pub steer_torque: f32,
-    pub engine_brake: f32,
-    pub base_grip: f32,
-    pub slip_threshold: f32,
-    pub drift_grip: f32,
     pub chassis_mass: f32,
     pub linear_damping: f32,
     pub angular_damping: f32,
-    pub friction: f32,
     pub gravity_y: f32,
 }
 
 impl Default for CarConfig {
     fn default() -> Self {
         Self {
-            engine_power: 800.0, // Gerçekçi güç: gearbox ×10.5 çarpanıyla ~0.5g; yüksek değer aşırı pitch (wheelie/göğe fırlama) yapar
+            engine_power: 450.0, // N·m; setup'ta artık hardcode yok, tuning her frame buradan sürülür
+            brake_torque: 1500.0,
+            base_grip: 8.0, // d = 8/8 = 1.0 (Pacejka default peak)
+            slip_threshold: 6.0,
             steer_speed: 6.0,
             steer_auto_return: 15.0,
             steer_max_angle: 1.0,
-            steer_torque: 1000.0,
-            engine_brake: 2.5,
-            base_grip: 8.0,
-            slip_threshold: 6.0,
-            drift_grip: 1.0,
             chassis_mass: 1200.0, // Standard car weight
             linear_damping: 0.1, // düşük: direnç vehicle sisteminin rolling-resistance+drag'inden gelir. 0.9 global sönüm terminal hızı ~drive/0.9 ≈ 28 km/h'ye kilitliyordu (motor gücünden bağımsız).
             angular_damping: 1.8,
-            friction: 0.8,
             gravity_y: -9.81, // Gerçek-dünya yerçekimi
         }
     }
+}
+
+/// Keşfedilebilir araç parçası (GLTF alt-mesh'i): explode ofseti ve highlight için gereken veri.
+struct CarPart {
+    id: u32,
+    name: String,
+    orig_pos: Vec3,     // parçanın orijinal yerel konumu
+    dir: Vec3,          // explode yönü (merkezden dışa); ZERO = merkezde kalır
+    orig_albedo: Vec4,  // highlight'tan geri döndürmek için
 }
 
 struct CarDemoState {
@@ -73,6 +80,16 @@ struct CarDemoState {
     show_physics_debug: bool,
     fps_smooth: f32,
     phys_accum: f32,
+    // Parça keşfi (araba parçalarını keşfetme)
+    parts: Vec<CarPart>,
+    explode: f32,
+    selected_part: Option<usize>,
+    // Son uygulanan explode/seçim — parça transform/material yazımını yalnız DEĞİŞİNCE tetiklemek için
+    // (her frame tüm parça material'ını yazmak gereksiz GPU upload'a yol açıyordu).
+    parts_applied_explode: f32,
+    parts_applied_selection: Option<usize>,
+    // Drift göstergesi için anlık yanal hız (Car Inspector'da okunur).
+    lateral_speed: f32,
 }
 
 impl CarDemoState {
@@ -103,6 +120,26 @@ impl CarDemoState {
             show_physics_debug: true,
             fps_smooth: 0.0,
             phys_accum: 0.0,
+            parts: Vec::new(),
+            explode: 0.0,
+            selected_part: None,
+            parts_applied_explode: -1.0, // sentinel: ilk frame'de bir kez uygula
+            parts_applied_selection: None,
+            lateral_speed: 0.0,
+        }
+    }
+}
+
+/// Bir entity'nin tüm alt-entity'lerini (özyinelemeli) toplar — parça keşfi için.
+fn collect_descendants(world: &World, root: u32, out: &mut Vec<u32>) {
+    let kids = world
+        .borrow::<gizmo::core::component::Children>()
+        .get(root)
+        .map(|c| c.0.clone());
+    if let Some(kids) = kids {
+        for k in kids {
+            out.push(k);
+            collect_descendants(world, k, out);
         }
     }
 }
@@ -162,6 +199,16 @@ fn main() {
                     let max_steer = state.config.steer_max_angle.max(0.01);
                     vehicle.steering_input = (state.steer_angle / max_steer).clamp(-1.0, 1.0);
 
+                    // Tuning slider'larını CANLI uygula. ESKİDEN engine_power/brake/grip slider'ları
+                    // yalnız state.config'i değiştirip araca HİÇ yansımıyordu (yanıltıcı ölü UI).
+                    vehicle.tuning.max_engine_torque = state.config.engine_power;
+                    vehicle.tuning.max_brake_torque = state.config.brake_torque;
+                    let tire_d = (state.config.base_grip / 8.0).max(0.05);
+                    for w in &mut vehicle.wheels {
+                        w.pacejka_long.d = tire_d;
+                        w.pacejka_lat.d = tire_d;
+                    }
+
                     // T: oto-vites aç/kapa
                     if input.is_key_just_pressed(gizmo::prelude::KeyCode::KeyT as u32) {
                         vehicle.auto_shift = !vehicle.auto_shift;
@@ -183,22 +230,35 @@ fn main() {
                 }
             }
             
-            // Reset Car Position and Velocity
+            // Reset Car (konum + hız + VehicleController durumu + görsel steer/spin).
+            // NOT: eskiden ayrıca phys_world.transforms/velocities'e DOĞRUDAN yazılıyordu; bu
+            // gereksiz — physics_step_system her adımda ECS'ten sync_bodies ile yeniden kurar.
             if input.is_key_just_pressed(gizmo::prelude::KeyCode::KeyR as u32) {
-                if let Some(mut phys_world) = world.get_resource_mut::<PhysicsWorld>() {
-                    if let Some(rb_idx) = phys_world.entities.iter().position(|e| e.id() == state.chassis_id) {
-                        phys_world.transforms[rb_idx] = Transform::new(Vec3::new(0.0, 1.5, 0.0));
-                        phys_world.velocities[rb_idx] = Velocity::default();
-                    }
-                }
-                let mut transforms = unsafe { world.borrow_mut_unchecked::<Transform>() }; // SAFETY: distinct component types
+                // SAFETY: Transform/Velocity/VehicleController ayrı bileşen tipleri, alias yok.
+                let mut transforms = unsafe { world.borrow_mut_unchecked::<Transform>() };
                 let mut velocities = unsafe { world.borrow_mut_unchecked::<Velocity>() };
+                let mut vehicles = unsafe {
+                    world.borrow_mut_unchecked::<gizmo::physics::vehicle::VehicleController>()
+                };
                 if let Some(mut t) = transforms.get_mut(state.chassis_id) {
                     *t = Transform::new(Vec3::new(0.0, 1.5, 0.0));
+                    t.update_local_matrix();
                 }
                 if let Some(mut v) = velocities.get_mut(state.chassis_id) {
                     *v = Velocity::default();
                 }
+                if let Some(mut vc) = vehicles.get_mut(state.chassis_id) {
+                    vc.engine_rpm = vc.tuning.idle_rpm;
+                    vc.current_gear = 2;
+                    vc.reverse_input = false;
+                    vc.current_speed_kmh = 0.0;
+                    for w in &mut vc.wheels {
+                        w.angular_velocity = 0.0;
+                        w.suspension_length = w.suspension_rest_length;
+                    }
+                }
+                state.steer_angle = 0.0;
+                state.wheel_spin = 0.0;
             }
 
             // GERÇEK Sabit Zaman Adımı (accumulator). ÖNCEDEN `step = dt.min(1/60)` idi:
@@ -211,7 +271,10 @@ fn main() {
             state.phys_accum += dt.min(0.1);
             let mut steps = 0;
             while state.phys_accum >= FIXED_DT && steps < 32 {
-                run_vehicle_controllers(world, FIXED_DT);
+                // Motorun KANONİK araç sistemi (facade'dan) — vehicle_scene/hill_climb ile aynı.
+                // Weather grip'i içeride PhysicsWorld.weather'dan türetir, kuvvetleri Velocity'ye
+                // yazar; sonraki physics_step onu entegre eder. (Eskiden demo-yerel kopya vardı.)
+                gizmo::physics::vehicle_controller_system(world, FIXED_DT);
                 gizmo::physics::physics_step_system(world, FIXED_DT);
                 state.phys_accum -= FIXED_DT;
                 steps += 1;
@@ -228,7 +291,15 @@ fn main() {
                 if let (Some(vel), Some(t)) = (vel_store.get(state.chassis_id), trans_store.get(state.chassis_id)) {
                     // VehicleController ileri yönü = -Z (tekerlek spin işareti için).
                     let forward = t.rotation * Vec3::new(0.0, 0.0, -1.0);
+                    let right = t.rotation * Vec3::new(1.0, 0.0, 0.0);
                     car_speed = vel.linear.dot(forward);
+                    // Drift tespiti: yanal (sideways) hız eşiği aşınca + araç yeterince hızlıyken.
+                    // ESKİDEN is_drifting hiçbir zaman true olmuyordu → skid izi sistemi (100 entity)
+                    // tamamen ölüydü. Artık gerçek yanal kaymadan besleniyor.
+                    let lateral = vel.linear.dot(right);
+                    state.lateral_speed = lateral;
+                    state.is_drifting =
+                        lateral.abs() > state.config.slip_threshold && car_speed.abs() > 2.0;
                 }
             }
 
@@ -264,6 +335,41 @@ fn main() {
                         t.update_local_matrix();
                     }
                 }
+            }
+
+            // ── PARÇA KEŞFİ: explode ofseti + highlight (yalnız GÖRSEL; sürüşü/fiziği etkilemez) ──
+            // Wheel-anim yalnız ROTASYON yazdı; burada POZİSYON yazıyoruz → çakışmaz. explode=0
+            // iken parçalar orijinal yerinde durur (idempotent).
+            // Yalnız explode ya da seçim DEĞİŞTİĞİNDE uygula (0.0/None'a dönüş dahil bir kez çalışır
+            // → orijinal konum/albedo geri gelir). Aksi halde her frame tüm parça material'ını
+            // yazmak Material'ı dirty işaretleyip gereksiz per-frame GPU upload'a yol açıyordu.
+            if !state.parts.is_empty()
+                && (state.explode != state.parts_applied_explode
+                    || state.selected_part != state.parts_applied_selection)
+            {
+                {
+                    let mut transforms = world.borrow_mut::<Transform>();
+                    for p in &state.parts {
+                        if let Some(mut t) = transforms.get_mut(p.id) {
+                            t.position = p.orig_pos + p.dir * state.explode;
+                            t.update_local_matrix();
+                        }
+                    }
+                }
+                {
+                    let mut materials = world.borrow_mut::<Material>();
+                    for (i, p) in state.parts.iter().enumerate() {
+                        if let Some(mut m) = materials.get_mut(p.id) {
+                            m.albedo = if Some(i) == state.selected_part {
+                                Vec4::new(1.0, 0.85, 0.15, p.orig_albedo.w) // highlight: sarı
+                            } else {
+                                p.orig_albedo
+                            };
+                        }
+                    }
+                }
+                state.parts_applied_explode = state.explode;
+                state.parts_applied_selection = state.selected_part;
             }
 
             // Hiyerarşiyi (Parent/Child) ve GlobalTransform'ları güncelle!
@@ -316,36 +422,46 @@ fn main() {
                 state.last_skid_time += dt;
             }
 
-            // Kamera: Arabayı yarış oyunu gibi takip et
+            // Kamera: sağ-tık BASILIYSA orbit (araç etrafında serbest bak — fare yaw/pitch'i
+            // update_camera'da sürer), değilse yarış-takip. ESKİDEN takip bloğu her frame
+            // yaw/pitch'i konumdan yeniden hesaplayıp fare sürüklemesini anında eziyordu →
+            // orbit işlevsizdi. Artık iki mod ayrık.
+            let orbit = input.is_mouse_button_pressed(gizmo::core::input::mouse::RIGHT);
             if let Some(t) = world.borrow::<Transform>().get(state.chassis_id) {
-                // Arabanın ileri yönü = VehicleController ile aynı: local -Z. Kamera bunun
-                // ARKASINDA (+Z tarafında) durur → gaz aracı kameradan UZAĞA sürer.
-                let forward = t.rotation * Vec3::new(0.0, 0.0, -1.0);
+                let car_pos = t.position;
+                if orbit {
+                    // Kameranın bakış yönü (yaw/pitch'ten) — kamerayı bu yönün TERSİNE, aracın
+                    // etrafına konumla ki araca baksın.
+                    let fx = state.cam_yaw.cos() * state.cam_pitch.cos();
+                    let fy = state.cam_pitch.sin();
+                    let fz = state.cam_yaw.sin() * state.cam_pitch.cos();
+                    let cam_forward = Vec3::new(fx, fy, fz).normalize();
+                    let dist = 8.0;
+                    state.cam_pos = car_pos + Vec3::new(0.0, 1.0, 0.0) - cam_forward * dist;
+                    // yaw/pitch = kameranın bakış yönü; override ETME (fare kontrolünde).
+                } else {
+                    // Arabanın ileri yönü = VehicleController ile aynı: local -Z. Kamera ARKADA durur.
+                    let forward = t.rotation * Vec3::new(0.0, 0.0, -1.0);
+                    let distance = 8.0;
+                    let height = 3.0;
+                    let target_pos = car_pos - forward * distance + Vec3::new(0.0, height, 0.0);
 
-                // Hedef pozisyon: Arabanın arkasında ve yukarısında
-                let distance = 8.0; // Biraz daha yaklaştırdık (eskiden 10.0 idi)
-                let height = 3.0;
-                let target_pos = t.position - forward * distance + Vec3::new(0.0, height, 0.0);
-                
-                // Kamerayı hedef pozisyona çok daha yumuşak ve framerate-bağımsız (sabit) götür
-                let lerp_factor = 1.0 - (-15.0 * dt).exp();
-                state.cam_pos = state.cam_pos.lerp(target_pos, lerp_factor);
-                
-                // Kameranın hedeften maksimum ne kadar uzaklaşabileceğini sınırla (lastik bant etkisi)
-                let max_lag_distance = 3.0;
-                let diff = state.cam_pos - target_pos;
-                if diff.length() > max_lag_distance {
-                    state.cam_pos = target_pos + diff.normalize() * max_lag_distance;
+                    let lerp_factor = 1.0 - (-15.0 * dt).exp();
+                    state.cam_pos = state.cam_pos.lerp(target_pos, lerp_factor);
+
+                    // Lastik-bant: hedeften max uzaklık sınırı.
+                    let max_lag_distance = 3.0;
+                    let diff = state.cam_pos - target_pos;
+                    if diff.length() > max_lag_distance {
+                        state.cam_pos = target_pos + diff.normalize() * max_lag_distance;
+                    }
+
+                    // Bakış yönünden yaw/pitch türet (takip modunda kamera araca bakar).
+                    let look_target = car_pos + Vec3::new(0.0, 1.0, 0.0);
+                    let look_dir = (look_target - state.cam_pos).normalize();
+                    state.cam_yaw = look_dir.z.atan2(look_dir.x);
+                    state.cam_pitch = look_dir.y.asin();
                 }
-
-                // Kameranın bakacağı nokta (arabanın biraz üstü)
-                let look_target = t.position + Vec3::new(0.0, 1.0, 0.0);
-                let look_dir = (look_target - state.cam_pos).normalize();
-
-                // Hedef yaw ve pitch'i hesapla
-                // atan2(y, x) -> atan2(fz, fx)
-                state.cam_yaw = look_dir.z.atan2(look_dir.x);
-                state.cam_pitch = look_dir.y.asin();
             }
 
             update_camera(world, state, input, dt);
@@ -419,6 +535,13 @@ fn main() {
                         };
                         let mode = if vehicle.auto_shift { "Auto (T ile değiştir)" } else { "Manual (Q/E)" };
                         ui.label(format!("Vites: {} | Mod: {}", gear_display, mode));
+                        ui.label(format!(
+                            "Tahrik: {:?} | Drift: {} (yanal {:.1} m/s, eşik {:.1})",
+                            vehicle.drivetrain,
+                            if state.is_drifting { "EVET" } else { "hayır" },
+                            state.lateral_speed,
+                            state.config.slip_threshold,
+                        ));
                         ui.label(format!("RPM: {:.0} | Hız: {:.1} km/h", vehicle.engine_rpm, vehicle.current_speed_kmh));
                         ui.label(format!(
                             "Gaz: {:.2} | Fren: {:.2} | Direksiyon: {:.2}",
@@ -428,17 +551,15 @@ fn main() {
                     }
 
                     ui.heading("Engine & Steering");
-                    ui.add(egui::Slider::new(&mut state.config.engine_power, 500.0..=20000.0).text("Engine Power"));
-                    ui.add(egui::Slider::new(&mut state.config.engine_brake, 0.0..=10.0).text("Engine Brake"));
+                    ui.add(egui::Slider::new(&mut state.config.engine_power, 100.0..=1500.0).text("Engine Torque (N·m)"));
+                    ui.add(egui::Slider::new(&mut state.config.brake_torque, 0.0..=3000.0).text("Brake Torque (N·m)"));
                     ui.add(egui::Slider::new(&mut state.config.steer_speed, 1.0..=20.0).text("Steer Speed"));
                     ui.add(egui::Slider::new(&mut state.config.steer_auto_return, 1.0..=30.0).text("Steer Auto Return"));
-                    ui.add(egui::Slider::new(&mut state.config.steer_torque, 500.0..=10000.0).text("Steer Torque"));
-                    
+
                     ui.separator();
-                    ui.heading("Friction & Drift");
-                    ui.add(egui::Slider::new(&mut state.config.base_grip, 1.0..=30.0).text("Base Grip (Asphalt)"));
-                    ui.add(egui::Slider::new(&mut state.config.drift_grip, 0.1..=10.0).text("Drift Grip"));
-                    ui.add(egui::Slider::new(&mut state.config.slip_threshold, 1.0..=20.0).text("Slip Threshold"));
+                    ui.heading("Tire Grip & Drift");
+                    ui.add(egui::Slider::new(&mut state.config.base_grip, 1.0..=30.0).text("Tire Grip (Pacejka peak)"));
+                    ui.add(egui::Slider::new(&mut state.config.slip_threshold, 1.0..=20.0).text("Drift Threshold (skid, m/s)"));
                     
                     ui.separator();
                     ui.separator();
@@ -543,13 +664,25 @@ fn main() {
                             if w.is_grounded { grounded_count += 1; }
                             let contact_y = w.ground_hit.as_ref().map(|h| h.point.y).unwrap_or(0.0);
                             ui.label(format!(
-                                "{}: {} | susp_uz {:>5.3} | temas Y {:>6.3}",
+                                "{}: {} | susp_uz {:>5.3} | temas Y {:>6.3} | sürt {:.2}",
                                 n,
                                 if w.is_grounded { "YERDE " } else { "HAVADA" },
                                 w.suspension_length,
                                 contact_y,
+                                w.surface_friction,
                             ));
                         }
+                        // Hava durumu grip çarpanı (aquaplaning dahil) — Track C canlı readout.
+                        let weather = match state.weather_idx {
+                            1 => gizmo::physics::world::Weather::Rain,
+                            2 => gizmo::physics::world::Weather::Snow,
+                            _ => gizmo::physics::world::Weather::Sunny,
+                        };
+                        let wg = gizmo::physics::vehicle::weather_grip_factor(
+                            weather,
+                            v.current_speed_kmh.abs() / 3.6,
+                        );
+                        ui.label(format!("Hava grip çarpanı: {:.2}  (yüzey × hava = lastik grip)", wg));
                         if let Some(w0) = v.wheels.first() {
                             let max_dist =
                                 w0.suspension_rest_length + w0.suspension_max_travel + w0.radius;
@@ -573,6 +706,32 @@ fn main() {
                         .small()
                         .italics(),
                     );
+                });
+
+            // ── 🔧 PARÇA KEŞFİ (araba parçalarını keşfetme) ──────────────────────────
+            egui::Window::new("🔧 Parça Keşfi")
+                .default_pos([320.0, 10.0])
+                .show(ctx, |ui| {
+                    ui.label("Explode ile parçaları ayır; listeden tıklayarak seç/highlight.");
+                    ui.add(
+                        egui::Slider::new(&mut state.explode, 0.0..=2.0)
+                            .text("Patlatılmış Görünüm (Explode)"),
+                    );
+                    if ui.button("Sıfırla (topla + seçimi kaldır)").clicked() {
+                        state.explode = 0.0;
+                        state.selected_part = None;
+                    }
+                    ui.separator();
+                    ui.label(format!("Parçalar: {}", state.parts.len()));
+                    egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                        for i in 0..state.parts.len() {
+                            let selected = Some(i) == state.selected_part;
+                            let name = state.parts[i].name.clone();
+                            if ui.selectable_label(selected, name).clicked() {
+                                state.selected_part = if selected { None } else { Some(i) };
+                            }
+                        }
+                    });
                 });
         })
         .set_render(|world, _state, encoder, view, renderer, _light_time| {
@@ -682,46 +841,6 @@ fn wheel_mesh_radius(world: &World, wheel_id: u32, scale_y: f32) -> f32 {
     0.3 // makul varsayılan
 }
 
-/// Demo-yerel araç sürücüsü. Artık motorda karşılığı VAR: `VehicleController`'ın fizik
-/// fonksiyonu `update_vehicle` M7.2'de `gizmo_physics_dynamics::vehicle_controller_system`
-/// olarak `Phase::Physics`'e kaydedildi (yani ÖLÜ KOD DEĞİL). Bu demo hâlâ kendi yerel
-/// kopyasını çağırıyor; sahnedeki tüm collider'ları toplayıp her araç için raycast+Pacejka+
-/// anti-roll fiziğini çalıştırır. (İleride: bu demo'yu yerel sürücü yerine motor sistemine
-/// bağla — sürüş hissi EKRAN doğrulaması gerektirdiğinden ayrı bir iş olarak ertelendi.)
-fn run_vehicle_controllers(world: &World, dt: f32) {
-    use gizmo::physics::BodyHandle;
-    // 1. Tüm collider'lar — raycast için sahiplenilmiş anlık görüntü (borrow çakışmasını önler).
-    let mut all: Vec<(BodyHandle, Transform, Collider)> = Vec::new();
-    if let Some(q) = world.query::<(&Transform, &Collider)>() {
-        for (id, (t, c)) in q.iter() {
-            all.push((BodyHandle::from_id(id), *t, c.clone()));
-        }
-    }
-    // 2. Her VehicleController'ı sür (update_vehicle rb/vel'i yerinde değiştirir; self'i dışlar).
-    // SAFETY: physics_vehicle_system ile aynı desen — disjoint bileşen erişimi (RigidBody/
-    // Velocity/VehicleController ayrı tipler), scheduler/demo tek-thread çağırır.
-    if let Some(mut q) = unsafe {
-        world.query_unchecked::<(
-            &Transform,
-            gizmo::core::query::Mut<RigidBody>,
-            gizmo::core::query::Mut<Velocity>,
-            gizmo::core::query::Mut<gizmo::physics::vehicle::VehicleController>,
-        )>()
-    } {
-        for (id, (t, mut rb, mut vel, mut vc)) in q.iter_mut() {
-            gizmo::physics::vehicle::update_vehicle(
-                BodyHandle::from_id(id),
-                &mut vc,
-                &mut rb,
-                t,
-                &mut vel,
-                &all,
-                dt,
-            );
-        }
-    }
-}
-
 fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDemoState {
     println!("Araba Demo Yükleniyor...");
 
@@ -799,13 +918,9 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
         Collider::box_collider(Vec3::new(20.0, 0.05, 20.0))
     );
 
-    phys_world.add_body(
-        gizmo::physics::BodyHandle::from_id(ground.id()),
-        ground_rb,
-        Transform::new(Vec3::ZERO),
-        Velocity::default(),
-        Collider::plane(Vec3::Y, 0.0),
-    );
+    // NOT: ground ZATEN yukarıda (1. ZEMİN) phys_world'e eklendi; buradaki ikinci ekleme
+    // yinelenen bir statik zemin planı yaratıyordu (çift temas). Kaldırıldı. Zaten
+    // physics_step_system her adımda gövdeleri ECS'ten sync_bodies ile yeniden kurar.
 
     // 2. GÜNEŞ
     let sun = world.spawn();
@@ -919,8 +1034,9 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
     ];
     for name in wheel_names {
         let (pos, radius) = derive_wheel(world, chassis_entity.id(), cs, name).unwrap_or_else(|| {
-            let x = if name.contains("Right") { -0.41 } else { 0.41 };
-            let z = if name.contains("Front") { 0.655 } else { -0.947 };
+            // VC konvansiyonu (modelin 180° Y çevirisi dahil): +X = sağ, -Z = ön.
+            let x = if name.contains("Right") { 0.41 } else { -0.41 };
+            let z = if name.contains("Front") { -0.655 } else { 0.947 };
             (Vec3::new(x, 0.2152, z), 0.282)
         });
         let axle = if name.contains("Front") {
@@ -1029,6 +1145,39 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
         state.skid_pool.push(e.id());
     }
 
+    // ── PARÇA KEŞFİ: araç GLTF'inin tüm alt-mesh'lerini (parçalarını) topla ──────────
+    // Tekerlek/gövde/panel gibi tüm çocukları enumerate et → explode & highlight için veri sakla.
+    {
+        let mut part_ids = Vec::new();
+        collect_descendants(world, state.chassis_id, &mut part_ids);
+        let names = world.borrow::<gizmo::core::EntityName>();
+        let transforms = world.borrow::<Transform>();
+        let materials = world.borrow::<Material>();
+        for (i, id) in part_ids.iter().enumerate() {
+            // Yalnız gerçekten render olan (Material'lı) parçalar.
+            let Some(mat) = materials.get(*id) else {
+                continue;
+            };
+            let orig_pos = transforms.get(*id).map(|t| t.position).unwrap_or(Vec3::ZERO);
+            let dir = if orig_pos.length() > 0.05 {
+                orig_pos.normalize()
+            } else {
+                Vec3::ZERO
+            };
+            let name = names
+                .get(*id)
+                .map(|n| n.0.clone())
+                .unwrap_or_else(|| format!("part{i}"));
+            state.parts.push(CarPart {
+                id: *id,
+                name,
+                orig_pos,
+                dir,
+                orig_albedo: mat.albedo,
+            });
+        }
+    }
+
     state
 }
 
@@ -1043,12 +1192,6 @@ fn update_camera(world: &mut World, state: &mut CarDemoState, input: &Input, _dt
         -std::f32::consts::FRAC_PI_2 + 0.1,
         std::f32::consts::FRAC_PI_2 - 0.1,
     );
-
-    let fx = state.cam_yaw.cos() * state.cam_pitch.cos();
-    let fy = state.cam_pitch.sin();
-    let fz = state.cam_yaw.sin() * state.cam_pitch.cos();
-    let _fwd = Vec3::new(fx, fy, fz).normalize();
-    let _right = _fwd.cross(Vec3::Y).normalize();
 
     // Kamera entity'sini güncelle (hem Transform, hem Camera, hem GlobalTransform)
     {
