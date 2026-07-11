@@ -524,7 +524,7 @@ pub fn execute_render_pipeline(
 
         // --- 0. COMPUTE PASSES ---
         if let Some(gpu_particles) = &renderer.gpu_particles {
-            gpu_particles.update_params(&renderer.queue, delta_time);
+            gpu_particles.update_params(&renderer.queue, delta_time, 0.0); // time (curl-noise) studio'da kullanılmıyor
 
             // --- YENİ PARTİCÜL SPAWNLAMA (CPU -> GPU) ---
             // Collect emitter entities up front through a read borrow that is dropped at the

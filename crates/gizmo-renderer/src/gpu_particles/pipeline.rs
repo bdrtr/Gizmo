@@ -4,6 +4,12 @@ pub struct ParticlePipelines {
     pub compute_pipeline: wgpu::ComputePipeline,
     pub compute_bind_group: wgpu::BindGroup,
     pub render_pipeline: wgpu::RenderPipeline,
+    /// Group 1: sahne derinlik dokusu (soft particles için FS'te örneklenir). Bind group
+    /// her frame güncel `depth_texture_view` ile oluşturulur (resize'da view değişir).
+    pub depth_bind_group_layout: wgpu::BindGroupLayout,
+    /// Group 2: flipbook/SubUV atlas dokusu + sampler (duman sprite'ları). Varsayılan 1×1
+    /// beyaz; `set_flipbook` gerçek atlas'ı yükler. `misc.z` bayrağı FS'te açar/kapatır.
+    pub flipbook_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 pub fn create_particle_pipelines(
@@ -83,9 +89,63 @@ pub fn create_particle_pipelines(
         "Particle Render Shader",
     );
 
+    // Group 1: sahne derinlik dokusu (soft particles). textureLoad ile okunur → sampler yok.
+    let depth_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("particle_depth_layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Depth,
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        }],
+    });
+
+    // Group 2: flipbook atlas dokusu (filterable) + sampler.
+    let flipbook_bind_group_layout =
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("particle_flipbook_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // binding 2: flipbook config uniform (x=tiles/kenar, y=açık 1/0)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Particle Render Pipeline Layout"),
-        bind_group_layouts: &[Some(global_bind_group_layout)],
+        bind_group_layouts: &[
+            Some(global_bind_group_layout),
+            Some(&depth_bind_group_layout),
+            Some(&flipbook_bind_group_layout),
+        ],
         immediate_size: 0,
     });
 
@@ -121,13 +181,9 @@ pub fn create_particle_pipelines(
             cull_mode: None,
             ..Default::default()
         },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: Some(false),
-            depth_compare: Some(wgpu::CompareFunction::Less),
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
+        // Depth attachment YOK: particle'lar ayrı pass'te (soft-particle derinlik örneklemesi
+        // için) çizilir; occlusion + soft-fade FS'te sahne derinliğinden manuel yapılır.
+        depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
             cache: None,
@@ -137,5 +193,7 @@ pub fn create_particle_pipelines(
         compute_pipeline,
         compute_bind_group,
         render_pipeline,
+        depth_bind_group_layout,
+        flipbook_bind_group_layout,
     }
 }

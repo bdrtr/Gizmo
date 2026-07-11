@@ -5,6 +5,7 @@ pub mod fluid;
 pub mod physics;
 #[cfg(feature = "render")]
 pub mod render;
+pub mod spin;
 pub mod streaming;
 pub mod transform;
 
@@ -15,5 +16,6 @@ pub use fluid::*;
 pub use physics::*;
 #[cfg(feature = "render")]
 pub use render::*;
+pub use spin::*;
 pub use streaming::*;
 pub use transform::*;
