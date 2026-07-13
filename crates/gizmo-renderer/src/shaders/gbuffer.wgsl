@@ -169,7 +169,13 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
     let geo_N = normalize(raw_normal);
 
     var raw_tangent = in.world_tangent.xyz;
-    if (length(raw_tangent) < 0.001) {
+    // Fall back to a synthesised tangent when the supplied one is missing OR nearly
+    // PARALLEL to the normal. Gram-Schmidt of parallel vectors is normalize(0) = NaN/garbage,
+    // which produced a per-pixel-varying TBN → normal-map streaks ONLY on the ±X cube faces,
+    // whose default vertex tangent [1,0,0] coincides with the face normal. (Front/back/top/
+    // bottom faces have a non-parallel tangent, so they were always clean.)
+    let tan_len = length(raw_tangent);
+    if (tan_len < 0.001 || abs(dot(raw_tangent / max(tan_len, 1e-8), geo_N)) > 0.999) {
         if (abs(geo_N.x) > 0.9) {
             raw_tangent = cross(vec3<f32>(0.0, 1.0, 0.0), geo_N);
         } else {
