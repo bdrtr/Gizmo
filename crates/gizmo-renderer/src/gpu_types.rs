@@ -178,7 +178,8 @@ pub struct MaterialParams {
     pub emissive_and_normal_scale: [f32; 4],
     /// x = occlusion (AO) strength; y = UV rotation (radians); zw = UV offset.
     pub occlusion_uv_rot_offset: [f32; 4],
-    /// xy = UV scale; zw reserved (0.0).
+    /// xy = UV scale; z = alpha cutoff (glTF `AlphaMode::Mask`; 0.0 = no cutout,
+    /// the g-buffer hard-`discard`s texels with `alpha < cutoff`); w reserved (0.0).
     pub uv_scale: [f32; 4],
 }
 
@@ -200,11 +201,12 @@ impl MaterialParams {
         normal_scale: f32,
         occlusion_strength: f32,
         uv: UvTransform,
+        alpha_cutoff: f32,
     ) -> Self {
         Self {
             emissive_and_normal_scale: [emissive[0], emissive[1], emissive[2], normal_scale],
             occlusion_uv_rot_offset: [occlusion_strength, uv.rotation, uv.offset[0], uv.offset[1]],
-            uv_scale: [uv.scale[0], uv.scale[1], 0.0, 0.0],
+            uv_scale: [uv.scale[0], uv.scale[1], alpha_cutoff, 0.0],
         }
     }
 }

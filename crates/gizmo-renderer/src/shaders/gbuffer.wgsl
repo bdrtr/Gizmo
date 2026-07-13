@@ -34,7 +34,7 @@ struct MaterialParams {
     emissive_and_normal_scale: vec4<f32>,
     // x = occlusion (AO) strength; y = UV rotation (radians); zw = UV offset.
     occlusion_uv_rot_offset: vec4<f32>,
-    // xy = UV scale; zw reserved.
+    // xy = UV scale; z = alpha cutoff (glTF Mask; 0 = no cutout); w reserved.
     uv_scale: vec4<f32>,
 };
 
@@ -164,7 +164,10 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
 
     let tex_color   = textureSample(t_diffuse, s_diffuse, uv);
     let final_alpha = in.inst_albedo.a * tex_color.a;
-    // if (final_alpha < 0.5) { discard; }
+    // glTF AlphaMode::Mask cutout: hard per-texel discard at alphaCutoff (uv_scale.z).
+    // cutoff == 0 → no cutout (Opaque / Blend materials), so this is a no-op for them.
+    let alpha_cutoff = material.uv_scale.z;
+    if (alpha_cutoff > 0.0 && final_alpha < alpha_cutoff) { discard; }
 
     // ── Geometric tangent basis (TBN) ─────────────────────────────────────
     var raw_normal = in.normal;
