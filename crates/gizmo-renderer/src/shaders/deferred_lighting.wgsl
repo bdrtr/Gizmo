@@ -1,10 +1,13 @@
 // Deferred lighting pass — fullscreen triangle.
 // Reads G-buffers, reconstructs surface data, computes PBR + CSM shadows → HDR output.
 //
-// SceneUniforms, LightData, the core BRDF (D_GGX/V_SmithJointGGX/F_Schlick),
-// compute_direct_lighting and inverse_mat4 are shared from common.wgsl and composed in by
-// load_shader_composed (naga_oil). Only deferred-specific code lives below.
-#import gizmo::common::{SceneUniforms, LightData, D_GGX, V_SmithJointGGX, F_Schlick, compute_direct_lighting, inverse_mat4, PI, INV_PI}
+// SceneUniforms, LightData, compute_direct_lighting and inverse_mat4 are shared from
+// common.wgsl; the anisotropic/clear-coat/env-BRDF lobes from pbr_ext.wgsl. Both are composed
+// in by load_shader_composed (naga_oil). Only binding-dependent deferred code lives below:
+// the fullscreen pass, procedural environment/IBL and PCSS shadows (they read `scene` and the
+// shadow textures, so per the common.wgsl convention they stay out of the pure modules).
+#import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting, inverse_mat4}
+#import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, compute_clear_coat}
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 
@@ -34,15 +37,6 @@ fn select_cascade(view_depth: f32) -> u32 {
     if (view_depth < scene.cascade_splits.y) { return 1u; }
     if (view_depth < scene.cascade_splits.z) { return 2u; }
     return 3u;
-}
-
-// Analytical Environment BRDF (2D LUT approximation by Lazarov)
-fn approximate_env_brdf(NdV: f32, roughness: f32) -> vec2<f32> {
-    let c0 = vec4<f32>(-1.0, -0.0275, -0.572, 0.022);
-    let c1 = vec4<f32>(1.0, 0.0425, 1.04, -0.04);
-    let r = roughness * c0 + c1;
-    let a004 = min(r.x * r.x, exp2(-9.28 * NdV)) * r.x + r.y;
-    return vec2<f32>(-1.04, 1.04) * a004 + r.zw;
 }
 
 fn get_single_preset_environment(preset: u32, dir: vec3<f32>, roughness: f32, sun_dot: f32, zenith: f32, horizon_blend: f32) -> vec3<f32> {
@@ -151,95 +145,9 @@ fn get_procedural_environment(dir: vec3<f32>, roughness: f32) -> vec3<f32> {
     return color1;
 }
 
-// inverse_mat4, D_GGX, V_SmithJointGGX, F_Schlick and compute_direct_lighting are imported
-// from gizmo::common (see the #import at the top). The anisotropic + clear-coat variants
-// below are deferred-specific and stay local.
-
-fn D_GGX_anisotropic(ToH: f32, BoH: f32, NoH: f32, roughness_t: f32, roughness_b: f32) -> f32 {
-    let at = roughness_t * roughness_t;
-    let ab = roughness_b * roughness_b;
-    let a2 = at * ab;
-    // Correct Burley/Filament anisotropic GGX: the tangent/bitangent terms divide by
-    // the per-axis alpha SQUARED (at = roughness_t^2 already), i.e. /(at*at), not /at.
-    // The old /at under-divided them, flattening the highlight's anisotropic stretch.
-    let denom = (ToH * ToH) / (at * at) + (BoH * BoH) / (ab * ab) + NoH * NoH;
-    return 1.0 / (3.1415926535 * a2 * denom * denom);
-}
-
-fn V_SmithJointGGX_anisotropic(ToV: f32, BoV: f32, NoV: f32, ToL: f32, BoL: f32, NoL: f32, roughness_t: f32, roughness_b: f32) -> f32 {
-    let at = roughness_t * roughness_t;
-    let ab = roughness_b * roughness_b;
-    let lambdaV = NoL * length(vec3<f32>(at * ToV, ab * BoV, NoV));
-    let lambdaL = NoV * length(vec3<f32>(at * ToL, ab * BoL, NoL));
-    return 0.5 / max(lambdaV + lambdaL, 0.0001);
-}
-
-fn compute_direct_lighting_anisotropic(
-    N: vec3<f32>, 
-    V: vec3<f32>, 
-    L: vec3<f32>, 
-    T: vec3<f32>,
-    B: vec3<f32>,
-    albedo: vec3<f32>, 
-    roughness: f32, 
-    metallic: f32, 
-    anisotropy: f32,
-    f0: vec3<f32>, 
-    light_color: vec3<f32>, 
-    intensity: f32, 
-    atten: f32
-) -> vec3<f32> {
-    let H = normalize(V + L);
-    let NoL = max(dot(N, L), 0.0);
-    let NoV = max(dot(N, V), 0.001);
-    let NoH = max(dot(N, H), 0.0);
-    let VoH = max(dot(V, H), 0.0);
-
-    if (NoL <= 0.0) {
-        return vec3<f32>(0.0);
-    }
-
-    // Clamp to the valid roughness range: roughness*(1+anisotropy) can exceed 1.0 for
-    // a rough, strongly-anisotropic surface, pushing the GGX alpha out of [0,1].
-    let roughness_t = clamp(roughness * (1.0 + anisotropy), 0.001, 1.0);
-    let roughness_b = clamp(roughness * (1.0 - anisotropy), 0.001, 1.0);
-
-    let ToH = dot(T, H);
-    let BoH = dot(B, H);
-    let ToV = dot(T, V);
-    let BoV = dot(B, V);
-    let ToL = dot(T, L);
-    let BoL = dot(B, L);
-
-    let D = D_GGX_anisotropic(ToH, BoH, NoH, roughness_t, roughness_b);
-    let Vis = V_SmithJointGGX_anisotropic(ToV, BoV, NoV, ToL, BoL, NoL, roughness_t, roughness_b);
-    let F = F_Schlick(VoH, f0);
-
-    let kS = F;
-    let kD = (vec3<f32>(1.0) - kS) * (1.0 - metallic);
-
-    let diffuse = kD * albedo * NoL * 0.31830988618; // Lambert: albedo / PI (energy-consistent with the 1/PI in D_GGX)
-    let specular = D * Vis * F * NoL;
-
-    return (diffuse + specular) * light_color * intensity * atten;
-}
-
-fn compute_clear_coat(
-    N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, 
-    light_color: vec3<f32>, intensity: f32, visibility: f32
-) -> vec3<f32> {
-    let H = normalize(V + L);
-    let NoH = max(dot(N, H), 0.0);
-    let VoH = max(dot(V, H), 0.0);
-    let NoL = max(dot(N, L), 0.0);
-    let NoV = max(dot(N, V), 0.001);
-
-    let D = D_GGX(NoH, 0.08); // Lacquer gloss roughness of 0.08
-    let V_term = V_SmithJointGGX(NoV, NoL, 0.08);
-    let F = 0.04 + (1.0 - 0.04) * pow(1.0 - VoH, 5.0);
-
-    return vec3<f32>(D * V_term * F) * light_color * intensity * visibility * NoL;
-}
+// The anisotropic GGX, clear-coat and env-BRDF lobes now live in gizmo::pbr_ext (imported at
+// the top). inverse_mat4 / compute_direct_lighting come from gizmo::common. Only the
+// binding-dependent PCSS shadow filter + procedural environment remain deferred-local.
 
 fn search_blockers(
     shadow_uv: vec2<f32>, receiver_depth: f32, ci: u32, texel: f32
