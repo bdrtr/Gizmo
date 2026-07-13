@@ -73,7 +73,7 @@ pub fn oxygen_system(world: &World, dt: f32) {
     if let Some(mut query) = query {
         for (_id, (mut oxy, transform, _)) in query.iter_mut() {
             let head = transform.position + Vec3::new(0.0, oxy.head_offset, 0.0);
-            let submerged = phys.as_ref().map_or(false, |pw| pw.is_submerged(head));
+            let submerged = phys.as_ref().is_some_and(|pw| pw.is_submerged(head));
             if submerged {
                 oxy.current = (oxy.current - oxy.depletion_rate * dt).max(0.0);
             } else {

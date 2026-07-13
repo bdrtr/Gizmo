@@ -186,7 +186,7 @@ impl PhysicsWorld {
                 fog_color: zone.fog_color,
                 fog_density: zone.fog_density,
             };
-            if best.map_or(true, |b| surface_y > b.surface_y) {
+            if best.is_none_or(|b| surface_y > b.surface_y) {
                 best = Some(sample);
             }
         }

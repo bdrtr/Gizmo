@@ -333,17 +333,17 @@ fn integrate_streamline(seed: Vec3, obstacles: &[[f32; 4]], phase: f32) -> Vec<V
                 let nrm = d / dist;
                 let vin = v.dot(nrm);
                 if vin < 0.0 {
-                    v = v - nrm * vin;
+                    v -= nrm * vin;
                 }
                 let push = 1.0 - dist / influence;
-                v = v + nrm * (push * 0.35);
+                v += nrm * (push * 0.35);
                 v = norm(v);
                 if dist < r {
                     pos = c + nrm * r;
                 }
             }
         }
-        pos = pos + v * STEP;
+        pos += v * STEP;
         pts.push(pos);
     }
     pts
