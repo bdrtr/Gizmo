@@ -7,6 +7,11 @@ use std::collections::HashMap;
 /// registered with the naga_oil composer so any shader can `#import gizmo::common::{...}`.
 const COMMON_WGSL: &str = include_str!("../shaders/common.wgsl");
 
+/// Deferred-specific PBR extensions (`#define_import_path gizmo::pbr_ext`): anisotropic GGX,
+/// clear-coat, and the Lazarov env-BRDF LUT. Imports `gizmo::common`, so it is registered
+/// AFTER it below.
+const PBR_EXT_WGSL: &str = include_str!("../shaders/pbr_ext.wgsl");
+
 /// Shader-defs for the NATIVE render schema: 5 bind groups with the CSM shadow group in the
 /// middle. `SHADOWS` keeps the `#ifdef SHADOWS` shadow bindings + PCF block; the group
 /// indices place skeleton at 3 and instance at 4 (see build_core_pipelines' native layout).
@@ -61,6 +66,16 @@ pub(crate) fn compose_wgsl(
             ..Default::default()
         })
         .unwrap_or_else(|e| panic!("composing common.wgsl failed: {e}"));
+    // pbr_ext imports gizmo::common, so it must be registered after common. Only shaders that
+    // `#import gizmo::pbr_ext` pull it in; registering it here is otherwise inert.
+    composer
+        .add_composable_module(ComposableModuleDescriptor {
+            source: PBR_EXT_WGSL,
+            file_path: "gizmo/pbr_ext.wgsl",
+            language: ShaderLanguage::Wgsl,
+            ..Default::default()
+        })
+        .unwrap_or_else(|e| panic!("composing pbr_ext.wgsl failed: {e}"));
 
     let module = composer
         .make_naga_module(NagaModuleDescriptor {
