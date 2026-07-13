@@ -54,15 +54,44 @@ pub struct DrawItem {
     pub(super) is_skybox: bool,
     pub(super) skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     pub(super) is_transparent: bool,
+    /// Start of this batch's CAMERA-visible instances in region A of the instance buffer.
     pub(super) first_instance: u32,
-    /// Total instances in this batch's contiguous range: camera-visible ones FIRST,
-    /// then shadow-only casters (outside the camera frustum but inside a cascade's light
-    /// frustum). Shadow passes draw the whole range; main passes draw only `camera_count`.
-    /// (Yalnız shadow geçitleri okur — web'de gölge yok, alan orada ölü.)
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    pub(super) instance_count: u32,
-    /// Number of leading instances visible to the CAMERA (== the old camera-culled set).
+    /// Number of camera-visible instances (== the old camera-culled set). Main/geometry
+    /// passes draw `first_instance .. first_instance + camera_count`.
     pub(super) camera_count: u32,
+    /// Start of this batch's SHADOW-ONLY casters in region B (all camera instances of all
+    /// batches come first, then all shadow-only casters — see `collect_draw_items`). These
+    /// are NOT contiguous with the camera range, so shadow passes draw them as a separate
+    /// range. (Yalnız shadow geçitleri okur — web'de gölge yok, alanlar orada ölü.)
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(super) shadow_first_instance: u32,
+    /// Number of shadow-only casters (region B) for this batch.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(super) shadow_count: u32,
+}
+
+impl DrawItem {
+    /// Camera-visible instance range (region A), clamped to what actually fit the GPU
+    /// instance buffer (`uploaded`). `.max(start)` keeps the range non-reversed when this
+    /// batch's region was entirely truncated (an empty range = a 0-instance no-op draw).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn camera_instance_range(&self, uploaded: u32) -> std::ops::Range<u32> {
+        self.first_instance
+            ..(self.first_instance + self.camera_count)
+                .min(uploaded)
+                .max(self.first_instance)
+    }
+
+    /// Shadow-only caster range (region B), clamped to what fit the GPU buffer. Because
+    /// region B is appended AFTER every camera instance, capacity truncation drops these
+    /// off-screen casters before it ever drops camera-visible geometry.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn shadow_instance_range(&self, uploaded: u32) -> std::ops::Range<u32> {
+        self.shadow_first_instance
+            ..(self.shadow_first_instance + self.shadow_count)
+                .min(uploaded)
+                .max(self.shadow_first_instance)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -281,18 +310,28 @@ pub(super) fn collect_draw_items(
         let mut local_instances: Vec<crate::renderer::gpu_types::InstanceRaw> = std::mem::take(&mut cache.instances);
         let mut local_draw_items: Vec<DrawItem> = std::mem::take(&mut cache.draw_items);
 
-        for batch in cache.batches.values() {
-            if batch.instances.is_empty() && batch.shadow_instances.is_empty() {
-                continue;
-            }
+        // Two-region instance layout. Region A = EVERY batch's camera-visible instances;
+        // region B (appended after A) = EVERY batch's shadow-only casters. The old layout
+        // packed each batch as [camera][shadow] contiguously, so when the total exceeded
+        // `instance_capacity` (8192) the tail truncation could drop a LATER batch's
+        // camera-visible geometry because an EARLIER batch's shadow-only casters had already
+        // eaten slots (and which mesh vanished flipped with nondeterministic HashMap order).
+        // Splitting the regions means truncation drops off-screen shadow casters first and
+        // never starves on-screen geometry. The two ranges are non-contiguous, so DrawItem
+        // carries both (first_instance/camera_count and shadow_first_instance/shadow_count)
+        // and the shadow pass draws them separately.
+        let batches: Vec<&BatchData> = cache
+            .batches
+            .values()
+            .filter(|b| !(b.instances.is_empty() && b.shadow_instances.is_empty()))
+            .collect();
+
+        // Region A — all camera-visible instances. One DrawItem per batch (shadow fields
+        // filled in the region-B pass below; the batch list order is stable between passes).
+        for batch in &batches {
             let first_instance = local_instances.len() as u32;
-            // Camera-visible instances FIRST (so `camera_count` == the old culled set),
-            // then shadow-only casters — both contiguous under one DrawItem range.
             let camera_count = batch.instances.len() as u32;
             local_instances.extend(&batch.instances);
-            local_instances.extend(&batch.shadow_instances);
-            let instance_count = camera_count + batch.shadow_instances.len() as u32;
-
             local_draw_items.push(DrawItem {
                 vbuf: batch.vbuf.clone(),
                 vertex_count: batch.vertex_count,
@@ -302,11 +341,23 @@ pub(super) fn collect_draw_items(
                 skeleton_bind_group: batch.skeleton_bind_group.clone(),
                 is_transparent: batch.is_transparent,
                 first_instance,
-                instance_count,
                 camera_count,
+                shadow_first_instance: 0,
+                shadow_count: 0,
             });
         }
-        
+
+        // Region B — all shadow-only casters, after every camera instance. Backfill each
+        // DrawItem's shadow range (draw items were pushed in the same batch order above).
+        let draw_item_base = local_draw_items.len() - batches.len();
+        for (i, batch) in batches.iter().enumerate() {
+            let shadow_first_instance = local_instances.len() as u32;
+            local_instances.extend(&batch.shadow_instances);
+            let item = &mut local_draw_items[draw_item_base + i];
+            item.shadow_first_instance = shadow_first_instance;
+            item.shadow_count = batch.shadow_instances.len() as u32;
+        }
+
         cache.instances = local_instances;
         cache.draw_items = local_draw_items;
 
