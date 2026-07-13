@@ -73,6 +73,17 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         if !loc.is_valid() {
             return None;
         }
+        // iter()/par_inner() yalnız `matching_archetypes`'i (archetype-seviyeli With/Without
+        // predicate ile kurulmuş) gezer. get/contains ise entity'nin KENDİ archetype'ını
+        // doğrudan indeksler; table-storage With/Without archetype seviyesinde kontrol edilir,
+        // filter_row DEĞİL → bu kapı olmadan get()/contains() iter()'in dışladığı entity için
+        // Some/true döner (soundness-bitişik tutarsızlık). Aynı archetype kümesine uy.
+        if !self
+            .matching_archetypes
+            .contains(&(loc.archetype_id as usize))
+        {
+            return None;
+        }
         let arch = &self.world.archetype_index.archetypes[loc.archetype_id as usize];
         unsafe {
             let fetch = Q::fetch_raw(self.world, arch, self.world.tick)?;
