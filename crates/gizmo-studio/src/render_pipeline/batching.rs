@@ -78,3 +78,79 @@ impl Default for PipelineCache {
 thread_local! {
     pub(super) static CACHE: RefCell<PipelineCache> = RefCell::new(PipelineCache::default());
 }
+
+/// Representative camera distance of an instanced batch: distance from `cam_pos` to the
+/// centroid of its instance world positions (the translation column of each
+/// `InstanceRaw::model`). Used to order transparent batches back-to-front RELATIVE TO EACH
+/// OTHER (inter-batch) — the per-instance sort inside a batch already handles intra-batch
+/// order, but batches drain from a HashMap in arbitrary order, so overlapping transparents
+/// of different materials (= different batches) blended wrongly without this. Returns 0 for
+/// an empty batch. Mirrors the game path's `batch_sort_depth`.
+pub(super) fn batch_centroid_depth(
+    instances: &[gizmo::renderer::InstanceRaw],
+    cam_pos: Vec3,
+) -> f32 {
+    if instances.is_empty() {
+        return 0.0;
+    }
+    let mut centroid = Vec3::ZERO;
+    for inst in instances {
+        centroid += Vec3::new(inst.model[3][0], inst.model[3][1], inst.model[3][2]);
+    }
+    centroid /= instances.len() as f32;
+    cam_pos.distance(centroid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::batch_centroid_depth;
+    use gizmo::renderer::InstanceRaw;
+    use gizmo::prelude::Vec3;
+
+    fn inst_at(x: f32, y: f32, z: f32) -> InstanceRaw {
+        InstanceRaw {
+            model: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [x, y, z, 1.0],
+            ],
+            albedo_color: [1.0, 1.0, 1.0, 1.0],
+            roughness: 0.5,
+            metallic: 0.0,
+            unlit: 0.0,
+            _padding: 0.0,
+        }
+    }
+
+    #[test]
+    fn centroid_depth_is_distance_to_batch_center() {
+        let cam = Vec3::new(0.0, 0.0, 0.0);
+        // Single instance 10 units down -Z → distance 10.
+        assert!((batch_centroid_depth(&[inst_at(0.0, 0.0, -10.0)], cam) - 10.0).abs() < 1e-3);
+        // Two instances at x=±3, z=-4 → centroid (0,0,-4), distance 4 (not 5).
+        let d = batch_centroid_depth(&[inst_at(3.0, 0.0, -4.0), inst_at(-3.0, 0.0, -4.0)], cam);
+        assert!((d - 4.0).abs() < 1e-3, "centroid distance wrong: {d}");
+        // Empty batch → 0.
+        assert_eq!(batch_centroid_depth(&[], cam), 0.0);
+    }
+
+    // A far batch must sort ahead of a near one (back-to-front). This is the inter-batch
+    // ordering the fix adds — instances within a batch were already sorted, but the batches
+    // themselves drained in arbitrary HashMap order.
+    #[test]
+    fn far_batch_sorts_before_near_batch() {
+        let cam = Vec3::ZERO;
+        let near = vec![inst_at(0.0, 0.0, -5.0)];
+        let far = vec![inst_at(0.0, 0.0, -50.0)];
+        let mut batches = [near, far];
+        batches.sort_by(|a, b| {
+            batch_centroid_depth(b, cam)
+                .partial_cmp(&batch_centroid_depth(a, cam))
+                .unwrap()
+        });
+        // Farthest first.
+        assert!((batch_centroid_depth(&batches[0], cam) - 50.0).abs() < 1e-3);
+        assert!((batch_centroid_depth(&batches[1], cam) - 5.0).abs() < 1e-3);
+    }
+}

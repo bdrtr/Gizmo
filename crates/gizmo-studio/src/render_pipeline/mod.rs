@@ -374,22 +374,34 @@ pub fn execute_render_pipeline(
              all_inst: &mut Vec<gizmo::renderer::InstanceRaw>,
              flat_b: &mut Vec<FlatBatchData>,
              vec_pool: &mut Vec<Vec<gizmo::renderer::InstanceRaw>>| {
-                for (_, mut batch) in batches.drain() {
-                    // Şeffaf objelerin arka plandan öne doğru sıralanması (Z-Sorting)
-                    // Instance'ın model matrisinden world pozisyonunu çekip kameraya uzaklığına göre sıralıyoruz
-                    if is_transparent {
+                // Drain the batches. Transparent batches must be ordered back-to-front
+                // RELATIVE TO EACH OTHER (inter-batch) too: they drain from a HashMap in
+                // arbitrary order, so overlapping transparents of DIFFERENT materials
+                // (= different batches) composited wrongly. Instances WITHIN a transparent
+                // batch are also sorted back-to-front (intra-batch, as before).
+                let mut drained: Vec<BatchData> = batches.drain().map(|(_, b)| b).collect();
+                if is_transparent {
+                    for batch in &mut drained {
                         batch.instances.sort_by(|a, b| {
                             let pos_a = Vec3::new(a.model[3][0], a.model[3][1], a.model[3][2]);
                             let pos_b = Vec3::new(b.model[3][0], b.model[3][1], b.model[3][2]);
-                            let dist_a = cam_pos.distance_squared(pos_a);
-                            let dist_b = cam_pos.distance_squared(pos_b);
-                            // Uzak olanlar ÖNCE çizilmeli (Azalan sıralama)
-                            dist_b
-                                .partial_cmp(&dist_a)
+                            // Uzak olanlar ÖNCE çizilmeli (Azalan sıralama).
+                            cam_pos
+                                .distance_squared(pos_b)
+                                .partial_cmp(&cam_pos.distance_squared(pos_a))
                                 .unwrap_or(std::cmp::Ordering::Equal)
                         });
                     }
+                    // Inter-batch: compute each batch's centroid depth once, farthest first.
+                    let mut keyed: Vec<(f32, BatchData)> = drained
+                        .into_iter()
+                        .map(|b| (batch_centroid_depth(&b.instances, cam_pos), b))
+                        .collect();
+                    keyed.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+                    drained = keyed.into_iter().map(|(_, b)| b).collect();
+                }
 
+                for mut batch in drained {
                     let start = all_inst.len() as u32;
                     // Camera-visible instances FIRST (main passes draw up to end_instance),
                     // then off-screen shadow casters (shadow pass draws up to shadow_end_instance).
