@@ -84,11 +84,21 @@ de-facto module (0.50) — the most tangled seam, and exactly where we burned ho
       convention keeps composable modules PURE (no binding refs). Moving them needs `scene`
       threaded through signatures (behaviour-adjacent) → its own verified step, not a pure move.
 
-### Phase 2 — asset/loaders.rs (Kind B, highest cognitive load: 192)
-- [ ] Split into `asset/gltf/{document,images,mesh,material,tangents}.rs`, `asset/texture/`,
-      `asset/procedural/`. The tangent/TBN generation (root of today's bug) becomes its own
-      testable unit.
-- Verify: build + load a glTF-using demo.
+### Phase 2 — asset/loaders.rs (Kind B, highest cognitive load: 192) ✅ `4d76c9e`
+- [x] Split the 1347-line `loaders.rs` into a `loaders/` module, one concern per file
+      (verbatim moves): `mod.rs` (public scene types + the load_gltf_scene/load_gltf_from_import
+      orchestration), `obj.rs`, `images.rs` (RGBA8/sRGB/upload + GpuImage), `material.rs`
+      (samplers + build_gltf_materials + tests), `mesh.rs` (parse_gltf_node + tangent fallback +
+      normal/skin helpers + tests), `animation.rs`, `skeleton.rs`. Cross-module helpers gained
+      `pub(super)`; public paths preserved (`asset::loaders::GltfSceneAsset`, `asset::GltfNodeData`).
+      Named `loaders/` not `asset/gltf/` because it also owns OBJ; `texture.rs`/`procedural.rs`
+      were already separate modules.
+- Verify: ✅ gizmo-renderer builds clean; 9 loaders CPU tests pass; full glTF demo chain compiles;
+      **headless load of a real `.glb`** (airbus_a310_mrtt) through the moved path → `roots=1,
+      prims=10` (mesh + material + image path exercised end-to-end).
+- Follow-up (optional, behaviour-adjacent → separate step): extract the inline per-vertex tangent
+      fallback in `parse_gltf_node` into a named, unit-tested `generate_tangent()` — the roadmap's
+      "TBN gen as its own testable unit" goal. Left out of this pure move on purpose.
 
 ### Phase 3 — Physics god files (Kind B, but TEST-BACKED → safer)
 - [ ] `vehicle.rs` (1562) → `vehicle/{wheel,suspension,drivetrain,steering,dynamics}.rs`
