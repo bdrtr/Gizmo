@@ -100,11 +100,20 @@ de-facto module (0.50) — the most tangled seam, and exactly where we burned ho
       fallback in `parse_gltf_node` into a named, unit-tested `generate_tangent()` — the roadmap's
       "TBN gen as its own testable unit" goal. Left out of this pure move on purpose.
 
-### Phase 3 — Physics god files (Kind B, but TEST-BACKED → safer)
-- [ ] `vehicle.rs` (1562) → `vehicle/{wheel,suspension,drivetrain,steering,dynamics}.rs`
-- [ ] `joints/…/joint_types.rs` (1236) → one file per joint type
-- [ ] `narrowphase.rs` (996) → per-collider-pair modules
-- Verify: `cargo test -p gizmo-physics-*` after each.
+### Phase 3 — Physics god files (Kind B, but TEST-BACKED → safer) ✅ COMPLETE
+- [x] `vehicle.rs` (1562) → `vehicle/{mod,dynamics}.rs`. Split at the type/simulation seam:
+      `mod.rs` = the data model (Pacejka/Wheel/Drivetrain/AeroPackage/VehicleTuning/
+      VehicleController), `dynamics.rs` = `update_vehicle` + steering/anti-roll/ground-effect/
+      weather helpers + `apply_force_*` + the ~585 lines of tests. `70ed7a3`; 38 tests pass.
+      (The roadmap's wheel/suspension/steering split didn't map — suspension is inside
+      `update_vehicle`, steering is one fn; the real seam is types vs. simulation.)
+- [x] `joints/solver/joint_types.rs` (1236) → `joint_types/{fixed,hinge,ball_socket,distance,
+      d6,slider,spring}.rs`, one `impl JointSolver` block per joint kind (springs grouped with
+      their base joint). `475a2b9`; 46 tests pass.
+- [x] `narrowphase.rs` (996) → `narrowphase/{mod,contacts,tests}.rs`: dispatcher + pair methods
+      in mod.rs, SAT/contact geometry helpers in contacts.rs, the 377-line suite in tests.rs.
+      `ca05bbf`; 70 tests pass.
+- Verified per file with `cargo test -p gizmo-physics-{dynamics,rigid,core}`.
 
 ### Phase 4 — Core & gameplay glue
 - [ ] `input.rs` (859) → `input/{keyboard,mouse,gamepad,mapping}.rs`
