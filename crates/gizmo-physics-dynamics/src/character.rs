@@ -18,6 +18,9 @@ pub fn update_character(
     vel: &mut Velocity,
     collider: &Collider,
     colliders: &[(BodyHandle, Transform, Collider)],
+    // Karakter bir su hacmindeyse yüzeyin dünya-Y'si (yüzme modunu tetikler); değilse None.
+    // Çağıran `PhysicsWorld::water_at(pos)` ile türetir.
+    water_surface_y: Option<f32>,
     dt: f32,
 ) {
     // Determine size from collider
@@ -65,6 +68,19 @@ pub fn update_character(
             near_colliders.push(col_data);
         }
     }
+
+    // ── SU / YÜZME ──────────────────────────────────────────
+    // Karakter bir su hacmindeyse (merkez zone içinde → water_surface_y = Some) buoyant 6DOF
+    // yüzme moduna geç: kara yerçekimi/ground-snap/step YOK; onun yerine kaldırma + su drag +
+    // 3D itiş (target_velocity Y dahil yukarı/aşağı) + duvar/teren kayması. Merkez su yüzeyini
+    // aşınca (veya zone'dan çıkınca) çağıran None geçer → kara moduna döner.
+    if let Some(surface_y) = water_surface_y {
+        kcc.is_submerged = true;
+        kcc.is_grounded = false;
+        swim_step(kcc, transform, vel, &near_colliders, height, radius, surface_y, dt);
+        return;
+    }
+    kcc.is_submerged = false;
 
     for (_col_ent, col_trans, col) in &near_colliders {
         if let Some((d, n)) = Raycast::ray_shape(&ray, &col.shape, col_trans) {
@@ -259,6 +275,83 @@ pub fn update_character(
     transform.position = current_pos;
 }
 
+/// Su-altı buoyant hareket + duvar/teren kayması (step-climb YOK). `surface_y` su yüzeyinin
+/// dünya-Y'si. Kara `update_character` yerine batıkken çağrılır.
+#[allow(clippy::too_many_arguments)]
+fn swim_step(
+    kcc: &CharacterController,
+    transform: &mut Transform,
+    vel: &mut Velocity,
+    near_colliders: &[&(BodyHandle, Transform, Collider)],
+    height: f32,
+    radius: f32,
+    surface_y: f32,
+    dt: f32,
+) {
+    // 1) Kaldırma: yalnız yüzeyin ALTINDAYKEN yukarı net ivme → yüzeyde kapanır (suda yüzersin,
+    //    havaya fırlamazsın). Drag ile terminal yükseliş hızına oturur.
+    if transform.position.y < surface_y - 0.05 {
+        vel.linear.y += kcc.buoyancy * dt;
+    }
+    // 2) Yüzme itişi: hızı istenen 3D hıza (target_velocity, Y dahil) yaklaştır — su tepkisel ama ağdalı.
+    let approach = (kcc.swim_acceleration * dt).min(1.0);
+    vel.linear += (kcc.target_velocity - vel.linear) * approach;
+    // 3) Su sürüklenmesi: runaway'i önler.
+    let drag = (1.0 - kcc.water_drag * dt).clamp(0.0, 1.0);
+    vel.linear *= drag;
+
+    // 4) Çarpışma kayması (3 iterasyon, step-climb YOK) — terenden/duvardan geçme.
+    let mut current = transform.position;
+    let mut delta = vel.linear * dt;
+    for _ in 0..3 {
+        let dist = delta.length();
+        if dist < 1e-4 {
+            break;
+        }
+        let dir = delta / dist;
+        let mut min_t = 1.0;
+        let mut closest_n = Vec3::ZERO;
+        let mut hit = false;
+        for h in [-height * 0.5 + radius, 0.0, height * 0.5 - radius] {
+            let origin = current + Vec3::new(0.0, h, 0.0);
+            let move_ray = Ray::new(origin, dir);
+            for (_e, ct, c) in near_colliders {
+                if let Some((d, n)) = Raycast::ray_shape(&move_ray, &c.shape, ct) {
+                    if d >= 0.0 {
+                        let actual_d = (d - radius).max(0.0);
+                        if actual_d < dist * min_t {
+                            min_t = actual_d / dist;
+                            closest_n = n;
+                            hit = true;
+                        }
+                    }
+                }
+            }
+        }
+        if hit {
+            current += dir * (dist * min_t).max(0.0);
+            let remaining = dist * (1.0 - min_t);
+            let slide = dir - closest_n * dir.dot(closest_n);
+            delta = slide * remaining;
+            vel.linear = vel.linear - closest_n * vel.linear.dot(closest_n);
+        } else {
+            current += delta;
+            break;
+        }
+    }
+
+    // 5) Yüzey tavanı: merkez su yüzeyini aşmasın (yüzeyde sekmeden yüzer). Suyu terk etmek için
+    //    zone'un bittiği sığ yere doğru yüz (merkez zone dışına çıkınca çağıran None geçip kara
+    //    moduna döndürür).
+    if current.y > surface_y {
+        current.y = surface_y;
+        if vel.linear.y > 0.0 {
+            vel.linear.y = 0.0;
+        }
+    }
+    transform.position = current;
+}
+
 #[cfg(test)]
 mod tests {
     use super::update_character;
@@ -311,7 +404,7 @@ mod tests {
             ..Default::default()
         };
 
-        update_character(entity, &mut kcc, &mut transform, &mut vel, &collider, &colliders, dt);
+        update_character(entity, &mut kcc, &mut transform, &mut vel, &collider, &colliders, None, dt);
 
         let advanced = transform.position.x - start.x;
         let intended = speed * dt;
@@ -360,7 +453,7 @@ mod tests {
         let dt = 1.0 / 60.0;
         // Walk into the wall for two seconds — far more than enough to reach it.
         for _ in 0..120 {
-            update_character(entity, &mut kcc, &mut transform, &mut vel, &collider, &colliders, dt);
+            update_character(entity, &mut kcc, &mut transform, &mut vel, &collider, &colliders, None, dt);
         }
 
         // The front surface (centre + radius) must not pass the wall face at x = 2.0,
@@ -408,6 +501,151 @@ mod tests {
         assert!(
             (slide_dir - old_buggy).length() > 0.1,
             "fixed slide dir must differ from the old horizontal-normal projection"
+        );
+    }
+
+    // ── SU / YÜZME (W1 + W2) ────────────────────────────────
+
+    /// W1: PhysicsWorld::water_at bir fluid zone içinde yüzey/derinlik/yoğunluk döner, dışında None.
+    #[test]
+    fn water_at_reports_surface_depth_and_density() {
+        use gizmo_physics_rigid::world::{FluidZone, PhysicsWorld, ZoneShape};
+        let mut pw = PhysicsWorld::new();
+        pw.fluid_zones.push(FluidZone {
+            shape: ZoneShape::Box {
+                min: Vec3::new(-50.0, -20.0, -50.0),
+                max: Vec3::new(50.0, 0.0, 50.0), // yüzey y=0
+            },
+            density: 1025.0, // deniz suyu
+            ..Default::default()
+        });
+        // İçeride (y=-5): batık, yüzey 0, derinlik 5.
+        let s = pw.water_at(Vec3::new(0.0, -5.0, 0.0)).expect("zone içinde → Some");
+        assert_eq!(s.surface_y, 0.0);
+        assert!((s.depth - 5.0).abs() < 1e-4);
+        assert_eq!(s.density, 1025.0);
+        // Fog Default'tan gelir (deniz mavisi-yeşili: mavi > kırmızı, yoğunluk > 0).
+        assert!(s.fog_density > 0.0);
+        assert!(s.fog_color[2] > s.fog_color[0]);
+        // Yüzey üstünde (y=5) → zone dışı → None.
+        assert!(pw.water_at(Vec3::new(0.0, 5.0, 0.0)).is_none());
+        // Yanlarda (x=100) → None.
+        assert!(!pw.is_submerged(Vec3::new(100.0, -1.0, 0.0)));
+        assert!(pw.is_submerged(Vec3::new(0.0, -1.0, 0.0)));
+    }
+
+    /// A: her FluidZone kendi su-altı sisini tanımlar; çakışan zone'larda en üst-yüzeyli seçilir
+    /// ve ONUN fog'u döner (kamera hangi su hacmindeyse onun görünümü).
+    #[test]
+    fn water_at_returns_per_zone_fog() {
+        use gizmo_physics_rigid::world::{FluidZone, PhysicsWorld, ZoneShape};
+        let mut pw = PhysicsWorld::new();
+        // Derin karanlık zone (yüzey y=-10) + üstte sığ turkuaz zone (yüzey y=0).
+        pw.fluid_zones.push(FluidZone {
+            shape: ZoneShape::Box { min: Vec3::new(-9.0, -50.0, -9.0), max: Vec3::new(9.0, -10.0, 9.0) },
+            fog_color: [0.0, 0.02, 0.05],
+            fog_density: 0.3,
+            ..Default::default()
+        });
+        pw.fluid_zones.push(FluidZone {
+            shape: ZoneShape::Box { min: Vec3::new(-9.0, -50.0, -9.0), max: Vec3::new(9.0, 0.0, 9.0) },
+            fog_color: [0.1, 0.4, 0.5],
+            fog_density: 0.05,
+            ..Default::default()
+        });
+        // Her iki zone da y=-20'yi içeriyor; en üst yüzeyli (y=0, turkuaz) kazanır.
+        let s = pw.water_at(Vec3::new(0.0, -20.0, 0.0)).expect("Some");
+        assert_eq!(s.surface_y, 0.0);
+        assert!((s.fog_density - 0.05).abs() < 1e-6, "üst zone'un fog'u dönmeli, {}", s.fog_density);
+        assert!((s.fog_color[1] - 0.4).abs() < 1e-6);
+    }
+
+    /// W2: batık karakter (girdisiz) kaldırma kuvvetiyle yüzeye doğru YÜKSELİR ve yüzeyi aşmaz.
+    #[test]
+    fn submerged_character_rises_toward_surface() {
+        let entity = BodyHandle::from_id(0);
+        let collider = box_collider(0.3, 0.9, 0.3);
+        let colliders: Vec<(BodyHandle, Transform, Collider)> = vec![]; // açık su
+        let surface_y = 0.0;
+        let start_y = -5.0;
+        let mut transform = Transform::new(Vec3::new(0.0, start_y, 0.0));
+        let mut vel = Velocity::new(Vec3::ZERO);
+        let mut kcc = CharacterController::default(); // target_velocity = 0
+        let dt = 1.0 / 60.0;
+        for _ in 0..120 {
+            update_character(entity, &mut kcc, &mut transform, &mut vel, &collider, &colliders, Some(surface_y), dt);
+        }
+        assert!(kcc.is_submerged, "batık bayrağı set olmalı");
+        assert!(
+            transform.position.y > start_y + 0.15,
+            "kaldırma karakteri yüzeye doğru yükseltmeli, {start_y} → {}",
+            transform.position.y
+        );
+        assert!(
+            transform.position.y <= surface_y + 1e-3,
+            "yüzey tavanı: merkez su yüzeyini aşmamalı, y={}",
+            transform.position.y
+        );
+    }
+
+    /// W2: batık karakter target_velocity yönünde 3B yüzer (ileri + yukarı/aşağı).
+    #[test]
+    fn submerged_character_swims_in_3d_target_direction() {
+        let entity = BodyHandle::from_id(0);
+        let collider = box_collider(0.3, 0.9, 0.3);
+        let colliders: Vec<(BodyHandle, Transform, Collider)> = vec![];
+        let surface_y = 0.0;
+        let start = Vec3::new(0.0, -10.0, 0.0);
+        let mut transform = Transform::new(start);
+        let mut vel = Velocity::new(Vec3::ZERO);
+        let mut kcc = CharacterController {
+            target_velocity: Vec3::new(3.0, 2.0, 0.0), // +X ileri, +Y yukarı yüz
+            ..Default::default()
+        };
+        let dt = 1.0 / 60.0;
+        for _ in 0..60 {
+            update_character(entity, &mut kcc, &mut transform, &mut vel, &collider, &colliders, Some(surface_y), dt);
+        }
+        assert!(
+            transform.position.x > start.x + 0.5,
+            "yatay yüzme +X ilerlemeli, Δx={}",
+            transform.position.x - start.x
+        );
+        assert!(
+            transform.position.y > start.y + 0.3,
+            "yukarı yüzme +Y yükseltmeli, Δy={}",
+            transform.position.y - start.y
+        );
+        assert!(transform.position.is_finite());
+    }
+
+    /// W2: yüzme modu terenden GEÇMEMELİ (duvar kayması step-climb'sız da çalışır).
+    #[test]
+    fn submerged_character_does_not_swim_through_wall() {
+        let entity = BodyHandle::from_id(0);
+        let collider = box_collider(0.3, 0.9, 0.3);
+        // Duvar: yakın yüzü x=2.0.
+        let wall = box_collider(0.5, 5.0, 10.0);
+        let colliders = vec![(
+            BodyHandle::from_id(1),
+            Transform::new(Vec3::new(2.5, 0.0, 0.0)),
+            wall,
+        )];
+        let surface_y = 5.0; // derin su
+        let mut transform = Transform::new(Vec3::new(1.0, 0.0, 0.0));
+        let mut vel = Velocity::new(Vec3::ZERO);
+        let mut kcc = CharacterController {
+            target_velocity: Vec3::new(4.0, 0.0, 0.0), // duvara doğru yüz
+            ..Default::default()
+        };
+        let dt = 1.0 / 60.0;
+        for _ in 0..120 {
+            update_character(entity, &mut kcc, &mut transform, &mut vel, &collider, &colliders, Some(surface_y), dt);
+        }
+        assert!(
+            transform.position.x <= 1.7 + 0.05,
+            "yüzücü duvardan geçmemeli: merkez x={} (≲1.7 beklenir)",
+            transform.position.x
         );
     }
 }

@@ -33,11 +33,21 @@ struct PostProcessParams {
     dof_blur_size: f32,
     cam_near: f32,
     cam_far: f32,
-    _padding2: f32,
+    underwater: f32,       // 0 = havada, 1 = kamera su altında
+    fog: vec4<f32>,        // rgb = su-altı sis rengi, a = yoğunluk (offset 48, 16-hizalı)
 };
 
 @group(2) @binding(0)
 var<uniform> params: PostProcessParams;
+
+// Düzgün 2B hash (Dave Hoskins). Eski film-grain `fract(sin(dot(uv,K))*M)` düz UV'de
+// sin'in ekstremumlarında donup STATİK DİAGONAL BANTLAR üretiyordu; bu, piksel
+// koordinatından düzgün beyaz-gürültü verir (yapısal bant yok).
+fn hash12(p: vec2<f32>) -> f32 {
+    var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
 
 // ============================
 // Pass 1: Bright Extract
@@ -165,13 +175,21 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // Swapchain is configured as an sRGB format (Bgra8UnormSrgb/Rgba8UnormSrgb)
     // Hardware automatically applies gamma correction upon writing.
     var final_color = mapped;
+
+    // ── Su-altı atmosferi: kamera bir su hacmindeyken derinlik-bazlı sis (Beer-Lambert) ──
+    // view_dist (lineer sahne derinliği) kullanılır; uzak geometri sis rengine gömülür → mavi-yeşil
+    // su hissi. underwater=0 iken tamamen atlanır (etkisiz).
+    if (params.underwater > 0.5) {
+        let fog_amount = clamp(1.0 - exp(-view_dist * params.fog.a), 0.0, 1.0);
+        final_color = mix(final_color, params.fog.rgb, fog_amount);
+    }
     
     // 5. Vignette
     let vignette = smoothstep(1.5, 0.3, center_dist * (1.0 + params.vignette_intensity));
     final_color *= vignette;
     
-    // 6. Film Grain
-    let noise = fract(sin(dot(in.uv, vec2<f32>(12.9898, 78.233))) * 43758.5453) - 0.5;
+    // 6. Film Grain — piksel-koordinatı tabanlı düzgün hash (statik diagonal bant yok).
+    let noise = hash12(in.position.xy) - 0.5;
     final_color += final_color * noise * params.film_grain_intensity;
     
     return vec4<f32>(final_color, 1.0);

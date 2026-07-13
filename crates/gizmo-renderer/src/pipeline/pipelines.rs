@@ -246,7 +246,12 @@ pub(super) fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs)
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
             front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
+            // FRONT-FACE CULLING: gölge haritasına yalnız ARKA yüzler yazılır. Aydınlık ön
+            // yüzün derinliği hiç saklanmadığından kendini gölgeleyemez → self-shadow acne
+            // (yalayan yüzlerdeki dikey grenli bantlar) tamamen biter. Normal-offset grazing
+            // açıda etkisizdi (offset·L → 0); solid casterlar için kanonik çözüm budur.
+            // (Katı geometri varsayar; tek-yüzlü ince mesh'ler gölge kaybedebilir.)
+            cull_mode: Some(wgpu::Face::Front),
             polygon_mode: wgpu::PolygonMode::Fill,
             ..Default::default()
         },
@@ -255,11 +260,8 @@ pub(super) fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs)
             depth_write_enabled: Some(true),
             depth_compare: Some(wgpu::CompareFunction::LessEqual),
             stencil: wgpu::StencilState::default(),
-            // Shadow-map depth bias. Kept low: an aggressive slope_scale shoves the
-            // caster deep into the shadow map and detaches its shadow from the base
-            // (peter-panning — a visible grey gap between a cube and its shadow). The
-            // shader-side normal offset + compare bias handle self-shadow acne, so
-            // this only needs a light touch. (Was 2 / 2.0 → visible gap.)
+            // Front-face culling arka yüzleri sakladığından bias çok az gerekir; peter-panning
+            // (kutu ile gölgesi arası gri boşluk) olmasın diye düşük tutuldu.
             bias: wgpu::DepthBiasState {
                 constant: 1,
                 slope_scale: 1.0,

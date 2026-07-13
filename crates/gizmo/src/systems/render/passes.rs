@@ -577,6 +577,23 @@ pub(super) fn record_forward_and_fluid(
         );
     }
 
+    // ── Volumetrik duman (T6): sahnenin üstüne HDR'ye raymarch (post-process ÖNCESİ) ──
+    if let Some(smoke) = &renderer.smoke {
+        let (time, dt) = world
+            .get_resource::<gizmo_core::time::Time>()
+            .map(|t| (t.elapsed() as f32, t.dt()))
+            .unwrap_or((0.0, 1.0 / 60.0));
+        smoke.render(
+            encoder,
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.global_bind_group,
+            &renderer.post.hdr_texture_view,
+            &renderer.depth_texture_view,
+            time,
+            dt,
+        );
+    }
 }
 
 pub(super) fn record_screen_space_effects(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer) {
@@ -658,6 +675,32 @@ pub(super) fn record_screen_space_effects(encoder: &mut wgpu::CommandEncoder, re
             pass.draw(0..3, 0..1);
         }
 
+        // Pass 1.5: SSGI Temporal Accumulation — blend the frame-varying 1-spp raymarch
+        // with reprojected history to converge the Monte-Carlo grain. Writes the current
+        // ping-pong accumulation buffer, which the blur then reads.
+        {
+            let (resolve_bg, output_view) = ssgi.current_temporal_io();
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("SSGI Temporal Resolve Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: output_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            multiview_mask: None,
+            });
+            pass.set_pipeline(&ssgi.temporal_pipeline);
+            pass.set_bind_group(0, resolve_bg, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
         // Pass 2: SSGI Blur
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -677,7 +720,7 @@ pub(super) fn record_screen_space_effects(encoder: &mut wgpu::CommandEncoder, re
             multiview_mask: None,
             });
             pass.set_pipeline(&ssgi.blur_pipeline);
-            pass.set_bind_group(0, &ssgi.blur_bind_group, &[]);
+            pass.set_bind_group(0, ssgi.current_blur_bg(), &[]);
             pass.draw(0..3, 0..1);
         }
 

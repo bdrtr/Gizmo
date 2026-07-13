@@ -46,6 +46,36 @@ struct VertexOutput {
     @location(4) inst_albedo: vec4<f32>,
 };
 
+// ── Gerstner dalga: tek dalganın pozisyon ötelemesi + analitik normal katkısı ──────
+struct WaveContrib {
+    disp: vec3<f32>,
+    nrm: vec3<f32>,
+};
+
+fn gerstner_wave(
+    dir: vec2<f32>,
+    wavelength: f32,
+    amplitude: f32,
+    steepness: f32,
+    speed: f32,
+    p0: vec2<f32>,
+    t: f32,
+) -> WaveContrib {
+    let d = normalize(dir);
+    let w = 6.28318530718 / max(wavelength, 0.001); // 2π/L (dalga sayısı)
+    let phi = speed * w;                             // faz hızı
+    let theta = w * dot(d, p0) + phi * t;
+    let c = cos(theta);
+    let s = sin(theta);
+    let wa = w * amplitude;
+    var out: WaveContrib;
+    // Yatay öteleme (steepness·A) sivri tepe/geniş vadi verir; dikey A·sin.
+    out.disp = vec3<f32>(steepness * amplitude * d.x * c, amplitude * s, steepness * amplitude * d.y * c);
+    // Analitik normal katkısı (GPU Gems Gerstner); taban (0,1,0) çağıranda eklenir.
+    out.nrm = vec3<f32>(-d.x * wa * c, -steepness * wa * s, -d.y * wa * c);
+    return out;
+}
+
 @vertex
 fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> VertexOutput {
     var out: VertexOutput;
@@ -60,19 +90,22 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
         inst.model_matrix_3,
     );
 
-    // Kendi pos'umuzu degistirelim: (Sine Wave Vertex Displacement)
+    // ── Gerstner Dalgaları (çoklu-dalga okyanus yüzeyi; sivri tepe + analitik normal) ──
+    // ESKİDEN 3 üst-üste sinüs (yalnız dikey) + kaba normal vardı. Gerstner yatay öteleme de
+    // yaparak gerçek okyanus tepe/vadi profili verir; normal analitik (ışık doğru kırılır).
     var pos = input.position;
     let time = scene.camera_pos.w;
-    
-    // Basit bir dalgalanma efekti (time ve x, z koordinatlarina bagli)
-    let wave_x = sin(pos.x * 2.0 + time * 3.0) * 0.1;
-    let wave_z = cos(pos.z * 2.0 + time * 3.5) * 0.1;
-    let wave_y = sin(pos.x * 1.5 + pos.z * 1.5 + time * 2.0) * 0.15;
-    
-    pos.y += wave_x + wave_z + wave_y;
+    let p0 = pos.xz;
 
-    // Normali de asagi yukari saptiralim ki isik kiriliyo gibi gozuksun
-    out.normal = normalize(input.normal + vec3<f32>(-wave_x * 2.0, 0.0, -wave_z * 2.0));
+    var nrm = vec3<f32>(0.0, 1.0, 0.0);
+    // dir, wavelength, amplitude, steepness, speed — büyükten küçüğe dalga hiyerarşisi.
+    let w1 = gerstner_wave(vec2<f32>( 1.0,  0.3), 12.0, 0.40, 0.50, 1.2, p0, time);
+    let w2 = gerstner_wave(vec2<f32>(-0.7,  1.0),  7.0, 0.22, 0.55, 1.6, p0, time);
+    let w3 = gerstner_wave(vec2<f32>( 0.4, -0.9),  3.5, 0.11, 0.60, 2.1, p0, time);
+    let w4 = gerstner_wave(vec2<f32>( 1.0, -0.2),  1.8, 0.05, 0.70, 2.8, p0, time);
+    pos += w1.disp + w2.disp + w3.disp + w4.disp;
+    nrm += w1.nrm + w2.nrm + w3.nrm + w4.nrm;
+    out.normal = normalize(nrm);
 
     var skin_mat = mat4x4<f32>(
         vec4<f32>(1.0, 0.0, 0.0, 0.0),
@@ -120,6 +153,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Physically-inspired water lighting: Diffuse response to sun + ambient light + shiny specular hotspot
     let ambient = vec3<f32>(0.15, 0.2, 0.25);
     let diffuse = max(dot(N, L), 0.0) * sun_col;
-    let final_color = base_color * (ambient + diffuse * 0.6) + (vec3<f32>(0.7, 0.9, 1.0) * spec * sun_col * 2.0);
-    return vec4<f32>(final_color, in.inst_albedo.a * tex_color.a * 0.85); // Transparent water
+    // Fresnel: sığ (grazing) açıda gökyüzü yansıması artar → gerçek su parlaklığı/opaklığı.
+    let fresnel = pow(1.0 - max(dot(N, view_dir), 0.0), 5.0);
+    let sky_reflect = vec3<f32>(0.45, 0.62, 0.85);
+    let water_body = base_color * (ambient + diffuse * 0.6);
+    let final_color = water_body + sky_reflect * fresnel * 0.5 + (vec3<f32>(0.7, 0.9, 1.0) * spec * sun_col * 2.0);
+    // Grazing açıda su daha yansıtıcı/opak → kenar opaklığı fresnel ile biraz artar.
+    let alpha = clamp(in.inst_albedo.a * tex_color.a * (0.7 + fresnel * 0.3), 0.0, 1.0);
+    return vec4<f32>(final_color, alpha);
 }

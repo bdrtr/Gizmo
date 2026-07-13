@@ -151,13 +151,17 @@ pub fn build_post_process_resources(
             exposure: 1.15, // ACES Tone mapping'in renkleri daha canlı sunması için pozlama artırıldı
             chromatic_aberration: 0.0, // Dövüş oyununda rahatsız edici ghosting yapmaması için kapatıldı
             vignette_intensity: 0.25,  // Köşelerde dramatik kararma (Vignette)
-            film_grain_intensity: 0.03, // Film greni (Realistic noise)
+            film_grain_intensity: 0.012, // Film greni (ince; statik hash olduğu için düşük tutuldu)
             dof_focus_dist: 15.0,
             dof_focus_range: 25.0,
             dof_blur_size: 0.0, // Disable focus depth blur to prevent thin gizmo lines from washing out
             cam_near: 0.1,
             cam_far: 2000.0,
-            _padding: 0.0,
+            underwater: 0.0,
+            fog_r: 0.0,
+            fog_g: 0.0,
+            fog_b: 0.0,
+            fog_density: 0.0,
         }]),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });

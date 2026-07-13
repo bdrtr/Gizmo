@@ -124,6 +124,13 @@ pub struct FluidZone {
     pub viscosity: f32,      // dynamic viscosity for Stokes drag
     pub linear_drag: f32,    // fallback linear drag
     pub quadratic_drag: f32, // fallback quadratic drag
+    /// Kamera bu hacimdeyken uygulanan su-altı sis rengi (lineer RGB). Böylece her su hacmi
+    /// kendi su-altı görünümünü tanımlar (sığ turkuaz vs derin lacivert). Serde-eksik → [0;3].
+    #[serde(default)]
+    pub fog_color: [f32; 3],
+    /// Su-altı sis yoğunluğu (Beer-Lambert; büyük = daha çabuk görüş kapanması). Serde-eksik → 0.
+    #[serde(default)]
+    pub fog_density: f32,
 }
 
 impl Default for FluidZone {
@@ -137,7 +144,58 @@ impl Default for FluidZone {
             viscosity: 1.0,
             linear_drag: 0.0,
             quadratic_drag: 0.0,
+            fog_color: [0.02, 0.10, 0.14], // deniz mavisi-yeşili
+            fog_density: 0.08,
         }
+    }
+}
+
+/// Bir noktadaki su örneği: onu içeren fluid zone'un yüzey yüksekliği, derinlik ve yoğunluk.
+/// Yüzme karakter kontrolcüsü ve kamera-su-altı tespiti bu ortak sorguyu kullanır.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WaterSample {
+    /// Su yüzeyinin dünya-Y'si (zone üstü).
+    pub surface_y: f32,
+    /// Noktanın yüzeyin ne kadar altında olduğu (m, ≥0).
+    pub depth: f32,
+    /// Sıvı yoğunluğu (kg/m³).
+    pub density: f32,
+    /// Bu hacmin su-altı sis rengi (kamera batıksa post-process için).
+    pub fog_color: [f32; 3],
+    /// Bu hacmin su-altı sis yoğunluğu.
+    pub fog_density: f32,
+}
+
+impl PhysicsWorld {
+    /// `p` herhangi bir fluid zone içindeyse su örneği döner (birden çok zone çakışırsa en ÜST
+    /// yüzeyli seçilir). Zone dışıysa `None`. Yüzme + kamera-batık tespiti için ortak sorgu.
+    pub fn water_at(&self, p: gizmo_math::Vec3) -> Option<WaterSample> {
+        let mut best: Option<WaterSample> = None;
+        for zone in &self.fluid_zones {
+            if !zone.shape.contains(p) {
+                continue;
+            }
+            let surface_y = match zone.shape {
+                ZoneShape::Box { max, .. } => max.y,
+                ZoneShape::Sphere { center, radius } => center.y + radius,
+            };
+            let sample = WaterSample {
+                surface_y,
+                depth: (surface_y - p.y).max(0.0),
+                density: zone.density,
+                fog_color: zone.fog_color,
+                fog_density: zone.fog_density,
+            };
+            if best.map_or(true, |b| surface_y > b.surface_y) {
+                best = Some(sample);
+            }
+        }
+        best
+    }
+
+    /// `p` bir su hacminin içinde mi (batık mı)?
+    pub fn is_submerged(&self, p: gizmo_math::Vec3) -> bool {
+        self.fluid_zones.iter().any(|z| z.shape.contains(p))
     }
 }
 

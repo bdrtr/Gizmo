@@ -147,6 +147,9 @@ pub struct AudioManager {
     active_spatial_sinks: HashMap<u64, SpatialSink>,
     active_sinks: HashMap<u64, Sink>,
     next_sink_id: u64,
+
+    // Su-altı "boğma" modu: aktifken tüm sesler kısık + hafif düşük pitch (dampening).
+    underwater: bool,
 }
 
 // SAFETY: wasm32'de (atomics/paylaşımlı-bellek OLMADAN) yürütme tek thread'dir —
@@ -212,6 +215,7 @@ impl AudioManager {
                     active_spatial_sinks: HashMap::new(),
                     active_sinks: HashMap::new(),
                     next_sink_id: 1,
+                    underwater: false,
                 })
             }
             Err(e) => {
@@ -246,6 +250,52 @@ impl AudioManager {
     /// Update çağrıldığında biten sesleri temizler
     pub fn update(&mut self) {
         self.clean_dead_sinks();
+    }
+
+    // ── Su-altı ses boğma (underwater muffle) ────────────────────────────────
+    /// Su altındayken hacim çarpanı (kısılır).
+    const UW_VOLUME_MUL: f32 = 0.4;
+    /// Su altındayken oynatma hızı = pitch (hafif düşürülür → "boğuk/uzak" his).
+    const UW_SPEED: f32 = 0.85;
+
+    /// Su-altı "boğma" modunu aç/kapa. Aktifken tüm sesler kısılır + hafif düşük pitch'e iner
+    /// (rodio `Sink` canlı alçak-geçiren filtre desteklemediğinden gerçek low-pass yerine bu
+    /// dampening kullanılır — "muffled" hissi verir). İDEMPOTENT: yalnız durum DEĞİŞİNCE uygular,
+    /// bu yüzden her frame güvenle çağrılabilir. NOT: hacim çarpanla geri alındığından, su
+    /// altındayken oyun tarafı `set_volume` çağırırsa yüzeye çıkışta hafif sapma olabilir
+    /// (sürekli ambient sesler için sorun değil).
+    pub fn set_underwater(&mut self, on: bool) {
+        if on == self.underwater {
+            return;
+        }
+        self.underwater = on;
+        let (vol_mul, speed) = if on {
+            (Self::UW_VOLUME_MUL, Self::UW_SPEED)
+        } else {
+            (1.0 / Self::UW_VOLUME_MUL, 1.0)
+        };
+        for sink in self.active_sinks.values() {
+            sink.set_volume(sink.volume() * vol_mul);
+            sink.set_speed(speed);
+        }
+        for sink in self.active_spatial_sinks.values() {
+            sink.set_volume(sink.volume() * vol_mul);
+            sink.set_speed(speed);
+        }
+    }
+
+    /// Su-altı boğma modu şu an aktif mi.
+    #[inline]
+    pub fn is_underwater(&self) -> bool {
+        self.underwater
+    }
+
+    /// Yeni oluşturulan bir normal `Sink`'e, o an su altındaysak boğmayı uygular.
+    fn apply_underwater_to(sink: &Sink, underwater: bool) {
+        if underwater {
+            sink.set_volume(sink.volume() * Self::UW_VOLUME_MUL);
+            sink.set_speed(Self::UW_SPEED);
+        }
     }
 
     /// Normal (Global/Stereo) bir ses oynatır (tek seferlik)
@@ -286,6 +336,8 @@ impl AudioManager {
         let id = self.next_sink_id;
         self.next_sink_id = self.next_sink_id.wrapping_add(1);
 
+        // Su altındayken başlayan ses de boğuk gelsin.
+        Self::apply_underwater_to(&sink, self.underwater);
         self.active_sinks.insert(id, sink);
         Ok(id)
     }
@@ -349,6 +401,10 @@ impl AudioManager {
         let id = self.next_sink_id;
         self.next_sink_id = self.next_sink_id.wrapping_add(1);
 
+        if self.underwater {
+            sink.set_volume(sink.volume() * Self::UW_VOLUME_MUL);
+            sink.set_speed(Self::UW_SPEED);
+        }
         self.active_spatial_sinks.insert(id, sink);
         Ok(id)
     }

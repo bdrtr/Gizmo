@@ -451,7 +451,7 @@ impl SimpleAppExt for App<SimpleSceneState> {
             renderer.gpu_particles = None;
             renderer.ssr = None; // Arkadaki istenmeyen yansımaları (Screen Space Reflections) kapatır
             renderer.ssgi = None; // SSGI kapatır
-            
+
             systems::default_render_pass(world, encoder, view, renderer);
         })
     }

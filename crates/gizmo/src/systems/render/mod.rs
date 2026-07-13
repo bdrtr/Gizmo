@@ -249,6 +249,19 @@ pub fn default_render_pass(
     // post composite over the entire HDR. (Previously the deferred pass baked cam.exposure
     // into geometry AND post multiplied by a separate 1.15, which compounded and skipped
     // sky/unlit; folding both into one post-stage exposure fixes that.)
+    // ── Su-altı atmosferi: kamera bir fluid zone içindeyse derinlik-bazlı sis uygula (W3+W4).
+    // W1 `water_at` sorgusu tekrar kullanılır (aynı su hacimleri hem buoyancy hem yüzme hem bu
+    // sisi sürer). Sis rengi/yoğunluğu deniz için makul sabitler — demolarda tunable yapılabilir.
+    // Sis rengi/yoğunluğu artık kameranın içinde bulunduğu FluidZone'dan gelir (her su hacmi
+    // kendi su-altı görünümünü tanımlar) — eskiden burada sabitti.
+    let water_sample = world
+        .get_resource::<crate::physics::world::PhysicsWorld>()
+        .and_then(|pw| pw.water_at(cam_pos));
+    let (uw, fog_r, fog_g, fog_b, fog_density) = match water_sample {
+        Some(s) => (1.0, s.fog_color[0], s.fog_color[1], s.fog_color[2], s.fog_density),
+        None => (0.0, 0.0, 0.0, 0.0, 0.0),
+    };
+
     renderer.update_post_process(
         &renderer.queue,
         crate::renderer::gpu_types::PostProcessUniforms {
@@ -263,7 +276,11 @@ pub fn default_render_pass(
             dof_blur_size: if renderer.dof_enabled { renderer.dof_blur_size } else { 0.0 },
             cam_near,
             cam_far,
-            _padding: 0.0,
+            underwater: uw,
+            fog_r,
+            fog_g,
+            fog_b,
+            fog_density,
         },
     );
 
@@ -402,6 +419,15 @@ pub fn default_render_pass(
             taa.update_params(&renderer.queue, [jx, jy], alpha);
             taa.store_prev_vp(unjittered_view_proj.to_cols_array_2d());
         }
+    }
+
+    // Upload SSGI temporal-accumulation params (mirrors TAA: previous-frame unjittered
+    // view-proj for reprojection + blend alpha). alpha=1.0 on the first frame / after a
+    // reset so there is no stale history to reproject. Denoises the 1-spp raymarch grain.
+    if let Some(ref mut ssgi) = renderer.ssgi {
+        let alpha = if ssgi.frame_index == 0 { 1.0f32 } else { 0.1f32 };
+        ssgi.update_params(&renderer.queue, alpha);
+        ssgi.store_prev_vp(unjittered_view_proj.to_cols_array_2d());
     }
 
     // ... inside default_render_pass ...
@@ -737,6 +763,10 @@ pub fn default_render_pass(
         encoder, renderer, world, &draw_items, uploaded_instances, particle_lod, fluid_lod,
     );
     passes::record_screen_space_effects(encoder, renderer);
+    // Advance SSGI temporal ping-pong / frame counter after its passes have run.
+    if let Some(ref mut ssgi) = renderer.ssgi {
+        ssgi.advance_frame();
+    }
     passes::record_taa_and_overlays(encoder, renderer, world);
 
     renderer.run_post_processing(encoder, view);

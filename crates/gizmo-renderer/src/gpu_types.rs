@@ -99,7 +99,15 @@ pub struct PostProcessUniforms {
     // instead of hardcoded 0.1/1000 (miscalibrated CoC for any other far plane).
     pub cam_near: f32,
     pub cam_far: f32,
-    pub _padding: f32,
+    // ── Su-altı atmosferi (kamera bir fluid zone içindeyken) ──
+    /// 0 = kamera havada (etki yok), 1 = kamera su altında → derinlik-bazlı sis uygulanır.
+    pub underwater: f32,
+    /// Su-altı sis rengi (deniz mavisi-yeşili) + yoğunluk. WGSL'de tek `fog: vec4` (rgb+a=density)
+    /// olarak hizalanır (offset 48, 16-bayt hizalı).
+    pub fog_r: f32,
+    pub fog_g: f32,
+    pub fog_b: f32,
+    pub fog_density: f32,
 }
 
 /// Uniform block for the shadow pass vertex shader only (one cascade matrix per draw).

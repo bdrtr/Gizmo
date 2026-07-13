@@ -114,6 +114,8 @@ pub struct Renderer {
 
     // === GPU SIVI SİSTEMİ ===
     pub gpu_fluid: Option<crate::gpu_fluid::GpuFluidSystem>,
+    /// Volumetrik duman (T6, raymarch). Default None; demo `Some(SmokeVolume::new(..))` verir.
+    pub smoke: Option<crate::gpu_smoke::SmokeVolume>,
 
     // === DEFERRED RENDERING — G-Buffer + Lighting pass ===
     pub deferred: Option<crate::deferred::DeferredState>,
@@ -393,7 +395,7 @@ mod tests {
         // Extremely critical alignment checks to prevent runtime pipeline crashes on GPU
         assert_eq!(std::mem::size_of::<crate::gpu_types::SceneUniforms>(), 1104, "SceneUniforms size shifted from target 1104 bytes!");
         assert_eq!(std::mem::size_of::<crate::gpu_types::LightData>(), 64, "LightData size shifted from target 64 bytes!");
-        assert_eq!(std::mem::size_of::<crate::gpu_types::PostProcessUniforms>(), 48, "PostProcessUniforms size shifted from target 48 bytes!");
+        assert_eq!(std::mem::size_of::<crate::gpu_types::PostProcessUniforms>(), 64, "PostProcessUniforms size shifted from target 64 bytes (underwater+fog eklendi)!");
         assert_eq!(std::mem::size_of::<crate::gpu_types::InstanceRaw>(), 96, "InstanceRaw size shifted from target 96 bytes!");
         // Textured-PBR per-material params: three std140 vec4 slots.
         assert_eq!(std::mem::size_of::<crate::gpu_types::MaterialParams>(), 48, "MaterialParams size shifted from target 48 bytes!");

@@ -550,6 +550,7 @@ impl Renderer {
             gpu_particles,
             gpu_physics,
             gpu_fluid,
+            smoke: None,
             debug_renderer,
             asset_manager: std::sync::RwLock::new(crate::asset::AssetManager::new()),
             web_profile: crate::web_profile::WebProfile::auto(),
@@ -578,7 +579,7 @@ impl Renderer {
             // the sky) got out-of-place red/blue fringes. Opt-in artistic effect,
             // like DoF — scenes that want the cinematic look set it themselves.
             chromatic_aberration: 0.0,
-            film_grain_intensity: 0.03, // Photographic film grain
+            film_grain_intensity: 0.012, // Photographic film grain — ince (statik olduğu için düşük; yüksekte düz yüzeylerde sabit gürültü kaplaması görünür)
             point_shadows_enabled: false,
             // The 100k-particle fluid system above is allocated but idle: its SSFR
             // water surface only composites when a scene opts in. Otherwise every

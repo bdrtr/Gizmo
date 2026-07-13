@@ -21,12 +21,14 @@
 //! frame and feeding it in.
 
 pub mod character;
+pub mod oxygen;
 pub mod ragdoll;
 pub mod systems;
 pub mod vehicle;
 
 // Re-export common traits and structs
 pub use character::*;
+pub use oxygen::*;
 pub use ragdoll::*;
 pub use systems::*;
 pub use vehicle::*;

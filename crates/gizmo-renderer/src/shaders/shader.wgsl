@@ -166,7 +166,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let view_depth = dot(in.world_position - scene.camera_pos.xyz, scene.camera_forward.xyz);
         let ci = select_cascade(view_depth);
         let light_vp = scene.light_view_proj[ci];
-        let light_clip = light_vp * vec4<f32>(in.world_position, 1.0);
+        // Normal-offset (cascade texel'ine orantılı) — deferred ile aynı. Asıl acne çözümü
+        // gölge-pass front-face culling; burası silüet/temas için ufak offset.
+        let sx = length(vec3<f32>(light_vp[0][0], light_vp[1][0], light_vp[2][0]));
+        let world_texel = 2.0 * scene.cascade_params.y / max(sx, 1e-6);
+        let offset_pos = in.world_position + N * world_texel * 2.0;
+        let light_clip = light_vp * vec4<f32>(offset_pos, 1.0);
         let light_ndc = light_clip.xyz / light_clip.w;
         let shadow_uv = vec2<f32>(
             light_ndc.x * 0.5 + 0.5,
@@ -175,7 +180,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 && light_ndc.z <= 1.0) {
             let L_dir = normalize(-scene.sun_direction.xyz);
             let slope = 1.0 - max(dot(N, L_dir), 0.0);
-            let bias = max(0.005 * slope, 0.001);
+            let bias = max(0.0004 * slope, 0.00004);
             var pcf_visibility = 0.0;
             let texel_size = scene.cascade_params.y;
             for (var x = -1; x <= 1; x++) {

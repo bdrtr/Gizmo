@@ -88,6 +88,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
             viscosity: 1.0,
             linear_drag: 5.0,
             quadratic_drag: 1.0,
+            ..Default::default()
         });
 
     phys_world.enable_gpu_compute();
