@@ -135,14 +135,25 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (vel.z > 0.0 && is_solid_world(world + vec3<f32>(0.0, 0.0, cs.z), n)) { vel.z = 0.0; }
     if (vel.z < 0.0 && is_solid_world(world - vec3<f32>(0.0, 0.0, cs.z), n)) { vel.z = 0.0; }
 
-    // Semi-Lagrangian: geriye izle, eski yoğunluğu örnekle, dissipation uygula. Backtrace bir
-    // solid'e düşerse duvardan ÇEKME yok (tünelleme engellenir) → duman duvarın diğer tarafına
-    // sızmaz.
+    // Semi-Lagrangian backtrace, MARCHED as a segment (not only the endpoint) so density cannot
+    // tunnel through a thin / fast-crossed wall, nor slip a diagonal corner: step from `world`
+    // (guaranteed open — solids returned above) toward `back`, stop at the last OPEN sample
+    // before the first solid, and pull from there. Endpoint-only checks miss walls thinner than
+    // |vel*dt| and corner seams; marching the whole segment seals both.
     let back = world - vel * dt;
-    var d = 0.0;
-    if (!is_solid_world(back, n)) {
-        d = sample_grid(back, n) * P.source.w;
+    let seg = back - world;
+    let cell_min = min(cs.x, min(cs.y, cs.z));
+    // ~2 samples per traversed cell (≥1, capped so a pathological velocity can't blow up the loop).
+    let msteps = clamp(i32(ceil(length(seg) / (0.5 * cell_min))), 1, 16);
+    var sample_pos = world;
+    for (var s = 1; s <= msteps; s = s + 1) {
+        let p = world + seg * (f32(s) / f32(msteps));
+        if (is_solid_world(p, n)) {
+            break;
+        }
+        sample_pos = p;
     }
+    var d = sample_grid(sample_pos, n) * P.source.w;
 
     // Kaynaktan enjeksiyon (yumuşak küre).
     let sdist = length(world - P.source.xyz);
