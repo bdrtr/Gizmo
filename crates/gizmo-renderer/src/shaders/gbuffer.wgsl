@@ -125,8 +125,11 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     let normal_mat     = inverse_transpose_3x3(mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz));
     out.normal = normal_mat * skinned_normal;
 
+    // Tangent bir yüzey YÖNÜdür → düz model 3x3 ile taşınır, inverse-transpose DEĞİL
+    // (yorum satır 120-122). skin yarısı (skin_mat) zaten düz; model yarısı da düz olmalı.
     let skinned_tangent = skin_mat * vec4<f32>(input.tangent.xyz, 0.0);
-    out.world_tangent = vec4<f32>(normal_mat * skinned_tangent.xyz, input.tangent.w);
+    let model_mat3 = mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz);
+    out.world_tangent = vec4<f32>(model_mat3 * skinned_tangent.xyz, input.tangent.w);
 
     out.inst_albedo = inst.albedo_color;
     out.inst_pbr    = inst.pbr;
