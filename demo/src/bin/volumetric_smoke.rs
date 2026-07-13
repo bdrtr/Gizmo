@@ -1,7 +1,8 @@
-//! Volumetrik duman demosu (T6) — GERÇEK katılımcı-ortam raymarch (billboard DEĞİL).
-//! Motorun yeni `SmokeVolume`'u sınırlı bir kutu içinde animasyonlu 3B fBm yoğunluğunu ışın
-//! boyunca yürütür (Beer-Lambert + güneş saçılımı + sahne-derinliği occlusion) ve HDR'ye
-//! kompozit eder. Çalıştır: `cargo run -p demo --bin volumetric_smoke`
+//! Volumetrik duman demosu (T6 + CS2-conform) — GERÇEK katılımcı-ortam raymarch (billboard
+//! DEĞİL). Motorun `SmokeVolume`'u 3B yoğunluk grid'ini advekte eder + ışın boyunca yürütür
+//! (Beer-Lambert + güneş saçılımı + sahne-derinliği occlusion) ve HDR'ye kompozit eder.
+//! CS2-tarzı: duman kaynaktan DIŞA doğru dolar (fill) ve merkezdeki direği DELMEYİP etrafını
+//! sarar (obstacle field). Çalıştır: `cargo run -p demo --bin volumetric_smoke`
 
 use gizmo::app::App;
 use gizmo::core::world::World;
@@ -16,6 +17,12 @@ use gizmo::renderer::gpu_smoke::SmokeVolume;
 struct S {
     cam_id: u32,
 }
+
+// Merkezdeki direğin dünya-uzayı AABB'si. Duman bu hacmi DELMEZ (obstacle field) —
+// hem görünür mesh hem SmokeVolume::set_obstacle_boxes AYNI kutuyu kullanır ki duman
+// tam görünen geometriye conform olsun.
+const PILLAR_MIN: [f32; 3] = [0.45, 0.0, -0.25];
+const PILLAR_MAX: [f32; 3] = [0.95, 3.2, 0.25];
 
 fn main() {
     gizmo::app::setup_panic_hook();
@@ -38,15 +45,21 @@ fn main() {
                 sm.source = [0.0, 0.5, 0.0]; // taban yakınında kaynak
                 sm.source_radius = 0.7;
                 sm.inject = 5.0; // enjeksiyon hızı
-                sm.dissipation = 0.99; // frame başına yoğunluk çarpanı (dağılma) — yüksek→plume yükselir
-                sm.buoyancy = 1.3; // yukarı sürükleme
-                sm.curl_strength = 1.8; // kıvrılma
+                sm.dissipation = 0.99; // frame başına yoğunluk çarpanı (dağılma)
+                sm.buoyancy = 0.55; // düşük yükselme → yükselmek yerine hacmi DOLDURUR
+                sm.curl_strength = 1.6; // kıvrılma
                 sm.curl_scale = 0.7;
                 sm.absorption = 2.6;
                 sm.density_scale = 1.5;
                 sm.steps = 64;
                 sm.color = [0.95, 0.96, 1.0];
                 sm.ambient = 0.4;
+                // CS2-tarzı: kaynaktan DIŞA doğru dolar (fill), sınırlı yarıçapta durur.
+                sm.fill_strength = 2.0;
+                sm.fill_radius = 2.4;
+                // ENGELE-CONFORM: merkezdeki direği DELMEZ, etrafını sarar. Obstacle AABB'si
+                // sahnedeki direk mesh'iyle BİREBİR aynı (bkz. setup: PILLAR_MIN/MAX).
+                sm.set_obstacle_boxes(&renderer.queue, &[(PILLAR_MIN, PILLAR_MAX)]);
                 renderer.smoke = Some(sm);
             }
             renderer.environment_preset = 1;
@@ -84,19 +97,30 @@ fn setup(world: &mut World, renderer: &gizmo::renderer::Renderer) -> S {
         );
         world.add_component(e, MeshRenderer::new());
     }
-    // Occlusion için bir kutu (duman arkasına girsin/önünde kalsın gösterimi)
+    // Merkezdeki DİREK — duman bunu delmeyip etrafını saracak (engele-conform gösterimi).
+    // Transform, PILLAR_MIN/MAX ile birebir: birim küp (-0.5..0.5) → merkez=(min+max)/2,
+    // ölçek=(max-min).
     {
         let mesh = AssetManager::create_cube(&renderer.device);
         let e = world.spawn();
-        let mut t = Transform::new(Vec3::new(1.4, 0.7, 0.8));
-        t.scale = Vec3::new(1.0, 1.4, 1.0);
+        let center = Vec3::new(
+            (PILLAR_MIN[0] + PILLAR_MAX[0]) * 0.5,
+            (PILLAR_MIN[1] + PILLAR_MAX[1]) * 0.5,
+            (PILLAR_MIN[2] + PILLAR_MAX[2]) * 0.5,
+        );
+        let mut t = Transform::new(center);
+        t.scale = Vec3::new(
+            PILLAR_MAX[0] - PILLAR_MIN[0],
+            PILLAR_MAX[1] - PILLAR_MIN[1],
+            PILLAR_MAX[2] - PILLAR_MIN[2],
+        );
         t.update_local_matrix();
         world.add_component(e, t);
         world.add_component(e, GlobalTransform { matrix: t.local_matrix });
         world.add_component(e, mesh);
         world.add_component(
             e,
-            Material::new(white.clone()).with_pbr(Vec4::new(0.55, 0.2, 0.2, 1.0), 0.4, 0.1),
+            Material::new(white.clone()).with_pbr(Vec4::new(0.5, 0.5, 0.55, 1.0), 0.5, 0.1),
         );
         world.add_component(e, MeshRenderer::new());
     }

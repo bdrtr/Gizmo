@@ -24,8 +24,10 @@ struct SmokeParams {
 pub struct SmokeVolume {
     grid_n: u32,
     // Bind grup'lar buffer'ları canlı tutar; alan sadece sahiplik/ömür içindir.
-    #[allow(dead_code)]
     density: [wgpu::Buffer; 2],
+    // Obstacle solidity field; kept alive by the compute bind groups (populated via
+    // `set_obstacle_boxes`). The field itself is only used for ownership/lifetime + upload.
+    obstacle: wgpu::Buffer,
     params_buffer: wgpu::Buffer,
 
     compute_pipeline: wgpu::ComputePipeline,
@@ -53,6 +55,11 @@ pub struct SmokeVolume {
     pub buoyancy: f32,
     pub curl_strength: f32,
     pub curl_scale: f32,
+    /// CS2-style bounded radial fill: smoke is pushed OUTWARD from the source so it fills a
+    /// volume (rather than only rising), stopping past `fill_radius`. 0 = off (pure plume).
+    pub fill_strength: f32,
+    /// Radius the radial fill expands to before the outward push fades to zero (world units).
+    pub fill_radius: f32,
 }
 
 impl SmokeVolume {
@@ -68,10 +75,24 @@ impl SmokeVolume {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(&zero),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                // COPY_SRC so a step's density can be read back (headless tests / debug).
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
             })
         };
         let density = [mk_density("smoke_density_0"), mk_density("smoke_density_1")];
+
+        // Obstacle voxel field (per-cell solidity: 0 = open air, 1 = inside solid geometry).
+        // The advect shader forces solid cells to zero density, blocks velocity from pushing
+        // smoke into solids, and refuses to advect density THROUGH a solid — so the smoke
+        // conforms to and flows around walls/pillars (the CS2-style filling behaviour).
+        // Populated on the CPU from AABBs via `set_obstacle_boxes`; all-zero = no obstacles.
+        let obstacle = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("smoke_obstacle"),
+            contents: bytemuck::cast_slice(&zero),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
 
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("smoke_params"),
@@ -121,6 +142,17 @@ impl SmokeVolume {
                     },
                     count: None,
                 },
+                // binding 3: obstacle solidity field (read-only).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let mk_compute_bg = |src: &wgpu::Buffer, dst: &wgpu::Buffer, label: &str| {
@@ -131,6 +163,7 @@ impl SmokeVolume {
                     wgpu::BindGroupEntry { binding: 0, resource: params_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 1, resource: src.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 2, resource: dst.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: obstacle.as_entire_binding() },
                 ],
             })
         };
@@ -273,6 +306,7 @@ impl SmokeVolume {
         Self {
             grid_n,
             density,
+            obstacle,
             params_buffer,
             compute_pipeline,
             compute_bg,
@@ -295,18 +329,105 @@ impl SmokeVolume {
             buoyancy: 1.2,
             curl_strength: 1.6,
             curl_scale: 0.7,
+            fill_strength: 0.0,
+            fill_radius: 1.5,
         }
+    }
+
+    /// Grid resolution N (the volume is N×N×N cells).
+    pub fn grid_n(&self) -> u32 {
+        self.grid_n
+    }
+
+    /// The density buffer holding the most recent simulation step (for readback / debugging).
+    pub fn density_buffer(&self) -> &wgpu::Buffer {
+        &self.density[self.parity.load(Ordering::Relaxed) as usize]
+    }
+
+    /// Voxelize a set of world-space AABBs (`(min, max)`) into the obstacle solidity field:
+    /// a cell is solid if its centre lies inside any box. Smoke then conforms to and flows
+    /// around these — pass the room's floor/walls/pillars (or collider AABBs). An empty slice
+    /// clears all obstacles. Cheap CPU voxelization at N³ (64³ ≈ 262k cells) — call when the
+    /// static geometry changes, not every frame.
+    pub fn set_obstacle_boxes(&self, queue: &wgpu::Queue, boxes: &[([f32; 3], [f32; 3])]) {
+        let n = self.grid_n as usize;
+        let mut solid = vec![0.0f32; n * n * n];
+        let bmin = self.bounds_min;
+        let bmax = self.bounds_max;
+        let cs = [
+            (bmax[0] - bmin[0]) / n as f32,
+            (bmax[1] - bmin[1]) / n as f32,
+            (bmax[2] - bmin[2]) / n as f32,
+        ];
+        for k in 0..n {
+            for j in 0..n {
+                for i in 0..n {
+                    let c = [
+                        bmin[0] + (i as f32 + 0.5) * cs[0],
+                        bmin[1] + (j as f32 + 0.5) * cs[1],
+                        bmin[2] + (k as f32 + 0.5) * cs[2],
+                    ];
+                    for (mn, mx) in boxes {
+                        if c[0] >= mn[0]
+                            && c[0] <= mx[0]
+                            && c[1] >= mn[1]
+                            && c[1] <= mx[1]
+                            && c[2] >= mn[2]
+                            && c[2] <= mx[2]
+                        {
+                            solid[(k * n + j) * n + i] = 1.0;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        queue.write_buffer(&self.obstacle, 0, bytemuck::cast_slice(&solid));
+    }
+
+    /// Record the advection compute pass onto `encoder` and flip the ping-pong parity.
+    /// Returns the buffer index now holding the freshest density.
+    fn record_advect(&self, encoder: &mut wgpu::CommandEncoder) -> usize {
+        let cur = self.parity.load(Ordering::Relaxed) as usize;
+        {
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Smoke Advect"),
+                timestamp_writes: None,
+            });
+            cpass.set_pipeline(&self.compute_pipeline);
+            cpass.set_bind_group(0, &self.compute_bg[cur], &[]);
+            let wg = self.grid_n.div_ceil(4);
+            cpass.dispatch_workgroups(wg, wg, wg);
+        }
+        let new_cur = 1 - cur;
+        self.parity.store(new_cur as u32, Ordering::Relaxed);
+        new_cur
+    }
+
+    /// Run ONE simulation step (advect compute only, no rendering) on its own submission.
+    /// Useful headless — e.g. to warm up the volume or to verify behaviour in tests. Returns
+    /// the buffer index now holding the freshest density.
+    pub fn step(&self, device: &wgpu::Device, queue: &wgpu::Queue, time: f32, dt: f32) -> usize {
+        let sim_dt = dt.clamp(1.0 / 240.0, 1.0 / 30.0);
+        self.write_params(queue, time, sim_dt);
+        let mut enc =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Smoke Step") });
+        let new_cur = self.record_advect(&mut enc);
+        queue.submit(Some(enc.finish()));
+        new_cur
     }
 
     fn write_params(&self, queue: &wgpu::Queue, time: f32, dt: f32) {
         let p = SmokeParams {
             bounds_min: [self.bounds_min[0], self.bounds_min[1], self.bounds_min[2], time],
             bounds_max: [self.bounds_max[0], self.bounds_max[1], self.bounds_max[2], self.absorption],
-            p0: [self.density_scale, 0.0, self.steps as f32, dt],
+            // p0.y carries fill_radius (advect only; raymarch ignores it).
+            p0: [self.density_scale, self.fill_radius, self.steps as f32, dt],
             color: [self.color[0], self.color[1], self.color[2], self.ambient],
             grid: [self.grid_n as f32, 0.0, self.source_radius, self.inject],
             source: [self.source[0], self.source[1], self.source[2], self.dissipation],
-            sim: [self.buoyancy, self.curl_strength, self.curl_scale, 0.0],
+            // sim.w carries fill_strength (radial outward push, 0 = pure plume).
+            sim: [self.buoyancy, self.curl_strength, self.curl_scale, self.fill_strength],
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[p]));
     }
@@ -328,20 +449,8 @@ impl SmokeVolume {
         let sim_dt = dt.clamp(1.0 / 240.0, 1.0 / 30.0);
         self.write_params(queue, time, sim_dt);
 
-        // 1) Advect compute (src=cur → dst=other).
-        let cur = self.parity.load(Ordering::Relaxed) as usize;
-        {
-            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Smoke Advect"),
-                timestamp_writes: None,
-            });
-            cpass.set_pipeline(&self.compute_pipeline);
-            cpass.set_bind_group(0, &self.compute_bg[cur], &[]);
-            let wg = self.grid_n.div_ceil(4);
-            cpass.dispatch_workgroups(wg, wg, wg);
-        }
-        let new_cur = 1 - cur;
-        self.parity.store(new_cur as u32, Ordering::Relaxed);
+        // 1) Advect compute (src=cur → dst=other). Obstacle-aware (see smoke_advect.wgsl).
+        let new_cur = self.record_advect(encoder);
 
         // 2) Raymarch (yeni yoğunluk buffer'ını oku).
         let depth_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -371,5 +480,138 @@ impl SmokeVolume {
         pass.set_bind_group(2, &self.params_bind_group, &[]);
         pass.set_bind_group(3, &self.density_bg[new_cur], &[]);
         pass.draw(0..3, 0..1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SmokeVolume;
+
+    async fn setup_headless_gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            flags: wgpu::InstanceFlags::default(),
+            memory_budget_thresholds: Default::default(),
+            backend_options: Default::default(),
+            display: None,
+        });
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })
+            .await
+            .ok()?;
+        adapter.request_device(&wgpu::DeviceDescriptor::default()).await.ok()
+    }
+
+    async fn read_f32(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer) -> Vec<f32> {
+        let size = buffer.size();
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("smoke_readback"),
+            size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        enc.copy_buffer_to_buffer(buffer, 0, &staging, 0, size);
+        queue.submit(Some(enc.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.recv().unwrap().unwrap();
+        let data = slice.get_mapped_range();
+        let out: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
+        drop(data);
+        staging.unmap();
+        out
+    }
+
+    // Minimal group-0 layout (SceneUniforms uniform @binding 0) so SmokeVolume::new can build
+    // its raymarch pipeline headlessly — this also validates BOTH smoke shaders compile.
+    fn scene_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("test_scene_layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        })
+    }
+
+    // A vertical wall down the middle of the volume, with the smoke source on the LEFT, must
+    // BLOCK smoke from reaching the right half: obstacle cells stay empty, and no smoke tunnels
+    // or advects across the wall. Without the obstacle-conforming advection (solid=0 +
+    // no-penetration + no-tunnel backtrace) the radial fill + curl would spread smoke to the
+    // right, so this is discriminating.
+    #[test]
+    fn smoke_conforms_to_and_does_not_cross_a_wall() {
+        pollster::block_on(async {
+            let Some((device, queue)) = setup_headless_gpu().await else {
+                eprintln!("no GPU adapter — skipping smoke obstacle test");
+                return;
+            };
+            let layout = scene_layout(&device);
+            let mut smoke = SmokeVolume::new(&device, &layout, wgpu::TextureFormat::Rgba16Float);
+            let n = smoke.grid_n() as usize;
+
+            // Volume x,z ∈ [-1,1], y ∈ [0,2]. Source on the LEFT; strong radial fill so smoke
+            // is actively pushed toward the wall (a strong test of the blocking).
+            smoke.bounds_min = [-1.0, 0.0, -1.0];
+            smoke.bounds_max = [1.0, 2.0, 1.0];
+            smoke.source = [-0.55, 0.5, 0.0];
+            smoke.source_radius = 0.35;
+            smoke.inject = 6.0;
+            smoke.buoyancy = 0.3;
+            smoke.fill_strength = 2.5;
+            smoke.fill_radius = 1.6;
+            smoke.dissipation = 0.99;
+
+            // Wall: x ∈ [-0.1, 0.1] (≈6 cells thick at N=64), full height/depth.
+            smoke.set_obstacle_boxes(&queue, &[([-0.1, 0.0, -1.0], [0.1, 2.0, 1.0])]);
+
+            // Warm up the volume.
+            for f in 0..60 {
+                smoke.step(&device, &queue, f as f32 * (1.0 / 60.0), 1.0 / 60.0);
+            }
+            let d = read_f32(&device, &queue, smoke.density_buffer()).await;
+            assert_eq!(d.len(), n * n * n);
+
+            // World x → grid i: i = (x + 1) / 2 * n.
+            let xi = |x: f32| (((x + 1.0) / 2.0) * n as f32) as usize;
+            let mut left = 0.0f64; // source side, x < -0.2
+            let mut wall = 0.0f64; // inside the wall, x ∈ [-0.1, 0.1]
+            let mut right = 0.0f64; // far side, x > 0.2
+            let (li, w0, w1, ri) = (xi(-0.2), xi(-0.1), xi(0.1), xi(0.2));
+            for k in 0..n {
+                for j in 0..n {
+                    for i in 0..n {
+                        let v = d[(k * n + j) * n + i] as f64;
+                        if i < li {
+                            left += v;
+                        } else if i >= w0 && i < w1 {
+                            wall += v;
+                        } else if i >= ri {
+                            right += v;
+                        }
+                    }
+                }
+            }
+
+            assert!(left > 5.0, "smoke should accumulate on the source side (left={left})");
+            assert!(wall < 1e-3, "obstacle cells must hold no smoke (wall={wall})");
+            assert!(
+                right < left * 0.02,
+                "smoke must not cross the wall: right={right} vs left={left}"
+            );
+        });
     }
 }
