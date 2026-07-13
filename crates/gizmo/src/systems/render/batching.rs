@@ -28,6 +28,21 @@ pub fn clear_render_cache() {
     });
 }
 
+/// anisotropy/clear_coat/subsurface'i tek bir f32'ye ondalık-basamak paketleme ile sıkıştırır
+/// (InstanceRaw'da ayrı alan yok). gbuffer.wgsl fs_main'deki unpack ile EŞLEŞMELİDİR:
+///   subsurface = floor(w/1e6)/100 · clear_coat = floor((w mod 1e6)/1e3)/1e3
+///   anisotropy = (w mod 1e3)/1e3
+/// anisotropy ve clear_coat 3-haneli alanlardır (0..999). `floor(1.0*1000)=1000` bir hane
+/// fazladır ve komşu alana TAŞAR (yasal clamp'li `1.0` uçları için) → alanı .min(999.0) ile
+/// sınırla; `1.0` artık `0.999` olarak okunur (fark edilmez) yerine komşuyu bozar.
+/// (Uzun vadeli sağlam çözüm: ayrı InstanceRaw alanları — bu şema f32'de 2^24 üstünde
+/// tamsayı hassasiyetini de kaybeder.)
+pub(crate) fn pack_pbr_params(anisotropy: f32, clear_coat: f32, subsurface: f32) -> f32 {
+    (anisotropy * 1000.0).floor().min(999.0)
+        + 1000.0 * (clear_coat * 1000.0).floor().min(999.0)
+        + 1_000_000.0 * (subsurface * 100.0).floor()
+}
+
 #[derive(Debug, Clone)]
 pub struct DrawItem {
     // Fields are `pub(super)` (= visible across the whole `render` module tree) so the sibling
@@ -190,7 +205,7 @@ pub(super) fn collect_draw_items(
                     $mesh.vertex_count
                 };
 
-                let packed_params = (($mat.anisotropy * 1000.0).floor() + 1000.0 * ($mat.clear_coat * 1000.0).floor() + 1000000.0 * ($mat.subsurface * 100.0).floor()) as f32;
+                let packed_params = pack_pbr_params($mat.anisotropy, $mat.clear_coat, $mat.subsurface);
 
                 let instance_data = crate::renderer::gpu_types::InstanceRaw {
                     model: model.to_cols_array_2d(),
@@ -358,5 +373,47 @@ mod batch_key_tests {
 
         // Identical routing + shared texture/mesh → same batch (instancing preserved).
         assert_eq!(base, base.clone(), "identical materials must still batch together");
+    }
+}
+
+#[cfg(test)]
+mod pbr_pack_tests {
+    use super::pack_pbr_params;
+
+    // Mirror gbuffer.wgsl fs_main's unpack of packed_params (in.inst_pbr.w) exactly.
+    fn unpack(w: f32) -> (f32, f32, f32) {
+        let subsurface = (w / 1_000_000.0).floor() / 100.0;
+        let rem = w - (w / 1_000_000.0).floor() * 1_000_000.0;
+        let clear_coat = (rem / 1000.0).floor() / 1000.0;
+        let anisotropy = (rem - (rem / 1000.0).floor() * 1000.0) / 1000.0;
+        (anisotropy, clear_coat, subsurface)
+    }
+
+    // Regression: the legal clamped endpoint 1.0 must NOT overflow its 3-digit field into
+    // the neighbour. Before the .min(999.0) clamp, clear_coat=1.0 packed as floor(1000)*1000
+    // which carried into the subsurface field → clear_coat read back as 0 and a phantom
+    // subsurface≈0.01 appeared. Symmetric for anisotropy=1.0.
+    #[test]
+    fn endpoint_one_does_not_overflow_into_neighbours() {
+        // clear_coat = 1.0, others 0 → clear_coat must survive (~0.999), no phantom subsurface.
+        let (aniso, cc, ss) = unpack(pack_pbr_params(0.0, 1.0, 0.0));
+        assert!(cc >= 0.99, "clear_coat=1.0 lost (got {cc})");
+        assert_eq!(ss, 0.0, "clear_coat=1.0 leaked a phantom subsurface ({ss})");
+        assert_eq!(aniso, 0.0, "clear_coat=1.0 leaked into anisotropy ({aniso})");
+
+        // anisotropy = 1.0 → survives, no leak into clear_coat.
+        let (aniso, cc, ss) = unpack(pack_pbr_params(1.0, 0.0, 0.0));
+        assert!(aniso >= 0.99, "anisotropy=1.0 lost (got {aniso})");
+        assert_eq!(cc, 0.0, "anisotropy=1.0 leaked into clear_coat ({cc})");
+        assert_eq!(ss, 0.0, "anisotropy=1.0 leaked into subsurface ({ss})");
+    }
+
+    // Ordinary mid-range values round-trip within the decimal-packing resolution.
+    #[test]
+    fn mid_range_values_round_trip() {
+        let (aniso, cc, ss) = unpack(pack_pbr_params(0.3, 0.7, 0.05));
+        assert!((aniso - 0.3).abs() < 0.002, "aniso {aniso}");
+        assert!((cc - 0.7).abs() < 0.002, "clear_coat {cc}");
+        assert!((ss - 0.05).abs() < 0.02, "subsurface {ss}");
     }
 }
