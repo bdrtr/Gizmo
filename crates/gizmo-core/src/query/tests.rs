@@ -271,3 +271,34 @@ fn sparse_query_mixed_presence_narrows_correctly() {
         );
     }
 }
+
+// Regression: get()/get_entity()/contains() must honour archetype-level (TABLE-storage)
+// With/Without filters exactly like iter(). Table-storage With/Without is decided ONLY by
+// matches_archetype — its fetch_raw always succeeds and filter_row always returns true
+// (see impl_presence_filter). get_inner used to index the entity's OWN archetype directly,
+// bypassing `matching_archetypes`, so get()/contains() returned Some/true for an entity that
+// iter() correctly skipped. (The sparse case above is already narrowed by filter_row, so it
+// never exhibited this; the table case is the one that leaked.)
+#[test]
+fn get_honours_table_with_without_like_iter() {
+    let mut world = crate::World::new();
+    world.register_component_type::<Position>();
+    world.register_component_type::<Velocity>();
+
+    // Entity with Position but NOT Velocity (both are table-storage components).
+    let e = world.spawn();
+    world.add_component(e, Position { x: 1.0, y: 2.0 });
+
+    // With<Velocity>: iter skips e ⇒ get/get_entity/contains must all agree (skip).
+    let q = world.query::<(&Position, With<Velocity>)>().unwrap();
+    assert_eq!(q.iter().count(), 0, "iter should skip the Velocity-less entity");
+    assert!(q.get(e.id()).is_none(), "get() must honour With<Velocity>");
+    assert!(q.get_entity(e).is_none(), "get_entity() must honour With<Velocity>");
+    assert!(!q.contains(e.id()), "contains() must honour With<Velocity>");
+
+    // Without<Velocity>: iter yields e ⇒ get/contains must also yield it (consistency both ways).
+    let q2 = world.query::<(&Position, Without<Velocity>)>().unwrap();
+    assert_eq!(q2.iter().count(), 1, "iter should include the Velocity-less entity");
+    assert!(q2.get(e.id()).is_some(), "get() must include under Without<Velocity>");
+    assert!(q2.contains(e.id()), "contains() must include under Without<Velocity>");
+}
