@@ -704,7 +704,11 @@ fn main() {
                     dof_blur_size: state.dof_blur_size,
                     cam_near: 0.1,
                     cam_far: 2000.0,
-                    _padding: 0.0,
+                    underwater: 0.0,
+                    fog_r: 0.0,
+                    fog_g: 0.0,
+                    fog_b: 0.0,
+                    fog_density: 0.0,
                 },
             );
 

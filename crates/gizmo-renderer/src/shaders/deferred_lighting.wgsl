@@ -472,21 +472,31 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         let view_depth = dot(world_pos - scene.camera_pos.xyz, scene.camera_forward.xyz);
         let ci         = select_cascade(view_depth);
         
-        let offset_pos = world_pos + N * 0.0018;
-        let light_clip = scene.light_view_proj[ci] * vec4<f32>(offset_pos, 1.0);
-        
+        // Normal-offset shadows: cascade'in DÜNYA texel boyutuna ORANTILI offset ile
+        // örnek noktasını yüzeyden ayır. Sabit N*0.0018 yalnızca en yakın cascade'e
+        // uyuyordu; uzak cascade'lerde (texel çok daha büyük) offset texel'in ~1/4'ü
+        // kalıp yüzeyi temizleyemiyor → diagonal self-shadow acne. Ortho X ölçeği
+        // sx = |M'nin lineer satır-0'ı| (V ortonormal), world_texel = 2·uv_texel/sx;
+        // ~2 texel offset her cascade'de acne'yi keser, peter-pan minimum.
+        // Asıl acne çözümü gölge-pass'te FRONT-FACE CULLING (arka yüzler haritada) — aydınlık
+        // ön yüz kendi derinliğiyle kıyaslanmaz. Burada yalnız silüet/temas için ufak, cascade
+        // texel'ine orantılı normal-offset kalır (grazing 1/NoL patch'i artık gereksiz).
+        let m = scene.light_view_proj[ci];
+        let sx = length(vec3<f32>(m[0][0], m[1][0], m[2][0]));
+        let world_texel = 2.0 * scene.cascade_params.y / max(sx, 1e-6);
+        let offset_pos = world_pos + N * world_texel * 2.0;
+        let light_clip = m * vec4<f32>(offset_pos, 1.0);
+
         let light_ndc  = light_clip.xyz / light_clip.w;
         let shadow_uv  = vec2<f32>(light_ndc.x * 0.5 + 0.5, light_ndc.y * -0.5 + 0.5);
 
         if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 &&
             shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 && light_ndc.z <= 1.0) {
             let slope  = 1.0 - max(dot(N, normalize(-scene.sun_direction.xyz)), 0.0);
-            // Normal-offset shadows (offset_pos = world_pos + N*0.0018 above) already
-            // push the sample off the surface, so the depth bias stays small. The old
-            // flat-ground floor `if (N.y > 0.99) { bias = max(bias, 0.005); }` was a
-            // 50x over-correction that peter-panned the shadow off the caster's base —
-            // and since the ground receives most shadows, that detachment was glaring.
-            let bias   = max(0.0002 * slope, 0.00003);
+            // Normal-offset (yukarıdaki world_texel·2) örneği yüzeyden ittiği için depth
+            // bias küçük kalır. Eski düz-zemin tabanı `if (N.y>0.99){bias=max(bias,0.005)}`
+            // 50x aşırı düzeltmeydi ve gölgeyi kaynağın tabanından peter-pan'ledi.
+            let bias   = max(0.0004 * slope, 0.00004);
             let texel  = scene.cascade_params.y;
             shadow_visibility = filter_pcss(shadow_uv, light_ndc.z, ci, bias, texel);
         }

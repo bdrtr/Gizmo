@@ -35,6 +35,7 @@ pub mod gi;
 pub mod gpu_cull;
 pub mod gpu_fluid;
 pub mod gpu_particles;
+pub mod gpu_smoke;
 pub mod gpu_physics;
 pub mod gpu_types;
 pub mod hot_reload;

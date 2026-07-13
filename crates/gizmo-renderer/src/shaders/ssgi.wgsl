@@ -64,10 +64,18 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let step_size = 0.5;
     let ray_count = 1; // Num rays per pixel
     
+    // Per-frame decorrelation: without this the hash is a pure function of frag_coord,
+    // so EVERY frame casts the identical ray and 1-spp Monte-Carlo noise is frozen —
+    // temporal accumulation could never converge. Rotate the seed each frame with a
+    // golden-ratio offset of scene time (cascade_params.z) so each frame samples a new
+    // hemisphere direction and the SSGI temporal pass averages them into a clean result.
+    let frame_offset = fract(scene.cascade_params.z * 0.61803398875) * 100.0;
+
     for (var r = 0; r < ray_count; r++) {
-        // Generate random seeds per ray
-        let s1 = hash(frag_coord.xy + vec2<f32>(f32(r) * 13.0, f32(r) * 31.0));
-        let s2 = hash(frag_coord.xy + vec2<f32>(f32(r) * 27.0, f32(r) * 19.0));
+        // Generate random seeds per ray (frame-varying → accumulable over time)
+        let seed_base = frag_coord.xy + vec2<f32>(frame_offset, frame_offset * 1.618);
+        let s1 = hash(seed_base + vec2<f32>(f32(r) * 13.0, f32(r) * 31.0));
+        let s2 = hash(seed_base + vec2<f32>(f32(r) * 27.0, f32(r) * 19.0));
         
         let ray_dir = get_sample_dir(normal, s1, s2);
         var current_pos = world_pos + ray_dir * 0.2; // Offset

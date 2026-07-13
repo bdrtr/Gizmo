@@ -1,6 +1,16 @@
 use crate::deferred::DeferredState;
 use crate::pipeline::{load_shader, load_shader_composed, SceneState};
 
+/// GPU uniform for the SSGI temporal-accumulation resolve. Byte-compatible with
+/// `SsgiTemporalParams` in `ssgi_temporal.wgsl` (64 + 4 + 12 = 80 bytes, 16-aligned).
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct SsgiTemporalParams {
+    prev_view_proj: [[f32; 4]; 4],
+    alpha: f32,
+    _pad: [f32; 3],
+}
+
 pub struct SsgiState {
     pub ssgi_texture: wgpu::Texture,
     pub ssgi_view: wgpu::TextureView,
@@ -12,9 +22,27 @@ pub struct SsgiState {
     ssgi_bgl: wgpu::BindGroupLayout,
     pub ssgi_bind_group: wgpu::BindGroup,
 
+    // ── Temporal accumulation (denoise the 1-spp raymarch) ──────────────────────
+    // Ping-pong half-res history: resolve reads history[parity] + raw ssgi, writes
+    // history[!parity]; the blur then reads that just-written accumulation buffer.
+    history_a: wgpu::Texture,
+    history_a_view: wgpu::TextureView,
+    history_b: wgpu::Texture,
+    history_b_view: wgpu::TextureView,
+    frame_parity: bool,
+    pub frame_index: u32,
+    prev_vp: [[f32; 4]; 4],
+    temporal_params_buffer: wgpu::Buffer,
+    pub temporal_pipeline: wgpu::RenderPipeline,
+    temporal_bgl: wgpu::BindGroupLayout,
+    temporal_bg_read_a: wgpu::BindGroup, // history=A → output=B
+    temporal_bg_read_b: wgpu::BindGroup, // history=B → output=A
+
     pub blur_pipeline: wgpu::RenderPipeline,
     blur_bgl: wgpu::BindGroupLayout,
-    pub blur_bind_group: wgpu::BindGroup,
+    // Blur reads the accumulated history (ping-pong), not the raw ssgi buffer.
+    blur_bg_a: wgpu::BindGroup, // reads history A
+    blur_bg_b: wgpu::BindGroup, // reads history B
 
     pub apply_pipeline: wgpu::RenderPipeline,
     apply_bgl: wgpu::BindGroupLayout,
@@ -59,10 +87,13 @@ impl SsgiState {
         let (ssgi_texture, ssgi_view) = Self::mk_tex(device, half_w, half_h, "ssgi_texture");
         let (ssgi_blurred_texture, ssgi_blurred_view) =
             Self::mk_tex(device, half_w, half_h, "ssgi_blurred_texture");
+        let (history_a, history_a_view) = Self::mk_tex(device, half_w, half_h, "ssgi_history_a");
+        let (history_b, history_b_view) = Self::mk_tex(device, half_w, half_h, "ssgi_history_b");
 
         let ssgi_bgl = Self::mk_ssgi_bgl(device);
         let blur_bgl = Self::mk_blur_bgl(device);
         let apply_bgl = Self::mk_apply_bgl(device);
+        let temporal_bgl = Self::mk_temporal_bgl(device);
 
         let ssgi_bind_group = Self::mk_ssgi_bg(
             device,
@@ -74,13 +105,48 @@ impl SsgiState {
             &deferred.albedo_metallic_view,
         );
 
-        let blur_bind_group = Self::mk_blur_bg(device, &blur_bgl, &ssgi_view, &linear_sampler);
+        let temporal_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ssgi_temporal_params"),
+            size: std::mem::size_of::<SsgiTemporalParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let temporal_bg_read_a = Self::mk_temporal_bg(
+            device,
+            &temporal_bgl,
+            &temporal_params_buffer,
+            &ssgi_view,
+            &history_a_view,
+            &deferred.world_position_view,
+            &linear_sampler,
+        );
+        let temporal_bg_read_b = Self::mk_temporal_bg(
+            device,
+            &temporal_bgl,
+            &temporal_params_buffer,
+            &ssgi_view,
+            &history_b_view,
+            &deferred.world_position_view,
+            &linear_sampler,
+        );
+
+        // Blur reads the accumulated history (ping-pong), never the raw ssgi buffer.
+        let blur_bg_a = Self::mk_blur_bg(device, &blur_bgl, &history_a_view, &linear_sampler);
+        let blur_bg_b = Self::mk_blur_bg(device, &blur_bgl, &history_b_view, &linear_sampler);
         let apply_bind_group =
             Self::mk_apply_bg(device, &apply_bgl, &ssgi_blurred_view, &linear_sampler);
 
         let ssgi_pipeline = Self::mk_ssgi_pipeline(device, scene, &ssgi_bgl);
         let blur_pipeline = Self::mk_blur_pipeline(device, &blur_bgl);
         let apply_pipeline = Self::mk_apply_pipeline(device, &apply_bgl);
+        let temporal_pipeline = Self::mk_temporal_pipeline(device, &temporal_bgl);
+
+        let identity: [[f32; 4]; 4] = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
 
         Self {
             ssgi_texture,
@@ -90,9 +156,22 @@ impl SsgiState {
             ssgi_pipeline,
             ssgi_bgl,
             ssgi_bind_group,
+            history_a,
+            history_a_view,
+            history_b,
+            history_b_view,
+            frame_parity: false,
+            frame_index: 0,
+            prev_vp: identity,
+            temporal_params_buffer,
+            temporal_pipeline,
+            temporal_bgl,
+            temporal_bg_read_a,
+            temporal_bg_read_b,
             blur_pipeline,
             blur_bgl,
-            blur_bind_group,
+            blur_bg_a,
+            blur_bg_b,
             apply_pipeline,
             apply_bgl,
             apply_bind_group,
@@ -115,6 +194,8 @@ impl SsgiState {
         let half_h = (height / 2).max(1);
         let (t1, v1) = Self::mk_tex(device, half_w, half_h, "ssgi_texture");
         let (t2, v2) = Self::mk_tex(device, half_w, half_h, "ssgi_blurred_texture");
+        let (ha, hav) = Self::mk_tex(device, half_w, half_h, "ssgi_history_a");
+        let (hb, hbv) = Self::mk_tex(device, half_w, half_h, "ssgi_history_b");
 
         self.ssgi_bind_group = Self::mk_ssgi_bg(
             device,
@@ -125,7 +206,26 @@ impl SsgiState {
             &self.linear_sampler,
             &deferred.albedo_metallic_view,
         );
-        self.blur_bind_group = Self::mk_blur_bg(device, &self.blur_bgl, &v1, &self.linear_sampler);
+        self.temporal_bg_read_a = Self::mk_temporal_bg(
+            device,
+            &self.temporal_bgl,
+            &self.temporal_params_buffer,
+            &v1,
+            &hav,
+            &deferred.world_position_view,
+            &self.linear_sampler,
+        );
+        self.temporal_bg_read_b = Self::mk_temporal_bg(
+            device,
+            &self.temporal_bgl,
+            &self.temporal_params_buffer,
+            &v1,
+            &hbv,
+            &deferred.world_position_view,
+            &self.linear_sampler,
+        );
+        self.blur_bg_a = Self::mk_blur_bg(device, &self.blur_bgl, &hav, &self.linear_sampler);
+        self.blur_bg_b = Self::mk_blur_bg(device, &self.blur_bgl, &hbv, &self.linear_sampler);
         self.apply_bind_group =
             Self::mk_apply_bg(device, &self.apply_bgl, &v2, &self.linear_sampler);
 
@@ -133,8 +233,57 @@ impl SsgiState {
         self.ssgi_view = v1;
         self.ssgi_blurred_texture = t2;
         self.ssgi_blurred_view = v2;
+        self.history_a = ha;
+        self.history_a_view = hav;
+        self.history_b = hb;
+        self.history_b_view = hbv;
+        // Stale history from the old resolution would ghost — restart accumulation.
+        self.frame_parity = false;
+        self.frame_index = 0;
         self.width = width;
         self.height = height;
+    }
+
+    /// Upload the temporal-resolve uniform: `self.prev_vp` (last frame's unjittered
+    /// view-proj) drives reprojection; `alpha` is the blend weight (1.0 = ignore
+    /// history, used on the first frame / after a reset).
+    pub fn update_params(&self, queue: &wgpu::Queue, alpha: f32) {
+        let data = SsgiTemporalParams {
+            prev_view_proj: self.prev_vp,
+            alpha,
+            _pad: [0.0; 3],
+        };
+        queue.write_buffer(&self.temporal_params_buffer, 0, bytemuck::bytes_of(&data));
+    }
+
+    /// Store the current frame's unjittered view-proj for reprojection next frame.
+    pub fn store_prev_vp(&mut self, vp: [[f32; 4]; 4]) {
+        self.prev_vp = vp;
+    }
+
+    /// Advance ping-pong parity and frame counter (call once per frame, after the passes).
+    pub fn advance_frame(&mut self) {
+        self.frame_parity = !self.frame_parity;
+        self.frame_index = self.frame_index.wrapping_add(1);
+    }
+
+    /// (temporal resolve bind group, output history view) for the current frame.
+    /// Reads history[parity] + raw ssgi, writes history[!parity].
+    pub fn current_temporal_io(&self) -> (&wgpu::BindGroup, &wgpu::TextureView) {
+        if !self.frame_parity {
+            (&self.temporal_bg_read_a, &self.history_b_view)
+        } else {
+            (&self.temporal_bg_read_b, &self.history_a_view)
+        }
+    }
+
+    /// Blur bind group that reads this frame's freshly-written accumulation buffer.
+    pub fn current_blur_bg(&self) -> &wgpu::BindGroup {
+        if !self.frame_parity {
+            &self.blur_bg_b // B was just written by the resolve
+        } else {
+            &self.blur_bg_a
+        }
     }
 
     fn mk_tex(
@@ -477,6 +626,151 @@ impl SsgiState {
                         },
                         alpha: wgpu::BlendComponent::REPLACE,
                     }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+
+    fn mk_temporal_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("ssgi_temporal_bgl"),
+            entries: &[
+                // 0: SsgiTemporalParams uniform
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<SsgiTemporalParams>() as u64,
+                        ),
+                    },
+                    count: None,
+                },
+                // 1: t_current — raw ssgi this frame (textureLoad → non-filterable)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    },
+                    count: None,
+                },
+                // 2: t_history — accumulated last frame (textureSample bilinear → filterable)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                // 3: t_position — full-res world position (textureLoad → non-filterable)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    },
+                    count: None,
+                },
+                // 4: s_linear (only paired with t_history)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn mk_temporal_bg(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        params_buf: &wgpu::Buffer,
+        current: &wgpu::TextureView,
+        history: &wgpu::TextureView,
+        position: &wgpu::TextureView,
+        samp: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ssgi_temporal_bg"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: params_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(current),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(history),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(position),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(samp),
+                },
+            ],
+        })
+    }
+
+    fn mk_temporal_pipeline(
+        device: &wgpu::Device,
+        bgl: &wgpu::BindGroupLayout,
+    ) -> wgpu::RenderPipeline {
+        let shader = load_shader(
+            device,
+            "demo/assets/shaders/ssgi_temporal.wgsl",
+            include_str!("shaders/ssgi_temporal.wgsl"),
+            "SSGI Temporal Shader",
+        );
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("ssgi_temporal_layout"),
+            bind_group_layouts: &[Some(bgl)],
+            immediate_size: 0,
+        });
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ssgi_temporal_pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_resolve"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),

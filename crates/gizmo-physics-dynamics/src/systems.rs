@@ -118,6 +118,11 @@ pub fn character_controller_system(world: &World, dt: f32) {
 
     let all_colliders = gather_colliders(world);
 
+    // Yüzme modu için sahnenin PhysicsWorld'ünden fluid-zone batık sorgusu (yoksa hiç su → kara).
+    // Copy olmayan bir referans; aşağıdaki unsafe component query'siyle çakışmaz (resource ayrı
+    // storage). Her karakter kendi konumuyla `water_at` sorgulanır.
+    let phys = world.get_resource::<gizmo_physics_rigid::world::PhysicsWorld>();
+
     // SAFETY: see `vehicle_controller_system` — exclusive barrier system, and the
     // read-only gather query is dropped before this mutable query is opened, so
     // the `Mut<Transform>` here never aliases the `&Transform` used above.
@@ -132,6 +137,9 @@ pub fn character_controller_system(world: &World, dt: f32) {
     };
     if let Some(mut query) = query {
         for (id, (mut kcc, mut transform, mut vel, collider, _)) in query.iter_mut() {
+            let water_surface_y = phys
+                .as_ref()
+                .and_then(|pw| pw.water_at(transform.position).map(|s| s.surface_y));
             update_character(
                 BodyHandle::from_id(id),
                 &mut kcc,
@@ -139,6 +147,7 @@ pub fn character_controller_system(world: &World, dt: f32) {
                 &mut vel,
                 collider,
                 &all_colliders,
+                water_surface_y,
                 dt,
             );
         }

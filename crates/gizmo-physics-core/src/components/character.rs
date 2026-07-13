@@ -22,6 +22,18 @@ pub struct CharacterController {
     pub jump_buffer_time: f32,
     #[serde(skip)]
     pub jump_buffer_timer: f32,
+
+    // ── Su / yüzme ──────────────────────────────────────────
+    /// Batıkken yukarı net kaldırma ivmesi (m/s²). 0 = nötr yüzerlik, >0 yüzeye çıkar; drag ile
+    /// terminal yükseliş hızına oturur.
+    pub buoyancy: f32,
+    /// Sudaki lineer sürüklenme katsayısı (her adım `vel *= 1 - water_drag*dt`). Suyu ağdalı yapar.
+    pub water_drag: f32,
+    /// Yüzme itişinin `target_velocity`'ye ne hızla yaklaştığı (su tepkiselliği).
+    pub swim_acceleration: f32,
+    /// Runtime: karakter şu an bir su hacminde mi (yüzme modu aktif). Serileştirilmez.
+    #[serde(skip)]
+    pub is_submerged: bool,
 }
 
 impl Default for CharacterController {
@@ -39,6 +51,10 @@ impl Default for CharacterController {
             coyote_timer: 0.0,
             jump_buffer_time: 0.1,
             jump_buffer_timer: 0.0,
+            buoyancy: 2.0,
+            water_drag: 2.0,
+            swim_acceleration: 8.0,
+            is_submerged: false,
         }
     }
 }
