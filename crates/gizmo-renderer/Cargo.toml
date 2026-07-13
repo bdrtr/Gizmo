@@ -26,9 +26,9 @@ log = "0.4"
 pollster = "0.3"
 winit = { workspace = true }
 bytemuck = { version = "1.14", features = ["derive"] }
-gizmo-math = { path = "../gizmo-math" , version = "0.2.0" }
-gizmo-core = { path = "../gizmo-core" , version = "0.2.0" }
-gizmo-animation = { path = "../gizmo-animation", version = "0.2.0", default-features = false }
+gizmo-math = { path = "../gizmo-math" , version = "0.8.0" }
+gizmo-core = { path = "../gizmo-core" , version = "0.8.0" }
+gizmo-animation = { path = "../gizmo-animation", version = "0.8.0", default-features = false }
 tobj = "4.0.3"
 image = { version = "0.25", features = ["webp"] }
 serde = { version = "1.0.228", features = ["derive"] }

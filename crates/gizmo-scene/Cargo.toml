@@ -21,10 +21,10 @@ reflect = [
 ]
 
 [dependencies]
-gizmo-core = { path = "../gizmo-core" , version = "0.2.0" }
-gizmo-math = { path = "../gizmo-math" , version = "0.2.0" }
-gizmo-physics-core = { path = "../gizmo-physics-core" , version = "0.2.0" }
-gizmo-physics-rigid = { path = "../gizmo-physics-rigid" , version = "0.2.0" }
+gizmo-core = { path = "../gizmo-core" , version = "0.8.0" }
+gizmo-math = { path = "../gizmo-math" , version = "0.8.0" }
+gizmo-physics-core = { path = "../gizmo-physics-core" , version = "0.8.0" }
+gizmo-physics-rigid = { path = "../gizmo-physics-rigid" , version = "0.8.0" }
 serde = { version = "1.0", features = ["derive"] }
 ron = "0.12.1"
 tracing = "0.1.44"

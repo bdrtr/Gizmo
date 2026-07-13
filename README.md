@@ -106,9 +106,10 @@ cargo run --release -p demo --bin fluid_rigid
 
 > **Note:** Due to the extreme scale of the broad-phase and narrow-phase physics computations, compiling without `--release` will cause a severe CPU bottleneck. Always use the release profile for optimal performance.
 
-> **Upgrading from `0.1.x`?** `0.2.0` is a breaking release (graphics-stack
-> upgrade + API hardening). See the [migration guide](docs/migration-0.1-to-0.2.md)
-> and the [`CHANGELOG`](CHANGELOG.md).
+> **Upgrading?** `0.8.0` is a large feature release; the whole workspace ships
+> at one uniform `0.x` version and no API is promised stable yet. See the
+> [`CHANGELOG`](CHANGELOG.md) (and, if coming from `0.1.x`, the
+> [migration guide](docs/migration-0.1-to-0.2.md)).
 
 ## 📄 License
 

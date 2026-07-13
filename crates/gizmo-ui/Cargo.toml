@@ -15,9 +15,9 @@ rustdoc-args = ["--cfg", "docsrs"]
 # Optional: only the `UiPlugin` convenience wrapper needs the app framework.
 # The dependency-light `register(world, schedule)` entry point needs only
 # gizmo-core, so gizmo-ui is usable as a pure ECS-UI layer without gizmo-app.
-gizmo-app = { version = "0.2.0", path = "../gizmo-app", default-features = false, optional = true }
-gizmo-core = { version = "0.2.0", path = "../gizmo-core" }
-gizmo-math = { path = "../gizmo-math", version = "0.2.0" }
+gizmo-app = { version = "0.8.0", path = "../gizmo-app", default-features = false, optional = true }
+gizmo-core = { version = "0.8.0", path = "../gizmo-core" }
+gizmo-math = { path = "../gizmo-math", version = "0.8.0" }
 taffy = "0.10.1"
 
 [features]

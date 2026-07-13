@@ -14,6 +14,48 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > documented in [`RELEASING.md`](RELEASING.md) and remains the planned path for a
 > later release.
 
+## [0.8.0] — 2026-07-12
+
+A large feature release gathering ~205 commits since `0.2.0`. The whole
+workspace continues to ship at one uniform `0.x` version (the staged `1.0`
+model in [`RELEASING.md`](RELEASING.md) remains the planned later path). No
+crate-level API is promised stable yet; treat any change as potentially
+breaking and pin an exact `=0.8.0` if you need reproducibility.
+
+### Added
+
+- **Physics — joints.** First-class `Distance`/`Rope` joint; a generic 6-DoF
+  (`D6`) joint with per-axis motors + springs; cone-twist, slider suspension,
+  and hinge torsional-spring joints; per-joint compliance, asymmetric cone
+  limits, distance reachability, spring-break, and servo motors.
+- **Physics — bodies & vehicles.** Consolidated vehicle simulation in
+  `gizmo-physics-dynamics` (dynamics is now canonical; the dead rigid vehicle
+  path was removed); ECS systems for vehicle/character + ragdoll runtime;
+  opt-in aerodynamic drag (½ρCdAv²) for rigid bodies; CCD exposed via bundle
+  builders with analytic test ladders; `RigidBodyBundle` derives rotational
+  inertia from its collider.
+- **Physics — soft bodies & water.** Hardened cloth ↔ rigid-body collision
+  (capsule, per-segment edge, averaged push) plus cloth tearing; a Subnautica-
+  style water system (`water_at` query, swimming controller, Gerstner waves,
+  underwater camera fog) and character oxygen.
+- **Physics — ergonomics.** Fluent builders for materials, colliders, bodies
+  and bundles; `PhysicsPlugin` auto-steps at the app's fixed timestep;
+  `GameplayPhysicsPlugin` registers vehicle/character systems.
+- **Rendering.** Textured PBR (normal / metallic-roughness / emissive / AO
+  maps); distance-based texture streaming wired end-to-end; AAA smoke VFX
+  (soft particles, flipbook, curl-noise, lit) with volumetric ray-marched
+  smoke; headless/offscreen renderer (no window/surface); HighPerformance GPU
+  adapter preference.
+- **Web / WASM.** The deterministic simulation core compiles to `wasm32`, and
+  the full engine runs in the browser (WebGPU/WASM) with an audio backend and
+  a hardened web surface.
+- **Animation & glTF.** Two-bone IK + FABRIK, cubic-Hermite scale tracks;
+  `KHR_texture_transform`, `KHR_materials_emissive_strength`, and glTF sampler
+  settings honoured.
+- **Camera.** Orthographic projection mode (Numpad5 toggle) and
+  `screen_to_ray` screen→world picking.
+- **CI.** Run-once benchmark gate (and the engine bug it caught).
+
 ## [0.2.0] — 2026-06-25
 
 The first release since `0.1.7`. It gathers the entire 1.0-readiness effort

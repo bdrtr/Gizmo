@@ -12,11 +12,11 @@ readme.workspace = true
 all-features = true
 
 [dependencies]
-gizmo-core = { path = "../gizmo-core", version = "0.2.0" }
+gizmo-core = { path = "../gizmo-core", version = "0.8.0" }
 
 # Optional — subsystem collectors & integrations.
-gizmo-app = { path = "../gizmo-app", version = "0.2.0", optional = true, default-features = false }
-gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.2.0", optional = true }
+gizmo-app = { path = "../gizmo-app", version = "0.8.0", optional = true, default-features = false }
+gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.8.0", optional = true }
 tracing = { version = "0.1.44", optional = true }
 tracing-subscriber = { version = "0.3", optional = true, default-features = false, features = ["registry", "std"] }
 egui = { version = "0.34", optional = true }

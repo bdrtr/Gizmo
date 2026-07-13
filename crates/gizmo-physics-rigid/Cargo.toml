@@ -23,9 +23,9 @@ experimental-multibody = []
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
-gizmo-core = { path = "../gizmo-core", version = "0.2.0" }
-gizmo-math = { path = "../gizmo-math", version = "0.2.0" }
-gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.2.0" }
+gizmo-core = { path = "../gizmo-core", version = "0.8.0" }
+gizmo-math = { path = "../gizmo-math", version = "0.8.0" }
+gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.8.0" }
 wide = "1.2.0"
 rand = "0.10.1"
 dashmap = "5.5"

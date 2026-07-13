@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.8.0"
 edition = "2021"
 # Minimum Supported Rust Version. Empirically verified (`cargo +1.92.0 check
 # --workspace` passes). Floor is set by `egui 0.34` (and its `ecolor`/`egui-wgpu`/
