@@ -64,6 +64,13 @@ fn density_at(p: vec3<f32>, t: f32) -> f32 {
     return acc * smoke.p0.x;
 }
 
+// Interleaved gradient noise (Jimenez), rotated per frame by the golden ratio so the dithered
+// samples decorrelate frame-to-frame and TAA can temporally average them into a smooth volume.
+fn ign(pix: vec2<f32>, frame: f32) -> f32 {
+    let p = pix + 5.588238 * fract(frame * 0.61803398875);
+    return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
+}
+
 @fragment
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let ndc = vec2<f32>(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0);
@@ -107,10 +114,15 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let sun_dir = normalize(scene.sun_direction.xyz);
     let sun_col = scene.sun_color.rgb * scene.sun_color.w;
 
+    // Per-pixel + per-frame dithered ray-start offset. Without it the fixed marching steps
+    // produce BANDING that visibly crawls as the volume animates (flicker); jittering the start
+    // by [0,1) of a step spreads the samples so TAA resolves a smooth volume instead.
+    let jitter = ign(in.pos.xy, t * 60.0);
+
     var transm = 1.0;
     var accum = vec3<f32>(0.0);
     for (var i = 0; i < steps; i = i + 1) {
-        let tt = start + (f32(i) + 0.5) * dstep;
+        let tt = start + (f32(i) + jitter) * dstep;
         let p = ro + rd * tt;
         let d = density_at(p, t);
         if (d > 0.002) {
