@@ -532,7 +532,6 @@ pub(super) fn spawn_mesh_entity(
     id
 }
 
-/// GLTF hiyerarşisini düz (flat) olarak spawn eder — parent/child olmadan.
 // ─── WorldExt Trait — Update içinde kısa sorgular ─────────────────────────────
 
 /// World üzerine eklenen kolaylık metodları.
