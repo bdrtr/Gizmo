@@ -207,16 +207,25 @@ pub(super) fn build_gltf_materials(
                 .map(|ot| ot.strength())
                 .unwrap_or(1.0);
             let uv_transform = material_uv_transform(&material);
+            // glTF alpha cutout: `AlphaMode::Mask` is OPAQUE geometry with a hard discard
+            // at `alphaCutoff` (default 0.5), NOT alpha blending. 0.0 → no cutout (Opaque/Blend).
+            let alpha_cutoff = if material.alpha_mode() == gltf::material::AlphaMode::Mask {
+                material.alpha_cutoff().unwrap_or(0.5)
+            } else {
+                0.0
+            };
             let params = crate::gpu_types::MaterialParams::new(
                 emissive,
                 normal_scale,
                 occlusion_strength,
                 uv_transform,
+                alpha_cutoff,
             );
             let is_default_params = emissive == [0.0, 0.0, 0.0]
                 && normal_scale == 1.0
                 && occlusion_strength == 1.0
-                && uv_transform.is_identity();
+                && uv_transform.is_identity()
+                && alpha_cutoff == 0.0;
 
             // Fast path: no textures and neutral params → reuse the shared white
             // fallback bind group. Otherwise assemble a dedicated one.
@@ -271,7 +280,13 @@ pub(super) fn build_gltf_materials(
             mat.metallic = pbr.metallic_factor();
             mat.roughness = pbr.roughness_factor();
 
-            mat.is_transparent = material.alpha_mode() != gltf::material::AlphaMode::Opaque || alpha < 0.99 || is_glass;
+            // Only `Blend` routes to the transparent pass. `Mask` (cutout) is opaque geometry
+            // with a per-texel discard (handled in gbuffer.wgsl via alpha_cutoff) — routing it
+            // as blend gave soft translucent fringes + depth-sort artifacts instead of a crisp
+            // cutout. `Opaque` stays opaque; a sub-unit base alpha or a glass name is translucent.
+            mat.is_transparent = material.alpha_mode() == gltf::material::AlphaMode::Blend
+                || alpha < 0.99
+                || is_glass;
             mat.is_double_sided = material.double_sided();
 
             mat
@@ -398,7 +413,7 @@ mod tests {
 
         // Packed into MaterialParams in the documented slots:
         // occlusion_uv_rot_offset = [occlusion, rotation, offset.x, offset.y].
-        let params = crate::gpu_types::MaterialParams::new([0.0; 3], 1.0, 1.0, uv);
+        let params = crate::gpu_types::MaterialParams::new([0.0; 3], 1.0, 1.0, uv, 0.0);
         assert_eq!(params.occlusion_uv_rot_offset, [1.0, 1.5, 0.1, 0.2]);
         assert_eq!(params.uv_scale, [2.0, 3.0, 0.0, 0.0]);
     }
