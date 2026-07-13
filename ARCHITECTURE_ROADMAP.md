@@ -128,8 +128,24 @@ de-facto module (0.50) — the most tangled seam, and exactly where we burned ho
       `spawn_gltf_node_flat` scene walker); the primitive/camera/light/rigid spawns + shared
       `spawn_mesh_entity` (now `pub(super)`) stay in mod.rs. `4f614b9`; gizmo-engine 19 tests.
 
-### Phase 5 — Tooling (lowest priority)
-- [ ] `gizmo-studio/render_pipeline.rs` (1002) — not shipped runtime.
+### Phase 5 — Tooling (lowest priority) ✅ COMPLETE
+- [x] `gizmo-studio/render_pipeline.rs` (1002) → `render_pipeline/{mod,batching,passes}.rs`:
+      `execute_render_pipeline` orchestration in mod.rs, the batch cache (BatchKey/BatchData/
+      FlatBatchData/PipelineCache + thread_local CACHE) in batching.rs, the editor pass recorders
+      (sync_editor_settings + record_studio_{shadow,main}) in passes.rs. Submodules private +
+      `pub(super)`, so the crate surface (`render_pipeline::execute_render_pipeline`) is unchanged.
+      `8dc8ec5`; builds clean; byte-identical fidelity diff + a 4-agent adversarial audit found no
+      behaviour change.
+
+---
+
+## 🏁 ALL PHASES COMPLETE (Phases 0–5)
+Every listed god-file has been decomposed via pure, verified moves — no rewrites, no behaviour
+changes. Each split was confirmed by the relevant crate's tests (or, for the renderer/studio,
+GPU golden-render tests + byte-identical diffs + adversarial review). See the commit trail from
+`d5fd52f` onward. Optional future micro-work only: further slicing of the still-large mega-functions
+(`update_vehicle`, `execute_render_pipeline`, `default_render_pass`'s remaining setup) — these are
+behaviour-adjacent extractions, not pure moves, and belong in their own verified steps.
 
 ## 4. Per-file execution protocol
 1. Read the file; map functions into cohesive groups. Use `search_graph` / `trace_path` to
