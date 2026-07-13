@@ -37,6 +37,43 @@ pub fn clear_render_cache() {
 /// sınırla; `1.0` artık `0.999` olarak okunur (fark edilmez) yerine komşuyu bozar.
 /// (Uzun vadeli sağlam çözüm: ayrı InstanceRaw alanları — bu şema f32'de 2^24 üstünde
 /// tamsayı hassasiyetini de kaybeder.)
+/// Representative camera distance of an instanced batch: distance from `cam_pos` to the
+/// centroid of the batch's instance world positions (the translation column of each
+/// `InstanceRaw::model`). Used to order transparent batches back-to-front. Per-batch (not
+/// per-instance) granularity — coarse for a batch spread across depth, but far better than
+/// the arbitrary HashMap order it replaces, and exact for the common single-instance case.
+pub(crate) fn batch_sort_depth(
+    instances: &[crate::renderer::gpu_types::InstanceRaw],
+    cam_pos: Vec3,
+) -> f32 {
+    if instances.is_empty() {
+        return 0.0;
+    }
+    let mut centroid = Vec3::ZERO;
+    for inst in instances {
+        // InstanceRaw::model is column-major [[f32;4];4]; column 3 is the translation.
+        centroid += Vec3::new(inst.model[3][0], inst.model[3][1], inst.model[3][2]);
+    }
+    centroid /= instances.len() as f32;
+    (centroid - cam_pos).length()
+}
+
+/// Draw-order comparator for correct alpha blending. Opaque batches come first (their
+/// relative order is irrelevant — the depth buffer resolves them); transparent batches
+/// follow, sorted back-to-front (farthest first) because the transparent pipeline disables
+/// depth-write, so ONLY draw order determines the blended result. Each arg is
+/// `(is_transparent, sort_depth)`.
+pub(crate) fn cmp_draw_order(a: (bool, f32), b: (bool, f32)) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a.0, b.0) {
+        (false, false) => Ordering::Equal,
+        (false, true) => Ordering::Less,
+        (true, false) => Ordering::Greater,
+        // Both transparent: farther one drawn first (descending depth).
+        (true, true) => b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal),
+    }
+}
+
 pub(crate) fn pack_pbr_params(anisotropy: f32, clear_coat: f32, subsurface: f32) -> f32 {
     (anisotropy * 1000.0).floor().min(999.0)
         + 1000.0 * (clear_coat * 1000.0).floor().min(999.0)
@@ -68,6 +105,10 @@ pub struct DrawItem {
     /// Number of shadow-only casters (region B) for this batch.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) shadow_count: u32,
+    /// Representative camera distance used to sort TRANSPARENT batches back-to-front
+    /// (see `cmp_draw_order` / `batch_sort_depth`). 0.0 for opaque batches (unused —
+    /// the depth buffer resolves opaque draw order).
+    pub(super) sort_depth: f32,
 }
 
 impl DrawItem {
@@ -331,6 +372,12 @@ pub(super) fn collect_draw_items(
         for batch in &batches {
             let first_instance = local_instances.len() as u32;
             let camera_count = batch.instances.len() as u32;
+            // Depth key only matters for transparent batches (opaque are depth-buffer sorted).
+            let sort_depth = if batch.is_transparent {
+                batch_sort_depth(&batch.instances, cam_pos)
+            } else {
+                0.0
+            };
             local_instances.extend(&batch.instances);
             local_draw_items.push(DrawItem {
                 vbuf: batch.vbuf.clone(),
@@ -344,6 +391,7 @@ pub(super) fn collect_draw_items(
                 camera_count,
                 shadow_first_instance: 0,
                 shadow_count: 0,
+                sort_depth,
             });
         }
 
@@ -357,6 +405,17 @@ pub(super) fn collect_draw_items(
             item.shadow_first_instance = shadow_first_instance;
             item.shadow_count = batch.shadow_instances.len() as u32;
         }
+
+        // Order draw items for correct alpha blending: opaque first, then transparent
+        // back-to-front. MUST run after region B backfill (which indexes draw items by batch
+        // order); reordering here is safe because the instance ranges are baked-in indices,
+        // independent of draw-item order, and every pass filters by its own flags. The
+        // forward transparent pass draws these in order, and its pipeline disables depth-write
+        // so this order is the only thing that makes overlapping transparents blend correctly
+        // (previously they were drawn in arbitrary HashMap order). Stable sort keeps opaque
+        // batches in their build order.
+        local_draw_items
+            .sort_by(|a, b| cmp_draw_order((a.is_transparent, a.sort_depth), (b.is_transparent, b.sort_depth)));
 
         cache.instances = local_instances;
         cache.draw_items = local_draw_items;
@@ -466,5 +525,66 @@ mod pbr_pack_tests {
         assert!((aniso - 0.3).abs() < 0.002, "aniso {aniso}");
         assert!((cc - 0.7).abs() < 0.002, "clear_coat {cc}");
         assert!((ss - 0.05).abs() < 0.02, "subsurface {ss}");
+    }
+}
+
+#[cfg(test)]
+mod transparent_order_tests {
+    use super::{batch_sort_depth, cmp_draw_order, Vec3};
+    use crate::renderer::gpu_types::InstanceRaw;
+    use bytemuck::Zeroable;
+
+    fn inst_at(x: f32, y: f32, z: f32) -> InstanceRaw {
+        let mut i = InstanceRaw::zeroed();
+        // Column-major identity rotation/scale; translation in column 3.
+        i.model = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [x, y, z, 1.0],
+        ];
+        i
+    }
+
+    #[test]
+    fn batch_depth_is_centroid_distance_to_camera() {
+        let cam = Vec3::new(0.0, 0.0, 0.0);
+        // Single instance 10 units down -Z → distance 10.
+        assert!((batch_sort_depth(&[inst_at(0.0, 0.0, -10.0)], cam) - 10.0).abs() < 1e-3);
+        // Two instances at x=±3, z=-4 → centroid (0,0,-4), distance 4 (not 5).
+        let d = batch_sort_depth(&[inst_at(3.0, 0.0, -4.0), inst_at(-3.0, 0.0, -4.0)], cam);
+        assert!((d - 4.0).abs() < 1e-3, "centroid distance wrong: {d}");
+        // Empty batch → 0.
+        assert_eq!(batch_sort_depth(&[], cam), 0.0);
+    }
+
+    // Opaque batches sort ahead of transparent ones; transparent sort back-to-front
+    // (farthest first) so the depth-write-disabled alpha pass composites correctly.
+    #[test]
+    fn opaque_first_then_transparent_back_to_front() {
+        let mut items = vec![
+            (true, 5.0),   // near transparent
+            (false, 0.0),  // opaque
+            (true, 20.0),  // far transparent
+            (false, 0.0),  // opaque
+            (true, 12.0),  // mid transparent
+        ];
+        items.sort_by(|a, b| cmp_draw_order(*a, *b));
+        assert_eq!(
+            items,
+            vec![(false, 0.0), (false, 0.0), (true, 20.0), (true, 12.0), (true, 5.0)]
+        );
+    }
+
+    // The whole point: the resulting transparent order depends on DEPTH, not on the
+    // (nondeterministic HashMap) insertion order.
+    #[test]
+    fn transparent_order_independent_of_input_order() {
+        let mut a = vec![(true, 3.0), (true, 9.0), (true, 1.0)];
+        let mut b = vec![(true, 1.0), (true, 3.0), (true, 9.0)];
+        a.sort_by(|x, y| cmp_draw_order(*x, *y));
+        b.sort_by(|x, y| cmp_draw_order(*x, *y));
+        assert_eq!(a, b);
+        assert_eq!(a, vec![(true, 9.0), (true, 3.0), (true, 1.0)]);
     }
 }
