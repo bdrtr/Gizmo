@@ -15,8 +15,8 @@ reflect = ["dep:bevy_reflect", "gizmo-core/reflect"]
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
-gizmo-core = { path = "../gizmo-core", version = "0.2.0" }
-gizmo-math = { path = "../gizmo-math", version = "0.2.0" }
+gizmo-core = { path = "../gizmo-core", version = "0.8.0" }
+gizmo-math = { path = "../gizmo-math", version = "0.8.0" }
 arrayvec = "0.7.6"
 tracing = "0.1.44"
 bevy_reflect = { version = "0.15.1", features = ["glam"], optional = true }

@@ -13,19 +13,19 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-gizmo-core = { path = "../gizmo-core" , version = "0.2.0" }
-gizmo-math = { path = "../gizmo-math" , version = "0.2.0" }
+gizmo-core = { path = "../gizmo-core" , version = "0.8.0" }
+gizmo-math = { path = "../gizmo-math" , version = "0.8.0" }
 tracing = "0.1.44"
 
 # Optional dependencies
-gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.2.0", optional = true }
-gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.2.0", optional = true }
-gizmo-physics-dynamics = { path = "../gizmo-physics-dynamics", version = "0.2.0", optional = true }
-gizmo-renderer = { path = "../gizmo-renderer" , version = "0.2.0", optional = true }
-gizmo-audio = { path = "../gizmo-audio" , version = "0.2.0", optional = true }
-gizmo-editor = { path = "../gizmo-editor" , version = "0.2.0", optional = true }
-gizmo-scene = { path = "../gizmo-scene" , version = "0.2.0", optional = true }
-gizmo-net = { path = "../gizmo-net", version = "0.2.0", optional = true, default-features = false }
+gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.8.0", optional = true }
+gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.8.0", optional = true }
+gizmo-physics-dynamics = { path = "../gizmo-physics-dynamics", version = "0.8.0", optional = true }
+gizmo-renderer = { path = "../gizmo-renderer" , version = "0.8.0", optional = true }
+gizmo-audio = { path = "../gizmo-audio" , version = "0.8.0", optional = true }
+gizmo-editor = { path = "../gizmo-editor" , version = "0.8.0", optional = true }
+gizmo-scene = { path = "../gizmo-scene" , version = "0.8.0", optional = true }
+gizmo-net = { path = "../gizmo-net", version = "0.8.0", optional = true, default-features = false }
 winit = { version = "0.30", optional = true }
 wgpu = { version = "29", features = ["fragile-send-sync-non-atomic-wasm", "webgl"], optional = true }
 pollster = { version = "0.3", optional = true }
@@ -61,7 +61,7 @@ backtrace = "0.3.76"
 # web the `scene` feature loads scenes without Script components (scripting is
 # part of the deferred web backlog). `dep:gizmo-scripting` in the `scene`
 # feature is a no-op on wasm32.
-gizmo-scripting = { path = "../gizmo-scripting" , version = "0.2.0", optional = true }
+gizmo-scripting = { path = "../gizmo-scripting" , version = "0.8.0", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

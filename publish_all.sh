@@ -35,14 +35,15 @@ crates=(
     "crates/gizmo-physics-dynamics" # [A]
     "crates/gizmo-audio"            # [A]
     "crates/gizmo-ai"               # [A]
-    "crates/gizmo-renderer"         # [B]
+    "crates/gizmo-animation"        # [B] MUST precede gizmo-renderer (renderer normal-deps it)
+    "crates/gizmo-renderer"         # [B] (depends on gizmo-animation)
     "crates/gizmo-window"           # [B]
-    "crates/gizmo-scripting"        # [B]
+    "crates/gizmo-scripting"        # [B] (depends on gizmo-animation)
     "crates/gizmo-scene"            # [A] (depends on gizmo-scripting on non-wasm)
-    "crates/gizmo-editor"           # [B]
-    "crates/gizmo-app"              # [B]
-    "crates/gizmo-animation"        # [B] (transitively, via gizmo-app)
+    "crates/gizmo-editor"           # [B] (depends on gizmo-renderer/scene/scripting)
+    "crates/gizmo-app"              # [B] (depends on gizmo-editor/renderer/scene/scripting)
     "crates/gizmo-ui"               # [B]
+    "crates/gizmo-analysis"         # [B] (opt-depends on gizmo-app/gizmo-physics-rigid; facade opt-dep)
     "crates/gizmo"                  # [B] facade — re-exports everything
 )
 
