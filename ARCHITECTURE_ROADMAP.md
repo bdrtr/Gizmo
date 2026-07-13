@@ -115,10 +115,18 @@ de-facto module (0.50) — the most tangled seam, and exactly where we burned ho
       `ca05bbf`; 70 tests pass.
 - Verified per file with `cargo test -p gizmo-physics-{dynamics,rigid,core}`.
 
-### Phase 4 — Core & gameplay glue
-- [ ] `input.rs` (859) → `input/{keyboard,mouse,gamepad,mapping}.rs`
-- [ ] `query/mod.rs` (975) → builder / iteration / filters
-- [ ] `spawner.rs` (957) → per-primitive spawn helpers
+### Phase 4 — Core & gameplay glue ✅ COMPLETE
+- [x] `input.rs` (859) → `input/{mod,mapping,fighter}.rs`. Split by concern: mod.rs = the
+      `Input` keyboard+mouse state machine (no gamepad code exists) + `mouse` constants + tests;
+      `mapping.rs` = `InputBinding`/`ActionMap`; `fighter.rs` = `FighterInputBuffer`/`PlaybackData`
+      replay buffer. `cdb7330`; 152 tests.
+- [x] `query/mod.rs` (975 → 452) → extract `access.rs` (the `impl Query` iteration/access blocks)
+      + `tests.rs`, leaving the coupled trait/macro machinery (WorldQuery/ReadOnlyQuery, the
+      impl_* macros, Or, aliasing `check`) in mod.rs. `4ce0619`; 152 tests + the 7 dual-Mut
+      soundness doctests still hold.
+- [x] `spawner.rs` (957 → 675) → extract `gltf.rs` (the ~310-line `spawn_gltf[_async]` +
+      `spawn_gltf_node_flat` scene walker); the primitive/camera/light/rigid spawns + shared
+      `spawn_mesh_entity` (now `pub(super)`) stay in mod.rs. `4f614b9`; gizmo-engine 19 tests.
 
 ### Phase 5 — Tooling (lowest priority)
 - [ ] `gizmo-studio/render_pipeline.rs` (1002) — not shipped runtime.
