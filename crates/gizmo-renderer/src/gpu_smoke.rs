@@ -55,11 +55,18 @@ pub struct SmokeVolume {
     pub buoyancy: f32,
     pub curl_strength: f32,
     pub curl_scale: f32,
-    /// CS2-style bounded radial fill: smoke is pushed OUTWARD from the source so it fills a
-    /// volume (rather than only rising), stopping past `fill_radius`. 0 = off (pure plume).
+    /// Bounded radial fill: smoke is pushed OUTWARD from the source so it spreads to fill a
+    /// volume (rather than only rising), the push fading to zero past `fill_radius`. This is a
+    /// force term, NOT a pressure solve — it does not re-route smoke around corners/doorways
+    /// (that is roadmap T7). 0 = off (pure plume).
     pub fill_strength: f32,
     /// Radius the radial fill expands to before the outward push fades to zero (world units).
     pub fill_radius: f32,
+
+    // Obstacle voxelization inputs, retained so the field can be re-baked when `bounds_*`
+    // change (the solidity buffer holds grid indices baked against a specific bounds box).
+    obstacle_boxes: Vec<([f32; 3], [f32; 3])>,
+    obstacle_bounds: [[f32; 3]; 2], // (min, max) the obstacle field was last voxelized against
 }
 
 impl SmokeVolume {
@@ -331,6 +338,8 @@ impl SmokeVolume {
             curl_scale: 0.7,
             fill_strength: 0.0,
             fill_radius: 1.5,
+            obstacle_boxes: Vec::new(),
+            obstacle_bounds: [[-1.6, 0.05, -1.6], [1.6, 5.5, 1.6]],
         }
     }
 
@@ -344,14 +353,32 @@ impl SmokeVolume {
         &self.density[self.parity.load(Ordering::Relaxed) as usize]
     }
 
-    /// Voxelize a set of world-space AABBs (`(min, max)`) into the obstacle solidity field:
-    /// a cell is solid if its centre lies inside any box. Smoke then conforms to and flows
-    /// around these — pass the room's floor/walls/pillars (or collider AABBs). An empty slice
-    /// clears all obstacles. Cheap CPU voxelization at N³ (64³ ≈ 262k cells) — call when the
-    /// static geometry changes, not every frame.
-    pub fn set_obstacle_boxes(&self, queue: &wgpu::Queue, boxes: &[([f32; 3], [f32; 3])]) {
+    /// Voxelize a set of world-space AABBs (`(min, max)`) into the obstacle solidity field.
+    /// Smoke then conforms to and flows around these — pass the room's floor/walls/pillars (or
+    /// collider AABBs). An empty slice clears all obstacles. The boxes are retained so the field
+    /// can be re-baked if `bounds_*` change (see [`refresh_obstacles`]). Cheap CPU voxelization
+    /// at N³ (64³ ≈ 262k cells) — call when the STATIC geometry changes, not every frame.
+    ///
+    /// **Conservative rasterization:** a cell is solid if the box OVERLAPS the cell's AABB (not
+    /// merely if the box contains the cell centre) — so a wall thinner than one cell still
+    /// produces a watertight ≥1-cell-thick solid layer instead of vanishing between cell centres.
+    ///
+    /// [`refresh_obstacles`]: SmokeVolume::refresh_obstacles
+    pub fn set_obstacle_boxes(&mut self, queue: &wgpu::Queue, boxes: &[([f32; 3], [f32; 3])]) {
+        self.obstacle_boxes = boxes.to_vec();
+        self.bake_obstacles(queue);
+    }
+
+    /// Re-voxelize the retained obstacle boxes against the CURRENT `bounds_*`. Call this if you
+    /// mutate `bounds_min`/`bounds_max` after `set_obstacle_boxes` — the solidity buffer stores
+    /// grid indices baked against a specific bounds box, so a bounds change otherwise leaves the
+    /// obstacles mapped to the wrong world positions.
+    pub fn refresh_obstacles(&mut self, queue: &wgpu::Queue) {
+        self.bake_obstacles(queue);
+    }
+
+    fn bake_obstacles(&mut self, queue: &wgpu::Queue) {
         let n = self.grid_n as usize;
-        let mut solid = vec![0.0f32; n * n * n];
         let bmin = self.bounds_min;
         let bmax = self.bounds_max;
         let cs = [
@@ -359,21 +386,25 @@ impl SmokeVolume {
             (bmax[1] - bmin[1]) / n as f32,
             (bmax[2] - bmin[2]) / n as f32,
         ];
+        let mut solid = vec![0.0f32; n * n * n];
         for k in 0..n {
             for j in 0..n {
                 for i in 0..n {
-                    let c = [
-                        bmin[0] + (i as f32 + 0.5) * cs[0],
-                        bmin[1] + (j as f32 + 0.5) * cs[1],
-                        bmin[2] + (k as f32 + 0.5) * cs[2],
+                    // The cell's world-space AABB [cmin, cmax].
+                    let cmin = [
+                        bmin[0] + i as f32 * cs[0],
+                        bmin[1] + j as f32 * cs[1],
+                        bmin[2] + k as f32 * cs[2],
                     ];
-                    for (mn, mx) in boxes {
-                        if c[0] >= mn[0]
-                            && c[0] <= mx[0]
-                            && c[1] >= mn[1]
-                            && c[1] <= mx[1]
-                            && c[2] >= mn[2]
-                            && c[2] <= mx[2]
+                    let cmax = [cmin[0] + cs[0], cmin[1] + cs[1], cmin[2] + cs[2]];
+                    for (mn, mx) in &self.obstacle_boxes {
+                        // AABB overlap on all three axes (conservative — thin walls survive).
+                        if mn[0] <= cmax[0]
+                            && mx[0] >= cmin[0]
+                            && mn[1] <= cmax[1]
+                            && mx[1] >= cmin[1]
+                            && mn[2] <= cmax[2]
+                            && mx[2] >= cmin[2]
                         {
                             solid[(k * n + j) * n + i] = 1.0;
                             break;
@@ -383,6 +414,7 @@ impl SmokeVolume {
             }
         }
         queue.write_buffer(&self.obstacle, 0, bytemuck::cast_slice(&solid));
+        self.obstacle_bounds = [bmin, bmax];
     }
 
     /// Record the advection compute pass onto `encoder` and flip the ping-pong parity.
@@ -418,6 +450,15 @@ impl SmokeVolume {
     }
 
     fn write_params(&self, queue: &wgpu::Queue, time: f32, dt: f32) {
+        // The obstacle field is voxelized against a specific bounds box; if bounds are mutated
+        // after set_obstacle_boxes without refresh_obstacles, the solidity indices map to the
+        // wrong world positions. Catch that footgun in debug builds.
+        debug_assert!(
+            self.obstacle_boxes.is_empty()
+                || (self.obstacle_bounds[0] == self.bounds_min
+                    && self.obstacle_bounds[1] == self.bounds_max),
+            "smoke bounds changed after set_obstacle_boxes — call refresh_obstacles(queue)"
+        );
         let p = SmokeParams {
             bounds_min: [self.bounds_min[0], self.bounds_min[1], self.bounds_min[2], time],
             bounds_max: [self.bounds_max[0], self.bounds_max[1], self.bounds_max[2], self.absorption],
@@ -590,7 +631,9 @@ mod tests {
             let mut left = 0.0f64; // source side, x < -0.2
             let mut wall = 0.0f64; // inside the wall, x ∈ [-0.1, 0.1]
             let mut right = 0.0f64; // far side, x > 0.2
-            let (li, w0, w1, ri) = (xi(-0.2), xi(-0.1), xi(0.1), xi(0.2));
+            // `right` starts at the wall's FAR FACE (w1), not a gap past it — the cells
+            // immediately beyond are where any leak/tunnel would first show.
+            let (li, w0, w1) = (xi(-0.2), xi(-0.1), xi(0.1));
             for k in 0..n {
                 for j in 0..n {
                     for i in 0..n {
@@ -599,7 +642,7 @@ mod tests {
                             left += v;
                         } else if i >= w0 && i < w1 {
                             wall += v;
-                        } else if i >= ri {
+                        } else if i >= w1 {
                             right += v;
                         }
                     }
@@ -611,6 +654,272 @@ mod tests {
             assert!(
                 right < left * 0.02,
                 "smoke must not cross the wall: right={right} vs left={left}"
+            );
+        });
+    }
+
+    // POSITIVE CONTROL (clean A/B): the EXACT same setup as the wall test but with NO obstacle.
+    // The region the wall WOULD occupy (x ∈ [-0.1, 0.1]) now FILLS with smoke. Paired with the
+    // wall test (same region ≈ 0 WITH the obstacle), this proves the blocking comes from the
+    // obstacle mechanism itself, not the geometry/params: the only difference between the two
+    // tests is `set_obstacle_boxes`, and it flips that region from full to empty.
+    #[test]
+    fn without_an_obstacle_the_wall_region_fills() {
+        pollster::block_on(async {
+            let Some((device, queue)) = setup_headless_gpu().await else {
+                eprintln!("no GPU adapter — skipping smoke control test");
+                return;
+            };
+            let layout = scene_layout(&device);
+            let mut smoke = SmokeVolume::new(&device, &layout, wgpu::TextureFormat::Rgba16Float);
+            let n = smoke.grid_n() as usize;
+            smoke.bounds_min = [-1.0, 0.0, -1.0];
+            smoke.bounds_max = [1.0, 2.0, 1.0];
+            smoke.source = [-0.55, 0.5, 0.0];
+            smoke.source_radius = 0.35;
+            smoke.inject = 6.0;
+            smoke.buoyancy = 0.3;
+            smoke.fill_strength = 2.5;
+            smoke.fill_radius = 1.6;
+            smoke.dissipation = 0.99;
+            // No obstacles — the ONLY difference from `smoke_conforms_to_and_does_not_cross_a_wall`.
+            for f in 0..60 {
+                smoke.step(&device, &queue, f as f32 * (1.0 / 60.0), 1.0 / 60.0);
+            }
+            let d = read_f32(&device, &queue, smoke.density_buffer()).await;
+            let xi = |x: f32| (((x + 1.0) / 2.0) * n as f32) as usize;
+            let (w0, w1) = (xi(-0.1), xi(0.1));
+            let mut wall_region = 0.0f64;
+            for k in 0..n {
+                for j in 0..n {
+                    for i in w0..w1 {
+                        wall_region += d[(k * n + j) * n + i] as f64;
+                    }
+                }
+            }
+            assert!(
+                wall_region > 5.0,
+                "without an obstacle the wall region must fill (got {wall_region}); \
+                 the wall test asserts this same region is ~0 WITH the obstacle"
+            );
+        });
+    }
+
+    // A horizontal ceiling obstacle above the source: rising smoke POOLS underneath and does
+    // not penetrate above — exercises the +Y no-penetration + no-tunnel path (a different axis
+    // and mechanism than the vertical-wall test).
+    #[test]
+    fn smoke_pools_under_a_ceiling() {
+        pollster::block_on(async {
+            let Some((device, queue)) = setup_headless_gpu().await else {
+                eprintln!("no GPU adapter — skipping smoke ceiling test");
+                return;
+            };
+            let layout = scene_layout(&device);
+            let mut smoke = SmokeVolume::new(&device, &layout, wgpu::TextureFormat::Rgba16Float);
+            let n = smoke.grid_n() as usize;
+            smoke.bounds_min = [-1.0, 0.0, -1.0];
+            smoke.bounds_max = [1.0, 2.0, 1.0];
+            smoke.source = [0.0, 0.35, 0.0];
+            smoke.source_radius = 0.4;
+            smoke.inject = 6.0;
+            smoke.buoyancy = 1.6; // strong rise → actively pushes into the ceiling
+            smoke.fill_strength = 0.0;
+            smoke.dissipation = 0.99;
+            // Horizontal ceiling slab at y ∈ [1.2, 1.4], spanning x/z.
+            smoke.set_obstacle_boxes(&queue, &[([-1.0, 1.2, -1.0], [1.0, 1.4, 1.0])]);
+            for f in 0..80 {
+                smoke.step(&device, &queue, f as f32 * (1.0 / 60.0), 1.0 / 60.0);
+            }
+            let d = read_f32(&device, &queue, smoke.density_buffer()).await;
+            let yj = |y: f32| ((y / 2.0) * n as f32) as usize;
+            let (below, c0, c1, above) = (yj(1.1), yj(1.2), yj(1.4), yj(1.5));
+            let mut below_s = 0.0f64;
+            let mut ceil_s = 0.0f64;
+            let mut above_s = 0.0f64;
+            for k in 0..n {
+                for j in 0..n {
+                    for i in 0..n {
+                        let v = d[(k * n + j) * n + i] as f64;
+                        if j < below {
+                            below_s += v;
+                        } else if j >= c0 && j < c1 {
+                            ceil_s += v;
+                        } else if j >= above {
+                            above_s += v;
+                        }
+                    }
+                }
+            }
+            assert!(below_s > 5.0, "smoke should pool under the ceiling (below={below_s})");
+            assert!(ceil_s < 1e-3, "ceiling cells must hold no smoke (ceil={ceil_s})");
+            assert!(
+                above_s < below_s * 0.05,
+                "smoke must not penetrate above the ceiling (above={above_s}, below={below_s})"
+            );
+        });
+    }
+
+    // THIN-WALL LOAD-BEARING TEST — the one that makes mechanisms (2)/(3) genuinely proven.
+    // A wall THINNER than one cell (0.016 < cs.x 0.03125) with strong lateral fill, so the
+    // semi-Lagrangian backtrace SPANS it. This exercises exactly the two fixes the audit
+    // demanded: (A) conservative box↔cell voxelization — the old center-in-box test found NO
+    // cell centre inside this wall and voxelized it to nothing (smoke crossed freely); and
+    // (B) segment-marched no-tunnel — an endpoint-only backtrace overshoots the sub-cell wall
+    // into the dense source side and pulls density across (tunnels). With both fixes the wall
+    // is a watertight ≥1-cell layer and nothing crosses. (Reverting either fix fails this test.)
+    #[test]
+    fn thin_wall_blocks_voxelization_and_tunneling_leaks() {
+        pollster::block_on(async {
+            let Some((device, queue)) = setup_headless_gpu().await else {
+                eprintln!("no GPU adapter — skipping thin-wall test");
+                return;
+            };
+            let layout = scene_layout(&device);
+            let mut smoke = SmokeVolume::new(&device, &layout, wgpu::TextureFormat::Rgba16Float);
+            let n = smoke.grid_n() as usize; // 64 → cs.x = 2/64 = 0.03125
+            smoke.bounds_min = [-1.0, 0.0, -1.0];
+            smoke.bounds_max = [1.0, 2.0, 1.0];
+            smoke.source = [-0.5, 1.0, 0.0];
+            smoke.source_radius = 0.35;
+            smoke.inject = 6.0;
+            smoke.buoyancy = 0.2;
+            smoke.curl_strength = 1.6;
+            // Very strong lateral push so |vel*dt| ≈ 8 cells: a far-side cell's backtrace spans
+            // the wall AND the no-penetration buffer cell in front of it, reaching the dense
+            // region beyond. An endpoint-only guard then samples that dense cell (tunnels); the
+            // segment march hits the wall first and stops. This is what isolates mechanism (3).
+            smoke.fill_strength = 10.0;
+            smoke.fill_radius = 2.5;
+            smoke.dissipation = 0.99;
+            // Sub-cell wall centered at x=0 (cells 31 & 32 under conservative rasterization).
+            smoke.set_obstacle_boxes(&queue, &[([-0.008, 0.0, -1.0], [0.008, 2.0, 1.0])]);
+            // dt at the sim clamp cap (1/30) so |vel*dt| clearly exceeds the wall thickness.
+            for f in 0..60 {
+                smoke.step(&device, &queue, f as f32 * (1.0 / 30.0), 1.0 / 30.0);
+            }
+            let d = read_f32(&device, &queue, smoke.density_buffer()).await;
+            let xi = |x: f32| (((x + 1.0) / 2.0) * n as f32) as usize;
+            // Cell boundaries land exactly on x = ±0.03125 → wall = i ∈ [31,33). Compare the 3
+            // columns IMMEDIATELY left of the wall (near face, dense) with the 3 IMMEDIATELY
+            // right (far face). With endpoint-only tunneling the backtrace (|vel*dt| ≈ 3 cells)
+            // jumps the wall and pulls the dense near-face across, so far ≈ near; with the
+            // segment march it stops at the wall and far ≈ 0. Comparing thin adjacent bands
+            // (not far vs the whole near region) keeps a single tunnelled column detectable.
+            let (near0, near1) = (xi(-0.25), xi(-0.03125)); // dense source-side band i ∈ [24,31)
+            let (w0, w1) = (xi(-0.03125), xi(0.03125)); // wall i ∈ [31,33)
+            let (far0, far1) = (xi(0.03125), xi(0.20)); // just past the wall i ∈ [33,38)
+            let mut near_face = 0.0f64;
+            let mut wall_cells = 0.0f64;
+            let mut far_face = 0.0f64;
+            for k in 0..n {
+                for j in 0..n {
+                    for i in 0..n {
+                        let v = d[(k * n + j) * n + i] as f64;
+                        if i >= near0 && i < near1 {
+                            near_face += v;
+                        } else if i >= w0 && i < w1 {
+                            wall_cells += v;
+                        } else if i >= far0 && i < far1 {
+                            far_face += v;
+                        }
+                    }
+                }
+            }
+            assert!(
+                near_face > 5.0,
+                "smoke should pile against the wall's near face (near_face={near_face})"
+            );
+            assert!(
+                wall_cells < 1e-3,
+                "the sub-cell wall's cells must be solid/empty (wall_cells={wall_cells})"
+            );
+            assert!(
+                far_face < near_face * 0.1,
+                "no smoke may tunnel/leak past a sub-cell wall (far_face={far_face}, near_face={near_face})"
+            );
+        });
+    }
+
+    // CONFORMING / FLOW-THROUGH: a wall with a DOORWAY gap. Smoke must flow THROUGH the gap to the
+    // far side (proving it flows around/through geometry, not just stops dead everywhere), while
+    // the far side directly behind the SOLID part stays blocked. Closes the "flow-around asserted
+    // nowhere" gap — a regression that froze smoke at every face would fail the flow-through half.
+    #[test]
+    fn smoke_flows_through_a_doorway_but_not_the_solid_wall() {
+        pollster::block_on(async {
+            let Some((device, queue)) = setup_headless_gpu().await else {
+                eprintln!("no GPU adapter — skipping doorway test");
+                return;
+            };
+            let layout = scene_layout(&device);
+            let mut smoke = SmokeVolume::new(&device, &layout, wgpu::TextureFormat::Rgba16Float);
+            let n = smoke.grid_n() as usize;
+            smoke.bounds_min = [-1.0, 0.0, -1.0];
+            smoke.bounds_max = [1.0, 2.0, 1.0];
+            smoke.source = [-0.55, 1.0, 0.0];
+            smoke.source_radius = 0.35;
+            smoke.inject = 6.0;
+            smoke.buoyancy = 0.2;
+            smoke.curl_strength = 1.6;
+            smoke.fill_strength = 4.0;
+            smoke.fill_radius = 2.2;
+            smoke.dissipation = 0.99;
+            // A wall at x ∈ [-0.05, 0.05] with a doorway gap in z ∈ [-0.25, 0.25]: two solid
+            // panels z ∈ [-1,-0.25] and z ∈ [0.25,1].
+            smoke.set_obstacle_boxes(
+                &queue,
+                &[
+                    ([-0.05, 0.0, -1.0], [0.05, 2.0, -0.25]),
+                    ([-0.05, 0.0, 0.25], [0.05, 2.0, 1.0]),
+                ],
+            );
+            for f in 0..90 {
+                smoke.step(&device, &queue, f as f32 * (1.0 / 30.0), 1.0 / 30.0);
+            }
+            let d = read_f32(&device, &queue, smoke.density_buffer()).await;
+            let xi = |x: f32| (((x + 1.0) / 2.0) * n as f32) as usize;
+            let zk = |z: f32| (((z + 1.0) / 2.0) * n as f32) as usize;
+            let far = xi(0.15); // past the wall's far face (x > 0.1)
+            // At the wall's IMMEDIATE far face, smoke exits only through the doorway lane — the
+            // z-lanes behind the SOLID panels can only fill later by wrapping around from the far
+            // side, so right at the face they are far emptier. (Measuring the whole far side would
+            // include that legitimate wrap-around, which is NOT tunneling.)
+            let face_hi = xi(0.28);
+            let (gap0, gap1) = (zk(-0.2), zk(0.2)); // doorway lane in z
+            let mut face_gap = 0.0f64; // at the far face, behind the doorway → should FILL
+            let mut face_solid = 0.0f64; // at the far face, behind a solid panel → blocked here
+            let mut far_gap = 0.0f64; // whole far side behind the doorway
+            for k in 0..n {
+                for j in 0..n {
+                    for i in far..n {
+                        let v = d[(k * n + j) * n + i] as f64;
+                        let behind_gap = k >= gap0 && k < gap1;
+                        let behind_solid = k < zk(-0.4) || k >= zk(0.4);
+                        if behind_gap {
+                            far_gap += v;
+                        }
+                        if i < face_hi {
+                            if behind_gap {
+                                face_gap += v;
+                            } else if behind_solid {
+                                face_solid += v;
+                            }
+                        }
+                    }
+                }
+            }
+            // Flow-through: smoke reaches the far side via the gap (a "frozen at every face"
+            // regression, or a closed wall, gives ~0 here — cf. the solid-wall tests).
+            assert!(
+                far_gap > 1.0,
+                "smoke must flow THROUGH the doorway to the far side (far_gap={far_gap})"
+            );
+            // And at the immediate far face it exits through the gap, not through the solid panels.
+            assert!(
+                face_gap > 5.0 * face_solid.max(1e-6),
+                "at the wall face, smoke must emerge through the doorway, not the solid \
+                 (face_gap={face_gap}, face_solid={face_solid})"
             );
         });
     }
