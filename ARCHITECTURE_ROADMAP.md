@@ -65,10 +65,16 @@ de-facto module (0.50) — the most tangled seam, and exactly where we burned ho
       + `mod.rs` re-exporting the recorders (call sites unchanged). Pure move; build clean +
       golden render tests pass. Commit `d5fd52f`. (The sixth recorder is `forward.rs`, not the
       guessed `post.rs`.)
-- [ ] `systems/render/mod.rs` (1120) → extract `default_render_pass` into: `scene_uniforms.rs`
-      (the giant uniform build), `lights.rs` (collection), `shadows.rs` (cascade setup),
-      `resize.rs` (already partly separate), leaving `mod.rs` as thin orchestration.
-      **← recommended next step.**
+- [~] `systems/render/mod.rs` (1120 → 782) → **largest chunk extracted.** The per-frame render
+      cache + draw-item collection/culling/instancing (the biggest self-contained block of the
+      ~620-line `default_render_pass`) moved verbatim into `batching.rs` — `RenderCache`,
+      `DrawItem`/`BatchKey`/`BatchData`, `collect_draw_items` (+ the `process_mesh!` macro) and
+      the routing-flags test. Commit `d518c48`; build clean + golden + batch tests pass.
+      The roadmap also named `lights.rs`/`shadows.rs` — those were **already** single-sourced in
+      `shared.rs` (`collect_scene_lights`) + the renderer crate (`compute_directional_cascades`),
+      so they didn't need extracting. Still inline (small now, optional follow-ups): the camera
+      resolve, the `SceneUniforms` assembly (`scene_uniforms.rs`), and the G-buffer/SSAO/…/TAA
+      `resize` block (`resize.rs`).
 - [~] `shaders/deferred_lighting.wgsl` (664 → 572) → **partly split.** The pure PBR lobes
       (anisotropic GGX, clear-coat, Lazarov env-BRDF LUT) moved into a new composable module
       `gizmo::pbr_ext` (`shaders/pbr_ext.wgsl`), `#import`ed by deferred_lighting. Commit
