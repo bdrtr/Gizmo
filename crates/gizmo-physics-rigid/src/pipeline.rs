@@ -197,9 +197,12 @@ impl PhysicsWorld {
         let potential_pairs = self.spatial_hash.query_pairs();
 
         // ── Dormant-çift atlama (geniş-sahne perf) ────────────────────────
-        // Profil: narrowphase (GJK/SAT) geniş sahnede zamanın ~%82'si. İki cisim de
-        // DORMANT ise (statik VEYA uyuyan dinamik VEYA hareketsiz kinematik) yeni temas
-        // ÜRETEMEZ → pahalı narrowphase ATLANIR. Cache aşağıda KORUNUR (yoksa ended-
+        // İki cisim de DORMANT ise (statik VEYA uyuyan dinamik VEYA hareketsiz kinematik)
+        // yeni temas ÜRETEMEZ → pahalı narrowphase ATLANIR. (Not: eski "~%82" ölçümü
+        // dormant-skip/pre-size/FxHash/paralel-narrowphase ÖNCESİNE ait; ölçüldü 2026-07-14 →
+        // narrowphase artık geniş sahnede ~%34, SAT compute alt-dilimi frame'in ~%3'ü. Bu yüzden
+        // box-box SAT batch-SoA SIMD DÜŞÜRÜLDÜ; bkz. docs/narrowphase-batch-simd-plan.md.)
+        // Cache aşağıda KORUNUR (yoksa ended-
         // collision wake sahte tetiklenir). En az biri aktifse normal narrowphase çalışır
         // (temas + wake yakalanır), böylece düşen/itilen cisim uyuyan komşuyu uyandırır.
         let is_active_body = |e: BodyHandle| -> bool {
