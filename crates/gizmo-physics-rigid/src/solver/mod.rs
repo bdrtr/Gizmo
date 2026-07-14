@@ -111,11 +111,16 @@ impl ConstraintSolver {
         velocities: &mut [Velocity],
         pos_corrections: &mut [(Vec3, Vec3)],
         entity_index_map: &rustc_hash::FxHashMap<u32, usize>,
+        // Distinct GLOBAL body indices in this island. The shared `pos_corrections`
+        // buffer is thread-local-reused across islands, so we clear only THIS island's
+        // entries (the caller reads back only these) instead of the whole world array.
+        island_bodies: &[usize],
         dt: f32,
     ) {
-        // Pozisyon düzeltme buffer'ını sıfırla (çağıran tarafından yeniden kullanılabilir).
-        for pc in pos_corrections.iter_mut() {
-            *pc = (Vec3::ZERO, Vec3::ZERO);
+        // Pozisyon düzeltme buffer'ını sıfırla — yalnız bu adanın girdileri (buffer çağıran
+        // tarafından adalar arası yeniden kullanılıyor; full-world sıfırlama O(n_islands×n_bodies)'ti).
+        for &i in island_bodies {
+            pos_corrections[i] = (Vec3::ZERO, Vec3::ZERO);
         }
         if manifolds.is_empty() {
             return;
@@ -141,6 +146,7 @@ impl ConstraintSolver {
                 velocities,
                 pos_corrections,
                 entity_index_map,
+                island_bodies,
                 dt,
             );
             return;
