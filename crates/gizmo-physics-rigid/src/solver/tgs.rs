@@ -1,8 +1,44 @@
 use super::ConstraintSolver;
 use crate::components::{RigidBody, Velocity};
-use gizmo_math::Vec3;
+use gizmo_math::{Mat3, Vec3};
 use gizmo_physics_core::components::Transform;
 use gizmo_physics_core::ContactManifold;
+
+/// Per-contact quantities that are INVARIANT across all 24 TGS sweeps (the biased
+/// iterations + relax passes) — hoisted out of the sweep and computed exactly once.
+/// The sweep then does only the velocity/dp-dependent work. `acc_n`/`acc_t` are the
+/// mutable impulse accumulators: seeded from the manifold, mutated in place each
+/// sweep, and written back to the manifold after solving (warm-start continuity).
+/// Every field is produced with the SAME expression the sweep used, so the result
+/// is bit-identical to the pre-hoist solver. Contacts that the old sweep skipped
+/// (`k_n < 1e-8`, or a manifold with two non-dynamic bodies) are simply not built.
+struct Prepared {
+    idx_a: usize,
+    idx_b: usize,
+    dyn_a: bool,
+    dyn_b: bool,
+    inv_m_a: f32,
+    inv_m_b: f32,
+    inv_i_a: Mat3,
+    inv_i_b: Mat3,
+    r_a: Vec3,
+    r_b: Vec3,
+    normal: Vec3,
+    k_n: f32,
+    t1: Vec3,
+    t2: Vec3,
+    k_t1: f32,
+    k_t2: f32,
+    friction: f32,
+    static_friction: f32,
+    restitution: f32,
+    pen0: f32,
+    vn0: f32,
+    mid: usize,
+    cid: usize,
+    acc_n: f32,
+    acc_t: Vec3,
+}
 
 impl ConstraintSolver {
     // ─────────────────────────────────────────────────────────────────────────
@@ -153,6 +189,101 @@ impl ConstraintSolver {
             dt
         };
 
+        // ── Per-contact SABİT precompute (hoist) ──
+        // sweep'ler arası DEĞİŞMEYEN her şeyi (idx / inv_m / inv_i / com→r / normal / k_n /
+        // t1,t2 / k_t) bir KEZ hesapla; 24 sweep aynı `prepared` dizisini yeniden kullanır.
+        // Değerler eski sweep'le BİREBİR aynı ifadelerle üretildiğinden sonuç bit-identical
+        // (davranış korunur — tgs_hash_check oracle'ı ile doğrulandı). Eski `continue`
+        // davranışı korunur: iki-statik manifold ve k_n<1e-8 temaslar hiç eklenmez, dolayısıyla
+        // her sweep'te atlanmış olurlar. Impulse birikimcileri (acc_n/acc_t) manifold'dan
+        // tohumlanır, sweep'lerde yerinde güncellenir, sonda geri yazılır.
+        let mut prepared: Vec<Prepared> = Vec::with_capacity(manifolds.len());
+        for mid in 0..manifolds.len() {
+            let (idx_a, idx_b) = match (
+                entity_index_map.get(&manifolds[mid].entity_a.id()),
+                entity_index_map.get(&manifolds[mid].entity_b.id()),
+            ) {
+                (Some(&a), Some(&b)) => (a, b),
+                _ => continue,
+            };
+            let dyn_a = rigid_bodies[idx_a].is_dynamic();
+            let dyn_b = rigid_bodies[idx_b].is_dynamic();
+            if !dyn_a && !dyn_b {
+                continue;
+            }
+            let inv_m_a = rigid_bodies[idx_a].inv_mass();
+            let inv_m_b = rigid_bodies[idx_b].inv_mass();
+            let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
+            let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
+            let com_a = com_of(idx_a);
+            let com_b = com_of(idx_b);
+            let friction = manifolds[mid].friction;
+            let static_friction = manifolds[mid].static_friction;
+            let restitution = manifolds[mid].restitution;
+            let n_contacts = manifolds[mid].contacts.len();
+            for cid in 0..n_contacts {
+                let ct = manifolds[mid].contacts[cid];
+                let normal = ct.normal;
+                let r_a = ct.point - com_a;
+                let r_b = ct.point - com_b;
+                let r_a_x_n = r_a.cross(normal);
+                let r_b_x_n = r_b.cross(normal);
+                let k_n = inv_m_a
+                    + inv_m_b
+                    + inv_i_a.mul_vec3(r_a_x_n).dot(r_a_x_n)
+                    + inv_i_b.mul_vec3(r_b_x_n).dot(r_b_x_n);
+                if k_n < 1e-8 {
+                    continue;
+                }
+                let (t1, t2) = {
+                    let a = if normal.x.abs() > 0.9 {
+                        Vec3::new(0.0, 1.0, 0.0).cross(normal)
+                    } else {
+                        Vec3::new(1.0, 0.0, 0.0).cross(normal)
+                    }
+                    .normalize();
+                    (a, normal.cross(a))
+                };
+                let eff_mass = |taxis: Vec3| -> f32 {
+                    let rxt_a = r_a.cross(taxis);
+                    let rxt_b = r_b.cross(taxis);
+                    inv_m_a
+                        + inv_m_b
+                        + inv_i_a.mul_vec3(rxt_a).dot(rxt_a)
+                        + inv_i_b.mul_vec3(rxt_b).dot(rxt_b)
+                };
+                let k_t1 = eff_mass(t1);
+                let k_t2 = eff_mass(t2);
+                prepared.push(Prepared {
+                    idx_a,
+                    idx_b,
+                    dyn_a,
+                    dyn_b,
+                    inv_m_a,
+                    inv_m_b,
+                    inv_i_a,
+                    inv_i_b,
+                    r_a,
+                    r_b,
+                    normal,
+                    k_n,
+                    t1,
+                    t2,
+                    k_t1,
+                    k_t2,
+                    friction,
+                    static_friction,
+                    restitution,
+                    pen0: ct.penetration,
+                    vn0: vn0[mid][cid],
+                    mid,
+                    cid,
+                    acc_n: ct.normal_impulse,
+                    acc_t: ct.tangent_impulse,
+                });
+            }
+        }
+
         // Per-body position-delta scratch (dp), indexed by GLOBAL body index but sized once
         // per thread and RESET only for `island_bodies` — no per-island full-world allocation.
         // Islands are disjoint (a body is in exactly one island), so resetting just this
@@ -175,14 +306,10 @@ impl ConstraintSolver {
             // iterasyonun bias'ı GÜNCEL penetrasyonu görür → düzeltme yığın boyunca yayılır
             // (SI'nin yapamadığı; uzun/çarpan yığınları ayakta tutan temel mekanizma).
             for iter in 0..self.iterations {
-                self.tgs_sweep(
-                    manifolds,
-                    rigid_bodies,
-                    transforms,
+                self.tgs_sweep_prepared(
+                    &mut prepared,
                     velocities,
-                    entity_index_map,
                     dp.as_slice(),
-                    &vn0,
                     false,
                     iter % 2 == 1,
                     true,
@@ -201,14 +328,10 @@ impl ConstraintSolver {
 
             // ── 4) RELAX (bias=0) — soft bias hızını temizle ──
             for iter in 0..self.relax_iterations {
-                self.tgs_sweep(
-                    manifolds,
-                    rigid_bodies,
-                    transforms,
+                self.tgs_sweep_prepared(
+                    &mut prepared,
                     velocities,
-                    entity_index_map,
                     dp.as_slice(),
-                    &vn0,
                     true,
                     iter % 2 == 1,
                     false,
@@ -234,24 +357,28 @@ impl ConstraintSolver {
                 }
             }
         });
+
+        // Impulse birikimcilerini manifold'a geri yaz (warm-start sürekliliği: bir sonraki
+        // substep bu değerleri okur). Eski kod bunu her sweep'te yazıyordu; `prepared` bunları
+        // bellekte tuttuğu için tek bir yazma yeterli, sonuç aynı.
+        for p in &prepared {
+            manifolds[p.mid].contacts[p.cid].normal_impulse = p.acc_n;
+            manifolds[p.mid].contacts[p.cid].tangent_impulse = p.acc_t;
+        }
     }
 
-    /// Tek TGS iterasyon taraması: her temasta normal (opsiyonel soft bias) + 2-tangent
-    /// Coulomb sürtünme çöz. `use_bias=false` → rijit relax (bias yok).
+    /// Tek TGS iterasyon taraması — precompute'lu (`prepared`) sürüm. Her temasta normal
+    /// (opsiyonel soft bias) + 2-tangent Coulomb sürtünme çöz. `use_bias=false` → rijit
+    /// relax. Sabitler (`r_a/r_b/normal/k_n/t1/t2/k_t/inv_i…`) `prepared`'da hazır; burada
+    /// yalnız hız/dp'ye bağlı değişken kısım hesaplanır. Ters sıra (`reverse`) düz dizinin
+    /// TERSİDİR — eski kodun (manifold-ters + contact-ters) sırasıyla BİREBİR aynı.
     #[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
-    fn tgs_sweep(
+    fn tgs_sweep_prepared(
         &self,
-        manifolds: &mut [ContactManifold],
-        rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        prepared: &mut [Prepared],
         velocities: &mut [Velocity],
-        entity_index_map: &rustc_hash::FxHashMap<u32, usize>,
         // Gerçek TGS: gövde başına biriken pozisyon-delta'sı (lin, açısal-scaled-axis).
-        // Bias, başlangıç penetrasyonu yerine bu delta'larla GÜNCELLENMİŞ penetrasyondan
-        // hesaplanır → düzeltme iterasyonlar arası yığın boyunca yayılır.
         dp: &[(Vec3, Vec3)],
-        // Başlangıç yaklaşma hızı (warm-start öncesi), restitution hedefi için. [mid][cid].
-        vn0: &[Vec<f32>],
         // Relax aşamasında restitution'u hedef-hız olarak uygula (sönümlü, kararlı).
         apply_restitution: bool,
         reverse: bool,
@@ -261,162 +388,91 @@ impl ConstraintSolver {
         impulse_scale: f32,
         inv_dt: f32,
     ) {
-        let n_manifolds = manifolds.len();
-        for mi in 0..n_manifolds {
-            let mid = if reverse { n_manifolds - 1 - mi } else { mi };
-            let (idx_a, idx_b) = match (
-                entity_index_map.get(&manifolds[mid].entity_a.id()),
-                entity_index_map.get(&manifolds[mid].entity_b.id()),
-            ) {
-                (Some(&a), Some(&b)) => (a, b),
-                _ => continue,
+        let n = prepared.len();
+        for k in 0..n {
+            let ki = if reverse { n - 1 - k } else { k };
+            let p = &mut prepared[ki];
+
+            // GÜNCEL penetrasyon (gerçek TGS): biriken pozisyon-delta'larıyla düzelt.
+            let dp_a = dp[p.idx_a].0 + dp[p.idx_a].1.cross(p.r_a);
+            let dp_b = dp[p.idx_b].0 + dp[p.idx_b].1.cross(p.r_b);
+            let penetration = p.pen0 - (dp_b - dp_a).dot(p.normal);
+
+            // ── Normal kısıt ──
+            let va = velocities[p.idx_a].linear + velocities[p.idx_a].angular.cross(p.r_a);
+            let vb = velocities[p.idx_b].linear + velocities[p.idx_b].angular.cross(p.r_b);
+            let vel_norm = (vb - va).dot(p.normal);
+
+            // Soft bias: penetrasyonda yay-damper gibi ayır; speculative boşlukta
+            // (penetration<0) kapanmayı boşluk/dt ile sınırla; aksi halde bias yok.
+            let (bias, m_scale, i_scale) = if penetration < 0.0 {
+                (penetration * inv_dt, 1.0, 0.0)
+            } else if use_bias && penetration > self.slop {
+                let b = (bias_rate * (penetration - self.slop)).min(self.max_bias_velocity);
+                (b, mass_scale, impulse_scale)
+            } else {
+                (0.0, 1.0, 0.0)
             };
-            let dyn_a = rigid_bodies[idx_a].is_dynamic();
-            let dyn_b = rigid_bodies[idx_b].is_dynamic();
-            if !dyn_a && !dyn_b {
-                continue;
+
+            // Restitution hedef-hızı: yalnız RELAX aşamasında, GERÇEK temasta
+            // (pen0≥0, speculative değil), eşiği aşan çarpmada — sönümlü/clamp'li.
+            let target_vn = if apply_restitution
+                && p.restitution > 0.0
+                && p.pen0 >= 0.0
+                && p.vn0 < -self.restitution_velocity_threshold
+            {
+                -p.restitution * p.vn0
+            } else {
+                0.0
+            };
+            let delta_n = (m_scale * (target_vn - vel_norm + bias) - i_scale * p.acc_n) / p.k_n;
+            let new_acc_n = (p.acc_n + delta_n).max(0.0);
+            let actual_n = new_acc_n - p.acc_n;
+            p.acc_n = new_acc_n;
+
+            let imp_n = p.normal * actual_n;
+            if p.dyn_a {
+                velocities[p.idx_a].linear -= imp_n * p.inv_m_a;
+                velocities[p.idx_a].angular -= p.inv_i_a.mul_vec3(p.r_a.cross(imp_n));
+            }
+            if p.dyn_b {
+                velocities[p.idx_b].linear += imp_n * p.inv_m_b;
+                velocities[p.idx_b].angular += p.inv_i_b.mul_vec3(p.r_b.cross(imp_n));
             }
 
-            let inv_m_a = rigid_bodies[idx_a].inv_mass();
-            let inv_m_b = rigid_bodies[idx_b].inv_mass();
-            let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
-            let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
-            let com_a = transforms[idx_a].position
-                + transforms[idx_a]
-                    .rotation
-                    .mul_vec3(rigid_bodies[idx_a].center_of_mass);
-            let com_b = transforms[idx_b].position
-                + transforms[idx_b]
-                    .rotation
-                    .mul_vec3(rigid_bodies[idx_b].center_of_mass);
-            let friction = manifolds[mid].friction;
-            let static_friction = manifolds[mid].static_friction;
-            let restitution = manifolds[mid].restitution;
-
-            let n_contacts = manifolds[mid].contacts.len();
-            for ci in 0..n_contacts {
-                let cid = if reverse { n_contacts - 1 - ci } else { ci };
-                let normal = manifolds[mid].contacts[cid].normal;
-                let point = manifolds[mid].contacts[cid].point;
-                let pen0 = manifolds[mid].contacts[cid].penetration;
-                let acc_n = manifolds[mid].contacts[cid].normal_impulse;
-                let acc_t = manifolds[mid].contacts[cid].tangent_impulse;
-
-                let r_a = point - com_a;
-                let r_b = point - com_b;
-
-                // GÜNCEL penetrasyon (gerçek TGS): biriken pozisyon-delta'larıyla düzelt.
-                // Cisimler ayrıldıkça (dp normal yönünde) penetrasyon azalır.
-                let dp_a = dp[idx_a].0 + dp[idx_a].1.cross(r_a);
-                let dp_b = dp[idx_b].0 + dp[idx_b].1.cross(r_b);
-                let penetration = pen0 - (dp_b - dp_a).dot(normal);
-
-                // ── Normal kısıt ──
-                let va = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
-                let vb = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
-                let vel_norm = (vb - va).dot(normal);
-
-                let r_a_x_n = r_a.cross(normal);
-                let r_b_x_n = r_b.cross(normal);
-                let k_n = inv_m_a
-                    + inv_m_b
-                    + inv_i_a.mul_vec3(r_a_x_n).dot(r_a_x_n)
-                    + inv_i_b.mul_vec3(r_b_x_n).dot(r_b_x_n);
-                if k_n < 1e-8 {
-                    continue;
-                }
-
-                // Soft bias: penetrasyonda yay-damper gibi ayır; speculative boşlukta
-                // (penetration<0) kapanmayı boşluk/dt ile sınırla; aksi halde bias yok.
-                let (bias, m_scale, i_scale) = if penetration < 0.0 {
-                    (penetration * inv_dt, 1.0, 0.0)
-                } else if use_bias && penetration > self.slop {
-                    let b = (bias_rate * (penetration - self.slop)).min(self.max_bias_velocity);
-                    (b, mass_scale, impulse_scale)
-                } else {
-                    (0.0, 1.0, 0.0)
-                };
-
-                // Restitution hedef-hızı: yalnız RELAX aşamasında, GERÇEK temasta
-                // (pen0≥0, speculative değil), eşiği aşan çarpmada — sönümlü/clamp'li
-                // uygulanır (ayrı pass yerine; yığın çarpmasını patlatmaz).
-                let target_vn = if apply_restitution
-                    && restitution > 0.0
-                    && pen0 >= 0.0
-                    && vn0[mid][cid] < -self.restitution_velocity_threshold
-                {
-                    -restitution * vn0[mid][cid]
-                } else {
-                    0.0
-                };
-                let delta_n = (m_scale * (target_vn - vel_norm + bias) - i_scale * acc_n) / k_n;
-                let new_acc_n = (acc_n + delta_n).max(0.0);
-                let actual_n = new_acc_n - acc_n;
-                manifolds[mid].contacts[cid].normal_impulse = new_acc_n;
-
-                let imp_n = normal * actual_n;
-                if dyn_a {
-                    velocities[idx_a].linear -= imp_n * inv_m_a;
-                    velocities[idx_a].angular -= inv_i_a.mul_vec3(r_a.cross(imp_n));
-                }
-                if dyn_b {
-                    velocities[idx_b].linear += imp_n * inv_m_b;
-                    velocities[idx_b].angular += inv_i_b.mul_vec3(r_b.cross(imp_n));
-                }
-
-                // ── Sürtünme (2-tangent Coulomb cone) ──
-                let (t1, t2) = {
-                    let a = if normal.x.abs() > 0.9 {
-                        Vec3::new(0.0, 1.0, 0.0).cross(normal)
-                    } else {
-                        Vec3::new(1.0, 0.0, 0.0).cross(normal)
-                    }
-                    .normalize();
-                    (a, normal.cross(a))
-                };
-                let va2 = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
-                let vb2 = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
-                let rel2 = vb2 - va2;
-                let eff_mass = |taxis: Vec3| -> f32 {
-                    let rxt_a = r_a.cross(taxis);
-                    let rxt_b = r_b.cross(taxis);
-                    inv_m_a
-                        + inv_m_b
-                        + inv_i_a.mul_vec3(rxt_a).dot(rxt_a)
-                        + inv_i_b.mul_vec3(rxt_b).dot(rxt_b)
-                };
-                let k_t1 = eff_mass(t1);
-                let k_t2 = eff_mass(t2);
-                let acc_t1 = acc_t.dot(t1);
-                let acc_t2 = acc_t.dot(t2);
-                let mut new1 = if k_t1 > 1e-8 {
-                    acc_t1 - rel2.dot(t1) / k_t1
-                } else {
-                    acc_t1
-                };
-                let mut new2 = if k_t2 > 1e-8 {
-                    acc_t2 - rel2.dot(t2) / k_t2
-                } else {
-                    acc_t2
-                };
-                let max_static = static_friction * new_acc_n.abs();
-                let max_dynamic = friction * new_acc_n.abs();
-                let mag = (new1 * new1 + new2 * new2).sqrt();
-                if mag > max_static && mag > 1e-12 {
-                    let s = max_dynamic / mag;
-                    new1 *= s;
-                    new2 *= s;
-                }
-                let imp_t = t1 * (new1 - acc_t1) + t2 * (new2 - acc_t2);
-                manifolds[mid].contacts[cid].tangent_impulse = t1 * new1 + t2 * new2;
-                if dyn_a {
-                    velocities[idx_a].linear -= imp_t * inv_m_a;
-                    velocities[idx_a].angular -= inv_i_a.mul_vec3(r_a.cross(imp_t));
-                }
-                if dyn_b {
-                    velocities[idx_b].linear += imp_t * inv_m_b;
-                    velocities[idx_b].angular += inv_i_b.mul_vec3(r_b.cross(imp_t));
-                }
+            // ── Sürtünme (2-tangent Coulomb cone) ── t1/t2/k_t1/k_t2 precompute'lu.
+            let va2 = velocities[p.idx_a].linear + velocities[p.idx_a].angular.cross(p.r_a);
+            let vb2 = velocities[p.idx_b].linear + velocities[p.idx_b].angular.cross(p.r_b);
+            let rel2 = vb2 - va2;
+            let acc_t1 = p.acc_t.dot(p.t1);
+            let acc_t2 = p.acc_t.dot(p.t2);
+            let mut new1 = if p.k_t1 > 1e-8 {
+                acc_t1 - rel2.dot(p.t1) / p.k_t1
+            } else {
+                acc_t1
+            };
+            let mut new2 = if p.k_t2 > 1e-8 {
+                acc_t2 - rel2.dot(p.t2) / p.k_t2
+            } else {
+                acc_t2
+            };
+            let max_static = p.static_friction * new_acc_n.abs();
+            let max_dynamic = p.friction * new_acc_n.abs();
+            let mag = (new1 * new1 + new2 * new2).sqrt();
+            if mag > max_static && mag > 1e-12 {
+                let s = max_dynamic / mag;
+                new1 *= s;
+                new2 *= s;
+            }
+            let imp_t = p.t1 * (new1 - acc_t1) + p.t2 * (new2 - acc_t2);
+            p.acc_t = p.t1 * new1 + p.t2 * new2;
+            if p.dyn_a {
+                velocities[p.idx_a].linear -= imp_t * p.inv_m_a;
+                velocities[p.idx_a].angular -= p.inv_i_a.mul_vec3(p.r_a.cross(imp_t));
+            }
+            if p.dyn_b {
+                velocities[p.idx_b].linear += imp_t * p.inv_m_b;
+                velocities[p.idx_b].angular += p.inv_i_b.mul_vec3(p.r_b.cross(imp_t));
             }
         }
     }
