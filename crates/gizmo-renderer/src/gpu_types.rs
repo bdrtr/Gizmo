@@ -143,7 +143,13 @@ pub struct SceneUniforms {
     pub point_shadows_enabled: u32, // offset 1092-1095
     pub environment_preset_2: u32, // offset 1096-1099
     pub shading_mode: u32,        // offset 1100-1103
-                           // Total: 1104 bytes
+    /// inverse(view_proj), computed once per frame on the CPU so fullscreen passes that
+    /// unproject NDC→world (volumetric, particle soft-depth) read it instead of recomputing a
+    /// full 4×4 inverse per fragment. Appended at the 16-byte-aligned tail (1104) so every
+    /// existing field offset — and the partial SceneUniforms copies in other shaders — is
+    /// unaffected. offset 1104-1167.
+    pub inv_view_proj: [[f32; 4]; 4],
+                           // Total: 1168 bytes
 }
 
 #[repr(C)]

@@ -1,5 +1,5 @@
 // SceneUniforms shared from gizmo::common (composed by load_shader_composed).
-#import gizmo::common::{SceneUniforms, inverse_mat4}
+#import gizmo::common::{SceneUniforms}
 
 @group(0) @binding(0)
 var<uniform> scene: SceneUniforms;
@@ -146,7 +146,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let scene_z = textureLoad(scene_depth, vec2<i32>(in.clip_position.xy), 0);
     let uv = in.clip_position.xy / dims;
     let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-    let sworld_h = inverse_mat4(scene.view_proj) * vec4<f32>(ndc, scene_z, 1.0);
+    let sworld_h = scene.inv_view_proj * vec4<f32>(ndc, scene_z, 1.0);
     let scene_world = sworld_h.xyz / sworld_h.w;
     let d_scene = length(scene_world - scene.camera_pos.xyz);
     let d_frag = length(in.world_pos - scene.camera_pos.xyz);

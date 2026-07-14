@@ -323,6 +323,7 @@ fn fluid_only_render_pass(
         point_shadows_enabled: 0,
         environment_preset_2: 0,
         shading_mode: 0,
+        inv_view_proj: view_proj.inverse().to_cols_array_2d(),
     };
     renderer.queue.write_buffer(
         &renderer.scene.global_uniform_buffer,

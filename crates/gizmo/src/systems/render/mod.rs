@@ -321,6 +321,9 @@ pub fn default_render_pass(
         point_shadows_enabled: renderer.point_shadows_enabled as u32,
         environment_preset_2: renderer.environment_preset_2,
         shading_mode: renderer.shading_mode,
+        // inverse of the same view_proj written above; hoists the per-fragment 4×4 inverse
+        // out of the volumetric/particle fullscreen passes into one CPU compute per frame.
+        inv_view_proj: view_proj.inverse().to_cols_array_2d(),
     };
     renderer.queue.write_buffer(
         &renderer.scene.global_uniform_buffer,

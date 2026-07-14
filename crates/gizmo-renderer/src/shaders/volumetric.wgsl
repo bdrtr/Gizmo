@@ -1,7 +1,8 @@
 // Volumetric Lighting Shader (God Rays)
-// SceneUniforms, LightData and inverse_mat4 come from gizmo::common (composed in by
-// load_shader_composed). Only volumetric-specific helpers stay local.
-#import gizmo::common::{SceneUniforms, LightData, inverse_mat4}
+// SceneUniforms and LightData come from gizmo::common (composed in by load_shader_composed).
+// Only volumetric-specific helpers stay local. The NDC→world unprojection reads the
+// CPU-computed scene.inv_view_proj instead of inverting view_proj per fragment.
+#import gizmo::common::{SceneUniforms, LightData}
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 
@@ -67,7 +68,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // the wrong world ray on any other resolution or FOV, throwing the sky god-rays off
     // in the wrong direction — exactly where they are most visible.
     let ndc = vec2<f32>(in.screen_uv.x * 2.0 - 1.0, 1.0 - in.screen_uv.y * 2.0);
-    let inv_vp = inverse_mat4(scene.view_proj);
+    let inv_vp = scene.inv_view_proj;
     let near_h = inv_vp * vec4<f32>(ndc, 0.0, 1.0);
     let near_world = near_h.xyz / near_h.w;
     let ray_dir_reconstructed = normalize(near_world - cam_pos);

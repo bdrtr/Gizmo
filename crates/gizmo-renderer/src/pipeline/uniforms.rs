@@ -35,6 +35,7 @@ pub(super) fn build_global_uniforms(device: &wgpu::Device) -> wgpu::Buffer {
         point_shadows_enabled: 0,
         environment_preset_2: 0,
         shading_mode: 0,
+        inv_view_proj: [[0.0; 4]; 4], // overwritten every frame before first use
     };
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Global Uniform Buffer"),
