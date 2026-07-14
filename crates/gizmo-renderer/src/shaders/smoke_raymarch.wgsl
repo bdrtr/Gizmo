@@ -2,7 +2,7 @@
 // 3B fBm yoğunluğunu ışın boyunca march eder; Beer-Lambert geçirgenlik + güneş saçılımı + sahne
 // derinliğine göre occlusion; HDR'ye premultiplied-over kompozit. (Grid/advect/pressure YOK —
 // gerçek Eulerian sim bir sonraki adım.)
-#import gizmo::common::{SceneUniforms, inverse_mat4}
+#import gizmo::common::{SceneUniforms}
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 @group(1) @binding(0) var scene_depth: texture_depth_2d;
@@ -15,6 +15,7 @@ struct SmokeParams {
     grid: vec4<f32>,       // x=N (grid çözünürlüğü), z=source_radius, w=inject
     source: vec4<f32>,     // xyz = kaynak, w = dissipation
     sim: vec4<f32>,        // x=buoyancy, y=curl_strength, z=curl_scale
+    inv_view_proj: mat4x4<f32>, // CPU-computed inverse view-proj (shader inverse_mat4 was wrong)
 };
 @group(2) @binding(0) var<uniform> smoke: SmokeParams;
 
@@ -74,7 +75,7 @@ fn ign(pix: vec2<f32>, frame: f32) -> f32 {
 @fragment
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let ndc = vec2<f32>(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0);
-    let inv = inverse_mat4(scene.view_proj);
+    let inv = smoke.inv_view_proj;
     let near_h = inv * vec4<f32>(ndc, 0.0, 1.0);
     let far_h = inv * vec4<f32>(ndc, 1.0, 1.0);
     let ro = scene.camera_pos.xyz;

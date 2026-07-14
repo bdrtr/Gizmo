@@ -153,7 +153,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         sample_pos = p;
     }
-    var d = sample_grid(sample_pos, n) * P.source.w;
+    // Dissipation is FRAME-RATE INDEPENDENT: P.source.w is the per-60fps-frame multiplier, so
+    // raise it to dt*60 (the number of 60fps-frames this step represents). Applying it once per
+    // frame (as `* P.source.w`) made the smoke decay far faster at high fps — at a release
+    // build's frame rate it dissipated before it could rise/spread, leaving only a thin sliver
+    // near the source while a headless 60fps run filled the volume.
+    var d = sample_grid(sample_pos, n) * pow(P.source.w, dt * 60.0);
 
     // Kaynaktan enjeksiyon (yumuşak küre).
     let sdist = length(world - P.source.xyz);

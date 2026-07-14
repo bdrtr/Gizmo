@@ -467,8 +467,12 @@ pub fn default_render_pass(
     passes::record_shadow_passes(encoder, renderer, &draw_items, uploaded_instances);
     passes::record_deferred_geometry(encoder, renderer, world, &draw_items, uploaded_instances);
     passes::record_ssao(encoder, renderer);
+    // CPU-computed inverse of the (unjittered) view-projection for the volumetric smoke raymarch
+    // (the WGSL inverse_mat4 returns a wrong inverse for the perspective matrix).
+    let inv_view_proj = unjittered_view_proj.inverse().to_cols_array_2d();
     passes::record_forward_and_fluid(
         encoder, renderer, world, &draw_items, uploaded_instances, particle_lod, fluid_lod,
+        inv_view_proj,
     );
     passes::record_screen_space_effects(encoder, renderer);
     // Advance SSGI temporal ping-pong / frame counter after its passes have run.
