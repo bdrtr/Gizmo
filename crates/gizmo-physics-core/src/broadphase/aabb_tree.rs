@@ -402,67 +402,19 @@ impl DynamicAabbTree {
             return pairs;
         }
 
-        // Stack: (node_a, node_b) — iki alt ağaç arasındaki olası çift
-        // Başlangıç: root'un sol ve sağ çocukları
-        let root_left = self.nodes[self.root].left;
-        let root_right = self.nodes[self.root].right;
-        let mut stack = Vec::with_capacity(128);
-        stack.push((root_left, root_right));
-
-        // Her internal node'un kendi içindeki çiftleri de ekle
-        // (self-descent): stack'e (left_child, right_child) olarak eklenir
-        // Bu işlem aşağıdaki döngüde zaten handle ediliyor.
-
-        while let Some((a, b)) = stack.pop() {
-            if a == NULL || b == NULL {
-                continue;
-            }
-
-            // AABB overlap yoksa bu dalı kes
-            if !aabb_overlaps(&self.nodes[a].aabb, &self.nodes[b].aabb) {
-                continue;
-            }
-
-            let a_leaf = self.nodes[a].is_leaf();
-            let b_leaf = self.nodes[b].is_leaf();
-
-            match (a_leaf, b_leaf) {
-                (true, true) => {
-                    // FIX-6: İleride SIMD batch için hazır; şimdi skalar
-                    if let (Some(ea), Some(eb)) = (self.nodes[a].entity, self.nodes[b].entity) {
-                        let pair = if ea.id() < eb.id() {
-                            (ea, eb)
-                        } else {
-                            (eb, ea)
-                        };
-                        pairs.push(pair);
-                    }
-                }
-                (true, false) => {
-                    // a yaprak, b internal → b'yi aç
-                    stack.push((a, self.nodes[b].left));
-                    stack.push((a, self.nodes[b].right));
-                }
-                (false, true) => {
-                    // b yaprak, a internal → a'yı aç
-                    stack.push((self.nodes[a].left, b));
-                    stack.push((self.nodes[a].right, b));
-                }
-                (false, false) => {
-                    // İkisi de internal: daha büyük SA'yı aç
-                    if surface_area(&self.nodes[a].aabb) >= surface_area(&self.nodes[b].aabb) {
-                        stack.push((self.nodes[a].left, b));
-                        stack.push((self.nodes[a].right, b));
-                    } else {
-                        stack.push((a, self.nodes[b].left));
-                        stack.push((a, self.nodes[b].right));
-                    }
-                }
-            }
-        }
-
-        // Her internal node'un kendi çocukları arasındaki çiftleri de tara
-        // (yukarıdaki descent yalnızca farklı alt ağaçlar arası çiftleri yakalar)
+        // Standard BVH self-query: for every internal node, test its LEFT subtree
+        // against its RIGHT subtree (`collect_internal_pairs` → `descent_pair`).
+        // Every colliding leaf pair has a unique lowest-common-ancestor internal
+        // node, so this enumerates each pair EXACTLY ONCE — no dedup required.
+        //
+        // PERF: the previous implementation additionally ran a root-seeded dual-tree
+        // descent first (phase 1) that produced the *same* pairs this phase does,
+        // then paid an O(P²) `pairs.contains` linear scan in `descent_pair` to drop
+        // the duplicates. Both are gone: pure phase-2 is complete and duplicate-free,
+        // so query_pairs is now O(P) in the number of reported pairs instead of O(P²).
+        // On a sustained-active 2000-box scene this took narrowphase (which owns the
+        // query_pairs call) from ~170 ms to a fraction of that. See docs.
+        pairs.reserve(self.entity_map.len());
         self.collect_internal_pairs(&mut pairs);
 
         pairs
@@ -507,9 +459,9 @@ impl DynamicAabbTree {
                     } else {
                         (eb, ea)
                     };
-                    if !pairs.contains(&pair) {
-                        pairs.push(pair);
-                    }
+                    // Each pair reaches this arm exactly once (unique LCA), so no
+                    // `pairs.contains` dedup is needed — that was the old O(P²) cost.
+                    pairs.push(pair);
                 }
             }
             (true, false) => {
