@@ -3,7 +3,7 @@
 // and writes instance_count (0 = culled, 1 = visible) to the indirect draw buffer.
 
 // SceneUniforms shared from gizmo::common (composed by load_shader_composed). Binds the
-// global 1104-byte uniform buffer; only view_proj is read here.
+// global 1168-byte uniform buffer; only view_proj is read here.
 #import gizmo::common::{SceneUniforms}
 
 struct MeshBounds {

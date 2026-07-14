@@ -6,7 +6,7 @@
 // in by load_shader_composed (naga_oil). Only binding-dependent deferred code lives below:
 // the fullscreen pass, procedural environment/IBL and PCSS shadows (they read `scene` and the
 // shadow textures, so per the common.wgsl convention they stay out of the pure modules).
-#import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting, inverse_mat4}
+#import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, compute_clear_coat}
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
@@ -289,15 +289,6 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let normal_roughness = textureLoad(t_normal_roughness, iuv, 0);
     let pos_sample       = textureLoad(t_world_position,   iuv, 0);
     let tangent_sample   = textureLoad(t_world_tangent,    iuv, 0);
-
-    let size = textureDimensions(t_albedo_metallic);
-    let screen_uv = uv / vec2<f32>(size);
-    let ndc = vec2<f32>(screen_uv.x * 2.0 - 1.0, 1.0 - screen_uv.y * 2.0);
-    let inv_vp = inverse_mat4(scene.view_proj);
-    let clip_pos = vec4<f32>(ndc, 0.0, 1.0);
-    let world_pos_from_ray = inv_vp * clip_pos;
-    let view_dir = normalize(world_pos_from_ray.xyz / world_pos_from_ray.w - scene.camera_pos.xyz);
-    let sun_dir = normalize(-scene.sun_direction.xyz);
 
     // Unwritten pixels (skipped geometry, unlit objects) — render clean dark grey background (Bevy parity)
     if (pos_sample.w < 0.5) { 

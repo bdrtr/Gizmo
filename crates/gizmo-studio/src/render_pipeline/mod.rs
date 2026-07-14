@@ -163,6 +163,7 @@ pub fn execute_render_pipeline(
         point_shadows_enabled: 0,
         environment_preset_2: 0,
         shading_mode: ed_shading_mode,
+        inv_view_proj: view_proj.inverse().to_cols_array_2d(),
     };
     renderer.queue.write_buffer(
         &renderer.scene.global_uniform_buffer,

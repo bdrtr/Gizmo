@@ -196,4 +196,147 @@ mod tests {
         // …and instance stays at group 4 (shadow occupies group 2).
         assert!(native.contains("@group(4)"), "native variant keeps instance at group 4");
     }
+
+    async fn setup_headless_gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            flags: wgpu::InstanceFlags::default(),
+            memory_budget_thresholds: Default::default(),
+            backend_options: Default::default(),
+            display: None,
+        });
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })
+            .await
+            .ok()?;
+        adapter.request_device(&wgpu::DeviceDescriptor::default()).await.ok()
+    }
+
+    async fn read_mat_cols(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer) -> [f32; 16] {
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("inv_readback"),
+            size: 64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        enc.copy_buffer_to_buffer(buffer, 0, &staging, 0, 64);
+        queue.submit(Some(enc.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.recv().unwrap().unwrap();
+        let data = slice.get_mapped_range();
+        let mut out = [0.0f32; 16];
+        out.copy_from_slice(bytemuck::cast_slice(&data));
+        drop(data);
+        staging.unmap();
+        out
+    }
+
+    // Executes the SHIPPED gizmo::common::inverse_mat4 on the GPU (composed against the real
+    // common.wgsl, not a copy) and compares it to glam's inverse for a perspective view_proj.
+    // A transcription typo (n42 in place of n43 in the t21/t22/t23 cofactors) made inverse_mat4
+    // return a wrong inverse for perspective matrices — the ray-reconstruction bug that
+    // collapsed volumetric smoke to a thin sliver and silently corrupted every fullscreen pass
+    // that unprojects NDC→world (deferred_lighting, particle_render, volumetric). Skips (passes)
+    // when no GPU adapter is available. Reintroducing the bad formula fails the assert below.
+    #[test]
+    fn inverse_mat4_matches_glam_on_gpu() {
+        use gizmo_math::{Mat4, Vec3};
+        use wgpu::util::DeviceExt;
+
+        let composed = compose_wgsl(
+            r#"
+#import gizmo::common::inverse_mat4
+@group(0) @binding(0) var<storage, read> m_in: mat4x4<f32>;
+@group(0) @binding(1) var<storage, read_write> m_out: mat4x4<f32>;
+@compute @workgroup_size(1)
+fn main() { m_out = inverse_mat4(m_in); }
+"#,
+            "inverse_mat4_test",
+            HashMap::new(),
+        );
+
+        pollster::block_on(async {
+            let Some((device, queue)) = setup_headless_gpu().await else { return };
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("inverse_mat4_test"),
+                source: wgpu::ShaderSource::Wgsl(composed.into()),
+            });
+
+            // The exact camera from the smoke-sliver repro (perspective → 4th row is not affine).
+            let view = Mat4::look_at_rh(Vec3::new(6.0, 3.0, 7.0), Vec3::new(0.0, 2.2, 0.0), Vec3::Y);
+            let proj = Mat4::perspective_rh(45f32.to_radians(), 16.0 / 9.0, 0.1, 500.0);
+            let vp = proj * view;
+
+            let in_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("m_in"),
+                contents: bytemuck::cast_slice(&vp.to_cols_array()),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+            let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("m_out"),
+                size: 64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+
+            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("inverse_mat4_test"),
+                layout: None,
+                module: &shader,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: in_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
+                ],
+            });
+
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            {
+                let mut cpass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: None,
+                    timestamp_writes: None,
+                });
+                cpass.set_pipeline(&pipeline);
+                cpass.set_bind_group(0, &bg, &[]);
+                cpass.dispatch_workgroups(1, 1, 1);
+            }
+            queue.submit(Some(enc.finish()));
+
+            let gpu_cols = read_mat_cols(&device, &queue, &out_buf).await;
+            let gpu_inv = Mat4::from_cols_array(&gpu_cols);
+            let want = vp.inverse();
+
+            // 1) GPU inverse matches glam element-wise (loose f32 tolerance).
+            let g = gpu_inv.to_cols_array();
+            let w = want.to_cols_array();
+            let max_err = g.iter().zip(w.iter()).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+            assert!(max_err < 1e-3, "GPU inverse_mat4 differs from glam by {max_err} (buggy formula?)");
+
+            // 2) The concrete bug scenario: unproject a known NDC point back to world. The box
+            //    center (0,2,0) projected to NDC then unprojected must return to (0,2,0). The
+            //    buggy formula returned world-y ≈ 94.8 here.
+            let clip = vp * gizmo_math::Vec4::new(0.0, 2.0, 0.0, 1.0);
+            let ndc = clip / clip.w;
+            let unproj_h = gpu_inv * gizmo_math::Vec4::new(ndc.x, ndc.y, ndc.z, 1.0);
+            let world = unproj_h.truncate() / unproj_h.w;
+            assert!(
+                (world - Vec3::new(0.0, 2.0, 0.0)).length() < 1e-2,
+                "NDC→world round-trip landed at {world:?}, expected ~(0,2,0) (buggy inverse_mat4)"
+            );
+        });
+    }
 }

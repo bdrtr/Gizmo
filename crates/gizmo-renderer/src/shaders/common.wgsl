@@ -46,6 +46,10 @@ struct SceneUniforms {
     // Only the byte layout must match gpu_types::SceneUniforms.environment_preset_2.
     environment_preset_b: u32,
     shading_mode: u32,
+    // inverse(view_proj), computed once per frame on the CPU (gpu_types::SceneUniforms).
+    // Fullscreen passes that unproject NDC→world read this instead of calling inverse_mat4
+    // per fragment. Appended at the tail so all prior field offsets stay byte-compatible.
+    inv_view_proj: mat4x4<f32>,
 };
 
 // ── Core BRDF (Cook-Torrance / GGX) ──────────────────────────────────────────
@@ -131,9 +135,9 @@ fn inverse_mat4(m: mat4x4<f32>) -> mat4x4<f32> {
 
     let idet = 1.0 / det;
 
-    let t21 = n24 * n33 * n41 - n24 * n31 * n42 - n23 * n34 * n41 + n21 * n34 * n42 + n23 * n31 * n44 - n21 * n33 * n44;
-    let t22 = n13 * n34 * n41 - n14 * n33 * n41 + n14 * n31 * n42 - n11 * n34 * n42 - n13 * n31 * n44 + n11 * n33 * n44;
-    let t23 = n14 * n23 * n41 - n13 * n24 * n41 - n14 * n21 * n42 + n11 * n24 * n42 + n13 * n21 * n44 - n11 * n23 * n44;
+    let t21 = n24 * n33 * n41 - n24 * n31 * n43 - n23 * n34 * n41 + n21 * n34 * n43 + n23 * n31 * n44 - n21 * n33 * n44;
+    let t22 = n13 * n34 * n41 - n14 * n33 * n41 + n14 * n31 * n43 - n11 * n34 * n43 - n13 * n31 * n44 + n11 * n33 * n44;
+    let t23 = n14 * n23 * n41 - n13 * n24 * n41 - n14 * n21 * n43 + n11 * n24 * n43 + n13 * n21 * n44 - n11 * n23 * n44;
     let t24 = n13 * n24 * n31 - n14 * n23 * n31 + n14 * n21 * n33 - n11 * n24 * n33 - n13 * n21 * n34 + n11 * n23 * n34;
 
     let t31 = n22 * n34 * n41 - n24 * n32 * n41 + n24 * n31 * n42 - n21 * n34 * n42 - n22 * n31 * n44 + n21 * n32 * n44;
