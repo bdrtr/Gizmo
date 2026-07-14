@@ -22,6 +22,9 @@ pub fn record_forward_and_fluid(
     uploaded_instances: u32,
     particle_lod: f32,
     fluid_lod: f32,
+    // Inverse of the (unjittered) camera view-projection — the volumetric smoke raymarch
+    // reconstructs rays with this instead of the buggy WGSL inverse_mat4.
+    inv_view_proj: [[f32; 4]; 4],
 ) {
     // ── Forward pass (unlit / skybox / GPU subsystems; PBR skipped if deferred) ──
     {
@@ -198,6 +201,7 @@ pub fn record_forward_and_fluid(
             &renderer.depth_texture_view,
             time,
             dt,
+            inv_view_proj,
         );
     }
 }

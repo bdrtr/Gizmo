@@ -9,6 +9,13 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use wgpu::util::DeviceExt;
 
+const IDENTITY4: [[f32; 4]; 4] = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+];
+
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct SmokeParams {
@@ -19,6 +26,11 @@ struct SmokeParams {
     grid: [f32; 4],       // x=N, z=source_radius, w=inject
     source: [f32; 4],     // xyz = kaynak, w = dissipation
     sim: [f32; 4],        // x=buoyancy, y=curl_strength, z=curl_scale
+    // Inverse of the camera view-projection, computed on the CPU. The raymarch reconstructs
+    // world-space rays with THIS instead of inverting scene.view_proj in the shader — the WGSL
+    // inverse_mat4 (common.wgsl) returns a wrong inverse for the perspective matrix, which
+    // placed the whole volume in the wrong screen region (a thin sliver). Identity until set.
+    inv_view_proj: [[f32; 4]; 4],
 }
 
 pub struct SmokeVolume {
@@ -111,6 +123,7 @@ impl SmokeVolume {
                 grid: [0.0; 4],
                 source: [0.0; 4],
                 sim: [0.0; 4],
+                inv_view_proj: IDENTITY4,
             }]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -441,7 +454,8 @@ impl SmokeVolume {
     /// the buffer index now holding the freshest density.
     pub fn step(&self, device: &wgpu::Device, queue: &wgpu::Queue, time: f32, dt: f32) -> usize {
         let sim_dt = dt.clamp(1.0 / 240.0, 1.0 / 30.0);
-        self.write_params(queue, time, sim_dt);
+        // step() only advects (no raymarch) → the inverse view-proj is unused; identity.
+        self.write_params(queue, time, sim_dt, IDENTITY4);
         let mut enc =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Smoke Step") });
         let new_cur = self.record_advect(&mut enc);
@@ -449,7 +463,7 @@ impl SmokeVolume {
         new_cur
     }
 
-    fn write_params(&self, queue: &wgpu::Queue, time: f32, dt: f32) {
+    fn write_params(&self, queue: &wgpu::Queue, time: f32, dt: f32, inv_view_proj: [[f32; 4]; 4]) {
         // The obstacle field is voxelized against a specific bounds box; if bounds are mutated
         // after set_obstacle_boxes without refresh_obstacles, the solidity indices map to the
         // wrong world positions. Catch that footgun in debug builds.
@@ -469,6 +483,7 @@ impl SmokeVolume {
             source: [self.source[0], self.source[1], self.source[2], self.dissipation],
             // sim.w carries fill_strength (radial outward push, 0 = pure plume).
             sim: [self.buoyancy, self.curl_strength, self.curl_scale, self.fill_strength],
+            inv_view_proj,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[p]));
     }
@@ -485,10 +500,13 @@ impl SmokeVolume {
         depth_view: &wgpu::TextureView,
         time: f32,
         dt: f32,
+        // Inverse of the camera view-projection (column-major), computed on the CPU — the
+        // raymarch reconstructs rays with this (the WGSL inverse_mat4 returns a wrong inverse).
+        inv_view_proj: [[f32; 4]; 4],
     ) {
         // Advection çok büyük dt'de instabil olmasın; sabit küçük adım.
         let sim_dt = dt.clamp(1.0 / 240.0, 1.0 / 30.0);
-        self.write_params(queue, time, sim_dt);
+        self.write_params(queue, time, sim_dt, inv_view_proj);
 
         // 1) Advect compute (src=cur → dst=other). Obstacle-aware (see smoke_advect.wgsl).
         let new_cur = self.record_advect(encoder);
@@ -586,6 +604,160 @@ mod tests {
                 count: None,
             }],
         })
+    }
+
+    // Render the smoke to an offscreen HDR with a real perspective camera (no depth occlusion)
+    // and assert it covers a substantial fraction of the frame. Guards the ray reconstruction:
+    // when the raymarch inverted scene.view_proj with the (buggy) WGSL inverse_mat4 the whole
+    // volume collapsed to a <1% thin sliver in the wrong screen region; with the CPU-computed
+    // inverse passed to render() it fills ~15%. A regression to the bad inverse fails here.
+    #[test]
+    fn raymarch_renders_the_volume_not_a_sliver() {
+        use bytemuck::Zeroable;
+        use gizmo_math::{Mat4, Vec3};
+        use wgpu::util::DeviceExt;
+        pollster::block_on(async {
+            let Some((device, queue)) = setup_headless_gpu().await else { return };
+            let layout = scene_layout(&device);
+            fn f16_to_f32(hbits: u16) -> f32 {
+                let sign = (hbits >> 15) & 1;
+                let exp = (hbits >> 10) & 0x1f;
+                let mant = hbits & 0x3ff;
+                let v = if exp == 0 {
+                    mant as f32 * 2f32.powi(-24)
+                } else if exp == 0x1f {
+                    1e4
+                } else {
+                    (1.0 + mant as f32 / 1024.0) * 2f32.powi(exp as i32 - 15)
+                };
+                if sign == 1 { -v } else { v }
+            }
+            let (w, h) = (320u32, 240u32);
+            let mut s = SmokeVolume::new(&device, &layout, wgpu::TextureFormat::Rgba16Float);
+            s.bounds_min = [-1.8, 0.02, -1.8];
+            s.bounds_max = [1.8, 4.0, 1.8];
+            s.source = [0.0, 0.8, 0.0];
+            s.source_radius = 0.6;
+            s.inject = 9.0;
+            s.dissipation = 0.985;
+            s.buoyancy = 1.7;
+            s.curl_strength = 2.0;
+            s.fill_strength = 2.5;
+            s.fill_radius = 2.0;
+            s.density_scale = 1.6;
+            s.absorption = 2.8;
+            s.set_obstacle_boxes(&queue, &[([0.45, 0.0, -0.25], [0.95, 3.2, 0.25])]);
+            for f in 0..200 {
+                s.step(&device, &queue, f as f32 / 60.0, 1.0 / 60.0);
+            }
+
+            // Scene uniforms — camera matching the demo (pos (6,3,7) → target (0,2.2,0)).
+            let cam = Vec3::new(6.0, 3.0, 7.0);
+            let view = Mat4::look_at_rh(cam, Vec3::new(0.0, 2.2, 0.0), Vec3::Y);
+            let proj = Mat4::perspective_rh(45f32.to_radians(), w as f32 / h as f32, 0.1, 500.0);
+            let vp_mat = proj * view;
+            let vp = vp_mat.to_cols_array_2d();
+            // The whole point of the fix: give the smoke the CORRECT inverse (CPU-computed).
+            let inv_vp = vp_mat.inverse().to_cols_array_2d();
+            let mut uni = crate::gpu_types::SceneUniforms::zeroed();
+            uni.view_proj = vp;
+            uni.camera_pos = [cam.x, cam.y, cam.z, 1.0];
+            uni.sun_direction = [-0.3, -0.8, -0.3, 0.0];
+            uni.sun_color = [1.0, 0.96, 0.9, 3.2];
+            uni.exposure = 1.0;
+            let uni_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("test_scene_uni"),
+                contents: bytemuck::cast_slice(&[uni]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let scene_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("test_scene_bg"),
+                layout: &layout,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: uni_buf.as_entire_binding() }],
+            });
+
+            let hdr = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("test_hdr"), size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let hdr_view = hdr.create_view(&Default::default());
+            let depth = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("test_depth"), size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Depth32Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let depth_view = depth.create_view(&Default::default());
+
+            // Clear HDR to black + depth to 1.0 (far → NO occlusion).
+            let mut enc = device.create_command_encoder(&Default::default());
+            enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &hdr_view, depth_slice: None, resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+            });
+            queue.submit(Some(enc.finish()));
+
+            // Raymarch the smoke onto the HDR.
+            let mut enc2 = device.create_command_encoder(&Default::default());
+            s.render(&mut enc2, &device, &queue, &scene_bg, &hdr_view, &depth_view, 3.0, 1.0 / 60.0, inv_vp);
+            queue.submit(Some(enc2.finish()));
+
+            // Read back HDR (Rgba16Float, 8 bytes/px; 320*8=2560, 256-aligned).
+            let bpr = w * 8;
+            let staging = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("hdr_readback"), size: (bpr * h) as u64,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            });
+            let mut enc3 = device.create_command_encoder(&Default::default());
+            enc3.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo { texture: &hdr, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyBufferInfo { buffer: &staging, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(h) } },
+                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+            queue.submit(Some(enc3.finish()));
+            let slice = staging.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |v| { let _ = tx.send(v); });
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            let _ = rx.recv();
+            let data = slice.get_mapped_range();
+            let px: &[u16] = bytemuck::cast_slice(&data);
+            let mut lit = 0u32;
+            let mut rows_with_smoke = std::collections::BTreeSet::new();
+            for y in 0..h {
+                for x in 0..w {
+                    let i = ((y * w + x) * 4) as usize;
+                    let b = f16_to_f32(px[i]) + f16_to_f32(px[i + 1]) + f16_to_f32(px[i + 2]);
+                    if b > 0.05 { lit += 1; rows_with_smoke.insert(y); }
+                }
+            }
+            let total_px = w * h;
+            let coverage = lit as f32 / total_px as f32;
+            let span = rows_with_smoke.len();
+            drop(data);
+            staging.unmap();
+            assert!(
+                coverage > 0.05,
+                "raymarch coverage {:.1}% is far too low — ray reconstruction is broken (the \
+                 volume collapsed to a sliver); expected the box to fill ~15% of the frame",
+                coverage * 100.0
+            );
+            // And it must span many rows (a real volume), not a one-row streak.
+            assert!(span > 40, "smoke spans only {span} rows — not a volume");
+        });
     }
 
     // A vertical wall down the middle of the volume, with the smoke source on the LEFT, must
@@ -920,6 +1092,58 @@ mod tests {
                 face_gap > 5.0 * face_solid.max(1e-6),
                 "at the wall face, smoke must emerge through the doorway, not the solid \
                  (face_gap={face_gap}, face_solid={face_solid})"
+            );
+        });
+    }
+
+    // FRAME-RATE INDEPENDENCE: the smoke's amount must not depend on the step size. Simulating
+    // the same 3 seconds at 60 fps and at 240 fps must give a similar total density. Before
+    // dissipation was made time-based it was applied per FRAME, so the 240 fps run dissipated
+    // ~4x more and collapsed to a thin sliver near the source — exactly the "no smoke, just a
+    // line" the demo showed at its (high) release frame rate while a 60 fps headless run filled
+    // the volume. Reverting the shader to `* P.source.w` fails this test.
+    #[test]
+    fn smoke_density_is_frame_rate_independent() {
+        async fn total_after_3s(
+            device: &wgpu::Device,
+            queue: &wgpu::Queue,
+            layout: &wgpu::BindGroupLayout,
+            dt: f32,
+            steps: usize,
+        ) -> f64 {
+            let mut s = SmokeVolume::new(device, layout, wgpu::TextureFormat::Rgba16Float);
+            s.bounds_min = [-1.5, 0.0, -1.5];
+            s.bounds_max = [1.5, 3.0, 1.5];
+            s.source = [0.0, 0.5, 0.0];
+            s.source_radius = 0.4;
+            s.inject = 6.0;
+            s.dissipation = 0.985;
+            s.buoyancy = 1.4;
+            s.fill_strength = 1.5;
+            s.fill_radius = 1.5;
+            for f in 0..steps {
+                s.step(device, queue, f as f32 * dt, dt);
+            }
+            read_f32(device, queue, s.density_buffer())
+                .await
+                .iter()
+                .map(|&v| v as f64)
+                .sum()
+        }
+
+        pollster::block_on(async {
+            let Some((device, queue)) = setup_headless_gpu().await else {
+                eprintln!("no GPU adapter — skipping frame-rate independence test");
+                return;
+            };
+            let layout = scene_layout(&device);
+            let a = total_after_3s(&device, &queue, &layout, 1.0 / 60.0, 180).await; // 3s @ 60fps
+            let b = total_after_3s(&device, &queue, &layout, 1.0 / 240.0, 720).await; // 3s @ 240fps
+            assert!(a > 100.0 && b > 100.0, "both runs should hold smoke (60fps={a}, 240fps={b})");
+            let ratio = a.min(b) / a.max(b);
+            assert!(
+                ratio > 0.7,
+                "smoke amount must be frame-rate independent (60fps={a}, 240fps={b}, ratio={ratio:.2})"
             );
         });
     }
