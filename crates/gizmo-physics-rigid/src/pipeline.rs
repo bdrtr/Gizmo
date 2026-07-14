@@ -609,7 +609,7 @@ impl PhysicsWorld {
                     });
 
                     // Collect island indices and bodies that need waking.
-                    let mut island_indices = std::collections::HashSet::new();
+                    let mut island_indices: FxHashSet<usize> = FxHashSet::default();
                     let mut wake_updates = Vec::new();
 
                     for m in &island_manifolds {
@@ -657,6 +657,11 @@ impl PhysicsWorld {
                                 buf[idx] = velocities[idx];
                             }
 
+                            // Island-local body index list: sizes the solver's per-body
+                            // scratch/loops to THIS island instead of the whole world.
+                            let island_body_vec: Vec<usize> =
+                                island_indices.iter().copied().collect();
+
                             solver.solve_contacts(
                                 &mut island_manifolds,
                                 rigid_bodies,
@@ -664,6 +669,7 @@ impl PhysicsWorld {
                                 &mut buf,
                                 &mut pos_buf,
                                 entity_map,
+                                &island_body_vec,
                                 dt,
                             );
 

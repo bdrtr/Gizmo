@@ -41,6 +41,12 @@ impl ConstraintSolver {
         velocities: &mut [Velocity],
         pos_corrections: &mut [(Vec3, Vec3)],
         entity_index_map: &rustc_hash::FxHashMap<u32, usize>,
+        // Distinct GLOBAL body indices referenced by THIS island's manifolds. All the
+        // per-body scratch (dp) and loops are sized/iterated by this island-local set
+        // instead of the full world, so cost is O(island_bodies·iters), not
+        // O(n_bodies·iters) per island — the difference between O(Σislands) and
+        // O(n_islands·n_bodies) across the frame.
+        island_bodies: &[usize],
         dt: f32,
     ) {
         let inv_dt = if dt > 0.0 { 1.0 / dt } else { 0.0 };
@@ -121,104 +127,113 @@ impl ConstraintSolver {
             }
         }
 
-        // ── 2) Aktif gövdeler + pozisyon-delta birikimi (gerçek TGS) ──
-        let n_bodies = velocities.len();
-        let mut active = vec![false; n_bodies];
-        for m in manifolds.iter() {
-            if let (Some(&a), Some(&b)) = (
-                entity_index_map.get(&m.entity_a.id()),
-                entity_index_map.get(&m.entity_b.id()),
-            ) {
-                active[a] = true;
-                active[b] = true;
-            }
-        }
-        // GERÇEK (penetran, pen0≥0) teması olan gövdeler. Yalnız bunlar TGS pozisyon
-        // düzeltmesi (dp) alır. Sadece SPECULATIVE (gap, pen0<0) teması olan gövdeler
-        // (ör. CCD mermisi) eski yolu kullanır: biased clamp velocity + position_integration
-        // taşır; relax/dp UYGULANMAZ (yoksa hız sıfırlanıp donar ya da dp taşıp tüneller).
-        let mut has_real = vec![false; n_bodies];
+        // ── 2) GERÇEK (penetran, pen0≥0) teması olan gövdeler ──
+        // Yalnız bunlar TGS pozisyon düzeltmesi (dp) alır. Sadece SPECULATIVE (gap, pen0<0)
+        // teması olan gövdeler (ör. CCD mermisi) eski yolu kullanır: biased clamp velocity +
+        // position_integration taşır; relax/dp UYGULANMAZ (yoksa hız sıfırlanıp donar ya da
+        // dp taşıp tüneller). Eski `active` (= manifold'da geçen tüm gövdeler) artık gereksiz:
+        // `island_bodies` zaten tam olarak o küme. `has_real` da full-world bit-vektörü yerine
+        // ada-boyutu küçük bir kümedir.
+        let mut real_bodies: rustc_hash::FxHashSet<usize> = rustc_hash::FxHashSet::default();
         for m in manifolds.iter() {
             if m.contacts.iter().any(|c| c.penetration >= 0.0) {
                 if let (Some(&a), Some(&b)) = (
                     entity_index_map.get(&m.entity_a.id()),
                     entity_index_map.get(&m.entity_b.id()),
                 ) {
-                    has_real[a] = true;
-                    has_real[b] = true;
+                    real_bodies.insert(a);
+                    real_bodies.insert(b);
                 }
             }
         }
-        let mut dp: Vec<(Vec3, Vec3)> = vec![(Vec3::ZERO, Vec3::ZERO); n_bodies];
+
         let h = if self.iterations > 0 {
             dt / self.iterations as f32
         } else {
             dt
         };
 
-        // ── 3) BIASED soft solve + iterasyon-arası pozisyon entegrasyonu ──
-        // Her iterasyondan sonra pozisyon-delta'sı güncel hızla ilerletilir; bir sonraki
-        // iterasyonun bias'ı GÜNCEL penetrasyonu görür → düzeltme yığın boyunca yayılır
-        // (SI'nin yapamadığı; uzun/çarpan yığınları ayakta tutan temel mekanizma).
-        for iter in 0..self.iterations {
-            self.tgs_sweep(
-                manifolds,
-                rigid_bodies,
-                transforms,
-                velocities,
-                entity_index_map,
-                &dp,
-                &vn0,
-                false,
-                iter % 2 == 1,
-                true,
-                bias_rate,
-                mass_scale,
-                impulse_scale,
-                inv_dt,
-            );
-            for i in 0..n_bodies {
-                if has_real[i] && active[i] && rigid_bodies[i].is_dynamic() {
-                    dp[i].0 += velocities[i].linear * h;
-                    dp[i].1 += velocities[i].angular * h;
+        // Per-body position-delta scratch (dp), indexed by GLOBAL body index but sized once
+        // per thread and RESET only for `island_bodies` — no per-island full-world allocation.
+        // Islands are disjoint (a body is in exactly one island), so resetting just this
+        // island's entries fully isolates the reused thread-local across islands/substeps.
+        thread_local! {
+            static DP: std::cell::RefCell<Vec<(Vec3, Vec3)>> =
+                const { std::cell::RefCell::new(Vec::new()) };
+        }
+        DP.with(|cell| {
+            let mut dp = cell.borrow_mut();
+            if dp.len() < velocities.len() {
+                dp.resize(velocities.len(), (Vec3::ZERO, Vec3::ZERO));
+            }
+            for &i in island_bodies {
+                dp[i] = (Vec3::ZERO, Vec3::ZERO);
+            }
+
+            // ── 3) BIASED soft solve + iterasyon-arası pozisyon entegrasyonu ──
+            // Her iterasyondan sonra pozisyon-delta'sı güncel hızla ilerletilir; bir sonraki
+            // iterasyonun bias'ı GÜNCEL penetrasyonu görür → düzeltme yığın boyunca yayılır
+            // (SI'nin yapamadığı; uzun/çarpan yığınları ayakta tutan temel mekanizma).
+            for iter in 0..self.iterations {
+                self.tgs_sweep(
+                    manifolds,
+                    rigid_bodies,
+                    transforms,
+                    velocities,
+                    entity_index_map,
+                    dp.as_slice(),
+                    &vn0,
+                    false,
+                    iter % 2 == 1,
+                    true,
+                    bias_rate,
+                    mass_scale,
+                    impulse_scale,
+                    inv_dt,
+                );
+                for &i in island_bodies {
+                    if real_bodies.contains(&i) && rigid_bodies[i].is_dynamic() {
+                        dp[i].0 += velocities[i].linear * h;
+                        dp[i].1 += velocities[i].angular * h;
+                    }
                 }
             }
-        }
 
-        // ── 4) RELAX (bias=0) — soft bias hızını temizle ──
-        for iter in 0..self.relax_iterations {
-            self.tgs_sweep(
-                manifolds,
-                rigid_bodies,
-                transforms,
-                velocities,
-                entity_index_map,
-                &dp,
-                &vn0,
-                true,
-                iter % 2 == 1,
-                false,
-                0.0,
-                1.0,
-                0.0,
-                inv_dt,
-            );
-        }
-
-        // ── 5) Pozisyon düzeltmesi = dp − (relaxed hız)·dt ──
-        // dp, biased çözümün TGS-entegre GERÇEK pozisyon değişimidir (penetrasyon
-        // düzeltmesi yığın boyunca yayılmış). position_integration relaxed·dt ekleyecek;
-        // farkı burada ekleyince toplam = dp olur → penetrasyon düzelir, hız temiz kalır
-        // (resting jitter yok, uyuyabilir). Restitution relax içinde uygulandığından
-        // sekme hızı `velocities`'tedir; çıkarılması sekme yer-değişimini bu kareye değil
-        // SONRAKİ kareye taşır (kararlı). Yalnız aktif dinamik gövdelere uygulanır.
-        for i in 0..n_bodies {
-            if has_real[i] && active[i] && rigid_bodies[i].is_dynamic() {
-                let dlin = dp[i].0 - velocities[i].linear * dt;
-                let dang = dp[i].1 - velocities[i].angular * dt;
-                pos_corrections[i] = (dlin, dang);
+            // ── 4) RELAX (bias=0) — soft bias hızını temizle ──
+            for iter in 0..self.relax_iterations {
+                self.tgs_sweep(
+                    manifolds,
+                    rigid_bodies,
+                    transforms,
+                    velocities,
+                    entity_index_map,
+                    dp.as_slice(),
+                    &vn0,
+                    true,
+                    iter % 2 == 1,
+                    false,
+                    0.0,
+                    1.0,
+                    0.0,
+                    inv_dt,
+                );
             }
-        }
+
+            // ── 5) Pozisyon düzeltmesi = dp − (relaxed hız)·dt ──
+            // dp, biased çözümün TGS-entegre GERÇEK pozisyon değişimidir (penetrasyon
+            // düzeltmesi yığın boyunca yayılmış). position_integration relaxed·dt ekleyecek;
+            // farkı burada ekleyince toplam = dp olur → penetrasyon düzelir, hız temiz kalır
+            // (resting jitter yok, uyuyabilir). Restitution relax içinde uygulandığından
+            // sekme hızı `velocities`'tedir; çıkarılması sekme yer-değişimini bu kareye değil
+            // SONRAKİ kareye taşır (kararlı). Yalnız aktif dinamik gövdelere uygulanır.
+            for &i in island_bodies {
+                if real_bodies.contains(&i) && rigid_bodies[i].is_dynamic() {
+                    let dlin = dp[i].0 - velocities[i].linear * dt;
+                    let dang = dp[i].1 - velocities[i].angular * dt;
+                    pos_corrections[i] = (dlin, dang);
+                }
+            }
+        });
     }
 
     /// Tek TGS iterasyon taraması: her temasta normal (opsiyonel soft bias) + 2-tangent
