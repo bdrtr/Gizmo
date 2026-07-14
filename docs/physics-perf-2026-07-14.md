@@ -90,13 +90,42 @@ regime.)
 - No golden-hash re-baseline needed: determinism tests are self-consistency
   checks and the soak/golden tests are behavioural tolerances — all green.
 
-## Remaining opportunities (not done)
+## Incremental broadphase — ATTEMPTED, reverted (blocked on solver order-robustness)
 
-Ranked by expected value; each needs its own measure-verify pass:
-1. **Incremental broadphase.** `broadphase_step` does `clear()` + full re-insert
-   every frame (O(N log N)), defeating the DBVT's fat-AABB early-out (already
-   implemented at `aabb_tree.rs`). Drive `update()` for movers instead ⇒ large win
-   in the common case where most bodies sleep; no help when everything moves.
+Dropping the per-substep `spatial_hash.clear()` and letting the DBVT `insert`
+early-out drive an incremental update is a large, correct broadphase win on its own:
+measured broadphase **~5–9 ms → ~0.6 ms at 2000 boxes (~8–16×)**, and a temporary
+completeness oracle (brute-force tight-overlap pairs, asserted ⊆ the incremental
+tree's `query_pairs`, run across the whole suite) confirmed **no missed pairs** —
+the fat-AABB early-out only skips when the stored box still contains the tight one,
+so it is provably conservative.
+
+**But it changes the *order* of `query_pairs`** (the incremental tree's shape is
+update-history-dependent, unlike the fresh-rebuild's insertion-order shape), and the
+constraint solver is **Gauss-Seidel — order-sensitive**. This surfaced two competing
+regressions that neither variant escapes:
+- **Incremental order (unsorted):** `soak_falling_stack_survives_impact` topples —
+  the metastable perfectly-aligned falling stack relies on a regular solve order for
+  the symmetric-GS bias cancellation, and the irregular AVL-traversal order breaks it.
+- **Canonical `(min_id,max_id)` sort** (fixes the stack): the wide settling scene
+  stops sleeping — **92.5% → 1.2% sleeping bodies**, contacts 2.4k → 31.6k, solver
+  jumps to ~59% — because the sorted order converges worse for resting stacks, leaving
+  residual jitter above the sleep threshold. (This regression is invisible to the
+  behavioural suite — soak checks stability/height, not sleep — so it would have
+  shipped silently. Caught only by `wide_scene_profile`'s sleep read-out.)
+
+**Prerequisite:** make the solver robust to contact-solve order (order-independent
+convergence, or sort manifolds by a stable key AND fix the resulting stack-sleep
+convergence) BEFORE re-attempting incremental broadphase. Related known effect: the
+`0aaa20d` `query_pairs` phase-1 removal already shifted the order enough to move
+wide-scene sleeping ~92.5% → ~73.5% (minor; the O(P²)→O(P) win dwarfs it, tests green).
+
+## Other remaining opportunities
+
+1. **Solver order-robustness** (the prerequisite above) — the highest-leverage next
+   item, since it unblocks incremental broadphase *and* recovers the sleep quality lost
+   to pair-order shifts. Needs a symmetric/Jacobi refinement or an order-canonical
+   manifold sweep whose convergence still settles stacks to sleep.
 2. Batch tiny islands into single rayon tasks (`with_min_len`) to cut per-island
    task-dispatch overhead.
 3. Reduce the biased-iteration count (currently 20) — a quality/perf trade-off,
