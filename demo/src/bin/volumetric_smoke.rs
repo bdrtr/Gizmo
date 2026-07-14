@@ -39,24 +39,26 @@ fn main() {
                     &renderer.scene.global_bind_group_layout,
                     gizmo::wgpu::TextureFormat::Rgba16Float,
                 );
-                // Sim kutusu + kaynak (grid-tabanlı advekte edilen yoğunluk).
+                // Sim kutusu + kaynak (grid-tabanlı advekte edilen yoğunluk). Kutu yüksekliği
+                // dumanın gerçekten DOLDURDUĞU hacme göre (4m) — çok yüksek kutu (6m) dumanı
+                // kadraj içinde minik bir dilim gibi gösteriyordu.
                 sm.bounds_min = [-1.8, 0.02, -1.8];
-                sm.bounds_max = [1.8, 6.0, 1.8];
-                sm.source = [0.0, 0.5, 0.0]; // taban yakınında kaynak
-                sm.source_radius = 0.7;
-                sm.inject = 5.0; // enjeksiyon hızı
-                sm.dissipation = 0.99; // frame başına yoğunluk çarpanı (dağılma)
-                sm.buoyancy = 0.55; // düşük yükselme → yükselmek yerine hacmi DOLDURUR
-                sm.curl_strength = 1.6; // kıvrılma
+                sm.bounds_max = [1.8, 4.0, 1.8];
+                sm.source = [0.0, 0.8, 0.0]; // taban yakınında kaynak
+                sm.source_radius = 0.6;
+                sm.inject = 9.0; // güçlü enjeksiyon → görünür yoğunluk (headless profille ayarlı)
+                sm.dissipation = 0.985; // frame başına yoğunluk çarpanı (dağılma)
+                sm.buoyancy = 1.7; // yükselir + kutuyu doldurur (0.55 ince disk yapıyordu)
+                sm.curl_strength = 2.0; // kıvrılma/türbülans
                 sm.curl_scale = 0.7;
-                sm.absorption = 2.6;
-                sm.density_scale = 1.5;
+                sm.absorption = 2.8;
+                sm.density_scale = 1.6;
                 sm.steps = 64;
                 sm.color = [0.95, 0.96, 1.0];
                 sm.ambient = 0.4;
                 // CS2-tarzı: kaynaktan DIŞA doğru dolar (fill), sınırlı yarıçapta durur.
-                sm.fill_strength = 2.0;
-                sm.fill_radius = 2.4;
+                sm.fill_strength = 2.5;
+                sm.fill_radius = 2.0;
                 // ENGELE-CONFORM: merkezdeki direği DELMEZ, etrafını sarar. Obstacle AABB'si
                 // sahnedeki direk mesh'iyle BİREBİR aynı (bkz. setup: PILLAR_MIN/MAX).
                 sm.set_obstacle_boxes(&renderer.queue, &[(PILLAR_MIN, PILLAR_MAX)]);
