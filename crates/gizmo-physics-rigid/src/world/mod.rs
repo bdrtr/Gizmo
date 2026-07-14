@@ -8,7 +8,7 @@ use gizmo_physics_core::{CollisionEvent, ContactManifold, TriggerEvent};
 use gizmo_physics_core::components::{Collider, Transform};
 use gizmo_physics_core::BodyHandle;
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::path::PathBuf;
 
 mod construction;
@@ -251,7 +251,7 @@ pub struct PhysicsWorld {
     pub fluid_zones: Vec<FluidZone>,
 
     #[serde(skip)]
-    pub(crate) contact_cache: HashMap<(BodyHandle, BodyHandle), (bool, Option<ContactManifold>)>,
+    pub(crate) contact_cache: FxHashMap<(BodyHandle, BodyHandle), (bool, Option<ContactManifold>)>,
 
     pub accumulator: f32,
     pub render_alpha: f32,
@@ -265,7 +265,7 @@ pub struct PhysicsWorld {
     pub transforms: Vec<Transform>,
     pub velocities: Vec<Velocity>,
     pub colliders: Vec<Collider>,
-    pub entity_index_map: HashMap<u32, usize>,
+    pub entity_index_map: FxHashMap<u32, usize>,
 
     // Timeline and Debugging
     #[serde(skip)]
@@ -301,7 +301,7 @@ pub struct WorldSnapshot {
     transforms: Vec<Transform>,
     velocities: Vec<crate::components::Velocity>,
     rigid_bodies: Vec<crate::components::RigidBody>,
-    contact_cache: HashMap<(BodyHandle, BodyHandle), (bool, Option<ContactManifold>)>,
+    contact_cache: FxHashMap<(BodyHandle, BodyHandle), (bool, Option<ContactManifold>)>,
     accumulator: f32,
     // Force-field state also feeds `velocity_integration_step`, so it MUST be part of
     // the rollback snapshot: these are public mutable `Vec`s that gameplay can add to /

@@ -34,7 +34,7 @@ impl JointSolver {
     pub fn solve_joints(
         &self,
         joints: &mut [Joint],
-        entity_index_map: &std::collections::HashMap<u32, usize>,
+        entity_index_map: &rustc_hash::FxHashMap<u32, usize>,
         rigid_bodies: &[RigidBody],
         transforms: &[Transform],
         velocities: &mut [Velocity],

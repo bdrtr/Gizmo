@@ -1,4 +1,5 @@
 use super::*;
+use rustc_hash::FxHashMap;
 
 #[derive(Clone)]
 struct Node {
@@ -41,7 +42,7 @@ pub struct DynamicAabbTree {
     nodes: Vec<Node>,
     root: usize,
     free_list: usize,
-    pub(crate) entity_map: HashMap<u32, usize>,
+    pub(crate) entity_map: FxHashMap<u32, usize>,
     fat_margin: f32,
 }
 
@@ -57,7 +58,7 @@ impl DynamicAabbTree {
             nodes: Vec::with_capacity(256),
             root: NULL,
             free_list: NULL,
-            entity_map: HashMap::new(),
+            entity_map: FxHashMap::default(),
             fat_margin: 0.1,
         }
     }

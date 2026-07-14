@@ -40,7 +40,7 @@ impl ConstraintSolver {
         transforms: &[Transform],
         velocities: &mut [Velocity],
         pos_corrections: &mut [(Vec3, Vec3)],
-        entity_index_map: &std::collections::HashMap<u32, usize>,
+        entity_index_map: &rustc_hash::FxHashMap<u32, usize>,
         dt: f32,
     ) {
         let inv_dt = if dt > 0.0 { 1.0 / dt } else { 0.0 };
@@ -230,7 +230,7 @@ impl ConstraintSolver {
         rigid_bodies: &[RigidBody],
         transforms: &[Transform],
         velocities: &mut [Velocity],
-        entity_index_map: &std::collections::HashMap<u32, usize>,
+        entity_index_map: &rustc_hash::FxHashMap<u32, usize>,
         // Gerçek TGS: gövde başına biriken pozisyon-delta'sı (lin, açısal-scaled-axis).
         // Bias, başlangıç penetrasyonu yerine bu delta'larla GÜNCELLENMİŞ penetrasyondan
         // hesaplanır → düzeltme iterasyonlar arası yığın boyunca yayılır.
