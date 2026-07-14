@@ -17,7 +17,7 @@ use gizmo_math::Vec3;
 use rayon::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use crate::parallel_compat::*;
-use std::collections::HashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 impl PhysicsWorld {
     // ================================================================== //
@@ -243,6 +243,20 @@ impl PhysicsWorld {
 
         let default_material = gizmo_physics_core::PhysicsMaterial::default();
 
+        // Precompute the set of entity pairs joined by a collision-disabled joint ONCE per
+        // frame (keyed by ordered id pair), instead of re-scanning every joint for every
+        // candidate contact pair inside the parallel narrowphase — that was O(pairs × joints).
+        // Empty (the common jointless case) ⇒ the per-pair check below short-circuits for free.
+        let disabled_joint_pairs: FxHashSet<(u32, u32)> = self
+            .joints
+            .iter()
+            .filter(|j| !j.collision_enabled)
+            .map(|j| {
+                let (a, b) = (j.entity_a.id(), j.entity_b.id());
+                (a.min(b), a.max(b))
+            })
+            .collect();
+
         let narrowphase_results: Vec<NpResult> = active_pairs
             .par_iter()
             .filter_map(|&(entity_a, entity_b)| {
@@ -265,12 +279,12 @@ impl PhysicsWorld {
                             return None;
                         }
 
-                        // Check if entities are connected by a joint with collision_enabled == false
-                        let has_disabled_joint = self.joints.iter().any(|j| {
-                            !j.collision_enabled && 
-                            ((j.entity_a.id() == entity_a.id() && j.entity_b.id() == entity_b.id()) ||
-                             (j.entity_a.id() == entity_b.id() && j.entity_b.id() == entity_a.id()))
-                        });
+                        // Entities connected by a joint with collision_enabled == false:
+                        // O(1) lookup in the precomputed set (empty ⇒ no work).
+                        let has_disabled_joint = !disabled_joint_pairs.is_empty() && {
+                            let (a, b) = (entity_a.id(), entity_b.id());
+                            disabled_joint_pairs.contains(&(a.min(b), a.max(b)))
+                        };
 
                         if has_disabled_joint {
                             return None;
@@ -360,8 +374,12 @@ impl PhysicsWorld {
             .collect();
 
         // ── Sequential post-processing ────────────────────────────────────
-        let mut manifolds = Vec::new();
-        let mut current_cache = HashMap::new();
+        // Pre-size to last frame's counts: the contact set is frame-coherent, so this skips the
+        // ~log2(N) grow-and-rehash reallocations the map/vec otherwise do every frame while
+        // filling to tens of thousands of entries.
+        let mut manifolds = Vec::with_capacity(narrowphase_results.len());
+        let mut current_cache =
+            FxHashMap::with_capacity_and_hasher(self.contact_cache.len(), Default::default());
         let mut soft_rigid_pairs = Vec::new();
         let mut soft_soft_pairs = Vec::new();
 
@@ -695,7 +713,7 @@ impl PhysicsWorld {
 
             // Write-back: velocities, wake-ups, fractures, warm-start data.
             // Build a lookup from entity pair → event index for O(1) updates.
-            let event_index: HashMap<(BodyHandle, BodyHandle), usize> = self
+            let event_index: FxHashMap<(BodyHandle, BodyHandle), usize> = self
                 .collision_events
                 .iter()
                 .enumerate()

@@ -110,7 +110,7 @@ impl ConstraintSolver {
         transforms: &[Transform],
         velocities: &mut [Velocity],
         pos_corrections: &mut [(Vec3, Vec3)],
-        entity_index_map: &std::collections::HashMap<u32, usize>,
+        entity_index_map: &rustc_hash::FxHashMap<u32, usize>,
         dt: f32,
     ) {
         // Pozisyon düzeltme buffer'ını sıfırla (çağıran tarafından yeniden kullanılabilir).

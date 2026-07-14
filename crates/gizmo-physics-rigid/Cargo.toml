@@ -27,6 +27,7 @@ gizmo-core = { path = "../gizmo-core", version = "0.8.0" }
 gizmo-math = { path = "../gizmo-math", version = "0.8.0" }
 gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.8.0" }
 wide = "1.2.0"
+rustc-hash = "2"
 rand = "0.10.1"
 dashmap = "5.5"
 crossbeam-queue = "0.3"

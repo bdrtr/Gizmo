@@ -8,7 +8,7 @@ use gizmo_physics_core::broadphase::SpatialHash;
 use gizmo_physics_core::components::{Collider, Transform};
 use gizmo_physics_core::BodyHandle;
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 impl PhysicsWorld {
     pub fn new() -> Self {
@@ -27,7 +27,7 @@ impl PhysicsWorld {
             fluid_zones: Vec::new(),
 
 
-            contact_cache: HashMap::new(),
+            contact_cache: FxHashMap::default(),
             accumulator: 0.0,
             render_alpha: 1.0,
             metrics: crate::island::PhysicsMetrics::default(),
@@ -36,7 +36,7 @@ impl PhysicsWorld {
             transforms: Vec::new(),
             velocities: Vec::new(),
             colliders: Vec::new(),
-            entity_index_map: HashMap::new(),
+            entity_index_map: FxHashMap::default(),
             is_paused: false,
             step_once: false,
             rewind_requested: false,

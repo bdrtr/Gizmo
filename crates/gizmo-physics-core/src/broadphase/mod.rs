@@ -22,7 +22,6 @@
 ///         parent'ın entity/aabb alanları temizlenmiyordu → free_node düzeltildi
 use crate::BodyHandle;
 use gizmo_math::{Aabb, Vec3};
-use std::collections::HashMap;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SIMD yardımcıları
