@@ -2,6 +2,7 @@
 pub mod audio;
 pub mod chunk_system;
 pub mod fluid;
+pub mod lifetime;
 pub mod physics;
 #[cfg(feature = "render")]
 pub mod render;
@@ -13,6 +14,7 @@ pub mod transform;
 pub use audio::*;
 pub use chunk_system::*;
 pub use fluid::*;
+pub use lifetime::*;
 pub use physics::*;
 #[cfg(feature = "render")]
 pub use render::*;

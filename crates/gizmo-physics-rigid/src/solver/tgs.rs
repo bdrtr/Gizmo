@@ -771,7 +771,7 @@ impl ConstraintSolver {
     /// contact. Iteration-independent — this is what eliminates the tall-tower buckling the
     /// per-manifold iterative path leaves as a weak creep. Rigid normal solve (like the
     /// block path); frozen anchors. No `reverse` (a joint solve has no sweep direction).
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
     fn tgs_sweep_island(
         &self,
         prepared: &mut [Prepared],
