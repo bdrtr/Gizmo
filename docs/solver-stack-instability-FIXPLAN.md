@@ -5,6 +5,138 @@
 > Box2D-v3 reference) **plus an empirical parameter sweep that REFUTED two of the
 > analysis's sub-hypotheses** — read the "measured" callouts before implementing.
 
+---
+
+> ## ✅ FIX SHIPPED (2026-07-15) — manifold BLOCK solver (partial: fixes N≤16)
+>
+> **Root cause (final): lateral BUCKLING.** A resting column leans (its lean/tilt grow
+> exponentially while |v| stays tiny) then topples — an inverted-pendulum instability whose
+> critical height was far too low (~N=5) because the contact solve gave too weak a
+> lateral/rotational restoring torque. Confirmed by `probe_buckling_vs_pump`. It is shared by
+> BOTH solvers and is NOT under-convergence / warm-start / soft-params (all refuted below).
+>
+> **The fix — manifold block solver** (`crates/gizmo-physics-rigid/src/solver/block.rs` +
+> `tgs.rs::tgs_sweep_block`): solve each contact manifold's up-to-4 **coplanar normal impulses
+> JOINTLY** (a regularised active-set LCP) instead of sequential Gauss-Seidel. The joint solve
+> realises the impulse *redistribution* (deeper corner carries more, lifting corner separates)
+> that produces the tilt-resisting torque — the restoring stiffness GS under-resolved. Two
+> details were essential: (1) a 4-coplanar-contact block is **rank-deficient** (4 contacts,
+> 3 DOF) → **Tikhonov regularisation** (`block_regularization`, default 0.1) or it produces a
+> huge garbage impulse (10-box tower flew to 18 m); (2) it stays **rigid** (soft mass-scaling
+> measurably weakens the fix). Plus **support-ordering + adaptive iterations** (sweeps scale
+> with island support-depth) so support propagates up the column. Defaults: `block_solver=true`,
+> `support_ordering=true`.
+>
+> **Result:** buckling critical height raised ~5 → ≥16; residual energy cut ~100× (20 m/s
+> blow-ups → ~0.2 peak). Realistic stacks (the field bug was 5-box columns; now stable well
+> beyond, to 16) are fixed. Full suite green in debug AND release, no determinism re-bless.
+> Live regression test: `soak_resting_stacks_stay_bounded` (N∈{2,5,16}).
+>
+> **Whole-chain DIRECT solve — IMPLEMENTED, opt-in** (`direct_chain_solve`, default OFF;
+> `solver/block.rs::solve_island_normals` + `tgs.rs::tgs_sweep_island`): for a tall bucklable
+> chain (support-depth ≥5, ≤256 contacts) it solves ALL the island's normal impulses JOINTLY
+> each sweep (dense active-set LCP over the full island Delassus matrix), resolving the
+> inter-manifold support coupling exactly. It **raises the stable-tower boundary** (e.g. N24 and
+> N40 stay bounded at 3000 frames where block-only failed) and roughly doubles survival time for
+> the rest — a real improvement. Default OFF because it costs **O(n³)** per chain (a 16-stack
+> soak went 10 s → 46 s in debug) for an **incomplete** benefit: it does NOT robustly fix N32+
+> (still chaotic — e.g. N32 blows @1420, N40 OK). Reason: it resolves only the NORMAL
+> constraints; the lean is also mediated by **friction** (solved sequentially) and frozen
+> anchors, so complete elimination needs a joint **normal+friction** nonlinear complementarity
+> solver (research-grade). Turn it on where you have tall towers and can afford the cost.
+>
+> **REMAINING (open):** robust stability for extreme towers (N≥32) — needs the normal+friction
+> joint solver above. Acceptance test: `soak_extreme_tower_n32_stays_bounded` (#[ignore]d).
+
+---
+
+> ## ⛔ CORRECTION (2026-07-14, execution session) — the root cause below is REFUTED
+>
+> Stage 0 (the RED test) and Stage 1 (support-order solve) were implemented. Then an
+> empirical **iteration ladder + targeted sweeps refuted the "under-converged Gauss-
+> Seidel" root cause this plan is built on.** Do NOT implement Stages 1–3 as written;
+> they target a mechanism that isn't the driver. Evidence:
+>
+> | test | result | conclusion |
+> |---|---|---|
+> | **iteration ladder** N=32, iters 30…110, ordering on/off | blow-up frame CHAOTIC / non-monotonic (iters=35→@63, iters=60→@1458); never stable | under-convergence would be **monotonic** — REFUTED |
+> | doc claim "iters=30 → never (N16)" | does **not** reproduce — N16 iters=30 blows @1417 | the original convergence evidence is not robust |
+> | **support ordering** (Stage 1) on vs off | blow-up frame barely moves (868→860) | not an O(N²)→O(N) GS-order problem for this SOFT solver — REFUTED as an instability fix |
+> | **frictionless** stack | CATASTROPHICALLY worse (blows ~frame 2–3) | friction is **stabilising**; injection is in the NORMAL/position channel, not friction |
+> | hertz / damping / relax / timestep-consistent-`h` (Stage 2b) | only shift the frame, or make it worse | soft-param tuning is a dead end — REFUTED |
+> | total energy (KE+PE) over time | ~conserved through a long plateau, then SUDDEN escape | **metastable**, not a slow exponential pump |
+>
+> **Corrected diagnosis:** a **metastable normal-channel resonance** seeded by float
+> asymmetry in the 4-point manifold. The residual max|v| hovers right at the 0.05 sleep
+> threshold, so the stack **never sleeps**, and eventually a fluctuation escapes
+> nonlinearly. It is NOT under-convergence and NOT fixable by iteration/soft-param tuning.
+>
+> **What shipped this session:** the RED test (`soak_resting_stacks_never_gain_energy`,
+> `#[ignore]`d — it is the acceptance test for the eventual fix) and the support-order
+> solver (kept, **default OFF**, unit-tested for pair-order-invariance — its one real,
+> independent win: it unblocks incremental broadphase; it does NOT fix the instability).
+>
+> ### Stage 4 executed (2026-07-15) — also does NOT fix it, but found the real redirect
+>
+> Implemented both Stage-4 components behind flags and measured:
+> - **Interleaved relax** (biased→integrate→relax per iteration, Box2D-style): WORSE
+>   (N16 868→418). The "accumulated bias velocity" hypothesis is refuted. Removed.
+> - **Rotating anchors** (`ConstraintSolver.rotating_anchors`, kept, default OFF): mild —
+>   delays N16 (868→1114) but does NOT fix it and does not help N32.
+>
+> **⭐ Pivotal finding:** the **SI (split-impulse) solver also blows up the resting stack,
+> even earlier** (N16@360, N32@67) with `use_tgs_soft=false`. So the instability is **NOT
+> TGS-specific** — two independent solvers both destabilise resting stacks. The root is
+> **upstream / shared**, i.e. in what both paths have in common: **warm-starting** (both
+> re-apply last frame's impulses; `warm_start=0` → instant blow, so it's load-bearing but
+> mis-applied?) and/or the **narrowphase box-box 4-point manifold** (contact-point
+> identity/positions shifting frame-to-frame as the stack micro-wobbles → warm-start
+> impulses land on slightly-wrong points → torque error → injection). NOT a solver-inner
+> issue.
+>
+> ### RESOLVED DIAGNOSIS (2026-07-15) — it is lateral BUCKLING, a linear instability
+>
+> A buckling-vs-pump probe + a 10-agent investigation workflow + a signed-drift probe settled it:
+>
+> - **It is LATERAL BUCKLING, not a vertical energy pump.** `probe_buckling_vs_pump`: the column's
+>   lean (max box |x|+|z|) and tilt grow EXPONENTIALLY (τ≈100 frames) for hundreds of frames while
+>   max|v| stays <0.05; then the column topples and PE→KE gives the sudden escape (at N16 blow-up,
+>   vy≈0.015 vs |v|=0.50 → lateral/rotational, not a bounce). Explains every constraint: height-
+>   scaling = lower buckling critical load; friction-stabilises = friction resists the lean
+>   (frictionless→frame 2); both solvers; metastable; never-sleeps.
+> - **It is a GENUINE LINEAR INSTABILITY, not a discrete bug.** Signed-drift probe: the lean
+>   direction meanders randomly early, then locks into a NOISE-selected direction (−x here) near
+>   frame ~400 and grows exponentially → the equilibrium eigenvalue is just above 1 for N≥5. Not a
+>   fixed solve-order bias, so symmetrisation cannot cancel it.
+> - **The workflow's top candidate (warm-start carry-over) was REFUTED by experiment.** Added a
+>   configurable `warm_start_match_tolerance` (default 0.02) and swept it: tightening 0.02→1e-3→1e-4
+>   makes the blow-up EARLIER (N16 868→635→22), and warm_start=0 blows at frame 24. **Warm-start is
+>   STABILISING, not the injection channel.** The box-box manifold is per-corner correct
+>   (contacts.rs `clip_box_box`), so it is not a manifold bug either. Only rotating anchors mildly
+>   help (868→1114), consistent with better torque-arm accuracy.
+>
+> **CONCLUSION:** the iterative contact solver's effective lateral/rotational restoring stiffness for
+> a stacked column is slightly below the buckling-critical value, so tall stacks (N≥5) are linearly
+> unstable. This is a solver-STRUCTURE limitation, not a small discrete bug — no
+> iteration/soft-param/warm-start knob fixes it.
+>
+> **Recommended fix (structural — needs a dedicated pass, user's call on approach):**
+> 1. **Contact-manifold BLOCK solver** — solve a box-box manifold's up-to-4 coplanar normal
+>    constraints JOINTLY (coupled) instead of sequential Gauss-Seidel, so the tilt-resisting impulse
+>    redistribution is realised exactly → raises restoring stiffness above critical. Most targeted;
+>    Box2D uses a 2-point block solver for exactly this.
+> 2. **Shock propagation** — an extra post-solve pass, bottom-up along the (already-built) support
+>    order, treating each contact's lower body as infinite-mass → rigidifies the support chain.
+>    Reuses `support_ordering`.
+> 3. **Sleep-before-buckle** — force a near-quiescent stack to sleep in the first ~100 frames
+>    (before the lean grows past linear), robust to the solver's velocity-jitter spikes. Smaller/
+>    heuristic; freezes the stack near-vertical.
+>
+> Shipped this session (all default-preserving, suite green): the buckling/signed-drift probes, the
+> `warm_start_match_tolerance` config (default 0.02 = historic behaviour), and the corrected diagnosis.
+
+---
+
 ## Root cause — CONFIRMED (empirical + code)
 
 A resting box stack of N≥5 spontaneously gains energy and blows up (16-stack at

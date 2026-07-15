@@ -11,8 +11,169 @@ use gizmo_physics_core::components::Transform;
 /// - Solver iteration sayısı konfigüre edilebilir
 use gizmo_physics_core::ContactManifold;
 
+mod block;
 mod standalone;
 mod tgs;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Support-order (topological) contact ordering.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Sorts an island's contacts into SUPPORT order — closest to a static/kinematic
+// anchor first, propagating outward. Support depth = graph distance (in contacts)
+// from the nearest anchor, via a multi-source BFS over the island's contact graph.
+// For a ground-anchored vertical stack this is exactly bottom-up: the ground contact,
+// then box1↔box2, then box2↔box3, … It generalises to trees/piles (no fragile "is
+// this a 1-D chain?" test).
+//
+// The value it DOES deliver: a DETERMINISTIC TOTAL ORDER keyed on
+// (max_depth, min_depth, canonical entity pair) that is INDEPENDENT of broadphase
+// pair-emission order → the island solve becomes pair-order-invariant, which is the
+// property that unblocks incremental broadphase (docs/physics-perf-2026-07-14.md).
+//
+// What it was HOPED to deliver but does NOT: fixing the tall-stack instability. The
+// theory was that a vertical N-stack's Delassus matrix is a 1-D Laplacian with O(N²)
+// condition number, so support-order GS would converge it in ~O(N) sweeps instead of
+// O(N²). Empirically REFUTED (2026-07-14): ordering barely moves the blow-up frame,
+// and the blow-up is chaotic (not monotonic) in iteration count — the instability is a
+// metastable normal-channel resonance, not under-convergence. See the root-cause note
+// in crates/gizmo-physics-rigid/tests/soak_and_golden.rs. Hence default OFF.
+/// Returns the island's maximum support depth (graph distance in contacts from the
+/// nearest anchor) — used to scale the block solver's iteration count so a tall stack
+/// gets enough sweeps for support to propagate up the column. When `reorder` is true,
+/// also permutes `manifolds` into support order in place.
+fn support_order_manifolds(
+    manifolds: &mut [ContactManifold],
+    rigid_bodies: &[RigidBody],
+    entity_index_map: &rustc_hash::FxHashMap<u32, usize>,
+    reorder: bool,
+) -> u32 {
+    let n = manifolds.len();
+    if n < 2 {
+        return n as u32; // 0 or 1 contact: trivially ordered, depth ≤ 1.
+    }
+
+    // ── 1) Intern distinct bodies → compact local indices; record anchors + edges. ──
+    // `medges[i]` = local endpoints of manifold i (None if an endpoint isn't mapped —
+    // those keep last, deterministically by entity pair, matching the solver's own
+    // `continue` on an unmapped manifold).
+    let mut local: rustc_hash::FxHashMap<usize, u32> = rustc_hash::FxHashMap::default();
+    let mut global: Vec<usize> = Vec::new(); // local idx → global body idx
+    let mut is_anchor: Vec<bool> = Vec::new(); // local idx → non-dynamic (static/kinematic)?
+    let mut medges: Vec<Option<(u32, u32)>> = Vec::with_capacity(n);
+
+    for m in manifolds.iter() {
+        let (ga, gb) = match (
+            entity_index_map.get(&m.entity_a.id()),
+            entity_index_map.get(&m.entity_b.id()),
+        ) {
+            (Some(&a), Some(&b)) => (a, b),
+            _ => {
+                medges.push(None);
+                continue;
+            }
+        };
+        let mut ends = [0u32; 2];
+        for (slot, &gidx) in ends.iter_mut().zip([ga, gb].iter()) {
+            *slot = match local.get(&gidx) {
+                Some(&li) => li,
+                None => {
+                    let li = global.len() as u32;
+                    local.insert(gidx, li);
+                    global.push(gidx);
+                    is_anchor.push(!rigid_bodies[gidx].is_dynamic());
+                    li
+                }
+            };
+        }
+        medges.push(Some((ends[0], ends[1])));
+    }
+
+    let v = global.len();
+    let mut adj: Vec<Vec<u32>> = vec![Vec::new(); v];
+    for &(a, b) in medges.iter().flatten() {
+        adj[a as usize].push(b);
+        adj[b as usize].push(a);
+    }
+
+    // ── 2) Multi-source BFS from anchors → support depth (min contacts to an anchor). ──
+    // BFS yields the min graph distance regardless of visitation order, so `depth` is a
+    // deterministic function of the island's contact graph.
+    const INF: u32 = u32::MAX;
+    let mut depth: Vec<u32> = vec![INF; v];
+    let mut queue: std::collections::VecDeque<u32> = std::collections::VecDeque::new();
+    for li in 0..v {
+        if is_anchor[li] {
+            depth[li] = 0;
+            queue.push_back(li as u32);
+        }
+    }
+    // Anchor-free island (e.g. two boxes colliding mid-air): root the BFS at the body
+    // with the lowest GLOBAL index — deterministic, so the order stays pair-invariant.
+    if queue.is_empty() {
+        let mut root = 0u32;
+        let mut best = usize::MAX;
+        for (li, &g) in global.iter().enumerate() {
+            if g < best {
+                best = g;
+                root = li as u32;
+            }
+        }
+        depth[root as usize] = 0;
+        queue.push_back(root);
+    }
+    let mut max_depth = 0u32;
+    while let Some(u) = queue.pop_front() {
+        let du = depth[u as usize];
+        max_depth = max_depth.max(du);
+        for &w in &adj[u as usize] {
+            if depth[w as usize] == INF {
+                depth[w as usize] = du + 1;
+                queue.push_back(w);
+            }
+        }
+    }
+
+    if !reorder {
+        return max_depth; // caller only wanted the depth (e.g. for adaptive iterations).
+    }
+
+    // ── 3) Sort key per manifold → deterministic total order. ──
+    // (max_depth, min_depth, min_entity_id, max_entity_id): anchor-closest contact
+    // first; the canonical entity pair is unique per manifold so the key is a strict
+    // total order → independent of the input (emission) order.
+    let key_of = |i: usize| -> (u32, u32, u32, u32) {
+        let ea = manifolds[i].entity_a.id();
+        let eb = manifolds[i].entity_b.id();
+        let (ida, idb) = if ea <= eb { (ea, eb) } else { (eb, ea) };
+        match medges[i] {
+            Some((la, lb)) => {
+                let (da, db) = (depth[la as usize], depth[lb as usize]);
+                let (lo, hi) = if da <= db { (da, db) } else { (db, da) };
+                (hi, lo, ida, idb)
+            }
+            None => (INF, INF, ida, idb),
+        }
+    };
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_unstable_by_key(|&i| key_of(i));
+
+    // ── 4) Apply the permutation to `manifolds` in place (no clone of the Vec-bearing
+    // ContactManifold). `pos[orig] = destination slot`; cycle-swap into place. ──
+    let mut pos: Vec<usize> = vec![0; n];
+    for (slot, &orig) in order.iter().enumerate() {
+        pos[orig] = slot;
+    }
+    for i in 0..n {
+        while pos[i] != i {
+            let target = pos[i];
+            manifolds.swap(i, target);
+            pos.swap(i, target);
+        }
+    }
+
+    max_depth
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Konfigürasyon
@@ -58,6 +219,58 @@ pub struct ConstraintSolver {
     /// Maksimum soft-bias hızı (m/s) — derin gömülmede pozisyon düzeltme hızını
     /// sınırlar (patlama yok). Box2D v3 ≈ 3·lengthUnits.
     pub max_bias_velocity: f32,
+
+    /// Temasları çözmeden önce ankraj-tabanlı (bottom-up) DETERMİNİSTİK support
+    /// sırasına diz → ada çözümü broadphase pair-emission sırasından BAĞIMSIZ olur
+    /// (pair-order-invariant). Bu, incremental-broadphase'in önünü açan uyku-determinizmi
+    /// özelliğidir (docs/physics-perf-2026-07-14.md).
+    ///
+    /// VARSAYILAN KAPALI. Başlangıçta yüksek-yığın instabilitesini çözeceği umuluyordu
+    /// (Stage 1 "linchpin"), ancak ampirik ölçüm bunu ÇÜRÜTTÜ: sıralama patlama frame'ini
+    /// pek oynatmıyor (bkz. soak_and_golden.rs kök-neden notu — instabilite bir
+    /// under-convergence değil, metastable rezonans). Instabiliteyi çözmediği ve
+    /// per-substep BFS+sort maliyeti + determinizm çıktısını değiştirdiği için, ölçülmüş
+    /// bir fayda olmadan perf-duyarlı motorda VARSAYILAN AÇILMADI. Hazır ve test edildi;
+    /// incremental-broadphase işi başladığında pair-invariance için açılabilir.
+    pub support_ordering: bool,
+
+    /// Dönen ankrajlar (Box2D-v3 tekniği): her sweep'te temas ayrımını (separation) ve
+    /// jacobian kollarını (r_a/r_b) birikmiş dp DÖNMESİYLE yeniden hesapla — donmuş-ankraj
+    /// linearizasyon kaymasını giderir. VARSAYILAN KAPALI: resting-stack instabilitesini
+    /// ÇÖZMEZ (ampirik: N16 patlamasını ~%30 geciktirir, N32'yi çözmez — enjeksiyon
+    /// HEM TGS HEM SI yolunda; yani solver-üstü/paylaşılan bir kök, bkz. soak_and_golden.rs
+    /// kök-neden notu). Doğru bir teknik; per-sweep 2 Quat maliyeti nedeniyle varsayılan
+    /// açılmadı. Hazır ve gated.
+    pub rotating_anchors: bool,
+
+    /// Warm-start eşleme toleransı (m): bir önceki substep'in temas impulsu, YENİ temas
+    /// noktasına yalnız bu mesafeden yakınsa taşınır (pipeline.rs narrowphase warm-start).
+    /// Dinlenen yığın instabilitesinin ENJEKSİYON KANALI burası: kaymış bir temas noktasına
+    /// eski (skaler) impulsu YENİ kaldıraç koluyla yeniden uygulamak artık-tork bırakıp
+    /// yanal salınımı pompalıyor (buckling). Toleransı düşürmek (ör. 1e-3) yalnız GERÇEKTEN
+    /// dural noktalara warm-start verir → kaymış noktalar soğuk başlar → pompa kesilir.
+    /// Varsayılan 0.02 (tarihsel davranış).
+    pub warm_start_match_tolerance: f32,
+
+    /// Manifold BLOCK solver: bir temas manifoldunun (aynı gövde-çifti, ≤4 coplanar nokta)
+    /// normal kısıtlarını ARDIŞIK Gauss-Seidel yerine BİRLİKTE (doğrudan aktif-küme LCP) çöz.
+    /// Noktalar-arası (tilt) kuplajı tam çözer → yığın-kolonunun yanal restoring stiffness'ini
+    /// buckling-kritiğin ÜSTÜNE çıkarır (dinlenen-yığın instabilitesinin yapısal fixi). Sürtünme
+    /// yine ardışık. Varsayılan kapalı (A/B + doğrulama); çalışırsa default açılacak.
+    pub block_solver: bool,
+
+    /// Block-solver Tikhonov regularizasyonu (manifoldun ortalama normal efektif kütlesinin
+    /// oranı). 4-coplanar temas bloğunun rank-eksikliğini giderir; fiziksel tilt-restoring
+    /// modlarını sert bırakacak kadar küçük olmalı.
+    pub block_regularization: f32,
+
+    /// Whole-CHAIN direct solve: yüksek (support-depth≥5), yeterince küçük chain adalarının
+    /// TÜM normal impulslarını her sweep'te BİRLİKTE (yoğun aktif-küme LCP) çöz → inter-manifold
+    /// support kuplajını TAM çözer, orta-yükseklik kule kararlılığını artırır (N24/N40 gibi).
+    /// VARSAYILAN KAPALI: O(n³) maliyeti pahalı ve aşırı kuleleri (N32+) yine ROBUST çözmüyor
+    /// (kalan instabilite friction/geometri-kanalında; normal+friction ortak çözücü gerek).
+    /// Doğru+test edildi; yüksek kuleye ihtiyaç olan ve maliyeti kaldıran sahneler için gated.
+    pub direct_chain_solve: bool,
 }
 
 impl Default for ConstraintSolver {
@@ -76,6 +289,12 @@ impl Default for ConstraintSolver {
             contact_damping_ratio: 10.0,
             relax_iterations: 4,
             max_bias_velocity: 4.0,
+            support_ordering: true,
+            rotating_anchors: false,
+            warm_start_match_tolerance: 0.02,
+            block_solver: true,
+            block_regularization: 0.1,
+            direct_chain_solve: false,
         }
     }
 }
@@ -126,6 +345,29 @@ impl ConstraintSolver {
             return;
         }
 
+        // ── Support order + island depth ──
+        // Support-order the island's contacts (bottom-up from anchors) when enabled — a
+        // deterministic, pair-emission-invariant total order that lets the block solver's
+        // support front propagate up the column. The BFS also yields the island's support
+        // depth, which drives ADAPTIVE ITERATIONS: a tall stack needs iterations ≥ its
+        // height for support to reach the top, so with the block solver we scale the sweep
+        // count with depth (short piles keep the base count → no perf cost).
+        let island_depth = if self.support_ordering || self.block_solver {
+            support_order_manifolds(manifolds, rigid_bodies, entity_index_map, self.support_ordering)
+        } else {
+            0
+        };
+        // Adaptive iterations: a stacked column of support-depth D is linearly unstable
+        // (buckling) until support propagates to its top, which needs sweeps that scale
+        // with D. Shallow islands (D<5, no buckling) keep the base count; bucklable stacks
+        // get max(FLOOR, 1.5·D) sweeps (empirically: D=5 needs ≥24, D=32 needs ~48), capped.
+        let n_iterations = if self.block_solver && island_depth >= 5 {
+            let target = (island_depth as usize * 3 / 2).max(Self::BLOCK_ITERS_FLOOR);
+            self.iterations.max(target).min(Self::BLOCK_ITERS_CAP)
+        } else {
+            self.iterations
+        };
+
         // TGS Soft yolu (modern çözücü): soft constraint + relax pass.
         // İSTİSNA: CCD-etkin gövde içeren island'lar eski (split-impulse) yolu kullanır.
         // CCD speculative temasları ince ayarlıdır; TGS'in dp/relax akışı yüksek-hızlı
@@ -147,6 +389,8 @@ impl ConstraintSolver {
                 pos_corrections,
                 entity_index_map,
                 island_bodies,
+                island_depth,
+                n_iterations,
                 dt,
             );
             return;
@@ -514,5 +758,85 @@ impl ConstraintSolver {
                 pos_corrections[i] = (pseudo_vel[i].0 * dt, pseudo_vel[i].1 * dt);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod support_order_tests {
+    use super::*;
+    use gizmo_physics_core::BodyHandle;
+
+    // Build a manifold between two bodies (contacts irrelevant to ordering — it keys on
+    // the entity pair + graph depth, never reads contact points).
+    fn manifold(a: u32, b: u32) -> ContactManifold {
+        ContactManifold::new(BodyHandle::from_id(a), BodyHandle::from_id(b))
+    }
+
+    fn id_pairs(ms: &[ContactManifold]) -> Vec<(u32, u32)> {
+        ms.iter().map(|m| (m.entity_a.id(), m.entity_b.id())).collect()
+    }
+
+    /// The ordering is a deterministic TOTAL order independent of the input (broadphase
+    /// emission) order, and for a ground-anchored chain it is bottom-up from the anchor.
+    #[test]
+    fn support_order_is_pair_emission_invariant_and_bottom_up() {
+        // Body 0 = static ground; bodies 1..=5 = a dynamic vertical chain.
+        let mut rigid_bodies = vec![RigidBody::new_static()];
+        for _ in 0..5 {
+            rigid_bodies.push(RigidBody::new(1.0, true));
+        }
+        let entity_index_map: rustc_hash::FxHashMap<u32, usize> =
+            (0..rigid_bodies.len() as u32).map(|i| (i, i as usize)).collect();
+
+        // Chain contacts: ground↔1, 1↔2, 2↔3, 3↔4, 4↔5.
+        let chain = [(0u32, 1u32), (1, 2), (2, 3), (3, 4), (4, 5)];
+
+        // Several different emission orders of the SAME contact set.
+        let orders: [Vec<(u32, u32)>; 3] = [
+            chain.to_vec(),
+            vec![(3, 4), (0, 1), (4, 5), (1, 2), (2, 3)], // shuffled
+            chain.iter().rev().copied().collect(),        // reversed
+        ];
+
+        let mut results = Vec::new();
+        for order in &orders {
+            let mut ms: Vec<ContactManifold> = order.iter().map(|&(a, b)| manifold(a, b)).collect();
+            support_order_manifolds(&mut ms, &rigid_bodies, &entity_index_map, true);
+            results.push(id_pairs(&ms));
+        }
+
+        // (1) Pair-order-invariance: every emission order yields the identical solve order.
+        assert_eq!(results[0], results[1], "shuffled emission changed the solve order");
+        assert_eq!(results[0], results[2], "reversed emission changed the solve order");
+
+        // (2) Bottom-up from the anchor: the ground contact (0,1) is solved first, then
+        //     the chain propagates outward.
+        assert_eq!(
+            results[0],
+            vec![(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)],
+            "expected anchor-first bottom-up support order"
+        );
+    }
+
+    /// Anchor-free island (no static body): still a deterministic total order,
+    /// independent of emission order (rooted at the lowest body index).
+    #[test]
+    fn support_order_anchor_free_is_deterministic() {
+        // Four dynamic bodies (ids 1..=4), no static anchor, chained 1-2-3-4.
+        let mut rigid_bodies = vec![RigidBody::new_static()]; // id 0 unused here
+        for _ in 0..4 {
+            rigid_bodies.push(RigidBody::new(1.0, true));
+        }
+        let entity_index_map: rustc_hash::FxHashMap<u32, usize> =
+            (0..rigid_bodies.len() as u32).map(|i| (i, i as usize)).collect();
+
+        let a: Vec<(u32, u32)> = vec![(1, 2), (2, 3), (3, 4)];
+        let b: Vec<(u32, u32)> = vec![(3, 4), (1, 2), (2, 3)];
+
+        let mut ma: Vec<ContactManifold> = a.iter().map(|&(x, y)| manifold(x, y)).collect();
+        let mut mb: Vec<ContactManifold> = b.iter().map(|&(x, y)| manifold(x, y)).collect();
+        support_order_manifolds(&mut ma, &rigid_bodies, &entity_index_map, true);
+        support_order_manifolds(&mut mb, &rigid_bodies, &entity_index_map, true);
+        assert_eq!(id_pairs(&ma), id_pairs(&mb), "anchor-free order must be emission-invariant");
     }
 }
