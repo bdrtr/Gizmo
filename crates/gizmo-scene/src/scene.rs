@@ -489,6 +489,57 @@ mod tests {
         assert!(matches!(deserialized.joints[0].data, gizmo_physics_rigid::joints::data::JointData::Fixed));
     }
 
+    // DEKLARATİF SAHNE (P4): bir geliştiricinin ELLE yazacağı bir RON "level" doğrudan
+    // yüklenebilmeli — mevcut round-trip testleri hep önce `save` ile MAKİNE RON'u üretiyor;
+    // bu test insan-yazımı akışı kanıtlar + kopyala-yapıştır ŞABLON görevi görür. Level'i
+    // `load_level`'daki gibi elle spawn'lamak yerine bir dosyadan yüklemenin declarative yolu.
+    #[test]
+    fn hand_authored_scene_ron_loads_and_spawns() {
+        use gizmo_math::Vec3;
+        use gizmo_physics_core::components::Transform;
+
+        // Bir insanın yazdığı declarative sahne (zemin + 2 kutu). Bileşen değerleri RON.
+        let ron_scene = r#"(
+            entities: [
+                (
+                    original_id: 1, name: Some("ground"), mesh_source: Some("cube"),
+                    material_source: Some((albedo: (0.3, 0.3, 0.3, 1.0), roughness: 0.9, metallic: 0.0, unlit: 0.0, texture_source: None)),
+                    parent_id: None,
+                    components: { "Transform": "(position:(0.0,-0.5,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(10.0,0.5,10.0))" },
+                ),
+                (
+                    original_id: 2, name: Some("box_a"), mesh_source: Some("cube"), material_source: None, parent_id: None,
+                    components: { "Transform": "(position:(-1.0,1.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))" },
+                ),
+                (
+                    original_id: 3, name: Some("box_b"), mesh_source: Some("cube"), material_source: None, parent_id: None,
+                    components: { "Transform": "(position:(1.0,2.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))" },
+                ),
+            ],
+            joints: [],
+        )"#;
+
+        let scene: SceneData = ron::from_str(ron_scene).expect("el-yazımı sahne RON'u geçerli olmalı");
+        let registry = crate::registry::default_scene_registry();
+        let mut world = World::new();
+        SceneData::instantiate_entities(scene.entities, None, &mut world, &registry);
+
+        // 3 varlık isim + Transform pozisyonlarıyla spawn olmalı (declarative → gerçek entity).
+        let names = world.borrow::<EntityName>();
+        let transforms = world.borrow::<Transform>();
+        let pos_of = |want: &str| -> Option<Vec3> {
+            world
+                .iter_alive_entities()
+                .into_iter()
+                .map(|e| e.id())
+                .find(|&id| names.get(id).map(|n| n.0.as_str()) == Some(want))
+                .and_then(|id| transforms.get(id).map(|t| t.position))
+        };
+        assert_eq!(pos_of("ground"), Some(Vec3::new(0.0, -0.5, 0.0)), "ground pozisyonu");
+        assert_eq!(pos_of("box_a"), Some(Vec3::new(-1.0, 1.0, 0.0)), "box_a pozisyonu");
+        assert_eq!(pos_of("box_b"), Some(Vec3::new(1.0, 2.0, 0.0)), "box_b pozisyonu");
+    }
+
     // Faz 5 — sahne kaydet/yükle GÜVENİLİRLİĞİ: bir dünya kaydedilip TAZE bir dünyaya
     // yüklendiğinde isim + bileşen değerleri + hiyerarşi KORUNMALI (round-trip sadakati).
     #[test]

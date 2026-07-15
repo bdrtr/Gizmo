@@ -10,6 +10,12 @@
 //!   (de)serialized, plus [`default_scene_registry`](registry::default_scene_registry).
 //!
 //! It is used by the editor, Lua scripting, and the runtime.
+//!
+//! Scenes are also **hand-authorable**: a RON file (or string) can be written by a
+//! developer and loaded with [`SceneData::load_into`] (or `ron::from_str` +
+//! [`SceneData::instantiate_entities`]) instead of hard-coding entity spawns — the
+//! declarative alternative to an imperative `load_level()`. See
+//! `scene::tests::hand_authored_scene_ron_loads_and_spawns` for a copy-paste template.
 
 pub mod error;
 pub mod registry;
