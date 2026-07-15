@@ -125,16 +125,6 @@ impl Game {
     }
 }
 
-// nişan yönü (kameranın get_front() ile birebir aynı)
-fn front(yaw: f32, pitch: f32) -> Vec3 {
-    Vec3::new(
-        yaw.cos() * pitch.cos(),
-        pitch.sin(),
-        yaw.sin() * pitch.cos(),
-    )
-    .normalize()
-}
-
 // -------------------------------------------------------------- blok kurulumu
 fn spawn_block(g: &mut Game, world: &mut World, pos: Vec3, half: Vec3, color: Vec4, mass: f32) {
     let mat = g.tint(color, 0.75, 0.05);
@@ -432,7 +422,10 @@ const FRAC_PI_3_LOCAL: f32 = std::f32::consts::FRAC_PI_3;
 // --------------------------------------------------------------- ateş
 fn fire(g: &mut Game, world: &mut World, power: f32) {
     let speed = MIN_SPEED + power.clamp(0.0, 1.0) * (MAX_SPEED - MIN_SPEED);
-    let dir = front(g.yaw, g.pitch);
+    // Nişan yönü motorun paylaşılan yardımından (elle "front" matematiği YOK). Standart
+    // bir FP oyunu tüm fare-look'u `FpsLook` komponentine bırakabilir; bu demo sabit-top +
+    // autoplay + aim-clamp şeması yüzünden yaw/pitch'i kendi tutuyor.
+    let dir = Camera::forward_from(g.yaw, g.pitch);
     let pos = CANNON_POS + dir * 2.5;
     let ball_mat = g.tint(Vec4::new(0.18, 0.19, 0.22, 1.0), 0.3, 1.0);
     let e = world

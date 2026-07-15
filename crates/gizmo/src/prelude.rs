@@ -66,6 +66,8 @@ pub use crate::systems::render::RenderContextExt;
 // prelude'da öne çıkar (elle her frame yeniden yazma tuzağını önlemek için).
 pub use crate::systems::lifetime::{DespawnAfter, DespawnBelowY, LifetimePlugin};
 pub use crate::systems::spin::{Spin, SpinPlugin};
+#[cfg(feature = "render")]
+pub use crate::systems::fps_look::{FpsLook, FpsLookPlugin};
 
 // === Uygulama Çerçevesi ===
 
