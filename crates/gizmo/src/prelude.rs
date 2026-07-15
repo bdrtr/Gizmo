@@ -62,6 +62,10 @@ pub use crate::renderer::{GizmoRendererSystem, Gizmos};
 pub use crate::systems::render::default_render_pass;
 #[cfg(feature = "render")]
 pub use crate::systems::render::RenderContextExt;
+// "Bir komponent ekle, plugin çalıştır, motor halletsin" ergonomik sistemleri —
+// prelude'da öne çıkar (elle her frame yeniden yazma tuzağını önlemek için).
+pub use crate::systems::lifetime::{DespawnAfter, DespawnBelowY, LifetimePlugin};
+pub use crate::systems::spin::{Spin, SpinPlugin};
 
 // === Uygulama Çerçevesi ===
 

@@ -13,14 +13,13 @@
 //!     ışık; devrilen hedefler ışığı da taşır (hareketli ışıklar).
 //!   * **Deferred PBR + gölge** ve egui HUD (skor / güç ölçeri / banner).
 //!
-//! ## ⚠️ DÜRÜSTLÜK NOTU — bu demo iki MOTOR LİMİTİNİ geçici çözümle atlatır
-//! (gizlemek yerine burada AÇIKÇA yazıyorum; kalıcı çözüm motor tarafındadır):
-//!   1. **Solver dinlenen-istif kararsızlığı (GERÇEK BUG).** TGS çözücü dinlenen
-//!      istife enerji pompalar; ölçüldü: uyanık N=16 kule ~13.5s'de kendiliğinden
-//!      PATLAR (max|v| 0.02→7.3, kayma 11m), sönümleme sadece ~2s geciktirir.
-//!      GEÇİCİ ÇÖZÜM: bloklar UYKUDA spawn'lanır (`spawn_asleep`) → solver onları
-//!      atlar, vurulunca uyanır. Yani "kule dik durması"nı motor değil bu hile
-//!      sağlar. Kalıcı çözüm = solver-yapısı işi (motorda ayrı iş).
+//! ## DÜRÜSTLÜK NOTU
+//!   1. **Solver dinlenen-istif kararsızlığı — ÇÖZÜLDÜ (2026-07-15).** Eskiden TGS çözücü
+//!      dinlenen istife enerji pompalıyordu (yanal buckling; uyanık N=16 kule ~13.5s'de
+//!      patlıyordu) ve bu demo bloklarını UYKUDA spawn'layarak (`spawn_asleep` hilesi) solver'ı
+//!      atlatıyordu. Manifold BLOCK solver (bkz. gizmo-physics-rigid solver/block.rs) bunu
+//!      düzeltti → bloklar artık UYANIK spawn'lanıyor, kuleyi GERÇEK solver dik tutuyor. (Aşırı
+//!      32+ kat tek-sütun kuleler hâlâ ayrı bir iş, ama bu demonun yapıları rahatça kararlı.)
 //!   2. **Gökyüzü GERÇEK environment-pass DEĞİL.** unlit ters küp + elle scale
 //!      (2000); köşeleri far-plane'i aşmasın diye elle ayarlı. Motorda gerçek
 //!      `Material::with_skybox()` yolu var (kcc_scene kullanır) — burada henüz
@@ -77,11 +76,6 @@ struct TargetInfo {
     alive: bool,
 }
 
-struct Transient {
-    entity: Entity,
-    born: f32,
-}
-
 struct Game {
     // varlıklar
     cube: Mesh,
@@ -103,7 +97,10 @@ struct Game {
     targets: Vec<TargetInfo>,
     targets_alive: usize,
     level_entities: Vec<Entity>,
-    transient: Vec<Transient>,
+    // Geçici varlıklar (gülle+konfeti) SADECE bölüm yenilenince topluca silinsin diye tutulur;
+    // "7 sn sonra sil" / "y<-60 düşünce sil" temizliğini artık DespawnAfter/DespawnBelowY
+    // komponentleri + LifetimeSystem otomatik yapıyor (elle döngü YOK).
+    transient: Vec<Entity>,
     // muhtelif
     time: f32,
     fps: f32,
@@ -139,16 +136,6 @@ fn front(yaw: f32, pitch: f32) -> Vec3 {
 }
 
 // -------------------------------------------------------------- blok kurulumu
-/// Cismi UYKUDA başlat: çözücü uyuyan cisimleri atlar → dinlenen istife enerji
-/// pompalayan TGS rezonansı bu bloklara dokunamaz (yapı vurulana dek taş gibi
-/// sabit kalır). Gülle çarpınca ada-uyandırma bunları uyandırır ve devrilirler.
-fn spawn_asleep(world: &mut World, e: Entity) {
-    if let Some(mut rb) = world.borrow_mut::<RigidBody>().get_mut(e.id()) {
-        rb.is_sleeping = true;
-        rb.sleep_counter = 120;
-    }
-}
-
 fn spawn_block(g: &mut Game, world: &mut World, pos: Vec3, half: Vec3, color: Vec4, mass: f32) {
     let mat = g.tint(color, 0.75, 0.05);
     let e = world
@@ -163,7 +150,6 @@ fn spawn_block(g: &mut Game, world: &mut World, pos: Vec3, half: Vec3, color: Ve
                 .with_restitution(0.0)
                 .with_damping(0.06, 0.12),
         ));
-    spawn_asleep(world, e);
     g.level_entities.push(e);
 }
 
@@ -195,7 +181,6 @@ fn spawn_target(g: &mut Game, world: &mut World, pos: Vec3) {
         ));
     // hedefi ışıldat — devrilince ışığı da taşır (hareketli dinamik ışık)
     world.add_component(e, PointLight::new(Vec3::new(1.0, 0.72, 0.2), 6.0, 8.0));
-    spawn_asleep(world, e);
     g.level_entities.push(e);
     g.targets.push(TargetInfo {
         entity: e,
@@ -210,8 +195,12 @@ fn load_level(g: &mut Game, world: &mut World, idx: usize) {
     for e in g.level_entities.drain(..) {
         world.despawn(e);
     }
-    for t in g.transient.drain(..) {
-        world.despawn(t.entity);
+    // Geçici varlıkları topluca temizle; bazıları LifetimeSystem tarafından çoktan
+    // silinmiş olabilir → is_alive ile koru (bayat entity'ye dokunma).
+    for e in g.transient.drain(..) {
+        if world.is_alive(e) {
+            world.despawn(e);
+        }
     }
     g.targets.clear();
 
@@ -464,7 +453,10 @@ fn fire(g: &mut Game, world: &mut World, power: f32) {
         ));
     // güllenin sıcak izi
     world.add_component(e, PointLight::new(Vec3::new(1.0, 0.45, 0.1), 9.0, 14.0));
-    g.transient.push(Transient { entity: e, born: g.time });
+    // Otomatik temizlik: 7 sn sonra ya da uçuruma düşünce sil (motor halleder).
+    world.add_component(e, DespawnAfter::secs(7.0));
+    world.add_component(e, DespawnBelowY::new(-60.0));
+    g.transient.push(e);
     g.shots_left -= 1;
     if g.shots_left <= 0 && g.fail_timer.is_none() {
         g.fail_timer = Some(4.0); // son güllenin oturması için süre tanı
@@ -504,7 +496,9 @@ fn confetti_burst(g: &mut Game, world: &mut World, at: Vec3) {
                     .with_angular_velocity(spin)
                     .with_restitution(0.4),
             ));
-        g.transient.push(Transient { entity: e, born: g.time });
+        world.add_component(e, DespawnAfter::secs(7.0));
+        world.add_component(e, DespawnBelowY::new(-60.0));
+        g.transient.push(e);
     }
 }
 
@@ -675,24 +669,8 @@ fn update(world: &mut World, g: &mut Game, dt: f32, input: &Input) {
         }
     }
 
-    // --- geçici varlık temizliği (dip zemine düşen/eskiyen gülle+konfeti) ---
-    let mut dead: Vec<Entity> = Vec::new();
-    {
-        let ts = world.borrow::<Transform>();
-        for tr in &g.transient {
-            let too_old = g.time - tr.born > 7.0;
-            let fell = ts.get(tr.entity.id()).map(|t| t.position.y < -60.0).unwrap_or(true);
-            if too_old || fell {
-                dead.push(tr.entity);
-            }
-        }
-    }
-    if !dead.is_empty() {
-        for e in &dead {
-            world.despawn(*e);
-        }
-        g.transient.retain(|t| !dead.contains(&t.entity));
-    }
+    // (Geçici varlık temizliği artık DespawnAfter/DespawnBelowY + LifetimeSystem'de —
+    // elle döngü kaldırıldı. `transient` yalnız bölüm-yenilemede topluca silmek için.)
 
     // --- kamerayı nişana göre güncelle ---
     if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
@@ -820,6 +798,7 @@ fn main() {
         .try_init();
     App::<Game>::new("Gizmo — YIKIM USTASI", 1360, 768)
         .add_plugin(PhysicsPlugin::new())
+        .add_plugin(LifetimePlugin) // gülle/konfeti ömrü + kill-plane otomatik
         .set_setup(setup)
         .set_update(update)
         .set_ui(ui)

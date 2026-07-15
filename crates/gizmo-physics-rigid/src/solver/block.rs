@@ -16,6 +16,14 @@
 //! bounded active-set method: solve the dense SPD system on the active set, clamp the
 //! most-negative λ to zero, repeat. N≤4 ⇒ this converges in ≤N drops and is cheap.
 
+// Dense linear-algebra kernels here index flat/row-major matrices by (row·n + col), so
+// index loops are the clearest form; the thread-local scratch tuple is intentional.
+#![allow(
+    clippy::needless_range_loop,
+    clippy::type_complexity,
+    clippy::doc_overindented_list_items
+)]
+
 /// Solve the dense system `a·x = b` (size `n`, n≤4) by Gauss-Elimination with partial
 /// pivoting, in place. Returns `None` if the matrix is (near-)singular. `a` is the
 /// active-set Delassus block (symmetric positive-definite in exact arithmetic, but we

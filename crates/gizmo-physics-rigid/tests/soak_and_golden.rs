@@ -741,6 +741,65 @@ fn probe_resting_stack_sleep() {
     }
 }
 
+/// Validates dropping the `yikim_ustasi` demo's `spawn_asleep` workaround: its hardest
+/// structure (level 3 — a 2-wide × 12-tall tower, mass 1.4, friction 0.85, damping
+/// 0.06/0.12) is built AWAKE and must stay bounded/upright. Before the block solver an
+/// awake tower buckled; the demo hid it by spawning blocks asleep. Now the real solver
+/// holds it, so the hack is gone — this locks that in.
+#[test]
+fn soak_demo_tower_awake_stays_upright() {
+    let mut world = PhysicsWorld::new();
+    add_ground(&mut world);
+
+    let half = 0.5;
+    let mat = PhysicsMaterial {
+        restitution: 0.0,
+        static_friction: 0.85,
+        dynamic_friction: 0.85,
+        ..Default::default()
+    };
+    let mut id = 1u32;
+    for row in 0..12 {
+        for dx in [-0.5f32, 0.5] {
+            let pos = Vec3::new(-4.0 + dx, half + row as f32, 0.0);
+            let mut rb = RigidBody::new(1.4, true);
+            rb.wake_up();
+            rb.linear_damping = 0.06;
+            rb.angular_damping = 0.12;
+            let col = Collider::box_collider(Vec3::splat(half)).with_material(mat);
+            rb.update_inertia_from_collider(&col);
+            world.add_body(
+                BodyHandle::from_id(id),
+                rb,
+                Transform::new(pos),
+                Velocity::default(),
+                col,
+            );
+            id += 1;
+        }
+    }
+    let n = 24usize;
+
+    // 10 s awake at rest — the demo hits the tower within a few seconds, so this is a
+    // generous margin for the "stands on its own until struck" guarantee.
+    for f in 0..600 {
+        world.step(1.0 / 60.0).ok();
+        let max_speed = (1..=n)
+            .map(|i| world.velocities[i].linear.length() + world.velocities[i].angular.length())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_speed < 0.5,
+            "awake demo tower gained energy / buckled at frame {f}: max|v|={max_speed}"
+        );
+    }
+    // Nothing toppled off or sank through the floor.
+    for i in 1..=n {
+        let p = world.transforms[i].position;
+        assert!(p.is_finite(), "block {i} non-finite");
+        assert!(p.y > 0.0 && p.x.abs() < 8.0, "block {i} left the tower: {p:?}");
+    }
+}
+
 #[test]
 fn golden_box_settles_on_ground() {
     let mut world = PhysicsWorld::new();
