@@ -345,6 +345,30 @@ impl World {
         }
     }
 
+    /// `C` bileşenine sahip TÜM entity'leri despawn eder; silinen sayısını döndürür.
+    /// "Bu sahneyi/grubu topluca temizle" (ör. bölüm yeniden yüklenince tüm `LevelEntity`'ler)
+    /// ya da "tüm mermileri sil" gibi yaygın işlemleri tek satıra indirir — geliştirici artık
+    /// `Vec<Entity>` tutup elle döngüyle silmez. Bir marker bileşeni ekle, bunu çağır.
+    ///
+    /// ```ignore
+    /// #[derive(Clone, Copy)] struct Bullet;
+    /// gizmo_core::impl_component!(Bullet);
+    /// // …mermilere Bullet ekle…
+    /// let cleared = world.despawn_all_with::<Bullet>();
+    /// ```
+    pub fn despawn_all_with<C: crate::component::Component>(&mut self) -> usize {
+        // Önce id'leri topla (query &self ödünç alır), sonra despawn et (&mut self).
+        let ids: Vec<u32> = match self.query::<&C>() {
+            Some(q) => q.iter().map(|(id, _)| id).collect(),
+            None => Vec::new(),
+        };
+        let n = ids.len();
+        for id in ids {
+            self.despawn_by_id(id);
+        }
+        n
+    }
+
     /// Yaşayan (despawn olmamış) tüm Entity'leri döndüren iterator.
     /// Uyarı: İterasyon boyunca Entities mutex kilidi tutulur!
     pub fn iter_alive_entities(&self) -> Vec<Entity> {
@@ -460,5 +484,28 @@ mod tests {
         world.despawn(reserved); // must not panic (bounds-safe location lookup)
 
         assert!(!world.is_alive(reserved), "despawn freed the reserved id");
+    }
+
+    #[test]
+    fn despawn_all_with_removes_only_tagged() {
+        #[derive(Clone, Copy)]
+        struct Tag;
+        crate::impl_component!(Tag);
+
+        let mut world = World::new();
+        let a = world.spawn();
+        let b = world.spawn();
+        let c = world.spawn();
+        world.add_component(a, Tag);
+        world.add_component(c, Tag);
+        // b has no Tag.
+
+        let removed = world.despawn_all_with::<Tag>();
+        assert_eq!(removed, 2, "yalnız 2 tag'li silinmeli");
+        assert!(!world.is_alive(a) && !world.is_alive(c), "tag'liler gitti");
+        assert!(world.is_alive(b), "tag'siz korunmalı");
+
+        // Boş çağrı 0 döner, panik yok.
+        assert_eq!(world.despawn_all_with::<Tag>(), 0);
     }
 }

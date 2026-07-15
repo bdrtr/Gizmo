@@ -76,6 +76,17 @@ struct TargetInfo {
     alive: bool,
 }
 
+// Marker bileşenleri — bölüm yenilenince `world.despawn_all_with::<T>()` ile TOPLUCA silmek
+// için (elle `Vec<Entity>` tutup döngüyle silmek YOK). LevelEntity = yapı blokları/hedefler/
+// statikler; TransientFx = gülle+konfeti (bunlar ayrıca DespawnAfter/DespawnBelowY ile de
+// kendiliğinden temizlenir).
+#[derive(Clone, Copy)]
+struct LevelEntity;
+gizmo::core::impl_component!(LevelEntity);
+#[derive(Clone, Copy)]
+struct TransientFx;
+gizmo::core::impl_component!(TransientFx);
+
 struct Game {
     // varlıklar
     cube: Mesh,
@@ -93,14 +104,9 @@ struct Game {
     charge: f32,
     charging: bool,
     fail_timer: Option<f32>,
-    // izlenen varlıklar
+    // izlenen hedefler (kazanma/vuruş mantığı için — despawn için değil)
     targets: Vec<TargetInfo>,
     targets_alive: usize,
-    level_entities: Vec<Entity>,
-    // Geçici varlıklar (gülle+konfeti) SADECE bölüm yenilenince topluca silinsin diye tutulur;
-    // "7 sn sonra sil" / "y<-60 düşünce sil" temizliğini artık DespawnAfter/DespawnBelowY
-    // komponentleri + LifetimeSystem otomatik yapıyor (elle döngü YOK).
-    transient: Vec<Entity>,
     // muhtelif
     time: f32,
     fps: f32,
@@ -140,7 +146,7 @@ fn spawn_block(g: &mut Game, world: &mut World, pos: Vec3, half: Vec3, color: Ve
                 .with_restitution(0.0)
                 .with_damping(0.06, 0.12),
         ));
-    g.level_entities.push(e);
+    world.add_component(e, LevelEntity);
 }
 
 fn spawn_static(g: &mut Game, world: &mut World, pos: Vec3, half: Vec3, mat: Material) {
@@ -152,7 +158,7 @@ fn spawn_static(g: &mut Game, world: &mut World, pos: Vec3, half: Vec3, mat: Mat
             MeshRenderer::new(),
             RigidBodyBundle::static_body().with_collider(Collider::box_collider(half)),
         ));
-    g.level_entities.push(e);
+    world.add_component(e, LevelEntity);
 }
 
 fn spawn_target(g: &mut Game, world: &mut World, pos: Vec3) {
@@ -171,7 +177,7 @@ fn spawn_target(g: &mut Game, world: &mut World, pos: Vec3) {
         ));
     // hedefi ışıldat — devrilince ışığı da taşır (hareketli dinamik ışık)
     world.add_component(e, PointLight::new(Vec3::new(1.0, 0.72, 0.2), 6.0, 8.0));
-    g.level_entities.push(e);
+    world.add_component(e, LevelEntity);
     g.targets.push(TargetInfo {
         entity: e,
         start: pos,
@@ -181,17 +187,9 @@ fn spawn_target(g: &mut Game, world: &mut World, pos: Vec3) {
 
 // --------------------------------------------------------------- bölümler
 fn load_level(g: &mut Game, world: &mut World, idx: usize) {
-    // eski bölüm + geçici varlıkları temizle
-    for e in g.level_entities.drain(..) {
-        world.despawn(e);
-    }
-    // Geçici varlıkları topluca temizle; bazıları LifetimeSystem tarafından çoktan
-    // silinmiş olabilir → is_alive ile koru (bayat entity'ye dokunma).
-    for e in g.transient.drain(..) {
-        if world.is_alive(e) {
-            world.despawn(e);
-        }
-    }
+    // Eski bölüm yapısını + geçici efektleri TOPLUCA sil (elle Vec-takibi YOK).
+    world.despawn_all_with::<LevelEntity>();
+    world.despawn_all_with::<TransientFx>();
     g.targets.clear();
 
     // platform (statik, üstü PLATFORM_TOP=0)
@@ -403,8 +401,6 @@ fn setup(world: &mut World, renderer: &Renderer) -> Game {
         fail_timer: None,
         targets: Vec::new(),
         targets_alive: 0,
-        level_entities: Vec::new(),
-        transient: Vec::new(),
         time: 0.0,
         fps: 60.0,
         rng: 0x1234_5678,
@@ -449,7 +445,7 @@ fn fire(g: &mut Game, world: &mut World, power: f32) {
     // Otomatik temizlik: 7 sn sonra ya da uçuruma düşünce sil (motor halleder).
     world.add_component(e, DespawnAfter::secs(7.0));
     world.add_component(e, DespawnBelowY::new(-60.0));
-    g.transient.push(e);
+    world.add_component(e, TransientFx);
     g.shots_left -= 1;
     if g.shots_left <= 0 && g.fail_timer.is_none() {
         g.fail_timer = Some(4.0); // son güllenin oturması için süre tanı
@@ -491,7 +487,7 @@ fn confetti_burst(g: &mut Game, world: &mut World, at: Vec3) {
             ));
         world.add_component(e, DespawnAfter::secs(7.0));
         world.add_component(e, DespawnBelowY::new(-60.0));
-        g.transient.push(e);
+        world.add_component(e, TransientFx);
     }
 }
 
@@ -662,8 +658,8 @@ fn update(world: &mut World, g: &mut Game, dt: f32, input: &Input) {
         }
     }
 
-    // (Geçici varlık temizliği artık DespawnAfter/DespawnBelowY + LifetimeSystem'de —
-    // elle döngü kaldırıldı. `transient` yalnız bölüm-yenilemede topluca silmek için.)
+    // (Geçici varlık temizliği artık motorda: DespawnAfter/DespawnBelowY + LifetimeSystem
+    // otomatik siler; bölüm yenilemede despawn_all_with::<TransientFx>() topluca temizler.)
 
     // --- kamerayı nişana göre güncelle ---
     if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
