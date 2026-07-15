@@ -40,7 +40,26 @@ struct Prepared {
     acc_t: Vec3,
 }
 
+/// One contact manifold's contiguous run in `prepared`, plus its precomputed N×N normal
+/// Delassus matrix `a` (constant across sweeps under frozen anchors). Used by the block
+/// solver to resolve the manifold's coplanar normal impulses jointly.
+struct BlockGroup {
+    start: usize,
+    n: usize,
+    a: [[f32; 4]; 4],
+}
+
 impl ConstraintSolver {
+    /// Adaptive iterations (block solver): minimum sweeps for any bucklable stack (D≥5).
+    /// Even a short stack needs ~this many block sweeps to stay below the buckling limit.
+    pub(super) const BLOCK_ITERS_FLOOR: usize = 28;
+    /// Cap on adaptive iterations — an extreme tower is bounded; short piles never reach it.
+    pub(super) const BLOCK_ITERS_CAP: usize = 96;
+
+    /// Max island contacts for the whole-chain DIRECT solve (dense O(n³) LCP). Above this,
+    /// fall back to the iterative block path. Covers towers up to ~N64 (≈4 contacts/interface).
+    const DIRECT_SOLVE_CAP: usize = 256;
+
     // ─────────────────────────────────────────────────────────────────────────
     // TGS SOFT ÇÖZÜCÜ (Temporal Gauss-Seidel, soft constraints)
     // ─────────────────────────────────────────────────────────────────────────
@@ -83,6 +102,12 @@ impl ConstraintSolver {
         // O(n_bodies·iters) per island — the difference between O(Σislands) and
         // O(n_islands·n_bodies) across the frame.
         island_bodies: &[usize],
+        // Island support depth (max graph distance from an anchor) — gates the whole-chain
+        // direct solve (only tall, bucklable chains use it).
+        island_depth: u32,
+        // Effective biased-iteration count for THIS island (adaptive: scaled with support
+        // depth when the block solver is on, else `self.iterations`).
+        n_iterations: usize,
         dt: f32,
     ) {
         let inv_dt = if dt > 0.0 { 1.0 / dt } else { 0.0 };
@@ -183,8 +208,8 @@ impl ConstraintSolver {
             }
         }
 
-        let h = if self.iterations > 0 {
-            dt / self.iterations as f32
+        let h = if n_iterations > 0 {
+            dt / n_iterations as f32
         } else {
             dt
         };
@@ -284,6 +309,113 @@ impl ConstraintSolver {
             }
         }
 
+        // ── Block-solver groups (Stage: manifold block normal solve) ──
+        // Each manifold's contacts are CONTIGUOUS in `prepared` (built mid-outer, cid-inner),
+        // all sharing the same body pair. Precompute, once, the N×N normal Delassus matrix A
+        // per group (constant across sweeps under frozen anchors): A[r][c] = change in contact
+        // r's normal velocity per unit normal impulse at contact c. The biased/relax sweeps
+        // then solve each group's normals JOINTLY (block LCP) so the inter-point tilt coupling
+        // is exact — the restoring stiffness that keeps tall stacks from buckling.
+        let block_groups: Vec<BlockGroup> = if self.block_solver {
+            let mut groups: Vec<BlockGroup> = Vec::new();
+            let mut i = 0usize;
+            while i < prepared.len() {
+                let mid = prepared[i].mid;
+                let start = i;
+                while i < prepared.len() && prepared[i].mid == mid {
+                    i += 1;
+                }
+                let n = (i - start).min(4);
+                let mut a = [[0.0f32; 4]; 4];
+                for r in 0..n {
+                    let pr = &prepared[start + r];
+                    let ua_r = pr.r_a.cross(pr.normal);
+                    let ub_r = pr.r_b.cross(pr.normal);
+                    for c in 0..n {
+                        let pc = &prepared[start + c];
+                        let ua_c = pc.r_a.cross(pc.normal);
+                        let ub_c = pc.r_b.cross(pc.normal);
+                        let ndot = pr.normal.dot(pc.normal);
+                        a[r][c] = (pr.inv_m_a + pr.inv_m_b) * ndot
+                            + pr.inv_i_a.mul_vec3(ua_c).dot(ua_r)
+                            + pr.inv_i_b.mul_vec3(ub_c).dot(ub_r);
+                    }
+                }
+                // Tikhonov regularisation: a 4-coplanar-contact manifold over-determines
+                // its 3 DOF (1 force + 2 tilt torques), so `a` is rank-deficient (singular).
+                // Add a small diagonal (BLOCK_REG × mean-diagonal) so the redundant direction
+                // yields a bounded, evenly-distributed impulse instead of a huge garbage one
+                // from a near-zero pivot. Small enough to leave the physical (well-conditioned)
+                // tilt-restoring modes stiff.
+                if n >= 2 {
+                    let mut mean_diag = 0.0f32;
+                    for r in 0..n {
+                        mean_diag += a[r][r];
+                    }
+                    mean_diag /= n as f32;
+                    let reg = self.block_regularization * mean_diag;
+                    for r in 0..n {
+                        a[r][r] += reg;
+                    }
+                }
+                groups.push(BlockGroup { start, n, a });
+            }
+            groups
+        } else {
+            Vec::new()
+        };
+
+        // ── Whole-chain DIRECT solve setup ──
+        // For a tall, bucklable chain (support-depth ≥ 5) small enough to solve densely,
+        // assemble the FULL island Delassus matrix and solve all normal impulses jointly
+        // each sweep → the inter-manifold support coupling is resolved EXACTLY (not left to
+        // iterate), eliminating the tall-tower buckling the iterative path can't robustly fix.
+        // A[i][j] = coupling of contacts i,j through any shared body: for each shared body X,
+        // s_i(X)·s_j(X)·[invM_X (n_i·n_j) + (invI_X (r_{X,j}×n_j))·(r_{X,i}×n_i)], with sign
+        // −1 on the contact's body A and +1 on body B. Symmetric; regularised on the diagonal
+        // (coplanar rank-deficiency, as in the per-manifold block).
+        let nprep = prepared.len();
+        let use_direct = self.direct_chain_solve
+            && self.block_solver
+            && island_depth >= 5
+            && (2..=Self::DIRECT_SOLVE_CAP).contains(&nprep);
+        let island_a: Vec<f32> = if use_direct {
+            let mut a = vec![0.0f32; nprep * nprep];
+            for i in 0..nprep {
+                for j in i..nprep {
+                    let (pi, pj) = (&prepared[i], &prepared[j]);
+                    let mut sum = 0.0f32;
+                    let ends_i = [
+                        (pi.idx_a, pi.r_a, pi.inv_m_a, pi.inv_i_a, -1.0f32),
+                        (pi.idx_b, pi.r_b, pi.inv_m_b, pi.inv_i_b, 1.0f32),
+                    ];
+                    let ends_j = [
+                        (pj.idx_a, pj.r_a, -1.0f32),
+                        (pj.idx_b, pj.r_b, 1.0f32),
+                    ];
+                    for &(xi, r_i, inv_m, inv_i, s_i) in &ends_i {
+                        for &(xj, r_j, s_j) in &ends_j {
+                            if xi == xj {
+                                let ndot = pi.normal.dot(pj.normal);
+                                let ui = r_i.cross(pi.normal);
+                                let uj = r_j.cross(pj.normal);
+                                sum += s_i * s_j * (inv_m * ndot + inv_i.mul_vec3(uj).dot(ui));
+                            }
+                        }
+                    }
+                    a[i * nprep + j] = sum;
+                    a[j * nprep + i] = sum;
+                }
+            }
+            // Diagonal regularisation (proportional) for the coplanar rank-deficiency.
+            for i in 0..nprep {
+                a[i * nprep + i] *= 1.0 + self.block_regularization;
+            }
+            a
+        } else {
+            Vec::new()
+        };
+
         // Per-body position-delta scratch (dp), indexed by GLOBAL body index but sized once
         // per thread and RESET only for `island_bodies` — no per-island full-world allocation.
         // Islands are disjoint (a body is in exactly one island), so resetting just this
@@ -305,19 +437,24 @@ impl ConstraintSolver {
             // Her iterasyondan sonra pozisyon-delta'sı güncel hızla ilerletilir; bir sonraki
             // iterasyonun bias'ı GÜNCEL penetrasyonu görür → düzeltme yığın boyunca yayılır
             // (SI'nin yapamadığı; uzun/çarpan yığınları ayakta tutan temel mekanizma).
-            for iter in 0..self.iterations {
-                self.tgs_sweep_prepared(
-                    &mut prepared,
-                    velocities,
-                    dp.as_slice(),
-                    false,
-                    iter % 2 == 1,
-                    true,
-                    bias_rate,
-                    mass_scale,
-                    impulse_scale,
-                    inv_dt,
-                );
+            for iter in 0..n_iterations {
+                if use_direct {
+                    self.tgs_sweep_island(
+                        &mut prepared, &island_a, velocities, dp.as_slice(),
+                        false, true, bias_rate, mass_scale, impulse_scale, inv_dt,
+                    );
+                } else if self.block_solver {
+                    self.tgs_sweep_block(
+                        &mut prepared, &block_groups, velocities, dp.as_slice(),
+                        false, iter % 2 == 1, true, bias_rate, mass_scale, impulse_scale, inv_dt,
+                    );
+                } else {
+                    self.tgs_sweep_prepared(
+                        &mut prepared, velocities, dp.as_slice(),
+                        false, iter % 2 == 1, true,
+                        bias_rate, mass_scale, impulse_scale, inv_dt,
+                    );
+                }
                 for &i in island_bodies {
                     if real_bodies.contains(&i) && rigid_bodies[i].is_dynamic() {
                         dp[i].0 += velocities[i].linear * h;
@@ -326,20 +463,25 @@ impl ConstraintSolver {
                 }
             }
 
-            // ── 4) RELAX (bias=0) — soft bias hızını temizle ──
+            // ── 4) RELAX (bias=0) — soft bias hızını temizle + restitution ──
             for iter in 0..self.relax_iterations {
-                self.tgs_sweep_prepared(
-                    &mut prepared,
-                    velocities,
-                    dp.as_slice(),
-                    true,
-                    iter % 2 == 1,
-                    false,
-                    0.0,
-                    1.0,
-                    0.0,
-                    inv_dt,
-                );
+                if use_direct {
+                    self.tgs_sweep_island(
+                        &mut prepared, &island_a, velocities, dp.as_slice(),
+                        true, false, 0.0, 1.0, 0.0, inv_dt,
+                    );
+                } else if self.block_solver {
+                    self.tgs_sweep_block(
+                        &mut prepared, &block_groups, velocities, dp.as_slice(),
+                        true, iter % 2 == 1, false, 0.0, 1.0, 0.0, inv_dt,
+                    );
+                } else {
+                    self.tgs_sweep_prepared(
+                        &mut prepared, velocities, dp.as_slice(),
+                        true, iter % 2 == 1, false,
+                        0.0, 1.0, 0.0, inv_dt,
+                    );
+                }
             }
 
             // ── 5) Pozisyon düzeltmesi = dp − (relaxed hız)·dt ──
@@ -393,14 +535,29 @@ impl ConstraintSolver {
             let ki = if reverse { n - 1 - k } else { k };
             let p = &mut prepared[ki];
 
+            // Ankraj kolları (r_a/r_b): donmuş (p.r_a) ya da Stage 4b'de birikmiş dp
+            // DÖNMESİYLE döndürülmüş. `disp_*` = temas noktasının bu substep'teki yer
+            // değişimi (lineer + ankraj hareketi). Donmuş dalda `dp.1.cross(p.r_a)` ilk-
+            // mertebe yaklaşımı korunur → default davranış BİT-AYNI.
+            let (ra, rb, disp_a, disp_b) = if self.rotating_anchors {
+                let ra = gizmo_math::Quat::from_scaled_axis(dp[p.idx_a].1).mul_vec3(p.r_a);
+                let rb = gizmo_math::Quat::from_scaled_axis(dp[p.idx_b].1).mul_vec3(p.r_b);
+                (ra, rb, dp[p.idx_a].0 + (ra - p.r_a), dp[p.idx_b].0 + (rb - p.r_b))
+            } else {
+                (
+                    p.r_a,
+                    p.r_b,
+                    dp[p.idx_a].0 + dp[p.idx_a].1.cross(p.r_a),
+                    dp[p.idx_b].0 + dp[p.idx_b].1.cross(p.r_b),
+                )
+            };
+
             // GÜNCEL penetrasyon (gerçek TGS): biriken pozisyon-delta'larıyla düzelt.
-            let dp_a = dp[p.idx_a].0 + dp[p.idx_a].1.cross(p.r_a);
-            let dp_b = dp[p.idx_b].0 + dp[p.idx_b].1.cross(p.r_b);
-            let penetration = p.pen0 - (dp_b - dp_a).dot(p.normal);
+            let penetration = p.pen0 - (disp_b - disp_a).dot(p.normal);
 
             // ── Normal kısıt ──
-            let va = velocities[p.idx_a].linear + velocities[p.idx_a].angular.cross(p.r_a);
-            let vb = velocities[p.idx_b].linear + velocities[p.idx_b].angular.cross(p.r_b);
+            let va = velocities[p.idx_a].linear + velocities[p.idx_a].angular.cross(ra);
+            let vb = velocities[p.idx_b].linear + velocities[p.idx_b].angular.cross(rb);
             let vel_norm = (vb - va).dot(p.normal);
 
             // Soft bias: penetrasyonda yay-damper gibi ayır; speculative boşlukta
@@ -433,16 +590,16 @@ impl ConstraintSolver {
             let imp_n = p.normal * actual_n;
             if p.dyn_a {
                 velocities[p.idx_a].linear -= imp_n * p.inv_m_a;
-                velocities[p.idx_a].angular -= p.inv_i_a.mul_vec3(p.r_a.cross(imp_n));
+                velocities[p.idx_a].angular -= p.inv_i_a.mul_vec3(ra.cross(imp_n));
             }
             if p.dyn_b {
                 velocities[p.idx_b].linear += imp_n * p.inv_m_b;
-                velocities[p.idx_b].angular += p.inv_i_b.mul_vec3(p.r_b.cross(imp_n));
+                velocities[p.idx_b].angular += p.inv_i_b.mul_vec3(rb.cross(imp_n));
             }
 
             // ── Sürtünme (2-tangent Coulomb cone) ── t1/t2/k_t1/k_t2 precompute'lu.
-            let va2 = velocities[p.idx_a].linear + velocities[p.idx_a].angular.cross(p.r_a);
-            let vb2 = velocities[p.idx_b].linear + velocities[p.idx_b].angular.cross(p.r_b);
+            let va2 = velocities[p.idx_a].linear + velocities[p.idx_a].angular.cross(ra);
+            let vb2 = velocities[p.idx_b].linear + velocities[p.idx_b].angular.cross(rb);
             let rel2 = vb2 - va2;
             let acc_t1 = p.acc_t.dot(p.t1);
             let acc_t2 = p.acc_t.dot(p.t2);
@@ -458,6 +615,250 @@ impl ConstraintSolver {
             };
             let max_static = p.static_friction * new_acc_n.abs();
             let max_dynamic = p.friction * new_acc_n.abs();
+            let mag = (new1 * new1 + new2 * new2).sqrt();
+            if mag > max_static && mag > 1e-12 {
+                let s = max_dynamic / mag;
+                new1 *= s;
+                new2 *= s;
+            }
+            let imp_t = p.t1 * (new1 - acc_t1) + p.t2 * (new2 - acc_t2);
+            p.acc_t = p.t1 * new1 + p.t2 * new2;
+            if p.dyn_a {
+                velocities[p.idx_a].linear -= imp_t * p.inv_m_a;
+                velocities[p.idx_a].angular -= p.inv_i_a.mul_vec3(ra.cross(imp_t));
+            }
+            if p.dyn_b {
+                velocities[p.idx_b].linear += imp_t * p.inv_m_b;
+                velocities[p.idx_b].angular += p.inv_i_b.mul_vec3(rb.cross(imp_t));
+            }
+        }
+    }
+
+    /// Block-solver sweep: for each manifold group, solve its coplanar NORMAL impulses
+    /// JOINTLY (active-set LCP over the precomputed Delassus block) so the inter-point
+    /// tilt coupling is exact — the restoring stiffness that keeps tall stacks from
+    /// buckling — then solve friction sequentially per contact (unchanged). Frozen
+    /// anchors (block_solver takes precedence over rotating_anchors). The normal solve
+    /// is rigid (drives vn to bias/restitution target); the soft/relax distinction is
+    /// carried by `use_bias` + the per-contact bias target, and `dp` still integrates
+    /// position between biased iterations, so the overall soft-step behaviour is kept.
+    #[allow(clippy::too_many_arguments)]
+    fn tgs_sweep_block(
+        &self,
+        prepared: &mut [Prepared],
+        groups: &[BlockGroup],
+        velocities: &mut [Velocity],
+        dp: &[(Vec3, Vec3)],
+        apply_restitution: bool,
+        reverse: bool,
+        use_bias: bool,
+        bias_rate: f32,
+        mass_scale: f32,
+        impulse_scale: f32,
+        inv_dt: f32,
+    ) {
+        let ng = groups.len();
+        for gi in 0..ng {
+            let g = &groups[if reverse { ng - 1 - gi } else { gi }];
+            let (start, n) = (g.start, g.n);
+            if n == 0 {
+                continue;
+            }
+
+            // ── Block NORMAL solve ── build the coupled soft driving term per contact:
+            // rhs_i = m_scale·(target_i − vn_i) − i_scale·acc_i (the block generalisation
+            // of the soft per-contact update). Speculative (pen<0) and non-biased contacts
+            // use their own m_scale/i_scale exactly as the sequential sweep does.
+            let mut rhs = [0.0f32; 4];
+            let mut acc = [0.0f32; 4];
+            for c in 0..n {
+                let p = &prepared[start + c];
+                let dp_a = dp[p.idx_a].0 + dp[p.idx_a].1.cross(p.r_a);
+                let dp_b = dp[p.idx_b].0 + dp[p.idx_b].1.cross(p.r_b);
+                let penetration = p.pen0 - (dp_b - dp_a).dot(p.normal);
+                let va = velocities[p.idx_a].linear + velocities[p.idx_a].angular.cross(p.r_a);
+                let vb = velocities[p.idx_b].linear + velocities[p.idx_b].angular.cross(p.r_b);
+                let vn = (vb - va).dot(p.normal);
+                // RIGID block (max restoring stiffness — the buckling fix): drive vn to
+                // the bias/restitution target exactly. The Tikhonov regularisation on `a`
+                // (not soft mass-scaling) is what tames the response, so the singular
+                // redundant direction stays bounded while the physical modes stay stiff.
+                // Softening the block with mass_scale<1 measurably weakens the tall-stack
+                // fix, so it is deliberately NOT applied here. Speculative gaps (pen<0)
+                // limit approach; otherwise bias only when use_bias.
+                let _ = (mass_scale, impulse_scale);
+                let bias = if penetration < 0.0 {
+                    penetration * inv_dt
+                } else if use_bias && penetration > self.slop {
+                    (bias_rate * (penetration - self.slop)).min(self.max_bias_velocity)
+                } else {
+                    0.0
+                };
+                let tvn = if apply_restitution
+                    && p.restitution > 0.0
+                    && p.pen0 >= 0.0
+                    && p.vn0 < -self.restitution_velocity_threshold
+                {
+                    -p.restitution * p.vn0
+                } else {
+                    0.0
+                };
+                rhs[c] = tvn + bias - vn;
+                acc[c] = p.acc_n;
+            }
+
+            let lambda = super::block::solve_normal_block(n, &g.a, &rhs, &acc);
+
+            for c in 0..n {
+                let p = &mut prepared[start + c];
+                let delta = lambda[c] - p.acc_n;
+                p.acc_n = lambda[c];
+                let imp_n = p.normal * delta;
+                if p.dyn_a {
+                    velocities[p.idx_a].linear -= imp_n * p.inv_m_a;
+                    velocities[p.idx_a].angular -= p.inv_i_a.mul_vec3(p.r_a.cross(imp_n));
+                }
+                if p.dyn_b {
+                    velocities[p.idx_b].linear += imp_n * p.inv_m_b;
+                    velocities[p.idx_b].angular += p.inv_i_b.mul_vec3(p.r_b.cross(imp_n));
+                }
+            }
+
+            // ── Sequential FRICTION per contact (2-tangent Coulomb cone) — identical to
+            // tgs_sweep_prepared, using the (frozen) anchors and the block's new acc_n. ──
+            for c in 0..n {
+                let p = &mut prepared[start + c];
+                let va2 = velocities[p.idx_a].linear + velocities[p.idx_a].angular.cross(p.r_a);
+                let vb2 = velocities[p.idx_b].linear + velocities[p.idx_b].angular.cross(p.r_b);
+                let rel2 = vb2 - va2;
+                let acc_t1 = p.acc_t.dot(p.t1);
+                let acc_t2 = p.acc_t.dot(p.t2);
+                let mut new1 = if p.k_t1 > 1e-8 {
+                    acc_t1 - rel2.dot(p.t1) / p.k_t1
+                } else {
+                    acc_t1
+                };
+                let mut new2 = if p.k_t2 > 1e-8 {
+                    acc_t2 - rel2.dot(p.t2) / p.k_t2
+                } else {
+                    acc_t2
+                };
+                let max_static = p.static_friction * p.acc_n.abs();
+                let max_dynamic = p.friction * p.acc_n.abs();
+                let mag = (new1 * new1 + new2 * new2).sqrt();
+                if mag > max_static && mag > 1e-12 {
+                    let s = max_dynamic / mag;
+                    new1 *= s;
+                    new2 *= s;
+                }
+                let imp_t = p.t1 * (new1 - acc_t1) + p.t2 * (new2 - acc_t2);
+                p.acc_t = p.t1 * new1 + p.t2 * new2;
+                if p.dyn_a {
+                    velocities[p.idx_a].linear -= imp_t * p.inv_m_a;
+                    velocities[p.idx_a].angular -= p.inv_i_a.mul_vec3(p.r_a.cross(imp_t));
+                }
+                if p.dyn_b {
+                    velocities[p.idx_b].linear += imp_t * p.inv_m_b;
+                    velocities[p.idx_b].angular += p.inv_i_b.mul_vec3(p.r_b.cross(imp_t));
+                }
+            }
+        }
+    }
+
+    /// Whole-CHAIN direct sweep: solve ALL of the island's normal impulses JOINTLY (one
+    /// active-set LCP over the precomputed island Delassus matrix) so the inter-manifold
+    /// support coupling up the column is resolved EXACTLY, then friction sequentially per
+    /// contact. Iteration-independent — this is what eliminates the tall-tower buckling the
+    /// per-manifold iterative path leaves as a weak creep. Rigid normal solve (like the
+    /// block path); frozen anchors. No `reverse` (a joint solve has no sweep direction).
+    #[allow(clippy::too_many_arguments)]
+    fn tgs_sweep_island(
+        &self,
+        prepared: &mut [Prepared],
+        island_a: &[f32],
+        velocities: &mut [Velocity],
+        dp: &[(Vec3, Vec3)],
+        apply_restitution: bool,
+        use_bias: bool,
+        bias_rate: f32,
+        mass_scale: f32,
+        impulse_scale: f32,
+        inv_dt: f32,
+    ) {
+        let n = prepared.len();
+        if n == 0 {
+            return;
+        }
+        let _ = (mass_scale, impulse_scale); // rigid solve (regularised A tames it)
+
+        let mut rhs = vec![0.0f32; n];
+        let mut acc = vec![0.0f32; n];
+        let mut lambda = vec![0.0f32; n];
+        for c in 0..n {
+            let p = &prepared[c];
+            let dp_a = dp[p.idx_a].0 + dp[p.idx_a].1.cross(p.r_a);
+            let dp_b = dp[p.idx_b].0 + dp[p.idx_b].1.cross(p.r_b);
+            let penetration = p.pen0 - (dp_b - dp_a).dot(p.normal);
+            let va = velocities[p.idx_a].linear + velocities[p.idx_a].angular.cross(p.r_a);
+            let vb = velocities[p.idx_b].linear + velocities[p.idx_b].angular.cross(p.r_b);
+            let vn = (vb - va).dot(p.normal);
+            let bias = if penetration < 0.0 {
+                penetration * inv_dt
+            } else if use_bias && penetration > self.slop {
+                (bias_rate * (penetration - self.slop)).min(self.max_bias_velocity)
+            } else {
+                0.0
+            };
+            let tvn = if apply_restitution
+                && p.restitution > 0.0
+                && p.pen0 >= 0.0
+                && p.vn0 < -self.restitution_velocity_threshold
+            {
+                -p.restitution * p.vn0
+            } else {
+                0.0
+            };
+            rhs[c] = tvn + bias - vn;
+            acc[c] = p.acc_n;
+        }
+
+        super::block::solve_island_normals(n, island_a, &rhs, &acc, &mut lambda);
+
+        for c in 0..n {
+            let p = &mut prepared[c];
+            let delta = lambda[c] - p.acc_n;
+            p.acc_n = lambda[c];
+            let imp_n = p.normal * delta;
+            if p.dyn_a {
+                velocities[p.idx_a].linear -= imp_n * p.inv_m_a;
+                velocities[p.idx_a].angular -= p.inv_i_a.mul_vec3(p.r_a.cross(imp_n));
+            }
+            if p.dyn_b {
+                velocities[p.idx_b].linear += imp_n * p.inv_m_b;
+                velocities[p.idx_b].angular += p.inv_i_b.mul_vec3(p.r_b.cross(imp_n));
+            }
+        }
+
+        // ── Sequential FRICTION per contact (identical to tgs_sweep_block). ──
+        for c in 0..n {
+            let p = &mut prepared[c];
+            let va2 = velocities[p.idx_a].linear + velocities[p.idx_a].angular.cross(p.r_a);
+            let vb2 = velocities[p.idx_b].linear + velocities[p.idx_b].angular.cross(p.r_b);
+            let rel2 = vb2 - va2;
+            let acc_t1 = p.acc_t.dot(p.t1);
+            let acc_t2 = p.acc_t.dot(p.t2);
+            let mut new1 = if p.k_t1 > 1e-8 {
+                acc_t1 - rel2.dot(p.t1) / p.k_t1
+            } else {
+                acc_t1
+            };
+            let mut new2 = if p.k_t2 > 1e-8 {
+                acc_t2 - rel2.dot(p.t2) / p.k_t2
+            } else {
+                acc_t2
+            };
+            let max_static = p.static_friction * p.acc_n.abs();
+            let max_dynamic = p.friction * p.acc_n.abs();
             let mag = (new1 * new1 + new2 * new2).sqrt();
             if mag > max_static && mag > 1e-12 {
                 let s = max_dynamic / mag;

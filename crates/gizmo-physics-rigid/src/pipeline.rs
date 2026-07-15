@@ -441,11 +441,12 @@ impl PhysicsWorld {
                     // the 4 sub-steps) keeps pumping energy into a settled stack.
                     // Suppress it once a contact has persisted so stacks can settle.
                     manifold.restitution = 0.0;
+                    let ws_tol_sq = self.solver.warm_start_match_tolerance.powi(2);
                     for mut contact in contacts.iter().copied() {
                         if let Some(old) = old_manifold
                             .contacts
                             .iter()
-                            .find(|o| (o.point - contact.point).length_squared() < 0.02 * 0.02)
+                            .find(|o| (o.point - contact.point).length_squared() < ws_tol_sq)
                         {
                             contact.normal_impulse = old.normal_impulse;
                             contact.tangent_impulse = old.tangent_impulse;
