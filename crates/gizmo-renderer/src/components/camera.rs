@@ -100,20 +100,33 @@ impl Camera {
         gizmo_math::Mat4::look_at_rh(position, position + front, up)
     }
 
-    pub fn get_front(&self) -> Vec3 {
-        let pitch = self.pitch.clamp(
+    /// Yaw/pitch'ten dünya-uzayı ileri (forward/aim) yön vektörü. [`get_front`] VE
+    /// FP-kamera denetleyicisi (`FpsLook`, gizmo-engine::systems) bunu paylaşır — böylece
+    /// "nişan yönü" matematiği demolarda/oyunlarda ELLE yeniden yazılmaz.
+    pub fn forward_from(yaw: f32, pitch: f32) -> Vec3 {
+        let pitch = pitch.clamp(
             -std::f32::consts::PI / 2.0 + 0.001,
             std::f32::consts::PI / 2.0 - 0.001,
         );
-        let fx = self.yaw.cos() * pitch.cos();
-        let fy = pitch.sin();
-        let fz = self.yaw.sin() * pitch.cos();
-        Vec3::new(fx, fy, fz).normalize()
+        Vec3::new(
+            yaw.cos() * pitch.cos(),
+            pitch.sin(),
+            yaw.sin() * pitch.cos(),
+        )
+        .normalize()
+    }
+
+    /// Yaw'dan dünya-uzayı sağ (right) yön vektörü (yatay). forward × (0,1,0)'ın kapalı formu.
+    pub fn right_from(yaw: f32) -> Vec3 {
+        Vec3::new(-yaw.sin(), 0.0, yaw.cos())
+    }
+
+    pub fn get_front(&self) -> Vec3 {
+        Self::forward_from(self.yaw, self.pitch)
     }
 
     pub fn get_right(&self) -> Vec3 {
-        // Front x (0,1,0) reduces mathematically to (-sin(yaw), 0, cos(yaw))
-        Vec3::new(-self.yaw.sin(), 0.0, self.yaw.cos())
+        Self::right_from(self.yaw)
     }
 
     /// Build a world-space picking ray from a screen/cursor pixel through this
