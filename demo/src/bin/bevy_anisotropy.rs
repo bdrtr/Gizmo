@@ -233,7 +233,6 @@ fn main() {
         .add_system(camera_orbit.into_config().label("camera_orbit").after("handle_input").in_phase(Phase::Update))
         .add_system(animate_lights.into_config().label("animate_lights").after("camera_orbit").in_phase(Phase::Update))
         .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
             renderer.gpu_fluid = None;
             renderer.gpu_particles = None;
             

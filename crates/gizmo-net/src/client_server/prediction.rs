@@ -59,6 +59,7 @@ impl ClientPredictor {
     /// - `server_tick`: Sunucunun işlediği son girdinin tick değeri
     /// - `server_state`: Sunucunun onayladığı kesin pozisyon/hız
     /// - `apply_physics_fn`: Geçmiş girdileri yeniden simüle etmek için kullanılacak closure
+    #[tracing::instrument(skip_all, name = "client_reconcile")]
     pub fn reconcile<F>(
         &mut self,
         server_tick: u32,
@@ -81,6 +82,13 @@ impl ClientPredictor {
             corrected_state = apply_physics_fn(&corrected_state, input);
         }
 
+        // Kaç onaylanmamış girdinin yeniden simüle edildiği (resimülasyon kare sayısı).
+        tracing::debug!(
+            server_tick,
+            replayed = self.pending_inputs.len(),
+            current_tick = self.current_tick,
+            "Reconciliation: onaylanmamış girdiler yeniden oynatıldı"
+        );
         corrected_state
     }
 }
@@ -143,5 +151,72 @@ mod tests {
 
         assert!(p.pending_inputs.is_empty());
         assert_eq!(corrected.position[0], 5.0); // replay yok
+    }
+
+    // add_input, current_tick'i wrapping_add ile ilerletir: u32::MAX'ta 0'a sarmalı
+    // (panik/overflow YOK) ve üretilen girdi taşmadan ÖNCEki tick'i taşımalı.
+    #[test]
+    fn add_input_wraps_current_tick_at_u32_max() {
+        let mut p = ClientPredictor::new();
+        p.current_tick = u32::MAX;
+        let a = p.add_input(0.0, 0.0, false, 1.0);
+        assert_eq!(a.tick, u32::MAX, "girdi taşmadan önceki tick'i taşımalı");
+        assert_eq!(p.current_tick, 0, "current_tick 0'a sarmalı");
+    }
+
+    // Kuyruk boşken reconcile hiç replay yapmadan otoriter durumu aynen döndürmeli.
+    #[test]
+    fn reconcile_with_empty_queue_returns_server_state_untouched() {
+        let mut p = ClientPredictor::new();
+        let server = PredictedState { position: [3.0, 4.0, 5.0], velocity: [1.0, 0.0, 0.0] };
+        let corrected = p.reconcile(0, server, |_s, _i| panic!("boş kuyrukta replay olmamalı"));
+        assert_eq!(corrected.position, [3.0, 4.0, 5.0]);
+        assert_eq!(corrected.velocity, [1.0, 0.0, 0.0]);
+        assert!(p.pending_inputs.is_empty());
+    }
+
+    // Onaylanmamış girdiler kuyruğa eklenme (FIFO) sırasıyla oynatılmalı. Sıra-duyarlı
+    // (komütatif OLMAYAN) fizik ile ters sıra farklı sonuç verir → sıra ayırt edicidir.
+    #[test]
+    fn reconcile_replays_pending_in_fifo_order() {
+        fn scale_step(s: &PredictedState, i: &PlayerInput) -> PredictedState {
+            // x' = x*2 + move_x  → uygulama sırası sonucu değiştirir.
+            PredictedState {
+                position: [s.position[0] * 2.0 + i.move_x, s.position[1], s.position[2]],
+                velocity: s.velocity,
+            }
+        }
+        let mut p = ClientPredictor::new();
+        p.current_tick = 5;
+        p.add_input(1.0, 0.0, false, 1.0); // tick 5, move_x=1
+        p.add_input(2.0, 0.0, false, 1.0); // tick 6, move_x=2
+        // Sunucu tick 4'e kadar işledi → tick 5,6 onaysız, ikisi de replay edilir.
+        // FIFO (5 sonra 6): ((0*2+1)*2+2) = 4.  Ters sıra ((0*2+2)*2+1) = 5 olurdu.
+        let server = PredictedState { position: [0.0, 0.0, 0.0], velocity: [0.0; 3] };
+        let corrected = p.reconcile(4, server, scale_step);
+        assert_eq!(corrected.position[0], 4.0, "pending girdiler FIFO sırayla oynatılmalı");
+    }
+
+    // REGRESYON (wraparound-güvenli reconcile): tick uzayı u32::MAX→0 taştıktan sonra
+    // sunucu onayı KESİN daha yeni olan girdileri korumalı. Düz `>` ile 0 > (u32::MAX-1)
+    // YANLIŞ (false) olur ve sarma-sonrası girdiler hatalı düşerdi (kuyruk sonsuz büyür).
+    #[test]
+    fn reconcile_keeps_post_wraparound_inputs_a_naive_compare_would_drop() {
+        let mut p = ClientPredictor::new();
+        p.current_tick = u32::MAX - 1;
+        p.add_input(1.0, 0.0, false, 1.0); // tick u32::MAX-1
+        p.add_input(1.0, 0.0, false, 1.0); // tick u32::MAX
+        p.add_input(1.0, 0.0, false, 1.0); // tick 0 (sardı), current_tick → 1
+        assert_eq!(p.pending_inputs.len(), 3);
+
+        // Sunucu tick (u32::MAX-1)'i işledi → kalanlar u32::MAX ve 0.
+        let server = PredictedState { position: [100.0, 0.0, 0.0], velocity: [0.0; 3] };
+        let corrected = p.reconcile(u32::MAX - 1, server, step);
+
+        assert_eq!(p.pending_inputs.len(), 2, "sarma sonrası girdiler korunmalı");
+        assert_eq!(p.pending_inputs.front().unwrap().tick, u32::MAX);
+        assert_eq!(p.pending_inputs.back().unwrap().tick, 0);
+        // 100 + 1 (tick u32::MAX) + 1 (tick 0) = 102.
+        assert_eq!(corrected.position[0], 102.0);
     }
 }

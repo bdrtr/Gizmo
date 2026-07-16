@@ -434,7 +434,6 @@ fn render(
     _light_time: f32,
 ) {
     // GPU Physics sistemini devreden çıkar
-    renderer.gpu_physics = None;
 
     // CPU objelerini render et
     gizmo::systems::default_render_pass(world, encoder, view, renderer);

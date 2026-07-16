@@ -333,3 +333,235 @@ pub fn build_ray(
     // .normalize() ile NaN üretmek yerine güvenli varsayılana düşer.
     Some(Ray::from_ndc(gizmo::math::Vec2::new(ndc_x, ndc_y), inv_vp))
 }
+
+#[cfg(test)]
+mod tests {
+    // Real production functions exercised against a HEADLESS World (no GPU, no
+    // window). Transform / Camera / Collider are plain-data components, so we can
+    // spawn entities and drive the actual picking/selection logic. Private helpers
+    // (`find_selection_root`, `is_editor_entity`, `compute_entity_obb`) are reachable
+    // because this module is a descendant of the one that defines them.
+    use super::{build_ray, compute_entity_obb, find_selection_root, is_editor_entity};
+    use gizmo::core::component::{EntityName, Parent};
+    use gizmo::math::{Quat, Vec3};
+    use gizmo::physics::components::{GlobalTransform, Transform};
+    use gizmo::physics::Collider;
+    use gizmo::prelude::World;
+    use gizmo::renderer::components::Camera;
+
+    const FRAC_PI_2: f32 = std::f32::consts::FRAC_PI_2;
+
+    fn make_camera(yaw: f32, pitch: f32) -> Camera {
+        Camera::new(90.0_f32.to_radians(), 0.1, 100.0, yaw, pitch, true)
+    }
+
+    fn spawn_camera(world: &mut World, pos: Vec3, yaw: f32, pitch: f32) -> u32 {
+        let e = world.spawn();
+        world.add_component(e, Transform::new(pos));
+        world.add_component(e, make_camera(yaw, pitch));
+        e.id()
+    }
+
+    // ── build_ray ──────────────────────────────────────────────────────────
+
+    /// Center-of-screen ray must originate a finite point and aim exactly along the
+    /// camera's forward vector — the invariant the whole picking pipeline relies on.
+    #[test]
+    fn build_ray_center_points_along_camera_forward() {
+        let mut world = World::new();
+        // yaw=-PI/2 → forward ≈ (0,0,-1) per Camera::forward_from.
+        let cam_id = spawn_camera(&mut world, Vec3::new(2.0, 3.0, 4.0), -FRAC_PI_2, 0.0);
+
+        let ray = build_ray(&world, cam_id, 0.0, 0.0, 1.0, 1.0).expect("ray built");
+        assert!(ray.is_valid(), "ray direction must be unit-length and finite");
+        assert!(ray.origin.is_finite());
+
+        let forward = make_camera(-FRAC_PI_2, 0.0).get_front();
+        let d = ray.direction;
+        assert!((d.x - forward.x).abs() < 1e-3, "dir.x={} fwd.x={}", d.x, forward.x);
+        assert!((d.y - forward.y).abs() < 1e-3, "dir.y={} fwd.y={}", d.y, forward.y);
+        assert!((d.z - forward.z).abs() < 1e-3, "dir.z={} fwd.z={}", d.z, forward.z);
+    }
+
+    /// Screen top vs bottom must tilt the ray up vs down (NDC +Y is up in WGPU),
+    /// and screen right vs left must tilt along the camera's right axis. These
+    /// monotonic invariants catch a flipped/ swapped unproject axis.
+    #[test]
+    fn build_ray_screen_edges_tilt_monotonically() {
+        let mut world = World::new();
+        let cam_id = spawn_camera(&mut world, Vec3::ZERO, -FRAC_PI_2, 0.0);
+
+        let up = build_ray(&world, cam_id, 0.0, 0.5, 1.0, 1.0).unwrap().direction;
+        let down = build_ray(&world, cam_id, 0.0, -0.5, 1.0, 1.0).unwrap().direction;
+        assert!(up.y > down.y, "top-of-screen ray must aim higher: {} vs {}", up.y, down.y);
+
+        // For yaw=-PI/2 the camera-right axis is +X, so screen-right tilts +X.
+        let right = build_ray(&world, cam_id, 0.5, 0.0, 1.0, 1.0).unwrap().direction;
+        let left = build_ray(&world, cam_id, -0.5, 0.0, 1.0, 1.0).unwrap().direction;
+        assert!(right.x > left.x, "screen-right ray must aim +X: {} vs {}", right.x, left.x);
+    }
+
+    /// build_ray short-circuits to None when the entity lacks a Camera OR a Transform
+    /// (both `?` early-returns), instead of fabricating a bogus ray.
+    #[test]
+    fn build_ray_none_without_camera_or_transform() {
+        let mut world = World::new();
+
+        let no_cam = world.spawn();
+        world.add_component(no_cam, Transform::new(Vec3::ZERO));
+        assert!(build_ray(&world, no_cam.id(), 0.0, 0.0, 1.0, 1.0).is_none());
+
+        let no_tf = world.spawn();
+        world.add_component(no_tf, make_camera(0.0, 0.0));
+        assert!(build_ray(&world, no_tf.id(), 0.0, 0.0, 1.0, 1.0).is_none());
+
+        // Entirely unknown id.
+        assert!(build_ray(&world, 987_654, 0.0, 0.0, 1.0, 1.0).is_none());
+    }
+
+    // ── find_selection_root (Blender-style parent walk) ─────────────────────
+
+    #[test]
+    fn find_selection_root_walks_to_topmost_ancestor() {
+        let mut world = World::new();
+        let a = world.spawn(); // root
+        let b = world.spawn();
+        let c = world.spawn();
+        world.add_component(b, Parent(a.id()));
+        world.add_component(c, Parent(b.id()));
+
+        // A root resolves to itself.
+        assert_eq!(find_selection_root(&world, a.id()), a.id());
+        // A direct child resolves to its parent.
+        assert_eq!(find_selection_root(&world, b.id()), a.id());
+        // A grandchild walks the whole chain up to the root.
+        assert_eq!(find_selection_root(&world, c.id()), a.id());
+    }
+
+    /// A pathological Parent cycle must NOT hang: the 32-level cap bounds the walk.
+    /// The test completing at all proves termination; the result is one of the two.
+    #[test]
+    fn find_selection_root_cycle_is_bounded_no_hang() {
+        let mut world = World::new();
+        let a = world.spawn();
+        let b = world.spawn();
+        world.add_component(a, Parent(b.id()));
+        world.add_component(b, Parent(a.id()));
+
+        let root = find_selection_root(&world, a.id());
+        assert!(root == a.id() || root == b.id());
+    }
+
+    // ── is_editor_entity (unpickable-object whitelist) ──────────────────────
+
+    #[test]
+    fn is_editor_entity_matches_names_and_prefixes() {
+        let mut world = World::new();
+        let named = |world: &mut World, name: &str| {
+            let e = world.spawn();
+            world.add_component(e, EntityName(name.to_string()));
+            e.id()
+        };
+
+        for exact in ["Editor Grid", "Editor Guidelines", "Directional Light"] {
+            let id = named(&mut world, exact);
+            assert!(is_editor_entity(&world, id), "'{exact}' should be an editor entity");
+        }
+        // Prefix rule: any "Editor Light Icon*".
+        let icon = named(&mut world, "Editor Light Icon 3");
+        assert!(is_editor_entity(&world, icon));
+
+        // Regular user objects are selectable.
+        let cube = named(&mut world, "Default Cube");
+        assert!(!is_editor_entity(&world, cube));
+
+        // An entity with no name is never an editor entity.
+        let anon = world.spawn();
+        assert!(!is_editor_entity(&world, anon.id()));
+    }
+
+    // ── compute_entity_obb (collider fallback path — no GPU mesh needed) ─────
+
+    fn obb_of(world: &World, id: u32) -> Option<super::ObbInfo> {
+        let transforms = world.borrow::<Transform>();
+        let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
+        let colliders = world.borrow::<Collider>();
+        let gts = world.borrow::<GlobalTransform>();
+        let t = transforms.get(id).unwrap();
+        compute_entity_obb(id, t, &meshes, &colliders, &gts)
+    }
+
+    #[test]
+    fn compute_obb_from_box_collider_uses_transform() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::new(5.0, 0.0, 0.0)));
+        world.add_component(e, Collider::box_collider(Vec3::new(0.5, 0.5, 0.5)));
+
+        let obb = obb_of(&world, e.id()).expect("collider yields an OBB");
+        assert!((obb.center - Vec3::new(5.0, 0.0, 0.0)).length() < 1e-4);
+        assert!((obb.half_extents - Vec3::new(0.5, 0.5, 0.5)).length() < 1e-4);
+        // No GlobalTransform present → OBB inherits the identity local rotation.
+        let dot = obb.rotation.dot(Quat::IDENTITY).abs();
+        assert!((dot - 1.0).abs() < 1e-4, "rotation should be identity, dot={dot}");
+    }
+
+    /// Non-uniform scale must multiply the half-extents component-wise while leaving
+    /// the (zero-offset) collider center anchored at the entity position.
+    #[test]
+    fn compute_obb_scales_half_extents() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(
+            e,
+            Transform::new(Vec3::new(5.0, 0.0, 0.0)).with_scale(Vec3::new(2.0, 3.0, 4.0)),
+        );
+        world.add_component(e, Collider::box_collider(Vec3::new(0.5, 0.5, 0.5)));
+
+        let obb = obb_of(&world, e.id()).unwrap();
+        assert!((obb.half_extents - Vec3::new(1.0, 1.5, 2.0)).length() < 1e-4);
+        // Center unaffected by scale because the collider offset is zero.
+        assert!((obb.center - Vec3::new(5.0, 0.0, 0.0)).length() < 1e-4);
+    }
+
+    #[test]
+    fn compute_obb_none_without_mesh_or_collider() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::ZERO));
+        assert!(obb_of(&world, e.id()).is_none());
+    }
+
+    // ── Rubber-band world→screen projection (mirror of
+    //    perform_rubber_band_selection). Guards the NDC→pixel mapping, whose Y axis
+    //    is FLIPPED (top-left origin). Kept as a formula mirror because the real fn
+    //    is welded to World + camera matrices; the arithmetic is the fragile part.
+    fn ndc_to_screen(ndc_x: f32, ndc_y: f32, rect: (f32, f32, f32, f32)) -> (f32, f32) {
+        let (left, top, width, height) = rect;
+        let sx = ((ndc_x + 1.0) / 2.0) * width + left;
+        let sy = ((1.0 - ndc_y) / 2.0) * height + top;
+        (sx, sy)
+    }
+
+    #[test]
+    fn rubber_band_projection_center_and_flipped_y() {
+        // Scene rect: origin (100,50), size 800x600.
+        let rect = (100.0, 50.0, 800.0, 600.0);
+
+        // NDC center → rect center.
+        let (cx, cy) = ndc_to_screen(0.0, 0.0, rect);
+        assert!((cx - 500.0).abs() < 1e-3);
+        assert!((cy - 350.0).abs() < 1e-3);
+
+        // NDC top (+1 y) maps to the TOP pixel row (min y) because y is flipped.
+        let (_, top_y) = ndc_to_screen(0.0, 1.0, rect);
+        assert!((top_y - 50.0).abs() < 1e-3, "top of NDC must map to top pixel: {top_y}");
+        // NDC bottom (-1 y) maps to the BOTTOM pixel row.
+        let (_, bot_y) = ndc_to_screen(0.0, -1.0, rect);
+        assert!((bot_y - 650.0).abs() < 1e-3, "bottom of NDC must map to bottom pixel: {bot_y}");
+
+        // NDC left/right map to the rect's left/right edges (x is NOT flipped).
+        assert!((ndc_to_screen(-1.0, 0.0, rect).0 - 100.0).abs() < 1e-3);
+        assert!((ndc_to_screen(1.0, 0.0, rect).0 - 900.0).abs() < 1e-3);
+    }
+}

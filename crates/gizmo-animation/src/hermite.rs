@@ -100,4 +100,46 @@ mod tests {
         let q = hermite_quat(a, Quat::from_xyzw(0.1, 0.0, 0.0, 0.0), b, Quat::default(), 0.5);
         assert!((q.length() - 1.0).abs() < 1e-4, "hermite quat must be unit, got {}", q.length());
     }
+
+    #[test]
+    fn hermite_vec4_endpoints_ignore_tangents() {
+        // At t=0 / t=1 the basis (h10,h11 → 0) must return p0 / p1 exactly, whatever
+        // the tangents. This is the property that keeps keyframe values authoritative.
+        let p0 = Vec4::new(1.0, -2.0, 3.0, 0.5);
+        let p1 = Vec4::new(-4.0, 5.0, 6.0, -0.5);
+        let (m0, m1) = (Vec4::splat(9.0), Vec4::splat(-3.0));
+        assert!((hermite_vec4(p0, m0, p1, m1, 0.0) - p0).length() < TOL);
+        assert!((hermite_vec4(p0, m0, p1, m1, 1.0) - p1).length() < TOL);
+    }
+
+    #[test]
+    fn hermite_vec3_is_time_reversal_symmetric() {
+        // A Hermite segment sampled at t equals the *reversed* segment
+        // (p1→p0 with negated tangents) sampled at 1-t. This invariant is what
+        // guarantees forward/reverse playback trace the same curve.
+        let p0 = Vec3::new(0.0, 1.0, 2.0);
+        let p1 = Vec3::new(3.0, -1.0, 0.5);
+        let m0 = Vec3::new(2.0, 0.0, -1.0);
+        let m1 = Vec3::new(-0.5, 1.5, 0.0);
+        for &t in &[0.0_f32, 0.25, 0.5, 0.73, 1.0] {
+            let fwd = hermite_vec3(p0, m0, p1, m1, t);
+            let rev = hermite_vec3(p1, -m1, p0, -m0, 1.0 - t);
+            assert!((fwd - rev).length() < TOL, "asymmetry at t={t}: {fwd:?} vs {rev:?}");
+        }
+    }
+
+    #[test]
+    fn hermite_vec3_zero_tangent_smoothstep_is_monotonic() {
+        // Zero-tangent Hermite is the classic smoothstep: monotonically increasing
+        // from p0 to p1 over [0,1], staying inside [p0, p1] (no overshoot).
+        let mut prev = f32::NEG_INFINITY;
+        for i in 0..=20 {
+            let t = i as f32 / 20.0;
+            let v = hermite_vec3(Vec3::ZERO, Vec3::ZERO, Vec3::splat(10.0), Vec3::ZERO, t).x;
+            assert!(v >= prev - TOL, "smoothstep must not decrease: {prev} -> {v} at t={t}");
+            assert!((-TOL..=10.0 + TOL).contains(&v), "smoothstep must stay in [0,10], got {v}");
+            prev = v;
+        }
+        assert!((prev - 10.0).abs() < TOL, "smoothstep must reach the endpoint");
+    }
 }

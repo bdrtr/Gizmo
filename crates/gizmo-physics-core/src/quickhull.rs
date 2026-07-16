@@ -45,9 +45,14 @@ pub struct ConvexHull {
 }
 
 /// Computes an exact 3D Convex Hull using the Quickhull algorithm.
+#[tracing::instrument(skip_all, name = "convex_hull", fields(point_count = points.len()))]
 pub fn compute_convex_hull(points: &[Vec3]) -> ConvexHull {
     if points.len() < 4 {
         // Fallback for very small point sets
+        tracing::debug!(
+            point_count = points.len(),
+            "convex hull input has fewer than 4 points; returning raw points without faces"
+        );
         return ConvexHull {
             vertices: points.to_vec(),
             faces: vec![],
@@ -104,6 +109,9 @@ pub fn compute_convex_hull(points: &[Vec3]) -> ConvexHull {
     }
 
     if max_dist_sq < 1e-8 {
+        tracing::debug!(
+            "convex hull input is a single point (all coincident); returning one vertex, no faces"
+        );
         return ConvexHull {
             vertices: vec![pts[0]],
             faces: vec![],
@@ -128,6 +136,9 @@ pub fn compute_convex_hull(points: &[Vec3]) -> ConvexHull {
     }
 
     if max_dist_line < 1e-8 {
+        tracing::debug!(
+            "convex hull input is collinear; collapsed to a segment (two vertices, no faces)"
+        );
         return ConvexHull {
             vertices: vec![pts[p0], pts[p1]],
             faces: vec![],
@@ -158,6 +169,10 @@ pub fn compute_convex_hull(points: &[Vec3]) -> ConvexHull {
         dedup.dedup_by(|a, b| {
             (a.x - b.x).abs() < 1e-4 && (a.y - b.y).abs() < 1e-4 && (a.z - b.z).abs() < 1e-4
         });
+        tracing::debug!(
+            vertex_count = dedup.len(),
+            "convex hull input is coplanar; returning a planar polygon without faces"
+        );
         return ConvexHull {
             vertices: dedup,
             faces: vec![],
@@ -350,8 +365,128 @@ pub fn compute_convex_hull(points: &[Vec3]) -> ConvexHull {
         ]);
     }
 
+    tracing::debug!(
+        vertex_count = out_vertices.len(),
+        face_count = out_faces.len(),
+        "convex hull built"
+    );
     ConvexHull {
         vertices: out_vertices,
         faces: out_faces,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cube_corners() -> Vec<Vec3> {
+        let mut v = Vec::new();
+        for &x in &[-1.0f32, 1.0] {
+            for &y in &[-1.0f32, 1.0] {
+                for &z in &[-1.0f32, 1.0] {
+                    v.push(Vec3::new(x, y, z));
+                }
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn cube_hull_has_all_eight_corners() {
+        let hull = compute_convex_hull(&cube_corners());
+        assert_eq!(hull.vertices.len(), 8, "every cube corner is a hull vertex");
+        assert!(!hull.faces.is_empty(), "a solid cube must have faces");
+        for c in cube_corners() {
+            assert!(
+                hull.vertices.iter().any(|v| (*v - c).length() < 1e-4),
+                "corner {c:?} missing from hull output"
+            );
+        }
+    }
+
+    #[test]
+    fn all_face_indices_are_valid_and_non_degenerate() {
+        let hull = compute_convex_hull(&cube_corners());
+        let n = hull.vertices.len() as u32;
+        for f in &hull.faces {
+            for &i in f {
+                assert!(i < n, "face index {i} out of range ({n} vertices)");
+            }
+            assert!(
+                f[0] != f[1] && f[1] != f[2] && f[0] != f[2],
+                "degenerate face {f:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn hull_output_is_deterministic() {
+        // BTreeMap/BTreeSet are used specifically so hull output is stable run-to-run
+        // (rollback/replay determinism). Two builds of the same input must be identical.
+        let pts = cube_corners();
+        let a = compute_convex_hull(&pts);
+        let b = compute_convex_hull(&pts);
+        assert_eq!(a.vertices, b.vertices);
+        assert_eq!(a.faces, b.faces);
+    }
+
+    #[test]
+    fn interior_points_are_excluded() {
+        let mut pts = cube_corners();
+        pts.push(Vec3::ZERO); // strictly inside
+        pts.push(Vec3::new(0.5, 0.25, -0.1)); // strictly inside
+        let hull = compute_convex_hull(&pts);
+        assert_eq!(
+            hull.vertices.len(),
+            8,
+            "interior points must not become hull vertices"
+        );
+    }
+
+    #[test]
+    fn fewer_than_four_points_returns_input_without_faces() {
+        let hull = compute_convex_hull(&[Vec3::ZERO, Vec3::X, Vec3::Y]);
+        assert_eq!(hull.vertices.len(), 3);
+        assert!(hull.faces.is_empty());
+    }
+
+    #[test]
+    fn coplanar_points_have_no_faces() {
+        // All z = 0: the farthest-from-plane distance is ~0 ⇒ planar fallback, no 3D hull.
+        let hull = compute_convex_hull(&[
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 1.0, 0.0),
+        ]);
+        assert!(hull.faces.is_empty(), "coplanar input cannot form a solid");
+    }
+
+    #[test]
+    fn collinear_points_collapse_to_a_segment() {
+        let hull = compute_convex_hull(&[
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(2.0, 0.0, 0.0),
+            Vec3::new(3.0, 0.0, 0.0),
+        ]);
+        assert_eq!(hull.vertices.len(), 2, "a line reduces to its two endpoints");
+        assert!(hull.faces.is_empty());
+    }
+
+    #[test]
+    fn coincident_points_collapse_to_one() {
+        let hull = compute_convex_hull(&[Vec3::splat(2.0); 5]);
+        assert_eq!(hull.vertices.len(), 1);
+        assert!(hull.faces.is_empty());
+    }
+
+    #[test]
+    fn tetrahedron_has_four_faces() {
+        // The minimal solid: 4 non-coplanar points ⇒ 4 triangular faces, 4 vertices.
+        let hull = compute_convex_hull(&[Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z]);
+        assert_eq!(hull.vertices.len(), 4);
+        assert_eq!(hull.faces.len(), 4, "a tetrahedron has exactly 4 faces");
     }
 }

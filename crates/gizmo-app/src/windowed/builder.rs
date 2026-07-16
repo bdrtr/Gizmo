@@ -38,6 +38,12 @@ impl<State: 'static> App<State> {
             init_error: None,
         };
         app = app.add_plugin(AssetPlugin);
+        tracing::info!(
+            title = %app.window_title,
+            width,
+            height,
+            "[App] created (windowed)"
+        );
         app
     }
 
@@ -57,12 +63,14 @@ impl<State: 'static> App<State> {
     }
 
     pub fn start_recording(mut self) -> Self {
+        tracing::info!("[App] input recording enabled");
         self.record_mode = true;
         self.record_data = Some(gizmo_core::input::PlaybackData { frames: Vec::new() });
         self
     }
 
     pub fn start_playback(mut self, path: &str) -> Self {
+        tracing::info!(path = %path, "[App] input playback enabled");
         self.playback_file = Some(path.to_string());
         self
     }
@@ -70,6 +78,7 @@ impl<State: 'static> App<State> {
     /// Sisteme yeni bir Olay (Event) türü kaydeder.
     /// Bu işlem sayesinde her kare bitişinde çift-buffer `update()` otomatik çalışır.
     pub fn add_event<T: 'static + Send + Sync>(mut self) -> Self {
+        tracing::debug!(event = %std::any::type_name::<T>(), "[App] event type registered");
         self.world
             .insert_resource(gizmo_core::event::Events::<T>::new());
         self.event_updaters.push(Box::new(|world| {
@@ -86,6 +95,7 @@ impl<State: 'static> App<State> {
     }
 
     pub fn add_plugin<P: crate::Plugin<State>>(mut self, plugin: P) -> Self {
+        tracing::info!(plugin = %std::any::type_name::<P>(), "[App] plugin build");
         plugin.build(&mut self);
         self
     }
@@ -168,6 +178,7 @@ impl<State: 'static> App<State> {
     }
 
     pub fn load_scene(mut self, path: &str) -> Self {
+        tracing::debug!(scene = %path, "[App] initial scene queued");
         self.initial_scene = Some(path.to_string());
         self
     }

@@ -68,6 +68,13 @@ impl World {
             return;
         }
 
+        tracing::trace!(
+            entity = eid,
+            from = old_arch_id,
+            to = target_arch_id,
+            "add_bundle: archetype migration"
+        );
+
         let old_loc = self.entity_locations[eid as usize];
         let (new_row, moved_eid) = {
             // İki archetype'ı FARKLI indekslerden disjoint ödünç al. Aynı Vec'ten
@@ -148,6 +155,13 @@ impl World {
         };
 
         if old_arch_id == target_arch_id { return; }
+
+        tracing::trace!(
+            entity = eid,
+            from = old_arch_id,
+            to = target_arch_id,
+            "remove_bundle: archetype migration"
+        );
 
         let old_loc = self.entity_locations[eid as usize];
         let (new_row, moved_eid) = {
@@ -260,6 +274,12 @@ impl World {
             entity.id(),
             old_loc.archetype_id as usize,
             old_loc.row as usize,
+        );
+        tracing::trace!(
+            entity = eid,
+            from = old_arch_id,
+            to = target_arch_id,
+            "add_component: archetype migration"
         );
 
         // İki archetype'ı FARKLI indekslerden disjoint olarak ödünç al. Önceki hal
@@ -393,6 +413,13 @@ impl World {
             return; // Zaten yok
         }
 
+        tracing::trace!(
+            entity = eid,
+            from = old_loc.archetype_id,
+            to = target_arch_id,
+            "remove_component: archetype migration"
+        );
+
         // 2. Migration — iki archetype'ı FARKLI indekslerden disjoint ödünç al
         // (aynı Vec'ten iki `&mut ... as *mut` = geçersiz-kılınan-provenance UB'si).
         let (new_row, moved_eid) = {
@@ -435,6 +462,7 @@ impl World {
     /// ```
     ///
     /// Toplu (Batch) component ekleme. O(N) archetype lookup maliyetini O(1)'e düşürür.
+    #[tracing::instrument(skip_all, name = "insert_batch")]
     pub fn insert_batch<T: Component + Clone>(&mut self, entities: &[Entity], component: T) {
         if T::storage_type() == crate::component::StorageType::SparseSet {
             for &e in entities {
@@ -486,9 +514,15 @@ impl World {
                         }
                     }
                 });
+                tracing::debug!(
+                    count = group_entities.len(),
+                    archetype = target_arch_id,
+                    "insert_batch: same-archetype overwrite group"
+                );
                 continue;
             }
 
+            let migrated = group_entities.len();
             for e in &group_entities {
                 let eid = e.id();
                 let old_loc = self.entity_locations[eid as usize];
@@ -532,10 +566,17 @@ impl World {
                     for hook in &mut h.on_set { hook(w, *e); }
                 }
             });
+            tracing::debug!(
+                count = migrated,
+                from = source_arch_id,
+                to = target_arch_id,
+                "insert_batch: migrated group to new archetype"
+            );
         }
     }
 
     /// Toplu (Batch) component çıkarma
+    #[tracing::instrument(skip_all, name = "remove_batch")]
     pub fn remove_batch<T: Component>(&mut self, entities: &[Entity]) {
         if T::storage_type() == crate::component::StorageType::SparseSet {
             for &e in entities {
@@ -597,6 +638,12 @@ impl World {
                     for hook in &mut h.on_remove { hook(w, *e); }
                 }
             });
+            tracing::debug!(
+                count = group_entities.len(),
+                from = source_arch_id,
+                to = target_arch_id,
+                "remove_batch: migrated group to new archetype"
+            );
         }
     }
 }

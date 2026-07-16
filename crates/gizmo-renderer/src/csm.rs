@@ -233,4 +233,52 @@ mod tests {
             c.splits
         );
     }
+
+    #[test]
+    fn uniform_lambda_gives_evenly_spaced_splits() {
+        // lambda = 0 → pure uniform: split[i] = near + (far−near)·(i+1)/N.
+        let s = cascade_split_distances(1.0, 5.0, 0.0);
+        assert!((s[0] - 2.0).abs() < 1e-4, "{s:?}");
+        assert!((s[1] - 3.0).abs() < 1e-4, "{s:?}");
+        assert!((s[2] - 4.0).abs() < 1e-4, "{s:?}");
+        assert!((s[3] - 5.0).abs() < 1e-4, "{s:?}");
+    }
+
+    #[test]
+    fn logarithmic_lambda_packs_splits_toward_the_near_plane() {
+        // lambda = 1 → pure log split: denser near the camera than a uniform split.
+        let log = cascade_split_distances(1.0, 100.0, 1.0);
+        let uni = cascade_split_distances(1.0, 100.0, 0.0);
+        // First cascade covers less distance under the log scheme.
+        assert!(log[0] < uni[0], "log near split should be tighter: {log:?} vs {uni:?}");
+        // Log splits grow geometrically: ratio between successive splits is ~constant.
+        let r0 = log[1] / log[0];
+        let r1 = log[2] / log[1];
+        assert!((r0 - r1).abs() < 1e-3, "log splits not geometric: {log:?}");
+    }
+
+    #[test]
+    fn cascade_computation_is_deterministic() {
+        let build = || {
+            compute_directional_cascades(
+                Vec3::new(1.0, 2.0, 3.0),
+                Vec3::new(0.0, 0.0, -1.0),
+                16.0 / 9.0,
+                std::f32::consts::FRAC_PI_4,
+                0.1,
+                200.0,
+                Vec3::new(0.3, -1.0, 0.2),
+            )
+        };
+        let a = build();
+        let b = build();
+        assert_eq!(a.splits, b.splits, "splits must be reproducible");
+        for i in 0..CASCADE_COUNT {
+            assert_eq!(
+                a.view_projs[i].to_cols_array(),
+                b.view_projs[i].to_cols_array(),
+                "cascade {i} matrix must be reproducible (texel snap is stable)"
+            );
+        }
+    }
 }

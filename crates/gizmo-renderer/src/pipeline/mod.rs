@@ -98,6 +98,7 @@ impl SceneState {
 // ANA YÖNETİCİ METOTLAR
 // ------------------------------------------------------------------
 
+#[tracing::instrument(skip_all)]
 pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     let global_uniform_buffer = build_global_uniforms(device);
     let (
@@ -235,6 +236,11 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     let core_pipelines = build_core_pipelines(device, &layout_refs);
     let shadow_pipeline = build_shadow_pipeline(device, &layout_refs);
 
+    tracing::info!(
+        initial_instance_capacity = initial_capacity,
+        "[Pipeline] scene render pipelines built (core + shadow + global bind groups)"
+    );
+
     SceneState {
         render_pipeline: core_pipelines.render,
         render_double_sided_pipeline: core_pipelines.render_double_sided,
@@ -271,6 +277,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     }
 }
 
+#[tracing::instrument(skip_all)]
 pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     let device = &renderer.device;
     let post_shader = load_shader(
@@ -304,6 +311,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     renderer.scene.shadow_pipeline = shadow_pipeline;
 
     crate::post_process::rebuild_post_pipelines(renderer, &post_shader);
+    tracing::info!("[Pipeline] core + shadow + post-process pipelines rebuilt");
 }
 
 #[cfg(test)]

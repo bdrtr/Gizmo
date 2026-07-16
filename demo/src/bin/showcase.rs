@@ -689,6 +689,7 @@ fn main() {
             );
         })
         .set_render(|world, state, encoder, view, renderer, _light_time| {
+            renderer.enable_gpu_physics(); // GPU-fizik OPT-IN (varsayılan None)
             // Post Processing Parametrelerini Güncelle
             renderer.update_post_process(
                 &renderer.queue,

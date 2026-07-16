@@ -135,6 +135,24 @@ mod tests {
         assert_eq!(batch_centroid_depth(&[], cam), 0.0);
     }
 
+    // Centroid averages in all three axes, not just Z, and the distance is measured
+    // from the ACTUAL camera position (not assumed origin).
+    #[test]
+    fn centroid_depth_is_3d_and_camera_relative() {
+        // Two instances at the origin and (2,2,2) → centroid (1,1,1); from a camera at
+        // the origin that is sqrt(3) away.
+        let d = batch_centroid_depth(
+            &[inst_at(0.0, 0.0, 0.0), inst_at(2.0, 2.0, 2.0)],
+            Vec3::ZERO,
+        );
+        assert!((d - 3.0_f32.sqrt()).abs() < 1e-3, "3D centroid distance wrong: {d}");
+
+        // Same single instance, camera moved to (10,0,0): distance is 10, proving the
+        // measure is camera-relative rather than origin-relative.
+        let d2 = batch_centroid_depth(&[inst_at(0.0, 0.0, 0.0)], Vec3::new(10.0, 0.0, 0.0));
+        assert!((d2 - 10.0).abs() < 1e-3, "camera-relative distance wrong: {d2}");
+    }
+
     // A far batch must sort ahead of a near one (back-to-front). This is the inter-batch
     // ordering the fix adds — instances within a batch were already sorted, but the batches
     // themselves drained in arbitrary HashMap order.

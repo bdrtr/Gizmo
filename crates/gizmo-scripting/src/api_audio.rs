@@ -48,3 +48,46 @@ pub fn register_audio_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Result
     lua.globals().set("audio", audio_table)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mlua::Lua;
+
+    /// audio.play / play_3d / stop doğru komutları (ad + 3B konum) kuyruğa yazmalı,
+    /// FIFO sırayı ve argüman dönüşümünü koruyarak.
+    #[test]
+    fn audio_calls_push_expected_commands() {
+        let lua = Lua::new();
+        let cq = Arc::new(CommandQueue::new());
+        register_audio_api(&lua, cq.clone()).unwrap();
+
+        lua.load(
+            r#"
+            audio.play("jump")
+            audio.play_3d("explosion", 1.0, 2.0, 3.0)
+            audio.stop("music")
+            "#,
+        )
+        .exec()
+        .unwrap();
+
+        let cmds = cq.drain();
+        assert_eq!(cmds.len(), 3);
+        match &cmds[0] {
+            ScriptCommand::PlaySound(name) => assert_eq!(name, "jump"),
+            other => panic!("beklenen PlaySound, gelen {other:?}"),
+        }
+        match &cmds[1] {
+            ScriptCommand::PlaySound3D(name, pos) => {
+                assert_eq!(name, "explosion");
+                assert_eq!(*pos, Vec3::new(1.0, 2.0, 3.0));
+            }
+            other => panic!("beklenen PlaySound3D, gelen {other:?}"),
+        }
+        match &cmds[2] {
+            ScriptCommand::StopSound(name) => assert_eq!(name, "music"),
+            other => panic!("beklenen StopSound, gelen {other:?}"),
+        }
+    }
+}

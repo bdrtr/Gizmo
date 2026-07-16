@@ -20,6 +20,7 @@ use gizmo_renderer::renderer::Renderer;
 /// their requested size changes, registers them with the egui renderer so the
 /// panels can sample them, and publishes the matching `EditorRenderTarget` /
 /// `GameRenderTarget` resources the engine renders into.
+#[tracing::instrument(skip_all, name = "editor_sync_render_targets")]
 pub fn sync_render_targets(world: &mut World, editor: &mut EguiContext) {
     // --- Scene View RTT (Render To Texture) YÖNETİMİ ---
     if world
@@ -84,6 +85,11 @@ pub fn sync_render_targets(world: &mut World, editor: &mut EguiContext) {
                 new_scene_target = Some((std::sync::Arc::new(view), scene_w, scene_h));
             }
             ed_state_ref.scene_texture_id = tex_id;
+            tracing::debug!(
+                width = scene_w,
+                height = scene_h,
+                "[Editor] scene-view RTT (re)created"
+            );
         }
 
         // Game View RTT
@@ -129,6 +135,11 @@ pub fn sync_render_targets(world: &mut World, editor: &mut EguiContext) {
                 new_game_target = Some((std::sync::Arc::new(view), game_w, game_h));
             }
             ed_state_ref.game_texture_id = tex_id;
+            tracing::debug!(
+                width = game_w,
+                height = game_h,
+                "[Editor] game-view RTT (re)created"
+            );
         }
 
         drop(ed_state_ref);
@@ -160,6 +171,7 @@ pub fn sync_render_targets(world: &mut World, editor: &mut EguiContext) {
 /// save/load request, then drains the `EditorState` scene requests, performing
 /// the actual `SceneData` save/load (with the scripting components registered)
 /// and despawning the previous scene's non-editor entities on clear/load.
+#[tracing::instrument(skip_all, name = "editor_scene_requests")]
 pub fn process_scene_requests(world: &mut World) {
     // --- EDITOR SCENE REQUESTS ---
     // 1. Poll the file-dialog channel and promote result to save/load request.
@@ -176,9 +188,20 @@ pub fn process_scene_requests(world: &mut World) {
                             ed.pending_dialog_rx = Some(std::sync::Mutex::new(rx));
                             None
                         }
-                        Err(_) => None,
+                        // Empty is handled above, so this is Disconnected: the file
+                        // dialog thread dropped its sender without a result.
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            tracing::debug!(
+                                "[Editor] file-dialog channel disconnected (no path chosen)"
+                            );
+                            None
+                        }
                     },
-                    Err(_) => None,
+                    // The dialog channel mutex was poisoned by a panicking thread.
+                    Err(e) => {
+                        tracing::warn!(error = %e, "[Editor] file-dialog channel mutex poisoned");
+                        None
+                    }
                 }
             } else {
                 None
@@ -222,8 +245,9 @@ pub fn process_scene_requests(world: &mut World) {
                     ed.has_unsaved_changes = false;
                     ed.status_message = format!("Kaydedildi: {}", path);
                 }
+                tracing::info!(scene = %path, "[Editor] scene saved");
             }
-            Err(e) => tracing::error!("[App] Sahne kayıt hatası: {}", e),
+            Err(e) => tracing::error!(scene = %path, error = %e, "[Editor] scene save failed"),
         }
     }
 
@@ -249,6 +273,12 @@ pub fn process_scene_requests(world: &mut World) {
             .into_iter()
             .filter(|e| !editor_entities.contains(&e.id()))
             .collect();
+        tracing::debug!(
+            despawn_count = to_despawn.len(),
+            kept_editor_entities = editor_entities.len(),
+            reason = if clear_req { "clear" } else { "load" },
+            "[Editor] clearing scene (despawning non-editor entities)"
+        );
         for e in to_despawn {
             world.despawn(e);
         }
@@ -263,7 +293,14 @@ pub fn process_scene_requests(world: &mut World) {
             let mut registry = gizmo_scene::registry::default_scene_registry();
             #[cfg(not(target_arch = "wasm32"))]
             gizmo_scripting::register_script_components(&mut registry);
-            let ok = gizmo_scene::scene::SceneData::load_into(path, world, &registry).is_ok();
+            let load_result = gizmo_scene::scene::SceneData::load_into(path, world, &registry);
+            let ok = load_result.is_ok();
+            match &load_result {
+                Ok(()) => tracing::info!(scene = %path, "[Editor] scene loaded"),
+                Err(e) => {
+                    tracing::warn!(scene = %path, error = %e, "[Editor] scene load failed")
+                }
+            }
             world.insert_resource(r);
             world.insert_resource(asset_manager);
             if let Some(mut ed) = world.get_resource_mut::<gizmo_editor::EditorState>() {

@@ -46,6 +46,7 @@ pub struct PhysicsStateSnapshot {
 
 impl PhysicsStateSnapshot {
     /// O(N) hızında belleğe kopyalama işlemi yapar
+    #[tracing::instrument(skip_all, name = "snapshot_capture")]
     pub fn capture(world: &World, tick: u64) -> Self {
         use gizmo_physics_core::components::transform::Transform;
         use gizmo_physics_rigid::components::velocity::Velocity;
@@ -75,10 +76,13 @@ impl PhysicsStateSnapshot {
             }
         }
 
+        // Per-frame sıcak yol → trace seviyesi; alan hesabı yalnızca Vec::len() (bedava).
+        tracing::trace!(tick, entity_count = states.len(), "Fizik snapshot'ı yakalandı");
         Self { tick, states }
     }
 
     /// Snapshot'u mevcut dünyaya anında geri yükler (Restore / Rollback)
+    #[tracing::instrument(skip_all, name = "snapshot_restore")]
     pub fn restore(&self, world: &mut World) {
         use gizmo_physics_core::components::transform::Transform;
         use gizmo_physics_rigid::components::velocity::Velocity;
@@ -90,23 +94,45 @@ impl PhysicsStateSnapshot {
         let mut velocities = unsafe { world.borrow_mut_unchecked::<Velocity>() };
         let mut rigid_bodies = unsafe { world.borrow_mut_unchecked::<RigidBody>() };
 
+        // Bir state'in en az bir bileşeni canlı entity'ye uygulandı mı — aksi halde
+        // (despawn/id-yeniden-kullanım, generation uyuşmazlığı) atlanmış demektir.
+        let mut skipped = 0usize;
+
         for state in &self.states {
             // Ham `id` yerine `get_mut_entity(state.entity)` kullan: bu, uygulamadan
             // ÖNCE `World::is_alive` ile generation'ı doğrular. Aksi halde bir entity
             // despawn edilip aynı id slot'u yeni bir entity'ye (gen++) yeniden verildiğinde,
             // despawn ÖNCESİ bir snapshot'ı geri yüklemek yeni entity'nin durumunu sessizce
             // eski verilerle bozardı. Generation uyuşmazsa bu state atlanır.
+            let mut applied_any = false;
             if let Some(mut t) = transforms.get_mut_entity(state.entity) {
                 t.position = state.position;
                 t.rotation = state.rotation;
+                applied_any = true;
             }
             if let Some(mut v) = velocities.get_mut_entity(state.entity) {
                 v.linear = state.linear_velocity;
                 v.angular = state.angular_velocity;
+                applied_any = true;
             }
             if let Some(mut rb) = rigid_bodies.get_mut_entity(state.entity) {
                 rb.is_sleeping = state.is_sleeping;
+                applied_any = true;
             }
+            if !applied_any {
+                skipped += 1;
+            }
+        }
+
+        // Atlama beklenen (kasıtlı) bir durum, o yüzden yalnızca gerçekleştiğinde ve
+        // debug seviyesinde toplu (aggregate) raporla — per-entity gürültü YOK.
+        if skipped > 0 {
+            tracing::debug!(
+                tick = self.tick,
+                total = self.states.len(),
+                skipped,
+                "Snapshot restore: bazı entity'ler atlandı (despawn/id-yeniden-kullanım, generation uyuşmazlığı)"
+            );
         }
     }
 }
@@ -124,6 +150,9 @@ impl RollbackBuffer {
         // Modulo-by-zero koruması: indeksleme `% self.capacity` kullandığından
         // capacity=0 ilk save/get'te panik üretir. İmza değiştirmeden en az 1
         // kapasiteye normalize ediyoruz (başarı yolu etkilenmez).
+        if capacity == 0 {
+            tracing::warn!("RollbackBuffer kapasitesi 0 verildi, 1'e normalize edildi (çağıran hatası)");
+        }
         let capacity = capacity.max(1);
         Self {
             buffer: vec![None; capacity],
@@ -218,5 +247,135 @@ mod tests {
         let transforms = world.borrow::<Transform>();
         let t = transforms.get(e.id()).unwrap();
         assert_eq!(t.position, Vec3::new(1.0, 2.0, 3.0));
+    }
+
+    // --- RollbackBuffer (saf halka-tampon mantığı) ---
+
+    fn snap(tick: u64) -> PhysicsStateSnapshot {
+        PhysicsStateSnapshot { tick, states: Vec::new() }
+    }
+
+    #[test]
+    fn rollback_buffer_save_then_get_roundtrips() {
+        let mut buf = RollbackBuffer::new(8);
+        buf.save(snap(5));
+        assert_eq!(buf.get(5).map(|s| s.tick), Some(5));
+    }
+
+    #[test]
+    fn rollback_buffer_get_absent_tick_is_none() {
+        let buf = RollbackBuffer::new(8);
+        assert!(buf.get(3).is_none(), "hiç kaydedilmeyen tick None olmalı");
+    }
+
+    // capacity=4 → tick 0 ve tick 4 AYNI slot'u paylaşır. Yeni tick eskiyi ezer ve
+    // eski tick artık slot etiketiyle uyuşmadığı için get() None döner (bayat okuma yok).
+    #[test]
+    fn rollback_buffer_slot_collision_evicts_old_and_reports_none() {
+        let mut buf = RollbackBuffer::new(4);
+        buf.save(snap(0));
+        buf.save(snap(4));
+        assert!(buf.get(0).is_none(), "ezilen eski tick None olmalı");
+        assert_eq!(buf.get(4).map(|s| s.tick), Some(4));
+    }
+
+    #[test]
+    fn rollback_buffer_capacity_zero_is_normalized_and_never_panics() {
+        let mut buf = RollbackBuffer::new(0); // en az 1'e normalize edilir
+        buf.save(snap(0));
+        assert_eq!(buf.get(0).map(|s| s.tick), Some(0));
+        let _ = buf.get(123_456); // modulo-by-zero koruması → panik yok
+    }
+
+    // FullState paketi bu snapshot'ı ağdan yollar → serde tur-gidişi state'leri korumalı.
+    #[test]
+    fn physics_snapshot_serde_roundtrip_preserves_states() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::new(1.5, -2.0, 3.25)));
+        world.add_component(e, Velocity::new(Vec3::new(7.0, 8.0, 9.0)));
+        let original = PhysicsStateSnapshot::capture(&world, 99);
+
+        let bytes = bincode::serialize(&original).unwrap();
+        let back: PhysicsStateSnapshot = bincode::deserialize(&bytes).unwrap();
+
+        assert_eq!(back.tick, 99);
+        assert_eq!(back.states.len(), 1);
+        assert_eq!(back.states[0].position, Vec3::new(1.5, -2.0, 3.25));
+        assert_eq!(back.states[0].linear_velocity, Vec3::new(7.0, 8.0, 9.0));
+        assert_eq!(back.states[0].entity, e);
+    }
+
+    // capture yalnız Transform VE Velocity'si olan (hareketli) objeleri yakalar.
+    #[test]
+    fn capture_excludes_entities_missing_velocity() {
+        let mut world = World::new();
+        let only_t = world.spawn();
+        world.add_component(only_t, Transform::new(Vec3::ZERO)); // Velocity yok → hariç
+        let moving = world.spawn();
+        world.add_component(moving, Transform::new(Vec3::new(1.0, 0.0, 0.0)));
+        world.add_component(moving, Velocity::new(Vec3::new(2.0, 0.0, 0.0)));
+
+        let snap = PhysicsStateSnapshot::capture(&world, 0);
+        assert_eq!(snap.states.len(), 1, "yalnız Transform+Velocity yakalanmalı");
+        assert_eq!(snap.states[0].entity, moving);
+    }
+
+    // restore yalnız pozisyonu değil hızı ve uyku bayrağını da geri yüklemeli.
+    #[test]
+    fn restore_recovers_velocity_and_sleep_flag_not_just_position() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::new(1.0, 2.0, 3.0)));
+        world.add_component(e, Velocity::new(Vec3::new(4.0, 5.0, 6.0)));
+        world.add_component(e, RigidBody::new(1.0, true)); // is_sleeping = false
+
+        // Uyku bayrağını kur, sonra snapshot al.
+        {
+            let mut rbs = world.borrow_mut::<RigidBody>();
+            let mut rb = rbs.get_mut(e.id()).unwrap();
+            rb.is_sleeping = true;
+        }
+        let snap = PhysicsStateSnapshot::capture(&world, 0);
+
+        // Her şeyi boz.
+        {
+            let mut ts = world.borrow_mut::<Transform>();
+            let mut t = ts.get_mut(e.id()).unwrap();
+            t.position = Vec3::new(-9.0, -9.0, -9.0);
+        }
+        {
+            let mut vs = world.borrow_mut::<Velocity>();
+            let mut v = vs.get_mut(e.id()).unwrap();
+            v.linear = Vec3::ZERO;
+        }
+        {
+            let mut rbs = world.borrow_mut::<RigidBody>();
+            let mut rb = rbs.get_mut(e.id()).unwrap();
+            rb.is_sleeping = false;
+        }
+
+        snap.restore(&mut world);
+
+        {
+            let ts = world.borrow::<Transform>();
+            assert_eq!(
+                ts.get(e.id()).unwrap().position,
+                Vec3::new(1.0, 2.0, 3.0),
+                "pozisyon geri gelmeli"
+            );
+        }
+        {
+            let vs = world.borrow::<Velocity>();
+            assert_eq!(
+                vs.get(e.id()).unwrap().linear,
+                Vec3::new(4.0, 5.0, 6.0),
+                "hız geri gelmeli"
+            );
+        }
+        {
+            let rbs = world.borrow::<RigidBody>();
+            assert!(rbs.get(e.id()).unwrap().is_sleeping, "uyku bayrağı geri gelmeli");
+        }
     }
 }

@@ -36,12 +36,17 @@ pub struct SceneSnapshot {
 impl SceneSnapshot {
     /// Mevcut World durumunu in-memory snapshot olarak yakalar.
     /// `protected_ids`: Editor kamerası, highlight box gibi korunacak entity'ler
+    #[tracing::instrument(skip_all, name = "snapshot_capture")]
     pub fn capture(
         world: &World,
         registry: &crate::registry::SceneRegistry,
         protected_ids: &std::collections::HashSet<u32>,
     ) -> Self {
+        let start = Instant::now();
         let mut entities = Vec::new();
+        // Aggregates: a dropped component here means Play→Stop will silently lose that state.
+        let mut component_count = 0usize;
+        let mut dropped_components = 0usize;
         let names = world.borrow::<gizmo_core::EntityName>();
 
         for ent in world.iter_alive_entities() {
@@ -72,10 +77,13 @@ impl SceneSnapshot {
             for type_id in types {
                 if let Some(reg) = registry.get_registration(type_id) {
                     if let Some(ptr) = world.get_component_ptr(entity, type_id) {
-                        if let Some(string_repr) =
-                            crate::serde_bridge::serialize_component(registry, reg, type_id, ptr)
-                        {
-                            components.insert(reg.name.clone(), string_repr);
+                        match crate::serde_bridge::serialize_component(registry, reg, type_id, ptr) {
+                            Some(string_repr) => {
+                                component_count += 1;
+                                components.insert(reg.name.clone(), string_repr);
+                            }
+                            // serde_bridge already logged the concrete reason.
+                            None => dropped_components += 1,
                         }
                     }
                 }
@@ -91,10 +99,25 @@ impl SceneSnapshot {
             }
         }
 
-        Self {
+        let snapshot = Self {
             entities,
             timestamp: Instant::now(),
+        };
+        if dropped_components > 0 {
+            tracing::warn!(
+                dropped_components,
+                entity_count = snapshot.entities.len(),
+                "[Scene] snapshot capture sırasında bazı bileşenler serialize edilemedi (Play→Stop'ta state kaybı riski)",
+            );
         }
+        // Play is a mode change → info! is the right level for the one-shot completion.
+        tracing::info!(
+            entity_count = snapshot.entities.len(),
+            component_count,
+            duration_ms = start.elapsed().as_secs_f64() * 1000.0,
+            "[Scene] Snapshot alındı (Play)",
+        );
+        snapshot
     }
 
     /// Snapshot'tan geri yükleme yapar. Mevcut entity'leri siler (korunanlar hariç)
@@ -103,6 +126,7 @@ impl SceneSnapshot {
     /// **Not:** Mesh ve Material gibi GPU kaynaklarını restore etmek için
     /// tam sahne yüklemesi yapılmalıdır. Bu fonksiyon yalnızca fizik/transform
     /// bileşenlerini geri yükler.
+    #[tracing::instrument(skip_all, name = "snapshot_restore")]
     pub fn restore(
         &self,
         world: &mut World,
@@ -112,6 +136,10 @@ impl SceneSnapshot {
         let start = Instant::now();
         let mut restored_count = 0u32;
         let mut despawned_count = 0u32;
+        // A failed/unknown component here means Stop leaves the entity with less state than
+        // it had at Play — worth surfacing, since the whole point of restore is fidelity.
+        let mut failed_components = 0usize;
+        let mut unknown_types = 0usize;
 
         let mut snap_ids = std::collections::HashSet::new();
         for snap_ent in &self.entities {
@@ -164,23 +192,53 @@ impl SceneSnapshot {
             }
 
             for (comp_name, comp_val) in &snap_entity.components {
-                if let Some(type_id) = registry.get_type_id(comp_name) {
-                    if let Some(reg) = registry.get_registration(type_id) {
-                        let _ = crate::serde_bridge::deserialize_component(
-                            world, ent, registry, reg, type_id, comp_val,
-                        );
+                match registry.get_type_id(comp_name) {
+                    Some(type_id) => {
+                        if let Some(reg) = registry.get_registration(type_id) {
+                            // Was `let _ = …`: a deserialize failure silently vanished, so a
+                            // component the editor captured at Play never came back at Stop.
+                            if let Err(e) = crate::serde_bridge::deserialize_component(
+                                world, ent, registry, reg, type_id, comp_val,
+                            ) {
+                                failed_components += 1;
+                                tracing::warn!(
+                                    component = %comp_name,
+                                    entity = snap_entity.entity_id,
+                                    error = %e,
+                                    "[Scene] snapshot restore: bileşen deserialize edilemedi (Stop'ta state eksik)",
+                                );
+                            }
+                        } else {
+                            unknown_types += 1;
+                        }
                     }
+                    None => unknown_types += 1,
                 }
             }
 
             restored_count += 1;
         }
 
-        RestoreResult {
+        let result = RestoreResult {
             despawned: despawned_count,
             restored: restored_count,
             duration: start.elapsed(),
+        };
+        if failed_components > 0 || unknown_types > 0 {
+            tracing::warn!(
+                failed_components,
+                unknown_types,
+                "[Scene] snapshot restore sırasında bazı bileşenler geri yüklenemedi (Stop sonrası state eksik olabilir)",
+            );
         }
+        // Stop is a mode change → info! for the one-shot completion.
+        tracing::info!(
+            despawned = result.despawned,
+            restored = result.restored,
+            duration_ms = result.duration.as_secs_f64() * 1000.0,
+            "[Scene] Snapshot geri yüklendi (Stop)",
+        );
+        result
     }
 
     /// Snapshot'taki entity sayısı
@@ -296,6 +354,166 @@ mod tests {
         assert!(
             snapshot.entities[0].components.contains_key("Transform"),
             "recycled-id entity'nin Transform'ı capture'da DÜŞTÜ (generation-0 lookup bug)"
+        );
+    }
+
+    // Capture must honor `protected_ids` (editor camera, gizmos, …): a protected entity is
+    // never pulled into the Play snapshot, so Stop can't clobber/duplicate it.
+    #[test]
+    fn capture_skips_protected_ids() {
+        let mut world = World::new();
+        let registry = crate::registry::default_scene_registry();
+
+        let keep = world.spawn();
+        world.add_component(keep, gizmo_core::EntityName::new("EditorCam"));
+        let normal = world.spawn();
+        world.add_component(normal, gizmo_core::EntityName::new("Cube"));
+
+        let mut protected = std::collections::HashSet::new();
+        protected.insert(keep.id());
+
+        let snapshot = SceneSnapshot::capture(&world, &registry, &protected);
+        assert_eq!(snapshot.entity_count(), 1, "only the unprotected entity is captured");
+        assert_eq!(snapshot.entities[0].name.as_deref(), Some("Cube"));
+    }
+
+    // Capture must also filter the editor's name-tagged scaffolding ("Editor …",
+    // "Highlight Box") even when they aren't in the explicit protected set.
+    #[test]
+    fn capture_skips_editor_named_scaffolding() {
+        let mut world = World::new();
+        let registry = crate::registry::default_scene_registry();
+        let protected = std::collections::HashSet::new();
+
+        let ed = world.spawn();
+        world.add_component(ed, gizmo_core::EntityName::new("Editor Grid"));
+        let hl = world.spawn();
+        world.add_component(hl, gizmo_core::EntityName::new("Highlight Box"));
+        let real = world.spawn();
+        world.add_component(real, gizmo_core::EntityName::new("Enemy"));
+
+        let snapshot = SceneSnapshot::capture(&world, &registry, &protected);
+        let names: Vec<_> = snapshot.entities.iter().filter_map(|e| e.name.clone()).collect();
+        assert_eq!(names, vec!["Enemy".to_string()], "only the real entity is snapshotted");
+    }
+
+    // The full Play→Stop contract: `restore` must (a) DESPAWN entities spawned during play
+    // that aren't in the snapshot, and (b) preserve the snapshot entities. The `despawned`
+    // count is the load-bearing statistic the editor reports.
+    #[test]
+    fn restore_despawns_play_time_entities_not_in_snapshot() {
+        let mut world = World::new();
+        let registry = crate::registry::default_scene_registry();
+        let protected = std::collections::HashSet::new();
+
+        let original = world.spawn();
+        world.add_component(original, gizmo_core::EntityName::new("Original"));
+
+        // Snapshot the pre-Play state (only `Original` exists).
+        let snapshot = SceneSnapshot::capture(&world, &registry, &protected);
+        assert_eq!(snapshot.entity_count(), 1);
+
+        // Simulate Play: a bullet is spawned at runtime.
+        let bullet = world.spawn();
+        world.add_component(bullet, gizmo_core::EntityName::new("Bullet"));
+        assert_eq!(world.iter_alive_entities().len(), 2);
+
+        // Stop: restore must remove the play-time bullet, keep Original.
+        let result = snapshot.restore(&mut world, &registry, &protected);
+        assert_eq!(result.despawned, 1, "the play-time bullet must be despawned");
+        assert_eq!(result.restored, 1, "the one snapshot entity must be restored");
+
+        let names = world.borrow::<gizmo_core::EntityName>();
+        let alive_names: Vec<_> = world
+            .iter_alive_entities()
+            .into_iter()
+            .filter_map(|e| names.get(e.id()).map(|n| n.0.clone()))
+            .collect();
+        assert!(alive_names.contains(&"Original".to_string()));
+        assert!(!alive_names.contains(&"Bullet".to_string()), "bullet must be gone after Stop");
+    }
+
+    // Restore must reinstate component VALUES, not just names — the whole point of the
+    // in-memory snapshot is that physics/transform state (position, …) is exactly recovered
+    // on Stop. Round-trips the value through the serde bridge (capture → despawn → restore).
+    #[test]
+    fn restore_reinstates_component_values() {
+        use gizmo_math::Vec3;
+        use gizmo_physics_core::Transform;
+
+        let mut world = World::new();
+        let registry = crate::registry::default_scene_registry();
+        let protected = std::collections::HashSet::new();
+
+        let ent = world.spawn();
+        world.add_component(ent, gizmo_core::EntityName::new("Mover"));
+        world.add_component(ent, Transform::new(Vec3::new(3.0, -7.0, 11.0)));
+
+        let snapshot = SceneSnapshot::capture(&world, &registry, &protected);
+
+        // Play destroyed the entity; Stop must bring it back WITH its transform value.
+        world.despawn(ent);
+        snapshot.restore(&mut world, &registry, &protected);
+
+        let names = world.borrow::<gizmo_core::EntityName>();
+        let id = world
+            .iter_alive_entities()
+            .into_iter()
+            .map(|e| e.id())
+            .find(|&id| names.get(id).map(|n| n.0.as_str()) == Some("Mover"))
+            .expect("Mover restore edilmeli");
+        let transforms = world.borrow::<Transform>();
+        assert_eq!(
+            transforms.get(id).map(|t| t.position),
+            Some(Vec3::new(3.0, -7.0, 11.0)),
+            "restore must recover the snapshotted transform value, not just the name"
+        );
+    }
+
+    // `RestoreResult`'s Display is surfaced in the editor status line; its formatting
+    // (counts + milliseconds to 2 dp) is a stable contract.
+    #[test]
+    fn restore_result_display_formats_counts_and_millis() {
+        let result = RestoreResult {
+            despawned: 2,
+            restored: 3,
+            duration: std::time::Duration::from_millis(5),
+        };
+        let s = result.to_string();
+        assert!(s.contains("2 entity silindi"), "despawn count missing: {s}");
+        assert!(s.contains("3 entity geri yüklendi"), "restore count missing: {s}");
+        // 5 ms → "5.00ms" (secs_f64 * 1000, {:.2}).
+        assert!(s.contains("5.00ms"), "duration ms formatting wrong: {s}");
+    }
+
+    // A snapshot of an entity carrying ONLY a name (no registered components) is still
+    // captured and restored — name-only entities (empty groups/markers) must not vanish.
+    #[test]
+    fn name_only_entity_is_captured_and_restored() {
+        let mut world = World::new();
+        let registry = crate::registry::default_scene_registry();
+        let protected = std::collections::HashSet::new();
+
+        let marker = world.spawn();
+        world.add_component(marker, gizmo_core::EntityName::new("SpawnMarker"));
+
+        let snapshot = SceneSnapshot::capture(&world, &registry, &protected);
+        assert_eq!(snapshot.entity_count(), 1);
+        assert!(
+            snapshot.entities[0].components.is_empty(),
+            "no registered components expected on a bare marker"
+        );
+
+        world.despawn(marker);
+        snapshot.restore(&mut world, &registry, &protected);
+
+        let names = world.borrow::<gizmo_core::EntityName>();
+        assert!(
+            world
+                .iter_alive_entities()
+                .into_iter()
+                .any(|e| names.get(e.id()).map(|n| n.0.as_str()) == Some("SpawnMarker")),
+            "name-only entity must be recreated on restore"
         );
     }
 }

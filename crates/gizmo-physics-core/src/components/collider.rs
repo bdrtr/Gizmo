@@ -83,6 +83,13 @@ impl Collider {
                 gizmo_math::Aabb::new(position - Vec3::splat(large), position + Vec3::splat(large))
             }
             ColliderShape::TriMesh(tm) => {
+                if tm.vertices.is_empty() {
+                    // No vertices ⇒ the min/max fold below stays at ±INFINITY, producing an
+                    // inverted (degenerate) AABB that silently breaks broadphase overlap tests.
+                    tracing::warn!(
+                        "TriMesh collider has no vertices; computed AABB is degenerate (inverted)"
+                    );
+                }
                 let mut min = Vec3::splat(f32::INFINITY);
                 let mut max = Vec3::splat(f32::NEG_INFINITY);
                 for v in tm.vertices.iter() {
@@ -93,6 +100,11 @@ impl Collider {
                 gizmo_math::Aabb::new(min, max)
             }
             ColliderShape::ConvexHull(ch) => {
+                if ch.vertices.is_empty() {
+                    tracing::warn!(
+                        "ConvexHull collider has no vertices; computed AABB is degenerate (inverted)"
+                    );
+                }
                 let mut min = Vec3::splat(f32::INFINITY);
                 let mut max = Vec3::splat(f32::NEG_INFINITY);
                 for v in ch.vertices.iter() {
@@ -103,6 +115,11 @@ impl Collider {
                 gizmo_math::Aabb::new(min, max)
             }
             ColliderShape::Compound(shapes) => {
+                if shapes.is_empty() {
+                    tracing::warn!(
+                        "Compound collider has no sub-shapes; computed AABB is degenerate (inverted)"
+                    );
+                }
                 let mut min = Vec3::splat(f32::INFINITY);
                 let mut max = Vec3::splat(f32::NEG_INFINITY);
                 for (local_t, sub_shape) in shapes {
@@ -312,7 +329,18 @@ struct TriMeshShapeData {
 
 impl From<TriMeshShapeData> for TriMeshShape {
     fn from(mut data: TriMeshShapeData) -> Self {
-        let bvh = crate::bvh::BvhTree::build(&data.vertices, &mut data.indices).unwrap_or_default();
+        let bvh = crate::bvh::BvhTree::build(&data.vertices, &mut data.indices).unwrap_or_else(|e| {
+            // A failed build (out-of-range index / u32 overflow) previously vanished into
+            // `unwrap_or_default()`, leaving an empty BVH so trimesh collision & raycasts
+            // silently degrade to a naive O(n) triangle scan. Surface it.
+            tracing::warn!(
+                error = %e,
+                vertex_count = data.vertices.len(),
+                index_count = data.indices.len(),
+                "TriMesh BVH build failed; falling back to an empty BVH (naive O(n) triangle scan)"
+            );
+            crate::bvh::BvhTree::default()
+        });
         Self {
             vertices: std::sync::Arc::new(data.vertices),
             indices: std::sync::Arc::new(data.indices),
@@ -361,3 +389,184 @@ impl From<ConvexHullShape> for ConvexHullShapeData {
 }
 
 gizmo_core::impl_component!(Collider);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests — AABB per shape variant, volume/extent closed forms, serde round-trips
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPS: f32 = 1e-4;
+
+    #[test]
+    fn sphere_aabb_is_rotation_invariant() {
+        let c = Collider::sphere(0.5);
+        let pos = Vec3::new(1.0, 2.0, 3.0);
+        let a0 = c.compute_aabb(pos, Quat::IDENTITY);
+        let a1 = c.compute_aabb(pos, Quat::from_rotation_x(1.3) * Quat::from_rotation_y(0.7));
+        // A sphere's AABB cannot depend on orientation.
+        assert!((Vec3::from(a0.min) - Vec3::from(a1.min)).length() < EPS);
+        assert!((Vec3::from(a0.max) - Vec3::from(a1.max)).length() < EPS);
+        assert!((Vec3::from(a0.min) - Vec3::new(0.5, 1.5, 2.5)).length() < EPS);
+        assert!((Vec3::from(a0.max) - Vec3::new(1.5, 2.5, 3.5)).length() < EPS);
+    }
+
+    #[test]
+    fn box_aabb_grows_under_45deg_rotation() {
+        let c = Collider::box_collider(Vec3::splat(1.0));
+        let rot = Quat::from_rotation_z(std::f32::consts::FRAC_PI_4);
+        let a = c.compute_aabb(Vec3::ZERO, rot);
+        let he = Vec3::from(a.half_extents());
+        // 45° about Z: the X/Y half-extents grow to √2; Z is unaffected.
+        assert!((he.x - std::f32::consts::SQRT_2).abs() < 1e-3, "x he {}", he.x);
+        assert!((he.y - std::f32::consts::SQRT_2).abs() < 1e-3, "y he {}", he.y);
+        assert!((he.z - 1.0).abs() < 1e-3, "z he {}", he.z);
+        // Still centred on the origin (symmetric corners).
+        assert!(Vec3::from(a.center()).length() < EPS);
+    }
+
+    #[test]
+    fn box_aabb_identity_equals_half_extents() {
+        let c = Collider::box_collider(Vec3::new(1.0, 2.0, 3.0));
+        let a = c.compute_aabb(Vec3::ZERO, Quat::IDENTITY);
+        assert!((Vec3::from(a.min) - Vec3::new(-1.0, -2.0, -3.0)).length() < EPS);
+        assert!((Vec3::from(a.max) - Vec3::new(1.0, 2.0, 3.0)).length() < EPS);
+    }
+
+    #[test]
+    fn capsule_aabb_tracks_axis_rotation() {
+        let c = Collider::capsule(0.5, 2.0);
+        // Upright: half-height along Y, plus the radius on every axis.
+        let up = Vec3::from(c.compute_aabb(Vec3::ZERO, Quat::IDENTITY).half_extents());
+        assert!((up - Vec3::new(0.5, 2.5, 0.5)).length() < 1e-3, "{up:?}");
+        // Rotated 90° about Z → the capsule axis now lies along X.
+        let side = Vec3::from(
+            c.compute_aabb(Vec3::ZERO, Quat::from_rotation_z(std::f32::consts::FRAC_PI_2))
+                .half_extents(),
+        );
+        assert!((side - Vec3::new(2.5, 0.5, 0.5)).length() < 1e-3, "{side:?}");
+    }
+
+    #[test]
+    fn plane_aabb_is_effectively_unbounded() {
+        let c = Collider::plane(Vec3::Y, 0.0);
+        let a = c.compute_aabb(Vec3::new(3.0, 0.0, 0.0), Quat::IDENTITY);
+        assert!(Vec3::from(a.min).x <= 3.0 - 10000.0);
+        assert!(Vec3::from(a.max).x >= 3.0 + 10000.0);
+    }
+
+    #[test]
+    fn compound_offset_box_aabb_centres_on_offset() {
+        let c = Collider::offset_box(Vec3::new(5.0, 0.0, 0.0), Vec3::splat(1.0));
+        // No parent rotation: the sub-box sits at its local offset.
+        let a = c.compute_aabb(Vec3::ZERO, Quat::IDENTITY);
+        assert!((Vec3::from(a.center()) - Vec3::new(5.0, 0.0, 0.0)).length() < 1e-3);
+        assert!((Vec3::from(a.half_extents()) - Vec3::splat(1.0)).length() < 1e-3);
+
+        // A 90° parent rotation about Z carries the offset from +X to +Y.
+        let ar = c.compute_aabb(Vec3::ZERO, Quat::from_rotation_z(std::f32::consts::FRAC_PI_2));
+        assert!(
+            (Vec3::from(ar.center()) - Vec3::new(0.0, 5.0, 0.0)).length() < 1e-3,
+            "offset must rotate with the compound, got {:?}",
+            Vec3::from(ar.center())
+        );
+    }
+
+    #[test]
+    fn volume_matches_closed_forms() {
+        use std::f32::consts::PI;
+        assert!((Collider::sphere(1.0).volume() - (4.0 / 3.0) * PI).abs() < 1e-4);
+        // Box: 8 · hx · hy · hz.
+        assert!((Collider::box_collider(Vec3::new(1.0, 2.0, 3.0)).volume() - 48.0).abs() < 1e-4);
+        // Capsule: cylinder (πr²·2h) + full sphere (4/3 πr³).
+        let cap = Collider::capsule(1.0, 2.0).volume();
+        let expected = PI * 1.0 * 4.0 + (4.0 / 3.0) * PI;
+        assert!((cap - expected).abs() < 1e-3, "cap {cap}");
+        // Plane returns a finite sentinel (not INF) so inertia math stays defined.
+        assert_eq!(Collider::plane(Vec3::Y, 0.0).volume(), f32::MAX);
+    }
+
+    #[test]
+    fn extents_y_per_shape() {
+        assert!((Collider::sphere(0.75).extents_y() - 0.75).abs() < EPS);
+        assert!((Collider::box_collider(Vec3::new(1.0, 2.0, 3.0)).extents_y() - 2.0).abs() < EPS);
+        // Capsule half-height + radius.
+        assert!((Collider::capsule(0.5, 2.0).extents_y() - 2.5).abs() < EPS);
+        assert_eq!(Collider::plane(Vec3::Y, 0.0).extents_y(), 0.0);
+    }
+
+    #[test]
+    fn collider_material_shortcuts_clamp() {
+        // with_restitution clamps to [0,1]; with_friction clamps to >= 0 and mirrors
+        // static == dynamic.
+        let c = Collider::sphere(1.0).with_restitution(1.5).with_friction(-2.0);
+        assert_eq!(c.material.restitution, 1.0);
+        assert_eq!(c.material.static_friction, 0.0);
+        assert_eq!(c.material.dynamic_friction, 0.0);
+        let c2 = Collider::sphere(1.0).with_restitution(-0.5);
+        assert_eq!(c2.material.restitution, 0.0);
+    }
+
+    #[test]
+    fn trimesh_serde_roundtrip_rebuilds_bvh() {
+        // A single triangle. TriMeshShape uses `#[serde(into/from = TriMeshShapeData)]`
+        // with the BVH marked `#[serde(skip)]`, so deserialization must rebuild it.
+        let data = TriMeshShapeData {
+            vertices: vec![Vec3::ZERO, Vec3::X, Vec3::Y],
+            indices: vec![0, 1, 2],
+        };
+        let shape = TriMeshShape::from(data);
+        assert_eq!(*shape.vertices, vec![Vec3::ZERO, Vec3::X, Vec3::Y]);
+        assert_eq!(*shape.indices, vec![0, 1, 2]);
+        assert!(
+            !shape.bvh.nodes.is_empty(),
+            "BVH is #[serde(skip)] and must be rebuilt on load"
+        );
+
+        // Back to the serialized form: geometry is preserved exactly.
+        let back = TriMeshShapeData::from(shape);
+        assert_eq!(back.vertices, vec![Vec3::ZERO, Vec3::X, Vec3::Y]);
+        assert_eq!(back.indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn convexhull_serde_roundtrip_is_idempotent() {
+        // The serialized form keeps only raw points and rebuilds the hull on load.
+        // Rebuilding a hull from its OWN vertices must reproduce the same vertex set.
+        let corners: Vec<Vec3> = (0..8)
+            .map(|i| {
+                Vec3::new(
+                    if i & 1 == 0 { -1.0 } else { 1.0 },
+                    if i & 2 == 0 { -1.0 } else { 1.0 },
+                    if i & 4 == 0 { -1.0 } else { 1.0 },
+                )
+            })
+            .collect();
+        let hull = crate::quickhull::compute_convex_hull(&corners);
+        let shape = ConvexHullShape {
+            vertices: std::sync::Arc::new(hull.vertices),
+            faces: std::sync::Arc::new(hull.faces),
+        };
+        assert_eq!(shape.vertices.len(), 8);
+
+        let data = ConvexHullShapeData::from(shape.clone());
+        let rebuilt = ConvexHullShape::from(data);
+        assert_eq!(
+            rebuilt.vertices.len(),
+            shape.vertices.len(),
+            "rebuilding a hull from its own vertices must be idempotent"
+        );
+    }
+
+    #[test]
+    fn from_shape_uses_defaults() {
+        // `from_shape` is the canonical bare-shape constructor for the #[non_exhaustive]
+        // struct: default material + layer, not a trigger.
+        let c = Collider::from_shape(ColliderShape::Sphere(SphereShape { radius: 2.0 }));
+        assert!(!c.is_trigger);
+        assert_eq!(c.material, PhysicsMaterial::default());
+        assert_eq!(c.collision_layer, CollisionLayer::default());
+    }
+}

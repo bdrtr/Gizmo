@@ -117,3 +117,98 @@ mod winding_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod geometry_tests {
+    //! Metric invariants for the procedural `*_data` generators: vertices must sit
+    //! on the parametric surface (right radius / height / extent) and analytic
+    //! normals must be unit-length and point outward. Pure CPU — no GPU device.
+
+    use crate::asset::AssetManager;
+    use gizmo_math::Vec3;
+
+    fn radial(p: [f32; 3]) -> f32 {
+        (p[0] * p[0] + p[2] * p[2]).sqrt()
+    }
+
+    #[test]
+    fn sphere_vertices_lie_on_the_radius_with_outward_unit_normals() {
+        let r = 2.5;
+        let verts = AssetManager::sphere_data(r, 12, 20);
+        assert!(!verts.is_empty() && verts.len().is_multiple_of(3));
+        for v in &verts {
+            let p = Vec3::from(v.position);
+            assert!((p.length() - r).abs() < 1e-3, "vertex off the sphere: {:?}", v.position);
+            let n = Vec3::from(v.normal);
+            assert!((n.length() - 1.0).abs() < 1e-3, "normal not unit: {:?}", v.normal);
+            // On a sphere the outward normal is the position direction.
+            assert!(p.normalize().dot(n) > 0.99, "normal not outward at {:?}", v.position);
+        }
+    }
+
+    #[test]
+    fn sphere_clamps_degenerate_resolution() {
+        // stacks/slices below 3 are raised to 3, still yielding whole triangles.
+        let v = AssetManager::sphere_data(1.0, 0, 0);
+        assert!(!v.is_empty() && v.len().is_multiple_of(3));
+    }
+
+    #[test]
+    fn cylinder_fits_inside_its_radius_and_height_and_has_both_caps() {
+        let (r, h) = (1.5, 4.0);
+        let half = h / 2.0;
+        let verts = AssetManager::cylinder_data(r, h, 24);
+        for v in &verts {
+            assert!(radial(v.position) <= r + 1e-3, "outside radius: {:?}", v.position);
+            assert!(v.position[1].abs() <= half + 1e-3, "outside height: {:?}", v.position);
+        }
+        // Both end caps are generated (a vertex touches each extreme y).
+        assert!(verts.iter().any(|v| (v.position[1] - half).abs() < 1e-4), "top cap missing");
+        assert!(verts.iter().any(|v| (v.position[1] + half).abs() < 1e-4), "bottom cap missing");
+    }
+
+    #[test]
+    fn cone_has_apex_at_top_and_base_within_radius() {
+        let (r, h) = (1.0, 3.0);
+        let half = h / 2.0;
+        let verts = AssetManager::cone_data(r, h, 20);
+        // Apex sits on the axis at +half_h.
+        assert!(
+            verts.iter().any(|v| (v.position[1] - half).abs() < 1e-4 && radial(v.position) < 1e-4),
+            "apex not found at (0,{half},0)"
+        );
+        for v in &verts {
+            assert!(v.position[1] <= half + 1e-4 && v.position[1] >= -half - 1e-4);
+            assert!(radial(v.position) <= r + 1e-3);
+        }
+    }
+
+    #[test]
+    fn capsule_stays_within_radius_and_capped_height() {
+        let (r, d) = (0.5, 2.0);
+        let max_y = d / 2.0 + r; // hemisphere caps extend r past each tube end
+        let verts = AssetManager::capsule_data(r, d, 8, 12);
+        assert!(!verts.is_empty());
+        for v in &verts {
+            assert!(v.position[1].abs() <= max_y + 1e-3, "capsule too tall: {:?}", v.position);
+            assert!(radial(v.position) <= r + 1e-3, "capsule too wide: {:?}", v.position);
+        }
+    }
+
+    #[test]
+    fn plane_and_circle_span_their_declared_extent_in_the_xz_plane() {
+        let plane = AssetManager::plane_data(4.0); // spans [−2, 2] in x and z
+        for v in &plane {
+            assert!(v.position[1].abs() < 1e-6, "plane not flat: {:?}", v.position);
+            assert!(v.position[0].abs() <= 2.0 + 1e-6 && v.position[2].abs() <= 2.0 + 1e-6);
+        }
+        assert!(plane.iter().any(|v| (v.position[0] - 2.0).abs() < 1e-6));
+        assert!(plane.iter().any(|v| (v.position[0] + 2.0).abs() < 1e-6));
+
+        let circle = AssetManager::circle_data(1.5, 16);
+        for v in &circle {
+            assert!(v.position[1].abs() < 1e-6, "circle not flat: {:?}", v.position);
+            assert!(radial(v.position) <= 1.5 + 1e-4, "circle exceeds radius: {:?}", v.position);
+        }
+    }
+}

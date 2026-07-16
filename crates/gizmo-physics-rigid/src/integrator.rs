@@ -135,13 +135,15 @@ impl Integrator {
             "Angular velocity became non-finite after integration! entity={entity:?}"
         );
 
-        // ── Speed warning ─────────────────────────────────────────────────
+        // ── Speed warning (blow-up / tunnelling guard) ────────────────────
+        // Gated behind a >1000 m/s threshold, so it only fires on a body that is already
+        // exploding — warn-level is appropriate (rare, and a symptom of a real problem).
         let speed_sq = vel.linear.length_squared();
         if speed_sq > 1_000_000.0 {
             tracing::warn!(
-                "BodyHandle {:?} is moving at {:.1} m/s — tunneling / explosion risk.",
-                entity,
-                speed_sq.sqrt(),
+                entity = ?entity,
+                speed = speed_sq.sqrt(),
+                "Body moving dangerously fast (>1000 m/s) — tunnelling / blow-up risk"
             );
         }
 

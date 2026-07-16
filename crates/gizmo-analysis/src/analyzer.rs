@@ -208,3 +208,105 @@ impl Default for Analyzer {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gizmo_core::world::World;
+    use gizmo_core::FrameProfiler;
+
+    #[derive(Clone)]
+    struct Pos(#[allow(dead_code)] f32);
+    impl gizmo_core::Component for Pos {}
+
+    /// A minimal headless world with a FrameProfiler and `n` entities carrying `Pos`.
+    fn world_with(n: usize) -> World {
+        let mut w = World::new();
+        w.insert_resource(FrameProfiler::new());
+        for i in 0..n {
+            let e = w.spawn();
+            w.add_component(e, Pos(i as f32));
+        }
+        w
+    }
+
+    #[test]
+    fn new_auto_registers_ecs_collector() {
+        assert_eq!(Analyzer::new().collector_names(), vec!["ecs"]);
+    }
+
+    #[test]
+    fn collect_increments_frame_and_records_history() {
+        let w = world_with(2);
+        let mut a = Analyzer::new();
+        for _ in 0..3 {
+            a.collect(&w);
+        }
+        assert_eq!(a.frame(), 3);
+        assert_eq!(a.history().count(), 3);
+        assert_eq!(a.last().unwrap().frame, 2, "last snapshot carries the newest frame index");
+    }
+
+    #[test]
+    fn disabled_config_makes_collect_a_noop() {
+        let w = world_with(1);
+        let mut a = Analyzer::with_config(AnalysisConfig { enabled: false, ..Default::default() });
+        a.collect(&w);
+        a.collect(&w);
+        assert_eq!(a.frame(), 0);
+        assert!(a.last().is_none());
+        assert!(a.metrics().is_empty());
+    }
+
+    #[test]
+    fn history_ring_is_bounded_and_keeps_newest() {
+        let w = world_with(1);
+        let mut a = Analyzer::with_config(AnalysisConfig { history_frames: 2, ..Default::default() });
+        for _ in 0..5 {
+            a.collect(&w);
+        }
+        // Five frames processed, but only the two most recent snapshots retained.
+        assert_eq!(a.frame(), 5);
+        let frames: Vec<u64> = a.history().map(|f| f.frame).collect();
+        assert_eq!(frames, vec![3, 4]);
+    }
+
+    #[test]
+    fn estimated_fps_is_reciprocal_of_mean_frame_ms() {
+        let mut a = Analyzer::new();
+        // No frame_ms data yet → 0, not a divide-by-zero / NaN.
+        assert_eq!(a.estimated_fps(), 0.0);
+        // Inject deterministic frame durations (sample() writes straight to the ring).
+        a.sample("frame_ms", 20.0);
+        a.sample("frame_ms", 20.0);
+        assert!((a.estimated_fps() - 50.0).abs() < 1e-9, "1000/20 = 50 fps");
+    }
+
+    #[test]
+    fn instrumentation_delegates_to_metric_store() {
+        let w = world_with(0);
+        let mut a = Analyzer::new();
+        a.counter_add("hits", 2.0);
+        a.counter_add("hits", 3.0);
+        a.gauge("temp", 7.0);
+        // collect() flushes the counter frame (end_frame) into the ring.
+        a.collect(&w);
+        let hits = a.metrics().get("hits").unwrap();
+        assert_eq!(hits.total(), 5.0);
+        assert_eq!(hits.last(), 5.0, "the frame delta (2+3) lands in the ring");
+        assert_eq!(a.stats("temp").unwrap().last, 7.0);
+    }
+
+    #[test]
+    fn collect_projects_ecs_snapshot_into_metrics() {
+        let w = world_with(3);
+        let mut a = Analyzer::new();
+        a.collect(&w);
+        let last = a.last().unwrap();
+        assert_eq!(last.ecs.entities, 3);
+        // EcsCollector's "ecs" group is mirrored into gauges keyed "<group>.<name>".
+        assert_eq!(a.stats("ecs.entities").unwrap().last, 3.0);
+        // frame_ms is always sampled once per collect.
+        assert_eq!(a.stats("frame_ms").unwrap().count, 1);
+    }
+}

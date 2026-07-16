@@ -151,6 +151,7 @@ pub struct GoapPlanner;
 
 impl GoapPlanner {
     /// Mevcut durum ve hedeflere göre en iyi aksiyon planını (sırasını) oluşturur.
+    #[tracing::instrument(skip_all, name = "goap_plan")]
     pub fn plan(
         current_state: &GoapState,
         actions: &[GoapAction],
@@ -162,12 +163,32 @@ impl GoapPlanner {
 
         for goal in sorted_goals {
             if let Some(plan) = Self::build_plan(current_state, actions, &goal.desired_state) {
+                // Hedef seçimi — hangi hedef planlanabildi ve kaç adımda.
+                tracing::debug!(
+                    goal = %goal.name,
+                    priority = goal.priority,
+                    plan_len = plan.len(),
+                    "[AI] GOAP hedefi seçildi, plan bulundu"
+                );
                 return Some(plan);
             }
+            tracing::trace!(
+                goal = %goal.name,
+                priority = goal.priority,
+                "[AI] GOAP hedefi için ulaşılabilir plan yok, sıradaki hedefe geçiliyor"
+            );
         }
+        // Hiçbir hedef karşılanamadı — ajan kararsız kalır, bu genelde eksik/yanlış
+        // aksiyon tanımına işaret eder.
+        tracing::warn!(
+            goal_count = goals.len(),
+            action_count = actions.len(),
+            "[AI] GOAP planlaması başarısız — ulaşılabilir hedef yok"
+        );
         None
     }
 
+    #[tracing::instrument(skip_all, name = "goap_build_plan")]
     fn build_plan(
         start_state: &GoapState,
         actions: &[GoapAction],
@@ -176,6 +197,8 @@ impl GoapPlanner {
         let mut open_list = BinaryHeap::new();
         // Ziyaret edilen durumların hash'i (state hashable olmalı, basitlik için String representasyonu)
         let mut closed_list = HashSet::new();
+        // A* genişletme sayacı — iç döngüde per-düğüm log yerine çıkışta AGGREGATE.
+        let mut nodes_expanded = 0u32;
 
         // Use h = 0 (uniform-cost / Dijkstra). The "unsatisfied-condition count"
         // heuristic (`distance_to`) is INADMISSIBLE — it charges 1.0 per unmet goal
@@ -209,6 +232,12 @@ impl GoapPlanner {
                     }
                 }
                 plan.reverse();
+                tracing::debug!(
+                    plan_len = plan.len(),
+                    cost = current.g_cost,
+                    nodes_expanded,
+                    "[AI] GOAP A* planı bulundu"
+                );
                 return Some(plan);
             }
 
@@ -221,6 +250,7 @@ impl GoapPlanner {
                 continue;
             }
             closed_list.insert(state_hash);
+            nodes_expanded += 1;
 
             // Uygulanabilir aksiyonları bul
             for action in actions {
@@ -241,6 +271,10 @@ impl GoapPlanner {
             }
         }
 
+        tracing::trace!(
+            nodes_expanded,
+            "[AI] GOAP A* açık liste tükendi — bu hedef bu aksiyonlarla ulaşılamaz"
+        );
         None
     }
 }

@@ -378,4 +378,117 @@ mod tests {
         assert!(store.stats("missing").is_none());
         assert_eq!(Stats::empty().count, 0);
     }
+
+    #[test]
+    fn single_sample_collapses_all_stats() {
+        // With one value, every percentile / min / max / mean equals that value and
+        // stddev is exactly zero (no interpolation, no division surprises).
+        let mut store = MetricStore::new(10);
+        store.sample("t", 42.0);
+        let s = store.stats("t").unwrap();
+        assert_eq!(s.count, 1);
+        assert_eq!(s.min, 42.0);
+        assert_eq!(s.max, 42.0);
+        assert_eq!(s.mean, 42.0);
+        assert_eq!(s.last, 42.0);
+        assert_eq!(s.p50, 42.0);
+        assert_eq!(s.p95, 42.0);
+        assert_eq!(s.p99, 42.0);
+        assert_eq!(s.stddev, 0.0);
+    }
+
+    #[test]
+    fn stddev_is_population_standard_deviation() {
+        // Textbook set {2,4,4,4,5,5,7,9}: mean 5, population variance 4 → stddev 2.
+        let mut store = MetricStore::new(100);
+        for v in [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0] {
+            store.sample("d", v);
+        }
+        let s = store.stats("d").unwrap();
+        assert!((s.mean - 5.0).abs() < 1e-12);
+        assert!((s.stddev - 2.0).abs() < 1e-12, "expected population stddev 2, got {}", s.stddev);
+    }
+
+    #[test]
+    fn p99_interpolates_between_ranks() {
+        // 1..=100: rank = 0.99*(99) = 98.01 → sorted[98]=99, sorted[99]=100, frac 0.01.
+        let mut store = MetricStore::new(200);
+        for v in 1..=100 {
+            store.sample("p", v as f64);
+        }
+        let s = store.stats("p").unwrap();
+        assert!((s.p99 - 99.01).abs() < 1e-9, "p99 interpolation wrong: {}", s.p99);
+        assert!((s.p50 - 50.5).abs() < 1e-9, "median of 1..=100 is 50.5, got {}", s.p50);
+    }
+
+    #[test]
+    fn metric_kind_as_str_round_trips() {
+        assert_eq!(MetricKind::Counter.as_str(), "counter");
+        assert_eq!(MetricKind::Gauge.as_str(), "gauge");
+        assert_eq!(MetricKind::Sample.as_str(), "sample");
+    }
+
+    #[test]
+    fn zero_capacity_floors_to_one() {
+        // A capacity of 0 would make a ring that can never hold a value; it must be
+        // clamped up to 1 so the newest write is always retained.
+        let mut store = MetricStore::new(0);
+        store.gauge("g", 1.0);
+        store.gauge("g", 2.0);
+        let s = store.get("g").unwrap();
+        assert_eq!(s.len(), 1);
+        assert_eq!(s.values().collect::<Vec<_>>(), vec![2.0], "only newest value kept");
+    }
+
+    #[test]
+    fn names_are_deterministically_sorted() {
+        // BTreeMap backing → names() must come out lexicographically sorted, which
+        // stable exports depend on.
+        let mut store = MetricStore::new(10);
+        store.gauge("zeta", 1.0);
+        store.gauge("alpha", 1.0);
+        store.gauge("mid", 1.0);
+        assert_eq!(store.names().collect::<Vec<_>>(), vec!["alpha", "mid", "zeta"]);
+    }
+
+    #[test]
+    fn counter_empty_frame_pushes_zero_delta() {
+        // A frame with no increments must still record a 0 delta so the time-series
+        // stays frame-aligned; the cumulative total is unaffected.
+        let mut store = MetricStore::new(100);
+        store.counter_add("c", 4.0);
+        store.end_frame();
+        store.end_frame(); // no adds this frame
+        let s = store.get("c").unwrap();
+        assert_eq!(s.total(), 4.0);
+        assert_eq!(s.values().collect::<Vec<_>>(), vec![4.0, 0.0]);
+    }
+
+    #[test]
+    fn store_and_series_emptiness_transitions() {
+        let mut store = MetricStore::new(10);
+        assert!(store.is_empty());
+        assert_eq!(store.len(), 0);
+        assert!(store.get("g").is_none());
+
+        store.gauge("g", 1.0);
+        assert!(!store.is_empty());
+        assert_eq!(store.len(), 1);
+        let s = store.get("g").unwrap();
+        assert!(!s.is_empty());
+        assert_eq!(s.len(), 1);
+        assert_eq!(s.last(), 1.0);
+    }
+
+    #[test]
+    fn last_is_defined_before_any_write() {
+        // A freshly created series (via a mismatched-drop path never runs here) — use
+        // an empty store: last() on a missing series is simply absent, and an existing
+        // but not-yet-flushed counter reports last() == 0.0 from an empty ring.
+        let mut store = MetricStore::new(10);
+        store.counter_add("c", 7.0); // accumulated, not yet flushed to the ring
+        let s = store.get("c").unwrap();
+        assert_eq!(s.last(), 0.0, "ring empty until end_frame → last defaults to 0");
+        assert_eq!(s.total(), 7.0, "but the cumulative total already reflects the add");
+    }
 }

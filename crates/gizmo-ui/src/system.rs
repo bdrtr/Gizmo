@@ -142,3 +142,277 @@ pub fn ui_layout_system(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::components::{Style, Node, Interaction};
+    use crate::layout::UiContext;
+    use gizmo_core::component::{Parent, Children};
+    use gizmo_core::entity::Entity;
+    use gizmo_core::input::Input;
+    use gizmo_core::system::Schedule;
+    use gizmo_core::window::WindowInfo;
+    use gizmo_core::world::World;
+    use gizmo_math::Vec2;
+    use taffy::geometry::{Rect, Size};
+    use taffy::style::{Dimension, LengthPercentage, Style as TaffyStyle};
+
+    /// Builds a world with the UI systems registered exactly the way production
+    /// does (via `crate::register`), plus the hierarchy component types and an
+    /// `Input` resource the interaction system needs.
+    fn make_world() -> (World, Schedule) {
+        let mut world = World::new();
+        let mut schedule = Schedule::new();
+        crate::register(&mut world, &mut schedule);
+        // The layout system queries Parent/Children; register them so the queries
+        // resolve. `register_component_type` is idempotent, so this is safe even
+        // if a future `register` starts registering them itself.
+        world.register_component_type::<Parent>();
+        world.register_component_type::<Children>();
+        // register() does not insert an Input; the interaction system is skipped
+        // without it, so provide one.
+        world.insert_resource(Input::new());
+        (world, schedule)
+    }
+
+    fn set_window(world: &mut World, w: f32, h: f32) {
+        let mut info = world.get_resource_mut::<WindowInfo>().unwrap();
+        *info = WindowInfo::new(w, h);
+    }
+
+    fn sized_style(w: f32, h: f32) -> Style {
+        Style(TaffyStyle {
+            size: Size { width: Dimension::length(w), height: Dimension::length(h) },
+            ..Default::default()
+        })
+    }
+
+    /// Style with an explicit size and left/top padding (right/bottom zero).
+    fn padded_style(w: f32, h: f32, pad_left: f32, pad_top: f32) -> Style {
+        Style(TaffyStyle {
+            size: Size { width: Dimension::length(w), height: Dimension::length(h) },
+            padding: Rect {
+                left: LengthPercentage::length(pad_left),
+                right: LengthPercentage::length(0.0),
+                top: LengthPercentage::length(pad_top),
+                bottom: LengthPercentage::length(0.0),
+            },
+            ..Default::default()
+        })
+    }
+
+    fn node_of(world: &World, e: Entity) -> Node {
+        *world.borrow::<Node>().get(e.id()).unwrap()
+    }
+
+    fn assert_vec2(got: Vec2, x: f32, y: f32) {
+        assert!(
+            (got.x - x).abs() < 1e-3 && (got.y - y).abs() < 1e-3,
+            "expected ({x}, {y}), got ({}, {})",
+            got.x,
+            got.y
+        );
+    }
+
+    #[test]
+    fn root_is_sized_and_placed_at_window_origin() {
+        let (mut world, mut schedule) = make_world();
+        let e = world.spawn();
+        world.add_component(e, sized_style(120.0, 80.0));
+        world.add_component(e, Node::default());
+
+        schedule.run(&mut world, 0.016);
+
+        let n = node_of(&world, e);
+        assert_vec2(n.size, 120.0, 80.0);
+        // A root (no Parent) is laid out at the top-left of the available space.
+        assert_vec2(n.position, 0.0, 0.0);
+    }
+
+    #[test]
+    fn window_size_drives_percentage_root_layout() {
+        let (mut world, mut schedule) = make_world();
+        // The layout system copies WindowInfo into the taffy available space each
+        // frame; a percentage-sized root must resolve against the real size.
+        set_window(&mut world, 800.0, 600.0);
+        let e = world.spawn();
+        world.add_component(
+            e,
+            Style(TaffyStyle {
+                size: Size {
+                    width: Dimension::percent(1.0),
+                    height: Dimension::percent(0.5),
+                },
+                ..Default::default()
+            }),
+        );
+        world.add_component(e, Node::default());
+
+        schedule.run(&mut world, 0.016);
+
+        let n = node_of(&world, e);
+        assert_vec2(n.size, 800.0, 300.0);
+    }
+
+    #[test]
+    fn child_positions_accumulate_ancestor_offsets_into_absolute_coords() {
+        // Three-level tree: root -> mid -> leaf. Padding on root and mid pushes
+        // each descendant to a non-zero PARENT-RELATIVE offset. taffy stores
+        // parent-relative locations; the write-back must accumulate them into
+        // ABSOLUTE window coordinates (the contract the hit-test relies on).
+        let (mut world, mut schedule) = make_world();
+
+        let root = world.spawn();
+        world.add_component(root, padded_style(400.0, 400.0, 100.0, 70.0));
+        world.add_component(root, Node::default());
+
+        let mid = world.spawn();
+        world.add_component(mid, padded_style(200.0, 200.0, 20.0, 30.0));
+        world.add_component(mid, Node::default());
+        world.add_component(mid, Parent(root.id()));
+
+        let leaf = world.spawn();
+        world.add_component(leaf, sized_style(50.0, 50.0));
+        world.add_component(leaf, Node::default());
+        world.add_component(leaf, Parent(mid.id()));
+
+        world.add_component(root, Children(vec![mid.id()]));
+        world.add_component(mid, Children(vec![leaf.id()]));
+
+        schedule.run(&mut world, 0.016);
+
+        // Read taffy's own parent-relative locations from the shared context and
+        // independently reconstruct the expected absolute positions. This keeps
+        // the assertion agnostic to taffy's exact flexbox math while still
+        // pinning down the accumulation logic under test.
+        let (loc_root, loc_mid, loc_leaf) = {
+            let ctx = world.get_resource::<UiContext>().unwrap();
+            let rel = |e: Entity| {
+                let id = ctx.entity_to_node[&e.id()];
+                let l = ctx.taffy.layout(id).unwrap();
+                Vec2::new(l.location.x, l.location.y)
+            };
+            (rel(root), rel(mid), rel(leaf))
+        };
+
+        let pr = node_of(&world, root).position;
+        let pm = node_of(&world, mid).position;
+        let pl = node_of(&world, leaf).position;
+
+        // Root: relative == absolute (it has no ancestors).
+        assert_vec2(pr, loc_root.x, loc_root.y);
+        // Child absolute = parent absolute + child relative.
+        let expect_mid = loc_root + loc_mid;
+        assert_vec2(pm, expect_mid.x, expect_mid.y);
+        // Grandchild accumulates the whole ancestor chain.
+        let expect_leaf = loc_root + loc_mid + loc_leaf;
+        assert_vec2(pl, expect_leaf.x, expect_leaf.y);
+
+        // Regression guard for the exact bug the write-back comment warns about:
+        // padding gave `mid` a non-zero relative offset, so the grandchild's
+        // absolute position must be strictly greater than its parent-relative
+        // location alone — proving the ancestor offset was added in, not dropped.
+        assert!(loc_mid.x > 0.0 && loc_mid.y > 0.0, "padding should offset mid within root");
+        assert!(
+            pl.x > loc_leaf.x + 1.0 && pl.y > loc_leaf.y + 1.0,
+            "grandchild absolute {pl:?} must exceed its parent-relative {loc_leaf:?}"
+        );
+    }
+
+    #[test]
+    fn taffy_node_is_created_then_reclaimed_when_style_removed() {
+        let (mut world, mut schedule) = make_world();
+        let e = world.spawn();
+        world.add_component(e, sized_style(10.0, 10.0));
+        world.add_component(e, Node::default());
+
+        schedule.run(&mut world, 0.016);
+        {
+            let ctx = world.get_resource::<UiContext>().unwrap();
+            assert!(ctx.entity_to_node.contains_key(&e.id()), "node mapped after first frame");
+            assert_eq!(ctx.entity_to_node.len(), 1);
+            assert_eq!(ctx.taffy.total_node_count(), 1);
+        }
+
+        // Dropping Style removes the entity from the styled set; the next frame's
+        // cleanup pass must evict its taffy node and mapping (no leak).
+        world.remove_component::<Style>(e);
+        schedule.run(&mut world, 0.016);
+        {
+            let ctx = world.get_resource::<UiContext>().unwrap();
+            assert!(!ctx.entity_to_node.contains_key(&e.id()), "mapping evicted");
+            assert!(ctx.entity_to_node.is_empty());
+            assert_eq!(ctx.taffy.total_node_count(), 0, "taffy node freed");
+        }
+    }
+
+    #[test]
+    fn interaction_state_machine_tracks_pointer_and_button() {
+        let (mut world, mut schedule) = make_world();
+        // Button with a directly-set Node (no Style, so the layout system leaves
+        // its geometry untouched) spanning [100,150) x [100,130).
+        let btn = world.spawn();
+        world.add_component(
+            btn,
+            Node { position: Vec2::new(100.0, 100.0), size: Vec2::new(50.0, 30.0) },
+        );
+        world.add_component(btn, Interaction::None);
+
+        let interaction = |world: &World| *world.borrow::<Interaction>().get(btn.id()).unwrap();
+
+        // Pointer outside the box -> None.
+        world.get_resource_mut::<Input>().unwrap().set_mouse_position(10.0, 10.0);
+        schedule.run(&mut world, 0.016);
+        assert_eq!(interaction(&world), Interaction::None);
+
+        // Pointer inside, button up -> Hovered.
+        world.get_resource_mut::<Input>().unwrap().set_mouse_position(120.0, 110.0);
+        schedule.run(&mut world, 0.016);
+        assert_eq!(interaction(&world), Interaction::Hovered);
+
+        // Pointer inside, left button down -> Pressed.
+        {
+            let mut input = world.get_resource_mut::<Input>().unwrap();
+            input.set_mouse_position(120.0, 110.0);
+            input.on_mouse_button_pressed(0);
+        }
+        schedule.run(&mut world, 0.016);
+        assert_eq!(interaction(&world), Interaction::Pressed);
+
+        // Release and move out -> the state is recomputed from scratch, back to
+        // None. (Reset the Input wholesale: without a per-frame begin_frame the
+        // "just pressed" latch would otherwise keep the button marked pressed.)
+        {
+            let mut input = world.get_resource_mut::<Input>().unwrap();
+            *input = Input::new();
+            input.set_mouse_position(0.0, 0.0);
+        }
+        schedule.run(&mut world, 0.016);
+        assert_eq!(interaction(&world), Interaction::None);
+    }
+
+    #[test]
+    fn hovering_one_element_does_not_affect_a_disjoint_element() {
+        let (mut world, mut schedule) = make_world();
+        let a = world.spawn();
+        world.add_component(
+            a,
+            Node { position: Vec2::new(0.0, 0.0), size: Vec2::new(50.0, 50.0) },
+        );
+        world.add_component(a, Interaction::None);
+
+        let b = world.spawn();
+        world.add_component(
+            b,
+            Node { position: Vec2::new(100.0, 0.0), size: Vec2::new(50.0, 50.0) },
+        );
+        world.add_component(b, Interaction::None);
+
+        // Pointer over `a` only.
+        world.get_resource_mut::<Input>().unwrap().set_mouse_position(25.0, 25.0);
+        schedule.run(&mut world, 0.016);
+
+        assert_eq!(*world.borrow::<Interaction>().get(a.id()).unwrap(), Interaction::Hovered);
+        assert_eq!(*world.borrow::<Interaction>().get(b.id()).unwrap(), Interaction::None);
+    }
+}

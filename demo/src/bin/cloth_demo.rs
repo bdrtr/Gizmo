@@ -291,7 +291,6 @@ fn render(
             *m = mesh;
         }
     }
-    renderer.gpu_physics = None;
     gizmo::systems::default_render_pass(world, encoder, view, renderer);
 }
 

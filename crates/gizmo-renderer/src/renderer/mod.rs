@@ -177,6 +177,27 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// OPT-IN: enable the renderer's own GPU rigid-body physics (default OFF). Idempotent —
+    /// safe to call every frame. Only games that drive massive body counts / GPU cloth via
+    /// [`GpuPhysicsLink`](gizmo_physics_rigid::components) need this; a normal CPU-physics game
+    /// (`PhysicsPlugin`) must NOT enable it — the two sims would fight and blank the scene.
+    /// Allocates ~50 000 GPU spheres, so it is off unless explicitly requested.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn enable_gpu_physics(&mut self) {
+        if self.gpu_physics.is_some() {
+            return;
+        }
+        let mut physics = crate::gpu_physics::GpuPhysicsSystem::new(
+            &self.device,
+            50_000,
+            &self.scene.global_bind_group_layout,
+            wgpu::TextureFormat::Rgba16Float,
+            wgpu::TextureFormat::Depth32Float,
+        );
+        physics.enable_debug(&self.device, 0);
+        self.gpu_physics = Some(physics);
+    }
+
     pub fn load_shader(
         device: &wgpu::Device,
         file_path: &str,

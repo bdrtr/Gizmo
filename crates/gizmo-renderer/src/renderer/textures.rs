@@ -144,6 +144,7 @@ impl Renderer {
         })
     }
 
+    #[tracing::instrument(skip_all, level = "debug")]
     pub(super) fn generate_mipmaps(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -258,5 +259,10 @@ impl Renderer {
         }
 
         queue.submit(Some(encoder.finish()));
+        tracing::debug!(
+            mip_levels = mip_level_count,
+            ?format,
+            "[Renderer] generated mipmap chain"
+        );
     }
 }

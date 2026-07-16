@@ -50,3 +50,52 @@ pub fn register_vehicle_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mlua::Lua;
+
+    /// vehicle.set_engine_force / set_steering / set_brake doğru komutları,
+    /// negatif değerleri (geri vites / sola direksiyon) koruyarak kuyruğa yazmalı.
+    #[test]
+    fn vehicle_calls_push_expected_commands() {
+        let lua = Lua::new();
+        let cq = Arc::new(CommandQueue::new());
+        register_vehicle_api(&lua, cq.clone()).unwrap();
+
+        lua.load(
+            r#"
+            vehicle.set_engine_force(3, 1500.0)
+            vehicle.set_steering(3, -0.35)
+            vehicle.set_brake(3, 800.0)
+            "#,
+        )
+        .exec()
+        .unwrap();
+
+        let cmds = cq.drain();
+        assert_eq!(cmds.len(), 3);
+        match cmds[0] {
+            ScriptCommand::SetVehicleEngineForce(id, f) => {
+                assert_eq!(id, 3);
+                assert!((f - 1500.0).abs() < 1e-3);
+            }
+            ref other => panic!("beklenen SetVehicleEngineForce, gelen {other:?}"),
+        }
+        match cmds[1] {
+            ScriptCommand::SetVehicleSteering(id, a) => {
+                assert_eq!(id, 3);
+                assert!((a - (-0.35)).abs() < 1e-6, "negatif direksiyon korunmalı");
+            }
+            ref other => panic!("beklenen SetVehicleSteering, gelen {other:?}"),
+        }
+        match cmds[2] {
+            ScriptCommand::SetVehicleBrake(id, f) => {
+                assert_eq!(id, 3);
+                assert!((f - 800.0).abs() < 1e-3);
+            }
+            ref other => panic!("beklenen SetVehicleBrake, gelen {other:?}"),
+        }
+    }
+}

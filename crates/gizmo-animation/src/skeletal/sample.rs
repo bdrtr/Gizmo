@@ -33,6 +33,7 @@ fn sample_quat(track: &Track<Quat>, time: f32) -> Option<Quat> {
         .or_else(|| track.get_interpolated(time, |a: Quat, b: Quat, t| a.slerp(b, t)))
 }
 
+#[tracing::instrument(skip_all, name = "evaluate_clip", level = "trace")]
 pub fn evaluate_clip(
     clip: &AnimationClip,
     time: f32,
@@ -40,6 +41,10 @@ pub fn evaluate_clip(
 ) -> Vec<(Vec3, Quat, Vec3)> {
     // Start with all None
     let mut changes = vec![(None, None, None); hierarchy.joints.len()];
+
+    // Count tracks that resolve to no joint (bad retarget) so the silent drop is
+    // observable. Aggregated over the whole clip and reported once below.
+    let mut missed_targets = 0usize;
 
     let get_joint_idx = |target_node: usize, target_node_name: &Option<String>| -> Option<usize> {
         if let Some(name) = target_node_name {
@@ -90,6 +95,8 @@ pub fn evaluate_clip(
                     changes[joint_idx].0 = Some(v);
                 }
             }
+        } else {
+            missed_targets += 1;
         }
     }
     for track in &clip.rotations {
@@ -97,6 +104,8 @@ pub fn evaluate_clip(
             if let Some(v) = sample_quat(track, time) {
                 changes[joint_idx].1 = Some(v.normalize());
             }
+        } else {
+            missed_targets += 1;
         }
     }
     for track in &clip.scales {
@@ -106,8 +115,32 @@ pub fn evaluate_clip(
                 // nefes-alma ve büyüme animasyonları için gerekli; render iskelete ulaşır.
                 changes[joint_idx].2 = Some(v);
             }
+        } else {
+            missed_targets += 1;
         }
     }
+
+    // Retarget mismatch: tracks that matched no joint by name *or* node index were
+    // silently dropped. Reported at debug! (not warn!) because this runs per skinned
+    // entity per frame — a persistent mismatch at warn! would flood the log — but the
+    // aggregate count still points straight at a broken retarget/skeleton pairing.
+    if missed_targets > 0 {
+        tracing::debug!(
+            missed_targets,
+            joints = hierarchy.joints.len(),
+            translations = clip.translations.len(),
+            rotations = clip.rotations.len(),
+            scales = clip.scales.len(),
+            clip = %clip.name,
+            "[Animation] retarget: tracks matched no joint (name or node index) and were dropped"
+        );
+    }
+    tracing::trace!(
+        joints = hierarchy.joints.len(),
+        t = time,
+        missed_targets,
+        "[Animation] evaluate_clip sampled pose"
+    );
 
     let mut result_trs = Vec::with_capacity(hierarchy.joints.len());
     for (joint_idx, (t_opt, r_opt, s_opt)) in changes.into_iter().enumerate() {
@@ -122,6 +155,7 @@ pub fn evaluate_clip(
 }
 
 /// Linearly blend two pose arrays. Uses lerp for T/S, slerp for R.
+#[tracing::instrument(skip_all, name = "blend_poses", level = "trace")]
 pub fn blend_poses(
     a: &[(Vec3, Quat, Vec3)],
     b: &[(Vec3, Quat, Vec3)],
@@ -131,6 +165,16 @@ pub fn blend_poses(
         a.len(), b.len(),
         "blend_poses: Pose dizileri farklı uzunlukta! a={}, b={}", a.len(), b.len()
     );
+    // In release the `zip` below silently truncates to the shorter pose (bones past
+    // the shorter length keep their old transform). That is a real skeleton-mismatch
+    // bug; the debug_assert is compiled out, so warn! is the only production signal.
+    if a.len() != b.len() {
+        tracing::warn!(
+            a = a.len(),
+            b = b.len(),
+            "[Animation] blend_poses: pose length mismatch; blend truncated to the shorter pose"
+        );
+    }
     a.iter()
         .zip(b.iter())
         .map(|((ta, ra, sa), (tb, rb, sb))| {
@@ -361,5 +405,137 @@ mod tests {
             "cubic scale at s=0.25 should be 1.5625, got {} (2.5 would mean lerp)",
             poses[0].2.x
         );
+    }
+
+    // ── Retargeting: loose bone-name matching ──────────────────────────
+
+    fn rotation_track(target_node: usize, name: Option<&str>, value: Quat) -> Track<Quat> {
+        Track {
+            target_node,
+            target_node_name: name.map(|s| s.to_string()),
+            interpolation: InterpolationMode::Linear,
+            keyframes: vec![Keyframe::new(0.0, value)],
+        }
+    }
+
+    #[test]
+    fn retarget_strips_mixamorig_prefix_to_match_bone() {
+        // Track authored as "mixamorig:Hips" must retarget onto a bone simply named
+        // "Hips" (exact match fails; the cleaned/loose comparison succeeds).
+        let hierarchy = SkeletonHierarchy {
+            joints: vec![make_joint("Hips", 0)],
+            root_transform: Mat4::IDENTITY,
+        };
+        let rot = Quat::from_rotation_y(0.9);
+        let clip = AnimationClip {
+            name: "a".into(),
+            duration: 1.0,
+            translations: vec![],
+            rotations: vec![rotation_track(0, Some("mixamorig:Hips"), rot)],
+            scales: vec![],
+        };
+        let poses = evaluate_clip(&clip, 0.0, &hierarchy);
+        assert!(
+            poses[0].1.dot(rot).abs() > 0.999,
+            "loose name match must apply the rotation, got {:?}",
+            poses[0].1
+        );
+    }
+
+    #[test]
+    fn retarget_strips_rootnode_and_is_case_insensitive() {
+        // fbx2gltf "/RootNode/" prefix plus case differences must not block the match.
+        let hierarchy = SkeletonHierarchy {
+            joints: vec![make_joint("arm", 5)],
+            root_transform: Mat4::IDENTITY,
+        };
+        let rot = Quat::from_rotation_x(0.5);
+        let clip = AnimationClip {
+            name: "a".into(),
+            duration: 1.0,
+            translations: vec![],
+            rotations: vec![rotation_track(999, Some("/RootNode/Arm"), rot)],
+            scales: vec![],
+        };
+        let poses = evaluate_clip(&clip, 0.0, &hierarchy);
+        assert!(
+            poses[0].1.dot(rot).abs() > 0.999,
+            "case-insensitive /RootNode/-stripped match must apply, got {:?}",
+            poses[0].1
+        );
+    }
+
+    #[test]
+    fn unmatched_name_and_node_keeps_bind_pose() {
+        // A track that matches no joint by name OR node index must leave the bind pose
+        // untouched instead of mis-targeting some other bone.
+        let mut joint = make_joint("Spine", 7);
+        joint.bind_rotation = Quat::from_rotation_z(0.25);
+        let hierarchy = SkeletonHierarchy {
+            joints: vec![joint],
+            root_transform: Mat4::IDENTITY,
+        };
+        let clip = AnimationClip {
+            name: "a".into(),
+            duration: 1.0,
+            translations: vec![],
+            rotations: vec![rotation_track(42, Some("NoSuchBone"), Quat::from_rotation_y(1.0))],
+            scales: vec![],
+        };
+        let poses = evaluate_clip(&clip, 0.0, &hierarchy);
+        assert!(
+            poses[0].1.dot(Quat::from_rotation_z(0.25)).abs() > 0.999,
+            "unmatched track must keep the bind rotation, got {:?}",
+            poses[0].1
+        );
+    }
+
+    // ── Pose blending ──────────────────────────────────────────────────
+
+    #[test]
+    fn blend_poses_endpoints_return_each_source() {
+        use std::f32::consts::PI;
+        let a = vec![(Vec3::ZERO, Quat::IDENTITY, Vec3::ONE)];
+        let b = vec![(Vec3::new(2.0, 0.0, 0.0), Quat::from_rotation_y(PI / 2.0), Vec3::splat(3.0))];
+        let at0 = blend_poses(&a, &b, 0.0);
+        assert!((at0[0].0 - a[0].0).length() < 1e-5, "alpha 0 → pose A translation");
+        assert!(at0[0].1.dot(a[0].1).abs() > 0.999, "alpha 0 → pose A rotation");
+        assert!((at0[0].2 - a[0].2).length() < 1e-5, "alpha 0 → pose A scale");
+        let at1 = blend_poses(&a, &b, 1.0);
+        assert!((at1[0].0 - b[0].0).length() < 1e-5, "alpha 1 → pose B translation");
+        assert!(at1[0].1.dot(b[0].1).abs() > 0.999, "alpha 1 → pose B rotation");
+        assert!((at1[0].2 - b[0].2).length() < 1e-5, "alpha 1 → pose B scale");
+    }
+
+    #[test]
+    fn blend_poses_midpoint_lerps_ts_slerps_r_and_stays_unit() {
+        use std::f32::consts::PI;
+        let a = vec![(Vec3::ZERO, Quat::IDENTITY, Vec3::ONE)];
+        let b = vec![(Vec3::new(2.0, 0.0, 0.0), Quat::from_rotation_y(PI / 2.0), Vec3::splat(3.0))];
+        let mid = blend_poses(&a, &b, 0.5);
+        // Translation & scale are linear.
+        assert!((mid[0].0 - Vec3::new(1.0, 0.0, 0.0)).length() < 1e-5, "T midpoint, got {:?}", mid[0].0);
+        assert!((mid[0].2 - Vec3::splat(2.0)).length() < 1e-5, "S midpoint, got {:?}", mid[0].2);
+        // Rotation is a normalized slerp → 45° about Y.
+        assert!((mid[0].1.length() - 1.0).abs() < 1e-5, "blended R must be unit");
+        assert!(
+            mid[0].1.dot(Quat::from_rotation_y(PI / 4.0)).abs() > 0.999,
+            "R midpoint should be 45°, got {:?}",
+            mid[0].1
+        );
+    }
+
+    // ── Matrix (de)composition round-trip ──────────────────────────────
+
+    #[test]
+    fn decompose_mat4_round_trips_translation_rotation_scale() {
+        let scale = Vec3::new(2.0, 3.0, 4.0);
+        let rot = Quat::from_rotation_y(0.7);
+        let trans = Vec3::new(1.0, -2.0, 5.0);
+        let m = Mat4::from_scale_rotation_translation(scale, rot, trans);
+        let (t, r, s) = decompose_mat4(m);
+        assert!((t - trans).length() < 1e-4, "translation recovered, got {t:?}");
+        assert!((s - scale).length() < 1e-4, "scale recovered, got {s:?}");
+        assert!(r.dot(rot).abs() > 0.999, "rotation recovered, got {r:?}");
     }
 }

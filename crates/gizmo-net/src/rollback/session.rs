@@ -22,7 +22,9 @@ pub trait Transport {
 // UdpTransport'u trait'e bağla (gerçek ağ yolu).
 impl Transport for super::transport::UdpTransport {
     fn send(&mut self, packet: &NetworkPacket) {
-        let _ = self.send_packet(packet);
+        if let Err(e) = self.send_packet(packet) {
+            tracing::warn!(error = ?e, "UDP paket gönderimi başarısız (rollback oturumu)");
+        }
     }
     fn poll(&mut self) -> Vec<NetworkPacket> {
         self.poll_events().into_iter().map(|(_addr, p)| p).collect()
@@ -109,6 +111,13 @@ impl<T: Transport> RollbackSession<T> {
         max_rollback: u64,
         fixed_dt: f32,
     ) -> Self {
+        tracing::info!(
+            local_id,
+            remote_id,
+            max_rollback,
+            fixed_dt,
+            "P2P rollback oturumu oluşturuldu"
+        );
         let cap = (max_rollback as usize + 8).max(64);
         Self {
             world,
@@ -131,6 +140,7 @@ impl<T: Transport> RollbackSession<T> {
     }
 
     /// Bir tick ilerlet. `local_input` bu tick'in yerel girdisi; `apply` girdiyi fiziğe uygular.
+    #[tracing::instrument(skip_all, name = "rollback_advance")]
     pub fn advance(&mut self, mut local_input: PlayerInput, apply: &ApplyInput) {
         let t = self.tick;
         local_input.tick = t;
@@ -163,6 +173,7 @@ impl<T: Transport> RollbackSession<T> {
         // Rollback: hedefin başına dön, hedef..t arası iki oyuncunun (düzeltilmiş) girdisiyle resim.
         if let Some(target) = rollback_to {
             if let Some(snap) = self.snaps.get(&target).cloned() {
+                let resim_frames = t.saturating_sub(target);
                 self.world.restore_snapshot(&snap);
                 for rt in target..t {
                     self.snaps.insert(rt, self.world.snapshot());
@@ -170,10 +181,27 @@ impl<T: Transport> RollbackSession<T> {
                     let rr = self.remote_buf.get_or_predict(rt);
                     apply(&mut self.world, self.local_id, &li);
                     apply(&mut self.world, self.remote_id, &rr);
-                    self.world.step(self.fixed_dt).ok();
+                    // `.ok()` fizik adımı hatasını (NaN/Inf) sessizce yutuyordu; davranışı
+                    // koruyup (kareyi atla, ilerlemeye devam et) artık bağlamlı raporluyoruz.
+                    if let Err(e) = self.world.step(self.fixed_dt) {
+                        tracing::warn!(tick = rt, error = ?e, "Rollback yeniden-simülasyonunda fizik adımı başarısız");
+                    }
                 }
+                tracing::debug!(
+                    target,
+                    current_tick = t,
+                    resim_frames,
+                    "Rollback: hedef tick'e dönüldü ve yeniden simüle edildi"
+                );
+            } else {
+                // snap yoksa: rollback penceresi aşıldı = desync; gerçek oyunda FullState istenir.
+                tracing::warn!(
+                    target,
+                    current_tick = t,
+                    max_rollback = self.max_rollback,
+                    "Rollback penceresi aşıldı: hedef snapshot yok (desync); FullState gerekli"
+                );
             }
-            // (snap yoksa: rollback penceresi aşıldı = desync; gerçek oyunda FullState istenir.)
         }
 
         // t'nin başını kaydet, iki oyuncunun girdisini uygula, ilerle.
@@ -181,7 +209,9 @@ impl<T: Transport> RollbackSession<T> {
         let ri = self.remote_buf.get_or_predict(t);
         apply(&mut self.world, self.local_id, &local_input);
         apply(&mut self.world, self.remote_id, &ri);
-        self.world.step(self.fixed_dt).ok();
+        if let Err(e) = self.world.step(self.fixed_dt) {
+            tracing::warn!(tick = t, error = ?e, "Fizik adımı başarısız (advance ileri adım)");
+        }
         self.tick += 1;
 
         // Eski snapshot'ları buda (pencere dışı).
@@ -273,5 +303,62 @@ mod tests {
         // Her iki peer birbirine VE ground-truth'a yakınsamalı (senkron).
         assert_eq!(a.state_hash(), b.state_hash(), "iki peer ayrıştı (desync)");
         assert_eq!(a.state_hash(), truth, "peer A ground-truth'a yakınsamadı (lag/loss sonrası)");
+    }
+
+    // --- LoopbackTransport (deterministik test transport'unun kendisi) ---
+    // Bu transport tüm rollback testlerinin temeli; buradaki bir hata convergence
+    // testini geçersiz kılar, bu yüzden lag/drop/yön davranışı doğrudan test edilir.
+
+    fn ping(ts: u64) -> NetworkPacket {
+        NetworkPacket::Ping { timestamp: ts }
+    }
+
+    fn ping_ts(p: &NetworkPacket) -> u64 {
+        match p {
+            NetworkPacket::Ping { timestamp } => *timestamp,
+            other => panic!("Ping beklendi, gelen {other:?}"),
+        }
+    }
+
+    #[test]
+    fn loopback_delivers_one_way_across_the_pair() {
+        let (mut a, mut b) = LoopbackTransport::pair(0, 0);
+        a.send(&ping(1));
+        assert!(a.poll().is_empty(), "gönderen kendi paketini almamalı (tek yönlü)");
+        let got = b.poll();
+        assert_eq!(got.len(), 1);
+        assert_eq!(ping_ts(&got[0]), 1);
+        assert!(b.poll().is_empty(), "paket yalnız bir kez teslim edilmeli");
+    }
+
+    #[test]
+    fn loopback_lag_delays_delivery_by_poll_count() {
+        let (mut a, mut b) = LoopbackTransport::pair(2, 0); // 2 poll gecikme
+        a.send(&ping(7));
+        assert!(b.poll().is_empty(), "poll #1: henüz gelmemeli (lag=2)");
+        assert!(b.poll().is_empty(), "poll #2: henüz gelmemeli");
+        let got = b.poll(); // poll #3: teslim
+        assert_eq!(got.len(), 1);
+        assert_eq!(ping_ts(&got[0]), 7);
+    }
+
+    #[test]
+    fn loopback_drops_every_nth_packet() {
+        let (mut a, mut b) = LoopbackTransport::pair(0, 2); // her 2. gönderim düşer
+        for ts in 1..=4 {
+            a.send(&ping(ts));
+        }
+        // sent=1→teslim, 2→düş, 3→teslim, 4→düş → yalnız 1 ve 3 gelir, sıra korunur.
+        let tss: Vec<u64> = b.poll().iter().map(ping_ts).collect();
+        assert_eq!(tss, vec![1, 3], "her 2. paket düşmeli, sıra korunmalı");
+    }
+
+    #[test]
+    fn loopback_never_drops_when_modulo_zero() {
+        let (mut a, mut b) = LoopbackTransport::pair(0, 0);
+        for ts in 1..=5 {
+            a.send(&ping(ts));
+        }
+        assert_eq!(b.poll().len(), 5, "drop_modulo=0 iken hiçbir paket düşmemeli");
     }
 }

@@ -1,6 +1,7 @@
 use super::*;
 
 impl GpuFluidSystem {
+    #[tracing::instrument(skip_all, level = "trace")]
     pub fn compute_pass(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -12,6 +13,12 @@ impl GpuFluidSystem {
             return;
         }
         let workgroups_parts = active_particles.div_ceil(64);
+        tracing::trace!(
+            active_particles,
+            update_grid,
+            solver_iterations = 6,
+            "[GpuFluid] recording PBF solve"
+        );
 
         // Keep the shader's `num_particles` guard (params offset 28) in sync with
         // the active LOD set. It is otherwise never updated, so under LOD < 1.0 the
@@ -162,6 +169,7 @@ impl GpuFluidSystem {
     ) {
         // Fallback for compatibility, not used directly by SSFR loop
     }
+    #[tracing::instrument(skip_all, level = "trace")]
     pub fn render_ssfr(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -174,6 +182,10 @@ impl GpuFluidSystem {
         if active_particles == 0 {
             return;
         }
+        tracing::trace!(
+            active_particles,
+            "[GpuFluid] recording screen-space fluid render (depth/blur/thickness/composite/foam)"
+        );
         // Copy the opaque background before rendering fluid on top
         encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {

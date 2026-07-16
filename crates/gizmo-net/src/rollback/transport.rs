@@ -20,6 +20,7 @@ impl UdpTransport {
         // Oyun döngüsünü (main loop) kilitlememesi için non-blocking yapıyoruz
         socket.set_nonblocking(true)?;
 
+        tracing::info!(local_port, "UDP taşıma katmanı porta bağlandı (non-blocking)");
         Ok(Self {
             socket,
             remote_addr: None,
@@ -28,6 +29,7 @@ impl UdpTransport {
 
     /// Karşı tarafın (Peer) adresini ayarlar.
     pub fn set_remote(&mut self, addr: SocketAddr) {
+        tracing::debug!(remote = %addr, "Uzak eş (peer) adresi elle ayarlandı");
         self.remote_addr = Some(addr);
     }
 
@@ -44,6 +46,7 @@ impl UdpTransport {
 
     /// Gelen tüm UDP paketlerini okur ve NetworkPacket olarak döndürür.
     /// Non-blocking olduğu için eğer okunacak paket yoksa anında boş döner.
+    #[tracing::instrument(skip_all, name = "udp_poll_events")]
     pub fn poll_events(&mut self) -> Vec<(SocketAddr, NetworkPacket)> {
         let mut events = Vec::new();
         let mut buf = [0u8; 65535]; // Maksimum UDP paket boyutu (64KB)
@@ -55,12 +58,13 @@ impl UdpTransport {
                     // (P2P için pratik bir "hole punching" veya eşleşme simülasyonu)
                     if self.remote_addr.is_none() {
                         self.remote_addr = Some(src_addr);
+                        tracing::info!(remote = %src_addr, "Uzak eş adresi ilk paketten öğrenildi (P2P eşleşme)");
                     }
 
                     if let Ok(packet) = bincode::deserialize::<NetworkPacket>(&buf[..size]) {
                         events.push((src_addr, packet));
                     } else {
-                        tracing::warn!("Unparseable packet received from {}", src_addr);
+                        tracing::warn!(src = %src_addr, size, "Ayrıştırılamayan paket alındı (bincode deserialize hatası)");
                     }
                 }
                 Err(e) => {
@@ -68,13 +72,16 @@ impl UdpTransport {
                         // Okunacak paket kalmadı
                         break;
                     } else {
-                        tracing::error!("UDP Recv Error: {:?}", e);
+                        tracing::error!(error = ?e, "UDP alım (recv) hatası");
                         break;
                     }
                 }
             }
         }
 
+        if !events.is_empty() {
+            tracing::trace!(received = events.len(), "UDP paketleri alındı");
+        }
         events
     }
 }

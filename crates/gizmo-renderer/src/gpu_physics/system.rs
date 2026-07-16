@@ -619,7 +619,14 @@ impl GpuPhysicsSystem {
         queue.write_buffer(&self.debug_params_buffer, 0, bytemuck::cast_slice(&[dp]));
     }
 
+    #[tracing::instrument(skip_all, level = "trace")]
     pub fn compute_pass(&self, encoder: &mut wgpu::CommandEncoder) {
+        tracing::trace!(
+            boxes = self.max_boxes,
+            joints = self.joint_count,
+            si_iterations = 6,
+            "[GpuPhysics] recording sequential-impulse solver passes"
+        );
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Physics Compute Pass"),
             timestamp_writes: None,
@@ -660,6 +667,7 @@ impl GpuPhysicsSystem {
         }
     }
 
+    #[tracing::instrument(skip_all, level = "trace")]
     pub fn cull_pass(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -677,6 +685,7 @@ impl GpuPhysicsSystem {
         cpass.dispatch_workgroups(self.max_boxes.div_ceil(256), 1, 1);
     }
 
+    #[tracing::instrument(skip_all, level = "trace")]
     pub fn render_pass<'a>(
         &'a self,
         rpass: &mut wgpu::RenderPass<'a>,

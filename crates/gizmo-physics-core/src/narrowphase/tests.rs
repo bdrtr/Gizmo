@@ -376,3 +376,89 @@ fn box_box_normal_points_a_to_b() {
         );
     }
 }
+
+// ── Degenerate / boundary guards ──────────────────────────────────────
+
+#[test]
+fn sphere_sphere_coincident_centres_returns_none() {
+    // Identical centres would divide by a ~zero distance; the d2 < 1e-10 guard must
+    // return None rather than a NaN normal.
+    let c = NarrowPhase::sphere_sphere(Vec3::ZERO, 1.0, Vec3::ZERO, 1.0);
+    assert!(c.is_none(), "coincident spheres must not yield a NaN normal");
+}
+
+#[test]
+fn sphere_plane_exactly_touching_returns_none() {
+    // Centre exactly `r` above the plane → signed_dist == r → no contact (>= r).
+    let c = NarrowPhase::sphere_plane(Vec3::new(0.0, 1.0, 0.0), 1.0, Vec3::Y, 0.0);
+    assert!(c.is_none());
+}
+
+#[test]
+fn sphere_plane_penetration_equals_gap() {
+    // Centre 0.25 above the plane, r = 1 → penetration = 0.75, normal into the plane.
+    let c = NarrowPhase::sphere_plane(Vec3::new(0.0, 0.25, 0.0), 1.0, Vec3::Y, 0.0).unwrap();
+    assert!((c.penetration - 0.75).abs() < 1e-5, "pen {}", c.penetration);
+    assert!((c.normal + Vec3::Y).length() < 1e-5, "normal must be -Y");
+}
+
+#[test]
+fn shape_plane_capsule_penetrates_with_downward_normal() {
+    // Generic support-point path: an upright capsule dipping below y = 0.
+    let shape = ColliderShape::Capsule(crate::components::CapsuleShape {
+        radius: 0.5,
+        half_height: 1.0,
+    });
+    // Lowest point sits at y = 1.0 - (half_height + radius) = -0.5.
+    let c = NarrowPhase::shape_plane(&shape, Vec3::new(0.0, 1.0, 0.0), Quat::IDENTITY, Vec3::Y, 0.0)
+        .expect("capsule dips below the plane");
+    assert!((c.penetration - 0.5).abs() < 1e-4, "pen {}", c.penetration);
+    assert!((c.normal + Vec3::Y).length() < 1e-4, "normal must be -Y");
+}
+
+#[test]
+fn dispatcher_plane_sphere_flips_normal_to_a_to_b() {
+    // Dispatcher order A = plane, B = sphere: the contact normal must follow the
+    // A→B convention (here +Y, since the sphere sits above the plane's solid side).
+    let plane = ColliderShape::Plane(crate::components::PlaneShape {
+        normal: Vec3::Y,
+        distance: 0.0,
+    });
+    let sphere = ColliderShape::Sphere(crate::components::SphereShape { radius: 1.0 });
+    let contacts = NarrowPhase::test_collision_manifold(
+        &plane,
+        Vec3::ZERO,
+        Quat::IDENTITY,
+        &sphere,
+        Vec3::new(0.0, 0.5, 0.0),
+        Quat::IDENTITY,
+    );
+    assert!(!contacts.is_empty());
+    for c in &contacts {
+        assert!(
+            c.normal.y > 0.9,
+            "plane→sphere normal must point A→B (+Y), got {:?}",
+            c.normal
+        );
+    }
+}
+
+#[test]
+fn box_box_normals_are_unit_length() {
+    let contacts = NarrowPhase::box_box(
+        Vec3::ZERO,
+        Quat::IDENTITY,
+        Vec3::splat(1.0),
+        Vec3::new(1.5, 0., 0.),
+        Quat::IDENTITY,
+        Vec3::splat(1.0),
+    );
+    assert!(!contacts.is_empty());
+    for c in &contacts {
+        assert!(
+            (c.normal.length() - 1.0).abs() < 1e-4,
+            "contact normal must be unit length, got {}",
+            c.normal.length()
+        );
+    }
+}

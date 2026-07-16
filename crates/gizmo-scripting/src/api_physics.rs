@@ -6,6 +6,7 @@ use crate::commands::{CommandQueue, ScriptCommand};
 use gizmo_math::Vec3;
 use mlua::prelude::*;
 use std::sync::Arc;
+use tracing::trace;
 
 /// Bir collider boyutunun alt sınırı. Script'ten gelen negatif/NaN/sonsuz/sıfır değerler
 /// (yazım hatası) bu değere kelepçelenir — dejenere AABB veya GJK'da NaN üretmesinler.
@@ -106,6 +107,7 @@ pub fn register_physics_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
 }
 
 /// Her frame güncel fizik olaylarını (Tetikleyiciler, Çarpışmalar) Lua'ya aktarır
+#[tracing::instrument(skip_all, name = "script_physics_read")]
 pub fn update_physics_api(
     lua: &Lua,
     world: &gizmo_core::World,
@@ -143,8 +145,18 @@ pub fn update_physics_api(
             ev.set("status", status)?;
             collisions.set(i + 1, ev)?;
         }
+
+        trace!(
+            trigger_count = physics_world.trigger_events().len(),
+            collision_count = physics_world.collision_events().len(),
+            "[Scripting] fizik olayları Lua'ya aktarıldı"
+        );
+    } else {
+        // PhysicsWorld kaynağı yoksa listeler sessizce boş kalır; olay bekleyen bir
+        // script'in neden hiçbir şey almadığını anlamak için görünür kıl.
+        trace!("[Scripting] PhysicsWorld kaynağı yok — trigger/collision listeleri boş");
     }
-    
+
     // Her frame listeleri güncelle
     physics_table.set("triggers", triggers)?;
     physics_table.set("collisions", collisions)?;
@@ -248,5 +260,110 @@ mod tests {
             }
             other => panic!("expected AddSphereCollider, got {other:?}"),
         }
+    }
+
+    /// apply_force / apply_impulse / add_rigidbody Lua argümanlarını doğru komutlara çevirmeli.
+    #[test]
+    fn force_impulse_rigidbody_calls_push_expected_commands() {
+        let lua = Lua::new();
+        let cq = Arc::new(CommandQueue::new());
+        register_physics_api(&lua, cq.clone()).unwrap();
+
+        lua.load(
+            r#"
+            physics.apply_force(1, 0.0, -9.8, 0.0)
+            physics.apply_impulse(1, 10.0, 0.0, 0.0)
+            physics.add_rigidbody(1, 2.5, true)
+            "#,
+        )
+        .exec()
+        .unwrap();
+
+        let cmds = cq.drain();
+        assert_eq!(cmds.len(), 3);
+        assert!(matches!(cmds[0], ScriptCommand::ApplyForce(1, f) if f == Vec3::new(0.0, -9.8, 0.0)));
+        assert!(matches!(cmds[1], ScriptCommand::ApplyImpulse(1, i) if i == Vec3::new(10.0, 0.0, 0.0)));
+        match cmds[2] {
+            ScriptCommand::AddRigidBody { id, mass, use_gravity } => {
+                assert_eq!(id, 1);
+                assert!((mass - 2.5).abs() < 1e-6);
+                assert!(use_gravity);
+            }
+            ref other => panic!("beklenen AddRigidBody, gelen {other:?}"),
+        }
+    }
+
+    /// Geçerli (sonlu, pozitif) box boyutları dokunulmadan geçmeli.
+    #[test]
+    fn valid_box_dims_pass_through() {
+        let lua = Lua::new();
+        let cq = Arc::new(CommandQueue::new());
+        register_physics_api(&lua, cq.clone()).unwrap();
+        lua.load("physics.add_box_collider(1, 0.5, 1.0, 2.0)").exec().unwrap();
+
+        let cmds = cq.drain();
+        match &cmds[0] {
+            ScriptCommand::AddBoxCollider { hx, hy, hz, .. } => {
+                assert_eq!((*hx, *hy, *hz), (0.5, 1.0, 2.0));
+            }
+            other => panic!("beklenen AddBoxCollider, gelen {other:?}"),
+        }
+    }
+
+    /// PhysicsWorld kaynağı hiç yoksa update_physics_api panik etmemeli ve
+    /// triggers/collisions BOŞ tablolar olarak ayarlanmalı (belirsiz değil).
+    #[test]
+    fn update_without_physics_world_yields_empty_lists() {
+        let lua = Lua::new();
+        let globals = lua.globals();
+        globals.set("physics", lua.create_table().unwrap()).unwrap();
+
+        let world = World::new(); // PhysicsWorld kaynağı eklenmedi
+        update_physics_api(&lua, &world).unwrap();
+
+        lua.load(
+            r#"
+            assert(type(physics.triggers) == "table", "triggers tablo olmalı")
+            assert(#physics.triggers == 0, "triggers boş olmalı")
+            assert(#physics.collisions == 0, "collisions boş olmalı")
+            "#,
+        )
+        .exec()
+        .unwrap();
+    }
+
+    /// Çarpışma olay tipi → durum string eşlemesi: Persisting="stay", Ended="exit".
+    #[test]
+    fn collision_event_status_maps_stay_and_exit() {
+        let lua = Lua::new();
+        lua.globals().set("physics", lua.create_table().unwrap()).unwrap();
+
+        let mut world = World::new();
+        let a = world.spawn();
+        let b = world.spawn();
+        let mut pw = PhysicsWorld::new();
+        pw.collision_events.push(CollisionEvent {
+            entity_a: gizmo_physics_core::BodyHandle::from_id(a.id()),
+            entity_b: gizmo_physics_core::BodyHandle::from_id(b.id()),
+            event_type: CollisionEventType::Persisting,
+            contact_points: Default::default(),
+        });
+        pw.trigger_events.push(TriggerEvent {
+            trigger_entity: gizmo_physics_core::BodyHandle::from_id(a.id()),
+            other_entity: gizmo_physics_core::BodyHandle::from_id(b.id()),
+            event_type: CollisionEventType::Ended,
+        });
+        world.insert_resource(pw);
+
+        update_physics_api(&lua, &world).unwrap();
+
+        lua.load(
+            r#"
+            assert(physics.collisions[1].status == "stay", "Persisting -> stay")
+            assert(physics.triggers[1].status == "exit", "Ended -> exit")
+            "#,
+        )
+        .exec()
+        .unwrap();
     }
 }

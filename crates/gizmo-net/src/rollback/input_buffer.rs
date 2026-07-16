@@ -43,6 +43,9 @@ impl InputBuffer {
         // kullandığı için capacity=0 ilk insert/get'te panik üretir. İmza
         // değiştirmeden en az 1 kapasiteye normalize ediyoruz (RollbackSession
         // içindeki .max(64) deseniyle tutarlı; başarı yolu etkilenmez).
+        if capacity == 0 {
+            tracing::warn!(player_id, "InputBuffer kapasitesi 0 verildi, 1'e normalize edildi (çağıran hatası)");
+        }
         let capacity = capacity.max(1);
         Self {
             player_id,
@@ -167,5 +170,41 @@ mod tests {
         b.insert(input(0, 1));
         let _ = b.get_or_predict(0);
         let _ = b.get_or_predict(1000);
+    }
+
+    // Tahmin (GGPO tekrar) yalnız buttons'ı değil analog eksenleri de taşımalı;
+    // aksi halde girdi gelmeyen karede stick sıfırlanıp karakter sürüklenir.
+    #[test]
+    fn prediction_carries_joystick_axes_not_just_buttons() {
+        let mut b = InputBuffer::new(1, 64);
+        b.insert(PlayerInput { tick: 4, buttons: 0b1, joystick_x: -50, joystick_y: 77 });
+        let p = b.get_or_predict(5); // tick 5 gelmedi → son doğrulanan tekrarlanır
+        assert_eq!(p.tick, 5);
+        assert_eq!(p.buttons, 0b1);
+        assert_eq!(p.joystick_x, -50, "joystick_x tahmine taşınmalı");
+        assert_eq!(p.joystick_y, 77, "joystick_y tahmine taşınmalı");
+    }
+
+    // Aynı tick'e ikinci insert öncekini ezmeli (geç gelen düzeltilmiş girdi kazanır).
+    #[test]
+    fn insert_overwrites_same_tick_slot_with_latest() {
+        let mut b = InputBuffer::new(1, 64);
+        b.insert(input(5, 0b001));
+        b.insert(input(5, 0b110));
+        assert_eq!(b.get_or_predict(5).buttons, 0b110, "aynı tick ikinci insert ezmeli");
+    }
+
+    // Wire tur-gidişi: i8 eksen işaretleri, u32 buton maskesi ve u64 tick tam korunmalı.
+    #[test]
+    fn player_input_serde_roundtrip_preserves_signed_axes() {
+        let original = PlayerInput {
+            tick: 9_000_000_000, // > u32::MAX → u64 alanı doğrular
+            buttons: 0xDEAD_BEEF,
+            joystick_x: -127,
+            joystick_y: 120,
+        };
+        let bytes = bincode::serialize(&original).unwrap();
+        let back: PlayerInput = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(back, original);
     }
 }

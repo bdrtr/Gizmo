@@ -294,7 +294,6 @@ fn render(
     _light_time: f32,
 ) {
     renderer.gpu_fluid = None;
-    renderer.gpu_physics = None;
 
     // --shot modu: sahne yerleşsin diye ~90 kare bekle, sonra offscreen bir frame'i GPU'dan okuyup
     // raw RGBA olarak diske yaz ve çık (headless ekran görüntüsü — X/Wayland yakalama gerekmez).

@@ -67,7 +67,6 @@ fn main() {
             renderer.environment_preset = 1;
             renderer.environment_preset_2 = 1;
             renderer.gpu_fluid = None;
-            renderer.gpu_physics = None;
             renderer.ssr = None;
             renderer.ssgi = None;
             renderer.volumetric = None;

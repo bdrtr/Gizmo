@@ -62,6 +62,10 @@ impl Gjk {
             } else {
                 // EPA failed (likely degenerate simplex), but we KNOW they intersect.
                 // Return a basic contact point for triggers and solver fallback.
+                tracing::debug!(
+                    fallback_penetration = 0.01,
+                    "GJK reported an intersection but EPA degenerated; using midpoint fallback contact"
+                );
                 Some(ContactPoint {
                     point: (pos_a + pos_b) * 0.5,
                     normal: (pos_b - pos_a).try_normalize().unwrap_or(Vec3::Y),

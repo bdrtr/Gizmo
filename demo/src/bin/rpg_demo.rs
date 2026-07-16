@@ -447,7 +447,6 @@ fn render(
     // Gökyüzünden düşen su damlalarını kapatıyoruz (performans için)
     renderer.gpu_fluid = None;
     renderer.gpu_particles = None;
-    renderer.gpu_physics = None;
 
     // Default render pass (Kamera, Işıklar, Model, Skybox, SSGI, SSR, Bloom vs. her şeyi yapar)
     gizmo::systems::render::default_render_pass(world, encoder, view, renderer);

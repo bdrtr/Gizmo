@@ -212,6 +212,7 @@ fn main() {
             gizmo::systems::physics_debug_system(world);
         })
         .set_render(|world, _state, encoder, view, renderer, _light_time| {
+            renderer.enable_gpu_physics(); // GPU-fizik OPT-IN (varsayılan None)
             // 1. Fizik Gönderimi (Broadphase, Narrowphase)
             gizmo::systems::gpu_physics_submit_system(world, renderer);
 

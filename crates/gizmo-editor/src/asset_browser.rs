@@ -329,3 +329,68 @@ fn get_file_icon(filename: &str) -> &'static str {
     }
     "📁"
 }
+
+#[cfg(test)]
+mod tests {
+    use super::get_file_icon;
+
+    #[test]
+    fn model_extensions_map_to_statue() {
+        assert_eq!(get_file_icon("chair.obj"), "🗿");
+        assert_eq!(get_file_icon("scene.glb"), "🗿");
+        assert_eq!(get_file_icon("scene.gltf"), "🗿");
+        assert_eq!(get_file_icon("rig.fbx"), "🗿");
+    }
+
+    #[test]
+    fn image_audio_script_data_extensions() {
+        assert_eq!(get_file_icon("albedo.png"), "🖼️");
+        assert_eq!(get_file_icon("hit.wav"), "🔊");
+        assert_eq!(get_file_icon("ai.lua"), "📜");
+        assert_eq!(get_file_icon("prefs.toml"), "📋");
+        assert_eq!(get_file_icon("data.json"), "📋");
+        assert_eq!(get_file_icon("box.prefab"), "📦");
+        assert_eq!(get_file_icon("level.gizmo"), "🎬");
+        assert_eq!(get_file_icon("level.giz"), "🎬");
+        assert_eq!(get_file_icon("pbr.wgsl"), "🎨");
+    }
+
+    /// Uzantı eşleştirmesi büyük/küçük harfe DUYARSIZ olmalı.
+    #[test]
+    fn extension_matching_is_case_insensitive() {
+        assert_eq!(get_file_icon("MODEL.OBJ"), "🗿");
+        assert_eq!(get_file_icon("Photo.PNG"), "🖼️");
+        assert_eq!(get_file_icon("Sound.Wav"), "🔊");
+        assert_eq!(get_file_icon("SHADER.WGSL"), "🎨");
+    }
+
+    /// Uzantısı olmayan (nokta içermeyen) isim = klasör ikonu.
+    #[test]
+    fn no_extension_is_folder() {
+        assert_eq!(get_file_icon("assets"), "📁");
+        assert_eq!(get_file_icon(""), "📁");
+    }
+
+    /// Bilinmeyen ama noktalı uzantı = jenerik dosya ikonu.
+    #[test]
+    fn unknown_extension_with_dot_is_generic_file() {
+        assert_eq!(get_file_icon("notes.txt"), "📄");
+        assert_eq!(get_file_icon("archive.xyz"), "📄");
+    }
+
+    /// Çok-noktalı isimde YALNIZ son uzantı dikkate alınır.
+    #[test]
+    fn only_last_extension_matters() {
+        // son parça "gz" → bilinmeyen ama noktalı → jenerik dosya
+        assert_eq!(get_file_icon("world.tar.gz"), "📄");
+        // son parça "png" → görsel
+        assert_eq!(get_file_icon("my.backup.png"), "🖼️");
+    }
+
+    /// Nokta ile başlayan dotfile: rsplit ilk parçayı "gitignore" olarak alır,
+    /// bilinen uzantı değil ama isim nokta içerir → jenerik dosya ikonu.
+    #[test]
+    fn leading_dot_dotfile_is_generic_file() {
+        assert_eq!(get_file_icon(".gitignore"), "📄");
+    }
+}

@@ -53,7 +53,12 @@ impl<State: 'static> App<State> {
                 // Eğer UI girdiyi yakalamadıysa Kullanıcı Input Hook'a Yolla
                 if !consumes_input {
                     if let Some(input_hk) = self.input_fn.as_mut() {
-                        let _ = input_hk(&mut self.world, &mut state, &event);
+                        // The hook's `bool` (event consumed) is not acted on by the
+                        // loop, but surface it at trace so a debugging session can see
+                        // when the user input handler claims an event.
+                        if input_hk(&mut self.world, &mut state, &event) {
+                            tracing::trace!("[App] user input hook consumed event");
+                        }
                     }
                 }
 
@@ -64,11 +69,20 @@ impl<State: 'static> App<State> {
                     } if window_id == window.id() => {
                         match event {
                             WindowEvent::CloseRequested => {
+                                tracing::info!("[App] close requested; shutting down");
                                 if let Some(record) = &self.record_data {
-                                    let _ = record.save("gizmo_record.ron");
-                                    tracing::info!(
-                                        "Kayit basariyla 'gizmo_record.ron' dosyasina kaydedildi."
-                                    );
+                                    match record.save("gizmo_record.ron") {
+                                        Ok(()) => tracing::info!(
+                                            path = "gizmo_record.ron",
+                                            frames = record.frames.len(),
+                                            "[App] input kaydı diske yazıldı"
+                                        ),
+                                        Err(e) => tracing::warn!(
+                                            path = "gizmo_record.ron",
+                                            error = %e,
+                                            "[App] input kaydı yazılamadı"
+                                        ),
+                                    }
                                 }
                                 // TLS'teki GPU kaynaklarını temizlemekle uğraşmak yerine direkt çık
                                 #[cfg(not(target_arch = "wasm32"))]
@@ -92,6 +106,13 @@ impl<State: 'static> App<State> {
                                     );
                                 win_info.width = effective.width as f32;
                                 win_info.height = effective.height as f32;
+                                tracing::debug!(
+                                    physical_width = physical_size.width,
+                                    physical_height = physical_size.height,
+                                    effective_width = effective.width,
+                                    effective_height = effective.height,
+                                    "[App] window resized"
+                                );
                             }
                             WindowEvent::KeyboardInput {
                                 event: kb_event, ..
@@ -215,10 +236,14 @@ impl<State: 'static> App<State> {
                             _ => {}
                         }
                         if let WindowEvent::RedrawRequested = event {
+                            // Per-frame root span; the physics/update/render sub-spans
+                            // (from the ECS schedule and physics pipeline) nest under it.
+                            let _frame_span = tracing::trace_span!("frame").entered();
                             let now = super::FrameInstant::now();
                             let mut dt = now.duration_since(last_frame_time).as_secs_f32();
                             dt = dt.min(0.05); // Güvenlik çemberi: Frame takılırsa 50ms'den fazla zıplamayacak, yerçekiminden düşme engellenecek.
                             last_frame_time = now;
+                            tracing::trace!(dt, "[frame] begin");
 
                             // Playback / Record mantigi
                             if let Some(playback) = &self.playback_data {
@@ -337,6 +362,7 @@ impl<State: 'static> App<State> {
                                         .map(|pt| pt.fixed_dt())
                                         .unwrap_or(1.0 / 60.0);
 
+                                    let mut catchup_steps = 0u32;
                                     loop {
                                         let curr = rm.as_ref().unwrap().current_tick;
                                         if curr >= target_tick {
@@ -355,6 +381,14 @@ impl<State: 'static> App<State> {
                                             manager.current_tick += 1;
                                             // latest_tick güncellenmeyecek çünkü zaten eskiyi simüle ediyoruz
                                         }
+                                        catchup_steps += 1;
+                                    }
+                                    if catchup_steps > 0 {
+                                        tracing::debug!(
+                                            catchup_steps,
+                                            target_tick,
+                                            "[frame] rollback fast-forward re-simulated ticks"
+                                        );
                                     }
                                 }
 
@@ -365,6 +399,8 @@ impl<State: 'static> App<State> {
                             }
 
                             // Sabit dt'de normal fizik adımları — frame rate'ten bağımsız
+                            let mut phys_steps = 0u32;
+                            let mut last_fixed_dt = 0.0f32;
                             loop {
                                 let should = self
                                     .world
@@ -396,6 +432,18 @@ impl<State: 'static> App<State> {
                                     .get_resource_mut::<gizmo_core::time::PhysicsTime>()
                                     .unwrap();
                                 phys_time.consume_step();
+                                phys_steps += 1;
+                                last_fixed_dt = fixed_dt;
+                            }
+                            // Accumulator sonucu: bu karede kaç sabit fizik adımı koştu.
+                            // 0-adımlı kareler (henüz birikmedi) loglanmaz; çok yüksek bir
+                            // sayı frame-spike/spiral-of-death işaretidir.
+                            if phys_steps > 0 {
+                                tracing::debug!(
+                                    steps = phys_steps,
+                                    fixed_dt = last_fixed_dt,
+                                    "[frame] fixed-timestep physics steps"
+                                );
                             }
 
                             // İnterpolasyon alpha'sını hesapla (render için)
@@ -448,6 +496,10 @@ impl<State: 'static> App<State> {
                                     .get_resource::<gizmo_physics_rigid::world::PhysicsWorld>()
                             {
                                 if !physics_world.fracture_events.is_empty() {
+                                    tracing::debug!(
+                                        fracture_count = physics_world.fracture_events.len(),
+                                        "[frame] fracture events -> dust particles"
+                                    );
                                     let renderer = self.world.get_resource::<Renderer>().unwrap();
                                     if let Some(gpu_particles) = &renderer.gpu_particles {
                                         for event in &physics_world.fracture_events {
@@ -497,6 +549,9 @@ impl<State: 'static> App<State> {
                                 wgpu::CurrentSurfaceTexture::Outdated
                                 | wgpu::CurrentSurfaceTexture::Occluded
                                 | wgpu::CurrentSurfaceTexture::Timeout => {
+                                    tracing::trace!(
+                                        "[frame] surface transient (outdated/occluded/timeout); frame skipped"
+                                    );
                                     self.world.insert_resource(renderer);
                                     if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                         profiler.end_scope("render");

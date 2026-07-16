@@ -209,11 +209,19 @@ impl BehaviorTree {
 }
 
 /// The System that ticks all BehaviorTrees
+#[tracing::instrument(skip_all, name = "behavior_tree_system")]
 pub fn behavior_tree_system(world: &mut World, dt: f32) {
     let entities: Vec<u32> = {
         let trees = world.borrow::<BehaviorTree>();
         trees.entities().collect()
     };
+
+    let tree_count = entities.len();
+    // Frame-başı toplu sayaçlar — iç döngüde per-tick log yerine çıkışta AGGREGATE.
+    let mut success = 0u32;
+    let mut failure = 0u32;
+    let mut running = 0u32;
+    let mut empty = 0u32;
 
     for entity in entities {
         let mut root_opt = None;
@@ -222,12 +230,33 @@ pub fn behavior_tree_system(world: &mut World, dt: f32) {
         }
 
         if let Some(mut root) = root_opt {
-            root.tick(entity, world, dt);
+            // Kök karar döngüsünün sonucu — per-entity SICAK yol, bu yüzden trace!.
+            let status = root.tick(entity, world, dt);
+            match status {
+                BtStatus::Success => success += 1,
+                BtStatus::Failure => failure += 1,
+                BtStatus::Running => running += 1,
+            }
+            tracing::trace!(entity, ?status, "[AI] Davranış ağacı köke kadar tick'lendi");
 
             if let Some(mut tree) = world.borrow_mut::<BehaviorTree>().get_mut(entity) {
                 tree.root = Some(root);
             }
+        } else {
+            // Boş ağaç (root None) — tick Failure döner; sık olabileceğinden yalnız say.
+            empty += 1;
         }
+    }
+
+    if tree_count > 0 {
+        tracing::debug!(
+            tree_count,
+            success,
+            failure,
+            running,
+            empty,
+            "[AI] Davranış ağaçları tick'lendi"
+        );
     }
 }
 

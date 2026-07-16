@@ -85,6 +85,13 @@ impl JointSolver {
 
             if impulse_sum / dt > joint.break_force {
                 joint.is_broken = true;
+                tracing::debug!(
+                    entity_a = ?joint.entity_a,
+                    entity_b = ?joint.entity_b,
+                    applied_force = impulse_sum / dt,
+                    break_force = joint.break_force,
+                    "Fixed joint broke (linear force exceeded break threshold)"
+                );
             }
         }
 
@@ -122,6 +129,13 @@ impl JointSolver {
             // weld — which carries its whole reaction through this angular lock — still breaks.
             if total_ang_impulse / dt > joint.break_torque {
                 joint.is_broken = true;
+                tracing::debug!(
+                    entity_a = ?joint.entity_a,
+                    entity_b = ?joint.entity_b,
+                    applied_torque = total_ang_impulse / dt,
+                    break_torque = joint.break_torque,
+                    "Fixed joint broke (torsional load exceeded break threshold)"
+                );
             }
         }
     }

@@ -32,7 +32,8 @@ impl<State: 'static> std::fmt::Debug for App<State> {
 }
 
 impl<State: 'static> App<State> {
-    pub fn new(_title: &str, _width: u32, _height: u32) -> Self {
+    pub fn new(title: &str, width: u32, height: u32) -> Self {
+        tracing::info!(title = %title, width, height, "[App:headless] created");
         Self {
             world: World::new(),
             schedule: Schedule::new(),
@@ -51,6 +52,7 @@ impl<State: 'static> App<State> {
     }
 
     pub fn add_plugin<P: Plugin<State>>(mut self, plugin: P) -> Self {
+        tracing::info!(plugin = %std::any::type_name::<P>(), "[App:headless] plugin build");
         plugin.build(&mut self);
         self
     }
@@ -93,19 +95,25 @@ impl<State: 'static> App<State> {
     /// hook was assigned.
     pub fn run(mut self) -> Result<(), crate::AppError> {
         if let Some(runner) = self.runner.take() {
+            tracing::info!("[App:headless] delegating to custom runner");
             runner(self);
             return Ok(());
         }
         self.run_default()
     }
 
+    #[tracing::instrument(skip_all, name = "app_headless_run")]
     fn run_default(mut self) -> Result<(), crate::AppError> {
         let mut state = if let Some(setup) = self.setup_fn.take() {
-            setup(&mut self.world)
+            let s = setup(&mut self.world);
+            tracing::info!("[App:headless] setup hook complete");
+            s
         } else {
+            tracing::error!("[App:headless] setup hook missing; cannot run");
             return Err(crate::AppError::MissingSetup);
         };
 
+        tracing::info!("[App:headless] entering update loop");
         let mut last_time = std::time::Instant::now();
 
         loop {

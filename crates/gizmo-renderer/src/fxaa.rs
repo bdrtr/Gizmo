@@ -236,6 +236,7 @@ impl FxaaState {
 
 /// FXAA render pass'ını çalıştırır
 /// `input_view` → composite çıktısı, `output_view` → ekran/swapchain
+#[tracing::instrument(skip_all, level = "trace")]
 pub fn run_fxaa_pass(
     fxaa: &FxaaState,
     encoder: &mut wgpu::CommandEncoder,

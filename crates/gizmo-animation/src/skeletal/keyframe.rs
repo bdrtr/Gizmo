@@ -268,4 +268,39 @@ mod tests {
         assert_eq!(track.sample_cubic(0.0, hermite_f32), Some(5.0));
         assert_eq!(track.sample_cubic(100.0, hermite_f32), Some(9.0));
     }
+
+    #[test]
+    fn sample_cubic_partial_segment_tangents_return_none() {
+        // Only the FIRST keyframe carries tangents; the segment's second endpoint is
+        // missing its in-tangent, so cubic sampling must decline (caller lerps) rather
+        // than fabricate a curve from half the data.
+        let track = Track {
+            target_node: 0,
+            target_node_name: None,
+            interpolation: InterpolationMode::CubicSpline,
+            keyframes: vec![
+                Keyframe::with_tangents(0.0, 0.0, 1.0, 1.0),
+                Keyframe::new(1.0, 10.0), // no tangents
+            ],
+        };
+        assert!(track.sample_cubic(0.5, hermite_f32).is_none());
+    }
+
+    #[test]
+    fn sample_cubic_clamps_end_even_without_tangents() {
+        // At/after the last keyframe the exact value is returned regardless of whether
+        // tangents were preserved — the Clamp arm never touches the tangent math.
+        let track = make_track(vec![(0.0, 0.0), (1.0, 7.0)], InterpolationMode::CubicSpline);
+        assert_eq!(track.sample_cubic(5.0, hermite_f32), Some(7.0));
+        assert_eq!(track.sample_cubic(-5.0, hermite_f32), Some(0.0));
+    }
+
+    #[test]
+    fn get_interpolated_treats_cubic_as_linear_blend() {
+        // `get_interpolated` is the tangent-free fallback path: a CubicSpline track
+        // sampled through it must produce the plain linear blend, not a Hermite curve.
+        let track = make_track(vec![(0.0, 0.0), (1.0, 10.0)], InterpolationMode::CubicSpline);
+        let v = track.get_interpolated(0.25, |a, b, t| a + (b - a) * t).unwrap();
+        assert!((v - 2.5).abs() < 1e-5, "cubic-via-get_interpolated should lerp to 2.5, got {v}");
+    }
 }

@@ -22,7 +22,16 @@ impl Ray {
     pub fn new(origin: Vec3, direction: Vec3) -> Self {
         Self {
             origin,
-            direction: direction.try_normalize().unwrap_or(Vec3::Z),
+            direction: direction.try_normalize().unwrap_or_else(|| {
+                // A zero-length / non-finite direction cannot be normalised; glam's bare
+                // `normalize` would yield NaN and poison every downstream raycast. We fall
+                // back to +Z, but that is almost certainly a caller bug worth surfacing.
+                tracing::warn!(
+                    ?direction,
+                    "Ray::new received a zero/non-finite direction; defaulting to +Z"
+                );
+                Vec3::Z
+            }),
         }
     }
 
@@ -254,12 +263,13 @@ impl Raycast {
     }
 
     /// Test ray against collider shape
+    #[tracing::instrument(skip_all, level = "trace", name = "ray_shape")]
     pub fn ray_shape(
         ray: &Ray,
         shape: &ColliderShape,
         transform: &Transform,
     ) -> Option<(f32, Vec3)> {
-        match shape {
+        let result = match shape {
             ColliderShape::Sphere(s) => Self::ray_sphere(ray, transform.position, s.radius),
             ColliderShape::Box(b) => {
                 Self::ray_box(ray, transform.position, transform.rotation, b.half_extents)
@@ -472,7 +482,14 @@ impl Raycast {
                     None
                 }
             }
+        };
+
+        match result {
+            Some((distance, _normal)) => tracing::trace!(distance, "raycast hit"),
+            None => tracing::trace!("raycast miss"),
         }
+
+        result
     }
 }
 
@@ -609,5 +626,93 @@ mod tests {
             Raycast::ray_shape(&hit, &shape, &tr).is_some(),
             "hull'dan geçen ışın isabet etmeli"
         );
+    }
+
+    #[test]
+    fn ray_aabb_parallel_outside_slab_misses() {
+        // Ray runs along +Z, but its X lies outside the box's X slab → parallel-miss.
+        let ray = Ray::new(Vec3::new(5.0, 0.0, -5.0), Vec3::Z);
+        let aabb = Aabb::from_center_half_extents(Vec3::ZERO, Vec3::splat(1.0));
+        assert!(Raycast::ray_aabb(&ray, &aabb).is_none());
+    }
+
+    #[test]
+    fn ray_aabb_entirely_behind_misses() {
+        // Box is fully behind the origin along the ray direction (tmax < 0).
+        let ray = Ray::new(Vec3::new(0.0, 0.0, 5.0), Vec3::Z);
+        let aabb = Aabb::from_center_half_extents(Vec3::ZERO, Vec3::splat(1.0));
+        assert!(Raycast::ray_aabb(&ray, &aabb).is_none());
+    }
+
+    #[test]
+    fn ray_sphere_from_inside_returns_far_exit() {
+        // Origin at the centre → the near root is negative, so the exit root (t2) is used.
+        let ray = Ray::new(Vec3::ZERO, Vec3::X);
+        let (t, normal) = Raycast::ray_sphere(&ray, Vec3::ZERO, 1.0).unwrap();
+        assert!((t - 1.0).abs() < 1e-4, "exit distance {t}");
+        assert!((normal - Vec3::X).length() < 1e-4, "{normal:?}");
+    }
+
+    #[test]
+    fn ray_plane_parallel_misses() {
+        let plane = ColliderShape::Plane(crate::components::PlaneShape {
+            normal: Vec3::Z,
+            distance: 0.0,
+        });
+        // Ray perpendicular to the normal (runs within the plane) → no intersection.
+        let ray = Ray::new(Vec3::new(0.0, 0.0, -5.0), Vec3::X);
+        assert!(Raycast::ray_shape(&ray, &plane, &Transform::new(Vec3::ZERO)).is_none());
+    }
+
+    #[test]
+    fn ray_plane_behind_origin_misses() {
+        let plane = ColliderShape::Plane(crate::components::PlaneShape {
+            normal: Vec3::Z,
+            distance: 0.0,
+        });
+        // Origin in front of the plane, pointing away → t < 0.
+        let ray = Ray::new(Vec3::new(0.0, 0.0, 5.0), Vec3::Z);
+        assert!(Raycast::ray_shape(&ray, &plane, &Transform::new(Vec3::ZERO)).is_none());
+    }
+
+    #[test]
+    fn ray_new_normalises_and_rejects_zero_direction() {
+        let r = Ray::new(Vec3::ZERO, Vec3::new(0.0, 0.0, 3.0));
+        assert!((r.direction.length() - 1.0).abs() < 1e-6, "direction must be unit");
+        // A degenerate zero direction falls back to +Z instead of producing NaNs.
+        let z = Ray::new(Vec3::ZERO, Vec3::ZERO);
+        assert_eq!(z.direction, Vec3::Z);
+        assert!(z.direction.is_finite());
+    }
+
+    #[test]
+    fn point_at_walks_along_direction() {
+        let ray = Ray::new(Vec3::new(1.0, 2.0, 3.0), Vec3::X);
+        assert!((ray.point_at(4.0) - Vec3::new(5.0, 2.0, 3.0)).length() < 1e-6);
+    }
+
+    #[test]
+    fn compound_raycast_returns_nearest_subshape() {
+        use crate::components::BoxShape;
+        // Two unit boxes along Z (near at z=0, far at z=10). A ray from -Z hits the near one.
+        let compound = ColliderShape::Compound(vec![
+            (
+                Transform::new(Vec3::new(0.0, 0.0, 0.0)),
+                Box::new(ColliderShape::Box(BoxShape {
+                    half_extents: Vec3::splat(1.0),
+                })),
+            ),
+            (
+                Transform::new(Vec3::new(0.0, 0.0, 10.0)),
+                Box::new(ColliderShape::Box(BoxShape {
+                    half_extents: Vec3::splat(1.0),
+                })),
+            ),
+        ]);
+        let ray = Ray::new(Vec3::new(0.0, 0.0, -5.0), Vec3::Z);
+        let (t, _n) =
+            Raycast::ray_shape(&ray, &compound, &Transform::new(Vec3::ZERO)).unwrap();
+        // Near box's front face at z = -1 ⇒ distance 4 (not the far box at ~14).
+        assert!((t - 4.0).abs() < 1e-3, "expected nearest hit at t≈4, got {t}");
     }
 }

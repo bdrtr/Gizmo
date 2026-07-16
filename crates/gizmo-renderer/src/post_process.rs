@@ -531,6 +531,7 @@ pub fn create_blur_buffers(
 }
 
 /// Post-processing render geçişlerini sırayla çalıştırır.
+#[tracing::instrument(skip_all, level = "trace")]
 pub fn run_post_processing(
     renderer: &crate::Renderer,
     encoder: &mut wgpu::CommandEncoder,
@@ -625,4 +626,12 @@ pub fn run_post_processing(
         pass.set_bind_group(2, &renderer.post.post_params_bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
+
+    // Native records bloom extract + H/V blur + composite; WASM strips bloom and
+    // records only the composite/tonemap pass.
+    #[cfg(not(target_arch = "wasm32"))]
+    let passes = 4u32;
+    #[cfg(target_arch = "wasm32")]
+    let passes = 1u32;
+    tracing::trace!(passes, "[PostProcess] recorded post-processing chain");
 }

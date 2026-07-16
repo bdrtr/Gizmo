@@ -47,6 +47,7 @@ impl<State: 'static> super::Plugin<State> for AssetPlugin {
         app.world.insert_resource(gizmo_core::asset::Assets::<
             gizmo_renderer::components::Material,
         >::new());
+        tracing::info!("[AssetPlugin] Assets<Mesh> + Assets<Material> kaynakları eklendi");
     }
 }
 

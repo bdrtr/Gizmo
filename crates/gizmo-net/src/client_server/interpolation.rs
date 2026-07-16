@@ -60,6 +60,9 @@ impl SnapshotInterpolator {
                 .position(|s| s.time > time)
                 .unwrap_or(self.buffer.len());
             self.buffer.insert(insert_at, snapshot);
+            // Jitter/yeniden-sıralama teşhisi: sırasız gelen örnekler interpolasyon
+            // penceresini bozabilir. Per-snapshot → trace seviyesi.
+            tracing::trace!(time, insert_at, buffer_len = self.buffer.len(), "Snapshot sırasız geldi, zaman-sıralı konuma eklendi");
         }
 
         // Tampon çok büyürse eskileri temizle (Örn: 2 saniyeden eskiler çöp).
@@ -229,5 +232,78 @@ mod tests {
         // Tüm snapshot'lardan ileride → son bilinen konum
         let (pos, _rot) = interp.get_interpolated_transform(5.0).unwrap();
         assert_eq!(pos[0], 10.0);
+    }
+
+    // interpolation_delay milisaniye→saniye çevrilir ve render_time'ı geriye kaydırır.
+    // Gecikme uygulanmasaydı 1.05 tüm örneklerden ileri olur, x=10.0'a KİLİTLENİRDİ;
+    // 100ms gecikme ile render_time=0.95 → 0.0..1.0 arası t=0.95 (x≈9.5).
+    #[test]
+    fn interpolation_delay_shifts_the_render_window() {
+        let mut interp = SnapshotInterpolator::new(100.0);
+        interp.add_snapshot(0.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        interp.add_snapshot(1.0, [10.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        let (pos, _rot) = interp.get_interpolated_transform(1.05).unwrap();
+        assert!(
+            (pos[0] - 9.5).abs() < 1e-4,
+            "gecikmeli render_time yanlış: x = {} (beklenen ≈9.5)",
+            pos[0]
+        );
+    }
+
+    // Tampon, en yeni örneğe göre 2 saniyeden eski snapshot'ları budar.
+    #[test]
+    fn prunes_snapshots_older_than_two_seconds() {
+        let mut interp = SnapshotInterpolator::new(0.0);
+        interp.add_snapshot(0.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        interp.add_snapshot(1.0, [10.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        // 2.5 eklenince en yeni=2.5; 2.5-0.0=2.5 > 2.0 → 0.0 budanır, 1.0 kalır.
+        interp.add_snapshot(2.5, [25.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        // render_time=0.5 tüm KALAN örneklerden geride → en eski kalan (1.0) döner (x=10).
+        // 0.0 budanmasaydı 0.0↔1.0 arası interpolasyon x=5.0 verirdi (ayırt edici).
+        let (pos, _rot) = interp.get_interpolated_transform(0.5).unwrap();
+        assert!((pos[0] - 10.0).abs() < 1e-5, "eski snapshot budanmadı: x = {}", pos[0]);
+    }
+
+    // REGRESYON: budama eşiği eklenen `time`'ı DEĞİL, tampondaki en yeni (back) zamanı
+    // referans almalı. Aksi halde çok-eski sırasız bir örnek kendini referans alıp asla
+    // budanmaz ve interpolasyonu bozar.
+    #[test]
+    fn pruning_reference_is_newest_after_out_of_order_insert() {
+        let mut interp = SnapshotInterpolator::new(0.0);
+        interp.add_snapshot(2.0, [20.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        interp.add_snapshot(3.0, [30.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        // ÇOK ESKİ (0.5) sırasız gelir: 3.0-0.5=2.5>2.0 → 0.5 hemen budanmalı.
+        interp.add_snapshot(0.5, [5.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        // 0.5 budandıysa render_time=0.5 en eski KALANı (2.0) döndürür (x=20).
+        // Budanmasaydı 0.5↔2.0 arası interpolasyon x=5.0 verirdi (ayırt edici).
+        let (pos, _rot) = interp.get_interpolated_transform(0.5).unwrap();
+        assert!((pos[0] - 20.0).abs() < 1e-5, "sırasız eski örnek budanmadı: x = {}", pos[0]);
+    }
+
+    // render_time tüm snapshot'lardan GERİDEyse ilk bilinen örneğe kıstırılır
+    // ((None, Some) dalı) — "ahead" testinin simetriği.
+    #[test]
+    fn clamps_to_first_known_when_behind_all_snapshots() {
+        let mut interp = SnapshotInterpolator::new(0.0);
+        interp.add_snapshot(5.0, [50.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        interp.add_snapshot(6.0, [60.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        let (pos, _rot) = interp.get_interpolated_transform(4.0).unwrap();
+        assert_eq!(pos[0], 50.0);
+    }
+
+    // Nlerp sonucu her ara noktada birim-norm kalmalı (aksi halde yön bozulur/kayar).
+    #[test]
+    fn interpolated_quaternion_stays_normalized() {
+        let mut interp = SnapshotInterpolator::new(0.0);
+        let h = std::f32::consts::FRAC_1_SQRT_2;
+        interp.add_snapshot(0.0, [0.0; 3], [0.0, 0.0, 0.0, 1.0]); // identity
+        interp.add_snapshot(1.0, [0.0; 3], [0.0, h, 0.0, h]); // 90° about Y
+        for k in 0..=10 {
+            let ct = k as f64 / 10.0;
+            let (_pos, rot) = interp.get_interpolated_transform(ct).unwrap();
+            let len =
+                (rot[0] * rot[0] + rot[1] * rot[1] + rot[2] * rot[2] + rot[3] * rot[3]).sqrt();
+            assert!((len - 1.0).abs() < 1e-5, "quaternion birim değil (t={ct}): |q|={len}");
+        }
     }
 }

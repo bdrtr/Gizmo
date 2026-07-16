@@ -36,15 +36,47 @@ pub(crate) fn serialize_component(
                 reflect_val,
                 &registry.reflect_registry,
             );
-            if let Ok(string_repr) = ron::ser::to_string(&serializer) {
-                return Some(string_repr);
+            match ron::ser::to_string(&serializer) {
+                Ok(string_repr) => return Some(string_repr),
+                // Not fatal on its own: fall through to the serde path below. Logged so a
+                // later "component vanished" investigation can see reflect was tried first.
+                Err(e) => tracing::debug!(
+                    component = %reg.name,
+                    error = %e,
+                    "[Scene] reflect serialize başarısız, serde yoluna düşülüyor",
+                ),
             }
         }
     }
     #[cfg(not(feature = "reflect"))]
     let _ = (registry, type_id);
 
-    reg.serialize_fn.and_then(|ser_fn| ser_fn(ptr).ok())
+    match reg.serialize_fn {
+        // The old `.ok()` swallowed this `Err` silently, so a component that failed to
+        // serialize was dropped from the saved scene/snapshot with no trace — silent
+        // data loss. Surface it with the component name and the concrete error.
+        Some(ser_fn) => match ser_fn(ptr) {
+            Ok(string_repr) => Some(string_repr),
+            Err(e) => {
+                tracing::warn!(
+                    component = %reg.name,
+                    error = %e,
+                    "[Scene] bileşen serialize edilemedi — kaydedilirken atlanıyor (veri kaybı)",
+                );
+                None
+            }
+        },
+        // Registration exists but carries no serializer at all — the component cannot be
+        // persisted. Normally unreachable (the default registry guarantees a path), but a
+        // custom registration could hit it, so make the omission visible instead of silent.
+        None => {
+            tracing::warn!(
+                component = %reg.name,
+                "[Scene] kayıtlı bileşenin serializer'ı yok — kaydedilirken atlanıyor",
+            );
+            None
+        }
+    }
 }
 
 /// Deserialize a single component from its RON string `comp_val` and insert it

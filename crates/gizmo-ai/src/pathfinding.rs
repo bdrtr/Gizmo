@@ -95,8 +95,10 @@ impl NavGrid {
     }
 
     /// Fizik dünyasındaki statik nesneleri tarayıp navigasyon engel ızgarasını (NavMesh) günceller
+    #[tracing::instrument(skip_all, name = "navgrid_rebuild")]
     pub fn update_from_physics_world(&mut self, physics: &gizmo_physics_rigid::world::PhysicsWorld) {
         let cell_size = self.cell_size;
+        let entity_count = physics.entities.len();
 
         let world_to_grid_fn = |pos: Vec3| -> GridPos {
             GridPos {
@@ -181,6 +183,14 @@ impl NavGrid {
         }
 
         self.needs_rebuild = false;
+
+        // Yeniden oluşturma seyrek (needs_rebuild ile tetiklenir) — çıkışta AGGREGATE detay.
+        tracing::debug!(
+            entity_count,
+            obstacle_count = self.obstacles.len(),
+            cell_size,
+            "[AI] NavGrid engel ızgarası PhysicsWorld'den yeniden oluşturuldu"
+        );
     }
 }
 
@@ -220,11 +230,21 @@ fn heuristic(a: GridPos, b: GridPos) -> u32 {
 
 impl NavGrid {
     /// A* Pathfinding Fonksiyonu
+    #[tracing::instrument(skip_all, name = "navgrid_find_path")]
     pub fn find_path(&self, start_world: Vec3, end_world: Vec3) -> Option<Vec<Vec3>> {
         let start = self.world_to_grid(start_world);
         let end = self.world_to_grid(end_world);
 
         if !self.is_walkable(end) || !self.is_walkable(start) {
+            // Beklenen sorgu sonucu (hedef/başlangıç duvar içinde ya da sınır dışı) — çağıran
+            // None'ı ele alır, ama sessiz dönmek yerine sebebi göster.
+            tracing::debug!(
+                start = ?start,
+                end = ?end,
+                start_walkable = self.is_walkable(start),
+                end_walkable = self.is_walkable(end),
+                "[AI] Pathfinding erken çıkış: başlangıç/hedef yürünebilir değil"
+            );
             return None; // Hedef duvar içinde
         }
 
@@ -245,9 +265,14 @@ impl NavGrid {
         while let Some(current_node) = open_set.pop() {
             iterations += 1;
             if iterations > max_iterations {
-                tracing::error!(
-                    "[AI] Pathfinding limit aşıldı ({}/{}). Ulaşılamaz rota?",
-                    iterations, max_iterations
+                // Kurtarılabilir: yol döndürülmez, ajan hareketsiz kalır. Ama gerçek bir
+                // sorunu (çok büyük/parçalı harita, ulaşılamaz hedef) gizleyebilir → warn!.
+                tracing::warn!(
+                    iterations,
+                    max_iterations,
+                    start = ?start,
+                    end = ?end,
+                    "[AI] Pathfinding iterasyon limiti aşıldı — ulaşılamaz/çok uzak rota, yol yok"
                 );
                 break;
             }
@@ -271,6 +296,11 @@ impl NavGrid {
                     };
                 }
                 path.reverse();
+                tracing::debug!(
+                    path_len = path.len(),
+                    iterations,
+                    "[AI] Pathfinding yol buldu"
+                );
                 return Some(path);
             }
 
@@ -298,6 +328,13 @@ impl NavGrid {
             }
         }
 
+        // Açık liste tükendi: bağlı bir yol yok. Beklenen sorgu sonucu → debug!.
+        tracing::debug!(
+            iterations,
+            start = ?start,
+            end = ?end,
+            "[AI] Pathfinding yol bulamadı (açık liste tükendi)"
+        );
         None // Yol bulunamadı
     }
 }

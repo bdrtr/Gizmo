@@ -312,6 +312,7 @@ impl GpuParticleSystem {
         }
     }
 
+    #[tracing::instrument(skip_all, level = "trace")]
     pub fn compute_pass(&self, encoder: &mut wgpu::CommandEncoder, active_particles: u32) {
         if active_particles == 0 {
             return;
@@ -324,6 +325,7 @@ impl GpuParticleSystem {
         cpass.set_bind_group(0, &self.pipelines.compute_bind_group, &[]);
         let workgroups = active_particles.div_ceil(64);
         cpass.dispatch_workgroups(workgroups, 1, 1);
+        tracing::trace!(active_particles, workgroups, "[GpuParticles] simulated");
     }
 
     /// Soft particles için group-1 (sahne derinliği) bind group'u güncel `depth_view` ile
@@ -343,6 +345,7 @@ impl GpuParticleSystem {
         })
     }
 
+    #[tracing::instrument(skip_all, level = "trace")]
     pub fn render_pass<'a>(
         &'a self,
         rpass: &mut wgpu::RenderPass<'a>,
@@ -353,6 +356,7 @@ impl GpuParticleSystem {
         if active_particles == 0 {
             return;
         }
+        tracing::trace!(active_particles, "[GpuParticles] drawing billboards");
         rpass.set_pipeline(&self.pipelines.render_pipeline);
         rpass.set_bind_group(0, global_bind_group, &[]);
         rpass.set_bind_group(1, depth_bind_group, &[]); // soft particles: sahne derinliği

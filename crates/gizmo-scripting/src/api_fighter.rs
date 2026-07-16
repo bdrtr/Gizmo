@@ -103,6 +103,7 @@ pub fn register_fighter_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
     Ok(())
 }
 
+#[tracing::instrument(skip_all, name = "script_fighter_read")]
 pub fn update_fighter_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> {
     let fighter_table: LuaTable = lua.globals().get("fighter")?;
 
@@ -189,5 +190,110 @@ mod tests {
             !rejected,
             "3 frame boşluk max_gap=2 için REDDEDİLMELİ (off-by-one)"
         );
+    }
+
+    /// Bitişik (boşluksuz) tam kombo tanınmalı; combo tersten (son eleman önce) taranır.
+    #[test]
+    fn adjacent_full_combo_is_recognized() {
+        let accepted = run_combo(
+            r#"
+            combo = { "a", "b", "c" }
+            max_gap = 1
+            local function f(k) return { just_pressed = { [k] = true } } end
+            -- Buffer ileri taranır, önce combo'nun sonu ("c") aranır: c, b, a
+            fighter._buffers[1] = { f("c"), f("b"), f("a") }
+            "#,
+        );
+        assert!(accepted, "bitişik c-b-a dizisi a,b,c kombosunu tamamlamalı");
+    }
+
+    /// Boş kombo listesi asla eşleşmemeli (combo_idx == 0 erken çıkış).
+    #[test]
+    fn empty_combo_never_matches() {
+        let matched = run_combo(
+            r#"
+            combo = {}
+            max_gap = 5
+            local function f(k) return { just_pressed = { [k] = true } } end
+            fighter._buffers[1] = { f("a"), f("b") }
+            "#,
+        );
+        assert!(!matched, "boş kombo false dönmeli");
+    }
+
+    /// Entity için buffer yoksa check_combo güvenle false dönmeli (nil buffer koruması).
+    #[test]
+    fn missing_buffer_returns_false() {
+        let matched = run_combo(
+            r#"
+            combo = { "a" }
+            max_gap = 5
+            -- fighter._buffers[1] hiç ayarlanmadı
+            "#,
+        );
+        assert!(!matched, "buffer yoksa false dönmeli");
+    }
+
+    /// Kombo tam tamamlanmazsa (yalnız son eleman var, ilki yok) false dönmeli.
+    #[test]
+    fn partially_matched_combo_is_rejected() {
+        let matched = run_combo(
+            r#"
+            combo = { "a", "b" }
+            max_gap = 5
+            local function f(k) return { just_pressed = { [k] = true } } end
+            -- Sadece "b" var, "a" hiç basılmadı → kombo tamamlanmaz.
+            fighter._buffers[1] = { f("b"), f("x"), f("y") }
+            "#,
+        );
+        assert!(!matched, "eksik kombo tamamlanmamış sayılmalı");
+    }
+
+    /// is_locked: _is_locked tablosunda giriş yoksa false, true ise true.
+    #[test]
+    fn is_locked_reads_table_with_false_default() {
+        let lua = Lua::new();
+        register_fighter_api(&lua, Arc::new(CommandQueue::new())).unwrap();
+        lua.load(
+            r#"
+            assert(fighter.is_locked(1) == false, "giriş yoksa varsayılan false")
+            fighter._is_locked[1] = true
+            assert(fighter.is_locked(1) == true, "true set edilince true")
+            "#,
+        )
+        .exec()
+        .unwrap();
+    }
+
+    /// set_move / apply_hitstop / apply_hitstun doğru komutları (frame verileri dahil) kuyruğa yazmalı.
+    #[test]
+    fn fighter_write_calls_push_expected_commands() {
+        let lua = Lua::new();
+        let cq = Arc::new(CommandQueue::new());
+        register_fighter_api(&lua, cq.clone()).unwrap();
+
+        lua.load(
+            r#"
+            fighter.set_move(1, "jab", 3, 2, 8, 5.5)
+            fighter.apply_hitstop(1, 6)
+            fighter.apply_hitstun(2, 20)
+            "#,
+        )
+        .exec()
+        .unwrap();
+
+        let cmds = cq.drain();
+        assert_eq!(cmds.len(), 3);
+        match &cmds[0] {
+            ScriptCommand::SetFighterMove { id, name, startup, active, recovery, damage } => {
+                assert_eq!(*id, 1);
+                assert_eq!(name, "jab");
+                assert_eq!((*startup, *active, *recovery), (3, 2, 8));
+                assert!((damage - 5.5).abs() < 1e-6);
+            }
+            other => panic!("beklenen SetFighterMove, gelen {other:?}"),
+        }
+        assert!(matches!(cmds[1], ScriptCommand::ApplyHitstop(1, 6)));
+        assert!(matches!(cmds[2], ScriptCommand::ApplyHitstun(2, 20)));
     }
 }

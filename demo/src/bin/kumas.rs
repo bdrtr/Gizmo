@@ -209,6 +209,7 @@ fn main() {
             }
         })
         .set_render(|world, state, encoder, view, renderer, _light_time| {
+            renderer.enable_gpu_physics(); // GPU-fizik OPT-IN (varsayılan None)
             // İlk frame render edildikten ve GpuPhysicsLink oluşturulduktan SONRA
             // Joint'leri GPU'ya basmalıyız.
             if state.joints_loaded {

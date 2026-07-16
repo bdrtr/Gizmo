@@ -166,4 +166,124 @@ mod tests {
             assert!(n.position.is_finite(), "ip NaN/Inf üretmemeli");
         }
     }
+
+    /// `Rope::new` lays `num_segments + 1` nodes along the (normalized) direction spaced
+    /// `segment_length` apart, tags the requested endpoints fixed, and zeroes their mass.
+    #[test]
+    fn rope_new_builds_nodes_positions_and_fixed_flags() {
+        let start = Vec3::new(1.0, 2.0, 3.0);
+        let rope = Rope::new(start, Vec3::new(1.0, 0.0, 0.0), 4, 0.5, 2.0, true, false);
+
+        assert_eq!(rope.nodes.len(), 5, "num_segments + 1 nodes");
+        for (i, n) in rope.nodes.iter().enumerate() {
+            let expected = start + Vec3::new(i as f32 * 0.5, 0.0, 0.0);
+            assert!(n.position.abs_diff_eq(expected, 1e-6), "node {i} misplaced: {:?}", n.position);
+            assert!(n.prev_position.abs_diff_eq(expected, 1e-6));
+        }
+        // fix_start pins node 0 only.
+        assert!(rope.nodes[0].is_fixed && rope.nodes[0].inv_mass == 0.0 && rope.nodes[0].mass == 0.0);
+        for n in &rope.nodes[1..] {
+            assert!(!n.is_fixed);
+            assert!((n.inv_mass - 0.5).abs() < 1e-6, "inv_mass = 1/mass");
+            assert_eq!(n.mass, 2.0);
+        }
+        // Defaults.
+        assert!((rope.link_length - 0.5).abs() < 1e-6);
+        assert_eq!(rope.iterations, 10);
+        assert!((rope.stiffness - 1.0).abs() < 1e-6);
+        assert!((rope.damping - 0.98).abs() < 1e-6);
+    }
+
+    /// A non-unit direction is normalized: spacing is `segment_length`, not scaled by the
+    /// direction's magnitude.
+    #[test]
+    fn rope_new_normalizes_direction() {
+        // Direction magnitude 3, but spacing must stay at segment_length = 1.
+        let rope = Rope::new(Vec3::ZERO, Vec3::new(0.0, 3.0, 0.0), 2, 1.0, 1.0, false, false);
+        assert!(rope.nodes[1].position.abs_diff_eq(Vec3::new(0.0, 1.0, 0.0), 1e-6));
+        assert!(rope.nodes[2].position.abs_diff_eq(Vec3::new(0.0, 2.0, 0.0), 1e-6));
+    }
+
+    /// A zero direction has no defined orientation (`normalize_or_zero` → 0), collapsing every
+    /// node onto the start position instead of producing NaN.
+    #[test]
+    fn rope_new_zero_direction_collapses_to_start() {
+        let start = Vec3::new(4.0, 5.0, 6.0);
+        let rope = Rope::new(start, Vec3::ZERO, 3, 1.0, 1.0, false, false);
+        for n in &rope.nodes {
+            assert!(n.position.abs_diff_eq(start, 1e-6), "all nodes collapse to start");
+        }
+    }
+
+    /// `fix_end` pins the LAST node (and only it, when fix_start is false).
+    #[test]
+    fn rope_new_fix_end_pins_last_node() {
+        let rope = Rope::new(Vec3::ZERO, Vec3::X, 3, 1.0, 1.0, false, true);
+        let last = rope.nodes.len() - 1;
+        assert!(rope.nodes[last].is_fixed && rope.nodes[last].inv_mass == 0.0);
+        assert!(!rope.nodes[0].is_fixed, "start must remain free");
+    }
+
+    /// A non-positive `dt` is a guarded no-op: the rope must not integrate, drift, or divide
+    /// by zero.
+    #[test]
+    fn rope_step_nonpositive_dt_is_noop() {
+        let mut rope = Rope::new(Vec3::new(0.0, 5.0, 0.0), Vec3::X, 4, 0.5, 1.0, false, false);
+        let before = rope.clone();
+        rope.step(0.0, Vec3::new(0.0, -9.81, 0.0));
+        assert_eq!(rope, before, "dt == 0 must change nothing");
+        rope.step(-0.01, Vec3::new(0.0, -9.81, 0.0));
+        assert_eq!(rope, before, "dt < 0 must change nothing");
+    }
+
+    /// The constraint loop uses `saturating_sub`, so stepping a rope whose (public) `nodes`
+    /// vector has been emptied must not underflow-panic.
+    #[test]
+    fn rope_step_empty_nodes_does_not_panic() {
+        let mut rope = Rope::new(Vec3::ZERO, Vec3::X, 2, 1.0, 1.0, false, false);
+        rope.nodes.clear();
+        rope.step(1.0 / 60.0, Vec3::new(0.0, -9.81, 0.0)); // must not panic
+        assert!(rope.nodes.is_empty());
+    }
+
+    /// A free node below the floor is snapped up to `y = 0` with its vertical velocity zeroed
+    /// (prev_position.y == 0).
+    #[test]
+    fn free_node_below_floor_is_clamped() {
+        // Single-node rope (num_segments = 0) → no links, isolates the floor clamp.
+        let mut rope = Rope::new(Vec3::new(0.0, -2.0, 0.0), Vec3::X, 0, 1.0, 1.0, false, false);
+        assert_eq!(rope.nodes.len(), 1);
+        rope.step(1.0 / 60.0, Vec3::ZERO);
+        assert!((rope.nodes[0].position.y - 0.0).abs() < 1e-6, "must clamp to floor");
+        assert!((rope.nodes[0].prev_position.y - 0.0).abs() < 1e-6, "vertical velocity zeroed");
+    }
+
+    /// An overstretched link is pulled back to `link_length`. With full stiffness (compliance
+    /// 0) a symmetric free pair converges to the rest length essentially exactly.
+    #[test]
+    fn stretched_link_is_pulled_to_rest_length() {
+        let mut rope = Rope::new(Vec3::new(0.0, 5.0, 0.0), Vec3::X, 1, 1.0, 1.0, false, false);
+        // Pull the pair to 3 units apart (rest = 1), zero velocity, well above the floor.
+        rope.nodes[0].position = Vec3::new(0.0, 5.0, 0.0);
+        rope.nodes[0].prev_position = rope.nodes[0].position;
+        rope.nodes[1].position = Vec3::new(3.0, 5.0, 0.0);
+        rope.nodes[1].prev_position = rope.nodes[1].position;
+
+        rope.step(1.0 / 60.0, Vec3::ZERO);
+        let d = (rope.nodes[0].position - rope.nodes[1].position).length();
+        assert!((d - 1.0).abs() < 1e-3, "link must converge to rest length, got {d}");
+    }
+
+    /// Two identical ropes stepped identically stay bit-identical (deterministic solver).
+    #[test]
+    fn rope_step_is_deterministic() {
+        let mk = || Rope::new(Vec3::new(0.0, 5.0, 0.0), Vec3::X, 8, 0.3, 1.0, true, false);
+        let (mut a, mut b) = (mk(), mk());
+        let g = Vec3::new(0.1, -9.81, 0.0);
+        for _ in 0..60 {
+            a.step(1.0 / 60.0, g);
+            b.step(1.0 / 60.0, g);
+        }
+        assert_eq!(a, b);
+    }
 }

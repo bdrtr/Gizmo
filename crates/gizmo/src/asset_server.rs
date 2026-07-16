@@ -43,15 +43,22 @@ impl AssetServer {
 
     pub fn load_mesh(&mut self, path: &str) -> Handle<Mesh> {
         if let Some(handle) = self.mesh_paths.get(path) {
+            tracing::trace!(path, "load_mesh: önbellek isabeti, mevcut handle döndürülüyor");
             return handle.clone();
         }
         let handle = crate::core::asset::Handle::weak(crate::core::asset::HandleId::new());
+        tracing::debug!(
+            path,
+            handle_id = handle.id.0,
+            "load_mesh: yeni OBJ mesh yüklemesi kuyruğa alındı"
+        );
         self.loader.request_obj_load(path.to_string(), handle.id.0);
         self.mesh_paths.insert(path.to_string(), handle.clone());
         handle
     }
 }
 
+#[tracing::instrument(skip_all, level = "trace", name = "asset_server_update")]
 pub fn asset_server_update_system(
     mut server: crate::core::system::ResMut<AssetServer>,
     renderer: crate::core::system::ResMut<crate::renderer::Renderer>,
@@ -65,7 +72,7 @@ pub fn asset_server_update_system(
             let path_str = path.to_string_lossy().to_string();
             // Check if mesh needs reloading
             if let Some(handle) = server.mesh_paths.get(&path_str) {
-                tracing::info!("AssetWatcher: Reloading mesh {:?}", path_str);
+                tracing::info!(path = %path_str, "AssetWatcher: mesh diskte değişti, yeniden yükleniyor (hot-reload)");
                 server.loader.request_obj_load(path_str.clone(), handle.id.0);
             }
         }
@@ -76,18 +83,49 @@ pub fn asset_server_update_system(
 
     let completed = server.loader.drain_completed();
 
+    // Arka planda başarısız olan glTF import'larını GÖRÜNÜR yap. Bu hatalar bugüne kadar
+    // yalnız `completed_gltf_errors`'a biriktirilip SADECE gizmo-studio tarafından
+    // tüketiliyordu; o kuyruğu sürmeyen düz bir App'te sessizce yığılıp kaybolurlardı
+    // (kullanıcının işaret ettiği sessiz-yutma). Her birini path + sebep ile logla.
+    for err in &completed.gltf_errors {
+        tracing::warn!(
+            path = %err.path,
+            reason = %err.message,
+            "glTF import (arka plan iş parçacığı) başarısız — model spawn edilemeyecek"
+        );
+    }
+
+    let gltf_count = completed.gltfs.len();
+    let tex_count = completed.textures.len();
+    let obj_count = completed.objs.len();
+
     server.completed_gltfs.extend(completed.gltfs);
     server.completed_gltf_errors.extend(completed.gltf_errors);
     // Decode'u biten streaming texture'ları SAKLA (eskiden burada atılıyordu → no-op).
     // `TextureStreamingSystem` bunları GPU'ya yükleyip materyallere uygular.
     server.completed_textures.extend(completed.textures);
 
+    if gltf_count > 0 || tex_count > 0 {
+        tracing::debug!(
+            gltf_count,
+            tex_count,
+            "asset_server_update: arka plan yüklemeleri tamamlandı (tüketim için kuyruklandı)"
+        );
+    }
+
     if completed.objs.is_empty() {
         return;
     }
 
+    tracing::debug!(obj_count, "asset_server_update: tamamlanan OBJ mesh'leri GPU'ya yükleniyor");
     for obj in completed.objs {
         let mesh_source = format!("obj:{}", obj.path);
+        tracing::trace!(
+            path = %obj.path,
+            vertices = obj.vertices.len(),
+            handles = obj.handle_ids.len(),
+            "OBJ mesh için GPU vertex buffer'ı oluşturuluyor"
+        );
         // Create wgpu buffer
         let vbuf = renderer
             .device

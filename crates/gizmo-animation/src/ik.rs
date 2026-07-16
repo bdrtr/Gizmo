@@ -384,4 +384,70 @@ mod tests {
         // Wrong number of bone lengths.
         assert_eq!(solve_fabrik(&mut two, &[1.0, 1.0], Vec3::X, 4, 1e-4), f32::INFINITY);
     }
+
+    // ── Analytic solver degenerate / boundary cases ────────────────────
+
+    #[test]
+    fn two_bone_target_at_root_stays_finite_and_preserves_lengths() {
+        // dist ~ 0: the root→target axis is undefined and must fall back to the
+        // pole direction rather than producing NaNs.
+        let root = Vec3::new(2.0, 2.0, 2.0);
+        let r = solve_two_bone_ik(root, 1.0, 1.0, root, root + Vec3::Y);
+        assert!(r.mid.is_finite() && r.end.is_finite(), "no NaN, got {r:?}");
+        assert!((len(r.root, r.mid) - 1.0).abs() < TOL, "upper length preserved");
+        assert!((len(r.mid, r.end) - 1.0).abs() < TOL, "lower length preserved");
+    }
+
+    #[test]
+    fn two_bone_folds_to_min_reach_when_target_too_close() {
+        // Asymmetric bones: minimum reach is |2 - 1| = 1. A target only 0.3 away
+        // must clamp the effective distance up to 1.0 (limb folded), lengths kept.
+        let root = Vec3::ZERO;
+        let (upper, lower) = (2.0_f32, 1.0_f32);
+        let target = Vec3::new(0.3, 0.0, 0.0);
+        let r = solve_two_bone_ik(root, upper, lower, target, Vec3::new(0.0, 1.0, 0.0));
+        assert!((len(r.root, r.mid) - upper).abs() < TOL, "upper length preserved");
+        assert!((len(r.mid, r.end) - lower).abs() < TOL, "lower length preserved");
+        // End sits at the minimum reach along the axis, not on the (too-close) target.
+        assert!((len(r.root, r.end) - 1.0).abs() < TOL, "end at min reach, got {:?}", r.end);
+    }
+
+    #[test]
+    fn two_bone_zero_length_upper_bone_is_finite() {
+        // A degenerate zero-length upper bone drives the law-of-cosines denominator
+        // to zero; the guard must keep the solve finite and lengths exact.
+        let root = Vec3::ZERO;
+        let r = solve_two_bone_ik(root, 0.0, 1.0, Vec3::new(0.5, 0.0, 0.0), Vec3::Y);
+        assert!(r.mid.is_finite() && r.end.is_finite(), "no NaN, got {r:?}");
+        assert!(len(r.root, r.mid) < TOL, "zero-length upper keeps mid at root");
+        assert!((len(r.mid, r.end) - 1.0).abs() < TOL, "lower length preserved");
+    }
+
+    #[test]
+    fn two_bone_ik_chain_solve_matches_free_function() {
+        // The component wrapper must delegate to the free function with its stored params.
+        let root = Vec3::new(0.0, 1.0, 0.0);
+        let chain = TwoBoneIkChain {
+            upper_len: 1.5,
+            lower_len: 0.8,
+            target: Vec3::new(1.2, 0.6, 0.0),
+            pole: Vec3::new(0.0, 2.0, 0.0),
+            weight: 1.0,
+        };
+        let expected = solve_two_bone_ik(root, 1.5, 0.8, chain.target, chain.pole);
+        assert_eq!(chain.solve(root), expected);
+    }
+
+    #[test]
+    fn fabrik_reaches_target_at_exact_full_reach() {
+        // Target exactly at total reach (not strictly greater) exercises the
+        // iterative path (the `> total` shortcut is skipped) and must still converge.
+        let mut joints = vec![Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), Vec3::new(2.0, 0.0, 0.0)];
+        let lengths = [1.0_f32, 1.0];
+        let target = Vec3::new(2.0, 0.0, 0.0); // distance 2 == total reach 2
+        let residual = solve_fabrik(&mut joints, &lengths, target, 16, 1e-5);
+        assert!(residual < 1e-3, "must reach a just-reachable target, residual {residual}");
+        assert!(len(joints[1], Vec3::new(1.0, 0.0, 0.0)) < 1e-3, "chain straight, got {:?}", joints[1]);
+        assert!(len(joints[2], target) < 1e-3);
+    }
 }

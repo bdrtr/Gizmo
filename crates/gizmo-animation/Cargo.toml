@@ -24,3 +24,4 @@ gizmo-core = { version = "0.8.0", path = "../gizmo-core" }
 gizmo-math = { version = "0.8.0", path = "../gizmo-math" }
 gizmo-physics-core = { version = "0.8.0", path = "../gizmo-physics-core" }
 serde = { version = "1", features = ["derive"] }
+tracing = "0.1.44"

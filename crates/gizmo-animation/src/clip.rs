@@ -459,4 +459,209 @@ mod tests {
         let track = Track::new("bone", vec![], Keyframes::Scale(vec![])).unwrap();
         assert_eq!(track.sample(0.5), InterpolatedValue::None);
     }
+
+    // ── Track::new invariant / error paths ─────────────────────────────
+
+    #[test]
+    fn track_new_rejects_length_mismatch() {
+        // Two timestamps, one value: indexing at sample time would go OOB.
+        let err = Track::new(
+            "bone",
+            vec![0.0, 1.0],
+            Keyframes::Scale(vec![Vec3::ONE]),
+        )
+        .unwrap_err();
+        assert_eq!(err, TrackError::LengthMismatch { timestamps: 2, values: 1 });
+    }
+
+    #[test]
+    fn track_new_rejects_non_finite_timestamp() {
+        // A NaN/Inf timestamp would poison the segment-span division at sample time.
+        for (bad, idx) in [(f32::NAN, 1usize), (f32::INFINITY, 1)] {
+            let err = Track::new(
+                "bone",
+                vec![0.0, bad],
+                Keyframes::Scale(vec![Vec3::ONE, Vec3::ONE]),
+            )
+            .unwrap_err();
+            assert_eq!(err, TrackError::NonFiniteTimestamp { index: idx }, "for {bad}");
+        }
+    }
+
+    #[test]
+    fn track_new_rejects_unsorted_timestamps() {
+        // Descending pair; the error must point at the first out-of-order index.
+        let err = Track::new(
+            "bone",
+            vec![0.0, 2.0, 1.0],
+            Keyframes::Scale(vec![Vec3::ONE, Vec3::ONE, Vec3::ONE]),
+        )
+        .unwrap_err();
+        assert_eq!(err, TrackError::UnsortedTimestamps { index: 2 });
+    }
+
+    #[test]
+    fn track_new_accepts_equal_adjacent_timestamps() {
+        // Equal (non-descending) timestamps are allowed — sorting is `>=`, not `>`.
+        assert!(Track::new(
+            "bone",
+            vec![0.0, 1.0, 1.0],
+            Keyframes::Scale(vec![Vec3::ONE, Vec3::ONE, Vec3::ONE]),
+        )
+        .is_ok());
+    }
+
+    // ── Rotation channel: slerp boundary + normalization ───────────────
+
+    fn rotation_track(interp: Interpolation) -> Track {
+        use std::f32::consts::PI;
+        Track::new(
+            "bone",
+            vec![0.0, 1.0],
+            Keyframes::Rotation(vec![Quat::IDENTITY, Quat::from_rotation_y(PI / 2.0)]),
+        )
+        .expect("valid track")
+        .with_interpolation(interp)
+    }
+
+    #[test]
+    fn rotation_track_slerp_midpoint_is_half_angle_and_unit() {
+        use std::f32::consts::PI;
+        // slerp(identity, 90°_y, 0.5) is the 45°_y rotation and must stay unit-length.
+        let track = rotation_track(Interpolation::Linear);
+        match track.sample(0.5) {
+            InterpolatedValue::Rotation(q) => {
+                assert!((q.length() - 1.0).abs() < TOL, "slerp result must be unit, got {}", q.length());
+                let expected = Quat::from_rotation_y(PI / 4.0);
+                assert!(q.dot(expected).abs() > 0.999, "midpoint should be 45°, got {q:?}");
+            }
+            other => panic!("expected Rotation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rotation_track_endpoints_and_clamp_are_exact() {
+        use std::f32::consts::PI;
+        let track = rotation_track(Interpolation::Linear);
+        let ends = [
+            (0.0_f32, Quat::IDENTITY),
+            (1.0, Quat::from_rotation_y(PI / 2.0)),
+            (-3.0, Quat::IDENTITY),               // clamp before start
+            (7.0, Quat::from_rotation_y(PI / 2.0)), // clamp after end
+        ];
+        for (t, expected) in ends {
+            match track.sample(t) {
+                InterpolatedValue::Rotation(q) => {
+                    assert!(q.dot(expected).abs() > 0.9999, "t={t} expected {expected:?}, got {q:?}");
+                }
+                other => panic!("expected Rotation, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn rotation_cubic_result_is_normalized() {
+        // Component-wise Hermite on a quaternion denormalizes; the sampler must
+        // re-normalize so the pose stays a valid unit rotation.
+        let values = Keyframes::Rotation(vec![Quat::IDENTITY, Quat::from_rotation_y(1.0)]);
+        let zero = Quat::from_xyzw(0.0, 0.0, 0.0, 0.0);
+        let in_t = Keyframes::Rotation(vec![zero, zero]);
+        let out_t = Keyframes::Rotation(vec![Quat::from_xyzw(0.0, 0.4, 0.0, 0.0), zero]);
+        let track = Track::new("bone", vec![0.0, 1.0], values)
+            .unwrap()
+            .with_cubic_tangents(in_t, out_t);
+        match track.sample(0.5) {
+            InterpolatedValue::Rotation(q) => {
+                assert!((q.length() - 1.0).abs() < 1e-4, "cubic quat must be unit, got {}", q.length());
+            }
+            other => panic!("expected Rotation, got {other:?}"),
+        }
+    }
+
+    // ── Translation channel (lerp) ─────────────────────────────────────
+
+    #[test]
+    fn translation_track_lerps_each_axis() {
+        let track = Track::new(
+            "bone",
+            vec![0.0, 2.0],
+            Keyframes::Translation(vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(4.0, -8.0, 2.0)]),
+        )
+        .unwrap();
+        // t=0.5 in [0,2] → factor 0.25 → quarter of the way.
+        match track.sample(0.5) {
+            InterpolatedValue::Translation(v) => {
+                assert!((v - Vec3::new(1.0, -2.0, 0.5)).length() < TOL, "got {v:?}");
+            }
+            other => panic!("expected Translation, got {other:?}"),
+        }
+    }
+
+    // ── Graceful degradation / fallback edges ──────────────────────────
+
+    #[test]
+    fn mismatched_length_track_samples_none_instead_of_panicking() {
+        // A track whose values are shorter than its timestamps (constructed by
+        // mutating a valid track) must degrade to None, not panic on OOB.
+        let mut track = Track::new(
+            "bone",
+            vec![0.0, 1.0],
+            Keyframes::Scale(vec![Vec3::ONE, Vec3::splat(2.0)]),
+        )
+        .unwrap();
+        track.keyframe_timestamps.push(2.0); // now 3 timestamps, 2 values
+        // t between the 2nd and (phantom) 3rd timestamp → idx1 indexes past the values.
+        assert_eq!(track.sample(1.5), InterpolatedValue::None);
+    }
+
+    #[test]
+    fn cubic_mismatched_variant_falls_back_to_linear() {
+        // Scale values but Translation tangents: the sampler must not panic; it
+        // falls back to the linear midpoint instead.
+        let track = Track::new(
+            "bone",
+            vec![0.0, 1.0],
+            Keyframes::Scale(vec![Vec3::ONE, Vec3::splat(3.0)]),
+        )
+        .unwrap()
+        .with_cubic_tangents(
+            Keyframes::Translation(vec![Vec3::ZERO, Vec3::ZERO]),
+            Keyframes::Translation(vec![Vec3::ZERO, Vec3::ZERO]),
+        );
+        match track.sample(0.5) {
+            InterpolatedValue::Scale(s) => {
+                assert!((s - Vec3::splat(2.0)).length() < TOL, "expected linear midpoint, got {s:?}");
+            }
+            other => panic!("expected Scale, got {other:?}"),
+        }
+    }
+
+    // ── Duration ───────────────────────────────────────────────────────
+
+    #[test]
+    fn empty_track_duration_is_zero() {
+        let track = Track::new("bone", vec![], Keyframes::Scale(vec![])).unwrap();
+        assert_eq!(track.duration(), 0.0);
+    }
+
+    #[test]
+    fn clip_duration_is_the_longest_track() {
+        let short = Track::new(
+            "a",
+            vec![0.0, 1.0],
+            Keyframes::Scale(vec![Vec3::ONE, Vec3::ONE]),
+        )
+        .unwrap();
+        let long = Track::new(
+            "b",
+            vec![0.0, 2.5],
+            Keyframes::Scale(vec![Vec3::ONE, Vec3::ONE]),
+        )
+        .unwrap();
+        let mut clip = AnimationClip::default();
+        clip.tracks = vec![short, long];
+        assert!((clip.duration() - 2.5).abs() < TOL, "got {}", clip.duration());
+        // An empty clip has zero duration (fold starts at 0.0).
+        assert_eq!(AnimationClip::default().duration(), 0.0);
+    }
 }

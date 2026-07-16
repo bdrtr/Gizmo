@@ -65,11 +65,17 @@ pub fn vehicle_controller_system(world: &World, dt: f32) {
     let all_colliders = gather_colliders(world);
 
     // Hava durumu grip çarpanı için sahnenin PhysicsWorld'ünden Weather'ı oku (yoksa Sunny).
-    // Copy değer olarak alınır → aşağıdaki unsafe query'den önce borrow düşer.
-    let weather = world
-        .get_resource::<gizmo_physics_rigid::world::PhysicsWorld>()
-        .map(|w| w.weather)
-        .unwrap_or_default();
+    // Copy değer olarak alınır → aşağıdaki unsafe query'den önce borrow düşer. Kaynak yokluğu
+    // KASITLI fallback (opsiyonel resource); sessizce yutmak yerine trace ile görünür kıl.
+    let weather = match world.get_resource::<gizmo_physics_rigid::world::PhysicsWorld>() {
+        Some(w) => w.weather,
+        None => {
+            tracing::trace!(
+                "[Vehicle] no PhysicsWorld resource — defaulting weather to Sunny (no grip penalty)"
+            );
+            gizmo_physics_rigid::world::Weather::default()
+        }
+    };
 
     // SAFETY: a `fn(&World, f32)` system reports `is_exclusive`, so the scheduler
     // runs it alone — no other query mutably aliases these components while this
@@ -85,6 +91,7 @@ pub fn vehicle_controller_system(world: &World, dt: f32) {
         )>()
     };
     if let Some(mut query) = query {
+        let mut vehicle_count = 0usize;
         for (id, (mut vehicle, mut rb, transform, mut vel, _)) in query.iter_mut() {
             // Aquaplaning hıza bağlı → her araç kendi hızıyla değerlendirilir.
             let wg = weather_grip_factor(weather, vel.linear.length());
@@ -98,7 +105,13 @@ pub fn vehicle_controller_system(world: &World, dt: f32) {
                 wg,
                 dt,
             );
+            vehicle_count += 1;
         }
+        tracing::trace!(
+            vehicle_count,
+            collider_count = all_colliders.len(),
+            "[Vehicle] controller system tick"
+        );
     }
 }
 
@@ -136,6 +149,7 @@ pub fn character_controller_system(world: &World, dt: f32) {
         )>()
     };
     if let Some(mut query) = query {
+        let mut char_count = 0usize;
         for (id, (mut kcc, mut transform, mut vel, collider, _)) in query.iter_mut() {
             let water_surface_y = phys
                 .as_ref()
@@ -150,7 +164,13 @@ pub fn character_controller_system(world: &World, dt: f32) {
                 water_surface_y,
                 dt,
             );
+            char_count += 1;
         }
+        tracing::trace!(
+            char_count,
+            collider_count = all_colliders.len(),
+            "[KCC] controller system tick"
+        );
     }
 }
 

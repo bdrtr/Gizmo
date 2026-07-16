@@ -95,6 +95,12 @@ pub fn weather_grip_factor(weather: Weather, speed_mps: f32) -> f32 {
 // `too_many_arguments`'ı `-A` ile muaf tutuyor; alternatif küçük bir `VehicleStepCtx` struct'ı
 // (colliders+weather_grip+dt) — ileride çevre girdisi artarsa (rüzgâr, yüzey sıcaklığı) tercih.
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(
+    skip_all,
+    level = "trace",
+    name = "update_vehicle",
+    fields(entity = ?vehicle_entity, weather_grip)
+)]
 pub fn update_vehicle(
     vehicle_entity: BodyHandle,
     vehicle: &mut VehicleController,
@@ -106,6 +112,7 @@ pub fn update_vehicle(
     dt: f32,
 ) {
     if vehicle_rb.is_static() {
+        tracing::trace!(entity = ?vehicle_entity, "[Vehicle] static rigid body — skipping update");
         return;
     }
 
@@ -282,6 +289,7 @@ pub fn update_vehicle(
             }
         }
 
+        let was_grounded = wheel.is_grounded;
         if let Some(hit) = closest_hit {
             wheel.is_grounded = true;
             wheel.ground_hit = Some(hit);
@@ -302,6 +310,17 @@ pub fn update_vehicle(
             wheel.suspension_length = wheel.suspension_rest_length;
             wheel.suspension_force = 0.0;
             wheel.surface_friction = PhysicsMaterial::ASPHALT.dynamic_friction;
+        }
+        if was_grounded != wheel.is_grounded {
+            tracing::debug!(
+                entity = ?vehicle_entity,
+                axle = ?wheel.axle_type,
+                is_left = wheel.is_left,
+                grounded = wheel.is_grounded,
+                suspension_length = wheel.suspension_length,
+                surface_friction = wheel.surface_friction,
+                "[Vehicle] wheel ground contact changed"
+            );
         }
 
         // Ackermann açısı (ön tekerlek)
@@ -415,6 +434,15 @@ pub fn update_vehicle(
                 let bump_stop_travel = wheel.suspension_max_travel * 0.1;
                 let bump_excess = compression - (wheel.suspension_max_travel - bump_stop_travel);
                 let bump_stop_force = if bump_excess > 0.0 {
+                    tracing::trace!(
+                        entity = ?vehicle_entity,
+                        axle = ?wheel.axle_type,
+                        is_left = wheel.is_left,
+                        bump_excess,
+                        compression,
+                        max_travel = wheel.suspension_max_travel,
+                        "[Vehicle] suspension bottoming out — bump-stop engaged"
+                    );
                     bump_excess * wheel.suspension_stiffness * 8.0
                 } else {
                     0.0
@@ -538,7 +566,19 @@ pub fn update_vehicle(
                     let spin_margin = TC_TARGET_SLIP * ref_vel;
                     let hi = (v_long + spin_margin) / wheel.radius;
                     let lo = (v_long - spin_margin) / wheel.radius;
+                    let pre_clamp_ω = wheel.angular_velocity;
                     wheel.angular_velocity = wheel.angular_velocity.clamp(lo, hi);
+                    if (wheel.angular_velocity - pre_clamp_ω).abs() > 1e-3 {
+                        tracing::trace!(
+                            entity = ?vehicle_entity,
+                            axle = ?wheel.axle_type,
+                            is_left = wheel.is_left,
+                            omega_before = pre_clamp_ω,
+                            omega_after = wheel.angular_velocity,
+                            v_long,
+                            "[Vehicle] traction control — clamped driven-wheel spin to target slip"
+                        );
+                    }
                 }
 
                 // Fren kilitleme: abs >= tekerlek hızı değilse sıfırla
@@ -590,6 +630,18 @@ pub fn update_vehicle(
         wheel.rotation_angle += wheel.angular_velocity * dt;
         wheel.rotation_angle %= std::f32::consts::TAU;
     }
+
+    // Per-step özet (yalnız trace etkinken alanlar hesaplanır — tracing makro seviye-kapılıdır).
+    tracing::trace!(
+        entity = ?vehicle_entity,
+        speed_kmh = vehicle.current_speed_kmh,
+        engine_rpm = vehicle.engine_rpm,
+        gear = vehicle.current_gear,
+        grounded_wheels = vehicle.wheels.iter().filter(|w| w.is_grounded).count(),
+        wheel_count = vehicle.wheels.len(),
+        ge_factor,
+        "[Vehicle] step complete"
+    );
 }
 
 // ============================================================
@@ -874,6 +926,32 @@ mod tests {
         assert!(
             right.abs() > left.abs(),
             "right(inner) {right} must steer more than left(outer) {left} on a right turn"
+        );
+    }
+
+    /// Near-straight guard: when the turn radius is effectively infinite (|r| ≥ 1e4,
+    /// i.e. steering ~0), `ackermann_steering_angle` must return the nominal steer
+    /// angle UNCHANGED for both wheels, rather than running the geometry formula —
+    /// which for a huge radius collapses to ~0 and would erase the commanded angle.
+    #[test]
+    fn ackermann_returns_nominal_angle_when_near_straight() {
+        let wheelbase = 2.8_f32;
+        let track = 1.6_f32;
+        let steer = 0.2_f32;
+
+        // Infinite radius (dead straight) → passthrough for both wheels.
+        let left = ackermann_steering_angle(steer, f32::MAX, wheelbase, track, true);
+        let right = ackermann_steering_angle(steer, f32::MAX, wheelbase, track, false);
+        assert_eq!(left, steer, "near-straight left wheel keeps the nominal angle");
+        assert_eq!(right, steer, "near-straight right wheel keeps the nominal angle");
+
+        // Just over the threshold is still passthrough...
+        assert_eq!(ackermann_steering_angle(steer, 2.0e4, wheelbase, track, true), steer);
+        // ...whereas an actual (tight) turn engages the geometry and diverges from nominal.
+        let tight = ackermann_steering_angle(steer, 6.0, wheelbase, track, true);
+        assert!(
+            (tight - steer).abs() > 1e-4,
+            "a real turn radius must compute a geometry angle ≠ nominal, got {tight}"
         );
     }
 

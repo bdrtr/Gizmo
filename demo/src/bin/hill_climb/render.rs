@@ -9,7 +9,6 @@ pub(super) fn render(
     renderer: &mut Renderer,
     _light_time: f32,
 ) {
-    renderer.gpu_physics = None;
     renderer.update_post_process(&renderer.queue, state.post_process);
 
     let mut pending = state.pending_particles.borrow_mut();

@@ -65,6 +65,14 @@ impl AnimationPlayer {
 
     /// Starts playing `clip` from the beginning, clearing any cached target entities.
     pub fn play(&mut self, clip: Arc<AnimationClip>) -> &mut Self {
+        // Clip-start is a genuine once-per-playthrough lifecycle event, so it is
+        // logged at info!. Read the metadata before the Arc is moved into `self`.
+        tracing::info!(
+            clip = %clip.name,
+            tracks = clip.tracks.len(),
+            duration = clip.duration(),
+            "[Animation] starting transform-track clip"
+        );
         self.clip = Some(clip);
         self.elapsed_time = 0.0;
         self.playing = true;
@@ -74,12 +82,14 @@ impl AnimationPlayer {
 
     /// Pauses playback, leaving [`Self::elapsed_time`] untouched.
     pub fn pause(&mut self) -> &mut Self {
+        tracing::debug!(elapsed = self.elapsed_time, "[Animation] paused");
         self.playing = false;
         self
     }
 
     /// Resumes playback from the current position.
     pub fn resume(&mut self) -> &mut Self {
+        tracing::debug!(elapsed = self.elapsed_time, "[Animation] resumed");
         self.playing = true;
         self
     }
@@ -121,7 +131,19 @@ impl AnimationPlayer {
             if duration > 0.0 {
                 // rem_euclid, not `%`: wraps negative (reverse-playback) times
                 // back into [0, duration) rather than leaving them negative.
+                let before = self.elapsed_time;
                 self.elapsed_time = self.elapsed_time.rem_euclid(duration);
+                // Only fires on the frames the playhead actually crosses a loop
+                // boundary (in-range values are unchanged by rem_euclid), so this
+                // stays quiet on the per-frame hot path — hence trace!, not debug!.
+                if self.elapsed_time != before {
+                    tracing::trace!(
+                        from = before,
+                        to = self.elapsed_time,
+                        duration,
+                        "[Animation] loop wrapped"
+                    );
+                }
             }
         } else if safe_speed < 0.0 {
             // Reverse, non-looping: complete at the start of the clip. Gated on
@@ -130,10 +152,12 @@ impl AnimationPlayer {
             if self.elapsed_time <= 0.0 {
                 self.elapsed_time = 0.0;
                 self.playing = false;
+                tracing::debug!(duration, "[Animation] reverse clip reached start; playback stopped");
             }
         } else if self.elapsed_time >= duration {
             self.elapsed_time = duration;
             self.playing = false;
+            tracing::debug!(duration, "[Animation] clip reached end; playback stopped");
         }
     }
 }
@@ -237,5 +261,73 @@ mod tests {
         p.advance(1.0, 2.0);
         assert_eq!(p.elapsed_time, 0.0);
         assert!(p.playing, "speed==0 must keep playing, not trip the reverse-stop branch");
+    }
+
+    // ── Playback control state transitions ─────────────────────────────
+
+    #[test]
+    fn play_resets_time_targets_and_marks_playing() {
+        let mut p = AnimationPlayer::new();
+        p.elapsed_time = 5.0;
+        p.playing = false;
+        p.target_entities.insert("bone".into(), Entity::new(3, 0)); // stale cache
+        p.play(Arc::new(AnimationClip::default()));
+        assert!(p.clip.is_some(), "clip must be set");
+        assert_eq!(p.elapsed_time, 0.0, "play restarts from the beginning");
+        assert!(p.playing, "play resumes playback");
+        assert!(
+            p.target_entities.is_empty(),
+            "targets must be re-resolved for the new clip"
+        );
+    }
+
+    #[test]
+    fn pause_and_resume_toggle_playing_without_touching_time() {
+        let mut p = AnimationPlayer::new();
+        p.elapsed_time = 1.25;
+        p.pause();
+        assert!(!p.playing);
+        assert_eq!(p.elapsed_time, 1.25, "pause must not rewind");
+        p.resume();
+        assert!(p.playing);
+        assert_eq!(p.elapsed_time, 1.25, "resume continues from the same spot");
+    }
+
+    #[test]
+    fn looping_builder_sets_flag() {
+        assert!(!AnimationPlayer::new().looping(false).looping);
+        assert!(AnimationPlayer::new().looping(true).looping);
+    }
+
+    #[test]
+    fn advance_speed_multiplier_scales_dt() {
+        // elapsed += dt * speed. speed 2.0, dt 0.5 → +1.0.
+        let mut p = AnimationPlayer::new().looping(false).with_speed(2.0);
+        p.elapsed_time = 0.0;
+        p.advance(0.5, 10.0);
+        assert!((p.elapsed_time - 1.0).abs() < 1e-6, "got {}", p.elapsed_time);
+        assert!(p.playing);
+    }
+
+    #[test]
+    fn advance_looping_wraps_across_multiple_periods() {
+        // A dt larger than the clip length wraps modulo the duration (rem_euclid),
+        // not just once: 2.7 over a 1.0 clip lands at 0.7.
+        let mut p = AnimationPlayer::new().looping(true);
+        p.elapsed_time = 0.0;
+        p.advance(2.7, 1.0);
+        assert!((p.elapsed_time - 0.7).abs() < 1e-5, "got {}", p.elapsed_time);
+        assert!(p.playing);
+    }
+
+    #[test]
+    fn advance_looping_zero_duration_does_not_wrap_or_nan() {
+        // duration == 0 must skip the rem_euclid (division by zero → NaN); the time
+        // just accumulates and stays finite.
+        let mut p = AnimationPlayer::new().looping(true);
+        p.elapsed_time = 0.0;
+        p.advance(0.5, 0.0);
+        assert!(p.elapsed_time.is_finite(), "must not become NaN on zero-length clip");
+        assert_eq!(p.elapsed_time, 0.5);
     }
 }

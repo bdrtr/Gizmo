@@ -97,6 +97,7 @@ impl World {
         if self.tick == 0 {
             self.tick = 1;
         }
+        tracing::trace!(tick = self.tick, "increment_tick");
 
         // Apply topological memory alignment for caching locality
         self.sort_archetype_hierarchy();
@@ -113,6 +114,7 @@ impl World {
         if self.tick == 0 {
             self.tick = 1;
         }
+        tracing::trace!(tick = self.tick, ref_tick, "begin_change_frame");
         self.tick
     }
 

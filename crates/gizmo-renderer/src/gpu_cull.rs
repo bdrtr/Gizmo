@@ -153,6 +153,7 @@ impl GpuCullState {
     }
 
     /// Upload per-frame bounds and initial draw args (instance_count = 0); GPU sets it to 1 if visible.
+    #[tracing::instrument(skip_all, level = "trace")]
     pub fn prepare(
         &self,
         queue: &wgpu::Queue,
@@ -163,6 +164,18 @@ impl GpuCullState {
             return;
         }
         let count = clamped_draw_count(bounds.len(), draw_args.len(), self.capacity);
+        if count < bounds.len() {
+            // Callers that pass more mesh bounds than the GPU buffer can hold (or a
+            // shorter draw-args slice) silently lose the tail — those meshes never
+            // get culled or drawn. Surface it so a missing object is diagnosable.
+            tracing::warn!(
+                submitted = bounds.len(),
+                draw_args = draw_args.len(),
+                capacity = self.capacity,
+                uploaded = count,
+                "[GpuCull] mesh bounds truncated to capacity; tail meshes will not draw"
+            );
+        }
         queue.write_buffer(
             &self.mesh_bounds_buffer,
             0,
@@ -184,6 +197,7 @@ impl GpuCullState {
     }
 
     /// Encode the cull compute pass. Must run before any render pass that uses `indirect_buffer`.
+    #[tracing::instrument(skip_all, level = "trace")]
     pub fn cull_pass(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -201,6 +215,11 @@ impl GpuCullState {
         cpass.set_bind_group(0, global_bind_group, &[]);
         cpass.set_bind_group(1, &self.bind_group, &[]);
         cpass.dispatch_workgroups(count.div_ceil(64), 1, 1);
+        tracing::trace!(
+            instances = count,
+            workgroups = count.div_ceil(64),
+            "[GpuCull] dispatched frustum cull"
+        );
     }
 
     /// Byte offset into `indirect_buffer` for draw item `i`.

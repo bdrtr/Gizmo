@@ -79,15 +79,30 @@ impl<'a> Commands<'a> {
                     );
                 }
 
+                // Bir-kez yaşam-döngüsü olayı: ağır bir asset yüklendi + sahneye spawn'landı.
+                tracing::info!(
+                    path,
+                    entity = root.id(),
+                    roots = asset.roots.len(),
+                    skeletons = asset.skeletons.len(),
+                    animations = asset.animations.len(),
+                    "glTF sahnesi yüklendi ve spawn'landı"
+                );
+
                 Ok(EntityBuilder {
                     commands: self,
                     entity: root,
                 })
             }
-            Err(e) => Err(GltfLoadError::Load {
-                path: path.to_string(),
-                source: e.to_string(),
-            }),
+            Err(e) => {
+                // Çağıran bunu sık sık `.ok()`/`.expect()` ile yutar → burada path + sebeple
+                // görünür kıl (davranış değişmez; hata yine de döndürülür).
+                tracing::warn!(path, error = %e, "glTF sahnesi yüklenemedi");
+                Err(GltfLoadError::Load {
+                    path: path.to_string(),
+                    source: e.to_string(),
+                })
+            }
         }
     }
 
@@ -164,15 +179,32 @@ impl<'a> Commands<'a> {
                     );
                 }
 
+                // Bir-kez yaşam-döngüsü olayı: asenkron import GPU'ya alındı + spawn'landı.
+                tracing::info!(
+                    path = %completion.path,
+                    entity = root.id(),
+                    roots = asset.roots.len(),
+                    skeletons = asset.skeletons.len(),
+                    animations = asset.animations.len(),
+                    "glTF sahnesi (async import) yüklendi ve spawn'landı"
+                );
+
                 Ok(EntityBuilder {
                     commands: self,
                     entity: root,
                 })
             }
-            Err(e) => Err(GltfLoadError::Load {
-                path: completion.path.clone(),
-                source: e.to_string(),
-            }),
+            Err(e) => {
+                tracing::warn!(
+                    path = %completion.path,
+                    error = %e,
+                    "glTF sahnesi (async import) yüklenemedi"
+                );
+                Err(GltfLoadError::Load {
+                    path: completion.path.clone(),
+                    source: e.to_string(),
+                })
+            }
         }
     }
 }
@@ -229,10 +261,23 @@ fn spawn_gltf_node_flat(
     world.add_component(entity, t);
     world.add_component(entity, gizmo_physics_core::components::GlobalTransform::default());
 
-    tracing::debug!("SPAWN GLTF NODE: name={:?}, num_primitives={}", node.name, node.primitives.len());
+    // Per-node/per-primitive → iç-döngü/özyineleme detayı, bu yüzden trace! (bir glTF yüzlerce
+    // node içerebilir; aggregate özet çağıran `spawn_gltf`'in info! satırında verilir).
+    tracing::trace!(
+        entity = entity.id(),
+        name = ?node.name,
+        primitives = node.primitives.len(),
+        children = node.children.len(),
+        "glTF node spawn'lanıyor"
+    );
     let mut newly_added_prims = Vec::new();
     for (mesh, mat_opt) in node.primitives.iter() {
-        tracing::debug!("  SPAWN PRIM: mesh_source='{}', bounds_min={:?}, bounds_max={:?}", mesh.source, mesh.bounds.min, mesh.bounds.max);
+        tracing::trace!(
+            source = %mesh.source,
+            bounds_min = ?mesh.bounds.min,
+            bounds_max = ?mesh.bounds.max,
+            "glTF primitive spawn'lanıyor"
+        );
         let prim = world.spawn();
         let mut prim_t = Transform::new(Vec3::ZERO);
         prim_t.update_local_matrix();

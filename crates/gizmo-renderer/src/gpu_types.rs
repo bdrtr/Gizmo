@@ -240,3 +240,80 @@ impl UvTransform {
         self.offset == [0.0, 0.0] && self.rotation == 0.0 && self.scale == [1.0, 1.0]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // These byte sizes are contracts with the WGSL side: `common.wgsl` and the
+    // partial SceneUniforms copies in other shaders assume this exact std140
+    // layout, and bytemuck::Pod requires no interior/trailing padding. If any of
+    // these drift the shaders read garbage (or bytemuck::cast_slice panics).
+    #[test]
+    fn gpu_struct_sizes_match_the_shader_layout() {
+        assert_eq!(std::mem::size_of::<Vertex>(), 92, "Vertex stride");
+        assert_eq!(std::mem::size_of::<LightData>(), 64, "LightData = 4×vec4");
+        assert_eq!(std::mem::size_of::<InstanceRaw>(), 96, "InstanceRaw");
+        assert_eq!(std::mem::size_of::<MaterialParams>(), 48, "MaterialParams = 3×vec4");
+        // The struct's own comment pins the total at 1168 bytes with inv_view_proj
+        // appended at the 16-byte-aligned tail (offset 1104).
+        assert_eq!(std::mem::size_of::<SceneUniforms>(), 1168, "SceneUniforms total");
+    }
+
+    #[test]
+    fn vertex_desc_offsets_are_packed_and_in_bounds() {
+        let d = Vertex::desc();
+        assert_eq!(d.array_stride as usize, std::mem::size_of::<Vertex>());
+
+        // Offsets strictly increase, shader locations run 0..=6, everything fits.
+        let mut prev: Option<u64> = None;
+        for (i, a) in d.attributes.iter().enumerate() {
+            assert_eq!(a.shader_location, i as u32, "attribute {i} shader_location");
+            assert!(a.offset < d.array_stride, "attribute {i} offset past stride");
+            if let Some(p) = prev {
+                assert!(a.offset > p, "attribute {i} offset must increase");
+            }
+            prev = Some(a.offset);
+        }
+        // Last attribute is the Float32x4 tangent (16 bytes) and must end exactly
+        // at the stride — no hidden gap that would corrupt the next vertex.
+        let last = d.attributes.last().unwrap();
+        assert_eq!(last.format, wgpu::VertexFormat::Float32x4);
+        assert_eq!(last.offset + 16, d.array_stride);
+    }
+
+    #[test]
+    fn material_params_new_packs_fields_into_documented_slots() {
+        let uv = UvTransform { offset: [0.1, 0.2], rotation: 0.5, scale: [2.0, 3.0] };
+        let p = MaterialParams::new([1.0, 2.0, 3.0], 0.7, 0.4, uv, 0.25);
+        // emissive.xyz + normal_scale
+        assert_eq!(p.emissive_and_normal_scale, [1.0, 2.0, 3.0, 0.7]);
+        // occlusion, uv.rotation, uv.offset.x, uv.offset.y
+        assert_eq!(p.occlusion_uv_rot_offset, [0.4, 0.5, 0.1, 0.2]);
+        // uv.scale.xy, alpha_cutoff, reserved 0
+        assert_eq!(p.uv_scale, [2.0, 3.0, 0.25, 0.0]);
+    }
+
+    #[test]
+    fn material_params_default_is_neutral() {
+        let d = MaterialParams::default();
+        assert_eq!(d.emissive_and_normal_scale, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(d.occlusion_uv_rot_offset, [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(d.uv_scale, [1.0, 1.0, 0.0, 0.0]);
+        // Default UvTransform folded into MaterialParams::new must reproduce Default.
+        let via_new = MaterialParams::new([0.0; 3], 1.0, 1.0, UvTransform::default(), 0.0);
+        assert_eq!(via_new.emissive_and_normal_scale, d.emissive_and_normal_scale);
+        assert_eq!(via_new.occlusion_uv_rot_offset, d.occlusion_uv_rot_offset);
+        assert_eq!(via_new.uv_scale, d.uv_scale);
+    }
+
+    #[test]
+    fn uv_transform_is_identity_only_for_the_identity() {
+        assert!(UvTransform::default().is_identity());
+        assert!(!UvTransform { offset: [0.1, 0.0], ..Default::default() }.is_identity());
+        assert!(!UvTransform { rotation: 0.001, ..Default::default() }.is_identity());
+        assert!(!UvTransform { scale: [1.0, 2.0], ..Default::default() }.is_identity());
+        // A non-unit scale of exactly 0 is still "not identity".
+        assert!(!UvTransform { scale: [0.0, 0.0], ..Default::default() }.is_identity());
+    }
+}

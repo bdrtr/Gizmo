@@ -79,6 +79,13 @@ impl JointSolver {
 
         if lin_impulse.abs() / dt > joint.break_force {
             joint.is_broken = true;
+            tracing::debug!(
+                entity_a = ?joint.entity_a,
+                entity_b = ?joint.entity_b,
+                applied_force = lin_impulse.abs() / dt,
+                break_force = joint.break_force,
+                "Distance joint broke (force exceeded break threshold)"
+            );
         }
     }
 }

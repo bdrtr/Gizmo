@@ -47,6 +47,14 @@ impl Gjk {
             }
         }
 
+        // Exhausted the iteration budget without enclosing the origin. Usually a genuine
+        // near-miss, but at this budget it can also be a numerically stalled search — a
+        // trace helps distinguish "no contact" from "GJK gave up" when debugging.
+        tracing::trace!(
+            max_iterations = MAX_ITERATIONS,
+            simplex_len = simplex.len(),
+            "GJK did not converge within the iteration budget; treating as no collision"
+        );
         None
     }
 
@@ -328,6 +336,10 @@ impl Gjk {
             }
         }
 
+        tracing::trace!(
+            max_iterations = 32,
+            "conservative advancement did not converge within the iteration budget; reporting no TOI"
+        );
         None
     }
 

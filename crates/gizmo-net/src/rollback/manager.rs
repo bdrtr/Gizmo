@@ -22,6 +22,7 @@ pub struct RollbackManager {
 impl RollbackManager {
     /// Creates a manager whose snapshot history holds `capacity` ticks.
     pub fn new(capacity: usize) -> Self {
+        tracing::info!(snapshot_capacity = capacity, "RollbackManager oluşturuldu");
         Self {
             current_tick: 0,
             latest_tick: 0,
@@ -34,6 +35,12 @@ impl RollbackManager {
     /// Registers a player and allocates an input buffer of `buffer_capacity` ticks for them.
     pub fn register_player(&mut self, player_id: u32, buffer_capacity: usize) {
         self.input_buffers.insert(player_id, InputBuffer::new(player_id, buffer_capacity));
+        tracing::info!(
+            player_id,
+            buffer_capacity,
+            player_count = self.input_buffers.len(),
+            "Rollback oyuncusu kaydedildi"
+        );
     }
 
     /// Uzak sunucudan/oyuncudan gelen girdiyi kabul eder
@@ -54,28 +61,57 @@ impl RollbackManager {
                     None => input.tick,
                 };
                 self.rollback_target_tick = Some(min_target);
+                tracing::warn!(
+                    player_id,
+                    tick = input.tick,
+                    current_tick = self.current_tick,
+                    rollback_target = min_target,
+                    "Tahmin uyumsuzluğu (misprediction): rollback hedefi güncellendi"
+                );
             }
+        } else {
+            // Kaydı olmayan bir oyuncudan girdi gelmesi bir protokol/eşleşme anomalisidir;
+            // davranışı korumak için yok sayıyoruz ama sessizce yutmuyoruz.
+            tracing::warn!(
+                player_id,
+                tick = input.tick,
+                "Kayıtlı olmayan oyuncudan girdi alındı, yok sayılıyor"
+            );
         }
     }
 
     /// Fizik döngüsünden ÖNCE çağrılır. Gerekirse geçmişe döner.
     /// Geriye dönülürse true döner, böylece oyun motoru mevcut current_tick'e 
     /// tekrar ulaşana kadar "sessizce" (render olmadan) fiziği simüle eder.
+    #[tracing::instrument(skip_all, name = "rollback_begin_frame")]
     pub fn begin_frame(&mut self, world: &mut World) -> bool {
         if let Some(target_tick) = self.rollback_target_tick {
             if let Some(past_state) = self.state_buffer.get(target_tick) {
+                // Motorun bu rollback'ten sonra current_tick'e tekrar ulaşmak için
+                // kaç kareyi sessizce yeniden simüle edeceği.
+                let resim_frames = self.current_tick.saturating_sub(target_tick);
                 // Zaman Makinesi: Evreni (World) geçmişteki haline geri yükle
                 past_state.restore(world);
-                
+
                 // Engine tick'i geçmişe çek
                 self.current_tick = target_tick;
                 self.rollback_target_tick = None; // Hedefe ulaşıldı
+                tracing::debug!(
+                    target_tick,
+                    resim_frames,
+                    latest_tick = self.latest_tick,
+                    "Rollback: dünya geçmiş tick'e geri yüklendi, yeniden simülasyon başlıyor"
+                );
                 return true; // Rollback gerçekleşti
             } else {
                 // Buffer'da o kadar eski bir kare yoksa (Çok yüksek ping/paket kaybı)
                 // Senkronizasyon kalıcı olarak kopmuş olabilir (Desync).
                 // Gerçek oyunda burada sunucudan Full State Update istenir.
-                tracing::error!("Rollback desync! Frame {} is lost in buffer.", target_tick);
+                tracing::error!(
+                    target_tick,
+                    latest_tick = self.latest_tick,
+                    "Rollback desync: hedef snapshot tamponda yok (çok eski / pencere aşımı); FullState gerekli"
+                );
                 self.rollback_target_tick = None;
             }
         }
@@ -83,6 +119,7 @@ impl RollbackManager {
     }
 
     /// Fizik döngüsünün tam SONUNDA çağrılır. O anki dünyanın anlık kopyasını alır.
+    #[tracing::instrument(skip_all, name = "rollback_end_frame")]
     pub fn end_frame(&mut self, world: &World) {
         let snapshot = PhysicsStateSnapshot::capture(world, self.current_tick);
         self.state_buffer.save(snapshot);
@@ -154,5 +191,83 @@ mod tests {
 
         // Manager'ın saati (current_tick) de 0'a çekilmiş olmalı
         assert_eq!(manager.current_tick, 0);
+    }
+
+    // Nötr (0) tahminden sapan bir girdi üretir → rollback tetikleyebilir.
+    fn btn(tick: u64, buttons: u32) -> PlayerInput {
+        let mut i = PlayerInput::empty(tick);
+        i.buttons = buttons;
+        i
+    }
+
+    #[test]
+    fn end_frame_advances_current_and_latest_tick() {
+        let world = World::new();
+        let mut m = RollbackManager::new(60);
+        assert_eq!(m.current_tick, 0);
+        m.end_frame(&world);
+        m.end_frame(&world);
+        assert_eq!(m.current_tick, 2, "end_frame current_tick'i ilerletmeli");
+        assert_eq!(m.latest_tick, 2, "latest_tick en yüksek tick'i izlemeli");
+    }
+
+    #[test]
+    fn begin_frame_without_target_is_noop() {
+        let mut world = World::new();
+        let mut m = RollbackManager::new(60);
+        assert!(!m.begin_frame(&mut world), "rollback hedefi yokken false dönmeli");
+    }
+
+    // Kayıtlı olmayan oyuncudan gelen girdi sessizce yoksayılmalı (panik/rollback yok).
+    #[test]
+    fn remote_input_for_unregistered_player_is_ignored() {
+        let mut m = RollbackManager::new(60);
+        m.receive_remote_input(42, btn(0, 1));
+        assert_eq!(m.rollback_target_tick, None);
+    }
+
+    // Gelen girdi tahminle AYNIysa (nötr↔nötr) rollback tetiklenmemeli.
+    #[test]
+    fn matching_prediction_does_not_trigger_rollback() {
+        let mut m = RollbackManager::new(60);
+        m.register_player(1, 60);
+        m.receive_remote_input(1, PlayerInput::empty(0)); // nötr = tahmin
+        assert_eq!(m.rollback_target_tick, None);
+    }
+
+    // Henüz simüle edilmemiş (gelecek) bir tick için sapma bile rollback tetiklememeli
+    // (input.tick <= current_tick koşulu).
+    #[test]
+    fn future_input_does_not_trigger_rollback() {
+        let mut m = RollbackManager::new(60);
+        m.register_player(1, 60);
+        m.receive_remote_input(1, btn(5, 1)); // current_tick=0, tick 5 gelecek
+        assert_eq!(m.rollback_target_tick, None, "gelecek tick rollback tetiklememeli");
+    }
+
+    // Birden çok sapmada rollback hedefi en ESKİ (minimum) sapan tick olmalı; daha yeni
+    // bir sapma hedefi ileri ÇEKMEMELİ.
+    #[test]
+    fn rollback_target_is_the_minimum_of_diverged_ticks() {
+        let mut m = RollbackManager::new(60);
+        m.register_player(1, 60);
+        m.current_tick = 10; // sapan tickler geçmişte kalsın
+        m.receive_remote_input(1, btn(5, 1)); // tahmin nötr(0) → sapar
+        assert_eq!(m.rollback_target_tick, Some(5));
+        m.receive_remote_input(1, btn(3, 2)); // tahmin son onaylanan(1) → 2≠1 sapar
+        assert_eq!(m.rollback_target_tick, Some(3), "hedef en eski sapan tick olmalı");
+        m.receive_remote_input(1, btn(8, 4)); // daha yeni sapma
+        assert_eq!(m.rollback_target_tick, Some(3), "daha yeni sapma hedefi ileri çekmemeli");
+    }
+
+    // Hedef snapshot tamponda yoksa (çok eski / pencere aşımı) begin_frame PANİK ETMEMELİ:
+    // desync yolu → false döner ve hedef temizlenir.
+    #[test]
+    fn begin_frame_target_missing_from_buffer_is_desync_not_panic() {
+        let mut world = World::new();
+        let mut m = RollbackManager::new(4);
+        m.rollback_target_tick = Some(999);
+        assert!(!m.begin_frame(&mut world), "eksik snapshot'ta false dönmeli");
+        assert_eq!(m.rollback_target_tick, None, "desync sonrası hedef temizlenmeli");
     }
 }

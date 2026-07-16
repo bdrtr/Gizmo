@@ -112,12 +112,26 @@ impl PhysicsMaterial {
         let f_mode = resolve_combine_mode(a.friction_combine, b.friction_combine);
         let r_mode = resolve_combine_mode(a.restitution_combine, b.restitution_combine);
 
-        CombinedMaterial {
+        let combined = CombinedMaterial {
             static_friction: f_mode.combine(a.static_friction, b.static_friction),
             dynamic_friction: f_mode.combine(a.dynamic_friction, b.dynamic_friction),
             restitution: r_mode.combine(a.restitution, b.restitution),
             density: CombineMode::Average.combine(a.density, b.density),
-        }
+        };
+
+        // Per-contact-pair operation (hot path → trace only). Shows which combine modes
+        // won and the resulting coefficients when debugging unexpected friction/bounce.
+        tracing::trace!(
+            friction_mode = ?f_mode,
+            restitution_mode = ?r_mode,
+            static_friction = combined.static_friction,
+            dynamic_friction = combined.dynamic_friction,
+            restitution = combined.restitution,
+            density = combined.density,
+            "combined contact material"
+        );
+
+        combined
     }
 
     // ── Hazır Malzemeler ──────────────────────────────────────────────────────
@@ -281,5 +295,104 @@ mod tests {
         };
         let c = PhysicsMaterial::combine(&a, &b);
         assert!((c.restitution - 0.9).abs() < 1e-5);
+    }
+
+    #[test]
+    fn combine_mode_each_operation() {
+        assert!((CombineMode::Average.combine(0.2, 0.8) - 0.5).abs() < 1e-6);
+        assert_eq!(CombineMode::Min.combine(0.2, 0.8), 0.2);
+        assert_eq!(CombineMode::Max.combine(0.2, 0.8), 0.8);
+        assert!((CombineMode::GeometricMean.combine(4.0, 9.0) - 6.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn geometric_mean_clamps_negative_product() {
+        // A negative operand makes a*b < 0, so a bare sqrt() would be NaN; the .max(0.0)
+        // guard must yield 0.0 and stay finite.
+        let g = CombineMode::GeometricMean.combine(-1.0, 4.0);
+        assert_eq!(g, 0.0);
+        assert!(g.is_finite());
+    }
+
+    #[test]
+    fn resolve_mode_priority_is_max_min_geo_avg() {
+        use CombineMode::*;
+        // Max dominates every mode.
+        for other in [Average, Min, Max, GeometricMean] {
+            assert_eq!(resolve_combine_mode(Max, other), Max);
+            assert_eq!(resolve_combine_mode(other, Max), Max);
+        }
+        // Min dominates everything except Max.
+        for other in [Average, Min, GeometricMean] {
+            assert_eq!(resolve_combine_mode(Min, other), Min);
+            assert_eq!(resolve_combine_mode(other, Min), Min);
+        }
+        // GeometricMean beats only Average.
+        assert_eq!(resolve_combine_mode(GeometricMean, Average), GeometricMean);
+        assert_eq!(resolve_combine_mode(Average, GeometricMean), GeometricMean);
+        // Average only when both are Average.
+        assert_eq!(resolve_combine_mode(Average, Average), Average);
+    }
+
+    #[test]
+    fn resolve_mode_is_symmetric() {
+        use CombineMode::*;
+        for a in [Average, Min, Max, GeometricMean] {
+            for b in [Average, Min, Max, GeometricMean] {
+                assert_eq!(
+                    resolve_combine_mode(a, b),
+                    resolve_combine_mode(b, a),
+                    "resolution must not depend on operand order"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn combine_density_always_averaged() {
+        // Density is averaged regardless of the friction/restitution combine modes.
+        let a = PhysicsMaterial {
+            density: 2.0,
+            friction_combine: CombineMode::Max,
+            restitution_combine: CombineMode::Max,
+            ..Default::default()
+        };
+        let b = PhysicsMaterial { density: 8.0, ..a };
+        let c = PhysicsMaterial::combine(&a, &b);
+        assert!((c.density - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn combine_is_symmetric_in_values() {
+        let a = PhysicsMaterial::RUBBER;
+        let b = PhysicsMaterial::ICE;
+        let ab = PhysicsMaterial::combine(&a, &b);
+        let ba = PhysicsMaterial::combine(&b, &a);
+        assert!((ab.static_friction - ba.static_friction).abs() < 1e-6);
+        assert!((ab.dynamic_friction - ba.dynamic_friction).abs() < 1e-6);
+        assert!((ab.restitution - ba.restitution).abs() < 1e-6);
+        assert!((ab.density - ba.density).abs() < 1e-6);
+    }
+
+    #[test]
+    fn presets_encode_sensible_extremes() {
+        // Spot-check that the preset table isn't accidentally scrambled.
+        assert!(PhysicsMaterial::ICE.dynamic_friction < PhysicsMaterial::RUBBER.dynamic_friction);
+        assert!(PhysicsMaterial::RUBBER.restitution > PhysicsMaterial::CONCRETE.restitution);
+        assert!(PhysicsMaterial::METAL.density > PhysicsMaterial::WOOD.density);
+        // Every preset stays inside physically meaningful ranges.
+        for m in [
+            PhysicsMaterial::RUBBER,
+            PhysicsMaterial::ICE,
+            PhysicsMaterial::METAL,
+            PhysicsMaterial::WOOD,
+            PhysicsMaterial::CONCRETE,
+            PhysicsMaterial::GLASS,
+            PhysicsMaterial::ASPHALT,
+            PhysicsMaterial::SAND,
+        ] {
+            assert!((0.0..=1.0).contains(&m.restitution), "restitution {m:?}");
+            assert!(m.static_friction >= 0.0 && m.density > 0.0);
+        }
     }
 }

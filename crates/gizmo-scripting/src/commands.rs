@@ -185,3 +185,101 @@ impl CommandQueue {
             .len()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// `drain` FIFO sırayı korumalı ve push edilen HER komutu döndürmeli.
+    #[test]
+    fn drain_preserves_push_order() {
+        let q = CommandQueue::new();
+        q.push(ScriptCommand::SetPosition(1, Vec3::new(1.0, 0.0, 0.0)));
+        q.push(ScriptCommand::DestroyEntity(2));
+        q.push(ScriptCommand::StartRace);
+
+        let drained = q.drain();
+        assert_eq!(drained.len(), 3);
+        assert!(matches!(drained[0], ScriptCommand::SetPosition(1, _)));
+        assert!(matches!(drained[1], ScriptCommand::DestroyEntity(2)));
+        assert!(matches!(drained[2], ScriptCommand::StartRace));
+    }
+
+    /// `new()` ve `default()` her ikisi de boş kuyruk üretmeli; len/is_empty tutarlı olmalı.
+    #[test]
+    fn new_and_default_start_empty_and_agree() {
+        for q in [CommandQueue::new(), CommandQueue::default()] {
+            assert!(q.is_empty());
+            assert_eq!(q.len(), 0);
+        }
+    }
+
+    /// `drain` kuyruğu boşaltmalı: ilk drain komutları döndürür, ikincisi boş döner.
+    #[test]
+    fn drain_empties_queue() {
+        let q = CommandQueue::new();
+        q.push(ScriptCommand::HideDialogue);
+        assert_eq!(q.len(), 1);
+        assert!(!q.is_empty());
+
+        let first = q.drain();
+        assert_eq!(first.len(), 1);
+
+        // Boşaldı: len/is_empty tutarlı, ikinci drain boş.
+        assert_eq!(q.len(), 0);
+        assert!(q.is_empty());
+        assert!(q.drain().is_empty());
+    }
+
+    /// Eşzamanlı push'lar: N thread × M komut = tam olarak N*M komut kaybolmadan birikmeli.
+    /// (Mutex'in sağladığı toplam-koruma invariant'ı.)
+    #[test]
+    fn concurrent_pushes_are_all_recorded() {
+        let q = Arc::new(CommandQueue::new());
+        let threads = 8;
+        let per_thread = 250;
+
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                let q = q.clone();
+                std::thread::spawn(move || {
+                    for i in 0..per_thread {
+                        q.push(ScriptCommand::DestroyEntity(i));
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(q.len(), threads * per_thread as usize);
+        assert_eq!(q.drain().len(), threads * per_thread as usize);
+    }
+
+    /// Zehirlenmiş mutex (bir thread lock tutarken panic etti) kuyruğu kullanılamaz
+    /// bırakmamalı — poison-recovery ile push/drain/len panic-free çalışmaya devam etmeli.
+    #[test]
+    fn survives_poisoned_mutex() {
+        let q = Arc::new(CommandQueue::new());
+        q.push(ScriptCommand::StartRace);
+
+        // Lock'u tutarken panic ederek mutex'i zehirle.
+        let q2 = q.clone();
+        let joined = std::thread::spawn(move || {
+            let _guard = q2.commands.lock().unwrap();
+            panic!("mutex'i kasıtlı zehirle");
+        })
+        .join();
+        assert!(joined.is_err(), "thread panic etmeliydi");
+
+        // Zehirli olsa da kuyruk hâlâ çalışmalı.
+        assert_eq!(q.len(), 1);
+        q.push(ScriptCommand::EndCutscene);
+        assert_eq!(q.len(), 2);
+        let drained = q.drain();
+        assert_eq!(drained.len(), 2);
+        assert!(q.is_empty());
+    }
+}
