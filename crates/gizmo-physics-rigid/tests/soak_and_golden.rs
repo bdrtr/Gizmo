@@ -433,20 +433,27 @@ fn stack_soak_report(results: &[StackSoakResult]) -> String {
     report
 }
 
-/// Regression lock for the resting-stack BUCKLING fix (block contact solver, 2026-07-15).
-/// Before the fix a fully settled stack of N≥5 boxes spontaneously toppled (energy from
-/// nowhere): N16 blew at frame ~868, N32 at ~462 — see the buckling analysis on
-/// `run_resting_stack_soak`. The manifold BLOCK solver (solver/block.rs) resolves each
-/// contact patch's coplanar normals jointly, restoring the tilt-resisting torque that
-/// sequential Gauss-Seidel under-resolved, and adaptive iterations propagate support up
-/// the column. Realistic stacks (up to ~16 tall — far beyond the 5-box columns the field
-/// bug had) now stay bounded. (Extreme 32+ towers are only partially improved and are
-/// covered by the #[ignore]d acceptance test below.)
+/// Regression lock for the resting-stack BUCKLING fix. Before the fix a fully settled stack
+/// of N≥5 boxes spontaneously toppled (energy from nowhere). Two layers fixed it:
+///   1. Manifold BLOCK solver (solver/block.rs) — resolves each contact patch's coplanar
+///      normals jointly, restoring the tilt-resisting torque sequential Gauss-Seidel
+///      under-resolved (took the ceiling to N≈16).
+///   2. FULL warm-start (warm_start_factor=1.0, 2026-07-15) — the previous 0.85 discarded 15%
+///      of the accumulated impulse each substep, and the partial re-convergence injected a
+///      marginal amount of energy that compounded in tall stacks. Full warm-start closes it
+///      and raises the robust ceiling to N≈32 (verified bounded over 3000 frames in
+///      grid_candidate_fixes; the config-sweep data showed this is the single most effective,
+///      most principled knob — hertz/tol/iters are chaotic and don't compose).
+/// Realistic game stacks (≤~12) are far below this. (Extreme 48+ towers still buckle and need
+/// a friction-aware direct solve — see the #[ignore]d acceptance test below.)
 #[test]
 fn soak_resting_stacks_stay_bounded() {
     let frames = 1500;
     let vel_threshold = 0.5;
-    let results: Vec<StackSoakResult> = [2usize, 5, 16]
+    // Full warm-start (warm_start_factor=1.0) raised the robust-stability ceiling from N≤16
+    // to N≤32 (verified bounded over 3000 frames in grid_candidate_fixes). Lock the whole
+    // range so a regression to the old partial-warm-start injection is caught.
+    let results: Vec<StackSoakResult> = [2usize, 5, 16, 24, 32]
         .into_iter()
         .map(|n| run_resting_stack_soak(n, frames, vel_threshold))
         .collect();
@@ -456,7 +463,7 @@ fn soak_resting_stacks_stay_bounded() {
     let blew: Vec<&StackSoakResult> = results.iter().filter(|r| r.blew_up_at.is_some()).collect();
     assert!(
         blew.is_empty(),
-        "a resting stack (N≤16) spontaneously gained energy / buckled — the block-solver \
+        "a resting stack (N≤32) spontaneously gained energy / buckled — the full-warm-start \
          stack-stability fix regressed:{report}"
     );
 }
@@ -477,17 +484,17 @@ fn direct_chain_solve_keeps_small_stack_bounded() {
     );
 }
 
-/// Acceptance test for the REMAINING work: extreme aspect-ratio towers (N≥32). The block
-/// solver reduced the instability ~100× (20 m/s blow-ups → ~0.2 residual) but does NOT
-/// fully eliminate it for very tall single columns — the iterative solve still leaves a
-/// weak buckling creep that eventually topples, and empirically NO iteration/reg/damping
-/// tuning robustly fixes N32 (the blow-up frame is chaotic across builds). A complete fix
-/// needs a whole-chain DIRECT solve (exact, iteration-independent). Un-ignore when that
-/// lands. See docs/solver-stack-instability-FIXPLAN.md.
+/// Acceptance test for the REMAINING work: extreme aspect-ratio towers (N≥48). Full warm-start
+/// pushed robust stability to N≤32 (now locked in soak_resting_stacks_stay_bounded), but the
+/// residual marginal energy injection still compounds for VERY tall single columns — N=48
+/// blows up around frame ~200, and empirically NO parameter tuning (warm-start/hertz/tol/iters,
+/// alone or combined) robustly fixes N≥48; the blow-up frame is chaotic. A complete fix needs a
+/// friction-aware whole-chain DIRECT/global solve (the current `solve_island_normals` handles
+/// only normals, and is O(n³)). Un-ignore when that lands. See grid_candidate_fixes for data.
 #[test]
-#[ignore = "extreme tower (N32) still buckles eventually; needs a whole-chain direct solve — un-ignore when it lands"]
-fn soak_extreme_tower_n32_stays_bounded() {
-    let results: Vec<StackSoakResult> = [32usize]
+#[ignore = "extreme tower (N48) still buckles eventually; needs a friction-aware whole-chain direct solve — un-ignore when it lands"]
+fn soak_extreme_tower_n48_stays_bounded() {
+    let results: Vec<StackSoakResult> = [48usize]
         .into_iter()
         .map(|n| run_resting_stack_soak(n, 1500, 0.5))
         .collect();
@@ -495,7 +502,7 @@ fn soak_extreme_tower_n32_stays_bounded() {
     eprint!("{report}");
     assert!(
         results.iter().all(|r| r.blew_up_at.is_none()),
-        "extreme tower N32 still buckles:{report}"
+        "extreme tower N48 still buckles:{report}"
     );
 }
 
@@ -627,6 +634,49 @@ fn grid_block_stability() {
             None => "OK".to_string(),
         };
         println!("  N={n:<3} peak|v|={:>8.3}  {tag}", r.peak_speed);
+    }
+    println!();
+}
+
+#[test]
+#[ignore = "diagnostic grid, run manually with --ignored --nocapture"]
+fn grid_candidate_fixes() {
+    // The config sweep found 3 independent knobs that stabilise N=32 (contact_hertz=60,
+    // warm_start_factor=1.0, warm_start_match_tolerance=1e-3). But the iteration ladder is
+    // CHAOTIC, so "stable at N=32/1500f" may be luck. Verify each candidate (and combos) is
+    // ROBUSTLY stable across N=16..64 over 3000 frames. The winner becomes the new default.
+    type Cfg = (&'static str, fn(&mut ConstraintSolver));
+    let cands: &[Cfg] = &[
+        ("baseline (defaults)", |_s| {}),
+        ("ws_factor=1.0", |s| s.warm_start_factor = 1.0),
+        ("direct", |s| s.direct_chain_solve = true),
+        ("direct + ws1.0", |s| {
+            s.direct_chain_solve = true;
+            s.warm_start_factor = 1.0;
+        }),
+        ("direct + ws1.0 + tol1e-3", |s| {
+            s.direct_chain_solve = true;
+            s.warm_start_factor = 1.0;
+            s.warm_start_match_tolerance = 1e-3;
+        }),
+        ("direct + ws1.0 + hertz60", |s| {
+            s.direct_chain_solve = true;
+            s.warm_start_factor = 1.0;
+            s.contact_hertz = 60.0;
+        }),
+    ];
+    println!("\n=== candidate-fix robustness grid (3000 frames, N=16..64) ===");
+    for &(name, cfg) in cands {
+        let mut line = format!("{name:>22} | ");
+        for n in [16usize, 24, 32, 48, 64] {
+            let r = run_resting_stack_soak_cfg(n, 3000, 0.5, cfg);
+            let tag = match r.blew_up_at {
+                Some(f) => format!("N{n}:BLOW@{f}"),
+                None => format!("N{n}:OK({:.2})", r.peak_speed),
+            };
+            line.push_str(&format!("{tag:<15} "));
+        }
+        println!("{line}");
     }
     println!();
 }
