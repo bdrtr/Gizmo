@@ -7,16 +7,24 @@
 //! **C** = altdaki cismi değiştir (küre → kapsül → kutu).
 //! **R** = yeniden düşür.
 //! (Değerler terminale yazılır.)
+//!
+//! ## Idiom notları — neyin motora, neyin demoya ait olduğu
+//!   * Bu demo `PhysicsPlugin` KAYDETMEZ: kumaş, `update` içinde CPU XPBD çözücüsüyle ELLE
+//!     adımlanır (`Cloth::step`). Collider'lar ECS rijit gövdesi DEĞİL — solver'a doğrudan
+//!     verilen `(BodyHandle, Transform, Collider)` üçlüleridir. Bu yüzden ömür komponentleri
+//!     (`DespawnAfter`/`DespawnBelowY` — bir ömür-çizelgesi gerektirir) ve `Prefab`/
+//!     `auto_box_collider` (tekrar eden rijit kutu nesneler için) BURAYA UYMAZ; sahne birer
+//!     tek görsel mesh'ten (zemin + üstüne serilen cisim) oluşur.
+//!   * **`is_key_just_pressed`** — kenar-tespiti motordan (elle `prev_*` bool takibi kaldırıldı).
+//!   * **Render = `default_render_pass` DOĞRUDAN** — her kare kumaş mesh'i düğümlerden YENİDEN
+//!     kurulur (gerçek özel iş), bu yüzden `with_scene_render` tek-satır kısayoluna çevrilemez.
 
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_3};
 use std::sync::Arc;
 
 use gizmo::physics::cloth::Cloth;
-use gizmo::physics::components::Collider;
-use gizmo::physics::{BodyHandle, Transform as PhysTransform};
+use gizmo::physics::BodyHandle;
 use gizmo::prelude::*;
-use gizmo::renderer::asset::AssetManager;
-use gizmo::renderer::components::{Camera, DirectionalLight, LightRole, Material, Mesh, MeshRenderer};
 use gizmo::renderer::gpu_types::Vertex;
 
 const SIZE: f32 = 3.4; // kumaşın fiziksel kenar uzunluğu (segment sayısından bağımsız)
@@ -58,11 +66,9 @@ struct ClothDemo {
     obj_entity: u32,
     obj_meshes: Vec<Mesh>, // [küre, kapsül, kutu]
     shape: usize,
-    colliders: Vec<(BodyHandle, PhysTransform, Collider)>,
+    colliders: Vec<(BodyHandle, Transform, Collider)>,
     accum: f32,
     cooldown: f32,
-    prev_r: bool,
-    prev_c: bool,
 }
 
 /// `segments` segmentlik (kenar başına) bir kumaş kur — fiziksel boyu SIZE sabit.
@@ -113,7 +119,12 @@ fn build_cloth_mesh(device: &gizmo::wgpu::Device, cloth: &Cloth, grid: usize) ->
             } else {
                 [0.96, 0.92, 0.90]
             };
-            let (p00, p10, p11, p01) = (node(x, z), node(x + 1, z), node(x + 1, z + 1), node(x, z + 1));
+            let (p00, p10, p11, p01) = (
+                node(x, z),
+                node(x + 1, z),
+                node(x + 1, z + 1),
+                node(x, z + 1),
+            );
             push_tri(&mut verts, p00, p11, p10, col);
             push_tri(&mut verts, p00, p01, p11, col);
         }
@@ -123,7 +134,13 @@ fn build_cloth_mesh(device: &gizmo::wgpu::Device, cloth: &Cloth, grid: usize) ->
         contents: gizmo::bytemuck::cast_slice(&verts),
         usage: gizmo::wgpu::BufferUsages::VERTEX,
     });
-    Mesh::new(device, Arc::new(vbuf), &verts, Vec3::ZERO, "cloth".to_string())
+    Mesh::new(
+        device,
+        Arc::new(vbuf),
+        &verts,
+        Vec3::ZERO,
+        "cloth".to_string(),
+    )
 }
 
 fn setup(world: &mut World, renderer: &Renderer) -> ClothDemo {
@@ -168,11 +185,17 @@ fn setup(world: &mut World, renderer: &Renderer) -> ClothDemo {
         ))
         .id();
 
+    // Solver collider'ları: [0]=serilen cisim (C ile değişir), [1]=zemin. ECS gövdesi değil,
+    // doğrudan `Cloth::step`'e verilen üçlüler.
     let colliders = vec![
-        (BodyHandle::from_id(1), PhysTransform::new(OBJ_C), shape_collider(shape)),
+        (
+            BodyHandle::from_id(1),
+            Transform::new(OBJ_C),
+            shape_collider(shape),
+        ),
         (
             BodyHandle::from_id(2),
-            PhysTransform::new(Vec3::new(0.0, -0.25, 0.0)),
+            Transform::new(Vec3::new(0.0, -0.25, 0.0)),
             Collider::box_collider(Vec3::new(20.0, 0.25, 20.0)),
         ),
     ];
@@ -188,7 +211,10 @@ fn setup(world: &mut World, renderer: &Renderer) -> ClothDemo {
         ))
         .id();
 
-    eprintln!("cisim: {}  ·  segment: {segments}  (↑↓ segment, C cisim, R yeniden)", SHAPE_NAMES[shape]);
+    eprintln!(
+        "cisim: {}  ·  segment: {segments}  (↑↓ segment, C cisim, R yeniden)",
+        SHAPE_NAMES[shape]
+    );
     ClothDemo {
         cloth,
         grid,
@@ -200,13 +226,12 @@ fn setup(world: &mut World, renderer: &Renderer) -> ClothDemo {
         colliders,
         accum: 0.0,
         cooldown: 0.0,
-        prev_r: false,
-        prev_c: false,
     }
 }
 
-fn update(world: &mut World, state: &mut ClothDemo, dt: f32, input: &gizmo::core::input::Input) {
-    // Yukarı/Aşağı ok → segment sayısını değiştir (basılı tutunca hızlanır).
+fn update(world: &mut World, state: &mut ClothDemo, dt: f32, input: &Input) {
+    // Yukarı/Aşağı ok → segment sayısını değiştir (basılı tutunca hızlanır; sürekli-tuş
+    // + kendi cooldown'u = kasıtlı tekrar-hızı, bu yüzden burada `is_key_pressed`).
     state.cooldown -= dt;
     if state.cooldown <= 0.0 {
         let up = input.is_key_pressed(KeyCode::ArrowUp as u32);
@@ -230,8 +255,8 @@ fn update(world: &mut World, state: &mut ClothDemo, dt: f32, input: &gizmo::core
     }
 
     // C = altdaki cismi değiştir (küre → kapsül → kutu) + kumaşı yeniden düşür.
-    let c = input.is_key_pressed(KeyCode::KeyC as u32);
-    if c && !state.prev_c {
+    // Kenar-tespiti motorun `is_key_just_pressed` API'sinden (elle prev_c takibi yok).
+    if input.is_key_just_pressed(KeyCode::KeyC as u32) {
         state.shape = (state.shape + 1) % 3;
         state.colliders[0].2 = shape_collider(state.shape);
         {
@@ -253,29 +278,30 @@ fn update(world: &mut World, state: &mut ClothDemo, dt: f32, input: &gizmo::core
         state.accum = 0.0;
         eprintln!("cisim: {}", SHAPE_NAMES[state.shape]);
     }
-    state.prev_c = c;
 
-    // R = yeniden düşür.
-    let r = input.is_key_pressed(KeyCode::KeyR as u32);
-    if r && !state.prev_r {
+    // R = yeniden düşür (kenar-tespiti motordan).
+    if input.is_key_just_pressed(KeyCode::KeyR as u32) {
         let (cloth, grid) = make_cloth(state.segments);
         state.cloth = cloth;
         state.grid = grid;
         state.accum = 0.0;
     }
-    state.prev_r = r;
 
     // SABİT dt biriktirici (değişken kare-dt XPBD'de enerji enjekte eder → kumaş uçar).
     const FIXED: f32 = 1.0 / 60.0;
     state.accum = (state.accum + dt).min(0.1);
     let mut n = 0;
     while state.accum >= FIXED && n < 5 {
-        state.cloth.step(FIXED, Vec3::new(0.0, -9.81, 0.0), 10, &state.colliders);
+        state
+            .cloth
+            .step(FIXED, Vec3::new(0.0, -9.81, 0.0), 10, &state.colliders);
         state.accum -= FIXED;
         n += 1;
     }
 }
 
+// Render kumaş mesh'ini her kare düğümlerden YENİDEN kurar (gerçek özel iş) — bu yüzden
+// `with_scene_render` kısayoluna çevrilmez; `default_render_pass` doğrudan çağrılır.
 fn render(
     world: &mut World,
     s: &ClothDemo,
@@ -291,14 +317,18 @@ fn render(
             *m = mesh;
         }
     }
-    gizmo::systems::default_render_pass(world, encoder, view, renderer);
+    default_render_pass(world, encoder, view, renderer);
 }
 
 fn main() {
-    App::<ClothDemo>::new("Gizmo — Kumaş (↑↓ çözünürlük · C cisim küre/kapsül/kutu · R yeniden)", 1280, 720)
-        .set_setup(setup)
-        .set_update(update)
-        .set_render(render)
-        .run()
-        .expect("uygulama çalıştırılamadı");
+    App::<ClothDemo>::new(
+        "Gizmo — Kumaş (↑↓ çözünürlük · C cisim küre/kapsül/kutu · R yeniden)",
+        1280,
+        720,
+    )
+    .set_setup(setup)
+    .set_update(update)
+    .set_render(render)
+    .run()
+    .expect("uygulama çalıştırılamadı");
 }

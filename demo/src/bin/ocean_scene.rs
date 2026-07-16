@@ -1,8 +1,33 @@
-use gizmo::physics::components::{Collider, RigidBody, Transform, Velocity};
+//! # OCEAN SCENE — GPU sıvı okyanus + fiziksel asma köprü + yıkım kum havuzu
+//!
+//! Bu demo motorun **modern ECS spawn idiomlarını** kullanır ama fizik/render kurulumu
+//! bilinçli olarak KENDİ elinde tutulur — çünkü sahne bir dizi özel iş yapar:
+//!   * **Fizik = elle `cpu_physics_step_system`** (App'e `PhysicsPlugin` EKLENMEZ). Köprü
+//!     mafsalları (`Joint::hinge`) bir `PhysicsWorld` resource'unda tutulur; adım her kare
+//!     manuel sürülür. Bu yüzden `DespawnAfter`/`DespawnBelowY` YOK: onları işleyecek
+//!     `LifetimePlugin` çalışmıyor (atılan cisimler kalıcı — orijinal davranış korunur).
+//!   * **Gövdeler `spawn_bundle` + HAM `RigidBody`/`Collider`/`Velocity`** — kasıtlı olarak
+//!     `RigidBodyBundle`/`Prefab` DEĞİL: onlar collider'dan atalet türetir (`local_inertia`
+//!     splat(1.0) → gerçek kutu ataleti), bu da devrilme dinamiğini görünür biçimde
+//!     değiştirirdi. `spawn_bundle` yalnız `spawn()+add_component` yığınını sadeleştirir,
+//!     davranışı bit-bit korur. Mafsallar entity id'ye kilitli → spawn SIRASI sabit kalır.
+//!   * **Render = özel iş** — `renderer.fluid_enabled = true` (GPU sıvı okyanus, varsayılan
+//!     kapalı) + X-tuşuyla Voronoi parçalama (dinamik wgpu buffer'lı chunk mesh'leri). Bu
+//!     yüzden `with_scene_render()` KISAYOLU KULLANILMAZ; çıplak `default_render_pass`.
+//!   * **`Camera::forward_from`** — nişan/hareket yönü paylaşılan yardımcıdan.
+//!
+//! ## Kontroller
+//!   * **Sağ-tık + fare / WASD / QE** — kamerayı döndür & uç (Shift = hızlı)
+//!   * **Sol tık** — ahşap kutu fırlat (yüzer) · **Sağ tık** — metal gülle fırlat (batar)
+//!   * **E** — şok dalgası (force push) · **X** — kırılabilir köprü tahtalarını parçala
+
+use gizmo::physics::components::{BodyType, Collider, RigidBody, Transform, Velocity};
 use gizmo::physics::world::PhysicsWorld;
 use gizmo::prelude::*;
 use gizmo::renderer::asset::AssetManager;
-use gizmo::renderer::components::{Camera, Material, MeshRenderer, PointLight};
+use gizmo::renderer::components::{
+    Camera, DirectionalLight, LightRole, Material, Mesh, MeshRenderer, PointLight,
+};
 use std::f32::consts::PI;
 
 struct DemoState {
@@ -11,19 +36,19 @@ struct DemoState {
     camera_yaw: f32,
     camera_pos: Vec3,
     time: f32,
-    cube_mesh: gizmo::renderer::components::Mesh,
-    cube_mat: gizmo::renderer::components::Material,
-    sphere_mesh: gizmo::renderer::components::Mesh,
-    metal_mat: gizmo::renderer::components::Material,
+    cube_mesh: Mesh,
+    cube_mat: Material,
+    sphere_mesh: Mesh,
+    metal_mat: Material,
     sun_entity: gizmo::core::Entity,
 }
 
-// Kırılabilir objeleri etiketleyen bileşen
+// Kırılabilir objeleri etiketleyen bileşen (X ile Voronoi parçalanır).
 #[derive(Clone)]
 pub struct Destructible;
 impl gizmo::prelude::Component for Destructible {}
 
-// Parçalanacak objeleri tutan kuyruk (Resource)
+// Parçalanacak objeleri render fn'e taşıyan kuyruk (Resource).
 pub struct FractureQueue {
     pub entities: Vec<u32>,
 }
@@ -32,21 +57,14 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     let mut asset_manager = AssetManager::new();
 
     // Işık (Güneş benzeri bir tepe ışığı)
-    let light = world.spawn();
-    world.add_component(light, Transform::new(Vec3::new(0.0, 50.0, 0.0)));
-    world.add_component(
-        light,
+    world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, 50.0, 0.0)),
         PointLight::new(Vec3::new(1.0, 0.9, 0.8), 2000.0, 100.0),
-    );
+    ));
 
     // Kamera
-    let camera_ent = world.spawn();
-    world.add_component(
-        camera_ent,
+    world.spawn_bundle((
         Transform::new(Vec3::new(8.0, 6.0, 12.0)).with_rotation(Quat::from_rotation_x(-0.3)),
-    );
-    world.add_component(
-        camera_ent,
         Camera::new(
             std::f32::consts::FRAC_PI_3,
             0.1,
@@ -55,14 +73,13 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
             -0.3,
             true,
         ),
-    );
-    world.add_component(camera_ent, gizmo::core::EntityName("Main Camera".into()));
+        gizmo::core::EntityName("Main Camera".into()),
+    ));
 
     // --- CPU PHYSICS SETUP ---
     let mut phys_world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
 
     // Gökyüzü (Skybox)
-    let skybox_mesh = AssetManager::create_inverted_cube(&renderer.device);
     let sky_tex = asset_manager
         .load_material_texture(
             &renderer.device,
@@ -71,24 +88,14 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
             "assets/sky.jpg",
         )
         .unwrap();
-    let sky_mat = Material::new(sky_tex).with_skybox();
-
-    let sky_ent = world.spawn();
-    world.add_component(
-        sky_ent,
+    world.spawn_bundle((
         Transform::new(Vec3::ZERO).with_scale(Vec3::splat(2000.0)),
-    );
-    world.add_component(sky_ent, skybox_mesh);
-    world.add_component(sky_ent, sky_mat);
-    world.add_component(sky_ent, MeshRenderer::new());
+        AssetManager::create_inverted_cube(&renderer.device),
+        Material::new(sky_tex).with_skybox(),
+        MeshRenderer::new(),
+    ));
 
     // Zemin (Çimen)
-    let ground = world.spawn();
-    world.add_component(
-        ground,
-        Transform::new(Vec3::new(0.0, 0.0, 0.0)).with_scale(Vec3::new(1000.0, 1.0, 1000.0)),
-    );
-    world.add_component(ground, AssetManager::create_cube(&renderer.device));
     let grass_tex = asset_manager
         .load_material_texture(
             &renderer.device,
@@ -103,23 +110,18 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
                 &renderer.scene.texture_bind_group_layout,
             )
         });
-    world.add_component(
-        ground,
+    world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, 0.0, 0.0)).with_scale(Vec3::new(1000.0, 1.0, 1000.0)),
+        AssetManager::create_cube(&renderer.device),
         Material::new(grass_tex).with_pbr(Vec4::new(0.5, 0.8, 0.4, 1.0), 0.9, 0.1),
-    );
-    world.add_component(ground, MeshRenderer::new());
-    world.add_component(
-        ground,
+        MeshRenderer::new(),
         Collider::box_collider(Vec3::new(1000.0, 0.5, 1000.0)),
-    );
-    world.add_component(
-        ground,
         RigidBody {
-            body_type: gizmo::physics::components::BodyType::Static,
+            body_type: BodyType::Static,
             mass: 0.0,
             ..Default::default()
         },
-    );
+    ));
 
     // Gökyüzünden düşen kutular (Etkileşimi görmek için)
     let cube_mesh = AssetManager::create_cube(&renderer.device);
@@ -129,38 +131,31 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         &renderer.scene.texture_bind_group_layout,
     );
     for i in 0..20 {
-        let box_ent = world.spawn();
         let pos = Vec3::new(
             (i as f32 % 4.0) * 2.0 - 3.0,
             10.0 + (i as f32) * 2.0,
             ((i / 4) as f32) * 2.0 - 3.0,
         );
-        world.add_component(box_ent, Transform::new(pos));
-        world.add_component(box_ent, cube_mesh.clone());
-        world.add_component(
-            box_ent,
+        world.spawn_bundle((
+            Transform::new(pos),
+            cube_mesh.clone(),
             Material::new(box_tex.clone()).with_pbr(Vec4::splat(1.0), 0.5, 0.0),
-        );
-        world.add_component(box_ent, MeshRenderer::new());
-        world.add_component(box_ent, Collider::box_collider(Vec3::new(0.5, 0.5, 0.5)));
-        world.add_component(box_ent, RigidBody::new(500.0, true)); // Ahşap yoğunluğu
-        world.add_component(box_ent, Velocity::default());
+            MeshRenderer::new(),
+            Collider::box_collider(Vec3::new(0.5, 0.5, 0.5)),
+            RigidBody::new(500.0, true), // Ahşap yoğunluğu
+            Velocity::default(),
+        ));
     }
 
     // Güneş Işığı (Gündüz/Gece Döngüsü için)
-    let sun_entity = world.spawn();
-    world.add_component(
-        sun_entity,
+    let sun_entity = world.spawn_bundle((
         Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_x(-PI / 4.0)),
-    );
-    world.add_component(
-        sun_entity,
-        gizmo::renderer::components::DirectionalLight::new(
+        DirectionalLight::new(
             Vec3::new(1.0, 0.9, 0.8), // Sıcak güneş rengi
             4.0,
-            gizmo::renderer::components::LightRole::Sun,
+            LightRole::Sun,
         ),
-    );
+    ));
 
     let metal_tex = asset_manager.create_white_texture(
         &renderer.device,
@@ -172,28 +167,25 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     let cube_mat = Material::new(box_tex.clone()).with_pbr(Vec4::splat(1.0), 0.5, 0.0);
 
     // --- FİZİKSEL ASMA KÖPRÜ (SUSPENSION BRIDGE) ---
+    // Mafsallar entity id'ye kilitli → direk/tahta spawn SIRASI korunmalı.
     // 1. Köprü direkleri (Statik)
-    let p1 = world.spawn();
-    world.add_component(
-        p1,
+    let p1 = world.spawn_bundle((
         Transform::new(Vec3::new(-12.0, 5.0, -10.0)).with_scale(Vec3::new(1.0, 10.0, 1.0)),
-    );
-    world.add_component(p1, cube_mesh.clone());
-    world.add_component(p1, metal_mat.clone());
-    world.add_component(p1, MeshRenderer::new());
-    world.add_component(p1, Collider::box_collider(Vec3::new(1.0, 10.0, 1.0)));
-    world.add_component(p1, RigidBody::new(0.0, false));
+        cube_mesh.clone(),
+        metal_mat.clone(),
+        MeshRenderer::new(),
+        Collider::box_collider(Vec3::new(1.0, 10.0, 1.0)),
+        RigidBody::new(0.0, false),
+    ));
 
-    let p2 = world.spawn();
-    world.add_component(
-        p2,
+    let p2 = world.spawn_bundle((
         Transform::new(Vec3::new(12.0, 5.0, -10.0)).with_scale(Vec3::new(1.0, 10.0, 1.0)),
-    );
-    world.add_component(p2, cube_mesh.clone());
-    world.add_component(p2, metal_mat.clone());
-    world.add_component(p2, MeshRenderer::new());
-    world.add_component(p2, Collider::box_collider(Vec3::new(1.0, 10.0, 1.0)));
-    world.add_component(p2, RigidBody::new(0.0, false));
+        cube_mesh.clone(),
+        metal_mat.clone(),
+        MeshRenderer::new(),
+        Collider::box_collider(Vec3::new(1.0, 10.0, 1.0)),
+        RigidBody::new(0.0, false),
+    ));
 
     // 2. Köprü Tahtaları (Dinamik - Joints)
     let num_planks = 14;
@@ -203,28 +195,23 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     let plank_depth = 1.5;
 
     for i in 0..num_planks {
-        let plank = world.spawn();
         let t = (i as f32 + 1.0) / (num_planks as f32 + 1.0);
         let x_pos = -12.0 + (24.0 * t);
 
-        world.add_component(
-            plank,
+        let plank = world.spawn_bundle((
             Transform::new(Vec3::new(x_pos, 9.0, -10.0)).with_scale(Vec3::new(
                 plank_width,
                 plank_height,
                 plank_depth,
             )),
-        );
-        world.add_component(plank, cube_mesh.clone());
-        world.add_component(plank, cube_mat.clone());
-        world.add_component(plank, MeshRenderer::new());
-        world.add_component(
-            plank,
+            cube_mesh.clone(),
+            cube_mat.clone(),
+            MeshRenderer::new(),
             Collider::box_collider(Vec3::new(plank_width, plank_height, plank_depth)),
-        );
-        world.add_component(plank, RigidBody::new(10.0, true));
-        world.add_component(plank, Velocity::default());
-        world.add_component(plank, Destructible);
+            RigidBody::new(10.0, true),
+            Velocity::default(),
+            Destructible,
+        ));
 
         planks.push(plank);
     }
@@ -276,15 +263,12 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     }
 }
 
-fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core::input::Input) {
+fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
     state.time += dt;
 
     let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
 
-    if let Some(mut q) = world.query_mut::<(
-        gizmo::core::query::Mut<Transform>,
-        gizmo::core::query::Mut<Camera>,
-    )>() {
+    if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
         for (_, (mut transform, mut camera)) in q.iter_mut() {
             let sensitivity = 0.002;
             let (dx, dy) = input.mouse_delta();
@@ -296,10 +280,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
                 state.camera_pitch = state.camera_pitch.clamp(-1.5, 1.5);
             }
 
-            let fx = state.camera_yaw.cos() * state.camera_pitch.cos();
-            let fy = state.camera_pitch.sin();
-            let fz = state.camera_yaw.sin() * state.camera_pitch.cos();
-            let forward = Vec3::new(fx, fy, fz).normalize();
+            // Nişan/hareket yönü paylaşılan yardımcıdan (elle fx/fy/fz yeniden yazma yok).
+            let forward = Camera::forward_from(state.camera_yaw, state.camera_pitch);
             let right = forward.cross(Vec3::new(0.0, 1.0, 0.0)).normalize();
             let up = Vec3::new(0.0, 1.0, 0.0);
 
@@ -344,7 +326,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
         }
     }
 
-    if let Some(mut q) = world.query_mut::<gizmo::core::query::Mut<Transform>>() {
+    if let Some(mut q) = world.query_mut::<Mut<Transform>>() {
         // Güneş rotasyonu (Gündüz/Gece döngüsü)
         if let Some((_, mut trans)) = q.iter_mut().find(|(e, _)| *e == state.sun_entity.id()) {
             let sun_speed = 0.2; // Zamanın hızı
@@ -358,64 +340,42 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
         let spawn_pos = state.camera_pos + cam_forward * 2.0;
         let throw_velocity = cam_forward * 25.0;
 
-        let box_ent = world.spawn();
-        world.add_component(box_ent, Transform::new(spawn_pos));
-        world.add_component(box_ent, state.cube_mesh.clone());
-        world.add_component(box_ent, state.cube_mat.clone());
-        world.add_component(box_ent, gizmo::renderer::components::MeshRenderer::new());
-        world.add_component(
-            box_ent,
-            gizmo::physics::components::Collider::box_collider(Vec3::new(0.5, 0.5, 0.5)),
-        );
-        world.add_component(
-            box_ent,
-            gizmo::physics::components::RigidBody::new(500.0, true),
-        ); // Ahşap (Yoğunluğu sudan az, yüzer)
-        world.add_component(
-            box_ent,
-            gizmo::physics::components::Velocity::new(throw_velocity),
-        );
+        world.spawn_bundle((
+            Transform::new(spawn_pos),
+            state.cube_mesh.clone(),
+            state.cube_mat.clone(),
+            MeshRenderer::new(),
+            Collider::box_collider(Vec3::new(0.5, 0.5, 0.5)),
+            RigidBody::new(500.0, true), // Ahşap (Yoğunluğu sudan az, yüzer)
+            Velocity::new(throw_velocity),
+        ));
     }
 
     if input.is_mouse_button_just_pressed(gizmo::core::input::mouse::RIGHT) {
         let spawn_pos = state.camera_pos + cam_forward * 2.0;
         let throw_velocity = cam_forward * 35.0; // Metal daha hızlı atılsın
 
-        let sphere_ent = world.spawn();
-        world.add_component(
-            sphere_ent,
+        world.spawn_bundle((
             Transform::new(spawn_pos).with_scale(Vec3::splat(0.5)),
-        );
-        world.add_component(sphere_ent, state.sphere_mesh.clone());
-        world.add_component(sphere_ent, state.metal_mat.clone());
-        world.add_component(sphere_ent, gizmo::renderer::components::MeshRenderer::new());
-        world.add_component(
-            sphere_ent,
-            gizmo::physics::components::Collider::sphere(0.5),
-        );
-        world.add_component(
-            sphere_ent,
-            gizmo::physics::components::RigidBody::new(5000.0, true),
-        ); // Metal (Çok ağır, hemen batar)
-        world.add_component(
-            sphere_ent,
-            gizmo::physics::components::Velocity::new(throw_velocity),
-        );
+            state.sphere_mesh.clone(),
+            state.metal_mat.clone(),
+            MeshRenderer::new(),
+            Collider::sphere(0.5),
+            RigidBody::new(5000.0, true), // Metal (Çok ağır, hemen batar)
+            Velocity::new(throw_velocity),
+        ));
     }
 
     // Şok Dalgası (Force Push) - E Tuşu
-    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyE as u32) {
+    if input.is_key_just_pressed(KeyCode::KeyE as u32) {
         let epicenter = state.camera_pos + cam_forward * 5.0; // Patlama noktası kameranın biraz önünde
         let explosion_radius = 25.0;
         let explosion_force = 20000.0; // Güçlü bir şok dalgası
 
-        if let Some(mut rbs) = world.query_mut::<(
-            gizmo::core::query::Mut<Transform>,
-            gizmo::core::query::Mut<gizmo::physics::components::RigidBody>,
-            gizmo::core::query::Mut<gizmo::physics::components::Velocity>,
-        )>() {
+        if let Some(mut rbs) = world.query_mut::<(Mut<Transform>, Mut<RigidBody>, Mut<Velocity>)>()
+        {
             for (_, (trans, rb, mut vel)) in rbs.iter_mut() {
-                if rb.body_type != gizmo::physics::components::BodyType::Static {
+                if rb.body_type != BodyType::Static {
                     let dir = trans.position - epicenter;
                     let dist = dir.length();
                     if dist < explosion_radius && dist > 0.1 {
@@ -433,8 +393,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
         }
     }
 
-    // X Tuşu: Cam Gibi Parçalama (Fracture)
-    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyX as u32) {
+    // X Tuşu: Cam Gibi Parçalama (Fracture) — kırılabilir tahtaları render fn'e kuyrukla.
+    if input.is_key_just_pressed(KeyCode::KeyX as u32) {
         let mut queue = world.get_resource_mut::<FractureQueue>().unwrap();
         if let Some(q) = world.query::<(&Transform, &Destructible)>() {
             for (ent_id, _) in q.iter() {
@@ -443,7 +403,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
         }
     }
 
-    // CPU Physics Adımı (Gizmo ECS entegrasyonu)
+    // CPU Physics Adımı (Gizmo ECS entegrasyonu) — App'te PhysicsPlugin yok, elle sür.
     gizmo::systems::cpu_physics_step_system(world, dt);
 }
 
@@ -465,11 +425,7 @@ fn render(
     if !to_fracture.is_empty() {
         let mut fracture_data = Vec::new();
 
-        if let Some(mut q) = world.query_mut::<(
-            gizmo::core::query::Mut<Transform>,
-            gizmo::core::query::Mut<gizmo::renderer::components::Material>,
-            gizmo::core::query::Mut<Velocity>,
-        )>() {
+        if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Material>, Mut<Velocity>)>() {
             for (ent_id, (trans, mat, vel)) in q.iter_mut() {
                 if to_fracture.contains(&ent_id) {
                     fracture_data.push((ent_id, *trans, mat.clone(), *vel));
@@ -512,7 +468,7 @@ fn render(
                             usage: gizmo::wgpu::BufferUsages::VERTEX,
                         });
 
-                let mesh = gizmo::renderer::components::Mesh::new(
+                let mesh = Mesh::new(
                     &renderer.device,
                     std::sync::Arc::new(vbuf),
                     &gpu_vertices,
@@ -523,34 +479,30 @@ fn render(
                 // Hacme göre yaklaşık bir çarpışma küresi hesapla
                 let approx_radius = (chunk.volume / 4.188).cbrt().max(0.15);
 
-                let chunk_ent = world.spawn();
                 let offset = chunk.center_of_mass;
                 let new_pos = trans.position + trans.rotation.mul_vec3(offset);
-
-                world.add_component(
-                    chunk_ent,
-                    Transform::new(new_pos).with_rotation(trans.rotation),
-                );
-                world.add_component(chunk_ent, mesh);
-                world.add_component(chunk_ent, mat.clone());
-                world.add_component(chunk_ent, gizmo::renderer::components::MeshRenderer::new());
-                world.add_component(chunk_ent, Collider::sphere(approx_radius));
-                world.add_component(chunk_ent, RigidBody::new(5.0, true));
 
                 // Parçaların merkeze göre dışa doğru patlaması için ufak şok dalgası ekle
                 let mut explosion_vel = vel;
                 explosion_vel.linear += offset.normalize() * 5.0;
                 explosion_vel.angular += Vec3::new(offset.y, offset.z, offset.x) * 10.0;
-                world.add_component(chunk_ent, explosion_vel);
+
+                world.spawn_bundle((
+                    Transform::new(new_pos).with_rotation(trans.rotation),
+                    mesh,
+                    mat.clone(),
+                    MeshRenderer::new(),
+                    Collider::sphere(approx_radius),
+                    RigidBody::new(5.0, true),
+                    explosion_vel,
+                ));
             }
         }
     }
 
-    // Sıvı ve Fizik Çarpışmalarını GPU'ya eşitleden çıkar
-
-    // This scene IS the fluid ocean → opt into GPU fluid rendering (off by default).
+    // Bu sahne AKICI okyanusun kendisi → GPU sıvı render'ını aç (varsayılan kapalı).
     renderer.fluid_enabled = true;
-    // CPU objelerini render et
+    // CPU objelerini (zemin, köprü, atılan cisimler, parçalar) çiz.
     gizmo::systems::default_render_pass(world, encoder, view, renderer);
 }
 

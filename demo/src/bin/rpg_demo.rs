@@ -1,3 +1,29 @@
+//! # AÇIK DÜNYA RPG — chunk-akışı + LOD + AI + fizik test sahnesi
+//!
+//! Sonsuz zeminde dolaşan bir karakter; kamera-etrafındaki chunk'lar akışla yüklenir,
+//! ağaçlar mesafeye göre LOD değiştirir, köylü NPC'ler NavAgent ile gezinir, ve tüm
+//! sahne manuel fizik adımıyla ilerler.
+//!
+//! Bu sürüm motorun modern idiomlarını kullanır — ama NEYİN motora, NEYİN bu demonun
+//! kendine ait olduğu konusunda dürüst kalır:
+//!   * **`spawn_bundle`** — NPC/karakter/kamera/güneş/skybox tek çağrıda kurulur (eski
+//!     `spawn()` + onlarca `add_component` zinciri gitti). Bileşenler ve değerleri aynı.
+//!   * **`Camera::forward_from`** — kamera/hareket yön vektörü paylaşılan yardımcıdan
+//!     (elle `cos·cos / sin / sin·cos` üçlüsü gitti; formül birebir aynı).
+//!   * **Chunk ağaç/zemin = `PoolManager` nesne-havuzu** — Prefab DEĞİL: chunk sistemi
+//!     boşalan varlıkları geri-dönüştürür (Prefab her seferinde YENİ varlık spawn'lardı,
+//!     havuzu bozardı). Prefab yalnız kutu-collider'lı, akış-dışı nesneler içindir.
+//!   * **Manuel `physics_step_system`** — `App` PhysicsPlugin EKLEMEZ (bu demo alt-adımı
+//!     kendi sürer); dolayısıyla `DespawnAfter`/`DespawnBelowY` de YOK: ömür-planlayıcı
+//!     kayıtlı değil ve zaten geçici/uçan varlık yok (chunk'lar havuzla temizlenir).
+//!   * **Sahne render = `default_render_pass` DOĞRUDAN** — `with_scene_render()` kısayolu
+//!     VAR ama KULLANMIYORUZ: render burada GERÇEK özel iş yapar (shader hot-reload
+//!     yoklaması + performans için `gpu_fluid`/`gpu_particles` kapatma). Bu işler kısayola
+//!     sığmaz, korunur.
+//!
+//! ## Kontroller
+//!   * **W A S D** — kamera yönünde hareket · **SPACE** — zıpla · **Sağ-tık + fare** — bak
+
 use gizmo::ai::components::NavAgent;
 use gizmo::audio::AudioSource;
 use gizmo::physics::components::{CharacterController, Collider, RigidBody, Transform, Velocity};
@@ -48,14 +74,12 @@ fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
         .expect("Failed to load skybox texture");
     let sky_mat = Material::new(sky_tex).with_skybox();
 
-    let sky_ent = world.spawn();
-    world.add_component(
-        sky_ent,
+    world.spawn_bundle((
         Transform::new(Vec3::ZERO).with_scale(Vec3::splat(2000.0)),
-    );
-    world.add_component(sky_ent, skybox_mesh);
-    world.add_component(sky_ent, sky_mat);
-    world.add_component(sky_ent, MeshRenderer::new());
+        skybox_mesh,
+        sky_mat,
+        MeshRenderer::new(),
+    ));
 
     // --- GROUND (DEVASA AÇIK DÜNYA ZEMİNİ) ---
     let ground_mesh = AssetManager::create_cube(&renderer.device);
@@ -90,44 +114,37 @@ fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
     world.insert_resource(pool_manager);
 
     // --- YAPAY ZEKA NPCLER ---
+    // Küre gövde + kapsül collider + NavAgent + 3D ses: her biri TEK spawn_bundle çağrısı.
     println!("YAPAY ZEKA: Köylüler spawn oluyor...");
     for i in 0..5 {
-        let npc = world.spawn();
         let npc_mesh = AssetManager::create_sphere(&renderer.device, 0.5, 16, 16);
         let npc_mat =
             Material::new(ground_tex.clone()).with_pbr(Vec4::new(1.0, 0.2, 0.2, 1.0), 0.5, 0.0);
-
-        world.add_component(
-            npc,
-            Transform::new(Vec3::new(10.0 + i as f32 * 5.0, 1.0, 10.0)),
-        );
-        world.add_component(npc, npc_mesh);
-        world.add_component(npc, npc_mat);
-        world.add_component(npc, MeshRenderer::new());
-        world.add_component(npc, Collider::capsule(0.5, 0.5));
-        world.add_component(npc, RigidBody::new_kinematic());
-        world.add_component(npc, Velocity::default());
-        world.add_component(npc, CharacterController::default());
-        world.add_component(npc, NavAgent::default()); // AI sistemi tarafından yürütülecek
 
         // 3D Spatial Ses Denemesi
         let mut audio = AudioSource::new("assets/sounds/villager_hum.wav");
         audio.is_3d = true;
         audio.max_distance = 20.0;
-        world.add_component(npc, audio);
+
+        world.spawn_bundle((
+            Transform::new(Vec3::new(10.0 + i as f32 * 5.0, 1.0, 10.0)),
+            npc_mesh,
+            npc_mat,
+            MeshRenderer::new(),
+            Collider::capsule(0.5, 0.5),
+            RigidBody::new_kinematic(),
+            Velocity::default(),
+            CharacterController::default(),
+            NavAgent::default(), // AI sistemi tarafından yürütülecek
+            audio,
+        ));
     }
 
     // --- ANA KARAKTER (PLAYER) ---
     println!("KARAKTER: Oyuncu yaratılıyor...");
-    let char_ent = world.spawn();
     let char_mesh = AssetManager::create_sphere(&renderer.device, 0.5, 16, 16);
     let char_mat =
         Material::new(ground_tex.clone()).with_pbr(Vec4::new(0.2, 0.2, 1.0, 1.0), 0.5, 0.5);
-
-    world.add_component(char_ent, Transform::new(Vec3::new(0.0, 2.0, 0.0)));
-    world.add_component(char_ent, char_mesh);
-    world.add_component(char_ent, char_mat);
-    world.add_component(char_ent, MeshRenderer::new());
 
     let kcc = CharacterController {
         speed: 10.0,
@@ -136,16 +153,20 @@ fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
         ..Default::default()
     };
 
-    world.add_component(char_ent, kcc);
-    world.add_component(char_ent, Collider::capsule(0.5, 0.5));
-    world.add_component(char_ent, RigidBody::new_kinematic());
-    world.add_component(char_ent, Velocity::default());
+    let char_ent = world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, 2.0, 0.0)),
+        char_mesh,
+        char_mat,
+        MeshRenderer::new(),
+        kcc,
+        Collider::capsule(0.5, 0.5),
+        RigidBody::new_kinematic(),
+        Velocity::default(),
+    ));
 
     // --- KAMERA ---
-    let camera_ent = world.spawn();
-    world.add_component(camera_ent, Transform::new(Vec3::new(0.0, 5.0, 10.0)));
-    world.add_component(
-        camera_ent,
+    world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, 5.0, 10.0)),
         Camera::new(
             std::f32::consts::FRAC_PI_3,
             0.1,
@@ -154,22 +175,17 @@ fn setup(world: &mut World, renderer: &Renderer) -> RpgState {
             -PI / 8.0,
             true,
         ),
-    );
+    ));
 
     // --- GÜNEŞ (DIRECTIONAL LIGHT) ---
-    let sun = world.spawn();
-    world.add_component(
-        sun,
+    world.spawn_bundle((
         Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_x(-PI / 4.0)),
-    );
-    world.add_component(
-        sun,
         gizmo::renderer::components::DirectionalLight::new(
             Vec3::new(1.0, 0.95, 0.9),
             5.0,
             gizmo::renderer::components::LightRole::Sun,
         ),
-    );
+    ));
 
     println!("✅ SETUP: Tamamlandı!");
     let watcher =
@@ -220,10 +236,8 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
         state.camera_pitch = state.camera_pitch.clamp(-PI / 2.0 + 0.1, PI / 2.0 - 0.1);
     }
 
-    let fx = state.camera_yaw.cos() * state.camera_pitch.cos();
-    let fy = state.camera_pitch.sin();
-    let fz = state.camera_yaw.sin() * state.camera_pitch.cos();
-    let forward = Vec3::new(fx, fy, fz).normalize_or_zero();
+    // Bakış yönü paylaşılan yardımcıdan; hareket için yatay bileşene indir.
+    let forward = Camera::forward_from(state.camera_yaw, state.camera_pitch);
     let right = Vec3::new(-state.camera_yaw.sin(), 0.0, state.camera_yaw.cos()).normalize_or_zero();
 
     let mut move_forward = forward;
@@ -271,13 +285,14 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
         physics_dt -= step;
     }
 
-    // Kamera pozisyonuna göre Doku Akış (Texture Streaming) Sistemi Çalıştırılır
+    // Kamera/karakter pozisyonuna göre chunk akışını sür.
     {
         if let Some(trans) = world.borrow::<Transform>().get(state.character_entity.id()) {
             char_pos = trans.position;
         }
     }
-    // Texture Streaming Sistemi (Lod Level'e göre uzaklaştıkça memory'den silinebilir veya eklenebilir)    // Açık Dünya (Open World) Chunk Sistemini çalıştır
+    // --- AÇIK DÜNYA (OPEN WORLD) CHUNK SİSTEMİ ---
+    // Yakın chunk'lar yüklenir, uzaktakiler havuza iade edilir (LOD mesafeye göre değişir).
     gizmo::systems::open_world_chunk_system(
         world,
         char_pos,

@@ -5,19 +5,21 @@
 //! ~50 m yaklaşınca [`TextureStreamingSystem`] o kutunun dokusunu arka planda decode
 //! edip GPU'ya yükler ve materyaline uygular: kutu BEYAZ → DOKULU olur ("pop-in").
 //!
+//! Bu sürüm `with_simple_scene`'in kanonik idiomlarını kullanır: serbest-uçuş kamera,
+//! fizik-adımı ve varsayılan render pass motordan gelir. Kutular tek `spawn_bundle` ile
+//! kurulur (elle `spawn()` + tekrar tekrar `add_component` yok). Kutuların RIGIDBODY'si
+//! YOK → fizik dünyasına girmezler, düşmez/uçmazlar (statik); bu yüzden `DespawnAfter`
+//! gibi ömür komponentleri BURADA anlamsız ve eklenmez.
+//!
 //! Kontroller: sağ-fare bak, W/S/A/D/E/Q uç, Shift hızlı. İleri (W) uçup kutuların
 //! sırayla dokulanmasını izle. Uzaklaşıp tekrar yaklaşınca da yeniden yüklenir.
 //!
 //! Çalıştır: `cargo run -p demo --bin texture_streaming` (CWD = workspace kökü olmalı;
 //! doku yolları `demo/assets/...` oradan çözülür).
 
-use gizmo::math::{Vec3, Vec4};
-use gizmo::physics::components::GlobalTransform;
-use gizmo::physics::Transform;
 use gizmo::prelude::*;
-use gizmo::renderer::asset::AssetManager;
-use gizmo::renderer::components::{Material, MeshRenderer};
 use gizmo::simple::{SceneBuilder, SimpleAppExt, SimpleSceneState};
+use std::f32::consts::FRAC_PI_4;
 
 /// Uzağa doğru dizilecek kutular: (z uzaklığı, x kayması, doku yolu).
 const CUBES: &[(f32, f32, &str)] = &[
@@ -31,6 +33,9 @@ const CUBES: &[(f32, f32, &str)] = &[
 
 /// Statik, dokulu-ama-henüz-yüklenmemiş bir kutu: beyaz placeholder bind_group +
 /// `texture_source` dolu. Fizik (rigidbody) YOK → düşmez, kamera etrafında uçar.
+/// Tüm bileşenler (Transform + GlobalTransform + mesh + materyal + renderer) tek
+/// `spawn_bundle` çağrısında; `GlobalTransform` başlangıç bileşeni olarak kalır
+/// (motorun `TransformSyncSystem`'i her kare Transform'dan besler).
 fn spawn_streaming_cube(scene: &mut SceneBuilder, pos: Vec3, size: f32, tex_path: &str) {
     let mesh = AssetManager::create_cube(&scene.renderer.device);
     let white = scene.asset_manager.create_white_texture(
@@ -42,22 +47,20 @@ fn spawn_streaming_cube(scene: &mut SceneBuilder, pos: Vec3, size: f32, tex_path
         .with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.8, 0.0)
         .with_texture_source(tex_path.to_string());
 
-    let ent = scene.world.spawn();
-    scene.world.add_component(
-        ent,
+    scene.world.spawn_bundle((
         Transform::new(pos).with_scale(Vec3::splat(size / 2.0)),
-    );
-    scene.world.add_component(ent, GlobalTransform::default());
-    scene.world.add_component(ent, mesh);
-    scene.world.add_component(ent, mat);
-    scene.world.add_component(ent, MeshRenderer::new());
+        GlobalTransform::default(),
+        mesh,
+        mat,
+        MeshRenderer::new(),
+    ));
 }
 
 fn main() {
     println!("Doku Akışı Demosu — W ile ileri uç; kutulara ~50m yaklaşınca");
     println!("dokuları yüklenir (BEYAZ → DOKULU). Sağ-fare: bak, Shift: hızlı.");
 
-    gizmo::app::App::<SimpleSceneState>::new("Gizmo — Texture Streaming", 1600, 900)
+    App::<SimpleSceneState>::new("Gizmo — Texture Streaming", 1600, 900)
         // Streaming sistemlerini (request + apply) kaydeder.
         .add_plugin(gizmo::asset_server::AssetServerPlugin)
         .with_simple_scene(|scene, state| {
@@ -67,14 +70,12 @@ fn main() {
 
             scene.spawn_ground(70.0);
 
-            let light_ent = scene.world.spawn();
-            let bundle = DirectionalLightBundle {
-                rotation: Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4)
-                    * Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
+            // Güneş — bundle DOĞRUDAN spawn'lanır (elle spawn()+apply() yok).
+            scene.world.spawn_bundle(DirectionalLightBundle {
+                rotation: Quat::from_rotation_x(-FRAC_PI_4) * Quat::from_rotation_y(FRAC_PI_4),
                 intensity: 2.2,
                 ..Default::default()
-            };
-            bundle.apply(scene.world, light_ent);
+            });
 
             for &(z, x, tex) in CUBES {
                 spawn_streaming_cube(scene, Vec3::new(x, 3.0, z), 5.0, tex);

@@ -4,20 +4,26 @@
 //!   • T2 Flipbook/SubUV: her parçacık PROSEDÜREL üretilmiş animasyonlu bir duman sprite'ı
 //!     oynatır (`set_procedural_smoke_flipbook`) — düz diskten çok daha gerçekçi.
 //! Yükselen bir duman sütunu; kamera yandan bakar. Çalıştır: `cargo run -p demo --bin smoke_demo`
+//!
+//! İdiom notları (davranış AYNI, yalnız kod motorun modern yüzeyine oturtuldu):
+//!   * Her varlık tek `world.spawn_bundle((...))` ile kurulur — `spawn()` + elle N×
+//!     `add_component` YOK. Sahnede fizik yok (yalnız `TransformPlugin`), dolayısıyla
+//!     `RigidBodyBundle`/collider/Prefab, ömür komponentleri (`DespawnAfter/BelowY`) ve
+//!     `despawn_all_with` UYGULANMAZ: kutular dekoratif statik mesh'ler, duman ise ECS
+//!     varlığı değil GPU parçacığı (kendi `max_life`'ı var). Girdi de yalnız zamanı
+//!     ilerletir → kenar-tespiti (`is_*_just_*`) gerekmez.
+//!   * Elle `GlobalTransform` eklenmez: `default_render_pass` her renderlanabilir mesh'e
+//!     eksik `GlobalTransform`'u geri-doldurur ve local matrisleri senkronlar; kamera da
+//!     `GlobalTransform` yoksa `Transform` konumuna düşer.
+//!   * Render el-yazımı KALIR (with_scene_render'a çevrilmez): flipbook kurulumu, her kare
+//!     parçacık püskürtme ve `gpu_fluid/ssr/ssgi/volumetric = None` GERÇEK özel iştir.
 
-use gizmo::app::App;
-use gizmo::core::world::World;
-use gizmo::math::{Quat, Vec3, Vec4};
-use gizmo::physics::components::GlobalTransform;
-use gizmo::physics::Transform;
-use gizmo::plugins::TransformPlugin;
-use gizmo::renderer::asset::AssetManager;
-use gizmo::renderer::components::{Camera, DirectionalLight, LightRole, Material, MeshRenderer};
+use gizmo::prelude::*;
 use gizmo::renderer::gpu_particles::GpuParticle;
+use std::f32::consts::{FRAC_PI_4, TAU};
 
 struct Smoke {
     t: f32,
-    cam_id: u32,
 }
 
 const SOURCE: Vec3 = Vec3::new(0.0, 0.2, 0.0);
@@ -52,8 +58,7 @@ fn main() {
             renderer.ssr = None;
             renderer.ssgi = None;
             renderer.volumetric = None;
-            let _ = state.cam_id;
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
+            default_render_pass(world, encoder, view, renderer);
         })
         .run()
         .expect("çalıştırılamadı");
@@ -64,11 +69,15 @@ fn emit_smoke(t: f32) -> Vec<GpuParticle> {
     let n = 10;
     let mut v = Vec::with_capacity(n);
     for i in 0..n {
-        let a = (i as f32 / n as f32) * std::f32::consts::TAU + t * 2.3;
+        let a = (i as f32 / n as f32) * TAU + t * 2.3;
         let spread = 0.35;
         let vy = 1.4 + (i % 3) as f32 * 0.25;
         v.push(GpuParticle {
-            position: [SOURCE.x + a.cos() * 0.12, SOURCE.y, SOURCE.z + a.sin() * 0.12],
+            position: [
+                SOURCE.x + a.cos() * 0.12,
+                SOURCE.y,
+                SOURCE.z + a.sin() * 0.12,
+            ],
             life: 0.0,
             velocity: [a.cos() * spread, vy, a.sin() * spread],
             max_life: 3.2,
@@ -81,7 +90,7 @@ fn emit_smoke(t: f32) -> Vec<GpuParticle> {
     v
 }
 
-fn setup(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Smoke {
+fn setup(world: &mut World, renderer: &Renderer) -> Smoke {
     let mut assets = AssetManager::new();
     let white = assets.create_white_texture(
         &renderer.device,
@@ -90,65 +99,46 @@ fn setup(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Smoke {
     );
 
     // Zemin
-    {
-        let mesh = AssetManager::create_plane(&renderer.device, 40.0);
-        let e = world.spawn();
-        let t = Transform::new(Vec3::ZERO);
-        world.add_component(e, t);
-        world.add_component(e, GlobalTransform { matrix: t.local_matrix });
-        world.add_component(e, mesh);
-        world.add_component(
-            e,
-            Material::new(white.clone()).with_pbr(Vec4::new(0.14, 0.14, 0.16, 1.0), 0.85, 0.0),
-        );
-        world.add_component(e, MeshRenderer::new());
-    }
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO),
+        AssetManager::create_plane(&renderer.device, 40.0),
+        Material::new(white.clone()).with_pbr(Vec4::new(0.14, 0.14, 0.16, 1.0), 0.85, 0.0),
+        MeshRenderer::new(),
+    ));
+
     // Birkaç kutu — soft particles'ın yumuşak kaybolmasını gösterir (duman kutulara girer).
-    for (i, x) in [-1.8f32, 1.8].iter().enumerate() {
-        let mesh = AssetManager::create_cube(&renderer.device);
-        let e = world.spawn();
-        let mut t = Transform::new(Vec3::new(*x, 0.5, 0.0));
-        t.scale = Vec3::new(0.8, 1.0, 0.8);
-        t.update_local_matrix();
-        world.add_component(e, t);
-        world.add_component(e, GlobalTransform { matrix: t.local_matrix });
-        world.add_component(e, mesh);
+    let cube = AssetManager::create_cube(&renderer.device);
+    for (i, &x) in [-1.8f32, 1.8].iter().enumerate() {
         let col = if i == 0 {
             Vec4::new(0.6, 0.2, 0.2, 1.0)
         } else {
             Vec4::new(0.2, 0.3, 0.6, 1.0)
         };
-        world.add_component(e, Material::new(white.clone()).with_pbr(col, 0.4, 0.2));
-        world.add_component(e, MeshRenderer::new());
+        world.spawn_bundle((
+            Transform::new(Vec3::new(x, 0.5, 0.0)).with_scale(Vec3::new(0.8, 1.0, 0.8)),
+            cube.clone(),
+            Material::new(white.clone()).with_pbr(col, 0.4, 0.2),
+            MeshRenderer::new(),
+        ));
     }
-    // Işık
-    {
-        let e = world.spawn();
-        let t = Transform::new(Vec3::new(0.0, 10.0, 0.0)).with_rotation(
-            Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4)
-                * Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
-        );
-        world.add_component(e, t);
-        world.add_component(e, GlobalTransform { matrix: t.local_matrix });
-        world.add_component(
-            e,
-            DirectionalLight::new(Vec3::new(1.0, 0.97, 0.9), 3.0, LightRole::Sun),
-        );
-    }
-    // Yan kamera
-    let cam_id = {
-        let e = world.spawn();
-        let pos = Vec3::new(5.0, 2.5, 6.5);
-        let target = Vec3::new(0.0, 1.6, 0.0);
-        let dir = (target - pos).normalize();
-        let yaw = dir.z.atan2(dir.x);
-        let pitch = dir.y.clamp(-1.0, 1.0).asin();
-        let t = Transform::new(pos);
-        world.add_component(e, t);
-        world.add_component(e, GlobalTransform { matrix: t.local_matrix });
-        world.add_component(e, Camera::new(1.0, 0.1, 500.0, yaw, pitch, true));
-        e.id()
-    };
 
-    Smoke { t: 0.0, cam_id }
+    // Işık
+    world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, 10.0, 0.0))
+            .with_rotation(Quat::from_rotation_x(-FRAC_PI_4) * Quat::from_rotation_y(FRAC_PI_4)),
+        DirectionalLight::new(Vec3::new(1.0, 0.97, 0.9), 3.0, LightRole::Sun),
+    ));
+
+    // Yan kamera — hedefe bakan yaw/pitch'ten kurulur.
+    let pos = Vec3::new(5.0, 2.5, 6.5);
+    let target = Vec3::new(0.0, 1.6, 0.0);
+    let dir = (target - pos).normalize();
+    let yaw = dir.z.atan2(dir.x);
+    let pitch = dir.y.clamp(-1.0, 1.0).asin();
+    world.spawn_bundle((
+        Transform::new(pos),
+        Camera::new(1.0, 0.1, 500.0, yaw, pitch, true),
+    ));
+
+    Smoke { t: 0.0 }
 }
