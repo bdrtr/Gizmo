@@ -1244,10 +1244,12 @@ mod tests {
         .unwrap();
         engine.load_script(&path).unwrap();
 
-        let mut ctx = ScriptContext::default();
-        ctx.entity_id = 42;
-        ctx.dt = 0.5;
-        ctx.position = [10.0, -1.0, 2.0];
+        let ctx = ScriptContext {
+            entity_id: 42,
+            dt: 0.5,
+            position: [10.0, -1.0, 2.0],
+            ..Default::default()
+        };
 
         let result = engine.run_entity_update(&path, "mv", &ctx).unwrap();
         assert_eq!(result.new_position, Some([10.5, -1.0, 2.0]));
@@ -1274,8 +1276,10 @@ mod tests {
         .unwrap();
         engine.load_script(&path).unwrap();
 
-        let mut ctx = ScriptContext::default();
-        ctx.key_d = true; // sağa
+        let mut ctx = ScriptContext {
+            key_d: true, // sağa
+            ..Default::default()
+        };
         let r = engine.run_entity_update(&path, "ctl", &ctx).unwrap();
         assert_eq!(r.new_velocity, Some([1.0, 0.0, 0.0]));
 

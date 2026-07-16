@@ -658,8 +658,10 @@ mod tests {
             Keyframes::Scale(vec![Vec3::ONE, Vec3::ONE]),
         )
         .unwrap();
-        let mut clip = AnimationClip::default();
-        clip.tracks = vec![short, long];
+        let clip = AnimationClip {
+            tracks: vec![short, long],
+            ..Default::default()
+        };
         assert!((clip.duration() - 2.5).abs() < TOL, "got {}", clip.duration());
         // An empty clip has zero duration (fold starts at 0.0).
         assert_eq!(AnimationClip::default().duration(), 0.0);

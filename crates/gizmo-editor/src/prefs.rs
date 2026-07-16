@@ -109,13 +109,15 @@ mod tests {
 
     #[test]
     fn validate_clamps_values_below_minimum() {
-        let mut p = EditorPrefs::default();
-        p.camera_speed = 0.0;
-        p.snap_translate = 0.0;
-        p.snap_rotate_deg = 0.0;
-        p.snap_scale = 0.0;
-        p.gizmo_size = 0.0;
-        p.max_history = 0;
+        let mut p = EditorPrefs {
+            camera_speed: 0.0,
+            snap_translate: 0.0,
+            snap_rotate_deg: 0.0,
+            snap_scale: 0.0,
+            gizmo_size: 0.0,
+            max_history: 0,
+            ..Default::default()
+        };
         p.validate();
         assert_eq!(p.camera_speed, 0.1);
         assert_eq!(p.snap_translate, 0.001);
@@ -127,13 +129,15 @@ mod tests {
 
     #[test]
     fn validate_clamps_values_above_maximum() {
-        let mut p = EditorPrefs::default();
-        p.camera_speed = 1e9;
-        p.snap_translate = 1e9;
-        p.snap_rotate_deg = 1e9;
-        p.snap_scale = 1e9;
-        p.gizmo_size = 1e9;
-        p.max_history = usize::MAX;
+        let mut p = EditorPrefs {
+            camera_speed: 1e9,
+            snap_translate: 1e9,
+            snap_rotate_deg: 1e9,
+            snap_scale: 1e9,
+            gizmo_size: 1e9,
+            max_history: usize::MAX,
+            ..Default::default()
+        };
         p.validate();
         assert_eq!(p.camera_speed, 1000.0);
         assert_eq!(p.snap_translate, 100.0);
@@ -147,11 +151,13 @@ mod tests {
     /// clamp edilmeyen alanlara (show_grid, camera_focus_distance) dokunulmamalı.
     #[test]
     fn validate_is_noop_for_valid_values() {
-        let mut p = EditorPrefs::default();
-        p.camera_speed = 25.0;
-        p.snap_rotate_deg = 45.0;
-        p.camera_focus_distance = 7.5;
-        p.show_grid = false;
+        let mut p = EditorPrefs {
+            camera_speed: 25.0,
+            snap_rotate_deg: 45.0,
+            camera_focus_distance: 7.5,
+            show_grid: false,
+            ..Default::default()
+        };
         let before = p.clone();
         p.validate();
         assert_eq!(p, before);
@@ -169,12 +175,14 @@ mod tests {
     /// Default olmayan değerler de round-trip'te korunmalı.
     #[test]
     fn toml_round_trip_preserves_custom_fields() {
-        let mut p = EditorPrefs::default();
-        p.camera_speed = 42.5;
-        p.snap_enabled = true;
-        p.snap_rotate_deg = 30.0;
-        p.max_history = 123;
-        p.show_grid = false;
+        let p = EditorPrefs {
+            camera_speed: 42.5,
+            snap_enabled: true,
+            snap_rotate_deg: 30.0,
+            max_history: 123,
+            show_grid: false,
+            ..Default::default()
+        };
         let s = toml::to_string(&p).expect("serialize");
         let p2: EditorPrefs = toml::from_str(&s).expect("deserialize");
         assert_eq!(p, p2);

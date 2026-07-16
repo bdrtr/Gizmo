@@ -661,7 +661,7 @@ mod tests {
         // Floored at 0.35, capped at 1.0, everywhere.
         for s in [0.0_f32, 0.1, 1.0, 10.0, 1000.0, -500.0] {
             let w = p.weighting_lorentzian(s);
-            assert!(w >= 0.35 - 1e-9 && w <= 1.0 + 1e-9, "weighting {w} out of [0.35, 1] at {s}");
+            assert!((0.35 - 1e-9..=1.0 + 1e-9).contains(&w), "weighting {w} out of [0.35, 1] at {s}");
         }
         assert!(
             (p.weighting_lorentzian(1000.0) - 0.35).abs() < 1e-6,

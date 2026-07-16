@@ -444,6 +444,7 @@ fn stack_soak_report(results: &[StackSoakResult]) -> String {
 ///      and raises the robust ceiling to N≈32 (verified bounded over 3000 frames in
 ///      grid_candidate_fixes; the config-sweep data showed this is the single most effective,
 ///      most principled knob — hertz/tol/iters are chaotic and don't compose).
+///
 /// Realistic game stacks (≤~12) are far below this. (Extreme 48+ towers still buckle and need
 /// a friction-aware direct solve — see the #[ignore]d acceptance test below.)
 #[test]

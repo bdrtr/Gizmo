@@ -376,10 +376,11 @@ mod tests {
 
     #[test]
     fn presets_encode_sensible_extremes() {
-        // Spot-check that the preset table isn't accidentally scrambled.
-        assert!(PhysicsMaterial::ICE.dynamic_friction < PhysicsMaterial::RUBBER.dynamic_friction);
-        assert!(PhysicsMaterial::RUBBER.restitution > PhysicsMaterial::CONCRETE.restitution);
-        assert!(PhysicsMaterial::METAL.density > PhysicsMaterial::WOOD.density);
+        // Spot-check that the preset table isn't accidentally scrambled. These are all
+        // `const` presets, so assert at compile time (a bad edit fails the build).
+        const { assert!(PhysicsMaterial::ICE.dynamic_friction < PhysicsMaterial::RUBBER.dynamic_friction) };
+        const { assert!(PhysicsMaterial::RUBBER.restitution > PhysicsMaterial::CONCRETE.restitution) };
+        const { assert!(PhysicsMaterial::METAL.density > PhysicsMaterial::WOOD.density) };
         // Every preset stays inside physically meaningful ranges.
         for m in [
             PhysicsMaterial::RUBBER,

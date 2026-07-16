@@ -118,16 +118,20 @@ mod tests {
 
     #[test]
     fn hottest_span_picks_max_ms() {
-        let mut s = FrameSnapshot::default();
-        s.spans = vec![span("a", 1.0), span("b", 5.0), span("c", 3.0)];
+        let s = FrameSnapshot {
+            spans: vec![span("a", 1.0), span("b", 5.0), span("c", 3.0)],
+            ..Default::default()
+        };
         assert_eq!(s.hottest_span().unwrap().name, "b");
     }
 
     #[test]
     fn hottest_span_is_nan_tolerant() {
         // A NaN duration must not panic the comparator; a finite span is still returned.
-        let mut s = FrameSnapshot::default();
-        s.spans = vec![span("bad", f64::NAN), span("good", 2.0)];
+        let s = FrameSnapshot {
+            spans: vec![span("bad", f64::NAN), span("good", 2.0)],
+            ..Default::default()
+        };
         let h = s.hottest_span().expect("must return a span, not panic");
         // Comparator maps NaN to Equal; the finite maximum "good" is reachable.
         assert!(h.name == "good" || h.name == "bad");
