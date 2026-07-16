@@ -49,6 +49,18 @@ impl<State: 'static> Plugin<State> for PhysicsPlugin {
             ))
             .label("physics_step"),
         );
+        // Resolve any `AutoBoxCollider` markers (box collider sized from Transform.scale)
+        // strictly BEFORE the physics step reads them, so a marked body never takes its
+        // first step with the placeholder unit box. Registered here (same plugin, same
+        // default phase) so the `physics_step` label is guaranteed to exist and the
+        // `.before` edge actually binds.
+        app.schedule.add_di_system(
+            gizmo_core::system::SystemConfig::new(Box::new(
+                crate::systems::auto_collider::AutoBoxColliderSystem,
+            ))
+            .label("auto_box_collider")
+            .before("physics_step"),
+        );
     }
 }
 
