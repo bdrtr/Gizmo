@@ -11,7 +11,7 @@
 //! ```
 
 use crate::core::{Bundle, Entity, EntityName, World};
-use crate::math::{Quat, Vec3};
+use crate::math::{Quat, Vec3, Vec4};
 use gizmo_physics_core::Transform;
 use crate::renderer::components::{
     Camera, DirectionalLight, LightRole, Material, Mesh, MeshRenderer, PointLight, SpotLight,
@@ -284,7 +284,7 @@ impl Bundle for MeshBundle {
 //  RigidBodyBundle
 // ============================================================
 
-use gizmo_physics_core::Collider;
+use gizmo_physics_core::{BoxShape, Collider, ColliderShape};
 use gizmo_physics_rigid::components::{RigidBody, Velocity};
 
 /// Fizik nesnesi oluşturmak için sıfır-yük (zero-overhead) Bundle.
@@ -482,5 +482,126 @@ mod tests {
         let e = world
             .spawn_bundle(RigidBodyBundle::static_body().with_collider(Collider::sphere(0.5)));
         assert!(world.borrow::<RigidBody>().get(e.id()).is_some());
+    }
+}
+
+// ============================================================
+//  Prefab — reusable spawn blueprint
+// ============================================================
+
+/// Yeniden kullanılabilir SPAWN BLUEPRINT'i: bir mesh + material + (opsiyonel) fizik
+/// gövdesini BİR KEZ tanımla, `transform`/renk ile ÇOK KEZ spawn'la — demoların her nesne
+/// için `spawn_bundle((Transform, mesh.clone(), material, MeshRenderer, RigidBodyBundle…))`
+/// zincirini elle tekrarlamasını önler. Mesh/Material Arc-destekli → klon ucuz.
+///
+/// ```ignore
+/// // Bir kez tanımla (fizik config'i dahil):
+/// let block = Prefab::new(renderer.create_cube(), stone_mat)
+///     .with_body(RigidBodyBundle::dynamic(1.0)
+///         .with_collider(Collider::box_collider(Vec3::splat(0.5)))
+///         .with_friction(0.85));
+/// // Çok kez spawn'la (yalnız konum + renk değişir):
+/// for pos in positions {
+///     block.clone().with_pbr(color, 0.8, 0.05).spawn(&mut world, Transform::new(pos));
+/// }
+/// ```
+#[derive(Clone)]
+pub struct Prefab {
+    mesh: Mesh,
+    material: Material,
+    body: Option<RigidBodyBundle>,
+    /// `Some(base)` ise kutu collider'ı SPAWN anında `transform.scale · base`'den türetilir
+    /// (boyutu iki kez yazma). Bkz. [`auto_box_collider`](Self::auto_box_collider).
+    auto_box: Option<Vec3>,
+}
+
+impl Prefab {
+    /// Görsel-only prefab (fizik yok). Fizik için [`with_body`](Self::with_body) zincirle.
+    pub fn new(mesh: Mesh, material: Material) -> Self {
+        Self {
+            mesh,
+            material,
+            body: None,
+            auto_box: None,
+        }
+    }
+
+    /// Fizik gövdesi ekle (`RigidBodyBundle`: dynamic/static + collider + friction…). Prefab
+    /// klonlandığında gövde config'i de klonlanır (her instance kendi rigid body'sini alır).
+    pub fn with_body(mut self, body: RigidBodyBundle) -> Self {
+        self.body = Some(body);
+        self
+    }
+
+    /// Material rengini/PBR'ını değiştir (per-instance tint — base texture korunur). Aynı
+    /// blueprint'i farklı renklerle spawn'lamak için `prefab.clone().with_pbr(...)`.
+    pub fn with_pbr(mut self, albedo: Vec4, roughness: f32, metallic: f32) -> Self {
+        self.material = self.material.clone().with_pbr(albedo, roughness, metallic);
+        self
+    }
+
+    /// Kutu collider'ını her spawn'da `transform.scale`'den türet (base = `Vec3::ONE`, mesh
+    /// yarı-genişliği == ölçek olan `create_cube` için) — böylece TEK blueprint her boyutta
+    /// bloğu kapsar ve boyutu iki kez yazmazsın. [`with_body`](Self::with_body)'deki
+    /// collider bir yer-tutucudur; spawn'da ölçeğe göre EZİLİR (material/friction korunur).
+    /// Prefab'ın gövdesi kutu-DIŞI bir collider'a set edilmişse yine kutuyla değiştirilir
+    /// (bu builder anlamca "bu prefab bir kutudur" der).
+    pub fn auto_box_collider(self) -> Self {
+        self.auto_box_collider_scaled(Vec3::ONE)
+    }
+
+    /// [`auto_box_collider`](Self::auto_box_collider) ama özel per-eksen taban çarpanıyla
+    /// (ör. 0.5-faktörlü mesh ailesi için `Vec3::splat(0.5)` → yarı-genişlik = ölçek/2).
+    pub fn auto_box_collider_scaled(mut self, base: Vec3) -> Self {
+        self.auto_box = Some(base);
+        self
+    }
+
+    /// Bir örnek `transform` konumunda spawn et; entity'yi döndür (ör. isim/işaret bileşeni
+    /// eklemek için).
+    pub fn spawn(&self, world: &mut World, transform: Transform) -> Entity {
+        self.spawn_inner(world, transform, None)
+    }
+
+    /// Kolaylık: verilen konumda (varsayılan rotasyon/ölçek) spawn et.
+    pub fn spawn_at(&self, world: &mut World, position: Vec3) -> Entity {
+        self.spawn(world, Transform::new(position))
+    }
+
+    /// [`spawn`](Self::spawn) ama bu örneğe özel kütle ile — atalet, ölçekli kutu + yeni
+    /// kütleden otomatik yeniden türetilir. Aynı blueprint'ten farklı kütleli örnekler
+    /// (ör. hafif blok vs ağır kiriş) spawn'lamak için.
+    pub fn spawn_with_mass(&self, world: &mut World, transform: Transform, mass: f32) -> Entity {
+        self.spawn_inner(world, transform, Some(mass))
+    }
+
+    fn spawn_inner(
+        &self,
+        world: &mut World,
+        transform: Transform,
+        mass_override: Option<f32>,
+    ) -> Entity {
+        let scale = transform.scale;
+        let e = world.spawn_bundle((
+            transform,
+            self.mesh.clone(),
+            self.material.clone(),
+            MeshRenderer::new(),
+        ));
+        if let Some(body) = &self.body {
+            let mut body = body.clone();
+            if let Some(base) = self.auto_box {
+                // Collider'ı bu örneğin ölçeğinden türet — TEK boyut kaynağı.
+                let he = crate::systems::auto_collider::derived_box_half_extents(scale, base);
+                body.collider.shape = ColliderShape::Box(BoxShape { half_extents: he });
+            }
+            if let Some(m) = mass_override {
+                body.rigid_body.mass = m;
+            }
+            // add_bundle → RigidBodyBundle::write_to_archetype, ölçekli kutu + kütleden
+            // ataleti yeniden türetir → shape/atalet tutarlı, yeni atalet kodu yok.
+            world.add_bundle(e, body);
+        }
+        e
     }
 }

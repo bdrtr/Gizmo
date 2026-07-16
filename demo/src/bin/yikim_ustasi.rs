@@ -18,8 +18,10 @@
 //!      dinlenen istife enerji pompalıyordu (yanal buckling; uyanık N=16 kule ~13.5s'de
 //!      patlıyordu) ve bu demo bloklarını UYKUDA spawn'layarak (`spawn_asleep` hilesi) solver'ı
 //!      atlatıyordu. Manifold BLOCK solver (bkz. gizmo-physics-rigid solver/block.rs) bunu
-//!      düzeltti → bloklar artık UYANIK spawn'lanıyor, kuleyi GERÇEK solver dik tutuyor. (Aşırı
-//!      32+ kat tek-sütun kuleler hâlâ ayrı bir iş, ama bu demonun yapıları rahatça kararlı.)
+//!      düzeltti → bloklar artık UYANIK spawn'lanıyor, KISA istifleri (N≤16) GERÇEK solver dik
+//!      tutuyor. AMA yüksek+ince kuleler hâlâ ~20-50s'de deviriyor (0.08 rest-jitter tabanı,
+//!      motorun #[ignore]'lı "N≥32 buckle" işiyle aynı kök) — o yüzden Bölüm 3 gökdeleni GENİŞ
+//!      3×3 taban × 10 kat (60s-soak ile STABİL doğrulandı; 2×1×12 ~20s'de çöküyordu).
 //!   2. **Gökyüzü GERÇEK environment-pass DEĞİL.** unlit ters küp + elle scale
 //!      (2000); köşeleri far-plane'i aşmasın diye elle ayarlı. Motorda gerçek
 //!      `Material::with_skybox()` yolu var (kcc_scene kullanır) — burada henüz
@@ -93,6 +95,14 @@ struct Game {
     ball_mesh: Mesh,
     base_mat: Material,    // beyaz doku üzerine tint'lenecek şablon
     ground_mat: Material,  // dama tahtası platform
+    // Altın hedef BLUEPRINT'i: gövde (dynamic + collider + friction…) BİR KEZ tanımlı,
+    // her hedef yalnız konumla spawn'lanır (`spawn_target` → `target_prefab.spawn`).
+    target_prefab: Prefab,
+    // Taş blok BLUEPRINT'i: `auto_box_collider()` sayesinde collider her örneğin
+    // `Transform.scale`'inden türetilir → TEK blueprint hem tekdüze blokları hem de farklı
+    // boyutlu kirişi kapsar; boyut yalnız BİR KEZ (scale olarak) yazılır (eskiden scale +
+    // `Collider::box_collider(half)` İKİ KEZ yazılıyordu).
+    block_prefab: Prefab,
     // nişan
     yaw: f32,
     pitch: f32,
@@ -133,48 +143,38 @@ impl Game {
 
 // -------------------------------------------------------------- blok kurulumu
 fn spawn_block(g: &mut Game, world: &mut World, pos: Vec3, half: Vec3, color: Vec4, mass: f32) {
-    let mat = g.tint(color, 0.75, 0.05);
-    let e = world
-        .spawn_bundle((
-            Transform::new(pos).with_scale(half),
-            g.cube.clone(),
-            mat,
-            MeshRenderer::new(),
-            RigidBodyBundle::dynamic(mass)
-                .with_collider(Collider::box_collider(half))
-                .with_friction(0.85)
-                .with_restitution(0.0)
-                .with_damping(0.06, 0.12),
-        ));
+    // Collider `half`'ten (Transform.scale) OTOMATİK türetilir — bir daha elle
+    // `Collider::box_collider(half)` yazmıyoruz. Aynı blueprint tekdüze blok da, farklı
+    // boyutlu kiriş de spawn'lar (yalnız scale + kütle + renk değişir).
+    let e = g
+        .block_prefab
+        .clone()
+        .with_pbr(color, 0.75, 0.05)
+        .spawn_with_mass(world, Transform::new(pos).with_scale(half), mass);
     world.add_component(e, LevelEntity);
 }
 
 fn spawn_static(g: &mut Game, world: &mut World, pos: Vec3, half: Vec3, mat: Material) {
-    let e = world
-        .spawn_bundle((
-            Transform::new(pos).with_scale(half),
-            g.cube.clone(),
-            mat,
-            MeshRenderer::new(),
-            RigidBodyBundle::static_body().with_collider(Collider::box_collider(half)),
-        ));
+    // Statik zemin/platform — collider SENKRON verilir (açık `box_collider`). Bölümler update
+    // hook'unda (fizik adımından SONRA) spawn'landığı için `AutoBoxCollider` marker yolu BURADA
+    // ÇALIŞMAZ: marker'ın added_tick'i sonraki frame'in ref-tick'ine eşit olup Added'ı kaçırır
+    // → collider yer-tutucu birim kutuda kalır → yük-taşıyan platform kaybolur. Bkz.
+    // auto_collider testi `marker_spawned_after_schedule_run_is_missed_by_added_gate`.
+    let e = world.spawn_bundle((
+        Transform::new(pos).with_scale(half),
+        g.cube.clone(),
+        mat,
+        MeshRenderer::new(),
+        RigidBodyBundle::static_body().with_collider(Collider::box_collider(half)),
+    ));
     world.add_component(e, LevelEntity);
 }
 
 fn spawn_target(g: &mut Game, world: &mut World, pos: Vec3) {
-    let gold = g.tint(Vec4::new(1.0, 0.78, 0.16, 1.0), 0.22, 1.0);
-    let e = world
-        .spawn_bundle((
-            Transform::new(pos).with_scale(Vec3::splat(BLOCK_H)),
-            g.cube.clone(),
-            gold,
-            MeshRenderer::new(),
-            RigidBodyBundle::dynamic(1.0)
-                .with_collider(Collider::box_collider(Vec3::splat(BLOCK_H)))
-                .with_friction(0.7)
-                .with_restitution(0.15)
-                .with_damping(0.06, 0.12),
-        ));
+    // Blueprint'ten spawn — gövde/görsel `target_prefab`'ta tanımlı (bkz. setup).
+    let e = g
+        .target_prefab
+        .spawn(world, Transform::new(pos).with_scale(Vec3::splat(BLOCK_H)));
     // hedefi ışıldat — devrilince ışığı da taşır (hareketli dinamik ışık)
     world.add_component(e, PointLight::new(Vec3::new(1.0, 0.72, 0.2), 6.0, 8.0));
     world.add_component(e, LevelEntity);
@@ -268,23 +268,33 @@ fn load_level(g: &mut Game, world: &mut World, idx: usize) {
         }
         // ---- Bölüm 3: GÖKDELEN + PİRAMİT ----
         _ => {
-            // ince yüksek kule (2×1 taban, 12 kat) — TGS istif kararlılığı
-            for row in 0..12 {
-                for dx in [-0.5_f32, 0.5] {
-                    let y = PLATFORM_TOP + BLOCK_H + row as f32;
-                    let c = if row % 2 == 0 { stone_c } else { stone_a };
-                    spawn_block(
-                        g,
-                        world,
-                        Vec3::new(-4.0 + dx, y, STRUCT_Z),
-                        Vec3::splat(BLOCK_H),
-                        c,
-                        BLOCK_MASS,
-                    );
+            // Gökdelen — 3×3 taban, 10 kat. NOT: solver kısa istifleri sağlam tutuyor ama
+            // yüksek+ince kuleleri hâlâ ~20-50s'de deviriyor (0.08 rest-jitter tabanı, motorun
+            // #[ignore]'lı "N≥32 buckle" işiyle aynı kök). 60s soak ile 3×3×10 STABİL doğrulandı
+            // (2×1×12 ~20s, 2×2×8 ~52s'de çöküyordu) → geniş taban, kendiliğinden yıkılmaz.
+            for row in 0..10 {
+                for ix in -1..=1 {
+                    for iz in -1..=1 {
+                        let y = PLATFORM_TOP + BLOCK_H + row as f32;
+                        let c = if (row + (ix + 1) as usize + (iz + 1) as usize) % 2 == 0 {
+                            stone_c
+                        } else {
+                            stone_a
+                        };
+                        spawn_block(
+                            g,
+                            world,
+                            Vec3::new(-4.0 + ix as f32, y, STRUCT_Z + iz as f32),
+                            Vec3::splat(BLOCK_H),
+                            c,
+                            BLOCK_MASS,
+                        );
+                    }
                 }
             }
-            spawn_target(g, world, Vec3::new(-4.5, PLATFORM_TOP + 12.0 + BLOCK_H, STRUCT_Z));
-            spawn_target(g, world, Vec3::new(-3.5, PLATFORM_TOP + 12.0 + BLOCK_H, STRUCT_Z));
+            let top = PLATFORM_TOP + 10.0 + BLOCK_H;
+            spawn_target(g, world, Vec3::new(-4.5, top, STRUCT_Z));
+            spawn_target(g, world, Vec3::new(-3.5, top, STRUCT_Z));
 
             // piramit (5-4-3-2-1)
             for row in 0..5 {
@@ -347,6 +357,34 @@ fn setup(world: &mut World, renderer: &Renderer) -> Game {
     let ground_mat =
         Material::new(checker).with_pbr(Vec4::new(0.34, 0.36, 0.40, 1.0), 0.9, 0.05);
 
+    // Altın hedef blueprint'i — gövde config'i (dynamic mass + collider + sürtünme/sekme/
+    // sönümleme) BİR KEZ burada, `spawn_target` her seferinde yalnız konumla klonlayıp spawn'lar.
+    let target_prefab = Prefab::new(
+        cube.clone(),
+        base_mat
+            .clone()
+            .with_pbr(Vec4::new(1.0, 0.78, 0.16, 1.0), 0.22, 1.0),
+    )
+    .with_body(
+        RigidBodyBundle::dynamic(1.0)
+            .with_collider(Collider::box_collider(Vec3::splat(BLOCK_H)))
+            .with_friction(0.7)
+            .with_restitution(0.15)
+            .with_damping(0.06, 0.12),
+    );
+
+    // Taş blok blueprint'i — collider ölçekten türetilir (auto_box_collider). Kütle
+    // per-instance (`spawn_with_mass`); renk per-instance (`with_pbr`). with_body'deki
+    // collider bir yer-tutucudur, spawn'da ölçeğe göre EZİLİR.
+    let block_prefab = Prefab::new(cube.clone(), base_mat.clone())
+        .with_body(
+            RigidBodyBundle::dynamic(1.0)
+                .with_friction(0.85)
+                .with_restitution(0.0)
+                .with_damping(0.06, 0.12),
+        )
+        .auto_box_collider();
+
     // --- gökyüzü kubbesi (ters küp, unlit mavi) ---
     // ÖNEMLİ: küpün köşeleri (scale·√3) far-plane'i (4000) AŞMAMALI, yoksa köşeler
     // kırpılıp gökte siyah "yırtık" oluşur. scale 2000 → köşe 3464 < 4000 (güvenli).
@@ -390,6 +428,8 @@ fn setup(world: &mut World, renderer: &Renderer) -> Game {
         ball_mesh,
         base_mat,
         ground_mat,
+        target_prefab,
+        block_prefab,
         yaw: FRAC_PI_2,
         pitch: 0.08,
         level: 0,
@@ -408,8 +448,17 @@ fn setup(world: &mut World, renderer: &Renderer) -> Game {
         auto_timer: 1.2,
     };
 
-    load_level(&mut g, world, 0);
-    println!("🎯 YIKIM USTASI — altın hedefleri platformdan düşür! (SPACE=ateş, Fare=nişan)");
+    // YIKIM_LEVEL=<0..2> → doğrudan o bölümde başla (test/hata-ayıklama düğmesi).
+    let start_level = std::env::var("YIKIM_LEVEL")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|l| l.min(2))
+        .unwrap_or(0);
+    load_level(&mut g, world, start_level);
+    println!("🎯 YIKIM USTASI — altın hedefleri platformdan düşür! (SPACE=ateş, Fare/WASD=nişan)");
+    if g.autoplay {
+        println!("🤖 Gösteri modu AÇIK (YIKIM_AUTOPLAY) — fareyi oynat ya da bir tuşa bas, kontrol sana geçer.");
+    }
     g
 }
 
@@ -497,6 +546,27 @@ fn update(world: &mut World, g: &mut Game, dt: f32, input: &Input) {
     g.time += dt;
     g.fps = g.fps * 0.9 + (1.0 / dt.max(1e-4)) * 0.1;
 
+    // Attract modu (autoplay) İNSANA TESLİM OLUR: oyuncu fareyi oynatır ya da nişan/ateş
+    // tuşuna basarsa gösteri modu KAPANIR, kontrol oyuncuya geçer. Yoksa autoplay her ~1.5s
+    // aim'i ele geçirip "atış çizgisini başa taşıyıp" oyuncuyu kilitler.
+    if g.autoplay {
+        let md = input.mouse_delta();
+        let touched = md.0.abs() > 1.0
+            || md.1.abs() > 1.0
+            || input.is_mouse_button_pressed(0)
+            || [
+                KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD,
+                KeyCode::ArrowUp, KeyCode::ArrowDown, KeyCode::ArrowLeft,
+                KeyCode::ArrowRight, KeyCode::Space,
+            ]
+            .iter()
+            .any(|&c| input.is_key_pressed(c as u32));
+        if touched {
+            g.autoplay = false;
+            println!("🎮 Gösteri modu kapandı — kontrol sende.");
+        }
+    }
+
     // --- nişan (fare + klavye) ---
     // Bu kamerada "sağ" = dünya -X (get_right=(-sin yaw,0,cos yaw)); yaw ARTINCA
     // bakış sağa döner. Bu yüzden: fare-sağ/D → yaw+=, fare-sol/A → yaw-=.
@@ -521,21 +591,34 @@ fn update(world: &mut World, g: &mut Game, dt: f32, input: &Input) {
     g.pitch = g.pitch.clamp(PITCH_MIN, PITCH_MAX);
 
     // --- ateş / güç ölçeri ---
-    // Kenar-tespiti motorun `is_key_just_*` / `is_mouse_button_just_*` API'sinden gelir
-    // (elle prev_* takibi GEREKMEZ).
+    // Kenar-tespiti motorun `is_key_just_*` / `is_mouse_button_just_*` API'sinden gelir.
+    // Manuel giriş yalnız autoplay KAPALIYKEN işlenir — yoksa attract modunda insan + autoplay
+    // aynı karede iki kez fire() çağırıp tek karede 2 gülle harcayabilir.
     let mut shot: Option<f32> = None;
-    if g.phase == Phase::Aiming && g.shots_left > 0 {
+    if !g.autoplay && g.phase == Phase::Aiming && g.shots_left > 0 {
         if k(KeyCode::Space) {
             g.charging = true;
             g.charge = (g.charge + dt / CHARGE_TIME).min(1.0);
-        } else if g.charging && input.is_key_just_released(KeyCode::Space as u32) {
-            shot = Some(g.charge.max(0.12)); // bırakınca ateşle
+        }
+        // just_released AYRI (else-if DEĞİL): tek-kare fast-tap'ta motor o kare is_key_pressed=true
+        // VE is_key_just_released=true tutar (fast-tap sözleşmesi); else-if olsaydı bırakma dalı hiç
+        // değerlendirilmez → atış kaybolur + charge takılırdı. Ayrı if ile fast-tap min güçle ateşler.
+        if g.charging && input.is_key_just_released(KeyCode::Space as u32) {
+            shot = Some(g.charge.max(0.12));
             g.charging = false;
             g.charge = 0.0;
         }
         if input.is_mouse_button_just_pressed(0) {
             shot = Some(0.7); // hızlı atış
+            g.charging = false;
+            g.charge = 0.0;
         }
+    }
+    // Aiming dışına çıkınca (Cleared/Failed/AllCleared) şarjı temizle — yoksa güç ölçeri
+    // "BÖLÜM TEMİZLENDİ" banner'ının üstünde donuk kalır.
+    if g.phase != Phase::Aiming {
+        g.charging = false;
+        g.charge = 0.0;
     }
 
     if let Some(power) = shot {
@@ -775,7 +858,6 @@ fn render(
     renderer: &mut Renderer,
     _light_time: f32,
 ) {
-    renderer.gpu_physics = None;
     gizmo::systems::render::default_render_pass(world, encoder, view, renderer);
 }
 

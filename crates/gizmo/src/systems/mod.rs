@@ -1,5 +1,6 @@
 #[cfg(feature = "audio")]
 pub mod audio;
+pub mod auto_collider;
 pub mod chunk_system;
 pub mod fluid;
 #[cfg(feature = "render")]
@@ -14,6 +15,7 @@ pub mod transform;
 
 #[cfg(feature = "audio")]
 pub use audio::*;
+pub use auto_collider::*;
 pub use chunk_system::*;
 pub use fluid::*;
 #[cfg(feature = "render")]

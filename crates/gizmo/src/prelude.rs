@@ -15,7 +15,8 @@ pub use crate::core::{
 
 // === Hazır Bundle'lar ===
 pub use crate::bundles::{
-    CameraBundle, DirectionalLightBundle, MeshBundle, PointLightBundle, SpotLightBundle, RigidBodyBundle,
+    CameraBundle, DirectionalLightBundle, MeshBundle, PointLightBundle, Prefab, SpotLightBundle,
+    RigidBodyBundle,
 };
 
 // === ECS Sorgu Sistemi ===
@@ -65,6 +66,7 @@ pub use crate::systems::render::RenderContextExt;
 // "Bir komponent ekle, plugin çalıştır, motor halletsin" ergonomik sistemleri —
 // prelude'da öne çıkar (elle her frame yeniden yazma tuzağını önlemek için).
 pub use crate::systems::lifetime::{DespawnAfter, DespawnBelowY, LifetimePlugin};
+pub use crate::systems::auto_collider::{AutoBoxCollider, derived_box_half_extents};
 pub use crate::systems::spin::{Spin, SpinPlugin};
 #[cfg(feature = "render")]
 pub use crate::systems::fps_look::{FpsLook, FpsLookPlugin};
