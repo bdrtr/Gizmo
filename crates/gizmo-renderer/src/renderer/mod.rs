@@ -221,6 +221,19 @@ impl Renderer {
         self.scene.ensure_instance_capacity(&self.device, needed)
     }
 
+    /// Reconfigure the surface with the current config — the first-line recovery when
+    /// `Surface::get_current_texture()` returns `Outdated` or `Lost` (wgpu recommends calling
+    /// `configure()` again before any heavier recreation). Cheap and idempotent, so it is safe
+    /// to call every frame the acquire keeps failing. Unlike [`resize`](Self::resize) it does
+    /// NOT rebuild the depth/deferred targets (those are device resources, still valid on a
+    /// mere surface loss); it only re-establishes the swapchain so the next frame can present
+    /// instead of freezing on a black screen.
+    pub fn reconfigure_surface(&self) {
+        if let Some(ref surface) = self.surface {
+            surface.configure(&self.device, &self.config);
+        }
+    }
+
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         // Web'de dahili render çözünürlüğünü aynı cap'ten geçir (native no-op).
         // Bu olmadan ilk `Resized` olayı — tarayıcı canvas'ı CSS %100 ile
