@@ -137,6 +137,7 @@ impl<'a> Commands<'a> {
 
     /// Diskten bir .obj modeli yükler ve spawn eder.
     pub fn spawn_model(&mut self, pos: Vec3, path: &str) -> EntityBuilder<'_, 'a> {
+        tracing::debug!(path, ?pos, "spawn_model: diskten .obj model yükleniyor");
         let mesh = self
             .asset_manager
             .as_mut()
@@ -417,23 +418,28 @@ impl<'a> Commands<'a> {
     /// Textureli bir materyal yükler ve bir küpe uygular.
     pub fn spawn_textured_cube(&mut self, pos: Vec3, texture_path: &str) -> EntityBuilder<'_, 'a> {
         let mesh = AssetManager::create_cube(&self.renderer.device);
-        let bg = self
-            .asset_manager
-            .as_mut()
-            .unwrap()
-            .load_material_texture(
-                &self.renderer.device,
-                &self.renderer.queue,
-                &self.renderer.scene.texture_bind_group_layout,
-                texture_path,
-            )
-            .unwrap_or_else(|_| {
+        let bg = match self.asset_manager.as_mut().unwrap().load_material_texture(
+            &self.renderer.device,
+            &self.renderer.queue,
+            &self.renderer.scene.texture_bind_group_layout,
+            texture_path,
+        ) {
+            Ok(bg) => bg,
+            Err(e) => {
+                // Sessiz `.unwrap_or_else(|_| ...)` yutması yerine: hatayı BAĞLAMLA logla,
+                // sonra görsel-bozulmayı önlemek için beyaz dokuya düş.
+                tracing::warn!(
+                    path = texture_path,
+                    error = %e,
+                    "spawn_textured_cube: doku yüklenemedi, beyaz dokuya düşülüyor"
+                );
                 self.asset_manager.as_mut().unwrap().create_white_texture(
                     &self.renderer.device,
                     &self.renderer.queue,
                     &self.renderer.scene.texture_bind_group_layout,
                 )
-            });
+            }
+        };
         let mat = Material::new(bg);
         let id = spawn_mesh_entity(self.world, pos, mesh, mat);
         EntityBuilder {
@@ -450,23 +456,28 @@ impl<'a> Commands<'a> {
         texture_path: &str,
     ) -> EntityBuilder<'_, 'a> {
         let mesh = AssetManager::create_plane(&self.renderer.device, size);
-        let bg = self
-            .asset_manager
-            .as_mut()
-            .unwrap()
-            .load_material_texture(
-                &self.renderer.device,
-                &self.renderer.queue,
-                &self.renderer.scene.texture_bind_group_layout,
-                texture_path,
-            )
-            .unwrap_or_else(|_| {
+        let bg = match self.asset_manager.as_mut().unwrap().load_material_texture(
+            &self.renderer.device,
+            &self.renderer.queue,
+            &self.renderer.scene.texture_bind_group_layout,
+            texture_path,
+        ) {
+            Ok(bg) => bg,
+            Err(e) => {
+                // Sessiz `.unwrap_or_else(|_| ...)` yutması yerine: hatayı BAĞLAMLA logla,
+                // sonra görsel-bozulmayı önlemek için beyaz dokuya düş.
+                tracing::warn!(
+                    path = texture_path,
+                    error = %e,
+                    "spawn_textured_plane: doku yüklenemedi, beyaz dokuya düşülüyor"
+                );
                 self.asset_manager.as_mut().unwrap().create_white_texture(
                     &self.renderer.device,
                     &self.renderer.queue,
                     &self.renderer.scene.texture_bind_group_layout,
                 )
-            });
+            }
+        };
         let mat = Material::new(bg);
         let id = spawn_mesh_entity(self.world, pos, mesh, mat);
         EntityBuilder {
@@ -526,9 +537,13 @@ pub(super) fn spawn_mesh_entity(
 
     world.add_component(id, trans);
     world.add_component(id, gizmo_physics_core::components::GlobalTransform::default());
+    let source = mesh.source.clone();
     world.add_component(id, mesh);
     world.add_component(id, mat);
     world.add_component(id, MeshRenderer::new());
+    // Tüm primitif/rigid/textured/model mesh spawn'ları buradan geçer → tek noktada,
+    // sıcak-yol-güvenli trace! (kapalıyken bedelsiz) ile spawn edilen mesh + konum kaydı.
+    tracing::trace!(entity = id.id(), source = %source, ?pos, "mesh entity spawn'landı");
     id
 }
 

@@ -36,6 +36,7 @@ impl NetworkServer {
         let transport = NetcodeServerTransport::new(server_config, socket)
             .map_err(|e| NetError::Transport(Box::new(e)))?;
 
+        tracing::info!(public_addr = %public_addr, max_clients = 64, "Otoriter netcode sunucusu oluşturuldu, dinleniyor");
         Ok(Self { server, transport })
     }
 
@@ -44,7 +45,7 @@ impl NetworkServer {
         let dt = Duration::from_secs_f64(dt_secs);
         // Geçici bir transport hatası tüm sunucu döngüsünü düşürmemeli.
         if let Err(e) = self.transport.update(dt, &mut self.server) {
-            tracing::error!("Sunucu taşıma güncellemesi başarısız: {e}");
+            tracing::error!(error = %e, "Sunucu taşıma güncellemesi başarısız");
         }
     }
 

@@ -138,6 +138,7 @@ struct GridCell {
 
 impl NavMesh {
     /// Fizik dünyasından NavMesh oluşturur (Recast-tarzı pipeline)
+    #[tracing::instrument(skip_all, name = "navmesh_build")]
     pub fn build_from_physics(
         physics: &gizmo_physics_rigid::world::PhysicsWorld,
         config: &NavMeshConfig,
@@ -241,6 +242,15 @@ impl NavMesh {
             }
         }
 
+        // Voxelizasyon + bölge oluşturma ara-detayı (build seyrek olduğundan debug! uygun).
+        tracing::debug!(
+            entity_count = physics.entities.len(),
+            blocked_cells = blocked.len(),
+            walkable_cells = all_walkable.len(),
+            region_count = regions.len(),
+            "[NavMesh] Voxelizasyon + bölge oluşturma tamamlandı"
+        );
+
         // 3. Polygon generation: Her bölgeyi dikdörtgen polygon'lara böl (greedy merge)
         let mut polygons = Vec::new();
         let mut poly_id = 0u32;
@@ -329,10 +339,10 @@ impl NavMesh {
         let build_time_ms = start.elapsed().as_secs_f64() * 1000.0;
 
         tracing::info!(
-            "[NavMesh] Mesh oluşturuldu: {} polygon, {} bölge, {:.1}ms",
-            polygons.len(),
-            regions.len(),
-            build_time_ms
+            polygon_count = polygons.len(),
+            region_count = regions.len(),
+            build_time_ms,
+            "[NavMesh] Mesh oluşturuldu"
         );
 
         Self {
@@ -484,6 +494,9 @@ impl NavMesh {
 
         // Fallback: En yakın polygon'u döndür
         if best.is_none() {
+            // Nokta hiçbir polygonun İÇİNDE değil — en yakın merkeze düşülüyor. Sessiz
+            // degradasyon (yol mesh dışına çıkabilir), bu yüzden izlenebilir olması için trace!.
+            tracing::trace!(pos = ?pos, "[NavMesh] Nokta hiçbir polygonda değil, en yakın polygona düşülüyor");
             let mut closest_dist = f32::MAX;
             for poly in &self.polygons {
                 let dist = (poly.center - pos).length_squared();
@@ -498,11 +511,31 @@ impl NavMesh {
     }
 
     /// Polygon grafı üzerinde A* pathfinding
+    #[tracing::instrument(skip_all, name = "navmesh_find_path")]
     pub fn find_path(&self, start: Vec3, end: Vec3) -> Option<Vec<Vec3>> {
-        let start_poly = self.find_polygon(start)?;
-        let end_poly = self.find_polygon(end)?;
+        let start_poly = match self.find_polygon(start) {
+            Some(p) => p,
+            None => {
+                tracing::debug!(
+                    polygon_count = self.polygons.len(),
+                    "[NavMesh] Başlangıç noktası için polygon bulunamadı (mesh boş?)"
+                );
+                return None;
+            }
+        };
+        let end_poly = match self.find_polygon(end) {
+            Some(p) => p,
+            None => {
+                tracing::debug!(
+                    polygon_count = self.polygons.len(),
+                    "[NavMesh] Hedef noktası için polygon bulunamadı (mesh boş?)"
+                );
+                return None;
+            }
+        };
 
         if start_poly.id == end_poly.id {
+            tracing::trace!(poly_id = start_poly.id, "[NavMesh] Başlangıç ve hedef aynı polygonda");
             return Some(vec![end]);
         }
 
@@ -559,6 +592,12 @@ impl NavMesh {
                 }
                 path.reverse();
                 path.push(end);
+                tracing::debug!(
+                    path_len = path.len(),
+                    start_poly = start_poly.id,
+                    end_poly = end_poly.id,
+                    "[NavMesh] Polygon yolu bulundu"
+                );
                 return Some(path);
             }
 
@@ -594,6 +633,11 @@ impl NavMesh {
             }
         }
 
+        tracing::debug!(
+            start_poly = start_poly.id,
+            end_poly = end_poly.id,
+            "[NavMesh] Polygon grafında yol bulunamadı (bağlantısız bölgeler?)"
+        );
         None
     }
 

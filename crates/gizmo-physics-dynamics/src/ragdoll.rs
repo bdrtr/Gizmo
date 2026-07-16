@@ -294,6 +294,7 @@ impl RagdollInstance {
 ///
 /// If no [`PhysicsWorld`] resource is present the bodies are still spawned but
 /// no joints are created (the returned `joint_indices` is empty).
+#[tracing::instrument(skip_all, name = "spawn_ragdoll", fields(bone_count = bones.len()))]
 pub fn spawn_ragdoll(world: &mut World, bones: Vec<RagdollBoneDef>) -> RagdollInstance {
     let mut instance = RagdollInstance::default();
 
@@ -308,7 +309,20 @@ pub fn spawn_ragdoll(world: &mut World, bones: Vec<RagdollBoneDef>) -> RagdollIn
         // carry their absolute position from `build()`).
         let world_pos = match bone.parent_type {
             Some(parent) => {
-                let parent_pos = resolved.get(&parent).map(|(_, p)| *p).unwrap_or(Vec3::ZERO);
+                // Parent topolojik sırayla ÖNCE gelmiş olmalı (build() garanti eder). El ile
+                // sırasız bir liste verilirse parent çözülmez → sessizce ZERO'ya düşüp kemiği
+                // yanlış konuma koyardık; artık görünür bir uyarı ver (davranış korunur).
+                let parent_pos = match resolved.get(&parent) {
+                    Some((_, p)) => *p,
+                    None => {
+                        tracing::warn!(
+                            bone = ?bone.bone_type,
+                            parent = ?parent,
+                            "[Ragdoll] parent bone not resolved (bones out of topological order?) — placing child at origin"
+                        );
+                        Vec3::ZERO
+                    }
+                };
                 parent_pos + bone.local_pos
             }
             None => bone.local_pos,
@@ -337,6 +351,14 @@ pub fn spawn_ragdoll(world: &mut World, bones: Vec<RagdollBoneDef>) -> RagdollIn
                     BodyHandle::from_id(parent_entity.id()),
                     BodyHandle::from_id(entity.id()),
                 ));
+            } else {
+                // Non-root kemik ama parent'ı spawn edilmemiş → eklem OLUŞTURULMAZ (kemik
+                // iskeleeten kopuk kalır). Eskiden sessizdi; artık uyar.
+                tracing::warn!(
+                    bone = ?bone.bone_type,
+                    parent = ?parent_type,
+                    "[Ragdoll] parent not spawned — bone left unconnected (no joint created)"
+                );
             }
         }
     }
@@ -345,12 +367,27 @@ pub fn spawn_ragdoll(world: &mut World, bones: Vec<RagdollBoneDef>) -> RagdollIn
     // the ECS). Record their indices so callers can inspect/break them.
     if !pending_joints.is_empty() {
         if let Some(mut physics_world) = world.get_resource_mut::<PhysicsWorld>() {
+            let joint_count = pending_joints.len();
             for joint in pending_joints {
                 instance.joint_indices.push(physics_world.joints.len());
                 physics_world.joints.push(joint);
             }
+            tracing::debug!(joint_count, "[Ragdoll] joints registered in PhysicsWorld");
+        } else {
+            // Kemikler spawn edildi ama eklem solver'ı yok → iskelet KISITSIZ (dağılır). Doküman
+            // bunu destekli sayar, yine de neredeyse her zaman yanlış kurulum → uyar.
+            tracing::warn!(
+                pending_joints = pending_joints.len(),
+                "[Ragdoll] no PhysicsWorld resource — skeleton spawned WITHOUT joints (bones unconstrained)"
+            );
         }
     }
+
+    tracing::debug!(
+        bones = instance.bones.len(),
+        joints = instance.joint_indices.len(),
+        "[Ragdoll] spawn complete"
+    );
 
     instance
 }
@@ -449,12 +486,19 @@ fn build_bone_joint(bone: &RagdollBoneDef, parent: BodyHandle, child: BodyHandle
         }
         // `JointType` is `#[non_exhaustive]`; fall back to a rigid fixed joint
         // for any future variant so the skeleton stays connected.
-        _ => Joint::fixed(
-            parent,
-            child,
-            bone.local_anchor_parent,
-            bone.local_anchor_child,
-        ),
+        _ => {
+            tracing::debug!(
+                bone = ?bone.bone_type,
+                joint_type = ?bone.joint_type,
+                "[Ragdoll] unhandled joint type — falling back to a rigid Fixed joint"
+            );
+            Joint::fixed(
+                parent,
+                child,
+                bone.local_anchor_parent,
+                bone.local_anchor_child,
+            )
+        }
     }
 }
 
@@ -563,6 +607,164 @@ mod tests {
             "spring rest length must be the 0.2 anchor separation, got {} (0.4 = old centre-to-centre bug)",
             data.rest_length
         );
+    }
+
+    /// `build()` must add the root world position ONLY to root bones (`parent_type ==
+    /// None`); child bones keep their parent-local offset (they are resolved onto the
+    /// parent later, in `spawn_ragdoll`). Feeding the offset to children too would
+    /// double-count the root translation for the whole skeleton.
+    #[test]
+    fn build_offsets_only_root_bones() {
+        let root = Vec3::new(1.0, 5.0, -2.0);
+        let mut builder = RagdollBuilder::new(root);
+        builder.create_humanoid();
+        let defs = builder.build();
+
+        let pelvis = defs.iter().find(|d| d.bone_type == RagdollBoneType::Pelvis).unwrap();
+        assert!(pelvis.parent_type.is_none(), "pelvis is the root");
+        assert_eq!(pelvis.local_pos, root, "root bone gets the world offset");
+
+        let torso = defs.iter().find(|d| d.bone_type == RagdollBoneType::Torso).unwrap();
+        assert_eq!(
+            torso.local_pos,
+            Vec3::new(0.0, 0.4, 0.0),
+            "child bone keeps its parent-local offset, unshifted"
+        );
+    }
+
+    /// `RagdollInstance::entity_of` is a lookup, not a bijection: it returns the spawned
+    /// entity for a present bone and `None` for a bone type that was never spawned.
+    #[test]
+    fn entity_of_returns_none_for_unspawned_bone() {
+        use super::RagdollBoneDef;
+        use gizmo_physics_rigid::joints::JointType;
+        let mut world = World::new();
+        let mut builder = RagdollBuilder::new(Vec3::ZERO);
+        // Spawn a lone pelvis (no head).
+        builder.add_bone(RagdollBoneDef {
+            bone_type: RagdollBoneType::Pelvis,
+            parent_type: None,
+            local_pos: Vec3::ZERO,
+            radius: 0.15,
+            length: 0.2,
+            mass: 10.0,
+            joint_type: JointType::Fixed,
+            local_anchor_parent: Vec3::ZERO,
+            local_anchor_child: Vec3::ZERO,
+            joint_axis: Vec3::Y,
+            limits: None,
+        });
+        let instance = builder.spawn(&mut world);
+        assert!(instance.entity_of(RagdollBoneType::Pelvis).is_some(), "spawned bone resolves");
+        assert!(
+            instance.entity_of(RagdollBoneType::Head).is_none(),
+            "an unspawned bone type must resolve to None"
+        );
+    }
+
+    /// A `Distance` bone joint rests taut at the ANCHOR-to-anchor separation (min 0 →
+    /// rope) by default, and honours explicit `(min, max)` limits when given. The
+    /// anchor gap is `|local_pos + anchor_child - anchor_parent|`, matching the Spring
+    /// convention (not the centre-to-centre `local_pos.length()`).
+    #[test]
+    fn distance_bone_joint_uses_anchor_gap_and_honours_limits() {
+        use super::{build_bone_joint, RagdollBoneDef};
+        use gizmo_physics_core::BodyHandle;
+        use gizmo_physics_rigid::joints::{JointData, JointType};
+
+        let mk = |limits| RagdollBoneDef {
+            bone_type: RagdollBoneType::LeftLowerArm,
+            parent_type: Some(RagdollBoneType::LeftUpperArm),
+            local_pos: Vec3::new(0.0, 0.5, 0.0),
+            radius: 0.06,
+            length: 0.25,
+            mass: 2.0,
+            joint_type: JointType::Distance,
+            local_anchor_parent: Vec3::new(0.0, 0.1, 0.0),
+            local_anchor_child: Vec3::new(0.0, -0.1, 0.0),
+            joint_axis: Vec3::Y,
+            limits,
+        };
+
+        // Default: rope from 0 to the anchor gap = |(0,0.5,0)+(0,-0.1,0)-(0,0.1,0)| = 0.3.
+        let joint = build_bone_joint(&mk(None), BodyHandle::from_id(0), BodyHandle::from_id(1));
+        let JointData::Distance(d) = joint.data else { panic!("expected a distance joint") };
+        assert_eq!(d.min_length, 0.0, "default distance bone is a rope (min 0)");
+        assert!(
+            (d.max_length - 0.3).abs() < 1e-6,
+            "max must be the 0.3 anchor gap, got {} (0.5 = centre-to-centre bug)",
+            d.max_length
+        );
+
+        // Explicit limits pass through (clamped to be sane by Joint::distance).
+        let joint = build_bone_joint(&mk(Some((0.2, 1.5))), BodyHandle::from_id(0), BodyHandle::from_id(1));
+        let JointData::Distance(d) = joint.data else { panic!("expected a distance joint") };
+        assert!((d.min_length - 0.2).abs() < 1e-6, "explicit min honoured, got {}", d.min_length);
+        assert!((d.max_length - 1.5).abs() < 1e-6, "explicit max honoured, got {}", d.max_length);
+    }
+
+    /// A `Hinge` bone joint maps `limits` → `use_limits` + `lower/upper_limit`, and
+    /// leaves `use_limits` false when no limits are authored. The joint axis is
+    /// normalised into the hinge data.
+    #[test]
+    fn hinge_bone_joint_maps_limits_and_axis() {
+        use super::{build_bone_joint, RagdollBoneDef};
+        use gizmo_physics_core::BodyHandle;
+        use gizmo_physics_rigid::joints::{JointData, JointType};
+
+        let mk = |limits| RagdollBoneDef {
+            bone_type: RagdollBoneType::LeftLowerLeg,
+            parent_type: Some(RagdollBoneType::LeftUpperLeg),
+            local_pos: Vec3::new(0.0, -0.4, 0.0),
+            radius: 0.08,
+            length: 0.35,
+            mass: 4.0,
+            joint_type: JointType::Hinge,
+            local_anchor_parent: Vec3::new(0.0, -0.2, 0.0),
+            local_anchor_child: Vec3::new(0.0, 0.175, 0.0),
+            joint_axis: Vec3::new(1.0, 0.0, 0.0),
+            limits,
+        };
+
+        let joint = build_bone_joint(&mk(Some((-0.5, 2.0))), BodyHandle::from_id(0), BodyHandle::from_id(1));
+        let JointData::Hinge(d) = joint.data else { panic!("expected a hinge joint") };
+        assert!(d.use_limits, "authored limits must enable the hinge limit");
+        assert!((d.lower_limit - -0.5).abs() < 1e-6, "lower limit mapped, got {}", d.lower_limit);
+        assert!((d.upper_limit - 2.0).abs() < 1e-6, "upper limit mapped, got {}", d.upper_limit);
+        assert!((d.axis - Vec3::new(1.0, 0.0, 0.0)).length() < 1e-6, "axis normalised, got {:?}", d.axis);
+
+        let joint = build_bone_joint(&mk(None), BodyHandle::from_id(0), BodyHandle::from_id(1));
+        let JointData::Hinge(d) = joint.data else { panic!("expected a hinge joint") };
+        assert!(!d.use_limits, "no authored limits → free hinge (use_limits false)");
+    }
+
+    /// A `Fixed` bone joint carries the parent/child anchors straight through and is
+    /// created with collision disabled (adjacent overlapping capsules must not fight
+    /// the joint) — the documented default for ragdoll joints.
+    #[test]
+    fn fixed_bone_joint_carries_anchors_and_disables_collision() {
+        use super::{build_bone_joint, RagdollBoneDef};
+        use gizmo_physics_core::BodyHandle;
+        use gizmo_physics_rigid::joints::{JointData, JointType};
+
+        let bone = RagdollBoneDef {
+            bone_type: RagdollBoneType::Torso,
+            parent_type: Some(RagdollBoneType::Pelvis),
+            local_pos: Vec3::new(0.0, 0.4, 0.0),
+            radius: 0.18,
+            length: 0.4,
+            mass: 25.0,
+            joint_type: JointType::Fixed,
+            local_anchor_parent: Vec3::new(0.0, 0.2, 0.0),
+            local_anchor_child: Vec3::new(0.0, -0.2, 0.0),
+            joint_axis: Vec3::Y,
+            limits: None,
+        };
+        let joint = build_bone_joint(&bone, BodyHandle::from_id(3), BodyHandle::from_id(4));
+        assert!(matches!(joint.data, JointData::Fixed), "joint type must be Fixed");
+        assert_eq!(joint.local_anchor_a, bone.local_anchor_parent, "parent anchor carried through");
+        assert_eq!(joint.local_anchor_b, bone.local_anchor_child, "child anchor carried through");
+        assert!(!joint.collision_enabled, "ragdoll joints disable adjacent-body collision");
     }
 
     /// A freshly spawned ragdoll falls under gravity without producing NaN/Inf.

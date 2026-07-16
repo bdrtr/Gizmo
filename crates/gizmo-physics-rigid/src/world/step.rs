@@ -12,6 +12,7 @@ use std::time::Instant;
 impl PhysicsWorld {
     /// Ana fizik adımı — sabit 120Hz sub-stepping ile
     /// Render dt'yi (değişken) sabit iç fizik dt'ye dönüştürür.
+    #[tracing::instrument(skip_all, name = "physics_frame")]
     pub fn step(
         &mut self,
 
@@ -24,10 +25,18 @@ impl PhysicsWorld {
                 if snapshot.transforms.len() == self.transforms.len() {
                     self.transforms = snapshot.transforms;
                     self.velocities = snapshot.velocities;
-                    tracing::info!("Physics rewound by 1 frame!");
+                    tracing::info!(body_count = self.transforms.len(), "Physics rewound by 1 frame");
                 } else {
-                    tracing::warn!("Cannot rewind: Entity count changed.");
+                    // A body was spawned/despawned between snapshot and rewind, so the SoA
+                    // arrays no longer line up — restoring would corrupt the index mapping.
+                    tracing::warn!(
+                        stored = snapshot.transforms.len(),
+                        current = self.transforms.len(),
+                        "Cannot rewind: entity count changed since snapshot"
+                    );
                 }
+            } else {
+                tracing::debug!("Rewind requested but history buffer is empty");
             }
             return Ok(());
         }
@@ -80,6 +89,32 @@ impl PhysicsWorld {
             .filter(|rb| rb.is_dynamic() && rb.is_sleeping)
             .count();
 
+        // Per-frame AGGREGATE: one debug line summarising the whole step — how many fixed
+        // substeps ran, how much of the world is asleep, contact/island load and the phase
+        // timings accumulated across substeps. Cheap (all counts already computed above),
+        // and the single highest-signal line for "is the sim healthy this frame?".
+        tracing::debug!(
+            substeps = steps,
+            frame_dt,
+            accumulator = self.accumulator,
+            body_count = self.metrics.body_count,
+            sleeping_count = self.metrics.sleeping_count,
+            island_count = self.metrics.island_count,
+            contact_count = self.metrics.contact_count,
+            solver_ms = self.metrics.solver_ms,
+            total_ms = self.metrics.total_ms(),
+            "physics frame stepped"
+        );
+        if steps == MAX_SUBSTEPS {
+            // Hit the substep ceiling: the accumulator still holds unspent time, so the sim
+            // is running slower than real time (death-spiral guard clamped it). Time is lost.
+            tracing::warn!(
+                max_substeps = MAX_SUBSTEPS,
+                accumulator = self.accumulator,
+                "Physics hit the substep ceiling — simulation is behind real time (time lost)"
+            );
+        }
+
         // Alpha: render interpolasyonu için (0 = önceki adım, 1 = mevcut adım)
         self.render_alpha = self.accumulator / FIXED_DT;
 
@@ -98,6 +133,7 @@ impl PhysicsWorld {
     /// İç fizik adımı — sabit FIXED_DT ile çağrılır
     /// İç fizik adımı — sabit FIXED_DT ile çağrılır
     /// Modüler pipeline: her aşama ayrı fonksiyonda (pipeline.rs)
+    #[tracing::instrument(skip_all, name = "physics_substep")]
     fn step_internal(
         &mut self,
 

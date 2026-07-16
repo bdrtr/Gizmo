@@ -254,6 +254,7 @@ impl GizmoRendererSystem {
         }
     }
 
+    #[tracing::instrument(skip_all, level = "trace")]
     pub fn render<'a>(
         &'a self,
         rpass: &mut wgpu::RenderPass<'a>,
@@ -264,6 +265,16 @@ impl GizmoRendererSystem {
             return;
         }
         let draw_count = self.index_count.min(self.max_vertices);
+        if self.index_count > self.max_vertices {
+            // The gizmo vertex buffer is fixed-capacity; excess debug lines are
+            // dropped this frame. Flag it so "missing" debug geometry is explained.
+            tracing::warn!(
+                requested = self.index_count,
+                capacity = self.max_vertices,
+                "[GizmoDebug] debug line vertices exceed buffer capacity; tail dropped"
+            );
+        }
+        tracing::trace!(vertices = draw_count, depth_test, "[GizmoDebug] drawing lines");
         if depth_test {
             rpass.set_pipeline(&self.pipeline);
         } else {

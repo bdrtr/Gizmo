@@ -10,6 +10,7 @@ impl<State: 'static> App<State> {
     /// event loop terminates with an error.
     pub fn run(mut self) -> Result<(), crate::AppError> {
         if let Some(runner) = self.runner.take() {
+            tracing::info!("[App::run] delegating to custom runner");
             runner(self);
             return Ok(());
         }
@@ -18,6 +19,12 @@ impl<State: 'static> App<State> {
 
     fn run_default(mut self) -> Result<(), crate::AppError> {
         crate::setup_panic_hook();
+        tracing::info!(
+            title = %self.window_title,
+            width = self.window_size.0,
+            height = self.window_size.1,
+            "[App::run] starting windowed event loop"
+        );
 
         if let Some(ref path) = self.playback_file {
             match gizmo_core::input::PlaybackData::load(path) {
@@ -84,6 +91,7 @@ impl<State: 'static> App<State> {
             event_loop
                 .run_app(&mut self)
                 .map_err(crate::AppError::EventLoop)?;
+            tracing::info!("[App::run] event loop exited");
             // `resumed` returns `()`, so a lazy-init failure can't propagate through
             // `run_app`. Surface it here so `run` honors its documented AppError
             // contract (e.g. missing setup hook, renderer build failure).
@@ -114,6 +122,7 @@ impl<State: 'static> App<State> {
     /// The synchronous tail of initialization, shared by the native path
     /// (`initialize`, via `pollster::block_on`) and the web path (the renderer
     /// arrives later from a `spawn_local` future — see `try_finish_web_init`).
+    #[tracing::instrument(skip_all, name = "app_finish_initialize")]
     fn finish_initialize(
         &mut self,
         window: Arc<winit::window::Window>,
@@ -129,9 +138,16 @@ impl<State: 'static> App<State> {
         });
 
         // Renderer Resource oluştur ve World'e ekle
+        let embedded_count = self.embedded_assets.len();
         renderer.asset_manager.write().unwrap().embedded_assets =
             std::mem::take(&mut self.embedded_assets);
         self.world.insert_resource(renderer);
+        tracing::debug!(
+            width = self.window_size.0,
+            height = self.window_size.1,
+            embedded_assets = embedded_count,
+            "[App] core resources + renderer inserted"
+        );
 
         let state = if let Some(setup) = self.setup_fn.take() {
             let r = self
@@ -140,8 +156,10 @@ impl<State: 'static> App<State> {
                 .ok_or(crate::AppError::MissingResource("Renderer"))?;
             let state = setup(&mut self.world, &r);
             self.world.insert_resource(r);
+            tracing::info!("[App] user setup hook complete");
             state
         } else {
+            tracing::error!("[App] setup hook missing; cannot initialize");
             return Err(crate::AppError::MissingSetup);
         };
 
@@ -162,12 +180,19 @@ impl<State: 'static> App<State> {
                     let mut registry = gizmo_scene::registry::default_scene_registry();
                     #[cfg(not(target_arch = "wasm32"))]
                     gizmo_scripting::register_script_components(&mut registry);
-                    if let Err(e) = gizmo_scene::scene::SceneData::load_into(
+                    match gizmo_scene::scene::SceneData::load_into(
                         &scene_path,
                         &mut self.world,
                         &registry,
                     ) {
-                        tracing::error!("[App::run] Sahne yüklenemedi '{}': {}", scene_path, e);
+                        Ok(()) => {
+                            tracing::info!(scene = %scene_path, "[App] initial scene loaded")
+                        }
+                        Err(e) => tracing::error!(
+                            scene = %scene_path,
+                            error = %e,
+                            "[App::run] initial scene load failed"
+                        ),
                     }
                 }
 
@@ -185,12 +210,14 @@ impl<State: 'static> App<State> {
                 EguiContext::new(&r.device, r.config.format, &window, 1)
             };
             self.editor = Some(editor);
+            tracing::debug!("[App] egui overlay context initialized");
         }
 
         self.app_state = Some(state);
         self.window = Some(window);
         self.last_frame_time = Some(super::FrameInstant::now());
         self.light_time = 0.0;
+        tracing::info!("[App] initialization complete");
         Ok(())
     }
 }
@@ -230,14 +257,22 @@ impl<State: 'static> ApplicationHandler for App<State> {
         // `resumed` can fire more than once (e.g. on mobile); only build the
         // window + runtime the first time.
         if self.window.is_some() {
+            tracing::trace!("[App] resumed ignored (already initialized)");
             return;
         }
+        tracing::debug!("[App] resumed: creating window + runtime");
         let attrs = match self.window_attributes.take() {
             Some(a) => a,
-            None => return,
+            None => {
+                tracing::warn!("[App] resumed without stashed window attributes; skipping init");
+                return;
+            }
         };
         let window = match event_loop.create_window(attrs) {
-            Ok(w) => Arc::new(w),
+            Ok(w) => {
+                tracing::debug!("[App] window created");
+                Arc::new(w)
+            }
             Err(e) => {
                 tracing::error!("Window creation failed: {}", e);
                 // `run`/`run_default`'ın belgeli hata sözleşmesini onurlandır:

@@ -8,8 +8,10 @@ use std::sync::Arc;
 
 // ── Simple AnimationPlayer update ────────────────────────────────────────────
 
+#[tracing::instrument(skip_all, level = "trace")]
 pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) {
     let entities: Vec<u32> = world.borrow::<AnimationPlayer>().entities().collect();
+    tracing::trace!(players = entities.len(), dt, "[Animation] updating skeletal players");
     // SAFETY: exclusive `&mut World`; AnimationPlayer and Skeleton are distinct component
     // types, so these two mutable queries never alias the same storage.
     let mut players = unsafe { world.borrow_mut_unchecked::<AnimationPlayer>() };
@@ -33,7 +35,12 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
             let anim = match animations.get(player.active_animation) {
                 Some(c) => c,
                 None => {
-                    tracing::error!("Warning: Invalid active_animation index for entity.");
+                    tracing::warn!(
+                        entity,
+                        active_animation = player.active_animation,
+                        clip_count = animations.len(),
+                        "[Animation] active_animation index out of range; skipping entity"
+                    );
                     continue;
                 }
             };

@@ -263,8 +263,105 @@ pub fn handle_simulation(
                     gizmos.draw_box(min, max, [1.0, 0.0, 0.0, 0.5]); // Red boxes for obstacles
                 }
             }
-            
+
 
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gizmo::math::Vec3;
+
+    // Mirror of the fixed-timestep pump in `handle_simulation` (the play-mode physics
+    // loop). Same accumulator, same fixed_dt, same death-spiral clamp + 16-step cap.
+    // Returns (leftover_accumulator, steps_taken) so the invariants are observable
+    // without a live World / ScriptEngine / PhysicsWorld.
+    fn pump(mut accumulator: f32, dt: f32) -> (f32, u32) {
+        accumulator += dt;
+        let fixed_dt = 1.0 / 60.0;
+        // Death spiral önleme
+        accumulator = accumulator.min(fixed_dt * 16.0);
+
+        let mut steps = 0;
+        while accumulator >= fixed_dt && steps < 16 {
+            accumulator -= fixed_dt;
+            steps += 1;
+        }
+        (accumulator, steps)
+    }
+
+    /// One real-time frame at exactly the fixed rate advances the sim exactly once
+    /// and leaves (essentially) no leftover.
+    #[test]
+    fn pump_single_frame_is_one_step() {
+        let (leftover, steps) = pump(0.0, 1.0 / 60.0);
+        assert_eq!(steps, 1);
+        assert!(leftover.abs() < 1e-4, "leftover accumulator: {leftover}");
+    }
+
+    /// A sub-frame dt performs no step but banks time; two half-frames then trigger
+    /// exactly one step (accumulator carry-over invariant).
+    #[test]
+    fn pump_sub_frame_banks_then_steps() {
+        let (acc1, steps1) = pump(0.0, 1.0 / 120.0);
+        assert_eq!(steps1, 0, "half a frame must not step yet");
+        assert!(acc1 > 0.0);
+
+        let (acc2, steps2) = pump(acc1, 1.0 / 120.0);
+        assert_eq!(steps2, 1, "two half-frames = one step");
+        assert!(acc2.abs() < 1e-4, "leftover after the step: {acc2}");
+    }
+
+    /// A catastrophic hitch (1 full second) must NOT spiral: the accumulator is
+    /// clamped to 16*fixed_dt and the loop is hard-capped at 16 steps, so the sim
+    /// never tries to simulate a second of physics in one frame.
+    #[test]
+    fn pump_huge_dt_is_capped_at_16_steps() {
+        let (leftover, steps) = pump(0.0, 1.0);
+        assert_eq!(steps, 16, "step count must be capped");
+        // Clamp = 16*fixed_dt, exactly drained by 16 steps → ~0 leftover, and never
+        // the ~0.78s of un-simulated time a naive loop would carry.
+        assert!(leftover < 1.0 / 60.0, "leftover must be below one step: {leftover}");
+    }
+
+    /// Even with pre-existing banked time plus a big dt, the clamp holds the step
+    /// count at the 16 ceiling (idempotent under repeated overload).
+    #[test]
+    fn pump_overload_stays_capped_with_prior_accumulator() {
+        let (_, steps) = pump(0.5, 0.5);
+        assert_eq!(steps, 16);
+    }
+
+    // Mirror of the auto-fight-camera framing math in `handle_simulation`:
+    // separation is floored at 2.0, and the camera pull-back distance is floored at
+    // 4.0 (min_dist) after a 1.2x zoom-out. Guards the two boundary clamps.
+    fn fight_camera_distance(p1: Vec3, p2: Vec3) -> f32 {
+        let separation = (p2 - p1).length().max(2.0);
+        let min_dist = 4.0_f32;
+        (separation * 1.2).max(min_dist)
+    }
+
+    #[test]
+    fn fight_camera_distance_respects_min_floor() {
+        // Fighters almost on top of each other → separation floored to 2.0, then
+        // 2.0*1.2 = 2.4 < 4.0 → distance floored to the 4.0 minimum.
+        let d = fight_camera_distance(Vec3::ZERO, Vec3::new(0.2, 0.0, 0.0));
+        assert!((d - 4.0).abs() < 1e-4, "close fighters must clamp to min_dist: {d}");
+    }
+
+    #[test]
+    fn fight_camera_distance_scales_when_far_apart() {
+        // Ten units apart → 10*1.2 = 12 wins over the 4.0 floor.
+        let d = fight_camera_distance(Vec3::new(-5.0, 0.0, 0.0), Vec3::new(5.0, 0.0, 0.0));
+        assert!((d - 12.0).abs() < 1e-4, "far fighters should zoom out: {d}");
+    }
+
+    #[test]
+    fn fight_camera_midpoint_is_average() {
+        let p1 = Vec3::new(-3.0, 1.0, 2.0);
+        let p2 = Vec3::new(7.0, 3.0, -4.0);
+        let midpoint = (p1 + p2) * 0.5;
+        assert!((midpoint - Vec3::new(2.0, 2.0, -1.0)).length() < 1e-5);
     }
 }

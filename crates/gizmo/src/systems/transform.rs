@@ -9,16 +9,20 @@ impl gizmo_core::system::System for TransformSyncSystem {
         info
     }
 
+    #[tracing::instrument(skip_all, level = "trace", name = "transform_sync")]
     fn run(&mut self, world: &gizmo_core::world::World, _dt: f32) {
         // SAFETY: scheduled system; the scheduler guarantees no other system mutably
         // aliases Transform while this runs (see `World::query_unchecked`).
+        let mut updated = 0usize;
         if let Some(mut transforms) = unsafe {
             world.query_unchecked::<gizmo_core::query::Mut<gizmo_physics_core::Transform>>()
         } {
             for (_, mut trans) in transforms.iter_mut() {
                 trans.update_local_matrix();
+                updated += 1;
             }
         }
+        tracing::trace!(updated, "transform_sync: yerel matrisler güncellendi");
     }
 }
 
@@ -31,6 +35,7 @@ impl gizmo_core::system::System for TransformPropagateSystem {
         info
     }
 
+    #[tracing::instrument(skip_all, level = "trace", name = "transform_propagate")]
     fn run(&mut self, world: &gizmo_core::world::World, _dt: f32) {
         // Query to get root transforms (no Parent)
         // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
@@ -96,6 +101,9 @@ impl gizmo_core::system::System for TransformPropagateSystem {
                 }
             }
         }
+
+        // Aggregate: bu frame'de dünya-matrisi güncellenen düğüm sayısı (kök + çocuklar).
+        tracing::trace!(nodes = visited.len(), "transform_propagate: hiyerarşi dünya-matrisleri güncellendi");
     }
 }
 
@@ -108,7 +116,9 @@ impl gizmo_core::system::System for BoneAttachmentSystem {
         info
     }
 
+    #[tracing::instrument(skip_all, level = "trace", name = "bone_attachment")]
     fn run(&mut self, world: &gizmo_core::world::World, _dt: f32) {
+        let mut attached = 0usize;
         if let Some(query) = world.query::<&gizmo_renderer::components::BoneAttachment>() {
             let mut skeletons = world.query::<&gizmo_renderer::components::Skeleton>();
             // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
@@ -128,12 +138,16 @@ impl gizmo_core::system::System for BoneAttachmentSystem {
                                     trans.rotation = r;
                                     trans.scale = s;
                                     trans.update_local_matrix();
+                                    attached += 1;
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+        if attached > 0 {
+            tracing::trace!(attached, "bone_attachment: kemiğe bağlı varlıklar güncellendi");
         }
     }
 }

@@ -18,7 +18,12 @@ pub fn physics_step_system(world: &World, dt: f32) {
     let mut physics_world = match world.try_get_resource_mut::<PhysicsWorld>() {
         Ok(res) => res,
         Err(e) => {
-            tracing::info!("[Physics] FAILED TO GET PhysicsWorld Resource: {:?}", e);
+            // Physics cannot run without its world resource. Recoverable (skip the frame),
+            // but a real per-frame functional failure → warn, not info.
+            tracing::warn!(
+                error = ?e,
+                "[Physics] PhysicsWorld resource unavailable — skipping physics this frame"
+            );
             return;
         }
     };
@@ -115,7 +120,11 @@ pub fn physics_step_system(world: &World, dt: f32) {
             }
         }
     } else {
-        tracing::info!("[Physics] FAILED TO BORROW RigidBody/Transform/Velocity Mutably!");
+        // The write query failed to build — no bodies get stepped this frame. Recoverable
+        // but a genuine failure (physics silently freezes), so warn rather than info.
+        tracing::warn!(
+            "[Physics] could not mutably borrow RigidBody/Transform/Velocity — no bodies stepped this frame"
+        );
     }
 
     // 4. Step Simulation
@@ -207,12 +216,21 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
 
     let physics_world = match world.try_get_resource::<PhysicsWorld>() {
         Ok(res) => res,
-        Err(_) => return,
+        // No physics world ⇒ nothing to fracture. Optional-resource absence, not a bug → trace.
+        Err(_) => {
+            tracing::trace!("[Physics] fracture system: no PhysicsWorld resource, skipping");
+            return;
+        }
     };
 
     let mut commands = match Commands::fetch(world, dt) {
         Ok(c) => c,
-        Err(_) => return,
+        // Commands are the ECS deferred-op channel; without them every fracture spawn is
+        // silently dropped — a hidden failure worth surfacing (debug: infra-level).
+        Err(e) => {
+            tracing::debug!(error = ?e, "[Physics] fracture system: Commands unavailable, fractures dropped this frame");
+            return;
+        }
     };
 
     let mut shattered = std::collections::HashSet::new();
@@ -229,7 +247,10 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
     };
     let mut query = match query_opt {
         Some(q) => q,
-        None => return,
+        None => {
+            tracing::trace!("[Physics] fracture system: breakable query unavailable, skipping");
+            return;
+        }
     };
 
     for event in &physics_world.collision_events {
@@ -403,7 +424,11 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
 
     let mut commands = match Commands::fetch(world, dt) {
         Ok(c) => c,
-        Err(_) => return,
+        // Without Commands the explosion despawns/impulses can't be issued — surface it.
+        Err(e) => {
+            tracing::debug!(error = ?e, "[Physics] explosion system: Commands unavailable, skipping");
+            return;
+        }
     };
 
     let explosion_query_opt = world.query::<(

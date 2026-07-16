@@ -95,6 +95,13 @@ impl AnimationStateMachine {
         states: Vec<AnimationState>,
         transitions: Vec<AnimationTransition>,
     ) -> Self {
+        tracing::debug!(
+            initial = %initial_state,
+            states = states.len(),
+            transitions = transitions.len(),
+            clips = clips.len(),
+            "[Animation] state machine created"
+        );
         Self {
             clips,
             states,
@@ -108,11 +115,25 @@ impl AnimationStateMachine {
 
     /// Queue a trigger to be evaluated on the next `animation_state_machine_update`.
     pub fn trigger(&mut self, name: &str) {
+        tracing::debug!(
+            trigger = %name,
+            current = %self.current_state,
+            "[Animation] FSM trigger queued"
+        );
         self.pending_triggers.push(name.to_string());
     }
 
     /// Drain and return all pending triggers (consumed by the update system).
     pub fn drain_triggers(&mut self) -> Vec<String> {
+        // Called every frame by the update system; only speak up when there is
+        // actually something to drain to keep the per-frame path quiet.
+        if !self.pending_triggers.is_empty() {
+            tracing::trace!(
+                count = self.pending_triggers.len(),
+                current = %self.current_state,
+                "[Animation] draining FSM triggers"
+            );
+        }
         self.pending_triggers.drain(..).collect()
     }
 
@@ -258,5 +279,83 @@ mod tests {
                 .map(|t| t.to.as_str()),
             Some("jump")
         );
+    }
+
+    // ── Cross-fade blend weight ────────────────────────────────────────
+
+    fn active_blend(elapsed: f32, duration: f32) -> ActiveBlend {
+        ActiveBlend {
+            from_clip: 0,
+            to_clip: 1,
+            from_time: 0.0,
+            to_time: 0.0,
+            elapsed,
+            duration,
+            to_state: "run".into(),
+            to_looped: true,
+            to_speed: 1.0,
+        }
+    }
+
+    #[test]
+    fn active_blend_alpha_ramps_and_clamps() {
+        assert_eq!(active_blend(0.0, 0.4).alpha(), 0.0, "start fully on the source");
+        assert!((active_blend(0.2, 0.4).alpha() - 0.5).abs() < 1e-6, "linear ramp midpoint");
+        assert_eq!(active_blend(0.4, 0.4).alpha(), 1.0, "end fully on the destination");
+        // Overshooting the blend duration must clamp, not exceed 1.0.
+        assert_eq!(active_blend(10.0, 0.4).alpha(), 1.0, "alpha clamps at 1.0");
+    }
+
+    #[test]
+    fn active_blend_zero_duration_is_instant() {
+        // A zero (or negative) blend duration snaps straight to the destination.
+        assert_eq!(active_blend(0.0, 0.0).alpha(), 1.0);
+        assert_eq!(active_blend(0.0, -1.0).alpha(), 1.0);
+    }
+
+    // ── Trigger queue ──────────────────────────────────────────────────
+
+    #[test]
+    fn triggers_drain_in_order_then_empty() {
+        let mut m = machine(vec![]);
+        m.trigger("run");
+        m.trigger("jump");
+        assert_eq!(m.drain_triggers(), vec!["run".to_string(), "jump".to_string()]);
+        assert!(m.drain_triggers().is_empty(), "queue must be empty after draining");
+    }
+
+    // ── Current-state metadata accessors ───────────────────────────────
+
+    #[test]
+    fn metadata_reads_from_state_and_clip_when_present() {
+        let clips: Arc<[AnimationClip]> = Arc::from(vec![AnimationClip {
+            name: "run".into(),
+            duration: 2.5,
+            translations: vec![],
+            rotations: vec![],
+            scales: vec![],
+        }]);
+        let states = vec![AnimationState {
+            name: "run".into(),
+            clip_index: 0,
+            looped: false,
+            speed: 1.5,
+        }];
+        let m = AnimationStateMachine::new("run", clips, states, vec![]);
+        assert_eq!(m.current_clip_index(), Some(0));
+        assert!((m.current_clip_duration() - 2.5).abs() < 1e-6);
+        assert!((m.current_speed() - 1.5).abs() < 1e-6);
+        assert!(!m.is_current_looped());
+    }
+
+    #[test]
+    fn metadata_falls_back_when_state_is_unknown() {
+        // `machine` sets current_state = "run" but supplies no states/clips, so every
+        // accessor must return its documented default rather than panic/index.
+        let m = machine(vec![]);
+        assert_eq!(m.current_clip_index(), None);
+        assert_eq!(m.current_clip_duration(), 1.0, "missing clip → 1.0");
+        assert_eq!(m.current_speed(), 1.0, "missing state → speed 1.0");
+        assert!(m.is_current_looped(), "missing state → looped true");
     }
 }

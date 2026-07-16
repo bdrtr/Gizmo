@@ -13,12 +13,14 @@ pub fn ui_dev_console(world: &mut World, ctx: &egui::Context, input: &gizmo_core
         if has_state {
             let mut state = world.get_resource_mut::<DevConsoleState>().unwrap();
             state.is_open = !state.is_open;
+            tracing::debug!(is_open = state.is_open, "[DevConsole] visibility toggled");
         } else {
             let state = DevConsoleState {
                 is_open: true,
                 ..Default::default()
             };
             world.insert_resource(state);
+            tracing::debug!("[DevConsole] opened for the first time");
         }
     }
 
@@ -102,9 +104,14 @@ pub fn ui_dev_console(world: &mut World, ctx: &egui::Context, input: &gizmo_core
 
         // Execute command and apply to CVarRegistry
         if let Some(cmd) = execute_cmd {
+            tracing::debug!(command = %cmd, "[DevConsole] executing command");
             let result = if let Some(mut registry) = world.get_resource_mut::<CVarRegistry>() {
                 registry.execute(&cmd)
             } else {
+                tracing::warn!(
+                    command = %cmd,
+                    "[DevConsole] CVarRegistry missing; engine not ready, command ignored"
+                );
                 "CVarRegistry bulunamadi. Motor henüz hazir değil.".to_string()
             };
 

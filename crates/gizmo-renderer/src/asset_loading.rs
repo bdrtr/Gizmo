@@ -8,6 +8,7 @@ use wgpu::BindGroupLayout;
 
 /// Sürekli olarak sahnede yeni eklenen `MeshSource` ve `MaterialSource` bileşenlerini
 /// tarayarak, eksik olan `Mesh` ve `Material` GPU bileşenlerini yükler.
+#[tracing::instrument(skip_all, level = "trace")]
 pub fn run_asset_loading_system(
     world: &mut World,
     device: &Device,
@@ -45,6 +46,16 @@ pub fn run_asset_loading_system(
         }
     }
 
+    // Idle frames find nothing missing and stay silent; only log when there is
+    // actual GPU upload work this frame (avoids per-frame noise on a steady scene).
+    if !missing_meshes.is_empty() || !missing_materials.is_empty() {
+        tracing::debug!(
+            meshes = missing_meshes.len(),
+            materials = missing_materials.len(),
+            "[AssetLoading] uploading missing GPU components"
+        );
+    }
+
     // Default beyaz doku oluştur (Texture yüklenemezse veya yoksa kullanılır)
     let default_texture_bind_group = asset_manager.create_white_texture(device, queue, texture_bind_group_layout);
 
@@ -72,13 +83,22 @@ pub fn run_asset_loading_system(
                     };
 
                     if let Some(path) = file_path {
-                        let _ = asset_manager.load_gltf_scene(
+                        if let Err(e) = asset_manager.load_gltf_scene(
                             device,
                             queue,
                             texture_bind_group_layout,
                             default_texture_bind_group.clone(),
                             path,
-                        );
+                        ) {
+                            // Previously swallowed with `let _`: on failure the mesh
+                            // silently became a placeholder with no explanation.
+                            tracing::warn!(
+                                path,
+                                mesh_source = %mesh_src,
+                                error = %e,
+                                "[AssetLoading] glTF scene load failed; using placeholder mesh"
+                            );
+                        }
                         if let Some(cached) = asset_manager.get_cached_mesh(&mesh_src) {
                             cached
                         } else {
@@ -106,7 +126,13 @@ pub fn run_asset_loading_system(
                 asset_manager
                     .load_material_texture(device, queue, texture_bind_group_layout, tex_path)
                     .unwrap_or_else(|e| {
-                        tracing::info!("Scene Texture error: {}", e);
+                        // Recoverable: falls back to the default white texture, but the
+                        // requested texture is missing/undecodable — a real problem to surface.
+                        tracing::warn!(
+                            texture = %tex_path,
+                            error = %e,
+                            "[AssetLoading] material texture load failed; using default white texture"
+                        );
                         default_texture_bind_group.clone()
                     })
             } else {

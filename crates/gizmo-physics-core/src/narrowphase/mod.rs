@@ -265,6 +265,10 @@ impl NarrowPhase {
         // Ultimate fallback to GJK when clipping completely fails (rare,
         // e.g. very thin boxes or heavily rounded geometry).
         if contacts.is_empty() {
+            tracing::trace!(
+                min_pen,
+                "box-box SAT overlapped but Sutherland-Hodgman clipping produced no contacts; falling back to GJK/EPA"
+            );
             let shape_a = ColliderShape::Box(crate::components::BoxShape { half_extents: ha });
             let shape_b = ColliderShape::Box(crate::components::BoxShape { half_extents: hb });
             if let Some(c) = Gjk::get_contact(&shape_a, pos_a, rot_a, &shape_b, pos_b, rot_b) {
@@ -406,6 +410,10 @@ impl NarrowPhase {
             c.local_point_a = c.point - pos_a;
             c.local_point_b = c.point - pos_b;
         }
+
+        // Per-pair narrowphase result (hot path → trace only). `contact_count == 0`
+        // means the pair did not actually overlap this frame.
+        tracing::trace!(contact_count = contacts.len(), "narrowphase manifold generated");
 
         contacts
     }

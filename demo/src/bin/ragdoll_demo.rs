@@ -159,7 +159,6 @@ fn render(
     renderer: &mut Renderer,
     _light_time: f32,
 ) {
-    renderer.gpu_physics = None;
     gizmo::systems::default_render_pass(world, encoder, view, renderer);
 }
 

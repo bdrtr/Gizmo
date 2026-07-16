@@ -163,6 +163,20 @@ impl<T> UtilityBrain<T> {
             }
         }
 
+        // Eylem/hedef seçimi — hangi eylem hangi skorla kazandı.
+        match &best_action {
+            Some(name) => tracing::debug!(
+                action = %name,
+                score = best_score,
+                action_count = self.actions.len(),
+                "[AI] Utility brain eylem seçti"
+            ),
+            None => tracing::trace!(
+                action_count = self.actions.len(),
+                "[AI] Utility brain seçilebilir eylem bulamadı (hepsi veto/0 skor?)"
+            ),
+        }
+
         best_action.map(|name| (name, best_score))
     }
 }

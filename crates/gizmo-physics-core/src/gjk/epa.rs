@@ -40,16 +40,26 @@ impl Gjk {
                 }
             }
         } else {
+            // GJK handed EPA a lower-dimensional simplex (line/triangle). EPA needs a
+            // tetrahedron to expand, so bail out — the caller falls back to a coarse contact.
+            tracing::trace!(
+                simplex_len = simplex.len(),
+                "EPA aborted: initial simplex is not a tetrahedron"
+            );
             return None;
         }
 
+        let mut converged = false;
+        let mut iterations = 0usize;
         for _ in 0..EPA_MAX_ITERATIONS {
+            iterations += 1;
             let (_closest_face_idx, normal, distance) = Self::find_closest_face(&simplex, &faces)?;
 
             let support_point = support(normal);
             let support_distance = support_point.v.dot(normal);
 
             if support_distance - distance < EPA_TOLERANCE {
+                converged = true;
                 break;
             }
 
@@ -83,6 +93,17 @@ impl Gjk {
             }
         }
 
+        if !converged {
+            // Hit the iteration cap before the polytope stopped growing: the returned
+            // penetration/normal are the best-so-far, not a fully converged MTV.
+            tracing::trace!(
+                iterations,
+                max_iterations = EPA_MAX_ITERATIONS,
+                tolerance = EPA_TOLERANCE,
+                "EPA reached its iteration cap without converging; using best-so-far contact"
+            );
+        }
+
         let (closest_idx, normal, penetration) = Self::find_closest_face(&simplex, &faces)?;
 
         // Temas noktası: en yakın EPA yüzündeki Minkowski köşelerinin origin'e en
@@ -108,6 +129,10 @@ impl Gjk {
             }
             None => {
                 // Dejenere yüz: deepest-support orta-noktasına düş.
+                tracing::trace!(
+                    penetration,
+                    "EPA closest face is degenerate (barycentric failed); using deepest-support midpoint"
+                );
                 let pt_a = Self::support_point(shape_a, pos_a, rot_a, -normal);
                 let pt_b = Self::support_point(shape_b, pos_b, rot_b, normal);
                 (pt_a + pt_b) * 0.5

@@ -303,4 +303,188 @@ mod tests {
             "canlı entity için undo eski (old) değeri geri yüklemeli"
         );
     }
+
+    // === Yardımcılar ===
+
+    /// Transform storage'ı kayıtlı bir World döndürür (boş-changes undo'ları
+    /// `borrow_mut::<Transform>()` çağırdığı için tip kayıtlı olmalı).
+    fn world_with_transform_storage() -> World {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.add_component(e, Transform::new(Vec3::ZERO));
+        w
+    }
+
+    fn is_soft_deleted(world: &World, e: gizmo_core::entity::Entity) -> bool {
+        world
+            .borrow::<gizmo_core::component::IsDeleted>()
+            .get(e.id())
+            .is_some()
+    }
+
+    fn is_hidden(world: &World, e: gizmo_core::entity::Entity) -> bool {
+        world
+            .borrow::<gizmo_core::component::IsHidden>()
+            .get(e.id())
+            .is_some()
+    }
+
+    // === Stack invariant'ları ===
+
+    #[test]
+    fn empty_history_cannot_undo_or_redo() {
+        let h = History::new(10);
+        assert!(!h.can_undo());
+        assert!(!h.can_redo());
+    }
+
+    #[test]
+    fn default_history_max_is_50() {
+        assert_eq!(History::default().max_history, 50);
+    }
+
+    /// Yeni bir push, redo_stack'i temizlemeli (undo→push sonrası redo gitmeli).
+    #[test]
+    fn push_clears_redo_stack() {
+        let mut world = world_with_transform_storage();
+        let mut h = History::new(10);
+
+        h.push(EditorAction::TransformsChanged { changes: vec![] });
+        assert!(h.can_undo());
+
+        // undo → kayıt redo_stack'e taşınır
+        h.undo(&mut world);
+        assert!(h.can_redo());
+        assert!(!h.can_undo());
+
+        // yeni push → redo_stack temizlenmeli
+        h.push(EditorAction::TransformsChanged { changes: vec![] });
+        assert!(!h.can_redo(), "yeni push sonrası redo geçmişi silinmeli");
+        assert!(h.can_undo());
+    }
+
+    /// max_history aşıldığında en eski kayıt düşürülmeli (ring-buffer davranışı).
+    #[test]
+    fn max_history_evicts_oldest_when_capacity_exceeded() {
+        let mut world = world_with_transform_storage();
+        let mut h = History::new(2);
+
+        for _ in 0..3 {
+            h.push(EditorAction::TransformsChanged { changes: vec![] });
+        }
+
+        // Kapasite 2 → yalnızca 2 undo mümkün olmalı.
+        let mut undo_count = 0;
+        while h.can_undo() {
+            h.undo(&mut world);
+            undo_count += 1;
+            assert!(undo_count <= 3, "sonsuz döngü koruması");
+        }
+        assert_eq!(undo_count, 2, "kapasite aşımında en eski kayıt düşmeliydi");
+    }
+
+    // === Spawn / Despawn round-trip (soft-delete işaretçileri) ===
+
+    /// EntitySpawned: undo objeyi soft-delete + gizler; redo geri getirir.
+    #[test]
+    fn entity_spawned_undo_hides_then_redo_restores() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::ZERO));
+
+        let mut h = History::new(10);
+        h.push(EditorAction::EntitySpawned { entity_ids: vec![e] });
+
+        // Başlangıçta ne silinmiş ne gizli
+        assert!(!is_soft_deleted(&world, e));
+        assert!(!is_hidden(&world, e));
+
+        // undo → spawn geri alınır (soft-delete + hide)
+        h.undo(&mut world);
+        assert!(is_soft_deleted(&world, e));
+        assert!(is_hidden(&world, e));
+        assert!(h.can_redo());
+
+        // redo → obje yeniden görünür (işaretçiler kalkar)
+        h.redo(&mut world);
+        assert!(!is_soft_deleted(&world, e));
+        assert!(!is_hidden(&world, e));
+        assert!(h.can_undo());
+    }
+
+    /// EntityDespawned: undo işaretçileri kaldırıp objeyi geri getirir;
+    /// redo tekrar soft-delete + gizler.
+    #[test]
+    fn entity_despawned_undo_restores_then_redo_hides() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::ZERO));
+        // Silinmiş durumu simüle et
+        world.add_component(e, gizmo_core::component::IsDeleted);
+        world.add_component(e, gizmo_core::component::IsHidden);
+
+        let mut h = History::new(10);
+        h.push(EditorAction::EntityDespawned { entity_ids: vec![e] });
+
+        // undo → despawn geri alınır (işaretçiler kalkar, obje geri gelir)
+        h.undo(&mut world);
+        assert!(!is_soft_deleted(&world, e));
+        assert!(!is_hidden(&world, e));
+
+        // redo → tekrar despawn (soft-delete + hide)
+        h.redo(&mut world);
+        assert!(is_soft_deleted(&world, e));
+        assert!(is_hidden(&world, e));
+    }
+
+    /// Henüz implement edilmemiş action türü (ComponentChanged) undo edilince
+    /// KAYBOLMAMALI — undo_stack'e geri konur, redo boş kalır.
+    #[test]
+    fn unsupported_action_is_preserved_on_undo() {
+        let mut world = World::new();
+        let e = world.spawn();
+
+        let mut h = History::new(10);
+        h.push(EditorAction::ComponentChanged {
+            entity: e,
+            type_name: "Velocity".to_string(),
+        });
+
+        h.undo(&mut world);
+        // Geri konduğu için hâlâ undo edilebilir, redo'ya taşınmamış olmalı
+        assert!(h.can_undo(), "desteklenmeyen action stack'te korunmalı");
+        assert!(!h.can_redo(), "desteklenmeyen action redo'ya taşınmamalı");
+    }
+
+    /// Spawn/despawn undo'ları da generation-safe olmalı: GC bir slot'u geri
+    /// dönüştürdükten sonra undo, o slotta yaşayan BAŞKA objeyi soft-delete
+    /// ETMEMELİ.
+    #[test]
+    fn entity_spawned_undo_is_generation_safe_after_recycle() {
+        let mut world = World::new();
+        let entity_a = world.spawn();
+        world.add_component(entity_a, Transform::new(Vec3::ZERO));
+
+        let mut h = History::new(10);
+        h.push(EditorAction::EntitySpawned {
+            entity_ids: vec![entity_a],
+        });
+
+        world.despawn(entity_a);
+        let entity_b = world.spawn();
+        assert_eq!(entity_b.id(), entity_a.id());
+        assert_ne!(entity_b.generation(), entity_a.generation());
+        world.add_component(entity_b, Transform::new(Vec3::ZERO));
+
+        // undo: A canlı değil → B soft-delete/hide EDİLMEMELİ.
+        h.undo(&mut world);
+        assert!(
+            !is_soft_deleted(&world, entity_b),
+            "geri dönüştürülen B soft-delete edilmemeli"
+        );
+        assert!(
+            !is_hidden(&world, entity_b),
+            "geri dönüştürülen B gizlenmemeli"
+        );
+    }
 }

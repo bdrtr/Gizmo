@@ -524,6 +524,18 @@ impl PhysicsWorld {
 
         self.contact_cache = current_cache;
 
+        // AGGREGATE: narrowphase outcome for this substep. `dormant_skipped` shows how many
+        // candidate pairs the broad-scene dormant-pair optimisation dropped before the
+        // expensive SAT/GJK test ran, so a sudden collapse in that ratio (everything active)
+        // explains a narrowphase cost spike. Counts are O(1) reads.
+        tracing::debug!(
+            candidate_pairs = active_pairs.len() + dormant_pairs.len(),
+            active_pairs = active_pairs.len(),
+            dormant_skipped = dormant_pairs.len(),
+            manifold_count = manifolds.len(),
+            "narrowphase complete"
+        );
+
         manifolds
     }
 
@@ -546,6 +558,7 @@ impl PhysicsWorld {
             };
 
             let islands = crate::island::IslandManager::build_islands(&manifolds, &is_dynamic);
+            let island_count = islands.len();
             let island_groups = crate::island::IslandManager::split_manifolds(manifolds, &islands);
 
             let rigid_bodies = &self.rigid_bodies;
@@ -730,6 +743,8 @@ impl PhysicsWorld {
                 .map(|(i, e)| ((e.entity_a, e.entity_b), i))
                 .collect();
 
+            let mut total_wakes = 0usize;
+            let mut total_fractures = 0usize;
             for (island_vels, island_manifolds, wake_ups, local_fractures, pos_corrections) in results {
                 for (entity, vel) in island_vels {
                     if let Some(&idx) = entity_map.get(&entity.id()) {
@@ -748,11 +763,13 @@ impl PhysicsWorld {
                         t.update_local_matrix();
                     }
                 }
+                total_wakes += wake_ups.len();
                 for entity in wake_ups {
                     if let Some(&idx) = entity_map.get(&entity.id()) {
                         self.rigid_bodies[idx].wake_up();
                     }
                 }
+                total_fractures += local_fractures.len();
                 self.fracture_events.extend(local_fractures);
 
                 // Update solved contact points on the matching collision event.
@@ -779,6 +796,17 @@ impl PhysicsWorld {
                     }
                 }
             }
+
+            // AGGREGATE: island solve outcome for this substep. island_count feeds the
+            // per-frame metrics; bodies_woken / fractures surface the two behaviours that
+            // most often explain "why did that pile suddenly move / shatter".
+            self.metrics.island_count += island_count;
+            tracing::debug!(
+                island_count,
+                bodies_woken = total_wakes,
+                fractures = total_fractures,
+                "islands solved"
+            );
         }
 
         // ── Joints ────────────────────────────────────────────────────────
@@ -819,6 +847,16 @@ impl PhysicsWorld {
                 &self.transforms,
                 &mut self.velocities,
                 dt,
+            );
+
+            // A joint that snapped this substep (exceeded its break force/torque) is a
+            // structural change to the scene — surface how many are now broken so a
+            // collapsing mechanism is traceable without stepping through the solver.
+            let broken_joints = self.joints.iter().filter(|j| j.is_broken).count();
+            tracing::debug!(
+                joint_count = self.joints.len(),
+                broken_joints,
+                "joints solved"
             );
         }
 
@@ -889,12 +927,14 @@ impl PhysicsWorld {
     /// entirely to the discrete + speculative path, so ordinary contacts and resting
     /// stacks are byte-for-byte unchanged; two fast *dynamic* bodies remain the
     /// documented out-of-scope case (handled, imperfectly, by the speculative path).
+    #[tracing::instrument(skip_all, name = "ccd_resolve")]
     pub(crate) fn ccd_resolve_step(&mut self, dt: f32) {
         use gizmo_math::{Aabb, Vec3};
         use gizmo_physics_core::raycast::{Ray, Raycast};
         const SKIN: f32 = 0.01;
 
         let n = self.entities.len();
+        let mut clamps = 0usize;
         for i in 0..n {
             let rb_i = &self.rigid_bodies[i];
             // `!is_static()` so kinematic CCD movers (new_kinematic ⇒ ccd on) are
@@ -956,6 +996,8 @@ impl PhysicsWorld {
             }
 
             if best_toi.is_finite() {
+                clamps += 1;
+                let entity = self.entities[i];
                 self.transforms[i].position = old_pos + dir * (best_toi - SKIN).max(0.0);
                 // Rebuild the cached local matrix so the clamp is visible to an
                 // end-of-frame snapshot (integrator + split-impulse paths do the same).
@@ -964,7 +1006,22 @@ impl PhysicsWorld {
                 if vn < 0.0 {
                     self.velocities[i].linear -= best_normal * vn;
                 }
+                // A fast CCD body was about to tunnel through static/sleeping geometry this
+                // substep; the geometric backstop clamped it to the surface. Rare and
+                // per-trigger → trace with toi/travel/normal is exactly what a tunnelling
+                // investigation needs.
+                tracing::trace!(
+                    entity = ?entity,
+                    toi = best_toi,
+                    travel,
+                    normal = ?best_normal,
+                    "CCD backstop clamped a fast body short of tunnelling"
+                );
             }
+        }
+
+        if clamps > 0 {
+            tracing::debug!(ccd_clamps = clamps, "CCD backstop engaged this substep");
         }
     }
 

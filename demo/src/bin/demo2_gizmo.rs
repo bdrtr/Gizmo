@@ -266,7 +266,6 @@ fn main() {
         .add_system((Box::new(PhysicsSystem) as Box<dyn gizmo::core::system::System>).in_phase(Phase::Physics))
         .add_system((Box::new(TransformUpdateSystem) as Box<dyn gizmo::core::system::System>).in_phase(Phase::PostUpdate))
         .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
             renderer.gpu_fluid = None;
             renderer.gpu_particles = None;
             renderer.ssr = None;

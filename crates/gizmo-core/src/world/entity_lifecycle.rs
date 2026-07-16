@@ -51,6 +51,7 @@ impl World {
             archetype_id: 0,
             row,
         };
+        tracing::trace!(entity = eid, row, "spawn: entity placed in empty archetype");
     }
 
     // Eski A3 bridge ve rebuild metodları silindi (Archetype artık authoritative).
@@ -68,15 +69,24 @@ impl World {
 
     /// Derin kopyalama (O(1) Prefab Splicing) işlemi.
     /// Var olan bir Entity'nin bulunduğu archetype tablosunda tamamen bitişik olarak N adet yeni kopyasını çıkarır.
+    #[tracing::instrument(skip_all, name = "clone_entity")]
     pub fn clone_entity(&mut self, source_id: u32, count: usize) -> Option<Vec<Entity>> {
         if count == 0 {
             return Some(Vec::new());
         }
 
-        let loc = self.entity_locations.get(source_id as usize).copied()?;
-        if !loc.is_valid() {
-            return None;
-        }
+        // Kaynak entity'nin geçerli bir konumu yoksa (silinmiş/hiç var olmamış) klonlama
+        // sessizce None döndürürdü; artık neden başarısız olduğu loglanıyor.
+        let loc = match self.entity_locations.get(source_id as usize).copied() {
+            Some(l) if l.is_valid() => l,
+            _ => {
+                tracing::debug!(
+                    source = source_id,
+                    "clone_entity: source has no valid location; nothing cloned"
+                );
+                return None;
+            }
+        };
 
         let arch_id = loc.archetype_id as usize;
         let row = loc.row as usize;
@@ -132,9 +142,16 @@ impl World {
             }
         }
 
+        tracing::debug!(
+            source = source_id,
+            count,
+            archetype = arch_id,
+            "clone_entity: prefab splice complete"
+        );
         Some(new_entities)
     }
 
+    #[tracing::instrument(skip_all, name = "spawn_batch")]
     pub fn spawn_batch<I>(&mut self, iter: I) -> impl Iterator<Item = Entity>
     where
         I: IntoIterator,
@@ -151,6 +168,7 @@ impl World {
             .any(|info| info.storage_type == crate::component::StorageType::SparseSet);
         if has_sparse {
             let entities: Vec<Entity> = iter.into_iter().map(|b| self.spawn_bundle(b)).collect();
+            tracing::debug!(count = entities.len(), "spawn_batch: sparse fallback (per-entity)");
             return entities.into_iter();
         }
 
@@ -199,6 +217,11 @@ impl World {
         #[cfg(debug_assertions)]
         self.archetype_index.archetypes[target_arch_id].debug_assert_consistent();
 
+        tracing::debug!(
+            count = entities.len(),
+            archetype = target_arch_id,
+            "spawn_batch: entities written into shared archetype"
+        );
         entities.into_iter()
     }
 
@@ -212,6 +235,7 @@ impl World {
         if let Some(entities) = self.get_resource::<Entities>() {
             entities.clear();
         }
+        tracing::debug!("clear_entities: all entities and archetype rows reset");
     }
 
     pub fn despawn(&mut self, entity: Entity) {
@@ -243,6 +267,8 @@ impl World {
                 .get(id as usize)
                 .copied()
                 .unwrap_or(crate::archetype::EntityLocation::INVALID);
+
+            tracing::trace!(entity = id, archetype = loc.archetype_id, "despawn");
 
             if loc.is_valid() {
                 // Call OnRemove hooks for all currently held components
@@ -314,9 +340,11 @@ impl World {
     /// Hafızadaki boşlukları sıkıştırır ve kullanılmayan (boş) Archetype tablolarını silerek
     /// RAM'i ve sistem performansını ilk baştaki defregmante (temiz) haline getirir.
     /// Yükleme (Loading) ekranlarında veya düşük yoğunluklu anlarda çağrılması önerilir.
+    #[tracing::instrument(skip_all, name = "compact")]
     pub fn compact(&mut self) {
         // 1. Önce eski, kullanılmayan boş archetype'ları silelim (GC)
-        self.archetype_index
+        let removed = self
+            .archetype_index
             .gc_empty_archetypes(&mut self.entity_locations);
 
         // 2. Kalan archetype'ların kapasitelerini minimuma indirelim (Shrink To Fit)
@@ -337,6 +365,13 @@ impl World {
         state.generations.shrink_to_fit();
         state.free_ids.shrink_to_fit();
         state.free_set.shrink_to_fit();
+        drop(state);
+
+        tracing::debug!(
+            removed_archetypes = removed,
+            remaining_archetypes = self.archetype_index.archetypes.len(),
+            "compact: reclaimed empty archetypes and shrank storage"
+        );
     }
 
     pub fn despawn_by_id(&mut self, id: u32) {
@@ -366,6 +401,11 @@ impl World {
         for id in ids {
             self.despawn_by_id(id);
         }
+        tracing::debug!(
+            removed = n,
+            component = std::any::type_name::<C>(),
+            "despawn_all_with"
+        );
         n
     }
 

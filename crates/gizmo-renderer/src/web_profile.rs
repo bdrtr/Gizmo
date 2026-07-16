@@ -396,3 +396,89 @@ impl Default for WebProfile {
         Self::auto()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn minimal_disables_every_heavy_subsystem() {
+        let p = WebProfile::minimal();
+        assert!(!p.gpu_particles_enabled && p.gpu_particles_max == 0);
+        assert!(!p.gpu_physics_enabled && p.gpu_physics_max == 0);
+        assert!(!p.gpu_fluid_enabled && p.gpu_fluid_max == 0);
+        assert!(!p.deferred_enabled && !p.gpu_cull_enabled);
+        assert!(!p.ssao_enabled && !p.ssr_enabled && !p.ssgi_enabled && !p.taa_enabled);
+        assert!(!p.volumetric_enabled && !p.use_hdr);
+        assert_eq!(p.shadow_quality, ShadowQuality::Off);
+        assert_eq!(p.post_process_level, PostProcessLevel::Minimal);
+    }
+
+    #[test]
+    fn custom_starts_from_the_minimal_baseline() {
+        let c = WebProfile::custom();
+        let m = WebProfile::minimal();
+        assert_eq!(c.gpu_particles_enabled, m.gpu_particles_enabled);
+        assert_eq!(c.max_instances, m.max_instances);
+        assert_eq!(c.use_hdr, m.use_hdr);
+        assert_eq!(c.shadow_quality, m.shadow_quality);
+    }
+
+    #[test]
+    fn builder_overrides_apply_across_the_chain() {
+        let p = WebProfile::custom()
+            .with_particles(true, 5_000)
+            .with_physics(true, 1_234)
+            .with_fluid(true, 777)
+            .with_shadows(ShadowQuality::High)
+            .with_post_processing(PostProcessLevel::Medium)
+            .with_deferred(true)
+            .with_ssao(true)
+            .with_ssr(true)
+            .with_max_instances(2_048);
+        assert!(p.gpu_particles_enabled && p.gpu_particles_max == 5_000);
+        assert!(p.gpu_physics_enabled && p.gpu_physics_max == 1_234);
+        assert!(p.gpu_fluid_enabled && p.gpu_fluid_max == 777);
+        assert_eq!(p.shadow_quality, ShadowQuality::High);
+        assert_eq!(p.post_process_level, PostProcessLevel::Medium);
+        assert!(p.deferred_enabled && p.ssao_enabled && p.ssr_enabled);
+        assert_eq!(p.max_instances, 2_048);
+    }
+
+    #[test]
+    fn desktop_enables_the_full_pipeline() {
+        let p = WebProfile::desktop();
+        assert!(p.deferred_enabled && p.gpu_cull_enabled && p.taa_enabled);
+        assert!(p.ssao_enabled && p.ssr_enabled && p.ssgi_enabled && p.volumetric_enabled);
+        assert_eq!(p.shadow_quality, ShadowQuality::High);
+        assert_eq!(p.post_process_level, PostProcessLevel::High);
+        assert!(p.max_instances > WebProfile::minimal().max_instances);
+    }
+
+    #[test]
+    fn disabled_subsystems_never_advertise_capacity() {
+        // Cross-preset invariant: a switched-off subsystem must report zero capacity
+        // so the renderer doesn't over-allocate GPU buffers for something unused.
+        let presets = [
+            WebProfile::fighter(),
+            WebProfile::racing(),
+            WebProfile::fluid(),
+            WebProfile::sandbox(),
+            WebProfile::desktop(),
+            WebProfile::minimal(),
+        ];
+        for p in presets {
+            if !p.gpu_particles_enabled {
+                assert_eq!(p.gpu_particles_max, 0, "{} leaks particle capacity", p.name);
+            }
+            if !p.gpu_physics_enabled {
+                assert_eq!(p.gpu_physics_max, 0, "{} leaks physics capacity", p.name);
+            }
+            if !p.gpu_fluid_enabled {
+                assert_eq!(p.gpu_fluid_max, 0, "{} leaks fluid capacity", p.name);
+            }
+            // Chrome WebGPU floor: presets never request fewer than 4 bind groups.
+            assert!(p.max_bind_groups >= 4, "{} under bind-group floor", p.name);
+        }
+    }
+}

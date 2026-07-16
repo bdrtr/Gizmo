@@ -39,6 +39,7 @@ impl NetworkClient {
         let transport = NetcodeClientTransport::new(current_time, authentication, socket)
             .map_err(|e| NetError::Transport(Box::new(e)))?;
 
+        tracing::info!(server = %server_addr, client_id, "Netcode istemcisi oluşturuldu, sunucuya bağlanılıyor");
         Ok(Self { client, transport })
     }
 
@@ -46,14 +47,14 @@ impl NetworkClient {
     pub fn update(&mut self, dt_secs: f64) {
         let dt = Duration::from_secs_f64(dt_secs);
         if let Err(e) = self.transport.update(dt, &mut self.client) {
-            tracing::warn!("İstemci taşıma güncellemesi başarısız: {e}");
+            tracing::warn!(error = %e, "İstemci taşıma güncellemesi başarısız");
         }
     }
 
     /// Flushes queued messages out over the network. Call after enqueuing this frame's messages.
     pub fn send_packets(&mut self) {
         if let Err(e) = self.transport.send_packets(&mut self.client) {
-            tracing::warn!("İstemci paket gönderimi başarısız: {e}");
+            tracing::warn!(error = %e, "İstemci paket gönderimi başarısız");
         }
     }
 }

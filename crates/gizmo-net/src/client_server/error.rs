@@ -64,3 +64,63 @@ impl From<std::time::SystemTimeError> for NetError {
         NetError::Time(e)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `?` (From) geçersiz adresi eşleşilebilir AddrParse varyantına eşlemeli ve
+    // kaynak zinciri altta yatan AddrParseError'ı vermeli (program-akışı ayrımı için).
+    #[test]
+    fn from_addr_parse_maps_to_addr_variant_and_chains_source() {
+        let parse_err = "definitely not an address"
+            .parse::<std::net::SocketAddr>()
+            .unwrap_err();
+        let net: NetError = parse_err.into();
+        assert!(matches!(net, NetError::AddrParse(_)), "yanlış varyanta eşlendi");
+        assert!(!net.to_string().is_empty(), "Display boş olmamalı");
+        let src = net.source().expect("AddrParse kaynağı olmalı");
+        assert!(
+            src.downcast_ref::<std::net::AddrParseError>().is_some(),
+            "source altta yatan AddrParseError olmalı"
+        );
+    }
+
+    // io::Error → Io varyantı; kaynak zinciri G/Ç hata TÜRÜnü korumalı (örn. AddrInUse).
+    #[test]
+    fn from_io_maps_to_io_variant_and_preserves_kind() {
+        let io = std::io::Error::new(std::io::ErrorKind::AddrInUse, "port dolu");
+        let net: NetError = io.into();
+        assert!(matches!(net, NetError::Io(_)));
+        let src = net.source().expect("Io kaynağı olmalı");
+        let inner = src
+            .downcast_ref::<std::io::Error>()
+            .expect("source io::Error olmalı");
+        assert_eq!(inner.kind(), std::io::ErrorKind::AddrInUse, "io hata türü korunmalı");
+    }
+
+    // Dört varyantın Display'i boş olmamalı ve birbirinden AYIRT EDİLEBİLİR olmalı —
+    // NetError'ın var oluş nedeni tam da bu (çağıran hatayı akışla ayırt edebilsin).
+    #[test]
+    fn all_variants_display_are_nonempty_and_distinct() {
+        let addr = NetError::from("x".parse::<std::net::SocketAddr>().unwrap_err());
+        let io = NetError::from(std::io::Error::new(std::io::ErrorKind::Other, "x"));
+        let time = NetError::from(
+            std::time::SystemTime::UNIX_EPOCH
+                .duration_since(std::time::SystemTime::now())
+                .unwrap_err(),
+        );
+        let transport =
+            NetError::Transport(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "t")));
+
+        let msgs = [addr.to_string(), io.to_string(), time.to_string(), transport.to_string()];
+        for m in &msgs {
+            assert!(!m.is_empty(), "hata mesajı boş olmamalı");
+        }
+        for i in 0..msgs.len() {
+            for j in (i + 1)..msgs.len() {
+                assert_ne!(msgs[i], msgs[j], "varyant mesajları ayırt edilebilir olmalı");
+            }
+        }
+    }
+}

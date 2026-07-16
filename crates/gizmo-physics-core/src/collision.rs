@@ -71,7 +71,14 @@ impl ContactPoints {
     /// [`CAPACITY`](Self::CAPACITY) points.
     #[inline]
     pub fn push(&mut self, contact: ContactPoint) {
-        let _ = self.0.try_push(contact);
+        // Dropping the overflow point is intentional (a manifold caps at 4), but a trace
+        // makes the loss visible when investigating a "missing" contact.
+        if self.0.try_push(contact).is_err() {
+            tracing::trace!(
+                capacity = Self::CAPACITY,
+                "ContactPoints already at capacity; dropping extra contact point"
+            );
+        }
     }
 
     /// The first contact point, if any.

@@ -188,4 +188,63 @@ mod tests {
             other => panic!("beklenmeyen varyant: {other:?}"),
         }
     }
+
+    #[test]
+    fn player_connected_roundtrip() {
+        let bytes = bincode::serialize(&ServerMessage::PlayerConnected { client_id: 77 }).unwrap();
+        match bincode::deserialize::<ServerMessage>(&bytes).unwrap() {
+            ServerMessage::PlayerConnected { client_id } => assert_eq!(client_id, 77),
+            other => panic!("beklenmeyen varyant: {other:?}"),
+        }
+    }
+
+    // 64-bit client_id'nin üst bitleri wire üzerinde korunmalı (32-bit'e kırpılmamalı).
+    #[test]
+    fn player_disconnected_roundtrip_preserves_full_64bit_id() {
+        let big = 0x1234_5678_9ABC_DEF0u64;
+        let bytes =
+            bincode::serialize(&ServerMessage::PlayerDisconnected { client_id: big }).unwrap();
+        match bincode::deserialize::<ServerMessage>(&bytes).unwrap() {
+            ServerMessage::PlayerDisconnected { client_id } => assert_eq!(client_id, big),
+            other => panic!("beklenmeyen varyant: {other:?}"),
+        }
+    }
+
+    // tick_is_newer, pencere içinde (diff < 2^31) tam bir sıralama: a≠b için tam biri
+    // "daha yeni"dir. Tam zıt kutupta (diff = 2^31) yön tanımsızdır → TASARIM GEREĞİ
+    // her iki yön de false.
+    #[test]
+    fn tick_is_newer_is_antisymmetric_and_false_at_the_antipode() {
+        for base in [0u32, 1000, u32::MAX - 5, u32::MAX / 2] {
+            for d in 1u32..40 {
+                let a = base.wrapping_add(d);
+                assert!(tick_is_newer(a, base), "base+{d}, base'ten yeni olmalı");
+                assert!(!tick_is_newer(base, a), "base, base+{d}'ten yeni OLMAMALI");
+            }
+        }
+        let antipode = 1u32 << 31;
+        assert!(!tick_is_newer(0, antipode), "zıt kutupta yön belirsiz → false");
+        assert!(!tick_is_newer(antipode, 0), "zıt kutupta yön belirsiz → false");
+    }
+
+    // Birden çok oyuncu ve dönüş verisi HashMap tur-gidişinde eksiksiz korunmalı
+    // (mevcut test yalnız tek oyuncu/tek alan bakıyordu).
+    #[test]
+    fn world_state_roundtrip_preserves_all_players_and_rotation() {
+        let mut players = HashMap::new();
+        players.insert(1u64, TransformData { position: [1.0, 2.0, 3.0], rotation: [0.1, 0.2, 0.3, 0.9] });
+        players.insert(9u64, TransformData { position: [-4.0, 5.5, 6.0], rotation: [0.0, 0.0, 1.0, 0.0] });
+        let bytes =
+            bincode::serialize(&ServerMessage::WorldStateUpdate { server_tick: 42, players }).unwrap();
+        match bincode::deserialize::<ServerMessage>(&bytes).unwrap() {
+            ServerMessage::WorldStateUpdate { server_tick, players } => {
+                assert_eq!(server_tick, 42);
+                assert_eq!(players.len(), 2);
+                assert_eq!(players[&9].position, [-4.0, 5.5, 6.0]);
+                assert_eq!(players[&9].rotation, [0.0, 0.0, 1.0, 0.0]);
+                assert_eq!(players[&1].rotation[3], 0.9);
+            }
+            other => panic!("beklenmeyen varyant: {other:?}"),
+        }
+    }
 }

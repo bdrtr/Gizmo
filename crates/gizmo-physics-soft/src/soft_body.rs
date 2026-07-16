@@ -445,4 +445,277 @@ mod tests {
             pos.x
         );
     }
+
+    // ---------------------------------------------------------------------
+    // Tetrahedron::calculate_rest_data — reference-shape math.
+    // ---------------------------------------------------------------------
+
+    /// The canonical unit tetrahedron (edges = the basis vectors) has rest volume 1/6 and an
+    /// identity inverse reference matrix.
+    #[test]
+    fn calculate_rest_data_unit_tet() {
+        let (inv_dm, vol) = Tetrahedron::calculate_rest_data(Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z);
+        assert!((vol - (1.0 / 6.0)).abs() < 1e-6, "unit tet volume must be 1/6, got {vol}");
+        assert!(inv_dm.abs_diff_eq(Mat3::IDENTITY, 1e-6), "Dm = I → inv = I");
+    }
+
+    /// Volume is UNSIGNED (node winding must not flip its sign) and scales with the cube of a
+    /// uniform edge scaling.
+    #[test]
+    fn calculate_rest_data_volume_is_unsigned_and_scales() {
+        // Swapping two nodes negates det(Dm); volume must stay positive and equal.
+        let (_, v_swapped) = Tetrahedron::calculate_rest_data(Vec3::ZERO, Vec3::Y, Vec3::X, Vec3::Z);
+        assert!((v_swapped - (1.0 / 6.0)).abs() < 1e-6, "reversed winding must not flip volume");
+
+        // Edges scaled x2 → volume x8.
+        let (inv_dm, v_big) = Tetrahedron::calculate_rest_data(
+            Vec3::ZERO,
+            Vec3::new(2.0, 0.0, 0.0),
+            Vec3::new(0.0, 2.0, 0.0),
+            Vec3::new(0.0, 0.0, 2.0),
+        );
+        assert!((v_big - (8.0 / 6.0)).abs() < 1e-5, "scaled volume must be 8/6, got {v_big}");
+        // inv(diag(2,2,2)) = diag(0.5,0.5,0.5).
+        assert!(inv_dm.abs_diff_eq(Mat3::from_diagonal(Vec3::splat(0.5)), 1e-6));
+    }
+
+    /// The deformation gradient `F = Ds · Dm⁻¹` equals identity when the element is at its
+    /// rest configuration — the fundamental FEM invariant.
+    #[test]
+    fn deformation_gradient_is_identity_at_rest() {
+        let (p0, p1, p2, p3) = (Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z);
+        let (inv_dm, _) = Tetrahedron::calculate_rest_data(p0, p1, p2, p3);
+        let ds = Mat3::from_cols(p1 - p0, p2 - p0, p3 - p0); // == Dm at rest
+        let f = ds * inv_dm;
+        assert!(f.abs_diff_eq(Mat3::IDENTITY, 1e-5), "F must be identity at rest, got {f:?}");
+        assert!((f.determinant() - 1.0).abs() < 1e-5, "J must be 1 at rest");
+    }
+
+    /// A uniaxial stretch of factor 2 along X yields `F = diag(2, 1, 1)` and `J = 2`.
+    #[test]
+    fn deformation_gradient_tracks_uniaxial_stretch() {
+        let (p0, p1, p2, p3) = (Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z);
+        let (inv_dm, _) = Tetrahedron::calculate_rest_data(p0, p1, p2, p3);
+        // Deform: double every x coordinate.
+        let (d0, d1, d2, d3) = (
+            Vec3::ZERO,
+            Vec3::new(2.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let ds = Mat3::from_cols(d1 - d0, d2 - d0, d3 - d0);
+        let f = ds * inv_dm;
+        assert!(f.abs_diff_eq(Mat3::from_diagonal(Vec3::new(2.0, 1.0, 1.0)), 1e-5), "got {f:?}");
+        assert!((f.determinant() - 2.0).abs() < 1e-5, "J must equal the stretch factor");
+    }
+
+    // ---------------------------------------------------------------------
+    // SoftBodyMesh::new — material validation & Lamé derivation.
+    // ---------------------------------------------------------------------
+
+    /// Valid parameters derive the Lamé coefficients from Young's modulus and Poisson's ratio.
+    #[test]
+    fn new_derives_lame_parameters() {
+        let sb = SoftBodyMesh::new(1000.0, 0.3).expect("valid");
+        // mu = E / (2(1+nu)); lambda = E*nu / ((1+nu)(1-2nu)).
+        assert!((sb.mu - (1000.0 / 2.6)).abs() < 1e-2, "mu = {}", sb.mu);
+        assert!((sb.lambda - (300.0 / 0.52)).abs() < 1e-1, "lambda = {}", sb.lambda);
+        assert!((sb.damping - 0.99).abs() < 1e-6);
+        assert!(sb.nodes.is_empty() && sb.elements.is_empty());
+
+        // nu = 0 → lambda = 0, mu = E/2 (no volumetric coupling).
+        let sb0 = SoftBodyMesh::new(1000.0, 0.0).expect("valid");
+        assert!((sb0.lambda - 0.0).abs() < 1e-4);
+        assert!((sb0.mu - 500.0).abs() < 1e-3);
+    }
+
+    /// Young's modulus must be finite and strictly positive.
+    #[test]
+    fn new_rejects_invalid_youngs_modulus() {
+        for bad in [0.0, -5.0, f32::NAN, f32::INFINITY] {
+            let r = SoftBodyMesh::new(bad, 0.3);
+            assert!(
+                matches!(r, Err(crate::SoftBodyError::InvalidYoungsModulus { .. })),
+                "E = {bad} must be rejected, got {r:?}"
+            );
+        }
+    }
+
+    /// Poisson's ratio must lie in `[0.0, 0.5)`; the incompressible limit and negatives are
+    /// rejected (they blow up or destabilize the Lamé denominator).
+    #[test]
+    fn new_rejects_invalid_poissons_ratio() {
+        for bad in [-0.1, 0.5, 0.6, f32::NAN] {
+            let r = SoftBodyMesh::new(1000.0, bad);
+            assert!(
+                matches!(r, Err(crate::SoftBodyError::InvalidPoissonsRatio { .. })),
+                "nu = {bad} must be rejected, got {r:?}"
+            );
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Node / element construction.
+    // ---------------------------------------------------------------------
+
+    /// `add_node` returns sequential indices and initializes velocity to zero / unpinned.
+    #[test]
+    fn add_node_returns_sequential_indices_and_defaults() {
+        let mut sb = SoftBodyMesh::new(1000.0, 0.3).expect("valid");
+        assert_eq!(sb.add_node(Vec3::X, 1.0), 0);
+        assert_eq!(sb.add_node(Vec3::Y, 2.0), 1);
+        assert_eq!(sb.add_node(Vec3::Z, 3.0), 2);
+        assert_eq!(sb.nodes.len(), 3);
+        let n = sb.nodes[1];
+        assert!(n.position.abs_diff_eq(Vec3::Y, 1e-6));
+        assert_eq!(n.mass, 2.0);
+        assert_eq!(n.velocity, Vec3::ZERO);
+        assert!(!n.is_fixed);
+    }
+
+    /// An element referencing a node index that does not exist yet is rejected and not stored.
+    #[test]
+    fn add_element_out_of_bounds_is_rejected() {
+        let mut sb = SoftBodyMesh::new(1000.0, 0.3).expect("valid");
+        sb.add_node(Vec3::ZERO, 1.0);
+        sb.add_node(Vec3::X, 1.0);
+        sb.add_node(Vec3::Y, 1.0);
+        // Index 3 is out of bounds (only 0..=2 exist).
+        let r = sb.add_element(0, 1, 2, 3);
+        assert_eq!(
+            r,
+            Err(crate::SoftBodyError::NodeIndexOutOfBounds { index: 3, node_count: 3 })
+        );
+        assert!(sb.elements.is_empty(), "rejected element must not be stored");
+    }
+
+    /// A well-conditioned tetrahedron is accepted and stored with the correct rest volume.
+    #[test]
+    fn add_element_accepts_valid_tet_and_stores_rest_volume() {
+        let mut sb = SoftBodyMesh::new(1000.0, 0.3).expect("valid");
+        sb.add_node(Vec3::ZERO, 1.0);
+        sb.add_node(Vec3::X, 1.0);
+        sb.add_node(Vec3::Y, 1.0);
+        sb.add_node(Vec3::Z, 1.0);
+        sb.add_element(0, 1, 2, 3).expect("valid tet");
+        assert_eq!(sb.elements.len(), 1);
+        assert!((sb.elements[0].rest_volume - (1.0 / 6.0)).abs() < 1e-6);
+        assert_eq!(sb.elements[0].node_indices, [0, 1, 2, 3]);
+    }
+
+    // ---------------------------------------------------------------------
+    // resolve_node_collision — single-hit sweep resolution.
+    // ---------------------------------------------------------------------
+
+    /// A (near-)stationary node travels no distance, so collision resolution is skipped and
+    /// state is returned unchanged.
+    #[test]
+    fn resolve_node_collision_zero_velocity_is_noop() {
+        use gizmo_physics_core::{BodyHandle, Collider, Transform};
+        let colliders = vec![(
+            BodyHandle::from_id(1),
+            Transform::new(Vec3::new(0.5, 0.0, 0.0)),
+            Collider::sphere(1.0),
+        )];
+        let pos = Vec3::new(0.0, 1.0, 0.0);
+        let (p, v, hit) = resolve_node_collision(pos, Vec3::ZERO, 1.0 / 60.0, &colliders);
+        assert!(!hit);
+        assert_eq!(p, pos);
+        assert_eq!(v, Vec3::ZERO);
+    }
+
+    /// A surface beyond the node's swept distance (plus the small margin) is ignored: no
+    /// collision is registered and the position is left for the caller to advance.
+    #[test]
+    fn resolve_node_collision_out_of_range_is_noop() {
+        use gizmo_physics_core::{BodyHandle, Collider, Transform};
+        let colliders = vec![(
+            BodyHandle::from_id(1),
+            Transform::new(Vec3::new(2.0, 0.0, 0.0)), // sphere surface at x = 1.5
+            Collider::sphere(0.5),
+        )];
+        // Slow node: dist = 1 * (1/60) ≈ 0.017, far short of the x=1.5 surface.
+        let (p, _v, hit) = resolve_node_collision(Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), 1.0 / 60.0, &colliders);
+        assert!(!hit, "surface out of sweep range must not collide");
+        assert_eq!(p, Vec3::ZERO, "position must be untouched when nothing is hit");
+    }
+
+    /// A node sweeping into a sphere stops just short of the surface and reflects its inward
+    /// velocity component (bounce), leaving the state finite.
+    #[test]
+    fn resolve_node_collision_bounces_off_sphere() {
+        use gizmo_physics_core::{BodyHandle, Collider, Transform};
+        let colliders = vec![(
+            BodyHandle::from_id(1),
+            Transform::new(Vec3::new(2.0, 0.0, 0.0)),
+            Collider::sphere(0.5), // near surface at x = 1.5
+        )];
+        // dist = 120 * (1/60) = 2 > 1.5 → the ray reaches the surface.
+        let (p, v, hit) = resolve_node_collision(Vec3::ZERO, Vec3::new(120.0, 0.0, 0.0), 1.0 / 60.0, &colliders);
+        assert!(hit, "the node must register the sphere hit");
+        assert!(p.x < 1.5, "node must stop before the surface, got x = {}", p.x);
+        assert!(v.x < 0.0, "inward velocity must reflect (bounce), got vx = {}", v.x);
+        assert!(p.is_finite() && v.is_finite());
+    }
+
+    // ---------------------------------------------------------------------
+    // SoftBodyMesh::step — integration behaviour.
+    // ---------------------------------------------------------------------
+
+    /// With no elements the step is pure gravity integration: a free node accelerates downward.
+    #[test]
+    fn step_free_node_falls_under_gravity() {
+        let mut sb = SoftBodyMesh::new(1000.0, 0.3).expect("valid");
+        sb.add_node(Vec3::new(0.0, 10.0, 0.0), 1.0);
+        sb.step(0.1, Vec3::new(0.0, -10.0, 0.0), &[]);
+        assert!(sb.nodes[0].velocity.y < 0.0, "gravity must accelerate downward");
+        assert!(sb.nodes[0].position.y < 10.0, "node must descend");
+        assert!(sb.nodes[0].position.is_finite() && sb.nodes[0].velocity.is_finite());
+    }
+
+    /// Fixed nodes and nodes with non-positive mass are skipped entirely (they never move and
+    /// never inject NaN/Inf), while a normal free node in the same body still integrates.
+    #[test]
+    fn step_fixed_and_negative_mass_nodes_do_not_move() {
+        let mut sb = SoftBodyMesh::new(1000.0, 0.3).expect("valid");
+        let fixed = sb.add_node(Vec3::new(0.0, 5.0, 0.0), 1.0) as usize;
+        sb.nodes[fixed].is_fixed = true;
+        let neg = sb.add_node(Vec3::new(1.0, 5.0, 0.0), -2.0) as usize; // negative mass
+        let free = sb.add_node(Vec3::new(2.0, 5.0, 0.0), 1.0) as usize;
+
+        let (fixed0, neg0) = (sb.nodes[fixed].position, sb.nodes[neg].position);
+        for _ in 0..20 {
+            sb.step(1.0 / 60.0, Vec3::new(0.0, -9.81, 0.0), &[]);
+        }
+        assert_eq!(sb.nodes[fixed].position, fixed0, "fixed node must not move");
+        assert_eq!(sb.nodes[fixed].velocity, Vec3::ZERO);
+        assert_eq!(sb.nodes[neg].position, neg0, "negative-mass node must be inert");
+        assert_eq!(sb.nodes[neg].velocity, Vec3::ZERO);
+        assert!(sb.nodes[free].position.y < 5.0, "the healthy free node must still fall");
+        for n in &sb.nodes {
+            assert!(n.position.is_finite() && n.velocity.is_finite());
+        }
+    }
+
+    /// The FEM step is deterministic: parallel element force accumulation is summed in a fixed
+    /// (element) order, so two identical bodies stay bit-identical.
+    #[test]
+    fn softbody_step_is_deterministic() {
+        let build = || {
+            let mut sb = SoftBodyMesh::new(1.0e5, 0.3).expect("valid");
+            for p in [Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z] {
+                sb.add_node(p, 1.0);
+            }
+            sb.add_element(0, 1, 2, 3).expect("valid");
+            // Perturb so internal forces are non-trivial.
+            sb.nodes[1].position *= 1.3;
+            sb
+        };
+        let (mut a, mut b) = (build(), build());
+        for _ in 0..120 {
+            a.step(1.0 / 120.0, Vec3::new(0.0, -9.81, 0.0), &[]);
+            b.step(1.0 / 120.0, Vec3::new(0.0, -9.81, 0.0), &[]);
+        }
+        assert_eq!(a, b, "identical soft bodies must evolve identically");
+    }
 }

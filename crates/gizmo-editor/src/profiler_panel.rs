@@ -266,3 +266,88 @@ pub fn ui_profiler(ui: &mut egui::Ui, world: &World, _state: &mut EditorState) {
             }
         });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── frame_color: eşik/sınır davranışı (60fps=16.67ms, 30fps=33.33ms) ───
+
+    #[test]
+    fn frame_color_below_60fps_budget_is_good() {
+        assert_eq!(frame_color(0.0), COLOR_GOOD);
+        assert_eq!(frame_color(8.0), COLOR_GOOD);
+        assert_eq!(frame_color(16.66), COLOR_GOOD);
+    }
+
+    /// Sınır: tam 16.67ms artık "iyi" DEĞİL (`< 16.67` false) → uyarı.
+    #[test]
+    fn frame_color_at_60fps_boundary_is_warn() {
+        assert_eq!(frame_color(16.67), COLOR_WARN);
+    }
+
+    #[test]
+    fn frame_color_between_budgets_is_warn() {
+        assert_eq!(frame_color(20.0), COLOR_WARN);
+        assert_eq!(frame_color(33.32), COLOR_WARN);
+    }
+
+    /// Sınır: tam 33.33ms artık "uyarı" DEĞİL (`< 33.33` false) → kötü.
+    #[test]
+    fn frame_color_at_30fps_boundary_is_bad() {
+        assert_eq!(frame_color(33.33), COLOR_BAD);
+        assert_eq!(frame_color(100.0), COLOR_BAD);
+    }
+
+    /// Negatif süre (anlamsız ama savunmacı) yine "iyi" tarafına düşer.
+    #[test]
+    fn frame_color_negative_is_good() {
+        assert_eq!(frame_color(-5.0), COLOR_GOOD);
+    }
+
+    /// NaN/∞ her iki `<` karşılaştırmasında da false → kötü (davranışı belgeler).
+    #[test]
+    fn frame_color_nan_and_inf_fall_through_to_bad() {
+        assert_eq!(frame_color(f64::NAN), COLOR_BAD);
+        assert_eq!(frame_color(f64::INFINITY), COLOR_BAD);
+    }
+
+    // ─── scope_color: (depth*3 + idx) % 8 palet indeksleme ───
+
+    /// Palet 8 elemanlı → indeks 8 periyoduyla sarmalanır.
+    #[test]
+    fn scope_color_wraps_modulo_palette_len() {
+        assert_eq!(scope_color(0, 0), scope_color(0, 8));
+        assert_eq!(scope_color(0, 0), scope_color(0, 16));
+    }
+
+    /// depth, idx'e 3'lük ofset ekler: scope_color(d, i) == scope_color(0, d*3 + i).
+    #[test]
+    fn scope_color_depth_offsets_index_by_three() {
+        assert_eq!(scope_color(1, 0), scope_color(0, 3));
+        assert_eq!(scope_color(2, 1), scope_color(0, 7));
+        // 2*3 + 2 = 8 ≡ 0 (mod 8)
+        assert_eq!(scope_color(2, 2), scope_color(0, 0));
+    }
+
+    /// İlk 8 indeks (i=0..8, depth=0) BİRBİRİNDEN farklı renkler vermeli.
+    #[test]
+    fn scope_color_first_eight_indices_are_distinct() {
+        let colors: Vec<_> = (0..8).map(|i| scope_color(0, i)).collect();
+        for i in 0..colors.len() {
+            for j in (i + 1)..colors.len() {
+                assert_ne!(
+                    colors[i], colors[j],
+                    "indeks {} ve {} aynı renge çözümlendi",
+                    i, j
+                );
+            }
+        }
+    }
+
+    /// Deterministiklik: aynı giriş daima aynı rengi verir.
+    #[test]
+    fn scope_color_is_deterministic() {
+        assert_eq!(scope_color(3, 5), scope_color(3, 5));
+    }
+}

@@ -55,3 +55,73 @@ impl Collector for EcsCollector {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone)]
+    struct A(#[allow(dead_code)] f32);
+    #[derive(Clone)]
+    struct B(#[allow(dead_code)] u32);
+    impl gizmo_core::Component for A {}
+    impl gizmo_core::Component for B {}
+
+    fn world_with_two_archetypes() -> World {
+        let mut w = World::new();
+        // Two entities with just A, one with A+B → two distinct non-empty archetypes.
+        for _ in 0..2 {
+            let e = w.spawn();
+            w.add_component(e, A(1.0));
+        }
+        let e = w.spawn();
+        w.add_component(e, A(1.0));
+        w.add_component(e, B(9));
+        w
+    }
+
+    #[test]
+    fn default_collector_is_detailed() {
+        assert!(EcsCollector::default().detailed_archetypes);
+    }
+
+    #[test]
+    fn collector_name_is_stable() {
+        assert_eq!(EcsCollector::default().name(), "ecs");
+    }
+
+    #[test]
+    fn collect_populates_ecs_stats_and_metric_group() {
+        let w = world_with_two_archetypes();
+        let mut c = EcsCollector { detailed_archetypes: true };
+        let mut snap = FrameSnapshot::default();
+        c.collect(&w, &mut snap);
+
+        assert_eq!(snap.ecs.entities, 3, "3 live entities across both archetypes");
+        assert_eq!(snap.ecs.non_empty_archetypes, 2);
+
+        // The high-level counts are mirrored into the "ecs" metric group as a time series.
+        assert_eq!(snap.metric("ecs", "entities"), Some(3.0));
+        assert_eq!(snap.metric("ecs", "non_empty_archetypes"), Some(2.0));
+        // Exactly the six documented entries are emitted.
+        assert_eq!(snap.groups["ecs"].len(), 6);
+    }
+
+    #[test]
+    fn detailed_flag_toggles_archetype_table_only() {
+        let w = world_with_two_archetypes();
+
+        let mut detailed = EcsCollector { detailed_archetypes: true };
+        let mut s1 = FrameSnapshot::default();
+        detailed.collect(&w, &mut s1);
+        assert!(!s1.archetypes.is_empty(), "detailed run fills the archetype table");
+
+        let mut brief = EcsCollector { detailed_archetypes: false };
+        let mut s2 = FrameSnapshot::default();
+        brief.collect(&w, &mut s2);
+        assert!(s2.archetypes.is_empty(), "brief run leaves the archetype table empty");
+        // ...but the top-level stats + metric group are present either way.
+        assert_eq!(s2.ecs.entities, 3);
+        assert_eq!(s2.metric("ecs", "entities"), Some(3.0));
+    }
+}

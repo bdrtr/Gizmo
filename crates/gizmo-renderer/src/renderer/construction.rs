@@ -357,20 +357,12 @@ impl Renderer {
         #[cfg(target_arch = "wasm32")]
         let gpu_particles: Option<crate::gpu_particles::GpuParticleSystem> = None;
 
-        #[cfg(not(target_arch = "wasm32"))]
-        let gpu_physics = {
-            let max_physics_spheres: u32 = 50_000;
-            let mut physics = crate::gpu_physics::GpuPhysicsSystem::new(
-                &device,
-                max_physics_spheres,
-                &scene.global_bind_group_layout,
-                wgpu::TextureFormat::Rgba16Float,
-                wgpu::TextureFormat::Depth32Float,
-            );
-            physics.enable_debug(&device, 0);
-            Some(physics)
-        };
-        #[cfg(target_arch = "wasm32")]
+        // GPU physics is OPT-IN — default `None`. When `Some`, the renderer runs its OWN
+        // GPU rigid-body sim (`gpu_physics_submit_system` in `default_render_pass`), which
+        // CONFLICTS with the CPU `PhysicsPlugin` (the common case) → wrong/blank scene, forcing
+        // every CPU-physics game to set `gpu_physics = None` each frame. Defaulting to None fixes
+        // that for all of them AND skips a 50 000-sphere GPU allocation. Games that genuinely
+        // want GPU physics (massive counts, GPU cloth) call [`Renderer::enable_gpu_physics`].
         let gpu_physics: Option<crate::gpu_physics::GpuPhysicsSystem> = None;
 
         #[cfg(not(target_arch = "wasm32"))]

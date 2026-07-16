@@ -452,8 +452,10 @@ impl SmokeVolume {
     /// Run ONE simulation step (advect compute only, no rendering) on its own submission.
     /// Useful headless — e.g. to warm up the volume or to verify behaviour in tests. Returns
     /// the buffer index now holding the freshest density.
+    #[tracing::instrument(skip_all, level = "trace")]
     pub fn step(&self, device: &wgpu::Device, queue: &wgpu::Queue, time: f32, dt: f32) -> usize {
         let sim_dt = dt.clamp(1.0 / 240.0, 1.0 / 30.0);
+        tracing::trace!(grid_n = self.grid_n, dt = sim_dt, "[Smoke] advect step");
         // step() only advects (no raymarch) → the inverse view-proj is unused; identity.
         self.write_params(queue, time, sim_dt, IDENTITY4);
         let mut enc =
@@ -490,6 +492,7 @@ impl SmokeVolume {
 
     /// Bir sim adımı (advect compute) + volumetrik raymarch (HDR'ye). Ping-pong ile buffer değişir.
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(skip_all, level = "trace")]
     pub fn render(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -506,6 +509,7 @@ impl SmokeVolume {
     ) {
         // Advection çok büyük dt'de instabil olmasın; sabit küçük adım.
         let sim_dt = dt.clamp(1.0 / 240.0, 1.0 / 30.0);
+        tracing::trace!(grid_n = self.grid_n, dt = sim_dt, "[Smoke] advect + raymarch");
         self.write_params(queue, time, sim_dt, inv_view_proj);
 
         // 1) Advect compute (src=cur → dst=other). Obstacle-aware (see smoke_advect.wgsl).

@@ -534,3 +534,48 @@ fn mk_blit_pipeline(
             cache: None,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Pure Halton-sequence coverage for the TAA subpixel jitter — no GPU state.
+    #[test]
+    fn halton_matches_known_base_values() {
+        // Base-2: 1/2, 1/4, 3/4, 1/8 ...
+        assert!((halton(1, 2) - 0.5).abs() < 1e-6);
+        assert!((halton(2, 2) - 0.25).abs() < 1e-6);
+        assert!((halton(3, 2) - 0.75).abs() < 1e-6);
+        assert!((halton(4, 2) - 0.125).abs() < 1e-6);
+        // Base-3: 1/3, 2/3 ...
+        assert!((halton(1, 3) - 1.0 / 3.0).abs() < 1e-6);
+        assert!((halton(2, 3) - 2.0 / 3.0).abs() < 1e-6);
+        // i = 0 is the empty sum.
+        assert_eq!(halton(0, 2), 0.0);
+    }
+
+    #[test]
+    fn jitter_stays_in_the_subpixel_range_and_repeats_every_8_frames() {
+        for f in 0..40u32 {
+            let [x, y] = TaaState::get_jitter(f);
+            // Halton ∈ [0,1) → jitter ∈ [−0.5, 0.5).
+            assert!((-0.5..0.5).contains(&x), "x out of range at frame {f}: {x}");
+            assert!((-0.5..0.5).contains(&y), "y out of range at frame {f}: {y}");
+            // 8-frame period.
+            let [x8, y8] = TaaState::get_jitter(f + 8);
+            assert!((x - x8).abs() < 1e-6 && (y - y8).abs() < 1e-6, "not periodic at frame {f}");
+        }
+    }
+
+    #[test]
+    fn jitter_is_deterministic_and_varies_between_frames() {
+        // Frame 0 uses Halton index 1: x = halton(1,2) − 0.5 = 0.0,
+        // y = halton(1,3) − 0.5 = 1/3 − 1/2.
+        let [x0, y0] = TaaState::get_jitter(0);
+        assert!(x0.abs() < 1e-6);
+        assert!((y0 - (1.0 / 3.0 - 0.5)).abs() < 1e-6);
+        // Same input → same output; consecutive frames differ (real sampling spread).
+        assert_eq!(TaaState::get_jitter(3), TaaState::get_jitter(3));
+        assert_ne!(TaaState::get_jitter(0), TaaState::get_jitter(1));
+    }
+}

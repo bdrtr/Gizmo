@@ -11,6 +11,12 @@ use gizmo_math::Vec3;
 /// climbing, mutating `transform` and `vel` in place. `colliders` must contain
 /// all scene colliders to test against; the entry whose entity equals `_entity`
 /// (the character itself) is skipped automatically.
+#[tracing::instrument(
+    skip_all,
+    level = "trace",
+    name = "update_character",
+    fields(entity = ?_entity)
+)]
 pub fn update_character(
     _entity: BodyHandle,
     kcc: &mut CharacterController,
@@ -75,10 +81,21 @@ pub fn update_character(
     // 3D itiş (target_velocity Y dahil yukarı/aşağı) + duvar/teren kayması. Merkez su yüzeyini
     // aşınca (veya zone'dan çıkınca) çağıran None geçer → kara moduna döner.
     if let Some(surface_y) = water_surface_y {
+        if !kcc.is_submerged {
+            tracing::debug!(
+                entity = ?_entity,
+                surface_y,
+                depth = surface_y - transform.position.y,
+                "[KCC] entered water — switching to swim mode (land gravity/ground-snap/step disabled)"
+            );
+        }
         kcc.is_submerged = true;
         kcc.is_grounded = false;
         swim_step(kcc, transform, vel, &near_colliders, height, radius, surface_y, dt);
         return;
+    }
+    if kcc.is_submerged {
+        tracing::debug!(entity = ?_entity, "[KCC] left water — switching back to land mode");
     }
     kcc.is_submerged = false;
 
@@ -91,8 +108,18 @@ pub fn update_character(
         }
     }
 
-    let _was_grounded = kcc.is_grounded;
+    let was_grounded = kcc.is_grounded;
     kcc.is_grounded = ground_dist <= grounded_threshold;
+    if was_grounded != kcc.is_grounded {
+        tracing::debug!(
+            entity = ?_entity,
+            grounded = kcc.is_grounded,
+            ground_dist,
+            threshold = grounded_threshold,
+            vy = vel.linear.y,
+            "[KCC] ground contact changed"
+        );
+    }
 
     // Update Timers
     if kcc.is_grounded {
@@ -113,6 +140,13 @@ pub fn update_character(
 
     // Process Jump (Buffered and Coyote)
     if kcc.jump_buffer_timer > 0.0 && kcc.coyote_timer > 0.0 {
+        tracing::debug!(
+            entity = ?_entity,
+            jump_speed = kcc.jump_speed,
+            coyote_remaining = kcc.coyote_timer,
+            buffer_remaining = kcc.jump_buffer_timer,
+            "[KCC] jump fired (buffered + coyote)"
+        );
         vel.linear.y = kcc.jump_speed;
         kcc.jump_buffer_timer = 0.0;
         kcc.coyote_timer = 0.0;
@@ -146,6 +180,13 @@ pub fn update_character(
             let down = Vec3::new(0.0, -1.0, 0.0);
             let slide_dir = (down - ground_normal * down.dot(ground_normal)).normalize_or_zero();
             desired_move += slide_dir * kcc.slope_slide_speed;
+            tracing::trace!(
+                entity = ?_entity,
+                slope_deg = slope_angle.to_degrees(),
+                max_slope_deg = kcc.max_slope_angle.to_degrees(),
+                slide_speed = kcc.slope_slide_speed,
+                "[KCC] slope too steep — sliding down"
+            );
         }
     }
 
@@ -255,6 +296,11 @@ pub fn update_character(
                 // — making the character lurch forward by up to ~2× its intended
                 // speed every time it steps up.
                 final_delta = move_dir * (move_dist * (1.0 - min_t)).max(0.0);
+                tracing::trace!(
+                    entity = ?_entity,
+                    new_y = current_pos.y,
+                    "[KCC] step-climb: raised onto ledge, carrying remaining move"
+                );
             } else {
                 current_pos += move_dir * (move_dist * min_t).max(0.0);
 
@@ -265,6 +311,12 @@ pub fn update_character(
                 final_delta = slide_dir * remaining_dist;
 
                 vel.linear = vel.linear - closest_n * vel.linear.dot(closest_n);
+                tracing::trace!(
+                    entity = ?_entity,
+                    normal = ?closest_n,
+                    blocked_frac = 1.0 - min_t,
+                    "[KCC] wall hit — deflecting velocity and sliding along surface"
+                );
             }
         } else {
             current_pos += final_delta;
@@ -278,6 +330,7 @@ pub fn update_character(
 /// Su-altı buoyant hareket + duvar/teren kayması (step-climb YOK). `surface_y` su yüzeyinin
 /// dünya-Y'si. Kara `update_character` yerine batıkken çağrılır.
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip_all, level = "trace", name = "swim_step")]
 fn swim_step(
     kcc: &CharacterController,
     transform: &mut Transform,
@@ -344,6 +397,10 @@ fn swim_step(
     //    zone'un bittiği sığ yere doğru yüz (merkez zone dışına çıkınca çağıran None geçip kara
     //    moduna döndürür).
     if current.y > surface_y {
+        tracing::trace!(
+            overshoot = current.y - surface_y,
+            "[KCC] swim: clamped to water surface (no breaching)"
+        );
         current.y = surface_y;
         if vel.linear.y > 0.0 {
             vel.linear.y = 0.0;

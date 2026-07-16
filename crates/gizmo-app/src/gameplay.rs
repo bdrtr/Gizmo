@@ -34,6 +34,9 @@ pub fn register_gameplay_physics_systems(schedule: &mut Schedule) {
             .label("character_controller_system")
             .before("physics_step_system"),
     );
+    tracing::info!(
+        "[Gameplay] registered vehicle_controller_system + character_controller_system (Phase::Physics, before physics_step_system)"
+    );
 }
 
 /// Plugin that registers the gameplay physics systems (see

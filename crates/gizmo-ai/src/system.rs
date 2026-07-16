@@ -29,20 +29,32 @@ pub fn ai_navmesh_rebuild_system(world: &World, _dt: f32) {
         if grid.needs_rebuild {
             grid.update_from_physics_world(&physics_world);
             tracing::info!(
-                "[AI] NavMesh dinamik olarak PhysicsWorld üzerinden güncellendi! Toplam engel: {}",
-                grid.obstacles.len()
+                obstacle_count = grid.obstacles.len(),
+                "[AI] NavMesh PhysicsWorld üzerinden yeniden oluşturuldu"
             );
         }
     }
 }
 
+#[tracing::instrument(skip_all, name = "ai_navigation_system")]
 pub fn ai_navigation_system(world: &World, dt: f32) {
     let grid = match world.get_resource::<NavGrid>() {
         Some(g) => g,
-        None => return,
+        None => {
+            tracing::trace!("[AI] NavGrid resource yok, navigasyon atlanıyor");
+            return;
+        }
     };
 
     let agent_entities: Vec<u32> = world.borrow::<NavAgent>().entities().collect();
+    let agent_count = agent_entities.len();
+
+    // Frame-başı toplu sayaçlar — iç döngüde per-iterasyon log yerine çıkışta AGGREGATE.
+    let mut recalc_count = 0u32;
+    let mut path_found = 0u32;
+    let mut path_failed = 0u32;
+    let mut stuck_count = 0u32;
+    let mut reached_count = 0u32;
 
     // SAFETY: ai_navigation_system runs as a scheduled system; the scheduler guarantees no
     // other system mutably aliases NavAgent/Velocity while it runs. NavAgent and Velocity are
@@ -80,6 +92,15 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
                 // 0.05^2
                 agent.stuck_timer += dt;
                 if agent.stuck_timer > 2.0 {
+                    // Yalnız YENİ sıkışma geçişini say/logla (her frame tekrar etmesin).
+                    if agent.state != crate::components::NavAgentState::Stuck {
+                        stuck_count += 1;
+                        tracing::trace!(
+                            entity = agent_id,
+                            stuck_timer = agent.stuck_timer,
+                            "[AI] Ajan sıkıştı — yol temizleniyor, yeniden hesaplanacak"
+                        );
+                    }
                     agent.state = crate::components::NavAgentState::Stuck;
                     agent.clear_path();
                 }
@@ -110,11 +131,25 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
         if needs_recalc {
             agent.recalc.last_target_pos = Some(target_pos);
             agent.recalc.timer = agent.recalc.interval;
+            recalc_count += 1;
 
             if let Some(new_path) = grid.find_path(t.position, target_pos) {
+                let path_len = new_path.len();
                 agent.set_path(new_path);
+                path_found += 1;
+                tracing::trace!(
+                    entity = agent_id,
+                    path_len,
+                    "[AI] Ajan yolu yeniden hesaplandı"
+                );
             } else {
+                // Yol bulunamadı: path temizlenir (sessiz yutmayı sayaca bağla — çıkışta warn!).
                 agent.clear_path();
+                path_failed += 1;
+                tracing::trace!(
+                    entity = agent_id,
+                    "[AI] Ajan için yol bulunamadı (hedef ulaşılamaz/duvar içinde?)"
+                );
             }
         }
 
@@ -165,6 +200,8 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
 
                     agent.target = None;
                     agent.state = crate::components::NavAgentState::Reached;
+                    reached_count += 1;
+                    tracing::trace!(entity = agent_id, "[AI] Ajan hedefe ulaştı");
                     continue;
                 } else {
                     next_node = agent.current_waypoint().copied().unwrap_or(t.position);
@@ -228,5 +265,29 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
 
         // Ajanın uzaya uçuşunu engellemek için Y eksenindeki suni birikimleri sıfırla
         v.linear.y = 0.0;
+    }
+
+    // Çıkışta AGGREGATE — yalnız bir navigasyon kararı olduysa logla (sessiz frame'ler gürültü yapmasın).
+    if recalc_count > 0 || stuck_count > 0 || reached_count > 0 || path_failed > 0 {
+        tracing::debug!(
+            agent_count,
+            recalc_count,
+            path_found,
+            path_failed,
+            stuck_count,
+            reached_count,
+            "[AI] Navigasyon frame'i işlendi"
+        );
+    }
+
+    // Yol hesaplama başarısızlıkları gerçek bir sorunu gizleyebilir (ulaşılamaz harita,
+    // hatalı hedef, bozuk NavGrid) — çıkışta toplu warn! ile yüzeye çıkar.
+    if path_failed > 0 {
+        tracing::warn!(
+            path_failed,
+            recalc_count,
+            agent_count,
+            "[AI] Bazı ajanlar için yol hesaplanamadı bu frame'de"
+        );
     }
 }

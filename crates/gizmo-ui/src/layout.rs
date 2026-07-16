@@ -35,3 +35,31 @@ impl UiContext {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fresh_context_is_empty_with_documented_fallback_size() {
+        // A brand-new context must carry no nodes and no entity mapping — the
+        // layout system relies on this to (re)build the taffy tree from scratch.
+        let ctx = UiContext::new();
+        assert!(ctx.entity_to_node.is_empty(), "no entity mapping yet");
+        assert_eq!(ctx.taffy.total_node_count(), 0, "no taffy nodes yet");
+        // The 1280x720 fallback is load-bearing: it is the available space used
+        // for root layout until a real WindowInfo resize updates window_size.
+        assert_eq!(ctx.window_size, Vec2::new(1280.0, 720.0));
+    }
+
+    #[test]
+    fn default_matches_new() {
+        // `Default` is documented as delegating to `new`; the observable empty
+        // state and fallback size must be identical.
+        let d = UiContext::default();
+        let n = UiContext::new();
+        assert_eq!(d.window_size, n.window_size);
+        assert_eq!(d.entity_to_node.len(), n.entity_to_node.len());
+        assert_eq!(d.taffy.total_node_count(), n.taffy.total_node_count());
+    }
+}

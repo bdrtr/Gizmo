@@ -23,3 +23,6 @@ serde = { version = "1.0.228", features = ["derive"] }
 mlua = { version = "0.9", features = ["lua54", "vendored", "send"] }
 tracing = "0.1.44"
 gizmo-animation = { path = "../gizmo-animation", version = "0.8.0", default-features = false }
+
+[dev-dependencies]
+serde_json = "1"

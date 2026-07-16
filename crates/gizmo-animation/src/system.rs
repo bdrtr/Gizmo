@@ -23,6 +23,7 @@ pub fn apply_interpolated(transform: &mut Transform, value: InterpolatedValue) {
 /// ECS system that advances every [`AnimationPlayer`], resolves track targets by
 /// name within each player's hierarchy, and applies sampled values to the
 /// targeted [`Transform`]s.
+#[tracing::instrument(skip_all, name = "animation_system")]
 pub fn animation_system(
     time: Res<Time>,
     entities: Res<Entities>,
@@ -63,13 +64,26 @@ pub fn animation_system(
                             // Recover from a poisoned mutex instead of panicking: a
                             // poisoned lock here would otherwise abort the whole frame.
                             let gen = {
-                                let state =
-                                    entities.state.lock().unwrap_or_else(|e| e.into_inner());
+                                let state = entities.state.lock().unwrap_or_else(|e| {
+                                    // Surface the silently-recovered lock poisoning: it
+                                    // means another thread panicked while holding it.
+                                    tracing::warn!(
+                                        "[Animation] entities state lock was poisoned; recovering in place"
+                                    );
+                                    e.into_inner()
+                                });
                                 // Bounds-check the id: a stale/out-of-range id must skip
                                 // gracefully rather than panic on an out-of-bounds index.
                                 match state.generations.get(current as usize).copied() {
                                     Some(gen) => gen,
-                                    None => continue,
+                                    None => {
+                                        tracing::trace!(
+                                            id = current,
+                                            target = %track.target_name,
+                                            "[Animation] target resolution: entity id out of range, skipping track"
+                                        );
+                                        continue;
+                                    }
                                 }
                             };
                             let entity = Entity::new(current, gen);
@@ -88,23 +102,57 @@ pub fn animation_system(
                     }
                 }
             }
+
+            // One-time-per-clip resolution result. A successful resolve is a useful
+            // debug! landmark; a resolve that found nothing re-runs every frame (the
+            // cache stays empty), so it is kept at trace! to avoid per-frame spam.
+            let resolved = player.target_entities.len();
+            if resolved > 0 {
+                tracing::debug!(
+                    resolved,
+                    tracks = clip.tracks.len(),
+                    clip = %clip.name,
+                    "[Animation] resolved track targets in hierarchy"
+                );
+            } else {
+                tracing::trace!(
+                    tracks = clip.tracks.len(),
+                    clip = %clip.name,
+                    "[Animation] no track targets resolved this frame"
+                );
+            }
         }
 
-        // Apply animations
+        // Apply animations. Aggregate per-track outcomes and emit a single
+        // per-player trace! rather than logging inside the hot per-track loop.
+        let mut applied = 0usize;
+        let mut skipped_dead = 0usize;
+        let mut missing_transform = 0usize;
         for track in &clip.tracks {
             if let Some(&target_entity) = player.target_entities.get(&track.target_name) {
                 // Check if the target entity is still alive and matches the generation in the world
                 if !entities.is_alive(target_entity) {
+                    skipped_dead += 1;
                     continue;
                 }
                 let target_id = target_entity.id();
                 let interpolated = track.sample(player.elapsed_time);
-                
+
                 if let Some((mut transform, _)) = transforms.get_mut(target_id) {
                     apply_interpolated(&mut transform, interpolated);
+                    applied += 1;
+                } else {
+                    missing_transform += 1;
                 }
             }
         }
+        tracing::trace!(
+            applied,
+            skipped_dead,
+            missing_transform,
+            elapsed = player.elapsed_time,
+            "[Animation] applied sampled tracks"
+        );
     }
 }
 

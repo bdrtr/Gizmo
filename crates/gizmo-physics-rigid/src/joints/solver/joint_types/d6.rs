@@ -73,6 +73,13 @@ impl JointSolver {
                 data.initial_relative_rotation = Some(relative_rot);
                 if lin_impulse / dt > break_force {
                     joint.is_broken = true;
+                    tracing::debug!(
+                        entity_a = ?joint.entity_a,
+                        entity_b = ?joint.entity_b,
+                        applied_force = lin_impulse / dt,
+                        break_force,
+                        "D6 joint broke (linear force exceeded break threshold)"
+                    );
                 }
                 return;
             }
@@ -109,6 +116,15 @@ impl JointSolver {
 
         if lin_impulse / dt > break_force || ang_impulse / dt > break_torque {
             joint.is_broken = true;
+            tracing::debug!(
+                entity_a = ?joint.entity_a,
+                entity_b = ?joint.entity_b,
+                applied_force = lin_impulse / dt,
+                break_force,
+                applied_torque = ang_impulse / dt,
+                break_torque,
+                "D6 joint broke (force/torque exceeded break threshold)"
+            );
         }
     }
 

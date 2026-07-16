@@ -243,6 +243,11 @@ impl Schedule {
         }
 
         if sorted_indices.len() != count {
+            tracing::error!(
+                system_count = count,
+                sorted = sorted_indices.len(),
+                "[Schedule] cyclic system dependency detected — topological sort incomplete"
+            );
             panic!(
                 "Cyclic dependency detected! {} sistemin {} tanesi sıralanabildi.",
                 count,
@@ -302,6 +307,7 @@ impl Schedule {
         if configs.is_empty() {
             return;
         }
+        let system_count = configs.len();
 
         // Apply SetConfigs to systems
         for config in &mut configs {
@@ -338,6 +344,18 @@ impl Schedule {
             // Geriye uyumlu: tek düz batch listesi
             self.legacy_batches = Self::build_batches_for(configs);
         }
+
+        let batch_count: usize = if self.uses_phases {
+            self.phase_batches.iter().map(|(_, b)| b.len()).sum()
+        } else {
+            self.legacy_batches.len()
+        };
+        tracing::debug!(
+            system_count,
+            batch_count,
+            uses_phases = self.uses_phases,
+            "[Schedule] built system DAG into parallel batches"
+        );
     }
 
     /// Batch listesini çalıştırır (faz-içi veya legacy).

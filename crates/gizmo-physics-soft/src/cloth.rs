@@ -817,4 +817,270 @@ mod tests {
             cloth.constraints.len()
         );
     }
+
+    // ---------------------------------------------------------------------
+    // project_point_out — the static shape-projection math (pure geometry).
+    // ---------------------------------------------------------------------
+
+    /// A point INSIDE a sphere is pushed out to exactly `radius + thickness` along the
+    /// outward normal; a point OUTSIDE returns `None`.
+    #[test]
+    fn project_point_out_sphere_pushes_to_surface_and_outside_returns_none() {
+        let t = Transform::new(Vec3::new(0.0, 0.0, 0.0));
+        let shape = Collider::sphere(1.0).shape;
+        let thickness = 0.02;
+
+        // Inside, off-centre along +X.
+        let (p, n) = project_point_out(Vec3::new(0.5, 0.0, 0.0), thickness, &shape, &t)
+            .expect("point inside the sphere must project out");
+        assert!(n.abs_diff_eq(Vec3::X, 1e-5), "outward normal must be +X, got {n:?}");
+        assert!(
+            ((p - t.position).length() - (1.0 + thickness)).abs() < 1e-5,
+            "must land on radius+thickness, got dist={}",
+            (p - t.position).length()
+        );
+
+        // Outside → no contact.
+        assert!(
+            project_point_out(Vec3::new(2.0, 0.0, 0.0), thickness, &shape, &t).is_none(),
+            "a point outside the sphere must not project"
+        );
+    }
+
+    /// A point exactly at the sphere CENTRE is degenerate (zero direction); the code must
+    /// fall back to the +Y normal instead of producing NaN.
+    #[test]
+    fn project_point_out_sphere_degenerate_center_uses_y_normal() {
+        let t = Transform::new(Vec3::ZERO);
+        let shape = Collider::sphere(1.0).shape;
+        let (p, n) = project_point_out(Vec3::ZERO, 0.02, &shape, &t)
+            .expect("centre point is inside → must project");
+        assert!(n.abs_diff_eq(Vec3::Y, 1e-6), "degenerate normal must default to +Y");
+        assert!(p.is_finite() && p.abs_diff_eq(Vec3::new(0.0, 1.02, 0.0), 1e-5));
+    }
+
+    /// A point inside a box is pushed out along the LEAST-penetrated face (here +X), landing
+    /// on `half_extent + thickness` in that axis while the other axes are unchanged.
+    #[test]
+    fn project_point_out_box_pushes_out_least_penetrated_face() {
+        let t = Transform::new(Vec3::ZERO);
+        let shape = Collider::box_collider(Vec3::splat(1.0)).shape;
+        // (0.9, 0.1, 0.1): closest to the +X face (penetration 0.12 vs 0.92 on y/z).
+        let (p, n) = project_point_out(Vec3::new(0.9, 0.1, 0.1), 0.02, &shape, &t)
+            .expect("interior point must project");
+        assert!(n.abs_diff_eq(Vec3::X, 1e-6), "normal must be the +X face, got {n:?}");
+        assert!(
+            p.abs_diff_eq(Vec3::new(1.02, 0.1, 0.1), 1e-5),
+            "must snap the X coord to half_extent+thickness, keeping y/z, got {p:?}"
+        );
+        // A point comfortably outside the (padded) box does not project.
+        assert!(project_point_out(Vec3::new(3.0, 0.0, 0.0), 0.02, &shape, &t).is_none());
+    }
+
+    /// The box projection works in the collider's LOCAL frame: a box rotated 90° about Z
+    /// pushes the point out along its rotated +X face (which points along world +Y).
+    #[test]
+    fn project_point_out_rotated_box_uses_local_frame() {
+        use std::f32::consts::FRAC_PI_2;
+        let t = Transform::new(Vec3::ZERO).with_rotation(gizmo_math::Quat::from_rotation_z(FRAC_PI_2));
+        let shape = Collider::box_collider(Vec3::splat(1.0)).shape;
+        let (p, n) = project_point_out(Vec3::new(0.1, 0.9, 0.1), 0.02, &shape, &t)
+            .expect("interior point must project");
+        // Rotated +X face points to world +Y; surface at world y = 1.02.
+        assert!(n.abs_diff_eq(Vec3::Y, 1e-5), "rotated normal must be world +Y, got {n:?}");
+        assert!(
+            p.abs_diff_eq(Vec3::new(0.1, 1.02, 0.1), 1e-5),
+            "rotated box must push along its local +X (world +Y), got {p:?}"
+        );
+    }
+
+    /// The capsule reduces to a sphere test at the clamped axis point: a point beside the
+    /// cylinder body pushes out radially, and a point above the top cap pushes out over the
+    /// dome (clamped to +half_height).
+    #[test]
+    fn project_point_out_capsule_body_and_caps() {
+        let t = Transform::new(Vec3::ZERO);
+        let shape = Collider::capsule(0.5, 1.0).shape; // radius 0.5, half_height 1.0
+        let thickness = 0.02;
+
+        // Beside the cylinder body (y within [-1, 1]).
+        let (pb, nb) = project_point_out(Vec3::new(0.2, 0.0, 0.0), thickness, &shape, &t)
+            .expect("body point inside must project");
+        assert!(nb.abs_diff_eq(Vec3::X, 1e-6));
+        assert!(pb.abs_diff_eq(Vec3::new(0.52, 0.0, 0.0), 1e-5), "got {pb:?}");
+
+        // Above the top cap: axis point clamps to y = +1, then pushes up over the dome.
+        let (pc, nc) = project_point_out(Vec3::new(0.0, 1.4, 0.0), thickness, &shape, &t)
+            .expect("cap point inside must project");
+        assert!(nc.abs_diff_eq(Vec3::Y, 1e-6));
+        assert!(pc.abs_diff_eq(Vec3::new(0.0, 1.52, 0.0), 1e-5), "got {pc:?}");
+
+        // Well outside the capsule → no contact.
+        assert!(project_point_out(Vec3::new(2.0, 0.0, 0.0), thickness, &shape, &t).is_none());
+    }
+
+    /// `collider_bound` returns the bounding-sphere radius for the shapes the cloth pass
+    /// understands, and `None` for shapes it cannot resolve (plane).
+    #[test]
+    fn collider_bound_matches_shape_and_none_for_plane() {
+        assert_eq!(collider_bound(&Collider::sphere(2.0).shape), Some(2.0));
+        let boxb = collider_bound(&Collider::box_collider(Vec3::splat(1.0)).shape).unwrap();
+        assert!((boxb - 3.0f32.sqrt()).abs() < 1e-6, "box bound must be |half_extents|");
+        assert_eq!(collider_bound(&Collider::capsule(0.5, 1.0).shape), Some(1.5));
+        assert_eq!(collider_bound(&Collider::plane(Vec3::Y, 0.0).shape), None);
+    }
+
+    /// `seg_point_dist_sq` clamps the projection parameter to `[0, 1]` (so points past an
+    /// endpoint measure to that endpoint) and degrades gracefully for a zero-length segment.
+    #[test]
+    fn seg_point_dist_sq_clamps_and_handles_degenerate() {
+        let a = Vec3::new(0.0, 0.0, 0.0);
+        let b = Vec3::new(2.0, 0.0, 0.0);
+        // Interior projection: closest point is the foot of the perpendicular.
+        assert!((seg_point_dist_sq(a, b, Vec3::new(1.0, 1.0, 0.0)) - 1.0).abs() < 1e-6);
+        // Past b → clamps to b (distance 3, squared 9), not the infinite-line distance.
+        assert!((seg_point_dist_sq(a, b, Vec3::new(5.0, 0.0, 0.0)) - 9.0).abs() < 1e-6);
+        // Before a → clamps to a.
+        assert!((seg_point_dist_sq(a, b, Vec3::new(-3.0, 0.0, 0.0)) - 9.0).abs() < 1e-6);
+        // Degenerate (a == b): distance to the single point, no divide-by-zero.
+        let d = seg_point_dist_sq(a, a, Vec3::new(0.0, 4.0, 0.0));
+        assert!((d - 16.0).abs() < 1e-6, "degenerate segment: {d}");
+    }
+
+    // ---------------------------------------------------------------------
+    // Cloth construction & bookkeeping invariants.
+    // ---------------------------------------------------------------------
+
+    /// A `w x h` grid must lay out row-major with the right node/constraint counts, and the
+    /// three constraint families must carry their expected rest lengths.
+    #[test]
+    fn cloth_new_builds_expected_grid_and_constraints() {
+        let (w, h, sp) = (3usize, 2usize, 0.5f32);
+        let cloth = Cloth::new(w, h, sp, 2.0);
+
+        assert_eq!(cloth.nodes.len(), w * h, "node count = width*height");
+        // Row-major layout: idx = y*w + x, positions on the XY plane.
+        for y in 0..h {
+            for x in 0..w {
+                let node = cloth.nodes[y * w + x];
+                assert!(node.position.abs_diff_eq(Vec3::new(x as f32 * sp, y as f32 * sp, 0.0), 1e-6));
+                assert!((node.inv_mass - 0.5).abs() < 1e-6, "inv_mass = 1/mass");
+                assert_eq!(node.mass, 2.0);
+            }
+        }
+
+        // Hand-counted for a 3x2 grid: 7 structural + 2 bend + 4 shear = 13.
+        let structural = (w - 1) * h + w * (h - 1);
+        let bend = (w - 2) * h; // no vertical bend for h < 3
+        let shear = 2 * (w - 1) * (h - 1);
+        assert_eq!(structural, 7);
+        assert_eq!(bend, 2);
+        assert_eq!(shear, 4);
+        assert_eq!(cloth.constraints.len(), structural + bend + shear);
+        assert_eq!(cloth.constraints.len(), 13);
+
+        // Every constraint's rest length is one of the three expected families.
+        let diag = sp * std::f32::consts::SQRT_2;
+        for c in &cloth.constraints {
+            let ok = (c.rest_length - sp).abs() < 1e-5
+                || (c.rest_length - (sp * 2.0)).abs() < 1e-5
+                || (c.rest_length - diag).abs() < 1e-5;
+            assert!(ok, "unexpected rest length {}", c.rest_length);
+            assert_eq!(c.lambda, 0.0, "lambda must start at zero");
+        }
+    }
+
+    /// `mass_per_node == 0` pins every node (inv_mass 0), so a zero-mass sheet never moves.
+    #[test]
+    fn cloth_new_zero_mass_pins_all_nodes() {
+        let cloth = Cloth::new(4, 4, 0.5, 0.0);
+        for node in &cloth.nodes {
+            assert_eq!(node.inv_mass, 0.0);
+            assert_eq!(node.mass, 0.0);
+        }
+    }
+
+    /// `pin_node` clears the node's mass/inv_mass; an out-of-range index is a silent no-op
+    /// (must not panic or resize the grid).
+    #[test]
+    fn pin_node_sets_and_out_of_range_is_noop() {
+        let mut cloth = Cloth::new(2, 2, 1.0, 1.0);
+        cloth.pin_node(1);
+        assert_eq!(cloth.nodes[1].inv_mass, 0.0);
+        assert_eq!(cloth.nodes[1].mass, 0.0);
+
+        let len = cloth.nodes.len();
+        cloth.pin_node(999); // out of range → no-op, no panic
+        assert_eq!(cloth.nodes.len(), len);
+    }
+
+    /// Freshly built cloth carries the documented default material fields.
+    #[test]
+    fn cloth_defaults_are_set() {
+        let cloth = Cloth::new(2, 2, 1.0, 1.0);
+        assert!((cloth.thickness - 0.02).abs() < 1e-6);
+        assert!((cloth.friction - 0.5).abs() < 1e-6);
+        assert_eq!(cloth.tear_factor, f32::INFINITY);
+    }
+
+    // ---------------------------------------------------------------------
+    // Integration & constraint dynamics (isolated, deterministic).
+    // ---------------------------------------------------------------------
+
+    /// A single free node falls under gravity; a pinned node in the same setup does not move.
+    #[test]
+    fn free_node_falls_under_gravity_pinned_stays() {
+        // Free: 1x1 sheet lifted above the floor, no colliders.
+        let mut free = Cloth::new(1, 1, 1.0, 1.0);
+        free.nodes[0].position = Vec3::new(0.0, 5.0, 0.0);
+        free.nodes[0].prev_position = free.nodes[0].position;
+        free.step(0.1, Vec3::new(0.0, -10.0, 0.0), 1, &[]);
+        assert!(free.nodes[0].position.y < 5.0, "free node must fall");
+        assert!(free.nodes[0].position.is_finite());
+
+        // Pinned: identical setup but pinned → immovable.
+        let mut pinned = Cloth::new(1, 1, 1.0, 1.0);
+        pinned.nodes[0].position = Vec3::new(0.0, 5.0, 0.0);
+        pinned.nodes[0].prev_position = pinned.nodes[0].position;
+        pinned.pin_node(0);
+        pinned.step(0.1, Vec3::new(0.0, -10.0, 0.0), 1, &[]);
+        assert_eq!(pinned.nodes[0].position, Vec3::new(0.0, 5.0, 0.0));
+    }
+
+    /// An overstretched structural constraint pulls its two endpoints back toward the rest
+    /// length in a single step (XPBD), reducing the separation without overshooting.
+    #[test]
+    fn stretched_structural_constraint_pulls_nodes_together() {
+        let mut cloth = Cloth::new(1, 2, 1.0, 1.0); // one vertical structural link, rest = 1
+        assert_eq!(cloth.constraints.len(), 1);
+        // Place the pair 2 units apart, well above the floor, with zero velocity.
+        cloth.nodes[0].position = Vec3::new(0.0, 5.0, 0.0);
+        cloth.nodes[0].prev_position = cloth.nodes[0].position;
+        cloth.nodes[1].position = Vec3::new(0.0, 7.0, 0.0);
+        cloth.nodes[1].prev_position = cloth.nodes[1].position;
+
+        let before = (cloth.nodes[0].position - cloth.nodes[1].position).length();
+        cloth.step(1.0 / 60.0, Vec3::ZERO, 1, &[]);
+        let after = (cloth.nodes[0].position - cloth.nodes[1].position).length();
+
+        assert!((before - 2.0).abs() < 1e-6);
+        assert!(after < before - 0.1, "constraint must contract the pair: {before} -> {after}");
+        assert!(after > 1.0, "must not overshoot past the rest length: {after}");
+    }
+
+    /// Stepping two identically-constructed cloths with identical inputs yields bit-identical
+    /// state — the solver is deterministic (no RNG, no order-dependent float reduction).
+    #[test]
+    fn cloth_step_is_deterministic() {
+        let mut a = Cloth::new(5, 5, 0.4, 1.0);
+        let mut b = Cloth::new(5, 5, 0.4, 1.0);
+        a.pin_node(0);
+        b.pin_node(0);
+        let g = Vec3::new(0.3, -9.81, -0.2);
+        for _ in 0..40 {
+            a.step(1.0 / 60.0, g, 4, &[]);
+            b.step(1.0 / 60.0, g, 4, &[]);
+        }
+        assert_eq!(a, b, "identical cloths must evolve identically");
+    }
 }

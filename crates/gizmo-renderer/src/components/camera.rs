@@ -215,4 +215,91 @@ mod tests {
         let down = cam.screen_to_ray((100.0, 90.0), (200.0, 100.0), pos);
         assert!(down.direction.y < -0.05, "lower pixel tilts -Y, got {:?}", down.direction);
     }
+
+    #[test]
+    fn new_sanitizes_out_of_range_inputs() {
+        // Degenerate fov/near, far ≤ near, huge yaw, over-vertical pitch.
+        let cam = Camera::new(
+            -1.0,
+            -1.0,
+            -5.0,
+            10.0 * std::f32::consts::TAU + 0.5,
+            5.0,
+            true,
+        );
+        assert!(cam.fov >= 0.001);
+        assert!(cam.near >= 0.001);
+        assert!(cam.far >= cam.near + 0.1, "far must sit past near, got {}", cam.far);
+        assert!(cam.yaw.abs() <= std::f32::consts::TAU, "yaw wrapped, got {}", cam.yaw);
+        assert!(
+            cam.pitch < std::f32::consts::FRAC_PI_2 && cam.pitch > -std::f32::consts::FRAC_PI_2,
+            "pitch clamped below vertical, got {}",
+            cam.pitch
+        );
+    }
+
+    #[test]
+    fn forward_and_right_are_orthonormal() {
+        let (yaw, pitch) = (0.7f32, 0.3f32);
+        let f = Camera::forward_from(yaw, pitch);
+        let r = Camera::right_from(yaw);
+        assert!((f.length() - 1.0).abs() < 1e-5, "forward not unit: {f:?}");
+        assert!((r.length() - 1.0).abs() < 1e-5, "right not unit: {r:?}");
+        assert!(r.y.abs() < 1e-6, "right must stay horizontal: {r:?}");
+        assert!(f.dot(r).abs() < 1e-5, "right ⟂ forward expected, dot={}", f.dot(r));
+    }
+
+    #[test]
+    fn forward_with_zero_pitch_is_horizontal() {
+        let f = Camera::forward_from(0.0, 0.0);
+        assert!(f.y.abs() < 1e-6, "zero pitch → horizontal aim, got {f:?}");
+        // Pitch beyond vertical is clamped, so y never reaches ±1.
+        let up = Camera::forward_from(0.0, std::f32::consts::PI); // way over vertical
+        assert!(up.y.abs() < 1.0);
+        assert!((up.length() - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn toggle_projection_is_an_involution_matching_the_fov_framing() {
+        let mut cam = Camera::new(std::f32::consts::FRAC_PI_2, 0.1, 100.0, 0.0, 0.0, true);
+        assert!(matches!(cam.projection, ProjectionMode::Perspective));
+
+        cam.toggle_projection(10.0);
+        match cam.projection {
+            ProjectionMode::Orthographic { height } => {
+                let expected = 2.0 * 10.0 * (cam.fov * 0.5).tan();
+                assert!((height - expected).abs() < 1e-3, "height {height} vs {expected}");
+            }
+            _ => panic!("expected orthographic after first toggle"),
+        }
+        // Toggling again returns to perspective (involution).
+        cam.toggle_projection(10.0);
+        assert!(matches!(cam.projection, ProjectionMode::Perspective));
+    }
+
+    #[test]
+    fn sanitize_angles_wraps_yaw_and_clamps_pitch() {
+        let mut cam = Camera::new(std::f32::consts::FRAC_PI_2, 0.1, 100.0, 0.0, 0.0, true);
+        cam.yaw = 100.0;
+        cam.pitch = 5.0;
+        cam.sanitize_angles();
+        assert!(cam.yaw.abs() <= std::f32::consts::TAU);
+        assert!(cam.pitch < std::f32::consts::FRAC_PI_2 && cam.pitch > -std::f32::consts::FRAC_PI_2);
+    }
+
+    #[test]
+    fn projections_are_finite_and_camera2d_zoom_scales_the_view() {
+        let cam = Camera::new(std::f32::consts::FRAC_PI_2, 0.1, 100.0, 0.0, 0.0, true);
+        assert!(cam.get_projection(1.777).to_cols_array().iter().all(|v| v.is_finite()));
+
+        // Camera2D orthographic: the visible half-width is (width/2)/zoom, so a world
+        // point there maps to NDC x = 1.
+        let cam2d = Camera2D::new(2.0, true);
+        let (w, h) = (800.0f32, 600.0f32);
+        let p = cam2d.get_projection(w, h);
+        assert!(p.to_cols_array().iter().all(|v| v.is_finite()));
+        let half_w = (w / 2.0) / 2.0; // zoom = 2
+        let clip = p.project_point3(Vec3::new(half_w, 0.0, 0.0));
+        assert!((clip.x - 1.0).abs() < 1e-4, "edge maps to NDC 1, got {}", clip.x);
+    }
 }

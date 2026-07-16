@@ -4,6 +4,7 @@ use mlua::prelude::*;
 use mlua::RegistryKey;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tracing::{debug, error, info, trace, warn};
 
 use crate::api_ai;
 use crate::api_audio;
@@ -228,6 +229,7 @@ impl ScriptEngine {
         api_vehicle::register_vehicle_api(&lua, command_queue.clone())?;
         api_ai::register_ai_api(&lua, command_queue.clone())?;
 
+        info!("[Scripting] ScriptEngine başlatıldı — Lua 5.4 sandbox aktif, API modülleri kayıtlı");
         Ok(Self {
             lua,
             loaded_scripts: HashMap::new(),
@@ -237,9 +239,13 @@ impl ScriptEngine {
         })
     }
 
+    #[tracing::instrument(skip_all, name = "script_load", fields(path = %path))]
     pub fn load_script(&mut self, path: &str) -> Result<(), String> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| format!("Script okunamadı {}: {}", path, e))?;
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            error!(path, error = %e, "[Scripting] Script dosyası okunamadı");
+            format!("Script okunamadı {}: {}", path, e)
+        })?;
+        let byte_len = content.len();
 
         let env = self.lua.create_table().map_err(|e| e.to_string())?;
 
@@ -254,7 +260,10 @@ impl ScriptEngine {
             .load(&content)
             .set_environment(env.clone())
             .exec()
-            .map_err(|e| format!("Lua hata {}: {}", path, e))?;
+            .map_err(|e| {
+                error!(path, bytes = byte_len, error = %e, "[Scripting] Lua derleme/çalıştırma hatası");
+                format!("Lua hata {}: {}", path, e)
+            })?;
 
         let key = self
             .lua
@@ -263,14 +272,20 @@ impl ScriptEngine {
 
         // Replace existing key if it exists to free old memory
         if let Some((_, old_key)) = self.loaded_scripts.insert(path.to_string(), (content, key)) {
-            let _ = self.lua.remove_registry_value(old_key);
+            debug!(path, "[Scripting] Var olan script değiştirildi (hot-reload), eski sürüm boşaltılıyor");
+            // Eskiden `let _ =` ile sessizce yutuluyordu; başarısızlık Lua registry
+            // belleğini sızdırır. Davranış aynı (yine yok say) ama artık en azından loglanır.
+            if let Err(e) = self.lua.remove_registry_value(old_key) {
+                warn!(path, error = %e, "[Scripting] Eski script registry değeri boşaltılamadı (olası Lua bellek sızıntısı)");
+            }
         }
 
-        tracing::info!("🔧 ScriptEngine: Yüklendi ve İzole Edildi → {}", path);
+        info!(path, bytes = byte_len, "🔧 [Scripting] Script yüklendi ve izole edildi");
         Ok(())
     }
 
     /// Her frame çağrılan güncelleme — World verilerini Lua'ya aktarır, scriptleri çalıştırır
+    #[tracing::instrument(skip_all, name = "script_update")]
     pub fn update(&mut self, world: &World, input: &Input, dt: f32) -> Result<(), String> {
         self.elapsed_time += dt;
 
@@ -301,8 +316,10 @@ impl ScriptEngine {
         for (path, (_, key)) in &self.loaded_scripts {
             let env: mlua::Table = self.lua.registry_value(key).map_err(|e| e.to_string())?;
             if let Ok(func) = env.get::<_, LuaFunction>("on_update") {
-                func.call::<_, ()>(ctx_table.clone())
-                    .map_err(|e| format!("Lua on_update hatası ({}): {}", path, e))?;
+                func.call::<_, ()>(ctx_table.clone()).map_err(|e| {
+                    warn!(path = %path, error = %e, "[Scripting] on_update çalışma-zamanı hatası");
+                    format!("Lua on_update hatası ({}): {}", path, e)
+                })?;
             }
         }
 
@@ -322,19 +339,24 @@ impl ScriptEngine {
             // on_entity_update(entity_id, dt) çağır (varsa)
             if let Ok(func) = env.get::<_, LuaFunction>("on_entity_update") {
                 func.call::<_, ()>((entity_id, dt)).map_err(|e| {
+                    warn!(entity_id, script_path, error = %e, "[Scripting] on_entity_update çalışma-zamanı hatası");
                     format!(
                         "Lua on_entity_update hatası (entity {} mod {}): {}",
                         entity_id, script_path, e
                     )
                 })?;
             }
+        } else {
+            trace!(entity_id, script_path, "[Scripting] update_entity: script yüklü değil, atlandı");
         }
         Ok(())
     }
 
     /// Komut kuyruğundaki tüm komutları World'e uygular ve oyun mantığı için kalan komutları döndürür
+    #[tracing::instrument(skip_all, name = "script_flush_commands")]
     pub fn flush_commands(&self, world: &mut World, dt: f32) -> Vec<ScriptCommand> {
         let commands = self.command_queue.drain();
+        let total = commands.len();
         let mut unhandled = Vec::new();
 
         for cmd in commands {
@@ -343,30 +365,40 @@ impl ScriptEngine {
                     let mut transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
                     if let Some(mut t) = transforms.get_mut(id) {
                         t.position = pos;
+                    } else {
+                        trace!(entity = id, "[Scripting] SetPosition: hedefte Transform yok, komut atlandı");
                     }
                 }
                 ScriptCommand::SetRotation(id, rot) => {
                     let mut transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
                     if let Some(mut t) = transforms.get_mut(id) {
                         t.rotation = rot;
+                    } else {
+                        trace!(entity = id, "[Scripting] SetRotation: hedefte Transform yok, komut atlandı");
                     }
                 }
                 ScriptCommand::SetScale(id, scale) => {
                     let mut transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
                     if let Some(mut t) = transforms.get_mut(id) {
                         t.scale = scale;
+                    } else {
+                        trace!(entity = id, "[Scripting] SetScale: hedefte Transform yok, komut atlandı");
                     }
                 }
                 ScriptCommand::SetVelocity(id, vel) => {
                     let mut velocities = world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
                     if let Some(mut v) = velocities.get_mut(id) {
                         v.linear = vel;
+                    } else {
+                        trace!(entity = id, "[Scripting] SetVelocity: hedefte Velocity yok, komut atlandı");
                     }
                 }
                 ScriptCommand::SetAngularVelocity(id, ang_vel) => {
                     let mut velocities = world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
                     if let Some(mut v) = velocities.get_mut(id) {
                         v.angular = ang_vel;
+                    } else {
+                        trace!(entity = id, "[Scripting] SetAngularVelocity: hedefte Velocity yok, komut atlandı");
                     }
                 }
                 ScriptCommand::ApplyForce(id, force) => {
@@ -397,6 +429,8 @@ impl ScriptEngine {
                                 v.linear += accel * dt;
                             }
                         }
+                    } else {
+                        trace!(entity = id, "[Scripting] ApplyForce: hedefte RigidBody yok, kuvvet yok sayıldı");
                     }
                 }
                 ScriptCommand::ApplyImpulse(id, impulse) => {
@@ -427,6 +461,8 @@ impl ScriptEngine {
                                 v.linear += delta_v;
                             }
                         }
+                    } else {
+                        trace!(entity = id, "[Scripting] ApplyImpulse: hedefte RigidBody yok, impuls yok sayıldı");
                     }
                 }
                 ScriptCommand::AddRigidBody {
@@ -449,6 +485,8 @@ impl ScriptEngine {
                                 gizmo_physics_rigid::components::Velocity::new(gizmo_math::Vec3::ZERO),
                             );
                         }
+                    } else {
+                        trace!(entity = id, "[Scripting] AddRigidBody: entity bulunamadı, komut atlandı");
                     }
                 }
                 ScriptCommand::AddBoxCollider { id, hx, hy, hz } => {
@@ -457,6 +495,8 @@ impl ScriptEngine {
                         let col =
                             gizmo_physics_core::Collider::aabb(gizmo_math::Vec3::new(hx, hy, hz));
                         world.add_component(e, col);
+                    } else {
+                        trace!(entity = id, "[Scripting] AddBoxCollider: entity bulunamadı, komut atlandı");
                     }
                 }
                 ScriptCommand::AddSphereCollider { id, radius } => {
@@ -464,6 +504,8 @@ impl ScriptEngine {
                     if let Some(e) = entity {
                         let col = gizmo_physics_core::Collider::sphere(radius);
                         world.add_component(e, col);
+                    } else {
+                        trace!(entity = id, "[Scripting] AddSphereCollider: entity bulunamadı, komut atlandı");
                     }
                 }
 
@@ -505,30 +547,40 @@ ScriptCommand::SetEntityName(id, name) => {
                     let mut names = world.borrow_mut::<gizmo_core::EntityName>();
                     if let Some(mut n) = names.get_mut(id) {
                         n.0 = name;
+                    } else {
+                        trace!(entity = id, "[Scripting] SetEntityName: hedefte EntityName yok, komut atlandı");
                     }
                 }
 ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
                     let mut players = world.borrow_mut::<gizmo_animation::skeletal::AnimationPlayer>();
                     if let Some(mut player) = players.get_mut(id) {
                         player.play_animation_by_name(&name, blend, loop_anim);
+                    } else {
+                        trace!(entity = id, anim = %name, "[Scripting] PlayAnimation: hedefte AnimationPlayer yok, komut atlandı");
                     }
                 }
                 ScriptCommand::SetAnimationSpeed(id, speed) => {
                     let mut players = world.borrow_mut::<gizmo_animation::skeletal::AnimationPlayer>();
                     if let Some(mut player) = players.get_mut(id) {
                         player.speed = speed;
+                    } else {
+                        trace!(entity = id, "[Scripting] SetAnimationSpeed: hedefte AnimationPlayer yok, komut atlandı");
                     }
                 }
                 ScriptCommand::AddNavAgent(id) => {
                     let entity = world.entity(id);
                     if let Some(e) = entity {
                         world.add_component(e, gizmo_ai::components::NavAgent::default());
+                    } else {
+                        trace!(entity = id, "[Scripting] AddNavAgent: entity bulunamadı, komut atlandı");
                     }
                 }
                 ScriptCommand::SetAiTarget(id, target) => {
                     let mut agents = world.borrow_mut::<gizmo_ai::components::NavAgent>();
                     if let Some(mut agent) = agents.get_mut(id) {
                         agent.set_target(target);
+                    } else {
+                        trace!(entity = id, "[Scripting] SetAiTarget: hedefte NavAgent yok, komut atlandı");
                     }
                 }
                 ScriptCommand::ClearAiTarget(id) => {
@@ -537,6 +589,8 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
                         // Must clear the TARGET, not just the path — clearing only the path
                         // leaves target set, so ai_navigation_system recomputes and keeps going.
                         agent.clear_target();
+                    } else {
+                        trace!(entity = id, "[Scripting] ClearAiTarget: hedefte NavAgent yok, komut atlandı");
                     }
                 }
                 ScriptCommand::SetFighterMove { id, name, startup, active, recovery, damage } => {
@@ -554,18 +608,24 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
                         combat_move.frame_data = frame_data;
                         fighter.active_move = Some(combat_move);
                         fighter.current_move_frame = 0;
+                    } else {
+                        trace!(entity = id, "[Scripting] SetFighterMove: hedefte FighterController yok, komut atlandı");
                     }
                 }
                 ScriptCommand::ApplyHitstop(id, frames) => {
                     let mut fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
                     if let Some(mut fighter) = fighters.get_mut(id) {
                         fighter.apply_hitstop(frames);
+                    } else {
+                        trace!(entity = id, frames, "[Scripting] ApplyHitstop: hedefte FighterController yok, komut atlandı");
                     }
                 }
                 ScriptCommand::ApplyHitstun(id, frames) => {
                     let mut fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
                     if let Some(mut fighter) = fighters.get_mut(id) {
                         fighter.apply_hitstun(frames);
+                    } else {
+                        trace!(entity = id, frames, "[Scripting] ApplyHitstun: hedefte FighterController yok, komut atlandı");
                     }
                 }
                 ScriptCommand::SaveScene(_)
@@ -589,6 +649,13 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
             }
         }
 
+        if total > 0 {
+            trace!(
+                total,
+                unhandled = unhandled.len(),
+                "[Scripting] script komut kuyruğu boşaltıldı"
+            );
+        }
         unhandled
     }
 
@@ -639,7 +706,10 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
 
         let func: LuaFunction = match env.get(func_name) {
             Ok(f) => f,
-            Err(_) => return Ok(ScriptResult::default()),
+            Err(e) => {
+                trace!(path, func_name, error = %e, "[Scripting] run_entity_update: fonksiyon alınamadı, varsayılan sonuç");
+                return Ok(ScriptResult::default());
+            }
         };
 
         let ctx_table = self.lua.create_table().map_err(|e| e.to_string())?;
@@ -679,9 +749,10 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
             .map_err(|e| e.to_string())?;
         ctx_table.set("input", input).map_err(|e| e.to_string())?;
 
-        let result_table: LuaTable = func
-            .call(ctx_table)
-            .map_err(|e| format!("Lua runtime: {}", e))?;
+        let result_table: LuaTable = func.call(ctx_table).map_err(|e| {
+            warn!(path, func_name, error = %e, "[Scripting] run_entity_update: Lua çalışma-zamanı hatası");
+            format!("Lua runtime: {}", e)
+        })?;
 
         let mut result = ScriptResult::default();
 
@@ -713,8 +784,24 @@ gizmo_core::impl_component!(Script);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gizmo_math::Vec3;
+    use gizmo_math::{Quat, Vec3};
+    use gizmo_physics_core::{Collider, ColliderShape, Transform};
     use gizmo_physics_rigid::components::{RigidBody, Velocity};
+
+    /// Paralel test koşumlarında çakışmayan benzersiz geçici script yolu üretir.
+    fn unique_temp(tag: &str) -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir()
+            .join(format!("gizmo_scripting_{tag}_{n}_{nanos}.lua"))
+            .to_string_lossy()
+            .into_owned()
+    }
 
     /// A top-level `on_update` in a loaded script must fire every frame. It's written
     /// into the script's isolated env, so the old code that read `on_update` from
@@ -794,5 +881,443 @@ mod tests {
             .expect("Velocity ApplyImpulse tarafından oluşturulmalıydı");
         // dv = impulse/mass = 6/2 = 3.0 (dt'den bağımsız)
         assert!((v.linear.x - 3.0).abs() < 1e-5, "x hızı yanlış: {}", v.linear.x);
+    }
+
+    /// Transform yazma komutları (SetPosition/SetScale/SetRotation) mevcut bir
+    /// Transform'a uygulanmalı.
+    #[test]
+    fn transform_commands_apply_to_component() {
+        let engine = ScriptEngine::new().unwrap();
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::ZERO));
+        let id = e.id();
+
+        engine.command_queue().push(ScriptCommand::SetPosition(id, Vec3::new(1.0, 2.0, 3.0)));
+        engine.command_queue().push(ScriptCommand::SetScale(id, Vec3::new(2.0, 4.0, 8.0)));
+        engine.command_queue().push(ScriptCommand::SetRotation(id, Quat::from_xyzw(1.0, 0.0, 0.0, 0.0)));
+        engine.flush_commands(&mut world, 0.016);
+
+        let transforms = world.borrow::<Transform>();
+        let t = transforms.get(id).unwrap();
+        assert_eq!(t.position, Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(t.scale, Vec3::new(2.0, 4.0, 8.0));
+        assert!((t.rotation.x - 1.0).abs() < 1e-6 && t.rotation.w.abs() < 1e-6);
+    }
+
+    /// SetVelocity/SetAngularVelocity mevcut Velocity'nin linear/angular alanlarını ayarlamalı.
+    #[test]
+    fn velocity_commands_apply_to_component() {
+        let engine = ScriptEngine::new().unwrap();
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, Velocity::new(Vec3::ZERO));
+        let id = e.id();
+
+        engine.command_queue().push(ScriptCommand::SetVelocity(id, Vec3::new(3.0, 0.0, -2.0)));
+        engine.command_queue().push(ScriptCommand::SetAngularVelocity(id, Vec3::new(0.0, 1.0, 0.0)));
+        engine.flush_commands(&mut world, 0.016);
+
+        let vels = world.borrow::<Velocity>();
+        let v = vels.get(id).unwrap();
+        assert_eq!(v.linear, Vec3::new(3.0, 0.0, -2.0));
+        assert_eq!(v.angular, Vec3::new(0.0, 1.0, 0.0));
+    }
+
+    /// Kütlesi sıfır (statik) bir gövdeye kuvvet uygulanınca Velocity OLUŞTURULMAMALI —
+    /// `mass > 0.0` koruması sonsuz ivmeyi engeller.
+    #[test]
+    fn apply_force_on_zero_mass_creates_no_velocity() {
+        let engine = ScriptEngine::new().unwrap();
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, RigidBody::new(0.0, false));
+        let id = e.id();
+
+        engine.command_queue().push(ScriptCommand::ApplyForce(id, Vec3::new(100.0, 0.0, 0.0)));
+        engine.flush_commands(&mut world, 0.016);
+
+        assert!(
+            world.borrow::<Velocity>().get(id).is_none(),
+            "sıfır kütle için Velocity oluşturulmamalı"
+        );
+    }
+
+    /// Aynı flush içinde birden çok kuvvet birikimli (superposition) uygulanmalı.
+    #[test]
+    fn multiple_forces_accumulate_in_one_flush() {
+        let engine = ScriptEngine::new().unwrap();
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, RigidBody::new(2.0, false));
+        world.add_component(e, Velocity::new(Vec3::ZERO));
+        let id = e.id();
+
+        engine.command_queue().push(ScriptCommand::ApplyForce(id, Vec3::new(4.0, 0.0, 0.0)));
+        engine.command_queue().push(ScriptCommand::ApplyForce(id, Vec3::new(0.0, 6.0, 0.0)));
+        engine.flush_commands(&mut world, 0.5);
+
+        let vels = world.borrow::<Velocity>();
+        let v = vels.get(id).unwrap();
+        // dv = (F/m)*dt : x = 4/2*0.5 = 1.0 ; y = 6/2*0.5 = 1.5
+        assert!((v.linear.x - 1.0).abs() < 1e-5, "x: {}", v.linear.x);
+        assert!((v.linear.y - 1.5).abs() < 1e-5, "y: {}", v.linear.y);
+    }
+
+    /// AddRigidBody hareket edebilmesi için beraberinde bir Velocity de oluşturmalı.
+    #[test]
+    fn add_rigidbody_also_creates_velocity() {
+        let engine = ScriptEngine::new().unwrap();
+        let mut world = World::new();
+        let e = world.spawn();
+        let id = e.id();
+
+        engine.command_queue().push(ScriptCommand::AddRigidBody { id, mass: 3.0, use_gravity: true });
+        engine.flush_commands(&mut world, 0.016);
+
+        let rbs = world.borrow::<RigidBody>();
+        assert!((rbs.get(id).unwrap().mass - 3.0).abs() < 1e-6);
+        drop(rbs);
+        assert!(
+            world.borrow::<Velocity>().get(id).is_some(),
+            "AddRigidBody Velocity de eklemeli"
+        );
+    }
+
+    /// AddBoxCollider/AddSphereCollider doğru şekilli Collider bileşenleri oluşturmalı.
+    #[test]
+    fn colliders_are_created_with_correct_shape() {
+        let engine = ScriptEngine::new().unwrap();
+        let mut world = World::new();
+        let e_box = world.spawn();
+        let e_sphere = world.spawn();
+        let (bid, sid) = (e_box.id(), e_sphere.id());
+
+        engine.command_queue().push(ScriptCommand::AddBoxCollider { id: bid, hx: 1.0, hy: 2.0, hz: 3.0 });
+        engine.command_queue().push(ScriptCommand::AddSphereCollider { id: sid, radius: 4.0 });
+        engine.flush_commands(&mut world, 0.016);
+
+        let cols = world.borrow::<Collider>();
+        match &cols.get(bid).unwrap().shape {
+            ColliderShape::Box(b) => assert_eq!(b.half_extents, Vec3::new(1.0, 2.0, 3.0)),
+            other => panic!("beklenen Box, gelen {other:?}"),
+        }
+        match &cols.get(sid).unwrap().shape {
+            ColliderShape::Sphere(s) => assert!((s.radius - 4.0).abs() < 1e-6),
+            other => panic!("beklenen Sphere, gelen {other:?}"),
+        }
+    }
+
+    /// SpawnEntity: isimli, Transform'lu bir entity oluşturmalı ve log kuyruğuna kayıt düşmeli.
+    #[test]
+    fn spawn_entity_creates_named_transform_and_logs() {
+        let engine = ScriptEngine::new().unwrap();
+        let mut world = World::new();
+
+        let logs_before = engine.log_queue.lock().unwrap().len();
+        engine
+            .command_queue()
+            .push(ScriptCommand::SpawnEntity { name: "hero".into(), position: Vec3::new(5.0, 6.0, 7.0) });
+        engine.flush_commands(&mut world, 0.016);
+
+        // İsimli entity'yi bul.
+        let names = world.borrow::<gizmo_core::EntityName>();
+        let found = names.iter().filter_map(|(eid, _)| names.get(eid).map(|n| (eid, n.0.clone())))
+            .find(|(_, name)| name == "hero");
+        let (eid, _) = found.expect("'hero' isimli entity oluşmalıydı");
+        drop(names);
+
+        let transforms = world.borrow::<Transform>();
+        assert_eq!(transforms.get(eid).unwrap().position, Vec3::new(5.0, 6.0, 7.0));
+        drop(transforms);
+
+        assert!(
+            engine.log_queue.lock().unwrap().len() > logs_before,
+            "spawn log kuyruğuna kayıt düşmeliydi"
+        );
+    }
+
+    /// DestroyEntity var olan bir entity'yi despawn etmeli (artık canlı olmamalı).
+    #[test]
+    fn destroy_entity_removes_it() {
+        let engine = ScriptEngine::new().unwrap();
+        let mut world = World::new();
+        let e = world.spawn();
+        let id = e.id();
+        assert!(world.entity(id).is_some());
+
+        engine.command_queue().push(ScriptCommand::DestroyEntity(id));
+        engine.flush_commands(&mut world, 0.016);
+
+        assert!(world.entity(id).is_none(), "entity despawn edilmeliydi");
+    }
+
+    /// SetEntityName mevcut EntityName'i yeniden adlandırmalı.
+    #[test]
+    fn set_entity_name_renames() {
+        let engine = ScriptEngine::new().unwrap();
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, gizmo_core::EntityName::new("old"));
+        let id = e.id();
+
+        engine.command_queue().push(ScriptCommand::SetEntityName(id, "new".into()));
+        engine.flush_commands(&mut world, 0.016);
+
+        let names = world.borrow::<gizmo_core::EntityName>();
+        assert_eq!(names.get(id).unwrap().0, "new");
+    }
+
+    /// AddNavAgent + SetAiTarget hedefi ayarlamalı; ClearAiTarget hedefi (yalnız yolu değil) temizlemeli.
+    #[test]
+    fn nav_agent_target_set_then_cleared() {
+        use gizmo_ai::components::NavAgent;
+        let engine = ScriptEngine::new().unwrap();
+        let mut world = World::new();
+        let e = world.spawn();
+        let id = e.id();
+
+        engine.command_queue().push(ScriptCommand::AddNavAgent(id));
+        engine.command_queue().push(ScriptCommand::SetAiTarget(id, Vec3::new(9.0, 0.0, 0.0)));
+        engine.flush_commands(&mut world, 0.016);
+        {
+            let agents = world.borrow::<NavAgent>();
+            assert_eq!(agents.get(id).unwrap().target, Some(Vec3::new(9.0, 0.0, 0.0)));
+        }
+
+        engine.command_queue().push(ScriptCommand::ClearAiTarget(id));
+        engine.flush_commands(&mut world, 0.016);
+        {
+            let agents = world.borrow::<NavAgent>();
+            assert_eq!(agents.get(id).unwrap().target, None, "hedef temizlenmeliydi");
+        }
+    }
+
+    /// flush_commands ses ve LoadScene komutlarını demo katmanına 'unhandled' olarak
+    /// döndürmeli; SaveScene ve araç komutlarını ise tüketmeli (döndürmemeli).
+    #[test]
+    fn flush_returns_audio_and_loadscene_but_consumes_savescene_and_vehicle() {
+        let engine = ScriptEngine::new().unwrap();
+        let mut world = World::new();
+
+        let cq = engine.command_queue();
+        cq.push(ScriptCommand::PlaySound("boom".into()));
+        cq.push(ScriptCommand::PlaySound3D("bird".into(), Vec3::ZERO));
+        cq.push(ScriptCommand::StopSound("music".into()));
+        cq.push(ScriptCommand::LoadScene("level.scene".into()));
+        cq.push(ScriptCommand::SaveScene("slot.scene".into()));
+        cq.push(ScriptCommand::SetVehicleBrake(1, 500.0));
+
+        let unhandled = engine.flush_commands(&mut world, 0.016);
+
+        assert_eq!(unhandled.len(), 4, "yalnız ses(3) + LoadScene(1) döndürülmeli");
+        assert!(unhandled.iter().any(|c| matches!(c, ScriptCommand::PlaySound(n) if n == "boom")));
+        assert!(unhandled.iter().any(|c| matches!(c, ScriptCommand::PlaySound3D(n, _) if n == "bird")));
+        assert!(unhandled.iter().any(|c| matches!(c, ScriptCommand::StopSound(n) if n == "music")));
+        assert!(unhandled.iter().any(|c| matches!(c, ScriptCommand::LoadScene(n) if n == "level.scene")));
+        assert!(!unhandled.iter().any(|c| matches!(c, ScriptCommand::SaveScene(_))));
+        assert!(!unhandled.iter().any(|c| matches!(c, ScriptCommand::SetVehicleBrake(..))));
+    }
+
+    /// flush_commands kuyruğu tüketmeli (drain): çağrı sonrası kuyruk boş olmalı.
+    #[test]
+    fn flush_drains_the_queue() {
+        let engine = ScriptEngine::new().unwrap();
+        let mut world = World::new();
+        engine.command_queue().push(ScriptCommand::StartRace);
+        engine.command_queue().push(ScriptCommand::HideDialogue);
+        assert_eq!(engine.command_queue().len(), 2);
+
+        engine.flush_commands(&mut world, 0.016);
+        assert!(engine.command_queue().is_empty(), "flush kuyruğu boşaltmalı");
+    }
+
+    /// Script::new her zaman initialized=false ile başlar (on_init henüz çağrılmadı).
+    #[test]
+    fn script_new_starts_uninitialized() {
+        let s = Script::new("scripts/player.lua");
+        assert_eq!(s.file_path, "scripts/player.lua");
+        assert!(!s.initialized);
+    }
+
+    /// Script serde round-trip: `initialized` alanı `#[serde(default, skip)]` olduğundan
+    /// serileştirmede yer almaz ve deserialize sonrası daima false olur — böylece sahne
+    /// yüklendiğinde on_init yeniden çalışır. file_path korunmalı.
+    #[test]
+    fn script_serde_roundtrip_resets_initialized() {
+        let mut s = Script::new("a.lua");
+        s.initialized = true;
+
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("initialized"), "skip'li alan JSON'da olmamalı: {json}");
+
+        let back: Script = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.file_path, "a.lua");
+        assert!(!back.initialized, "deserialize sonrası initialized=false olmalı");
+    }
+
+    /// Güvenlik: motor tehlikeli global'leri (os/io/require/dofile/loadfile/package/
+    /// debug/load/loadstring) devre dışı bırakmalı.
+    #[test]
+    fn sandbox_disables_dangerous_globals() {
+        let mut engine = ScriptEngine::new().unwrap();
+        let path = unique_temp("sandbox");
+        std::fs::write(
+            &path,
+            r#"
+            assert(os == nil, "os kapatılmalı")
+            assert(io == nil, "io kapatılmalı")
+            assert(require == nil, "require kapatılmalı")
+            assert(dofile == nil, "dofile kapatılmalı")
+            assert(loadfile == nil, "loadfile kapatılmalı")
+            assert(package == nil, "package kapatılmalı")
+            assert(debug == nil, "debug kapatılmalı")
+            assert(load == nil, "load kapatılmalı")
+            assert(loadstring == nil, "loadstring kapatılmalı")
+            "#,
+        )
+        .unwrap();
+        let res = engine.load_script(&path);
+        let _ = std::fs::remove_file(&path);
+        res.expect("sandbox assert'leri geçmeli (global'ler nil olmalı)");
+    }
+
+    /// Motorun kaydettiği Lua matematik yardımcıları (vec3_*, clamp, lerp) doğru çalışmalı.
+    #[test]
+    fn lua_math_helpers_are_correct() {
+        let mut engine = ScriptEngine::new().unwrap();
+        let path = unique_temp("mathhelpers");
+        std::fs::write(
+            &path,
+            r#"
+            assert(math.abs(vec3_length(vec3(3,4,0)) - 5.0) < 1e-5, "length 3-4-5")
+            local c = vec3_cross(vec3(1,0,0), vec3(0,1,0))
+            assert(c.x == 0 and c.y == 0 and c.z == 1, "x cross y = z")
+            assert(clamp(5, 0, 3) == 3, "clamp üst sınır")
+            assert(clamp(-1, 0, 3) == 0, "clamp alt sınır")
+            assert(clamp(2, 0, 3) == 2, "clamp aralık içi")
+            assert(lerp(0, 10, 0.5) == 5, "lerp orta")
+            local n = vec3_normalize(vec3(0,0,0))
+            assert(n.x == 0 and n.y == 0 and n.z == 0, "sıfır vektör normalize => sıfır")
+            assert(math.abs(vec3_distance(vec3(0,0,0), vec3(0,3,4)) - 5.0) < 1e-5, "distance")
+            local d = vec3_dot(vec3(1,2,3), vec3(4,5,6))
+            assert(d == 32, "dot 1*4+2*5+3*6=32")
+            "#,
+        )
+        .unwrap();
+        let res = engine.load_script(&path);
+        let _ = std::fs::remove_file(&path);
+        res.expect("matematik yardımcı assert'leri geçmeli");
+    }
+
+    /// Hata yolu: var olmayan bir script yüklenince açıklayıcı bir hata dönmeli (panik değil).
+    #[test]
+    fn load_missing_file_returns_error() {
+        let mut engine = ScriptEngine::new().unwrap();
+        let err = engine
+            .load_script("/nonexistent/gizmo/definitely_missing_5f2a.lua")
+            .unwrap_err();
+        assert!(err.contains("okunamadı"), "okuma hatası mesajı beklenir, gelen: {err}");
+    }
+
+    /// Hata yolu: yüklenmemiş bir script için run_entity_update 'not loaded' hatası vermeli.
+    #[test]
+    fn run_entity_update_on_unloaded_script_errors() {
+        let engine = ScriptEngine::new().unwrap();
+        let ctx = ScriptContext::default();
+        let err = engine
+            .run_entity_update("never_loaded.lua", "on_entity_update", &ctx)
+            .unwrap_err();
+        assert!(err.contains("not loaded"), "mesaj: {err}");
+    }
+
+    /// run_entity_update ctx'i (pozisyon + dt) Lua'ya geçirmeli ve dönen position tablosunu
+    /// ScriptResult.new_position olarak çıkarmalı. Var olmayan fonksiyon default döndürmeli.
+    #[test]
+    fn run_entity_update_marshals_position_and_extracts_result() {
+        let mut engine = ScriptEngine::new().unwrap();
+        let path = unique_temp("marshal_pos");
+        std::fs::write(
+            &path,
+            "function mv(ctx)\n  return { position = { x = ctx.position.x + ctx.dt, y = ctx.position.y, z = ctx.position.z } }\nend\n",
+        )
+        .unwrap();
+        engine.load_script(&path).unwrap();
+
+        let mut ctx = ScriptContext::default();
+        ctx.entity_id = 42;
+        ctx.dt = 0.5;
+        ctx.position = [10.0, -1.0, 2.0];
+
+        let result = engine.run_entity_update(&path, "mv", &ctx).unwrap();
+        assert_eq!(result.new_position, Some([10.5, -1.0, 2.0]));
+        assert_eq!(result.new_velocity, None, "script velocity döndürmedi");
+
+        // Var olmayan fonksiyon → default (her ikisi None).
+        let empty = engine.run_entity_update(&path, "yok_boyle_fn", &ctx).unwrap();
+        assert_eq!(empty.new_position, None);
+        assert_eq!(empty.new_velocity, None);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// run_entity_update girdi (input) bayraklarını Lua ctx.input'a geçirmeli; script
+    /// bunlara göre velocity döndürebilmeli.
+    #[test]
+    fn run_entity_update_marshals_input_flags() {
+        let mut engine = ScriptEngine::new().unwrap();
+        let path = unique_temp("marshal_input");
+        std::fs::write(
+            &path,
+            "function ctl(ctx)\n  local vx = 0\n  if ctx.input.d then vx = 1 end\n  if ctx.input.a then vx = vx - 1 end\n  return { velocity = { x = vx, y = 0, z = 0 } }\nend\n",
+        )
+        .unwrap();
+        engine.load_script(&path).unwrap();
+
+        let mut ctx = ScriptContext::default();
+        ctx.key_d = true; // sağa
+        let r = engine.run_entity_update(&path, "ctl", &ctx).unwrap();
+        assert_eq!(r.new_velocity, Some([1.0, 0.0, 0.0]));
+
+        ctx.key_d = false;
+        ctx.key_a = true; // sola
+        let r2 = engine.run_entity_update(&path, "ctl", &ctx).unwrap();
+        assert_eq!(r2.new_velocity, Some([-1.0, 0.0, 0.0]));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// has_function yalnız yüklü script'te tanımlı fonksiyonlar için true dönmeli.
+    #[test]
+    fn has_function_detects_defined_and_missing() {
+        let mut engine = ScriptEngine::new().unwrap();
+        let path = unique_temp("hasfn");
+        std::fs::write(&path, "function on_update(ctx) end\n").unwrap();
+        engine.load_script(&path).unwrap();
+
+        assert!(engine.has_function(&path, "on_update"));
+        assert!(!engine.has_function(&path, "on_missing"));
+        assert!(!engine.has_function("unloaded.lua", "on_update"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// reload_if_changed: içerik değişmediyse false (yeniden yükleme yok), değişince true;
+    /// sonra tekrar değişmezse yine false — hot-reload durum makinesi.
+    #[test]
+    fn reload_if_changed_detects_content_change() {
+        let mut engine = ScriptEngine::new().unwrap();
+        let path = unique_temp("reload");
+        std::fs::write(&path, "function on_update(ctx) end\n").unwrap();
+        engine.load_script(&path).unwrap();
+
+        assert!(!engine.reload_if_changed(&path).unwrap(), "değişmemişken false");
+
+        std::fs::write(&path, "function on_update(ctx) end\n-- değişti\n").unwrap();
+        assert!(engine.reload_if_changed(&path).unwrap(), "değişince true");
+
+        assert!(!engine.reload_if_changed(&path).unwrap(), "tekrar değişmemişken false");
+
+        let _ = std::fs::remove_file(&path);
     }
 }

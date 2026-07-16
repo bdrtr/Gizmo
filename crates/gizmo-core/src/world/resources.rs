@@ -64,8 +64,15 @@ impl World {
     /// Sisteme global bir Resource ekler veya üzerine yazar.
     pub fn insert_resource<T: Send + Sync + 'static>(&mut self, resource: T) {
         let type_id = TypeId::of::<T>();
-        self.resources
-            .insert(type_id, RwLock::new(Box::new(resource)));
+        let replaced = self
+            .resources
+            .insert(type_id, RwLock::new(Box::new(resource)))
+            .is_some();
+        tracing::debug!(
+            resource = std::any::type_name::<T>(),
+            replaced,
+            "insert_resource"
+        );
     }
 
     /// Global bir Resource'u okumak için çağrılır (Immutable Borrow)
@@ -129,8 +136,16 @@ impl World {
             .get(&type_id)
             .expect("resource just inserted");
         // Poison kurtarma: bir resource kullanıcısı panikleyip kilidi
-        // zehirlese bile motor çalışmaya devam etsin (imza değişmez).
-        let guard = storage.write().unwrap_or_else(|e| e.into_inner());
+        // zehirlese bile motor çalışmaya devam etsin (imza değişmez). Sessiz
+        // kurtarma bir paniği gizlerdi; artık önce uyarı basılır (yalnız poison
+        // yolunda çalışır, mutlu yolda maliyeti sıfırdır).
+        let guard = storage.write().unwrap_or_else(|e| {
+            tracing::warn!(
+                resource = std::any::type_name::<T>(),
+                "resource lock poisoned by an earlier panic; recovering"
+            );
+            e.into_inner()
+        });
         ResourceWriteGuard {
             guard,
             _marker: PhantomData,
@@ -140,11 +155,37 @@ impl World {
     /// Global bir Resource'u ECS'ten tamamen çıkartır ve sahipliğini döndürür
     pub fn remove_resource<T: 'static>(&mut self) -> Option<T> {
         let type_id = TypeId::of::<T>();
-        let cell = self.resources.remove(&type_id)?;
-        let boxed_any = cell.into_inner().ok()?;
+        let Some(cell) = self.resources.remove(&type_id) else {
+            tracing::trace!(resource = std::any::type_name::<T>(), "remove_resource: not present");
+            return None;
+        };
+        // Poisoned RwLock: a previous holder panicked. The original code swallowed this
+        // via `.ok()?`, silently returning None (and dropping the resource) with no trace
+        // of the earlier panic. Keep that behavior but surface it as a warning first.
+        let boxed_any = match cell.into_inner() {
+            Ok(b) => b,
+            Err(_) => {
+                tracing::warn!(
+                    resource = std::any::type_name::<T>(),
+                    "remove_resource: lock poisoned by an earlier panic; resource dropped"
+                );
+                return None;
+            }
+        };
         match boxed_any.downcast::<T>() {
-            Ok(boxed_t) => Some(*boxed_t),
-            Err(_) => None,
+            Ok(boxed_t) => {
+                tracing::debug!(resource = std::any::type_name::<T>(), "remove_resource");
+                Some(*boxed_t)
+            }
+            // Keyed by TypeId, so the stored box is always `T`; a mismatch means a
+            // registration invariant broke. Previously returned None silently.
+            Err(_) => {
+                tracing::warn!(
+                    resource = std::any::type_name::<T>(),
+                    "remove_resource: TypeId matched but downcast failed (registry invariant broken)"
+                );
+                None
+            }
         }
     }
 

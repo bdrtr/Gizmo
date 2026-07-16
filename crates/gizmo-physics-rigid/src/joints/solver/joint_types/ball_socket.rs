@@ -176,6 +176,13 @@ impl JointSolver {
 
         if total_ang_impulse / dt > joint.break_torque {
             joint.is_broken = true;
+            tracing::debug!(
+                entity_a = ?joint.entity_a,
+                entity_b = ?joint.entity_b,
+                applied_torque = total_ang_impulse / dt,
+                break_torque = joint.break_torque,
+                "Ball-socket joint broke (torque exceeded break threshold)"
+            );
         }
     }
 }

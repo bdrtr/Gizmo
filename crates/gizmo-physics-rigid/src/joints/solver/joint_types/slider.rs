@@ -162,6 +162,15 @@ impl JointSolver {
         if total_lin_impulse / dt > joint.break_force || total_ang_impulse / dt > joint.break_torque
         {
             joint.is_broken = true;
+            tracing::debug!(
+                entity_a = ?joint.entity_a,
+                entity_b = ?joint.entity_b,
+                applied_force = total_lin_impulse / dt,
+                break_force = joint.break_force,
+                applied_torque = total_ang_impulse / dt,
+                break_torque = joint.break_torque,
+                "Slider joint broke (force/torque exceeded break threshold)"
+            );
             return;
         }
 

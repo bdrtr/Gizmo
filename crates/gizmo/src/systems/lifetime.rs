@@ -62,14 +62,27 @@ impl gizmo_core::system::System for LifetimeSystem {
         info
     }
 
+    #[tracing::instrument(skip_all, level = "trace", name = "lifetime")]
     fn run(&mut self, world: &World, dt: f32) {
         use gizmo_core::commands::Commands;
         use gizmo_core::system::SystemParam;
 
         let mut commands = match Commands::fetch(world, dt) {
             Ok(c) => c,
-            Err(_) => return,
+            // Sessiz `Err(_) => return` yutması yerine: CommandQueue yoksa hiçbir varlık
+            // despawn edilemez (yaşam-döngüsü komponentleri atıl kalır). Kalıcı, per-frame
+            // bir koşul olduğu için trace! (gürültü yapmaz; kurulum hatasında görünür).
+            Err(_) => {
+                tracing::trace!(
+                    "LifetimeSystem: Commands (CommandQueue) yok — despawn atlanıyor, ömür komponentleri atıl"
+                );
+                return;
+            }
         };
+
+        // Silinenleri say → çıkışta tek AGGREGATE debug! (per-entity despawn logu YOK).
+        let mut despawned_after = 0usize;
+        let mut despawned_below_y = 0usize;
 
         // ── DespawnAfter: sayacı azalt, süresi dolanları sil. ──
         // SAFETY: exclusive sistem; scheduler bu çalışırken disjoint mutable erişim garanti eder.
@@ -81,6 +94,7 @@ impl gizmo_core::system::System for LifetimeSystem {
                 if d.remaining <= 0.0 {
                     if let Some(e) = world.entity(id) {
                         commands.entity(e).despawn();
+                        despawned_after += 1;
                     }
                 }
             }
@@ -92,9 +106,18 @@ impl gizmo_core::system::System for LifetimeSystem {
                 if t.position.y < below.y {
                     if let Some(e) = world.entity(id) {
                         commands.entity(e).despawn();
+                        despawned_below_y += 1;
                     }
                 }
             }
+        }
+
+        if despawned_after > 0 || despawned_below_y > 0 {
+            tracing::debug!(
+                despawned_after,
+                despawned_below_y,
+                "LifetimeSystem: geçici varlıklar despawn için kuyruğa alındı"
+            );
         }
     }
 }

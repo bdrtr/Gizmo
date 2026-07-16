@@ -119,6 +119,13 @@ impl IslandManager {
             .collect();
         islands
             .sort_unstable_by_key(|isl| isl.manifold_indices.first().copied().unwrap_or(usize::MAX));
+        // Hot path (per substep) → trace. Shows how the contact set partitioned into
+        // independently-solvable islands (drives the parallel solve + sleep decisions).
+        tracing::trace!(
+            manifold_count = n,
+            island_count = islands.len(),
+            "contact islands built"
+        );
         islands
     }
 

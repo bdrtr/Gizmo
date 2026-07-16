@@ -34,6 +34,11 @@ fn checked_tri_count(index_count: usize) -> Option<u32> {
 }
 
 impl BvhTree {
+    #[tracing::instrument(
+        skip_all,
+        name = "bvh_build",
+        fields(vertex_count = vertices.len(), index_count = indices.len())
+    )]
     pub fn build(vertices: &[Vec3], indices: &mut [u32]) -> Result<Self, crate::error::GizmoError> {
         if indices.is_empty() {
             return Ok(Self::default());
@@ -65,6 +70,11 @@ impl BvhTree {
         let mut tree = Self { nodes };
         tree.update_node_bounds(0, vertices, indices);
         tree.subdivide(0, vertices, indices, 0);
+        tracing::debug!(
+            triangle_count = tri_count,
+            node_count = tree.nodes.len(),
+            "BVH built"
+        );
         Ok(tree)
     }
 

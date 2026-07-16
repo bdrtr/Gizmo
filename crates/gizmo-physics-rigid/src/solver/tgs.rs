@@ -321,44 +321,56 @@ impl ConstraintSolver {
             let mut i = 0usize;
             while i < prepared.len() {
                 let mid = prepared[i].mid;
-                let start = i;
+                let m_start = i;
                 while i < prepared.len() && prepared[i].mid == mid {
                     i += 1;
                 }
-                let n = (i - start).min(4);
-                let mut a = [[0.0f32; 4]; 4];
-                for r in 0..n {
-                    let pr = &prepared[start + r];
-                    let ua_r = pr.r_a.cross(pr.normal);
-                    let ub_r = pr.r_b.cross(pr.normal);
-                    for c in 0..n {
-                        let pc = &prepared[start + c];
-                        let ua_c = pc.r_a.cross(pc.normal);
-                        let ub_c = pc.r_b.cross(pc.normal);
-                        let ndot = pr.normal.dot(pc.normal);
-                        a[r][c] = (pr.inv_m_a + pr.inv_m_b) * ndot
-                            + pr.inv_i_a.mul_vec3(ua_c).dot(ua_r)
-                            + pr.inv_i_b.mul_vec3(ub_c).dot(ub_r);
-                    }
-                }
-                // Tikhonov regularisation: a 4-coplanar-contact manifold over-determines
-                // its 3 DOF (1 force + 2 tilt torques), so `a` is rank-deficient (singular).
-                // Add a small diagonal (BLOCK_REG × mean-diagonal) so the redundant direction
-                // yields a bounded, evenly-distributed impulse instead of a huge garbage one
-                // from a near-zero pivot. Small enough to leave the physical (well-conditioned)
-                // tilt-restoring modes stiff.
-                if n >= 2 {
-                    let mut mean_diag = 0.0f32;
+                // Chunk this manifold's contacts into blocks of ≤4 so EVERY contact is
+                // solved. Previously a single group with n = count.min(4) was pushed and the
+                // walk jumped to the next manifold, so any manifold with >4 contacts
+                // (compound / multi-collider bodies, or an unreduced box-plane's 8 corner
+                // contacts) had its contacts beyond the 4th orphaned into NO group → they
+                // received zero normal AND zero friction impulse → that side sank / tilted /
+                // never settled. For the common ≤4-contact manifold this is byte-identical to
+                // before (one group, same `start`/`n`/`a`), so single-box stacks are unchanged.
+                let mut start = m_start;
+                while start < i {
+                    let n = (i - start).min(4);
+                    let mut a = [[0.0f32; 4]; 4];
                     for r in 0..n {
-                        mean_diag += a[r][r];
+                        let pr = &prepared[start + r];
+                        let ua_r = pr.r_a.cross(pr.normal);
+                        let ub_r = pr.r_b.cross(pr.normal);
+                        for c in 0..n {
+                            let pc = &prepared[start + c];
+                            let ua_c = pc.r_a.cross(pc.normal);
+                            let ub_c = pc.r_b.cross(pc.normal);
+                            let ndot = pr.normal.dot(pc.normal);
+                            a[r][c] = (pr.inv_m_a + pr.inv_m_b) * ndot
+                                + pr.inv_i_a.mul_vec3(ua_c).dot(ua_r)
+                                + pr.inv_i_b.mul_vec3(ub_c).dot(ub_r);
+                        }
                     }
-                    mean_diag /= n as f32;
-                    let reg = self.block_regularization * mean_diag;
-                    for r in 0..n {
-                        a[r][r] += reg;
+                    // Tikhonov regularisation: a 4-coplanar-contact manifold over-determines
+                    // its 3 DOF (1 force + 2 tilt torques), so `a` is rank-deficient (singular).
+                    // Add a small diagonal (BLOCK_REG × mean-diagonal) so the redundant direction
+                    // yields a bounded, evenly-distributed impulse instead of a huge garbage one
+                    // from a near-zero pivot. Small enough to leave the physical (well-conditioned)
+                    // tilt-restoring modes stiff.
+                    if n >= 2 {
+                        let mut mean_diag = 0.0f32;
+                        for r in 0..n {
+                            mean_diag += a[r][r];
+                        }
+                        mean_diag /= n as f32;
+                        let reg = self.block_regularization * mean_diag;
+                        for r in 0..n {
+                            a[r][r] += reg;
+                        }
                     }
+                    groups.push(BlockGroup { start, n, a });
+                    start += n;
                 }
-                groups.push(BlockGroup { start, n, a });
             }
             groups
         } else {

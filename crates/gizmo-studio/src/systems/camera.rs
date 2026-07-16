@@ -240,3 +240,74 @@ pub fn handle_camera(
         es.prefs.camera_focus_distance = camera_focus_distance;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::f32::consts::{PI, TAU};
+
+    // Mirror of the focus-target yaw wrapping inside `handle_camera`: the delta
+    // between the desired and current yaw is folded into (-PI, PI] so the camera
+    // always rotates along the SHORTEST arc instead of unwinding the long way
+    // around. Kept as a formula mirror because the real code is welded to World +
+    // Camera + EditorState; the angle arithmetic is the part that silently breaks.
+    fn shortest_yaw_diff(desired: f32, current: f32) -> f32 {
+        let mut yaw_diff = desired - current;
+        while yaw_diff > PI {
+            yaw_diff -= TAU;
+        }
+        while yaw_diff < -PI {
+            yaw_diff += TAU;
+        }
+        yaw_diff
+    }
+
+    #[test]
+    fn yaw_diff_within_range_is_unchanged() {
+        assert!((shortest_yaw_diff(0.5, 0.2) - 0.3).abs() < 1e-5);
+        assert!((shortest_yaw_diff(-0.4, 0.4) - (-0.8)).abs() < 1e-5);
+    }
+
+    /// Crossing the ±PI seam must take the short way. Desired just past +PI relative
+    /// to current should become a small NEGATIVE delta, not ~+2PI.
+    #[test]
+    fn yaw_diff_wraps_to_shortest_arc() {
+        // current near +PI, desired just past -PI (i.e. wrapped) → tiny step, sign flips.
+        let d = shortest_yaw_diff(-PI + 0.1, PI - 0.1);
+        assert!(d.abs() < PI, "must be the short arc, got {d}");
+        assert!((d - 0.2).abs() < 1e-4, "expected ~+0.2 shortest step, got {d}");
+
+        // A near-full-turn desired collapses to a near-zero move.
+        let d2 = shortest_yaw_diff(TAU - 0.05, 0.0);
+        assert!((d2 - (-0.05)).abs() < 1e-4, "full turn should be ~-0.05, got {d2}");
+    }
+
+    /// The wrapped delta is always in (-PI, PI], regardless of how many turns apart
+    /// the two raw angles are (bounded-output invariant).
+    #[test]
+    fn yaw_diff_is_always_bounded() {
+        let samples = [-10.0f32, -3.3, -1.0, 0.0, 0.7, 2.9, 5.5, 9.99, 100.0];
+        for &a in &samples {
+            for &b in &samples {
+                let d = shortest_yaw_diff(a, b);
+                assert!(d > -PI - 1e-4 && d <= PI + 1e-4, "diff({a},{b})={d} out of range");
+            }
+        }
+    }
+
+    // Mirror of the gimbal-lock pitch clamp at the end of `handle_camera`.
+    fn clamp_pitch(pitch: f32) -> f32 {
+        let max_pitch = 89.0_f32.to_radians();
+        pitch.clamp(-max_pitch, max_pitch)
+    }
+
+    #[test]
+    fn pitch_is_clamped_to_avoid_gimbal_flip() {
+        let max_pitch = 89.0_f32.to_radians();
+        // Looking straight up (PI/2) is clamped just below vertical.
+        assert!((clamp_pitch(PI / 2.0) - max_pitch).abs() < 1e-6);
+        // And straight down.
+        assert!((clamp_pitch(-PI / 2.0) + max_pitch).abs() < 1e-6);
+        // A gentle pitch is untouched.
+        assert!((clamp_pitch(0.3) - 0.3).abs() < 1e-6);
+    }
+}

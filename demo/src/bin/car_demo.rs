@@ -738,7 +738,6 @@ fn main() {
             // Bu sahnede sıvı/parçacık/GPU fizik yok — kapat.
             renderer.gpu_fluid = None;
             renderer.gpu_particles = None;
-            renderer.gpu_physics = None;
 
             // Ağır post-processing pass'lerini kapat.
             renderer.ssr = None;
