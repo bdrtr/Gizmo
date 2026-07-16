@@ -6,7 +6,7 @@
 //!     yok, yanal sürüklenme yok, tünelleme/iç-içe-geçme yok, NaN yok.
 //!   * GOLDEN — bilinen bir senaryonun (zeminde dengelenen kutu) yerleşme değerleri
 //!     referans aralıkta kalmalı. Toleranslar platformlar-arası f32 sapmasını
-//!     soğurur (cross-platform bit-exact GARANTİ EDİLMEZ — bkz. docs/determinism.md),
+//!     soğurur (cross-platform bit-exact GARANTİ EDİLMEZ — bkz. docs/ENGINE.md §5),
 //!     ama davranış-bozucu bir regresyonu yakalar.
 
 use gizmo_physics_core::BodyHandle;
@@ -301,7 +301,7 @@ fn soak_tall_stack_n16_stays_upright() {
 // ratio) still buckle eventually — the iterative solve leaves a weak creep and NO iteration/
 // reg/damping tuning robustly fixes N32 (chaotic across builds); a whole-chain DIRECT solve
 // is needed (soak_extreme_tower_n32_stays_bounded, #[ignore]d). See
-// docs/solver-stack-instability-FIXPLAN.md for the full investigation + 10-agent synthesis.
+// docs/ENGINE.md §7 for the shipped fix + rationale.
 //
 // GATE that DID hold: resting penetration sits > slop for tall stacks (N16 0.0074,
 // N32 0.0092 vs slop 0.005) — kept below as a mechanism cross-check.

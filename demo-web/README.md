@@ -46,7 +46,7 @@ deferred shading, screen-space effects and GPU compute subsystems are disabled
 on wasm and the forward shaders are rewritten at load
 (`gizmo_renderer::pipeline`'s `load_shader_web`). Audio, networking (UDP) and
 Lua scripting are native-only for now; the corresponding features are simply
-not enabled by this crate. See `RELEASING.md` §4g for the full status.
+not enabled by this crate. See `docs/ENGINE.md` for the full status.
 
 `test.html` is a headless verification harness (boots the engine, counts 90
 frames, samples canvas pixels, reports to the serving process); `index.html`

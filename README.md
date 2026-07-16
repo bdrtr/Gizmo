@@ -23,7 +23,7 @@ Gizmo Engine is a high-performance, data-driven, and fully modular game developm
   - GJK/EPA Narrow-Phase for accurate collision detection (Convex Hulls, Capsules, Polygons).
   - FEM (Finite Element Method) Soft-Body Physics for hyper-realistic deformation and stress-tensor calculations.
   - Sequential Impulse Solvers with advanced Coulomb Friction and Moment of Inertia.
-- **WGPU-Based Rendering:** A robust graphics pipeline targeting Vulkan, Metal, DX12 — **and WebGPU in the browser**. Features Instanced Rendering, GLTF PBR Materials, Dynamic Shadows (CSM), SSAO, Bloom, and Deferred Shading. The engine runs on `wasm32-unknown-unknown` with a reduced web pipeline (forward-only, 4 bind groups, no shadows); try it with the [`demo-web/`](demo-web/) crate. Audio, networking and Lua scripting are still native-only — see [`RELEASING.md`](RELEASING.md) §4g.
+- **WGPU-Based Rendering:** A robust graphics pipeline targeting Vulkan, Metal, DX12 — **and WebGPU in the browser**. Features Instanced Rendering, GLTF PBR Materials, Dynamic Shadows (CSM), SSAO, Bloom, and Deferred Shading. The engine runs on `wasm32-unknown-unknown` with a reduced web pipeline (forward-only, 4 bind groups, no shadows); try it with the [`demo-web/`](demo-web/) crate. Audio, networking and Lua scripting are still native-only — see [`docs/ENGINE.md`](docs/ENGINE.md).
 - **In-Game Editor:** Built-in `egui` tooling with a dynamic scene hierarchy, real-time inspector, and modular prefab architecture.
 - **Spatial Audio:** RAM-cached, 3D spatial audio engine with distance attenuation and Doppler effect support.
 
@@ -109,7 +109,7 @@ cargo run --release -p demo --bin fluid_rigid
 > **Upgrading?** `0.8.0` is a large feature release; the whole workspace ships
 > at one uniform `0.x` version and no API is promised stable yet. See the
 > [`CHANGELOG`](CHANGELOG.md) (and, if coming from `0.1.x`, the
-> [migration guide](docs/migration-0.1-to-0.2.md)).
+> [migration guide](docs/ENGINE.md) (§6)).
 
 ## 📄 License
 

@@ -4,7 +4,7 @@
 #
 # VERSIONS: the workspace currently ships at one uniform `0.x` version (0.2.0).
 # A later release will adopt the STAGED model (Stage A core on `1.x`, Stage B
-# graphics/integration on `0.y`; see RELEASING.md), at which point crates will no
+# graphics/integration on `0.y`; see docs/ENGINE.md §4), at which point crates will no
 # longer share a version. This script is already staged-ready: it reads each
 # crate's own version from its Cargo.toml instead of assuming a uniform version,
 # and the [A]/[B] tags below mark the eventual stage split.
@@ -24,7 +24,7 @@ SLEEP_TIME=15
 DRY_RUN="${DRY_RUN:-0}"
 
 # Topological dependency order (foundations first, facade last) — matches
-# RELEASING.md §5. [A] = Stage A (1.x), [B] = Stage B (0.y).
+# docs/ENGINE.md §4. [A] = Stage A (1.x), [B] = Stage B (0.y).
 crates=(
     "crates/gizmo-math"             # [A] foundation; glam
     "crates/gizmo-core"             # [A] ECS

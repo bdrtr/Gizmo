@@ -33,5 +33,5 @@ pub use snapshot::SceneSnapshot;
 /// RON and [`SceneError`] exposes `ron::error::SpannedError` / `ron::Error` in its public
 /// API. As with `glam` in `gizmo-math`, a `ron` major-version bump is therefore a breaking
 /// change to this crate's public API and is treated as a breaking `gizmo-scene` bump for
-/// semver. (`ron` is currently a `0.x` crate; this is tracked in RELEASING.md §3.)
+/// semver. (`ron` is currently a `0.x` crate; this is tracked in docs/ENGINE.md §4.)
 pub use ron;
