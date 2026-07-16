@@ -279,7 +279,13 @@ impl Default for ConstraintSolver {
             iterations: 20,
             baumgarte: 0.15,
             slop: 0.005,
-            warm_start_factor: 0.85,
+            // Full warm-start (Box2D v3 / Rapier standard). The previous 0.85 discarded 15%
+            // of the accumulated impulse each substep, forcing partial re-convergence whose
+            // soft-constraint bias injected a marginal amount of energy — harmless at small N
+            // but compounding in tall resting stacks (blow-up at N≥24). Full warm-start closes
+            // that injection and makes stacks robustly stable to N≈40 (verified: soak grid
+            // N=16..40 bounded over 3000 frames). See soak_and_golden::grid_candidate_fixes.
+            warm_start_factor: 1.0,
             restitution_velocity_threshold: 1.0,
             max_linear_correction: 0.02,
             split_impulse_enabled: true,
@@ -380,6 +386,24 @@ impl ConstraintSolver {
                     .is_some_and(|&i| rigid_bodies[i].ccd_enabled)
             })
         });
+
+        // Tall, bucklable stacks (support-depth ≥ 5) are the historically unstable case
+        // (resting-stack instability). Only these deep islands reach this branch, so a
+        // trace here — chosen solver path, adaptive sweep count, block/direct flags — is a
+        // low-frequency, high-signal window into the stack solve without touching the
+        // per-contact inner loop.
+        if island_depth >= 5 {
+            tracing::trace!(
+                island_depth,
+                n_iterations,
+                n_manifolds = manifolds.len(),
+                solver = if self.use_tgs_soft && !has_ccd { "tgs-soft" } else { "split-impulse" },
+                block_solver = self.block_solver,
+                direct_chain = self.direct_chain_solve,
+                "solving tall (bucklable) stack island"
+            );
+        }
+
         if self.use_tgs_soft && !has_ccd {
             self.solve_contacts_tgs(
                 manifolds,
