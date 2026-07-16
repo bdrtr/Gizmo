@@ -1,4 +1,28 @@
+//! # SPH Sıvı Simülasyonu — GPU tabanlı PBF akışkan (SSFR render)
+//!
+//! 100.000 SPH parçacığı GPU'da (Position-Based Fluids) simüle edilir ve Screen-Space
+//! Fluid Rendering (SSFR) ile çizilir. Tank sınırları Gizmo debug hatlarıyla gösterilir;
+//! WASD/QE serbest-uçuş kamera, sağ-tık+fare ile bakış, sol tık suya kuvvet enjekte eder.
+//!
+//! Motora/oyuna dürüst bakış:
+//!   * **`PhysicsPlugin` YOK** — burada rijit gövde/collider/eklem yok; tüm hareket GPU compute
+//!     (`gpu_fluid`) içinde. Dolayısıyla `DespawnAfter`/`DespawnBelowY` gibi ömür komponentleri
+//!     UYGULANMAZ: onları işleyecek fizik/ömür zamanlaması bu App'te çalışmıyor.
+//!   * **`spawn_bundle`** — kamera/güneş/parçacık şablonu tek çağrıda kurulur (eski
+//!     `spawn()` + tekrar tekrar `add_component` zincirleri yerine). 100K parçacık
+//!     `clone_entity` ile anında çoğaltılıp GPU indeksleriyle doğrulanır.
+//!   * **`Camera::forward_from`** — ileri/nişan yönü paylaşılan yardımcıdan (elle sin/cos yok).
+//!   * **Özel render pass KORUNDU** — `with_scene_render()` tek-satır kısayoluna ÇEVRİLMEDİ:
+//!     bu demo `gpu_fluid` compute + SSFR + özel `SceneUniforms` + gizmo hatları yazan
+//!     "yalnız-sıvı" bir geçiş ister (deferred boru hattı değil). Gerçek özel iş → doğrudan tutuldu.
+//!
+//! ## Kontroller
+//!   * **Sağ tık + Fare** — bakış · **W A S D / Q E** — hareket · **Shift** — hızlı
+//!   * **Sol tık** — suya kuvvet enjekte et (aktif parçacık sayısını artırır)
+
 use gizmo::prelude::*;
+use gizmo::renderer::components::{FluidHandle, FluidParticle, FluidPhase, FluidPhaseType};
+use std::f32::consts::{FRAC_PI_2, FRAC_PI_3};
 
 struct FluidDemo {
     cam_id: u32,
@@ -20,7 +44,7 @@ impl FluidDemo {
     fn new() -> Self {
         Self {
             cam_id: 0,
-            cam_yaw: -std::f32::consts::FRAC_PI_2,
+            cam_yaw: -FRAC_PI_2,
             cam_pitch: -0.2,
             cam_pos: Vec3::new(0.0, 4.0, 10.0),
             cam_speed: 5.0,
@@ -45,62 +69,37 @@ fn main() {
 
             let mut state = FluidDemo::new();
 
-            // Kamera
-            let cam = world.spawn();
-            world.add_component(
-                cam,
-                Transform::new(state.cam_pos)
-                    .with_rotation(pitch_yaw_quat(state.cam_pitch, state.cam_yaw)),
-            );
-            world.add_component(
-                cam,
-                Camera::new(
-                    std::f32::consts::FRAC_PI_3,
-                    0.1,
-                    500.0,
-                    state.cam_yaw,
-                    state.cam_pitch,
-                    true,
-                ),
-            );
-            world.add_component(cam, EntityName("Kamera".into()));
-            state.cam_id = cam.id();
+            // Kamera — Transform + Camera + isim tek bundle'da
+            state.cam_id = world
+                .spawn_bundle((
+                    Transform::new(state.cam_pos)
+                        .with_rotation(pitch_yaw_quat(state.cam_pitch, state.cam_yaw)),
+                    Camera::new(FRAC_PI_3, 0.1, 500.0, state.cam_yaw, state.cam_pitch, true),
+                    EntityName("Kamera".into()),
+                ))
+                .id();
 
             // Güneş ışığı
-            let sun = world.spawn();
-            world.add_component(
-                sun,
+            world.spawn_bundle((
                 Transform::new(Vec3::new(0.0, 10.0, 5.0))
                     .with_rotation(Quat::from_axis_angle(Vec3::X, -0.8)),
-            );
-            world.add_component(
-                sun,
-                DirectionalLight::new(
-                    Vec3::new(1.0, 0.95, 0.9),
-                    3.5,
-                    gizmo::renderer::components::LightRole::Sun,
-                ),
-            );
+                DirectionalLight::new(Vec3::new(1.0, 0.95, 0.9), 3.5, LightRole::Sun),
+            ));
 
-            // Gizmo debug hattı ile cam sınırlarını çiz
+            // Gizmo debug hattı ile tank sınırlarını çiz
             world.insert_resource(gizmo::renderer::Gizmos::default());
 
-            // 100K SPH parçacığını ECS varlığı olarak anında kopyala
-            let template = world.spawn();
-            world.add_component(template, gizmo::renderer::components::FluidParticle);
-            world.add_component(
-                template,
-                gizmo::renderer::components::FluidPhase {
-                    phase: gizmo::renderer::components::FluidPhaseType::Water,
+            // 100K SPH parçacığını ECS varlığı olarak anında kopyala — önce şablon, sonra clone.
+            let template = world.spawn_bundle((
+                FluidParticle,
+                FluidPhase {
+                    phase: FluidPhaseType::Water,
                 },
-            );
-            world.add_component(
-                template,
-                gizmo::renderer::components::FluidHandle { gpu_index: 0 },
-            );
+                FluidHandle { gpu_index: 0 },
+            ));
 
             if let Some(clones) = world.clone_entity(template.id(), 100_000 - 1) {
-                let mut handles = world.borrow_mut::<gizmo::renderer::components::FluidHandle>();
+                let mut handles = world.borrow_mut::<FluidHandle>();
                 for (i, clone_ent) in clones.into_iter().enumerate() {
                     if let Some(mut h) = handles.get_mut(clone_ent.id()) {
                         h.gpu_index = (i + 1) as u32;
@@ -166,7 +165,7 @@ fn main() {
                 cam_move = cam_move.normalize() * speed * dt;
             }
 
-            // Fare ile kamera döndürme
+            // Fare ile kamera döndürme (yalnız sağ-tık basılıyken)
             let mouse_delta = input.mouse_delta();
             if input.is_mouse_button_pressed(1) {
                 state.cam_yaw -= mouse_delta.0 * 0.002;
@@ -175,14 +174,11 @@ fn main() {
             }
 
             if let Some(mut tr) = world.borrow_mut::<Transform>().get_mut(state.cam_id) {
-                let rot = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
-                tr.rotation = rot;
+                tr.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
 
-                let fx = state.cam_yaw.cos() * state.cam_pitch.cos();
-                let fy = state.cam_pitch.sin();
-                let fz = state.cam_yaw.sin() * state.cam_pitch.cos();
-                let forward = Vec3::new(fx, fy, fz).normalize();
-                let right = forward.cross(Vec3::new(0.0, 1.0, 0.0)).normalize();
+                // İleri yön paylaşılan kamera yardımcısından; sağ/yukarı ondan türetilir.
+                let forward = Camera::forward_from(state.cam_yaw, state.cam_pitch);
+                let right = forward.cross(Vec3::Y).normalize();
                 let up = right.cross(forward).normalize();
 
                 let movement = right * cam_move.x + up * cam_move.y - forward * cam_move.z;
@@ -190,14 +186,13 @@ fn main() {
                 state.cam_pos = tr.position;
 
                 // Fare etkileşimi: Kameranın 3 metre önündeki bir nokta
-                state.mouse_active = input.is_mouse_button_pressed(0); // Left Click
+                state.mouse_active = input.is_mouse_button_pressed(0); // Sol tık
+                state.mouse_dir = forward;
 
                 // Su ekleme efekti: Tıklandığında aktif su miktarını artır
                 if state.mouse_active {
                     state.active_particles = (state.active_particles + 150).min(100_000);
                 }
-
-                state.mouse_dir = forward;
 
                 // Suyun tankın dışına (duvarlara) spawn olup yapışmasını engellemek için sınırla
                 let mut m_pos = state.cam_pos + forward * 3.0;

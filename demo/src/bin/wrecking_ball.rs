@@ -1,20 +1,39 @@
-//! Yıkım topu — ip'e (Joint::rope) asılı AĞIR bir top (CCD açık) geri çekili başlar,
-//! bırakılınca salınıp bir kutu duvarını dağıtır. Bu turdaki eklem işini eğlenceli
-//! biçimde birleştirir: rope eklemi + CCD (with_ccd) + rijit çarpışma + istif.
+//! # Yıkım Topu — rope eklemi + CCD + rijit istif (temiz sürüm)
+//!
+//! İp'e (`Joint::rope`) asılı AĞIR bir top (CCD açık) 70° geri çekili başlar; bırakılınca
+//! salınıp bir kutu duvarını dağıtır. Bu tur eklem işini eğlenceli biçimde birleştirir:
+//! rope eklemi + CCD (`with_ccd`) + rijit çarpışma + istif.
+//!
+//! Bu sürüm motorun yüksek-seviye olanaklarını kullanır; neyin motora neyin oyuna ait
+//! olduğu konusunda dürüst olalım:
+//!   * **`Prefab` + `auto_box_collider`** — KUTU DUVARI tek blueprint'ten; her tuğlanın box
+//!     collider'ı spawn anında `Transform.scale`'den OTOMATİK türetilir (boyutu iki kez
+//!     yazma yok). Renk per-örnek `with_pbr` ile. Top Prefab DEĞİL: küre collider'ı +
+//!     kendine özel CCD/rope bağı olduğundan doğrudan `spawn_bundle`.
+//!   * **`is_key_just_pressed`** — R kenar-tespiti motordan (elle `prev_r` bool takibi gitti).
+//!   * **Yerinde reset (`despawn_all_with` DEĞİL)** — top + tuğlalar ilk transform/hız'a
+//!     döndürülür ama SİLİNMEZ: rope eklemi topun entity-id'sine bağlı; despawn/respawn
+//!     eklemi koparırdı. Bu yüzden bilinçli olarak gövdeleri yerinde sıfırlıyoruz (`resets`
+//!     = ev pozları) — sahne-reset idiomunun eklem-güvenli varyantı.
+//!   * **Sahne render = `default_render_pass` DOĞRUDAN** — motorun `with_scene_render()`
+//!     tek-satır kısayolu VAR ama SSR/SSGI/volumetric/TAA'yı da kapatırdı; metalik topun
+//!     yansımaları için bu efektleri AÇIK tutuyoruz. `gpu_physics` zaten motor-varsayılanı
+//!     `None` (opt-in) olduğundan render'da state-mutasyonu GEREKMEZ.
 //!
 //! **R** = yeniden başlat (top + tüm kutular ilk pozlarına döner).
 
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_3};
 
-use gizmo::bundles::RigidBodyBundle;
-use gizmo::physics::components::Collider;
 use gizmo::physics::joints::Joint;
 use gizmo::physics::world::PhysicsWorld;
 use gizmo::physics::BodyHandle;
 use gizmo::prelude::*;
-use gizmo::renderer::asset::AssetManager;
-use gizmo::renderer::components::{Camera, DirectionalLight, LightRole, Material, MeshRenderer};
 
+const BALL_R: f32 = 0.7;
+const ROPE_LEN: f32 = 5.0;
+const HALF: f32 = 0.25; // duvar tuğlası yarı-boyu
+
+/// R'ye basınca gövdenin döndürüleceği "ev" pozu (id-anahtarlı yerinde reset).
 struct BodyReset {
     id: u32,
     transform: Transform,
@@ -25,11 +44,7 @@ struct Wrecking {
     ball: u32,
     pivot: Vec3,
     resets: Vec<BodyReset>,
-    prev_r: bool,
 }
-
-const BALL_R: f32 = 0.7;
-const ROPE_LEN: f32 = 5.0;
 
 fn setup(world: &mut World, renderer: &Renderer) -> Wrecking {
     let mut assets = AssetManager::new();
@@ -41,7 +56,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> Wrecking {
     let cube = AssetManager::create_cube(&renderer.device);
     let sphere = AssetManager::create_sphere(&renderer.device, BALL_R, 28, 28);
 
-    // Işık + kamera + zemin
+    // Güneş + kamera + zemin
     world.spawn_bundle((
         Transform::new(Vec3::new(12.0, 40.0, 18.0)).with_rotation(Quat::from_rotation_x(-0.9)),
         DirectionalLight::new(Vec3::new(1.0, 0.97, 0.9), 3.2, LightRole::Sun),
@@ -55,34 +70,43 @@ fn setup(world: &mut World, renderer: &Renderer) -> Wrecking {
         cube.clone(),
         Material::new(tex.clone()).with_pbr(Vec4::new(0.28, 0.30, 0.34, 1.0), 0.9, 0.05),
         MeshRenderer::new(),
-        RigidBodyBundle::static_body().with_collider(Collider::box_collider(Vec3::new(30.0, 0.5, 30.0))),
+        RigidBodyBundle::static_body()
+            .with_collider(Collider::box_collider(Vec3::new(30.0, 0.5, 30.0))),
     ));
 
+    // Yerçekimi + rope eklemini tutacak fizik dünyası (gövdeler ECS'ten senklenir, eklem burada).
     let mut phys = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
     let mut resets: Vec<BodyReset> = Vec::new();
 
-    // Askı direği (görsel) + tepe kirişi
+    // Askı direği (görsel) + tepe kirişi — fiziksiz süs.
     let pivot = Vec3::new(0.0, 7.0, 0.0);
+    let frame_mat = Material::new(tex.clone()).with_pbr(Vec4::new(0.35, 0.35, 0.4, 1.0), 0.5, 0.6);
     world.spawn_bundle((
         Transform::new(Vec3::new(-3.2, 3.5, 0.0)).with_scale(Vec3::new(0.12, 3.5, 0.12)),
         cube.clone(),
-        Material::new(tex.clone()).with_pbr(Vec4::new(0.35, 0.35, 0.4, 1.0), 0.5, 0.6),
+        frame_mat.clone(),
         MeshRenderer::new(),
     ));
     world.spawn_bundle((
         Transform::new(Vec3::new(-1.6, 7.0, 0.0)).with_scale(Vec3::new(1.7, 0.12, 0.12)),
         cube.clone(),
-        Material::new(tex.clone()).with_pbr(Vec4::new(0.35, 0.35, 0.4, 1.0), 0.5, 0.6),
+        frame_mat,
         MeshRenderer::new(),
     ));
 
-    // Çapa (statik gövde, ipin bağlandığı nokta)
-    let anchor = spawn_static_anchor(world, &cube, pivot);
+    // Çapa (statik gövde, ipin bağlandığı görünmez nokta — Material/MeshRenderer yok).
+    let anchor = world
+        .spawn_bundle((
+            Transform::new(pivot).with_scale(Vec3::splat(0.06)),
+            cube.clone(),
+            RigidBodyBundle::static_body().with_collider(Collider::box_collider(Vec3::splat(0.06))),
+        ))
+        .id();
 
-    // AĞIR TOP — 70° geri çekili; CCD açık (hızlı+ağır, kutuları delmesin).
+    // AĞIR TOP — 70° geri çekili; CCD açık (hızlı+ağır, kutuları delmesin). Küre collider'ı +
+    // kendine özel bağ → Prefab DEĞİL, doğrudan spawn_bundle.
     let a = 70.0_f32.to_radians();
-    let ball_pos = pivot + ROPE_LEN * Vec3::new(-a.sin(), -a.cos(), 0.0);
-    let ball_t = Transform::new(ball_pos);
+    let ball_t = Transform::new(pivot + ROPE_LEN * Vec3::new(-a.sin(), -a.cos(), 0.0));
     let ball = world
         .spawn_bundle((
             ball_t,
@@ -94,7 +118,10 @@ fn setup(world: &mut World, renderer: &Renderer) -> Wrecking {
                 .with_ccd(),
         ))
         .id();
-    resets.push(BodyReset { id: ball, transform: ball_t });
+    resets.push(BodyReset {
+        id: ball,
+        transform: ball_t,
+    });
     phys.joints.push(Joint::rope(
         BodyHandle::from_id(anchor),
         BodyHandle::from_id(ball),
@@ -103,7 +130,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> Wrecking {
         ROPE_LEN,
     ));
 
-    // İp görseli
+    // İp görseli (her kare pivot↔top yüzeyine gerilir — update'te).
     let rope_vis = world
         .spawn_bundle((
             Transform::new(pivot),
@@ -113,8 +140,10 @@ fn setup(world: &mut World, renderer: &Renderer) -> Wrecking {
         ))
         .id();
 
-    // KUTU DUVARI (topun salınım düzleminde, sağda)
-    let half = 0.25_f32;
+    // KUTU DUVARI (topun salınım düzleminde) — tek Prefab blueprint, collider Transform.scale'den.
+    let brick = Prefab::new(cube.clone(), Material::new(tex.clone()))
+        .with_body(RigidBodyBundle::dynamic(1.0))
+        .auto_box_collider();
     let cols = [1.9_f32, 2.42, 2.94];
     let colors = [
         Vec4::new(0.85, 0.35, 0.25, 1.0),
@@ -123,40 +152,31 @@ fn setup(world: &mut World, renderer: &Renderer) -> Wrecking {
     ];
     for (ci, &cx) in cols.iter().enumerate() {
         for row in 0..7 {
-            let y = half + row as f32 * (2.0 * half);
-            let t = Transform::new(Vec3::new(cx, y, 0.0)).with_scale(Vec3::splat(half));
+            let y = HALF + row as f32 * (2.0 * HALF);
+            let t = Transform::new(Vec3::new(cx, y, 0.0)).with_scale(Vec3::splat(HALF));
             let color = colors[(ci + row) % colors.len()];
-            let b = world
-                .spawn_bundle((
-                    t,
-                    cube.clone(),
-                    Material::new(tex.clone()).with_pbr(color, 0.6, 0.3),
-                    MeshRenderer::new(),
-                    RigidBodyBundle::dynamic(1.0).with_collider(Collider::box_collider(Vec3::splat(half))),
-                ))
-                .id();
-            resets.push(BodyReset { id: b, transform: t });
+            let e = brick.clone().with_pbr(color, 0.6, 0.3).spawn(world, t);
+            resets.push(BodyReset {
+                id: e.id(),
+                transform: t,
+            });
         }
     }
 
     world.insert_resource(phys);
-    Wrecking { rope_vis, ball, pivot, resets, prev_r: false }
+    Wrecking {
+        rope_vis,
+        ball,
+        pivot,
+        resets,
+    }
 }
 
-fn spawn_static_anchor(world: &mut World, cube: &gizmo::renderer::components::Mesh, pos: Vec3) -> u32 {
-    world
-        .spawn_bundle((
-            Transform::new(pos).with_scale(Vec3::splat(0.06)),
-            cube.clone(),
-            RigidBodyBundle::static_body().with_collider(Collider::box_collider(Vec3::splat(0.06))),
-        ))
-        .id()
-}
-
-fn update(world: &mut World, state: &mut Wrecking, _dt: f32, input: &gizmo::core::input::Input) {
-    // R = yeniden başlat (kenar-algılamalı)
-    let r = input.is_key_pressed(KeyCode::KeyR as u32);
-    if r && !state.prev_r {
+fn update(world: &mut World, state: &mut Wrecking, _dt: f32, input: &Input) {
+    // R = yeniden başlat — kenar-tespiti motorun is_key_just_pressed API'sinden (elle prev_r yok).
+    if input.is_key_just_pressed(KeyCode::KeyR as u32) {
+        // Gövdeleri yerinde sıfırla: transform → ev pozu, hız → 0, uyuyanları uyandır.
+        // Rope eklemi ball entity-id'sine bağlı olduğundan despawn/respawn YOK.
         {
             let mut ts = world.borrow_mut::<Transform>();
             for b in &state.resets {
@@ -174,7 +194,7 @@ fn update(world: &mut World, state: &mut Wrecking, _dt: f32, input: &gizmo::core
             }
         }
         {
-            let mut rbs = world.borrow_mut::<gizmo::physics::components::RigidBody>();
+            let mut rbs = world.borrow_mut::<RigidBody>();
             for b in &state.resets {
                 if let Some(mut rb) = rbs.get_mut(b.id) {
                     rb.wake_up();
@@ -182,10 +202,12 @@ fn update(world: &mut World, state: &mut Wrecking, _dt: f32, input: &gizmo::core
             }
         }
     }
-    state.prev_r = r;
 
-    // İp görselini pivot↔top yüzeyi arasına ger.
-    let ball_pos = world.borrow::<Transform>().get(state.ball).map(|t| t.position);
+    // İp görselini pivot↔top yüzeyi arasına ger (gerçek özel iş — her kare).
+    let ball_pos = world
+        .borrow::<Transform>()
+        .get(state.ball)
+        .map(|t| t.position);
     if let Some(bp) = ball_pos {
         let seg = state.pivot - bp;
         let len = (seg.length() - BALL_R).max(0.0);
@@ -214,7 +236,7 @@ fn render(
 
 fn main() {
     App::<Wrecking>::new("Gizmo — Yıkım Topu (R = yeniden başlat)", 1280, 720)
-        .add_plugin(gizmo::plugins::PhysicsPlugin::new())
+        .add_plugin(PhysicsPlugin::new())
         .set_setup(setup)
         .set_update(update)
         .set_render(render)

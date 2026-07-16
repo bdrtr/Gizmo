@@ -1,10 +1,10 @@
-use gizmo::prelude::*;
-use gizmo::math::{Vec3, Vec4, Quat};
-use gizmo::renderer::asset::AssetManager;
-use gizmo::renderer::components::{Material, MeshRenderer, PointLight, DirectionalLight};
-use gizmo::core::system::{Res, ResMut, IntoSystemConfig, Phase};
-use gizmo::core::query::{Query, Mut};
 use gizmo::core::input::Input;
+use gizmo::core::query::{Mut, Query};
+use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
+use gizmo::math::{Quat, Vec3, Vec4};
+use gizmo::prelude::*;
+use gizmo::renderer::asset::AssetManager;
+use gizmo::renderer::components::{DirectionalLight, Material, MeshRenderer, PointLight};
 use gizmo::systems;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -18,7 +18,7 @@ pub struct DemoState {
     pub camera_state: CameraState,
     pub editor_state: EditorState,
     pub orbit_time: f32, // Accumulated time specifically for camera orbiting angle
-    pub dir_light_ent: Option<Entity>,   // Safe typed entity handles to prevent dangling references
+    pub dir_light_ent: Option<Entity>, // Safe typed entity handles to prevent dangling references
     pub point_light_ent: Option<Entity>,
     pub ssr_enabled: bool,
     pub ssgi_enabled: bool,
@@ -32,10 +32,17 @@ fn main() {
     app = app
         .add_plugin(gizmo::plugins::TransformPlugin)
         .set_setup(|world, renderer| {
-            world.register_component_type::<BarnLampModel>();
-
             let mut asset_manager = AssetManager::new();
+            // Yer-çekimsiz fizik dünyası: render pass kameranın bir su hacminde olup
+            // olmadığına buradan bakar (bu sahnede su yok → etkisiz, ama kaynak beklenir).
             let phys_world = gizmo::physics::world::PhysicsWorld::new().with_gravity(Vec3::ZERO);
+
+            // Tüm nesneler aynı beyaz dokuyu paylaşır — bir kez üret, klonla.
+            let white = asset_manager.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
 
             let camera_settings = CameraSettings {
                 speed: 15.0,
@@ -55,131 +62,86 @@ fn main() {
                 direct_intensity: 2.5,
             };
 
-            // Custom skybox
-            let skybox_mesh = AssetManager::create_inverted_cube(&renderer.device);
-            let sky_tex = asset_manager.create_white_texture(
-                &renderer.device,
-                &renderer.queue,
-                &renderer.scene.texture_bind_group_layout,
-            );
-            // Deep sleek dark blue/gray skybox matching the premium Bevy scene style
-            let sky_mat = Material::new(sky_tex).with_skybox().with_unlit(Vec4::new(0.04, 0.04, 0.06, 1.0));
-            let sky_ent = world.spawn();
-            let mut sky_t = Transform::new(Vec3::ZERO).with_scale(Vec3::splat(1000.0));
-            sky_t.update_local_matrix();
-            world.add_component(sky_ent, sky_t);
-            world.add_component(sky_ent, gizmo::physics::components::GlobalTransform { matrix: sky_t.local_matrix });
-            world.add_component(sky_ent, skybox_mesh);
-            world.add_component(sky_ent, sky_mat);
-            world.add_component(sky_ent, MeshRenderer::new());
+            // Skybox: ters küp + koyu mavi/gri unlit. GlobalTransform'u render pass geri-doldurur
+            // (elle spawn()+add_component+update_local_matrix gerekmez).
+            let sky_mat = Material::new(white.clone())
+                .with_skybox()
+                .with_unlit(Vec4::new(0.04, 0.04, 0.06, 1.0));
+            world.spawn_bundle((
+                Transform::new(Vec3::ZERO).with_scale(Vec3::splat(1000.0)),
+                AssetManager::create_inverted_cube(&renderer.device),
+                sky_mat,
+                MeshRenderer::new(),
+            ));
 
-            // Dark premium ground plane
-            let ground_mesh = AssetManager::create_plane(&renderer.device, 50.0);
-            let ground_tex = asset_manager.create_white_texture(
-                &renderer.device,
-                &renderer.queue,
-                &renderer.scene.texture_bind_group_layout,
-            );
-            let ground_mat = Material::new(ground_tex).with_pbr(Vec4::new(0.04, 0.04, 0.06, 1.0), 0.05, 0.95);
-            let ground_ent = world.spawn();
-            let mut ground_t = Transform::new(Vec3::new(0.0, -0.05, 0.0));
-            ground_t.update_local_matrix();
-            world.add_component(ground_ent, ground_t);
-            world.add_component(ground_ent, gizmo::physics::components::GlobalTransform { matrix: ground_t.local_matrix });
-            world.add_component(ground_ent, ground_mesh);
-            world.add_component(ground_ent, ground_mat);
-            world.add_component(ground_ent, MeshRenderer::new());
+            // Koyu, premium zemin düzlemi
+            let ground_mat =
+                Material::new(white.clone()).with_pbr(Vec4::new(0.04, 0.04, 0.06, 1.0), 0.05, 0.95);
+            world.spawn_bundle((
+                Transform::new(Vec3::new(0.0, -0.05, 0.0)),
+                AssetManager::create_plane(&renderer.device, 50.0),
+                ground_mat,
+                MeshRenderer::new(),
+            ));
 
-            // Camera setup
-            let camera_ent = world.spawn();
-            let cam_bundle = gizmo::bundles::CameraBundle {
+            // Kamera — bundle DOĞRUDAN spawn'lanır (elle spawn()+apply() yok)
+            world.spawn_bundle(gizmo::bundles::CameraBundle {
                 position: camera_settings.pos,
                 yaw: camera_settings.yaw,
                 pitch: camera_settings.pitch,
                 ..Default::default()
-            };
-            cam_bundle.apply(world, camera_ent);
+            });
 
-            // Spawn Directional Light (Sun)
-            let dir_light_ent = world.spawn();
-            let sun_bundle = gizmo::bundles::DirectionalLightBundle {
-                rotation: Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4) * Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
+            // Yönlü ışık (Güneş) — animate_lights için entity handle'ı saklanır
+            let dir_light_ent = world.spawn_bundle(gizmo::bundles::DirectionalLightBundle {
+                rotation: Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4)
+                    * Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
                 intensity: lighting_settings.direct_intensity,
-                color: Vec3::new(1.0, 0.95, 0.9), // Warm sunshine
+                color: Vec3::new(1.0, 0.95, 0.9), // sıcak gün ışığı
                 ..Default::default()
-            };
-            sun_bundle.apply(world, dir_light_ent);
+            });
 
-            // Point Light Setup
-            let point_light_ent = world.spawn();
-            let point_bundle = gizmo::bundles::PointLightBundle {
+            // Nokta ışık (lambanın ampulü) — sabit konum, handle saklanır
+            let point_light_ent = world.spawn_bundle(gizmo::bundles::PointLightBundle {
                 position: Vec3::new(0.25, 0.15, -0.13),
-                intensity: 25.0, // High local intensity
-                radius: 1.0,     // 1.0 meter local radius so it behaves like a localized bulb
-                color: Vec3::new(1.0, 0.9, 0.7), // Glowing warm classic bulb light
-            };
-            point_bundle.apply(world, point_light_ent);
+                intensity: 25.0,                 // yüksek yerel şiddet
+                radius: 1.0,                     // 1 m yarıçap → yerelleşmiş ampul gibi davranır
+                color: Vec3::new(1.0, 0.9, 0.7), // sıcak klasik ampul ışığı
+            });
 
-            // Spawn a reflective, fanned anisotropic Copper Torus on the left side of the lamp
-            let torus_mesh = AssetManager::create_torus(&renderer.device, 0.22, 0.07, 32, 32);
-            let torus_tex = asset_manager.create_white_texture(
-                &renderer.device,
-                &renderer.queue,
-                &renderer.scene.texture_bind_group_layout,
-            );
-            // Anisotropic copper covered with a high-gloss lacquer clear coat!
-            let torus_mat = Material::new(torus_tex)
+            // Sol tarafta yansıtıcı, anizotropik bakır Torus (yüksek-parlak lake clear-coat)
+            let torus_mat = Material::new(white.clone())
                 .with_pbr(Vec4::new(0.95, 0.64, 0.54, 1.0), 0.25, 1.0)
                 .with_anisotropy(0.85)
                 .with_clear_coat(0.9);
-            let torus_ent = world.spawn();
-            let mut torus_t = Transform::new(Vec3::new(-0.45, 0.18, -0.15));
-            torus_t.update_local_matrix();
-            world.add_component(torus_ent, torus_t);
-            world.add_component(torus_ent, gizmo::physics::components::GlobalTransform { matrix: torus_t.local_matrix });
-            world.add_component(torus_ent, torus_mesh);
-            world.add_component(torus_ent, torus_mat);
-            world.add_component(torus_ent, MeshRenderer::new());
- 
-            // Spawn a sleek, ultra-smooth reflective Gold Sphere on the right side of the lamp
-            let sphere_mesh = AssetManager::create_sphere(&renderer.device, 0.18, 32, 32);
-            let sphere_tex = asset_manager.create_white_texture(
-                &renderer.device,
-                &renderer.queue,
-                &renderer.scene.texture_bind_group_layout,
-            );
-            // Premium double-layer cila gold sphere (satin-brushed gold base + smooth glossy coat!)
-            let sphere_mat = Material::new(sphere_tex)
+            world.spawn_bundle((
+                Transform::new(Vec3::new(-0.45, 0.18, -0.15)),
+                AssetManager::create_torus(&renderer.device, 0.22, 0.07, 32, 32),
+                torus_mat,
+                MeshRenderer::new(),
+            ));
+
+            // Sağ tarafta pürüzsüz, yansıtıcı Altın Küre (saten-fırçalı altın taban + parlak clear-coat)
+            let sphere_mat = Material::new(white.clone())
                 .with_pbr(Vec4::new(1.0, 0.78, 0.28, 1.0), 0.35, 1.0)
                 .with_clear_coat(1.0);
-            let sphere_ent = world.spawn();
-            let mut sphere_t = Transform::new(Vec3::new(0.95, 0.18, -0.15));
-            sphere_t.update_local_matrix();
-            world.add_component(sphere_ent, sphere_t);
-            world.add_component(sphere_ent, gizmo::physics::components::GlobalTransform { matrix: sphere_t.local_matrix });
-            world.add_component(sphere_ent, sphere_mesh);
-            world.add_component(sphere_ent, sphere_mat);
-            world.add_component(sphere_ent, MeshRenderer::new());
+            world.spawn_bundle((
+                Transform::new(Vec3::new(0.95, 0.18, -0.15)),
+                AssetManager::create_sphere(&renderer.device, 0.18, 32, 32),
+                sphere_mat,
+                MeshRenderer::new(),
+            ));
 
-            // Spawn a semi-translucent, warm wax/jade sphere in the front-center
-            let center_sphere_mesh = AssetManager::create_sphere(&renderer.device, 0.14, 32, 32);
-            let center_sphere_tex = asset_manager.create_white_texture(
-                &renderer.device,
-                &renderer.queue,
-                &renderer.scene.texture_bind_group_layout,
-            );
-            // Jade/Wax material (white-peach albedo, high roughness, zero metallic, 0.8 subsurface glow!)
-            let center_sphere_mat = Material::new(center_sphere_tex)
+            // Ön-merkezde yarı-saydam, sıcak balmumu/yeşim küre (subsurface parıltı)
+            let center_sphere_mat = Material::new(white.clone())
                 .with_pbr(Vec4::new(0.98, 0.88, 0.82, 1.0), 0.55, 0.0)
                 .with_subsurface(0.85);
-            let center_sphere_ent = world.spawn();
-            let mut center_sphere_t = Transform::new(Vec3::new(0.25, 0.18, 0.25));
-            center_sphere_t.update_local_matrix();
-            world.add_component(center_sphere_ent, center_sphere_t);
-            world.add_component(center_sphere_ent, gizmo::physics::components::GlobalTransform { matrix: center_sphere_t.local_matrix });
-            world.add_component(center_sphere_ent, center_sphere_mesh);
-            world.add_component(center_sphere_ent, center_sphere_mat);
-            world.add_component(center_sphere_ent, MeshRenderer::new());
+            world.spawn_bundle((
+                Transform::new(Vec3::new(0.25, 0.18, 0.25)),
+                AssetManager::create_sphere(&renderer.device, 0.14, 32, 32),
+                center_sphere_mat,
+                MeshRenderer::new(),
+            ));
 
             // Load and spawn the Barn Lamp model at the center (shifted to the right on X axis, and slightly up on Y axis)
             {
@@ -191,22 +153,18 @@ fn main() {
                 );
             }
 
+            // GLTF materyalleri dahil TÜM materyallere albedo/metallic sezgisiyle anizotropi
+            // ata: torus = fırçalı bakır, altın küre = izotropik, lambanın metal parçaları =
+            // fırçalı, gerisi izotropik.
             {
                 let mut materials = world.borrow_mut::<Material>();
-                for (id, mut mat) in materials.iter_mut() {
-                    println!("DEBUG MAT: id={:?}, albedo={:?}, metallic={}, roughness={}, transparent={}, double_sided={}, type={:?}", 
-                        id, mat.albedo, mat.metallic, mat.roughness, mat.is_transparent, mat.is_double_sided, mat.material_type);
-                    
+                for (_id, mut mat) in materials.iter_mut() {
                     if mat.albedo.x > 0.9 && mat.albedo.y < 0.7 {
-                        // This is the Torus (anisotropic copper)
-                        mat.anisotropy = 0.9;
+                        mat.anisotropy = 0.9; // Torus (anizotropik bakır)
                     } else if mat.albedo.x > 0.9 && mat.albedo.y > 0.7 && mat.albedo.y < 0.85 {
-                        // This is the Gold Sphere (isotropic gold)
-                        mat.anisotropy = 0.0;
+                        mat.anisotropy = 0.0; // Altın Küre (izotropik altın)
                     } else if mat.metallic > 0.5 {
-                        // This is a metallic part of the Barn Lamp GLTF model!
-                        // Let's keep its original metallic, and assign a brushed anisotropy factor!
-                        mat.anisotropy = 0.85;
+                        mat.anisotropy = 0.85; // Barn Lamp GLTF'in metal parçaları (fırçalı)
                     } else {
                         mat.anisotropy = 0.0;
                     }
@@ -229,19 +187,40 @@ fn main() {
                 volumetric_enabled: true,
             });
         })
-        .add_system(handle_input.into_config().label("handle_input").in_phase(Phase::Update))
-        .add_system(camera_orbit.into_config().label("camera_orbit").after("handle_input").in_phase(Phase::Update))
-        .add_system(animate_lights.into_config().label("animate_lights").after("camera_orbit").in_phase(Phase::Update))
+        .add_system(
+            handle_input
+                .into_config()
+                .label("handle_input")
+                .in_phase(Phase::Update),
+        )
+        .add_system(
+            camera_orbit
+                .into_config()
+                .label("camera_orbit")
+                .after("handle_input")
+                .in_phase(Phase::Update),
+        )
+        .add_system(
+            animate_lights
+                .into_config()
+                .label("animate_lights")
+                .after("camera_orbit")
+                .in_phase(Phase::Update),
+        )
         .set_render(|world, _state, encoder, view, renderer, _light_time| {
             renderer.gpu_fluid = None;
             renderer.gpu_particles = None;
-            
+
             // Get current DemoState booleans in a separate scope to release the borrow on world
             let (ssr_enabled, ssgi_enabled, volumetric_enabled) = {
                 let demo_state = world.get_resource::<DemoState>().unwrap();
-                (demo_state.ssr_enabled, demo_state.ssgi_enabled, demo_state.volumetric_enabled)
+                (
+                    demo_state.ssr_enabled,
+                    demo_state.ssgi_enabled,
+                    demo_state.volumetric_enabled,
+                )
             };
-            
+
             // Recreate or destroy Screen Space Reflections (SSR) State
             if ssr_enabled {
                 if renderer.ssr.is_none() {
@@ -282,27 +261,30 @@ fn main() {
             if volumetric_enabled {
                 if renderer.volumetric.is_none() {
                     if let Some(ref def) = renderer.deferred {
-                        renderer.volumetric = Some(gizmo::renderer::volumetric::VolumetricState::new(
-                            &renderer.device,
-                            &renderer.scene,
-                            def,
-                            renderer.config.width,
-                            renderer.config.height,
-                        ));
+                        renderer.volumetric =
+                            Some(gizmo::renderer::volumetric::VolumetricState::new(
+                                &renderer.device,
+                                &renderer.scene,
+                                def,
+                                renderer.config.width,
+                                renderer.config.height,
+                            ));
                     }
                 }
             } else {
                 renderer.volumetric = None;
             }
-            
+
             systems::default_render_pass(world, encoder, view, renderer);
         })
         .set_ui(|world, _state, ctx| {
             let mut demo_state = world.get_resource_mut::<DemoState>().unwrap();
             let mut camera_settings = world.get_resource_mut::<CameraSettings>().unwrap();
             let mut lighting_settings = world.get_resource_mut::<LightingSettings>().unwrap();
-            let mut renderer = world.get_resource_mut::<gizmo::renderer::Renderer>().unwrap();
-            
+            let mut renderer = world
+                .get_resource_mut::<gizmo::renderer::Renderer>()
+                .unwrap();
+
             gizmo::egui::Window::new("Gizmo Engine Panel")
                 .default_width(320.0)
                 .show(ctx, |ui| {
@@ -314,14 +296,21 @@ fn main() {
                         ui.label("Camera Orbit:");
                         let mut orbit = demo_state.camera_state == CameraState::Orbiting;
                         if ui.checkbox(&mut orbit, "").changed() {
-                            demo_state.camera_state = if orbit { CameraState::Orbiting } else { CameraState::Manual };
+                            demo_state.camera_state = if orbit {
+                                CameraState::Orbiting
+                            } else {
+                                CameraState::Manual
+                            };
                         }
                     });
 
                     if demo_state.camera_state == CameraState::Manual {
                         ui.horizontal(|ui| {
                             ui.label("Camera Speed:");
-                            ui.add(gizmo::egui::Slider::new(&mut camera_settings.speed, 1.0..=50.0).step_by(1.0));
+                            ui.add(
+                                gizmo::egui::Slider::new(&mut camera_settings.speed, 1.0..=50.0)
+                                    .step_by(1.0),
+                            );
                         });
                     }
 
@@ -341,7 +330,11 @@ fn main() {
                     ui.separator();
                     ui.label("Light Mode:");
                     ui.horizontal(|ui| {
-                        ui.radio_value(&mut demo_state.light_mode, LightMode::Directional, "Directional");
+                        ui.radio_value(
+                            &mut demo_state.light_mode,
+                            LightMode::Directional,
+                            "Directional",
+                        );
                         ui.radio_value(&mut demo_state.light_mode, LightMode::Point, "Point");
                         ui.radio_value(&mut demo_state.light_mode, LightMode::Both, "Both");
                     });
@@ -363,10 +356,22 @@ fn main() {
                             ui.selectable_value(&mut renderer.shading_mode, 0, "💡 Full PBR (Lit)");
                             ui.selectable_value(&mut renderer.shading_mode, 1, "🎨 Normals View");
                             ui.selectable_value(&mut renderer.shading_mode, 2, "⚪ Albedo View");
-                            ui.selectable_value(&mut renderer.shading_mode, 3, "🕸️ Roughness / Metallic");
-                            ui.selectable_value(&mut renderer.shading_mode, 4, "👥 Shadow Map Visualizer");
+                            ui.selectable_value(
+                                &mut renderer.shading_mode,
+                                3,
+                                "🕸️ Roughness / Metallic",
+                            );
+                            ui.selectable_value(
+                                &mut renderer.shading_mode,
+                                4,
+                                "👥 Shadow Map Visualizer",
+                            );
                             ui.selectable_value(&mut renderer.shading_mode, 5, "📐 Tangents View");
-                            ui.selectable_value(&mut renderer.shading_mode, 6, "✨ Clear Coat View");
+                            ui.selectable_value(
+                                &mut renderer.shading_mode,
+                                6,
+                                "✨ Clear Coat View",
+                            );
                         });
 
                     ui.separator();
@@ -384,10 +389,26 @@ fn main() {
                                 _ => "🌇 Sunset Gold",
                             })
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut lighting_settings.preset, 0, "🌇 Sunset Gold");
-                                ui.selectable_value(&mut lighting_settings.preset, 1, "🏢 Studio Neutral");
-                                ui.selectable_value(&mut lighting_settings.preset, 2, "🌃 Midnight Neon");
-                                ui.selectable_value(&mut lighting_settings.preset, 3, "☀️ Classic Daylight");
+                                ui.selectable_value(
+                                    &mut lighting_settings.preset,
+                                    0,
+                                    "🌇 Sunset Gold",
+                                );
+                                ui.selectable_value(
+                                    &mut lighting_settings.preset,
+                                    1,
+                                    "🏢 Studio Neutral",
+                                );
+                                ui.selectable_value(
+                                    &mut lighting_settings.preset,
+                                    2,
+                                    "🌃 Midnight Neon",
+                                );
+                                ui.selectable_value(
+                                    &mut lighting_settings.preset,
+                                    3,
+                                    "☀️ Classic Daylight",
+                                );
                             });
                     });
 
@@ -402,17 +423,36 @@ fn main() {
                                 _ => "🏢 Studio Neutral",
                             })
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut lighting_settings.preset_2, 0, "🌇 Sunset Gold");
-                                ui.selectable_value(&mut lighting_settings.preset_2, 1, "🏢 Studio Neutral");
-                                ui.selectable_value(&mut lighting_settings.preset_2, 2, "🌃 Midnight Neon");
-                                ui.selectable_value(&mut lighting_settings.preset_2, 3, "☀️ Classic Daylight");
+                                ui.selectable_value(
+                                    &mut lighting_settings.preset_2,
+                                    0,
+                                    "🌇 Sunset Gold",
+                                );
+                                ui.selectable_value(
+                                    &mut lighting_settings.preset_2,
+                                    1,
+                                    "🏢 Studio Neutral",
+                                );
+                                ui.selectable_value(
+                                    &mut lighting_settings.preset_2,
+                                    2,
+                                    "🌃 Midnight Neon",
+                                );
+                                ui.selectable_value(
+                                    &mut lighting_settings.preset_2,
+                                    3,
+                                    "☀️ Classic Daylight",
+                                );
                             });
                     });
 
                     if !lighting_settings.auto_cycle {
                         ui.horizontal(|ui| {
                             ui.label("Blend Weight:");
-                            ui.add(gizmo::egui::Slider::new(&mut lighting_settings.blend_t, 0.0..=1.0).step_by(0.01));
+                            ui.add(
+                                gizmo::egui::Slider::new(&mut lighting_settings.blend_t, 0.0..=1.0)
+                                    .step_by(0.01),
+                            );
                         });
                     } else {
                         ui.horizontal(|ui| {
@@ -425,15 +465,24 @@ fn main() {
                     ui.label("Post-Processing & HDR:");
                     ui.horizontal(|ui| {
                         ui.label("Exposure:");
-                        ui.add(gizmo::egui::Slider::new(&mut renderer.exposure, 0.1..=4.0).step_by(0.05));
+                        ui.add(
+                            gizmo::egui::Slider::new(&mut renderer.exposure, 0.1..=4.0)
+                                .step_by(0.05),
+                        );
                     });
                     ui.horizontal(|ui| {
                         ui.label("Bloom Intensity:");
-                        ui.add(gizmo::egui::Slider::new(&mut renderer.bloom_intensity, 0.0..=5.0).step_by(0.05));
+                        ui.add(
+                            gizmo::egui::Slider::new(&mut renderer.bloom_intensity, 0.0..=5.0)
+                                .step_by(0.05),
+                        );
                     });
                     ui.horizontal(|ui| {
                         ui.label("Bloom Threshold:");
-                        ui.add(gizmo::egui::Slider::new(&mut renderer.bloom_threshold, 0.0..=1.0).step_by(0.05));
+                        ui.add(
+                            gizmo::egui::Slider::new(&mut renderer.bloom_threshold, 0.0..=1.0)
+                                .step_by(0.05),
+                        );
                     });
 
                     ui.separator();
@@ -445,24 +494,42 @@ fn main() {
                     if renderer.dof_enabled {
                         ui.horizontal(|ui| {
                             ui.label("  Focus Distance:");
-                            ui.add(gizmo::egui::Slider::new(&mut renderer.dof_focus_dist, 0.5..=20.0).step_by(0.1));
+                            ui.add(
+                                gizmo::egui::Slider::new(&mut renderer.dof_focus_dist, 0.5..=20.0)
+                                    .step_by(0.1),
+                            );
                         });
                         ui.horizontal(|ui| {
                             ui.label("  Focus Range:");
-                            ui.add(gizmo::egui::Slider::new(&mut renderer.dof_focus_range, 0.1..=10.0).step_by(0.1));
+                            ui.add(
+                                gizmo::egui::Slider::new(&mut renderer.dof_focus_range, 0.1..=10.0)
+                                    .step_by(0.1),
+                            );
                         });
                         ui.horizontal(|ui| {
                             ui.label("  Blur Size:");
-                            ui.add(gizmo::egui::Slider::new(&mut renderer.dof_blur_size, 0.5..=10.0).step_by(0.1));
+                            ui.add(
+                                gizmo::egui::Slider::new(&mut renderer.dof_blur_size, 0.5..=10.0)
+                                    .step_by(0.1),
+                            );
                         });
                     }
                     ui.horizontal(|ui| {
                         ui.label("Chromatic Aberration:");
-                        ui.add(gizmo::egui::Slider::new(&mut renderer.chromatic_aberration, 0.0..=1.0).step_by(0.01));
+                        ui.add(
+                            gizmo::egui::Slider::new(&mut renderer.chromatic_aberration, 0.0..=1.0)
+                                .step_by(0.01),
+                        );
                     });
                     ui.horizontal(|ui| {
                         ui.label("Film Grain:");
-                        ui.add(gizmo::egui::Slider::new(&mut renderer.film_grain_intensity, 0.0..=0.15).step_by(0.005));
+                        ui.add(
+                            gizmo::egui::Slider::new(
+                                &mut renderer.film_grain_intensity,
+                                0.0..=0.15,
+                            )
+                            .step_by(0.005),
+                        );
                     });
 
                     if let Some(ref mut taa) = renderer.taa {
@@ -500,17 +567,42 @@ fn main() {
                         // total frame time calculations based on active rendering passes
                         let gbuffer_ms = 1.45;
                         let shadow_ms = 0.82;
-                        let point_shadow_ms = if renderer.point_shadows_enabled { 1.12 } else { 0.0 };
+                        let point_shadow_ms = if renderer.point_shadows_enabled {
+                            1.12
+                        } else {
+                            0.0
+                        };
                         let deferred_ms = 2.25;
                         let ssr_ms = if demo_state.ssr_enabled { 1.85 } else { 0.0 };
                         let ssgi_ms = if demo_state.ssgi_enabled { 2.95 } else { 0.0 };
-                        let volumetric_ms = if demo_state.volumetric_enabled { 1.25 } else { 0.0 };
+                        let volumetric_ms = if demo_state.volumetric_enabled {
+                            1.25
+                        } else {
+                            0.0
+                        };
                         let dof_ms = if renderer.dof_enabled { 1.20 } else { 0.0 };
                         let bloom_ms = 0.58;
-                        let taa_ms = if let Some(ref taa) = renderer.taa { if taa.enabled { 0.85 } else { 0.0 } } else { 0.0 };
-                        
-                        let total_ms = gbuffer_ms + shadow_ms + point_shadow_ms + deferred_ms + ssr_ms + ssgi_ms + volumetric_ms + dof_ms + bloom_ms + taa_ms;
-                        
+                        let taa_ms = if let Some(ref taa) = renderer.taa {
+                            if taa.enabled {
+                                0.85
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        };
+
+                        let total_ms = gbuffer_ms
+                            + shadow_ms
+                            + point_shadow_ms
+                            + deferred_ms
+                            + ssr_ms
+                            + ssgi_ms
+                            + volumetric_ms
+                            + dof_ms
+                            + bloom_ms
+                            + taa_ms;
+
                         ui.horizontal(|ui| {
                             ui.label("GPU Frame Time:");
                             let fps = 1000.0 / total_ms;
@@ -523,65 +615,103 @@ fn main() {
                             };
                             ui.colored_label(color, format!("{:.2} ms ({:.1} FPS)", total_ms, fps));
                         });
-                        
+
                         // Budget progress bar
                         let progress = (total_ms / 16.66f32).min(1.0f32);
-                        ui.add(gizmo::egui::ProgressBar::new(progress).text(format!("{:.1}% of 60 FPS Target", progress * 100.0)));
-                        
+                        ui.add(
+                            gizmo::egui::ProgressBar::new(progress)
+                                .text(format!("{:.1}% of 60 FPS Target", progress * 100.0)),
+                        );
+
                         ui.separator();
                         ui.small("Render Budget Breakdown:");
-                        gizmo::egui::Grid::new("budget_grid").striped(true).show(ui, |ui| {
-                            ui.label("Pass Name"); ui.label("CPU-GPU Cost"); ui.end_row();
-                            ui.label("G-Buffer Geometry"); ui.label(format!("{:.2} ms", gbuffer_ms)); ui.end_row();
-                            ui.label("CSM Shadow Mapping"); ui.label(format!("{:.2} ms", shadow_ms)); ui.end_row();
-                            if point_shadow_ms > 0.0 {
-                                ui.label("Point Light Cubemaps"); ui.label(format!("{:.2} ms", point_shadow_ms)); ui.end_row();
-                            }
-                            ui.label("Deferred Lighting"); ui.label(format!("{:.2} ms", deferred_ms)); ui.end_row();
-                            if ssr_ms > 0.0 {
-                                ui.colored_label(gizmo::egui::Color32::from_rgb(142, 68, 173), "SSR Pass"); ui.label(format!("{:.2} ms", ssr_ms)); ui.end_row();
-                            }
-                            if ssgi_ms > 0.0 {
-                                ui.colored_label(gizmo::egui::Color32::from_rgb(52, 152, 219), "SSGI Pass"); ui.label(format!("{:.2} ms", ssgi_ms)); ui.end_row();
-                            }
-                            if volumetric_ms > 0.0 {
-                                ui.colored_label(gizmo::egui::Color32::from_rgb(230, 126, 34), "Volumetric Fog"); ui.label(format!("{:.2} ms", volumetric_ms)); ui.end_row();
-                            }
-                            if dof_ms > 0.0 {
-                                ui.label("Cinematic DoF"); ui.label(format!("{:.2} ms", dof_ms)); ui.end_row();
-                            }
-                            ui.label("Bloom & Lens Flare"); ui.label(format!("{:.2} ms", bloom_ms)); ui.end_row();
-                            if taa_ms > 0.0 {
-                                ui.label("TAA Antialiasing"); ui.label(format!("{:.2} ms", taa_ms)); ui.end_row();
-                            }
-                        });
-                        
+                        gizmo::egui::Grid::new("budget_grid")
+                            .striped(true)
+                            .show(ui, |ui| {
+                                ui.label("Pass Name");
+                                ui.label("CPU-GPU Cost");
+                                ui.end_row();
+                                ui.label("G-Buffer Geometry");
+                                ui.label(format!("{:.2} ms", gbuffer_ms));
+                                ui.end_row();
+                                ui.label("CSM Shadow Mapping");
+                                ui.label(format!("{:.2} ms", shadow_ms));
+                                ui.end_row();
+                                if point_shadow_ms > 0.0 {
+                                    ui.label("Point Light Cubemaps");
+                                    ui.label(format!("{:.2} ms", point_shadow_ms));
+                                    ui.end_row();
+                                }
+                                ui.label("Deferred Lighting");
+                                ui.label(format!("{:.2} ms", deferred_ms));
+                                ui.end_row();
+                                if ssr_ms > 0.0 {
+                                    ui.colored_label(
+                                        gizmo::egui::Color32::from_rgb(142, 68, 173),
+                                        "SSR Pass",
+                                    );
+                                    ui.label(format!("{:.2} ms", ssr_ms));
+                                    ui.end_row();
+                                }
+                                if ssgi_ms > 0.0 {
+                                    ui.colored_label(
+                                        gizmo::egui::Color32::from_rgb(52, 152, 219),
+                                        "SSGI Pass",
+                                    );
+                                    ui.label(format!("{:.2} ms", ssgi_ms));
+                                    ui.end_row();
+                                }
+                                if volumetric_ms > 0.0 {
+                                    ui.colored_label(
+                                        gizmo::egui::Color32::from_rgb(230, 126, 34),
+                                        "Volumetric Fog",
+                                    );
+                                    ui.label(format!("{:.2} ms", volumetric_ms));
+                                    ui.end_row();
+                                }
+                                if dof_ms > 0.0 {
+                                    ui.label("Cinematic DoF");
+                                    ui.label(format!("{:.2} ms", dof_ms));
+                                    ui.end_row();
+                                }
+                                ui.label("Bloom & Lens Flare");
+                                ui.label(format!("{:.2} ms", bloom_ms));
+                                ui.end_row();
+                                if taa_ms > 0.0 {
+                                    ui.label("TAA Antialiasing");
+                                    ui.label(format!("{:.2} ms", taa_ms));
+                                    ui.end_row();
+                                }
+                            });
+
                         ui.separator();
                         ui.label("⚙️ ECS Thread & Scheduler Pipeline:");
                         ui.small("Systems DAG Thread Execution Flow:");
-                        ui.monospace("Thread 1: handle_input (0.4ms) ➔ camera_orbit (0.8ms)\n\
+                        ui.monospace(
+                            "Thread 1: handle_input (0.4ms) ➔ camera_orbit (0.8ms)\n\
                                       Thread 2: physics_step (2.4ms) [Parallel Batch]\n\
                                       Thread 3: animation_system (1.2ms) [Parallel Batch]\n\
                                       Thread 4: particle_update (0.9ms) [Parallel Batch]\n\
                                       Main Thrd: animate_lights (0.3ms) ➔ UI Render (1.5ms)\n\
-                                      Render   : default_render_pass (4.6ms)");
-                        
+                                      Render   : default_render_pass (4.6ms)",
+                        );
+
                         ui.separator();
                         ui.small("Resolved Scheduler Bottlenecks:");
-                        ui.colored_label(gizmo::egui::Color32::from_rgb(46, 204, 113), "✔ Transform Writes (Narrowed to With<Animated>)");
-                        ui.colored_label(gizmo::egui::Color32::from_rgb(46, 204, 113), "✔ Safe Entity Handles (despawn safe Option<Entity>)");
+                        ui.colored_label(
+                            gizmo::egui::Color32::from_rgb(46, 204, 113),
+                            "✔ Transform Writes (Narrowed to With<Animated>)",
+                        );
+                        ui.colored_label(
+                            gizmo::egui::Color32::from_rgb(46, 204, 113),
+                            "✔ Safe Entity Handles (despawn safe Option<Entity>)",
+                        );
                     });
                 });
         });
 
     app.run().expect("uygulama çalıştırılamadı");
 }
-
-// Marker component for GLTF models
-#[derive(Clone, Copy)]
-pub struct BarnLampModel;
-
-impl Component for BarnLampModel {}
 
 fn handle_input(
     mut state: ResMut<DemoState>,
@@ -618,12 +748,16 @@ fn camera_orbit(
     input: Res<Input>,
 ) {
     let dt = time.dt();
-    
+
     if state.camera_state == CameraState::Orbiting {
         state.orbit_time += dt;
         let radius = 0.55;
         let angle = state.orbit_time * 0.4;
-        camera_settings.pos = Vec3::new(0.25 + radius * angle.sin(), 0.26, -0.13 + radius * angle.cos());
+        camera_settings.pos = Vec3::new(
+            0.25 + radius * angle.sin(),
+            0.26,
+            -0.13 + radius * angle.cos(),
+        );
         // Look slightly lower to push the lamp higher up on the screen, centered on the new X/Z position
         let look_at = Vec3::new(0.25, 0.13, -0.13);
         let look_dir = (look_at - camera_settings.pos).normalize_or_zero();
@@ -637,7 +771,10 @@ fn camera_orbit(
             let delta = input.mouse_delta();
             camera_settings.yaw -= delta.0 * 0.005;
             camera_settings.pitch -= delta.1 * 0.005;
-            camera_settings.pitch = camera_settings.pitch.clamp(-std::f32::consts::FRAC_PI_2 + 0.1, std::f32::consts::FRAC_PI_2 - 0.1);
+            camera_settings.pitch = camera_settings.pitch.clamp(
+                -std::f32::consts::FRAC_PI_2 + 0.1,
+                std::f32::consts::FRAC_PI_2 - 0.1,
+            );
         }
 
         let fx = camera_settings.yaw.cos() * camera_settings.pitch.cos();
@@ -654,12 +791,24 @@ fn camera_orbit(
         };
 
         let mut cam_move = Vec3::ZERO;
-        if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyW as u32) { cam_move += forward; }
-        if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyS as u32) { cam_move -= forward; }
-        if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyD as u32) { cam_move += right; }
-        if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyA as u32) { cam_move -= right; }
-        if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyE as u32) { cam_move += up; }
-        if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyQ as u32) { cam_move -= up; }
+        if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyW as u32) {
+            cam_move += forward;
+        }
+        if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyS as u32) {
+            cam_move -= forward;
+        }
+        if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyD as u32) {
+            cam_move += right;
+        }
+        if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyA as u32) {
+            cam_move -= right;
+        }
+        if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyE as u32) {
+            cam_move += up;
+        }
+        if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyQ as u32) {
+            cam_move -= up;
+        }
 
         if cam_move.length_squared() > 0.0 {
             camera_settings.pos += cam_move.normalize() * speed * dt;
@@ -696,18 +845,24 @@ fn animate_lights(
     } else {
         lighting_settings.blend_t
     };
-    
+
     // Toggle active light features based on LightMode
-    let show_dir = state.light_mode == LightMode::Directional || state.light_mode == LightMode::Both;
+    let show_dir =
+        state.light_mode == LightMode::Directional || state.light_mode == LightMode::Both;
     let show_point = state.light_mode == LightMode::Point || state.light_mode == LightMode::Both;
 
     if let Some(dir_ent) = state.dir_light_ent {
         let dir_id = dir_ent.id();
         if let Some((mut trans, mut dir)) = q_dir.get_mut(dir_id) {
-            dir.intensity = if show_dir { lighting_settings.direct_intensity } else { 0.0 };
+            dir.intensity = if show_dir {
+                lighting_settings.direct_intensity
+            } else {
+                0.0
+            };
             if lighting_settings.rotation_speed > 0.0 && show_dir {
                 // Orbit the directional light direction
-                trans.rotation = Quat::from_rotation_y(t * lighting_settings.rotation_speed) * Quat::from_rotation_x(-0.8);
+                trans.rotation = Quat::from_rotation_y(t * lighting_settings.rotation_speed)
+                    * Quat::from_rotation_x(-0.8);
             }
         }
     }

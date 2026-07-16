@@ -9,6 +9,12 @@
 //
 // Kontroller: sağ-tık + fare = bak, WASD = yüz, Space = yüksel, Sol-Ctrl = dal, Shift = hızlı.
 //
+// Idiom notu: varlıklar `world.spawn_bundle((...))` ile tek çağrıda kurulur (spawn+add_component
+// zinciri yok); bakış yönleri `Camera::forward_from`/`right_from` paylaşılan yardımcılarından.
+// Fizik ELLE, sabit-adımla sürülür (PhysicsPlugin YOK) → ömür komponentleri/otomatik schedule
+// yok. Render, gerçek özel iş yaptığından KORUNUR: `gpu_fluid=None` (su shader'ı deferred'da)
+// ve `--shot` headless GPU-readback ekran görüntüsü.
+//
 // Çalıştır: cargo run -p demo --bin water_demo
 
 use gizmo::physics::components::{CharacterController, Collider, RigidBody, Transform, Velocity};
@@ -72,77 +78,96 @@ fn setup(world: &mut World, renderer: &Renderer) -> WaterState {
     world.insert_resource(phys_world);
 
     // ── GÖKYÜZÜ (asset'siz: ters küp + unlit mavi) ───────────────────────────
-    let sky = world.spawn();
-    world.add_component(sky, Transform::new(Vec3::ZERO).with_scale(Vec3::splat(900.0)));
-    world.add_component(sky, AssetManager::create_inverted_cube(&renderer.device));
-    world.add_component(sky, Material::new(white.clone()).with_unlit(Vec4::new(0.35, 0.55, 0.8, 1.0)));
-    world.add_component(sky, MeshRenderer::new());
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_scale(Vec3::splat(900.0)),
+        AssetManager::create_inverted_cube(&renderer.device),
+        Material::new(white.clone()).with_unlit(Vec4::new(0.35, 0.55, 0.8, 1.0)),
+        MeshRenderer::new(),
+    ));
 
     // ── GÜNEŞ ────────────────────────────────────────────────────────────────
-    let sun = world.spawn();
-    world.add_component(
-        sun,
-        Transform::new(Vec3::new(40.0, 90.0, 30.0))
-            .with_rotation(Quat::from_axis_angle(Vec3::new(1.0, 0.4, 0.0).normalize(), -0.9)),
-    );
-    world.add_component(sun, DirectionalLight::new(Vec3::new(1.0, 0.96, 0.85), 3.0, LightRole::Sun));
+    world.spawn_bundle((
+        Transform::new(Vec3::new(40.0, 90.0, 30.0)).with_rotation(Quat::from_axis_angle(
+            Vec3::new(1.0, 0.4, 0.0).normalize(),
+            -0.9,
+        )),
+        DirectionalLight::new(Vec3::new(1.0, 0.96, 0.85), 3.0, LightRole::Sun),
+    ));
 
     // ── OKYANUS YÜZEYİ (Gerstner su shader'ı) ────────────────────────────────
     // Material::with_water → MaterialType::Water → water.wgsl (Gerstner dalga + Fresnel).
     // Çift-taraflı: su altından yukarı bakınca da görünür.
-    let ocean = world.spawn();
-    world.add_component(ocean, Transform::new(Vec3::new(0.0, WATER_SURFACE_Y, 0.0)));
-    world.add_component(ocean, AssetManager::create_plane(&renderer.device, 400.0));
-    world.add_component(
-        ocean,
+    world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, WATER_SURFACE_Y, 0.0)),
+        AssetManager::create_plane(&renderer.device, 400.0),
         Material::new(white.clone())
             .with_water(Vec4::new(0.10, 0.35, 0.50, 0.80))
             .with_double_sided(true),
-    );
-    world.add_component(ocean, MeshRenderer::new());
+        MeshRenderer::new(),
+    ));
 
     // ── DENİZ TABANI (statik zemin) ──────────────────────────────────────────
-    let seabed = world.spawn();
-    world.add_component(seabed, Transform::new(Vec3::new(0.0, SEABED_Y, 0.0)));
-    world.add_component(seabed, AssetManager::create_plane(&renderer.device, 400.0));
-    world.add_component(
-        seabed,
+    world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, SEABED_Y, 0.0)),
+        AssetManager::create_plane(&renderer.device, 400.0),
         Material::new(checker.clone()).with_pbr(Vec4::new(0.35, 0.32, 0.25, 1.0), 0.95, 0.0),
-    );
-    world.add_component(seabed, MeshRenderer::new());
-    world.add_component(seabed, Collider::box_collider(Vec3::new(200.0, 0.1, 200.0)));
-    world.add_component(seabed, RigidBody::new_static());
-    world.add_component(seabed, Velocity::default());
+        MeshRenderer::new(),
+        Collider::box_collider(Vec3::new(200.0, 0.1, 200.0)),
+        RigidBody::new_static(),
+        Velocity::default(),
+    ));
 
     // ── YÜZEN KUTULAR (buoyancy) ─────────────────────────────────────────────
     // Yarı-boyut 0.5 → hacim 1 m³ → tam batıkta ~1000 N/kg kaldırma. mass<1000 → yüzer
     // (mass/1000 oranında batık), mass>1000 → batar. Yükseklikten düşüp yüzeyde sallanırlar.
+    // Prefab DEĞİL: her kutunun kendi kütlesi var ve buoyancy sallanması varsayılan
+    // atalete (splat(1.0)) dayanır — Prefab/auto_box_collider ataleti collider'dan TÜRETİR
+    // (~40× fark) ve sallanmayı değiştirirdi → doğrudan spawn_bundle + explicit RigidBody.
     let cube = AssetManager::create_cube(&renderer.device);
     let floaters: &[(Vec3, f32, Vec4)] = &[
-        (Vec3::new(-3.0, 6.0, -2.0), 250.0, Vec4::new(0.9, 0.5, 0.2, 1.0)), // hafif → yüzer
-        (Vec3::new(0.0, 8.0, 0.0), 350.0, Vec4::new(0.8, 0.75, 0.2, 1.0)),
-        (Vec3::new(3.5, 5.0, 1.5), 450.0, Vec4::new(0.3, 0.7, 0.4, 1.0)),
-        (Vec3::new(-1.5, 7.0, 3.0), 600.0, Vec4::new(0.5, 0.4, 0.8, 1.0)), // yarı-batık
-        (Vec3::new(2.0, 10.0, -3.5), 2500.0, Vec4::new(0.3, 0.3, 0.35, 1.0)), // ağır → dibe batar
+        (
+            Vec3::new(-3.0, 6.0, -2.0),
+            250.0,
+            Vec4::new(0.9, 0.5, 0.2, 1.0),
+        ), // hafif → yüzer
+        (
+            Vec3::new(0.0, 8.0, 0.0),
+            350.0,
+            Vec4::new(0.8, 0.75, 0.2, 1.0),
+        ),
+        (
+            Vec3::new(3.5, 5.0, 1.5),
+            450.0,
+            Vec4::new(0.3, 0.7, 0.4, 1.0),
+        ),
+        (
+            Vec3::new(-1.5, 7.0, 3.0),
+            600.0,
+            Vec4::new(0.5, 0.4, 0.8, 1.0),
+        ), // yarı-batık
+        (
+            Vec3::new(2.0, 10.0, -3.5),
+            2500.0,
+            Vec4::new(0.3, 0.3, 0.35, 1.0),
+        ), // ağır → dibe batar
     ];
     for &(pos, mass, color) in floaters {
-        let e = world.spawn();
-        world.add_component(e, Transform::new(pos).with_scale(Vec3::splat(0.5)));
-        world.add_component(e, cube.clone());
-        world.add_component(e, Material::new(white.clone()).with_pbr(color, 0.6, 0.0));
-        world.add_component(e, MeshRenderer::new());
-        world.add_component(e, Collider::box_collider(Vec3::splat(0.5)));
-        world.add_component(e, RigidBody::new(mass, true));
-        world.add_component(e, Velocity::default());
+        world.spawn_bundle((
+            Transform::new(pos).with_scale(Vec3::splat(0.5)),
+            cube.clone(),
+            Material::new(white.clone()).with_pbr(color, 0.6, 0.0),
+            MeshRenderer::new(),
+            Collider::box_collider(Vec3::splat(0.5)),
+            RigidBody::new(mass, true),
+            Velocity::default(),
+        ));
     }
 
     // ── DALGIÇ (yüzme karakter kontrolcüsü — kinematik, RigidBody YOK) ────────
-    let swimmer = world.spawn();
-    world.add_component(swimmer, Transform::new(Vec3::new(0.0, -1.0, 8.0)));
-    world.add_component(swimmer, Velocity::default());
-    world.add_component(swimmer, Collider::capsule(0.3, 0.6));
-    world.add_component(
-        swimmer,
+    let swimmer = world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, -1.0, 8.0)),
+        Velocity::default(),
+        Collider::capsule(0.3, 0.6),
         CharacterController {
             speed: 6.0,             // yüzme hızı
             buoyancy: 1.5,          // hafif yukarı meyil (girdisizken yavaş yüzeye çıkar)
@@ -150,20 +175,23 @@ fn setup(world: &mut World, renderer: &Renderer) -> WaterState {
             swim_acceleration: 9.0, // tepkisel itiş
             ..Default::default()
         },
-    );
-    // Oksijen: batıkken tükenir (~1/sn, 45 sn hava), yüzeyde hızla dolar.
-    world.add_component(swimmer, gizmo::physics::Oxygen::default());
+        // Oksijen: batıkken tükenir (~1/sn, 45 sn hava), yüzeyde hızla dolar.
+        gizmo::physics::Oxygen::default(),
+    ));
 
     // ── KAMERA (FPS: dalgıcın kafasında) ─────────────────────────────────────
-    let cam = world.spawn();
-    world.add_component(cam, Transform::new(Vec3::new(0.0, 0.0, 10.0)));
-    world.add_component(cam, Camera::new(std::f32::consts::FRAC_PI_3, 0.1, 2000.0, 0.0, 0.0, true));
+    world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, 0.0, 10.0)),
+        Camera::new(std::f32::consts::FRAC_PI_3, 0.1, 2000.0, 0.0, 0.0, true),
+    ));
 
     // ── AMBIENT SES ──────────────────────────────────────────────────────────
     // Sürekli bir ambient loop; kamera su altına inince AudioManager::set_underwater(true) ile
     // kısılıp boğuklaşır (su-altı ses boğma). Ses cihazı yoksa (headless) sessizce None kalır.
     let audio = gizmo::prelude::AudioManager::new().ok().map(|mut a| {
-        if a.load_sound("ambient", "demo/assets/audio/engine.wav").is_ok() {
+        if a.load_sound("ambient", "demo/assets/audio/engine.wav")
+            .is_ok()
+        {
             if let Ok(id) = a.play_looped("ambient") {
                 a.set_volume(id, 0.22); // hafif ambient uğultu
             }
@@ -202,26 +230,41 @@ fn update(world: &mut World, state: &mut WaterState, dt: f32, input: &gizmo::cor
         );
     }
 
-    // Bakış vektörleri.
-    let (cy, sy) = (state.cam_yaw.cos(), state.cam_yaw.sin());
-    let (cp, sp) = (state.cam_pitch.cos(), state.cam_pitch.sin());
-    let forward = Vec3::new(cy * cp, sp, sy * cp).normalize_or_zero(); // tam 3B (yukarı/aşağı bakış dahil)
-    let right = Vec3::new(-sy, 0.0, cy).normalize_or_zero();
+    // Bakış vektörleri paylaşılan kamera yardımcılarından (elle sin/cos yok).
+    // forward_from tam 3B (yukarı/aşağı bakış dahil) → baktığın yöne yüz; right_from yatay.
+    let forward = Camera::forward_from(state.cam_yaw, state.cam_pitch);
+    let right = Camera::right_from(state.cam_yaw);
 
     // ── Yüzme girdisi → target_velocity (3B) ─────────────────────────────────
-    let fast = if input.is_key_pressed(KeyCode::ShiftLeft as u32) { 1.8 } else { 1.0 };
+    let fast = if input.is_key_pressed(KeyCode::ShiftLeft as u32) {
+        1.8
+    } else {
+        1.0
+    };
     {
         if let Some(mut kcc) = world
             .borrow_mut::<CharacterController>()
             .get_mut(state.swimmer.id())
         {
             let mut dir = Vec3::ZERO;
-            if input.is_key_pressed(KeyCode::KeyW as u32) { dir += forward; } // baktığın yöne yüz
-            if input.is_key_pressed(KeyCode::KeyS as u32) { dir -= forward; }
-            if input.is_key_pressed(KeyCode::KeyD as u32) { dir += right; }
-            if input.is_key_pressed(KeyCode::KeyA as u32) { dir -= right; }
-            if input.is_key_pressed(KeyCode::Space as u32) { dir += Vec3::Y; } // yüksel
-            if input.is_key_pressed(KeyCode::ControlLeft as u32) { dir -= Vec3::Y; } // dal
+            if input.is_key_pressed(KeyCode::KeyW as u32) {
+                dir += forward;
+            } // baktığın yöne yüz
+            if input.is_key_pressed(KeyCode::KeyS as u32) {
+                dir -= forward;
+            }
+            if input.is_key_pressed(KeyCode::KeyD as u32) {
+                dir += right;
+            }
+            if input.is_key_pressed(KeyCode::KeyA as u32) {
+                dir -= right;
+            }
+            if input.is_key_pressed(KeyCode::Space as u32) {
+                dir += Vec3::Y;
+            } // yüksel
+            if input.is_key_pressed(KeyCode::ControlLeft as u32) {
+                dir -= Vec3::Y;
+            } // dal
             kcc.target_velocity = dir.normalize_or_zero() * (kcc.speed * fast);
         }
     }
@@ -253,14 +296,20 @@ fn update(world: &mut World, state: &mut WaterState, dt: f32, input: &gizmo::cor
         let pos = Vec3::new(2.5, 1.4, 12.0);
         let yaw = -std::f32::consts::FRAC_PI_2 - 0.16;
         let pitch = -0.30;
-        (pos, Quat::from_rotation_y(-yaw) * Quat::from_rotation_x(pitch))
+        (
+            pos,
+            Quat::from_rotation_y(-yaw) * Quat::from_rotation_x(pitch),
+        )
     } else {
         let h = world
             .borrow::<Transform>()
             .get(state.swimmer.id())
             .map(|t| t.position + Vec3::new(0.0, 0.7, 0.0))
             .unwrap_or(Vec3::new(0.0, 0.7, 8.0));
-        (h, Quat::from_rotation_y(-state.cam_yaw) * Quat::from_rotation_x(state.cam_pitch))
+        (
+            h,
+            Quat::from_rotation_y(-state.cam_yaw) * Quat::from_rotation_x(state.cam_pitch),
+        )
     };
 
     // HUD: kamera derinliği + su-altı durumu (render'daki su-altı tespitiyle aynı mantık).
@@ -272,9 +321,10 @@ fn update(world: &mut World, state: &mut WaterState, dt: f32, input: &gizmo::cor
         audio.set_underwater(state.underwater);
         audio.update();
     }
-    if let Some(mut q) =
-        world.query_mut::<(gizmo::core::query::Mut<Transform>, gizmo::core::query::Mut<Camera>)>()
-    {
+    if let Some(mut q) = world.query_mut::<(
+        gizmo::core::query::Mut<Transform>,
+        gizmo::core::query::Mut<Camera>,
+    )>() {
         for (_, (mut t, mut c)) in q.iter_mut() {
             t.position = head;
             t.rotation = cam_rot;
@@ -314,7 +364,11 @@ fn capture_and_save(world: &mut World, renderer: &mut Renderer, raw_path: &str) 
 
     let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("shot-target"),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -325,7 +379,9 @@ fn capture_and_save(world: &mut World, renderer: &mut Renderer, raw_path: &str) 
     let tview = target.create_view(&wgpu::TextureViewDescriptor::default());
     let mut enc = renderer
         .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("shot-enc") });
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("shot-enc"),
+        });
     gizmo::systems::default_render_pass(world, &mut enc, &tview, renderer);
 
     let bpp = 4u32;
@@ -352,7 +408,11 @@ fn capture_and_save(world: &mut World, renderer: &mut Renderer, raw_path: &str) 
                 rows_per_image: Some(h),
             },
         },
-        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
     );
     renderer.queue.submit(Some(enc.finish()));
 
@@ -361,9 +421,10 @@ fn capture_and_save(world: &mut World, renderer: &mut Renderer, raw_path: &str) 
     slice.map_async(wgpu::MapMode::Read, move |v| {
         let _ = tx.send(v);
     });
-    let _ = renderer
-        .device
-        .poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    let _ = renderer.device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: None,
+    });
     rx.recv().unwrap().unwrap();
     let data = slice.get_mapped_range();
 
@@ -386,38 +447,47 @@ fn capture_and_save(world: &mut World, renderer: &mut Renderer, raw_path: &str) 
     drop(data);
     staging.unmap();
     std::fs::write(raw_path, &out).unwrap();
-    println!("SHOT_WRITTEN path={raw_path} {w}x{h} bytes={} fmt={fmt:?}", out.len());
+    println!(
+        "SHOT_WRITTEN path={raw_path} {w}x{h} bytes={} fmt={fmt:?}",
+        out.len()
+    );
 }
 
 fn ui(_world: &mut World, state: &mut WaterState, ctx: &gizmo::egui::Context) {
     use gizmo::egui;
-    egui::Window::new("🌊 Su Sistemi Demosu").default_pos([10.0, 10.0]).show(ctx, |ui| {
-        ui.label(if state.underwater { "Durum: SU ALTINDA 🐠" } else { "Durum: yüzeyde ☀" });
-        ui.label(format!("Derinlik: {:.1} m", state.depth));
-        // Oksijen barı (kafa batıkken azalır, yüzeyde dolar).
-        let (col, warn) = if state.oxygen_frac < 0.25 {
-            (egui::Color32::from_rgb(230, 80, 80), "  — NEFES AL!")
-        } else {
-            (egui::Color32::from_rgb(80, 180, 230), "")
-        };
-        ui.add(
-            egui::ProgressBar::new(state.oxygen_frac)
-                .fill(col)
-                .text(format!("Hava: {:.0} s{}", state.oxygen_secs, warn)),
-        );
-        if state.underwater {
-            ui.label("🔇 Ses: boğuk (su altı)");
-        } else {
-            ui.label("🔊 Ses: normal");
-        }
-        ui.separator();
-        ui.label("WASD = yüz (baktığın yöne)");
-        ui.label("Space = yüksel · Sol-Ctrl = dal");
-        ui.label("Shift = hızlı · sağ-tık+fare = bak");
-        ui.separator();
-        ui.label("Gerstner dalga · FluidZone buoyancy");
-        ui.label("Yüzme kontrolcüsü · su-altı sisi");
-    });
+    egui::Window::new("🌊 Su Sistemi Demosu")
+        .default_pos([10.0, 10.0])
+        .show(ctx, |ui| {
+            ui.label(if state.underwater {
+                "Durum: SU ALTINDA 🐠"
+            } else {
+                "Durum: yüzeyde ☀"
+            });
+            ui.label(format!("Derinlik: {:.1} m", state.depth));
+            // Oksijen barı (kafa batıkken azalır, yüzeyde dolar).
+            let (col, warn) = if state.oxygen_frac < 0.25 {
+                (egui::Color32::from_rgb(230, 80, 80), "  — NEFES AL!")
+            } else {
+                (egui::Color32::from_rgb(80, 180, 230), "")
+            };
+            ui.add(
+                egui::ProgressBar::new(state.oxygen_frac)
+                    .fill(col)
+                    .text(format!("Hava: {:.0} s{}", state.oxygen_secs, warn)),
+            );
+            if state.underwater {
+                ui.label("🔇 Ses: boğuk (su altı)");
+            } else {
+                ui.label("🔊 Ses: normal");
+            }
+            ui.separator();
+            ui.label("WASD = yüz (baktığın yöne)");
+            ui.label("Space = yüksel · Sol-Ctrl = dal");
+            ui.label("Shift = hızlı · sağ-tık+fare = bak");
+            ui.separator();
+            ui.label("Gerstner dalga · FluidZone buoyancy");
+            ui.label("Yüzme kontrolcüsü · su-altı sisi");
+        });
 }
 
 fn main() {

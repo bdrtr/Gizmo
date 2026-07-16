@@ -1,11 +1,31 @@
-use std::f32::consts::{FRAC_PI_2, PI};
+//! # Demo2 — geometrik şekil vitrini (dokulu ilkel + ekstrüzyonlar)
+//!
+//! Üç sıra hâlinde motorun dokulu şekillerini sergiler: ÖN sıra çeşitli 3B ilkel gövdeler
+//! (küp/tetrahedron/kapsül/torus/silindir/koni/küre...), ORTA sıra dolu 2B profillerin
+//! ekstrüzyonu, ARKA sıra halka (ring) ekstrüzyonlar. Şekiller dinamik gövdedir ama
+//! YERÇEKİMİ SIFIR olduğundan havada asılı kalır; dönüşlerini `rotate_shapes` sistemi
+//! elle sürer.
+//!
+//! Bu demo motorun ECS-zamanlayıcı yüzeyini (`add_system` + `Res`/`Query`) kullanır ve
+//! yikim'in tek-kapanış `App<State>` kalıbına ÇEVRİLMEZ — davranış birebir korunur.
+//! İdiomatikleştirmeler yalnızca yüzeysel: bileşenler `impl_component!` makrosuyla,
+//! kamera yön matematiği `Camera::forward_from`/`right_from` yardımcılarıyla verildi.
+//! Şekiller `SceneBuilder` ile spawn'lanır (collider'ı zaten otomatik verir) → Prefab
+//! gereksiz; uçan/geçici varlık veya sahne-sıfırlama olmadığından DespawnAfter/
+//! `despawn_all_with` de KULLANILMAZ.
+//!
+//! ## Kontroller
+//!   * **R** — dönüşü duraklat/sürdür · **Tab** — sıraları döndür · **Space** — tel-kafes
+//!   * **Sağ-tık + fare** — bak · **WASDQE** — kamera · **Shift** — hızlı hareket
+
+use gizmo::core::input::Input;
+use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
+use gizmo::physics::world::PhysicsWorld;
 use gizmo::prelude::*;
 use gizmo::simple::{SceneBuilder, SimpleSceneState};
 use gizmo::systems;
-use gizmo::physics::world::PhysicsWorld;
-use gizmo::core::system::{Res, ResMut, IntoSystemConfig, Phase};
-use gizmo::core::query::{Query, Mut, With};
-use gizmo::core::input::Input;
+use std::f32::consts::{FRAC_PI_2, PI};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Row {
@@ -32,21 +52,12 @@ impl Row {
     }
 }
 
-// Marker component for shapes
+// Şekiller için işaretçi (marker) bileşen
 #[derive(Clone, Copy)]
 pub struct Shape;
 
-impl gizmo::core::component::Component for Shape {
-    fn storage_type() -> gizmo::core::component::StorageType {
-        gizmo::core::component::StorageType::Table
-    }
-}
-
-impl gizmo::core::component::Component for Row {
-    fn storage_type() -> gizmo::core::component::StorageType {
-        gizmo::core::component::StorageType::Table
-    }
-}
+// Bileşen trait'ini elle yazmak yerine motorun makrosuyla (varsayılan depo = Table, birebir aynı).
+gizmo::core::impl_component!(Shape, Row);
 
 pub struct DemoState {
     simple: SimpleSceneState,
@@ -95,7 +106,8 @@ fn main() {
             // Directional Light (Sun)
             let sun_ent = scene.world.spawn();
             let sun_bundle = gizmo::bundles::DirectionalLightBundle {
-                rotation: Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4) * Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
+                rotation: Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4)
+                    * Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
                 intensity: 1.2,
                 color: Vec3::new(1.0, 1.0, 1.0),
                 ..Default::default()
@@ -103,7 +115,11 @@ fn main() {
             sun_bundle.apply(scene.world, sun_ent);
 
             // Camera setup
-            scene.spawn_camera(&mut state, Vec3::new(0.0, 7.0, 14.0), Vec3::new(0.0, 1.0, 0.0));
+            scene.spawn_camera(
+                &mut state,
+                Vec3::new(0.0, 7.0, 14.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            );
 
             let shapes_x_extent = 14.0;
             let z_extent = 8.0;
@@ -111,7 +127,8 @@ fn main() {
             // Front Row (Various Shapes)
             let num_front = 11;
             for i in 0..num_front {
-                let x = -shapes_x_extent / 2.0 + (i as f32 / (num_front - 1) as f32) * shapes_x_extent;
+                let x =
+                    -shapes_x_extent / 2.0 + (i as f32 / (num_front - 1) as f32) * shapes_x_extent;
                 let pos = Vec3::new(x, 2.0, z_extent / 2.0);
                 let e = match i {
                     0 => scene.spawn_textured_cube(pos, 1.0),
@@ -133,51 +150,86 @@ fn main() {
             // Middle Row (Extrusions)
             let num_middle = 8;
             for i in 0..num_middle {
-                let x = -shapes_x_extent / 2.0 + (i as f32 / (num_middle - 1) as f32) * shapes_x_extent;
+                let x =
+                    -shapes_x_extent / 2.0 + (i as f32 / (num_middle - 1) as f32) * shapes_x_extent;
                 let pos = Vec3::new(x, 2.0, 0.0);
                 let depth = 1.0;
                 let e = match i {
                     // Rectangle
-                    0 => scene.spawn_textured_convex_extrusion(pos, &[[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]], depth),
+                    0 => scene.spawn_textured_convex_extrusion(
+                        pos,
+                        &[[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]],
+                        depth,
+                    ),
                     // Capsule2d (Approximate with polygon)
                     1 => {
                         let mut pts = Vec::new();
-                        for j in 0..8 { let a = j as f32 * PI / 7.0; pts.push([0.5 + 0.5 * a.cos(), 0.5 * a.sin()]); }
-                        for j in 0..8 { let a = PI + j as f32 * PI / 7.0; pts.push([-0.5 + 0.5 * a.cos(), 0.5 * a.sin()]); }
+                        for j in 0..8 {
+                            let a = j as f32 * PI / 7.0;
+                            pts.push([0.5 + 0.5 * a.cos(), 0.5 * a.sin()]);
+                        }
+                        for j in 0..8 {
+                            let a = PI + j as f32 * PI / 7.0;
+                            pts.push([-0.5 + 0.5 * a.cos(), 0.5 * a.sin()]);
+                        }
                         scene.spawn_textured_convex_extrusion(pos, &pts, depth)
-                    },
+                    }
                     // Annulus
                     2 => {
-                        let mut i_pts = Vec::new(); let mut o_pts = Vec::new();
+                        let mut i_pts = Vec::new();
+                        let mut o_pts = Vec::new();
                         for j in 0..16 {
                             let a = j as f32 * 2.0 * PI / 16.0;
                             i_pts.push([0.25 * a.cos(), 0.25 * a.sin()]);
                             o_pts.push([0.5 * a.cos(), 0.5 * a.sin()]);
                         }
                         scene.spawn_textured_ring_extrusion(pos, &i_pts, &o_pts, depth)
-                    },
+                    }
                     // Circle
                     3 => {
                         let mut pts = Vec::new();
-                        for j in 0..16 { let a = j as f32 * 2.0 * PI / 16.0; pts.push([0.5 * a.cos(), 0.5 * a.sin()]); }
+                        for j in 0..16 {
+                            let a = j as f32 * 2.0 * PI / 16.0;
+                            pts.push([0.5 * a.cos(), 0.5 * a.sin()]);
+                        }
                         scene.spawn_textured_convex_extrusion(pos, &pts, depth)
-                    },
+                    }
                     // Ellipse
                     4 => {
                         let mut pts = Vec::new();
-                        for j in 0..16 { let a = j as f32 * 2.0 * PI / 16.0; pts.push([0.5 * a.cos(), 0.25 * a.sin()]); }
+                        for j in 0..16 {
+                            let a = j as f32 * 2.0 * PI / 16.0;
+                            pts.push([0.5 * a.cos(), 0.25 * a.sin()]);
+                        }
                         scene.spawn_textured_convex_extrusion(pos, &pts, depth)
-                    },
+                    }
                     // RegularPolygon (Hexagon)
                     5 => {
                         let mut pts = Vec::new();
-                        for j in 0..6 { let a = j as f32 * 2.0 * PI / 6.0; pts.push([0.5 * a.cos(), 0.5 * a.sin()]); }
+                        for j in 0..6 {
+                            let a = j as f32 * 2.0 * PI / 6.0;
+                            pts.push([0.5 * a.cos(), 0.5 * a.sin()]);
+                        }
                         scene.spawn_textured_convex_extrusion(pos, &pts, depth)
-                    },
+                    }
                     // Triangle2d
-                    6 => scene.spawn_textured_convex_extrusion(pos, &[[-0.5, -0.4], [0.5, -0.4], [0.0, 0.5]], depth),
+                    6 => scene.spawn_textured_convex_extrusion(
+                        pos,
+                        &[[-0.5, -0.4], [0.5, -0.4], [0.0, 0.5]],
+                        depth,
+                    ),
                     // ConvexPolygon
-                    _ => scene.spawn_textured_convex_extrusion(pos, &[[0.0, 0.8], [-0.47, 0.25], [-0.47, -0.65], [0.47, -0.65], [0.47, 0.25]], depth),
+                    _ => scene.spawn_textured_convex_extrusion(
+                        pos,
+                        &[
+                            [0.0, 0.8],
+                            [-0.47, 0.25],
+                            [-0.47, -0.65],
+                            [0.47, -0.65],
+                            [0.47, 0.25],
+                        ],
+                        depth,
+                    ),
                 };
                 scene.world.add_component(e, Shape);
                 scene.world.add_component(e, Row::Middle);
@@ -186,61 +238,85 @@ fn main() {
             // Rear Row (Ring Extrusions)
             let num_rear = 7;
             for i in 0..num_rear {
-                let x = -shapes_x_extent / 2.0 + (i as f32 / (num_rear - 1) as f32) * shapes_x_extent;
+                let x =
+                    -shapes_x_extent / 2.0 + (i as f32 / (num_rear - 1) as f32) * shapes_x_extent;
                 let pos = Vec3::new(x, 2.0, -z_extent / 2.0);
                 let depth = 1.0;
                 let e = match i {
                     // Rectangle Ring
-                    0 => scene.spawn_textured_ring_extrusion(pos, 
+                    0 => scene.spawn_textured_ring_extrusion(
+                        pos,
                         &[[-0.4, -0.4], [0.4, -0.4], [0.4, 0.4], [-0.4, 0.4]],
-                        &[[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]], depth),
+                        &[[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]],
+                        depth,
+                    ),
                     // Capsule2d Ring
                     1 => {
-                        let mut i_pts = Vec::new(); let mut o_pts = Vec::new();
-                        for j in 0..8 { let a = j as f32 * PI / 7.0; o_pts.push([0.5 + 0.5 * a.cos(), 0.5 * a.sin()]); i_pts.push([0.5 + 0.4 * a.cos(), 0.4 * a.sin()]); }
-                        for j in 0..8 { let a = PI + j as f32 * PI / 7.0; o_pts.push([-0.5 + 0.5 * a.cos(), 0.5 * a.sin()]); i_pts.push([-0.5 + 0.4 * a.cos(), 0.4 * a.sin()]); }
+                        let mut i_pts = Vec::new();
+                        let mut o_pts = Vec::new();
+                        for j in 0..8 {
+                            let a = j as f32 * PI / 7.0;
+                            o_pts.push([0.5 + 0.5 * a.cos(), 0.5 * a.sin()]);
+                            i_pts.push([0.5 + 0.4 * a.cos(), 0.4 * a.sin()]);
+                        }
+                        for j in 0..8 {
+                            let a = PI + j as f32 * PI / 7.0;
+                            o_pts.push([-0.5 + 0.5 * a.cos(), 0.5 * a.sin()]);
+                            i_pts.push([-0.5 + 0.4 * a.cos(), 0.4 * a.sin()]);
+                        }
                         scene.spawn_textured_ring_extrusion(pos, &i_pts, &o_pts, depth)
-                    },
+                    }
                     // Ring (Circle-Circle)
                     2 => {
-                        let mut i_pts = Vec::new(); let mut o_pts = Vec::new();
+                        let mut i_pts = Vec::new();
+                        let mut o_pts = Vec::new();
                         for j in 0..16 {
                             let a = j as f32 * 2.0 * PI / 16.0;
                             i_pts.push([0.5 * a.cos(), 0.5 * a.sin()]);
                             o_pts.push([1.0 * a.cos(), 1.0 * a.sin()]);
                         }
                         scene.spawn_textured_ring_extrusion(pos, &i_pts, &o_pts, depth)
-                    },
+                    }
                     // Circle Ring
                     3 => {
-                        let mut i_pts = Vec::new(); let mut o_pts = Vec::new();
+                        let mut i_pts = Vec::new();
+                        let mut o_pts = Vec::new();
                         for j in 0..16 {
                             let a = j as f32 * 2.0 * PI / 16.0;
                             i_pts.push([0.4 * a.cos(), 0.4 * a.sin()]);
                             o_pts.push([0.5 * a.cos(), 0.5 * a.sin()]);
                         }
                         scene.spawn_textured_ring_extrusion(pos, &i_pts, &o_pts, depth)
-                    },
+                    }
                     // Ellipse Ring
                     4 => {
-                        let mut i_pts = Vec::new(); let mut o_pts = Vec::new();
+                        let mut i_pts = Vec::new();
+                        let mut o_pts = Vec::new();
                         for j in 0..16 {
                             let a = j as f32 * 2.0 * PI / 16.0;
                             i_pts.push([0.4 * a.cos(), 0.15 * a.sin()]);
                             o_pts.push([0.5 * a.cos(), 0.25 * a.sin()]);
                         }
                         scene.spawn_textured_ring_extrusion(pos, &i_pts, &o_pts, depth)
-                    },
+                    }
                     // RegularPolygon Ring
                     5 => {
-                        let mut i_pts = Vec::new(); let mut o_pts = Vec::new();
-                        for j in 0..6 { let a = j as f32 * 2.0 * PI / 6.0; i_pts.push([0.4 * a.cos(), 0.4 * a.sin()]); o_pts.push([0.5 * a.cos(), 0.5 * a.sin()]); }
+                        let mut i_pts = Vec::new();
+                        let mut o_pts = Vec::new();
+                        for j in 0..6 {
+                            let a = j as f32 * 2.0 * PI / 6.0;
+                            i_pts.push([0.4 * a.cos(), 0.4 * a.sin()]);
+                            o_pts.push([0.5 * a.cos(), 0.5 * a.sin()]);
+                        }
                         scene.spawn_textured_ring_extrusion(pos, &i_pts, &o_pts, depth)
-                    },
+                    }
                     // Triangle2d Ring
-                    _ => scene.spawn_textured_ring_extrusion(pos, 
+                    _ => scene.spawn_textured_ring_extrusion(
+                        pos,
                         &[[-0.3, -0.2], [0.3, -0.2], [0.0, 0.3]],
-                        &[[-0.5, -0.4], [0.5, -0.4], [0.0, 0.5]], depth),
+                        &[[-0.5, -0.4], [0.5, -0.4], [0.0, 0.5]],
+                        depth,
+                    ),
                 };
                 scene.world.add_component(e, Shape);
                 scene.world.add_component(e, Row::Rear);
@@ -263,23 +339,38 @@ fn main() {
         .add_system(rotate_shapes.in_phase(Phase::Update))
         .add_system(camera_movement.in_phase(Phase::Update))
         .add_system(draw_cursor.in_phase(Phase::Update))
-        .add_system((Box::new(PhysicsSystem) as Box<dyn gizmo::core::system::System>).in_phase(Phase::Physics))
-        .add_system((Box::new(TransformUpdateSystem) as Box<dyn gizmo::core::system::System>).in_phase(Phase::PostUpdate))
+        .add_system(
+            (Box::new(PhysicsSystem) as Box<dyn gizmo::core::system::System>)
+                .in_phase(Phase::Physics),
+        )
+        .add_system(
+            (Box::new(TransformUpdateSystem) as Box<dyn gizmo::core::system::System>)
+                .in_phase(Phase::PostUpdate),
+        )
         .set_render(|world, _state, encoder, view, renderer, _light_time| {
+            // Bu vitrin ekran-uzayı efektlerini (SSR/SSGI) ve GPU parçacık/akışkanı istemez → kapat.
             renderer.gpu_fluid = None;
             renderer.gpu_particles = None;
             renderer.ssr = None;
             renderer.ssgi = None;
-            
             systems::default_render_pass(world, encoder, view, renderer);
         })
         .set_ui(|_world, _state, ctx| {
             gizmo::egui::Area::new("demo2_ui".into())
                 .fixed_pos(gizmo::egui::pos2(12.0, 12.0))
                 .show(ctx, |ui| {
-                    ui.label(gizmo::egui::RichText::new("Press 'R' to pause/resume rotation").color(gizmo::egui::Color32::WHITE));
-                    ui.label(gizmo::egui::RichText::new("Press 'Tab' to cycle through rows").color(gizmo::egui::Color32::WHITE));
-                    ui.label(gizmo::egui::RichText::new("Press 'Space' to toggle wireframes").color(gizmo::egui::Color32::WHITE));
+                    ui.label(
+                        gizmo::egui::RichText::new("Press 'R' to pause/resume rotation")
+                            .color(gizmo::egui::Color32::WHITE),
+                    );
+                    ui.label(
+                        gizmo::egui::RichText::new("Press 'Tab' to cycle through rows")
+                            .color(gizmo::egui::Color32::WHITE),
+                    );
+                    ui.label(
+                        gizmo::egui::RichText::new("Press 'Space' to toggle wireframes")
+                            .color(gizmo::egui::Color32::WHITE),
+                    );
                 });
         });
 
@@ -309,7 +400,11 @@ fn advance_rows(mut q: Query<(Mut<Row>, Mut<Transform>, With<Shape>)>, input: Re
     }
 }
 
-fn rotate_shapes(mut q: Query<(Mut<Transform>, With<Shape>)>, mut state: ResMut<DemoState>, time: Res<gizmo::core::time::Time>) {
+fn rotate_shapes(
+    mut q: Query<(Mut<Transform>, With<Shape>)>,
+    mut state: ResMut<DemoState>,
+    time: Res<gizmo::core::time::Time>,
+) {
     let dt = time.dt();
     if state.rotate {
         state.time += dt;
@@ -320,20 +415,26 @@ fn rotate_shapes(mut q: Query<(Mut<Transform>, With<Shape>)>, mut state: ResMut<
     }
 }
 
-fn camera_movement(mut q: Query<(Mut<Transform>, Mut<gizmo::renderer::components::Camera>)>, mut state: ResMut<DemoState>, input: Res<Input>, time: Res<gizmo::core::time::Time>) {
+fn camera_movement(
+    mut q: Query<(Mut<Transform>, Mut<gizmo::renderer::components::Camera>)>,
+    mut state: ResMut<DemoState>,
+    input: Res<Input>,
+    time: Res<gizmo::core::time::Time>,
+) {
     let dt = time.dt();
     if input.is_mouse_button_pressed(gizmo::core::input::mouse::RIGHT) {
         let delta = input.mouse_delta();
         state.simple.camera_yaw -= delta.0 * 0.005;
         state.simple.camera_pitch -= delta.1 * 0.005;
-        state.simple.camera_pitch = state.simple.camera_pitch.clamp(-PI / 2.0 + 0.1, PI / 2.0 - 0.1);
+        state.simple.camera_pitch = state
+            .simple
+            .camera_pitch
+            .clamp(-PI / 2.0 + 0.1, PI / 2.0 - 0.1);
     }
 
-    let fx = state.simple.camera_yaw.cos() * state.simple.camera_pitch.cos();
-    let fy = state.simple.camera_pitch.sin();
-    let fz = state.simple.camera_yaw.sin() * state.simple.camera_pitch.cos();
-    let forward = Vec3::new(fx, fy, fz).normalize();
-    let right = forward.cross(Vec3::new(0.0, 1.0, 0.0)).normalize();
+    // Yön matematiği paylaşılan kamera yardımcılarından (elle yeniden yazılmaz; birebir aynı).
+    let forward = Camera::forward_from(state.simple.camera_yaw, state.simple.camera_pitch);
+    let right = Camera::right_from(state.simple.camera_yaw);
     let up = Vec3::new(0.0, 1.0, 0.0);
 
     let speed = if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ShiftLeft as u32) {
@@ -343,12 +444,24 @@ fn camera_movement(mut q: Query<(Mut<Transform>, Mut<gizmo::renderer::components
     };
 
     let mut cam_move = Vec3::ZERO;
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyW as u32) { cam_move += forward; }
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyS as u32) { cam_move -= forward; }
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyD as u32) { cam_move += right; }
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyA as u32) { cam_move -= right; }
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyE as u32) { cam_move += up; }
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyQ as u32) { cam_move -= up; }
+    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyW as u32) {
+        cam_move += forward;
+    }
+    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyS as u32) {
+        cam_move -= forward;
+    }
+    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyD as u32) {
+        cam_move += right;
+    }
+    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyA as u32) {
+        cam_move -= right;
+    }
+    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyE as u32) {
+        cam_move += up;
+    }
+    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyQ as u32) {
+        cam_move -= up;
+    }
 
     if cam_move.length_squared() > 0.0 {
         state.simple.camera_pos += cam_move.normalize() * speed * dt;
@@ -366,7 +479,7 @@ fn camera_movement(mut q: Query<(Mut<Transform>, Mut<gizmo::renderer::components
     }
 }
 
-// Exclusive system because physics uses `&World` everywhere and modifies things internally.
+// Dışlayıcı (exclusive) sistem: fizik her yerde `&World` kullanır ve dahili olarak durum değiştirir.
 struct PhysicsSystem;
 impl gizmo::core::system::System for PhysicsSystem {
     fn run(&mut self, world: &gizmo::core::world::World, dt: f32) {
@@ -377,13 +490,13 @@ impl gizmo::core::system::System for PhysicsSystem {
             physics_dt -= step;
         }
     }
-    
+
     fn access_info(&self) -> gizmo::core::system::AccessInfo {
-        gizmo::core::system::AccessInfo::new() // Not strictly accurate, but fine for exclusive
+        gizmo::core::system::AccessInfo::new() // tam doğru değil ama dışlayıcı sistem için yeterli
     }
 }
 
-// Exclusive system because TransformSyncSystem has its own `run(&mut self, world, dt)` method
+// Dışlayıcı sistem: TransformSyncSystem'in kendi `run(&mut self, world, dt)` metodu var.
 struct TransformUpdateSystem;
 impl gizmo::core::system::System for TransformUpdateSystem {
     fn run(&mut self, world: &gizmo::core::world::World, dt: f32) {
@@ -392,7 +505,7 @@ impl gizmo::core::system::System for TransformUpdateSystem {
         transform_sync.run(world, dt);
         transform_propagate.run(world, dt);
     }
-    
+
     fn access_info(&self) -> gizmo::core::system::AccessInfo {
         gizmo::core::system::AccessInfo::new()
     }
@@ -454,12 +567,19 @@ fn draw_cursor(
                 for j in 0..segments {
                     let a1 = j as f32 * 2.0 * std::f32::consts::PI / segments as f32;
                     let a2 = (j + 1) as f32 * 2.0 * std::f32::consts::PI / segments as f32;
-                    let start = Vec3::new(hit_vec3.x + radius * a1.cos(), 0.01, hit_vec3.z + radius * a1.sin());
-                    let end = Vec3::new(hit_vec3.x + radius * a2.cos(), 0.01, hit_vec3.z + radius * a2.sin());
+                    let start = Vec3::new(
+                        hit_vec3.x + radius * a1.cos(),
+                        0.01,
+                        hit_vec3.z + radius * a1.sin(),
+                    );
+                    let end = Vec3::new(
+                        hit_vec3.x + radius * a2.cos(),
+                        0.01,
+                        hit_vec3.z + radius * a2.sin(),
+                    );
                     gizmos.draw_line(start, end, color);
                 }
             }
         }
     }
 }
-

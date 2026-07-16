@@ -1,23 +1,35 @@
-//! Eklem vitrini — bu turda motora eklenen eklemleri CANLI gösterir:
-//!   1) ROPE (Joint::rope): geri çekilmiş top bir iple sallanır (ip görsel çubuk).
-//!   2) D6 SERVO KOL (Joint::d6 + açısal drive): kol hedef açıya sürülür; hedef `update`'te
-//!      salınır → robot kolu gibi süpürür.
-//!   3) SÜSPANSİYON (Joint::slider + yay): kutu dikey yay-kızakta zıplayıp söner.
-//!   4) TORSİYONEL YAY (Joint::hinge + torsional spring): paçavra hedef açıya yaylanır.
+//! # Eklem vitrini — motorun eklem (joint) sistemini CANLI gösterir (temiz sürüm)
 //!
-//! Her istasyon: statik çapa + dinamik gövde + eklem. Fizik Transform'u sürer, render
-//! `ensure_global_transforms` ile otomatik senkron eder.
+//! Soldan sağa dört istasyon, her biri statik çapa + dinamik gövde + tek eklem:
+//!   1) **ROPE** (`Joint::rope`, x=-6) — 60° geri çekili top bir iple sarkaç gibi sallanır
+//!      (ip ince görsel çubuktur, `update`'te pivot↔top yüzeyi arasına gerilir).
+//!   2) **TORSİYONEL YAY** (`Joint::hinge` + torsional spring, x=-2) — paçavra Z ekseninde
+//!      dinlenme açısına (0.9 rad) yaylanıp söner.
+//!   3) **D6 SERVO KOL** (`Joint::d6` + açısal drive, x=2) — kol hedef açıya sürülür; hedef
+//!      `update`'te salınır → robot kolu gibi süpürür.
+//!   4) **SÜSPANSİYON** (`Joint::slider` + yay, x=6) — kutu dikey yay-kızakta zıplayıp söner.
+//!
+//! NEYİN motora, NEYİN demoya ait olduğu konusunda dürüst olalım:
+//!   * **`Prefab` + `auto_box_collider`** — dört STATİK çapa direği tek blueprint'ten; kutu
+//!     collider `Transform.scale`'den OTOMATİK türetilir (boyut bir kez). Direkler tekrar eden
+//!     aynı kutu → Prefab'ın tam yeri.
+//!   * **Dinamik eklem gövdeleri = doğrudan `spawn_bundle`** — top KÜRE, kol/paçavra/platform
+//!     her biri kendine özgü (materyal/ölçek/başlangıç hızı farklı) TEK örnek; Prefab hız
+//!     gömemez ve yalnız kutu verir → bunlar açık `Collider` ile spawn_bundle.
+//!   * **Eklemler elle kurulan bir `PhysicsWorld` kaynağına** yığılır — demonun ASIL konusu bu.
+//!     Fizik Transform'u sürer, render `ensure_global_transforms` ile otomatik senkron eder.
+//!   * **Render = `default_render_pass` DOĞRUDAN** — `with_scene_render()` kısayolu SSR/SSGI/
+//!     volumetric/TAA'yı kapatırdı; bu vitrin efektleri AÇIK ister.
+//!
+//! Geçici/uçan varlık, sahne-sıfırlama ve kullanıcı girdisi olmadığından `DespawnAfter` /
+//! `despawn_all_with` / `is_key_just_*` idiomları burada geçerli değil (kasıtlı olarak yok).
 
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_3};
 
-use gizmo::bundles::RigidBodyBundle;
-use gizmo::physics::components::Collider;
-use gizmo::physics::joints::{Joint, JointData};
+use gizmo::physics::joints::{D6Drive, D6Motion, Joint, JointData};
 use gizmo::physics::world::PhysicsWorld;
 use gizmo::physics::BodyHandle;
 use gizmo::prelude::*;
-use gizmo::renderer::asset::AssetManager;
-use gizmo::renderer::components::{Camera, DirectionalLight, LightRole, Material, Mesh, MeshRenderer};
 
 struct Showcase {
     rope_vis: u32,
@@ -37,17 +49,15 @@ fn setup(world: &mut World, renderer: &Renderer) -> Showcase {
     let cube = AssetManager::create_cube(&renderer.device);
     let sphere = AssetManager::create_sphere(&renderer.device, 0.4, 24, 24);
 
-    // helper closures capture tex/cube
-    let spawn_static = |world: &mut World, pos: Vec3, scale: Vec3, color: Vec4, m: &Mesh| -> u32 {
-        world
-            .spawn_bundle((
-                Transform::new(pos).with_scale(scale),
-                m.clone(),
-                Material::new(tex.clone()).with_pbr(color, 0.5, 0.4),
-                MeshRenderer::new(),
-                RigidBodyBundle::static_body()
-                    .with_collider(Collider::box_collider(scale.max(Vec3::splat(0.05)))),
-            ))
+    // Statik çapa direği blueprint'i: collider her spawn'da Transform.scale'den türetilir.
+    let post = Prefab::new(
+        cube.clone(),
+        Material::new(tex.clone()).with_pbr(Vec4::new(0.6, 0.6, 0.65, 1.0), 0.5, 0.4),
+    )
+    .with_body(RigidBodyBundle::static_body())
+    .auto_box_collider();
+    let spawn_post = |world: &mut World, pos: Vec3, half: f32| -> u32 {
+        post.spawn(world, Transform::new(pos).with_scale(Vec3::splat(half)))
             .id()
     };
 
@@ -65,7 +75,8 @@ fn setup(world: &mut World, renderer: &Renderer) -> Showcase {
         cube.clone(),
         Material::new(tex.clone()).with_pbr(Vec4::new(0.28, 0.30, 0.34, 1.0), 0.9, 0.05),
         MeshRenderer::new(),
-        RigidBodyBundle::static_body().with_collider(Collider::box_collider(Vec3::new(30.0, 0.5, 30.0))),
+        RigidBodyBundle::static_body()
+            .with_collider(Collider::box_collider(Vec3::new(30.0, 0.5, 30.0))),
     ));
 
     let mut phys = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
@@ -73,7 +84,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> Showcase {
     // ── 1) ROPE pendulum (x=-6) ────────────────────────────────────────────
     let rope_pivot = Vec3::new(-6.0, 5.0, 0.0);
     let rope_len = 2.6_f32;
-    let post1 = spawn_static(world, rope_pivot, Vec3::new(0.12, 0.12, 0.12), Vec4::new(0.6, 0.6, 0.65, 1.0), &cube);
+    let post1 = spawn_post(world, rope_pivot, 0.12);
     // Top 60° geri çekili başlar → ip gerilip sallanır.
     let a = 60.0_f32.to_radians();
     let ball_pos = rope_pivot + rope_len * Vec3::new(-a.sin(), -a.cos(), 0.0);
@@ -104,7 +115,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> Showcase {
 
     // ── 2) TORSİYONEL YAY paçavra (x=-2) ───────────────────────────────────
     let pivot2 = Vec3::new(-2.0, 4.5, 0.0);
-    let post2 = spawn_static(world, pivot2, Vec3::new(0.12, 0.12, 0.12), Vec4::new(0.6, 0.6, 0.65, 1.0), &cube);
+    let post2 = spawn_post(world, pivot2, 0.12);
     // Paçavra: pivotun altında; hinge Z; torsional spring rest 0.9 → o açıya yaylanır.
     let paddle = world
         .spawn_bundle((
@@ -112,7 +123,8 @@ fn setup(world: &mut World, renderer: &Renderer) -> Showcase {
             cube.clone(),
             Material::new(tex.clone()).with_pbr(Vec4::new(0.2, 0.7, 0.3, 1.0), 0.5, 0.4),
             MeshRenderer::new(),
-            RigidBodyBundle::dynamic(1.0).with_collider(Collider::box_collider(Vec3::new(0.12, 1.0, 0.5))),
+            RigidBodyBundle::dynamic(1.0)
+                .with_collider(Collider::box_collider(Vec3::new(0.12, 1.0, 0.5))),
         ))
         .id();
     let mut hinge = Joint::hinge(
@@ -132,14 +144,16 @@ fn setup(world: &mut World, renderer: &Renderer) -> Showcase {
 
     // ── 3) D6 SERVO KOL (x=2) ──────────────────────────────────────────────
     let pivot3 = Vec3::new(2.0, 4.5, 0.0);
-    let post3 = spawn_static(world, pivot3, Vec3::new(0.14, 0.14, 0.14), Vec4::new(0.6, 0.6, 0.65, 1.0), &cube);
+    let post3 = spawn_post(world, pivot3, 0.14);
     let arm = world
         .spawn_bundle((
-            Transform::new(pivot3 - Vec3::new(0.0, 1.0, 0.0)).with_scale(Vec3::new(0.15, 1.0, 0.15)),
+            Transform::new(pivot3 - Vec3::new(0.0, 1.0, 0.0))
+                .with_scale(Vec3::new(0.15, 1.0, 0.15)),
             cube.clone(),
             Material::new(tex.clone()).with_pbr(Vec4::new(0.95, 0.7, 0.1, 1.0), 0.5, 0.6),
             MeshRenderer::new(),
-            RigidBodyBundle::dynamic(1.0).with_collider(Collider::box_collider(Vec3::new(0.15, 1.0, 0.15))),
+            RigidBodyBundle::dynamic(1.0)
+                .with_collider(Collider::box_collider(Vec3::new(0.15, 1.0, 0.15))),
         ))
         .id();
     let mut d6 = Joint::d6(
@@ -149,8 +163,8 @@ fn setup(world: &mut World, renderer: &Renderer) -> Showcase {
         Vec3::new(0.0, 1.0, 0.0),
     );
     if let JointData::D6(ref mut d) = d6.data {
-        d.angular[2] = gizmo::physics::joints::D6Motion::Free; // Z serbest
-        d.angular_drives[2] = gizmo::physics::joints::D6Drive {
+        d.angular[2] = D6Motion::Free; // Z serbest
+        d.angular_drives[2] = D6Drive {
             enabled: true,
             stiffness: 120.0,
             damping: 18.0,
@@ -164,7 +178,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> Showcase {
 
     // ── 4) SÜSPANSİYON (x=6) ───────────────────────────────────────────────
     let pivot4 = Vec3::new(6.0, 5.0, 0.0);
-    let post4 = spawn_static(world, pivot4, Vec3::new(0.12, 0.12, 0.12), Vec4::new(0.6, 0.6, 0.65, 1.0), &cube);
+    let post4 = spawn_post(world, pivot4, 0.12);
     let platform = world
         .spawn_bundle((
             Transform::new(pivot4 - Vec3::new(0.0, 1.5, 0.0)).with_scale(Vec3::new(0.6, 0.2, 0.6)),
@@ -193,10 +207,16 @@ fn setup(world: &mut World, renderer: &Renderer) -> Showcase {
 
     world.insert_resource(phys);
 
-    Showcase { rope_vis, rope_ball, rope_pivot, servo_idx, time: 0.0 }
+    Showcase {
+        rope_vis,
+        rope_ball,
+        rope_pivot,
+        servo_idx,
+        time: 0.0,
+    }
 }
 
-fn update(world: &mut World, state: &mut Showcase, dt: f32, _input: &gizmo::core::input::Input) {
+fn update(world: &mut World, state: &mut Showcase, dt: f32, _input: &Input) {
     state.time += dt;
 
     // D6 servo hedefini salındır → kol süpürür.
@@ -208,7 +228,10 @@ fn update(world: &mut World, state: &mut Showcase, dt: f32, _input: &gizmo::core
     }
 
     // İp görselini pivot↔top yüzeyi arasına ger.
-    let ball = world.borrow::<Transform>().get(state.rope_ball).map(|t| t.position);
+    let ball = world
+        .borrow::<Transform>()
+        .get(state.rope_ball)
+        .map(|t| t.position);
     if let Some(ball) = ball {
         let seg = state.rope_pivot - ball;
         let len = (seg.length() - 0.4).max(0.0);
@@ -232,15 +255,19 @@ fn render(
     renderer: &mut Renderer,
     _light_time: f32,
 ) {
-    gizmo::systems::default_render_pass(world, encoder, view, renderer);
+    default_render_pass(world, encoder, view, renderer);
 }
 
 fn main() {
-    App::<Showcase>::new("Gizmo — Eklem Vitrini (rope / torsional / D6 servo / süspansiyon)", 1280, 720)
-        .add_plugin(gizmo::plugins::PhysicsPlugin::new())
-        .set_setup(setup)
-        .set_update(update)
-        .set_render(render)
-        .run()
-        .expect("uygulama çalıştırılamadı");
+    App::<Showcase>::new(
+        "Gizmo — Eklem Vitrini (rope / torsional / D6 servo / süspansiyon)",
+        1280,
+        720,
+    )
+    .add_plugin(PhysicsPlugin::new())
+    .set_setup(setup)
+    .set_update(update)
+    .set_render(render)
+    .run()
+    .expect("uygulama çalıştırılamadı");
 }

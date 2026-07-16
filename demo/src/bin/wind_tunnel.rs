@@ -8,19 +8,29 @@
 //!   • Araba → herhangi bir GLB (model-bağımsız oto-ölçek/ortala/yere-otur).
 //!   • Metalik boya → "Studio Neutral" ortam preset'i (IBL) + TAA.
 //!
+//! Motor idiomları (dürüst): sahne varlıkları tek `spawn_bundle` ile kurulur. Bu demo
+//! `TransformPlugin` kullanır (fizik YOK → tüm gövdeler statik/görsel), bu yüzden ömür
+//! komponentleri (DespawnAfter/BelowY) ya da Prefab-collider'ı YOK; `GlobalTransform` bundle'a
+//! ELLE eklenir (PhysicsPlugin demoları bunu otomatik alır, TransformPlugin propagate'i yalnız
+//! MEVCUT GlobalTransform'ları günceller). Render kancası BİLE-İSTEYE el-yazımı: her frame
+//! şeritleri yeniden entegre eder ve gpu_particles/gpu_fluid/SSR/SSGI/volumetric'i kapatıp yalnız
+//! IBL+TAA bırakır → `with_scene_render()` tek-satır kısayoluna çevrilMEZ.
+//!
 //! Kontrol: ↑/↓ (veya HUD slider) rüzgar hızı (HUD drag okuması). Çalıştır:
 //! `cargo run -p demo --bin wind_tunnel`
 
 use gizmo::app::App;
 use gizmo::core::world::World;
+use gizmo::egui;
 use gizmo::math::{Mat4, Quat, Vec3, Vec4};
 use gizmo::physics::components::GlobalTransform;
 use gizmo::physics::Transform;
 use gizmo::plugins::TransformPlugin;
 use gizmo::renderer::asset::AssetManager;
-use gizmo::renderer::components::{Camera, DirectionalLight, LightRole, Material, Mesh, MeshRenderer};
+use gizmo::renderer::components::{
+    Camera, DirectionalLight, LightRole, Material, Mesh, MeshRenderer,
+};
 use gizmo::renderer::gpu_types::Vertex;
-use gizmo::egui;
 
 // Gerçek spor araba (Mercedes AMG GT4). Model-bağımsız oto-yerleştirme sayesinde herhangi
 // bir araba GLB'siyle değiştirilebilir (ör. assets/bmw_z8__www.vecarz.com.glb).
@@ -43,12 +53,12 @@ struct WindTunnel {
     wind_speed: f32, // m/s
     cam_id: u32,
     t: f32,
-    ribbon_id: u32,            // akış-çizgisi şerit mesh entity'si
-    seeds: Vec<Vec3>,          // akış çizgisi başlangıç noktaları (girişte)
-    obstacles: Vec<[f32; 4]>,  // arabayı temsil eden engel küreleri (her frame entegrasyonda)
-    view_dir: Vec3,            // kameraya bakan şerit yönü
-    frontal_area_m2: f32,      // mesh silüetinden GERÇEK ölçülen ön-izdüşüm alanı (m²)
-    cd: f32,                   // drag katsayısı (kullanıcı girer; ampirik/CFD)
+    ribbon_id: u32,           // akış-çizgisi şerit mesh entity'si
+    seeds: Vec<Vec3>,         // akış çizgisi başlangıç noktaları (girişte)
+    obstacles: Vec<[f32; 4]>, // arabayı temsil eden engel küreleri (her frame entegrasyonda)
+    view_dir: Vec3,           // kameraya bakan şerit yönü
+    frontal_area_m2: f32,     // mesh silüetinden GERÇEK ölçülen ön-izdüşüm alanı (m²)
+    cd: f32,                  // drag katsayısı (kullanıcı girer; ampirik/CFD)
 }
 
 fn main() {
@@ -63,7 +73,7 @@ fn main() {
         .set_ui(ui)
         .set_render(|world, state, encoder, view, renderer, _light_time| {
             renderer.gpu_particles = None; // akış artık şerit mesh'i (parçacık yok)
-            // Metalik boya için stüdyo ortamı (IBL) → yansıma/görünürlük.
+                                           // Metalik boya için stüdyo ortamı (IBL) → yansıma/görünürlük.
             renderer.environment_preset = 1; // Studio Neutral
             renderer.environment_preset_2 = 1;
             // Kullanılmayan ağır pass'leri kapat; TAA AÇIK (spekular parıltıyı temizler).
@@ -101,34 +111,33 @@ fn setup(world: &mut World, renderer: &gizmo::renderer::Renderer) -> WindTunnel 
         &renderer.scene.texture_bind_group_layout,
     );
 
-    // Zemin (koyu tünel tabanı).
+    // Zemin (koyu tünel tabanı) — tek spawn_bundle (GlobalTransform elle: TransformPlugin).
     {
-        let mesh = AssetManager::create_plane(&renderer.device, 60.0);
-        let e = world.spawn();
-        let t = Transform::new(Vec3::new(0.0, 0.0, 0.0));
-        world.add_component(e, t);
-        world.add_component(e, GlobalTransform { matrix: t.local_matrix });
-        world.add_component(e, mesh);
-        world.add_component(
-            e,
+        let t = Transform::new(Vec3::ZERO);
+        world.spawn_bundle((
+            t,
+            GlobalTransform {
+                matrix: t.local_matrix,
+            },
+            AssetManager::create_plane(&renderer.device, 60.0),
             Material::new(white.clone()).with_pbr(Vec4::new(0.10, 0.10, 0.12, 1.0), 0.85, 0.0),
-        );
-        world.add_component(e, MeshRenderer::new());
+            MeshRenderer::new(),
+        ));
     }
 
     // Işık
     {
-        let e = world.spawn();
         let t = Transform::new(Vec3::new(0.0, 10.0, 0.0)).with_rotation(
             Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4)
                 * Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
         );
-        world.add_component(e, t);
-        world.add_component(e, GlobalTransform { matrix: t.local_matrix });
-        world.add_component(
-            e,
+        world.spawn_bundle((
+            t,
+            GlobalTransform {
+                matrix: t.local_matrix,
+            },
             DirectionalLight::new(Vec3::new(1.0, 0.97, 0.90), 3.4, LightRole::Sun),
-        );
+        ));
     }
 
     // Araba (GLB) — YALNIZ GÖRSEL, fizik yok. Model-bağımsız oto-yerleştirme.
@@ -147,7 +156,10 @@ fn setup(world: &mut World, renderer: &gizmo::renderer::Renderer) -> WindTunnel 
 
     // GERÇEK frontal alanı mesh silüetinden ölç (m²).
     let frontal_area_m2 = measure_frontal_area_m2(world, chassis.id(), car_min, car_max);
-    println!("[wind_tunnel] ölçülen frontal alan ≈ {:.3} m²", frontal_area_m2);
+    println!(
+        "[wind_tunnel] ölçülen frontal alan ≈ {:.3} m²",
+        frontal_area_m2
+    );
 
     // Arabayı temsil eden engel küreleri (Z boyunca) — akış bunlara TEĞET sapıp gövdeye sarılır.
     let obstacles = build_obstacles(car_min, car_max);
@@ -157,16 +169,20 @@ fn setup(world: &mut World, renderer: &gizmo::renderer::Renderer) -> WindTunnel 
     let dist = diag * 1.5 + 4.0;
     let cam_pos = center + dir * dist;
     let cam_id = {
-        let e = world.spawn();
         let target = center + Vec3::new(0.0, diag * 0.02, 0.0);
         let look = (target - cam_pos).normalize();
         let yaw = look.z.atan2(look.x);
         let pitch = look.y.clamp(-1.0, 1.0).asin();
         let t = Transform::new(cam_pos);
-        world.add_component(e, t);
-        world.add_component(e, GlobalTransform { matrix: t.local_matrix });
-        world.add_component(e, Camera::new(1.05, 0.1, 500.0, yaw, pitch, true));
-        e.id()
+        world
+            .spawn_bundle((
+                t,
+                GlobalTransform {
+                    matrix: t.local_matrix,
+                },
+                Camera::new(1.05, 0.1, 500.0, yaw, pitch, true),
+            ))
+            .id()
     };
 
     // AKIŞ-ÇİZGİSİ ŞERİTLERİ: ön kesiti kaplayan tohum ızgarası. Şeritler HER FRAME (render'da)
@@ -197,20 +213,20 @@ fn setup(world: &mut World, renderer: &gizmo::renderer::Renderer) -> WindTunnel 
 
     let ribbon_id = {
         let verts = build_ribbon_verts(&seeds, &obstacles, view_dir, RIBBON_WIDTH, 0.0, 0.0);
-        let mesh = Mesh::from_vertices(&renderer.device, &verts, "streamlines");
-        let e = world.spawn();
-        let t = Transform::new(Vec3::ZERO);
-        world.add_component(e, t);
-        world.add_component(e, GlobalTransform { matrix: t.local_matrix });
-        world.add_component(e, mesh);
-        // Yarı-saydam unlit → araba aralardan görünür; vertex renkleri her frame animasyonlanır.
-        world.add_component(
-            e,
-            Material::new(white.clone()).with_unlit(Vec4::new(0.95, 0.97, 1.0, 0.30)),
-        );
-        world.add_component(e, MeshRenderer::new());
         println!("[wind_tunnel] şerit vertex sayısı: {}", verts.len());
-        e.id()
+        let t = Transform::new(Vec3::ZERO);
+        world
+            .spawn_bundle((
+                t,
+                GlobalTransform {
+                    matrix: t.local_matrix,
+                },
+                Mesh::from_vertices(&renderer.device, &verts, "streamlines"),
+                // Yarı-saydam unlit → araba aralardan görünür; vertex renkleri her frame animasyonlanır.
+                Material::new(white.clone()).with_unlit(Vec4::new(0.95, 0.97, 1.0, 0.30)),
+                MeshRenderer::new(),
+            ))
+            .id()
     };
 
     WindTunnel {
@@ -239,8 +255,7 @@ fn fit_car(world: &mut World, root: u32) {
             t.update_local_matrix();
         }
     }
-    let (a0, b0) =
-        world_aabb(world, root).unwrap_or((Vec3::splat(-1.0), Vec3::splat(1.0)));
+    let (a0, b0) = world_aabb(world, root).unwrap_or((Vec3::splat(-1.0), Vec3::splat(1.0)));
     let size = b0 - a0;
     let long_horiz = size.x.max(size.z).max(1e-3);
     let scale = TARGET_LEN / long_horiz;
@@ -283,7 +298,11 @@ fn build_obstacles(car_min: Vec3, car_max: Vec3) -> Vec<[f32; 4]> {
     let z1 = car_max.z - r * 0.5;
     let mut v = Vec::with_capacity(n);
     for i in 0..n {
-        let f = if n > 1 { i as f32 / (n - 1) as f32 } else { 0.5 };
+        let f = if n > 1 {
+            i as f32 / (n - 1) as f32
+        } else {
+            0.5
+        };
         v.push([cx, cy, z0 + (z1 - z0) * f, r]);
     }
     v
@@ -506,7 +525,15 @@ fn measure_frontal_area_m2(world: &World, root: u32, amin: Vec3, amax: Vec3) -> 
                 let b = world_m.transform_point3(cv[i + 1]);
                 let c = world_m.transform_point3(cv[i + 2]);
                 rasterize_tri_xy(
-                    &mut grid, G, (a.x, a.y), (b.x, b.y), (c.x, c.y), min_x, min_y, w, h,
+                    &mut grid,
+                    G,
+                    (a.x, a.y),
+                    (b.x, b.y),
+                    (c.x, c.y),
+                    min_x,
+                    min_y,
+                    w,
+                    h,
                 );
                 tri_count += 1;
                 i += 3;

@@ -1,19 +1,46 @@
-use gizmo::physics::components::{Breakable, Collider, Explosion, RigidBody, Transform, Velocity};
+//! # Gelişmiş Fizik Demosu — yıkım / ragdoll / halat vitrini
+//!
+//! Motorun fizik yeteneklerini üç bağımsız sahneyle sergiler:
+//!   * **Yıkım** — kırılabilir (`Breakable`) cam duvar; sol-tık ışın-izle + `Explosion`.
+//!   * **Ragdoll** — `Joint::fixed` ile zincirlenmiş uzuvlar (X = tüm eklemleri kopar).
+//!   * **Halat** — `Rope` düğümleri her kare görsel kürelere kopyalanır.
+//!
+//! İdiom notları (NEYİN motora, NEYİN demoya ait olduğu konusunda dürüst olalım):
+//!   * **`Prefab` + `auto_box_collider`** — cam-duvar blokları TEK blueprint'ten; kutu collider
+//!     `Transform.scale`'den OTOMATİK türetilir (boyutu iki kez yazma). Halat düğümleri de
+//!     fizik-siz görsel-only `Prefab`.
+//!   * **`spawn_bundle`** — kamera/zemin/ragdoll-uzuvları tek çağrıda kurulur (dağınık
+//!     `add_component` zinciri yok). Uzuvlarda BİLEREK `RigidBodyBundle` DEĞİL, elle
+//!     `RigidBody`+`Velocity`+`Collider` kullanılır: ragdoll+joint çözücü ataletten hassastır,
+//!     bundle'ın collider'dan atalet-türetmesi zincirin çözüm dengesini bozabilir → orijinal
+//!     varsayılan atalet KORUNUR.
+//!   * **Fizik ELLE sürülür** (`cpu_physics_step_system` + fracture/explosion/debug her kare) —
+//!     bu demo `PhysicsPlugin` KULLANMAZ; joint/raycast için kendi `PhysicsWorld` kaynağını tutar.
+//!     Bu yüzden `DespawnAfter`/`DespawnBelowY` EKLENMEZ: onları işleyecek `LifetimePlugin`
+//!     schedule'da yok → sessizce hiçbir şey yapmazlardı.
+//!   * **Sahne render = `default_render_pass` DOĞRUDAN** — motor `with_scene_render()` tek-satır
+//!     kısayolunu sunar ama onu KULLANMIYORUZ: o kısayol SSR/SSGI/volumetric'i (ve gizmo debug
+//!     çizgilerini) kapatır; bu vitrin hız/iz gizmo'larını ve efektleri AÇIK ister.
+//!
+//! ## Kontroller
+//!   * **Sağ-tık + fare / WASD** — kamerayı gez · **Space** — yüksel · **Shift** — hızlan
+//!   * **Sol-tık (basılı)** — nişan aldığın yerde patlama · **X** — ragdoll eklemlerini kopar
+
+use gizmo::core::input::mouse;
+use gizmo::physics::components::{Breakable, CollisionLayer, Explosion};
 use gizmo::physics::joints::Joint;
-use gizmo::physics::ragdoll::RagdollBuilder;
 use gizmo::physics::rope::Rope;
 use gizmo::physics::world::PhysicsWorld;
+use gizmo::physics::BodyHandle;
 use gizmo::prelude::*;
-use gizmo::renderer::asset::AssetManager;
-use gizmo::renderer::components::{Camera, Material, MeshRenderer, PointLight};
 
+/// Hata-ayıklama izi: her karenin Transform'unu tutar, gizmo ile geçmiş kutuları çizilir.
 #[derive(Clone)]
 struct GhostTrail {
     history: std::collections::VecDeque<Transform>,
     max_frames: usize,
 }
-
-impl gizmo::core::component::Component for GhostTrail {}
+gizmo::core::impl_component!(GhostTrail);
 
 struct DemoState {
     camera_speed: f32,
@@ -21,21 +48,17 @@ struct DemoState {
     camera_yaw: f32,
     camera_pos: Vec3,
     rope: Option<Rope>,
-    sphere_mesh: gizmo::renderer::components::Mesh,
-    chunk_material: gizmo::renderer::components::Material,
+    // Fracture ile üretilen chunk'lara görsel mesh/material vermek için (runtime).
+    sphere_mesh: Mesh,
+    chunk_material: Material,
 }
 
 fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     let mut asset_manager = AssetManager::new();
 
-    // Camera
-    let camera_ent = world.spawn();
-    world.add_component(
-        camera_ent,
+    // Kamera — Transform + Camera + isim tek spawn_bundle'da.
+    world.spawn_bundle((
         Transform::new(Vec3::new(0.0, 5.0, 15.0)).with_rotation(Quat::from_rotation_x(-0.2)),
-    );
-    world.add_component(
-        camera_ent,
         Camera::new(
             std::f32::consts::FRAC_PI_3,
             0.1,
@@ -44,17 +67,16 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
             -0.2,
             true,
         ),
-    );
-    world.add_component(camera_ent, gizmo::core::EntityName("Main Camera".into()));
+        EntityName("Main Camera".into()),
+    ));
 
-    // Textures
-    let ground_tex = asset_manager.create_checkerboard_texture(
+    // Dokular — zemin/blok/uzuv/düğüm hepsi aynı damalı dokuyu paylaşır; skybox beyaz.
+    let checker = asset_manager.create_checkerboard_texture(
         &renderer.device,
         &renderer.queue,
         &renderer.scene.texture_bind_group_layout,
     );
-
-    let box_tex = asset_manager.create_checkerboard_texture(
+    let white_tex = asset_manager.create_white_texture(
         &renderer.device,
         &renderer.queue,
         &renderer.scene.texture_bind_group_layout,
@@ -64,68 +86,50 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
     let plane_mesh = AssetManager::create_plane(&renderer.device, 100.0);
     let sphere_mesh = AssetManager::create_sphere(&renderer.device, 1.0, 16, 16);
 
-    // Skybox (Procedural)
-    let skybox = world.spawn();
-    let sky_mesh = AssetManager::create_sphere(&renderer.device, 2000.0, 32, 32);
-    let white_tex = asset_manager.create_white_texture(
-        &renderer.device,
-        &renderer.queue,
-        &renderer.scene.texture_bind_group_layout,
-    );
-    world.add_component(skybox, Transform::new(Vec3::new(0.0, 0.0, 0.0)));
-    world.add_component(skybox, sky_mesh);
-    world.add_component(
-        skybox,
+    // Skybox (prosedürel, unlit ters küre).
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO),
+        AssetManager::create_sphere(&renderer.device, 2000.0, 32, 32),
         Material::new(white_tex.clone())
-            .with_unlit(Vec4::new(1.0, 1.0, 1.0, 1.0))
+            .with_unlit(Vec4::ONE)
             .with_skybox(),
-    );
-    world.add_component(skybox, MeshRenderer::new());
+        MeshRenderer::new(),
+    ));
 
-    // Light
-    let light = world.spawn();
-    world.add_component(light, Transform::new(Vec3::new(0.0, 20.0, 0.0)));
-    world.add_component(
-        light,
-        PointLight::new(Vec3::new(1.0, 1.0, 1.0), 500.0, 50.0),
-    );
+    // Işık.
+    world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, 20.0, 0.0)),
+        PointLight::new(Vec3::ONE, 500.0, 50.0),
+    ));
 
-    // Ground
-    let ground = world.spawn();
-    world.add_component(ground, Transform::new(Vec3::ZERO));
-    world.add_component(ground, plane_mesh.clone());
-    world.add_component(
-        ground,
-        Material::new(ground_tex).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.8, 0.1),
-    );
-    world.add_component(ground, MeshRenderer::new());
-    world.add_component(ground, Collider::plane(Vec3::Y, 0.0));
-    world.add_component(ground, RigidBody::new_static());
-    world.add_component(ground, Velocity::default());
+    // Zemin — statik düzlem collider (RigidBodyBundle::static_body → RigidBody+Velocity+Collider).
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO),
+        plane_mesh.clone(),
+        Material::new(checker.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.8, 0.1),
+        MeshRenderer::new(),
+        RigidBodyBundle::static_body().with_collider(Collider::plane(Vec3::Y, 0.0)),
+    ));
 
+    // Fizik dünyası — joint'ler ve ışın-izleme (raycast) burada tutulur.
     let mut phys_world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
 
-    // --- 1. DESTRUCTION SYSTEM DEMO ---
-    // A glass wall that breaks
+    // ── 1. YIKIM: kırılabilir cam duvar (5×5 blok) ──
+    // TEK blueprint; kutu collider `Transform.scale`'den otomatik (0.5 → box_collider(0.5)).
+    // Gülle/mermi gibi per-örnek hız gerekmez → Prefab uygun.
+    let glass = Prefab::new(
+        cube_mesh.clone(),
+        Material::new(checker.clone()).with_pbr(Vec4::new(0.3, 0.6, 1.0, 0.5), 0.2, 0.0),
+    )
+    .with_body(RigidBodyBundle::dynamic(10.0))
+    .auto_box_collider();
+
     for y in 0..5 {
         for x in 0..5 {
-            let brick = world.spawn();
-            // Ground top is at y=0.1. Brick half-height is 0.5. So start at y=0.6. Add a tiny gap (1.02) to prevent micro-collisions.
+            // Zemin üstü y=0.1; blok yarı-boyu 0.5 → y=0.6'dan başla. 1.02 boşluk mikro-çarpışmayı önler.
             let pos = Vec3::new(-5.0 + (x as f32) * 1.02, 0.6 + (y as f32) * 1.02, -5.0);
-            world.add_component(
-                brick,
-                Transform::new(pos).with_scale(Vec3::new(0.5, 0.5, 0.5)),
-            );
-            world.add_component(brick, cube_mesh.clone());
-            world.add_component(
-                brick,
-                Material::new(box_tex.clone()).with_pbr(Vec4::new(0.3, 0.6, 1.0, 0.5), 0.2, 0.0),
-            );
-            world.add_component(brick, MeshRenderer::new());
-            world.add_component(brick, Collider::box_collider(Vec3::new(0.5, 0.5, 0.5)));
-            world.add_component(brick, RigidBody::new(10.0, true));
-            world.add_component(brick, Velocity::default());
-            // Add GhostTrail for debugging
+            let brick = glass.spawn(world, Transform::new(pos).with_scale(Vec3::splat(0.5)));
+            // Hata-ayıklama izi (gizmo geçmiş kutuları).
             world.add_component(
                 brick,
                 GhostTrail {
@@ -133,7 +137,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
                     max_frames: 10,
                 },
             );
-            // Make it breakable with high threshold to survive stacking
+            // Yüksek eşik → istifleme sırasında kırılmaz, ancak güçlü darbede (patlama) kırılır.
             world.add_component(
                 brick,
                 Breakable {
@@ -145,46 +149,31 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         }
     }
 
-    // --- 2. RAGDOLL DEMO ---
-    let ragdoll_root = Vec3::new(5.0, 8.0, -5.0);
-    let mut builder = RagdollBuilder::new(ragdoll_root);
-    builder.create_humanoid();
-
-    // Normally you'd spawn entities dynamically using the builder, but since the builder just creates defs,
-    // we'll manually create some connected limbs for demo
-
-    let mut prev_ent: Option<gizmo::core::Entity> = None;
+    // ── 2. RAGDOLL: sabit eklemlerle zincirlenmiş uzuvlar ──
+    // Her uzuv spawn_bundle ile tek çağrıda kurulur. Joint'ler ENTITY id'sine göre bağlanır,
+    // bu yüzden spawn SIRASI (ebeveyn önce) ve dönen entity KORUNMALIDIR.
+    let mut prev_ent: Option<Entity> = None;
     for i in 0..4 {
-        let limb = world.spawn();
         let pos = Vec3::new(5.0, 8.0 - (i as f32) * 1.2, 0.0);
-        world.add_component(
-            limb,
+        let limb = world.spawn_bundle((
             Transform::new(pos).with_scale(Vec3::new(0.2, 0.5, 0.2)),
-        );
-        world.add_component(limb, cube_mesh.clone());
-        world.add_component(
-            limb,
-            Material::new(box_tex.clone()).with_pbr(Vec4::new(0.8, 0.2, 0.2, 1.0), 0.5, 0.5),
-        );
-        world.add_component(limb, MeshRenderer::new());
-        // Put limbs on layer 1 and ignore layer 1 collisions to prevent self-collision explosion
-        world.add_component(
-            limb,
-            Collider::box_collider(Vec3::new(0.2, 0.5, 0.2)).with_layer(
-                gizmo::physics::components::CollisionLayer {
-                    layer: 1,
-                    mask: !(1 << 1),
-                },
-            ),
-        );
-        // Lower restitution to prevent chaotic bouncing and joint solver explosions
-        world.add_component(limb, RigidBody::new(5.0, true));
-        world.add_component(limb, Velocity::default());
+            cube_mesh.clone(),
+            Material::new(checker.clone()).with_pbr(Vec4::new(0.8, 0.2, 0.2, 1.0), 0.5, 0.5),
+            MeshRenderer::new(),
+            // Uzuvları layer 1'e koy + layer 1 çarpışmasını yok say → kendi-kendine çarpışma patlamasını önle.
+            Collider::box_collider(Vec3::new(0.2, 0.5, 0.2)).with_layer(CollisionLayer {
+                layer: 1,
+                mask: !(1 << 1),
+            }),
+            // BİLEREK RigidBodyBundle DEĞİL: joint çözücü ataletten hassas → varsayılan atalet korunur.
+            RigidBody::new(5.0, true),
+            Velocity::default(),
+        ));
 
         if let Some(parent) = prev_ent {
             let fixed = Joint::fixed(
-                gizmo::physics::BodyHandle::from_id(parent.id()),
-                gizmo::physics::BodyHandle::from_id(limb.id()),
+                BodyHandle::from_id(parent.id()),
+                BodyHandle::from_id(limb.id()),
                 Vec3::new(0.0, -0.6, 0.0),
                 Vec3::new(0.0, 0.6, 0.0),
             )
@@ -194,7 +183,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         prev_ent = Some(limb);
     }
 
-    // --- 3. ROPE DEMO ---
+    // ── 3. HALAT: her düğüm için görsel-only küre (fizik `Rope` içinde, CPU'da adımlanır) ──
     let rope = Rope::new(
         Vec3::new(-5.0, 10.0, 5.0),
         Vec3::new(1.0, -0.2, 0.0),
@@ -205,20 +194,17 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         false,
     );
 
-    // Create visual spheres for rope nodes
+    // Görsel-only Prefab (fizik gövdesi YOK) — konumlar update'te halat düğümlerinden kopyalanır.
+    let rope_node = Prefab::new(
+        sphere_mesh.clone(),
+        Material::new(checker.clone()).with_pbr(Vec4::new(1.0, 0.8, 0.1, 1.0), 0.5, 0.5),
+    );
     for _ in 0..rope.nodes.len() {
-        let node_ent = world.spawn();
-        world.add_component(
-            node_ent,
+        let node = rope_node.spawn(
+            world,
             Transform::new(Vec3::ZERO).with_scale(Vec3::splat(0.2)),
         );
-        world.add_component(node_ent, sphere_mesh.clone());
-        world.add_component(
-            node_ent,
-            Material::new(box_tex.clone()).with_pbr(Vec4::new(1.0, 0.8, 0.1, 1.0), 0.5, 0.5),
-        );
-        world.add_component(node_ent, MeshRenderer::new());
-        world.add_component(node_ent, gizmo::core::EntityName("RopeNode".into()));
+        world.add_component(node, EntityName("RopeNode".into()));
     }
 
     world.insert_resource(phys_world);
@@ -230,28 +216,22 @@ fn setup(world: &mut World, renderer: &Renderer) -> DemoState {
         camera_yaw: -std::f32::consts::FRAC_PI_2,
         camera_pos: Vec3::new(0.0, 5.0, 15.0),
         rope: Some(rope),
-        sphere_mesh: sphere_mesh.clone(),
-        chunk_material: Material::new(box_tex.clone()).with_pbr(
-            Vec4::new(0.5, 0.5, 0.5, 1.0),
-            0.5,
-            0.5,
-        ),
+        sphere_mesh,
+        chunk_material: Material::new(checker).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.5, 0.5),
     }
 }
 
-fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core::input::Input) {
+fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
     let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
     let mut cam_pos = Vec3::ZERO;
 
-    if let Some(mut q) = world.query_mut::<(
-        gizmo::core::query::Mut<Transform>,
-        gizmo::core::query::Mut<Camera>,
-    )>() {
+    // --- serbest-uçuş kamera (sağ-tık basılıyken fare-look) ---
+    if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
         for (_, (mut transform, mut camera)) in q.iter_mut() {
             let sensitivity = 0.002;
             let (dx, dy) = input.mouse_delta();
 
-            if input.is_mouse_button_pressed(gizmo::core::input::mouse::RIGHT) {
+            if input.is_mouse_button_pressed(mouse::RIGHT) {
                 state.camera_yaw -= dx * sensitivity;
                 state.camera_pitch -= dy * sensitivity;
                 state.camera_pitch = state.camera_pitch.clamp(-1.5, 1.5);
@@ -303,8 +283,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
         }
     }
 
-    // Left Click: Explosion (Trigger Destruction)
-    if input.is_mouse_button_pressed(gizmo::core::input::mouse::LEFT) {
+    // --- Sol-tık: ışın-izle + patlama (yıkımı tetikle) ---
+    if input.is_mouse_button_pressed(mouse::LEFT) {
         let mut hit_pos = None;
         if let Some(phys) = world.get_resource::<PhysicsWorld>() {
             let ray = gizmo::physics::raycast::Ray::new(cam_pos, cam_forward);
@@ -314,21 +294,20 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
         }
 
         if let Some(pos) = hit_pos {
-            let exp_ent = world.spawn();
-            world.add_component(exp_ent, Transform::new(pos));
-            world.add_component(
-                exp_ent,
+            world.spawn_bundle((
+                Transform::new(pos),
                 Explosion {
                     force_radius: 5.0,
                     force: 5000.0,
                     is_active: true,
                     ..Default::default()
                 },
-            );
+            ));
         }
     }
-    // Break joints on X key
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyX as u32) {
+
+    // --- X: tüm eklemleri kopar ---
+    if input.is_key_pressed(KeyCode::KeyX as u32) {
         if let Some(mut phys_world) = world.get_resource_mut::<PhysicsWorld>() {
             for joint in &mut phys_world.joints {
                 joint.is_broken = true;
@@ -336,13 +315,10 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
         }
     }
 
-    // 1. Compute and update vectors (v, a, f) and draw them
+    // --- gizmo debug: hız vektörleri (yeşil) + iz bırakma (yarı-saydam) ---
     if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
-        if let Some(q) =
-            world.query::<(&Velocity, &Transform, &RigidBody)>()
-        {
+        if let Some(q) = world.query::<(&Velocity, &Transform, &RigidBody)>() {
             for (_, (vel, trans, _rb)) in q.iter() {
-                // Draw Velocity (Green)
                 gizmos.draw_line(
                     trans.position,
                     trans.position + vel.linear * 0.1,
@@ -351,24 +327,23 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
             }
         }
 
-        // 2. Draw Ghosting (İz Bırakma)
-        // SAFETY: single-threaded demo; GhostTrail (component) is disjoint from the held Gizmos resource guard.
-        if let Some(mut q) = unsafe {
-            world.query_unchecked::<(gizmo::core::query::Mut<GhostTrail>, &Transform, &Collider)>()
-        } {
+        // GÜVENLİK: tek-thread demo; GhostTrail bileşeni, tutulan Gizmos kaynak-guard'ından ayrık.
+        if let Some(mut q) =
+            unsafe { world.query_unchecked::<(Mut<GhostTrail>, &Transform, &Collider)>() }
+        {
             for (_, (mut ghost, trans, col)) in q.iter_mut() {
-                // Store current frame
+                // Bu kareyi sakla, en eskiyi at.
                 ghost.history.push_front(*trans);
                 if ghost.history.len() > ghost.max_frames {
                     ghost.history.pop_back();
                 }
 
-                // Draw ghosts
+                // Geçmiş kutuları giderek sönerek çiz.
                 for (i, g_trans) in ghost.history.iter().enumerate() {
                     let alpha = 1.0 - (i as f32 / ghost.max_frames as f32);
-                    let color = [1.0, 1.0, 1.0, alpha * 0.5]; // Semi-transparent white
+                    let color = [1.0, 1.0, 1.0, alpha * 0.5];
 
-                    if let gizmo::physics::components::ColliderShape::Box(b) = &col.shape {
+                    if let ColliderShape::Box(b) = &col.shape {
                         let h = b.half_extents;
                         let p0 = g_trans
                             .local_matrix
@@ -413,12 +388,13 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
         }
     }
 
+    // --- fizik ELLE sürülür (bu demo PhysicsPlugin kullanmaz) ---
     gizmo::systems::cpu_physics_step_system(world, dt);
     gizmo::physics::physics_fracture_system(world, dt);
     gizmo::physics::physics_explosion_system(world, dt);
     gizmo::systems::physics::physics_debug_system(world);
 
-    // Give visual meshes to chunks created by fracture system
+    // Fracture sisteminin ürettiği chunk'lara görsel mesh/material ver.
     let mut missing = Vec::new();
     if let Some(q) = world.query::<(&RigidBody, &Collider)>() {
         let meshes = world.borrow::<MeshRenderer>();
@@ -436,14 +412,12 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &gizmo::core
         }
     }
 
-    // Rope Update
+    // --- halat adımı + görsel düğümleri güncelle ---
     if let Some(ref mut rope) = state.rope {
         rope.step(dt, Vec3::new(0.0, -9.81, 0.0));
 
         let mut node_idx = 0;
-        if let Some(mut q) =
-            world.query_mut::<(gizmo::core::query::Mut<Transform>, &gizmo::core::EntityName)>()
-        {
+        if let Some(mut q) = world.query_mut::<(Mut<Transform>, &EntityName)>() {
             for (_, (mut trans, name)) in q.iter_mut() {
                 if name.0 == "RopeNode" && node_idx < rope.nodes.len() {
                     trans.position = rope.nodes[node_idx].position;
@@ -462,7 +436,8 @@ fn render(
     renderer: &mut Renderer,
     _light_time: f32,
 ) {
-    gizmo::systems::default_render_pass(world, encoder, view, renderer);
+    // Tam deferred boru hattı + gizmo çizgileri açık — with_scene_render KULLANMA (efektleri kapatır).
+    default_render_pass(world, encoder, view, renderer);
 }
 
 fn main() {

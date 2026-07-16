@@ -1,22 +1,27 @@
-//! Ragdoll showcase — humanoid iskeletler (RagdollBuilder::create_humanoid) yerden
-//! yükseğe doğuyor, düşüyor ve YENİ CONE-TWIST + yumuşak (compliant) eklem limitleriyle
-//! doğal biçimde savruluyor: uzuvlar kendi ekseninde serbest DÖNMÜYOR, hiperekstansiyona
-//! GİRMİYOR, limitler yaylı hissettiriyor.
+//! # Ragdoll showcase — humanoid iskeletler CONE-TWIST + yumuşak eklem limitleriyle
+//!
+//! `RagdollBuilder::create_humanoid` ile kurulan üç iskelet yerden yükseğe doğar, düşer ve
+//! yumuşak (compliant) eklem limitleriyle doğal biçimde savrulur: uzuvlar kendi ekseninde
+//! serbest DÖNMEZ, hiperekstansiyona GİRMEZ, limitler yaylı hissettirir.
+//!
+//! Neyin motora, neyin demoya ait olduğu konusunda dürüst olalım:
+//!   * **`RagdollBuilder` + `spawn_ragdoll`** — iskelet/eklem topolojisi motordan gelir; her
+//!     kemik kapsül collider'lı bir fizik gövdesidir, render için üstüne kutu mesh takılır.
+//!   * **`is_key_just_pressed`** — R kenar-tespiti motordan (elle `prev_r` bool takibi YOK).
+//!   * **Yeniden başlat = poz/hız RESET** (despawn+respawn DEĞİL): eklem topolojisini bozmadan
+//!     kemikleri kayıtlı ilk poz + başlangıç hızlarına döndürür ve gövdeleri uyandırır. Kimlik
+//!     tabanlı per-kemik reset gerektiğinden `despawn_all_with` yerine `borrow_mut`+`get_mut`.
+//!   * **Render = `default_render_pass` DOĞRUDAN** — `with_scene_render()` tek-satır kısayolu
+//!     VAR ama SSR/SSGI/volumetric/TAA'yı kapatırdı; çıplak pass deferred efektleri AÇIK tutar.
+//!     `gpu_physics` zaten motor-varsayılanı `None` (opt-in) → render'da state-mutasyonu YOK.
 //!
 //! **R** = yeniden başlat (kemikleri ilk pozlarına + başlangıç hızlarına sıfırlar).
-//!
-//! Her kemik fizik gövdesine (kapsül collider) render için bir kutu mesh takılır; fizik
-//! Transform'u sürer, render `ensure_global_transforms` ile otomatik senkron eder.
 
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_3};
 
-use gizmo::bundles::RigidBodyBundle;
-use gizmo::physics::components::{Collider, RigidBody, Velocity};
 use gizmo::physics::ragdoll::{spawn_ragdoll, RagdollBoneType, RagdollBuilder};
 use gizmo::physics::world::PhysicsWorld;
 use gizmo::prelude::*;
-use gizmo::renderer::asset::AssetManager;
-use gizmo::renderer::components::{Camera, DirectionalLight, LightRole, Material, MeshRenderer};
 
 /// Bir kemiğin yeniden-başlatma durumu: ilk poz + başlangıç hızı.
 struct BoneReset {
@@ -28,7 +33,6 @@ struct BoneReset {
 
 struct RagdollDemo {
     resets: Vec<BoneReset>,
-    prev_r: bool,
 }
 
 fn bone_color(bt: RagdollBoneType) -> Vec4 {
@@ -56,16 +60,19 @@ fn setup(world: &mut World, renderer: &Renderer) -> RagdollDemo {
     ));
 
     // Kamera
-    let cam = Camera::new(FRAC_PI_3, 0.1, 500.0, -FRAC_PI_2, -0.25, true);
-    world.spawn_bundle((Transform::new(Vec3::new(0.0, 4.5, 13.0)), cam));
+    world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, 4.5, 13.0)),
+        Camera::new(FRAC_PI_3, 0.1, 500.0, -FRAC_PI_2, -0.25, true),
+    ));
 
-    // Zemin (büyük statik kutu; üst yüzü y=0)
+    // Zemin (tek statik kutu; üst yüzü y=0) — tekrar eden nesne değil → Prefab yerine spawn_bundle.
     world.spawn_bundle((
         Transform::new(Vec3::new(0.0, -0.5, 0.0)).with_scale(Vec3::new(30.0, 0.5, 30.0)),
         cube.clone(),
         Material::new(tex.clone()).with_pbr(Vec4::new(0.28, 0.30, 0.34, 1.0), 0.9, 0.05),
         MeshRenderer::new(),
-        RigidBodyBundle::static_body().with_collider(Collider::box_collider(Vec3::new(30.0, 0.5, 30.0))),
+        RigidBodyBundle::static_body()
+            .with_collider(Collider::box_collider(Vec3::new(30.0, 0.5, 30.0))),
     ));
 
     // Yerçekimi dünyası (spawn_ragdoll eklemleri buraya iter)
@@ -112,43 +119,50 @@ fn setup(world: &mut World, renderer: &Renderer) -> RagdollDemo {
                     *v = Velocity::new(lin).with_angular(ang);
                 }
             }
-            resets.push(BoneReset { id: entity.id(), transform: saved, lin, ang });
+            resets.push(BoneReset {
+                id: entity.id(),
+                transform: saved,
+                lin,
+                ang,
+            });
         }
     }
 
-    RagdollDemo { resets, prev_r: false }
+    println!("🦴 RAGDOLL — R = yeniden başlat");
+    RagdollDemo { resets }
 }
 
-fn update(world: &mut World, state: &mut RagdollDemo, _dt: f32, input: &gizmo::core::input::Input) {
-    let r = input.is_key_pressed(KeyCode::KeyR as u32);
-    // Basış kenarı (tuşu basılı tutmak sürekli tetiklemesin).
-    if r && !state.prev_r {
-        {
-            let mut ts = world.borrow_mut::<Transform>();
-            for b in &state.resets {
-                if let Some(mut t) = ts.get_mut(b.id) {
-                    *t = b.transform;
-                }
-            }
-        }
-        {
-            let mut vs = world.borrow_mut::<Velocity>();
-            for b in &state.resets {
-                if let Some(mut v) = vs.get_mut(b.id) {
-                    *v = Velocity::new(b.lin).with_angular(b.ang);
-                }
-            }
-        }
-        {
-            let mut rbs = world.borrow_mut::<RigidBody>();
-            for b in &state.resets {
-                if let Some(mut rb) = rbs.get_mut(b.id) {
-                    rb.wake_up();
-                }
+fn update(world: &mut World, state: &mut RagdollDemo, _dt: f32, input: &Input) {
+    // Kenar-tespiti motordan (is_key_just_pressed): tuşu basılı tutmak sürekli tetiklemez.
+    if !input.is_key_just_pressed(KeyCode::KeyR as u32) {
+        return;
+    }
+
+    // Kimlik tabanlı per-kemik reset → poz + hız + uyandır (topolojiye dokunmadan).
+    {
+        let mut ts = world.borrow_mut::<Transform>();
+        for b in &state.resets {
+            if let Some(mut t) = ts.get_mut(b.id) {
+                *t = b.transform;
             }
         }
     }
-    state.prev_r = r;
+    {
+        let mut vs = world.borrow_mut::<Velocity>();
+        for b in &state.resets {
+            if let Some(mut v) = vs.get_mut(b.id) {
+                *v = Velocity::new(b.lin).with_angular(b.ang);
+            }
+        }
+    }
+    {
+        let mut rbs = world.borrow_mut::<RigidBody>();
+        for b in &state.resets {
+            if let Some(mut rb) = rbs.get_mut(b.id) {
+                rb.wake_up();
+            }
+        }
+    }
 }
 
 fn render(
@@ -159,12 +173,12 @@ fn render(
     renderer: &mut Renderer,
     _light_time: f32,
 ) {
-    gizmo::systems::default_render_pass(world, encoder, view, renderer);
+    default_render_pass(world, encoder, view, renderer);
 }
 
 fn main() {
     App::<RagdollDemo>::new("Gizmo — Ragdoll (R = yeniden başlat)", 1280, 720)
-        .add_plugin(gizmo::plugins::PhysicsPlugin::new())
+        .add_plugin(PhysicsPlugin::new())
         .set_setup(setup)
         .set_update(update)
         .set_render(render)

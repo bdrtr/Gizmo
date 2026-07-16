@@ -1,33 +1,39 @@
-//! Newton's cradle — N elastik top bir sıra halinde kirişe **hinge** ile asılı.
+//! # Newton Sarkacı — N elastik top kirişe **ip eklemiyle** asılı
 //!
-//! Gerçek fizik: her top X–Y düzleminde sallanır (hinge Z ekseni), çarpışmalar
-//! elastik (restitution≈1, sürtünme≈0). Toplar dinlenerek başlar.
+//! Gerçek fizik: her top X–Y düzleminde sallanır, çarpışmalar elastik
+//! (restitution≈1, sürtünme≈0). Toplar dinlenerek başlar; en soldaki top
+//! geri-çekilmiş doğar ve açılışta salınıma girer.
 //!
-//! **FARE İLE SÜRÜKLE-BIRAK:** sol tık ile bir topu yakala, arkın üzerinde
-//! sürükle, bırak → salınır (bir topu geri çekip bırakmak gibi). Ekran→dünya
-//! ışını için motora yeni eklenen `Camera::screen_to_ray` kullanılır (Bevy'nin
-//! `viewport_to_world`'ü); ışın fizik `raycast`'iyle topu seçer, sürüklenen top
-//! KİNEMATİK yapılır (fizik onu itmez ama komşuları o iter), bırakınca DİNAMİK'e
-//! döner ve son hareketin hızını alır.
+//! Bu sürüm motorun modern olanaklarını kullanır; NEYİN motora NEYİN oyuna ait
+//! olduğu konusunda dürüst olalım:
+//!   * **Toplar = `spawn_bundle` + explicit `Collider::sphere`** — Prefab DEĞİL:
+//!     Prefab yalnız kutu-collider verir ve her örneğin kendi başlangıç açısı/hızı
+//!     olduğundan (Prefab bunları gömemez) doğrudan bundle ile spawn edilir.
+//!   * **İp = `Joint::rope` (motorda birinci-sınıf)** — esnemez ama gevşeyebilir
+//!     (dist ≤ L). Ankor A = kiriş pivotu, B = top merkezi. Elle konum kırpma HİLESİ yok.
+//!   * **Görsel ip = fiziksiz ince çubuk** — her kare topun konumuna göre gerilir.
+//!   * **Sürükleme = `Camera::screen_to_ray` + fizik `raycast`** — sol tıkla topu seç,
+//!     KİNEMATİK yap (komşuları iter), bırakınca DİNAMİK'e dön ve servo hızını taşı.
+//!   * **Sahne render = `default_render_pass` DOĞRUDAN** — `with_scene_render()` kısayolu
+//!     SSR/SSGI/volumetric/TAA'yı kapatırdı; bu sahne yansımaları/keskinliği ister.
 //!
-//! İdiomatik ECS: `world.spawn_bundle((..tuple..))`. API eksikleri dosya sonunda.
+//! Bu demoda geçici/uçan varlık (mermi/konfeti) ve sahne sıfırlama yok → dolayısıyla
+//! `DespawnAfter`/`despawn_all_with` idiomları uygulanmaz.
+//!
+//! ## Kontroller
+//!   * **Sol tık + sürükle** — bir topu yakala, ark üzerinde sürükle, bırak → salınır.
 
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_3};
 
-use gizmo::bundles::RigidBodyBundle;
 use gizmo::core::input::mouse;
-use gizmo::core::window::WindowInfo;
-use gizmo::physics::components::{
-    BodyType, Collider, CombineMode, PhysicsMaterial, RigidBody, Velocity,
-};
+use gizmo::physics::components::{BodyType, CombineMode, PhysicsMaterial};
 use gizmo::physics::joints::Joint;
 use gizmo::physics::raycast::Ray;
 use gizmo::physics::world::PhysicsWorld;
 use gizmo::physics::BodyHandle;
 use gizmo::prelude::*;
-use gizmo::renderer::asset::AssetManager;
-use gizmo::renderer::components::{Camera, DirectionalLight, LightRole, Material, MeshRenderer};
 
+// ------------------------------------------------------------------ ayarlar
 const N: usize = 5; // top sayısı
 const R: f32 = 0.5; // top yarıçapı
 const L: f32 = 4.0; // ip uzunluğu (pivot → top merkezi)
@@ -56,6 +62,7 @@ struct Cradle {
     dragging: Option<usize>, // balls içindeki index
 }
 
+// --------------------------------------------------------------- setup
 fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
     let mut assets = AssetManager::new();
     let tex = assets.create_white_texture(
@@ -66,11 +73,13 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
     let sphere = AssetManager::create_sphere(&renderer.device, R, 32, 32);
     let cube = AssetManager::create_cube(&renderer.device);
 
+    // Güneş
     world.spawn_bundle((
         Transform::new(Vec3::new(20.0, 40.0, 20.0)).with_rotation(Quat::from_rotation_x(-0.9)),
         DirectionalLight::new(Vec3::new(1.0, 0.97, 0.9), 3.0, LightRole::Sun),
     ));
 
+    // Sabit ön-görünüm kamerası
     let cam = Camera::new(FRAC_PI_3, 0.1, 500.0, -FRAC_PI_2, -0.05, true);
     let cam_pos = Vec3::new(0.0, PIVOT_Y - L + 1.0, 11.0);
     world.spawn_bundle((Transform::new(cam_pos), cam));
@@ -78,12 +87,13 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
     let spacing = 2.0 * R + GAP;
     let start_x = -((N as f32 - 1.0) / 2.0) * spacing;
 
-    // (Eski API-EKSİK #6 DÜZELTİLDİ: render artık GlobalTransform'u otomatik
-    // backfill+sync ediyor → sadece Transform+Mesh+Material ile spawn yeter.)
-    // Üst kiriş: ipler buraya (üzerindeki sabit pivotlara) rope eklemiyle bağlı.
+    // Üst kiriş (statik): ipler buradaki sabit pivotlara bağlanır.
     let beam = world.spawn_bundle((
-        Transform::new(Vec3::new(0.0, PIVOT_Y, 0.0))
-            .with_scale(Vec3::new(N as f32 * spacing + 1.0, 0.15, 0.15)),
+        Transform::new(Vec3::new(0.0, PIVOT_Y, 0.0)).with_scale(Vec3::new(
+            N as f32 * spacing + 1.0,
+            0.15,
+            0.15,
+        )),
         cube.clone(),
         Material::new(tex.clone()).with_pbr(Vec4::new(0.15, 0.15, 0.18, 1.0), 0.4, 0.5),
         MeshRenderer::new(),
@@ -100,7 +110,10 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
         // Top 0 geri-çekilmiş doğar (pivottan L uzakta) → AÇILIŞTA salınır.
         let (center, rot) = if i == 0 {
             let a = 55.0_f32.to_radians();
-            (pivot + L * Vec3::new(-a.sin(), -a.cos(), 0.0), Quat::from_rotation_z(-a))
+            (
+                pivot + L * Vec3::new(-a.sin(), -a.cos(), 0.0),
+                Quat::from_rotation_z(-a),
+            )
         } else {
             (pivot - Vec3::new(0.0, L, 0.0), Quat::IDENTITY)
         };
@@ -110,8 +123,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
             Vec4::new(0.82, 0.82, 0.86, 1.0)
         };
 
-        // (Eski API-EKSİK #1 DÜZELTİLDİ: RigidBodyBundle artık collider'dan ataleti
-        // otomatik türetiyor → elle calculate_sphere_inertia gerekmiyor.)
+        // Küre gövde: collider'dan atalet otomatik türetilir, malzeme elastik.
         let ball = world.spawn_bundle((
             Transform::new(center).with_rotation(rot),
             sphere.clone(),
@@ -121,9 +133,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
                 .with_collider(Collider::sphere(R).with_material(elastic())),
         ));
 
-        // İP EKLEMİ (motorda birinci-sınıf): esnemez ama gevşeyebilir (dist ≤ L).
-        // Ankor A = kiriş üzerindeki pivot, B = top merkezi. Gevşekken serbest düşer,
-        // gerilince yakalar — artık demoda elle konum kırpma HİLESİ yok.
+        // İp eklemi: gevşekken serbest düşer, gerilince yakalar (dist ≤ L).
         phys.joints.push(Joint::rope(
             BodyHandle::from_id(beam.id()),
             BodyHandle::from_id(ball.id()),
@@ -131,8 +141,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
             Vec3::ZERO,
             L,
         ));
-        // Görsel ip: fiziksiz ince çubuk (pivot↔top). Her kare `update`'te
-        // konumlanır; burada sadece doğuyor. Küp mesh -1..1 → scale.y = uzunluk/2.
+        // Görsel ip: fiziksiz ince çubuk (pivot↔top), her kare `update`'te konumlanır.
         let rope = world.spawn_bundle((
             Transform::new(pivot),
             cube.clone(),
@@ -147,22 +156,32 @@ fn setup(world: &mut World, renderer: &Renderer) -> Cradle {
 
     world.insert_resource(phys);
     world.insert_resource(assets);
-    Cradle { balls, ropes, pivots, cam, cam_pos, dragging: None }
+    Cradle {
+        balls,
+        ropes,
+        pivots,
+        cam,
+        cam_pos,
+        dragging: None,
+    }
 }
 
-fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &gizmo::core::input::Input) {
+// --------------------------------------------------------------- update
+fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
     // ── Fare ile sürükle-bırak ───────────────────────────────────────────────
     let viewport = world
         .get_resource::<WindowInfo>()
         .map(|w| (w.width, w.height))
         .unwrap_or((1280.0, 720.0));
-    // Motora yeni eklenen unproject: ekran pikselinden dünya ışını.
-    let ray = state.cam.screen_to_ray(input.mouse_position(), viewport, state.cam_pos);
-    // gizmo_math::Ray SIMD Vec3A tutar; fizik Ray/matematik Vec3 ister → dönüştür.
+    // Ekran pikselinden dünya ışını (unproject).
+    let ray = state
+        .cam
+        .screen_to_ray(input.mouse_position(), viewport, state.cam_pos);
+    // screen_to_ray SIMD `Ray` döner; fizik Ray/matematik Vec3 ister → dönüştür.
     let (ro, rd) = (Vec3::from(ray.origin), Vec3::from(ray.direction));
     let lmb = input.is_mouse_button_pressed(mouse::LEFT);
 
-    // Yakalama (basış anı): ışını topa raycast et.
+    // Yakalama: LMB basılıyken ışını topa raycast et (henüz sürüklenmiyorsa).
     if lmb && state.dragging.is_none() {
         let hit_id = world
             .get_resource::<PhysicsWorld>()
@@ -181,9 +200,7 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &gizmo::core::
             if rd.z.abs() > 1e-5 {
                 let t = (pivot.z - ro.z) / rd.z;
                 let p = ro + rd * t;
-                // SERBEST sürükleme: top fareyi düzlemde TAKİP eder (ark'a kilitli DEĞİL)
-                // → ipi pivota kadar büzüştür ya da L'ye kadar ger. Yalnız ip boyunu (L)
-                // AŞMASIN diye mesafeyi ≤ L kırp (gerçek ip esnemez, gevşeyebilir).
+                // Top fareyi düzlemde TAKİP eder; ip boyunu (L) aşmasın diye mesafe ≤ L kırpılır.
                 let from_pivot = p - pivot;
                 let dist = from_pivot.length();
                 let target = if dist > L {
@@ -193,12 +210,14 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &gizmo::core::
                 };
 
                 let id = state.balls[idx];
-                // Hedefe SABİT-KAZANÇLI hız servosu ile sür (dt'ye BÖLME YOK). Kinematik
-                // cisim konumu hızından entegre eder → komşularla çarpışıp onları iter
-                // (teleport+v=0 hiçbir çarpışma göremiyordu, içinden geçiyordu). dt'ye
-                // bölmek ~240 kazanç = aşırı sert P-servo → dt tutarsızlığında/0'da
-                // TİTRERDİ; sabit ılımlı kazanç buna bağışık ve pürüzsüz takip eder.
-                let cur = world.borrow::<Transform>().get(id).map(|t| t.position).unwrap_or(target);
+                // Hedefe SABİT-KAZANÇLI hız servosu ile sür (dt'ye bölme YOK). Kinematik cisim
+                // konumu hızından entegre eder → komşularla çarpışıp onları iter. Sabit ılımlı
+                // kazanç dt tutarsızlığına bağışık ve pürüzsüz takip eder.
+                let cur = world
+                    .borrow::<Transform>()
+                    .get(id)
+                    .map(|t| t.position)
+                    .unwrap_or(target);
                 const DRAG_GAIN: f32 = 18.0;
                 let vel = ((target - cur) * DRAG_GAIN).clamp_length_max(15.0);
                 let mut vs = world.borrow_mut::<Velocity>();
@@ -209,8 +228,7 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &gizmo::core::
             }
         }
     } else if let Some(idx) = state.dragging.take() {
-        // Bırakma: dinamiğe dön; topun mevcut servo hızı doğal fiske olarak kalır
-        // (ayrı /dt flick hesabı YOK → patlama yok). Güvenlik için hafif sınırla.
+        // Bırakma: dinamiğe dön; servo hızı doğal fiske olarak kalır (patlama yok).
         let id = state.balls[idx];
         set_body_type(world, id, BodyType::Dynamic);
         let mut vs = world.borrow_mut::<Velocity>();
@@ -219,15 +237,16 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &gizmo::core::
         }
     }
 
-    // (İp fiziği artık motorun `Joint::rope` eklemi tarafından çözülüyor — demoda
-    //  elle konum kırpma yok. Toplar düzlemde simetrik başlar → 2B kalır.)
-
     // ── Görsel ipleri toplara bağla ──────────────────────────────────────────
-    // Fizik (schedule'da) bu kareden önce koştu → top konumları güncel. İpi
-    // pivot ile topun pivota bakan yüzeyi arasına gerilmiş ince çubuk yap.
+    // Fizik (schedule'da) bu kareden önce koştu → top konumları güncel. İpi pivot
+    // ile topun pivota bakan yüzeyi arasına gerilmiş ince çubuk yap.
     let centers: Vec<Vec3> = {
         let ts = world.borrow::<Transform>();
-        state.balls.iter().map(|&b| ts.get(b).map(|t| t.position).unwrap_or(Vec3::ZERO)).collect()
+        state
+            .balls
+            .iter()
+            .map(|&b| ts.get(b).map(|t| t.position).unwrap_or(Vec3::ZERO))
+            .collect()
     };
     let mut ts = world.borrow_mut::<Transform>();
     for (i, &rope) in state.ropes.iter().enumerate() {
@@ -243,9 +262,6 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &gizmo::core::
             tr.update_local_matrix();
         }
     }
-    // (Eski API-EKSİK #3 DÜZELTİLDİ: fizik artık PhysicsPlugin ile sabit-timestep
-    //  schedule'da OTOMATİK adımlanıyor — burada elle adım YOK. Transform→Global
-    //  senkronu da render'da otomatik — #6 düzeltildi.)
 }
 
 fn set_body_type(world: &mut World, id: u32, bt: BodyType) {
@@ -258,6 +274,10 @@ fn set_body_type(world: &mut World, id: u32, bt: BodyType) {
     }
 }
 
+// --------------------------------------------------------------- render + main
+// `default_render_pass` DOĞRUDAN: SSR/SSGI/volumetric/TAA'yı AÇIK tutar
+// (`with_scene_render()` kısayolu bunları kapatırdı). gpu_physics motor-varsayılanı
+// zaten None olduğundan render'da state-mutasyonu gerekmez.
 fn render(
     world: &mut World,
     _s: &Cradle,
@@ -266,50 +286,15 @@ fn render(
     renderer: &mut Renderer,
     _light_time: f32,
 ) {
-    gizmo::systems::default_render_pass(world, encoder, view, renderer);
+    default_render_pass(world, encoder, view, renderer);
 }
 
 fn main() {
     App::<Cradle>::new("Gizmo — Newton Sarkacı", 1280, 720)
-        // Fizik artık sabit-timestep'te OTOMATİK adımlanıyor (elle adım yok).
-        .add_plugin(gizmo::plugins::PhysicsPlugin::new())
+        .add_plugin(PhysicsPlugin::new())
         .set_setup(setup)
         .set_update(update)
         .set_render(render)
         .run()
         .expect("uygulama çalıştırılamadı");
 }
-
-// ============================================================================
-//  API EKSİKLERİ (yazarken karşılaştıklarım — düzeltilebilir):
-//
-//  #1  RigidBodyBundle collider'dan atalet türetmiyor → `calculate_sphere_inertia`
-//      elle. Öneri: bundle apply/ilk adımda collider'dan otomatik türet.
-//
-//  #2  Joint'ler ECS bileşeni değil → `PhysicsWorld.joints`'e `BodyHandle::from_id`
-//      ile elle push; entity despawn'da dangling. Öneri: `Joint` bileşen + toplama sistemi.
-//
-//  #3  Fizik zamanlanmış sistem değil → `cpu_physics_step_system` her update'te elle;
-//      `PhysicsPlugin` adımı kaydetmiyor. Sabit-adım accumulator'ı da motor sağlamıyor.
-//
-//  #4  İki paralel asset sistemi → `MeshBundle` `Handle<Mesh>` ister ama `AssetManager`
-//      doğrudan `Mesh` döner; uyumsuz.
-//
-//  #5  (DÜZELTİLDİ) "Elastik çarpışma zayıf, efektif ~0.1" aslında bir BUG'dı:
-//      ECS→PhysicsWorld gather'ı collider'ı `from_shape` ile yeniden kurup
-//      MALZEMEYİ (restitution/friction/density) düşürüyordu → her özel malzeme
-//      yok sayılıyordu (elastik=1 top, default 0.3 gibi davranıyordu). Gather artık
-//      malzemeyi koruyor; restitution çözücüye ulaşıyor (efektif ~0.7, çalışan
-//      beşik). Kalan not: `RigidBody.restitution` alanı hâlâ okunmuyor (kaynak =
-//      Collider malzemesi) — bu bir tasarım tercihi.
-//
-//  #6  Mesh render için GlobalTransform ŞART + custom App'te propagate ELLE. Mesh
-//      sorgusu `(&Mesh, &GlobalTransform, &Material)` (render/mod.rs) — GlobalTransform
-//      yoksa nesne HİÇ çizilmez (kamera/ışıkta Transform fallback var, mesh'te yok);
-//      fizik yalnız Transform yazdığından `TransformSync`+`Propagate`'i her update'te
-//      elle koşmak gerekiyor. Öneri: mesh sorgusuna Transform fallback / otomatik backfill.
-//
-//  ARTI (bu turda EKLENDİ): `Camera::screen_to_ray(screen, viewport, world_pos)` —
-//  ekran→dünya ışını (Bevy `viewport_to_world` karşılığı); picking/drag için gerekliydi,
-//  eksikti. `gizmo_math::Ray::from_ndc` zaten vardı; üstüne ince kamera-wrapper + test.
-// ============================================================================

@@ -1,8 +1,33 @@
+//! # BeamNG tarzı FEM yumuşak-gövde demosu (temiz sürüm)
+//!
+//! GPU üzerinde tetrahedral **FEM** (sonlu-eleman) simülasyonu ile deforme olan bir "araba
+//! gövdesi" zemine düşer ve ezilir. Fizik TAMAMEN özel bir GPU compute boru hattında koşar —
+//! motorun rigid-body `PhysicsPlugin`'i burada YOK. Bu yüzden bilinçli idiom seçimleri:
+//!
+//!   * **`Prefab` / `DespawnAfter` / `DespawnBelowY` YOK** — tekrar eden kutu-collider'lı rigid
+//!     nesne yok, ömür-döngüsü çalıştıran bir fizik/lifetime schedule de kayıtlı değil. Bu
+//!     komponentleri eklemek işlevsiz olurdu (statik sahne). Sahne varlıkları (skybox, güneş,
+//!     kamera, zemin) tek çağrılık `world.spawn_bundle((...))` ile kurulur — eski `spawn()` +
+//!     tekrar tekrar `add_component()` kalıbı yerine.
+//!   * **Kamera yönü paylaşılan yardımcılardan** — `Camera::forward_from` / `Camera::right_from`
+//!     (nişan/ileri-sağ matematiği elle yeniden yazılmaz; pitch her zaman clamp'li → davranış
+//!     birebir aynı).
+//!   * **`is_key_just_pressed`** — R (reset) için kenar-tespiti motordan (elle prev_* takibi yok).
+//!   * **Render = `default_render_pass` + ÖZEL FEM geçişleri KORUNUR** — motorun tek-satır
+//!     `with_scene_render()` kısayolu VAR ama onu kullanamayız: bu demo render-hook içinde GERÇEK
+//!     özel iş yapar (FEM compute substep'leri + kendi render pipeline'ı ile yumuşak gövdeyi çizme).
+//!     Bu mantık aynen korunur.
+//!
+//! ## Kontroller
+//!   * **Sağ-tık + fare** — kamera orbit · **WASD / QE** — kamera hareket · **Shift** — hızlı
+//!   * **R** — yumuşak gövdeyi başlangıç durumuna sıfırla
+
 use gizmo::prelude::*;
 use gizmo::renderer::gpu_physics::fem::{
-    GpuFemParams, GpuFemSystem, GpuSoftBodyNode, GpuTetrahedron,
+    GpuFemCollider, GpuFemParams, GpuFemSystem, GpuSoftBodyNode, GpuTetrahedron,
 };
-use std::f32::consts::PI;
+use gizmo::renderer::gpu_types::Vertex;
+use std::f32::consts::{FRAC_PI_2, FRAC_PI_3, PI};
 use wgpu::util::DeviceExt;
 
 struct BeamNGState {
@@ -26,6 +51,8 @@ struct BeamNGState {
     initial_nodes: Vec<GpuSoftBodyNode>,
 }
 
+/// Kutu şeklinde tetrahedral FEM ağı üretir (düğümler + elemanlar + yüzey index tamponu).
+/// Motorun rigid-body sistemleriyle ilgisi yok — tamamen GPU-FEM sim için özel geometri.
 fn create_tetra_box(
     device: &wgpu::Device,
     pos: Vec3,
@@ -45,7 +72,7 @@ fn create_tetra_box(
     let total_nodes = (res_x + 1) * (res_y + 1) * (res_z + 1);
     let node_mass = mass / total_nodes as f32;
 
-    // Create nodes
+    // Düğümleri kur
     for z in 0..=res_z {
         for y in 0..=res_y {
             for x in 0..=res_x {
@@ -66,7 +93,7 @@ fn create_tetra_box(
 
     let mut surface_indices = Vec::new();
 
-    // Create elements
+    // Elemanları (tetrahedra) kur
     for z in 0..res_z {
         for y in 0..res_y {
             for x in 0..res_x {
@@ -79,7 +106,7 @@ fn create_tetra_box(
                 let i011 = get_idx(x, y + 1, z + 1);
                 let i111 = get_idx(x + 1, y + 1, z + 1);
 
-                // Alternating 5-tetrahedron decomposition
+                // Dönüşümlü 5-tetrahedron ayrıştırması
                 let flip = (x + y + z) % 2 == 1;
 
                 let tets = if flip {
@@ -111,13 +138,13 @@ fn create_tetra_box(
                     let e3 = [p3[0] - p0[0], p3[1] - p0[1], p3[2] - p0[2]];
 
                     let dm = gizmo::math::Mat3::from_cols(
-                        gizmo::math::Vec3::new(e1[0], e1[1], e1[2]),
-                        gizmo::math::Vec3::new(e2[0], e2[1], e2[2]),
-                        gizmo::math::Vec3::new(e3[0], e3[1], e3[2]),
+                        Vec3::new(e1[0], e1[1], e1[2]),
+                        Vec3::new(e2[0], e2[1], e2[2]),
+                        Vec3::new(e3[0], e3[1], e3[2]),
                     );
 
                     let det = dm.determinant();
-                    // Degenerate tetrahedron (det≈0) → dm.inverse() NaN üretir ve TÜM sim'i zehirler.
+                    // Dejenere tetrahedron (det≈0) → dm.inverse() NaN üretir ve TÜM sim'i zehirler.
                     // Düzgün ızgarada oluşmaz ama savunmacı guard (0 boyut/çözünürlük verilirse).
                     if det.abs() < 1e-9 {
                         continue;
@@ -137,7 +164,7 @@ fn create_tetra_box(
         }
     }
 
-    // Extract outer surface indices for rendering
+    // Dış yüzey index'lerini çıkar (çizim için)
     let mut add_quad = |i0, i1, i2, i3| {
         surface_indices.push(i0);
         surface_indices.push(i1);
@@ -149,7 +176,7 @@ fn create_tetra_box(
 
     for z in 0..res_z {
         for y in 0..res_y {
-            // Left (x=0) and Right (x=res_x)
+            // Sol (x=0) ve Sağ (x=res_x)
             add_quad(
                 get_idx(0, y, z),
                 get_idx(0, y + 1, z),
@@ -166,7 +193,7 @@ fn create_tetra_box(
     }
     for z in 0..res_z {
         for x in 0..res_x {
-            // Bottom (y=0) and Top (y=res_y)
+            // Alt (y=0) ve Üst (y=res_y)
             add_quad(
                 get_idx(x, 0, z + 1),
                 get_idx(x + 1, 0, z + 1),
@@ -183,7 +210,7 @@ fn create_tetra_box(
     }
     for y in 0..res_y {
         for x in 0..res_x {
-            // Front (z=0) and Back (z=res_z)
+            // Ön (z=0) ve Arka (z=res_z)
             add_quad(
                 get_idx(x, y, 0),
                 get_idx(x + 1, y, 0),
@@ -209,10 +236,9 @@ fn create_tetra_box(
 }
 
 fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
-    let mut asset_manager = gizmo::renderer::asset::AssetManager::new();
+    let mut asset_manager = AssetManager::new();
 
-    // Gökyüzü (Skybox)
-    let skybox_mesh = gizmo::renderer::asset::AssetManager::create_inverted_cube(&renderer.device);
+    // Gökyüzü (skybox) — ters küp, tek varlık
     let sky_tex = asset_manager
         .load_material_texture(
             &renderer.device,
@@ -221,56 +247,30 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
             "tut/assets/sky.jpg",
         )
         .unwrap();
-    let sky_mat = gizmo::renderer::components::Material::new(sky_tex).with_skybox();
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_scale(Vec3::splat(2000.0)),
+        AssetManager::create_inverted_cube(&renderer.device),
+        Material::new(sky_tex).with_skybox(),
+        MeshRenderer::new(),
+    ));
 
-    let sky_ent = world.spawn();
-    world.add_component(
-        sky_ent,
-        gizmo::physics::components::Transform::new(Vec3::ZERO).with_scale(Vec3::splat(2000.0)),
-    );
-    world.add_component(sky_ent, skybox_mesh);
-    world.add_component(sky_ent, sky_mat);
-    world.add_component(sky_ent, gizmo::renderer::components::MeshRenderer::new());
+    // Güneş (yönlü ışık)
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_x(-PI / 4.0)),
+        DirectionalLight::new(Vec3::new(1.0, 0.95, 0.9), 4.0, LightRole::Sun),
+    ));
 
-    // Güneş
-    let sun_entity = world.spawn();
-    world.add_component(
-        sun_entity,
-        gizmo::physics::components::Transform::new(Vec3::ZERO)
-            .with_rotation(Quat::from_rotation_x(-PI / 4.0)),
-    );
-    world.add_component(
-        sun_entity,
-        gizmo::renderer::components::DirectionalLight::new(
-            Vec3::new(1.0, 0.95, 0.9),
-            4.0,
-            gizmo::renderer::components::LightRole::Sun,
-        ),
-    );
+    // Kamera (serbest uçuş)
+    world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, 5.0, 15.0)),
+        Camera::new(FRAC_PI_3, 0.1, 5000.0, 0.0, 0.0, true),
+    ));
 
-    // Kamera
-    let camera_ent = world.spawn();
-    world.add_component(
-        camera_ent,
-        gizmo::physics::components::Transform::new(Vec3::new(0.0, 5.0, 15.0)),
-    );
-    world.add_component(
-        camera_ent,
-        gizmo::renderer::components::Camera::new(
-            std::f32::consts::FRAC_PI_3,
-            0.1,
-            5000.0,
-            0.0,
-            0.0,
-            true,
-        ),
-    );
-
-    // Zemin
+    // Zemin (tek büyük quad, elle kurulu vertex tamponu + damalı doku)
     let mut ground_vertices = Vec::new();
     let r = 500.0;
     let uvs = 300.0;
-    let v0 = gizmo::renderer::gpu_types::Vertex {
+    let v0 = Vertex {
         position: [-r, 0.0, r],
         tex_coords: [0.0, uvs],
         color: [1.0, 1.0, 1.0],
@@ -279,7 +279,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
         joint_indices: [0; 4],
         joint_weights: [0.0; 4],
     };
-    let v1 = gizmo::renderer::gpu_types::Vertex {
+    let v1 = Vertex {
         position: [r, 0.0, r],
         tex_coords: [uvs, uvs],
         color: [1.0, 1.0, 1.0],
@@ -288,7 +288,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
         joint_indices: [0; 4],
         joint_weights: [0.0; 4],
     };
-    let v2 = gizmo::renderer::gpu_types::Vertex {
+    let v2 = Vertex {
         position: [r, 0.0, -r],
         tex_coords: [uvs, 0.0],
         color: [1.0, 1.0, 1.0],
@@ -297,7 +297,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
         joint_indices: [0; 4],
         joint_weights: [0.0; 4],
     };
-    let v3 = gizmo::renderer::gpu_types::Vertex {
+    let v3 = Vertex {
         position: [-r, 0.0, -r],
         tex_coords: [0.0, 0.0],
         color: [1.0, 1.0, 1.0],
@@ -322,7 +322,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-    let ground_mesh = gizmo::renderer::components::Mesh::new(
+    let ground_mesh = Mesh::new(
         &renderer.device,
         std::sync::Arc::new(ground_vbuf),
         &ground_vertices,
@@ -335,30 +335,24 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
         &renderer.queue,
         &renderer.scene.texture_bind_group_layout,
     );
-    let grass_mat = gizmo::renderer::components::Material::new(grass_tex).with_pbr(
-        Vec4::new(0.5, 0.8, 0.3, 1.0),
-        0.9,
-        0.1,
-    );
+    let grass_mat = Material::new(grass_tex).with_pbr(Vec4::new(0.5, 0.8, 0.3, 1.0), 0.9, 0.1);
 
-    let ground_ent = world.spawn();
-    world.add_component(
-        ground_ent,
-        gizmo::physics::components::Transform::new(Vec3::ZERO),
-    );
-    world.add_component(ground_ent, ground_mesh);
-    world.add_component(ground_ent, grass_mat);
-    world.add_component(ground_ent, gizmo::renderer::components::MeshRenderer::new());
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO),
+        ground_mesh,
+        grass_mat,
+        MeshRenderer::new(),
+    ));
 
-    // FEM Araba (Chassis) Setup
+    // FEM araba (chassis) kurulumu — özel tetrahedral yumuşak gövde.
     let (nodes, elements, index_buffer, index_count) = create_tetra_box(
         &renderer.device,
-        Vec3::new(0.0, 15.0, 0.0), // Pos
-        Vec3::new(2.0, 1.0, 4.0),  // Size
+        Vec3::new(0.0, 15.0, 0.0), // Konum
+        Vec3::new(2.0, 1.0, 4.0),  // Boyut
         8,
         4,
-        16,     // Resolution
-        1000.0, // Mass
+        16,     // Çözünürlük
+        1000.0, // Kütle
     );
 
     let params = GpuFemParams {
@@ -367,8 +361,8 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
         counts: [nodes.len() as u32, elements.len() as u32, 1, 0],
     };
 
-    let ground_collider = gizmo::renderer::gpu_physics::fem::GpuFemCollider {
-        shape_type: 0, // Plane
+    let ground_collider = GpuFemCollider {
+        shape_type: 0, // Düzlem
         radius: 0.0,
         _pad0: 0,
         _pad1: 0,
@@ -384,7 +378,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
         &params,
     );
 
-    // Render Pipeline for FEM
+    // FEM yumuşak gövdesi için render pipeline (pozisyonları storage buffer'dan çeker).
     let render_shader = renderer
         .device
         .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -444,7 +438,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
                     module: &render_shader,
                     entry_point: Some("vs_main"),
                     compilation_options: Default::default(),
-                    buffers: &[], // We fetch from storage buffer instead
+                    buffers: &[], // Vertex verisi yerine storage buffer'dan çekilir
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &render_shader,
@@ -471,7 +465,7 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
                 }),
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
-            cache: None,
+                cache: None,
             });
 
     world.insert_resource(asset_manager);
@@ -498,11 +492,11 @@ fn setup(world: &mut World, renderer: &Renderer) -> BeamNGState {
     }
 }
 
-fn update(world: &mut World, state: &mut BeamNGState, dt: f32, input: &gizmo::core::input::Input) {
-    // Bir önceki frame'de set edilen reset bayrağı render'da tüketildi → temizle.
+fn update(world: &mut World, state: &mut BeamNGState, dt: f32, input: &Input) {
+    // Önceki frame'de set edilen reset bayrağı render'da tüketildi → temizle.
     state.reset_requested = false;
-    // R: yumuşak gövdeyi başlangıç durumuna sıfırla.
-    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyR as u32) {
+    // R: yumuşak gövdeyi başlangıç durumuna sıfırla (kenar-tespiti motorun is_key_just_* API'sinden).
+    if input.is_key_just_pressed(KeyCode::KeyR as u32) {
         state.reset_requested = true;
     }
 
@@ -514,6 +508,7 @@ fn update(world: &mut World, state: &mut BeamNGState, dt: f32, input: &gizmo::co
     state.pending_substeps = (n as u32).min(80); // spiral-of-death guard
     state.sim_accum -= n * SUB_DT;
 
+    // Sağ-tık: kamera orbit (fare-look).
     if input.is_mouse_button_pressed(1) {
         let delta = input.mouse_delta();
         state.camera_yaw -= delta.0 * 0.005;
@@ -521,36 +516,34 @@ fn update(world: &mut World, state: &mut BeamNGState, dt: f32, input: &gizmo::co
         state.camera_pitch = state.camera_pitch.clamp(-PI / 2.0 + 0.1, PI / 2.0 - 0.1);
     }
 
-    let fx = state.camera_yaw.cos() * state.camera_pitch.cos();
-    let fy = state.camera_pitch.sin();
-    let fz = state.camera_yaw.sin() * state.camera_pitch.cos();
-    let forward = Vec3::new(fx, fy, fz).normalize();
-    let right = forward.cross(Vec3::new(0.0, 1.0, 0.0)).normalize();
+    // İleri/sağ yönler paylaşılan kamera yardımcılarından (elle yeniden yazılmaz).
+    let forward = Camera::forward_from(state.camera_yaw, state.camera_pitch);
+    let right = Camera::right_from(state.camera_yaw);
     let up = Vec3::new(0.0, 1.0, 0.0);
 
-    let speed = if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::ShiftLeft as u32) {
+    let speed = if input.is_key_pressed(KeyCode::ShiftLeft as u32) {
         state.camera_speed * 3.0
     } else {
         state.camera_speed
     };
 
     let mut cam_move = Vec3::ZERO;
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyW as u32) {
+    if input.is_key_pressed(KeyCode::KeyW as u32) {
         cam_move += forward;
     }
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyS as u32) {
+    if input.is_key_pressed(KeyCode::KeyS as u32) {
         cam_move -= forward;
     }
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyD as u32) {
+    if input.is_key_pressed(KeyCode::KeyD as u32) {
         cam_move += right;
     }
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyA as u32) {
+    if input.is_key_pressed(KeyCode::KeyA as u32) {
         cam_move -= right;
     }
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyE as u32) {
+    if input.is_key_pressed(KeyCode::KeyE as u32) {
         cam_move += up;
     }
-    if input.is_key_pressed(gizmo::winit::keyboard::KeyCode::KeyQ as u32) {
+    if input.is_key_pressed(KeyCode::KeyQ as u32) {
         cam_move -= up;
     }
 
@@ -558,11 +551,8 @@ fn update(world: &mut World, state: &mut BeamNGState, dt: f32, input: &gizmo::co
         state.camera_pos += cam_move.normalize() * speed * dt;
     }
 
-    if let Some(mut q) = world.query_mut::<(
-        gizmo::core::query::Mut<gizmo::physics::components::Transform>,
-        gizmo::core::query::Mut<gizmo::renderer::components::Camera>,
-    )>() {
-        let yaw_rot = Quat::from_rotation_y(-state.camera_yaw + std::f32::consts::FRAC_PI_2);
+    if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
+        let yaw_rot = Quat::from_rotation_y(-state.camera_yaw + FRAC_PI_2);
         let pitch_rot = Quat::from_rotation_x(state.camera_pitch);
         let rot = yaw_rot * pitch_rot;
 
@@ -575,6 +565,9 @@ fn update(world: &mut World, state: &mut BeamNGState, dt: f32, input: &gizmo::co
     }
 }
 
+// Render-hook GERÇEK özel iş yapar (FEM compute substep'leri + kendi pipeline'ıyla yumuşak gövdeyi
+// çizme). Bu yüzden `with_scene_render()` tek-satır kısayoluna ÇEVRİLMEZ; standart sahne için
+// `default_render_pass`, ardından özel FEM geçişi elle sürülür.
 fn render(
     world: &mut World,
     state: &BeamNGState,
@@ -592,18 +585,18 @@ fn render(
         );
     }
 
-    // 1. FEM Compute — substep sayısı update'te GERÇEK dt'den hesaplandı (FPS-bağımsız).
+    // 1. FEM compute — substep sayısı update'te GERÇEK dt'den hesaplandı (FPS-bağımsız).
     for _ in 0..state.pending_substeps {
         state.fem_system.compute_pass(encoder);
     }
 
-    // 2. Render all standard entities (Skybox, Ground Plane)
-    gizmo::systems::default_render_pass(world, encoder, view, renderer);
+    // 2. Standart varlıkları çiz (skybox, zemin)
+    default_render_pass(world, encoder, view, renderer);
 
-    // 3. Prepare depth for FEM pass
+    // 3. FEM geçişi için derinlik tamponunu hazırla
     let depth_view = &renderer.depth_texture_view;
 
-    // 4. Render FEM Object
+    // 4. FEM nesnesini çiz
     {
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("FEM Render Pass"),
@@ -634,7 +627,7 @@ fn render(
         rpass.set_bind_group(1, &state.fem_bind_group, &[]);
 
         rpass.set_index_buffer(state.fem_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        // Note: We use index buffer to fetch position from storage buffer inside Vertex Shader
+        // Not: index buffer'ı kullanarak pozisyonu Vertex Shader içinde storage buffer'dan çekiyoruz
         rpass.draw_indexed(0..state.fem_index_count, 0, 0..1);
     }
 }
