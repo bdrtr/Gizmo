@@ -1,5 +1,11 @@
 use super::*;
 
+/// Consecutive `get_current_texture()` failures (Outdated/Lost/Validation) since the last good
+/// frame — drives rate-limited logging + backoff so a persistently unrecoverable surface (a true
+/// device loss the renderer can't yet recreate) degrades to a throttled retry with one clear
+/// warning, instead of a 100%-CPU busy-spin and a per-frame log flood.
+static SURFACE_FAIL_STREAK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 impl<State: 'static> App<State> {
     /// The unified per-event handler — the old `EventLoop::run` closure body,
     /// reconstructed as a method so `ApplicationHandler` can drive it. Each event
@@ -84,10 +90,12 @@ impl<State: 'static> App<State> {
                                         ),
                                     }
                                 }
-                                // TLS'teki GPU kaynaklarını temizlemekle uğraşmak yerine direkt çık
-                                #[cfg(not(target_arch = "wasm32"))]
-                                std::process::exit(0);
-                                #[cfg(target_arch = "wasm32")]
+                                // DÜZGÜN kapanış: event loop'a çıkışı SİNYALLE (init-hata
+                                // yollarının kullandığı `event_loop.exit()` sözleşmesi) →
+                                // `run_app` döner, App+World+Renderer normal DROP olur → wgpu
+                                // device/surface temiz kapanır (buffer flush, kaynak serbest).
+                                // Eski `process::exit(0)` hiçbir destructor çalıştırmadan aniden
+                                // kesiyordu; graceful exit her iki hedefte de (wasm dahil) aynı yol.
                                 current_window.exit();
                             }
                             WindowEvent::Resized(physical_size) => {
@@ -543,14 +551,18 @@ impl<State: 'static> App<State> {
                                 .expect("windowed render path requires a surface");
                             let output = match surface.get_current_texture() {
                                 wgpu::CurrentSurfaceTexture::Success(texture)
-                                | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
-                                // Transient, non-error states (window resized/minimized/occluded
-                                // or a timed-out acquire) — silently skip this frame.
-                                wgpu::CurrentSurfaceTexture::Outdated
-                                | wgpu::CurrentSurfaceTexture::Occluded
+                                | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+                                    // A good frame: clear the failure streak.
+                                    SURFACE_FAIL_STREAK.store(0, std::sync::atomic::Ordering::Relaxed);
+                                    texture
+                                }
+                                // Transient, non-error states — the window is minimized/behind
+                                // another window, or the acquire timed out. The surface config is
+                                // still valid; just skip this frame and try again.
+                                wgpu::CurrentSurfaceTexture::Occluded
                                 | wgpu::CurrentSurfaceTexture::Timeout => {
                                     tracing::trace!(
-                                        "[frame] surface transient (outdated/occluded/timeout); frame skipped"
+                                        "[frame] surface transient (occluded/timeout); frame skipped"
                                     );
                                     self.world.insert_resource(renderer);
                                     if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
@@ -565,8 +577,71 @@ impl<State: 'static> App<State> {
                                     self.light_time = light_time;
                                     return;
                                 }
-                                other => {
-                                    tracing::error!("Surface hatasi: {:?}", other);
+                                // RECOVERABLE surface loss. `Outdated` = the surface config is
+                                // stale (display/DPI/format change); `Lost` = the surface (or the
+                                // whole GPU context) dropped, e.g. suspend↔resume, a driver TDR,
+                                // an external-monitor unplug, or GPU stress. wgpu's first-line fix
+                                // for both is to `configure()` again — so reconfigure the swapchain
+                                // and retry next frame instead of FREEZING on a black screen (the
+                                // old code lumped `Outdated` into the transient skip and never
+                                // reconfigured, and treated `Lost` as a dead-end error). This is
+                                // the "demos don't crash under stress" hardening.
+                                wgpu::CurrentSurfaceTexture::Outdated
+                                | wgpu::CurrentSurfaceTexture::Lost => {
+                                    use std::sync::atomic::Ordering;
+                                    let streak = SURFACE_FAIL_STREAK.fetch_add(1, Ordering::Relaxed) + 1;
+                                    // `Outdated` (stale DPI/format/resize) genuinely recovers via
+                                    // configure(). `Lost` is BEST-EFFORT here: a true surface/device
+                                    // loss needs surface (or device+resource) RECREATION, which the
+                                    // renderer can't yet do (it retains no Instance/Window) — a known
+                                    // limitation. configure() still recovers the common recoverable
+                                    // cases (suspend/resume, transient context loss).
+                                    renderer.reconfigure_surface();
+                                    // Rate-limit: warn once up front, then ~once/5s, so a persistent
+                                    // loss never floods the log.
+                                    if streak == 1 || streak.is_multiple_of(300) {
+                                        tracing::warn!(
+                                            streak,
+                                            "[frame] surface Outdated/Lost — reconfigured swapchain; if this persists the surface/device may be unrecoverable"
+                                        );
+                                    }
+                                    // Backoff: after a short grace, throttle the retry so an
+                                    // unrecoverable loss degrades to a quiet ~60Hz retry instead of a
+                                    // 100%-CPU busy-spin. (Skipped on wasm — the browser throttles rAF.)
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    if streak > 4 {
+                                        std::thread::sleep(std::time::Duration::from_millis(16));
+                                    }
+                                    self.world.insert_resource(renderer);
+                                    if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+                                        profiler.end_scope("render");
+                                    }
+                                    #[cfg(feature = "egui")]
+                                    {
+                                        self.editor = Some(editor);
+                                    }
+                                    self.app_state = Some(state);
+                                    self.last_frame_time = Some(last_frame_time);
+                                    self.light_time = light_time;
+                                    return;
+                                }
+                                // A validation error was raised inside `get_current_texture` and
+                                // caught by an error scope — a real bug, not recoverable by
+                                // reconfiguring. Log it and skip the frame so we neither crash nor
+                                // busy-spin on a reconfigure that can't help.
+                                wgpu::CurrentSurfaceTexture::Validation => {
+                                    use std::sync::atomic::Ordering;
+                                    let streak = SURFACE_FAIL_STREAK.fetch_add(1, Ordering::Relaxed) + 1;
+                                    if streak == 1 || streak.is_multiple_of(300) {
+                                        tracing::error!(
+                                            streak,
+                                            "[frame] surface acquire raised a validation error; frame skipped"
+                                        );
+                                    }
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    if streak > 4 {
+                                        std::thread::sleep(std::time::Duration::from_millis(16));
+                                    }
                                     self.world.insert_resource(renderer);
                                     if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                         profiler.end_scope("render");
