@@ -104,14 +104,14 @@ mod tests {
     #[test]
     fn all_variants_display_are_nonempty_and_distinct() {
         let addr = NetError::from("x".parse::<std::net::SocketAddr>().unwrap_err());
-        let io = NetError::from(std::io::Error::new(std::io::ErrorKind::Other, "x"));
+        let io = NetError::from(std::io::Error::other("x"));
         let time = NetError::from(
             std::time::SystemTime::UNIX_EPOCH
                 .duration_since(std::time::SystemTime::now())
                 .unwrap_err(),
         );
         let transport =
-            NetError::Transport(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "t")));
+            NetError::Transport(Box::new(std::io::Error::other("t")));
 
         let msgs = [addr.to_string(), io.to_string(), time.to_string(), transport.to_string()];
         for m in &msgs {

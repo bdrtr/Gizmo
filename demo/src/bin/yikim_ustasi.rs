@@ -276,7 +276,7 @@ fn load_level(g: &mut Game, world: &mut World, idx: usize) {
                 for ix in -1..=1 {
                     for iz in -1..=1 {
                         let y = PLATFORM_TOP + BLOCK_H + row as f32;
-                        let c = if (row + (ix + 1) as usize + (iz + 1) as usize) % 2 == 0 {
+                        let c = if (row + (ix + 1) as usize + (iz + 1) as usize).is_multiple_of(2) {
                             stone_c
                         } else {
                             stone_a

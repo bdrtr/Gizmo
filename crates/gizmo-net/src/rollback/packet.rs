@@ -57,8 +57,10 @@ mod tests {
     // FullState, iç içe PhysicsStateSnapshot'ı (EntityState listesi dahil) korumalı.
     #[test]
     fn full_state_packet_roundtrips_nested_snapshot() {
-        let mut snap = PhysicsStateSnapshot::default();
-        snap.tick = 55;
+        let mut snap = PhysicsStateSnapshot {
+            tick: 55,
+            ..Default::default()
+        };
         snap.states.push(EntityState {
             entity: Entity::INVALID,
             position: Vec3::new(1.0, -2.0, 3.0),

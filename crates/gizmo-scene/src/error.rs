@@ -95,7 +95,7 @@ mod tests {
     // classes (I/O vs parse vs serialize) apart at a glance.
     #[test]
     fn each_variant_has_a_distinct_display() {
-        let io: SceneError = std::io::Error::new(std::io::ErrorKind::Other, "x").into();
+        let io: SceneError = std::io::Error::other("x").into();
         let parse: SceneError = ron::from_str::<i32>("zz").unwrap_err().into();
         let ser: SceneError = ron::Error::Message("y".to_string()).into();
 
