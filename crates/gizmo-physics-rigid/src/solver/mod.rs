@@ -29,7 +29,7 @@ mod tgs;
 // The value it DOES deliver: a DETERMINISTIC TOTAL ORDER keyed on
 // (max_depth, min_depth, canonical entity pair) that is INDEPENDENT of broadphase
 // pair-emission order → the island solve becomes pair-order-invariant, which is the
-// property that unblocks incremental broadphase (docs/physics-perf-2026-07-14.md).
+// property that unblocks incremental broadphase (docs/ENGINE.md §7).
 //
 // What it was HOPED to deliver but does NOT: fixing the tall-stack instability. The
 // theory was that a vertical N-stack's Delassus matrix is a 1-D Laplacian with O(N²)
@@ -223,7 +223,7 @@ pub struct ConstraintSolver {
     /// Temasları çözmeden önce ankraj-tabanlı (bottom-up) DETERMİNİSTİK support
     /// sırasına diz → ada çözümü broadphase pair-emission sırasından BAĞIMSIZ olur
     /// (pair-order-invariant). Bu, incremental-broadphase'in önünü açan uyku-determinizmi
-    /// özelliğidir (docs/physics-perf-2026-07-14.md).
+    /// özelliğidir (docs/ENGINE.md §7).
     ///
     /// VARSAYILAN KAPALI. Başlangıçta yüksek-yığın instabilitesini çözeceği umuluyordu
     /// (Stage 1 "linchpin"), ancak ampirik ölçüm bunu ÇÜRÜTTÜ: sıralama patlama frame'ini

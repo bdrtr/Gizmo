@@ -7,7 +7,7 @@
 //!   * adım sonrası hash değişir (state ilerliyor),
 //!   * iki dünyadan biri perturbe edilirse hash AYRIŞIR (desync tespiti çalışır).
 //!
-//! Cross-platform bit-exact KAPSAM DIŞI (sim f32/glam; bkz docs/determinism.md). Süreçler-
+//! Cross-platform bit-exact KAPSAM DIŞI (sim f32/glam; bkz docs/ENGINE.md §5). Süreçler-
 //! arası determinizm `demo/tests/cross_process_determinism.rs` ile ayrıca doğrulanır.
 
 use gizmo_physics_core::BodyHandle;

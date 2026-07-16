@@ -36,7 +36,7 @@ impl PhysicsWorld {
     ///
     /// Garanti: **aynı platform + aynı binary**'de, aynı başlangıç durumundan aynı `dt`
     /// adımlarıyla adım-adım eşleşir (replay/rollback için yeterli). Cross-platform bit-exact
-    /// GARANTİ EDİLMEZ (sim f32/glam üzerinde; bkz. `docs/determinism.md`).
+    /// GARANTİ EDİLMEZ (sim f32/glam üzerinde; bkz. `docs/ENGINE.md §5`).
     pub fn state_hash(&self) -> u64 {
         use std::hash::Hasher;
         // BodyHandle id'sine göre sabit sıra (dizi/ekleme sırasından bağımsız).

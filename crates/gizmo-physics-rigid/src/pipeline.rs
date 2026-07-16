@@ -201,7 +201,7 @@ impl PhysicsWorld {
         // yeni temas ÜRETEMEZ → pahalı narrowphase ATLANIR. (Not: eski "~%82" ölçümü
         // dormant-skip/pre-size/FxHash/paralel-narrowphase ÖNCESİNE ait; ölçüldü 2026-07-14 →
         // narrowphase artık geniş sahnede ~%34, SAT compute alt-dilimi frame'in ~%3'ü. Bu yüzden
-        // box-box SAT batch-SoA SIMD DÜŞÜRÜLDÜ; bkz. docs/narrowphase-batch-simd-plan.md.)
+        // box-box SAT batch-SoA SIMD DÜŞÜRÜLDÜ; bkz. docs/ENGINE.md §7.)
         // Cache aşağıda KORUNUR (yoksa ended-
         // collision wake sahte tetiklenir). En az biri aktifse normal narrowphase çalışır
         // (temas + wake yakalanır), böylece düşen/itilen cisim uyuyan komşuyu uyandırır.

@@ -11,14 +11,58 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > dependency-light **Stage A** core (`gizmo-math`, `gizmo-core`, the
 > `gizmo-physics-*` crates, `gizmo-scene`, `gizmo-net`, `gizmo-audio`, `gizmo-ai`)
 > to `1.x` while the graphics/integration **Stage B** crates stay on `0.y` — is
-> documented in [`RELEASING.md`](RELEASING.md) and remains the planned path for a
+> documented in [`docs/ENGINE.md`](docs/ENGINE.md) and remains the planned path for a
 > later release.
+
+## [Unreleased]
+
+Post-`0.8.0` work; the workspace still ships one uniform `0.x` version.
+
+### Added
+
+- **Ergonomics (DX).** `Prefab` — a define-once / spawn-many blueprint (mesh +
+  material + optional `RigidBodyBundle`) with `spawn` / `spawn_at` /
+  `spawn_with_mass` + per-instance `with_pbr`. `AutoBoxCollider` — derive a box
+  collider from an entity's `Transform.scale` so the size is authored once
+  (opt-in marker + a synchronous `Prefab` path). Auto-despawn lifetime
+  components (`DespawnAfter` / `DespawnBelowY` + `LifetimePlugin`), `FpsLook`
+  mouse-look camera controller, `World::despawn_all_with::<C>()` bulk despawn.
+- **Tooling.** Broad unit-test sweep (~1376 tests across the workspace);
+  structured `tracing` logging (instrument spans + fields) across the value
+  crates, with silent error-swallows promoted to `warn!` / `error!`.
+
+### Changed
+
+- **Docs.** Consolidated 12 planning / fix-plan documents (roadmap, releasing,
+  determinism, migration, architecture, and the finished FIX-PLANs) into a
+  single [`docs/ENGINE.md`](docs/ENGINE.md); `README` / `CHANGELOG` /
+  `demo-web/README` stay standalone.
+
+### Fixed
+
+- **Physics — resting-stack stability.** A settled box stack that spontaneously
+  gained energy and blew up (lateral buckling) is fixed by a manifold **block
+  solver** (coplanar normals solved jointly + Tikhonov regularization) plus
+  **full warm-start** (`warm_start_factor` 0.85 → 1.0) — stable to N≤32 (was
+  ~N≤16); N≥48 towers remain open. See [`docs/ENGINE.md`](docs/ENGINE.md) §7.
+- **Rendering — 6 latent bugs.** World tangent (plain model 3×3, not
+  inverse-transpose); PBR param-packing overflow at 1.0; ECS query
+  `get` / `contains` now honour table-storage `With` / `Without` filters
+  (matched `iter`); shadow-caster instance ordering (two-region layout); glTF
+  `AlphaMode::Mask` cutout (alpha-cutoff discard).
+- **Physics — perf.** Quadratic costs removed (broadphase pair dedup
+  O(P²)→O(P); per-island TGS scratch sized to the island; per-contact constants
+  hoisted out of the sweep loop): worst frame 262→46 ms on a 2000-box scene.
+- **App — GPU robustness.** Surface `Outdated` / `Lost` now reconfigures the
+  swapchain and backs off (rate-limited) instead of freezing or busy-spinning;
+  `CloseRequested` shuts down gracefully (runs `Drop` → clean wgpu teardown)
+  instead of `process::exit(0)`.
 
 ## [0.8.0] — 2026-07-12
 
 A large feature release gathering ~205 commits since `0.2.0`. The whole
 workspace continues to ship at one uniform `0.x` version (the staged `1.0`
-model in [`RELEASING.md`](RELEASING.md) remains the planned later path). No
+model in [`docs/ENGINE.md`](docs/ENGINE.md) remains the planned later path). No
 crate-level API is promised stable yet; treat any change as potentially
 breaking and pin an exact `=0.8.0` if you need reproducibility.
 
@@ -61,7 +105,7 @@ breaking and pin an exact `=0.8.0` if you need reproducibility.
 The first release since `0.1.7`. It gathers the entire 1.0-readiness effort
 (audit + hardening rounds) and the graphics-stack upgrade, shipped as a single
 breaking `0.x` bump. **Upgrading from `0.1.x`? See the
-[migration guide](docs/migration-0.1-to-0.2.md).**
+[migration guide](docs/ENGINE.md).**
 
 ### Changed (breaking)
 
@@ -98,7 +142,7 @@ breaking `0.x` bump. **Upgrading from `0.1.x`? See the
   `winit 0.29 → 0.30`, `egui 0.28 → 0.34` (plus `egui-wgpu`/`egui-winit` `0.34`,
   `egui_dock 0.13 → 0.19`, `transform-gizmo-egui 0.3 → 0.9`). Public `wgpu`/
   `winit`/`egui` types in the renderer/window/editor/app/facade move to the new
-  versions. See [`docs/graphics-upgrade-plan.md`](docs/graphics-upgrade-plan.md).
+  versions. See [`docs/ENGINE.md`](docs/ENGINE.md) (§6).
 - **`bevy_reflect` is now gated behind an off-by-default `reflect` feature** on
   `gizmo-core`, `gizmo-physics-core`, `gizmo-physics-rigid`, and `gizmo-scene`.
   With default features, scene save/load + snapshots fall back to plain `serde`
@@ -153,7 +197,7 @@ breaking `0.x` bump. **Upgrading from `0.1.x`? See the
   SAT, ABA/multibody, joints, soft-body, and fracture; a CI matrix
   (ubuntu/macos/windows), a ratcheted `clippy -D warnings` gate, and a headless
   determinism gate.
-- `RELEASING.md` (staged-1.0 strategy) and this changelog.
+- `docs/ENGINE.md` (§4 staged-1.0 strategy) and this changelog.
 
 ### Fixed
 
