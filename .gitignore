@@ -6,7 +6,12 @@
 
 # OS artifacts
 .DS_Store
+._*
+.Spotlight-V100
+.Trashes
 Thumbs.db
+ehthumbs.db
+Desktop.ini
 
 # Binaries
 *.exe
@@ -18,6 +23,8 @@ Thumbs.db
 *.log
 *.tmp
 *.swp
+*.swo
+.*.sw?
 *~
 .vscode/
 .idea/
@@ -45,3 +52,30 @@ assets/*.crdownload
 
 # wasm-bindgen output (demo-web packaging artifact; rebuilt from source)
 demo-web/pkg/
+
+# Rustfmt / rustc backups & internal-compiler-error dumps
+**/*.rs.bk
+rustc-ice-*.txt
+
+# Merge / patch leftovers
+*.orig
+*.rej
+
+# Profiling & coverage output (cargo-flamegraph, perf, LLVM-cov, cargo timings)
+flamegraph.svg
+perf.data
+perf.data.old
+*.profraw
+*.profdata
+lcov.info
+cargo-timing-*.html
+tarpaulin-report.html
+
+# Nix — flake.nix / flake.lock ARE committed; these are local build state only
+.direnv/
+/result
+/result-*
+
+# Python bytecode (scratch *.py is already ignored above)
+__pycache__/
+*.pyc
