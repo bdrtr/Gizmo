@@ -249,6 +249,23 @@ pub struct VehicleTuning {
     pub max_engine_torque: f32,
     pub max_brake_torque: f32,
     pub aero: AeroPackage,
+    /// Ölçülmüş tork eğrisi: `(rpm, N·m)` çiftleri, **devire göre artan** sırada.
+    ///
+    /// Boş bırakılırsa (varsayılan) motor [`Self::max_engine_torque`] ile ölçeklenen kendi
+    /// parametrik çan eğrisini kullanır — yani mevcut davranış bit düzeyinde korunur.
+    /// Doluysa çan eğrisi tamamen devre dışı kalır ve tork bu noktalardan doğrusal
+    /// interpolasyonla okunur.
+    ///
+    /// Neden var: çan eğrisi her aracın tepe torkunu **aynı devirde** yapmasına yol açıyor
+    /// (`ratio = 0.4`). Gerçek bir aracın eğrisi elde varsa bu, arabaları birbirinden ayıran
+    /// şeyi atmak demek — iki farklı motor aynı tepe torka sahipse birebir aynı sürülür.
+    /// Örnek: NFSU2'nun 240SX kaydı tepe torkunu 4675 devirde yapıyor, çan eğrisi ise
+    /// 3280'de; 1.400 devirlik bir fark ve tamamen farklı bir düşüş şekli.
+    ///
+    /// Aralık dışı devirler **uçlara sabitlenir**, sıfıra düşmez: motorun kırmızı çizgiyi
+    /// aşınca arabayı frenlemesi gerçek değil, ve çan eğrisinin `0.05` tabanı da tam bunun
+    /// için vardı.
+    pub torque_curve: Vec<(f32, f32)>,
 }
 
 impl Default for VehicleTuning {
@@ -266,6 +283,8 @@ impl Default for VehicleTuning {
             max_engine_torque: 350.0,
             max_brake_torque: 1500.0,
             aero: AeroPackage::default(),
+            // Boş = çan eğrisi. Varsayılanın davranışı değişmiyor.
+            torque_curve: Vec::new(),
         }
     }
 }
@@ -323,12 +342,54 @@ impl VehicleController {
         self.wheels.push(wheel);
     }
 
-    /// Motor tork eğrisi — parametrik çan eğrisi
+    /// Motor tork eğrisi — ölçülmüş noktalar varsa onlardan, yoksa parametrik çan eğrisinden.
+    ///
+    /// İki yol da gazla doğrusal ölçekleniyor ve ikisi de asla negatif dönmüyor: kırmızı çizgiyi
+    /// aşan bir motorun arabayı *frenlemesi* fizik değil, hata olur.
     pub fn engine_torque(&self) -> f32 {
         let t = &self.tuning;
-        let ratio = (self.engine_rpm - t.idle_rpm).max(0.0) / (t.max_rpm - t.idle_rpm).max(1.0);
-        let curve = (1.0 - (ratio - 0.4).powi(2) * 2.5).clamp(0.05, 1.0);
-        t.max_engine_torque * curve * self.throttle_input.abs()
+        let nm = if t.torque_curve.is_empty() {
+            let ratio = (self.engine_rpm - t.idle_rpm).max(0.0) / (t.max_rpm - t.idle_rpm).max(1.0);
+            let curve = (1.0 - (ratio - 0.4).powi(2) * 2.5).clamp(0.05, 1.0);
+            t.max_engine_torque * curve
+        } else {
+            Self::torque_from_curve(&t.torque_curve, self.engine_rpm)
+        };
+        nm * self.throttle_input.abs()
+    }
+
+    /// `(rpm, N·m)` noktalarından devire karşılık gelen torku doğrusal interpolasyonla okur.
+    ///
+    /// Uçların dışı **sabitlenir** (ekstrapolasyon yok): ilk noktanın altında ilk değer, son
+    /// noktanın üstünde son değer. Ekstrapolasyon yapsaydı düşen bir eğri yeterince yüksek
+    /// devirde negatife geçer ve motor arabayı frenlemeye başlardı — çan eğrisinin `0.05`
+    /// tabanının koruduğu şey buydu, ve aynı koruma burada da olmalı.
+    ///
+    /// Noktaların artan sırada olduğu varsayılır. Değilse sonuç anlamsız olur ama panik veya
+    /// negatif değer üretmez; sıralama çağıranın işi, çünkü onu burada her karede yapmak
+    /// ölçülmüş bir eğriyi kullanmanın maliyetini boşuna ikiye katlar.
+    fn torque_from_curve(points: &[(f32, f32)], rpm: f32) -> f32 {
+        let first = points[0];
+        if rpm <= first.0 {
+            return first.1.max(0.0);
+        }
+        let last = points[points.len() - 1];
+        if rpm >= last.0 {
+            return last.1.max(0.0);
+        }
+        for pair in points.windows(2) {
+            let (lo, hi) = (pair[0], pair[1]);
+            if rpm <= hi.0 {
+                let span = hi.0 - lo.0;
+                // Aynı deviri iki kez yazan bir eğri sıfıra bölmez; ikincisi kazanır.
+                if span <= 0.0 {
+                    return hi.1.max(0.0);
+                }
+                let k = (rpm - lo.0) / span;
+                return (lo.1 + (hi.1 - lo.1) * k).max(0.0);
+            }
+        }
+        last.1.max(0.0)
     }
 
     pub fn set_reverse(&mut self, on: bool) {
@@ -465,6 +526,146 @@ mod tests {
             (torque - expected_floor).abs() < 1e-3,
             "over-rev torque must sit on the 0.05 floor = {expected_floor}, got {torque}"
         );
+    }
+
+    // ── Measured torque curve ───────────────────────────────
+
+    /// A car whose curve is given reads it back point for point, and interpolates between.
+    ///
+    /// The numbers are NFSU2's 240SX record — nine points from idle to the limiter — because the
+    /// whole reason this field exists is that the bell curve cannot represent them: this engine
+    /// peaks at `ratio = 0.4`, which is 3280 rpm on that car, and the car itself peaks at 4675.
+    #[test]
+    fn a_measured_curve_is_read_instead_of_the_bell() {
+        let mut vc = VehicleController::new();
+        vc.throttle_input = 1.0;
+        vc.tuning.torque_curve = vec![
+            (800.0, 140.0),
+            (1575.0, 150.0),
+            (2350.0, 160.0),
+            (3125.0, 180.0),
+            (3900.0, 200.0),
+            (4675.0, 216.0),
+            (5450.0, 203.0),
+            (6225.0, 170.0),
+            (7000.0, 150.0),
+        ];
+
+        // Every point comes back exactly.
+        for &(rpm, nm) in &vc.tuning.torque_curve.clone() {
+            vc.engine_rpm = rpm;
+            let got = vc.engine_torque();
+            assert!((got - nm).abs() < 1e-3, "at {rpm} rpm expected {nm}, got {got}");
+        }
+
+        // Half way between two points is half way between their values.
+        vc.engine_rpm = (4675.0 + 5450.0) / 2.0;
+        let mid = vc.engine_torque();
+        assert!((mid - (216.0 + 203.0) / 2.0).abs() < 1e-3, "{mid}");
+
+        // And the peak is where the *car* puts it, not where the bell would.
+        let bell_peak_rpm = vc.tuning.idle_rpm + 0.4 * (vc.tuning.max_rpm - vc.tuning.idle_rpm);
+        vc.engine_rpm = bell_peak_rpm;
+        let at_bell_peak = vc.engine_torque();
+        vc.engine_rpm = 4675.0;
+        let at_real_peak = vc.engine_torque();
+        assert!(
+            at_real_peak > at_bell_peak,
+            "the measured peak {at_real_peak} must beat the bell's rpm {at_bell_peak}"
+        );
+    }
+
+    /// Outside the curve the ends are held, never extrapolated — because a falling curve
+    /// extrapolated far enough goes negative, and a negative engine torque is an engine braking
+    /// the car. That is exactly what the bell curve's `0.05` floor was protecting against, so the
+    /// measured path has to protect against it too.
+    #[test]
+    fn a_measured_curve_holds_its_ends_rather_than_extrapolating() {
+        let mut vc = VehicleController::new();
+        vc.throttle_input = 1.0;
+        vc.tuning.torque_curve = vec![(1000.0, 100.0), (5000.0, 300.0), (7000.0, 120.0)];
+
+        vc.engine_rpm = 0.0;
+        assert!((vc.engine_torque() - 100.0).abs() < 1e-3, "below the first point holds it");
+        vc.engine_rpm = 500.0;
+        assert!((vc.engine_torque() - 100.0).abs() < 1e-3);
+
+        vc.engine_rpm = 20_000.0;
+        let over = vc.engine_torque();
+        assert!((over - 120.0).abs() < 1e-3, "far past the last point holds it, got {over}");
+        assert!(over > 0.0, "and never goes negative");
+    }
+
+    /// The default is empty, so every existing vehicle keeps the bell curve **bit for bit**.
+    /// This engine's determinism contract makes that the whole point of the field being a `Vec`
+    /// with an empty default rather than a curve someone has to opt out of.
+    #[test]
+    fn an_empty_curve_leaves_the_bell_untouched() {
+        assert!(VehicleTuning::default().torque_curve.is_empty());
+
+        let mut bell = VehicleController::new();
+        bell.throttle_input = 0.7;
+        let mut measured = VehicleController::new();
+        measured.throttle_input = 0.7;
+        measured.tuning.torque_curve = vec![(800.0, 999.0), (7000.0, 999.0)];
+
+        for rpm in [800.0, 2000.0, 3280.0, 5000.0, 7000.0, 12_000.0] {
+            bell.engine_rpm = rpm;
+            measured.engine_rpm = rpm;
+            let b = bell.engine_torque();
+            // The bell path is unchanged: reproduce it here rather than trusting the reading.
+            let t = &bell.tuning;
+            let ratio = (rpm - t.idle_rpm).max(0.0) / (t.max_rpm - t.idle_rpm).max(1.0);
+            let want = t.max_engine_torque
+                * (1.0 - (ratio - 0.4).powi(2) * 2.5).clamp(0.05, 1.0)
+                * 0.7;
+            assert!((b - want).abs() < 1e-3, "at {rpm} rpm bell gave {b}, expected {want}");
+            // …and a filled curve takes the other branch, so the two disagree.
+            assert!((measured.engine_torque() - 999.0 * 0.7).abs() < 1e-3);
+        }
+    }
+
+    /// A measured curve still scales linearly with throttle and is zero when it is closed, the
+    /// same contract the bell curve keeps.
+    #[test]
+    fn a_measured_curve_still_obeys_the_throttle() {
+        let mut vc = VehicleController::new();
+        vc.tuning.torque_curve = vec![(1000.0, 200.0), (6000.0, 400.0)];
+        vc.engine_rpm = 3500.0;
+
+        vc.throttle_input = 0.0;
+        assert_eq!(vc.engine_torque(), 0.0);
+        vc.throttle_input = 0.5;
+        let half = vc.engine_torque();
+        vc.throttle_input = 1.0;
+        let full = vc.engine_torque();
+        assert!((full - 2.0 * half).abs() < 1e-3, "full {full} ≈ 2·half {half}");
+        assert!((full - 300.0).abs() < 1e-3, "3500 rpm is the midpoint: {full}");
+    }
+
+    /// Degenerate curves do not panic and do not produce a negative or infinite torque: one
+    /// point, a repeated rpm (which would divide by zero), and a negative value in the table.
+    #[test]
+    fn a_degenerate_curve_is_survived_rather_than_trusted() {
+        let mut vc = VehicleController::new();
+        vc.throttle_input = 1.0;
+
+        vc.tuning.torque_curve = vec![(3000.0, 250.0)];
+        for rpm in [0.0, 3000.0, 9000.0] {
+            vc.engine_rpm = rpm;
+            assert!((vc.engine_torque() - 250.0).abs() < 1e-3, "one point is a flat curve");
+        }
+
+        vc.tuning.torque_curve = vec![(1000.0, 100.0), (4000.0, 200.0), (4000.0, 300.0), (6000.0, 50.0)];
+        vc.engine_rpm = 4000.0;
+        let at_dup = vc.engine_torque();
+        assert!(at_dup.is_finite() && at_dup > 0.0, "a repeated rpm must not divide by zero");
+
+        vc.tuning.torque_curve = vec![(1000.0, -50.0), (6000.0, -10.0)];
+        for rpm in [500.0, 3000.0, 9000.0] {
+            vc.engine_rpm = rpm;
+            assert_eq!(vc.engine_torque(), 0.0, "a negative table never brakes the car");
+        }
     }
 
     // ── set_reverse state machine ───────────────────────────
