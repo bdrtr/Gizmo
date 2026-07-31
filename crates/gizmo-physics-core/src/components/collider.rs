@@ -191,6 +191,42 @@ impl Collider {
         }
     }
 
+    /// A **static triangle mesh** collider: terrain, a track surface, a level's geometry.
+    ///
+    /// Takes the mesh by value because building the BVH **reorders the indices** — the tree's
+    /// `first_tri_index` addresses that reordered array, so the two must travel together and a
+    /// caller keeping its own copy would be keeping the wrong one.
+    ///
+    /// The mesh is the one shape that is genuinely *concave*, which is the whole reason it exists
+    /// as a shape rather than as a convex hull. See [`crate::narrowphase::NarrowPhase`]: a pair
+    /// involving one is dispatched per-triangle, not through GJK over the whole thing.
+    ///
+    /// Meant for **static** bodies. There is no inertia tensor for an arbitrary mesh here, and a
+    /// dynamic one would be asking the solver a question this shape cannot answer.
+    ///
+    /// A failed BVH build (an index past the end, a mesh past `u32::MAX` triangles) leaves an
+    /// empty tree and logs it. That degrades to "collides with nothing" rather than to a panic or,
+    /// worse, a silent O(n) scan nobody notices until the frame budget is gone.
+    pub fn trimesh(vertices: Vec<Vec3>, mut indices: Vec<u32>) -> Self {
+        let bvh = crate::bvh::BvhTree::build(&vertices, &mut indices).unwrap_or_else(|e| {
+            tracing::warn!(
+                error = %e,
+                vertex_count = vertices.len(),
+                index_count = indices.len(),
+                "TriMesh collider BVH build failed; this mesh will collide with nothing"
+            );
+            crate::bvh::BvhTree::default()
+        });
+        Self {
+            shape: ColliderShape::TriMesh(TriMeshShape {
+                vertices: std::sync::Arc::new(vertices),
+                indices: std::sync::Arc::new(indices),
+                bvh: std::sync::Arc::new(bvh),
+            }),
+            ..Default::default()
+        }
+    }
+
     pub fn with_trigger(mut self, is_trigger: bool) -> Self {
         self.is_trigger = is_trigger;
         self
@@ -507,6 +543,50 @@ mod tests {
         assert_eq!(c.material.dynamic_friction, 0.0);
         let c2 = Collider::sphere(1.0).with_restitution(-0.5);
         assert_eq!(c2.material.restitution, 0.0);
+    }
+
+    /// `Collider::trimesh` builds a usable tree, and keeps the indices the tree was built
+    /// against — the build reorders them, so handing back the caller's original would address the
+    /// wrong triangles.
+    #[test]
+    fn a_trimesh_collider_keeps_the_indices_its_tree_was_built_on() {
+        // Two quads far apart, so the builder actually splits and reorders.
+        let mut v = Vec::new();
+        let mut i = Vec::new();
+        for cx in [0.0f32, 50.0] {
+            let b = v.len() as u32;
+            v.extend([
+                Vec3::new(cx - 1.0, 0.0, -1.0),
+                Vec3::new(cx + 1.0, 0.0, -1.0),
+                Vec3::new(cx + 1.0, 0.0, 1.0),
+                Vec3::new(cx - 1.0, 0.0, 1.0),
+            ]);
+            i.extend([b, b + 1, b + 2, b, b + 2, b + 3]);
+        }
+        let c = Collider::trimesh(v.clone(), i.clone());
+        let ColliderShape::TriMesh(tm) = &c.shape else { panic!("not a trimesh") };
+        assert!(!tm.bvh.nodes.is_empty(), "the tree was built");
+        assert_eq!(tm.vertices.len(), v.len());
+        assert_eq!(tm.indices.len(), i.len());
+        // Every triangle the tree addresses resolves through the indices it kept.
+        let mut tris = Vec::new();
+        tm.bvh.query_aabb(gizmo_math::Aabb::new(Vec3::splat(-100.0), Vec3::splat(100.0)), &mut tris);
+        assert_eq!(tris.len(), 4, "all four triangles are reachable");
+        for t in tris {
+            for k in 0..3 {
+                let idx = tm.indices[t as usize * 3 + k] as usize;
+                assert!(idx < tm.vertices.len(), "index {idx} is past the vertices");
+            }
+        }
+    }
+
+    /// A mesh the BVH cannot be built for collides with nothing, and does not panic.
+    #[test]
+    fn a_broken_trimesh_degrades_to_an_empty_tree() {
+        let v = vec![Vec3::ZERO, Vec3::X, Vec3::Y];
+        let c = Collider::trimesh(v, vec![0, 1, 9]); // 9 is past the end
+        let ColliderShape::TriMesh(tm) = &c.shape else { panic!("not a trimesh") };
+        assert!(tm.bvh.nodes.is_empty(), "a failed build leaves an empty tree, not a bad one");
     }
 
     #[test]
