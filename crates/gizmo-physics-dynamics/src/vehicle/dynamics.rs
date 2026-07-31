@@ -116,6 +116,42 @@ pub fn update_vehicle(
         return;
     }
 
+    // Bir sürücü girdisi varsa gövdeyi UYANDIR.
+    //
+    // Duran bir araba ~1 saniye sonra uyur ve `integrator` uyuyan gövdeyi hiç entegre etmez. Bu
+    // sistem ise uyusun uyumasın çalışmaya devam eder: tork üretir, `current_speed_kmh` yazar,
+    // tekerlekleri döndürür. Sonuç, dışarıdan bakınca fizik motorunun bozulmuş gibi görünmesidir —
+    // gaza basarsın, devir yükselir, hız göstergesi 54 km/h yazar, tekerler döner ve araba
+    // milimetre kıpırdamaz. (Tam olarak böyle bir hata raporuyla bulundu.)
+    //
+    // Uyandırmayı *girdiye* bağlamak önemli: koşulsuz uyandırmak park etmiş bir aracın asla
+    // uyumaması demek olurdu ve uyku sistemi tam da bunun için var. Frenin de sayılması, el freni
+    // çekili bir araca çarpıldığında değil, sürücü frene bastığında gövdenin uyanması içindir.
+    let driver_input = vehicle.throttle_input.abs() > f32::EPSILON
+        || vehicle.brake_input.abs() > f32::EPSILON
+        || vehicle.steering_input.abs() > f32::EPSILON;
+    if driver_input && vehicle_rb.is_sleeping {
+        tracing::debug!(entity = ?vehicle_entity, "[Vehicle] driver input woke a sleeping chassis");
+        vehicle_rb.wake_up();
+    }
+
+    // Hâlâ uyuyorsa: HİÇBİR ŞEY yapma.
+    //
+    // Uyandırma tek başına yetmiyor, ve yetmediği çok net bir şekilde görüldü. Bu fonksiyon
+    // eskiden uyuyan bir gövde için de sonuna kadar koşuyordu: süspansiyon kuvvetini, yerçekimini
+    // ve tahrik torkunu `vehicle_vel`'e **biriktiriyordu**. Entegratör uyuyan gövdeyi taşımadığı
+    // için o hız hiç harcanmıyor, sadece büyüyordu — ölçüldü, bir dakika park eden bir arabada
+    // 15 m/s'ye ulaşmıştı. Uyandırma eklendiğinde o birikim tek karede serbest kaldı ve araba
+    // havalanıp takla attı. İlk hata "gaz veriyorum gitmiyor", ikincisi "araba uçtu": aynı hatanın
+    // iki yarısı.
+    //
+    // Erken çıkış ikisini birden kapatıyor: uyuyan araca kuvvet uygulanmaz, uyanan araç durgun
+    // halden başlar. `is_grounded` gibi okunan alanlar son uyanık karenin değerinde kalır, ki bir
+    // park etmiş araba için doğru olan da budur.
+    if vehicle_rb.is_sleeping {
+        return;
+    }
+
     // Yerel eksenler
     let up = vehicle_transform
         .rotation
@@ -1056,6 +1092,126 @@ mod tests {
     /// Yüzey materyali + hava durumu grip wiring'i (Track C) ve FWD/reverse (Track E) için
     /// esnek harness: verilen zemin materyali, weather_grip, tahrik düzeni ve aks yerleşimiyle
     /// aracı düşürüp sürer; sonda ileri (−Z) hızı ve son VehicleController'ı döner.
+    /// A parked car that has fallen asleep must **move when the driver presses the accelerator**.
+    ///
+    /// The integrator skips a sleeping body entirely, but this system runs regardless: it makes
+    /// torque, writes `current_speed_kmh` and turns the wheels. Nothing woke the chassis, so the
+    /// visible result was a car whose rev counter climbed, whose speedometer read 54 km/h, whose
+    /// wheels spun — and which did not move a millimetre. It reached a bug report as "the wheels
+    /// turn but it doesn't go", and it only ever happened to a car that had been left standing:
+    /// anything driven from the first frame never slept and so never showed it.
+    ///
+    /// The test asserts the wake, and then that the wake is **earned** — a sleeping car with no
+    /// input stays asleep, because unconditional waking would mean the sleep system does nothing
+    /// for parked cars, which is the whole reason it exists.
+    #[test]
+    fn driver_input_wakes_a_sleeping_chassis() {
+        let veh_id = BodyHandle::from_id(2);
+        let ground_id = BodyHandle::from_id(1);
+        let ground = Collider::box_collider(Vec3::new(200.0, 1.0, 200.0));
+        let ground_t = Transform::new(Vec3::new(0.0, -1.0, 0.0));
+        let mut rb = RigidBody::new(1200.0, true);
+        rb.calculate_box_inertia(1.4, 0.7, 2.4);
+        let t = Transform::new(Vec3::new(0.0, 1.0, 0.0));
+        let mut vel = Velocity::default();
+        let mut vc = VehicleController::new();
+        vc.add_wheel(Wheel { attachment_local_pos: Vec3::new(0.0, 0.2, 0.0), ..Default::default() });
+        let cols = [(ground_id, ground_t, ground), (veh_id, t, Collider::box_collider(Vec3::new(0.7, 0.35, 1.4)))];
+
+        // Parked and asleep, exactly as `update_sleep_state` leaves a car that has stood still.
+        rb.is_sleeping = true;
+        rb.sleep_counter = 60;
+
+        // No input: it stays asleep.
+        vc.throttle_input = 0.0;
+        vc.brake_input = 0.0;
+        vc.steering_input = 0.0;
+        update_vehicle(veh_id, &mut vc, &mut rb, &t, &mut vel, &cols, 1.0, 1.0 / 60.0);
+        assert!(rb.is_sleeping, "a parked car with no input must not be woken by its own controller");
+
+        // Throttle wakes it, and clears the counter so it does not doze straight off again.
+        vc.throttle_input = 1.0;
+        update_vehicle(veh_id, &mut vc, &mut rb, &t, &mut vel, &cols, 1.0, 1.0 / 60.0);
+        assert!(!rb.is_sleeping, "throttle must wake the chassis");
+        assert_eq!(rb.sleep_counter, 0);
+
+        // Brake and steering count too — a driver touching either is a driver.
+        for (throttle, brake, steer) in [(0.0, 1.0, 0.0), (0.0, 0.0, 0.6)] {
+            rb.is_sleeping = true;
+            vc.throttle_input = throttle;
+            vc.brake_input = brake;
+            vc.steering_input = steer;
+            update_vehicle(veh_id, &mut vc, &mut rb, &t, &mut vel, &cols, 1.0, 1.0 / 60.0);
+            assert!(!rb.is_sleeping, "brake {brake} / steering {steer} must wake the chassis");
+        }
+    }
+
+    /// A sleeping chassis accumulates **no velocity**, and that is the other half of the same bug.
+    ///
+    /// Waking on input, on its own, made things worse rather than better. This function used to run
+    /// to completion for a sleeping body — suspension, gravity and drive torque all summed into
+    /// `Velocity` — while the integrator, which skips sleeping bodies, never spent any of it. The
+    /// velocity only grew: measured at 15 m/s on a car that had been standing. Adding the wake
+    /// released all of it in one frame and the car took off and flipped. First report: "I press the
+    /// accelerator and it doesn't move." Second: "the car flew and did a backflip." One bug, two
+    /// halves, and the early return closes both.
+    #[test]
+    fn a_sleeping_chassis_accumulates_nothing() {
+        let veh_id = BodyHandle::from_id(2);
+        let ground_id = BodyHandle::from_id(1);
+        let ground = Collider::box_collider(Vec3::new(200.0, 1.0, 200.0));
+        let ground_t = Transform::new(Vec3::new(0.0, -1.0, 0.0));
+        let mut rb = RigidBody::new(1200.0, true);
+        rb.calculate_box_inertia(1.4, 0.7, 2.4);
+        // **Resting on the ground**, which the earlier draft of this test got wrong: it put the
+        // car at y = 1.0 over a ground whose top is y = 0, so the wheels hung in the air, no
+        // suspension force was ever produced and the test passed with the fix removed. A test for
+        // "a parked car accumulates nothing" has to park the car. Ground top is 0; attachment sits
+        // 0.2 above the chassis origin, rest 0.15, radius 0.3 — so y = 0.25 puts the tyres on it
+        // and anything lower **compresses the springs**, which is the state a parked car is
+        // actually in: they are holding its weight. That compression is the whole mechanism — the
+        // springs push up every frame, and for a sleeping body the integrator skips gravity too,
+        // so there is nothing pushing back.
+        let t = Transform::new(Vec3::new(0.0, 0.17, 0.0));
+        let mut vel = Velocity::default();
+        let mut vc = VehicleController::new();
+        for (x, z) in [(0.7_f32, 1.0_f32), (-0.7, 1.0), (0.7, -1.0), (-0.7, -1.0)] {
+            vc.add_wheel(Wheel {
+                attachment_local_pos: Vec3::new(x, 0.2, z),
+                radius: 0.3,
+                suspension_rest_length: 0.15,
+                suspension_max_travel: 0.15,
+                suspension_stiffness: 40000.0,
+                suspension_damping: 3000.0,
+                ..Default::default()
+            });
+        }
+        let cols = [
+            (ground_id, ground_t, ground),
+            (veh_id, t, Collider::box_collider(Vec3::new(0.7, 0.35, 1.4))),
+        ];
+
+        rb.is_sleeping = true;
+        rb.sleep_counter = 60;
+        // Ten seconds of standing still, with no driver anywhere near it.
+        for _ in 0..600 {
+            update_vehicle(veh_id, &mut vc, &mut rb, &t, &mut vel, &cols, 1.0, 1.0 / 60.0);
+        }
+        assert!(rb.is_sleeping, "nothing woke it");
+        assert!(
+            vel.linear.length() < 1e-6 && vel.angular.length() < 1e-6,
+            "a parked car built up {:?} / {:?} in ten seconds; on waking that is a launch",
+            vel.linear,
+            vel.angular
+        );
+
+        // And the first frame after waking starts from rest rather than from a stored-up shove.
+        vc.throttle_input = 1.0;
+        update_vehicle(veh_id, &mut vc, &mut rb, &t, &mut vel, &cols, 1.0, 1.0 / 60.0);
+        assert!(!rb.is_sleeping);
+        assert!(vel.linear.y.abs() < 1.0, "woke with {:.2} m/s upward — that is the flip", vel.linear.y);
+    }
+
     fn sim_forward_speed(
         throttle: f32,
         reverse: bool,
