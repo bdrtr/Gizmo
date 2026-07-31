@@ -301,6 +301,98 @@ impl NarrowPhase {
             .max_by(|a, b| a.penetration.total_cmp(&b.penetration))
     }
 
+    /// Contacts between a convex shape and a **triangle mesh**, one triangle at a time.
+    ///
+    /// # Why this exists
+    ///
+    /// A `TriMesh` used to fall through to the GJK+EPA fallback, and GJK is a **convex**
+    /// algorithm: its support function walks the mesh's BVH for the farthest vertex in a
+    /// direction, which describes the mesh's *convex hull*. For a hull that is right; for a
+    /// racetrack it is catastrophic. The hull of a closed oval ribbon is a filled disc, so a car
+    /// driving inside the oval is "inside" the hull and gets pushed out sideways by a surface that
+    /// is not there. A dip in the ground becomes a lid over it.
+    ///
+    /// So: ask the BVH which triangles the shape's own bounds actually reach, and test each one as
+    /// its own convex shape. Three points *are* convex, so GJK is exactly right per triangle, and
+    /// the concavity lives in which triangles get picked rather than in the algorithm.
+    ///
+    /// # What it costs, and the bound on it
+    ///
+    /// One GJK call per candidate triangle. The BVH keeps that proportional to what the shape
+    /// overlaps rather than to mesh size — a car on a city block touches a handful of triangles,
+    /// not the city. The contacts are then cut to the **four deepest**, which is what the solver
+    /// takes anyway; keeping more would cost solver time for points it discards.
+    fn shape_trimesh(
+        shape: &ColliderShape,
+        pos: Vec3,
+        rot: Quat,
+        mesh: &crate::components::TriMeshShape,
+        mesh_pos: Vec3,
+        mesh_rot: Quat,
+    ) -> Vec<ContactPoint> {
+        // The query box, in the mesh's own space. Six support queries give the shape's world
+        // bounds without needing to know what shape it is; the corners then come back into mesh
+        // space, and their AABB is conservative — never tighter than the truth, which is the safe
+        // direction for a broad query.
+        let axes = [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z];
+        let mut lo = Vec3::splat(f32::INFINITY);
+        let mut hi = Vec3::splat(f32::NEG_INFINITY);
+        let inv = mesh_rot.inverse();
+        for dir in axes {
+            let p = inv * (Gjk::support_point(shape, pos, rot, dir) - mesh_pos);
+            lo = lo.min(p);
+            hi = hi.max(p);
+        }
+        if !lo.is_finite() || !hi.is_finite() {
+            return Vec::new();
+        }
+        // A skin of tolerance, so a shape resting exactly on a triangle plane still finds it.
+        let skin = Vec3::splat(0.01);
+        let query = gizmo_math::Aabb::new(lo - skin, hi + skin);
+
+        let mut tris = Vec::new();
+        mesh.bvh.query_aabb(query, &mut tris);
+        if tris.is_empty() {
+            return Vec::new();
+        }
+
+        let mut out: Vec<ContactPoint> = Vec::new();
+        let mut verts = Vec::with_capacity(3);
+        for tri in tris {
+            let base = tri as usize * 3;
+            verts.clear();
+            let mut ok = true;
+            for k in 0..3 {
+                match mesh.indices.get(base + k).and_then(|i| mesh.vertices.get(*i as usize)) {
+                    Some(v) => verts.push(*v),
+                    // A corrupt index is skipped rather than panicking: this is the hot path over
+                    // data that may have come from a file.
+                    None => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if !ok {
+                continue;
+            }
+            // A triangle as a three-point hull. `faces` stays empty because the support function
+            // only reads `vertices`; a face list would be carried per triangle per frame for
+            // nothing.
+            let face = ColliderShape::ConvexHull(crate::components::ConvexHullShape {
+                vertices: std::sync::Arc::new(verts.clone()),
+                faces: std::sync::Arc::new(Vec::new()),
+            });
+            if let Some(c) = Gjk::get_contact(shape, pos, rot, &face, mesh_pos, mesh_rot) {
+                out.push(c);
+            }
+        }
+
+        out.sort_by(|a, b| b.penetration.total_cmp(&a.penetration));
+        out.truncate(4);
+        out
+    }
+
     /// Return up to 4 contact points between two shapes.
     ///
     /// Compound shapes are handled recursively; each sub-shape pair is
@@ -381,6 +473,7 @@ impl NarrowPhase {
                 Self::box_box(pos_a, rot_a, ba.half_extents, pos_b, rot_b, bb.half_extents)
             }
 
+
             // Generic – Plane (A is arbitrary, B is plane)
             (_, ColliderShape::Plane(p)) => {
                 Self::shape_plane(shape_a, pos_a, rot_a, p.normal, p.distance)
@@ -397,6 +490,22 @@ impl NarrowPhase {
                     })
                     .into_iter()
                     .collect()
+            }
+
+            // Anything – TriMesh, and its mirror. Position matters twice over. **Below the two
+            // Plane arms**, because `(TriMesh, Plane)` must keep going to `shape_plane`: routing it
+            // here would hand a `Plane` to `Gjk::support_point`, which that function documents as a
+            // contract violation and asserts on. **Above the GJK fallback**, because a mesh is not
+            // convex and the fallback collides against its convex hull. See [`Self::shape_trimesh`].
+            (_, ColliderShape::TriMesh(tm)) => {
+                Self::shape_trimesh(shape_a, pos_a, rot_a, tm, pos_b, rot_b)
+            }
+            (ColliderShape::TriMesh(tm), _) => {
+                let mut cs = Self::shape_trimesh(shape_b, pos_b, rot_b, tm, pos_a, rot_a);
+                for c in &mut cs {
+                    c.normal = -c.normal;
+                }
+                cs
             }
 
             // Fallback to GJK + EPA for all other shape combinations.
@@ -416,6 +525,186 @@ impl NarrowPhase {
         tracing::trace!(contact_count = contacts.len(), "narrowphase manifold generated");
 
         contacts
+    }
+}
+
+#[cfg(test)]
+mod trimesh_tests {
+    use super::*;
+    use crate::components::{BoxShape, ColliderShape, TriMeshShape};
+    use std::sync::Arc;
+
+    /// A flat square of ground in the XZ plane at `y`, as two triangles spanning `±half`.
+    fn quad(y: f32, half: f32) -> (Vec<Vec3>, Vec<u32>) {
+        (
+            vec![
+                Vec3::new(-half, y, -half),
+                Vec3::new(half, y, -half),
+                Vec3::new(half, y, half),
+                Vec3::new(-half, y, half),
+            ],
+            vec![0, 1, 2, 0, 2, 3],
+        )
+    }
+
+    fn trimesh(vertices: Vec<Vec3>, mut indices: Vec<u32>) -> ColliderShape {
+        let bvh = crate::bvh::BvhTree::build(&vertices, &mut indices).expect("bvh");
+        ColliderShape::TriMesh(TriMeshShape {
+            vertices: Arc::new(vertices),
+            indices: Arc::new(indices),
+            bvh: Arc::new(bvh),
+        })
+    }
+
+    /// A box resting on a flat trimesh floor is pushed **up**, and barely.
+    #[test]
+    fn a_box_on_a_trimesh_floor_is_pushed_up() {
+        let (v, i) = quad(0.0, 20.0);
+        let floor = trimesh(v, i);
+        let b = ColliderShape::Box(BoxShape { half_extents: Vec3::splat(0.5) });
+
+        // Sunk 0.1 into the floor.
+        let cs = NarrowPhase::test_collision_manifold(
+            &b, Vec3::new(0.0, 0.4, 0.0), Quat::IDENTITY,
+            &floor, Vec3::ZERO, Quat::IDENTITY,
+        );
+        assert!(!cs.is_empty(), "a box overlapping the floor must produce contacts");
+        // Normal points A→B, i.e. from the box down into the floor.
+        for c in &cs {
+            assert!(c.normal.y < -0.7, "normal {:?} is not into the floor", c.normal);
+            assert!(c.penetration > 0.0 && c.penetration < 0.5, "penetration {}", c.penetration);
+        }
+
+        // Clear of the floor: no contacts.
+        let none = NarrowPhase::test_collision_manifold(
+            &b, Vec3::new(0.0, 3.0, 0.0), Quat::IDENTITY,
+            &floor, Vec3::ZERO, Quat::IDENTITY,
+        );
+        assert!(none.is_empty(), "a box well above the floor must not touch it");
+    }
+
+    /// **The bug this arm was added for.** A ring of ground with a hole in the middle is
+    /// concave: standing in the hole must touch nothing.
+    ///
+    /// Under the old GJK+EPA fallback the mesh was reduced to its **convex hull** — the hole is
+    /// filled in — so a body in the middle collided with a lid that is not there. That is what
+    /// made a closed racetrack undrivable, and it is why this test puts the box where the mesh
+    /// *is not*.
+    #[test]
+    fn a_hole_in_the_mesh_is_a_hole_and_not_its_convex_hull() {
+        // Four quads forming a ring around an empty 4×4 centre, all at y = 0.
+        let mut v = Vec::new();
+        let mut i = Vec::new();
+        for (cx, cz) in [(-6.0, 0.0), (6.0, 0.0), (0.0, -6.0), (0.0, 6.0)] {
+            let (qv, qi) = quad(0.0, 2.0);
+            let base = v.len() as u32;
+            v.extend(qv.into_iter().map(|p| p + Vec3::new(cx, 0.0, cz)));
+            i.extend(qi.into_iter().map(|k| k + base));
+        }
+        let ring = trimesh(v, i);
+        let b = ColliderShape::Box(BoxShape { half_extents: Vec3::splat(0.5) });
+
+        // Dead centre, at the height the ground would be: the hull says "solid", the mesh says
+        // "nothing here".
+        let inside = NarrowPhase::test_collision_manifold(
+            &b, Vec3::new(0.0, 0.0, 0.0), Quat::IDENTITY,
+            &ring, Vec3::ZERO, Quat::IDENTITY,
+        );
+        assert!(
+            inside.is_empty(),
+            "the hole is empty space; {} contact(s) means the convex hull is being collided with",
+            inside.len()
+        );
+
+        // And the ring itself still collides, so the emptiness above is not simply "nothing works".
+        let on_ring = NarrowPhase::test_collision_manifold(
+            &b, Vec3::new(6.0, 0.4, 0.0), Quat::IDENTITY,
+            &ring, Vec3::ZERO, Quat::IDENTITY,
+        );
+        assert!(!on_ring.is_empty(), "the ring's own surface must still be solid");
+    }
+
+    /// The mesh's transform is honoured: the same box and mesh, with the mesh moved and turned,
+    /// collide exactly as if the box had been moved and turned the opposite way.
+    #[test]
+    fn a_moved_and_turned_mesh_is_collided_in_its_own_space() {
+        let (v, i) = quad(0.0, 20.0);
+        let floor = trimesh(v, i);
+        let b = ColliderShape::Box(BoxShape { half_extents: Vec3::splat(0.5) });
+        let mesh_pos = Vec3::new(3.0, 1.0, -2.0);
+        let mesh_rot = Quat::from_rotation_y(0.7);
+
+        let cs = NarrowPhase::test_collision_manifold(
+            &b, mesh_pos + Vec3::new(0.0, 0.4, 0.0), Quat::IDENTITY,
+            &floor, mesh_pos, mesh_rot,
+        );
+        assert!(!cs.is_empty(), "a moved floor is still a floor");
+        for c in &cs {
+            assert!(c.normal.y < -0.7, "normal {:?} is not into the floor", c.normal);
+        }
+    }
+
+    /// The mirrored arm flips the normal, so `(mesh, box)` is the negation of `(box, mesh)` —
+    /// the A→B convention this whole module keeps.
+    #[test]
+    fn the_mirrored_pair_flips_the_normal() {
+        let (v, i) = quad(0.0, 20.0);
+        let floor = trimesh(v, i);
+        let b = ColliderShape::Box(BoxShape { half_extents: Vec3::splat(0.5) });
+        let at = Vec3::new(0.0, 0.4, 0.0);
+
+        let fwd = NarrowPhase::test_collision_manifold(&b, at, Quat::IDENTITY, &floor, Vec3::ZERO, Quat::IDENTITY);
+        let rev = NarrowPhase::test_collision_manifold(&floor, Vec3::ZERO, Quat::IDENTITY, &b, at, Quat::IDENTITY);
+        assert_eq!(fwd.len(), rev.len());
+        assert!(!fwd.is_empty());
+        assert!(rev[0].normal.y > 0.7, "mesh→box must point up out of the floor: {:?}", rev[0].normal);
+    }
+
+    /// A mesh against a **plane** keeps going to `shape_plane`, not to the new arm.
+    ///
+    /// This is a regression the new arms caused and this test now prevents. Placed above the two
+    /// Plane arms, `(TriMesh, Plane)` matched the trimesh arm, which hands the plane to
+    /// `Gjk::support_point` — a case that function documents as a contract violation and
+    /// `debug_assert!`s on. The arms belong *below* Plane and *above* the GJK fallback, and the
+    /// window between the two is the only correct place for them.
+    #[test]
+    fn a_mesh_against_a_plane_still_takes_the_plane_path() {
+        let (v, i) = quad(0.0, 5.0);
+        let mesh = trimesh(v, i);
+        let plane = ColliderShape::Plane(crate::components::PlaneShape {
+            normal: Vec3::Y,
+            distance: 0.2,
+        });
+        // Both orders: neither may reach GJK with a plane in hand.
+        let _ = NarrowPhase::test_collision_manifold(
+            &mesh, Vec3::ZERO, Quat::IDENTITY, &plane, Vec3::ZERO, Quat::IDENTITY);
+        let _ = NarrowPhase::test_collision_manifold(
+            &plane, Vec3::ZERO, Quat::IDENTITY, &mesh, Vec3::ZERO, Quat::IDENTITY);
+    }
+
+    /// An empty mesh, and a mesh whose indices point past its vertices, produce no contacts and
+    /// no panic. Meshes arrive from files.
+    #[test]
+    fn a_degenerate_mesh_is_survived() {
+        let b = ColliderShape::Box(BoxShape { half_extents: Vec3::splat(0.5) });
+        let empty = ColliderShape::TriMesh(TriMeshShape {
+            vertices: Arc::new(Vec::new()),
+            indices: Arc::new(Vec::new()),
+            bvh: Arc::new(crate::bvh::BvhTree::default()),
+        });
+        assert!(NarrowPhase::test_collision_manifold(
+            &b, Vec3::ZERO, Quat::IDENTITY, &empty, Vec3::ZERO, Quat::IDENTITY).is_empty());
+
+        // A BVH that claims a triangle the index array cannot supply.
+        let (v, i) = quad(0.0, 5.0);
+        let bvh = crate::bvh::BvhTree::build(&v, &mut i.clone()).expect("bvh");
+        let broken = ColliderShape::TriMesh(TriMeshShape {
+            vertices: Arc::new(v),
+            indices: Arc::new(vec![0, 1, 2]), // one triangle where the BVH indexes two
+            bvh: Arc::new(bvh),
+        });
+        let _ = NarrowPhase::test_collision_manifold(
+            &b, Vec3::new(0.0, 0.4, 0.0), Quat::IDENTITY, &broken, Vec3::ZERO, Quat::IDENTITY);
     }
 }
 

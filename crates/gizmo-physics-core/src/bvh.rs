@@ -259,6 +259,43 @@ impl BvhTree {
         self.subdivide(left_child_idx, vertices, indices, depth + 1);
         self.subdivide(right_child_idx, vertices, indices, depth + 1);
     }
+
+    /// Every triangle whose leaf bounds overlap `query`, as **triangle indices** — multiply by 3
+    /// to reach the mesh's index array.
+    ///
+    /// Appends rather than returning, so a caller running this per pair per frame reuses one
+    /// buffer. Results are in tree order, not sorted, and a triangle appears once.
+    ///
+    /// This is the query a *concave* mesh needs. Support-point algorithms (GJK/EPA) walk the same
+    /// tree to find the farthest vertex in a direction, which is a **convex hull** support
+    /// function — correct for a hull and wrong for a mesh with a dent in it. Collecting the
+    /// candidate triangles and testing each one separately is what makes a valley a valley
+    /// instead of the lid over it.
+    pub fn query_aabb(&self, query: Aabb, out: &mut Vec<u32>) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        let mut stack = Vec::with_capacity(32);
+        stack.push(0usize);
+        while let Some(i) = stack.pop() {
+            let Some(node) = self.nodes.get(i) else { continue };
+            if !node.aabb.intersects(query) {
+                continue;
+            }
+            if node.is_leaf() {
+                out.extend(node.first_tri_index..node.first_tri_index + node.tri_count);
+            } else {
+                // `-1` is the leaf marker; anything else is an index, and a negative one that is
+                // not `-1` would be a corrupt tree rather than a leaf.
+                if node.left_child >= 0 {
+                    stack.push(node.left_child as usize);
+                }
+                if node.right_child >= 0 {
+                    stack.push(node.right_child as usize);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
