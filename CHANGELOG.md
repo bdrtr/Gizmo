@@ -18,6 +18,81 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Post-`0.8.0` work; the workspace still ships one uniform `0.x` version.
 
+### Fixed — soundness
+
+- **`unsafe impl Sync for ScriptEngine` was unsound and published.** mlua's `send`
+  feature makes `Lua` `Send`; it never makes it `Sync`, because the `lua_State` is
+  mutated through `&Lua`. `has_function` and `run_entity_update` did exactly that
+  behind `&self`, and `ScriptEngine` is stored as a `World` resource — so two
+  systems holding a shared reference could race on the interpreter. Both methods
+  now take `&mut self`, which makes concurrent VM access unrepresentable rather
+  than merely discouraged. **Breaking** for direct callers; there were none outside
+  the crate.
+- **`World::query_entity_mut` skipped its aliasing check.** Every other query entry
+  point runs `check_aliasing` first; this one did not, so
+  `query_entity_mut::<(Mut<T>, Mut<T>)>(id)` was safe code that handed out two live
+  `&mut T` to the same row — undefined behaviour with no panic and no compile error.
+  It now panics like the other paths, as does `query_entity` for symmetry.
+
+### Fixed — determinism
+
+- **`generate_fracture_chunks` seeded itself from thread-local entropy**, so
+  identical inputs produced different chunk geometry, masses and spins. Any scene
+  that fractured diverged between replays and desynced under rollback. It now takes
+  an explicit `seed: u64`. **Breaking**: the parameter is required, because keeping
+  the old signature would mean keeping the bug. The ECS fracture path
+  (`shatter_entity`) was already deterministic and is unaffected.
+
+### Fixed — feature composition
+
+- **`gizmo-engine` compiled in exactly one configuration.** Its own advertised
+  `headless` feature failed with 37 errors, and `--no-default-features` plus every
+  single-feature build failed too — so the README's headless-server story was dead
+  code. The facade's modules are now gated on what they actually use.
+- **`gizmo-physics-core` is now a mandatory dependency of the facade.** It defines
+  `Transform`, `GlobalTransform` and `Collider`, so gating it behind `physics` also
+  broke `--features render` and `--features audio`: nothing can be drawn or
+  spatialised without a transform. `physics` now gates the *simulation*
+  (`gizmo-physics-rigid`), which is the honest split.
+- **`gizmo-app`'s `window` feature was non-additive** — enabling it *deleted*
+  `headless::App`. Since Cargo unifies features across the whole graph, an unrelated
+  dependency turning `window` on could silently swap a simulation server's `App`
+  type out from under it. Both runtimes now coexist and are reachable by path; the
+  root re-export still prefers the windowed one, so existing code is unaffected.
+  `headless::App::add_plugin` is unavailable when both are compiled in, because
+  `Plugin::build` is typed against the root `App`.
+- A `feature-powerset` CI job (`cargo hack --depth 2`) now covers both entry crates.
+
+### Added — supply chain and process
+
+- `deny.toml` and a `cargo deny` CI job covering advisories, licences, sources and
+  duplicate versions. Every exception carries a written justification. The first run
+  fixed one advisory (`crossbeam-epoch` → 0.9.20) and documented five, including
+  `bincode 1.x`, which is a direct dependency of `gizmo-net` and is tracked for
+  migration.
+- MPL-2.0 (via `rodio` → `symphonia`, on the default `audio` feature) is now
+  disclosed explicitly rather than sitting unremarked under a flat "MIT OR
+  Apache-2.0".
+- `CONTRIBUTING.md`, `SECURITY.md`, `.github/dependabot.yml`.
+- `docs/AUDIT-2026-08.md` — an external review with every finding pinned to
+  `file:line` — and `docs/FIXPLAN.md`, which tracks the work it opened.
+
+### Fixed — other
+
+- The two golden-image GPU tests are serialised behind a mutex. Each requested its
+  own wgpu device, and `cargo test` runs a binary's tests in parallel — concurrent
+  device creation surfaced as an intermittent `SIGSEGV` inside the driver that took
+  down the whole workspace run.
+- `car_demo` and `wind_tunnel` loaded models from absolute paths into the original
+  author's home directory and unwrapped the result, so the demo the README tells
+  people to run panicked for everyone else. Optional assets now resolve through
+  `demo::assets` and fall back to procedural geometry.
+- README feature claims corrected: there is no Sweep-and-Prune broadphase (it is a
+  dynamic AABB tree, and single-threaded), no `gizmo-physics` crate, no mimalloc in
+  `gizmo-core`, and no Doppler in `gizmo-audio`. Determinism — the one property here
+  with no equivalent in Rapier or Avian — is now stated, having previously gone
+  unmentioned.
+
 ### Added
 
 - **Ergonomics (DX).** `Prefab` — a define-once / spawn-many blueprint (mesh +
