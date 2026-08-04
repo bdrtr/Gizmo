@@ -46,7 +46,6 @@ impl JointSolver {
 
         // Rotation of B away from its initial orientation, in A's frame.
         let swing_quat = initial_rot.inverse() * relative_rot;
-        let mut total_ang_impulse = 0.0;
 
         // ── Cone (swing) limit — clamps how far B rotates from its initial pose ──
         if data.use_cone_limit {
@@ -63,8 +62,7 @@ impl JointSolver {
             if swing_angle > data.cone_limit_angle && swing_mag >= 1e-6 {
                 let excess = swing_angle - data.cone_limit_angle;
                 let swing_dir_world = transforms[idx_a].rotation * (swing_err_local / swing_mag);
-                total_ang_impulse += self
-                    .apply_angular_constraint_soft(
+                self.apply_angular_constraint_soft(
                         rigid_bodies,
                         transforms,
                         velocities,
@@ -76,9 +74,8 @@ impl JointSolver {
                         f32::NEG_INFINITY,
                         0.0,
                         data.compliance,
-                        joint.rows.row(row::ANG),
-                    )
-                    .abs();
+                        &mut joint.scratch, row::ANG,
+                    );
             }
         }
 
@@ -93,8 +90,7 @@ impl JointSolver {
             let twist_angle = 2.0 * proj.atan2(q.w);
             let axis_world = transforms[idx_a].rotation * axis_local;
             if twist_angle > data.twist_upper {
-                total_ang_impulse += self
-                    .apply_angular_constraint_soft(
+                self.apply_angular_constraint_soft(
                         rigid_bodies,
                         transforms,
                         velocities,
@@ -106,12 +102,10 @@ impl JointSolver {
                         f32::NEG_INFINITY,
                         0.0,
                         data.compliance,
-                        joint.rows.row(row::ANG + 1),
-                    )
-                    .abs();
+                        &mut joint.scratch, row::ANG + 1,
+                    );
             } else if twist_angle < data.twist_lower {
-                total_ang_impulse += self
-                    .apply_angular_constraint_soft(
+                self.apply_angular_constraint_soft(
                         rigid_bodies,
                         transforms,
                         velocities,
@@ -123,9 +117,8 @@ impl JointSolver {
                         0.0,
                         f32::INFINITY,
                         data.compliance,
-                        joint.rows.row(row::ANG + 1),
-                    )
-                    .abs();
+                        &mut joint.scratch, row::ANG + 1,
+                    );
             }
         }
 
@@ -145,8 +138,7 @@ impl JointSolver {
                 let a = rvec.dot(perp); // swing angle about this perpendicular
                 let perp_world = transforms[idx_a].rotation * perp;
                 if a > limit {
-                    total_ang_impulse += self
-                        .apply_angular_constraint_soft(
+                    self.apply_angular_constraint_soft(
                             rigid_bodies,
                             transforms,
                             velocities,
@@ -158,12 +150,10 @@ impl JointSolver {
                             f32::NEG_INFINITY,
                             0.0,
                             data.compliance,
-                            joint.rows.row(row::SWING + i),
-                        )
-                        .abs();
+                            &mut joint.scratch, row::SWING + i,
+                        );
                 } else if a < -limit {
-                    total_ang_impulse += self
-                        .apply_angular_constraint_soft(
+                    self.apply_angular_constraint_soft(
                             rigid_bodies,
                             transforms,
                             velocities,
@@ -175,22 +165,11 @@ impl JointSolver {
                             0.0,
                             f32::INFINITY,
                             data.compliance,
-                            joint.rows.row(row::SWING + i),
-                        )
-                        .abs();
+                            &mut joint.scratch, row::SWING + i,
+                        );
                 }
             }
         }
 
-        if total_ang_impulse / dt > joint.break_torque {
-            joint.is_broken = true;
-            tracing::debug!(
-                entity_a = ?joint.entity_a,
-                entity_b = ?joint.entity_b,
-                applied_torque = total_ang_impulse / dt,
-                break_torque = joint.break_torque,
-                "Ball-socket joint broke (torque exceeded break threshold)"
-            );
-        }
     }
 }

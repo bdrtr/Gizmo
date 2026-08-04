@@ -35,16 +35,12 @@ impl JointSolver {
         let r_a = Self::lever_arm(rigid_bodies, transforms, idx_a, anchor_a);
         let r_b = Self::lever_arm(rigid_bodies, transforms, idx_b, anchor_b);
 
-        let mut total_lin_impulse = 0.0;
-        let mut total_ang_impulse = 0.0;
-
         // 1. Off-axis constraint: project onto two perpendicular directions
         let (perp1, perp2) = Self::perpendiculars(axis_w);
 
         let err1 = off_axis.dot(perp1);
         if err1.abs() > 1e-4 {
-            total_lin_impulse += self
-                .apply_linear_constraint(
+            self.apply_linear_constraint(
                     rigid_bodies,
                     transforms,
                     velocities,
@@ -57,15 +53,13 @@ impl JointSolver {
                     dt,
                     f32::NEG_INFINITY,
                     f32::INFINITY,
-                    joint.rows.row(row::LIN),
-                )
-                .abs();
+                    &mut joint.scratch, row::LIN,
+                );
         }
 
         let err2 = off_axis.dot(perp2);
         if err2.abs() > 1e-4 {
-            total_lin_impulse += self
-                .apply_linear_constraint(
+            self.apply_linear_constraint(
                     rigid_bodies,
                     transforms,
                     velocities,
@@ -78,9 +72,8 @@ impl JointSolver {
                     dt,
                     f32::NEG_INFINITY,
                     f32::INFINITY,
-                    joint.rows.row(row::LIN + 1),
-                )
-                .abs();
+                    &mut joint.scratch, row::LIN + 1,
+                );
         }
 
         // 2. Angular lock — full 3-DOF rotation constraint using quaternion error
@@ -96,8 +89,7 @@ impl JointSolver {
             let err_world = transforms[idx_a].rotation * ang_err_local;
             let err_mag = err_world.length();
             if err_mag > 1e-6 {
-                total_ang_impulse += self
-                    .apply_angular_constraint(
+                self.apply_angular_constraint(
                         rigid_bodies,
                         transforms,
                         velocities,
@@ -108,9 +100,8 @@ impl JointSolver {
                         dt,
                         f32::NEG_INFINITY,
                         f32::INFINITY,
-                        joint.rows.row(row::ANG),
-                    )
-                    .abs();
+                        &mut joint.scratch, row::ANG,
+                    );
             }
         } else {
             data.initial_relative_rotation = Some(relative_rot);
@@ -125,8 +116,7 @@ impl JointSolver {
         if data.use_limits {
             if along < data.lower_limit {
                 let err = data.lower_limit - along; // positive
-                total_lin_impulse += self
-                    .apply_linear_constraint(
+                self.apply_linear_constraint(
                         rigid_bodies,
                         transforms,
                         velocities,
@@ -139,13 +129,11 @@ impl JointSolver {
                         dt,
                         0.0,
                         f32::INFINITY,
-                        joint.rows.row(row::LIMIT),
-                    )
-                    .abs();
+                        &mut joint.scratch, row::LIMIT,
+                    );
             } else if along > data.upper_limit {
                 let err = data.upper_limit - along; // negative
-                total_lin_impulse += self
-                    .apply_linear_constraint(
+                self.apply_linear_constraint(
                         rigid_bodies,
                         transforms,
                         velocities,
@@ -158,26 +146,11 @@ impl JointSolver {
                         dt,
                         f32::NEG_INFINITY,
                         0.0,
-                        joint.rows.row(row::LIMIT),
-                    )
-                    .abs();
+                        &mut joint.scratch, row::LIMIT,
+                    );
             }
         }
 
-        if total_lin_impulse / dt > joint.break_force || total_ang_impulse / dt > joint.break_torque
-        {
-            joint.is_broken = true;
-            tracing::debug!(
-                entity_a = ?joint.entity_a,
-                entity_b = ?joint.entity_b,
-                applied_force = total_lin_impulse / dt,
-                break_force = joint.break_force,
-                applied_torque = total_ang_impulse / dt,
-                break_torque = joint.break_torque,
-                "Slider joint broke (force/torque exceeded break threshold)"
-            );
-            return;
-        }
 
         // 4. Motor — velocity along axis
         if data.use_motor {
@@ -246,7 +219,7 @@ impl JointSolver {
     /// which the hard-limit + velocity-motor Slider could not express.
     pub(crate) fn solve_slider_spring(
         &self,
-        joint: &Joint,
+        joint: &mut Joint,
         rigid_bodies: &[RigidBody],
         transforms: &[Transform],
         velocities: &mut [Velocity],
@@ -283,6 +256,11 @@ impl JointSolver {
             return;
         }
         let impulse = axis_w * impulse_mag;
+        // Süspansiyon yayı gerçek yük taşır → `break_force` toplamına girer. (Daha önce
+        // hiç break kontrolü görmüyordu: "breakable" bir slider'ın yay yükü görünmezdi.)
+        // İşaret ters, çünkü aşağıda impulse A'ya ARTI, B'ye EKSİ uygulanıyor — satır
+        // yardımcılarının konvansiyonunun tersi; büyüklük aynı.
+        joint.scratch.impulse_lin -= impulse;
         let inv_m_a = rigid_bodies[idx_a].inv_mass();
         let inv_m_b = rigid_bodies[idx_b].inv_mass();
         let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);

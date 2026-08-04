@@ -2,7 +2,8 @@ use gizmo_physics_core::BodyHandle;
 use gizmo_math::{Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
-/// Bir çözücü GEÇİŞİ boyunca satır-başına birikmiş Lagrange çarpanları (λ).
+/// Bir çözücü GEÇİŞİNE ait çözücü scratch'i: satır-başına birikmiş λ ve geçişin NET
+/// impulse'ı.
 ///
 /// Eşitsizlik (tek-yönlü) satırlarında — limit, halat, koni — clamp artık her iterasyonun
 /// kendi artımına değil, geçiş boyunca birikmiş TOPLAM λ'ya uygulanır. Eskiden negatif bir
@@ -14,9 +15,16 @@ use serde::{Deserialize, Serialize};
 /// `solve_joints` geçişinin başında sıfırlanır, yani adımlar arasında TAŞINMAZ — bu yüzden
 /// `WorldSnapshot`'a da girmesi gerekmez (bkz. `JointSolver::solve_joints`).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct JointRows([f32; JointRows::LEN]);
+pub struct JointScratch {
+    rows: [f32; JointScratch::LEN],
+    /// Geçişin NET doğrusal impulse'ı, `Σ λᵢ·nᵢ` (dünya uzayı). `break_force` bundan
+    /// hesaplanır: taşınan gerçek tepki kuvvetinin büyüklüğü `‖Σ λᵢ·nᵢ‖ / dt`.
+    pub(crate) impulse_lin: Vec3,
+    /// Geçişin NET açısal impulse'ı, `Σ λᵢ·nᵢ`. `break_torque` bundan hesaplanır.
+    pub(crate) impulse_ang: Vec3,
+}
 
-impl JointRows {
+impl JointScratch {
     /// En çok satır üreten tür BallSocket: 3 lineer (`solve_fixed_joint`'ten), koni, twist ve
     /// 2 asimetrik swing = 7 satır, en yüksek yuva indeksi 8. 10 = yuva 9 motor satırı için
     /// ayrılmış pay.
@@ -27,7 +35,7 @@ impl JointRows {
     /// (atlanan bir satır sonraki her satırın kimliğini kaydırırdı).
     #[inline]
     pub(crate) fn row(&mut self, slot: usize) -> &mut f32 {
-        &mut self.0[slot]
+        &mut self.rows[slot]
     }
 }
 
@@ -42,10 +50,10 @@ pub struct Joint {
     pub break_torque: f32,
     #[serde(skip)]
     pub is_broken: bool,
-    /// Çözücü scratch'i — bu geçişteki satır-başına birikmiş λ. `is_broken` gibi serialize
-    /// EDİLMEZ ve her geçişin başında sıfırlanır.
+    /// Çözücü scratch'i — bu geçişteki satır-başına birikmiş λ ve net impulse. `is_broken`
+    /// gibi serialize EDİLMEZ ve her geçişin başında sıfırlanır.
     #[serde(skip)]
-    pub(crate) rows: JointRows,
+    pub(crate) scratch: JointScratch,
     pub collision_enabled: bool,
     pub data: JointData,
 }
@@ -279,7 +287,7 @@ impl Joint {
             break_force: f32::INFINITY,
             break_torque: f32::INFINITY,
             is_broken: false,
-            rows: JointRows::default(),
+            scratch: JointScratch::default(),
             collision_enabled: false,
             data: JointData::Fixed,
         }
@@ -309,7 +317,7 @@ impl Joint {
             break_force: f32::INFINITY,
             break_torque: f32::INFINITY,
             is_broken: false,
-            rows: JointRows::default(),
+            scratch: JointScratch::default(),
             collision_enabled: false,
             data: JointData::Hinge(HingeJointData {
                 axis: safe_axis,
@@ -348,7 +356,7 @@ impl Joint {
             break_force: f32::INFINITY,
             break_torque: f32::INFINITY,
             is_broken: false,
-            rows: JointRows::default(),
+            scratch: JointScratch::default(),
             collision_enabled: false,
             data: JointData::BallSocket(BallSocketJointData {
                 use_cone_limit: false,
@@ -390,7 +398,7 @@ impl Joint {
             break_force: f32::INFINITY,
             break_torque: f32::INFINITY,
             is_broken: false,
-            rows: JointRows::default(),
+            scratch: JointScratch::default(),
             collision_enabled: false,
             data: JointData::Slider(SliderJointData {
                 axis: safe_axis,
@@ -433,7 +441,7 @@ impl Joint {
             break_force: f32::INFINITY,
             break_torque: f32::INFINITY,
             is_broken: false,
-            rows: JointRows::default(),
+            scratch: JointScratch::default(),
             collision_enabled: false,
             data: JointData::Spring(SpringJointData {
                 rest_length,
@@ -467,7 +475,7 @@ impl Joint {
             break_force: f32::INFINITY,
             break_torque: f32::INFINITY,
             is_broken: false,
-            rows: JointRows::default(),
+            scratch: JointScratch::default(),
             collision_enabled: false,
             data: JointData::Distance(DistanceJointData {
                 min_length: min_length.max(0.0),
@@ -513,7 +521,7 @@ impl Joint {
             break_force: f32::INFINITY,
             break_torque: f32::INFINITY,
             is_broken: false,
-            rows: JointRows::default(),
+            scratch: JointScratch::default(),
             collision_enabled: false,
             data: JointData::D6(D6JointData {
                 frame: Quat::IDENTITY,

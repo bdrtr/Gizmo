@@ -3,7 +3,7 @@ use gizmo_physics_core::components::Transform;
 use crate::components::{RigidBody, Velocity};
 use gizmo_math::Vec3;
 
-/// Birikmiş-λ yuvaları ([`JointRows`]).
+/// Birikmiş-λ yuvaları ([`JointScratch`]).
 ///
 /// Yuvalar DERLEME ZAMANI SABİTİ, ilerleyen bir imleç DEĞİL: satırların çoğu koşullu
 /// atlanıyor (`fixed.rs`'te `err_len >= 1e-4`, `hinge.rs`'te `err_mag > 1e-6` ve limit
@@ -74,7 +74,7 @@ impl JointSolver {
         // arası warm-start eklendiği gün bu tersine döner ve snapshot'a girmesi ZORUNLU olur
         // (bkz. `PhysicsWorld::WorldSnapshot`'taki contact_cache gerekçesi).
         for joint in joints.iter_mut() {
-            joint.rows = JointRows::default();
+            joint.scratch = JointScratch::default();
         }
 
         for _ in 0..self.iterations {
@@ -192,6 +192,44 @@ impl JointSolver {
                 _ => {}
             }
         }
+
+        // ── Kopma kontrolü: geçiş başına BİR kez, NET tepki üzerinden ─────────
+        //
+        // Eskiden her joint türü kendi içinde, İTERASYON DÖNGÜSÜNÜN İÇİNDE kontrol
+        // ediyordu (8 ayrı yer) ve ölçtüğü şey `Σ|λᵢ|` — satır büyüklüklerinin L1
+        // toplamı — idi. Üç ayrı biçimde yanlıştı:
+        //   * eş-doğrusal OLMAYAN satırların büyüklüklerini topluyordu: Fixed'in üç dik
+        //     lineer satırında bu net tepkiyi √3'e kadar abartır, ball-socket'te
+        //     (koni + twist + swing, dik bile değiller) daha da fazla;
+        //   * `iterations` ile ölçekleniyordu — `world.joint_solver.iterations` public
+        //     bir alan, yani onu değiştirmek sahnedeki HER eşiği sessizce yeniden
+        //     ölçekliyordu;
+        //   * `fixed.rs`'teki `err_len >= 1e-4` kapısı, kusursuz sabitlenmiş bir kaynağın
+        //     lineer kontrolünü tamamen atlıyordu.
+        //
+        // Artık ölçülen şey geçişin NET impulse vektörü `‖Σ λᵢ·nᵢ‖ / dt` — yani eklemin
+        // gerçekten taşıdığı kuvvet/tork. Kuvvet-tabanlı yaylar da (Spring, slider
+        // süspansiyonu, hinge torsiyon yayı) bu toplama katkı verir; motorlar/sürücüler
+        // VERMEZ, çünkü onlar dış yük değil eyleyicidir (bkz. docs/FIXPLAN.md B4 commit 4).
+        for joint in joints.iter_mut() {
+            if joint.is_broken {
+                continue;
+            }
+            let force = joint.scratch.impulse_lin.length() / dt;
+            let torque = joint.scratch.impulse_ang.length() / dt;
+            if joint.check_break(force, torque) {
+                tracing::debug!(
+                    entity_a = ?joint.entity_a,
+                    entity_b = ?joint.entity_b,
+                    joint_type = joint.joint_type(),
+                    applied_force = force,
+                    break_force = joint.break_force,
+                    applied_torque = torque,
+                    break_torque = joint.break_torque,
+                    "Joint broke (net reaction exceeded break threshold)"
+                );
+            }
+        }
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
@@ -270,11 +308,12 @@ impl JointSolver {
         dt: f32,
         lambda_min: f32,
         lambda_max: f32,
-        accum: &mut f32,
+        scratch: &mut JointScratch,
+        slot: usize,
     ) -> f32 {
         self.apply_angular_constraint_soft(
             rigid_bodies, transforms, velocities, idx_a, idx_b, direction, error, dt, lambda_min,
-            lambda_max, 0.0, accum,
+            lambda_max, 0.0, scratch, slot,
         )
     }
 
@@ -297,7 +336,8 @@ impl JointSolver {
         lambda_min: f32,
         lambda_max: f32,
         compliance: f32,
-        accum: &mut f32,
+        scratch: &mut JointScratch,
+        slot: usize,
     ) -> f32 {
         if direction.length_squared() < 1e-10 {
             return 0.0;
@@ -330,7 +370,11 @@ impl JointSolver {
         // Bu yüzden compliance'ın iterasyon-sayısına bağımlılığı burada KAPANMIYOR; kırpma
         // rejimiyle birlikte ele alınacak (bkz. docs/FIXPLAN.md, B4 sonrası).
         let delta = (-vel_err + position_bias) / k;
-        let lambda = Self::accumulate(accum, delta, lambda_min, lambda_max);
+        let lambda = Self::accumulate(scratch.row(slot), delta, lambda_min, lambda_max);
+        // Geçişin NET açısal impulse'ı — `break_torque` bundan hesaplanır. Artımların
+        // VEKTÖR toplamı: eş-doğrusal olmayan satırların büyüklüklerini toplamak (eski
+        // `.abs()` yığını) taşınan torku Fixed'de √3'e kadar abartıyordu.
+        scratch.impulse_ang += direction * lambda;
 
         let delta_a = inv_i_a.mul_vec3(direction) * lambda;
         let delta_b = inv_i_b.mul_vec3(direction) * lambda;
@@ -371,11 +415,12 @@ impl JointSolver {
         dt: f32,
         lambda_min: f32,
         lambda_max: f32,
-        accum: &mut f32,
+        scratch: &mut JointScratch,
+        slot: usize,
     ) -> f32 {
         self.apply_linear_constraint_soft(
             rigid_bodies, transforms, velocities, idx_a, idx_b, direction, r_a, r_b, error, dt,
-            lambda_min, lambda_max, 0.0, accum,
+            lambda_min, lambda_max, 0.0, scratch, slot,
         )
     }
 
@@ -398,7 +443,8 @@ impl JointSolver {
         lambda_min: f32,
         lambda_max: f32,
         compliance: f32,
-        accum: &mut f32,
+        scratch: &mut JointScratch,
+        slot: usize,
     ) -> f32 {
         let inv_m_a = rigid_bodies[idx_a].inv_mass();
         let inv_m_b = rigid_bodies[idx_b].inv_mass();
@@ -428,7 +474,9 @@ impl JointSolver {
             .clamp(-self.max_correction_speed, self.max_correction_speed);
         // CFM geri beslemesi burada da yok — gerekçe apply_angular_constraint_soft'ta.
         let delta = (-rel_vel + position_bias) / k;
-        let lambda = Self::accumulate(accum, delta, lambda_min, lambda_max);
+        let lambda = Self::accumulate(scratch.row(slot), delta, lambda_min, lambda_max);
+        // Geçişin NET doğrusal impulse'ı — `break_force` bundan hesaplanır (bkz. açısal eş).
+        scratch.impulse_lin += direction * lambda;
 
         let impulse = direction * lambda;
 
@@ -541,7 +589,8 @@ mod tests {
             1.0 / 60.0,
             f32::NEG_INFINITY,
             f32::INFINITY,
-            &mut 0.0,
+            &mut JointScratch::default(),
+            row::LIN,
         );
 
         let v_a = vels[0].linear + vels[0].angular.cross(r_a);
@@ -577,7 +626,7 @@ mod tests {
     fn a_one_sided_row_can_return_the_impulse_it_applied() {
         let solver = JointSolver::default();
         let (bodies, transforms, mut vels) = one_sided_pair();
-        let mut accum = 0.0;
+        let mut scratch = JointScratch::default();
 
         // 1) Cisimler ayrılıyor (bağıl hız +1) → yalnız-çeken satır onları yakalar.
         vels[1].linear = Vec3::Y;
@@ -587,7 +636,8 @@ mod tests {
             1.0 / 60.0,
             f32::NEG_INFINITY,
             0.0, // yalnız çek
-            &mut accum,
+            &mut scratch,
+            row::LIMIT,
         );
         assert!(first < 0.0, "çeken satır negatif λ uygulamalı, uyguladığı = {first}");
         let rel = |v: &[Velocity; 2]| (v[1].linear - v[0].linear).dot(Vec3::Y);
@@ -604,7 +654,8 @@ mod tests {
             1.0 / 60.0,
             f32::NEG_INFINITY,
             0.0,
-            &mut accum,
+            &mut scratch,
+            row::LIMIT,
         );
         assert!(
             second > 0.0,
@@ -624,16 +675,16 @@ mod tests {
     fn a_one_sided_row_never_pushes_past_its_bound() {
         let solver = JointSolver::default();
         let (bodies, transforms, mut vels) = one_sided_pair();
-        let mut accum = 0.0;
+        let mut scratch = JointScratch::default();
         let dt = 1.0 / 60.0;
         let args = (Vec3::Y, Vec3::ZERO, Vec3::ZERO, 0.0f32);
 
         vels[1].linear = Vec3::Y;
         solver.apply_linear_constraint(
             &bodies, &transforms, &mut vels, 0, 1, args.0, args.1, args.2, args.3, dt,
-            f32::NEG_INFINITY, 0.0, &mut accum,
+            f32::NEG_INFINITY, 0.0, &mut scratch, row::LIMIT,
         );
-        let applied_total = accum;
+        let applied_total = *scratch.row(row::LIMIT);
         assert!(applied_total < 0.0);
 
         // Cisimler artık HIZLA yaklaşıyor: satır bunu düzeltmeye çalışsa iterek yapardı.
@@ -641,10 +692,11 @@ mod tests {
         vels[1].linear = Vec3::Y * -3.0;
         solver.apply_linear_constraint(
             &bodies, &transforms, &mut vels, 0, 1, args.0, args.1, args.2, args.3, dt,
-            f32::NEG_INFINITY, 0.0, &mut accum,
+            f32::NEG_INFINITY, 0.0, &mut scratch, row::LIMIT,
         );
 
-        assert_eq!(accum, 0.0, "biriken toplam üst sınırda durmalı, durduğu = {accum}");
+        let total = *scratch.row(row::LIMIT);
+        assert_eq!(total, 0.0, "biriken toplam üst sınırda durmalı, durduğu = {total}");
         assert!(
             (vels[1].linear - vels[0].linear).dot(Vec3::Y) < 0.0,
             "yalnız-çeken satır cisimleri AYIRMAMALI; bağıl hız = {}",
@@ -686,7 +738,7 @@ mod tests {
         let mut joints = fresh();
         let mut v1 = start;
         solver.solve_joints(&mut joints, &map, &bodies, &transforms, &mut v1, 1.0 / 60.0);
-        let lambda_after_one = joints[0].rows;
+        let lambda_after_one = joints[0].scratch;
 
         // Aynı eklem üzerinde İKİ geçiş, ikincisi aynı başlangıç hızlarıyla.
         let mut v2 = start;
@@ -695,7 +747,7 @@ mod tests {
         solver.solve_joints(&mut joints, &map, &bodies, &transforms, &mut v2, 1.0 / 60.0);
 
         assert_eq!(
-            joints[0].rows, lambda_after_one,
+            joints[0].scratch, lambda_after_one,
             "aynı girdiyle ikinci geçiş aynı λ'yı üretmeli; birikim geçişler arasında taşınmış"
         );
         assert_eq!(v2, v1, "…ve dolayısıyla aynı hızları");

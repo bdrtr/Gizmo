@@ -61,24 +61,17 @@ impl JointSolver {
             pull_impulse
         };
 
-        // Breakable: the spring's linear force is |impulse|/dt. Previously missing — a
-        // Spring could never break despite the advertised break_force (an API footgun,
-        // like the old Fixed-torque no-op). Now matches Distance's break handling.
-        if clamped_impulse.abs() / dt > joint.break_force {
-            joint.is_broken = true;
-            tracing::debug!(
-                entity_a = ?joint.entity_a,
-                entity_b = ?joint.entity_b,
-                applied_force = clamped_impulse.abs() / dt,
-                break_force = joint.break_force,
-                "Spring joint broke (force exceeded break threshold)"
-            );
-            return;
-        }
 
         if clamped_impulse.abs() < 1e-10 {
             return;
         }
+
+        // Kopma kontrolü artık `solve_joints`'te, geçiş başına bir kez, NET impulse
+        // üzerinden. Yay burada yalnızca kendi katkısını bildiriyor. (Eskiden buradaki
+        // kontrol impulse'ı UYGULAMADAN önce dönüyordu; artık geçiş normal tamamlanıyor ve
+        // eklem adım sonunda kopuyor — kopma anındaki tek adımlık impuls transferi kadar
+        // fark eder, ve tüm eklem türleri için tek bir kural olur.)
+        joint.scratch.impulse_lin += direction * clamped_impulse;
 
         // Apply impulse along direction (A to B)
         // If clamped_impulse > 0, they are pulled together: A moves to B (+), B moves to A (-)
