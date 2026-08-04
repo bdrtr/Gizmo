@@ -463,12 +463,25 @@ modda lib testlerini koşturuyor, yani GPU testleri orada da çalışıyor. Flak
 **iki** CI job'ını birden vurabilir (`test` ve `benchmarks`) — bu turda bir kez `benchmarks`
 job'ının yerel karşılığında görüldü, ardışık 3 koşu temiz geçti.
 
-**Muhtemel kalan neden:** cihaz *sayısı*. `shadow-gate` (`af6f168`) `render_frame`'i
-bayrağın iki hâliyle çağıran bir test ekledi; artık bir koşuda ~5 kez `Renderer::new_headless`
-çağrılıyor (öncesi 3). Doğru düzeltme testler arasında **tek bir cihazı paylaşmak** —
-`gpu_lock`'un arkasında tembel kurulan tek bir headless renderer. Ayrı iş, çünkü iki
-yardımcının (`render_frame`, `render_mean_brightness`) kurulum yollarını birleştirmeyi
-gerektiriyor.
+**Kalan neden:** cihaz *sayısı*. `shadow-gate` (`af6f168`) `render_frame`'i bayrağın iki
+hâliyle çağıran bir test ekledi; artık bir koşuda ~5 kez `Renderer::new_headless` çağrılıyor
+(öncesi 3).
+
+**Denendi ve REDDEDİLDİ: tek paylaşılan `Renderer`.** `OnceLock<Mutex<Renderer>>` ile
+5 cihazı 1'e indirmeyi denedim (`Renderer: Send` — doğruladım). Derledi, ama
+`skipping_the_point_shadow_passes_changes_no_pixel` **kırıldı**: iki kare arasında 9586 bayt
+fark. Sebep öğretici — `Renderer` **kareler arası durum taşıyor** (TAA history ve muhtemelen
+bloom/SSGI geçmişi). Golden testlerin tamamı "temiz durumdan tek kare" varsayımına dayanıyor;
+renderer'ı paylaşmak tam da o varsayımı bozuyor. Yani sorun "cihazı paylaş" değil.
+
+**Doğru çözüm: cihazı paylaş, renderer'ı DEĞİL.** Her test hâlâ taze bir `Renderer` almalı
+ama hepsi aynı `wgpu::Device`/`Queue` üzerinde kurulmalı. Bunun için
+`Renderer::new_headless_with_device(device, queue, w, h)` gibi bir constructor gerekiyor —
+şu an yok. Renderer cerrahisi olduğu için ayrı iş.
+
+**Ara çare (isteğe bağlı):** her test kendi cihazını bir kez kurup iki render'ını onunla
+yapsın → 5 cihaz 3'e iner. Kısmi, ama `render_frame`'e `&mut Renderer` parametresi
+eklemekten ibaret.
 
 ## Faz C — Performans ve ölçüm
 - ⬜ **C1** — `benches/step_bench.rs` (solver/broadphase/narrowphase) + commit'lenmiş baseline.
