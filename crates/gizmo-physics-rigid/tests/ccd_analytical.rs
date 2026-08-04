@@ -245,11 +245,20 @@ fn ccd_r7_fast_body_vs_sleeping_target_does_not_tunnel() {
 // `cargo test -- --ignored` ile sınır doğrulanır. Assert'ler İSTENEN sözleşmedir.
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Rung 8 — UYANIK DİNAMİK HEDEF. Rung 7'nin birebir aynısı, plaka UYANIK.
+//
+// Eskiden #[ignore]'lu bir "açık"tı: backstop uyanık-dinamik hedefleri topluca
+// atlıyordu, mermi tünelliyordu. Atlamanın gerekçesi gerçekti ama kapı gerekçeden
+// çok daha genişti — hareketli bir hedefte süpürme kare-uyumsuzdu (merminin
+// `old_pos`'u entegrasyon-öncesi, hedefin AABB'si sonrası). Kapı yerine
+// uyumsuzluk düzeltildi: hedef de kendi substep deltasıyla süpürülüyor.
+//
+// (NOT: backstop hedefe momentum AKTARMAZ — Rung 7'de de belgeli. Clamp'ten
+//  sonraki substep'te ayrık çözücü teması görüp momentumu aktarır.)
+// ═══════════════════════════════════════════════════════════════════════════
 #[test]
-#[ignore = "AÇIK: ccd_resolve_step uyanık-dinamik hedefleri atlar (pipeline.rs:894) ve \
-speculative mach'ta ince geometride bozulur → UYANIK ince plakaya karşı mermi tüneller. \
-Çözüm: dinamik CCD çiftleri için conservative_advancement'i bağla (gjk/simplex.rs:281)."]
-fn ccd_hole_fast_body_vs_dynamic_awake_thin_plate() {
+fn ccd_r8_fast_body_vs_dynamic_awake_thin_plate_does_not_tunnel() {
     let mut w = scene();
     let mut orb = RigidBody::new(1.0e6, false);
     orb.wake_up(); // UYANIK dinamik → backstop dışlar
@@ -261,7 +270,7 @@ fn ccd_hole_fast_body_vs_dynamic_awake_thin_plate() {
 
     let b = bullet(&mut w, -8.0, 2336.0, 0.0995, true);
     let (peak, _, _) = run(&w, b, 120);
-    assert!(peak < 0.05, "İSTENEN: uyanık dinamik plakadan geçmemeli, tepe_x={peak}");
+    assert!(peak < 0.05, "uyanık dinamik plakadan geçmemeli, tepe_x={peak}");
 }
 
 #[test]
@@ -287,6 +296,22 @@ fn ccd_hole_fast_spinning_thin_body() {
     w.add_component(e, v);
     w.add_component(e, Collider::box_collider(Vec3::new(1.0, 0.02, 1.0)).with_material(sticky()));
     let (_peak, _, _) = run(&w, e.id(), 60);
-    // İSTENEN: dönen kenar duvarı süpürürken bir temas üretilmeli (şu an üretilmiyor).
-    // Bu rung şu an yalnızca sınırı belgeler; assert istenen davranıştır.
+
+    // Bu test bir assertion'a SAHİP OLMALI, yoksa #[ignore] kalkarsa hata hâlâ oradayken
+    // yeşil geçer — denetimin yakaladığı tam da buydu ("dürüst olmayan ignore").
+    //
+    // Oracle: `angular_damping = 0.0` ve dönen kenar duvarı gerçekten süpürürse bir temas
+    // impulsu ω'yı düşürmeli. Temas hiç üretilmezse ω tam 200.0'da kalır.
+    let omega = w
+        .borrow::<Velocity>()
+        .get(e.id())
+        .map(|v| v.angular.z)
+        .expect("entity keeps its Velocity");
+    assert!(
+        omega.abs() < 190.0,
+        "İSTENEN: dönen kenar duvarla temas edip ω'yı düşürmeli; ω={omega} (başlangıç 200, \
+         sönümleme yok → hiç temas olmadı). Dönme CCD'si yok: speculative yalnız öteleme \
+         (gjk/simplex.rs), backstop yalnız doğrusal merkez deltasını süpürüyor \
+         (pipeline.rs ccd_resolve_step). Çözüm: süpürme AABB'sine |ω|·max_uzanım ekle."
+    );
 }
