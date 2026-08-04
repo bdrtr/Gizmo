@@ -814,29 +814,85 @@ impl PhysicsWorld {
             // Joint-coupled uyandırma: joint_solver `&[RigidBody]` alır → uyuyan bir cismi
             // uyandıramaz; ucu hareketli bir eklemin diğer (uyuyan) ucunun hızını sessizce
             // değiştirir ama is_sleeping'i bırakır → position_integration onu atlar, eklem
-            // düzeltmesi YUTULUR (mekanizma kopuk görünür). Çözüm: bir ucu "mover" (uyanık-
-            // dinamik VEYA hareketli-kinematik) olan her eklemin uyuyan dinamik ucunu çöz
-            // ÖNCESİ uyandır. İki uç da uykudaysa mekanizma dinlenmededir → dokunma.
-            for ji in 0..self.joints.len() {
-                if self.joints[ji].is_broken {
-                    continue;
-                }
-                let ia = self.entity_index_map.get(&self.joints[ji].entity_a.id()).copied();
-                let ib = self.entity_index_map.get(&self.joints[ji].entity_b.id()).copied();
-                if let (Some(ia), Some(ib)) = (ia, ib) {
-                    let mover = |idx: usize| -> bool {
-                        let rb = &self.rigid_bodies[idx];
-                        (rb.is_dynamic() && !rb.is_sleeping)
-                            || (rb.is_kinematic()
-                                && (self.velocities[idx].linear.length_squared() > 1e-8
-                                    || self.velocities[idx].angular.length_squared() > 1e-8))
-                    };
-                    let (a_mover, b_mover) = (mover(ia), mover(ib));
-                    if a_mover && self.rigid_bodies[ib].is_dynamic() && self.rigid_bodies[ib].is_sleeping {
-                        self.rigid_bodies[ib].wake_up();
+            // düzeltmesi YUTULUR (mekanizma kopuk görünür).
+            //
+            // Bu, eklemlerle bağlı cisim BİLEŞENİ üzerinde çalışır, tek tek eklemler üzerinde
+            // değil. Eskiden `self.joints` üzerinde TEK GEÇİŞ vardı ve yayılım dizi sırasına
+            // bağlıydı: 12 halkalı bir zincirin DERİN ucu sarsıldığında bir adımda yalnız 5
+            // halka uyanıyordu (substep başına bir halka), kalan 7'si hiç entegre etmedikleri
+            // eklem düzeltmelerini yutmaya devam ediyordu — zincir yarısından çivilenmiş gibi
+            // davranıyordu. Fiziksel olarak incelik değil: uzamaz bir zincirin alt halkasını
+            // rahatsız etmek üstündeki HER halkayı aynı anda yükler.
+            //
+            // Temaslarda bunu island'lar çözüyor (`island.rs` manifoldları union-find'lar,
+            // yığın topluca uyanır); eklemler island kurulumuna hiç girmiyordu. Aynı yapı,
+            // eklem grafı üzerinde: bileşende TEK BİR mover varsa bileşenin tamamı uyanır.
+            // İki uç da uykudaysa mekanizma dinlenmededir → dokunma.
+            //
+            // Maliyet eklem sayısına bağlı, cisim sayısına değil: yalnız eklemlerin DOKUNDUĞU
+            // cisimler yerel bir indeks uzayına toplanır.
+            {
+                let mut local: FxHashMap<usize, usize> = FxHashMap::default();
+                let mut members: Vec<usize> = Vec::new();
+                let mut edges: Vec<(usize, usize)> = Vec::new();
+
+                for j in self.joints.iter().filter(|j| !j.is_broken) {
+                    let ia = self.entity_index_map.get(&j.entity_a.id()).copied();
+                    let ib = self.entity_index_map.get(&j.entity_b.id()).copied();
+                    let (Some(ia), Some(ib)) = (ia, ib) else { continue };
+                    if ia == ib {
+                        continue;
                     }
-                    if b_mover && self.rigid_bodies[ia].is_dynamic() && self.rigid_bodies[ia].is_sleeping {
-                        self.rigid_bodies[ia].wake_up();
+                    let intern = |g: usize,
+                                      local: &mut FxHashMap<usize, usize>,
+                                      members: &mut Vec<usize>| {
+                        *local.entry(g).or_insert_with(|| {
+                            members.push(g);
+                            members.len() - 1
+                        })
+                    };
+                    let la = intern(ia, &mut local, &mut members);
+                    let lb = intern(ib, &mut local, &mut members);
+                    edges.push((la, lb));
+                }
+
+                if !members.is_empty() {
+                    let mut parent: Vec<usize> = (0..members.len()).collect();
+                    fn find(parent: &mut [usize], mut i: usize) -> usize {
+                        while parent[i] != i {
+                            parent[i] = parent[parent[i]]; // path splitting
+                            i = parent[i];
+                        }
+                        i
+                    }
+                    for &(a, b) in &edges {
+                        let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+                        if ra != rb {
+                            parent[ra] = rb;
+                        }
+                    }
+
+                    // Bileşen başına: mover var mı?
+                    let mut has_mover: Vec<bool> = vec![false; members.len()];
+                    for (li, &gi) in members.iter().enumerate() {
+                        let rb = &self.rigid_bodies[gi];
+                        let mover = (rb.is_dynamic() && !rb.is_sleeping)
+                            || (rb.is_kinematic()
+                                && (self.velocities[gi].linear.length_squared() > 1e-8
+                                    || self.velocities[gi].angular.length_squared() > 1e-8));
+                        if mover {
+                            let r = find(&mut parent, li);
+                            has_mover[r] = true;
+                        }
+                    }
+                    for (li, &gi) in members.iter().enumerate() {
+                        let r = find(&mut parent, li);
+                        if has_mover[r]
+                            && self.rigid_bodies[gi].is_dynamic()
+                            && self.rigid_bodies[gi].is_sleeping
+                        {
+                            self.rigid_bodies[gi].wake_up();
+                        }
                     }
                 }
             }
