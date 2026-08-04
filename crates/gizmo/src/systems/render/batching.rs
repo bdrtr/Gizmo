@@ -88,6 +88,8 @@ pub struct DrawItem {
     pub(super) vertex_count: u32,
     pub(super) bind_group: std::sync::Arc<wgpu::BindGroup>,
     pub(super) unlit: bool,
+    /// Baked lighting + the sun's cascade term: casts shadows and skips the G-buffer.
+    pub(super) baked_lit: bool,
     pub(super) is_skybox: bool,
     pub(super) skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     pub(super) is_transparent: bool,
@@ -151,6 +153,7 @@ pub(crate) struct BatchKey {
     // same-routing instances batched while separating ones that render differently.
     is_transparent: bool,
     unlit: bool,
+    baked_lit: bool,
     is_skybox: bool,
 }
 
@@ -159,6 +162,7 @@ pub(crate) struct BatchData {
     bind_group: std::sync::Arc<wgpu::BindGroup>,
     vertex_count: u32,
     unlit: bool,
+    baked_lit: bool,
     is_skybox: bool,
     skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     is_transparent: bool,
@@ -285,6 +289,9 @@ pub(super) fn collect_draw_items(
                     unlit: match $mat.material_type {
                         crate::renderer::components::MaterialType::Skybox => 2.0,
                         crate::renderer::components::MaterialType::Unlit => 1.0,
+                        // Baked-lit reads the same attributes the unlit shader does; the flag is
+                        // only what the *forward* shader branches on, and it has its own pipeline.
+                        crate::renderer::components::MaterialType::BakedLit => 1.0,
                         _ => 0.0,
                     },
                     _padding: packed_params,
@@ -294,7 +301,12 @@ pub(super) fn collect_draw_items(
                 // Compute the pass-routing flags up front so they can be part of the
                 // batch key (see BatchKey docs) — not just read from the first material.
                 let is_skybox = $mat.material_type == crate::renderer::components::MaterialType::Skybox;
+                let baked_lit =
+                    $mat.material_type == crate::renderer::components::MaterialType::BakedLit;
+                // `unlit` means "not in the deferred path", which baked-lit also is not. The two
+                // part company in the shadow pass, where baked-lit casts and unlit does not.
                 let unlit = is_skybox
+                    || baked_lit
                     || $mat.material_type == crate::renderer::components::MaterialType::Unlit;
                 let is_transparent = $mat.is_transparent || $mat.albedo.w < 0.99;
 
@@ -304,6 +316,7 @@ pub(super) fn collect_draw_items(
                     skeleton_id: skel_bg.as_ref().map(|bg| std::sync::Arc::as_ptr(bg) as usize),
                     is_transparent,
                     unlit,
+                    baked_lit,
                     is_skybox,
                 };
 
@@ -312,6 +325,7 @@ pub(super) fn collect_draw_items(
                     bind_group: $mat.bind_group.clone(),
                     vertex_count: active_vertex_count,
                     unlit,
+                    baked_lit,
                     is_skybox,
                     skeleton_bind_group: skel_bg,
                     is_transparent,
@@ -384,6 +398,7 @@ pub(super) fn collect_draw_items(
                 vertex_count: batch.vertex_count,
                 bind_group: batch.bind_group.clone(),
                 unlit: batch.unlit,
+                baked_lit: batch.baked_lit,
                 is_skybox: batch.is_skybox,
                 skeleton_bind_group: batch.skeleton_bind_group.clone(),
                 is_transparent: batch.is_transparent,
@@ -462,6 +477,7 @@ mod batch_key_tests {
             skeleton_id: None,
             is_transparent: false,
             unlit: false,
+            baked_lit: false,
             is_skybox: false,
         };
         let transparent = BatchKey {
@@ -470,6 +486,7 @@ mod batch_key_tests {
         };
         let unlit = BatchKey {
             unlit: true,
+            baked_lit: false,
             ..base.clone()
         };
         let skybox = BatchKey {

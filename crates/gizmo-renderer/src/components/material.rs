@@ -5,6 +5,11 @@ use std::sync::Arc;
 pub enum MaterialType {
     Pbr,
     Unlit,
+    /// Lighting already baked into the vertex colour, plus the sun's shadow — a static level, a
+    /// lightmapped world, anything authored lit. Skips the G-buffer and the point lights: one
+    /// forward draw per batch instead of eleven, and it still casts into and receives from the
+    /// directional cascades.
+    BakedLit,
     Skybox,
     Water,
     Grid,
@@ -81,6 +86,19 @@ impl Material {
 
     pub fn with_double_sided(mut self, double_sided: bool) -> Self {
         self.is_double_sided = double_sided;
+        self
+    }
+
+    /// Vertex renginde pişmiş ışığı kullanan, güneşin gölgesini alan materyal.
+    ///
+    /// `with_unlit`'ten farkı tek şey: gölge. Işık zaten vertex renginde olduğu için PBR'a gerek
+    /// yok, ama dünyanın önünde duran dinamik nesnelerin gölgesi dosyada olamaz.
+    pub fn with_baked_lit(mut self, albedo: gizmo_math::Vec4) -> Self {
+        self.albedo = albedo;
+        self.material_type = MaterialType::BakedLit;
+        if albedo.w < 1.0 {
+            self.is_transparent = true;
+        }
         self
     }
 

@@ -389,6 +389,7 @@ impl Renderer {
             render_double_sided_pipeline: scene.render_double_sided_pipeline,
             wireframe_pipeline: scene.wireframe_pipeline,
             unlit_pipeline: scene.unlit_pipeline,
+            baked_lit_pipeline: scene.baked_lit_pipeline,
             sky_pipeline: scene.sky_pipeline,
             water_pipeline: scene.water_pipeline,
             shadow_pipeline: scene.shadow_pipeline,

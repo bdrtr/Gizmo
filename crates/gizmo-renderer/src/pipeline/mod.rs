@@ -26,6 +26,8 @@ pub struct SceneState {
     pub render_pipeline: wgpu::RenderPipeline,
     pub render_double_sided_pipeline: wgpu::RenderPipeline,
     pub unlit_pipeline: wgpu::RenderPipeline,
+    /// Baked lighting × texture, with the sun's cascade term. See `shaders/baked_lit.wgsl`.
+    pub baked_lit_pipeline: wgpu::RenderPipeline,
     pub sky_pipeline: wgpu::RenderPipeline,
     pub water_pipeline: wgpu::RenderPipeline,
     pub shadow_pipeline: wgpu::RenderPipeline,
@@ -246,6 +248,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         render_double_sided_pipeline: core_pipelines.render_double_sided,
         wireframe_pipeline: core_pipelines.wireframe,
         unlit_pipeline: core_pipelines.unlit,
+        baked_lit_pipeline: core_pipelines.baked_lit,
         sky_pipeline: core_pipelines.sky,
         water_pipeline: core_pipelines.water,
         transparent_pipeline: core_pipelines.transparent,
@@ -304,6 +307,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     renderer.scene.render_double_sided_pipeline = core_pipelines.render_double_sided;
     renderer.scene.wireframe_pipeline = core_pipelines.wireframe;
     renderer.scene.unlit_pipeline = core_pipelines.unlit;
+    renderer.scene.baked_lit_pipeline = core_pipelines.baked_lit;
     renderer.scene.sky_pipeline = core_pipelines.sky;
     renderer.scene.water_pipeline = core_pipelines.water;
     renderer.scene.transparent_pipeline = core_pipelines.transparent;
@@ -376,6 +380,7 @@ mod tests {
                 ("volumetric_apply.wgsl", include_str!("../shaders/volumetric_apply.wgsl")),
                 ("sky.wgsl", include_str!("../shaders/sky.wgsl")),
                 ("unlit.wgsl", include_str!("../shaders/unlit.wgsl")),
+                ("baked_lit.wgsl", include_str!("../shaders/baked_lit.wgsl")),
                 ("grid.wgsl", include_str!("../shaders/grid.wgsl")),
                 ("water.wgsl", include_str!("../shaders/water.wgsl")),
                 ("shadow.wgsl", include_str!("../shaders/shadow.wgsl")),
@@ -404,7 +409,7 @@ mod tests {
             // is verified — the web variant strips `#ifdef SHADOWS` and remaps
             // `@group(#{SKELETON_GROUP/INSTANCE_GROUP})`, which is exactly where a bad #ifdef
             // (e.g. a shadow binding used outside the guard) would surface as an undefined id.
-            let web_path = ["shader.wgsl", "unlit.wgsl", "water.wgsl", "sky.wgsl", "grid.wgsl"];
+            let web_path = ["shader.wgsl", "unlit.wgsl", "baked_lit.wgsl", "water.wgsl", "sky.wgsl", "grid.wgsl"];
 
             let mut failures: Vec<String> = Vec::new();
             for (name, src) in shaders {

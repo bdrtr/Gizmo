@@ -13,6 +13,7 @@ pub(super) struct CorePipelines {
     pub(super) render_double_sided: wgpu::RenderPipeline,
     pub(super) wireframe: wgpu::RenderPipeline,
     pub(super) unlit: wgpu::RenderPipeline,
+    pub(super) baked_lit: wgpu::RenderPipeline,
     pub(super) sky: wgpu::RenderPipeline,
     pub(super) water: wgpu::RenderPipeline,
     pub(super) transparent: wgpu::RenderPipeline,
@@ -63,8 +64,18 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
         include_str!("../shaders/unlit.wgsl"),
         "Unlit Shader",
     );
+    #[cfg(not(target_arch = "wasm32"))]
+    let baked_lit_shader = load_shader_composed(
+        device,
+        "demo/assets/shaders/baked_lit.wgsl",
+        include_str!("../shaders/baked_lit.wgsl"),
+        "Baked-Lit Shader",
+    );
     #[cfg(target_arch = "wasm32")]
     let unlit_shader = load_shader_composed_web(device, include_str!("../shaders/unlit.wgsl"), "Unlit Shader");
+    #[cfg(target_arch = "wasm32")]
+    let baked_lit_shader =
+        load_shader_composed_web(device, include_str!("../shaders/baked_lit.wgsl"), "Baked-Lit Shader");
 
     #[cfg(not(target_arch = "wasm32"))]
     let water_shader = load_shader_composed(
@@ -191,6 +202,17 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
             true,
             None,
             Some(wgpu::BlendState::ALPHA_BLENDING),
+            wgpu::PolygonMode::Fill,
+        ),
+        // Backface-culled and opaque, unlike `unlit`. Baked-lit geometry is a solid world rather
+        // than a decal or a billboard, so both halves of that are free wins: no blend, and no
+        // second pass over every triangle facing away.
+        baked_lit: create_main(
+            &baked_lit_shader,
+            "Baked-Lit Pipeline",
+            true,
+            Some(wgpu::Face::Back),
+            None,
             wgpu::PolygonMode::Fill,
         ),
         sky: create_main(
