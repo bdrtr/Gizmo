@@ -658,19 +658,31 @@ satıra yazardı). Clamp artık artıma değil geçiş boyunca birikmiş TOPLAMA
 > eklemleri rijitleştirir" uyarısı da bu şemada geçerli değil. Terim, kırpma rejimiyle
 > BİRLİKTE ele alınmalı; compliance'ın iterasyon-sayısına bağımlılığı o zamana kadar açık.
 
-**⬜ commit 3 — `break_force` yeniden kalibrasyonu.** Sekiz iterasyon-içi kontrol
-(`fixed.rs:86,130`, `hinge.rs:125`, `ball_socket.rs:177`, `slider.rs:162`, `distance.rs:80`,
-`d6.rs:74,117`) tek bir döngü-sonrası kontrole taşınacak, iki `#[serde(skip)] Vec3`
-birikimden (`Σ λᵢ·nᵢ`) beslenerek. Dört kusuru birden kapatıyor: iterasyon sayısına
-bağımlılık; eş-doğrusal olmayan satırlar üzerinde L1 `.abs()` toplamı (Fixed'de √3'e kadar
-abartma, ball-socket'te daha fazla); `fixed.rs:29`'daki `err_len >= 1e-4` kapısının kusursuz
-sabitlenmiş bir kaynakta lineer kontrolü gizlemesi; ve `solve_slider_spring` /
-`solve_hinge_spring` / `solve_d6_drives`'ın hiç break kontrolü yapmaması. `Joint::check_break`
-(`data.rs:501`) şu an **ölü kod** — buraya bağlanacak. Committed hiçbir test yeniden
-kutsanmıyor (`world/tests.rs:441` `f32::MAX`, `joints_behavior.rs:245` Spring) → YENİ test
-gerekiyor. Kullanıcıya görünür semantik değişim: kalibre edilmiş sonlu eşikler artık daha
-erken kopacak, ve `world.joint_solver.iterations` (public) artık sahnedeki her eşiği sessizce
-yeniden ölçeklemiyor. CHANGELOG'a girmeli.
+**✅ commit 3 — `break_force` net tepkiden hesaplanıyor.** Sekiz iterasyon-içi kontrol tek
+bir geçiş-sonrası kontrole indi; ölçülen şey artık `‖Σ λᵢ·nᵢ‖ / dt`. `JointRows`,
+`JointScratch` oldu ve λ'ların yanında geçişin net doğrusal/açısal impulse vektörünü de
+taşıyor. `Joint::check_break` (sıfır çağıranı olan **ölü kod**) tek yol hâline geldi.
+
+> **Asıl kusur L1 toplamıydı, iterasyon bağımlılığı değil.** Eş-doğrusal OLMAYAN satırların
+> büyüklüklerini toplamak, taşınan kuvveti yükün dünya eksenlerine göre yönelimine bağlı
+> kılıyordu: aynı 9.81 N'luk yük, yerçekimi bir eksen boyunca iken 9.81 N, köşegen iken
+> 17 N olarak raporlanıyordu. Ball-socket'te (koni/twist/swing dik bile değil) abartmanın
+> üst sınırı yok. `break_force_measures_the_net_reaction_not_the_sum_of_axis_magnitudes`
+> tam bunu — YÖNDEN BAĞIMSIZLIĞI — iddia ediyor ve eski kodda kırmızı.
+>
+> Denetimin "iterasyon sayısına bağımlı" iddiası ise ÖLÇÜMLE ÇÜRÜDÜ: 4/10/20 iterasyonda
+> kopma eşiği 22.5617 N, üçünde de aynı. Sebep birikim cırcırını da atıl bırakan sebep —
+> satır ilk iterasyonda `Jv`'yi sıfırlıyor, 2..N iterasyonlar toplama ≈0 katıyor.
+> `break_force_does_not_depend_on_the_solver_iteration_count` bu yüzden bir REGRESYON
+> BEKÇİSİ olarak etiketlendi, bu commit'in kanıtı olarak değil (eski kodda da geçiyor).
+>
+> İki kusur daha kapandı: `fixed.rs`'teki `err_len >= 1e-4` kapısı kusursuz sabitlenmiş bir
+> kaynağın lineer kontrolünü tamamen atlıyordu; ve slider süspansiyon yayı ile hinge torsiyon
+> yayı gerçek yük taşıdıkları hâlde break kontrolüne hiç görünmüyorlardı — "kopabilir" bir
+> amortisör sonsuz yük taşıyabiliyordu (`a_suspension_spring_reports_its_load_to_break_force`,
+> eski kodda kırmızı). Motorlar/sürücüler bilinçli olarak DIŞARIDA: onlar dış yük değil
+> eyleyici. Eklem artık iterasyon ortasında değil geçiş sonunda kopuyor → kopma adımında bir
+> adımlık fazla impuls transferi. CHANGELOG'a girdi.
 
 **⬜ commit 4 — motor satırları.** `hinge.rs:161` ve `slider.rs:180`'deki
 `/ self.iterations` elle yazılmış bir birikim vekili (Türkçe yorumu bunu zaten söylüyor);

@@ -22,12 +22,7 @@ impl JointSolver {
         idx_b: usize,
         dt: f32,
     ) {
-        let (la, lb, break_force, break_torque) = (
-            joint.local_anchor_a,
-            joint.local_anchor_b,
-            joint.break_force,
-            joint.break_torque,
-        );
+        let (la, lb) = (joint.local_anchor_a, joint.local_anchor_b);
         let JointData::D6(ref mut data) = joint.data else {
             return;
         };
@@ -41,7 +36,6 @@ impl JointSolver {
         let compliance = data.compliance;
 
         // ── Linear DOFs (error convention: target - current = -offset for a lock) ──
-        let mut lin_impulse = 0.0;
         for (i, mode) in data.linear.iter().enumerate() {
             let axis_w = rot_a * (data.frame * unit[i]);
             let offset = delta.dot(axis_w);
@@ -58,12 +52,10 @@ impl JointSolver {
                     }
                 }
             };
-            lin_impulse += self
-                .apply_linear_constraint_soft(
+            self.apply_linear_constraint_soft(
                     rigid_bodies, transforms, velocities, idx_a, idx_b, axis_w, r_a, r_b, error,
-                    dt, lo_clamp, hi_clamp, compliance, joint.rows.row(row::LIN + i),
-                )
-                .abs();
+                    dt, lo_clamp, hi_clamp, compliance, &mut joint.scratch, row::LIN + i,
+                );
         }
 
         // ── Angular DOFs (small-angle rotation vector projected onto the frame axes) ──
@@ -71,16 +63,6 @@ impl JointSolver {
         let initial = match data.initial_relative_rotation {
             None => {
                 data.initial_relative_rotation = Some(relative_rot);
-                if lin_impulse / dt > break_force {
-                    joint.is_broken = true;
-                    tracing::debug!(
-                        entity_a = ?joint.entity_a,
-                        entity_b = ?joint.entity_b,
-                        applied_force = lin_impulse / dt,
-                        break_force,
-                        "D6 joint broke (linear force exceeded break threshold)"
-                    );
-                }
                 return;
             }
             Some(rot) => rot,
@@ -88,7 +70,6 @@ impl JointSolver {
         let swing = initial.inverse() * relative_rot;
         let q = if swing.w < 0.0 { -swing } else { swing };
         let rvec = 2.0 * Vec3::new(q.x, q.y, q.z);
-        let mut ang_impulse = 0.0;
         for (i, mode) in data.angular.iter().enumerate() {
             let axis_local = data.frame * unit[i];
             let angle = rvec.dot(axis_local);
@@ -106,26 +87,12 @@ impl JointSolver {
                     }
                 }
             };
-            ang_impulse += self
-                .apply_angular_constraint_soft(
+            self.apply_angular_constraint_soft(
                     rigid_bodies, transforms, velocities, idx_a, idx_b, axis_w, error, dt,
-                    lo_clamp, hi_clamp, compliance, joint.rows.row(row::ANG + i),
-                )
-                .abs();
+                    lo_clamp, hi_clamp, compliance, &mut joint.scratch, row::ANG + i,
+                );
         }
 
-        if lin_impulse / dt > break_force || ang_impulse / dt > break_torque {
-            joint.is_broken = true;
-            tracing::debug!(
-                entity_a = ?joint.entity_a,
-                entity_b = ?joint.entity_b,
-                applied_force = lin_impulse / dt,
-                break_force,
-                applied_torque = ang_impulse / dt,
-                break_torque,
-                "D6 joint broke (force/torque exceeded break threshold)"
-            );
-        }
     }
 
     /// Force-based per-axis DRIVES for a D6 joint (motor + spring), applied once per step

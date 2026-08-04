@@ -33,9 +33,7 @@ impl JointSolver {
             let max_impulse = f32::MAX;
             let min_impulse = f32::MIN;
 
-            let mut impulse_sum = 0.0;
-            impulse_sum += self
-                .apply_linear_constraint(
+            self.apply_linear_constraint(
                     rigid_bodies,
                     transforms,
                     velocities,
@@ -48,11 +46,9 @@ impl JointSolver {
                     dt,
                     min_impulse,
                     max_impulse,
-                    joint.rows.row(row::LIN),
-                )
-                .abs();
-            impulse_sum += self
-                .apply_linear_constraint(
+                    &mut joint.scratch, row::LIN,
+                );
+            self.apply_linear_constraint(
                     rigid_bodies,
                     transforms,
                     velocities,
@@ -65,11 +61,9 @@ impl JointSolver {
                     dt,
                     min_impulse,
                     max_impulse,
-                    joint.rows.row(row::LIN + 1),
-                )
-                .abs();
-            impulse_sum += self
-                .apply_linear_constraint(
+                    &mut joint.scratch, row::LIN + 1,
+                );
+            self.apply_linear_constraint(
                     rigid_bodies,
                     transforms,
                     velocities,
@@ -82,20 +76,9 @@ impl JointSolver {
                     dt,
                     min_impulse,
                     max_impulse,
-                    joint.rows.row(row::LIN + 2),
-                )
-                .abs();
-
-            if impulse_sum / dt > joint.break_force {
-                joint.is_broken = true;
-                tracing::debug!(
-                    entity_a = ?joint.entity_a,
-                    entity_b = ?joint.entity_b,
-                    applied_force = impulse_sum / dt,
-                    break_force = joint.break_force,
-                    "Fixed joint broke (linear force exceeded break threshold)"
+                    &mut joint.scratch, row::LIN + 2,
                 );
-            }
+
         }
 
         // Angular lock — a genuine Fixed joint must ALSO prevent relative rotation.
@@ -107,10 +90,8 @@ impl JointSolver {
         // solver runs every sub-step before integration, so no relative rotation
         // accumulates; the joint stays welded.
         if matches!(joint.data, JointData::Fixed) {
-            let mut total_ang_impulse = 0.0;
             for (i, axis) in [Vec3::X, Vec3::Y, Vec3::Z].into_iter().enumerate() {
-                total_ang_impulse += self
-                    .apply_angular_constraint(
+                self.apply_angular_constraint(
                         rigid_bodies,
                         transforms,
                         velocities,
@@ -121,25 +102,8 @@ impl JointSolver {
                         dt,
                         f32::NEG_INFINITY,
                         f32::INFINITY,
-                        joint.rows.row(row::ANG + i),
-                    )
-                    .abs();
-            }
-            // Break the weld under excessive torsional load. The hinge/ball-socket/slider
-            // solvers all honor break_torque, but the Fixed angular lock previously
-            // discarded every lambda, so a Fixed joint could never break no matter how small
-            // break_torque was (the with_break_force(force, torque) API silently no-op'd its
-            // torque argument). Checked outside the linear-error gate so a perfectly-pinned
-            // weld — which carries its whole reaction through this angular lock — still breaks.
-            if total_ang_impulse / dt > joint.break_torque {
-                joint.is_broken = true;
-                tracing::debug!(
-                    entity_a = ?joint.entity_a,
-                    entity_b = ?joint.entity_b,
-                    applied_torque = total_ang_impulse / dt,
-                    break_torque = joint.break_torque,
-                    "Fixed joint broke (torsional load exceeded break threshold)"
-                );
+                        &mut joint.scratch, row::ANG + i,
+                    );
             }
         }
     }

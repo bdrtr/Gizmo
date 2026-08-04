@@ -62,6 +62,33 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`break_force` / `break_torque` now measure the joint's net reaction.** *Behavioural —
+  finite thresholds already calibrated against the old numbers will need re-tuning.*
+
+  Each joint type used to run its own break check from **inside** the solver's iteration
+  loop, comparing `Σ|λᵢ|` — the L1 sum of its rows' impulse magnitudes — against the
+  threshold. Summing magnitudes of rows that are not collinear does not give the force the
+  joint carries. A weld's three linear rows are the world X/Y/Z axes, so the same 9.81 N
+  load reported 9.81 N when gravity pointed down one axis and 17 N when it pointed
+  diagonally: the reported force depended on the arbitrary orientation of the load relative
+  to the world axes, and nothing else. On a ball-socket, whose cone/twist/swing rows are not
+  even orthogonal, there was no bound on the overstatement.
+
+  There is now one check, once per solver pass, against `‖Σ λᵢ·nᵢ‖ / dt` — the magnitude of
+  the net impulse the joint actually applied. Three further consequences:
+
+  - `Joint::check_break` was public API with **zero callers**. It is now the one code path.
+  - A `Fixed` joint whose anchors were exactly coincident skipped its linear break check
+    entirely, because the whole linear block sat behind an `err_len >= 1e-4` gate.
+  - Slider suspension springs and hinge torsional springs carry real load and were invisible
+    to the break check — a "breakable" shock absorber could hold any load forever. They now
+    report into the same total. Motors and D6 drives deliberately do **not**: they are
+    actuators, not external load.
+
+  A joint that breaks now does so at the end of the pass rather than mid-iteration, so it
+  transfers one extra step's worth of impulse before letting go. `world.joint_solver
+  .iterations` no longer participates in the calculation at all.
+
 - **`UiPlugin` and `TransformPlugin` now register on the per-frame schedule.** Layout,
   hit-testing and transform propagation are read once per rendered frame; running them
   `0..N` times in the fixed loop was both wasted work and, with vsync off, a hover that

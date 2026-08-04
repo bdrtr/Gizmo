@@ -441,7 +441,7 @@ fn test_car_simulation() {
             break_force: f32::MAX, // Asla kopmasın
             break_torque: f32::MAX,
             is_broken: false,
-            rows: Default::default(),
+            scratch: Default::default(),
             collision_enabled: false, // Şasi ile tekerlek çarpışmasın
             data: JointData::Hinge(hinge_data),
         };

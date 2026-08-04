@@ -41,7 +41,7 @@ impl JointSolver {
 
         // error = target - current (so a violated UPPER bound gives a negative error,
         // driving a negative — i.e. pulling-together — lambda, exactly like the cone limit).
-        let lin_impulse = if length > data.max_length {
+        if length > data.max_length {
             self.apply_linear_constraint_soft(
                 rigid_bodies,
                 transforms,
@@ -56,8 +56,8 @@ impl JointSolver {
                 f32::NEG_INFINITY,
                 0.0, // pull only
                 data.compliance, // 0 = rigid rope; >0 = elastic/stretchy
-                joint.rows.row(row::LIMIT),
-            )
+                &mut joint.scratch, row::LIMIT,
+            );
         } else if length < data.min_length {
             self.apply_linear_constraint_soft(
                 rigid_bodies,
@@ -73,20 +73,7 @@ impl JointSolver {
                 0.0, // push only
                 f32::INFINITY,
                 data.compliance,
-                joint.rows.row(row::LIMIT),
-            )
-        } else {
-            0.0 // within bounds → free
-        };
-
-        if lin_impulse.abs() / dt > joint.break_force {
-            joint.is_broken = true;
-            tracing::debug!(
-                entity_a = ?joint.entity_a,
-                entity_b = ?joint.entity_b,
-                applied_force = lin_impulse.abs() / dt,
-                break_force = joint.break_force,
-                "Distance joint broke (force exceeded break threshold)"
+                &mut joint.scratch, row::LIMIT,
             );
         }
     }

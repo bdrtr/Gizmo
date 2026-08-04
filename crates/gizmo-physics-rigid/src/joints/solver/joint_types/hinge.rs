@@ -39,11 +39,9 @@ impl JointSolver {
         // 2. Angular constraint — keep hinge axes aligned (2 DOF)
         let ang_err = axis_a.cross(axis_b);
         let err_mag = ang_err.length();
-        let mut total_ang_impulse = 0.0;
         if err_mag > 1e-6 {
             let err_dir = ang_err / err_mag;
-            total_ang_impulse += self
-                .apply_angular_constraint(
+            self.apply_angular_constraint(
                     rigid_bodies,
                     transforms,
                     velocities,
@@ -54,9 +52,8 @@ impl JointSolver {
                     dt,
                     f32::NEG_INFINITY,
                     f32::INFINITY,
-                    joint.rows.row(row::ANG),
-                )
-                .abs();
+                    &mut joint.scratch, row::ANG,
+                );
         }
 
         // 3. Track current angle
@@ -89,8 +86,7 @@ impl JointSolver {
                 if data.current_angle < data.lower_limit {
                     let err = data.lower_limit - data.current_angle;
                     // axis_w points from A to B; positive lambda increases angle
-                    total_ang_impulse += self
-                        .apply_angular_constraint(
+                    self.apply_angular_constraint(
                             rigid_bodies,
                             transforms,
                             velocities,
@@ -101,13 +97,11 @@ impl JointSolver {
                             dt,
                             0.0,
                             f32::INFINITY,
-                            joint.rows.row(row::LIMIT),
-                        )
-                        .abs();
+                            &mut joint.scratch, row::LIMIT,
+                        );
                 } else if data.current_angle > data.upper_limit {
                     let err = data.upper_limit - data.current_angle; // negative
-                    total_ang_impulse += self
-                        .apply_angular_constraint(
+                    self.apply_angular_constraint(
                             rigid_bodies,
                             transforms,
                             velocities,
@@ -118,24 +112,12 @@ impl JointSolver {
                             dt,
                             f32::NEG_INFINITY,
                             0.0,
-                            joint.rows.row(row::LIMIT),
-                        )
-                        .abs();
+                            &mut joint.scratch, row::LIMIT,
+                        );
                 }
             }
         }
 
-        if total_ang_impulse / dt > joint.break_torque {
-            joint.is_broken = true;
-            tracing::debug!(
-                entity_a = ?joint.entity_a,
-                entity_b = ?joint.entity_b,
-                applied_torque = total_ang_impulse / dt,
-                break_torque = joint.break_torque,
-                "Hinge joint broke (torque exceeded break threshold)"
-            );
-            return;
-        }
 
         // 5. Motor — velocity constraint along hinge axis
         if data.use_motor {
@@ -194,7 +176,7 @@ impl JointSolver {
     /// solve_hinge_joint). No-op unless `use_torsional_spring`.
     pub(crate) fn solve_hinge_spring(
         &self,
-        joint: &Joint,
+        joint: &mut Joint,
         rigid_bodies: &[RigidBody],
         transforms: &[Transform],
         velocities: &mut [Velocity],
@@ -225,6 +207,9 @@ impl JointSolver {
         if torque_impulse.abs() < 1e-12 {
             return;
         }
+        // Torsiyon yayı gerçek yük taşır → `break_torque` toplamına girer (bkz. slider
+        // süspansiyonu). Satır yardımcılarıyla aynı işaret konvansiyonu.
+        joint.scratch.impulse_ang += axis_w * torque_impulse;
         let delta_a = inv_i_a.mul_vec3(axis_w) * torque_impulse;
         let delta_b = inv_i_b.mul_vec3(axis_w) * torque_impulse;
         let dyn_a = rigid_bodies[idx_a].is_dynamic();
