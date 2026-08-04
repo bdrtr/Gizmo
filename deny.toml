@@ -1,0 +1,129 @@
+# cargo-deny — supply-chain gate for the Gizmo workspace.
+#
+# Run locally with:
+#   cargo deny --all-features check
+#
+# The point of this file is not to be permissive enough to pass. It is to make every
+# exception a written decision with a name attached, so that "we ship an unmaintained
+# crate" is something someone chose rather than something nobody noticed. The workspace
+# had no supply-chain tooling at all before 2026-08; the first run surfaced six advisories
+# and one licence question, recorded below.
+
+[graph]
+all-features = true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Security advisories
+# ─────────────────────────────────────────────────────────────────────────────
+[advisories]
+version = 2
+# Anything not listed below fails the build. New advisories are supposed to break CI.
+yanked = "deny"
+
+ignore = [
+  # ── Fixed, kept here only as a record of what the first run found ──────────
+  # RUSTSEC-2026-0204 (crossbeam-epoch invalid pointer deref) was resolved by
+  # `cargo update -p crossbeam-epoch` → 0.9.20. Not ignored; genuinely fixed.
+
+  # ── Unmaintained, no upgrade path, transitive ─────────────────────────────
+  # `paste` — proc-macro used at build time by several dependencies. Unmaintained is
+  # not a vulnerability, it runs only during compilation, and nothing in the graph
+  # offers an alternative. Nothing to do until an upstream drops it.
+  { id = "RUSTSEC-2024-0436", reason = "paste: unmaintained build-time proc-macro, no upstream alternative available" },
+
+  # `ttf-parser` — reached through winit → sctk-adwaita → ab_glyph, i.e. Wayland
+  # client-side window decorations. It parses fonts the user's own system provides,
+  # not attacker-supplied data, and the whole chain disappears on X11/macOS/Windows.
+  # Resolves when winit's decoration stack moves off ab_glyph.
+  { id = "RUSTSEC-2026-0192", reason = "ttf-parser: unmaintained, transitive via winit's Wayland decorations; parses local system fonts only" },
+
+  # `quick-xml` 0.39 — pinned by `wayland-scanner ^0.39`, so >=0.41 is unreachable
+  # without a winit/wayland-rs bump. Both advisories are DoS-shaped (quadratic
+  # attribute scan, unbounded namespace allocation) and wayland-scanner parses the
+  # Wayland protocol XML that ships with the build, at build time. Not attacker input.
+  { id = "RUSTSEC-2026-0194", reason = "quick-xml: DoS on hostile XML; pinned by wayland-scanner, which parses build-time protocol files" },
+  { id = "RUSTSEC-2026-0195", reason = "quick-xml: as above — same crate, same unreachable-upgrade situation" },
+
+  # ── Unmaintained, OURS to fix ─────────────────────────────────────────────
+  # `bincode 1.3.3` is a DIRECT dependency of gizmo-net (Cargo.toml) and is the wire
+  # format for rollback snapshots and client-server messages. bincode 2.x exists, but
+  # changing a netcode serializer is a wire-compat break that needs its own change and
+  # its own round-trip tests — it is tracked in docs/FIXPLAN.md rather than smuggled
+  # into a supply-chain commit. This is the one entry here that is a real to-do.
+  { id = "RUSTSEC-2025-0141", reason = "bincode 1.x unmaintained; direct dep of gizmo-net, migration to 2.x tracked in docs/FIXPLAN.md" },
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Licences
+# ─────────────────────────────────────────────────────────────────────────────
+[licenses]
+version = 2
+confidence-threshold = 0.9
+
+# The workspace itself is MIT OR Apache-2.0. Everything below is permissive and
+# compatible with redistributing a compiled binary under those terms.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "CC0-1.0",
+  "Unlicense",
+  "Unicode-3.0",
+  "BSL-1.0",
+  "MIT-0",
+  "OpenSSL",
+  "NCSA",           # libfuzzer-sys, alongside MIT/Apache — permissive
+  "OFL-1.1",        # embedded default fonts (epaint) — permissive for embedding/redistribution
+  "Ubuntu-font-1.0", # ditto
+
+  # MPL-2.0 — a deliberate, disclosed exception.
+  #
+  # Reached only through the default `audio` feature: rodio → symphonia (and its
+  # bundle-mp3/core/metadata crates), plus `option-ext` via `dirs`. MPL-2.0 is
+  # *file-level* copyleft: linking it into a proprietary binary is fine, and only
+  # modifications to those specific files must be published. It does not affect the
+  # licence of anything in this repository.
+  #
+  # It is listed here rather than silently allowed because README.md says "MIT OR
+  # Apache-2.0" without qualification, and a downstream user with a strict licence
+  # policy deserves to find this in one grep rather than in an audit.
+  "MPL-2.0",
+]
+
+# Crates offering a permissive licence *or* a copyleft one: take the permissive side.
+# `r-efi` is "MIT OR Apache-2.0 OR LGPL-2.1-or-later" and `self_cell` is
+# "Apache-2.0 OR GPL-2.0-only" — there is no GPL obligation here, only an unfortunate
+# SPDX expression that a naive scan reads as contamination.
+[[licenses.exceptions]]
+name = "r-efi"
+allow = ["MIT", "Apache-2.0"]
+
+[[licenses.exceptions]]
+name = "self_cell"
+allow = ["Apache-2.0"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bans / duplicate versions
+# ─────────────────────────────────────────────────────────────────────────────
+[bans]
+# The graph currently carries several semver-incompatible duplicates that are ours:
+# three `rand` majors (0.8 dev / 0.9 renderer / 0.10 physics), three `getrandom`, two
+# `ron` (0.8 core / 0.12 scene+renderer), two `criterion`, two `glam` (0.29 ours,
+# 0.32 via transform-gizmo). Deduplicating them is real work with real semver
+# consequences, tracked in docs/FIXPLAN.md — so this warns rather than fails, to keep
+# the gate honest instead of permanently red.
+multiple-versions = "warn"
+wildcards = "deny"
+# `cradle`, `demo`, `demo-web` and `server` are unpublished workspace members that depend on
+# their siblings by bare `path`. That is correct for a non-published binary — pinning a
+# version there would be noise — so path wildcards are allowed while registry wildcards
+# stay denied.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

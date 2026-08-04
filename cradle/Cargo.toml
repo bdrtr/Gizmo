@@ -3,6 +3,7 @@ publish = false
 name = "cradle"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 gizmo = { package = "gizmo-engine", path = "../crates/gizmo", features = ["audio", "scripting", "scene", "editor", "render", "window", "ui"] }
