@@ -713,6 +713,73 @@ elle yazılmış vekiliydi (Türkçe yorumu bunu zaten söylüyordu). Motor art�
 > ancak 1.0e-3 oynatıyor — mutlak 1e-3'lük bir kol-uzunluğu kilidi ise kısıt hatasının iki
 > katına çıkmasını "değişmedi" sayardı.
 
+### ✅ Derin düzeltmeler — kökten giden üç madde (2026-08-04)
+
+B4'ün beş commit'i "eklem çözücüsünün yaptığı işi" düzeltti. Bunlar ise ALTINDAKİ üç yapıyı
+düzeltti; üçü de tek tek yamanmak yerine mekanizması değiştirildi.
+
+**✅ `compliance` gerçek bir ters-sertlik oldu** (`d49bedb`). CFM (`k += α/dt²`) tek başına
+yumuşaklık üretmiyor: `k`'yi büyütmek yalnız her iterasyonun adımını küçültür, seri yine
+RİJİT çözüme yakınsar. Gözlenen tüm yumuşaklık `iterations`'ın sonlu olmasındandı — aynı
+halat 5 iterasyonda 0.0194 m, 10'da 0.0096 m uzuyordu. Eklemler artık temas çözücüsünün
+kullandığı soft-constraint formülasyonunda (`solver/tgs.rs:117-124`, `:597`); frekans satırın
+kendi compliance'ı ve efektif kütlesinden geliyor: `ω = √(k/α)`. Sonuç Hooke: 1 kg,
+α = 0.03 → 0.294 m, iki büyüklük mertebesi compliance ve bir mertebe kütle boyunca %0.2
+içinde, 5/10/20/40 iterasyonda aynı.
+
+> **İlk denemem 1 kg'da mükemmel ölçüp 4 kg'da patladı.** `impulse_scale` terimi `k`'ye
+> bölününce λ yinelemesi `impulse_scale > 2k` olduğunda ıraksıyor; cisim 331 m düşüyordu
+> (2000 adım serbest düşüş). Bölünmeyen biçimde `impulse_scale ∈ (0,1]` ve koşulsuz kararlı.
+> Tek kütleli bir test bunu geçirirdi — bu yüzden `compliance_is_an_inverse_stiffness`
+> kütleyi de tarıyor.
+>
+> Commit 2'de ertelenen CFM geri besleme terimi de böylece kapandı: soft formülasyonda `c`
+> bir ÇARPAN (`λ = c·bias_rate·C`), CFM'de ise BÖLEN'di. Aynı fizik, kırpmalı bir çözücüde
+> taban tabana zıt koşullanma.
+
+**✅ Eklem durumu `WorldSnapshot`'a girdi** (`f5042af`). `is_broken` TEK YÖNLÜ bir mandal ve
+`joints` snapshot'ta hiç yoktu → rollback penceresi içinde kopan eklem restore'dan sonra da
+kopuk kalıyordu, kalıcı olarak. Aynısı `initial_relative_rotation` için: bütün koni/twist/swing
+limitlerinin ölçüldüğü referans poz. İkisi de `state_hash`'e girmediği için desync hızlara
+sızana kadar GÖRÜNMEZDİ. Türe ekleme kuralı da yazıldı: ölçüt "büyük mü" değil,
+*transform/velocity'den türetilebilir mi*.
+
+**✅ Uyandırma eklem bileşenine yayılıyor** (`699c68d`). `pipeline.rs`'teki yayılım tek geçiş
+ve dizi sırasına bağlıydı: 12 halkalı zincirin derin ucu sarsıldığında bir adımda 5 halka
+uyanıyordu (substep başına bir), kalan 7'si entegre etmediği eklem düzeltmelerini yutuyordu.
+Temaslarda island'lar bunu zaten çözüyordu; eklemler island kurulumuna girmiyordu. Artık aynı
+union-find eklem grafında: bileşende bir mover varsa bileşenin tamamı uyanır.
+`an_undisturbed_chain_stays_asleep` fixi dürüst tutuyor — "hepsini uyandır" o testi kırar.
+
+### ⬜ Ölçüldü: warm-start ne kadar önemli?
+
+Denetim warm-start'ı "büyük olan" diye işaretlemişti. **Ölçüm bunu kısmen destekliyor: yalnız
+YÜKSEK KÜTLE ORANLARINDA.** 16 halkalı rijit zincir, varsayılan 10 iterasyon, 400 adım:
+
+| uç kütlesi | 10 iter | 40 iter | 160 iter |
+|---|---|---|---|
+| 1 kg | 16.0066 (%0.04) | 16.0014 | 16.0002 |
+| 20 kg | 16.0229 (%0.14) | 16.0056 | 16.0012 |
+| 200 kg | **16.1657 (%1.04)** | 16.0443 | 16.0106 |
+
+Sıradan kütle oranlarında sapma 6.6 mm/16 m — görünmez. 200:1'de %1, ve 160 iterasyona
+çıkmak 16 kat düzeltiyor; işte warm-start'ın kapatacağı boşluk bu. Yani: **yıkım topu zincirde,
+halatta ağır platform** gibi sahneler için değerli, genel bir kusur değil.
+
+İki engeli artık kalktı: λ zaten `Joint::scratch` içinde, o da artık snapshot'lanıyor; ve
+uyuyan-uç kapısı için gereken bileşen bilgisi de var. Kalan iş: iterasyon 0'dan önce ayrı bir
+warm-start sweep'i, bir satırın aktivasyon kapısı kapandığı substep'te λ'sının sıfırlanması
+(gevşemiş halat yeniden çekmemeli), ve `tests/rollback.rs`'e yüksek-kütle-oranlı bir zincir
+sahnesi.
+
+### ⬜ Ölçülecek: temas çözücüsünde de aynı bölme var mı?
+
+`solver/tgs.rs:597` `impulse_scale` terimini `/ k_n` ile bölüyor — eklemlerde 4 kg'da
+kısıtı boşaltan yapının aynısı. Oradaki `impulse_scale` çok daha küçük (contact_hertz = 30,
+ζ = 10 → ≈0.058), yani kararlılık sınırı `m_eff ≈ 34`'e çıkıyor ve mevcut soak sahnelerinde
+ısırmıyor. **Körlemesine değiştirilecek bir şey değil** — önce ağır cisimli bir temas sahnesi
+kurup ölçmek gerekiyor.
+
 **⬜ commit 5 — warm-start + rollback (en riskli, en sonda).** İterasyon 0'dan ÖNCE ayrı bir
 sweep'te `dir * λ_önceki` uygulanması (temas çözücüsündeki `solver/mod.rs:458-476` yapısının
 aynısı). Aynı commit'te ZORUNLU: iki-uç-uykuda kapısı (bugün `joints/` içinde tek bir
