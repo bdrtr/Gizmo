@@ -60,6 +60,14 @@ impl Gjk {
 
     /// Compute distance and closest points using GJK (for non-intersecting shapes)
     /// Returns (distance, normal_from_b_to_a)
+    /// # Overlapping input
+    ///
+    /// Defined for **non-intersecting** shapes only. When the Minkowski difference contains
+    /// the origin the result is meaningless: the magnitude is a positive upper bound taken
+    /// from a stale iterate and the direction is arbitrary — there is no penetration
+    /// channel, and the return is clamped at zero. Callers that must distinguish
+    /// "separated by d" from "overlapping" should ask [`Gjk::test_collision`], which is the
+    /// authoritative enclosure predicate; `conservative_advancement` does exactly that.
     pub fn distance<F>(support: F) -> Option<(f32, Vec3)>
     where
         F: Fn(Vec3) -> Vec3,
@@ -285,7 +293,41 @@ impl Gjk {
         }
     }
 
-    /// Exact TOI (Time of Impact) using Conservative Advancement
+    /// Conservative-advancement time of impact for a **translational** sweep.
+    ///
+    /// Returns `(toi, normal)` where `normal` points from B to A — the same convention as
+    /// [`Gjk::distance`], and the OPPOSITE of the A→B normal that `speculative_contact`
+    /// puts into a [`ContactPoint`]. `toi` is a conservative *under*-estimate: never late,
+    /// which is the safe direction for CCD.
+    ///
+    /// **Translation only.** `rot_a`/`rot_b` are fixed orientations; there is no angular
+    /// velocity input, so a spinning thin body is not covered (same scope limit
+    /// `speculative_contact` states for itself). `Plane` and `Compound` violate
+    /// [`Gjk::support_point`]'s contract and must not be passed here.
+    ///
+    /// # Why the numerator is re-derived
+    ///
+    /// The advance rule `dt = gap / closing_speed` is the textbook Mirtich bound and is
+    /// provably non-overshooting under pure translation — the Minkowski set translates
+    /// rigidly, so a supporting plane's offset decays exactly linearly and the step lands
+    /// at most *on* touching. That was never the bug.
+    ///
+    /// The bug was the numerator's provenance. [`Gjk::distance`] returns
+    /// `max(best_sq.sqrt(), lb_max)` — an *upper* bound that can come from a stale iterate
+    /// — paired with a normal from a different one. When the shapes touch exactly, its
+    /// simplex reduction reaches the origin, trips the degenerate-collapse break and falls
+    /// back to the previous positive iterate. Two unit boxes swept together with a 0.2
+    /// lateral offset reported a 0.1414 gap at the exact moment of contact, so the touch
+    /// test never fired, the next step carried them into overlap, and from there
+    /// `distance()` (which has no penetration channel) returned a positive value with an
+    /// arbitrary normal until the separation certificate rejected the whole sweep.
+    ///
+    /// So `distance()` supplies the *direction* only, and the gap is re-derived here as the
+    /// certified supporting-plane offset `sep(n) = min_{p ∈ A⊖B} p·n = support(-n)·n`.
+    /// That is never greater than the true distance for any unit `n`, so every step is at
+    /// least as small as before, and it is positive exactly when `n` separates.
+    /// Cost: one extra support call per iteration.
+    #[allow(clippy::too_many_arguments)]
     pub fn conservative_advancement(
         shape_a: &ColliderShape,
         mut pos_a: Vec3,
@@ -297,48 +339,111 @@ impl Gjk {
         vel_b: Vec3,
         max_t: f32,
     ) -> Option<(f32, Vec3)> {
-        let mut t = 0.0;
-        let rel_vel = vel_a - vel_b;
+        /// Certified gap at or below which the pair counts as touching.
+        const TOUCH: f32 = 1e-4;
+        const MAX_ITERS: u32 = 32;
 
-        if rel_vel.length_squared() < 1e-6 {
+        // NaN-safe: a NaN horizon is not a valid budget and must reject, so the test is
+        // written positively rather than as a negated comparison.
+        if max_t.is_nan() || max_t <= 0.0 {
             return None;
         }
 
-        for _ in 0..32 {
+        // Already overlapping at t=0 is a hit at t=0, not a miss. `distance()` clamps its
+        // result at zero and has no penetration channel, so ask the enclosure predicate
+        // directly. This must precede the velocity early-out: a stationary interpenetrating
+        // pair still has a TOI of 0.
+        if Self::test_collision(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b) {
+            let n = (pos_a - pos_b).try_normalize().unwrap_or(Vec3::X);
+            return Some((0.0, n));
+        }
+
+        let rel_vel = vel_a - vel_b;
+        let speed = rel_vel.length();
+        if speed < 1e-6 {
+            // Stationary, and provably apart by the test above.
+            return None;
+        }
+
+        let mut t = 0.0f32;
+        // Last axis measured at a gap wide enough for the GJK axis to be trustworthy.
+        // At the touching iterate the axis degenerates (`distance` falls back to `Vec3::X`),
+        // so the reported impact normal comes from the previous, reliable measurement.
+        let mut reliable_n: Option<Vec3> = None;
+
+        for _ in 0..MAX_ITERS {
             let support = |dir: Vec3| {
                 let sa = Self::support_point(shape_a, pos_a, rot_a, dir);
                 let sb = Self::support_point(shape_b, pos_b, rot_b, -dir);
                 sa - sb
             };
 
-            if let Some((dist, normal)) = Self::distance(support) {
-                if dist < 0.001 {
-                    return Some((t, normal));
-                }
+            let (_, axis) = Self::distance(support)?;
+            let Some(n) = axis.try_normalize() else {
+                break;
+            };
 
-                let closing_vel = -rel_vel.dot(normal);
+            let sep = support(-n).dot(n);
 
-                if closing_vel <= 0.0 {
-                    return None;
-                }
+            if sep <= TOUCH {
+                return Some((t, reliable_n.unwrap_or(n)));
+            }
+            reliable_n = Some(n);
 
-                let delta_t = dist / closing_vel;
-                t += delta_t;
-
-                if t > max_t {
-                    return None;
-                }
-
-                pos_a += vel_a * delta_t;
-                pos_b += vel_b * delta_t;
-            } else {
+            let closing = -rel_vel.dot(n);
+            if closing <= 1e-6 * speed {
+                // `n` separates now, and under constant relative translation its plane
+                // offset can only grow — the pair can never intersect. A proof, not a
+                // heuristic, so returning None here is sound.
                 return None;
             }
+
+            let dt = sep / closing;
+
+            if t + dt >= max_t {
+                // Clamp to the horizon and TEST it, rather than dropping a contact that
+                // lands exactly at `max_t`.
+                //
+                // The test is the same certified-gap criterion the loop uses, NOT
+                // `test_collision`: a sweep whose TOI is exactly `max_t` ends *touching*,
+                // and touching is not containment — GJK's enclosure predicate answers
+                // false there, which would drop precisely the contact this branch exists
+                // to keep.
+                let remaining = max_t - t;
+                let end_a = pos_a + vel_a * remaining;
+                let end_b = pos_b + vel_b * remaining;
+                let end_support = |dir: Vec3| {
+                    Self::support_point(shape_a, end_a, rot_a, dir)
+                        - Self::support_point(shape_b, end_b, rot_b, -dir)
+                };
+                if end_support(-n).dot(n) <= TOUCH {
+                    return Some((max_t, reliable_n.unwrap_or(n)));
+                }
+                return None;
+            }
+
+            t += dt;
+            pos_a += vel_a * dt;
+            pos_b += vel_b * dt;
         }
 
+        // Budget exhausted. A glancing approach makes `closing` small and progress
+        // collapse; report the best conservative estimate reached rather than a silent
+        // false miss, but only if we are demonstrably close.
+        let support = |dir: Vec3| {
+            Self::support_point(shape_a, pos_a, rot_a, dir)
+                - Self::support_point(shape_b, pos_b, rot_b, -dir)
+        };
+        if let Some((_, axis)) = Self::distance(support) {
+            if let Some(n) = axis.try_normalize() {
+                if support(-n).dot(n) <= 1e-2 {
+                    return Some((t, reliable_n.unwrap_or(n)));
+                }
+            }
+        }
         tracing::trace!(
-            max_iterations = 32,
-            "conservative advancement did not converge within the iteration budget; reporting no TOI"
+            max_iterations = MAX_ITERS,
+            "conservative advancement did not converge within the iteration budget"
         );
         None
     }

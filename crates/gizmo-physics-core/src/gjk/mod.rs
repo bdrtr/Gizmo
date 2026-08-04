@@ -195,6 +195,142 @@ mod tests {
         );
     }
 
+    /// The repro that motivated rewriting CA: a swept box with a LATERAL OFFSET.
+    ///
+    /// CA used to work only for a head-on approach. Two unit boxes with B at x=5 and A
+    /// swept along +X reported no hit at all for any offset ≥ 0.05, because `distance()`
+    /// over-reports the gap at the exact touching iterate, the step then carried A into
+    /// overlap, and the separation certificate rejected the sweep from there.
+    ///
+    /// The analytic TOI is the same for every offset with |z| < 1.0, because contact is
+    /// face-to-face at x = 4.5: (4.5 - 0.5) / 20 = 0.2.
+    #[test]
+    fn ca_box_sweep_with_lateral_offset_finds_the_toi() {
+        let shape = ColliderShape::Box(BoxShape {
+            half_extents: Vec3::splat(0.5),
+        });
+        for z in [0.0f32, 0.05, 0.2, 0.4, 0.6, 0.9] {
+            let hit = Gjk::conservative_advancement(
+                &shape,
+                Vec3::new(0.0, 0.0, z),
+                Quat::IDENTITY,
+                Vec3::new(20.0, 0.0, 0.0),
+                &shape,
+                Vec3::new(5.0, 0.0, 0.0),
+                Quat::IDENTITY,
+                Vec3::ZERO,
+                1.0,
+            );
+            let (toi, normal) = hit.unwrap_or_else(|| {
+                panic!("offset z={z} sweeps straight into the box and must report a TOI")
+            });
+            assert!(
+                (toi - 0.2).abs() < 5e-3,
+                "z={z}: TOI {toi} should be 0.2 (face contact at x=4.5)"
+            );
+            assert!(normal.x < -0.99, "z={z}: impact normal should be -x, got {normal:?}");
+        }
+
+        // Beyond the combined half-extents there is no z-overlap: a genuine miss.
+        let miss = Gjk::conservative_advancement(
+            &shape,
+            Vec3::new(0.0, 0.0, 1.05),
+            Quat::IDENTITY,
+            Vec3::new(20.0, 0.0, 0.0),
+            &shape,
+            Vec3::new(5.0, 0.0, 0.0),
+            Quat::IDENTITY,
+            Vec3::ZERO,
+            1.0,
+        );
+        assert!(miss.is_none(), "a sweep that passes beside the box must report no hit");
+    }
+
+    /// Analytic oracle. Sphere-sphere TOI has a closed form, so this pins the numeric
+    /// answer rather than a plausibility band: centres touch at separation r+r = 1, so
+    /// with A starting 10 apart in x at 10 u/s and offset z, toi = (10 - sqrt(1 - z²)) / 10.
+    #[test]
+    fn ca_sphere_sweep_matches_the_closed_form() {
+        let shape = ColliderShape::Sphere(SphereShape { radius: 0.5 });
+        for z in [0.0f32, 0.3, 0.6, 0.8] {
+            let expected = (10.0 - (1.0f32 - z * z).sqrt()) / 10.0;
+            let (toi, _) = Gjk::conservative_advancement(
+                &shape,
+                Vec3::new(-5.0, 0.0, z),
+                Quat::IDENTITY,
+                Vec3::new(10.0, 0.0, 0.0),
+                &shape,
+                Vec3::new(5.0, 0.0, 0.0),
+                Quat::IDENTITY,
+                Vec3::ZERO,
+                2.0,
+            )
+            .unwrap_or_else(|| panic!("z={z} must produce an impact"));
+            assert!(
+                (toi - expected).abs() < 5e-3,
+                "z={z}: TOI {toi} should match the closed form {expected}"
+            );
+        }
+    }
+
+    /// The invariant CA exists to provide, stated directly: the reported TOI is *before*
+    /// contact, never past it. A late TOI is how a CCD routine lets a body tunnel.
+    #[test]
+    fn ca_toi_is_conservative_never_late() {
+        let shape = ColliderShape::Box(BoxShape {
+            half_extents: Vec3::splat(0.5),
+        });
+        for z in [0.0f32, 0.3, 0.7] {
+            let vel = Vec3::new(20.0, 0.0, 0.0);
+            let start = Vec3::new(0.0, 0.0, z);
+            let (toi, _) = Gjk::conservative_advancement(
+                &shape, start, Quat::IDENTITY, vel, &shape,
+                Vec3::new(5.0, 0.0, 0.0), Quat::IDENTITY, Vec3::ZERO, 1.0,
+            )
+            .expect("impact");
+
+            let just_before = start + vel * (toi - 1e-3).max(0.0);
+            assert!(
+                !Gjk::test_collision(
+                    &shape, just_before, Quat::IDENTITY,
+                    &shape, Vec3::new(5.0, 0.0, 0.0), Quat::IDENTITY
+                ),
+                "z={z}: the shapes must still be apart just before the reported TOI"
+            );
+        }
+    }
+
+    /// A pair already overlapping at t=0 has a TOI of 0 — including when both are
+    /// stationary, which the old velocity early-out reported as a miss.
+    #[test]
+    fn ca_initial_overlap_reports_zero_toi() {
+        let shape = ColliderShape::Box(BoxShape {
+            half_extents: Vec3::splat(0.5),
+        });
+        for vel in [Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)] {
+            let (toi, _) = Gjk::conservative_advancement(
+                &shape, Vec3::ZERO, Quat::IDENTITY, vel,
+                &shape, Vec3::new(0.3, 0.0, 0.0), Quat::IDENTITY, Vec3::ZERO, 1.0,
+            )
+            .unwrap_or_else(|| panic!("overlapping at t=0 with vel={vel:?} is a hit, not a miss"));
+            assert_eq!(toi, 0.0);
+        }
+    }
+
+    /// A contact landing exactly on the horizon must be reported. The old code incremented
+    /// `t` and then rejected `t > max_t`, dropping it.
+    #[test]
+    fn ca_reports_a_contact_that_lands_exactly_at_max_t() {
+        let shape = ColliderShape::Sphere(SphereShape { radius: 0.5 });
+        // A at x=-5 closing at 10 u/s touches at t = 0.9 exactly.
+        let hit = Gjk::conservative_advancement(
+            &shape, Vec3::new(-5.0, 0.0, 0.0), Quat::IDENTITY, Vec3::new(10.0, 0.0, 0.0),
+            &shape, Vec3::new(5.0, 0.0, 0.0), Quat::IDENTITY, Vec3::ZERO,
+            0.9,
+        );
+        assert!(hit.is_some(), "a contact exactly at max_t must not be dropped");
+    }
+
     #[test]
     fn test_conservative_advancement_sphere_sphere_toi() {
         // First-ever coverage for the exact-TOI primitive (previously dead + untested).
@@ -216,7 +352,10 @@ mod tests {
         );
         let (toi, normal) = hit.expect("CA must find the sphere-sphere impact within max_t");
         assert!((toi - 0.9).abs() < 0.02, "TOI wrong: {toi} (expected ≈ 0.9)");
-        assert!(normal.x.abs() > 0.99, "impact normal must be ±x, got {normal:?}");
+        // Was `normal.x.abs() > 0.99`, which the `Vec3::X` fallback `distance()` emits for a
+        // near-zero gap satisfies just as well — a vacuous assertion. The true B→A axis is
+        // -X, so pin the sign: this is what proves the `reliable_n` carry-back works.
+        assert!(normal.x < -0.99, "impact normal must be -x (B→A), got {normal:?}");
 
         // Separating (moving apart) ⇒ no impact.
         let miss = Gjk::conservative_advancement(
