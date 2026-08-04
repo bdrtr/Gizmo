@@ -52,7 +52,21 @@ pub fn record_shadow_passes(
         }
     }
 
-    // Point Light Shadow Passes — 6 faces
+    // Point Light Shadow Passes — 6 faces.
+    //
+    // Gated on the flag the *sampling* side already reads: `SceneUniforms.point_shadows_enabled`
+    // is written from this same bool (`systems/render/mod.rs`), and `deferred_lighting.wgsl`
+    // skips the point-shadow lookup unless it is set. It defaults to false
+    // (`renderer/construction.rs`), so by default this recorded six depth passes per frame — two
+    // draws per lit item each, twelve of the twenty-three a lit batch costs — into a cubemap
+    // nothing sampled. `gizmo-studio` never recorded them at all, so this is the game path
+    // catching up rather than a behaviour change.
+    //
+    // Both gates must stay on the one bool. If the uniform is ever set independently of it, the
+    // shader would sample a cubemap this skipped writing, which is a worse failure than the waste.
+    if !renderer.point_shadows_enabled {
+        return;
+    }
     for i in 0..6 {
         let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Point Shadow Pass"),
