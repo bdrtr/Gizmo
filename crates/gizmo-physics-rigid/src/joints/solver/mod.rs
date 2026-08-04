@@ -169,6 +169,30 @@ impl JointSolver {
         (p1, v.cross(p1))
     }
 
+    /// World-space lever arm from a body's **centre of mass** to a point.
+    ///
+    /// Every joint row needs this, and every one of them used to compute
+    /// `anchor - transforms[idx].position` — the arm about the transform ORIGIN. The two
+    /// agree only when `center_of_mass` is zero. They differ for every compound collider
+    /// (`RigidBody::update_inertia_from_collider` derives a shifted COM automatically),
+    /// every fracture chunk (`fracture.rs` sets one explicitly) and every vehicle chassis,
+    /// so those bodies got the wrong torque and the wrong effective mass from every joint
+    /// attached to them.
+    ///
+    /// This is the same expression `Integrator::apply_impulse_at_point` uses, which is the
+    /// convention the contact solver has always followed — the joint path was the outlier.
+    #[inline]
+    pub(crate) fn lever_arm(
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        idx: usize,
+        point: Vec3,
+    ) -> Vec3 {
+        let t = &transforms[idx];
+        let global_com = t.position + t.rotation * rigid_bodies[idx].center_of_mass;
+        point - global_com
+    }
+
     /// Apply a 1-DOF angular velocity constraint along `direction` (hard).
     /// `error` is the positional error in radians (positive = bodies need to rotate apart).
     fn apply_angular_constraint(
@@ -281,30 +305,6 @@ impl JointSolver {
     /// [`Self::apply_angular_constraint_soft`] — `compliance/dt²` regularises the effective
     /// mass (0 ⇒ rigid).
     #[allow(clippy::too_many_arguments)]
-    /// World-space lever arm from a body's **centre of mass** to a point.
-    ///
-    /// Every joint row needs this, and every one of them used to compute
-    /// `anchor - transforms[idx].position` — the arm about the transform ORIGIN. The two
-    /// agree only when `center_of_mass` is zero. They differ for every compound collider
-    /// (`RigidBody::update_inertia_from_collider` derives a shifted COM automatically),
-    /// every fracture chunk (`fracture.rs` sets one explicitly) and every vehicle chassis,
-    /// so those bodies got the wrong torque and the wrong effective mass from every joint
-    /// attached to them.
-    ///
-    /// This is the same expression `Integrator::apply_impulse_at_point` uses, which is the
-    /// convention the contact solver has always followed — the joint path was the outlier.
-    #[inline]
-    pub(crate) fn lever_arm(
-        rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
-        idx: usize,
-        point: Vec3,
-    ) -> Vec3 {
-        let t = &transforms[idx];
-        let global_com = t.position + t.rotation * rigid_bodies[idx].center_of_mass;
-        point - global_com
-    }
-
     fn apply_linear_constraint_soft(
         &self,
         rigid_bodies: &[RigidBody],
