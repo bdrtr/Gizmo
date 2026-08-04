@@ -9,6 +9,17 @@ license.workspace = true
 repository.workspace = true
 readme.workspace = true
 
+# The package is `gizmo-engine`; the library it exposes is `gizmo`.
+#
+# Without this the library name would be derived from the package name — `gizmo_engine` —
+# and `use gizmo::prelude::*` would only compile for someone who renamed the dependency in
+# their own manifest (`gizmo = { package = "gizmo-engine" }`), which is what this repo's own
+# demos do. Every example in the README, in `lib.rs` and across the docs uses the `gizmo::`
+# path, so anyone installing from crates.io and copying the quickstart got an unresolved-crate
+# error on the first line. Naming the lib here makes the documented path the real one.
+[lib]
+name = "gizmo"
+
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]

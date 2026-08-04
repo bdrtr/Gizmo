@@ -41,6 +41,13 @@ Upgrading from `0.8.0`:
 - Several facade items are now behind the feature that actually provides them. A default
   build is unchanged; a `--no-default-features` build now compiles at all, which it
   previously did not.
+- The library is now genuinely named `gizmo`. Previously the package was `gizmo-engine`
+  with no `[lib] name`, so the real path was `gizmo_engine::` — and `use gizmo::prelude::*`,
+  which is what the README, the crate docs and every example show, only compiled for
+  someone who renamed the dependency in their own manifest. Copying the quickstart after
+  `cargo add gizmo-engine` failed on line one. If you were using `gizmo_engine::` paths
+  directly, either switch them to `gizmo::` or rename in your manifest
+  (`gizmo_engine = { package = "gizmo-engine", version = "0.9" }`).
 
 ### Fixed — soundness
 
@@ -100,6 +107,17 @@ Upgrading from `0.8.0`:
 - `CONTRIBUTING.md`, `SECURITY.md`, `.github/dependabot.yml`.
 - `docs/AUDIT-2026-08.md` — an external review with every finding pinned to
   `file:line` — and `docs/FIXPLAN.md`, which tracks the work it opened.
+
+### Fixed — rendering
+
+- **Six point-light shadow passes were recorded every frame into a cubemap nothing
+  sampled.** `Renderer::point_shadows_enabled` defaults to false and
+  `deferred_lighting.wgsl` already gated its lookup on the uniform written from that same
+  bool, but `record_shadow_passes` did not — so a lit batch spent twelve of its
+  twenty-three draws filling a 1024×1024×6 depth cubemap for nothing. Both sides now read
+  the one flag. A golden-image test renders the scene with it on and off and demands
+  byte-identical frames, which is both the claim (the skipped work was unobserved) and the
+  guard against gating a pass the shader really does sample.
 
 ### Fixed — other
 

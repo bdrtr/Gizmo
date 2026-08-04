@@ -8,7 +8,22 @@
 //!
 //! Note that the published *package* is named `gizmo-engine`, while the *library*
 //! (and thus the crate path used in `use` statements and examples) is simply
-//! `gizmo`.
+//! `gizmo`. That is declared by `[lib] name = "gizmo"` in the manifest, so
+//! `cargo add gizmo-engine` followed by `use gizmo::prelude::*;` works with no
+//! rename in your own `Cargo.toml`:
+//!
+//! ```
+//! use gizmo::prelude::*;
+//!
+//! // The path in every example on this page is the real one.
+//! let mut world = World::new();
+//! let e = world.spawn();
+//! world.add_component(e, Transform::new(Vec3::new(0.0, 1.0, 0.0)));
+//! assert_eq!(
+//!     world.query::<&Transform>().unwrap().get(e.id()).unwrap().position.y,
+//!     1.0
+//! );
+//! ```
 //!
 //! ## Feature flags
 //!

@@ -185,9 +185,24 @@ gizliyor ama fizik crate'lerini bağımsız paketlemeyi (D1) zorlaştırıyor ve
       çevir; GPU/pencere gerektirenleri `no_run` yap (derlenir, koşmaz); gerçekten
       sözde-kod olanları ` ```text ` işaretle ve örnek iddiasını bırak.
 
-### ⬜ A7-followup — `[lib] name = "gizmo"` ekle
-README ve `lib.rs` `gizmo::` yolunu vaat ediyor; gerçek yol `gizmo_engine::`. Tek satırlık
-düzeltme ama public crate yolunu değiştirdiği için A9 (sürüm) ile birlikte kararlaştırılmalı.
+### ✅ A7-followup — `[lib] name = "gizmo"` eklendi
+> **Bitti (2026-08-04), 0.9.0'a dahil.** `crates/gizmo/Cargo.toml`'a `[lib] name = "gizmo"`.
+> Artık `cargo add gizmo-engine` + `use gizmo::prelude::*` manifest'te yeniden adlandırma
+> olmadan çalışıyor — README quickstart'ı, crate dokümanı ve bütün örnekler bu yolu
+> gösterdiği hâlde crates.io'dan kuran biri ilk satırda `unresolved crate` alıyordu.
+>
+> Crate'in **kendi** entegrasyon testleri (`car_demo_integration.rs`, `ccd_bundle.rs` —
+> 8 satır) ve A7'de yazdığım iki doctest eski `gizmo_engine::` yolunu kullanıyordu;
+> hepsi `gizmo::`'ye çevrildi. `lib.rs`'e, vaat edilen yolun gerçekten derlendiğini
+> kanıtlayan bir doctest eklendi — asıl mesele buydu.
+>
+> Teknik olarak kırıcı (doğrudan `gizmo_engine::` yazan varsa), CHANGELOG'da geçiş
+> notuyla belirtildi.
+>
+> **Not:** `cargo package -p gizmo-engine` hâlâ başarısız — ama `[lib]` yüzünden değil:
+> path-dep'ler registry sürümleriyle değiştiği için `gizmo-ai 0.9.0` bulunamıyor. Tam da
+> A9'da `publish_all.sh`'e yazdığım sınır. `cargo package -p gizmo-math` (yayınlanmamış
+> kardeşi yok) sorunsuz geçiyor → paketleme makinesi sağlam.
 
 ### ✅ A6 — CI kapıları
 > **Bitti (2026-08-04).** Üç yeni kapı + topluluk dosyaları. `cargo deny` tamamen yeşil.
@@ -286,9 +301,17 @@ client-server mesajları round-trip testleriyle birlikte taşınmalı.
   `center_of_mass` yok sayılıyor (`joint_types/fixed.rs:30-31`); `break_force` tek iterasyonun
   transient'inden hesaplanıyor; joint'ler island kurulumuna dahil değil (`pipeline.rs:560`).
 - ⬜ **B5** — Gamepad girdisi. ⬜ **B6** — `PresentMode` yapılandırılabilir.
-  ⬜ **B7** — Cylinder + Heightfield collider. ⬜ **B8** — ışık limitini kaldır
-  (`gpu_types.rs:127` `[LightData; 10]`) + boş point-shadow pass'lerini guard'la
-  (`passes/shadow.rs:57-97`, point-shadow varsayılan KAPALI olmasına rağmen her frame 6 kez koşuyor).
+  ⬜ **B7** — Cylinder + Heightfield collider.
+- 🔄 **B8** — iki parçası vardı:
+  - ✅ **Boş point-shadow pass'leri** (2026-08-04, `af6f168`): `record_shadow_passes` artık
+    shader'ın zaten okuduğu `point_shadows_enabled` bayrağına bakıyor. Varsayılan kapalı
+    olduğu için her frame 6 depth pass'i (aydınlatılan bir batch'in 23 draw'ının 12'si)
+    hiç örneklenmeyen bir 1024²×6 cubemap'e yazılıyordu. Golden-image testi bayrağın iki
+    hâlinde bit-eş kare talep ediyor — hem iddiayı (atlanan iş gözlemlenemezdi) kanıtlıyor
+    hem de shader'ın GERÇEKTEN örneklediği bir pass'i yanlışlıkla kapatmaya karşı koruyor.
+  - ⬜ **10 ışık tavanı** hâlâ duruyor (`gpu_types.rs:127` `[LightData; 10]`, kararsız ECS
+    iterasyon sırasına göre seçilen ilk 10, mesafe/öncelik culling'i yok) — clustered/tiled
+    ışık culling'i gerekiyor. Deferred pipeline'a sahip olmanın asıl gerekçesi bu.
 
 ## Faz C — Performans ve ölçüm
 - ⬜ **C1** — `benches/step_bench.rs` (solver/broadphase/narrowphase) + commit'lenmiş baseline.

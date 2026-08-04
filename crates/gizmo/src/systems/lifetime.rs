@@ -6,9 +6,9 @@
 //! [`LifetimePlugin`]'i çalıştır, motor silsin (tıpkı [`Spin`](crate::systems::spin) gibi).
 //!
 //! ```
-//! use gizmo_engine::prelude::*;
-//! use gizmo_engine::core::system::System;
-//! use gizmo_engine::systems::lifetime::LifetimeSystem;
+//! use gizmo::prelude::*;
+//! use gizmo::core::system::System;
+//! use gizmo::systems::lifetime::LifetimeSystem;
 //!
 //! let mut world = World::new();
 //!
