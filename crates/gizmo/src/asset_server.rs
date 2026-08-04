@@ -158,6 +158,9 @@ impl<State: 'static> crate::app::Plugin<State> for AssetServerPlugin {
         // upload+apply the ones the worker finished decoding. Runs after the drain
         // above populated `AssetServer::completed_textures` (a one-frame lag if it
         // happens to run first is harmless).
+        // `TextureStreamingSystem` reads `Transform`, so it lives behind `physics` with the
+        // rest of the transform-touching systems (see systems/mod.rs).
+        #[cfg(feature = "physics")]
         app.schedule.add_di_system(
             gizmo_core::system::SystemConfig::new(Box::new(
                 crate::systems::streaming::TextureStreamingSystem,

@@ -368,6 +368,7 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
 
 /// GPU'dan Asenkron (0ms) çekilen devasa Fizik lokasyon durumlarını,
 /// Ekrandaki objelerin render edilmesi için ECS'deki Transform'larına kopyalar.
+#[cfg(feature = "render")]
 pub fn gpu_physics_readback_system(world: &mut crate::core::World, renderer: &Renderer) {
     if let Some(physics) = &renderer.gpu_physics {
         if let Some(gpu_data) = physics.poll_readback_data(&renderer.device) {

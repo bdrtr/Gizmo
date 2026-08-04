@@ -102,14 +102,36 @@ impl std::error::Error for AppError {
     }
 }
 
-#[cfg(feature = "window")]
-pub mod windowed;
-#[cfg(feature = "window")]
-pub use windowed::*;
+// The two app runtimes coexist; they are NOT mutually exclusive.
+//
+// This used to read `#[cfg(feature = "window")] pub mod windowed; ... #[cfg(not(feature =
+// "window"))] pub mod headless;` — i.e. enabling `window` *deleted* `headless::App`. Cargo
+// unifies features across the whole dependency graph, so a headless simulation server could
+// be broken by an unrelated crate that happened to turn `window` on: its `App` silently
+// became the windowed one and every `set_setup`/`run` call stopped type-checking. A feature
+// that removes API is non-additive, which is exactly the pattern Cargo tells you to avoid.
+//
+// Now each module is gated only on what it actually needs, and both are always addressable
+// by path (`gizmo_app::windowed::App`, `gizmo_app::headless::App`). The glob re-export at
+// the crate root still resolves `App` to whichever runtime is available, preferring the
+// windowed one when both are — so existing `gizmo_app::App` code keeps compiling.
 
-#[cfg(not(feature = "window"))]
+/// The windowed runtime (winit event loop + wgpu surface). Needs `render`: the loop owns the
+/// surface, drives the renderer and reconfigures on resize/surface-loss, so there is no
+/// meaningful "window without renderer" build.
+#[cfg(all(feature = "window", feature = "render"))]
+pub mod windowed;
+
+/// The headless runtime — a fixed-timestep loop with no window and no GPU. This is what a
+/// dedicated simulation/game server uses, and it stays available no matter which other
+/// features are on.
 pub mod headless;
-#[cfg(not(feature = "window"))]
+
+#[cfg(all(feature = "window", feature = "render"))]
+pub use windowed::*;
+// Only glob the headless runtime into the crate root when the windowed one is absent,
+// otherwise the two `App` types would collide. Both remain reachable by full path.
+#[cfg(not(all(feature = "window", feature = "render")))]
 pub use headless::*;
 
 /// Installs the Gizmo engine panic hook.

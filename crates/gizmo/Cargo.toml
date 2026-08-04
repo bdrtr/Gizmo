@@ -27,7 +27,14 @@ egui = ["dep:egui", "gizmo-app/egui", "render", "gizmo-analysis?/egui"]
 editor = ["egui", "scene", "dep:gizmo-editor", "gizmo-app/editor"]
 scripting = ["dep:gizmo-scripting"]
 scene = ["dep:gizmo-scene", "gizmo-app/scene"]
-physics = ["gizmo-app/physics", "dep:gizmo-physics-core", "dep:gizmo-physics-rigid"]
+# `gizmo-physics-core` is intentionally NOT gated here: it defines `Transform`,
+# `GlobalTransform`, `Collider` and the AABB/shape vocabulary that the renderer, the audio
+# listener and the scene format all need. Gating it made `--features render` and
+# `--features audio` fail to compile, because you cannot draw or spatialise anything without
+# a transform. `physics` therefore gates the *simulation* (the rigid-body solver), not the
+# spatial types. Moving `Transform` into `gizmo-core` where it belongs is tracked in
+# docs/FIXPLAN.md; until then this is the honest split.
+physics = ["gizmo-app/physics", "dep:gizmo-physics-rigid"]
 physics-dynamics = ["dep:gizmo-physics-dynamics"]
 physics-soft = ["dep:gizmo-physics-soft"]
 ui = ["dep:gizmo-ui", "gizmo-ui/app"]
@@ -41,7 +48,7 @@ gizmo-core = { path = "../gizmo-core" , version = "0.8.0" }
 gizmo-math = { path = "../gizmo-math" , version = "0.8.0" }
 gizmo-renderer = { path = "../gizmo-renderer", version = "0.8.0", optional = true }
 gizmo-window = { path = "../gizmo-window", version = "0.8.0", optional = true }
-gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.8.0", optional = true }
+gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.8.0" }
 gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.8.0", optional = true }
 gizmo-physics-soft = { path = "../gizmo-physics-soft", version = "0.8.0", optional = true }
 gizmo-physics-dynamics = { path = "../gizmo-physics-dynamics", version = "0.8.0", optional = true }
