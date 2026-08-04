@@ -1,7 +1,7 @@
 use core::hint::black_box;
 use std::time::Duration;
 
-use bevy_math::{Mat4, Dir3, Ray3d, Vec3};
+use bevy_math::{Affine3A, Dir3, Mat4, Ray3d, Vec3};
 use bevy_picking::mesh_picking::ray_cast::{self, Backfaces};
 use criterion::{criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration};
 
@@ -146,7 +146,10 @@ fn mesh_picking_bench(c: &mut Criterion) {
                 &vertices_per_side,
                 |b, &vertices_per_side| {
                     let ray = black_box(benchmark.ray());
-                    let mesh_to_world = black_box(benchmark.mesh_to_world());
+                    // bevy_picking 0.19 takes the mesh transform as an `Affine3A` rather
+                    // than a `Mat4` — the benchmark's transform is affine by construction.
+                    let mesh_to_world =
+                        black_box(Affine3A::from_mat4(benchmark.mesh_to_world()));
                     let mesh = black_box(create_mesh(vertices_per_side));
                     let backface_culling = black_box(benchmark.backface_culling());
 
@@ -157,6 +160,10 @@ fn mesh_picking_bench(c: &mut Criterion) {
                             &mesh.positions,
                             Some(&mesh.normals),
                             Some(&mesh.indices),
+                            // bevy_picking 0.19 gained a `uvs` parameter between the mesh
+                            // indices and the culling mode. This bench compares raw
+                            // ray/triangle throughput, so no UVs.
+                            None::<&[[f32; 2]]>,
                             backface_culling,
                         );
 

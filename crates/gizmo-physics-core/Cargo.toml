@@ -20,7 +20,7 @@ gizmo-math = { path = "../gizmo-math", version = "0.9.0" }
 arrayvec = "0.7.6"
 rustc-hash = "2"
 tracing = "0.1.44"
-bevy_reflect = { version = "0.15.1", features = ["glam"], optional = true }
+bevy_reflect = { version = "0.19", features = ["glam"], optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

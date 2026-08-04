@@ -854,9 +854,27 @@ eklemekten ibaret.
   `CONTRIBUTING.md`. Bus factor = 1'in tek sebebi bu.
 - ⬜ **D3** — Click-to-try WASM demosu (GitHub Pages).
 - ⬜ **D4** — `#![warn(missing_docs)]` Stage A'da (public API'nin %53'ü belgesiz).
-- ⬜ **D5** — `glam` 0.29 → 0.32. Tek kasıtlı public dep, 3 major geride, varsayılan-KAPALI
-  `bevy_reflect 0.15`'in bağımlılığı tutuyor; grafta `transform-gizmo` üzerinden 0.32 de var.
-  **1.0'dan önce şart** — sonrası 2.0-seviyesi kırıcı.
+- ✅ **D5 — `glam` 0.29 → 0.32 + `bevy_reflect` 0.15 → 0.19** *(2026-08-04)*. Grafta artık
+  TEK glam var (0.32.1). Fizik kıpırdamadı: hash `EF6E4AC3644BF3BA`, `golden_state.rs`'in
+  hiçbir değeri yeniden kutsanmadı — bir matematik kütüphanesinin major bump'ı sessiz sayısal
+  kaymanın saklanacağı yerdir, golden fixture tam bu soruyu cevaplamak için vardı.
+
+  > **Plandaki teşhis kısmen yanlıştı.** "bevy_reflect'in bağımlılığı tutuyor" doğru ama
+  > eksik: 0.29'u tutan tek şey `gizmo-math`'in KENDİ manifest'iydi; `bevy_reflect` yalnızca
+  > `reflect` feature'ı açıkken kırıyordu (0.15 ve 0.16'nın ikisi de glam 0.29'da; 0.32'ye
+  > geçen ilk sürüm 0.19 — dört minor'lük sıçramanın sebebi bu).
+  >
+  > Bench dev-dep'leri (`bevy_math`/`bevy_picking`/`bevy_mesh`) de 0.19'a çekildi; API
+  > göçleri: `new_bezier`→`new_bezier_easing`, `VectorSpace::Scalar`, `Affine3A` + `uvs`,
+  > `clone_dynamic`→`to_dynamic_{map,list,struct}` ve `Map`/`List`/`Struct`'ın kökten
+  > alt-modüle taşınması.
+
+  > **Yan bulgu — bakılması gereken:** `gizmo-core/benches/` altındaki `map_bench`,
+  > `reflect_bench`, `struct_bench`, `path_bench` dosyalarında **sıfır `gizmo_core`
+  > referansı** var; bunlar bevy_reflect'in kendi benchmark'ları, yani bir BAĞIMLILIĞI
+  > ölçüyorlar. Her bevy yükseltmesinde kırılıyorlar ve motorun performansı hakkında hiçbir
+  > şey söylemiyorlar. `ecs_bench/` (20 dosya) ise gerçekten `gizmo_core`'u ölçüyor.
+  > Silme kararı senin — bu commit yalnızca göç ettirdi.
 - ⬜ **D6** — İki yönlü soft↔rigid coupling (`soft_body.rs:74-120` impulsu hesaplayıp atıyor).
 - ⬜ **D7** — `gizmo-ui` metin render'ı, ya da crate'i dürüstçe "deneysel" işaretle
   (şu an hiçbir şey çizmiyor: `gizmo-ui/src/lib.rs:39-52`).
