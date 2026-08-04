@@ -411,9 +411,17 @@ client-server mesajları round-trip testleriyle birlikte taşınmalı.
   > ardından 24 bisection.
   >
   > **Kalan:** `raycast_all` için filtre, `project_point`, sorguların facade/ECS katmanına
-  > açılması, ve karakter (`character.rs:64-76`) + araç (`dynamics/systems.rs:41-49`)
-  > kodundaki broadphase'i atlayan `O(N)` taramaların bu API'ye taşınması — denetimin
-  > işaret ettiği asıl kazanç orada.
+  > açılması.
+  >
+  > **Karakter/araç `O(N)` taramalarının taşınması — incelendi, ERTELENDİ.** Denetim bunu
+  > "asıl kazanç" diye işaretlemişti ve öyle; ama sandığımdan büyük bir iş çıktı.
+  > `character.rs:65-76` ile `dynamics/systems.rs:41-49` **`PhysicsWorld` üzerinde değil**,
+  > ECS'ten toplanan bir `Vec<(BodyHandle, Transform, Collider)>` üzerinde çalışıyor
+  > (`gather_colliders`). Yeni sorgu API'si `PhysicsWorld`'e ait, dolayısıyla taşımak bu
+  > sistemleri farklı bir veri kaynağına bağlamak demek — ve `PhysicsWorld`'ün broadphase'i
+  > denetimin de yazdığı gibi **bir substep bayat** (`world/step.rs`: broadphase, position
+  > integration'dan ÖNCE kuruluyor). Yani düz bir çağrı değişimi değil, davranış değişimi;
+  > kendi doğrulamasını ve muhtemelen broadphase tazeliği kararını istiyor.
 
 ### ⬜ B2-followup — `Gjk::conservative_advancement` / `Gjk::distance` düzeltmesi
 CA yalnızca head-on doğru (yukarıdaki izleme). İki ayrı iş: `distance()` örtüşen şekillerde
