@@ -40,7 +40,11 @@ scratch.rs
 editor_prefs.toml
 .play_backup.scene
 
-# Large assets (tracked via Git LFS or downloaded separately)
+# Large models are not shipped with the repo (no Git LFS is configured — the previous
+# "tracked via Git LFS" note here was aspirational, and it left the demos referencing
+# files nobody else had). Demos that want one resolve it through `demo::assets::find`
+# ($GIZMO_ASSETS, then <repo>/assets/) and fall back to procedural geometry when it is
+# absent, so a fresh clone runs everything. See assets/README.md.
 *.glb
 assets/*.crdownload
 

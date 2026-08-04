@@ -33,9 +33,12 @@ use gizmo::renderer::components::{
 use gizmo::renderer::gpu_types::Vertex;
 
 // Gerçek spor araba (Mercedes AMG GT4). Model-bağımsız oto-yerleştirme sayesinde herhangi
-// bir araba GLB'siyle değiştirilebilir (ör. assets/bmw_z8__www.vecarz.com.glb).
-const CAR_GLB: &str =
-    "/home/bedir/Documents/code/Gizmo-engine/assets/mercedes_amg_gt4__www.vecarz.com.glb";
+// bir araba GLB'siyle değiştirilebilir (ör. bmw_z8__www.vecarz.com.glb).
+//
+// `*.glb` gitignore'da: bu dosya depoda YOK. `demo::assets` onu <repo>/assets/ veya
+// $GIZMO_ASSETS içinde arar; bulamazsa demo kaba bir kutu siluetiyle çalışır — drag
+// okuması anlamını korur (frontal alan yine mesh'ten ölçülür), yalnız görsel basitleşir.
+const CAR_GLB_NAME: &str = "mercedes_amg_gt4__www.vecarz.com.glb";
 const TARGET_LEN: f32 = 7.0; // arabayı bu uzunluğa (birim) oto-ölçekle
 const RIBBON_WIDTH: f32 = 0.32; // akış-çizgisi şerit genişliği (az sayıda, kalın)
 
@@ -141,9 +144,18 @@ fn setup(world: &mut World, renderer: &gizmo::renderer::Renderer) -> WindTunnel 
     }
 
     // Araba (GLB) — YALNIZ GÖRSEL, fizik yok. Model-bağımsız oto-yerleştirme.
+    // Model yoksa kutu siluetine düş (bkz. CAR_GLB_NAME): demo çalışmaya devam etsin.
     let chassis = {
         let mut cmd = gizmo::prelude::SpawnCommands::new(world, renderer);
-        cmd.spawn_gltf(Vec3::ZERO, CAR_GLB, false).unwrap().id()
+        let loaded = demo::assets::find_or_warn(CAR_GLB_NAME, "a box silhouette")
+            .and_then(|p| cmd.spawn_gltf(Vec3::ZERO, &p.to_string_lossy(), false).ok())
+            .map(|b| b.id());
+        match loaded {
+            Some(id) => id,
+            None => cmd
+                .spawn_cube(Vec3::ZERO, gizmo::prelude::Color::rgb(0.6, 0.6, 0.65))
+                .id(),
+        }
     };
     fit_car(world, chassis.id());
 

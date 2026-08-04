@@ -1069,19 +1069,43 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
     // 4. ŞASİ (GLTF)
     let chassis_pos = Vec3::new(0.0, 1.5, 0.0);
 
-    let chassis_entity = {
+    // The Kenney racing-kit chassis is a nice-to-have, not a hard requirement: `*.glb` is
+    // gitignored, so a fresh clone does not have it and this demo used to panic on an
+    // absolute path into the author's home directory. Fall back to a box chassis instead —
+    // the vehicle dynamics, which is what this demo is actually about, are identical.
+    let (chassis_entity, has_gltf_chassis) = {
         let mut cmd = gizmo::prelude::SpawnCommands::new(world, renderer);
-        let path =
-            "/home/bedir/Documents/assets/kenney_racing-kit/Models/GLTF format/raceCarRed.glb";
-        let builder = cmd.spawn_gltf(chassis_pos, path, false).unwrap();
-        builder.id()
+        match demo::assets::find_or_warn("raceCarRed.glb", "a plain box chassis") {
+            Some(path) => match cmd.spawn_gltf(chassis_pos, &path.to_string_lossy(), false) {
+                Ok(builder) => (builder.id(), true),
+                Err(e) => {
+                    eprintln!("[car_demo] glTF chassis failed to load ({e}); using a box.");
+                    (
+                        cmd.spawn_cube(chassis_pos, gizmo::prelude::Color::rgb(0.75, 0.1, 0.1))
+                            .id(),
+                        false,
+                    )
+                }
+            },
+            None => (
+                cmd.spawn_cube(chassis_pos, gizmo::prelude::Color::rgb(0.75, 0.1, 0.1))
+                    .id(),
+                false,
+            ),
+        }
     };
 
-    // Modelin scale'ini ayarlayalım (Kenney modelleri bazen küçük gelebiliyor)
+    // Modelin scale'ini ayarlayalım (Kenney modelleri bazen küçük gelebiliyor).
+    // Kutu fallback'te şasi kabaca araç boyutlarına ölçeklenir (1.46 × 0.8 × 2.7 m —
+    // aşağıdaki `calculate_box_inertia` ile aynı ölçüler), böylece görsel ve fizik uyuşur.
     {
         let mut transforms = world.borrow_mut::<Transform>();
         if let Some(mut t) = transforms.get_mut(chassis_entity.id()) {
-            t.scale = Vec3::splat(2.0); // 5.0 çok büyük gelmişti
+            t.scale = if has_gltf_chassis {
+                Vec3::splat(2.0) // 5.0 çok büyük gelmişti
+            } else {
+                Vec3::new(1.46, 0.8, 2.7)
+            };
             t.update_local_matrix();
         }
     }
@@ -1092,7 +1116,9 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> CarDe
     // ekranda ve fizik-görsel hizasında kayıyordu). Doğrudan çocuğun (GLB kökü)
     // x/z'sini sıfırlayınca tüm gövde+tekerlekler orijine simetrik oturur; böylece
     // fizik tekerlek local_position'larını (aşağıda) simetrik verebiliriz.
-    {
+    // (Yalnız gerçek GLB yüklendiyse anlamlı — kutu fallback'in çocuğu yok ve zaten
+    // orijine simetrik oturuyor.)
+    if has_gltf_chassis {
         let kids = world
             .borrow::<gizmo::core::component::Children>()
             .get(chassis_entity.id())
