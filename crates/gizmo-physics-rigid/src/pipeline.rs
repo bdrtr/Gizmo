@@ -965,9 +965,19 @@ impl PhysicsWorld {
                 if j == i {
                     continue;
                 }
-                // Only against bodies that hold their ground: static or sleeping.
-                let rb_j = &self.rigid_bodies[j];
-                if (rb_j.is_dynamic() && !rb_j.is_sleeping) || self.colliders[j].is_trigger {
+                // Triggers are pass-through by definition; everything solid is a valid
+                // target, awake dynamic bodies included.
+                //
+                // This used to also skip `rb_j.is_dynamic() && !rb_j.is_sleeping`, which is
+                // why `ccd_hole_fast_body_vs_dynamic_awake_thin_plate` tunnelled while the
+                // otherwise-identical Rung 7 (same plate, asleep) passed. The exclusion had
+                // a real reason — for a *moving* target the sweep was frame-mismatched,
+                // since the bullet's `old_pos` is pre-integration while `compute_aabb` reads
+                // the target's post-integration transform — but the gate was far wider than
+                // the reason. The fix below is to sweep the target's own volume instead of
+                // snapshotting it, which removes the mismatch and makes the exclusion
+                // unnecessary.
+                if self.colliders[j].is_trigger {
                     continue;
                 }
                 // Respect collision-layer filtering, exactly like narrowphase — else the
@@ -978,8 +988,20 @@ impl PhysicsWorld {
                 {
                     continue;
                 }
-                let other = self.colliders[j]
+                // Sweep the TARGET too. `compute_aabb` gives its post-integration pose, but
+                // the ray starts from the bullet's pre-integration position, so a moving
+                // target must be covered over the whole substep or the two are a frame
+                // apart. Merging the current box with where it was at the start of the
+                // substep closes that gap; for a static or sleeping target the delta is
+                // zero and this is exactly the old behaviour.
+                let other_now = self.colliders[j]
                     .compute_aabb(self.transforms[j].position, self.transforms[j].rotation);
+                let other_delta = self.velocities[j].linear * dt;
+                let other_then = Aabb::new(
+                    Vec3::from(other_now.min) - other_delta,
+                    Vec3::from(other_now.max) - other_delta,
+                );
+                let other = other_now.merge(other_then);
                 let infl = Aabb::new(Vec3::from(other.min) - half, Vec3::from(other.max) + half);
                 // Already overlapping at the start of the substep ⇒ leave it to the
                 // discrete solver (this guard is only for clean pass-through).

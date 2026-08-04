@@ -482,6 +482,51 @@ client-server mesajları round-trip testleriyle birlikte taşınmalı.
     iterasyon sırasına göre seçilen ilk 10, mesafe/öncelik culling'i yok) — clustered/tiled
     ışık culling'i gerekiyor. Deferred pipeline'a sahip olmanın asıl gerekçesi bu.
 
+### ✅ CCD gating — uyanık dinamik hedefler artık backstop'lanıyor
+> **Bitti (2026-08-04).** `ccd_hole_fast_body_vs_dynamic_awake_thin_plate` artık
+> `#[ignore]`'suz geçen **Rung 8**; `ccd_analytical` 7→8 test.
+>
+> **Sorun bir GATING sorunuydu, geometri değil** (17-ajanlık analiz bunu tespit etti ve
+> doğruladım). `pipeline.rs`'teki backstop `if (rb_j.is_dynamic() && !rb_j.is_sleeping) || is_trigger`
+> ile uyanık dinamik hedefleri **topluca** atlıyordu. Rung 7 (birebir aynı sahne, plaka
+> UYUYOR) zaten geçiyordu → mevcut ray-vs-şişirilmiş-AABB süpürmesi bu sahneyi hallediyor,
+> yalnız kapı çalışmasına izin vermiyordu.
+>
+> Atlamanın gerekçesi gerçekti ama kapı gerekçeden **çok daha genişti**: hareketli bir
+> hedefte süpürme kare-uyumsuz — merminin `old_pos`'u entegrasyon-ÖNCESİ, hedefin
+> `compute_aabb`'si SONRASI. Kapıyı kaldırmak yerine **uyumsuzluğu** düzelttim: hedefin
+> AABB'si artık kendi substep deltasıyla süpürülüyor (şimdiki kutu ⊕ substep başındaki
+> kutu). Statik/uyuyan hedefte delta sıfır → eski davranış birebir korunuyor.
+>
+> **`ccd_hole_fast_spinning_thin_body` artık dürüst.** Denetim "assertion'ı yok, ignore
+> kalkarsa hata dururken yeşil geçer" demişti — doğruydu. Gerçek bir oracle eklendi:
+> `angular_damping = 0.0` olduğu için temas hiç üretilmezse ω tam 200.0'da kalır;
+> `|ω| < 190` iddiası. `--ignored` ile koşturunca artık **gerçekten kırmızı** — dönme CCD'si
+> hâlâ yok, ama test bunu artık kanıtlıyor, gizlemiyor.
+>
+> **Determinizm:** `headless_stress_test` hash'i pre-session temel değerimle aynı
+> (`EF6E4AC3644BF3BA`). Bu anlamlı bir kanıt: `RigidBody::new` varsayılanı
+> `ccd_enabled: true`, yani kuledeki 200 kutunun CCD'si AÇIK — değişiklik onları
+> etkileyebilirdi. Engage kapısı (`travel <= min_half`) düşen bir kutu için hiç
+> tetiklenmediği için etkilemiyor. Cross-process determinizm testi de geçiyor.
+>
+> **UYARI (analizden, kayda değer):** `headless_stress_test` **davranışı kilitlemiyor**.
+> Üç koşuyu birbiriyle karşılaştırıyor (`hashes[0]==hashes[1]==hashes[2]`), hiçbir sabitle
+> değil — `EF6E4AC3644BF3BA` yalnızca yazdırılıyor. Yani kapı *nondeterminizmi* yakalar,
+> davranış değişimini yakalamaz. Yukarıdaki "hash aynı" kanıtı benim kendi temel değerimle
+> elle karşılaştırmam; CI bunu yapmıyor. → **Golden hash fixture'ı** hâlâ açık iş.
+>
+> **Bilinen sınır (Rung 7'de de belgeli):** backstop clamp anında hedefe momentum
+> aktarmıyor. Clamp'ten sonraki substep'te ayrık çözücü teması görüp aktarıyor, dolayısıyla
+> etki sınırlı — ama hafif bir plakaya karşı mermi bir kare "ölü durur".
+
+### ⬜ Golden hash fixture'ı — `headless_stress_test` davranışı kilitlemiyor
+Gate üç koşuyu birbiriyle karşılaştırıyor, commit'lenmiş bir referansla değil. Fizik
+davranışı değişse gate YEŞİL kalır. Çözüm: kanonik sahnelerin hash'lerini bir fixture'a
+yaz ve ona karşı assert et. Denetimin "self-referential gate" bulgusunun tam çekirdeği;
+o bulgu "hiç golden yok" diye fazla geniş yazıldığı için doğrulamada çürütülmüştü —
+`analytical.rs` kapalı-form oracle'ları var — ama bu dar hâli geçerli.
+
 ### ⬜ GPU test flake'i — kısmen çözüldü, kalanı ölçüldü
 `crates/gizmo/src/systems/render/mod.rs`'teki golden-image testleri her biri kendi wgpu
 cihazını açıyordu ve `cargo test` bir binary'nin testlerini paralel koşturuyor → eşzamanlı
