@@ -317,11 +317,47 @@ client-server mesajları round-trip testleriyle birlikte taşınmalı.
   > her biri ayrı davranış doğrulaması istediği için ayrı iş → **B1-followup**.
   > `AutoNoVsync` (B6) ve interpolasyon alpha'sının render'da tüketilmesi de ayrı.
 
-- ⬜ **B1-followup — motorun kalan per-frame sistemlerini taşı**
-  `TransformPropagateSystem`, `gizmo-ui` layout/interaction, `streaming` — hepsi mantıken
-  per-frame. Her biri fizikle sıralama ilişkisi taşıdığı için tek tek doğrulanmalı
-  (özellikle transform propagate: fizik sabit adımda transform yazıyor, render per-frame
-  okuyor). `alpha`'nın render'da tüketilmesi de buraya bağlı.
+- 🔄 **B1-followup — motorun kalan per-frame sistemlerini taşı** *(kısmen, 2026-08-04)*
+  > **`gizmo-ui` taşındı.** Layout pencere boyutuna, interaction fare konumuna karşı
+  > çözülüyor — ikisi de render-frame başına tazelenen sunum durumu. Sabit schedule'da
+  > accumulator'a göre `0..N` kez koşuyordu; vsync kapalıyken bir hover ~10 frame'de bir
+  > kaydediliyor, resize birkaç frame'de yansıyordu. Simülasyon hızıyla ilgisi yok.
+  >
+  > **`headless::App`'e de `update_schedule` eklendi.** `gizmo-ui`, `gizmo-app`'i
+  > default-features'sız çektiği için oradaki `App` **headless** olan; alan olmayınca
+  > `UiPlugin` derlenmiyordu. Bu, A2-followup'ta yazdığım `Plugin` genericity sorununun
+  > pratikteki maliyeti. **Uyarı:** headless'ta sabit-adım döngüsü YOK — tek tick gerçek
+  > `dt` ile koşuyor, dolayısıyla iki schedule aynı kadansta. Alan taşınabilirlik için var.
+  >
+  > **`TransformPlugin` TAŞINMADI — ve sebebi bir bulgu.** `default_render_pass` zaten
+  > çizimden hemen önce `ensure_global_transforms(world)` çağırıyor
+  > (`systems/render/mod.rs:101`) ve o da **aynı iki sistemi** (`TransformSyncSystem`,
+  > `TransformPropagateSystem`) elle koşturuyor. Yani:
+  > - `FpsLook`'u per-frame'e taşımam bayat kamera YARATMADI — doğruladım, render yolu
+  >   kendi tazeliyor. (Endişelendim, kontrol ettim, endişe yersizdi.)
+  > - Buna karşılık `TransformPlugin`'in sabit schedule'daki kaydı **mükerrer**: sistemler
+  >   frame başına `0..N` kez orada, bir kez daha render'da koşuyor. Denetimin "transform
+  >   local matrisleri her frame dirty-flag'siz yeniden hesaplanıyor" bulgusunun üstüne
+  >   bir de duplikasyon biniyor.
+  > - Kaydı silmek düz bir kazanç DEĞİL: `gizmo-studio` kendi render pipeline'ına sahip
+  >   (`render_pipeline/mod.rs:234` `GlobalTransform` okuyor) ve `ensure_global_transforms`
+  >   çağırmıyor → silmek editörü bozar. Tüketici-başına doğrulama gerektiriyor.
+  >
+  > Kalan: `streaming`, ve interpolasyon `alpha`'sının render'da tüketilmesi (judder).
+
+### ⬜ B1-followup-2 — `TransformPlugin` mükerrerliğini çöz
+Aynı iki sistem hem sabit schedule'da (`0..N` kez/frame) hem render'da
+(`ensure_global_transforms`, 1 kez/frame) koşuyor. Doğru hedef: tek bir per-frame
+propagate. Engel: `gizmo-studio`'nun ayrı render pipeline'ı `ensure_global_transforms`
+çağırmıyor, dolayısıyla sabit-schedule kaydına bel bağlıyor. Ya studio'nun pipeline'ı da
+çağıracak, ya propagate `update_schedule`'a taşınacak (ve studio ona bağlanacak).
+
+### ⬜ B1-followup-3 — headless runtime'ın sabit-adım döngüsü yok
+`headless::App::run_default` tek schedule'ı gerçek `dt` ile koşturuyor; windowed
+runtime'daki accumulator burada yok. Determinizm çökmüyor çünkü `PhysicsWorld::step`
+kendi içinde 240 Hz sabit substep uyguluyor — ama iki runtime'ın kadansı farklı ve
+determinizmin en çok önemsendiği yer (adanmış sunucu) sabit-adımsız. `frame::run_fixed_and_update`
+zaten hazır; headless'ı ona geçirmek davranış değiştirir, kendi doğrulamasını ister.
 
 - ⬜ **B2 — Sahne sorgu katmanı.** `cast_shape`, `overlap_shape`, `project_point`,
   `QueryFilter { layers, mask, exclude, predicate }`. Primitifler hazır:
