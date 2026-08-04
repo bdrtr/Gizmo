@@ -711,14 +711,17 @@ mod golden_render_tests {
         });
     }
 
-    /// Render the standard lit cube at a given camera `exposure` and return the mean of all
-    /// RGB bytes in the frame. Shared by the exposure invariant test below.
-    async fn render_mean_brightness(exposure: f32) -> f32 {
+    /// Render the standard lit cube through the real pipeline and return the frame's bytes.
+    ///
+    /// `point_shadows` sets [`Renderer::point_shadows_enabled`], which gates both the six
+    /// point-shadow face passes and the shader's lookup into the cubemap they write.
+    async fn render_frame(exposure: f32, point_shadows: bool) -> Vec<u8> {
         const W: u32 = 128;
         const H: u32 = 128;
         const BPP: u32 = 4;
 
         let mut renderer = Renderer::new_headless(W, H, None).await;
+        renderer.point_shadows_enabled = point_shadows;
         let mut asset_manager = AssetManager::new();
         let mut world = World::new();
 
@@ -748,7 +751,7 @@ mod golden_render_tests {
 
         let format = renderer.config.format;
         let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("exposure-target"),
+            label: Some("frame-target"),
             size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
@@ -764,7 +767,7 @@ mod golden_render_tests {
         default_render_pass(&mut world, &mut encoder, &view, &mut renderer);
 
         let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("exposure-readback"),
+            label: Some("frame-readback"),
             size: (W * H * BPP) as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -795,12 +798,14 @@ mod golden_render_tests {
         rx.recv().unwrap().unwrap();
         let data = slice.get_mapped_range();
 
-        // Mean of R,G,B over the whole frame (alpha excluded).
-        let mut sum = 0u64;
-        for i in (0..(W * H * BPP) as usize).step_by(BPP as usize) {
-            sum += data[i] as u64 + data[i + 1] as u64 + data[i + 2] as u64;
-        }
-        sum as f32 / (W * H * 3) as f32
+        data.to_vec()
+    }
+
+    /// The mean of every RGB byte in a frame (alpha excluded).
+    async fn render_mean_brightness(exposure: f32) -> f32 {
+        let data = render_frame(exposure, false).await;
+        let sum: u64 = data.chunks_exact(4).map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64).sum();
+        sum as f32 / (data.len() / 4 * 3) as f32
     }
 
     /// Exposure is a SINGLE post-process knob applied over the whole composited HDR (the
@@ -822,6 +827,42 @@ mod golden_render_tests {
                 bright > dim + 1.0,
                 "higher camera exposure must brighten the scene, but exp=1.0 mean={dim:.2} \
                  vs exp=2.0 mean={bright:.2} (exposure not applied / detached from post?)"
+            );
+        });
+    }
+
+    /// The six point-shadow face passes are skipped when nothing samples them, and skipping
+    /// them changes no pixel.
+    ///
+    /// `Renderer::point_shadows_enabled` defaults to false, and `deferred_lighting.wgsl` already
+    /// gates its cubemap lookup on the uniform written from that same bool. Until this was fixed
+    /// the passes ran anyway — six depth passes a frame, two draws per lit item each, twelve of
+    /// the twenty-three draws a lit batch costs, into a cubemap nothing read.
+    ///
+    /// Rendering the same scene both ways and demanding byte-identical output is what proves the
+    /// skipped work was unobserved. It is also what catches the dangerous version of this change:
+    /// gate something the shader *does* sample — the cascades, say — and the frames diverge here
+    /// rather than in someone's screenshot.
+    #[test]
+    fn skipping_the_point_shadow_passes_changes_no_pixel() {
+        let _gpu = gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping skipping_the_point_shadow_passes_changes_no_pixel: no GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let gated = render_frame(1.0, false).await;
+            let recorded = render_frame(1.0, true).await;
+            assert_eq!(gated.len(), recorded.len(), "same target, same byte count");
+            let differing = gated.iter().zip(&recorded).filter(|(a, b)| a != b).count();
+            assert_eq!(
+                differing, 0,
+                "{differing} bytes differ between a frame with the point-shadow passes recorded                  and one with them skipped — this scene has no point light, so they cannot be                  observable; a gate was put on a pass something samples"
+            );
+            // And the frame is a real render, not two identical blank targets.
+            assert!(
+                gated.chunks_exact(4).any(|p| p[..3] != gated[..3]),
+                "the frame is uniform — nothing was drawn, so the comparison proves nothing"
             );
         });
     }
