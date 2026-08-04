@@ -83,6 +83,31 @@ jobs:
       - name: Test experimental multibody (ABA) — opt-in, off by default
         run: cargo test --locked -p gizmo-physics-rigid --features experimental-multibody
 
+  # ── Feature composition: every feature combination of the two entry crates must build ──
+  # A workspace build only ever exercises the DEFAULT feature set, which is how the facade
+  # ended up in a state where `--features headless` — an advertised, documented config —
+  # failed with 37 errors, and where NO non-default combination compiled at all. The cause
+  # was unconditional `pub mod`s whose bodies used the optional renderer/physics deps, plus
+  # a non-additive `window` feature in gizmo-app that *deleted* `headless::App`.
+  #
+  # `cargo hack --feature-powerset` builds the combinations directly. Depth 2 (every pair)
+  # is the sweet spot: it catches "feature A alone" and "A+B interact" without the
+  # exponential blowup of the full powerset on a 15-feature crate.
+  feature-powerset:
+    name: Feature powerset (facade + app)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-hack
+      - name: gizmo-app — every feature pair must compile
+        run: cargo hack check --locked -p gizmo-app --feature-powerset --depth 2 --no-dev-deps
+      - name: gizmo-engine — every feature pair must compile
+        run: cargo hack check --locked -p gizmo-engine --feature-powerset --depth 2 --no-dev-deps
+
   # ── MSRV gate: workspace must build on the declared rust-version (1.92) ────
   msrv:
     name: MSRV (1.92)
