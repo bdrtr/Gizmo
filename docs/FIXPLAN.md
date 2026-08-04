@@ -189,17 +189,40 @@ gizliyor ama fizik crate'lerini bağımsız paketlemeyi (D1) zorlaştırıyor ve
 README ve `lib.rs` `gizmo::` yolunu vaat ediyor; gerçek yol `gizmo_engine::`. Tek satırlık
 düzeltme ama public crate yolunu değiştirdiği için A9 (sürüm) ile birlikte kararlaştırılmalı.
 
-### ⬜ A6 — CI kapıları
-- [x] **`cargo hack --feature-powerset --depth 2`** ✅ (A2 ile eklendi) (en azından `gizmo-engine` + `gizmo-app`)
-      → A2'nin geri gelmesini engeller. Bu kampanyanın en değerli tek CI eklemesi.
-- [ ] **`cargo-deny`** (advisories + licenses + bans + sources). Not: `rodio 0.17` →
-      `symphonia` **MPL-2.0** çekiyor; README düz "MIT/Apache-2.0" diyor. `deny.toml`'da
-      bilinçli olarak işaretle veya audio'yu güncelle.
-- [ ] **`cargo-semver-checks`** — Stage A crate'leri için. 1.0 sözü bunsuz sadece hafızaya dayanır.
-- [ ] **`cargo package --dry-run`** — workspace build'i `path` dep'lerle çözdüğü için
-      yanlış `version = "0.8.0"` stringlerini asla yakalayamaz.
-- [ ] `.github/` şu an **tek dosya**: `CONTRIBUTING.md`, `SECURITY.md`, issue/PR şablonları,
-      `dependabot.yml` ekle.
+### ✅ A6 — CI kapıları
+> **Bitti (2026-08-04).** Üç yeni kapı + topluluk dosyaları. `cargo deny` tamamen yeşil.
+>
+> **`feature-powerset`** (A2 ile geldi) — `cargo hack --depth 2`, iki giriş crate'i.
+>
+> **`supply-chain`** (`cargo deny --all-features check`). İlk koşu **6 advisory** buldu:
+> - `crossbeam-epoch` geçersiz pointer deref → **düzeltildi** (`cargo update` → 0.9.20).
+> - `quick-xml` ×2 (DoS) → `wayland-scanner ^0.39` pinliyor, >=0.41 erişilemez; üstelik
+>   build-time protokol XML'i ayrıştırıyor, saldırgan girdisi değil. Gerekçeli muafiyet.
+> - `ttf-parser`, `paste` bakımsız → transitive, yükseltme yolu yok. Gerekçeli muafiyet.
+> - **`bincode 1.x` bakımsız → BU BİZİM.** `gizmo-net`'in DOĞRUDAN bağımlılığı ve rollback
+>   snapshot'larının wire formatı. bincode 2.x var ama serializer değişimi wire-compat
+>   kırıcısı, kendi değişikliğini ve round-trip testlerini hak ediyor → **A6-followup**.
+>
+> Lisans tarafı: grafta `GPL-2.0-only` ve `LGPL-2.1-or-later` göründü ama ikisi de
+> **`OR` seçenekli** (`r-efi`, `self_cell`) — gerçek bulaşma **yok**. Buna karşılık
+> denetimin işaret ettiği **MPL-2.0 gerçek**: varsayılan `audio` feature'ı üzerinden
+> `rodio → symphonia`. Dosya-düzeyi copyleft, linkleme sorunu değil, ama README'nin düz
+> "MIT OR Apache-2.0"ı bunu söylemiyor → `deny.toml`'da açık ve gerekçeli muafiyet.
+>
+> Yan düzeltmeler: `cradle`/`demo`/`server`/`demo-web` **lisanssızdı** (`publish = false`
+> ama `license` alanı yok) → `license.workspace = true` eklendi.
+>
+> `multiple-versions` bilinçli olarak `warn`: üç `rand`, üç `getrandom`, iki `ron`,
+> iki `glam` majoru var; bunları tekilleştirmek semver sonuçlu ayrı bir iş (D5) —
+> kapıyı kalıcı kırmızı bırakmak yerine uyarıya çekildi.
+>
+> **`CONTRIBUTING.md`, `SECURITY.md`, `.github/dependabot.yml`** yazıldı. Dependabot'ta
+> grafik yığını (wgpu/winit/egui/naga) tek PR'da gruplanıyor — MSRV'yi birlikte etkiliyorlar;
+> `glam` major'ı ise bilinçli olarak **ignore** (public dep, D5 ile planlı yapılacak).
+
+### ⬜ A6-followup — `bincode` 1.x → 2.x (gizmo-net)
+Bakımsız ve doğrudan bağımlılık. Wire formatı değiştiği için rollback snapshot'ı ve
+client-server mesajları round-trip testleriyle birlikte taşınmalı.
 
 ### ⏸️ A9 — 0.8.1 yayınla
 **Neden:** `main`'de 0.8.0 etiketinden bu yana **61 yayınlanmamış commit** var, 3'ü fizik

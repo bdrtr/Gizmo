@@ -1,0 +1,34 @@
+# Dependabot — the workspace had no dependency automation at all before 2026-08, which is
+# how it ended up carrying six advisories, three `rand` majors and two `glam` majors at once.
+#
+# Grouped deliberately: a graphics-stack bump (wgpu/winit/egui/naga) is a coordinated,
+# MSRV-affecting change that must land as one reviewable PR, not five that each break the
+# build on their own. Everything else can come through individually.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      graphics-stack:
+        patterns:
+          - "wgpu*"
+          - "winit"
+          - "egui*"
+          - "naga*"
+          - "transform-gizmo*"
+      dev-dependencies:
+        dependency-type: development
+    ignore:
+      # `glam` is a deliberate public dependency: `gizmo_math` re-exports it, so a major
+      # bump is a breaking change for every downstream user and has to be planned rather
+      # than merged. Tracked in docs/FIXPLAN.md (D5).
+      - dependency-name: glam
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly

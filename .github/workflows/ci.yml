@@ -108,6 +108,25 @@ jobs:
       - name: gizmo-engine — every feature pair must compile
         run: cargo hack check --locked -p gizmo-engine --feature-powerset --depth 2 --no-dev-deps
 
+  # ── Supply chain: advisories, licences, sources ───────────────────────────
+  # The workspace publishes 19 crates and had no supply-chain tooling at all until
+  # 2026-08. The first run found six advisories (one fixed by a lockfile bump, five
+  # documented as accepted with reasons in deny.toml) and confirmed that the MPL-2.0
+  # code the default `audio` feature pulls in is a real, disclosable exception to the
+  # README's flat "MIT OR Apache-2.0".
+  #
+  # Every exception in deny.toml carries a written justification. New advisories are
+  # meant to break this job.
+  supply-chain:
+    name: Supply chain (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-deny
+      - name: cargo deny (advisories + licenses + bans + sources)
+        run: cargo deny --all-features check
+
   # ── MSRV gate: workspace must build on the declared rust-version (1.92) ────
   msrv:
     name: MSRV (1.92)
