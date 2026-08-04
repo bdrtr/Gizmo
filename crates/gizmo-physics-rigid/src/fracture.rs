@@ -289,6 +289,38 @@ fn intersect_planes(p1: &MathPlane, p2: &MathPlane, p3: &MathPlane) -> Option<Ve
 
 /// Helper function to create physics chunks from a fracturing event.
 /// Returns a list of (RigidBody, Transform, Collider, ProceduralChunk) for the ECS to spawn.
+///
+/// # Determinism
+///
+/// `seed` drives **everything** random about the result: the Voronoi cell layout (and hence
+/// every chunk's geometry, volume, mass and inertia) and the debris spin. The same inputs
+/// always produce bit-identical output, which is what lets fractured scenes take part in
+/// replay and rollback.
+///
+/// Pick a seed that is itself reproducible — an entity id, a frame counter, a hash of the two
+/// — **not** `rand::random()`. Passing entropy here silently opts the whole simulation out of
+/// the crate's same-platform bit-exactness guarantee: a replay would shatter the object
+/// differently, and a rollback netcode peer would desync on the first fracture.
+///
+/// Until 0.9 this function seeded itself from the thread-local entropy pool, which made every
+/// caller non-deterministic with no way to opt out. Passing an explicit seed is the fix; use
+/// a fixed constant if you genuinely do not care about variation.
+///
+/// ```
+/// # use gizmo_physics_rigid::fracture::generate_fracture_chunks;
+/// # use gizmo_physics_rigid::components::{RigidBody, Velocity};
+/// # use gizmo_physics_core::Transform;
+/// # use gizmo_math::Vec3;
+/// let t = Transform::new(Vec3::ZERO);
+/// let rb = RigidBody::new(10.0, true);
+/// let v = Velocity::default();
+/// let args = (Vec3::splat(0.5), 8u32, Vec3::new(0.0, 1.0, 0.0), 50.0);
+///
+/// let a = generate_fracture_chunks(&t, &rb, &v, args.0, args.1, args.2, args.3, 1234);
+/// let b = generate_fracture_chunks(&t, &rb, &v, args.0, args.1, args.2, args.3, 1234);
+/// assert_eq!(a.len(), b.len());
+/// assert_eq!(a[0].1.position, b[0].1.position); // same seed → same debris
+/// ```
 pub fn generate_fracture_chunks(
     original_transform: &gizmo_physics_core::Transform,
     original_body: &crate::components::RigidBody,
@@ -297,6 +329,7 @@ pub fn generate_fracture_chunks(
     num_pieces: u32,
     impact_point: Vec3,
     impact_force: f32,
+    seed: u64,
 ) -> Vec<(
     crate::components::RigidBody,
     gizmo_physics_core::Transform,
@@ -304,7 +337,13 @@ pub fn generate_fracture_chunks(
     crate::components::Velocity,
     ProceduralChunk,
 )> {
-    let chunks = voronoi_shatter(extents, num_pieces, rand::random::<u64>());
+    let chunks = voronoi_shatter(extents, num_pieces, seed);
+
+    // Separate stream for the debris spin so that adding/removing a jitter draw can never
+    // shift the Voronoi cell layout (and vice versa). The constant is the golden-ratio odd
+    // integer used by SplitMix64 — any fixed odd constant works; the point is only that the
+    // two streams are decorrelated and reproducible.
+    let mut spin_rng = StdRng::seed_from_u64(seed ^ 0x9E37_79B9_7F4A_7C15);
 
     let mut results = Vec::with_capacity(chunks.len());
     let total_volume: f32 = chunks.iter().map(|c| c.volume).sum();
@@ -337,11 +376,13 @@ pub fn generate_fracture_chunks(
             let dv = (force / mass).min(MAX_EXPLOSION_DV);
             vel.linear += explosion_dir * dv;
 
-            // Add some random spin
+            // Add some random spin — drawn from the seeded `spin_rng`, never from the
+            // thread-local entropy pool: this function is part of the crate's public API and
+            // the crate's contract is same-platform bit-exact replay.
             vel.angular += Vec3::new(
-                rand::random::<f32>() - 0.5,
-                rand::random::<f32>() - 0.5,
-                rand::random::<f32>() - 0.5,
+                spin_rng.random_range(-0.5f32..0.5),
+                spin_rng.random_range(-0.5f32..0.5),
+                spin_rng.random_range(-0.5f32..0.5),
             ) * dv
                 * 0.5;
         }
@@ -596,6 +637,91 @@ mod tests {
                 v.linear.length() < 100.0,
                 "patlama hızı makul sınırda olmalı (clamp), oldu: {}",
                 v.linear.length()
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod determinism_tests {
+    use super::*;
+    use crate::components::{RigidBody, Velocity};
+    use gizmo_physics_core::Transform;
+
+    fn scenario() -> (Transform, RigidBody, Velocity, Vec3, u32, Vec3, f32) {
+        (
+            Transform::new(Vec3::new(1.0, 2.0, 3.0)),
+            RigidBody::new(10.0, true),
+            Velocity::default(),
+            Vec3::new(0.5, 0.4, 0.3),
+            12,
+            Vec3::new(0.0, 1.5, 0.0),
+            80.0,
+        )
+    }
+
+    fn run(seed: u64) -> Vec<(Vec3, Vec3, Vec3, f32)> {
+        let (t, rb, v, extents, pieces, impact, force) = scenario();
+        generate_fracture_chunks(&t, &rb, &v, extents, pieces, impact, force, seed)
+            .into_iter()
+            .map(|(body, transform, _collider, vel, chunk)| {
+                (transform.position, vel.linear, vel.angular, body.mass + chunk.volume)
+            })
+            .collect()
+    }
+
+    /// The contract this whole crate is sold on: same inputs → bit-identical output.
+    ///
+    /// Before 0.9 this function called `rand::random::<u64>()` for the Voronoi seed and
+    /// `rand::random::<f32>()` three times for the debris spin, so two calls with identical
+    /// arguments produced different chunk geometry, masses, inertias and angular velocities.
+    /// Any scene that fractured therefore diverged between replays and desynced under
+    /// rollback — the exact failure the `state_hash` + cross-process oracle exist to prevent.
+    #[test]
+    fn same_seed_reproduces_debris_bit_for_bit() {
+        let a = run(0xC0FFEE);
+        let b = run(0xC0FFEE);
+        assert!(!a.is_empty(), "scenario must actually produce chunks");
+        assert_eq!(a.len(), b.len(), "chunk count must be reproducible");
+        for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
+            assert_eq!(x.0.to_array(), y.0.to_array(), "chunk {i} position drifted");
+            assert_eq!(x.1.to_array(), y.1.to_array(), "chunk {i} linear velocity drifted");
+            assert_eq!(x.2.to_array(), y.2.to_array(), "chunk {i} angular velocity drifted");
+            assert_eq!(x.3.to_bits(), y.3.to_bits(), "chunk {i} mass/volume drifted");
+        }
+    }
+
+    /// The seed must actually be load-bearing — a function that ignores it would pass the
+    /// test above trivially.
+    #[test]
+    fn different_seeds_produce_different_debris() {
+        let a = run(1);
+        let b = run(2);
+        assert!(!a.is_empty() && !b.is_empty());
+        let identical = a.len() == b.len()
+            && a.iter()
+                .zip(b.iter())
+                .all(|(x, y)| x.0.to_array() == y.0.to_array() && x.3.to_bits() == y.3.to_bits());
+        assert!(!identical, "seed had no observable effect on the debris");
+    }
+
+    /// The debris spin must come from the seeded stream too, not just the cell layout.
+    /// Guards against a partial fix that seeds `voronoi_shatter` but leaves the jitter on
+    /// `rand::random()` — chunk geometry would match while angular velocity drifted.
+    #[test]
+    fn angular_jitter_is_seeded_not_entropy() {
+        let a = run(7);
+        let b = run(7);
+        let spun: Vec<_> = a.iter().filter(|c| c.2.length_squared() > 0.0).collect();
+        assert!(
+            !spun.is_empty(),
+            "scenario must impart spin, otherwise this test proves nothing"
+        );
+        for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
+            assert_eq!(
+                x.2.to_array(),
+                y.2.to_array(),
+                "chunk {i} angular velocity is not reproducible — jitter still uses entropy"
             );
         }
     }
