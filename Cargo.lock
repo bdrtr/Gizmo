@@ -2648,6 +2648,7 @@ dependencies = [
  "log",
  "pollster 0.3.0",
  "rfd",
+ "serde",
  "tracing",
  "tracing-wasm",
  "wasm-bindgen",
