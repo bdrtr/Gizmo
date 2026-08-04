@@ -281,13 +281,48 @@ client-server mesajları round-trip testleriyle birlikte taşınmalı.
 
 ## Faz B — Oyunun yazılabilir olması
 
-- ⬜ **B1 — Per-frame `Update` schedule.** `schedule.run` yalnız `windowed/event.rs:383,429`'da,
-  ikisi de sabit-adım döngüsünün içinde. `Input` frame başına yazılıp (`:301`) temizleniyor
-  (`:724`) ama 0..N kez tüketiliyor; `AutoNoVsync` hardcoded (`renderer/construction.rs:222,304`)
-  olduğu için render frame'lerinin çoğunda **hiçbir sistem çalışmıyor** → basmaların ve mouse
-  delta'nın çoğu kayboluyor. `time.rs:193-210`'daki interpolasyon alpha'sının tüketicisi de yok.
-  → `Update` (frame) / `FixedUpdate` (fizik) ayrımı + alpha'yı render'a bağla.
-  **App API kırıcısı — 1.0 dondurmasından ÖNCE yapılmalı.**
+- ✅ **B1 — Per-frame `Update` schedule.** *(2026-08-04)*
+  > **Yapılan.** `App` artık iki schedule taşıyor:
+  > - `schedule` — sabit adım, frame başına `0..N` kez, sabit `dt` (fizik). **Değişmedi**;
+  >   hiç kimsenin sistemi yerinden oynamadı.
+  > - `update_schedule` — **tam olarak** frame başına bir kez, gerçek frame `dt`'siyle.
+  >   `App::add_update_system` / `add_update_system_mut` ile kaydedilir.
+  >
+  > Sıralama `gizmo-app/src/frame.rs::run_fixed_and_update`'e çıkarıldı: accumulator'ı boşalt
+  > → alpha hesapla → update'i bir kez koştur. Event loop artık bunu çağırıyor. Çıkarmanın
+  > asıl kazancı test edilebilirlik: denetimin "gizmo-app 2553 satır için 1 test" bulgusuna
+  > karşılık bu dosya **7 testle** geliyor ve pencere/GPU gerektirmiyor.
+  >
+  > **Kanıtlanan sözleşme:** 600 fps'te 60 Hz accumulator'a karşı 9 frame boyunca sabit
+  > schedule **hiç** koşmuyor ama update 9 kez koşuyor. Tersi de test edildi: uzun bir
+  > frame'de sabit schedule 4 kez, update yine 1 kez. Ayrıca: iki schedule'a farklı `dt`
+  > gidiyor (sabit → sabit adım, update → gerçek frame delta'sı), duraklatılmış simülasyon
+  > (`sim_dt = 0`) update'i durdurmuyor, per-step hook'u (rollback snapshot'ı taşıyor)
+  > adım başına tam bir kez ateşliyor ve adımsız frame'de hiç ateşlemiyor.
+  >
+  > **`FpsLookPlugin` update_schedule'a taşındı** — `mouse_delta`'yı okuyor ve o değer
+  > render-frame başına toplanıp temizleniyor; sabit schedule'da hareketin bir kısmını
+  > (adımsız frame'lerde hiçbirini) görüyordu. `crates/gizmo/tests/update_vs_fixed_schedule.rs`
+  > yerleşimi davranışsal olarak kilitliyor: sabit schedule'ı koşturunca kamera **oynamamalı**,
+  > update'i koşturunca **oynamalı**.
+  >
+  > **Kendi hatam, kayda geçiyor:** `lib.rs`'e `pub mod frame;` eklerken satır-eşleştirmeli
+  > düzenleme `#[cfg(feature = "physics")]`'i `gameplay`'den alıp `frame`'e kaydırdı →
+  > `--no-default-features` kırıldı. Workspace testi bunu göremezdi; **powerset kapısı
+  > yakaladı** (A2'de eklediğim iş, ilk gerçek getirisi bu oldu).
+  >
+  > **Kapsam dışı bırakılanlar (bilinçli):** `add_system`'in varsayılanı sabit schedule
+  > olarak KALDI — Update'e çevirmek mevcut kullanıcıların sistemlerini sessizce değişken
+  > `dt`'ye taşırdı. Motorun diğer sistemlerinin (transform propagate, UI layout) taşınması
+  > her biri ayrı davranış doğrulaması istediği için ayrı iş → **B1-followup**.
+  > `AutoNoVsync` (B6) ve interpolasyon alpha'sının render'da tüketilmesi de ayrı.
+
+- ⬜ **B1-followup — motorun kalan per-frame sistemlerini taşı**
+  `TransformPropagateSystem`, `gizmo-ui` layout/interaction, `streaming` — hepsi mantıken
+  per-frame. Her biri fizikle sıralama ilişkisi taşıdığı için tek tek doğrulanmalı
+  (özellikle transform propagate: fizik sabit adımda transform yazıyor, render per-frame
+  okuyor). `alpha`'nın render'da tüketilmesi de buraya bağlı.
+
 - ⬜ **B2 — Sahne sorgu katmanı.** `cast_shape`, `overlap_shape`, `project_point`,
   `QueryFilter { layers, mask, exclude, predicate }`. Primitifler hazır:
   `DynamicAabbTree::query_aabb`, `NarrowPhase::test_collision`, `CollisionLayer::can_collide_with`,

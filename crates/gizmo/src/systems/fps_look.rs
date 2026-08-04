@@ -180,7 +180,12 @@ pub struct FpsLookPlugin;
 
 impl<State: 'static> crate::app::Plugin<State> for FpsLookPlugin {
     fn build(&self, app: &mut crate::app::App<State>) {
-        app.schedule.add_di_system(
+        // Per-frame, not per fixed step. This system reads `Input::mouse_delta`, which is
+        // accumulated from window events and cleared once per rendered frame — so on the
+        // fixed schedule it saw a fraction of the mouse motion (or, on frames where the
+        // accumulator did not fill, none of it) and the camera stuttered. Mouse-look is
+        // also a presentation concern: it should track the display, not the simulation.
+        app.update_schedule.add_di_system(
             gizmo_core::system::SystemConfig::new(Box::new(FpsLookSystem)).label("fps_look"),
         );
     }

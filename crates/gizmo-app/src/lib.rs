@@ -32,6 +32,9 @@ pub mod egui_ctx;
 /// the windowed event loop.
 #[cfg(feature = "editor")]
 pub mod editor_runtime;
+/// Per-frame simulation stepping — the fixed-timestep loop and the once-per-frame
+/// update schedule. Dependency-free, so it is available in every configuration.
+pub mod frame;
 /// High-level gameplay physics systems (vehicle / character controllers) wired
 /// into the app schedule. Requires the `physics` feature.
 #[cfg(feature = "physics")]
