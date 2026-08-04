@@ -1,7 +1,7 @@
 use gizmo_core::{world::World, system::Schedule};
 use gizmo_physics_core::{Transform, Collider, components::GlobalTransform};
 use gizmo_physics_rigid::{components::{RigidBody, Velocity}, physics_step_system, PhysicsWorld};
-use gizmo_engine::systems::transform::TransformPropagateSystem;
+use gizmo::systems::transform::TransformPropagateSystem;
 use gizmo_math::Vec3;
 
 #[test]

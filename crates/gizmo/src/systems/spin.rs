@@ -6,9 +6,9 @@
 //! ekle, [`SpinPlugin`]'i (veya doğrudan [`SpinSystem`]) çalıştır, motor döndürsün.
 //!
 //! ```
-//! use gizmo_engine::prelude::*;
-//! use gizmo_engine::core::system::System;
-//! use gizmo_engine::systems::spin::SpinSystem;
+//! use gizmo::prelude::*;
+//! use gizmo::core::system::System;
+//! use gizmo::systems::spin::SpinSystem;
 //!
 //! let mut world = World::new();
 //! let wheel = world.spawn();

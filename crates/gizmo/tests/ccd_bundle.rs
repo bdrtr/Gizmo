@@ -4,13 +4,13 @@
 //! ince duvarı `cpu_physics_step_system` üzerinden GERÇEKTEN tünellemediğini gösterir.
 //! Bu, "CCD var ama idiomatik API'den açılamıyor" boşluğunun kapandığının kanıtıdır.
 
-use gizmo_engine::bundles::RigidBodyBundle;
-use gizmo_engine::core::world::World;
-use gizmo_engine::math::Vec3;
-use gizmo_engine::physics::components::{Collider, RigidBody};
-use gizmo_engine::physics::world::PhysicsWorld;
-use gizmo_engine::physics::Transform;
-use gizmo_engine::systems::cpu_physics_step_system;
+use gizmo::bundles::RigidBodyBundle;
+use gizmo::core::world::World;
+use gizmo::math::Vec3;
+use gizmo::physics::components::{Collider, RigidBody};
+use gizmo::physics::world::PhysicsWorld;
+use gizmo::physics::Transform;
+use gizmo::systems::cpu_physics_step_system;
 
 #[test]
 fn with_ccd_sets_flag_and_prevents_tunnel_end_to_end() {
