@@ -401,6 +401,11 @@ Rust panic'i değil, sürücü çöküşü olduğu için hiçbir test adı rapor
 Yani binary-içi yarış çözüldü; kalan çöküş yalnızca **tam workspace koşusunda** ve izole
 koşuda hiç tekrarlanmıyor → sürücü/sistem seviyesinde, sürekli yük altında.
 
+**Etki alanı sanılandan geniş:** `cargo bench --workspace --benches -- --test` de release
+modda lib testlerini koşturuyor, yani GPU testleri orada da çalışıyor. Flake bu yüzden
+**iki** CI job'ını birden vurabilir (`test` ve `benchmarks`) — bu turda bir kez `benchmarks`
+job'ının yerel karşılığında görüldü, ardışık 3 koşu temiz geçti.
+
 **Muhtemel kalan neden:** cihaz *sayısı*. `shadow-gate` (`af6f168`) `render_frame`'i
 bayrağın iki hâliyle çağıran bir test ekledi; artık bir koşuda ~5 kez `Renderer::new_headless`
 çağrılıyor (öncesi 3). Doğru düzeltme testler arasında **tek bir cihazı paylaşmak** —
