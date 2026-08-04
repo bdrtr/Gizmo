@@ -3,6 +3,31 @@ use gizmo_physics_core::components::Transform;
 use crate::components::{RigidBody, Velocity};
 use gizmo_math::Vec3;
 
+/// Birikmiş-λ yuvaları ([`JointRows`]).
+///
+/// Yuvalar DERLEME ZAMANI SABİTİ, ilerleyen bir imleç DEĞİL: satırların çoğu koşullu
+/// atlanıyor (`fixed.rs`'te `err_len >= 1e-4`, `hinge.rs`'te `err_mag > 1e-6` ve limit
+/// dalları, `slider.rs`'te `err.abs() > 1e-4`, `ball_socket.rs`'teki koni/twist/swing
+/// kapıları, `d6.rs`'teki `continue` kolları), bir imleç atlanan her satırda sonraki
+/// satırların kimliğini kaydırır ve λ'lar yanlış satıra yazılırdı.
+///
+/// Bir DOF'un ALT ve ÜST limiti aynı yuvayı paylaşır: iki bağ ama tek serbestlik derecesi,
+/// ve bir geçiş boyunca `transforms` DEĞİŞMEDİĞİ için (çözücü `&[Transform]` alır,
+/// entegrasyon geçişten sonra) hangi dalın seçildiği 10 iterasyon boyunca sabittir — ters
+/// işaretli bayat bir λ miras alınamaz.
+pub(crate) mod row {
+    /// 0,1,2 — nokta kısıtının X/Y/Z'si, slider'ın iki dik ekseni, D6 lineer DOF'ları.
+    pub const LIN: usize = 0;
+    /// 3,4,5 — Fixed 3-eksen açısal kilidi, D6 açısal DOF'ları, hinge eksen hizalaması,
+    /// slider açısal kilidi, ball-socket koni (3) ve twist (4).
+    pub const ANG: usize = 3;
+    /// Hinge/slider limiti, distance min|max — hepsi tek DOF'un iki yönlü sınırı.
+    pub const LIMIT: usize = 6;
+    /// 7,8 — ball-socket asimetrik swing limitleri (perp1, perp2).
+    pub const SWING: usize = 7;
+    // 9 — REZERVE: motor satırı (bkz. docs/FIXPLAN.md, B4 commit 4).
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct JointSolver {
@@ -40,6 +65,18 @@ impl JointSolver {
         velocities: &mut [Velocity],
         dt: f32,
     ) {
+        // Birikmiş λ'lar bir çözücü GEÇİŞİNE (= bir substep) aittir; aşağıdaki iterasyonlar
+        // bu birikimi yakınsatır. Geçiş başında sıfırla — döngünün İÇİNDE sıfırlamak tüm
+        // değişikliği no-op'a indirir.
+        //
+        // λ adımlar arasında TAŞINMADIĞI için `WorldSnapshot`'a girmesi gerekmez: rollback
+        // restore'undan sonraki ilk `solve_joints` onu zaten sıfırdan kurar. Substep'ler
+        // arası warm-start eklendiği gün bu tersine döner ve snapshot'a girmesi ZORUNLU olur
+        // (bkz. `PhysicsWorld::WorldSnapshot`'taki contact_cache gerekçesi).
+        for joint in joints.iter_mut() {
+            joint.rows = JointRows::default();
+        }
+
         for _ in 0..self.iterations {
             for joint in joints.iter_mut() {
                 if joint.is_broken {
@@ -193,8 +230,34 @@ impl JointSolver {
         point - global_com
     }
 
+    /// Birikmiş-λ kırpma: `lambda_min/max` ARTIMA değil, geçiş boyunca birikmiş TOPLAMA
+    /// uygulanır. Tek yönlü bir satır (limit / halat / koni) böylece NEGATİF artım da
+    /// uygulayabilir — toplam doğru tarafta kaldığı sürece kendi önceki aşırı-düzeltmesini
+    /// GERİ ALIR. Eskiden her artım ayrı kırpıldığından geri verme mümkün değildi.
+    ///
+    /// Uygulanan (geri döndürülen) değer artımdır, birikim değil; hızlar artımla güncellenir.
+    #[inline]
+    fn accumulate(accum: &mut f32, delta: f32, lambda_min: f32, lambda_max: f32) -> f32 {
+        let total = *accum + delta;
+        let clamped = total.clamp(lambda_min, lambda_max);
+        if clamped == total {
+            // Sınır ISIRMADI → artımı OLDUĞU GİBİ uygula. `clamped - *accum` yazsaydık
+            // birikim büyüdükçe f32 yuvarlama farkı doğardı. Bu dal sayesinde ±∞ clamp'li
+            // ve compliance = 0 olan EŞİTLİK satırları — Fixed, D6 Locked, slider'ın dik
+            // eksenleri ve açısal kilidi, hinge eksen hizalaması — bugünküyle BİT-AYNI
+            // kalır. Davranış değişimi yalnızca gerçekten bir sınıra dayanan satırlarda.
+            *accum = total;
+            delta
+        } else {
+            let applied = clamped - *accum;
+            *accum = clamped;
+            applied
+        }
+    }
+
     /// Apply a 1-DOF angular velocity constraint along `direction` (hard).
     /// `error` is the positional error in radians (positive = bodies need to rotate apart).
+    #[allow(clippy::too_many_arguments)]
     fn apply_angular_constraint(
         &self,
         rigid_bodies: &[RigidBody],
@@ -207,10 +270,11 @@ impl JointSolver {
         dt: f32,
         lambda_min: f32,
         lambda_max: f32,
+        accum: &mut f32,
     ) -> f32 {
         self.apply_angular_constraint_soft(
             rigid_bodies, transforms, velocities, idx_a, idx_b, direction, error, dt, lambda_min,
-            lambda_max, 0.0,
+            lambda_max, 0.0, accum,
         )
     }
 
@@ -233,6 +297,7 @@ impl JointSolver {
         lambda_min: f32,
         lambda_max: f32,
         compliance: f32,
+        accum: &mut f32,
     ) -> f32 {
         if direction.length_squared() < 1e-10 {
             return 0.0;
@@ -254,7 +319,18 @@ impl JointSolver {
         let vel_err = (w_b - w_a).dot(direction);
         let position_bias = (self.position_bias * error / dt)
             .clamp(-self.max_angular_speed, self.max_angular_speed);
-        let lambda = ((-vel_err + position_bias) / k).clamp(lambda_min, lambda_max);
+        // NOT: burada XPBD/CFM geri beslemesi (`- cfm * *accum`) KASITLI OLARAK YOK.
+        // Doğru terim odur — yumuşak bir satırın denge noktası Jv + α̃·λ_toplam = bias'tır —
+        // ama `position_bias` bu çözücüde `max_correction_speed`/`max_angular_speed` ile
+        // HIZ-KIRPILI. Kırpma ısırdığı anda denge λ_toplam = bias_max/α̃ değerine tavanlanır;
+        // bu, taşınması gereken yükün çok altında kalır ve kısıt sessizce boşalır. Ölçüldü:
+        // compliance=0.03, 1 kg yük, dt=1/240 → 2 m'lik halat 600 adımda 27.4 m'ye uzuyor
+        // (yani serbest düşüş), oysa doğru statik uzama α·m·g/β = 0.98 m. Kırpmayı 5000'e
+        // çekince ölçüm 1.007 m — terim doğru, kırpmayla ETKİLEŞİMİ yanlış.
+        // Bu yüzden compliance'ın iterasyon-sayısına bağımlılığı burada KAPANMIYOR; kırpma
+        // rejimiyle birlikte ele alınacak (bkz. docs/FIXPLAN.md, B4 sonrası).
+        let delta = (-vel_err + position_bias) / k;
+        let lambda = Self::accumulate(accum, delta, lambda_min, lambda_max);
 
         let delta_a = inv_i_a.mul_vec3(direction) * lambda;
         let delta_b = inv_i_b.mul_vec3(direction) * lambda;
@@ -280,6 +356,7 @@ impl JointSolver {
     }
 
     /// Apply a 1-DOF linear velocity constraint along `direction` at the anchor points (hard).
+    #[allow(clippy::too_many_arguments)]
     fn apply_linear_constraint(
         &self,
         rigid_bodies: &[RigidBody],
@@ -294,10 +371,11 @@ impl JointSolver {
         dt: f32,
         lambda_min: f32,
         lambda_max: f32,
+        accum: &mut f32,
     ) -> f32 {
         self.apply_linear_constraint_soft(
             rigid_bodies, transforms, velocities, idx_a, idx_b, direction, r_a, r_b, error, dt,
-            lambda_min, lambda_max, 0.0,
+            lambda_min, lambda_max, 0.0, accum,
         )
     }
 
@@ -320,6 +398,7 @@ impl JointSolver {
         lambda_min: f32,
         lambda_max: f32,
         compliance: f32,
+        accum: &mut f32,
     ) -> f32 {
         let inv_m_a = rigid_bodies[idx_a].inv_mass();
         let inv_m_b = rigid_bodies[idx_b].inv_mass();
@@ -347,7 +426,9 @@ impl JointSolver {
         let rel_vel = (v_b - v_a).dot(direction);
         let position_bias = (self.position_bias * error / dt)
             .clamp(-self.max_correction_speed, self.max_correction_speed);
-        let lambda = ((-rel_vel + position_bias) / k).clamp(lambda_min, lambda_max);
+        // CFM geri beslemesi burada da yok — gerekçe apply_angular_constraint_soft'ta.
+        let delta = (-rel_vel + position_bias) / k;
+        let lambda = Self::accumulate(accum, delta, lambda_min, lambda_max);
 
         let impulse = direction * lambda;
 
@@ -460,6 +541,7 @@ mod tests {
             1.0 / 60.0,
             f32::NEG_INFINITY,
             f32::INFINITY,
+            &mut 0.0,
         );
 
         let v_a = vels[0].linear + vels[0].angular.cross(r_a);
@@ -469,6 +551,154 @@ mod tests {
             rel_n.abs() < 1e-5,
             "tek uygulamada bağıl hız sıfırlanmalı; kalan = {rel_n} (yanlış efektif kütle?)"
         );
+    }
+
+    /// İki eşit kütleli cisim, ankorları kütle merkezinde (r = 0 → k = 1/m + 1/m = 2),
+    /// tek yönlü (yalnız ÇEKEN) bir satır. Aradaki tek fark clamp'in nereye uygulandığı.
+    fn one_sided_pair() -> ([RigidBody; 2], [Transform; 2], [Velocity; 2]) {
+        let body = || RigidBody::new(1.0, false);
+        (
+            [body(), body()],
+            [Transform::new(Vec3::ZERO), Transform::new(Vec3::ZERO)],
+            [Velocity::default(), Velocity::default()],
+        )
+    }
+
+    /// Tek yönlü bir satır kendi ÖNCEKİ impulse'ını GERİ VEREBİLMELİ.
+    ///
+    /// Eskiden clamp her iterasyonun kendi artımına uygulanıyordu: yalnız-çeken bir satırda
+    /// (`lambda_max = 0`) pozitif bir artım her seferinde 0'a kırpıldığından satır, kendi
+    /// aşırı-düzeltmesini geri alamıyordu — tek yönlü bir cırcır. Clamp artık geçiş boyunca
+    /// birikmiş TOPLAMA uygulanıyor, dolayısıyla toplam doğru tarafta kaldığı sürece
+    /// negatif/pozitif her artım uygulanabilir.
+    ///
+    /// Ayırt edici: eski kodda ikinci çağrı hiçbir şey uygulamaz ve bağıl hız −1.0'da kalır.
+    #[test]
+    fn a_one_sided_row_can_return_the_impulse_it_applied() {
+        let solver = JointSolver::default();
+        let (bodies, transforms, mut vels) = one_sided_pair();
+        let mut accum = 0.0;
+
+        // 1) Cisimler ayrılıyor (bağıl hız +1) → yalnız-çeken satır onları yakalar.
+        vels[1].linear = Vec3::Y;
+        let first = solver.apply_linear_constraint(
+            &bodies, &transforms, &mut vels, 0, 1, Vec3::Y, Vec3::ZERO, Vec3::ZERO,
+            0.0, // pozisyon hatası yok → saf hız kısıtı
+            1.0 / 60.0,
+            f32::NEG_INFINITY,
+            0.0, // yalnız çek
+            &mut accum,
+        );
+        assert!(first < 0.0, "çeken satır negatif λ uygulamalı, uyguladığı = {first}");
+        let rel = |v: &[Velocity; 2]| (v[1].linear - v[0].linear).dot(Vec3::Y);
+        assert!(rel(&vels).abs() < 1e-6, "ilk çağrı bağıl hızı sıfırlamalı: {}", rel(&vels));
+
+        // 2) Başka bir satır (burada elle) cisimleri BİRBİRİNE yaklaştırıyor. Satırın artık
+        //    daha az çekmesi gerekiyor: doğru davranış, uyguladığının bir kısmını geri vermek.
+        vels[0].linear = Vec3::ZERO;
+        vels[1].linear = -Vec3::Y;
+        assert!((rel(&vels) - (-1.0)).abs() < 1e-6);
+
+        let second = solver.apply_linear_constraint(
+            &bodies, &transforms, &mut vels, 0, 1, Vec3::Y, Vec3::ZERO, Vec3::ZERO, 0.0,
+            1.0 / 60.0,
+            f32::NEG_INFINITY,
+            0.0,
+            &mut accum,
+        );
+        assert!(
+            second > 0.0,
+            "satır kendi impulse'ını geri vermeli (pozitif artım); uyguladığı = {second} \
+             — iterasyon-başına clamp'te bu 0'a kırpılırdı"
+        );
+        assert!(
+            rel(&vels).abs() < 1e-6,
+            "geri verdikten sonra bağıl hız yine sıfır olmalı, kalan = {}",
+            rel(&vels)
+        );
+    }
+
+    /// …ama uyguladığından FAZLASINI geri veremez: biriken toplam sınırı geçemez, yani
+    /// yalnız-çeken bir satır hiçbir koşulda İTMEZ.
+    #[test]
+    fn a_one_sided_row_never_pushes_past_its_bound() {
+        let solver = JointSolver::default();
+        let (bodies, transforms, mut vels) = one_sided_pair();
+        let mut accum = 0.0;
+        let dt = 1.0 / 60.0;
+        let args = (Vec3::Y, Vec3::ZERO, Vec3::ZERO, 0.0f32);
+
+        vels[1].linear = Vec3::Y;
+        solver.apply_linear_constraint(
+            &bodies, &transforms, &mut vels, 0, 1, args.0, args.1, args.2, args.3, dt,
+            f32::NEG_INFINITY, 0.0, &mut accum,
+        );
+        let applied_total = accum;
+        assert!(applied_total < 0.0);
+
+        // Cisimler artık HIZLA yaklaşıyor: satır bunu düzeltmeye çalışsa iterek yapardı.
+        vels[0].linear = Vec3::ZERO;
+        vels[1].linear = Vec3::Y * -3.0;
+        solver.apply_linear_constraint(
+            &bodies, &transforms, &mut vels, 0, 1, args.0, args.1, args.2, args.3, dt,
+            f32::NEG_INFINITY, 0.0, &mut accum,
+        );
+
+        assert_eq!(accum, 0.0, "biriken toplam üst sınırda durmalı, durduğu = {accum}");
+        assert!(
+            (vels[1].linear - vels[0].linear).dot(Vec3::Y) < 0.0,
+            "yalnız-çeken satır cisimleri AYIRMAMALI; bağıl hız = {}",
+            (vels[1].linear - vels[0].linear).dot(Vec3::Y)
+        );
+    }
+
+    /// Birikim bir GEÇİŞE ait: `solve_joints` her çağrıda sıfırdan başlamalı. Sıfırlama
+    /// olmasa ikinci geçiş, birincinin doymuş λ'sını miras alır ve aynı girdiye farklı
+    /// cevap verir — adımlar arası sessiz bir durum sızıntısı.
+    #[test]
+    fn accumulated_lambda_does_not_leak_between_passes() {
+        use crate::joints::data::Joint;
+        use gizmo_physics_core::BodyHandle;
+
+        let solver = JointSolver::default();
+        let mut bodies = [RigidBody::new(1.0, false), RigidBody::new(1.0, false)];
+        for rb in &mut bodies {
+            rb.local_inertia = Vec3::splat(1.0);
+        }
+        let transforms = [
+            Transform::new(Vec3::ZERO),
+            Transform::new(Vec3::new(0.0, -3.0, 0.0)), // halat gergin (max 2.0)
+        ];
+        let map: rustc_hash::FxHashMap<u32, usize> =
+            [(1u32, 0usize), (2u32, 1usize)].into_iter().collect();
+        let fresh = || {
+            vec![Joint::rope(
+                BodyHandle::from_id(1),
+                BodyHandle::from_id(2),
+                Vec3::ZERO,
+                Vec3::ZERO,
+                2.0,
+            )]
+        };
+        let start = [Velocity::default(), Velocity::new(Vec3::new(0.0, -4.0, 0.0))];
+
+        // Tek geçiş.
+        let mut joints = fresh();
+        let mut v1 = start;
+        solver.solve_joints(&mut joints, &map, &bodies, &transforms, &mut v1, 1.0 / 60.0);
+        let lambda_after_one = joints[0].rows;
+
+        // Aynı eklem üzerinde İKİ geçiş, ikincisi aynı başlangıç hızlarıyla.
+        let mut v2 = start;
+        solver.solve_joints(&mut joints, &map, &bodies, &transforms, &mut v2, 1.0 / 60.0);
+        v2 = start;
+        solver.solve_joints(&mut joints, &map, &bodies, &transforms, &mut v2, 1.0 / 60.0);
+
+        assert_eq!(
+            joints[0].rows, lambda_after_one,
+            "aynı girdiyle ikinci geçiş aynı λ'yı üretmeli; birikim geçişler arasında taşınmış"
+        );
+        assert_eq!(v2, v1, "…ve dolayısıyla aynı hızları");
     }
 
     #[test]

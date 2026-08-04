@@ -56,6 +56,7 @@ impl JointSolver {
                 f32::NEG_INFINITY,
                 0.0, // pull only
                 data.compliance, // 0 = rigid rope; >0 = elastic/stretchy
+                joint.rows.row(row::LIMIT),
             )
         } else if length < data.min_length {
             self.apply_linear_constraint_soft(
@@ -72,6 +73,7 @@ impl JointSolver {
                 0.0, // push only
                 f32::INFINITY,
                 data.compliance,
+                joint.rows.row(row::LIMIT),
             )
         } else {
             0.0 // within bounds → free

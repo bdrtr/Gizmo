@@ -495,9 +495,10 @@ client-server mesajları round-trip testleriyle birlikte taşınmalı.
   > animasyon/araç bileşenleri (`BoneAttachment` dışında serileştirilebilir olan yok),
   > ve gerçek bir migrasyon zinciri sınandığında 0→1'in ötesi.
 
-- ⬜ **B4 — Joint çözücüsü.** Biriken impuls + warm-start yok (`joints/solver/mod.rs:43-122`);
-  `center_of_mass` yok sayılıyor (`joint_types/fixed.rs:30-31`); `break_force` tek iterasyonun
-  transient'inden hesaplanıyor; joint'ler island kurulumuna dahil değil (`pipeline.rs:560`).
+- 🔄 **B4 — Joint çözücüsü.** Dört maddesi vardı; ikisi bitti, ikisi sırada. Ayrıntı için
+  aşağıdaki **B4 bölümüne** bak. Kalan: `break_force` yeniden kalibrasyonu (commit 3),
+  motor satırları (commit 4), substep'ler arası warm-start + rollback (commit 5), ve
+  joint'lerin island kurulumuna dahil edilmesi (`pipeline.rs:560`).
 - ⬜ **B5** — Gamepad girdisi. ⬜ **B6** — `PresentMode` yapılandırılabilir.
   ⬜ **B7** — Cylinder + Heightfield collider.
 - 🔄 **B8** — iki parçası vardı:
@@ -612,6 +613,86 @@ client-server mesajları round-trip testleriyle birlikte taşınmalı.
 > Ayrıca `state_hash`'in süreç-içi tekrarlanabilirliği artık demo binary'sinde değil test
 > suite'inde de iddia ediliyor — ama bilinçli olarak bir sabitle KARŞILAŞTIRILMIYOR, çünkü o
 > motorun vermediği bir cross-platform bit-eşlik iddiası olurdu.
+
+### 🔄 B4 — Joint çözücüsü
+
+Denetimin dört maddesi vardı. Sırayla ve her biri kendi başına doğrulanabilir olacak
+şekilde iniyor.
+
+**✅ commit 1 — `lever_arm` kütle merkezinden ölçülüyor** (`8495819`). Her joint satırı
+`anchor - transforms[idx].position` — yani transform ORİJİNİ etrafındaki kolu —
+hesaplıyordu. Bileşik collider'lar, kırılma parçaları ve araç şasileri için `center_of_mass`
+sıfır değil, dolayısıyla bu cisimlere bağlı her eklem yanlış tork ve yanlış efektif kütle
+görüyordu. 14 çağrı yeri tek yardımcıdan geçiyor; `tests/joint_com.rs` (3 test) yardımcıyı
+geri alınca kırmızıya dönerek değişimin davranışsal olduğunu kanıtlıyor.
+
+**✅ commit 2 — biriken λ + tek-yönlü satırların geri verebilmesi.** `JointRows([f32; 10])`
+`Joint` üzerinde, `is_broken` gibi `#[serde(skip)]`; yuvalar `joints::solver::row` içinde
+derleme-zamanı sabiti (ilerleyen bir imleç, koşullu atlanan satırlar yüzünden λ'ları yanlış
+satıra yazardı). Clamp artık artıma değil geçiş boyunca birikmiş TOPLAMA uygulanıyor.
+
+> **Ölçüldü — ve denetimin iddiası bu haliyle çürüdü.** Denetim "çözücü doğru impulse'ın
+> `iterations` katına kadarını uygulayabiliyor" diyordu. Mevcut sahnelerde bu OLMUYOR:
+> hinge-limit, slider-limit, koni-limit ve motor-limit sahnelerinde eski ve yeni kod
+> **bit-eş veya 1 ULP** fark veriyor; 6 halkalı bir zincirde fark 600 adımda ~8e-4 m.
+> Sebep, tek-yönlü satırın rakibinin zayıf olması: satır her iterasyonda `Jv`'yi zaten
+> sıfırlıyor, sonraki artım ~0 kalıyor. Yani düzeltme DOĞRU ama mevcut sahnelerde ATIL —
+> hiçbir committed threshold yeniden kutsanmadı, `EF6E4AC3644BF3BA` kıpırdamadı.
+>
+> Değeri iki yerde: (a) `break_force`'un doğru hesaplanabilmesi için bir λ TOPLAMI gerekiyor
+> ve commit 3'ün önkoşulu bu; (b) cırcır gerçek bir kusur, sadece latent — güçlü rakibi olan
+> sahnelerde (dış impuls, temas beslemesi) ortaya çıkardı. Bu yüzden senaryo eşiği yerine
+> **ayırt edici birim testleri** yazıldı: `a_one_sided_row_can_return_the_impulse_it_applied`
+> ve `a_one_sided_row_never_pushes_past_its_bound` eski semantikle kırmızı,
+> `accumulated_lambda_does_not_leak_between_passes` sıfırlama silinince kırmızı. Üçü de
+> tersine çevrilerek doğrulandı.
+
+> **XPBD/CFM geri besleme terimi KASITLI OLARAK ERTELENDİ.** Plan `- α̃·λ_toplam` terimini
+> birikimle birlikte zorunlu sayıyordu; ölçüm bunu çürüttü. Terim fizik olarak doğru
+> (1 kg yük, α=0.03, dt=1/240 → öngörülen statik uzama α·m·g/β = 0.98 m, `max_correction_speed`
+> 5000'e çekilince ölçülen 1.007 m ✓) ama bu çözücüde `position_bias` HIZ-KIRPILI. Kırpma
+> ısırdığı anda denge λ_toplam = bias_max/α̃'ya tavanlanıyor, bu taşınacak yükün çok altında
+> kalıyor ve kısıt sessizce boşalıyor: aynı sahnede 2 m'lik halat 600 adımda **27.4 m**'ye
+> uzuyor (pratikte serbest düşüş), α=0.3'te 31.9 m. Terimsiz haliyle compliance davranışı
+> HEAD ile bit-eş (2.014287 / 6.078255 / 27.403154) — yani "birikim tek başına compliant
+> eklemleri rijitleştirir" uyarısı da bu şemada geçerli değil. Terim, kırpma rejimiyle
+> BİRLİKTE ele alınmalı; compliance'ın iterasyon-sayısına bağımlılığı o zamana kadar açık.
+
+**⬜ commit 3 — `break_force` yeniden kalibrasyonu.** Sekiz iterasyon-içi kontrol
+(`fixed.rs:86,130`, `hinge.rs:125`, `ball_socket.rs:177`, `slider.rs:162`, `distance.rs:80`,
+`d6.rs:74,117`) tek bir döngü-sonrası kontrole taşınacak, iki `#[serde(skip)] Vec3`
+birikimden (`Σ λᵢ·nᵢ`) beslenerek. Dört kusuru birden kapatıyor: iterasyon sayısına
+bağımlılık; eş-doğrusal olmayan satırlar üzerinde L1 `.abs()` toplamı (Fixed'de √3'e kadar
+abartma, ball-socket'te daha fazla); `fixed.rs:29`'daki `err_len >= 1e-4` kapısının kusursuz
+sabitlenmiş bir kaynakta lineer kontrolü gizlemesi; ve `solve_slider_spring` /
+`solve_hinge_spring` / `solve_d6_drives`'ın hiç break kontrolü yapmaması. `Joint::check_break`
+(`data.rs:501`) şu an **ölü kod** — buraya bağlanacak. Committed hiçbir test yeniden
+kutsanmıyor (`world/tests.rs:441` `f32::MAX`, `joints_behavior.rs:245` Spring) → YENİ test
+gerekiyor. Kullanıcıya görünür semantik değişim: kalibre edilmiş sonlu eşikler artık daha
+erken kopacak, ve `world.joint_solver.iterations` (public) artık sahnedeki her eşiği sessizce
+yeniden ölçeklemiyor. CHANGELOG'a girmeli.
+
+**⬜ commit 4 — motor satırları.** `hinge.rs:161` ve `slider.rs:180`'deki
+`/ self.iterations` elle yazılmış bir birikim vekili (Türkçe yorumu bunu zaten söylüyor);
+motor `row` yuva 9'a taşınıp TOPLAM `motor_max_force * dt`'ye kırpılacak. Ayrı commit,
+çünkü tek per-kind mantığa dokunan parça ve blast radius'u commit 2'den ayrık:
+`hinge_motor_reaches_target_velocity`, `slider_motor_reaches_target_velocity`,
+`slider_servo_reaches_target_position`, `hinge_servo_reaches_target_angle`,
+`world/tests.rs::test_car_simulation`. `golden_state.rs`'e joint sahnesi BURADA ekleniyor
+(`analytical.rs:336` sarkacı iyi koşullu aday) — semantik oturmadan eklemek anında yeniden
+kutsama demek.
+
+**⬜ commit 5 — warm-start + rollback (en riskli, en sonda).** İterasyon 0'dan ÖNCE ayrı bir
+sweep'te `dir * λ_önceki` uygulanması (temas çözücüsündeki `solver/mod.rs:458-476` yapısının
+aynısı). Aynı commit'te ZORUNLU: iki-uç-uykuda kapısı (bugün `joints/` içinde tek bir
+`is_sleeping` referansı yok); bir satırın aktivasyon kapısı kapandığı substep'te λ'sının
+sıfırlanması (gevşemiş halat yeniden çekmemeli); ve joint durumunun `WorldSnapshot`'a
+eklenmesi. λ substep sınırını geçtiği an bu ŞART olur — `WorldSnapshot`'ın kendi Türkçe
+gerekçesi (`world/mod.rs:294-301`) tam olarak bunu söylüyor. Aynı fırsatta bugün de var olan
+delik kapanır: `is_broken`, `initial_relative_rotation`, `current_angle`/`current_position`
+hiçbiri snapshot'lanmıyor, yani rollback bugün de bir eklemi "kırılmamış" hâline döndüremiyor.
+`tests/rollback.rs`'te joint içeren sahne YOK → bu commit `build_scene`'e bir tane eklemeli;
+yoksa desync yeşil ışıkta geçer ve `state_hash` (yalnız transform/velocity/sleep) onu göremez.
 
 ### ⬜ GPU test flake'i — kısmen çözüldü, kalanı ölçüldü
 `crates/gizmo/src/systems/render/mod.rs`'teki golden-image testleri her biri kendi wgpu

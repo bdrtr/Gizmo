@@ -2,6 +2,35 @@ use gizmo_physics_core::BodyHandle;
 use gizmo_math::{Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
+/// Bir çözücü GEÇİŞİ boyunca satır-başına birikmiş Lagrange çarpanları (λ).
+///
+/// Eşitsizlik (tek-yönlü) satırlarında — limit, halat, koni — clamp artık her iterasyonun
+/// kendi artımına değil, geçiş boyunca birikmiş TOPLAM λ'ya uygulanır. Eskiden negatif bir
+/// artım her seferinde 0'a kırpıldığından bir satır kendi ÖNCEKİ AŞIRI-DÜZELTMESİNİ geri
+/// alamıyordu: aynı eklemin başka bir satırı Jv'yi geri ittiğinde limit her iterasyonda
+/// yeniden pompalıyor, hiç geri vermiyordu — tek yönlü bir cırcır.
+///
+/// `is_broken` gibi `#[serde(skip)]`: sahne dosyası formatının parçası değil. Her
+/// `solve_joints` geçişinin başında sıfırlanır, yani adımlar arasında TAŞINMAZ — bu yüzden
+/// `WorldSnapshot`'a da girmesi gerekmez (bkz. `JointSolver::solve_joints`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct JointRows([f32; JointRows::LEN]);
+
+impl JointRows {
+    /// En çok satır üreten tür BallSocket: 3 lineer (`solve_fixed_joint`'ten), koni, twist ve
+    /// 2 asimetrik swing = 7 satır, en yüksek yuva indeksi 8. 10 = yuva 9 motor satırı için
+    /// ayrılmış pay.
+    pub const LEN: usize = 10;
+
+    /// Bir satırın birikmiş λ'sına erişim. Yuvalar `joints::solver::row` içinde DERLEME
+    /// ZAMANI SABİTİ; koşullu atlanan satırlar yüzünden ilerleyen bir imleç kullanılamaz
+    /// (atlanan bir satır sonraki her satırın kimliğini kaydırırdı).
+    #[inline]
+    pub(crate) fn row(&mut self, slot: usize) -> &mut f32 {
+        &mut self.0[slot]
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Joint {
@@ -13,6 +42,10 @@ pub struct Joint {
     pub break_torque: f32,
     #[serde(skip)]
     pub is_broken: bool,
+    /// Çözücü scratch'i — bu geçişteki satır-başına birikmiş λ. `is_broken` gibi serialize
+    /// EDİLMEZ ve her geçişin başında sıfırlanır.
+    #[serde(skip)]
+    pub(crate) rows: JointRows,
     pub collision_enabled: bool,
     pub data: JointData,
 }
@@ -246,6 +279,7 @@ impl Joint {
             break_force: f32::INFINITY,
             break_torque: f32::INFINITY,
             is_broken: false,
+            rows: JointRows::default(),
             collision_enabled: false,
             data: JointData::Fixed,
         }
@@ -275,6 +309,7 @@ impl Joint {
             break_force: f32::INFINITY,
             break_torque: f32::INFINITY,
             is_broken: false,
+            rows: JointRows::default(),
             collision_enabled: false,
             data: JointData::Hinge(HingeJointData {
                 axis: safe_axis,
@@ -313,6 +348,7 @@ impl Joint {
             break_force: f32::INFINITY,
             break_torque: f32::INFINITY,
             is_broken: false,
+            rows: JointRows::default(),
             collision_enabled: false,
             data: JointData::BallSocket(BallSocketJointData {
                 use_cone_limit: false,
@@ -354,6 +390,7 @@ impl Joint {
             break_force: f32::INFINITY,
             break_torque: f32::INFINITY,
             is_broken: false,
+            rows: JointRows::default(),
             collision_enabled: false,
             data: JointData::Slider(SliderJointData {
                 axis: safe_axis,
@@ -396,6 +433,7 @@ impl Joint {
             break_force: f32::INFINITY,
             break_torque: f32::INFINITY,
             is_broken: false,
+            rows: JointRows::default(),
             collision_enabled: false,
             data: JointData::Spring(SpringJointData {
                 rest_length,
@@ -429,6 +467,7 @@ impl Joint {
             break_force: f32::INFINITY,
             break_torque: f32::INFINITY,
             is_broken: false,
+            rows: JointRows::default(),
             collision_enabled: false,
             data: JointData::Distance(DistanceJointData {
                 min_length: min_length.max(0.0),
@@ -474,6 +513,7 @@ impl Joint {
             break_force: f32::INFINITY,
             break_torque: f32::INFINITY,
             is_broken: false,
+            rows: JointRows::default(),
             collision_enabled: false,
             data: JointData::D6(D6JointData {
                 frame: Quat::IDENTITY,

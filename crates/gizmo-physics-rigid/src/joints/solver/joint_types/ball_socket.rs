@@ -76,6 +76,7 @@ impl JointSolver {
                         f32::NEG_INFINITY,
                         0.0,
                         data.compliance,
+                        joint.rows.row(row::ANG),
                     )
                     .abs();
             }
@@ -105,6 +106,7 @@ impl JointSolver {
                         f32::NEG_INFINITY,
                         0.0,
                         data.compliance,
+                        joint.rows.row(row::ANG + 1),
                     )
                     .abs();
             } else if twist_angle < data.twist_lower {
@@ -121,6 +123,7 @@ impl JointSolver {
                         0.0,
                         f32::INFINITY,
                         data.compliance,
+                        joint.rows.row(row::ANG + 1),
                     )
                     .abs();
             }
@@ -135,7 +138,10 @@ impl JointSolver {
             // Swing rotation vector (small-angle: 2·xyz), canonicalised to w ≥ 0.
             let q = if swing_quat.w < 0.0 { -swing_quat } else { swing_quat };
             let rvec = 2.0 * Vec3::new(q.x, q.y, q.z);
-            for (perp, limit) in [(perp1, data.swing_limit_1), (perp2, data.swing_limit_2)] {
+            for (i, (perp, limit)) in [(perp1, data.swing_limit_1), (perp2, data.swing_limit_2)]
+                .into_iter()
+                .enumerate()
+            {
                 let a = rvec.dot(perp); // swing angle about this perpendicular
                 let perp_world = transforms[idx_a].rotation * perp;
                 if a > limit {
@@ -152,6 +158,7 @@ impl JointSolver {
                             f32::NEG_INFINITY,
                             0.0,
                             data.compliance,
+                            joint.rows.row(row::SWING + i),
                         )
                         .abs();
                 } else if a < -limit {
@@ -168,6 +175,7 @@ impl JointSolver {
                             0.0,
                             f32::INFINITY,
                             data.compliance,
+                            joint.rows.row(row::SWING + i),
                         )
                         .abs();
                 }
