@@ -122,9 +122,11 @@ cargo run --release -p demo --bin fluid_rigid
 > `GIZMO_ASSETS` at a directory containing it to get the real thing — see
 > [`assets/README.md`](assets/README.md).
 
-> **Upgrading?** `0.8.0` is a large feature release; the whole workspace ships
-> at one uniform `0.x` version and no API is promised stable yet. See the
-> [`CHANGELOG`](CHANGELOG.md) (and, if coming from `0.1.x`, the
+> **Upgrading?** `0.9.0` is a correctness release — two paths to undefined behaviour,
+> one determinism hole, and the reason the crate previously compiled in only one feature
+> configuration. Three public signatures changed, because their old shape *was* the bug.
+> The whole workspace still ships at one uniform `0.x` version and no API is promised
+> stable yet. See the [`CHANGELOG`](CHANGELOG.md) (and, if coming from `0.1.x`, the
 > [migration guide](docs/ENGINE.md) (§6)).
 
 ## 📄 License

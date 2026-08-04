@@ -16,7 +16,31 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Post-`0.8.0` work; the workspace still ships one uniform `0.x` version.
+## [0.9.0] — 2026-08-04
+
+A correctness and honesty release. It carries no new features: it closes two paths to
+undefined behaviour, one determinism hole, and the reason the facade only ever compiled
+in a single configuration — all found by an external audit
+([`docs/AUDIT-2026-08.md`](docs/AUDIT-2026-08.md)), and all with the evidence written
+down rather than summarised.
+
+**It is a minor bump rather than a patch because three public signatures changed.** Two
+of them changed because their previous shape was the bug: a fracture API seeded from
+thread-local entropy cannot be reproduced, and a `&self` method that mutates a Lua VM
+cannot be `Sync`. Keeping the old signatures would have meant keeping the defects.
+
+Upgrading from `0.8.0`:
+
+- `generate_fracture_chunks(..)` takes a trailing `seed: u64`. Pass anything
+  reproducible — an entity id, a frame counter — not `rand::random()`.
+- `ScriptEngine::has_function` and `::run_entity_update` take `&mut self`. Callers
+  reaching them through a `World` resource need `ResMut`, not `Res`.
+- `gizmo_app::headless::App` and `gizmo_app::windowed::App` now coexist. `gizmo_app::App`
+  still resolves to the windowed runtime when it is compiled in, so most code is
+  unaffected; `headless::App::add_plugin` is unavailable when both are present.
+- Several facade items are now behind the feature that actually provides them. A default
+  build is unchanged; a `--no-default-features` build now compiles at all, which it
+  previously did not.
 
 ### Fixed — soundness
 
