@@ -186,6 +186,22 @@ Upgrading from `0.8.0`:
   `&mut T` to the same row — undefined behaviour with no panic and no compile error.
   It now panics like the other paths, as does `query_entity` for symmetry.
 
+### Fixed — sleeping
+
+- **Waking now travels a jointed mechanism in one step.** A sleeping body does not integrate,
+  so a joint pulling on one has its correction silently swallowed and the mechanism looks
+  broken. The wake propagation existed, but as a single pass over `world.joints` in array
+  order: disturbing the deep end of a 12-link chain woke only 5 links in one step — one per
+  substep — while the seven above kept absorbing joint corrections they never integrated, so
+  the chain behaved as if pinned partway down.
+
+  Physically this is not a subtlety: an inextensible chain loads every link the instant the
+  bottom one is disturbed. Contacts have had the right answer all along — `island.rs`
+  union-finds manifolds so a whole pile wakes together — but joints were never part of island
+  construction. Wake propagation now runs over the joint-connected COMPONENT: one mover
+  anywhere in it wakes all of it, and a component with no mover is left alone. Cost scales
+  with the joint count, not the body count.
+
 ### Fixed — rollback
 
 - **`WorldSnapshot` now carries joint state.** Rollback could not un-break a joint.
