@@ -48,6 +48,7 @@ impl JointSolver {
                     dt,
                     min_impulse,
                     max_impulse,
+                    joint.rows.row(row::LIN),
                 )
                 .abs();
             impulse_sum += self
@@ -64,6 +65,7 @@ impl JointSolver {
                     dt,
                     min_impulse,
                     max_impulse,
+                    joint.rows.row(row::LIN + 1),
                 )
                 .abs();
             impulse_sum += self
@@ -80,6 +82,7 @@ impl JointSolver {
                     dt,
                     min_impulse,
                     max_impulse,
+                    joint.rows.row(row::LIN + 2),
                 )
                 .abs();
 
@@ -105,7 +108,7 @@ impl JointSolver {
         // accumulates; the joint stays welded.
         if matches!(joint.data, JointData::Fixed) {
             let mut total_ang_impulse = 0.0;
-            for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+            for (i, axis) in [Vec3::X, Vec3::Y, Vec3::Z].into_iter().enumerate() {
                 total_ang_impulse += self
                     .apply_angular_constraint(
                         rigid_bodies,
@@ -118,6 +121,7 @@ impl JointSolver {
                         dt,
                         f32::NEG_INFINITY,
                         f32::INFINITY,
+                        joint.rows.row(row::ANG + i),
                     )
                     .abs();
             }

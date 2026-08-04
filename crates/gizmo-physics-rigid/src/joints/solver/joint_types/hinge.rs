@@ -54,6 +54,7 @@ impl JointSolver {
                     dt,
                     f32::NEG_INFINITY,
                     f32::INFINITY,
+                    joint.rows.row(row::ANG),
                 )
                 .abs();
         }
@@ -100,6 +101,7 @@ impl JointSolver {
                             dt,
                             0.0,
                             f32::INFINITY,
+                            joint.rows.row(row::LIMIT),
                         )
                         .abs();
                 } else if data.current_angle > data.upper_limit {
@@ -116,6 +118,7 @@ impl JointSolver {
                             dt,
                             f32::NEG_INFINITY,
                             0.0,
+                            joint.rows.row(row::LIMIT),
                         )
                         .abs();
                 }

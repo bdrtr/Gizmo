@@ -61,7 +61,7 @@ impl JointSolver {
             lin_impulse += self
                 .apply_linear_constraint_soft(
                     rigid_bodies, transforms, velocities, idx_a, idx_b, axis_w, r_a, r_b, error,
-                    dt, lo_clamp, hi_clamp, compliance,
+                    dt, lo_clamp, hi_clamp, compliance, joint.rows.row(row::LIN + i),
                 )
                 .abs();
         }
@@ -109,7 +109,7 @@ impl JointSolver {
             ang_impulse += self
                 .apply_angular_constraint_soft(
                     rigid_bodies, transforms, velocities, idx_a, idx_b, axis_w, error, dt,
-                    lo_clamp, hi_clamp, compliance,
+                    lo_clamp, hi_clamp, compliance, joint.rows.row(row::ANG + i),
                 )
                 .abs();
         }
