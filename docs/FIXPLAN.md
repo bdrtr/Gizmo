@@ -684,15 +684,34 @@ taşıyor. `Joint::check_break` (sıfır çağıranı olan **ölü kod**) tek yo
 > eyleyici. Eklem artık iterasyon ortasında değil geçiş sonunda kopuyor → kopma adımında bir
 > adımlık fazla impuls transferi. CHANGELOG'a girdi.
 
-**⬜ commit 4 — motor satırları.** `hinge.rs:161` ve `slider.rs:180`'deki
-`/ self.iterations` elle yazılmış bir birikim vekili (Türkçe yorumu bunu zaten söylüyor);
-motor `row` yuva 9'a taşınıp TOPLAM `motor_max_force * dt`'ye kırpılacak. Ayrı commit,
-çünkü tek per-kind mantığa dokunan parça ve blast radius'u commit 2'den ayrık:
-`hinge_motor_reaches_target_velocity`, `slider_motor_reaches_target_velocity`,
-`slider_servo_reaches_target_position`, `hinge_servo_reaches_target_angle`,
-`world/tests.rs::test_car_simulation`. `golden_state.rs`'e joint sahnesi BURADA ekleniyor
-(`analytical.rs:336` sarkacı iyi koşullu aday) — semantik oturmadan eklemek anında yeniden
-kutsama demek.
+**✅ commit 4 — motor bütçesi geçişin toplamına uygulanıyor + ilk joint golden'ı.**
+`hinge.rs`/`slider.rs`'deki `motor_max_force * dt / self.iterations`, eksik olan birikimin
+elle yazılmış vekiliydi (Türkçe yorumu bunu zaten söylüyordu). Motor artık yuva 9'da
+`accumulate`'ten geçiyor ve bütçe TOPLAMA uygulanıyor.
+
+> **Ölçülen fark: yakınsama.** Toplamı doğru sınırlaması açısından iki şema denk — kopma
+> eşiği gibi burada da beklenen "N kat fazla kuvvet" gerçekleşmiyor. Fark, `iterations`'ın
+> ne olduğunda: eski bölmeyle motorun etkisi koştuğu döngünün UZUNLUĞUNA bağlıydı, yani
+> `iterations`'ı artırmak cevabı iyileştirmiyor, DEĞİŞTİRİYORDU. Yüklü bir servo kolunda,
+> 5/10/20/40 iterasyon:
+>
+> | | 5 | 10 | 20 | 40 |
+> |---|---|---|---|---|
+> | eski, tepe açı | 1.7588705 | 1.7593216 | 1.7595481 | 1.7595280 |
+> | yeni, tepe açı | 1.7590271 | 1.7590069 | 1.7590047 | **1.7590047** |
+>
+> Yeni şemada 20'de oturuyor ve 40 aynısını veriyor; eskisi hiç oturmuyor (stall'daki servo
+> ve doymuş hız motorunda da aynı tablo). `a_force_limited_motor_converges_as_iterations_rise`
+> tam bunu iddia ediyor — eski kodda kırmızı, üç rejimde de.
+
+> **`golden_state.rs` artık bir joint sahnesi içeriyor** (`golden_hinge_pendulum_swing`).
+> CI'ı kapatan hiçbir şeyde eklem yoktu: `headless_stress_test`, `determinism.rs`,
+> `rollback.rs`, `soak_and_golden.rs` ve golden'daki diğer beş sahne joint'siz. Bu
+> kampanyadaki dört joint değişikliğinin hiçbiri bir kapıyı kıpırdatamazdı; her biri elle
+> kurulan sahnelerle ölçüldü. En keskin ölçüt kol UZUNLUĞU DEĞİL, kol HATASI (×1000):
+> Baumgarte katsayısını 0.3→0.25 düşürmek onu 0.226 (226 tolerans) oynatırken `pendulum x`'i
+> ancak 1.0e-3 oynatıyor — mutlak 1e-3'lük bir kol-uzunluğu kilidi ise kısıt hatasının iki
+> katına çıkmasını "değişmedi" sayardı.
 
 **⬜ commit 5 — warm-start + rollback (en riskli, en sonda).** İterasyon 0'dan ÖNCE ayrı bir
 sweep'te `dir * λ_önceki` uygulanması (temas çözücüsündeki `solver/mod.rs:458-476` yapısının
