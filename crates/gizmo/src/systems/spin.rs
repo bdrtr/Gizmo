@@ -5,9 +5,23 @@
 //! artık demoların her frame elle `transform.rotation = ...` yazması GEREKMEZ. Bileşeni
 //! ekle, [`SpinPlugin`]'i (veya doğrudan [`SpinSystem`]) çalıştır, motor döndürsün.
 //!
-//! ```ignore
-//! world.add_component(wheel_mesh, Spin::new(Vec3::X, 30.0)); // 30 rad/s yuvarlanma
-//! app.add_plugin(SpinPlugin);                                // otomatik döner
+//! ```
+//! use gizmo_engine::prelude::*;
+//! use gizmo_engine::core::system::System;
+//! use gizmo_engine::systems::spin::SpinSystem;
+//!
+//! let mut world = World::new();
+//! let wheel = world.spawn();
+//! world.add_component(wheel, Transform::new(Vec3::ZERO));
+//! // 30 rad/s, X ekseni etrafında.
+//! world.add_component(wheel, Spin::new(Vec3::X, 30.0));
+//!
+//! // Bir uygulamada `app.add_plugin(SpinPlugin)` bunu her frame çalıştırır;
+//! // burada tek adımı elle sürüyoruz.
+//! SpinSystem.run(&world, 0.1);
+//!
+//! let rotated = world.query::<&Transform>().unwrap().get(wheel.id()).unwrap().rotation;
+//! assert!(rotated.angle_between(Quat::IDENTITY) > 0.0, "Spin dönüşü uygulamalı");
 //! ```
 
 use gizmo_core::world::World;
