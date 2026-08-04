@@ -22,7 +22,7 @@ rollback = [
 
 [dependencies]
 # Ortak (her iki mimari de kullanır)
-bincode = "1.3.3"
+bincode = "3.0.0"
 serde = { version = "1.0.228", features = ["derive"] }
 tracing = "0.1.44"
 
