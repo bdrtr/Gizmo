@@ -43,6 +43,28 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `add_system` still targets the fixed schedule. Changing its default would have silently
   moved existing users' systems onto a variable `dt`.
 
+### Changed
+
+- **`UiPlugin` and `TransformPlugin` now register on the per-frame schedule.** Layout,
+  hit-testing and transform propagation are read once per rendered frame; running them
+  `0..N` times in the fixed loop was both wasted work and, with vsync off, a hover that
+  registered on roughly one frame in ten.
+
+  Moving transform propagation also turns an intention into a guarantee. `PhysicsPlugin`
+  labels its step `physics_step` with a comment saying transform systems "can order
+  themselves after it", but no such edge was ever wired. The update schedule runs after
+  every fixed step of the frame, so "transforms propagate after physics" is now structural —
+  and it happens after the per-frame update systems too, which is what a camera moved by
+  `FpsLookSystem` needs.
+
+- **The headless runtime has a fixed timestep.** It used to run its single schedule once per
+  loop iteration with the real elapsed `dt`; with the loop's 1 ms sleep that is roughly a
+  thousand ticks a second, so a server registering `PhysicsPlugin` stepped physics ~1000
+  times per second while the same plugin in the windowed runtime stepped at 60 Hz. Both
+  runtimes now use the same sequencing, so a plugin behaves the same in either. Simulation
+  determinism was never at risk — `PhysicsWorld::step` substeps internally at 240 Hz — but
+  the cadence and the wasted work were real.
+
 
 ## [0.9.0] — 2026-08-04
 

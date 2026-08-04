@@ -17,18 +17,17 @@ use crate::plugin::Plugin;
 pub struct App<State: 'static = ()> {
     /// The ECS world holding all entities, components and resources.
     pub world: World,
-    /// The system schedule executed every update step.
+    /// The system schedule executed every fixed simulation step — `0..N` times per tick,
+    /// always with the same `dt`. Physics and anything that must be tick-rate independent.
     pub schedule: Schedule,
     /// Mirror of [`windowed::App::update_schedule`](crate::windowed::App::update_schedule),
     /// so a [`Plugin`] can register per-frame systems without knowing which runtime it is
     /// being built into.
     ///
-    /// **Cadence caveat:** the headless runtime has no fixed-timestep loop — it runs its
-    /// single tick with the real elapsed `dt` — so here `schedule` and `update_schedule`
-    /// both run exactly once per tick and the distinction carries no timing difference. It
-    /// exists for portability of plugin code. (`PhysicsWorld::step` keeps its own internal
-    /// fixed substepping, so simulation determinism does not depend on this.) Giving the
-    /// headless loop a real fixed step is tracked in docs/FIXPLAN.md.
+    /// The cadence matches the windowed runtime: `schedule` drains a fixed-timestep
+    /// accumulator (`0..N` times per tick, constant `dt`) and this one runs exactly once per
+    /// tick with the real elapsed delta. A plugin can therefore be written once and behave
+    /// the same in either runtime.
     pub update_schedule: Schedule,
     setup_fn: Option<Box<dyn FnOnce(&mut World) -> State + 'static>>,
     update_fn: Option<Box<dyn FnMut(&mut World, &mut State, f32)>>, // dt
@@ -155,8 +154,24 @@ impl<State: 'static> App<State> {
                 update(&mut self.world, &mut state, dt);
             }
 
-            self.schedule.run(&mut self.world, dt);
-            self.update_schedule.run(&mut self.world, dt);
+            // Same sequencing as the windowed runtime: drain the fixed-timestep accumulator
+            // into `schedule`, then run `update_schedule` exactly once.
+            //
+            // This loop used to call `schedule.run(world, dt)` directly with the real
+            // elapsed delta, once per iteration. With the 1 ms sleep below that is roughly a
+            // thousand ticks a second, so a server registering `PhysicsPlugin` stepped its
+            // physics systems ~1000 times per second at a wall-clock dt, while the same
+            // plugin in the windowed runtime stepped at a fixed 60 Hz. A plugin could not be
+            // written once and behave the same in both — which for a dedicated server, the
+            // one place a fixed step matters most, was the wrong way round.
+            crate::frame::run_fixed_and_update(
+                &mut self.world,
+                &mut self.schedule,
+                &mut self.update_schedule,
+                dt,
+                dt,
+                |_| {},
+            );
 
             // Flush deferred commands (Commands/CommandQueue) queued by the update
             // hook — mirrors the windowed loop. `Schedule::run` only flushes BETWEEN

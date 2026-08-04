@@ -366,37 +366,22 @@ client-server mesajları round-trip testleriyle birlikte taşınmalı.
 > özel bir `App` için emniyet ağı, ve yeni spawn edilmiş mesh'e `GlobalTransform` iliştiren
 > yer o. Plugin kayıtlıyken yayılım zaten güncel oluyor.
 
-### ⬜ B1-followup-3 — headless runtime'ın sabit-adım döngüsü yok
-`headless::App::run_default` tek schedule'ı gerçek `dt` ile koşturuyor; windowed
-runtime'daki accumulator burada yok. Determinizm çökmüyor çünkü `PhysicsWorld::step`
-kendi içinde 240 Hz sabit substep uyguluyor — ama iki runtime'ın kadansı farklı ve
-determinizmin en çok önemsendiği yer (adanmış sunucu) sabit-adımsız. `frame::run_fixed_and_update`
-zaten hazır; headless'ı ona geçirmek davranış değiştirir, kendi doğrulamasını ister.
-
-- ⬜ **B2 — Sahne sorgu katmanı.** `cast_shape`, `overlap_shape`, `project_point`,
-  `QueryFilter { layers, mask, exclude, predicate }`. Primitifler hazır:
-  `DynamicAabbTree::query_aabb`, `NarrowPhase::test_collision`, `CollisionLayer::can_collide_with`,
-  ve bağlanmamış `Gjk::conservative_advancement`. Kanıt ki gerekli: motorun kendi karakter
-  (`character.rs:64-76`) ve araç (`dynamics/systems.rs:41-49`) kodu broadphase'i atlayıp
-  her frame O(N) tarıyor.
-- ⬜ **B3 — Sahne registry'sini aç.** Şu an **8 tip** (`gizmo-scene/src/registry.rs:9-51`) →
-  ışık/kamera/animasyon/ses ve *her kullanıcı component'i* sessizce kaydedilmiyor.
-  `App::register_scene_component::<T>()` + `version` alanı + migrasyon zinciri.
-- ⬜ **B4 — Joint çözücüsü.** Biriken impuls + warm-start yok (`joints/solver/mod.rs:43-122`);
-  `center_of_mass` yok sayılıyor (`joint_types/fixed.rs:30-31`); `break_force` tek iterasyonun
-  transient'inden hesaplanıyor; joint'ler island kurulumuna dahil değil (`pipeline.rs:560`).
-- ⬜ **B5** — Gamepad girdisi. ⬜ **B6** — `PresentMode` yapılandırılabilir.
-  ⬜ **B7** — Cylinder + Heightfield collider.
-- 🔄 **B8** — iki parçası vardı:
-  - ✅ **Boş point-shadow pass'leri** (2026-08-04, `af6f168`): `record_shadow_passes` artık
-    shader'ın zaten okuduğu `point_shadows_enabled` bayrağına bakıyor. Varsayılan kapalı
-    olduğu için her frame 6 depth pass'i (aydınlatılan bir batch'in 23 draw'ının 12'si)
-    hiç örneklenmeyen bir 1024²×6 cubemap'e yazılıyordu. Golden-image testi bayrağın iki
-    hâlinde bit-eş kare talep ediyor — hem iddiayı (atlanan iş gözlemlenemezdi) kanıtlıyor
-    hem de shader'ın GERÇEKTEN örneklediği bir pass'i yanlışlıkla kapatmaya karşı koruyor.
-  - ⬜ **10 ışık tavanı** hâlâ duruyor (`gpu_types.rs:127` `[LightData; 10]`, kararsız ECS
-    iterasyon sırasına göre seçilen ilk 10, mesafe/öncelik culling'i yok) — clustered/tiled
-    ışık culling'i gerekiyor. Deferred pipeline'a sahip olmanın asıl gerekçesi bu.
+### ✅ B1-followup-3 — headless runtime artık sabit-adım koşuyor
+> **Bitti (2026-08-04).** `run_default` artık `frame::run_fixed_and_update` kullanıyor —
+> windowed runtime'la birebir aynı sıralama.
+>
+> **Öncesi:** döngü `schedule.run(world, dt)`'yi gerçek geçen süreyle, iterasyon başına bir
+> kez çağırıyordu. Alttaki 1 ms `sleep` ile bu saniyede ~1000 tick demek; yani
+> `PhysicsPlugin` kaydeden bir sunucu fizik sistemlerini **saniyede ~1000 kez** duvar-saati
+> `dt`'siyle adımlıyordu, aynı plugin windowed'da sabit 60 Hz'de adımlarken. Bir plugin bir
+> kez yazılıp iki runtime'da aynı davranamıyordu — ve bu, sabit adımın en çok önemsendiği
+> yerde (adanmış sunucu) tersine dönmüş hâldeydi.
+>
+> **Not:** simülasyon determinizmi zaten çökmüyordu, çünkü `PhysicsWorld::step` kendi içinde
+> 240 Hz sabit substep uyguluyor. Sorun kadans ve boşa iş idi, bit-eşlik değil —
+> `headless_stress_test` hash'i değişmedi (`EF6E4AC3644BF3BA`).
+>
+> `server/` ve `cradle/` derleniyor.
 
 ### ⬜ GPU test flake'i — kısmen çözüldü, kalanı ölçüldü
 `crates/gizmo/src/systems/render/mod.rs`'teki golden-image testleri her biri kendi wgpu
