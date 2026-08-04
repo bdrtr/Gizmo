@@ -11,9 +11,6 @@ pub struct ScriptEngine {
     pub log_queue: Arc<Mutex<Vec<(String, String)>>>,
 }
 
-unsafe impl Send for ScriptEngine {}
-unsafe impl Sync for ScriptEngine {}
-
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Script {
     pub file_path: String,
@@ -84,11 +81,15 @@ impl ScriptEngine {
     pub fn reload_if_changed(&mut self, _path: &str) -> Result<bool, String> {
         Ok(false)
     }
-    pub fn has_function(&self, _path: &str, _name: &str) -> bool {
+    // `&mut self` on these two mirrors the native `engine::ScriptEngine`, whose
+    // `unsafe impl Sync` depends on no `&self` method reaching the Lua VM. The
+    // wasm stub has no VM, but keeping the signatures identical means calling
+    // code compiles unchanged on both targets.
+    pub fn has_function(&mut self, _path: &str, _name: &str) -> bool {
         false
     }
     pub fn run_entity_update(
-        &self,
+        &mut self,
         _path: &str,
         _func_name: &str,
         _ctx: &ScriptContext,
