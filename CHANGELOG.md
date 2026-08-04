@@ -16,6 +16,34 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A per-frame `Update` schedule.** `App` now carries two: `schedule` still runs `0..N`
+  times per rendered frame at a constant `dt` (physics, unchanged — nothing moved out of
+  it), and the new `update_schedule` runs **exactly once** per frame with the real frame
+  delta. Register on it with `App::add_update_system`.
+
+  This closes a defect that was hard to see and easy to blame on hardware. The single
+  schedule ran only inside the fixed-timestep loop, so with the renderer's default
+  `PresentMode::AutoNoVsync` pushing hundreds of frames per second against a 60 Hz
+  accumulator, most rendered frames ran no systems at all. `Input` is captured once per
+  rendered frame and its edges cleared once per rendered frame, but were consumed 0..N
+  times — so keypresses and mouse motion on those frames were written and discarded with
+  nothing observing them. Taps went missing; mouse-look arrived in fragments.
+
+  `FpsLookPlugin` moves to the per-frame schedule for exactly that reason. Its placement
+  is locked by a test: running the fixed schedule must not move the camera, running the
+  update schedule must.
+
+  The sequencing lives in `gizmo_app::frame::run_fixed_and_update` with seven tests that
+  need neither a window nor a GPU — including the two that state the contract directly:
+  nine short frames run the fixed schedule zero times and update nine times, and one long
+  frame runs fixed four times and update once.
+
+  `add_system` still targets the fixed schedule. Changing its default would have silently
+  moved existing users' systems onto a variable `dt`.
+
+
 ## [0.9.0] — 2026-08-04
 
 A correctness and honesty release. It carries no new features: it closes two paths to

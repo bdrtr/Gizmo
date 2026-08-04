@@ -69,8 +69,18 @@ impl<State: 'static> super::Plugin<State> for AssetPlugin {
 pub struct App<State: 'static = ()> {
     /// The ECS world holding all entities, components and resources.
     pub world: World,
-    /// The system schedule executed every (fixed) simulation step.
+    /// The system schedule executed every (fixed) simulation step — `0..N` times per
+    /// rendered frame, always with the same `dt`. Physics and anything that must be
+    /// frame-rate independent or deterministic belongs here.
     pub schedule: Schedule,
+    /// The system schedule executed **exactly once** per rendered frame, with the real
+    /// frame `dt`. Gameplay, cameras, UI and anything reading input edges belongs here.
+    ///
+    /// Before 0.10 there was only `schedule`, and because it runs only inside the fixed
+    /// loop, a system registered on it observed nothing at all on frames where the
+    /// accumulator had not filled — which, with vsync off, is most of them. See
+    /// [`crate::frame`] for the full story.
+    pub update_schedule: Schedule,
     window_title: String,
     window_size: (u32, u32),
 

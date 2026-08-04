@@ -6,6 +6,7 @@ impl<State: 'static> App<State> {
         let mut app = Self {
             world: World::new(),
             schedule: Schedule::new(),
+            update_schedule: Schedule::new(),
             window_title: title.to_string(),
             window_size: (width, height),
             setup_fn: None,
@@ -172,7 +173,41 @@ impl<State: 'static> App<State> {
         self
     }
 
-    pub fn configure_set(mut self, config: gizmo_core::system::SetConfig) -> Self {
+    
+    /// Registers a system on the **per-frame** schedule: it runs exactly once per rendered
+    /// frame, with the real frame `dt`.
+    ///
+    /// This is what gameplay code almost always wants. [`add_system`](Self::add_system)
+    /// registers on the fixed-timestep schedule instead, which runs `0..N` times per frame
+    /// depending on the accumulator — correct for physics, and silently wrong for anything
+    /// reading `Input::is_key_just_pressed` or `mouse_delta`, since those edges are captured
+    /// and cleared once per *rendered* frame.
+    ///
+    /// ```no_run
+    /// # use gizmo_app::windowed::App;
+    /// App::<()>::new("demo", 800, 600)
+    ///     // camera, UI, input — once per rendered frame, with the real frame delta
+    ///     .add_update_system(|| { /* … */ })
+    ///     // physics-adjacent — constant dt, may run zero or several times per frame
+    ///     .add_system(|| { /* … */ });
+    /// ```
+    pub fn add_update_system<Params, S: gizmo_core::system::IntoSystemConfig<Params>>(
+        mut self,
+        system: S,
+    ) -> Self {
+        self.update_schedule.add_di_system(system);
+        self
+    }
+
+    /// [`add_update_system`](Self::add_update_system) for the `&mut self` builder style.
+    pub fn add_update_system_mut<Params, S: gizmo_core::system::IntoSystemConfig<Params>>(
+        &mut self,
+        system: S,
+    ) {
+        self.update_schedule.add_di_system(system);
+    }
+
+pub fn configure_set(mut self, config: gizmo_core::system::SetConfig) -> Self {
         self.schedule.configure_set(config);
         self
     }

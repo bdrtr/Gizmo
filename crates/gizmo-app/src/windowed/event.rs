@@ -329,7 +329,9 @@ impl<State: 'static> App<State> {
                             if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                 profiler.begin_scope("physics");
                             }
-                            // PhysicsTime resource'u yoksa oluştur
+                            // `PhysicsTime` is ensured and fed by `frame::run_fixed_and_update`
+                            // below; it is created here only so the rollback block that follows
+                            // can read `fixed_dt` before the first frame has stepped.
                             if self
                                 .world
                                 .get_resource::<gizmo_core::time::PhysicsTime>()
@@ -337,13 +339,6 @@ impl<State: 'static> App<State> {
                             {
                                 self.world
                                     .insert_resource(gizmo_core::time::PhysicsTime::default());
-                            }
-                            {
-                                let mut phys_time = self
-                                    .world
-                                    .get_resource_mut::<gizmo_core::time::PhysicsTime>()
-                                    .unwrap();
-                                phys_time.accumulate(sim_dt);
                             }
 
                             #[cfg(feature = "network")]
@@ -406,62 +401,35 @@ impl<State: 'static> App<State> {
                                 }
                             }
 
-                            // Sabit dt'de normal fizik adımları — frame rate'ten bağımsız
-                            let mut phys_steps = 0u32;
-                            let mut last_fixed_dt = 0.0f32;
-                            loop {
-                                let should = self
-                                    .world
-                                    .get_resource::<gizmo_core::time::PhysicsTime>()
-                                    .map(|pt| pt.should_step())
-                                    .unwrap_or(false);
-                                if !should {
-                                    break;
-                                }
-
-                                let fixed_dt = self
-                                    .world
-                                    .get_resource::<gizmo_core::time::PhysicsTime>()
-                                    .map(|pt| pt.fixed_dt())
-                                    .unwrap_or(1.0 / 60.0);
-
-                                // ECS fizik sistemlerini sabit dt ile çalıştır
-                                self.schedule.run(&mut self.world, fixed_dt);
-
-                                #[cfg(feature = "network")]
-                                {
-                                    if let Some(mut rm) = self.world.get_resource_mut::<gizmo_net::rollback::RollbackManager>() {
-                                        rm.end_frame(&self.world);
+                            // Fixed-timestep simulation, then the once-per-frame update.
+                            //
+                            // The accumulator drains into `self.schedule` at a constant dt
+                            // (0..N times, frame-rate independent), and `self.update_schedule`
+                            // then runs EXACTLY ONCE with the real frame delta. That second
+                            // part is the fix for the defect this loop used to have: with only
+                            // the fixed schedule, a frame that did not fill the accumulator ran
+                            // no systems at all — and since `Input` is captured just above and
+                            // cleared at the bottom of this same frame, key edges and mouse
+                            // deltas on those frames were written and discarded unobserved.
+                            // With vsync off by default, that was most frames.
+                            //
+                            // See `crate::frame` for the sequencing and its regression tests.
+                            let steps = crate::frame::run_fixed_and_update(
+                                &mut self.world,
+                                &mut self.schedule,
+                                &mut self.update_schedule,
+                                sim_dt,
+                                dt,
+                                |_world| {
+                                    #[cfg(feature = "network")]
+                                    if let Some(mut rm) = _world
+                                        .get_resource_mut::<gizmo_net::rollback::RollbackManager>()
+                                    {
+                                        rm.end_frame(_world);
                                     }
-                                }
-
-                                let mut phys_time = self
-                                    .world
-                                    .get_resource_mut::<gizmo_core::time::PhysicsTime>()
-                                    .unwrap();
-                                phys_time.consume_step();
-                                phys_steps += 1;
-                                last_fixed_dt = fixed_dt;
-                            }
-                            // Accumulator sonucu: bu karede kaç sabit fizik adımı koştu.
-                            // 0-adımlı kareler (henüz birikmedi) loglanmaz; çok yüksek bir
-                            // sayı frame-spike/spiral-of-death işaretidir.
-                            if phys_steps > 0 {
-                                tracing::debug!(
-                                    steps = phys_steps,
-                                    fixed_dt = last_fixed_dt,
-                                    "[frame] fixed-timestep physics steps"
-                                );
-                            }
-
-                            // İnterpolasyon alpha'sını hesapla (render için)
-                            {
-                                let mut phys_time = self
-                                    .world
-                                    .get_resource_mut::<gizmo_core::time::PhysicsTime>()
-                                    .unwrap();
-                                phys_time.compute_alpha();
-                            }
+                                },
+                            );
+                            let _ = steps;
 
                             if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                 profiler.end_scope("physics");
