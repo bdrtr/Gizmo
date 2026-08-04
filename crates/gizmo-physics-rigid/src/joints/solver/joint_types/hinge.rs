@@ -140,11 +140,18 @@ impl JointSolver {
                     data.motor_target_velocity
                 };
                 let vel_err = target_vel - rel_vel;
-                // Step başına toplam motor impulse bütçesini iterasyonlara böl; aksi
-                // halde her iterasyon ayrı sınırlandığından motor ~iterations kat fazla
-                // kuvvet uygulardı.
-                let max_impulse = data.motor_max_force * dt / self.iterations.max(1) as f32;
-                let lambda = (vel_err / k).clamp(-max_impulse, max_impulse);
+                // Motor bütçesi geçişin TOPLAMINA uygulanır. Eskiden burada elle yazılmış
+                // bir `/ self.iterations` vardı: her iterasyon kendi payını ayrı
+                // kırptığından motor bütçesine ancak N iterasyonda RAMPLANARAK ulaşabiliyor
+                // ve aşırı hızlandığında fazlasını geri veremiyordu. O bölme, eksik olan
+                // birikimin elle yazılmış vekiliydi — artık birikim var.
+                let max_impulse = data.motor_max_force * dt;
+                let lambda = Self::accumulate(
+                    joint.scratch.row(row::MOTOR),
+                    vel_err / k,
+                    -max_impulse,
+                    max_impulse,
+                );
 
                 let delta_a = inv_i_a.mul_vec3(axis_w) * lambda;
                 let delta_b = inv_i_b.mul_vec3(axis_w) * lambda;

@@ -199,6 +199,85 @@ fn golden_two_box_stack_rest_heights() {
     lock("stack upper y", w.transforms[2].position.y, 1.499_451_6);
 }
 
+/// A pendulum on a hinge, swinging under gravity. The first joint scene in this file.
+///
+/// Nothing that gates CI has a joint in it: `headless_stress_test`, `determinism.rs`,
+/// `rollback.rs`, `soak_and_golden.rs` and every scene above are joint-free. Every joint
+/// change in this campaign — centre-of-mass lever arms, accumulated impulses, the net-reaction
+/// break check, the motor budget — could therefore have moved joint behaviour arbitrarily
+/// without a single gate noticing, and each one had to be measured by hand against a
+/// hand-built scene to know whether it had. That gap closes here.
+///
+/// Deliberately well-conditioned, like the rest of the file: a single hinge, no limits, no
+/// motor, no contact. The bob swings on a fixed arm, so its position is bounded and smooth
+/// and cross-platform `f32` drift stays orders below `TOL`. A rope or a limit would be the
+/// wrong choice — those saturate against a bound, which is exactly where small differences
+/// get amplified.
+#[test]
+fn golden_hinge_pendulum_swing() {
+    let mut w = PhysicsWorld::new();
+
+    let mut anchor = RigidBody::new_static();
+    anchor.wake_up();
+    w.add_body(
+        BodyHandle::from_id(1),
+        anchor,
+        Transform::new(Vec3::new(0.0, 5.0, 0.0)),
+        Velocity::default(),
+        Collider::sphere(0.1),
+    );
+
+    let mut rb = RigidBody::new(1.0, true);
+    rb.wake_up();
+    let c = Collider::box_collider(Vec3::splat(0.2));
+    rb.update_inertia_from_collider(&c);
+    w.add_body(
+        BodyHandle::from_id(2),
+        rb,
+        Transform::new(Vec3::new(2.0, 5.0, 0.0)), // arm horizontal: released from the top
+        Velocity::default(),
+        c,
+    );
+
+    let j = gizmo_physics_rigid::Joint::hinge(
+        BodyHandle::from_id(1),
+        BodyHandle::from_id(2),
+        Vec3::ZERO,
+        Vec3::new(-2.0, 0.0, 0.0),
+        Vec3::Z,
+    );
+    w.joints.push(j);
+
+    for _ in 0..180 {
+        w.step(1.0 / 60.0).expect("step");
+    }
+
+    lock("pendulum x", w.transforms[1].position.x, 1.892_767);
+    lock("pendulum y", w.transforms[1].position.y, 4.351_293);
+    lock("pendulum vx", w.velocities[1].linear.x, 1.100_116_5);
+    lock("pendulum vy", w.velocities[1].linear.y, 3.208_478_7);
+
+    // The arm length is the joint's whole job, and its ERROR is the sharpest instrument in
+    // this file. Scaled by 1000 on purpose: the raw length is 2.0008, so an absolute 1e-3
+    // lock on it would accept anything from 1.999 to 2.001 — it would accept the constraint
+    // error changing by a factor of two and call it unchanged. Scaling the error into the
+    // same range as the other locks gives it the same resolution.
+    //
+    // Measured sensitivity: dropping the solver's Baumgarte factor from 0.3 to 0.25 moves
+    // this by 0.226 — 226 tolerances — while it moves `pendulum x` by 1.0e-3, which barely
+    // clears the tolerance at all. This is the line that will catch a joint regression.
+    let arm = (w.transforms[1].position - Vec3::new(0.0, 5.0, 0.0)).length();
+    lock("pendulum arm error x1000", (arm - 2.0) * 1000.0, 0.846_624_4);
+
+    // …and independently of every golden value above: whatever those numbers become after a
+    // deliberate re-blessing, a hinge that lets the bob drift off its arm is broken, not
+    // merely different.
+    assert!(
+        (arm - 2.0).abs() < 0.02,
+        "the hinge must hold the 2 m arm, got {arm}"
+    );
+}
+
 /// The gate on the gate: `state_hash` must stay reproducible within a process.
 ///
 /// This is what `headless_stress_test` actually checks, kept here so the property is

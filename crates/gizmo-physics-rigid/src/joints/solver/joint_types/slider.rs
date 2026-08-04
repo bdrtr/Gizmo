@@ -154,8 +154,8 @@ impl JointSolver {
 
         // 4. Motor — velocity along axis
         if data.use_motor {
-            // Step başına toplam motor impulse bütçesini iterasyonlara böl (bkz. hinge motor).
-            let max_impulse = data.motor_max_force * dt / self.iterations.max(1) as f32;
+            // Bütçe geçişin TOPLAMINA uygulanır — bkz. hinge motoru.
+            let max_impulse = data.motor_max_force * dt;
 
             let v_a = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
             let v_b = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
@@ -184,7 +184,12 @@ impl JointSolver {
                 + inv_i_a.mul_vec3(rxa_a).dot(rxa_a)
                 + inv_i_b.mul_vec3(rxa_b).dot(rxa_b);
             if k > 1e-10 {
-                let lambda = (vel_err / k).clamp(-max_impulse, max_impulse);
+                let lambda = Self::accumulate(
+                    joint.scratch.row(row::MOTOR),
+                    vel_err / k,
+                    -max_impulse,
+                    max_impulse,
+                );
                 let impulse = axis_w * lambda;
 
                 if idx_a < idx_b {

@@ -25,7 +25,8 @@ pub(crate) mod row {
     pub const LIMIT: usize = 6;
     /// 7,8 — ball-socket asimetrik swing limitleri (perp1, perp2).
     pub const SWING: usize = 7;
-    // 9 — REZERVE: motor satırı (bkz. docs/FIXPLAN.md, B4 commit 4).
+    /// 9 — motor / servo satırı. Kopma toplamına KATILMAZ: motor dış yük değil eyleyicidir.
+    pub const MOTOR: usize = 9;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
