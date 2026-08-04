@@ -549,6 +549,38 @@ client-server mesajları round-trip testleriyle birlikte taşınmalı.
 > aktarmıyor. Clamp'ten sonraki substep'te ayrık çözücü teması görüp aktarıyor, dolayısıyla
 > etki sınırlı — ama hafif bir plakaya karşı mermi bir kare "ölü durur".
 
+### ✅ CCD — belgelenen iki açık da kapandı (`ccd_analytical` 9 test, 0 ignored)
+> **Bitti (2026-08-04).** Rung 8 (uyanık dinamik hedef) bir önceki turda gerçek düzeltmeydi.
+> Rung 9 (dönen ince cisim) ise **bir düzeltme değil, bir çürütme**.
+>
+> **Belgelenen dönme açığı ölçümü geçemedi. Senaryosu da iddiası da hatalıydı:**
+>
+> 1. **Senaryo bozuktu.** Yassı kutu merkezi x=-1.0, x-yarı-uzanımı 1.0 → köşesi t=0'da
+>    duvara (x=0) **zaten değiyordu**. İlk karede temas impulsu yiyip savruluyor (ω 200→194),
+>    sonra 60 kare boyunca duvara bir daha hiç değmiyor (**ölçüm: 0/60 örtüşme**, AABB
+>    uzaklaşıyor). "Dönen kenar duvarı süpürür ama temas üretilmez" diyordu; kenar duvarı
+>    hiç süpürmüyordu. Üstelik assertion'ı yoktu → ignore kalksa hata dururken yeşil geçerdi.
+>
+> 2. **İddia tutmadı.** Temiz başlayan senaryolarda ayrık narrowphase yakalıyor:
+>    | plaka | ω | substep yayı | pencere | sonuç |
+>    |---|---|---|---|---|
+>    | y=0.9 | 200 rad/s | 47.7° | 118° | ω 200→117 |
+>    | y=0.985 | 600 rad/s | 143° | 65° | ω 600→544 |
+>    Uzun bir çubukta penetrasyon penceresi substep yayından dar olmuyor — süpüren uç değil,
+>    gövdenin tamamı.
+>
+> **Kendi ara bulgum da yanlıştı, kayda geçiyor.** Bir ara "ECS yolu hiç temas üretmiyor,
+> doğrudan `PhysicsWorld` üretiyor" ölçtüm ve bunu ciddi bir ayrışma sandım. Artefaktmış:
+> o denemede `sticky()` (**sürtünme = 0**) ve yarı süre kullanmıştım. Dönen bir cismi
+> yavaşlatan teğetsel impulstur. Sürtünmeli malzeme + 2 saniyeyle ECS yolu ω'yı
+> **117.487**'ye düşürüyor — doğrudan `PhysicsWorld::step` ölçümüyle **birebir aynı**.
+> İki yol ayrışmıyor.
+>
+> **DİKKAT:** bu dönme CCD'si VAR demek değil. `speculative_contact` hâlâ yalnız öteleme,
+> backstop yalnız doğrusal merkez deltasını süpürüyor. Yeterince uç bir konfigürasyon
+> muhtemelen hâlâ tünelller — kurulamadı, o kadar. Belgelenen açık ise yanlıştı, ve yanlış
+> bir "bilinen açık" taşımak gerçek bir açık taşımaktan daha pahalı: kimse kovalamıyor.
+
 ### ✅ Golden state fixture'ı — davranış artık kilitli
 > **Bitti (2026-08-04).** `crates/gizmo-physics-rigid/tests/golden_state.rs`, 5 test.
 >

@@ -273,45 +273,90 @@ fn ccd_r8_fast_body_vs_dynamic_awake_thin_plate_does_not_tunnel() {
     assert!(peak < 0.05, "uyanık dinamik plakadan geçmemeli, tepe_x={peak}");
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Rung 9 — DÖNEN İNCE CİSİM temas üretir.
+//
+// Bu, eski `ccd_hole_fast_spinning_thin_body` #[ignore]'unun yerine geçiyor.
+// O açık ÖLÇÜMLE DOĞRULANMADI; hem senaryosu hem iddiası hatalıydı:
+//
+//  1) SENARYO BOZUKTU. Yassı kutu merkezi x=-1.0, x-yarı-uzanımı 1.0 → köşesi
+//     t=0'da duvara (x=0) ZATEN değiyordu. İlk karede temas impulsu yiyip
+//     savruluyor (ω 200→194), sonra 60 kare boyunca duvara BİR DAHA değmiyordu
+//     (ölçüm: 0/60 örtüşme, AABB duvardan uzaklaşıyor). "Dönen kenar duvarı
+//     süpürür ama temas üretilmez" diyordu; kenar duvarı hiç süpürmüyordu.
+//     Assertion'ı da yoktu → #[ignore] kalksa hata dururken YEŞİL geçerdi.
+//
+//  2) İDDİA DA TUTMADI. Temiz başlayan senaryolarda ayrık narrowphase temasları
+//     yakalıyor:
+//       * plaka y=0.9,   ω=200 rad/s (47.7°/substep), pencere 118° → ω 200→117
+//       * plaka y=0.985, ω=600 rad/s (143°/substep),  pencere  65° → ω 600→544
+//     Uzun bir çubukta penetrasyon penceresi substep yayından dar olmuyor: süpüren
+//     uç değil, gövdenin tamamı.
+//
+// KENDİ ARA BULGUM DA YANLIŞTI, kayda geçiyor: bir ara "ECS yolu hiç temas
+// üretmiyor" ölçtüm. Artefakttı — o denemede `sticky()` (sürtünme = 0) ve yarı
+// süre kullanmıştım. Dönen bir cismi yavaşlatan TEĞETSEL impulstur. Sürtünmeli
+// malzeme ve 2 saniyeyle ECS yolu ω'yı 117.487'ye düşürüyor: doğrudan
+// `PhysicsWorld::step` ölçümüyle BİREBİR aynı. İki yol ayrışmıyor.
+//
+// DİKKAT — bu dönme CCD'si VAR demek DEĞİL. `speculative_contact` hâlâ yalnız
+// öteleme (gjk/simplex.rs) ve backstop yalnız doğrusal merkez deltasını süpürüyor
+// (pipeline.rs `ccd_resolve_step`). Yeterince uç bir konfigürasyon muhtemelen hâlâ
+// tünelller; kurulamadı, o kadar. Belgelenen açık ise yanlıştı.
+// ═══════════════════════════════════════════════════════════════════════════
 #[test]
-#[ignore = "AÇIK: dönme CCD'si yok — speculative yalnız öteleme (simplex.rs:354), backstop \
-yalnız doğrusal merkez deltasını süpürür (pipeline.rs:870,879). Hızlı dönen ince cismin \
-kenarı tüneller. Çözüm: süpürme AABB + backstop yoluna |ω|·max_uzanım ekle."]
-fn ccd_hole_fast_spinning_thin_body() {
-    let mut w = scene();
-    wall(&mut w, 0.0, 0.02);
-    // İnce yassı kutu, merkezi ~sabit ama yüksek açısal hız → kenar duvarı süpürür.
+fn ccd_r9_spinning_thin_body_generates_contacts() {
+    const PLATE_Y: f32 = 0.9;
+
+    let mut w = World::new();
+    w.insert_resource(PhysicsWorld::new().with_gravity(Vec3::ZERO));
+
+    // Geniş ince yatay plaka. Çubuk t=0'da x boyunca yattığı için DEĞMİYOR —
+    // eski senaryonun aksine temas hâlinde başlamıyoruz.
+    let plate = w.spawn();
+    let mut pr = RigidBody::new_static();
+    pr.wake_up();
+    w.add_component(plate, Transform::new(Vec3::new(0.0, PLATE_Y, 0.0)));
+    w.add_component(plate, pr);
+    w.add_component(plate, Velocity::default());
+    w.add_component(plate, Collider::box_collider(Vec3::new(5.0, 0.02, 5.0)));
+
+    let rod = w.spawn();
     let mut rb = RigidBody::new(1.0, false);
     rb.linear_damping = 0.0;
-    rb.angular_damping = 0.0;
+    rb.angular_damping = 0.0; // temas hiç olmazsa ω tam 200'de kalır → ayırt edici oracle
     rb.ccd_enabled = true;
-    rb.calculate_box_inertia(2.0, 0.04, 2.0);
+    rb.use_gravity = false; // düşüş temasla karışmasın
+    rb.calculate_box_inertia(2.0, 0.04, 0.04);
     rb.wake_up();
-    let e = w.spawn();
-    // Kenarı duvar düzlemine (x=0) ulaşacak şekilde konumla; merkez -1.0'da.
-    w.add_component(e, Transform::new(Vec3::new(-1.0, 0.0, 0.0)));
-    w.add_component(e, rb);
+    w.add_component(rod, Transform::new(Vec3::ZERO));
+    w.add_component(rod, rb);
     let mut v = Velocity::new(Vec3::ZERO);
-    v.angular = Vec3::new(0.0, 0.0, 200.0); // 200 rad/s
-    w.add_component(e, v);
-    w.add_component(e, Collider::box_collider(Vec3::new(1.0, 0.02, 1.0)).with_material(sticky()));
-    let (_peak, _, _) = run(&w, e.id(), 60);
+    v.angular = Vec3::new(0.0, 0.0, 200.0);
+    w.add_component(rod, v);
+    // Varsayılan (sürtünmeli) malzeme — `sticky()` sürtünmesizdir ve dönen bir cisme
+    // teğetsel impuls uygulamaz, yani hiçbir şey ölçmez.
+    w.add_component(rod, Collider::box_collider(Vec3::new(1.0, 0.02, 0.02)));
 
-    // Bu test bir assertion'a SAHİP OLMALI, yoksa #[ignore] kalkarsa hata hâlâ oradayken
-    // yeşil geçer — denetimin yakaladığı tam da buydu ("dürüst olmayan ignore").
-    //
-    // Oracle: `angular_damping = 0.0` ve dönen kenar duvarı gerçekten süpürürse bir temas
-    // impulsu ω'yı düşürmeli. Temas hiç üretilmezse ω tam 200.0'da kalır.
+    for _ in 0..480 {
+        physics_step_system(&w, DT); // DT = 1/240 → 2 saniye
+    }
+
     let omega = w
         .borrow::<Velocity>()
-        .get(e.id())
-        .map(|v| v.angular.z)
-        .expect("entity keeps its Velocity");
+        .get(rod.id())
+        .expect("rod keeps its Velocity")
+        .angular
+        .z;
+
     assert!(
         omega.abs() < 190.0,
-        "İSTENEN: dönen kenar duvarla temas edip ω'yı düşürmeli; ω={omega} (başlangıç 200, \
-         sönümleme yok → hiç temas olmadı). Dönme CCD'si yok: speculative yalnız öteleme \
-         (gjk/simplex.rs), backstop yalnız doğrusal merkez deltasını süpürüyor \
-         (pipeline.rs ccd_resolve_step). Çözüm: süpürme AABB'sine |ω|·max_uzanım ekle."
+        "dönen çubuk plakayla temas edip açısal momentum kaybetmeli; ω={omega} \
+         (başlangıç 200, angular_damping=0 → hiç temas üretilmemiş demektir)"
+    );
+    // Ve temas çözücüsü açısal enerji POMPALAMAMALI.
+    assert!(
+        omega.abs() <= 200.0 + 1e-3,
+        "temas çözücüsü açısal enerji pompaladı: ω={omega} > 200"
     );
 }
