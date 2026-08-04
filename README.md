@@ -17,15 +17,16 @@ Gizmo Engine is a high-performance, data-driven, and fully modular game developm
 
 ## ✨ Features
 
-- **Archetype-based ECS:** A columnar, data-driven Entity Component System powered by `mimalloc`. Built for maximum cache locality and lock-free concurrency, easily scaling to tens of thousands of entities. Component access goes through a borrow-checked query API — shared reads via `World::query` (read-only), exclusive mutation via `World::query_mut`/`borrow_mut` — so two aliasing `&mut` views can never be created from safe code.
-- **Custom Vectorial Physics Engine:** Built from scratch using purely mathematical vectors. Features include:
-  - Sweep and Prune (SAP) Broad-Phase with Rayon multi-threading.
-  - GJK/EPA Narrow-Phase for accurate collision detection (Convex Hulls, Capsules, Polygons).
-  - FEM (Finite Element Method) Soft-Body Physics for hyper-realistic deformation and stress-tensor calculations.
-  - Sequential Impulse Solvers with advanced Coulomb Friction and Moment of Inertia.
-- **WGPU-Based Rendering:** A robust graphics pipeline targeting Vulkan, Metal, DX12 — **and WebGPU in the browser**. Features Instanced Rendering, GLTF PBR Materials, Dynamic Shadows (CSM), SSAO, Bloom, and Deferred Shading. The engine runs on `wasm32-unknown-unknown` with a reduced web pipeline (forward-only, 4 bind groups, no shadows); try it with the [`demo-web/`](demo-web/) crate. Audio, networking and Lua scripting are still native-only — see [`docs/ENGINE.md`](docs/ENGINE.md).
-- **In-Game Editor:** Built-in `egui` tooling with a dynamic scene hierarchy, real-time inspector, and modular prefab architecture.
-- **Spatial Audio:** RAM-cached, 3D spatial audio engine with distance attenuation and Doppler effect support.
+- **Deterministic simulation:** The rigid-body simulation is **bit-exactly reproducible on the same platform** — the property that makes replay, deterministic rollback netcode and reproducible bug reports possible. It is enforced, not hoped for: a `state_hash` over the world, a cross-process oracle that runs the same scene in two separate processes (different hash seeds) and compares, and long-horizon soak tests all gate CI. Cross-*platform* bit-exactness is explicitly out of scope — see [`docs/ENGINE.md`](docs/ENGINE.md) §5.
+- **Archetype-based ECS:** A columnar, data-driven Entity Component System built for cache locality, easily scaling to tens of thousands of entities. Systems declare their component access and the scheduler batches non-conflicting ones onto a Rayon pool. Component access goes through a borrow-checked query API — shared reads via `World::query` (read-only), exclusive mutation via `World::query_mut`/`borrow_mut` — so two aliasing `&mut` views can never be created from safe code, a contract fenced by `compile_fail` doctests and a Miri job in CI.
+- **Custom Physics Engine:** Written from scratch, with **no third-party physics dependency**. Features include:
+  - Dynamic AABB tree (BVH) broad-phase with swept AABBs for CCD.
+  - GJK/EPA narrow-phase (sphere, box, capsule, plane, convex hull, triangle mesh, compound), with a dedicated SAT path and full contact manifold for box–box.
+  - **TGS-Soft contact solver** — temporal Gauss-Seidel with inter-iteration position integration, a per-manifold block LCP, warm starting and a true two-tangent Coulomb friction cone. Islands are solved in parallel via Rayon, in a deterministic order.
+  - FEM (Finite Element Method) soft bodies — compressible Neo-Hookean first Piola–Kirchhoff stress — plus XPBD cloth, rope and Voronoi fracture.
+- **WGPU-Based Rendering:** A graphics pipeline targeting Vulkan, Metal, DX12 — **and WebGPU in the browser**. Features Instanced Rendering, GLTF PBR Materials, Dynamic Shadows (CSM), SSAO, SSGI, Bloom, TAA and Deferred Shading. The engine also runs on `wasm32-unknown-unknown` with a substantially reduced web pipeline (forward-only, fixed internal resolution, no shadows/AO/GI/TAA); try it with the [`demo-web/`](demo-web/) crate. Networking and Lua scripting are native-only — see [`docs/ENGINE.md`](docs/ENGINE.md).
+- **In-Game Editor:** `egui`-based tooling with a scene hierarchy, an inspector for the engine's built-in components, transform gizmos and prefabs. It is a library of panels (`gizmo-editor`); the editor *application* (`gizmo-studio`) is not published to crates.io yet, and the inspector does not yet cover user-defined components.
+- **Spatial Audio:** RAM-cached 3D audio with distance attenuation and pitch-based Doppler. It is a thin, functional layer — there is no mixer, bus routing or DSP yet (see the roadmap).
 
 ## 🚀 Quickstart
 
@@ -72,12 +73,21 @@ fn main() {
 
 ## 📦 Workspace Architecture
 
-Gizmo's decoupled workspace architecture allows you to pick and choose exactly what you need. If you are building a headless server, simply omit the renderer plugin!
+Gizmo is a workspace of small crates layered bottom-up, so you can depend on the parts you need rather than the whole engine.
 
-- **`gizmo-core`**: The foundational ECS, math, and scheduling architecture.
-- **`gizmo-physics`**: A completely render-agnostic, zero-dependency physics engine. Can be embedded into other engines (e.g., Bevy, Macroquad).
-- **`gizmo-renderer`**: The standalone, WGPU-driven rendering pipeline.
+- **`gizmo-math`**: Vector/quaternion math (re-exports `glam`).
+- **`gizmo-core`**: The foundational ECS, scheduling, events, hierarchy and input.
+- **`gizmo-physics-core` / `-rigid` / `-dynamics` / `-soft`**: The physics stack — colliders and collision detection, the rigid-body world and solver, vehicle/character dynamics, and soft bodies/cloth/rope. Render-agnostic: `PhysicsWorld` is a plain structure-of-arrays container keyed by opaque `BodyHandle`s, and stepping it never touches the ECS.
+- **`gizmo-renderer`**: The WGPU-driven rendering pipeline.
 - **`gizmo-app`**: The plugin-driven app loop and phase executor.
+- **`gizmo-engine`**: The facade crate that ties it all together (`gizmo::prelude::*`).
+
+> **Note on embedding the physics on its own:** the simulation core is genuinely
+> independent of the renderer and only lightly coupled to the ECS, but
+> `gizmo-physics-rigid` still takes `gizmo-core` as a mandatory dependency today, so
+> using it from another engine pulls the ECS in with it. Making that dependency
+> optional (and shipping the physics crates with their own docs) is a tracked
+> roadmap item — see [`docs/FIXPLAN.md`](docs/FIXPLAN.md) D1.
 
 ## 📸 Showcase
 
@@ -105,6 +115,12 @@ cargo run --release -p demo --bin fluid_rigid
 ```
 
 > **Note:** Due to the extreme scale of the broad-phase and narrow-phase physics computations, compiling without `--release` will cause a severe CPU bottleneck. Always use the release profile for optimal performance.
+
+> **Assets:** every demo runs on a fresh clone. Large `.glb` models are not committed, so
+> the couple of demos that showcase one (`car_demo`, `wind_tunnel`) fall back to
+> procedural geometry and say so on stderr. Drop the model into `assets/` or point
+> `GIZMO_ASSETS` at a directory containing it to get the real thing — see
+> [`assets/README.md`](assets/README.md).
 
 > **Upgrading?** `0.8.0` is a large feature release; the whole workspace ships
 > at one uniform `0.x` version and no API is promised stable yet. See the
