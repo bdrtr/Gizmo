@@ -224,14 +224,43 @@ düzeltme ama public crate yolunu değiştirdiği için A9 (sürüm) ile birlikt
 Bakımsız ve doğrudan bağımlılık. Wire formatı değiştiği için rollback snapshot'ı ve
 client-server mesajları round-trip testleriyle birlikte taşınmalı.
 
-### ⏸️ A9 — 0.8.1 yayınla
-**Neden:** `main`'de 0.8.0 etiketinden bu yana **61 yayınlanmamış commit** var, 3'ü fizik
-davranışı değiştiriyor (trimesh narrowphase, araç tork eğrisi, uyuyan şasi).
-`cargo add gizmo-engine@0.8.0` ≠ `git clone` → hata raporları tekrarlanamaz.
-
-**Kullanıcı kararı gerektirir** (dışa dönük, geri alınamaz). Faz A'nın geri kalanı bitince
-tek seferde yayınlamak en mantıklısı — A2 zaten API kırıcısı içeriyor, dolayısıyla
-**0.9.0** daha doğru olabilir. Sürüm numarası kararı: _(bekliyor)_
+### ✅ A9 — 0.9.0 sürüm bump'ı
+> **Bitti (2026-08-04).** `0.8.1` değil **`0.9.0`**: bu turda üç public imza değişti
+> (fracture seed, ScriptEngine metotları, gizmo-app runtime'ları), yani patch değil minor.
+>
+> Root `[workspace.package] version` + **81 sibling path-dep stringi** 0.9.0'a çekildi;
+> `Cargo.lock`'ta 20 crate yansıdı; README/ENGINE.md/CHANGELOG güncellendi.
+>
+> **DENETİM BU MADDEDE YANILDI — kayda geçiyor (düşmanca doğrulama zaten çürütmüştü,
+> ben de elle onayladım).** İddia şuydu: "81 string elle güncellenir, birini unutursan
+> `cargo publish` sessizce eski sürüme pinler". **Yanlış.** Cargo, `path` + `version`
+> yazılmış bir bağımlılığın sürüm şartını hedef crate'in GERÇEK sürümüne karşı çözüm
+> anında doğruluyor. Denedim: `gizmo-ai`'de tek bir stringi 0.8.0'a çevirince
+> `error: failed to select a version for the requirement gizmo-math = "^0.8.0" /
+> candidate versions found which didn't match: 0.9.0` alıp derleme anında düştü.
+> Yani bu bir **ergonomi külfeti**, korektlik tehlikesi değil. Bunu doğrulamak için
+> yazdığım testi de sildim — Cargo'nun zaten yaptığı kontrolü tekrarlıyordu.
+>
+> **`publish_all.sh`'te iki gerçek hata düzeltildi:**
+> 1. Sürüm okuma **hiç çalışmıyordu**. Her crate `version.workspace = true` yazdığı için
+>    `grep -m1 '^version'` o satırı yakalıyor, `sed` tırnak bulamayıp satırı olduğu gibi
+>    döndürüyordu → script hep `(workspace)` basıyordu. Başlıktaki "her crate'in kendi
+>    sürümünü okur" iddiası bu yüzden yanlıştı. Artık workspace mirasını root manifest'e
+>    karşı çözüyor (kademeli 1.0'da crate'ler ayrı sürümlere geçtiğinde de çalışacak).
+> 2. Başlıktaki sürüm `0.2.0`'da kalmıştı.
+>
+> **DRY_RUN sınırı dürüstçe belgelendi:** `cargo publish --dry-run` path-dep'leri registry
+> sürümleriyle değiştirdiği için, henüz yayınlanmamış bir sürüme bump'tan sonra ilk
+> katman dışındaki her crate çözülemez (gizmo-core 0.9.0 registry'de yok). Bu dry-run'ın
+> doğası, script hatası değil — ama script onu tam prova gibi sunuyordu.
+>
+> **CI powerset job'ında hata bulundu ve düzeltildi:** `--locked` ile `--no-dev-deps`
+> karşılıklı dışlayıcı (`--no-dev-deps` manifest'i yeniden yazıp çözümü değiştirdiği için
+> lock dosyasına dokunmak zorunda). Job yazdığım haliyle CI'da kırmızı olurdu; yerel
+> koşumda `--locked` kullanmadığım için fark etmemiştim.
+>
+> **Yayınlama YAPILMADI.** crates.io'ya `publish_all.sh` ile çıkmak geri alınamaz
+> (sürümler silinemez) → ayrı ve açık bir onay gerektirir.
 
 ---
 

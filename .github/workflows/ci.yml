@@ -103,10 +103,16 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-hack
+      # No `--locked` here on purpose: `--no-dev-deps` rewrites the manifest to drop
+      # dev-dependencies, which changes resolution and therefore needs to touch the lock
+      # file — the two flags are mutually exclusive and `--locked` wins with a hard error.
+      # Reproducibility is already enforced by every other job; this one is a compile
+      # matrix. `--no-dev-deps` stays because it keeps 39 combinations from each rebuilding
+      # the bevy dev-dependency stack.
       - name: gizmo-app — every feature pair must compile
-        run: cargo hack check --locked -p gizmo-app --feature-powerset --depth 2 --no-dev-deps
+        run: cargo hack check -p gizmo-app --feature-powerset --depth 2 --no-dev-deps
       - name: gizmo-engine — every feature pair must compile
-        run: cargo hack check --locked -p gizmo-engine --feature-powerset --depth 2 --no-dev-deps
+        run: cargo hack check -p gizmo-engine --feature-powerset --depth 2 --no-dev-deps
 
   # ── Supply chain: advisories, licences, sources ───────────────────────────
   # The workspace publishes 19 crates and had no supply-chain tooling at all until

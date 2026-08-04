@@ -12,7 +12,7 @@
 ## 1. Genel Bakış
 
 Gizmo — hafif, **saf-Rust**, ECS tabanlı 3B motor + sıfırdan yazılmış fizik simülatörü
-(harici fizik bağımlılığı yok). crates.io'da yayında (**0.8.0**, 19 crate).
+(harici fizik bağımlılığı yok). crates.io'da yayında (**0.9.0**, 19 crate).
 
 - **ECS:** Entity = id, Component = veri, System'ler Archetype'ları sorgular. `World`
   merkezi durum; `Query`/`Mut`/`With`/`Without`/`Changed`/`Added` filtreleri; `Commands`
