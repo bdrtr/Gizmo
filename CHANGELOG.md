@@ -62,6 +62,31 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`glam` 0.29 → 0.32, `bevy_reflect` 0.15 → 0.19.** *No behavioural change — see below.*
+
+  `glam` is the one deliberate permanent public dependency, so its major version is part of
+  the 1.0 promise: shipping 1.0 on 0.29 would have made the upgrade a 2.0-level break for
+  every downstream crate. It was three majors behind.
+
+  The blocker was real but narrower than recorded: nothing in the workspace pinned 0.29
+  except `gizmo-math`'s own manifest. What broke was the default-off `reflect` feature —
+  `bevy_reflect 0.15` implements `Reflect` for `glam 0.29`'s types, so with the engine on
+  0.32 those impls no longer applied. `bevy_reflect 0.16` is on glam 0.29 as well; 0.19 is
+  the first release on 0.32, which is why the jump is four minors.
+
+  The physics did not move: `state_hash` is unchanged at `EF6E4AC3644BF3BA` and every
+  committed value in `tests/golden_state.rs` holds without re-blessing. That is worth
+  stating explicitly — a maths-library major bump is exactly where silent numerical drift
+  would hide, and the golden fixtures exist to answer that question rather than assume it.
+
+  Benchmark-only follow-on: `bevy_math` / `bevy_picking` / `bevy_mesh` dev-dependencies moved
+  to 0.19 too, so `glam` now resolves to a single version across the whole graph. Their APIs
+  shifted — `CubicSegment::new_bezier` split off `new_bezier_easing`, `VectorSpace` gained a
+  `Scalar` associated type, `ray_mesh_intersection` takes `Affine3A` plus a `uvs` argument,
+  and `bevy_reflect`'s `clone_dynamic` became `to_dynamic_map` / `to_dynamic_list` /
+  `to_dynamic_struct` with `Map` / `List` / `Struct` moved out of the crate root.
+
+
 - **`compliance` is now an inverse stiffness.** *Behavioural for every joint with
   `compliance > 0` — ragdoll limits, elastic ropes, soft D6 locks.*
 

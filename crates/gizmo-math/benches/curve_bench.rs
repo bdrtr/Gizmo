@@ -4,7 +4,9 @@ use criterion::{
 };
 
 fn segment_ease(c: &mut Criterion) {
-    let segment = core::hint::black_box(CubicSegment::new_bezier(
+    // bevy_math 0.19 split the 4-point constructor from the 2-point easing one:
+    // `new_bezier` now takes `[P; 4]`, and the CSS-easing form is `new_bezier_easing`.
+    let segment = core::hint::black_box(CubicSegment::new_bezier_easing(
         vec2(0.25, 0.1),
         vec2(0.25, 1.0),
     ));
@@ -28,7 +30,7 @@ fn segment_ease(c: &mut Criterion) {
 
 fn curve_position(c: &mut Criterion) {
     /// A helper function that benchmarks calling [`CubicCurve::position()`] over a generic [`VectorSpace`].
-    fn bench_curve<M: Measurement, P: VectorSpace>(
+    fn bench_curve<M: Measurement, P: VectorSpace<Scalar = f32>>(
         group: &mut BenchmarkGroup<M>,
         name: &str,
         curve: CubicCurve<P>,
