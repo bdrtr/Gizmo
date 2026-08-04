@@ -19,6 +19,17 @@ pub struct App<State: 'static = ()> {
     pub world: World,
     /// The system schedule executed every update step.
     pub schedule: Schedule,
+    /// Mirror of [`windowed::App::update_schedule`](crate::windowed::App::update_schedule),
+    /// so a [`Plugin`] can register per-frame systems without knowing which runtime it is
+    /// being built into.
+    ///
+    /// **Cadence caveat:** the headless runtime has no fixed-timestep loop — it runs its
+    /// single tick with the real elapsed `dt` — so here `schedule` and `update_schedule`
+    /// both run exactly once per tick and the distinction carries no timing difference. It
+    /// exists for portability of plugin code. (`PhysicsWorld::step` keeps its own internal
+    /// fixed substepping, so simulation determinism does not depend on this.) Giving the
+    /// headless loop a real fixed step is tracked in docs/FIXPLAN.md.
+    pub update_schedule: Schedule,
     setup_fn: Option<Box<dyn FnOnce(&mut World) -> State + 'static>>,
     update_fn: Option<Box<dyn FnMut(&mut World, &mut State, f32)>>, // dt
     runner: Option<Box<dyn FnOnce(App<State>)>>,
@@ -40,6 +51,7 @@ impl<State: 'static> App<State> {
         Self {
             world: World::new(),
             schedule: Schedule::new(),
+            update_schedule: Schedule::new(),
             setup_fn: None,
             update_fn: None,
             runner: None,
@@ -144,6 +156,7 @@ impl<State: 'static> App<State> {
             }
 
             self.schedule.run(&mut self.world, dt);
+            self.update_schedule.run(&mut self.world, dt);
 
             // Flush deferred commands (Commands/CommandQueue) queued by the update
             // hook — mirrors the windowed loop. `Schedule::run` only flushes BETWEEN
