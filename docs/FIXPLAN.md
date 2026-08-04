@@ -520,12 +520,37 @@ client-server mesajları round-trip testleriyle birlikte taşınmalı.
 > aktarmıyor. Clamp'ten sonraki substep'te ayrık çözücü teması görüp aktarıyor, dolayısıyla
 > etki sınırlı — ama hafif bir plakaya karşı mermi bir kare "ölü durur".
 
-### ⬜ Golden hash fixture'ı — `headless_stress_test` davranışı kilitlemiyor
-Gate üç koşuyu birbiriyle karşılaştırıyor, commit'lenmiş bir referansla değil. Fizik
-davranışı değişse gate YEŞİL kalır. Çözüm: kanonik sahnelerin hash'lerini bir fixture'a
-yaz ve ona karşı assert et. Denetimin "self-referential gate" bulgusunun tam çekirdeği;
-o bulgu "hiç golden yok" diye fazla geniş yazıldığı için doğrulamada çürütülmüştü —
-`analytical.rs` kapalı-form oracle'ları var — ama bu dar hâli geçerli.
+### ✅ Golden state fixture'ı — davranış artık kilitli
+> **Bitti (2026-08-04).** `crates/gizmo-physics-rigid/tests/golden_state.rs`, 5 test.
+>
+> **Boşluk gösterildi, iddia edilmedi.** `PHYSICS_HZ`'i 240→120 yaptım (gerçek bir davranış
+> regresyonu) ve iki kapıyı yan yana koştum:
+> | | sonuç |
+> |---|---|
+> | `headless_stress_test` | ✅ "DETERMINISM VERIFIED" — **tamamen kör** |
+> | golden fixture | ❌ **5'ten 3'ü kırmızı**, `reference/measured/delta` diff'iyle |
+>
+> **Neden hash değil, tolerans.** `state_hash` bit-eş ve açıkça **aynı-platform**
+> (`ENGINE.md §5`) — CI Linux/macOS/Windows'ta koşuyor, commit'lenmiş bir hash üçünden
+> ikisinde hata değil *platform* yüzünden kırmızı olurdu. Değer+tolerans platform
+> saçılmasını soğuruyor ama anlamlı her değişimi yakalıyor.
+>
+> **Neden bu sahneler.** Hepsi bilinçli olarak **iyi-koşullu**: zemine oturma, sürtünmeyle
+> durma, serbest düşüş, duran yığın. Son durumları yakınsıyor, dolayısıyla cross-platform
+> f32 sapması toleransın çok altında kalıyor. Kaotik sahne (200-kutu kule çöküşü) tam tersi
+> — son durumu son bit'e keyfî hassas, hiçbir tolerans "farklı platform" ile "farklı fizik"i
+> ayıramaz. O yüzden burada YOK; onu değer değil sınır iddia eden soak testleri kapsıyor.
+>
+> `TOL = 1e-3` ölçümle seçildi: kilitlenen büyüklükler 1–100 mertebesinde, gerçek bir
+> davranış değişimi (çözücü iterasyonu, sönümleme varsayılanı, sürtünme combine modu)
+> onları 1e-2+ oynatıyor, platform sapması birkaç mertebe altında.
+>
+> Hata mesajı ölçülen değeri **yapıştırılabilir biçimde** basıyor ve commit mesajında
+> eski→yeni değerin kaydını istiyor — kasıtlı değişimlerin sessizce yeniden kutsanmaması için.
+>
+> Ayrıca `state_hash`'in süreç-içi tekrarlanabilirliği artık demo binary'sinde değil test
+> suite'inde de iddia ediliyor — ama bilinçli olarak bir sabitle KARŞILAŞTIRILMIYOR, çünkü o
+> motorun vermediği bir cross-platform bit-eşlik iddiası olurdu.
 
 ### ⬜ GPU test flake'i — kısmen çözüldü, kalanı ölçüldü
 `crates/gizmo/src/systems/render/mod.rs`'teki golden-image testleri her biri kendi wgpu
