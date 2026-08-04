@@ -62,6 +62,33 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`compliance` is now an inverse stiffness.** *Behavioural for every joint with
+  `compliance > 0` — ragdoll limits, elastic ropes, soft D6 locks.*
+
+  The field is public, persisted, and documented as "0 = hard stop; larger = a soft, springy
+  limit that gives under load". It did not behave like one. The implementation added
+  `compliance / dt²` to the row's effective mass (CFM regularisation) and stopped there — but
+  enlarging `k` only shrinks each iteration's step, so the sequential-impulse series still
+  converges to the RIGID solution. All the observed softness came from `iterations` being
+  finite. `compliance` was a relaxation factor for the solver loop, and doubling the
+  iteration count halved its effect: the same rope stretched 0.0194 m at 5 iterations and
+  0.0096 m at 10.
+
+  Joints now use the same soft-constraint formulation the contact solver has always used
+  (`bias_rate` / `mass_scale` / `impulse_scale`, Box2D v3), with each row's frequency derived
+  from its compliance and effective mass as `ω = √(k/α)`. The result obeys Hooke's law:
+  hanging 1 kg from a rope with `compliance = 0.03` settles `0.03 · 1 · 9.81 = 0.294 m` past
+  its rest length, measured within 0.2% across two orders of magnitude of compliance and one
+  of mass, and identical at 5, 10, 20 and 40 iterations.
+
+  `compliance == 0` keeps the original rigid path unchanged, so nothing that did not opt into
+  softness moves. `JointSolver` gains `compliance_damping_ratio` (default 1.0, critically
+  damped) for the soft rows.
+
+  If you tuned a ragdoll or a rope against the old numbers, re-tune: the value is now a
+  physical spring constant rather than a solver artefact, and it no longer drifts when you
+  change `iterations`.
+
 - **`break_force` / `break_torque` now measure the joint's net reaction.** *Behavioural —
   finite thresholds already calibrated against the old numbers will need re-tuning.*
 

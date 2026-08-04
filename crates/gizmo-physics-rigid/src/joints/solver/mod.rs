@@ -36,6 +36,10 @@ pub struct JointSolver {
     pub max_correction_speed: f32,
     pub max_angular_speed: f32,
     pub position_bias: f32,
+    /// `compliance > 0` olan satırların sönüm oranı ζ (yumuşak kısıt yay-damper'ının).
+    /// 1.0 = kritik sönüm: yay hedefe salınmadan oturur. Rijit satırlar (compliance = 0)
+    /// bu alanı hiç görmez — onlar Baumgarte yolunda kalır.
+    pub compliance_damping_ratio: f32,
 }
 
 impl Default for JointSolver {
@@ -45,6 +49,7 @@ impl Default for JointSolver {
             max_correction_speed: 5.0,
             max_angular_speed: 5.0,
             position_bias: 0.3,
+            compliance_damping_ratio: 1.0,
         }
     }
 }
@@ -269,6 +274,58 @@ impl JointSolver {
         point - global_com
     }
 
+    /// Yumuşak (compliant) bir satırın Box2D v3 soft-constraint katsayıları:
+    /// `(bias_rate, mass_scale, impulse_scale)`.
+    ///
+    /// Temas çözücüsü bu formülasyonu zaten kullanıyor (`solver/tgs.rs:117-124` ve `:597`);
+    /// joint çözücüsü Baumgarte β + hız kırpmasında kalmış ve `compliance`'ı efektif kütleye
+    /// `α/dt²` (CFM) ekleyerek uyguluyordu. O yol bu motorda ÇALIŞMIYOR, iki ayrı sebepten:
+    ///
+    /// 1. **CFM tek başına yumuşaklık üretmez.** `k`'yi büyütmek yalnızca her iterasyonun
+    ///    adımını küçültür; iterasyon sayısı arttıkça seri yine RİJİT çözüme yakınsar. Yani
+    ///    `compliance` fiziksel bir ters-sertlik değil, `iterations`'a bağlı bir gevşetme
+    ///    katsayısıydı.
+    /// 2. **Eksik geri besleme terimi (`-α̃·λ`) bu çözücüye eklenemiyor.** Denge noktası
+    ///    `λ_toplam = bias/α̃` olurdu, ama `bias` burada `max_correction_speed` ile HIZ-KIRPILI:
+    ///    kırpma ısırdığı an λ tavanlanıyor, taşınacak yükün çok altında kalıyor ve kısıt
+    ///    sessizce boşalıyor (ölçüldü: 2 m'lik halat 600 adımda 27.4 m — serbest düşüş).
+    ///
+    /// Soft formülasyonda `c` bir ÇARPAN: denge `λ_toplam = c·bias_rate·C = dt·ω²·C`. Gereken
+    /// bias küçük kalıyor, kırpma hiç ısırmıyor. CFM'de `λ = bias/α̃` bir BÖLME'ydi ve aynı
+    /// yükü taşımak kırpmanın ~14 katı bias istiyordu. Aynı fiziğin iki yazılışı; kırpmalı bir
+    /// çözücüde taban tabana zıt koşullanma.
+    ///
+    /// `ω = √(k/α)` — satırın efektif kütlesinden türetilir (`m_eff = 1/k`), yani
+    /// `ω = √(K/m_eff)` klasik yay frekansı. Dengede `λ = dt·ω²·C/k = dt·C/α`, yani
+    /// **`F = C/α`: Hooke yasası.** Sertlik sabit, ağır yük daha çok uzatır — `compliance`
+    /// bir ters-sertlik olarak ilan edildiğine göre olması gereken de bu.
+    ///
+    /// # `impulse_scale` terimi `k`'ye BÖLÜNMEZ
+    ///
+    /// Bu ayrım kozmetik değil, KARARLILIK meselesi. `-impulse_scale·λ` de `/k` ile
+    /// bölünürse λ yinelemesi `λ_{n+1} = λ_n·(1 - impulse_scale/k) + …` olur ve
+    /// `impulse_scale > 2k`, yani `m_eff > 2/impulse_scale` olduğunda IRAKSAR. Ölçüldü:
+    /// bölünen biçimde α = 0.03'lük halat 1 kg'ı 0.2937 m uzatıyor (Hooke: 0.2943 ✓) ama
+    /// 4 kg'da kısıt tamamen boşalıp cisim 331 m'ye düşüyor — 2000 adımlık serbest düşüş.
+    ///
+    /// Bölünmeyen biçimde yineleme `λ_{n+1} = λ_n·(1 - impulse_scale) + …` ve
+    /// `impulse_scale = 1/(1+c) ∈ (0, 1]` olduğundan **koşulsuz kararlı**.
+    ///
+    /// (`solver/tgs.rs:597` temas çözücüsünde terim `/ k_n` ile bölünüyor. Oradaki
+    /// `impulse_scale` çok daha küçük — contact_hertz=30, ζ=10 ile ≈0.058 — bu yüzden sınır
+    /// `m_eff ≈ 34`'e çıkıyor ve mevcut soak sahnelerinde ısırmıyor. Ölçülmesi gereken ayrı
+    /// bir konu; bkz. docs/FIXPLAN.md.)
+    #[inline]
+    fn soft_coefficients(&self, compliance: f32, k: f32, dt: f32) -> (f32, f32, f32) {
+        let omega = (k / compliance).sqrt();
+        let denom = 2.0 * self.compliance_damping_ratio + dt * omega;
+        if denom <= 1e-9 {
+            return (0.0, 1.0, 0.0);
+        }
+        let c = dt * omega * denom;
+        (omega / denom, c / (1.0 + c), 1.0 / (1.0 + c))
+    }
+
     /// Birikmiş-λ kırpma: `lambda_min/max` ARTIMA değil, geçiş boyunca birikmiş TOPLAMA
     /// uygulanır. Tek yönlü bir satır (limit / halat / koni) böylece NEGATİF artım da
     /// uygulayabilir — toplam doğru tarafta kaldığı sürece kendi önceki aşırı-düzeltmesini
@@ -355,12 +412,26 @@ impl JointSolver {
         if k < 1e-10 {
             return 0.0;
         }
-        let k = k + compliance / (dt * dt); // CFM regularisation (0 ⇒ rigid)
-
         let vel_err = (w_b - w_a).dot(direction);
-        let position_bias = (self.position_bias * error / dt)
-            .clamp(-self.max_angular_speed, self.max_angular_speed);
-        // NOT: burada XPBD/CFM geri beslemesi (`- cfm * *accum`) KASITLI OLARAK YOK.
+
+        // İki rejim. `compliance == 0` → RİJİT: Baumgarte bias + hız kırpması, bit-aynı
+        // korunuyor (motorun bugüne kadar doğru çalışan yolu bu). `compliance > 0` → YUMUŞAK:
+        // temas çözücüsüyle aynı soft-constraint formülasyonu, bkz. `soft_coefficients`.
+        let (position_bias, mass_scale, impulse_scale) = if compliance > 0.0 {
+            let (bias_rate, m, i) = self.soft_coefficients(compliance, k, dt);
+            (
+                (bias_rate * error).clamp(-self.max_angular_speed, self.max_angular_speed),
+                m,
+                i,
+            )
+        } else {
+            (
+                (self.position_bias * error / dt)
+                    .clamp(-self.max_angular_speed, self.max_angular_speed),
+                1.0,
+                0.0,
+            )
+        };
         // Doğru terim odur — yumuşak bir satırın denge noktası Jv + α̃·λ_toplam = bias'tır —
         // ama `position_bias` bu çözücüde `max_correction_speed`/`max_angular_speed` ile
         // HIZ-KIRPILI. Kırpma ısırdığı anda denge λ_toplam = bias_max/α̃ değerine tavanlanır;
@@ -370,7 +441,8 @@ impl JointSolver {
         // çekince ölçüm 1.007 m — terim doğru, kırpmayla ETKİLEŞİMİ yanlış.
         // Bu yüzden compliance'ın iterasyon-sayısına bağımlılığı burada KAPANMIYOR; kırpma
         // rejimiyle birlikte ele alınacak (bkz. docs/FIXPLAN.md, B4 sonrası).
-        let delta = (-vel_err + position_bias) / k;
+        // `impulse_scale` terimi BÖLÜNMEZ — gerekçe `soft_coefficients`'ta (kararlılık).
+        let delta = mass_scale * (-vel_err + position_bias) / k - impulse_scale * *scratch.row(slot);
         let lambda = Self::accumulate(scratch.row(slot), delta, lambda_min, lambda_max);
         // Geçişin NET açısal impulse'ı — `break_torque` bundan hesaplanır. Artımların
         // VEKTÖR toplamı: eş-doğrusal olmayan satırların büyüklüklerini toplamak (eski
@@ -468,13 +540,26 @@ impl JointSolver {
         if k < 1e-10 {
             return 0.0;
         }
-        let k = k + compliance / (dt * dt); // CFM regularisation (0 ⇒ rigid)
-
         let rel_vel = (v_b - v_a).dot(direction);
-        let position_bias = (self.position_bias * error / dt)
-            .clamp(-self.max_correction_speed, self.max_correction_speed);
-        // CFM geri beslemesi burada da yok — gerekçe apply_angular_constraint_soft'ta.
-        let delta = (-rel_vel + position_bias) / k;
+
+        // İki rejim — gerekçe `apply_angular_constraint_soft`'ta.
+        let (position_bias, mass_scale, impulse_scale) = if compliance > 0.0 {
+            let (bias_rate, m, i) = self.soft_coefficients(compliance, k, dt);
+            (
+                (bias_rate * error).clamp(-self.max_correction_speed, self.max_correction_speed),
+                m,
+                i,
+            )
+        } else {
+            (
+                (self.position_bias * error / dt)
+                    .clamp(-self.max_correction_speed, self.max_correction_speed),
+                1.0,
+                0.0,
+            )
+        };
+        // `impulse_scale` terimi BÖLÜNMEZ — gerekçe `soft_coefficients`'ta (kararlılık).
+        let delta = mass_scale * (-rel_vel + position_bias) / k - impulse_scale * *scratch.row(slot);
         let lambda = Self::accumulate(scratch.row(slot), delta, lambda_min, lambda_max);
         // Geçişin NET doğrusal impulse'ı — `break_force` bundan hesaplanır (bkz. açısal eş).
         scratch.impulse_lin += direction * lambda;

@@ -145,8 +145,13 @@ pub struct BallSocketJointData {
     pub use_swing_limits: bool,
     pub swing_limit_1: f32,
     pub swing_limit_2: f32,
-    /// Inverse stiffness (CFM) applied to the cone/twist/swing LIMITS: 0 = hard stop;
-    /// larger = a soft, springy limit that gives under load (natural ragdoll joint feel).
+    /// Inverse stiffness applied to the cone/twist/swing LIMITS: 0 = hard stop; larger =
+    /// a soft, springy limit that gives under load (natural ragdoll joint feel).
+    ///
+    /// Literally `1/K` in newton-metres per radian: a limit breached by `θ` past its bound
+    /// pushes back with `θ/compliance`, so a heavier limb sinks further into its stop. Note
+    /// this was NOT true before the soft-constraint rewrite, when the value behaved as a
+    /// solver relaxation factor and its effect halved every time `iterations` doubled.
     pub compliance: f32,
     #[serde(default)]
     pub initial_relative_rotation: Option<Quat>,
@@ -199,8 +204,13 @@ pub struct SpringJointData {
 pub struct DistanceJointData {
     pub min_length: f32,
     pub max_length: f32,
-    /// Inverse stiffness (CFM): 0 = rigid rope/rod (hard bounds); larger = a stretchy,
-    /// elastic rope that gives under load. See the soft constraint primitives.
+    /// Inverse stiffness: 0 = rigid rope/rod (hard bounds); larger = a stretchy, elastic
+    /// rope that gives under load.
+    ///
+    /// Literally `1/K` in metres per newton: a load of `F` stretches the rope by
+    /// `F · compliance`, so hanging 1 kg from a rope with `compliance = 0.03` settles
+    /// 0.294 m past its rest length (`0.03 · 1 · 9.81`). Asserted in
+    /// `tests/joint_compliance.rs`.
     pub compliance: f32,
 }
 
@@ -250,7 +260,8 @@ pub struct D6JointData {
     pub linear_drives: [D6Drive; 3],
     /// Optional spring-damper drives (motor+spring) per rotational axis.
     pub angular_drives: [D6Drive; 3],
-    /// Inverse stiffness (CFM) for every locked/limited DOF (0 = rigid).
+    /// Inverse stiffness for every locked/limited DOF (0 = rigid). `1/K`, in the units of
+    /// the DOF it applies to — see [`DistanceJointData::compliance`].
     pub compliance: f32,
     #[serde(default)]
     pub initial_relative_rotation: Option<Quat>,
