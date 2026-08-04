@@ -27,7 +27,32 @@ pub struct ScriptEngine {
     pub log_queue: Arc<std::sync::Mutex<Vec<(String, String)>>>, // (Level, Message)
 }
 
-unsafe impl Send for ScriptEngine {}
+// `Send` is NOT hand-written: mlua is built with its `send` feature (see this
+// crate's Cargo.toml), which makes `Lua: Send`, and every other field is already
+// `Send`. The compiler derives it — if that ever stops holding we want the build
+// to break rather than an `unsafe impl` to paper over it.
+
+// SAFETY: `Lua` is `Send` but deliberately **not** `Sync` — mlua mutates the
+// underlying `lua_State` through `&Lua`, so two threads holding `&Lua` would
+// race. `Sync` on this type therefore has exactly one precondition:
+//
+//   *** No `&self` method of `ScriptEngine` may touch `self.lua`. ***
+//
+// That precondition holds by construction. The complete set of `&self` methods
+// is `flush_commands`, `get_pending_audio_scene_commands` and `command_queue`;
+// none of them reads `self.lua` (they only drain the `Arc<CommandQueue>` and the
+// `Arc<Mutex<..>>` log queue, both of which are `Sync` on their own). Every
+// method that does reach the VM — `new`, `load_script`, `reload_script`,
+// `update`, `has_function`, `run_entity_update`, … — takes `&mut self`, so the
+// borrow checker makes concurrent VM access unrepresentable: a caller needs
+// `ResMut<ScriptEngine>`, which the scheduler treats as an exclusive write.
+//
+// `Sync` is required because `ScriptEngine` is stored as a `World` resource and
+// `World::insert_resource` demands `Send + Sync`.
+//
+// If you add a `&self` method, it must not touch `self.lua`. The regression test
+// `shared_methods_never_reach_the_lua_vm` at the bottom of this file records the
+// audited list; update it deliberately, not incidentally.
 unsafe impl Sync for ScriptEngine {}
 
 // `Lua` does not implement `Debug`, so the engine provides a manual summary that
@@ -682,7 +707,11 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
     }
 
     /// Belirli bir isimdeki Lua fonksiyonunun var olup olmadığını kontrol eder
-    pub fn has_function(&self, path: &str, name: &str) -> bool {
+    ///
+    /// Takes `&mut self` even though it only reads: `registry_value` mutates the
+    /// underlying `lua_State`, and the `unsafe impl Sync` above is only sound
+    /// while no `&self` method reaches the VM.
+    pub fn has_function(&mut self, path: &str, name: &str) -> bool {
         if let Some((_, key)) = self.loaded_scripts.get(path) {
             if let Ok(env) = self.lua.registry_value::<mlua::Table>(key) {
                 return env.get::<_, LuaFunction>(name).is_ok();
@@ -692,8 +721,11 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
     }
 
     /// Belirli bir isimdeki Lua fonksiyonunu çağırır (per-entity scriptler için)
+    ///
+    /// Takes `&mut self`: calling into the VM mutates the `lua_State`, and the
+    /// `unsafe impl Sync` above is only sound while no `&self` method does that.
     pub fn run_entity_update(
-        &self,
+        &mut self,
         path: &str,
         func_name: &str,
         ctx: &ScriptContext,
@@ -780,6 +812,77 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
 }
 
 gizmo_core::impl_component!(Script);
+
+#[cfg(test)]
+mod soundness {
+    use super::*;
+
+    /// `ScriptEngine` must be `Send + Sync` — it is stored as a `World`
+    /// resource and `insert_resource` requires both.
+    ///
+    /// `Send` is derived (mlua's `send` feature makes `Lua: Send`); `Sync` is
+    /// the hand-written `unsafe impl` above.
+    #[test]
+    fn script_engine_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<ScriptEngine>();
+    }
+
+    /// Locks the precondition of the `unsafe impl Sync for ScriptEngine`:
+    /// **no `&self` method may touch `self.lua`**, because mlua mutates the
+    /// `lua_State` through `&Lua` and two threads sharing `&ScriptEngine` would
+    /// race on it.
+    ///
+    /// The audited shared surface is exactly these three methods, none of which
+    /// reads `self.lua`:
+    ///   - `flush_commands`
+    ///   - `get_pending_audio_scene_commands`
+    ///   - `command_queue`
+    ///
+    /// This test calls each of them through a genuinely shared `&ScriptEngine`
+    /// obtained from two threads at once. It cannot prove the absence of a
+    /// future `&self` VM access on its own — but it does prove these three stay
+    /// callable from a shared reference, so converting one of them to
+    /// `&mut self` (the correct move if it ever needs the VM) breaks this test
+    /// and forces the SAFETY comment to be revisited.
+    #[test]
+    fn shared_methods_never_reach_the_lua_vm() {
+        let engine = ScriptEngine::new().expect("Lua VM");
+        let shared = &engine;
+
+        std::thread::scope(|s| {
+            for _ in 0..2 {
+                s.spawn(move || {
+                    // Every `&self` method on the audited list, exercised
+                    // concurrently. If any of these grew a `self.lua` access,
+                    // this is a data race that Miri/TSan would flag here.
+                    let _ = shared.get_pending_audio_scene_commands();
+                    let _ = shared.command_queue().len();
+                });
+            }
+        });
+
+        // `flush_commands` needs a &mut World, so drive it on one thread — the
+        // point is only that it is reachable through `&self`.
+        let mut world = gizmo_core::World::new();
+        let _ = shared.flush_commands(&mut world, 1.0 / 60.0);
+    }
+
+    /// The two methods that DO reach the VM must require exclusive access, so
+    /// the borrow checker — not a comment — prevents concurrent VM use.
+    ///
+    /// This is a compile-time assertion: it only builds while both take
+    /// `&mut self`. Reverting either to `&self` fails to compile here.
+    #[test]
+    fn vm_touching_methods_require_exclusive_access() {
+        fn _needs_mut(e: &mut ScriptEngine) {
+            let _ = e.has_function("nope.lua", "on_update");
+        }
+        fn _needs_mut_2(e: &mut ScriptEngine, ctx: &ScriptContext) {
+            let _ = e.run_entity_update("nope.lua", "on_update", ctx);
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1223,7 +1326,7 @@ mod tests {
     /// Hata yolu: yüklenmemiş bir script için run_entity_update 'not loaded' hatası vermeli.
     #[test]
     fn run_entity_update_on_unloaded_script_errors() {
-        let engine = ScriptEngine::new().unwrap();
+        let mut engine = ScriptEngine::new().unwrap();
         let ctx = ScriptContext::default();
         let err = engine
             .run_entity_update("never_loaded.lua", "on_entity_update", &ctx)

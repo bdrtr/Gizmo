@@ -16,7 +16,18 @@ pub struct UiContext {
     pub window_size: Vec2,
 }
 
+// SAFETY: `TaffyTree` is `!Send + !Sync` for exactly one reason — it stores
+// `NodeData`, which embeds `taffy::Style`, which embeds `CompactLength`'s
+// `*const ()` tagged-pointer union. We build taffy without its `calc` feature,
+// so that union is unconstructible as a pointer and only ever holds `f32` + tag.
+// See the SAFETY note on `Style` in `components.rs` and the rationale recorded
+// next to the `taffy` dependency in Cargo.toml — that feature gate is what makes
+// these impls sound, and re-enabling `calc` would invalidate them.
+//
+// The remaining fields (`HashMap<u32, NodeId>`, `Vec2`) are plain data.
+// `UiContext` is stored as a `World` resource, which requires `Send + Sync`.
 unsafe impl Send for UiContext {}
+// SAFETY: see the `Send` impl above — same invariant.
 unsafe impl Sync for UiContext {}
 
 impl Default for UiContext {

@@ -18,7 +18,24 @@ rustdoc-args = ["--cfg", "docsrs"]
 gizmo-app = { version = "0.8.0", path = "../gizmo-app", default-features = false, optional = true }
 gizmo-core = { version = "0.8.0", path = "../gizmo-core" }
 gizmo-math = { path = "../gizmo-math", version = "0.8.0" }
-taffy = "0.10.1"
+# `calc` KASITLI OLARAK KAPALI (taffy'nin varsayılanında açıktır).
+# taffy'nin `CompactLength`'i 64-bit'te tag+değer+pointer'ı tek bir `*const ()`
+# içine paketler → `taffy::Style` yapısal olarak `!Send + !Sync`. Ama pointer
+# varyantını üreten TEK public constructor `CompactLength::calc`'tır ve o
+# `#[cfg(feature = "calc")]` ile kapılıdır. Feature kapalıyken union yalnızca
+# f32+tag taşıyabilir (ham veri) → `Style`/`UiContext` için elle yazılan
+# `unsafe impl Send/Sync` KANITLANABİLİR olur. Bkz. components.rs / layout.rs.
+# Bu satırı `calc` ekleyerek geri açarsan o iki impl unsound olur.
+taffy = { version = "0.10.1", default-features = false, features = [
+    "std",
+    "taffy_tree",
+    "flexbox",
+    "grid",
+    "block_layout",
+    "float_layout",
+    "content_size",
+    "detailed_layout_info",
+] }
 
 [features]
 default = []
