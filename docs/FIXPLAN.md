@@ -383,6 +383,63 @@ client-server mesajları round-trip testleriyle birlikte taşınmalı.
 >
 > `server/` ve `cradle/` derleniyor.
 
+- 🔄 **B2 — Sahne sorgu katmanı** *(çekirdek bitti, 2026-08-04)*
+  > `crates/gizmo-physics-rigid/src/world/scene_query.rs` + 17 test.
+  >
+  > **Eklenen API:** `QueryFilter` (layer mask, çoklu body dışlama, trigger dahil/hariç,
+  > builder'lı), `raycast_filtered`, `overlap_shape`, `point_query`, `cast_shape`, `cast_body`.
+  > Hepsi broadphase-hızlandırmalı (`spatial_hash.query_aabb` → kesin narrowphase).
+  >
+  > **Yolda bulunan gerçek hata — `Gjk::conservative_advancement` bozuk.** Shapecast'i onun
+  > üzerine kurmayı planlamıştım; denetim onu "tamamen implement edilmiş ama bağlanmamış"
+  > diye işaretlemişti. **Bağlanmamış olduğu için bozuk, bozuk olduğu için bağlanmamış.**
+  > Ölçtüm: yalnızca şekiller tam karşıdan hizalıyken çalışıyor. 5 birim uzaktaki iki birim
+  > kutu, **0.2** yanal kayıklıkla → `None`:
+  > ```
+  > it0: dist=4.000  n=(-1,0,0)      closing= 20.0   ilerle
+  > it1: dist=0.141  n=(-.71,0,.71)  closing= 14.1   ilerle
+  > it2: dist=0.089  n=(-.45,0,.89)  closing=  8.9   ilerle
+  > it3: dist=0.447  n=(+.89,0,.45)  closing=-17.9   REDDET
+  > ```
+  > `it3`'te kutular **zaten örtüşüyor** ama `Gjk::distance()` pozitif mesafe + ters normal
+  > döndürüyor. İki kusur birlikte: `dist/closing_vel` adımı yanal kayıklıkta konservatif
+  > değil (örtüşmenin içine taşıyor), ve `distance()` penetrasyonu bildiremiyor.
+  >
+  > `cast_shape` bu yüzden CA yerine **`test_collision` üzerinde march-and-bisect**: march
+  > adımı sabit bölme yerine ilgili **en küçük extent'ten** türetiliyor (200 birimlik
+  > süpürmede 2 cm'lik duvar testi bunu kilitliyor — sabit 512-örnekli march onu atlardı),
+  > ardından 24 bisection.
+  >
+  > **Kalan:** `raycast_all` için filtre, `project_point`, sorguların facade/ECS katmanına
+  > açılması, ve karakter (`character.rs:64-76`) + araç (`dynamics/systems.rs:41-49`)
+  > kodundaki broadphase'i atlayan `O(N)` taramaların bu API'ye taşınması — denetimin
+  > işaret ettiği asıl kazanç orada.
+
+### ⬜ B2-followup — `Gjk::conservative_advancement` / `Gjk::distance` düzeltmesi
+CA yalnızca head-on doğru (yukarıdaki izleme). İki ayrı iş: `distance()` örtüşen şekillerde
+penetrasyon bildirmeli (şu an pozitif çöp), ve CA adımı gerçekten konservatif olmalı.
+**Dikkat:** CA CCD yolunda da kullanılıyor → düzeltme determinizm hash'ini etkileyebilir,
+kendi doğrulamasını ister.
+
+- ⬜ **B3 — Sahne registry'sini aç.** Şu an **8 tip** (`gizmo-scene/src/registry.rs:9-51`) →
+  ışık/kamera/animasyon/ses ve *her kullanıcı component'i* sessizce kaydedilmiyor.
+  `App::register_scene_component::<T>()` + `version` alanı + migrasyon zinciri.
+- ⬜ **B4 — Joint çözücüsü.** Biriken impuls + warm-start yok (`joints/solver/mod.rs:43-122`);
+  `center_of_mass` yok sayılıyor (`joint_types/fixed.rs:30-31`); `break_force` tek iterasyonun
+  transient'inden hesaplanıyor; joint'ler island kurulumuna dahil değil (`pipeline.rs:560`).
+- ⬜ **B5** — Gamepad girdisi. ⬜ **B6** — `PresentMode` yapılandırılabilir.
+  ⬜ **B7** — Cylinder + Heightfield collider.
+- 🔄 **B8** — iki parçası vardı:
+  - ✅ **Boş point-shadow pass'leri** (2026-08-04, `af6f168`): `record_shadow_passes` artık
+    shader'ın zaten okuduğu `point_shadows_enabled` bayrağına bakıyor. Varsayılan kapalı
+    olduğu için her frame 6 depth pass'i (aydınlatılan bir batch'in 23 draw'ının 12'si)
+    hiç örneklenmeyen bir 1024²×6 cubemap'e yazılıyordu. Golden-image testi bayrağın iki
+    hâlinde bit-eş kare talep ediyor — hem iddiayı (atlanan iş gözlemlenemezdi) kanıtlıyor
+    hem de shader'ın GERÇEKTEN örneklediği bir pass'i yanlışlıkla kapatmaya karşı koruyor.
+  - ⬜ **10 ışık tavanı** hâlâ duruyor (`gpu_types.rs:127` `[LightData; 10]`, kararsız ECS
+    iterasyon sırasına göre seçilen ilk 10, mesafe/öncelik culling'i yok) — clustered/tiled
+    ışık culling'i gerekiyor. Deferred pipeline'a sahip olmanın asıl gerekçesi bu.
+
 ### ⬜ GPU test flake'i — kısmen çözüldü, kalanı ölçüldü
 `crates/gizmo/src/systems/render/mod.rs`'teki golden-image testleri her biri kendi wgpu
 cihazını açıyordu ve `cargo test` bir binary'nin testlerini paralel koşturuyor → eşzamanlı
