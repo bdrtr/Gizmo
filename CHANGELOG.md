@@ -186,6 +186,27 @@ Upgrading from `0.8.0`:
   `&mut T` to the same row — undefined behaviour with no panic and no compile error.
   It now panics like the other paths, as does `query_entity` for symmetry.
 
+### Fixed — rollback
+
+- **`WorldSnapshot` now carries joint state.** Rollback could not un-break a joint.
+
+  `Joint::is_broken` is a one-way latch — nothing outside scene load ever sets it back to
+  `false` — and `joints` was not in the snapshot at all. A joint that snapped inside a
+  rollback window stayed snapped through the restore, so the re-simulation ran without a
+  joint the continuous simulation still had, permanently. The same applied to
+  `initial_relative_rotation`, the reference pose latched on a joint's first solve, against
+  which every cone/twist/swing limit is measured: a stale one silently redefines the joint's
+  rest pose.
+
+  Neither is visible to `state_hash`, which hashes only transform/velocity/sleep — so the
+  desync stayed invisible until it bled into velocities. `tests/rollback.rs` gains two cases
+  that fail on the old code, using a rope that goes taut (and breaks) at tick 38, inside a
+  snapshot window opened at 20.
+
+  The criterion for what belongs in `WorldSnapshot` is not size but derivability: anything
+  that cannot be recomputed from `transforms`/`velocities` has to be in it, and its absence
+  cannot be caught by the hash. That rule is now written on the type.
+
 ### Fixed — determinism
 
 - **`generate_fracture_chunks` seeded itself from thread-local entropy**, so

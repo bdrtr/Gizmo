@@ -13,6 +13,7 @@ impl PhysicsWorld {
             accumulator: self.accumulator,
             gravity_fields: self.gravity_fields.clone(),
             fluid_zones: self.fluid_zones.clone(),
+            joints: self.joints.clone(),
         }
     }
 
@@ -26,6 +27,7 @@ impl PhysicsWorld {
         self.accumulator = snap.accumulator;
         self.gravity_fields.clone_from(&snap.gravity_fields);
         self.fluid_zones.clone_from(&snap.fluid_zones);
+        self.joints.clone_from(&snap.joints);
     }
 
     /// Simülasyon durumunun DETERMINISTIK hash'i — rollback/replay desync tespiti + testler.

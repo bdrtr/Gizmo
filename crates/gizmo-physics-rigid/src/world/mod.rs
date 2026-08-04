@@ -295,10 +295,16 @@ impl Default for PhysicsWorld {
 ///
 /// `PhysicsStateSnapshot`'tan (yalnız transform+velocity, 1-kare rewind için) FARKLI:
 /// deterministik RE-SİMÜLASYON için gereken İÇ DURUMU da taşır — `rigid_bodies` (uyku
-/// durumu + sayaçlar), **`contact_cache` (warm-start impuls'ları)** ve substep
-/// `accumulator`. Bunlar olmadan restore sonrası çözücü farklı warm-start'la yakınsar →
-/// rollback re-simülasyonu kesintisiz simülasyondan SAPAR. (entities/colliders/
-/// entity_index_map rollback penceresinde DEĞİŞMEZ varsayılır — ekleme/silme yok.)
+/// durumu + sayaçlar), **`contact_cache` (warm-start impuls'ları)**, substep `accumulator`
+/// ve **`joints`** (`is_broken` mandalı + mandallanmış referans pozları). Bunlar olmadan
+/// restore sonrası çözücü farklı warm-start'la yakınsar → rollback re-simülasyonu kesintisiz
+/// simülasyondan SAPAR. (entities/colliders/entity_index_map rollback penceresinde DEĞİŞMEZ
+/// varsayılır — ekleme/silme yok.)
+///
+/// **Ekleme kuralı:** buraya bir alanın girip girmeyeceğinin ölçütü "büyük mü" değil,
+/// *`transforms`/`velocities`'ten türetilebiliyor mu*. Türetilemiyorsa girmek ZORUNDA — ve
+/// eksikliği `state_hash` ile YAKALANAMAZ, çünkü o yalnız transform/velocity/sleep karıştırır.
+/// Eklem durumu tam bu yüzden yıllarca sessizce eksik kaldı.
 #[derive(Debug, Clone)]
 pub struct WorldSnapshot {
     transforms: Vec<Transform>,
@@ -312,4 +318,17 @@ pub struct WorldSnapshot {
     // them untouched would resimulate under the wrong forces and diverge.
     gravity_fields: Vec<GravityField>,
     fluid_zones: Vec<FluidZone>,
+    // Eklemler de simülasyon durumunun parçası. `transforms`/`velocities`'ten TÜRETİLEMEYEN
+    // runtime alanları var:
+    //   * `is_broken` TEK YÖNLÜ bir mandal — sahne yüklemesi dışında hiçbir yer `false`'a
+    //     çekmiyor. Rollback penceresi içinde kopan bir eklem restore'dan sonra da kopuk
+    //     kalıyor, yani re-simülasyon kesintisiz simülasyonun hâlâ sahip olduğu bir eklem
+    //     olmadan koşuyordu.
+    //   * `initial_relative_rotation` eklemin İLK çözümünde mandallanan referans pozu
+    //     (ball-socket / slider / D6). Bütün koni/twist/swing limitleri ona göre ölçülüyor,
+    //     dolayısıyla bayat bir referans eklemin dinlenme pozunu sessizce yeniden tanımlar.
+    //
+    // İkisi de `state_hash`'e girmiyor (o yalnız transform/velocity/sleep karıştırıyor), yani
+    // desync hızlara sızana kadar GÖRÜNMEZ — kopuk bir eklemde bu anında ve kalıcı.
+    joints: Vec<crate::joints::Joint>,
 }
