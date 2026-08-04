@@ -159,18 +159,38 @@ crate'inde duruyor. `gizmo-physics-core`'un facade'da zorunlu olması bunu şimd
 gizliyor ama fizik crate'lerini bağımsız paketlemeyi (D1) zorlaştırıyor ve
 "transform istiyorum ama fizik istemiyorum" tüketicisini imkânsız kılıyor.
 
-### ⬜ A7 — Doc-test'ler gerçekten çalışsın
-**Neden:** `cargo test --workspace` → **19 doc-test hedefinin 19'unda 0 çalışan test.**
-Tüm doc örnekleri `ignore`. Yani dokümandaki hiçbir örnek derlendiği bile doğrulanmıyor.
+### 🔄 A7 — Doc-test'ler gerçekten çalışsın
+> **Kısmen bitti (2026-08-04).** Çalışan doc-test: **7 → 12**. Kalan 30 `ignore`.
+>
+> **Ölçüm düzeltmesi:** ilk denetimde "20 hedefin 19'unda 0 çalışan test" doğruydu ama
+> bunu "tüm doc örnekleri ignore" diye özetlemek fazla genişti — `gizmo-core`'un 7 tanesi
+> (4'ü `compile_fail`, ki aliasing sözleşmesini koruyan gerçek testler) hep koşuyordu.
+> `docs/AUDIT-2026-08.md` düzeltildi.
+>
+> Gerçek örneğe çevrilenler: `gizmo-core/time.rs` (time_scale'in `dt`'yi ölçekleyip
+> `raw_dt`'yi etkilemediğini ve spike clamp'ini iddia ediyor), `gizmo/systems/spin.rs`,
+> `gizmo/systems/lifetime.rs`. Yeni yazılanlar: `fracture::generate_fracture_chunks`
+> (workspace'in **ilk** çalışan fizik doc örneği) ve `demo::assets::find`.
+>
+> **Yan bulgu — `[lib] name` eksik.** `crates/gizmo/Cargo.toml`'da `[lib]` bölümü yok, yani
+> kütüphane adı `gizmo_engine`. `gizmo::prelude::*` YALNIZCA tüketici manifest'inde
+> `gizmo = { package = "gizmo-engine" }` diye yeniden adlandırırsa çalışıyor — demolar bunu
+> yapıyor, ama README'nin quickstart'ı ve `lib.rs`'in "the library ... is simply `gizmo`"
+> cümlesi bunu söylemiyor. crates.io'dan kuran biri README'yi kopyalayınca derlenmez.
+> Düzeltme `[lib] name = "gizmo"` eklemek (tek satır, docs'u doğru kılar) ama crate yolu
+> public API olduğu için sürüm kararıyla birlikte alınmalı → **A7-followup**.
 
-- [ ] `ignore` işaretli örnekleri tara; derlenebilir olanları `no_run`'a çevir (GPU/pencere
-      gerektirenler `no_run` olarak derlenir ama çalıştırılmaz — istenen budur).
-- [ ] Gerçekten derlenemeyecek olanlar (yalancı-kod) → `text` işaretle, örnek olduğu iddiasını bırak.
-- [ ] Fizik crate'lerinde **tek bir derlenen örnek yok**: `PhysicsWorld` kur → gövde ekle →
-      `step()` → sonucu oku. En az bir tane ekle.
+- [ ] Kalan 30 `ignore`: `gizmo-engine` 13, `gizmo-core` 10, `gizmo-renderer` 3,
+      `gizmo-{analysis,animation,app,scripting}` 1'er. Derlenebilir olanları gerçek örneğe
+      çevir; GPU/pencere gerektirenleri `no_run` yap (derlenir, koşmaz); gerçekten
+      sözde-kod olanları ` ```text ` işaretle ve örnek iddiasını bırak.
+
+### ⬜ A7-followup — `[lib] name = "gizmo"` ekle
+README ve `lib.rs` `gizmo::` yolunu vaat ediyor; gerçek yol `gizmo_engine::`. Tek satırlık
+düzeltme ama public crate yolunu değiştirdiği için A9 (sürüm) ile birlikte kararlaştırılmalı.
 
 ### ⬜ A6 — CI kapıları
-- [ ] **`cargo hack --feature-powerset --depth 2`** (en azından `gizmo-engine` + `gizmo-app`)
+- [x] **`cargo hack --feature-powerset --depth 2`** ✅ (A2 ile eklendi) (en azından `gizmo-engine` + `gizmo-app`)
       → A2'nin geri gelmesini engeller. Bu kampanyanın en değerli tek CI eklemesi.
 - [ ] **`cargo-deny`** (advisories + licenses + bans + sources). Not: `rodio 0.17` →
       `symphonia` **MPL-2.0** çekiyor; README düz "MIT/Apache-2.0" diyor. `deny.toml`'da

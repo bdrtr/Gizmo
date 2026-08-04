@@ -1,5 +1,8 @@
 use gizmo_core::system::Schedule;
 use gizmo_core::world::World;
+// Only `add_plugin` uses this, and that method exists only when the headless runtime is the
+// crate's root `App` — see the gate on it below.
+#[cfg(not(all(feature = "window", feature = "render")))]
 use crate::plugin::Plugin;
 
 /// The headless application builder and runtime.

@@ -1,21 +1,34 @@
 /// Motor genelinde zaman yönetimi.
 ///
 /// # Kullanım
-/// ```rust,ignore
-/// let mut time = Time::default();
+/// ```
+/// use gizmo_core::time::Time;
+///
+/// let mut time = Time::new();
 ///
 /// // Her frame başında:
-/// time.update(raw_dt);
+/// time.update(1.0 / 60.0);
 ///
-/// // Okuma:
-/// let dt = time.dt();           // Clamped delta (max 50ms)
-/// let elapsed = time.elapsed(); // Toplam geçen süre
-/// let frame = time.frame();     // Frame sayacı
-/// let raw = time.raw_dt();      // Ham, clamp edilmemiş dt
+/// assert_eq!(time.frame(), 1);
+/// assert!((time.dt() - 1.0 / 60.0).abs() < 1e-6);
+/// assert!((time.raw_dt() - 1.0 / 60.0).abs() < 1e-6);
 ///
-/// // Zaman ölçeği:
-/// time.set_time_scale(0.5); // Slow motion
-/// time.set_time_scale(0.0); // Pause
+/// // Zaman ölçeği dt'yi ölçekler, raw_dt'yi ETKİLEMEZ.
+/// time.set_time_scale(0.5); // slow motion
+/// time.update(1.0 / 60.0);
+/// assert!((time.dt() - 0.5 / 60.0).abs() < 1e-6);
+/// assert!((time.raw_dt() - 1.0 / 60.0).abs() < 1e-6);
+///
+/// time.set_time_scale(0.0); // pause: dt sıfırlanır, frame saymaya devam eder
+/// time.update(1.0 / 60.0);
+/// assert_eq!(time.dt(), 0.0);
+/// assert_eq!(time.frame(), 3);
+///
+/// // Uzun bir takılma (spike) clamp'lenir — fizik tek karede patlamasın.
+/// time.set_time_scale(1.0);
+/// time.update(5.0);
+/// assert!(time.dt() <= 0.05 + 1e-6, "dt max_dt'ye clamp'lenmeli");
+/// assert!((time.raw_dt() - 5.0).abs() < 1e-6, "raw_dt clamp'lenmez");
 /// ```
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Time {

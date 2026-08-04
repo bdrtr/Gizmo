@@ -5,10 +5,31 @@
 //! tutup, süre/konum kontrol edip `despawn` döngüsü yazarak yapar. Bir komponent ekle,
 //! [`LifetimePlugin`]'i çalıştır, motor silsin (tıpkı [`Spin`](crate::systems::spin) gibi).
 //!
-//! ```ignore
-//! world.add_component(spark, DespawnAfter::secs(2.0));   // 2 sn sonra yok
-//! world.add_component(ball,  DespawnBelowY::new(-60.0)); // y < -60 olunca yok
-//! app.add_plugin(LifetimePlugin);                        // otomatik temizlik
+//! ```
+//! use gizmo_engine::prelude::*;
+//! use gizmo_engine::core::system::System;
+//! use gizmo_engine::systems::lifetime::LifetimeSystem;
+//!
+//! let mut world = World::new();
+//!
+//! let spark = world.spawn();
+//! world.add_component(spark, Transform::new(Vec3::ZERO));
+//! world.add_component(spark, DespawnAfter::secs(2.0));
+//!
+//! let ball = world.spawn();
+//! world.add_component(ball, Transform::new(Vec3::new(0.0, -100.0, 0.0)));
+//! world.add_component(ball, DespawnBelowY::new(-60.0));
+//!
+//! // Bir uygulamada `app.add_plugin(LifetimePlugin)` bunu her frame çalıştırır.
+//! let mut sys = LifetimeSystem;
+//! sys.run(&world, 1.0);
+//! world.apply_commands();
+//! assert!(world.is_alive(spark), "1 sn sonra kıvılcım hâlâ yaşıyor");
+//! assert!(!world.is_alive(ball), "eşiğin altındaki top hemen silinmeli");
+//!
+//! sys.run(&world, 1.5); // toplam 2.5 sn > 2.0
+//! world.apply_commands();
+//! assert!(!world.is_alive(spark), "süresi dolan kıvılcım silinmeli");
 //! ```
 
 use gizmo_core::world::World;
