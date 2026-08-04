@@ -215,3 +215,178 @@ fn snapshot_restores_gravity_and_fluid_zones() {
         "restore_snapshot must revert fluid_zones to the snapshot state"
     );
 }
+
+// ── Joint state is part of the simulation state ──────────────────────────────
+//
+// `WorldSnapshot` carried transforms, velocities, rigid bodies, the contact cache and the
+// force fields — but no joint state at all, even though `PhysicsWorld::joints` holds runtime
+// fields that are not derivable from any of those:
+//
+//   * `is_broken` is a ONE-WAY latch. Nothing ever sets it back to false outside scene load,
+//     so a joint that snapped inside a rollback window stayed snapped through the restore and
+//     the re-simulation ran with a joint the continuous simulation still had.
+//   * `initial_relative_rotation` is the reference pose latched on a joint's FIRST solve
+//     (ball-socket, slider, D6). Every limit is measured against it.
+//
+// Neither is visible to `state_hash`, which hashes only transform/velocity/sleep — so the
+// desync stays invisible until it bleeds into velocities, which for a broken joint is
+// immediately and permanently.
+
+/// Measured: the rope goes taut at tick 38 and its peak reaction sits between 1200 and
+/// 2000 N, so this threshold breaks it at tick 38 — after the snapshot at 20 and before the
+/// window closes at 60. The break has to land INSIDE the window or the test is vacuous.
+const BREAK_FORCE: f32 = 1200.0;
+
+/// A mass free-falling on a slack rope. The rope only carries load when it goes TAUT, which
+/// happens well after the snapshot point — so the break lands inside the rollback window
+/// rather than in the release transient at tick 0.
+fn breakable_rope(break_force: f32) -> PhysicsWorld {
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
+    let mut anchor = RigidBody::new_static();
+    anchor.wake_up();
+    world.add_body(
+        BodyHandle::from_id(0),
+        anchor,
+        Transform::new(Vec3::new(0.0, 10.0, 0.0)),
+        Velocity::default(),
+        Collider::sphere(0.1),
+    );
+    let mut rb = RigidBody::new(1.0, true);
+    rb.wake_up();
+    let col = Collider::box_collider(Vec3::splat(0.2));
+    rb.update_inertia_from_collider(&col);
+    world.add_body(
+        BodyHandle::from_id(1),
+        rb,
+        Transform::new(Vec3::new(0.0, 9.0, 0.0)), // 1 m below: 2 m of slack to fall through
+        Velocity::default(),
+        col,
+    );
+    let mut j = gizmo_physics_rigid::Joint::rope(
+        BodyHandle::from_id(0),
+        BodyHandle::from_id(1),
+        Vec3::ZERO,
+        Vec3::ZERO,
+        3.0,
+    );
+    j.break_force = break_force;
+    world.joints.push(j);
+    world
+}
+
+/// A joint that breaks inside the rollback window must be un-broken by the restore.
+#[test]
+fn rollback_restores_a_broken_joint() {
+    // Ground truth: 60 ticks straight through.
+    let mut gt = breakable_rope(BREAK_FORCE);
+    for _ in 0..60 {
+        gt.step(DT).ok();
+    }
+    let truth = gt.state_hash();
+    assert!(
+        gt.joints[0].is_broken,
+        "scene precondition: the joint must actually break within the window, or this test \
+         asserts nothing"
+    );
+
+    let mut w = breakable_rope(BREAK_FORCE);
+    for _ in 0..20 {
+        w.step(DT).ok();
+    }
+    assert!(
+        !w.joints[0].is_broken,
+        "scene precondition: the joint must still be intact at the snapshot point"
+    );
+    let snap = w.snapshot();
+
+    for _ in 20..60 {
+        w.step(DT).ok();
+    }
+    assert_eq!(w.state_hash(), truth, "control: the continuous sim is not deterministic");
+
+    w.restore_snapshot(&snap);
+    assert!(
+        !w.joints[0].is_broken,
+        "restore_snapshot must un-break a joint that broke after the snapshot — `is_broken` \
+         is a one-way latch and nothing else resets it"
+    );
+    for _ in 20..60 {
+        w.step(DT).ok();
+    }
+    assert_eq!(
+        w.state_hash(),
+        truth,
+        "rollback + resim != continuous once a joint breaks in the window"
+    );
+}
+
+/// `initial_relative_rotation` is latched on first solve and every limit is measured from it.
+/// If a rollback window spans the latch, the restore has to revert it too.
+#[test]
+fn rollback_restores_the_latched_joint_reference_pose() {
+    use gizmo_physics_rigid::{Joint, JointData};
+
+    let mut world = PhysicsWorld::new().with_gravity(Vec3::ZERO);
+    let mut anchor = RigidBody::new_static();
+    anchor.wake_up();
+    world.add_body(
+        BodyHandle::from_id(0),
+        anchor,
+        Transform::new(Vec3::ZERO),
+        Velocity::default(),
+        Collider::sphere(0.1),
+    );
+    let mut rb = RigidBody::new(1.0, false);
+    rb.wake_up();
+    let col = Collider::box_collider(Vec3::splat(0.2));
+    rb.update_inertia_from_collider(&col);
+    world.add_body(
+        BodyHandle::from_id(1),
+        rb,
+        Transform::new(Vec3::new(0.5, 0.0, 0.0)),
+        Velocity {
+            angular: Vec3::new(2.0, 0.0, 0.0),
+            ..Default::default()
+        },
+        col,
+    );
+    let mut j = Joint::ball_socket(
+        BodyHandle::from_id(0),
+        BodyHandle::from_id(1),
+        Vec3::new(0.5, 0.0, 0.0),
+        Vec3::ZERO,
+    );
+    if let JointData::BallSocket(ref mut d) = j.data {
+        d.use_cone_limit = true;
+        d.cone_limit_angle = 0.5;
+    }
+    world.joints.push(j);
+
+    // Snapshot BEFORE the first solve, so the reference pose is still unlatched.
+    let unlatched = match world.joints[0].data {
+        JointData::BallSocket(d) => d.initial_relative_rotation,
+        _ => unreachable!(),
+    };
+    assert!(unlatched.is_none(), "precondition: not yet latched");
+    let snap = world.snapshot();
+
+    for _ in 0..30 {
+        world.step(DT).ok();
+    }
+    let latched = match world.joints[0].data {
+        JointData::BallSocket(d) => d.initial_relative_rotation,
+        _ => unreachable!(),
+    };
+    assert!(latched.is_some(), "precondition: stepping must latch the reference pose");
+
+    world.restore_snapshot(&snap);
+    let after = match world.joints[0].data {
+        JointData::BallSocket(d) => d.initial_relative_rotation,
+        _ => unreachable!(),
+    };
+    assert!(
+        after.is_none(),
+        "restore_snapshot must revert the latched reference pose — every cone/twist/swing \
+         limit is measured against it, so a stale one silently redefines the joint's rest pose"
+    );
+}
