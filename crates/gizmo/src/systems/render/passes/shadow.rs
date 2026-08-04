@@ -28,7 +28,10 @@ pub fn record_shadow_passes(
         shadow_pass.set_bind_group(0, &renderer.scene.shadow_pass_bind_groups[i], &[]);
         shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
         for item in draw_items {
-            if item.unlit || item.is_transparent {
+            // Baked-lit geometry casts. It is `unlit` in the sense of skipping the deferred path,
+            // but it is a solid world and a world that does not occlude the sun has no shadows in
+            // it at all.
+            if (item.unlit && !item.baked_lit) || item.is_transparent {
                 continue;
             }
             let skel_bg = item
@@ -88,7 +91,7 @@ pub fn record_shadow_passes(
         shadow_pass.set_bind_group(0, &renderer.scene.point_shadow_pass_bind_groups[i], &[]);
         shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
         for item in draw_items {
-            if item.unlit || item.is_transparent { continue; }
+            if (item.unlit && !item.baked_lit) || item.is_transparent { continue; }
             let skel_bg = item
                 .skeleton_bind_group
                 .as_ref()

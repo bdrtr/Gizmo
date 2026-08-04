@@ -102,6 +102,8 @@ pub fn record_forward_and_fluid(
             if draw_solid {
                 let pipeline = if item.is_skybox {
                     &renderer.scene.sky_pipeline
+                } else if item.baked_lit {
+                    &renderer.scene.baked_lit_pipeline
                 } else if item.unlit {
                     &renderer.scene.unlit_pipeline
                 } else if item.is_transparent {
