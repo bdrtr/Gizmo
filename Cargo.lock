@@ -458,7 +458,7 @@ dependencies = [
  "bevy_ecs",
  "bevy_platform",
  "bevy_reflect",
- "bevy_tasks 0.19.0",
+ "bevy_tasks",
  "bevy_utils",
  "console_error_panic_hook",
  "ctrlc",
@@ -489,7 +489,7 @@ dependencies = [
  "bevy_ecs",
  "bevy_platform",
  "bevy_reflect",
- "bevy_tasks 0.19.0",
+ "bevy_tasks",
  "bevy_utils",
  "bitflags 2.13.0",
  "blake3",
@@ -588,7 +588,7 @@ dependencies = [
  "bevy_app",
  "bevy_ecs",
  "bevy_platform",
- "bevy_tasks 0.19.0",
+ "bevy_tasks",
  "bevy_time",
  "const-fnv1a-hash",
  "log",
@@ -605,7 +605,7 @@ dependencies = [
  "bevy_platform",
  "bevy_ptr",
  "bevy_reflect",
- "bevy_tasks 0.19.0",
+ "bevy_tasks",
  "bevy_utils",
  "bitflags 2.13.0",
  "bumpalo",
@@ -854,19 +854,6 @@ dependencies = [
 
 [[package]]
 name = "bevy_tasks"
-version = "0.15.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "028630ddc355563bd567df1076db3515858aa26715ddf7467d2086f9b40e5ab1"
-dependencies = [
- "async-executor",
- "futures-channel",
- "futures-lite",
- "pin-project",
- "wasm-bindgen-futures",
-]
-
-[[package]]
-name = "bevy_tasks"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa34e6b9b804851ec08a41c0346c859d82e2fa98c906d74b965ee61bbbb688e4"
@@ -907,7 +894,7 @@ dependencies = [
  "bevy_ecs",
  "bevy_math",
  "bevy_reflect",
- "bevy_tasks 0.19.0",
+ "bevy_tasks",
  "bevy_utils",
  "derive_more",
  "serde",
@@ -2676,7 +2663,7 @@ name = "gizmo-core"
 version = "0.9.0"
 dependencies = [
  "bevy_reflect",
- "bevy_tasks 0.15.3",
+ "bevy_tasks",
  "chacha20 0.10.1",
  "chrono",
  "criterion 0.8.2",
