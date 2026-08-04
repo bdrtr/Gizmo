@@ -553,6 +553,7 @@ mod trimesh_tests {
             vertices: Arc::new(vertices),
             indices: Arc::new(indices),
             bvh: Arc::new(bvh),
+                local_aabb: Default::default(),
         })
     }
 
@@ -691,6 +692,7 @@ mod trimesh_tests {
             vertices: Arc::new(Vec::new()),
             indices: Arc::new(Vec::new()),
             bvh: Arc::new(crate::bvh::BvhTree::default()),
+                local_aabb: Default::default(),
         });
         assert!(NarrowPhase::test_collision_manifold(
             &b, Vec3::ZERO, Quat::IDENTITY, &empty, Vec3::ZERO, Quat::IDENTITY).is_empty());
@@ -702,6 +704,7 @@ mod trimesh_tests {
             vertices: Arc::new(v),
             indices: Arc::new(vec![0, 1, 2]), // one triangle where the BVH indexes two
             bvh: Arc::new(bvh),
+                local_aabb: Default::default(),
         });
         let _ = NarrowPhase::test_collision_manifold(
             &b, Vec3::new(0.0, 0.4, 0.0), Quat::IDENTITY, &broken, Vec3::ZERO, Quat::IDENTITY);
