@@ -36,8 +36,8 @@ impl JointSolver {
             return; // degenerate: direction undefined
         }
         let n = diff / length; // A→B
-        let r_a = anchor_a - transforms[idx_a].position;
-        let r_b = anchor_b - transforms[idx_b].position;
+        let r_a = Self::lever_arm(rigid_bodies, transforms, idx_a, anchor_a);
+        let r_b = Self::lever_arm(rigid_bodies, transforms, idx_b, anchor_b);
 
         // error = target - current (so a violated UPPER bound gives a negative error,
         // driving a negative — i.e. pulling-together — lambda, exactly like the cone limit).

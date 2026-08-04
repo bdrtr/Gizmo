@@ -32,8 +32,8 @@ impl JointSolver {
         }
 
         let direction = diff / length;
-        let r_a = anchor_a - transforms[idx_a].position;
-        let r_b = anchor_b - transforms[idx_b].position;
+        let r_a = Self::lever_arm(rigid_bodies, transforms, idx_a, anchor_a);
+        let r_b = Self::lever_arm(rigid_bodies, transforms, idx_b, anchor_b);
 
         let v_a = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
         let v_b = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);

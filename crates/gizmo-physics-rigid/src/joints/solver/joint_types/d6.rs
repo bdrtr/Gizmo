@@ -34,8 +34,8 @@ impl JointSolver {
         let rot_a = transforms[idx_a].rotation;
         let anchor_a = transforms[idx_a].position + rot_a * la;
         let anchor_b = transforms[idx_b].position + transforms[idx_b].rotation * lb;
-        let r_a = anchor_a - transforms[idx_a].position;
-        let r_b = anchor_b - transforms[idx_b].position;
+        let r_a = Self::lever_arm(rigid_bodies, transforms, idx_a, anchor_a);
+        let r_b = Self::lever_arm(rigid_bodies, transforms, idx_b, anchor_b);
         let delta = anchor_b - anchor_a; // position error (world)
         let unit = [Vec3::X, Vec3::Y, Vec3::Z];
         let compliance = data.compliance;
@@ -158,8 +158,8 @@ impl JointSolver {
         let anchor_a = transforms[idx_a].position + rot_a * joint.local_anchor_a;
         let anchor_b =
             transforms[idx_b].position + transforms[idx_b].rotation * joint.local_anchor_b;
-        let r_a = anchor_a - transforms[idx_a].position;
-        let r_b = anchor_b - transforms[idx_b].position;
+        let r_a = Self::lever_arm(rigid_bodies, transforms, idx_a, anchor_a);
+        let r_b = Self::lever_arm(rigid_bodies, transforms, idx_b, anchor_b);
         let delta = anchor_b - anchor_a;
         let unit = [Vec3::X, Vec3::Y, Vec3::Z];
 
