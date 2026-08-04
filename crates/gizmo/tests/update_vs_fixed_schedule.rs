@@ -132,3 +132,101 @@ fn the_physics_plugin_installs_its_world_and_leaves_the_frame_schedule_alone() {
     app.update_schedule.run(&mut app.world, 1.0 / 60.0);
     assert!(app.world.get_resource::<PhysicsWorld>().is_some());
 }
+
+/// Transform propagation belongs on the per-frame schedule, and its placement carries an
+/// ordering guarantee that used to be only an aspiration.
+///
+/// `PhysicsPlugin` labels its step `physics_step` with a comment saying transform systems
+/// "can order themselves after it" — but no `.after("physics_step")` edge was ever wired, so
+/// within a fixed step the order was whatever the batcher picked. Running the transforms on
+/// the update schedule makes "after physics" structural instead: `run_fixed_and_update`
+/// drains every fixed step before update runs at all.
+///
+/// It is also a cost fix. The result is consumed once, at draw; propagating it `0..N` times
+/// per frame in the fixed loop was work nobody read.
+#[test]
+fn transform_propagation_runs_on_the_per_frame_schedule() {
+    use gizmo::physics::components::GlobalTransform;
+
+    let mut app = app_with_plugin(gizmo::plugins::TransformPlugin);
+
+    let e = app.world.spawn();
+    app.world
+        .add_component(e, Transform::new(Vec3::new(3.0, 4.0, 5.0)));
+    app.world.add_component(e, GlobalTransform::default());
+
+    let world_y = |w: &World| -> f32 {
+        w.query::<&GlobalTransform>()
+            .unwrap()
+            .get(e.id())
+            .expect("entity keeps its GlobalTransform")
+            .matrix
+            .to_scale_rotation_translation()
+            .2
+            .y
+    };
+
+    // The fixed schedule must not own transform propagation any more.
+    app.schedule.run(&mut app.world, 1.0 / 60.0);
+    assert_eq!(
+        world_y(&app.world),
+        0.0,
+        "the fixed-timestep schedule must not propagate transforms — the result is read once \
+         per frame, not once per simulation step"
+    );
+
+    // The per-frame schedule must.
+    app.update_schedule.run(&mut app.world, 1.0 / 60.0);
+    assert!(
+        (world_y(&app.world) - 4.0).abs() < 1e-5,
+        "the per-frame schedule must propagate Transform into GlobalTransform, got y={}",
+        world_y(&app.world)
+    );
+}
+
+/// The whole point of the split: a system on the update schedule observes the world *after*
+/// this frame's fixed steps. Anything that reads simulation output for presentation —
+/// transform propagation, cameras, UI — depends on that ordering.
+#[test]
+fn update_systems_observe_the_world_after_the_frame_s_fixed_steps() {
+    use gizmo_app::frame::run_fixed_and_update;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    let order = Arc::new(std::sync::Mutex::new(Vec::<&'static str>::new()));
+    let fixed_count = Arc::new(AtomicU32::new(0));
+
+    let mut world = World::new();
+    world.insert_resource(gizmo::core::time::PhysicsTime::new(60));
+
+    let o1 = order.clone();
+    let fc = fixed_count.clone();
+    let mut fixed = gizmo::core::system::Schedule::new();
+    fixed.add_system(move |_w: &World, _dt: f32| {
+        fc.fetch_add(1, Ordering::Relaxed);
+        o1.lock().unwrap().push("fixed");
+    });
+
+    let o2 = order.clone();
+    let mut update = gizmo::core::system::Schedule::new();
+    update.add_system(move |_w: &World, _dt: f32| {
+        o2.lock().unwrap().push("update");
+    });
+
+    // A frame long enough for several fixed steps.
+    run_fixed_and_update(&mut world, &mut fixed, &mut update, 3.5 / 60.0, 3.5 / 60.0, |_| {});
+
+    let seq = order.lock().unwrap().clone();
+    let steps = fixed_count.load(Ordering::Relaxed) as usize;
+    assert!(steps >= 3, "expected several fixed steps, got {steps}");
+    assert_eq!(
+        seq.last(),
+        Some(&"update"),
+        "update must run last, after every fixed step of the frame; sequence was {seq:?}"
+    );
+    assert_eq!(
+        seq.iter().filter(|s| **s == "update").count(),
+        1,
+        "and exactly once; sequence was {seq:?}"
+    );
+}

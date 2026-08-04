@@ -345,12 +345,26 @@ client-server mesajları round-trip testleriyle birlikte taşınmalı.
   >
   > Kalan: `streaming`, ve interpolasyon `alpha`'sının render'da tüketilmesi (judder).
 
-### ⬜ B1-followup-2 — `TransformPlugin` mükerrerliğini çöz
-Aynı iki sistem hem sabit schedule'da (`0..N` kez/frame) hem render'da
-(`ensure_global_transforms`, 1 kez/frame) koşuyor. Doğru hedef: tek bir per-frame
-propagate. Engel: `gizmo-studio`'nun ayrı render pipeline'ı `ensure_global_transforms`
-çağırmıyor, dolayısıyla sabit-schedule kaydına bel bağlıyor. Ya studio'nun pipeline'ı da
-çağıracak, ya propagate `update_schedule`'a taşınacak (ve studio ona bağlanacak).
+### ✅ B1-followup-2 — `TransformPlugin` mükerrerliği çözüldü
+> **Bitti (2026-08-04).** `TransformSyncSystem` + `TransformPropagateSystem`
+> `update_schedule`'a taşındı. 2 test.
+>
+> **Kaydettiğim engel yokmuş — kontrol edince çıktı.** "gizmo-studio sabit-schedule kaydına
+> bel bağlıyor" demiştim; `gizmo-studio/src/update.rs:43-46` bu iki sistemi **zaten kendisi
+> koşturuyor**. Yani kimse o kayda bağlı değildi: render yolu `ensure_global_transforms`
+> ile, studio kendi eliyle hallediyor.
+>
+> Taşıma bir maliyet düzeltmesinden fazlası: **sıralama artık yapısal.** `PhysicsPlugin`'in
+> `physics_step` etiketinin yorumu transform sistemlerinin "kendini ondan sonraya
+> sıralayabileceğini" söylüyor ama `.after("physics_step")` edge'i **hiç bağlanmamış** —
+> sabit adım içinde sıra batcher'ın seçtiğiydi. `update_schedule` frame'in *bütün* sabit
+> adımlarından sonra koştuğu için "transform'lar fizikten sonra yayılır" artık etikete değil
+> yapıya dayanıyor. Ayrıca per-frame update sistemlerinden de sonra — `FpsLookSystem`'in
+> oynattığı kameranın ihtiyacı tam olarak bu.
+>
+> `default_render_pass`'teki `ensure_global_transforms` **kaldı**: plugin'i hiç kaydetmeyen
+> özel bir `App` için emniyet ağı, ve yeni spawn edilmiş mesh'e `GlobalTransform` iliştiren
+> yer o. Plugin kayıtlıyken yayılım zaten güncel oluyor.
 
 ### ⬜ B1-followup-3 — headless runtime'ın sabit-adım döngüsü yok
 `headless::App::run_default` tek schedule'ı gerçek `dt` ile koşturuyor; windowed
