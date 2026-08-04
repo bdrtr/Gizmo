@@ -348,6 +348,31 @@ client-server mesajları round-trip testleriyle birlikte taşınmalı.
     iterasyon sırasına göre seçilen ilk 10, mesafe/öncelik culling'i yok) — clustered/tiled
     ışık culling'i gerekiyor. Deferred pipeline'a sahip olmanın asıl gerekçesi bu.
 
+### ⬜ GPU test flake'i — kısmen çözüldü, kalanı ölçüldü
+`crates/gizmo/src/systems/render/mod.rs`'teki golden-image testleri her biri kendi wgpu
+cihazını açıyordu ve `cargo test` bir binary'nin testlerini paralel koşturuyor → eşzamanlı
+cihaz oluşturma sürücüde **SIGSEGV**'e dönüyor, tüm workspace koşusunu düşürüyordu.
+Rust panic'i değil, sürücü çöküşü olduğu için hiçbir test adı raporlanmıyordu.
+
+**Yapılan:** üç GPU testi de process-genelinde tek bir mutex'in arkasına alındı (`gpu_lock`).
+
+**Ölçüm (bu makine):**
+| durum | sonuç |
+|---|---|
+| kilit ÖNCESİ, workspace koşusu | 2 koşuda 2 çöküş |
+| kilit SONRASI, binary izole (paralel + tek-thread) | **8/8 temiz** |
+| kilit SONRASI, tam workspace koşusu | ~12 koşuda 2 çöküş |
+
+Yani binary-içi yarış çözüldü; kalan çöküş yalnızca **tam workspace koşusunda** ve izole
+koşuda hiç tekrarlanmıyor → sürücü/sistem seviyesinde, sürekli yük altında.
+
+**Muhtemel kalan neden:** cihaz *sayısı*. `shadow-gate` (`af6f168`) `render_frame`'i
+bayrağın iki hâliyle çağıran bir test ekledi; artık bir koşuda ~5 kez `Renderer::new_headless`
+çağrılıyor (öncesi 3). Doğru düzeltme testler arasında **tek bir cihazı paylaşmak** —
+`gpu_lock`'un arkasında tembel kurulan tek bir headless renderer. Ayrı iş, çünkü iki
+yardımcının (`render_frame`, `render_mean_brightness`) kurulum yollarını birleştirmeyi
+gerektiriyor.
+
 ## Faz C — Performans ve ölçüm
 - ⬜ **C1** — `benches/step_bench.rs` (solver/broadphase/narrowphase) + commit'lenmiş baseline.
   Şu an bu üçü için **sıfır** benchmark var; ENGINE.md'deki tüm perf sayıları tekrarlanamaz.
