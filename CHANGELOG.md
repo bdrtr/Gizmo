@@ -43,6 +43,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `add_system` still targets the fixed schedule. Changing its default would have silently
   moved existing users' systems onto a variable `dt`.
 
+- **Scene queries.** `QueryFilter` (layer mask, multi-body exclusion, trigger opt-in) plus
+  `PhysicsWorld::raycast_filtered`, `overlap_shape`, `point_query`, `cast_shape` and
+  `cast_body`, all broadphase-accelerated.
+
+  The previous public surface was three unfilterable raycasts. A ray has no volume, so a
+  character controller could not sweep its own capsule; without a layer mask every gameplay
+  ray hit triggers, debris and the caster itself. The engine's own character and vehicle
+  code shows what that cost: both bypass the broadphase and scan every collider in the
+  world, every frame, because there was nothing to call.
+
+  `cast_shape` marches over `NarrowPhase::test_collision` and bisects, rather than using
+  `Gjk::conservative_advancement`. That routine is present in the crate but only correct
+  for a head-on approach — with any lateral offset its step carries the shape into overlap,
+  and `Gjk::distance` reports a positive distance for overlapping shapes instead of
+  signalling penetration, so it concludes nothing was hit. Fixing it is tracked separately;
+  the query layer does not wait on it.
+
 ### Changed
 
 - **`UiPlugin` and `TransformPlugin` now register on the per-frame schedule.** Layout,
