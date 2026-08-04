@@ -27,8 +27,8 @@ impl JointSolver {
         // Fixed angular lock below must still run (earlier an early `return` here let a
         // perfectly-pinned Fixed joint spin freely).
         if err_len >= 0.0001 {
-            let r_a = anchor_a - transforms[idx_a].position;
-            let r_b = anchor_b - transforms[idx_b].position;
+            let r_a = Self::lever_arm(rigid_bodies, transforms, idx_a, anchor_a);
+            let r_b = Self::lever_arm(rigid_bodies, transforms, idx_b, anchor_b);
 
             let max_impulse = f32::MAX;
             let min_impulse = f32::MIN;
