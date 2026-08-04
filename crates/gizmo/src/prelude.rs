@@ -14,10 +14,16 @@ pub use crate::core::{
 };
 
 // === Hazır Bundle'lar ===
+// The prelude narrows with the feature set rather than disappearing: a headless build still
+// gets the ECS, math, physics and app surface, just not the renderer-backed bundles.
+#[cfg(feature = "render")]
 pub use crate::bundles::{
-    CameraBundle, DirectionalLightBundle, MeshBundle, PointLightBundle, Prefab, SpotLightBundle,
-    RigidBodyBundle,
+    CameraBundle, DirectionalLightBundle, MeshBundle, PointLightBundle, SpotLightBundle,
 };
+#[cfg(all(feature = "render", feature = "physics"))]
+pub use crate::bundles::Prefab;
+#[cfg(feature = "physics")]
+pub use crate::bundles::RigidBodyBundle;
 
 // === ECS Sorgu Sistemi ===
 pub use crate::core::query::{Changed, Mut, Or, Query, With, Without};
@@ -30,17 +36,24 @@ pub use crate::math::{EulerRot, Mat4, Quat, Ray, Vec2, Vec3, Vec4};
 
 // === Sadelik API (Bevy tarzı) ===
 pub use crate::app::{App, Plugin};
+#[cfg(feature = "render")]
 pub use crate::asset_server::AssetServer;
 pub use crate::color::Color;
 pub use crate::plugins::*;
+#[cfg(all(feature = "render", feature = "physics"))]
 pub use crate::spawner::{Commands as SpawnCommands, GltfLoadError, InputExt, WorldExt};
 
 // Temel Makrolar
 pub use crate::gizmo_log;
 
 // === Fizik ===
+// NOTE: `Transform` and `GlobalTransform` live in `gizmo-physics-core`, so the `physics`
+// feature is what puts even the basic spatial types in the prelude. Moving them into
+// `gizmo-core` would let a render-only or logic-only build have transforms — tracked in
+// docs/FIXPLAN.md.
 pub use gizmo_physics_core::{Collider, ColliderShape, Transform};
 pub use gizmo_physics_core::components::GlobalTransform;
+#[cfg(feature = "physics")]
 pub use gizmo_physics_rigid::components::{RigidBody, Velocity};
 pub use gizmo_math::Aabb;
 
@@ -66,6 +79,7 @@ pub use crate::systems::render::RenderContextExt;
 // "Bir komponent ekle, plugin çalıştır, motor halletsin" ergonomik sistemleri —
 // prelude'da öne çıkar (elle her frame yeniden yazma tuzağını önlemek için).
 pub use crate::systems::lifetime::{DespawnAfter, DespawnBelowY, LifetimePlugin};
+#[cfg(feature = "physics")]
 pub use crate::systems::auto_collider::{AutoBoxCollider, derived_box_half_extents};
 pub use crate::systems::spin::{Spin, SpinPlugin};
 #[cfg(feature = "render")]
@@ -109,5 +123,5 @@ pub use crate::ui::prelude::*;
 pub use crate::animation::{clip::*, player::*};
 
 // === Sadelik Modüler Sistemleri (Phase 3) ===
-#[cfg(feature = "window")]
+#[cfg(all(feature = "window", feature = "render", feature = "physics"))]
 pub use crate::simple::{CameraSettings, LightingSettings, CameraState, EditorState};

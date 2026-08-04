@@ -1,3 +1,4 @@
+#[cfg(feature = "physics")]
 use super::physics::*;
 use crate::core::World;
 use crate::math::{Mat4, Vec3};
@@ -118,9 +119,12 @@ pub fn default_render_pass(
     // TODO: Bütün nesnelerin (özellikle kamera ve çizilecek objelerin) global matrix'leri
     // bu pass çağrılmadan hemen önce bir `update_transforms(world)` sistemiyle güncellenmiş olmalıdır.
 
-    // ECS veri GPU'ya basılır ve GPU verisi ECS'ye alınır
-    gpu_physics_submit_system(world, renderer);
-    gpu_physics_readback_system(world, renderer);
+    // ECS veri GPU'ya basılır ve GPU verisi ECS'ye alınır (GPU-fizik yolu — `physics` ister)
+    #[cfg(feature = "physics")]
+    {
+        gpu_physics_submit_system(world, renderer);
+        gpu_physics_readback_system(world, renderer);
+    }
 
     let mut cam_exposure = 1.0;
     // Shadow cascades must follow the ACTIVE camera's near/far/fov, not hardcoded values
@@ -182,13 +186,19 @@ pub fn default_render_pass(
     // sisi sürer). Sis rengi/yoğunluğu deniz için makul sabitler — demolarda tunable yapılabilir.
     // Sis rengi/yoğunluğu artık kameranın içinde bulunduğu FluidZone'dan gelir (her su hacmi
     // kendi su-altı görünümünü tanımlar) — eskiden burada sabitti.
-    let water_sample = world
+    // Underwater fog comes from the FluidZone the camera sits in, which lives in the physics
+    // world; without the `physics` feature there are no fluid volumes, so the scene simply
+    // never renders as submerged.
+    #[cfg(feature = "physics")]
+    let (uw, fog_r, fog_g, fog_b, fog_density) = match world
         .get_resource::<crate::physics::world::PhysicsWorld>()
-        .and_then(|pw| pw.water_at(cam_pos));
-    let (uw, fog_r, fog_g, fog_b, fog_density) = match water_sample {
+        .and_then(|pw| pw.water_at(cam_pos))
+    {
         Some(s) => (1.0, s.fog_color[0], s.fog_color[1], s.fog_color[2], s.fog_density),
         None => (0.0, 0.0, 0.0, 0.0, 0.0),
     };
+    #[cfg(not(feature = "physics"))]
+    let (uw, fog_r, fog_g, fog_b, fog_density) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
 
     renderer.update_post_process(
         &renderer.queue,
@@ -532,6 +542,27 @@ pub use shared::{collect_scene_lights, SceneLights};
 #[cfg(test)]
 mod golden_render_tests {
     use super::default_render_pass;
+
+    /// Serialises every test in this module that touches the GPU.
+    ///
+    /// Each of these tests calls `Renderer::new_headless`, which requests its own wgpu
+    /// adapter and device. `cargo test` runs the tests in a binary **in parallel**, so
+    /// without this lock two threads race to create devices on the same adapter — which on
+    /// Linux/Mesa shows up as a `SIGSEGV` in the driver rather than a Rust panic, taking the
+    /// whole test binary (and the workspace run) down with it. The failure is load-dependent
+    /// and therefore intermittent: the same binary passes in isolation and crashes under
+    /// `cargo test --workspace`.
+    ///
+    /// Holding one process-wide mutex for the duration of each GPU test is the cheap fix.
+    /// It costs wall-clock (these tests become sequential) and buys determinism.
+    ///
+    /// The guard deliberately ignores poisoning: if one GPU test panics, the others should
+    /// still get a chance to run and report their own results rather than cascading.
+    fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
+        static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        GPU.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     use crate::bundles::{CameraBundle, DirectionalLightBundle};
     use crate::core::World;
     use crate::math::{Vec3, Vec4};
@@ -542,6 +573,7 @@ mod golden_render_tests {
 
     #[test]
     fn default_render_pass_draws_a_cube_distinct_from_background() {
+        let _gpu = gpu_lock();
         if !pollster::block_on(Renderer::headless_adapter_available()) {
             eprintln!(
                 "skipping default_render_pass_draws_a_cube_distinct_from_background: \
@@ -778,6 +810,7 @@ mod golden_render_tests {
     /// we assert monotonic increase, not an exact 2x.)
     #[test]
     fn camera_exposure_brightens_the_frame() {
+        let _gpu = gpu_lock();
         if !pollster::block_on(Renderer::headless_adapter_available()) {
             eprintln!("skipping camera_exposure_brightens_the_frame: no GPU adapter available");
             return;

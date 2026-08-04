@@ -51,6 +51,21 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// Applies a [`Plugin`] to this app.
+    ///
+    /// Available when the headless runtime is the crate's root `App` — that is, whenever the
+    /// windowed runtime is not compiled in. [`Plugin::build`] is typed against the root
+    /// `App`, so with both runtimes present a plugin written for the windowed app cannot be
+    /// applied to the headless one; the two are different types.
+    ///
+    /// Everything else on `headless::App` (`set_setup`, `set_update`, `set_runner`, `run`)
+    /// stays available unconditionally, so a simulation server keeps working even if some
+    /// unrelated crate in the graph turns `window` on — which is the whole point of the two
+    /// runtimes no longer being mutually exclusive.
+    ///
+    /// Making `Plugin` generic over the runtime would remove this restriction; see
+    /// `docs/FIXPLAN.md`.
+    #[cfg(not(all(feature = "window", feature = "render")))]
     pub fn add_plugin<P: Plugin<State>>(mut self, plugin: P) -> Self {
         tracing::info!(plugin = %std::any::type_name::<P>(), "[App:headless] plugin build");
         plugin.build(&mut self);

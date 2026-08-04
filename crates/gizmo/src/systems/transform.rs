@@ -107,8 +107,15 @@ impl gizmo_core::system::System for TransformPropagateSystem {
     }
 }
 
+/// Drives entities that follow a skeleton bone.
+///
+/// Gated on `render`: `BoneAttachment`/`Skeleton` are renderer components (skinning lives on
+/// the GPU side), so this system has nothing to read without the renderer. Transform sync and
+/// hierarchy propagation above are renderer-independent and stay available headless.
+#[cfg(feature = "render")]
 pub struct BoneAttachmentSystem;
 
+#[cfg(feature = "render")]
 impl gizmo_core::system::System for BoneAttachmentSystem {
     fn access_info(&self) -> gizmo_core::system::AccessInfo {
         let mut info = gizmo_core::system::AccessInfo::new();

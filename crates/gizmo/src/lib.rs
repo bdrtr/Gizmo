@@ -36,11 +36,30 @@
 //! [`wgpu`] and [`bytemuck`] (with `render`), [`egui`] (with `editor`) and
 //! [`winit`] (with `window`).
 
+// Feature gating rule for the facade's own modules:
+//
+// These used to be unconditional `pub mod`s whose bodies referenced the *optional*
+// `gizmo-renderer` / `gizmo-physics-*` dependencies unconditionally, so `gizmo-engine`
+// only ever compiled with `render` AND `physics` on — including under its own advertised
+// `headless` feature. Gate at the narrowest level that still compiles: a whole module
+// where every item needs the dependency, individual items where the split is inside.
+//
+// `Transform` lives in `gizmo-physics-core`, so anything touching transforms needs the
+// `physics` feature — that is why several purely-logical modules are gated on it.
+
+/// GPU asset loading — requires a renderer.
+#[cfg(feature = "render")]
 pub mod asset_server;
+/// Ready-made component bundles. Light/camera/mesh bundles need `render`; the rigid-body
+/// bundle needs `physics` (see the per-item gates inside).
+#[cfg(any(feature = "render", feature = "physics"))]
 pub mod bundles;
 pub mod color;
 pub mod plugins;
 pub mod prelude;
+/// Entity spawning helpers built on the renderer's mesh/material pipeline. They also spawn
+/// rigid bodies, hence the `physics` half of the gate.
+#[cfg(all(feature = "render", feature = "physics"))]
 pub mod spawner;
 pub mod systems;
 
@@ -51,6 +70,8 @@ pub use gizmo_analysis as analysis;
 pub use gizmo_app as app;
 pub use gizmo_core as core;
 pub use gizmo_math as math;
+/// Re-exports of the split physics crates under one `gizmo::physics` path.
+#[cfg(feature = "physics")]
 pub mod physics;
 #[cfg(feature = "render")]
 pub use gizmo_renderer as renderer;
@@ -61,9 +82,9 @@ pub use gizmo_window as window;
 // Sık kullanılan matematik tiplerini lib.rs'ten doğrudan aç:
 pub use math::{Mat4, Quat, Vec2, Vec3, Vec4};
 
-#[cfg(feature = "window")]
+#[cfg(all(feature = "window", feature = "render", feature = "physics"))]
 pub mod simple;
-#[cfg(feature = "window")]
+#[cfg(all(feature = "window", feature = "render", feature = "physics"))]
 pub use simple::*;
 
 // === Opsiyonel Modüller ===

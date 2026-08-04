@@ -13,6 +13,9 @@
 use crate::core::{Bundle, Entity, EntityName, World};
 use crate::math::{Quat, Vec3, Vec4};
 use gizmo_physics_core::Transform;
+// Light/camera/mesh bundles are renderer components; `RigidBodyBundle` below is not, so the
+// module stays available with `physics` alone.
+#[cfg(feature = "render")]
 use crate::renderer::components::{
     Camera, DirectionalLight, LightRole, Material, Mesh, MeshRenderer, PointLight, SpotLight,
 };
@@ -23,6 +26,7 @@ use crate::renderer::components::{
 
 /// Yönlü ışık (güneş) için hazır bundle.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg(feature = "render")]
 pub struct DirectionalLightBundle {
     pub rotation: Quat,
     pub color: Vec3,
@@ -30,6 +34,7 @@ pub struct DirectionalLightBundle {
     pub role: LightRole,
 }
 
+#[cfg(feature = "render")]
 impl Default for DirectionalLightBundle {
     fn default() -> Self {
         Self {
@@ -41,6 +46,7 @@ impl Default for DirectionalLightBundle {
     }
 }
 
+#[cfg(feature = "render")]
 impl Bundle for DirectionalLightBundle {
     fn get_infos() -> Vec<gizmo_core::archetype::ComponentInfo> { vec![] }
     unsafe fn write_to_archetype(self, _arch: &mut gizmo_core::archetype::Archetype, _row: usize, _tick: u32) {}
@@ -63,6 +69,7 @@ impl Bundle for DirectionalLightBundle {
 
 /// Nokta ışığı için hazır bundle.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg(feature = "render")]
 pub struct PointLightBundle {
     pub position: Vec3,
     pub color: Vec3,
@@ -70,6 +77,7 @@ pub struct PointLightBundle {
     pub radius: f32,
 }
 
+#[cfg(feature = "render")]
 impl Default for PointLightBundle {
     fn default() -> Self {
         Self {
@@ -81,6 +89,7 @@ impl Default for PointLightBundle {
     }
 }
 
+#[cfg(feature = "render")]
 impl Bundle for PointLightBundle {
     fn get_infos() -> Vec<gizmo_core::archetype::ComponentInfo> { vec![] }
     unsafe fn write_to_archetype(self, _arch: &mut gizmo_core::archetype::Archetype, _row: usize, _tick: u32) {}
@@ -100,6 +109,7 @@ impl Bundle for PointLightBundle {
 
 /// Spot ışığı için hazır bundle.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg(feature = "render")]
 pub struct SpotLightBundle {
     pub position: Vec3,
     pub rotation: Quat,
@@ -110,6 +120,7 @@ pub struct SpotLightBundle {
     pub outer_angle: f32,
 }
 
+#[cfg(feature = "render")]
 impl Default for SpotLightBundle {
     fn default() -> Self {
         Self {
@@ -124,6 +135,7 @@ impl Default for SpotLightBundle {
     }
 }
 
+#[cfg(feature = "render")]
 impl Bundle for SpotLightBundle {
     fn get_infos() -> Vec<gizmo_core::archetype::ComponentInfo> { vec![] }
     unsafe fn write_to_archetype(self, _arch: &mut gizmo_core::archetype::Archetype, _row: usize, _tick: u32) {}
@@ -152,6 +164,7 @@ impl Bundle for SpotLightBundle {
 
 /// Kamera için hazır bundle.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg(feature = "render")]
 pub struct CameraBundle {
     pub position: Vec3,
     pub fov: f32,
@@ -163,6 +176,7 @@ pub struct CameraBundle {
     pub primary: bool,
 }
 
+#[cfg(feature = "render")]
 impl Default for CameraBundle {
     fn default() -> Self {
         Self {
@@ -178,6 +192,7 @@ impl Default for CameraBundle {
     }
 }
 
+#[cfg(feature = "render")]
 impl Bundle for CameraBundle {
     fn get_infos() -> Vec<gizmo_core::archetype::ComponentInfo> { vec![] }
     unsafe fn write_to_archetype(self, _arch: &mut gizmo_core::archetype::Archetype, _row: usize, _tick: u32) {}
@@ -210,6 +225,7 @@ impl Bundle for CameraBundle {
 ///         .at(Vec3::new(0.0, 5.0, 0.0))
 /// );
 /// ```
+#[cfg(feature = "render")]
 pub struct MeshBundle {
     pub position: Vec3,
     pub rotation: Quat,
@@ -219,6 +235,7 @@ pub struct MeshBundle {
     pub name: Option<String>,
 }
 
+#[cfg(feature = "render")]
 impl MeshBundle {
     /// Yeni bir MeshBundle oluşturur (mesh ve material zorunlu).
     pub fn new(
@@ -260,6 +277,7 @@ impl MeshBundle {
     }
 }
 
+#[cfg(feature = "render")]
 impl Bundle for MeshBundle {
     fn get_infos() -> Vec<gizmo_core::archetype::ComponentInfo> { vec![] }
     unsafe fn write_to_archetype(self, _arch: &mut gizmo_core::archetype::Archetype, _row: usize, _tick: u32) {}
@@ -285,10 +303,12 @@ impl Bundle for MeshBundle {
 // ============================================================
 
 use gizmo_physics_core::{BoxShape, Collider, ColliderShape};
+#[cfg(feature = "physics")]
 use gizmo_physics_rigid::components::{RigidBody, Velocity};
 
 /// Fizik nesnesi oluşturmak için sıfır-yük (zero-overhead) Bundle.
 /// Velocity veya Collider eklemeyi unutma hatalarını önler.
+#[cfg(feature = "physics")]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RigidBodyBundle {
     pub rigid_body: RigidBody,
@@ -297,6 +317,7 @@ pub struct RigidBodyBundle {
 }
 
 
+#[cfg(feature = "physics")]
 impl RigidBodyBundle {
     pub fn dynamic(mass: f32) -> Self {
         Self {
@@ -395,6 +416,7 @@ impl RigidBodyBundle {
     }
 }
 
+#[cfg(feature = "physics")]
 impl Bundle for RigidBodyBundle {
     fn get_infos() -> Vec<gizmo_core::archetype::ComponentInfo> {
         <(RigidBody, Velocity, Collider)>::get_infos()
@@ -505,6 +527,9 @@ mod tests {
 ///     block.clone().with_pbr(color, 0.8, 0.05).spawn(&mut world, Transform::new(pos));
 /// }
 /// ```
+/// Reusable mesh+material(+body) template. Renderer-backed, hence gated on `render`;
+/// `RigidBodyBundle` above is the renderer-free half of this module.
+#[cfg(all(feature = "render", feature = "physics"))]
 #[derive(Clone)]
 pub struct Prefab {
     mesh: Mesh,
@@ -515,6 +540,7 @@ pub struct Prefab {
     auto_box: Option<Vec3>,
 }
 
+#[cfg(all(feature = "render", feature = "physics"))]
 impl Prefab {
     /// Görsel-only prefab (fizik yok). Fizik için [`with_body`](Self::with_body) zincirle.
     pub fn new(mesh: Mesh, material: Material) -> Self {

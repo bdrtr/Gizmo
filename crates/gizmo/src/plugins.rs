@@ -1,4 +1,5 @@
 use crate::app::{App, Plugin};
+#[cfg(feature = "physics")]
 use gizmo_physics_rigid::world::PhysicsWorld;
 
 use crate::math::Vec3;
@@ -6,10 +7,12 @@ use crate::math::Vec3;
 /// Gizmo Engine Fizik Eklentisi (Plugin).
 /// Eklendiğinde fizik dünyasını (PhysicsWorld) başlatır.
 #[non_exhaustive]
+#[cfg(feature = "physics")]
 pub struct PhysicsPlugin {
     pub gravity: Vec3,
 }
 
+#[cfg(feature = "physics")]
 impl Default for PhysicsPlugin {
     fn default() -> Self {
         Self {
@@ -18,6 +21,7 @@ impl Default for PhysicsPlugin {
     }
 }
 
+#[cfg(feature = "physics")]
 impl PhysicsPlugin {
     /// Varsayılan yerçekimi ile yeni bir PhysicsPlugin oluşturur.
     pub fn new() -> Self {
@@ -31,6 +35,7 @@ impl PhysicsPlugin {
     }
 }
 
+#[cfg(feature = "physics")]
 impl<State: 'static> Plugin<State> for PhysicsPlugin {
     fn build(&self, app: &mut App<State>) {
         tracing::info!(
@@ -65,8 +70,10 @@ impl<State: 'static> Plugin<State> for PhysicsPlugin {
 }
 
 /// Transform (hiyerarşi ve senkronizasyon) sistemlerini başlatan eklenti.
+#[cfg(feature = "physics")]
 pub struct TransformPlugin;
 
+#[cfg(feature = "physics")]
 impl<State: 'static> Plugin<State> for TransformPlugin {
     fn build(&self, app: &mut App<State>) {
         // PostUpdate (veya Update sonu) gibi bir faz eklenebilir, şimdilik direkt ekleniyor.
