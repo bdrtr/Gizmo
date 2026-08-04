@@ -317,15 +317,21 @@ impl PhysicsWorld {
 
     /// Earliest distance along `dir` at which `shape` first touches one target, or `None`.
     ///
-    /// Deliberately a march-and-bisect over [`NarrowPhase::test_collision`] rather than
-    /// [`Gjk::conservative_advancement`], which is present in the crate and looks like the
-    /// obvious tool. Conservative advancement is only correct for a head-on approach here:
-    /// with any lateral offset its step `dist / closing_velocity` carries the shape *into*
-    /// overlap, and `Gjk::distance` returns a meaningless positive distance for overlapping
-    /// shapes instead of signalling penetration — so the closing velocity flips sign and the
-    /// routine reports no hit for a sweep that plainly connects. Two unit boxes 5 apart with
-    /// a 0.2 lateral offset reproduce it. Tracked in docs/FIXPLAN.md; this query does not
-    /// wait on it.
+    /// A march-and-bisect over [`NarrowPhase::test_collision`], not
+    /// [`Gjk::conservative_advancement`].
+    ///
+    /// CA was broken when this was written — it reported no hit for any laterally offset
+    /// sweep — and the diagnosis recorded here was itself wrong: the blame went to the step
+    /// rule `dist / closing_velocity`, which is in fact the textbook bound and provably
+    /// non-overshooting under pure translation. The real fault was the *numerator*, an
+    /// upper bound of mixed provenance handed back by `Gjk::distance`. CA has since been
+    /// rewritten to re-derive a certified supporting-plane gap and is correct now.
+    ///
+    /// This function still marches, for a different reason: CA is translation-only and
+    /// answers "when do these two touch", while a scene query wants "which body does this
+    /// sweep hit first", already broadphase-filtered. Marching over the narrowphase reuses
+    /// the exact predicate the simulation uses, at a cost that is fine for a query. Swapping
+    /// in CA per-candidate is a reasonable optimisation, not a correctness fix.
     ///
     /// The march step is derived from the smaller of the two shapes rather than being a
     /// fixed subdivision, so the sweep cannot step over a thin target — the classic failure

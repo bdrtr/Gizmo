@@ -423,11 +423,45 @@ client-server mesajları round-trip testleriyle birlikte taşınmalı.
   > integration'dan ÖNCE kuruluyor). Yani düz bir çağrı değişimi değil, davranış değişimi;
   > kendi doğrulamasını ve muhtemelen broadphase tazeliği kararını istiyor.
 
-### ⬜ B2-followup — `Gjk::conservative_advancement` / `Gjk::distance` düzeltmesi
-CA yalnızca head-on doğru (yukarıdaki izleme). İki ayrı iş: `distance()` örtüşen şekillerde
-penetrasyon bildirmeli (şu an pozitif çöp), ve CA adımı gerçekten konservatif olmalı.
-**Dikkat:** CA CCD yolunda da kullanılıyor → düzeltme determinizm hash'ini etkileyebilir,
-kendi doğrulamasını ister.
+### ✅ B2-followup — `Gjk::conservative_advancement` düzeltildi
+> **Bitti (2026-08-04).** 5 yeni test + 1 vakum assertion gerçek yapıldı.
+> **Determinizm hash'i DEĞİŞMEDİ** (`EF6E4AC3644BF3BA`) — tahmin edildiği gibi.
+>
+> **BENİM TEŞHİSİM YANLIŞTI, düzeltiyorum.** B2'de "adım `dist/closing_vel` yanal kayıklıkta
+> konservatif değil" yazmıştım. **Değil** — 17-ajanlık analiz bunu çürüttü ve elle
+> doğruladım: saf ötelemede Minkowski kümesi rijit ötelendiği için destek düzleminin ofseti
+> **tam doğrusal** azalır, yani `Δt = gap/closing` en fazla temasa oturur, asla geçmez.
+> Adım kuralı ders kitabı (Mirtich) bound'u ve doğru.
+>
+> **Gerçek kusur PAYDA değil, PAY'daydı.** `distance()` `max(best_sq.sqrt(), lb_max)`
+> döndürüyor — *bayat bir iterasyondan* gelen bir ÜST sınır — ve normali başka bir
+> iterasyondan alıyor. İzlemedeki ilk hata `it3` değil **`it1`**: orada `pos_a=(4,0,0.2)`,
+> A x[3.5,4.5] ile B x[4.5,5.5] **tam temas ediyor** (gerçek mesafe 0, `t=0.2` tam TOI).
+> Ama simplex indirgemesi orijine ulaşıp `min_dist_sq < 1e-8` break'ini tetikliyor,
+> best-iterate güncellemesinden ÖNCE — ve bayat `0.1414`'ü raporluyor. Dokunma kapısı
+> (`dist < 0.001`) bu yüzden hiç ateşlemiyor; sonraki adım şekilleri örtüşmeye taşıyor;
+> oradan sonra `distance()` çöp döndürüyor ve ayrılma sertifikası tüm süpürmeyi reddediyor.
+>
+> **Yapılan (yalnız CA içinde, `distance()`'a tek bayt dokunulmadı):**
+> - `distance()` artık yalnız **yön** sağlıyor; boşluk her iterasyonda sertifikalı destek-düzlemi
+>   ofsetinden yeniden türetiliyor: `sep(n) = support(-n)·n`. Her `n` için gerçek mesafeden
+>   küçük-eşit → adımlar eskisinden ASLA büyük değil.
+> - `t=0`'da örtüşme artık `Gjk::test_collision` ile tespit edilip TOI 0 dönüyor (eskiden
+>   duran-örtüşen çift "ıskaladı" sayılıyordu).
+> - `closing <= 0` sertifikası **KORUNDU** — sezgisel değil, kalıcı-ayrılma ispatı.
+> - Tam `max_t`'ye düşen temas artık düşürülmüyor; ufuk **döngüdeki dokunma ölçütüyle**
+>   sınanıyor (`test_collision` ile değil — tam temas örtüşme DEĞİLDİR, o kontrol tam da
+>   korumak istediğimiz teması eler; kendi testim yakaladı).
+> - Dönen impact normal'i artık son *güvenilir* eksenden; `distance()` yakın-sıfır boşlukta
+>   literal `Vec3::X` fallback'i veriyor.
+>
+> **Mevcut testin assertion'ı vakumdu:** `normal.x.abs() > 0.99` — `Vec3::X` fallback'i de
+> geçiyordu. `normal.x < -0.99` yapıldı (gerçek B→A ekseni).
+>
+> **`distance()` neden dokunulmadı:** üretimde `speculative_contact` → `pipeline.rs:317`
+> (CCD) kullanıyor ve dönen boşluk üç eşikten geçip doğrudan `ContactPoint::penetration`'a
+> ve çözücüye akıyor. Penetrasyon kanalı eklemek CCD davranışını değiştirirdi. Yalnız bir
+> doküman notu eklendi: örtüşen girdide sonuç anlamsız, containment için `test_collision`.
 
 - ⬜ **B3 — Sahne registry'sini aç.** Şu an **8 tip** (`gizmo-scene/src/registry.rs:9-51`) →
   ışık/kamera/animasyon/ses ve *her kullanıcı component'i* sessizce kaydedilmiyor.
