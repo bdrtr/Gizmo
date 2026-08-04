@@ -35,6 +35,10 @@ pub mod editor_runtime;
 /// Per-frame simulation stepping — the fixed-timestep loop and the once-per-frame
 /// update schedule. Dependency-free, so it is available in every configuration.
 pub mod frame;
+/// The registry scene save/load uses. NOT `gizmo_scene::registry::default_scene_registry`
+/// — see the module docs for why.
+#[cfg(feature = "scene")]
+pub mod scene_registry;
 /// High-level gameplay physics systems (vehicle / character controllers) wired
 /// into the app schedule. Requires the `physics` feature.
 #[cfg(feature = "physics")]

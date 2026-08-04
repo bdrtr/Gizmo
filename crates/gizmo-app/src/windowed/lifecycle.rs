@@ -176,10 +176,7 @@ impl<State: 'static> App<State> {
                 {
                     // wasm32: gizmo-scripting (mlua) web'de derlenmez — sahneler
                     // Script bileşeni kaydı olmadan yüklenir (web scripting ertelendi).
-                    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
-                    let mut registry = gizmo_scene::registry::default_scene_registry();
-                    #[cfg(not(target_arch = "wasm32"))]
-                    gizmo_scripting::register_script_components(&mut registry);
+                    let registry = crate::scene_registry::full_scene_registry();
                     match gizmo_scene::scene::SceneData::load_into(
                         &scene_path,
                         &mut self.world,

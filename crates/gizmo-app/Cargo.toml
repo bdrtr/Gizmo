@@ -81,3 +81,7 @@ web-sys = { version = "0.3", features = [
     "HtmlElement",
 ] }
 web-time = "0.2"
+
+[dev-dependencies]
+# Test-only: the scene-registry tests derive Serialize on a stand-in user component.
+serde = { version = "1", features = ["derive"] }

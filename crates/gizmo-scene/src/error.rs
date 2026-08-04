@@ -10,6 +10,18 @@ pub enum SceneError {
     Parse(ron::error::SpannedError),
     /// RON serialization failure when saving a scene/prefab.
     Serialize(ron::Error),
+    /// The file declares a format version this build does not know how to read.
+    ///
+    /// Loading it anyway would silently drop whatever the newer engine wrote, since the
+    /// unknown fields are already gone by the time parsing succeeds — so this fails instead.
+    UnsupportedVersion {
+        /// Path of the offending file.
+        path: String,
+        /// Version the file declares.
+        found: u32,
+        /// Highest version this build understands.
+        supported: u32,
+    },
 }
 
 impl std::fmt::Display for SceneError {
@@ -18,6 +30,15 @@ impl std::fmt::Display for SceneError {
             SceneError::Io(_) => write!(f, "scene file I/O error"),
             SceneError::Parse(_) => write!(f, "scene file parse error"),
             SceneError::Serialize(_) => write!(f, "scene serialization error"),
+            SceneError::UnsupportedVersion {
+                path,
+                found,
+                supported,
+            } => write!(
+                f,
+                "scene file '{path}' is format version {found}, but this build understands \
+                 at most {supported} — it was written by a newer version of the engine"
+            ),
         }
     }
 }
@@ -28,6 +49,8 @@ impl std::error::Error for SceneError {
             SceneError::Io(e) => Some(e),
             SceneError::Parse(e) => Some(e),
             SceneError::Serialize(e) => Some(e),
+            // No inner error — the version mismatch IS the failure.
+            SceneError::UnsupportedVersion { .. } => None,
         }
     }
 }

@@ -463,9 +463,38 @@ client-server mesajları round-trip testleriyle birlikte taşınmalı.
 > ve çözücüye akıyor. Penetrasyon kanalı eklemek CCD davranışını değiştirirdi. Yalnız bir
 > doküman notu eklendi: örtüşen girdide sonuç anlamsız, containment için `test_collision`.
 
-- ⬜ **B3 — Sahne registry'sini aç.** Şu an **8 tip** (`gizmo-scene/src/registry.rs:9-51`) →
-  ışık/kamera/animasyon/ses ve *her kullanıcı component'i* sessizce kaydedilmiyor.
-  `App::register_scene_component::<T>()` + `version` alanı + migrasyon zinciri.
+- 🔄 **B3 — Sahne registry'si açıldı + sürümlendi** *(2026-08-04)*
+  > `gizmo-app/src/scene_registry.rs` (yeni, 3 test) + `SceneData.version` + facade delegesi.
+  > `gizmo-app` 1 → **11 test**.
+  >
+  > **Boşluk sandığımdan kötüydü.** Denetim "registry 8 tip kapsıyor" demişti; asıl sorun
+  > save/load yolunun `default_scene_registry()`'yi **her çağrı yerinde elle yeniden
+  > kurması**ydı (`editor_runtime.rs` ×2, `windowed/lifecycle.rs` ×1), her seferinde `Script`'i
+  > satır içi ekleyerek. Facade'ın `full_scene_registry()`'si ise **hiç çağrılmıyordu** — ölü
+  > kod. Yani kullanıcının kendi bileşenini kaydedebileceği bir yer yoktu: nereye eklerse
+  > eklesin save/load yolu onu görmüyordu.
+  >
+  > **Yapılan:** kurulum tek bir yere (`gizmo-app::scene_registry`) taşındı, 3 çağrı yeri
+  > oraya bağlandı, facade'ın `full_scene_registry()`'si ona delege ediyor. Artık
+  > `let mut reg = gizmo::full_scene_registry(); reg.register_serializable::<Health>("Health")`
+  > gerçekten save/load yoluna ulaşıyor — facade'da derlenen bir doctest bunu gösteriyor.
+  >
+  > **Kaydedilenlere eklendi:** `Camera`, `Camera2D`, `PointLight`, `DirectionalLight`,
+  > `SpotLight` (render feature'ı), `AudioSource` (audio). Yani "sahneyi kaydet, ışıklar
+  > gitsin" bitti. `Material` **bilinçli olarak dışarıda**: canlı bir wgpu bind group tutuyor,
+  > olduğu gibi serileştirilemez — sahne round-trip'inin PBR haritalarını kaybetmesi ayrı bir
+  > bulgu ve çözümü ayrı.
+  >
+  > **Sürümleme:** `CURRENT_SCENE_VERSION = 1`, `SceneData.version` + `PrefabData.version`
+  > (`serde(default)` → eski dosyalar 0 okunur), `SceneData::migrate()` ve yeni
+  > `SceneError::UnsupportedVersion`. Daha YENİ bir motordan gelen dosya artık **hata
+  > veriyor**, sessizce yüklenmiyor: bilinmeyen alanlar parse anında zaten kaybolmuş olurdu,
+  > dolayısıyla yüklemek kullanıcının verisini sessizce atmak olurdu.
+  >
+  > **Kalan:** `Material` serileştirmesi (PBR round-trip), `Mesh`/`MeshSource` yolu,
+  > animasyon/araç bileşenleri (`BoneAttachment` dışında serileştirilebilir olan yok),
+  > ve gerçek bir migrasyon zinciri sınandığında 0→1'in ötesi.
+
 - ⬜ **B4 — Joint çözücüsü.** Biriken impuls + warm-start yok (`joints/solver/mod.rs:43-122`);
   `center_of_mass` yok sayılıyor (`joint_types/fixed.rs:30-31`); `break_force` tek iterasyonun
   transient'inden hesaplanıyor; joint'ler island kurulumuna dahil değil (`pipeline.rs:560`).

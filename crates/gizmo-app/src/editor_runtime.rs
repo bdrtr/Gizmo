@@ -236,9 +236,9 @@ pub fn process_scene_requests(world: &mut World) {
 
     // 3. Save
     if let Some(ref path) = save_req {
-        let mut registry = gizmo_scene::registry::default_scene_registry();
-        #[cfg(not(target_arch = "wasm32"))]
-        gizmo_scripting::register_script_components(&mut registry);
+        // One assembled registry, not a hand-rolled one per call site — lights, cameras and
+        // audio emitters were silently absent from every one of these before.
+        let registry = crate::scene_registry::full_scene_registry();
         match gizmo_scene::scene::SceneData::save(world, path, &registry) {
             Ok(()) => {
                 if let Some(mut ed) = world.get_resource_mut::<gizmo_editor::EditorState>() {
@@ -290,9 +290,7 @@ pub fn process_scene_requests(world: &mut World) {
             let r = world.remove_resource::<Renderer>().unwrap();
             let dummy_rgba = [255u8, 255, 255, 255];
             let _dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
-            let mut registry = gizmo_scene::registry::default_scene_registry();
-            #[cfg(not(target_arch = "wasm32"))]
-            gizmo_scripting::register_script_components(&mut registry);
+            let registry = crate::scene_registry::full_scene_registry();
             let load_result = gizmo_scene::scene::SceneData::load_into(path, world, &registry);
             let ok = load_result.is_ok();
             match &load_result {

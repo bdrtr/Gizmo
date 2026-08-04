@@ -7,19 +7,83 @@ use std::fs;
 use gizmo_core::component::{Children, Parent};
 use std::collections::HashMap;
 
+/// Format version written into every scene and prefab file.
+///
+/// A scene file is data a user authored and expects to keep working. Until this existed
+/// there was no way to tell a file apart from one written by a different engine version, so
+/// any change to a component's serde shape silently broke every scene ever saved — a RON
+/// parse error with nothing to branch on. The repository's own `demo/assets/perfect_car.scene`
+/// and one shipped prefab are already unloadable relics of earlier formats, which is what
+/// that costs in practice.
+///
+/// | version | meaning |
+/// |---|---|
+/// | `0` | pre-versioning. Files written before this field existed; `serde(default)` maps them here. |
+/// | `1` | current. |
+///
+/// Bump this when the on-disk shape changes, and add the migration to
+/// [`SceneData::migrate`].
+pub const CURRENT_SCENE_VERSION: u32 = 1;
+
 /// Full scene data — all entities together with their components.
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[non_exhaustive]
 pub struct SceneData {
+    /// Format version — see [`CURRENT_SCENE_VERSION`]. Missing in pre-versioning files,
+    /// which `serde(default)` reads as `0`.
+    #[serde(default)]
+    pub version: u32,
     pub entities: Vec<EntityData>,
     #[serde(default)]
     pub joints: Vec<gizmo_physics_rigid::joints::Joint>,
+}
+
+impl Default for SceneData {
+    fn default() -> Self {
+        Self {
+            version: CURRENT_SCENE_VERSION,
+            entities: Vec::new(),
+            joints: Vec::new(),
+        }
+    }
+}
+
+impl SceneData {
+    /// Bring a freshly parsed scene up to [`CURRENT_SCENE_VERSION`].
+    ///
+    /// Returns an error for a file from a *newer* engine: the fields this build does not
+    /// know about are already lost by the time parsing succeeded, so loading it would
+    /// silently discard the user's data. Failing loudly is the kinder outcome.
+    pub fn migrate(&mut self, source: &str) -> Result<(), SceneError> {
+        if self.version > CURRENT_SCENE_VERSION {
+            return Err(SceneError::UnsupportedVersion {
+                path: source.to_string(),
+                found: self.version,
+                supported: CURRENT_SCENE_VERSION,
+            });
+        }
+        if self.version < CURRENT_SCENE_VERSION {
+            tracing::info!(
+                path = %source,
+                from = self.version,
+                to = CURRENT_SCENE_VERSION,
+                "[Scene] eski sürüm sahne dosyası geçirildi (migrate)",
+            );
+            // 0 → 1 is a pure field addition: `version` itself. Nothing to rewrite.
+            // Later bumps add their transforms here, in order.
+            self.version = CURRENT_SCENE_VERSION;
+        }
+        Ok(())
+    }
 }
 
 /// Prefab data — like [`SceneData`] but anchored to a root entity.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[non_exhaustive]
 pub struct PrefabData {
+    /// Format version — see [`CURRENT_SCENE_VERSION`]. Shares the scene numbering.
+    #[serde(default)]
+    pub version: u32,
     pub root_id: u32,
     pub entities: Vec<EntityData>,
     #[serde(default)]
@@ -86,6 +150,7 @@ impl SceneData {
         }
 
         let scene = SceneData {
+            version: CURRENT_SCENE_VERSION,
             entities: entities_data,
             joints,
         };
@@ -243,7 +308,7 @@ impl SceneData {
             e
         })?;
 
-        let scene: SceneData = ron::from_str(&string_data).map_err(|e| {
+        let mut scene: SceneData = ron::from_str(&string_data).map_err(|e| {
             tracing::error!(
                 path = %file_path,
                 error = %e,
@@ -252,6 +317,8 @@ impl SceneData {
             );
             e
         })?;
+
+        scene.migrate(file_path)?;
 
         let entities = scene.entities;
         let entity_count = entities.len();
@@ -507,6 +574,7 @@ impl SceneData {
         }
 
         let prefab = PrefabData {
+            version: CURRENT_SCENE_VERSION,
             root_id: root_entity_id,
             entities: entities_data,
             joints,
@@ -680,6 +748,7 @@ mod tests {
         .with_break_force(1000.0, 1000.0);
 
         let prefab_data = PrefabData {
+            version: CURRENT_SCENE_VERSION,
             root_id: ent1.id(),
             entities: vec![],
             joints: vec![joint.clone()],
@@ -1147,6 +1216,7 @@ mod tests {
         }
 
         let prefab = PrefabData {
+            version: CURRENT_SCENE_VERSION,
             root_id: 1,
             entities: vec![],
             joints: vec![hinge, ball, slider, spring, rope, d6],
@@ -1221,7 +1291,8 @@ mod tests {
         .with_break_force(321.0, 654.0);
         joint.is_broken = true; // runtime state — must NOT persist.
 
-        let prefab = PrefabData { root_id: 1, entities: vec![], joints: vec![joint] };
+        let prefab = PrefabData {
+            version: CURRENT_SCENE_VERSION, root_id: 1, entities: vec![], joints: vec![joint] };
         let encoded = ron::ser::to_string(&prefab).unwrap();
         let decoded: PrefabData = ron::from_str(&encoded).unwrap();
 

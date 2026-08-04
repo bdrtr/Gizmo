@@ -117,18 +117,37 @@ pub use gizmo_scene as scene;
 #[cfg(feature = "scene")]
 pub use gizmo_scene::ron;
 
-/// A [`scene::registry::SceneRegistry`] pre-populated with the engine's built-in
-/// components **and** the scripting layer's `Script` component.
+/// A [`scene::registry::SceneRegistry`] holding every component the enabled feature set
+/// can round-trip — not just the physics ones.
 ///
-/// `gizmo-scene` intentionally does not depend on `gizmo-scripting` (so scene
-/// save/load stays GPU-free), and therefore its
-/// [`scene::registry::default_scene_registry`] omits `Script`. Use this facade
-/// helper when you want scenes that round-trip script components.
-#[cfg(all(feature = "scene", feature = "scripting"))]
+/// `gizmo-scene` deliberately depends on neither the renderer nor the scripting layer, so
+/// that scene save/load works in a GPU-free headless build. The cost is that
+/// [`scene::registry::default_scene_registry`] can only register what physics owns:
+/// transforms, bodies, colliders and the fighter components. Everything a scene visibly
+/// consists of — lights, cameras, audio emitters — lived outside its reach, so saving a
+/// scene from the editor and loading it back returned the physics and dropped the rest,
+/// silently.
+///
+/// This is the facade's job, because the facade is the layer that can see all of them. Use
+/// it wherever you would otherwise call `default_scene_registry`.
+///
+/// To round-trip your *own* components, register them on the result — anything that is
+/// `Component + Serialize + DeserializeOwned` qualifies:
+///
+/// ```no_run
+/// # use gizmo::scene::scene::SceneData;
+/// # #[derive(Clone, serde::Serialize, serde::Deserialize)]
+/// # struct Health(f32);
+/// # gizmo::core::impl_component!(Health);
+/// let mut registry = gizmo::full_scene_registry();
+/// registry
+///     .register_serializable::<Health>("Health")
+///     .expect("name must not collide with a built-in");
+/// // `registry` now round-trips Health alongside everything the engine registers.
+/// ```
+#[cfg(feature = "scene")]
 pub fn full_scene_registry() -> scene::registry::SceneRegistry {
-    let mut reg = scene::registry::default_scene_registry();
-    scripting::register_script_components(&mut reg);
-    reg
+    app::scene_registry::full_scene_registry()
 }
 
 #[cfg(feature = "ui")]
