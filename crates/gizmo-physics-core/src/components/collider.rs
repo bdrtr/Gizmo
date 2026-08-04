@@ -23,6 +23,22 @@ impl Default for Collider {
     }
 }
 
+/// Axis-aligned bounds of a vertex list, in its own space. Empty gives a degenerate box at the
+/// origin rather than the inverted infinities a bare fold would leave, because an inverted AABB
+/// silently overlaps nothing in the broadphase.
+fn local_bounds(vertices: &[Vec3]) -> gizmo_math::Aabb {
+    if vertices.is_empty() {
+        return gizmo_math::Aabb::new(Vec3::ZERO, Vec3::ZERO);
+    }
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+    for v in vertices {
+        min = min.min(*v);
+        max = max.max(*v);
+    }
+    gizmo_math::Aabb::new(min, max)
+}
+
 impl Collider {
     /// Build a collider from a raw [`ColliderShape`], using the default
     /// material and collision layer with `is_trigger = false`.
@@ -84,18 +100,29 @@ impl Collider {
             }
             ColliderShape::TriMesh(tm) => {
                 if tm.vertices.is_empty() {
-                    // No vertices ⇒ the min/max fold below stays at ±INFINITY, producing an
-                    // inverted (degenerate) AABB that silently breaks broadphase overlap tests.
-                    tracing::warn!(
-                        "TriMesh collider has no vertices; computed AABB is degenerate (inverted)"
-                    );
+                    // Was an inverted (+inf, -inf) box, which this file already recorded as
+                    // "silently breaks broadphase overlap tests". A degenerate box at the body's
+                    // position overlaps nothing either, and does it without poisoning a min/max
+                    // fold somewhere upstream.
+                    tracing::warn!("TriMesh collider has no vertices; its AABB is a point");
+                    return gizmo_math::Aabb::new(position, position);
                 }
+                // Eight corners of the box measured when the collider was built, rather than
+                // every vertex transformed — see `TriMeshShape::local_aabb`. Exact for an
+                // axis-aligned rotation and a conservative superset otherwise, which is what a
+                // broadphase bound is allowed to be.
+                let (lo, hi) = (Vec3::from(tm.local_aabb.min), Vec3::from(tm.local_aabb.max));
                 let mut min = Vec3::splat(f32::INFINITY);
                 let mut max = Vec3::splat(f32::NEG_INFINITY);
-                for v in tm.vertices.iter() {
-                    let world_pos = position + rotation * (*v);
-                    min = min.min(world_pos);
-                    max = max.max(world_pos);
+                for i in 0..8 {
+                    let corner = Vec3::new(
+                        if i & 1 == 0 { lo.x } else { hi.x },
+                        if i & 2 == 0 { lo.y } else { hi.y },
+                        if i & 4 == 0 { lo.z } else { hi.z },
+                    );
+                    let p = position + rotation * corner;
+                    min = min.min(p);
+                    max = max.max(p);
                 }
                 gizmo_math::Aabb::new(min, max)
             }
@@ -217,11 +244,13 @@ impl Collider {
             );
             crate::bvh::BvhTree::default()
         });
+        let local_aabb = local_bounds(&vertices);
         Self {
             shape: ColliderShape::TriMesh(TriMeshShape {
                 vertices: std::sync::Arc::new(vertices),
                 indices: std::sync::Arc::new(indices),
                 bvh: std::sync::Arc::new(bvh),
+                local_aabb,
             }),
             ..Default::default()
         }
@@ -355,6 +384,15 @@ pub struct TriMeshShape {
     pub indices: std::sync::Arc<Vec<u32>>,
     #[serde(skip)]
     pub bvh: std::sync::Arc<crate::bvh::BvhTree>,
+    /// The mesh's bounds in its own space, measured once when the collider is built.
+    ///
+    /// [`Collider::compute_aabb`] used to fold over every vertex, transforming each one. The
+    /// broadphase asks for that AABB several times per body per substep — the vehicle alone asks
+    /// four times per wheel per step — so a static mesh with real triangle counts spent the frame
+    /// budget re-deriving a number that cannot change. With the local box cached, the world AABB
+    /// is eight corners rotated, whatever the mesh.
+    #[serde(skip)]
+    pub local_aabb: gizmo_math::Aabb,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -377,10 +415,12 @@ impl From<TriMeshShapeData> for TriMeshShape {
             );
             crate::bvh::BvhTree::default()
         });
+        let local_aabb = local_bounds(&data.vertices);
         Self {
             vertices: std::sync::Arc::new(data.vertices),
             indices: std::sync::Arc::new(data.indices),
             bvh: std::sync::Arc::new(bvh),
+            local_aabb,
         }
     }
 }
@@ -648,5 +688,109 @@ mod tests {
         assert!(!c.is_trigger);
         assert_eq!(c.material, PhysicsMaterial::default());
         assert_eq!(c.collision_layer, CollisionLayer::default());
+    }
+}
+
+#[cfg(test)]
+mod trimesh_aabb_tests {
+    use super::*;
+    use gizmo_math::Quat;
+
+    /// A tetrahedron with distinct extents on every axis, so a swapped axis cannot pass.
+    fn tetra() -> (Vec<Vec3>, Vec<u32>) {
+        let v = vec![
+            Vec3::new(-1.0, -2.0, -3.0),
+            Vec3::new(4.0, -2.0, -3.0),
+            Vec3::new(-1.0, 5.0, -3.0),
+            Vec3::new(-1.0, -2.0, 6.0),
+        ];
+        (v, vec![0, 1, 2, 0, 1, 3, 0, 2, 3, 1, 2, 3])
+    }
+
+    #[test]
+    fn an_unrotated_trimesh_reports_its_own_bounds() {
+        let (v, i) = tetra();
+        let c = Collider::trimesh(v, i);
+        let aabb = c.compute_aabb(Vec3::ZERO, Quat::IDENTITY);
+        assert_eq!(aabb.min, Vec3::new(-1.0, -2.0, -3.0).into());
+        assert_eq!(aabb.max, Vec3::new(4.0, 5.0, 6.0).into());
+    }
+
+    #[test]
+    fn translation_moves_the_box_and_nothing_else() {
+        let (v, i) = tetra();
+        let c = Collider::trimesh(v, i);
+        let at = Vec3::new(100.0, -50.0, 7.5);
+        let aabb = c.compute_aabb(at, Quat::IDENTITY);
+        assert_eq!(aabb.min, (Vec3::new(-1.0, -2.0, -3.0) + at).into());
+        assert_eq!(aabb.max, (Vec3::new(4.0, 5.0, 6.0) + at).into());
+    }
+
+    /// The contract the cached box has to keep: a broadphase bound may be conservative, but it may
+    /// never miss a vertex. Folding the corners of a box is a superset of folding the vertices;
+    /// this is what says the superset is a real one and not a shifted box.
+    #[test]
+    fn a_rotated_box_still_contains_every_vertex() {
+        let (v, i) = tetra();
+        let c = Collider::trimesh(v.clone(), i);
+        for (axis, angle) in [
+            (Vec3::Y, 0.7_f32),
+            (Vec3::X, -1.2),
+            (Vec3::new(1.0, 1.0, 1.0).normalize(), 2.4),
+        ] {
+            let q = Quat::from_axis_angle(axis, angle);
+            let at = Vec3::new(3.0, -4.0, 5.0);
+            let aabb = c.compute_aabb(at, q);
+            for p in &v {
+                let w = at + q * *p;
+                assert!(
+                    w.x >= aabb.min.x - 1e-4
+                        && w.y >= aabb.min.y - 1e-4
+                        && w.z >= aabb.min.z - 1e-4
+                        && w.x <= aabb.max.x + 1e-4
+                        && w.y <= aabb.max.y + 1e-4
+                        && w.z <= aabb.max.z + 1e-4,
+                    "{w:?} escaped {aabb:?} under {axis:?}/{angle}"
+                );
+            }
+        }
+    }
+
+    /// An empty mesh must not produce the inverted box a bare fold leaves, which overlaps nothing.
+    #[test]
+    fn an_empty_trimesh_is_degenerate_rather_than_inverted() {
+        let c = Collider::trimesh(Vec::new(), Vec::new());
+        let aabb = c.compute_aabb(Vec3::new(1.0, 2.0, 3.0), Quat::IDENTITY);
+        assert!(aabb.min.x <= aabb.max.x && aabb.min.y <= aabb.max.y && aabb.min.z <= aabb.max.z);
+    }
+
+    /// The cached box is measured once, so a mesh with a great many vertices costs the same as a
+    /// small one. Asserted as a ratio rather than an absolute time: the point is that it stopped
+    /// scaling, not how fast the machine is.
+    #[test]
+    fn the_cost_no_longer_scales_with_the_mesh() {
+        let build = |n: u32| {
+            let v: Vec<Vec3> = (0..n).map(|k| Vec3::new(k as f32, (k % 7) as f32, (k % 13) as f32)).collect();
+            let i: Vec<u32> = (0..n.saturating_sub(2)).flat_map(|k| [k, k + 1, k + 2]).collect();
+            Collider::trimesh(v, i)
+        };
+        let small = build(64);
+        let large = build(200_000);
+        let q = Quat::from_axis_angle(Vec3::Y, 0.3);
+
+        let time = |c: &Collider| {
+            let t = std::time::Instant::now();
+            for _ in 0..2_000 {
+                std::hint::black_box(c.compute_aabb(Vec3::ZERO, q));
+            }
+            t.elapsed()
+        };
+        let (a, b) = (time(&small), time(&large));
+        // Generous, because this runs on whatever CI has: before the cache the large mesh was
+        // three thousand times the work, so anything under 10x is the difference being measured.
+        assert!(
+            b.as_nanos() < a.as_nanos().max(1) * 10,
+            "200k vertices cost {b:?} against {a:?} for 64 — the AABB is being recomputed"
+        );
     }
 }
