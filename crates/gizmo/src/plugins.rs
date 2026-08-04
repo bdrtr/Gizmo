@@ -76,14 +76,31 @@ pub struct TransformPlugin;
 #[cfg(feature = "physics")]
 impl<State: 'static> Plugin<State> for TransformPlugin {
     fn build(&self, app: &mut App<State>) {
-        // PostUpdate (veya Update sonu) gibi bir faz eklenebilir, şimdilik direkt ekleniyor.
-        app.schedule.add_di_system(
+        // Per-frame, not per fixed step — and this is an ordering fix as much as a cost one.
+        //
+        // These ran in the fixed-timestep schedule, so they propagated `0..N` times per
+        // rendered frame while the result is only ever consumed once, at draw. The comment
+        // on `PhysicsPlugin`'s `physics_step` label says transform systems "can order
+        // themselves after it", but no such edge was ever wired — so within a single fixed
+        // step the order was whatever the batcher chose.
+        //
+        // The update schedule runs after *every* fixed step of the frame (see
+        // `gizmo_app::frame::run_fixed_and_update`), so "transforms propagate after physics"
+        // is now structural rather than dependent on a label edge that did not exist. It is
+        // also after the per-frame update systems, which is what a camera moved by
+        // `FpsLookSystem` needs.
+        //
+        // `default_render_pass` still calls `ensure_global_transforms` immediately before
+        // drawing. That stays: it is the safety net for a custom `App` that never registers
+        // this plugin, and it is what backfills a `GlobalTransform` onto a freshly spawned
+        // mesh. With this plugin registered the propagation is simply already current.
+        app.update_schedule.add_di_system(
             gizmo_core::system::SystemConfig::new(Box::new(
                 crate::systems::transform::TransformSyncSystem,
             ))
             .label("transform_sync"),
         );
-        app.schedule.add_di_system(
+        app.update_schedule.add_di_system(
             gizmo_core::system::SystemConfig::new(Box::new(
                 crate::systems::transform::TransformPropagateSystem,
             ))
