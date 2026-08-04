@@ -13,11 +13,14 @@ use std::path::PathBuf;
 
 mod construction;
 mod query;
+mod scene_query;
 mod snapshot;
 mod step;
 #[cfg(test)]
 #[allow(clippy::field_reassign_with_default)] // testlerde Default sonrası alan atama okunabilirlik için
 mod tests;
+
+pub use scene_query::{QueryFilter, ShapeCastHit};
 
 /// Errors that can occur while writing a physics-world diagnostic snapshot
 /// via [`PhysicsWorld::trigger_snapshot`].
