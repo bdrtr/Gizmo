@@ -46,6 +46,12 @@ bölünmesi — gerektiğinde.
 
 ## 3. Yol Haritası (CANLI — yalnız kalan iş)
 
+> **2026-08-04:** Bağımsız bir tam-motor denetimi yapıldı → `docs/AUDIT-2026-08.md`
+> (her bulgu `dosya:satır` kanıtlı; düşmanca doğrulamayı geçemeyen 9 iddia çıkarıldı).
+> Çıkan işler `docs/FIXPLAN.md`'de yürütülüyor — o kampanya bitince kalıcı kararlar buraya
+> taşınacak ve FIXPLAN silinecek. Aşağıdaki Faz 6/7 maddeleri geçerliliğini koruyor;
+> denetim bunların **önüne** giren bir Faz A (dürüstlük + güvenlik) ekledi.
+
 Faz 0–5 (stabilizasyon, test+CI, determinizm, P2P rollback netcode, fizik-derinliği,
 renderer/WASM/editör) **TAMAM**. Kalan:
 
